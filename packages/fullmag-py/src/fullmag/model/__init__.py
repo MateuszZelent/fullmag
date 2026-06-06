@@ -7,6 +7,7 @@ from .antenna import (
     SpinWaveExcitationAnalysis,
 )
 from .current_transport import CurrentTransport
+from .couplings import Coupling, CouplingEndpoint, CouplingRegistry
 from .dynamics import (
     AdaptiveTimestep,
     Elastodynamics,
@@ -74,7 +75,15 @@ from .spin_torque import (
     SpinTorqueModule,
     ZhangLiSTT,
 )
-from .structure import Ferromagnet, Material, Region
+from .structure import (
+    Ferromagnet,
+    Material,
+    MaterialParameterAssignment,
+    MaterialParameterField,
+    ObjectRegion,
+    Region,
+    RegionMaterialOverride,
+)
 from .study import Eigenmodes, FloquetBC, FrequencyResponse, PeriodicBC, RelaxStop, Relaxation, TableAutosave, TimeEvolution
 from .eigen import KPath, KPoint, ModeTracking
 
@@ -91,6 +100,9 @@ __all__ = [
     "BulkDMI",
     "CPWAntenna",
     "CurrentTransport",
+    "Coupling",
+    "CouplingEndpoint",
+    "CouplingRegistry",
     "Constant",
     "Cylinder",
     "Demag",
@@ -130,11 +142,14 @@ __all__ = [
     "OerstedField",
     "MagnetostrictionLaw",
     "Material",
+    "MaterialParameterAssignment",
+    "MaterialParameterField",
     "MechanicalBoundaryCondition",
     "MechanicalLoad",
     "MicrostripAntenna",
     "OerstedCylinder",
     "OERSTED_FIELD_MODELS",
+    "ObjectRegion",
     "PrescribedStrain",
     "Problem",
     "PeriodicBC",
@@ -142,6 +157,7 @@ __all__ = [
     "RelaxStop",
     "RfDrive",
     "Region",
+    "RegionMaterialOverride",
     "Relaxation",
     "RuntimeSelection",
     "Pulse",

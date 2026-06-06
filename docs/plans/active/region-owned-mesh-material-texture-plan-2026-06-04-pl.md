@@ -458,7 +458,12 @@ study.regions[0] is skyrmion
 
 Reguły:
 
-- `RegionHandle.region_id` jest stabilny i niejawny.
+- `RegionHandle.region_id` jest stabilnym identyfikatorem typu primary key:
+  przydziela go rejestr ownera, rename go nie zmienia, a skasowane id nie jest
+  ponownie używane w tej samej scenie/sesji.
+- UI/backend create może pominąć `region_id`; rejestr ownera przydziela kolejny
+  wolny identyfikator typu `owner:r1`, `owner:r2`, ... . Jawne `region_id`
+  jest potrzebne tylko dla importu, migracji i round-trip.
 - `RegionHandle.name` jest etykietą użytkownika i identyfikatorem w eksporcie skryptu.
 - `waveguide.regions[...]` jest modyfikowalne tylko przez `add_region`, `remove_region`, `rename_region`, `reorder_region`.
 - `study.regions[...]` jest read-only.
@@ -480,10 +485,44 @@ Regiony muszą być widoczne w Explorerze jako dzieci obiektu:
 ```text
 Objects
   arch_waveguide
+    Geometry
+    Magnetic Parameters
+    Texture
+    Mesh
+    Visualization
     Regions
       skyrmion
+        Geometry
+        Magnetic Parameters
+        Texture
+        Mesh
+        Visualization
+        Regions
       edge_softening
+        Geometry
+        Magnetic Parameters
+        Texture
+        Mesh
+        Visualization
+        Regions
 ```
+
+Region jest w UI sub-obiektem authoringowym: ma wyglądać prawie identycznie jak
+obiekt rodzic, bo może mieć własną geometrię selektora, lokalne parametry
+magnetyczne, texture override, mesh policy, visualization override i opcjonalnie
+podrzędne regiony. Semantycznie nadal nie tworzy nowego pola `m`; dziedziczy
+pole `m` właściciela i tylko zawęża attachmenty/override'y do swojego supportu.
+
+Region dziedziczy domyślnie wszystkie efektywne ustawienia rodzica. Lokalny
+payload regionu zapisujemy tylko wtedy, gdy użytkownik tworzy override, np.
+lokalne zagęszczenie meshu, lokalny `Ms/Aex`, lokalną teksturę początkową albo
+lokalną konfigurację wizualizacji. UI musi pokazywać `inherited` jako stan
+domyślny, zamiast materializować kopię parametrów rodzica w regionie.
+
+Jeżeli v1 nie obsługuje zagnieżdżonych regionów, grupa `Regions` pod regionem
+pozostaje widoczna jako disabled/empty z diagnostyką capability, zamiast
+znikać. Dzięki temu model UI jest stabilny i nie trzeba go przebudowywać przy
+włączeniu nested regions.
 
 Widok `Mesh -> Region fields` jest tylko raportem realizacji, nie miejscem edycji.
 
@@ -604,6 +643,12 @@ Wymagane przypadki:
 18. exchange field/energy consistency: `δE_ex/δm ∝ -μ₀ Ms H_ex` (Taylor test z finite difference) -> spójność `A_ij` w field i energy reduction,
 19. `Ms=0` wewnątrz aktywnego obiektu magnetycznego -> błąd walidacji (nie division by zero).
 
+Powyższe przypadki nie są opcjonalną listą regresji. Są odpowiedzią na pytania
+recenzji i muszą mieć odwzorowanie w masterplanie jako test albo capability
+gate. Jeżeli implementacja danej warstwy nie ma jeszcze runtime mechanizmu, ma
+zablokować ścieżkę planowania zamiast zachować authored intent i uruchomić
+solver z cicho zmienioną fizyką.
+
 ### Kryteria akceptacji
 
 - Użytkownik może tworzyć regiony w Pythonie i UI.
@@ -670,3 +715,49 @@ Wymagane przypadki:
     `exchange_pairs` + `exchange_pair_default`. Stary `exchange_lut` zostaje
     low-level realized override, a legacy zero-default może działać tylko dla
     jawnie oznaczonej starej wersji planu.
+15. Rejestr regionów jest owner-scoped. `object.regions` jest modyfikowalne
+    tylko przez metody ownera, a `study.regions` jest read-only flattened view.
+    `region.delete()` usuwa region i jego attachmenty albo wymaga jawnej
+    decyzji UI, gdy istnieją zewnętrzne referencje.
+16. Overlap regionów jest rozstrzygany per attachment: mesh wybiera mniejszy
+    rozmiar elementu, material/texture używa priority per property, a equal
+    priority dla tego samego parametru jest błędem walidacji.
+17. Runtime contact discovery jest częścią realizacji couplingów. FDM używa
+    sąsiedztwa masek komórek na jednej siatce; FEM wymaga boundary/domain
+    markerów w shared-domain mesh. Brak realizowalnego interfejsu dla
+    explicit coupling blokuje run.
+18. Stare `MaterialIR.ms_field` i podobne payloady są realized/compatibility
+    surface, nie authored intent. Nowe authored intent musi przechodzić przez
+    `MaterialParameterFieldIR` z provenance.
+19. Authored-only coupling może istnieć w modelu i UI tylko jako zachowana
+    intencja. Nie wolno uruchomić solvera, jeśli coupling wymaga operatora,
+    którego backend nie wspiera.
+20. Projection mode nie ma w v1 ilościowej gwarancji błędu dla ostrych skoków
+    `Aex/Ms`. W trybie `strict` taki przypadek wymaga conformal boundary/domain
+    marker; w `extended` można go dopuścić tylko jako jawne
+    `realization_policy="projected"` z diagnostyką kontrastu i provenance.
+21. Projection mode nie jest dopuszczalnym domyślnym modelem dla RKKY/contact
+    ani dla DMI na interfejsie. Te interakcje wymagają jawnego interfejsu
+    runtime albo blokady capability.
+22. Contact discovery nie jest authoringiem. FDM rozwiązuje contact przez
+    sąsiedztwo masek komórek na jednej siatce; FEM przez boundary/domain
+    markers w shared-domain mesh. Brak realizowalnego contactu dla explicit
+    coupling blokuje run.
+23. Stary `RegionIR { name, geometry }` zostaje compatibility/body-region
+    surface. Nowe authored regiony nie rozszerzają tego typu, tylko używają
+    `ObjectRegionIR`.
+24. Exchange field i exchange energy muszą używać tej samej definicji `A_ij`.
+    Kryterium produkcyjności obejmuje Taylor/directional-derivative test
+    wykrywający rozjazd pola i energii.
+
+Szczegółowy decision log z odpowiedziami na pytania recenzji znajduje się w
+masterplanie wdrożeniowym, sekcja `4.4 Pytania z recenzji i wiążące
+odpowiedzi`, `4.5 Doprecyzowania po drugiej recenzji` oraz `4.6 Macierz
+egzekwowania decyzji`. Dodatkowe pytania operacyjne dotyczące edycji UI,
+authoring transactions, delete/invalidation, airbox ownership, indeksowania
+rejestru regionów i zakresu named-face selectors są zamknięte w sekcji
+`4.7 Dodatkowe pytania implementacyjne i odpowiedzi`. Te sekcje są częścią
+kontraktu implementacyjnego:
+jeżeli kod, OpenAPI, UI albo backend nie mogą zrealizować którejś odpowiedzi,
+planner musi zablokować ścieżkę capability gate zamiast cicho degradować
+fizykę.

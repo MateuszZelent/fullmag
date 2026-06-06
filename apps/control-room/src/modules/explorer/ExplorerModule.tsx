@@ -6,10 +6,14 @@ import { Search } from "lucide-react";
 import type { LiveStatusResource } from "@/kernel/api/apiTypes";
 import {
   useMeshBuildCurrent,
+  useMeshBuildLatestSuccessful,
   useMeshSharedDomainManifestResource,
   useMeshSharedDomainQualityGatesResource,
   useMeshSharedDomainRealizedSizeFieldsResource,
   useMeshSummaryResource,
+  useModelCouplingsResource,
+  useModelMaterialFieldsResource,
+  useModelRegionsResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import {
@@ -62,6 +66,10 @@ function record(value: unknown): Record<string, unknown> | null {
 
 function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function revisionValue(value: unknown): number | string | null {
+  return typeof value === "number" || typeof value === "string" ? value : null;
 }
 
 function qualityStatus(value: unknown): string | null {
@@ -156,10 +164,18 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     { enabled: modelTabActive, isEqual: explorerModelRuntimeStatusEquals },
   );
   const modelResource = useSceneResource({ enabled: modelTabActive });
+  const modelRegions = useModelRegionsResource({ enabled: modelTabActive });
+  const modelMaterialFields = useModelMaterialFieldsResource({
+    enabled: modelTabActive,
+  });
+  const modelCouplings = useModelCouplingsResource({ enabled: modelTabActive });
   const meshSummary = useMeshSummaryResource({
     enabled: shouldLoadRuntimeMeshSummary(modelTabActive, sessionStatusData),
   });
   const activeBuild = useMeshBuildCurrent({
+    enabled: shouldLoadRuntimeMeshBuild(modelTabActive, sessionStatusData),
+  });
+  const latestSuccessfulBuild = useMeshBuildLatestSuccessful({
     enabled: shouldLoadRuntimeMeshBuild(modelTabActive, sessionStatusData),
   });
   const manifest = useMeshSharedDomainManifestResource({
@@ -180,13 +196,20 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
 
   const nodes = useMemo(() => {
     const modelSnapshot = modelTreeSnapshotWithStageExecution(
-      modelTreeSnapshotFromScene(modelResource.data),
+      modelTreeSnapshotFromScene(modelResource.data, {
+        couplings: modelCouplings.data,
+        materialFields: modelMaterialFields.data,
+        regions: modelRegions.data,
+      }),
       stageExecution.data,
     );
     const activeBuildStatus = resolveMeshBuildStatusLabel(
       record(activeBuild.data?.active_build),
       normalizeMeshPipelineStatus(activeBuild.data?.mesh_pipeline_status),
     );
+    const latestSuccessfulBuildRecord = record(latestSuccessfulBuild.data);
+    const latestBuildProvenance = record(latestSuccessfulBuildRecord?.provenance);
+    const modelResourceRecord = record(modelResource.data);
     const mesh: ModelTreeMeshSnapshot = {
       activeBuildStatus: meshPipelineStatusIsActive(activeBuildStatus)
         ? activeBuildStatus
@@ -194,7 +217,11 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
       buildRevision: activeBuild.data?.revision,
       domainMeshMode: manifest.data?.domain_mesh_mode,
       generationId: manifest.data?.generation_id,
+      latestBuildSourceSceneRevision:
+        revisionValue(latestBuildProvenance?.scene_revision),
+      latestBuildStatus: stringValue(latestSuccessfulBuildRecord?.status),
       lastError: activeBuild.data?.last_build_error,
+      manifestSourceSceneRevision: manifest.data?.source_scene_revision,
       meshName: manifest.data?.mesh_name,
       meshRevision: meshSummary.data?.revision ?? manifest.data?.revision,
       objectSegmentCount: manifest.data?.object_segments?.length ?? null,
@@ -203,6 +230,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
       realizedSizeFieldCount:
         realizedSizeFields.data?.realized_size_fields?.fields?.length ?? null,
       regionCount: manifest.data?.regions?.length ?? null,
+      sourceSceneRevision: revisionValue(modelResourceRecord?.revision),
     };
     const objects = modelSnapshot.objects?.map((object) => ({
       ...object,
@@ -215,12 +243,16 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     return filterExplorerNodes(baseNodes, filterText);
   }, [
     activeBuild.data,
+    latestSuccessfulBuild.data,
     activeTab,
     filterText,
     crossSections,
     manifest.data,
     meshSummary.data,
     modelResource.data,
+    modelCouplings.data,
+    modelMaterialFields.data,
+    modelRegions.data,
     stageExecution.data,
     textureLoadObjectIds,
     qualityGates.data,

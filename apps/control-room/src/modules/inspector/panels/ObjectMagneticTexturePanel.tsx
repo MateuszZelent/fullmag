@@ -6,6 +6,7 @@ import {
   MODEL_GEOMETRY_DIAGNOSTICS_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
 } from "@/kernel/api/apiPaths";
+import type { JsonObject } from "@/kernel/api/apiTypes";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
 import {
@@ -104,6 +105,7 @@ export function magneticTextureInspectorView(
       return "load";
     case "object.magnetic-texture.transform":
       return "transform";
+    case "object.region.texture":
     case "object.region-magnetic-texture":
       return "region";
     default:
@@ -245,7 +247,8 @@ function DraftNumberField({
   return (
     <FormField
       label={label}
-      type="number"
+      inputMode="decimal"
+      type="text"
       unit={unit}
       value={String(draft[field])}
       onChange={(event) => patchDraftField(updateDraft, field, event.target.value)}
@@ -792,7 +795,12 @@ export function ObjectMagneticTexturePanel({
       );
       const response =
         target.kind === "region"
-          ? await api.model.patchRegion(target.regionId, patch.payload)
+          ? await api.model.patchObjectRegionResource(
+              target.objectId,
+              target.regionId,
+              patch.payload as JsonObject,
+              { baseRevision: assetResponse.scene_revision ?? undefined },
+            )
           : await api.model.patchObject(model.objectId, patch.payload);
       const revision =
         typeof response.revision === "number"
@@ -833,7 +841,12 @@ export function ObjectMagneticTexturePanel({
       const patch = buildTextureAssignmentPatch(target, null, model.baseRevision);
       const response =
         target.kind === "region"
-          ? await api.model.patchRegion(target.regionId, patch.payload)
+          ? await api.model.patchObjectRegionResource(
+              target.objectId,
+              target.regionId,
+              patch.payload as JsonObject,
+              { baseRevision: model.baseRevision ?? undefined },
+            )
           : await api.model.patchObject(model.objectId, patch.payload);
       const revision =
         typeof response.revision === "number"

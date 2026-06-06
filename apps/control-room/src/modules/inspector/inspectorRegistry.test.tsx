@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { resolveInspectorPanel } from "./inspectorRegistry";
+import { ObjectMagneticTexturePanel } from "./panels/ObjectMagneticTexturePanel";
 
 describe("inspectorRegistry", () => {
-  it("resolves geometry object selections to the geometry object panel", () => {
+  it("resolves geometry object selections to their correct panels", () => {
     expect(resolveInspectorPanel({ kind: "object.root" })?.id).toBe(
-      "geometry-object",
+      "object-general",
     );
     expect(resolveInspectorPanel({ kind: "object.geometry" })?.id).toBe(
       "geometry-object",
@@ -15,6 +16,9 @@ describe("inspectorRegistry", () => {
   it("resolves object physics selections to the physics interaction panel", () => {
     expect(resolveInspectorPanel({ kind: "object.physics" })?.id).toBe(
       "physics-interaction",
+    );
+    expect(resolveInspectorPanel({ kind: "physics.coupling" })?.id).toBe(
+      "physics-coupling",
     );
   });
 
@@ -31,6 +35,39 @@ describe("inspectorRegistry", () => {
     expect(resolveInspectorPanel({ kind: "object.regions" })?.id).toBe(
       "object-regions",
     );
+    expect(resolveInspectorPanel({ kind: "object.region" })?.id).toBe(
+      "object-region",
+    );
+    expect(resolveInspectorPanel({ kind: "object.region.geometry" })?.id).toBe(
+      "object-region-geometry",
+    );
+    expect(resolveInspectorPanel({ kind: "object.region.shape" })?.id).toBe(
+      "object-region-geometry",
+    );
+    expect(
+      resolveInspectorPanel({ kind: "object.region.magnetic-parameters" })?.id,
+    ).toBe("object-region-magnetic-parameters");
+    expect(resolveInspectorPanel({ kind: "object.region.material" })?.id).toBe(
+      "object-region-magnetic-parameters",
+    );
+    expect(resolveInspectorPanel({ kind: "object.region.mesh" })?.id).toBe(
+      "object-region-mesh",
+    );
+    expect(resolveInspectorPanel({ kind: "object.region.regions" })?.id).toBe(
+      "object-region-regions",
+    );
+    expect(resolveInspectorPanel({ kind: "object.region.diagnostics" })?.id).toBe(
+      "object-region-diagnostics",
+    );
+    expect(resolveInspectorPanel({ kind: "object.region.texture" })?.id).toBe(
+      "object-region-texture",
+    );
+    expect(resolveInspectorPanel({ kind: "object.region.texture" })?.component).toBe(
+      ObjectMagneticTexturePanel,
+    );
+    expect(
+      resolveInspectorPanel({ kind: "object.region-magnetic-texture" })?.id,
+    ).toBe("object-region-texture");
     expect(resolveInspectorPanel({ kind: "object.magnetic-texture" })?.id).toBe(
       "object-magnetic-texture",
     );
@@ -42,9 +79,6 @@ describe("inspectorRegistry", () => {
     ).toBe("object-magnetic-texture");
     expect(
       resolveInspectorPanel({ kind: "object.magnetic-texture.transform" })?.id,
-    ).toBe("object-magnetic-texture");
-    expect(
-      resolveInspectorPanel({ kind: "object.region-magnetic-texture" })?.id,
     ).toBe("object-magnetic-texture");
   });
 
@@ -62,6 +96,9 @@ describe("inspectorRegistry", () => {
 
   it("resolves object and airbox visualization selections to the visualization panel", () => {
     expect(resolveInspectorPanel({ kind: "object.visualization" })?.id).toBe(
+      "object-visualization",
+    );
+    expect(resolveInspectorPanel({ kind: "object.region.visualization" })?.id).toBe(
       "object-visualization",
     );
     expect(resolveInspectorPanel({ kind: "airbox.visualization" })?.id).toBe(

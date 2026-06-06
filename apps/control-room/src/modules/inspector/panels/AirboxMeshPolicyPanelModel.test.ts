@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   AIRBOX_GRADING_MODES,
   buildAirboxMeshPolicyReplaceRequest,
+  airboxMeshPolicyDraftDirty,
   defaultUniverseMeshPolicyResource,
   draftFromUniverseMeshPolicyResource,
   draftKeyForUniverseMeshPolicyResource,
@@ -39,6 +40,29 @@ describe("AirboxMeshPolicyPanelModel", () => {
       airboxHmin: "2e-9",
     });
     expect(draftKeyForUniverseMeshPolicyResource(resource)).toContain("12");
+  });
+
+  it("detects airbox policy draft changes without JSON or numeric formatting false positives", () => {
+    const base = {
+      ...draftFromUniverseMeshPolicyResource(defaultUniverseMeshPolicyResource()),
+      airboxHmax: "1e-8",
+      configText: "{\n  \"airbox_hmax\": 1e-8\n}",
+    };
+
+    expect(
+      airboxMeshPolicyDraftDirty(base, {
+        ...base,
+        airboxHmax: "0.00000001",
+        configText: "{\"airbox_hmax\":10e-9}",
+      }),
+    ).toBe(false);
+
+    expect(
+      airboxMeshPolicyDraftDirty(base, {
+        ...base,
+        airboxGrowthRate: "1.7",
+      }),
+    ).toBe(true);
   });
 
   it("shows effective defaults without copying them into raw universe policy JSON", () => {

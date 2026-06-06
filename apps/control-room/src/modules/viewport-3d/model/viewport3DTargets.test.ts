@@ -7,9 +7,24 @@ import {
   resolveAirboxVisualizationSettingsFromState,
   resolveGlobalObjectVisualizationSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
-import { resolveViewport3DSelectionBounds } from "./viewport3DTargets";
+import {
+  resolveViewport3DSelectionBounds,
+  targetForFdmDomain,
+} from "./viewport3DTargets";
 
 describe("viewport3DTargets", () => {
+  it("maps the FDM structured domain to a stable object visualization target", () => {
+    expect(targetForFdmDomain("current")).toEqual({
+      id: "current",
+      kind: "object",
+      label: "current",
+    });
+  });
+
+  it("does not create an FDM visualization target without a domain id", () => {
+    expect(targetForFdmDomain(null)).toBeNull();
+  });
+
   it("maps canonical global mesh/vector layers into object render defaults", () => {
     expect(
       resolveGlobalObjectVisualizationSettings({

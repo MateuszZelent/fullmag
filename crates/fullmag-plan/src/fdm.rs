@@ -1,9 +1,10 @@
 use fullmag_ir::{
     BackendPlanIR, BackendTarget, CommonPlanMeta, DiscretizationHintsIR, EnergyTermIR,
-    ExchangeBoundaryCondition, ExecutionPlanIR, ExecutionPrecision, FdmLayerPlanIR, FdmMaterialIR,
-    FdmMultilayerPlanIR, FdmMultilayerSummaryIR, FdmPlanIR, GeometryEntryIR, GridDimensions,
-    InitialMagnetizationIR, IntegratorChoice, OutputPlanIR, ProblemIR, ProvenancePlanIR,
-    RelaxationAlgorithmIR, TimeDependenceIR, IR_VERSION,
+    ExchangeBoundaryCondition, ExchangeCouplingModeIR, ExecutionPlanIR, ExecutionPrecision,
+    FdmLayerPlanIR, FdmMaterialIR, FdmMultilayerPlanIR, FdmMultilayerSummaryIR, FdmPlanIR,
+    GeometryEntryIR, GridDimensions, InitialMagnetizationIR, IntegratorChoice, OutputPlanIR,
+    ProblemIR, ProvenancePlanIR, RegionFrameIR, RegionShapeIR, RelaxationAlgorithmIR,
+    TimeDependenceIR, IR_VERSION,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -51,6 +52,258 @@ fn grid_sample_points(
         }
     }
     points
+}
+
+fn point_in_region_shape(point: [f64; 3], shape: &RegionShapeIR) -> Result<bool, String> {
+    match shape {
+        RegionShapeIR::Box { size, center } => Ok((0..3).all(|axis| {
+            let half = size[axis] * 0.5;
+            point[axis] >= center[axis] - half && point[axis] <= center[axis] + half
+        })),
+        RegionShapeIR::Sphere { radius, center } => {
+            let dx = point[0] - center[0];
+            let dy = point[1] - center[1];
+            let dz = point[2] - center[2];
+            Ok(dx * dx + dy * dy + dz * dz <= radius * radius)
+        }
+        RegionShapeIR::Cylinder {
+            radius,
+            height,
+            center,
+            axis,
+        } => {
+            let axis_norm = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
+            if axis_norm <= 0.0 {
+                return Err("cylinder region axis must be non-zero".to_string());
+            }
+            let unit = [
+                axis[0] / axis_norm,
+                axis[1] / axis_norm,
+                axis[2] / axis_norm,
+            ];
+            let rel = [
+                point[0] - center[0],
+                point[1] - center[1],
+                point[2] - center[2],
+            ];
+            let axial = rel[0] * unit[0] + rel[1] * unit[1] + rel[2] * unit[2];
+            if axial.abs() > height * 0.5 {
+                return Ok(false);
+            }
+            let radial = [
+                rel[0] - axial * unit[0],
+                rel[1] - axial * unit[1],
+                rel[2] - axial * unit[2],
+            ];
+            Ok(
+                radial[0] * radial[0] + radial[1] * radial[1] + radial[2] * radial[2]
+                    <= radius * radius,
+            )
+        }
+        RegionShapeIR::Csg { .. } => Err(
+            "FDM object region materialization does not yet support CSG region shapes".to_string(),
+        ),
+    }
+}
+
+fn materialize_object_region_mask(
+    problem: &ProblemIR,
+    owner_names: &[&str],
+    grid_cells: [u32; 3],
+    cell_size: [f64; 3],
+    origin: [f64; 3],
+    active_mask: Option<&Vec<bool>>,
+    errors: &mut Vec<String>,
+) -> (Vec<u32>, BTreeMap<String, u32>) {
+    let n_cells = (grid_cells[0] * grid_cells[1] * grid_cells[2]) as usize;
+    let mut mask = vec![0u32; n_cells];
+    let mut regions = problem
+        .object_regions
+        .iter()
+        .filter(|region| region.enabled && owner_names.contains(&region.owner_object.as_str()))
+        .collect::<Vec<_>>();
+    regions.sort_by_key(|region| (region.priority, region.region_id.as_str()));
+
+    let mut region_ids = BTreeMap::new();
+    for (index, region) in regions.iter().enumerate() {
+        if region.frame != RegionFrameIR::Object {
+            errors.push(format!(
+                "object_region '{}' uses frame={:?}; FDM region mask materialization currently supports object frame only",
+                region.region_id, region.frame
+            ));
+            continue;
+        }
+        let region_index = (index + 1) as u32;
+        region_ids.insert(region.region_id.clone(), region_index);
+        let mut assigned = 0usize;
+        let points = grid_sample_points(grid_cells, cell_size, origin, active_mask);
+        for (flat_index, point) in points.iter().enumerate() {
+            if !point.active {
+                continue;
+            }
+            match point_in_region_shape(point.position_object, &region.shape) {
+                Ok(true) => {
+                    mask[flat_index] = region_index;
+                    assigned += 1;
+                }
+                Ok(false) => {}
+                Err(message) => {
+                    errors.push(format!("object_region '{}': {message}", region.region_id));
+                    break;
+                }
+            }
+        }
+        if assigned == 0 {
+            errors.push(format!(
+                "object_region '{}' did not cover any active FDM cells",
+                region.region_id
+            ));
+        }
+    }
+
+    (mask, region_ids)
+}
+
+fn materialize_region_exchange_couplings(
+    problem: &ProblemIR,
+    material_exchange: f64,
+    region_index_by_id: &BTreeMap<String, u32>,
+    errors: &mut Vec<String>,
+) -> Vec<(u32, u32, f64)> {
+    let mut overrides = Vec::new();
+    for coupling in problem.couplings.iter().filter(|coupling| coupling.enabled) {
+        let (
+            fullmag_ir::CouplingEndpointIR::Region {
+                region_id: source_id,
+                ..
+            },
+            fullmag_ir::CouplingEndpointIR::Region {
+                region_id: target_id,
+                ..
+            },
+            fullmag_ir::CouplingParametersIR::Exchange {
+                mode,
+                scale,
+                inter_exchange,
+            },
+        ) = (&coupling.source, &coupling.target, &coupling.parameters)
+        else {
+            continue;
+        };
+        let Some(&source_index) = region_index_by_id.get(source_id) else {
+            errors.push(format!(
+                "coupling '{}' references object_region '{}' that was not materialized in the FDM region mask",
+                coupling.coupling_id, source_id
+            ));
+            continue;
+        };
+        let Some(&target_index) = region_index_by_id.get(target_id) else {
+            errors.push(format!(
+                "coupling '{}' references object_region '{}' that was not materialized in the FDM region mask",
+                coupling.coupling_id, target_id
+            ));
+            continue;
+        };
+        let exchange = match mode {
+            ExchangeCouplingModeIR::Explicit => {
+                let Some(value) = inter_exchange else {
+                    errors.push(format!(
+                        "coupling '{}' uses explicit exchange mode but does not provide inter_exchange",
+                        coupling.coupling_id
+                    ));
+                    continue;
+                };
+                *value
+            }
+            ExchangeCouplingModeIR::Disabled => 0.0,
+            ExchangeCouplingModeIR::HarmonicMean => {
+                let scale = scale.unwrap_or(1.0);
+                if (scale - 1.0).abs() <= f64::EPSILON {
+                    continue;
+                }
+                material_exchange * scale
+            }
+        };
+        overrides.push((source_index, target_index, exchange));
+    }
+    overrides
+}
+
+fn apply_region_texture_overrides(
+    problem: &ProblemIR,
+    region_index_by_id: &BTreeMap<String, u32>,
+    region_mask: &[u32],
+    grid_cells: [u32; 3],
+    cell_size: [f64; 3],
+    origin: [f64; 3],
+    active_mask: Option<&Vec<bool>>,
+    initial_magnetization: &mut [[f64; 3]],
+    errors: &mut Vec<String>,
+) {
+    let mut regions = problem
+        .object_regions
+        .iter()
+        .filter(|region| region.enabled && region.texture_override.is_some())
+        .collect::<Vec<_>>();
+    regions.sort_by_key(|region| (region.priority, region.region_id.as_str()));
+
+    let points = grid_sample_points(grid_cells, cell_size, origin, active_mask);
+    for region in regions {
+        let Some(&region_index) = region_index_by_id.get(&region.region_id) else {
+            errors.push(format!(
+                "object_region '{}' has texture_override but was not materialized in the FDM region mask",
+                region.region_id
+            ));
+            continue;
+        };
+        let Some(texture_override) = region.texture_override.as_ref() else {
+            continue;
+        };
+        let values = match &texture_override.initial_magnetization {
+            InitialMagnetizationIR::Uniform { value } => vec![*value; initial_magnetization.len()],
+            InitialMagnetizationIR::RandomSeeded { seed } => {
+                generate_random_unit_vectors(*seed, initial_magnetization.len())
+            }
+            InitialMagnetizationIR::SampledField { values } => {
+                if values.len() != initial_magnetization.len() {
+                    errors.push(format!(
+                        "object_region '{}' texture_override sampled field length {} does not match FDM cell count {}",
+                        region.region_id,
+                        values.len(),
+                        initial_magnetization.len()
+                    ));
+                    continue;
+                }
+                values.clone()
+            }
+            InitialMagnetizationIR::PresetTexture {
+                preset_kind,
+                preset_params,
+                mapping,
+                texture_transform,
+            } => match sample_preset_texture(
+                preset_kind,
+                preset_params,
+                mapping,
+                texture_transform,
+                &points,
+            ) {
+                Ok(values) => values,
+                Err(message) => {
+                    errors.push(format!(
+                        "object_region '{}' texture_override: {message}",
+                        region.region_id
+                    ));
+                    continue;
+                }
+            },
+        };
+        for (index, value) in values.into_iter().enumerate() {
+            if region_mask[index] == region_index {
+                initial_magnetization[index] = value;
+            }
+        }
+    }
 }
 
 pub(crate) fn plan_fdm(
@@ -176,7 +429,7 @@ pub(crate) fn plan_fdm(
             .find(|asset| asset.geometry_name == geometry.name())
     });
 
-    let (bounding_size, active_mask, grid_cells, used_precomputed_asset) =
+    let (bounding_size, active_mask, grid_cells, native_origin, used_precomputed_asset) =
         if let Some(asset) = provided_grid_asset {
             validate_grid_asset_cell_size(asset, cell_size, &mut errors);
             (
@@ -187,12 +440,13 @@ pub(crate) fn plan_fdm(
                 ],
                 Some(asset.active_mask.clone()),
                 asset.cells,
+                asset.origin,
                 true,
             )
         } else {
-            let (bounding_size, active_mask, grid_cells, _origin) =
+            let (bounding_size, active_mask, grid_cells, origin) =
                 voxelize_shape(&shape, cell_size, &mut errors);
-            (bounding_size, active_mask, grid_cells, false)
+            (bounding_size, active_mask, grid_cells, origin, false)
         };
 
     if !used_precomputed_asset {
@@ -223,7 +477,7 @@ pub(crate) fn plan_fdm(
         .expect("validation should have caught missing material");
 
     let n_cells = (grid_cells[0] * grid_cells[1] * grid_cells[2]) as usize;
-    let initial_magnetization = match &magnet.initial_magnetization {
+    let mut initial_magnetization = match &magnet.initial_magnetization {
         Some(InitialMagnetizationIR::Uniform { value }) => {
             if let Some(ref mask) = active_mask {
                 mask.iter()
@@ -270,12 +524,8 @@ pub(crate) fn plan_fdm(
                 texture_transform.scale[1],
                 texture_transform.scale[2],
             );
-            let origin = [
-                -(grid_cells[0] as f64 * cell_size[0]) * 0.5,
-                -(grid_cells[1] as f64 * cell_size[1]) * 0.5,
-                -(grid_cells[2] as f64 * cell_size[2]) * 0.5,
-            ];
-            let points = grid_sample_points(grid_cells, cell_size, origin, active_mask.as_ref());
+            let points =
+                grid_sample_points(grid_cells, cell_size, native_origin, active_mask.as_ref());
             match sample_preset_texture(
                 preset_kind,
                 &preset_params,
@@ -324,6 +574,42 @@ pub(crate) fn plan_fdm(
         .as_ref()
         .map(|mask| mask.iter().filter(|&&active| active).count())
         .unwrap_or(n_cells);
+    let owner_names = [magnet.name.as_str(), geometry.name()];
+    let (region_mask, region_index_by_id) = materialize_object_region_mask(
+        problem,
+        &owner_names,
+        grid_cells,
+        cell_size,
+        native_origin,
+        active_mask.as_ref(),
+        &mut errors,
+    );
+    if !errors.is_empty() {
+        return Err(PlanError { reasons: errors });
+    }
+    apply_region_texture_overrides(
+        problem,
+        &region_index_by_id,
+        &region_mask,
+        grid_cells,
+        cell_size,
+        native_origin,
+        active_mask.as_ref(),
+        &mut initial_magnetization,
+        &mut errors,
+    );
+    if !errors.is_empty() {
+        return Err(PlanError { reasons: errors });
+    }
+    let inter_region_exchange = materialize_region_exchange_couplings(
+        problem,
+        material.exchange_stiffness,
+        &region_index_by_id,
+        &mut errors,
+    );
+    if !errors.is_empty() {
+        return Err(PlanError { reasons: errors });
+    }
 
     let geometry_label = match &shape {
         GeometryShape::Box { .. } if used_precomputed_asset => format!(
@@ -373,7 +659,7 @@ pub(crate) fn plan_fdm(
     let mut fdm_plan = FdmPlanIR {
         grid: GridDimensions { cells: grid_cells },
         cell_size,
-        region_mask: vec![0; n_cells],
+        region_mask,
         active_mask: active_mask.clone(),
         initial_magnetization,
         material: FdmMaterialIR {
@@ -381,6 +667,9 @@ pub(crate) fn plan_fdm(
             saturation_magnetisation: material.saturation_magnetisation,
             exchange_stiffness: material.exchange_stiffness,
             damping: material.damping,
+            ms_field: None,
+            a_field: None,
+            alpha_field: None,
             uniaxial_anisotropy_ku1: material.uniaxial_anisotropy,
             uniaxial_anisotropy_ku2: material.uniaxial_anisotropy_k2,
             anisotropy_axis: material.anisotropy_axis,
@@ -393,7 +682,7 @@ pub(crate) fn plan_fdm(
         enable_exchange,
         enable_demag,
         external_field,
-        inter_region_exchange: vec![],
+        inter_region_exchange,
         gyromagnetic_ratio,
         precision: problem.backend_policy.execution_precision,
         exchange_bc: ExchangeBoundaryCondition::Neumann,
@@ -446,6 +735,8 @@ pub(crate) fn plan_fdm(
         temperature: problem.temperature,
         interfacial_dmi: None,
         bulk_dmi: None,
+        dind_field: None,
+        dbulk_field: None,
         mel_b1: None,
         mel_b2: None,
         mel_uniform_strain: None,
@@ -835,6 +1126,12 @@ pub(crate) fn plan_fdm_multilayer(
                 .to_string(),
         );
     }
+    if problem.object_regions.iter().any(|region| region.enabled) {
+        errors.push(
+            "object_regions are authored in ProblemIR but multilayer FDM + region-owned material/coupling is capability-gated out of scope for v1; planner must not silently ignore authored regions in the multilayer FDM path"
+                .to_string(),
+        );
+    }
     reject_fdm_spatial_material_fields(problem, "multilayer FDM", &mut errors);
     if problem.current_density.is_some()
         || problem.stt_degree.is_some()
@@ -1110,6 +1407,9 @@ pub(crate) fn plan_fdm_multilayer(
                 saturation_magnetisation: material.saturation_magnetisation,
                 exchange_stiffness: material.exchange_stiffness,
                 damping: material.damping,
+                ms_field: None,
+                a_field: None,
+                alpha_field: None,
                 uniaxial_anisotropy_ku1: material.uniaxial_anisotropy,
                 uniaxial_anisotropy_ku2: material.uniaxial_anisotropy_k2,
                 anisotropy_axis: material.anisotropy_axis,

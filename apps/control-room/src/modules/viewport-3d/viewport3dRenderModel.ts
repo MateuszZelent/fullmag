@@ -59,6 +59,8 @@ export interface Viewport3DTopologyRenderModel<
   fallbackVolumeEdgeIndices: Uint32Array;
   magneticParts: Array<Viewport3DTopologyPartRenderModel<TPart>>;
   airboxParts: Array<Viewport3DTopologyPartRenderModel<TPart>>;
+  meshGenerationId: string | null;
+  meshRevision: number | string | null;
   nodeCount: number;
   positions: Float32Array;
 }
@@ -243,6 +245,10 @@ export function buildViewport3DTopologyRenderModel<
   magneticParts: readonly TPart[],
   airboxParts: readonly TPart[],
   magneticSurfacePartsByPartId?: ReadonlyMap<string, readonly TPart[]>,
+  meshIdentity: {
+    meshGenerationId?: string | null;
+    meshRevision?: number | string | null;
+  } = {},
 ): Viewport3DTopologyRenderModel<TPart> | null {
   if (!topology) return null;
 
@@ -281,6 +287,8 @@ export function buildViewport3DTopologyRenderModel<
         magneticSurfacePartsByPartId?.get(part.id) ?? [],
       ),
     ),
+    meshGenerationId: meshIdentity.meshGenerationId ?? null,
+    meshRevision: meshIdentity.meshRevision ?? null,
     nodeCount: topology.nodeCount,
     positions: buildTopologyPositions(topology),
   };

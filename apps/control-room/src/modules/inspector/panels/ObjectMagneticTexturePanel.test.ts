@@ -36,6 +36,7 @@ describe("ObjectMagneticTexturePanel", () => {
     expect(magneticTextureInspectorView("object.magnetic-texture.transform")).toBe(
       "transform",
     );
+    expect(magneticTextureInspectorView("object.region.texture")).toBe("region");
     expect(magneticTextureInspectorView("object.region-magnetic-texture")).toBe(
       "region",
     );

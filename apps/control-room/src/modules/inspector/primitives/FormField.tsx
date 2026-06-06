@@ -226,6 +226,9 @@ export function FormField(props: FormFieldProps) {
   ]
     .filter(Boolean)
     .join(" ");
+  const inputType = type === "number" && unit ? "text" : type ?? "text";
+  const resolvedInputMode =
+    inputMode ?? (type === "number" || unit ? "decimal" : undefined);
   return (
     <div className={wrapClass}>
       <FormFieldLabel fieldId={fieldId} help={help} label={label} />
@@ -236,8 +239,8 @@ export function FormField(props: FormFieldProps) {
           aria-label={label}
           className={inputClass}
           disabled={disabled}
-          inputMode={inputMode ?? (type === "number" ? "decimal" : undefined)}
-          type={type ?? "text"}
+          inputMode={resolvedInputMode}
+          type={inputType}
           value={value}
           onChange={onChange}
         />

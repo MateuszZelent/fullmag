@@ -63,7 +63,13 @@ describe("buildModelTree", () => {
         "model:object:free-layer:geometry",
         "model:object:free-layer:regions",
         "model:object:free-layer:regions:primary",
-        "model:object:free-layer:regions:primary:magnetic-texture",
+        "model:object:free-layer:regions:primary:geometry",
+        "model:object:free-layer:regions:primary:magnetic-parameters",
+        "model:object:free-layer:regions:primary:mesh",
+        "model:object:free-layer:regions:primary:texture",
+        "model:object:free-layer:regions:primary:visualization",
+        "model:object:free-layer:regions:primary:regions",
+        "model:object:free-layer:regions:primary:diagnostics",
         "model:object:free-layer:magnetic-parameters",
         "model:object:free-layer:magnetic-parameters:material",
         "model:object:free-layer:magnetic-parameters:uniaxial_anisotropy",
@@ -88,6 +94,26 @@ describe("buildModelTree", () => {
       kind: "airbox.mesh-quality",
       label: "Airbox Quality",
       parentId: "model:mesh",
+    });
+  });
+
+  it("labels the shared-domain mesh node from mesh build freshness", () => {
+    const flattened = flattenExplorerNodes(
+      buildModelTree({
+        mesh: {
+          meshName: "shared-domain",
+          meshRevision: 12,
+          sourceSceneRevision: 5,
+          manifestSourceSceneRevision: 4,
+        },
+      }),
+    );
+
+    expect(
+      flattened.find((node) => node.id === "model:mesh:shared-domain"),
+    ).toMatchObject({
+      badge: "stale",
+      status: "mesh-stale",
     });
   });
 
@@ -205,12 +231,12 @@ describe("buildModelTree", () => {
     expect(
       flattened.find(
         (node) =>
-          node.id === "model:object:box-1:regions:primary:magnetic-texture",
+          node.id === "model:object:box-1:regions:primary:texture",
       ),
     ).toMatchObject({
       badge: "Vortex texture",
-      kind: "object.region-magnetic-texture",
-      label: "Magnetic Texture",
+      kind: "object.region.texture",
+      label: "Texture",
       objectId: "box-1",
       regionId: "region:box-1",
     });
@@ -232,6 +258,133 @@ describe("buildModelTree", () => {
         "mesh.build-selected",
       ]),
     );
+  });
+
+  it("shows authored object regions, material fields, and couplings from model resources", () => {
+    const snapshot = modelTreeSnapshotFromScene(
+      {
+        objects: [
+          {
+            geometry: { geometry_kind: "Box" },
+            id: "film",
+            material_ref: "mat-film",
+            name: "Film",
+          },
+        ],
+      },
+      {
+        couplings: {
+          couplings: [
+            {
+              coupling_id: "cpl-exchange",
+              coupling_kind: "exchange",
+              enabled: true,
+              params: {},
+              realization_status: "authored_pending_realization",
+              source: { object: "film", region_id: "reg-core" },
+              target: { object: "film", region_id: "reg-edge" },
+            },
+          ],
+          scene_revision: 3,
+        } as never,
+        materialFields: {
+          fields: [
+            {
+              assignment_id: "field-ms-core",
+              field: {},
+              owner_object_id: "film",
+              parameter: "Ms",
+              realization_status: "authored_pending_realization",
+              source_region_id: "reg-core",
+              unit: "A/m",
+            },
+          ],
+          scene_revision: 3,
+        } as never,
+        regions: {
+          geometry_realization_revision: 0,
+          regions: [
+            {
+              bounds_max: [0, 0, 0],
+              bounds_min: [0, 0, 0],
+              enabled: true,
+              interaction_refs: [],
+              material_parameter_fields: [],
+              material_overrides: [{ parameter: "Aex" }],
+              material_ref: "mat-film",
+              mesh_part_ids: [],
+              mesh_policy: { maximum_element_size: 1e-9 },
+              name: "Skyrmion core",
+              owner_object_id: "film",
+              priority: 10,
+              region_id: "reg-core",
+              region_kind: "object_region",
+              realization_status: "authored_pending_realization",
+              shape: { kind: "cylinder" },
+              source: "authored_object_region",
+              source_body_ids: [],
+              source_object_ids: ["film"],
+            },
+          ],
+          scene_revision: 3,
+        } as never,
+      },
+    );
+
+    const flattened = flattenExplorerNodes(buildModelTree(snapshot));
+
+    expect(
+      flattened.find((node) => node.id === "model:object:film:regions")?.badge,
+    ).toBe("1");
+    expect(
+      flattened.find((node) => node.id === "model:object:film:regions:reg-core"),
+    ).toMatchObject({
+      kind: "object.region",
+      label: "Skyrmion core",
+      objectId: "film",
+      regionId: "reg-core",
+    });
+    expect(
+      flattened.find(
+        (node) => node.id === "model:object:film:regions:reg-core:geometry",
+      ),
+    ).toMatchObject({ badge: "cylinder", kind: "object.region.geometry" });
+    expect(
+      flattened.find(
+        (node) =>
+          node.id === "model:object:film:regions:reg-core:magnetic-parameters",
+      )?.badge,
+    ).toBe("1 override / 1 field");
+    expect(
+      flattened.find(
+        (node) =>
+          node.id ===
+          "model:object:film:regions:reg-core:magnetic-parameters:field-ms-core",
+      ),
+    ).toMatchObject({ badge: "authored_pending_realization", label: "Ms (A/m)" });
+    expect(
+      flattened.find(
+        (node) =>
+          node.id === "model:object:film:regions:reg-core:visualization",
+      ),
+    ).toMatchObject({ kind: "object.region.visualization", badge: "display" });
+    expect(
+      flattened.find(
+        (node) => node.id === "model:object:film:regions:reg-core:regions",
+      ),
+    ).toMatchObject({ kind: "object.region.regions", badge: "inherits none" });
+    expect(
+      flattened.find((node) => node.id === "model:physics:couplings"),
+    ).toMatchObject({ badge: "1", kind: "physics.couplings" });
+    expect(
+      flattened.find(
+        (node) => node.id === "model:physics:couplings:cpl-exchange",
+      ),
+    ).toMatchObject({
+      couplingId: "cpl-exchange",
+      kind: "physics.coupling",
+      status: "warning",
+    });
   });
 
   it("shows object texture load nodes only after activation", () => {

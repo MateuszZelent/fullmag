@@ -137,6 +137,245 @@ pub struct RegionIR {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ObjectRegionIR {
+    pub region_id: String,
+    pub owner_object: String,
+    pub name: String,
+    pub shape: RegionShapeIR,
+    #[serde(default)]
+    pub frame: RegionFrameIR,
+    #[serde(default = "default_object_region_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub priority: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh_policy: Option<RegionMeshPolicyIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub material_overrides: Vec<RegionMaterialOverrideIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub texture_override: Option<RegionTextureOverrideIR>,
+    #[serde(default)]
+    pub realization_policy: RegionRealizationPolicyIR,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RegionShapeIR {
+    Box {
+        size: [f64; 3],
+        center: [f64; 3],
+    },
+    Cylinder {
+        radius: f64,
+        height: f64,
+        center: [f64; 3],
+        axis: [f64; 3],
+    },
+    Sphere {
+        radius: f64,
+        center: [f64; 3],
+    },
+    Csg {
+        expression: std::boxed::Box<GeometryEntryIR>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RegionFrameIR {
+    #[default]
+    Object,
+    World,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RegionRealizationPolicyIR {
+    #[default]
+    Inherit,
+    Conformal,
+    Project,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RegionMeshPolicyIR {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_element_size: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_element_size: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transition_distance: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RegionMaterialOverrideIR {
+    pub parameter: MaterialParameterNameIR,
+    pub value: MaterialParameterFieldIR,
+    #[serde(default)]
+    pub priority: i32,
+    #[serde(default)]
+    pub conflict_policy: RegionConflictPolicyIR,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MaterialParameterNameIR {
+    Ms,
+    Aex,
+    Alpha,
+    Ku1,
+    Ku2,
+    AnisotropyAxis,
+    Kc1,
+    Kc2,
+    Kc3,
+    Dind,
+    Dbulk,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MaterialParameterFieldIR {
+    Constant {
+        value: Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unit: Option<String>,
+    },
+    Linear {
+        base: f64,
+        gradient: [f64; 3],
+        #[serde(default)]
+        frame: RegionFrameIR,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unit: Option<String>,
+    },
+    Radial {
+        center: [f64; 3],
+        radius: f64,
+        inside: f64,
+        outside: f64,
+        #[serde(default)]
+        frame: RegionFrameIR,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unit: Option<String>,
+    },
+    Sampled {
+        asset_id: String,
+        component_count: u32,
+        location: MaterialFieldLocationIR,
+        unit: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MaterialFieldLocationIR {
+    Cell,
+    Node,
+    Element,
+    Quadrature,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RegionConflictPolicyIR {
+    #[default]
+    Error,
+    HigherPriorityWins,
+    MinMeshSizeWins,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RegionTextureOverrideIR {
+    pub initial_magnetization: InitialMagnetizationIR,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MaterialParameterAssignmentIR {
+    pub assignment_id: String,
+    pub owner_object: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region_id: Option<String>,
+    pub parameter: MaterialParameterNameIR,
+    pub value: MaterialParameterFieldIR,
+    #[serde(default)]
+    pub priority: i32,
+    #[serde(default)]
+    pub conflict_policy: RegionConflictPolicyIR,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CouplingIR {
+    pub coupling_id: String,
+    pub kind: CouplingKindIR,
+    pub source: CouplingEndpointIR,
+    pub target: CouplingEndpointIR,
+    #[serde(default = "default_object_region_enabled")]
+    pub enabled: bool,
+    pub parameters: CouplingParametersIR,
+    #[serde(default)]
+    pub capability_policy: CouplingCapabilityPolicyIR,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CouplingKindIR {
+    Exchange,
+    Rkky,
+    InterlayerExchange,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CouplingEndpointIR {
+    Object { object: String },
+    Region { object: String, region_id: String },
+    Surface { object: String, selector: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CouplingParametersIR {
+    Exchange {
+        mode: ExchangeCouplingModeIR,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scale: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        inter_exchange: Option<f64>,
+    },
+    Rkky {
+        j1: f64,
+    },
+    InterlayerExchange {
+        j1: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        j2: Option<f64>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ExchangeCouplingModeIR {
+    HarmonicMean,
+    Explicit,
+    Disabled,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CouplingCapabilityPolicyIR {
+    #[default]
+    RequireRuntime,
+    AuthoredOnly,
+}
+
+fn default_object_region_enabled() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MaterialIR {
     pub name: String,
     pub saturation_magnetisation: f64,

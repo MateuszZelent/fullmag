@@ -26,6 +26,7 @@ import {
   useSelectionActions,
   useSelectionSelector,
 } from "@/kernel/selection/useSelection";
+import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
 import type { ModuleProps } from "@/kernel/types";
 import {
@@ -58,6 +59,7 @@ import {
   VIEWPORT_3D_ORBIT_DEBUG_LIMITS,
 } from "./layers/CameraControls";
 import { Viewport3DScene } from "./layers/Viewport3DScene";
+import type { RegionOverlaySelection } from "./layers/RegionOverlayLayer";
 import { Viewport3DCameraDialog } from "./components/Viewport3DCameraDialog";
 import { Viewport3DSettingsDialog } from "./components/Viewport3DSettingsDialog";
 import {
@@ -108,6 +110,22 @@ interface Viewport3DInspectHover {
   inspectRevision: number;
   sample: Viewport3DInspectSample;
   screenPosition: Viewport3DInspectScreenPosition;
+}
+
+export function notifyMeshTopologyRendered({
+  bus,
+  lastRevision,
+  meshRevision,
+  rendererId,
+}: {
+  bus: Pick<ModuleProps["kernel"]["bus"], "emit">;
+  lastRevision: { current: number | string | null };
+  meshRevision: number | string | null;
+  rendererId: string;
+}) {
+  if (meshRevision === null || lastRevision.current === meshRevision) return;
+  lastRevision.current = meshRevision;
+  bus.emit("mesh:topology-rendered", { meshRevision, rendererId });
 }
 
 function formatLegendValue(value: number): string {
@@ -167,10 +185,13 @@ interface Viewport3DFrameProps
     patch: NonNullable<VisualizationStatePatch["camera"]>,
   ) => void;
   onClearSelection: () => void;
+  onRegionOverlayVisibleChange: (visible: boolean) => void;
   quantityId: string;
+  renderedMeshRevision: number | string | null;
   selectedLabel: string;
   slotId: ModuleProps["slotId"];
   status: string;
+  topologyRevision: number | string | null;
   visualizationEffectiveRenderMode: string;
   visualizationError: string | null;
 }
@@ -189,6 +210,7 @@ export default function Viewport3DModule({
   const resourceCounts = useViewport3DResourceCounts(tracker);
   const commandState = useViewport3DCommandState();
   const meshSizeHighlight = useMeshSizeHistogramHighlight(kernel.bus);
+  const [regionOverlayVisible, setRegionOverlayVisible] = useState(true);
   const meshHistogramBinElements = useMeshHistogramBinElementsResource(
     meshSizeHighlight?.resource ?? null,
   );
@@ -202,7 +224,7 @@ export default function Viewport3DModule({
     resourceCounts,
     selection,
   });
-  const { onSelectDomain, onSelectObject, onSelectPart } =
+  const { onSelectDomain, onSelectObject, onSelectPart, onSelectRegion } =
     useViewport3DSelectionHandlers({
       domainId,
       select,
@@ -282,9 +304,11 @@ export default function Viewport3DModule({
       kernel={kernel}
       onCameraPatch={patchCameraState}
       onClearSelection={clear}
+      onRegionOverlayVisibleChange={setRegionOverlayVisible}
       onSelectDomain={onSelectDomain}
       onSelectObject={onSelectObject}
       onSelectPart={onSelectPart}
+      onSelectRegion={onSelectRegion}
       onCameraChange={saveCameraState}
       onCameraInteractionEnd={endCameraInteraction}
       onCameraInteractionStart={beginCameraInteraction}
@@ -294,6 +318,7 @@ export default function Viewport3DModule({
       inspectRevision={commandState.widgets.inspectRevision}
       requestDiagnostics={kernel.diagnostics}
       resetCameraRevision={commandState.resetCameraRevision}
+      regionOverlayVisible={regionOverlayVisible}
       rotationMode={commandState.widgets.rotationMode}
       scaleLabelsVisible={commandState.widgets.scaleLabelsVisible}
       scaleUnitMode={commandState.widgets.scaleUnitMode}
@@ -349,8 +374,31 @@ function useViewport3DSelectionHandlers({
     },
     [select],
   );
+  const onSelectRegion = useCallback(
+    (region: RegionOverlaySelection) => {
+      const nodeId = `model:object:${region.objectId}:regions:${region.regionId}`;
+      select({
+        kind: "object.region",
+        label: region.regionId,
+        nodeId,
+        objectId: region.objectId,
+        ref: {
+          kind: "object.region",
+          nodeId,
+          objectId: region.objectId,
+          regionId: region.regionId,
+          type: "scene-object",
+          visualizationTargetId: visualizationTargetIdForSceneObject(
+            region.objectId,
+            region.regionId,
+          ),
+        },
+      });
+    },
+    [select],
+  );
 
-  return { onSelectDomain, onSelectObject, onSelectPart };
+  return { onSelectDomain, onSelectObject, onSelectPart, onSelectRegion };
 }
 
 const Viewport3DFrame = memo(function Viewport3DFrame({
@@ -370,6 +418,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   meshQualityRange,
   onCameraPatch,
   onClearSelection,
+  onRegionOverlayVisibleChange,
   quantityId,
   selectedLabel,
   slotId,
@@ -403,6 +452,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     useState<string | null>(null);
   const [inspectHover, setInspectHover] =
     useState<Viewport3DInspectHover | null>(null);
+  const lastRenderedMeshRevision = useRef<number | string | null>(null);
   const sendVisualizationAck = useVisualizationClientAckSender({ api: kernel.api });
   const initialCameraFit = resolveViewport3DCameraFit(null);
   const discretizationKind = sceneProps.fdmDomain
@@ -423,8 +473,16 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       status: "rendered",
       viewportId: slotId,
     });
+    notifyMeshTopologyRendered({
+      bus: kernel.bus,
+      lastRevision: lastRenderedMeshRevision,
+      meshRevision: sceneProps.renderedMeshRevision,
+      rendererId: slotId,
+    });
   }, [
     clientReady,
+    kernel.bus,
+    sceneProps.renderedMeshRevision,
     sendVisualizationAck,
     slotId,
     visualizationEffectiveRenderMode,
@@ -450,7 +508,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       }
       setDismissedResourceIssueKey(fieldDataIssue?.key ?? null);
     },
-    [fieldDataIssue?.key],
+    [fieldDataIssue?.key, setDismissedResourceIssueKey],
   );
   useEffect(() => {
     if (captureRevision <= 0 || typeof window === "undefined") return;
@@ -480,7 +538,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           : currentAngles,
       );
     },
-    [],
+    [setOrbitDebugAngles],
   );
   const applyOrbitDebugAngles = useCallback(
     (angles: Viewport3DOrbitDebugAngles) => {
@@ -488,14 +546,14 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       setOrbitDebugAngles(nextAngles);
       setOrbitDebugRevision((revision) => revision + 1);
     },
-    [],
+    [setOrbitDebugAngles, setOrbitDebugRevision],
   );
   const commitOrbitDebugAngles = useCallback(() => {
     setOrbitDebugCommitRevision((revision) => revision + 1);
-  }, []);
+  }, [setOrbitDebugCommitRevision]);
   const clearInspectHover = useCallback(() => {
     setInspectHover(null);
-  }, []);
+  }, [setInspectHover]);
   const updateInspectHover = useCallback(
     (
       sample: Viewport3DInspectSample,
@@ -503,7 +561,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     ) => {
       setInspectHover({ inspectRevision, sample, screenPosition });
     },
-    [inspectRevision],
+    [inspectRevision, setInspectHover],
   );
   const visibleInspectHover =
     sceneProps.inspectEnabled &&
@@ -545,6 +603,19 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           </span>
         ) : null}
         <span>{status}</span>
+        {sceneProps.regionOverlays.length > 0 ? (
+          <Button
+            aria-pressed={sceneProps.regionOverlayVisible}
+            size="sm"
+            type="button"
+            variant="ghost"
+            onClick={() =>
+              onRegionOverlayVisibleChange(!sceneProps.regionOverlayVisible)
+            }
+          >
+            {sceneProps.regionOverlayVisible ? "Hide regions" : "Show regions"}
+          </Button>
+        ) : null}
         <Viewport3DFieldRefreshCountdown refresh={fieldRefresh} />
         <span>{diagnostics}</span>
       </div>

@@ -15,6 +15,7 @@ use crate::error::ApiError;
 use crate::fem_slice_overlay::{collect_fem_slice_overlay, FemSliceOverlayInput};
 use crate::field_slice::{resolve_slice_query, FieldSliceQuery, SlicePlane};
 use crate::field_store::serialize_fem_mesh_topology_binary_v1;
+use crate::router_v2::handlers::sessions::status::{domain_generation_id, fdm_grid_shape};
 use crate::schemas::domain::*;
 use crate::types::{AppState, SessionStateResponse};
 
@@ -46,7 +47,11 @@ pub async fn get_domain_meta(
     let is_fem = snapshot.fem_mesh.is_some();
     let latest = snapshot.live_state.as_ref().map(|l| &l.latest_step);
 
-    let grid_shape = latest.map(|s| s.grid).unwrap_or([0, 0, 0]);
+    let grid_shape = if is_fem {
+        [0, 0, 0]
+    } else {
+        fdm_grid_shape(snapshot, latest.map(|s| s.grid))
+    };
 
     let (cells, nodes, elements, boundary_faces) = if is_fem {
         let m = snapshot.fem_mesh.as_ref().unwrap();
@@ -68,12 +73,7 @@ pub async fn get_domain_meta(
     let mut units = HashMap::new();
     units.insert("length".into(), "m".into());
 
-    let generation_id = snapshot
-        .fem_mesh
-        .as_ref()
-        .and_then(|m| m.generation_id.as_deref())
-        .and_then(|g| g.parse::<u64>().ok())
-        .unwrap_or(0);
+    let generation_id = domain_generation_id(snapshot);
 
     let fdm_grid =
         (!is_fem && grid_shape.iter().any(|v| *v > 0)).then(|| fdm_grid_descriptor(snapshot));

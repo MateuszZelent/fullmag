@@ -209,6 +209,16 @@ export function draftKeyForObjectMeshPolicyResource(
   ].join(":");
 }
 
+export function objectMeshPolicyDraftDirty(
+  draft: ObjectMeshPolicyDraft,
+  baseDraft: ObjectMeshPolicyDraft,
+): boolean {
+  return !draftRecordsEqual(
+    draft as unknown as Record<string, unknown>,
+    baseDraft as unknown as Record<string, unknown>,
+  );
+}
+
 function defaultObjectMeshPolicyConfig(): JsonObject {
   return {
     algorithm_2d: 6,
@@ -521,6 +531,60 @@ function parseConfig(
       ok: false,
     };
   }
+}
+
+function draftRecordsEqual(
+  left: Record<string, unknown>,
+  right: Record<string, unknown>,
+): boolean {
+  const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
+  for (const key of keys) {
+    if (key === "configText") {
+      if (!jsonTextEquivalent(left[key], right[key])) return false;
+    } else if (!draftValueEquivalent(left[key], right[key])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function jsonTextEquivalent(left: unknown, right: unknown): boolean {
+  const leftParsed = parseConfig(typeof left === "string" ? left : "");
+  const rightParsed = parseConfig(typeof right === "string" ? right : "");
+  if (!leftParsed.ok || !rightParsed.ok) return Object.is(left, right);
+  return normalizedJsonValue(leftParsed.value) === normalizedJsonValue(rightParsed.value);
+}
+
+function normalizedJsonValue(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(normalizedJsonValue).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, nested]) => `${JSON.stringify(key)}:${normalizedJsonValue(nested)}`)
+      .join(",")}}`;
+  }
+  const numeric = finiteNumericValue(value);
+  return numeric !== null ? `number:${numeric}` : JSON.stringify(value);
+}
+
+function draftValueEquivalent(left: unknown, right: unknown): boolean {
+  const leftNumber = finiteNumericValue(left);
+  const rightNumber = finiteNumericValue(right);
+  if (leftNumber !== null && rightNumber !== null) {
+    return Object.is(leftNumber, rightNumber);
+  }
+  return Object.is(left, right);
+}
+
+function finiteNumericValue(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return null;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 interface ManualBoxSizeFieldDraft {

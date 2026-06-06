@@ -48,8 +48,7 @@ export function Vector3Field({
                   aria-label={`${label} ${axis.toUpperCase()}`}
                   className="fm-inspector-input"
                   disabled={disabled}
-                  inputMode="decimal"
-                  type="number"
+                  type="text"
                   value={values[index] ?? ""}
                   onChange={(event) => onChange(index as 0 | 1 | 2, event.target.value)}
                 />

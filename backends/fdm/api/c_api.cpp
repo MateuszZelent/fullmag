@@ -459,6 +459,16 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
             "oersted configuration is ambiguous: provide either OerstedCylinder or oersted_field_xyz, not both";
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
+    const bool has_cellwise_material_field =
+        plan->ms_field != nullptr || plan->a_field != nullptr || plan->alpha_field != nullptr
+        || plan->dind_field != nullptr || plan->dbulk_field != nullptr
+        || plan->ms_field_len != 0 || plan->a_field_len != 0 || plan->alpha_field_len != 0
+        || plan->dind_field_len != 0 || plan->dbulk_field_len != 0;
+    if (has_cellwise_material_field) {
+        ctx->last_error =
+            "FDM cellwise material fields reached native backend before kernel support is enabled; planner/runtime materialization must keep this path capability-gated";
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
     if (has_oersted_field && plan->oersted_field_len != ctx->cell_count * 3u) {
         ctx->last_error = "oersted_field_len mismatch: expected "
             + std::to_string(ctx->cell_count * 3u)
@@ -469,6 +479,14 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
         ctx->last_error = "region_mask_len mismatch: expected "
             + std::to_string(ctx->cell_count)
             + ", got " + std::to_string(plan->region_mask_len);
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+    if (plan->exchange_pair_count != 0 && plan->exchange_pairs == nullptr) {
+        ctx->last_error = "exchange_pair_count is non-zero but exchange_pairs is null";
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+    if (plan->exchange_pair_count != 0 && !ctx->has_region_mask) {
+        ctx->last_error = "exchange_pairs require region_mask";
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
     if (ctx->has_active_mask) {
@@ -559,9 +577,52 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
             // Use caller-provided LUT
             std::memcpy(lut_host.data(), plan->exchange_lut, N * N * sizeof(double));
         } else {
-            // Auto-build default LUT: A_ii = A, A_ij(i!=j) = 0
-            for (uint64_t r = 0; r < N; ++r) {
-                lut_host[r * N + r] = ctx->A;
+            switch (plan->exchange_pair_default) {
+            case FULLMAG_FDM_EXCHANGE_PAIR_HARMONIC_MEAN:
+                // Uniform-material harmonic mean is A for every active pair.
+                std::fill(lut_host.begin(), lut_host.end(), ctx->A);
+                break;
+            case FULLMAG_FDM_EXCHANGE_PAIR_EXPLICIT:
+                ctx->last_error =
+                    "exchange_pair_default=explicit is not a valid default; use exchange_pairs for explicit overrides";
+                return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+            case FULLMAG_FDM_EXCHANGE_PAIR_DISABLED:
+            case FULLMAG_FDM_EXCHANGE_PAIR_UNSPECIFIED:
+                // Legacy/free-surface default: A_ii = A, A_ij(i!=j) = 0.
+                for (uint64_t r = 0; r < N; ++r) {
+                    lut_host[r * N + r] = ctx->A;
+                }
+                break;
+            default:
+                ctx->last_error = "invalid exchange_pair_default";
+                return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+            }
+            for (uint64_t index = 0; index < plan->exchange_pair_count; ++index) {
+                const fullmag_fdm_exchange_pair_desc &pair = plan->exchange_pairs[index];
+                if (pair.region_i >= N || pair.region_j >= N) {
+                    ctx->last_error = "exchange pair region index exceeds FULLMAG_FDM_MAX_EXCHANGE_REGIONS";
+                    return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+                }
+                double value = 0.0;
+                switch (pair.mode) {
+                case FULLMAG_FDM_EXCHANGE_PAIR_HARMONIC_MEAN:
+                    value = ctx->A * pair.scale;
+                    break;
+                case FULLMAG_FDM_EXCHANGE_PAIR_EXPLICIT:
+                    value = pair.inter_exchange * pair.scale;
+                    break;
+                case FULLMAG_FDM_EXCHANGE_PAIR_DISABLED:
+                    value = 0.0;
+                    break;
+                case FULLMAG_FDM_EXCHANGE_PAIR_UNSPECIFIED:
+                    ctx->last_error = "exchange pair mode must not be unspecified";
+                    return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+                default:
+                    ctx->last_error = "invalid exchange pair mode";
+                    return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+                }
+                lut_host[pair.region_i * N + pair.region_j] = value;
+                lut_host[pair.region_j * N + pair.region_i] = value;
             }
         }
         if (!context_upload_exchange_lut(*ctx, lut_host.data(), N * N)) {

@@ -107,6 +107,23 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
                 .delete(handlers::model::delete_authoring_object),
         )
         .route(
+            "/v2/sessions/current/model/objects/:object_id/regions",
+            post(handlers::model::create_authoring_object_region),
+        )
+        .route(
+            "/v2/sessions/current/model/objects/:object_id/regions/reorder",
+            post(handlers::model::reorder_authoring_object_regions),
+        )
+        .route(
+            "/v2/sessions/current/model/objects/:object_id/regions/:region_id/duplicate",
+            post(handlers::model::duplicate_authoring_object_region),
+        )
+        .route(
+            "/v2/sessions/current/model/objects/:object_id/regions/:region_id",
+            patch(handlers::model::patch_authoring_object_region)
+                .delete(handlers::model::delete_authoring_object_region),
+        )
+        .route(
             "/v2/sessions/current/model/objects/:object_id/geometry",
             patch(handlers::model::patch_authoring_object_geometry),
         )
@@ -145,6 +162,22 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         .route(
             "/v2/sessions/current/model/regions",
             get(handlers::model::get_authoring_regions),
+        )
+        .route(
+            "/v2/sessions/current/model/realized-regions",
+            get(handlers::model::get_authoring_realized_regions),
+        )
+        .route(
+            "/v2/sessions/current/model/region-diagnostics",
+            get(handlers::model::get_authoring_region_diagnostics),
+        )
+        .route(
+            "/v2/sessions/current/model/material-fields",
+            get(handlers::model::get_authoring_material_fields),
+        )
+        .route(
+            "/v2/sessions/current/model/couplings",
+            get(handlers::model::get_authoring_couplings),
         )
         .route(
             "/v2/sessions/current/model/regions/:region_id",

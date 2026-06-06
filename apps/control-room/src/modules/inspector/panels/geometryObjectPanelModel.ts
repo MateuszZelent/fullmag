@@ -1,6 +1,5 @@
 import type {
   JsonObject,
-  ObjectMetricsResource,
   SceneResource,
 } from "@/kernel/api/apiTypes";
 import type { Selection } from "@/kernel/selection/selectionTypes";
@@ -50,19 +49,6 @@ export interface GeometryDraftTransformResult {
   transform: JsonObject | null;
 }
 
-export interface ObjectMetricsPanelModel {
-  anisotropy: string;
-  demag: string;
-  dmi: string;
-  exchange: string;
-  magnetization: string;
-  sample: string;
-  source: string;
-  status: string;
-  total: string;
-  zeeman: string;
-}
-
 type JsonRecord = Record<string, unknown>;
 
 function asRecord(value: unknown): JsonRecord | null {
@@ -86,9 +72,18 @@ function asNumberArray(value: unknown): number[] | null {
     : null;
 }
 
+function formatScientificInput(value: number): string {
+  if (value === 0) return "0";
+  const abs = Math.abs(value);
+  if (abs < 1e-4 || abs >= 1e6) {
+    return value.toExponential().replace(/\.0+e/, "e").replace(/(\.\d*?[1-9])0+e/, "$1e");
+  }
+  return String(value);
+}
+
 function formatNumberInput(value: unknown, fallback: number): string {
   const numberValue = asNumber(value);
-  return String(numberValue ?? fallback);
+  return formatScientificInput(numberValue ?? fallback);
 }
 
 function formatVectorInput(
@@ -97,9 +92,9 @@ function formatVectorInput(
 ): [string, string, string] {
   const values = asNumberArray(value);
   return [
-    String(values?.[0] ?? fallback[0]),
-    String(values?.[1] ?? fallback[1]),
-    String(values?.[2] ?? fallback[2]),
+    formatScientificInput(values?.[0] ?? fallback[0]),
+    formatScientificInput(values?.[1] ?? fallback[1]),
+    formatScientificInput(values?.[2] ?? fallback[2]),
   ];
 }
 
@@ -526,45 +521,5 @@ export function resolveGeometryObjectPanelModel(
       asString(geometry?.kind) ??
       "object",
     source: "SceneDocument",
-  };
-}
-
-function formatScientific(value: number, unit: string): string {
-  return `${value.toExponential(6)} ${unit}`;
-}
-
-function formatMagnetization(value: ObjectMetricsResource["magnetization_average"]): string {
-  return `(${value.mx.toFixed(6)}, ${value.my.toFixed(6)}, ${value.mz.toFixed(6)})`;
-}
-
-export function resolveObjectMetricsPanelModel(
-  metrics: ObjectMetricsResource | null,
-): ObjectMetricsPanelModel {
-  if (!metrics) {
-    return {
-      anisotropy: "unavailable",
-      demag: "unavailable",
-      dmi: "unavailable",
-      exchange: "unavailable",
-      magnetization: "unavailable",
-      sample: "no resource",
-      source: "unavailable",
-      status: "unavailable",
-      total: "unavailable",
-      zeeman: "unavailable",
-    };
-  }
-
-  return {
-    anisotropy: formatScientific(metrics.energies.anisotropy, "J"),
-    demag: formatScientific(metrics.energies.demag, "J"),
-    dmi: formatScientific(metrics.energies.dmi, "J"),
-    exchange: formatScientific(metrics.energies.exchange, "J"),
-    magnetization: formatMagnetization(metrics.magnetization_average),
-    sample: `step ${metrics.step} @ ${metrics.time_seconds.toExponential(6)} s`,
-    source: metrics.source,
-    status: metrics.has_solver_sample ? "computed" : "initial",
-    total: formatScientific(metrics.energies.total, "J"),
-    zeeman: formatScientific(metrics.energies.zeeman, "J"),
   };
 }

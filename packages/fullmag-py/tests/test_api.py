@@ -138,6 +138,495 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(
             ir["problem_meta"]["runtime_metadata"]["runtime_selection"]["device"], "auto"
         )
+        self.assertEqual(ir["object_regions"], [])
+        self.assertEqual(ir["material_parameter_fields"], [])
+        self.assertEqual(ir["couplings"], [])
+
+    def test_flat_api_object_region_lowers_to_ir(self) -> None:
+        fm.reset()
+        fm.engine("fem")
+        layer = fm.geometry(
+            fm.Box(size=(200e-9, 80e-9, 4e-9), name="track"),
+            name="track",
+        )
+        layer.Ms = 800e3
+        layer.Aex = 13e-12
+        layer.alpha = 0.01
+        core = layer.add_region(
+            "skyrmion_core",
+            fm.Cylinder(radius=30e-9, height=4e-9),
+            priority=10,
+        )
+        core.material.Ms = fm.fields.constant(750e3, unit="A/m")
+        core.mesh(
+            maximum_element_size=1e-9,
+            minimum_element_size=1e-9,
+            transition_distance=60e-9,
+            order=1,
+        )
+        layer.set_material_field(
+            "Ms",
+            fm.fields.linear(
+                base=800e3,
+                gradient=(0.0, 1.0e11, 0.0),
+                unit="A/m",
+            ),
+            assignment_id="track_ms_gradient",
+        )
+        fm.exchange()
+        fm.solver(integrator="rk23")
+        fm.run(1e-12)
+
+        ir = flat_world._build_problem().to_ir(include_geometry_assets=False)
+
+        self.assertEqual(len(ir["object_regions"]), 1)
+        region_ir = ir["object_regions"][0]
+        self.assertEqual(region_ir["region_id"], "track:r1")
+        self.assertEqual(region_ir["owner_object"], "track")
+        self.assertEqual(region_ir["shape"]["kind"], "cylinder")
+        self.assertEqual(region_ir["shape"]["radius"], 30e-9)
+        self.assertEqual(region_ir["mesh_policy"]["maximum_element_size"], 1e-9)
+        self.assertEqual(region_ir["material_overrides"][0]["parameter"], "Ms")
+        self.assertEqual(
+            region_ir["material_overrides"][0]["value"],
+            {"kind": "constant", "value": 750e3, "unit": "A/m"},
+        )
+        self.assertEqual(len(ir["material_parameter_fields"]), 1)
+        assignment_ir = ir["material_parameter_fields"][0]
+        self.assertEqual(assignment_ir["assignment_id"], "track_ms_gradient")
+        self.assertEqual(assignment_ir["owner_object"], "track")
+        self.assertEqual(assignment_ir["parameter"], "Ms")
+        self.assertEqual(assignment_ir["value"]["kind"], "linear")
+        self.assertEqual(assignment_ir["value"]["frame"], "object")
+
+    def test_object_region_rejects_zero_ms_override(self) -> None:
+        fm.reset()
+        layer = fm.geometry(fm.Box(size=(20e-9, 20e-9, 2e-9)), name="film")
+        region = layer.add_region("void_like", fm.Box(size=(5e-9, 5e-9, 2e-9)))
+
+        with self.assertRaisesRegex(ValueError, "Ms must be > 0"):
+            region.material.Ms = 0.0
+
+    def test_region_registries_are_owner_scoped_and_study_read_only(self) -> None:
+        fm.reset()
+        study = fm.study("region_registry")
+        film = study.geometry(fm.Box(size=(100e-9, 50e-9, 2e-9)), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        core = film.add_region("core", fm.Cylinder(radius=15e-9, height=2e-9))
+        shell = film.add_region("shell", fm.Box(size=(60e-9, 40e-9, 2e-9)))
+
+        self.assertIs(film.regions["core"], core)
+        self.assertIs(film.regions[0], core)
+        self.assertEqual(film.regions.keys(), ("core", "shell"))
+        self.assertIs(study.regions["film/core"], core)
+        self.assertIs(study.regions[1], shell)
+        self.assertEqual(study.regions.keys(), ("film/core", "film/shell"))
+        with self.assertRaisesRegex(TypeError, "read-only"):
+            study.regions["film/core"] = shell
+
+        film.rename_region("core", "center")
+        self.assertEqual(core.name, "center")
+        self.assertEqual(core.region_id, "film:r1")
+        self.assertIs(film.regions["center"], core)
+        self.assertNotIn("core", film.regions)
+        self.assertEqual(study.regions.keys(), ("film/center", "film/shell"))
+
+        film.reorder_region("shell", 0)
+        self.assertIs(film.regions[0], shell)
+        self.assertIs(film.regions[1], core)
+
+    def test_region_registry_allocates_stable_non_reused_ids(self) -> None:
+        fm.reset()
+        study = fm.study("region_registry_ids")
+        film = study.geometry(fm.Box(size=(100e-9, 50e-9, 2e-9)), name="film")
+
+        first = film.add_region("core", fm.Cylinder(radius=15e-9, height=2e-9))
+        self.assertEqual(first.region_id, "film:r1")
+
+        film.remove_region(first)
+        second = film.add_region("core", fm.Cylinder(radius=20e-9, height=2e-9))
+
+        self.assertEqual(second.name, "core")
+        self.assertNotEqual(second.region_id, first.region_id)
+        self.assertEqual(second.region_id, "film:r2")
+        self.assertIs(study.regions["film/core"], second)
+        self.assertIs(study.regions["film/r2"], second)
+        self.assertIs(study.regions["film:r2"], second)
+
+    def test_region_registry_round_trip_preserves_deleted_allocated_ids(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            script_path = Path(tmp_dir) / "region_registry_deleted_ids.py"
+            script_path.write_text(
+                textwrap.dedent(
+                    """
+                    import fullmag as fm
+
+                    study = fm.study("region_registry_deleted_ids")
+                    film = study.geometry(fm.Box(size=(100e-9, 50e-9, 2e-9)), name="film")
+                    film.Ms = 800e3
+                    film.Aex = 13e-12
+                    first = film.add_region("core", fm.Cylinder(radius=15e-9, height=2e-9))
+                    film.remove_region(first)
+                    film.add_region("core", fm.Cylinder(radius=20e-9, height=2e-9))
+                    study.exchange()
+                    """
+                ).strip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            loaded = load_problem_from_script(script_path, lightweight_assets=True)
+            draft = export_builder_draft(loaded)
+            exported = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            exported_path = Path(tmp_dir) / "region_registry_deleted_ids_exported.py"
+            exported_path.write_text(exported, encoding="utf-8")
+            reloaded = load_problem_from_script(exported_path, lightweight_assets=True)
+            reloaded_draft = export_builder_draft(reloaded)
+
+        self.assertEqual(
+            draft["geometries"][0]["allocated_region_ids"],
+            ["film:r1", "film:r2"],
+        )
+        self.assertEqual(
+            draft["geometries"][0]["object_regions"][0]["region_id"],
+            "film:r2",
+        )
+        self.assertIn('film.regions.reserve_id("film:r1")', exported)
+        self.assertEqual(
+            reloaded_draft["geometries"][0]["allocated_region_ids"],
+            draft["geometries"][0]["allocated_region_ids"],
+        )
+        self.assertEqual(
+            reloaded_draft["geometries"][0]["object_regions"],
+            draft["geometries"][0]["object_regions"],
+        )
+
+    def test_shapes_namespace_authors_geometry_and_centered_region_shapes(self) -> None:
+        fm.reset()
+        study = fm.study("region_shapes_namespace")
+        film = study.geometry(
+            fm.shapes.box(
+                size=(100e-9, 50e-9, 2e-9),
+                center=(10e-9, 0.0, 0.0),
+                name="film",
+            ),
+            name="film",
+        )
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        region = film.add_region(
+            "core",
+            fm.shapes.cylinder(
+                radius=15e-9,
+                height=2e-9,
+                center=(5e-9, -2e-9, 0.0),
+            ),
+        )
+
+        ir = flat_world._build_problem().to_ir(include_geometry_assets=False)
+
+        self.assertEqual(ir["geometry"]["entries"][0]["kind"], "translate")
+        self.assertEqual(region.region_id, "film:r1")
+        self.assertEqual(
+            ir["object_regions"][0]["shape"],
+            {
+                "axis": [0.0, 0.0, 1.0],
+                "center": [5e-9, -2e-9, 0.0],
+                "height": 2e-9,
+                "kind": "cylinder",
+                "radius": 15e-9,
+            },
+        )
+
+    def test_region_shape_translation_adds_to_existing_center(self) -> None:
+        fm.reset()
+        study = fm.study("region_shape_translate_center")
+        film = study.geometry(fm.Box(size=(100e-9, 50e-9, 2e-9)), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.add_region(
+            "core",
+            fm.shapes.box(
+                size=(20e-9, 10e-9, 2e-9),
+                center=(5e-9, 1e-9, 0.0),
+            ).translate((2e-9, -3e-9, 0.0)),
+        )
+
+        ir = flat_world._build_problem().to_ir(include_geometry_assets=False)
+
+        shape = ir["object_regions"][0]["shape"]
+        self.assertEqual(shape["kind"], "box")
+        self.assertEqual(shape["size"], [20e-9, 10e-9, 2e-9])
+        for actual, expected in zip(shape["center"], [7e-9, -2e-9, 0.0], strict=True):
+            self.assertAlmostEqual(actual, expected)
+
+    def test_script_export_writes_default_region_ids_explicitly(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            script_path = Path(tmp_dir) / "region_registry_export.py"
+            script_path.write_text(
+                textwrap.dedent(
+                    """
+                    import fullmag as fm
+
+                    study = fm.study("region_registry_export")
+                    study.engine("fem")
+                    film = study.geometry(
+                        fm.Box(size=(100e-9, 50e-9, 2e-9), name="film"),
+                        name="film",
+                    )
+                    film.Ms = 800e3
+                    film.Aex = 13e-12
+                    film.add_region("core", fm.Cylinder(radius=15e-9, height=2e-9))
+                    study.exchange()
+                    """
+                ).strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            loaded = load_problem_from_script(script_path, lightweight_assets=True)
+            exported = rewrite_loaded_problem_script(loaded)["rendered_source"]
+
+        self.assertIn('region_id="film:r1"', exported)
+
+    def test_remove_region_drops_material_fields_and_region_couplings(self) -> None:
+        fm.reset()
+        study = fm.study("region_remove")
+        film = study.geometry(fm.Box(size=(100e-9, 50e-9, 2e-9)), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        core = film.add_region("core", fm.Cylinder(radius=15e-9, height=2e-9))
+        shell = film.add_region("shell", fm.Box(size=(60e-9, 40e-9, 2e-9)))
+        film.set_material_field(
+            "Ms",
+            fm.fields.linear(base=800e3, gradient=(0.0, 1.0e11, 0.0)),
+            assignment_id="core_ms",
+            region="core",
+        )
+        study.couplings.exchange(core, shell, coupling_id="core_shell_exchange")
+        study.exchange()
+
+        before = flat_world._build_problem().to_ir(include_geometry_assets=False)
+        self.assertEqual(len(before["material_parameter_fields"]), 1)
+        self.assertEqual(len(before["couplings"]), 1)
+
+        removed = film.remove_region("core")
+        self.assertIs(removed, core)
+        self.assertEqual(film.regions.keys(), ("shell",))
+        after = flat_world._build_problem().to_ir(include_geometry_assets=False)
+        self.assertEqual(after["material_parameter_fields"], [])
+        self.assertEqual(after["couplings"], [])
+
+        with self.assertRaisesRegex(RuntimeError, "not attached"):
+            removed.delete()
+
+    def test_class_api_exchange_coupling_lowers_to_ir(self) -> None:
+        material = fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.01)
+        track = fm.Ferromagnet(
+            name="track",
+            geometry=fm.Box(size=(100e-9, 20e-9, 2e-9), name="track"),
+            material=material,
+        )
+        reference = fm.Ferromagnet(
+            name="reference",
+            geometry=fm.Box(size=(100e-9, 20e-9, 2e-9), name="reference"),
+            material=material,
+        )
+        registry = fm.CouplingRegistry()
+        coupling = registry.exchange(
+            "track",
+            "reference",
+            mode="harmonic_mean",
+            scale=0.5,
+            coupling_id="track_reference_exchange",
+        )
+        problem = fm.Problem(
+            name="exchange_pair",
+            magnets=[track, reference],
+            energy=[fm.Exchange()],
+            study=fm.TimeEvolution(
+                dynamics=fm.LLG(),
+                outputs=[fm.SaveField("m", every=1e-12)],
+            ),
+            couplings=[coupling],
+        )
+
+        ir = problem.to_ir(include_geometry_assets=False)
+
+        self.assertEqual(len(ir["couplings"]), 1)
+        coupling_ir = ir["couplings"][0]
+        self.assertEqual(coupling_ir["coupling_id"], "track_reference_exchange")
+        self.assertEqual(coupling_ir["kind"], "exchange")
+        self.assertEqual(coupling_ir["source"], {"kind": "object", "object": "track"})
+        self.assertEqual(coupling_ir["target"], {"kind": "object", "object": "reference"})
+        self.assertEqual(coupling_ir["parameters"]["mode"], "harmonic_mean")
+        self.assertEqual(coupling_ir["parameters"]["scale"], 0.5)
+
+    def test_flat_api_surface_rkky_coupling_lowers_to_ir(self) -> None:
+        fm.reset()
+        study = fm.study("rkky_stack")
+        layer_a = study.geometry(
+            fm.Box(size=(100e-9, 100e-9, 2e-9), name="layer_a"),
+            name="layer_a",
+        )
+        layer_b = study.geometry(
+            fm.Box(size=(100e-9, 100e-9, 2e-9), name="layer_b"),
+            name="layer_b",
+        )
+        for layer in (layer_a, layer_b):
+            layer.Ms = 800e3
+            layer.Aex = 13e-12
+        study.couplings.rkky(
+            layer_a.surface("top"),
+            layer_b.surface("bottom"),
+            J1=-0.3e-3,
+            coupling_id="layer_a_layer_b_rkky",
+        )
+        study.exchange()
+        study.solver(integrator="rk23")
+        fm.run(1e-12)
+
+        ir = flat_world._build_problem().to_ir(include_geometry_assets=False)
+
+        self.assertEqual(len(ir["couplings"]), 1)
+        coupling_ir = ir["couplings"][0]
+        self.assertEqual(coupling_ir["kind"], "rkky")
+        self.assertEqual(
+            coupling_ir["source"],
+            {"kind": "surface", "object": "layer_a", "selector": "top"},
+        )
+        self.assertEqual(
+            coupling_ir["target"],
+            {"kind": "surface", "object": "layer_b", "selector": "bottom"},
+        )
+        self.assertEqual(coupling_ir["parameters"], {"kind": "rkky", "j1": -0.3e-3})
+
+    def test_rkky_requires_surface_endpoints_in_python(self) -> None:
+        registry = fm.CouplingRegistry()
+
+        with self.assertRaisesRegex(ValueError, "endpoints must be surfaces"):
+            registry.rkky("layer_a", "layer_b", J1=-0.3e-3)
+
+    def test_public_couplings_namespace_builds_surface_endpoint(self) -> None:
+        self.assertEqual(
+            fm.couplings.surface("layer", "top").to_ir(),
+            {"kind": "surface", "object": "layer", "selector": "top"},
+        )
+
+    def test_script_builder_round_trips_region_owned_authoring(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            script_path = Path(tmp_dir) / "region_owned.py"
+            script_path.write_text(
+                textwrap.dedent(
+                    """
+                    import fullmag as fm
+
+                    study = fm.study("region_owned")
+                    study.engine("fem")
+
+                    film = study.geometry(
+                        fm.Box(size=(100e-9, 50e-9, 2e-9), name="film"),
+                        name="film",
+                    )
+                    film.Ms = 800e3
+                    film.Aex = 13e-12
+                    film.alpha = 0.1
+                    core = film.add_region(
+                        "core",
+                        fm.Cylinder(radius=15e-9, height=2e-9),
+                        region_id="film:core_region",
+                        priority=7,
+                        realization_policy="conformal",
+                    )
+                    core.material.Ms = fm.fields.constant(760e3, unit="A/m")
+                    core.mesh(
+                        maximum_element_size=1e-9,
+                        minimum_element_size=1e-9,
+                        transition_distance=40e-9,
+                        order=1,
+                    )
+                    film.set_material_field(
+                        "Ms",
+                        fm.fields.linear(
+                            base=800e3,
+                            gradient=(0.0, 1.0e11, 0.0),
+                            unit="A/m",
+                        ),
+                        assignment_id="film_ms_gradient",
+                        region=core,
+                        priority=3,
+                    )
+
+                    reference = study.geometry(
+                        fm.Box(size=(100e-9, 50e-9, 2e-9), name="reference"),
+                        name="reference",
+                    )
+                    reference.Ms = 780e3
+                    reference.Aex = 12e-12
+                    reference.alpha = 0.1
+
+                    study.couplings.rkky(
+                        film.surface("top"),
+                        reference.surface("bottom"),
+                        J1=-0.3e-3,
+                        coupling_id="film_reference_rkky",
+                    )
+                    study.exchange()
+                    """
+                ).strip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            loaded = load_problem_from_script(script_path, lightweight_assets=True)
+            draft = export_builder_draft(loaded)
+            scene = build_scene_document_from_builder(draft)
+            rebuilt_draft = build_builder_from_scene_document(scene)
+            exported = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            exported_path = Path(tmp_dir) / "region_owned_exported.py"
+            exported_path.write_text(exported, encoding="utf-8")
+            reloaded = load_problem_from_script(exported_path, lightweight_assets=True)
+
+        self.assertEqual(
+            rebuilt_draft["geometries"][0]["object_regions"],
+            draft["geometries"][0]["object_regions"],
+        )
+        self.assertEqual(
+            rebuilt_draft["geometries"][0]["allocated_region_ids"],
+            draft["geometries"][0]["allocated_region_ids"],
+        )
+        self.assertEqual(
+            rebuilt_draft["geometries"][0]["material_parameter_fields"],
+            draft["geometries"][0]["material_parameter_fields"],
+        )
+        self.assertEqual(rebuilt_draft["couplings"], draft["couplings"])
+        self.assertEqual(
+            scene["objects"][0]["regions"],
+            draft["geometries"][0]["object_regions"],
+        )
+        self.assertEqual(scene["version"], "scene.v2")
+        self.assertEqual(
+            scene["objects"][0]["allocated_region_ids"],
+            draft["geometries"][0]["allocated_region_ids"],
+        )
+        self.assertEqual(scene["couplings"], draft["couplings"])
+
+        self.assertIn('study = fm.study("region_owned")', exported)
+        self.assertIn("film_core_region = film.add_region", exported)
+        self.assertIn('region_id="film:core_region"', exported)
+        self.assertIn('fm.fields.constant(760000, unit="A/m")', exported)
+        self.assertIn("film.set_material_field", exported)
+        self.assertIn("study.couplings.rkky", exported)
+        self.assertIn('film.surface("top")', exported)
+
+        original_ir = loaded.problem.to_ir(include_geometry_assets=False)
+        reloaded_ir = reloaded.problem.to_ir(include_geometry_assets=False)
+        self.assertEqual(reloaded_ir["object_regions"], original_ir["object_regions"])
+        self.assertEqual(
+            reloaded_ir["material_parameter_fields"],
+            original_ir["material_parameter_fields"],
+        )
+        self.assertEqual(reloaded_ir["couplings"], original_ir["couplings"])
 
     def test_demag_fredkin_koehler_lowers_to_ir(self) -> None:
         self.assertEqual(
@@ -1094,10 +1583,10 @@ class ProblemApiTests(unittest.TestCase):
         )
         mesh_workflow = loaded.problem.runtime_metadata["mesh_workflow"]
         study_universe = loaded.problem.runtime_metadata["study_universe"]
-        self.assertEqual(study_universe["airbox_hmax"], 1000e-9)
-        self.assertEqual(study_universe["airbox_hmin"], 50e-9)
+        self.assertEqual(study_universe["airbox_hmax"], 500e-9)
+        self.assertEqual(study_universe["airbox_hmin"], 20e-9)
         self.assertEqual(study_universe["airbox_growth_rate"], 1.5)
-        self.assertEqual(mesh_workflow["fem"]["hmax"], 40e-9)
+        self.assertEqual(mesh_workflow["fem"]["hmax"], 10e-9)
         mesh_options = mesh_workflow["mesh_options"]
         self.assertEqual(mesh_options["algorithm_2d"], 6)
         self.assertEqual(mesh_options["algorithm_3d"], 1)
@@ -1107,22 +1596,25 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(len(per_geometry), 1)
         arch_mesh = per_geometry[0]
         self.assertEqual(arch_mesh["geometry"], "arch_waveguide")
-        self.assertEqual(arch_mesh["maximum_element_size"], 40e-9)
-        self.assertEqual(arch_mesh["minimum_element_size"], 10e-9)
-        self.assertEqual(arch_mesh["interface_hmax"], 40e-9)
-        self.assertEqual(arch_mesh["interface_thickness"], 40e-9)
+        self.assertEqual(arch_mesh["maximum_element_size"], 10e-9)
+        self.assertEqual(arch_mesh["minimum_element_size"], 5e-9)
+        self.assertEqual(arch_mesh["interface_hmax"], 10e-9)
+        self.assertEqual(arch_mesh["interface_thickness"], 10e-9)
         self.assertEqual(arch_mesh["transition_distance"], "airbox_boundary")
         self.assertEqual(arch_mesh["mesh_strategy"], "thin_film_tetrahedral")
         self.assertEqual(arch_mesh["through_thickness_elements"], 1)
-        self.assertEqual(arch_mesh["edge_hmax"], 40e-9)
-        self.assertEqual(arch_mesh["edge_thickness"], 40e-9)
+        self.assertEqual(arch_mesh["edge_hmax"], 5e-9)
+        self.assertEqual(arch_mesh["edge_thickness"], 10e-9)
         self.assertEqual(arch_mesh["edge_transition_distance"], "airbox_boundary")
-        self.assertEqual(arch_mesh["corner_hmax"], 40e-9)
-        self.assertEqual(arch_mesh["corner_extent"], 40e-9)
+        self.assertEqual(arch_mesh["corner_hmax"], 5e-9)
+        self.assertEqual(arch_mesh["corner_extent"], 10e-9)
         self.assertEqual(arch_mesh["corner_transition_distance"], "airbox_boundary")
         self.assertNotIn("algorithm_3d", arch_mesh)
         self.assertNotIn("optimize", arch_mesh)
         self.assertEqual(arch_mesh["size_fields"][0]["kind"], "ComponentRestrictedCylinder")
+        self.assertEqual(arch_mesh["size_fields"][0]["params"]["VIn"], 1e-9)
+        self.assertEqual(arch_mesh["size_fields"][0]["params"]["VOut"], 10e-9)
+        self.assertEqual(arch_mesh["size_fields"][0]["params"]["Radius"], 350e-9)
         demag_solver = loaded.problem.discretization.fem.demag_solver_policy
         self.assertIsNotNone(demag_solver)
         self.assertEqual(demag_solver.print_level, 0)
@@ -1131,14 +1623,14 @@ class ProblemApiTests(unittest.TestCase):
         object_mesh = scene["objects"][0]["object_mesh"]
         self.assertEqual(object_mesh["mesh_strategy"], "thin_film_tetrahedral")
         self.assertIsNone(object_mesh["algorithm_3d"])
-        self.assertEqual(object_mesh["hmin"], "1e-08")
-        self.assertEqual(object_mesh["edge_maximum_element_size"], "4e-08")
-        self.assertEqual(object_mesh["edge_thickness"], "4e-08")
+        self.assertEqual(object_mesh["hmin"], "5e-09")
+        self.assertEqual(object_mesh["edge_maximum_element_size"], "5e-09")
+        self.assertEqual(object_mesh["edge_thickness"], "1e-08")
         self.assertEqual(object_mesh["edge_transition_distance"], "airbox_boundary")
-        self.assertEqual(object_mesh["corner_maximum_element_size"], "4e-08")
-        self.assertEqual(object_mesh["corner_extent"], "4e-08")
+        self.assertEqual(object_mesh["corner_maximum_element_size"], "5e-09")
+        self.assertEqual(object_mesh["corner_extent"], "1e-08")
         self.assertEqual(object_mesh["corner_transition_distance"], "airbox_boundary")
-        self.assertEqual(object_mesh["interface_maximum_element_size"], "4e-08")
+        self.assertEqual(object_mesh["interface_maximum_element_size"], "1e-08")
 
     def test_arch_skyrmion_example_uses_skyrmion_texture_and_gpu_ready_relax(self) -> None:
         example_path = Path(__file__).resolve().parents[3] / "examples" / "arch_skyrmion_relax_50nm.py"

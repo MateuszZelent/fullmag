@@ -171,7 +171,8 @@ Current object-authoring routes:
 | `/v2/sessions/current/model/objects/{object_id}/interactions/{interaction_kind}` | `PATCH` | Patch one selected-object interaction entry. |
 | `/v2/sessions/current/model/materials/{material_id}` | `GET` | Read a material asset referenced by an object. |
 | `/v2/sessions/current/model/materials/{material_id}` | `PATCH` | Patch a material asset referenced by an object. Shared-asset semantics are explicit until object-private material assets are introduced. |
-| `/v2/sessions/current/model/regions` | `GET` | Read object-derived region resources for the current scene realization. |
+| `/v2/sessions/current/model/regions` | `GET` | Read authored object-region resources from the canonical scene. |
+| `/v2/sessions/current/model/realized-regions` | `GET` | Read geometry-realized body-region resources derived from the current scene realization. |
 | `/v2/sessions/current/model/regions/{region_id}` | `PATCH` | Patch an object-derived region name/visibility and return the committed scene. |
 | `/v2/sessions/current/model/transactions` | `POST` | Commit an explicit semantic authoring transaction. |
 | `/v2/sessions/current/model/geometry/capabilities` | `GET` | Read backend-owned primitive/CSG capability matrix. |
@@ -202,6 +203,10 @@ resources. The control room commits `study.exchange_enabled` and `study.demag_en
 as interfacial DMI and anisotropy.
 
 Mesh-affecting model changes mark affected objects or the scene as mesh-stale. A frontend may show primitive authoring geometry immediately after a create/edit commit, but solver topology remains owned by `meshing` resources and is current only after mesh-build provenance matches the committed scene revision.
+
+### Production mesh build management
+
+Mesh build management distinguishes policy intent, accepted command, active build, latest successful build, and rendered viewport revision. Policy resources store requested authoring intent. Build resources expose resolved execution reality and published mesh revisions. Viewport acknowledgements are diagnostics and must not become the source of mesh truth.
 
 Mesh rebuild uses the existing command path:
 

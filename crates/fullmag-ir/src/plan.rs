@@ -62,10 +62,13 @@ pub struct FdmPlanIR {
     pub enable_demag: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_field: Option<[f64; 3]>,
-    /// Inter-region exchange coupling overrides.
+    /// Explicit inter-region exchange coupling overrides.
     /// Each entry `(region_i, region_j, A_ij)` sets the exchange stiffness [J/m]
-    /// between regions i and j (symmetric: A_ij = A_ji).
-    /// When empty, cross-region exchange defaults to zero (free-surface BC).
+    /// between regions i and j (symmetric: A_ij = A_ji). When a region mask is
+    /// present and this list is empty, native FDM uses the backend default
+    /// exchange-pair mode. Current region-owned semantics require harmonic mean
+    /// by default; free surfaces must be explicit disabled/zero-scale pair
+    /// semantics in the resolved runtime contract.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inter_region_exchange: Vec<(u32, u32, f64)>,
     pub gyromagnetic_ratio: f64,
@@ -193,6 +196,10 @@ pub struct FdmPlanIR {
     /// Bulk (Bloch) DMI constant D [J/m³]. None = disabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bulk_dmi: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dind_field: Option<Vec<f64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dbulk_field: Option<Vec<f64>>,
 
     // ── Magnetoelastic coupling (prescribed strain) ──
     /// First magnetoelastic coupling constant B₁ [Pa]. None = disabled.
@@ -242,6 +249,12 @@ pub struct FdmMaterialIR {
     pub saturation_magnetisation: f64,
     pub exchange_stiffness: f64,
     pub damping: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ms_field: Option<Vec<f64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub a_field: Option<Vec<f64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alpha_field: Option<Vec<f64>>,
     // ── Uniaxial anisotropy ──
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uniaxial_anisotropy_ku1: Option<f64>,

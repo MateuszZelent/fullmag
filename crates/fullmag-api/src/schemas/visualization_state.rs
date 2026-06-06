@@ -337,6 +337,7 @@ pub enum VisualizationScopeKind {
     Airbox,
     Object,
     Part,
+    Region,
     Selection,
 }
 

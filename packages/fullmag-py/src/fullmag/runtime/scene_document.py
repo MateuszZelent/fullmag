@@ -174,6 +174,13 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             mag_kind = "sampled"
 
         material_properties = dict(geometry.get("material") or {})
+        object_regions = list(geometry.get("object_regions") or [])
+        allocated_region_ids = list(geometry.get("allocated_region_ids") or [])
+        for region in object_regions:
+            if isinstance(region, dict):
+                region_id = region.get("region_id") or region.get("id")
+                if isinstance(region_id, str) and region_id not in allocated_region_ids:
+                    allocated_region_ids.append(region_id)
         physics_stack = _ensure_physics_stack(
             geometry.get("physics_stack"),
             material_dind=material_properties.get("Dind"),
@@ -202,6 +209,9 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
                 "physics_stack": physics_stack,
                 "object_mesh": geometry.get("mesh"),
                 "mesh_override": geometry.get("mesh"),
+                "regions": object_regions,
+                "allocated_region_ids": allocated_region_ids,
+                "material_parameter_fields": geometry.get("material_parameter_fields") or [],
                 "visible": True,
                 "locked": False,
                 "tags": [],
@@ -237,7 +247,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
         )
 
     return {
-        "version": "scene.v1",
+        "version": "scene.v2",
         "revision": int(builder.get("revision", 0)),
         "scene": {
             "id": "scene",
@@ -253,6 +263,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             "modules": builder.get("current_modules") or [],
             "excitation_analysis": builder.get("excitation_analysis"),
         },
+        "couplings": builder.get("couplings") or [],
         "study": {
             "backend": builder.get("backend"),
             "requested_backend": "auto",
@@ -357,6 +368,9 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
                 "magnetization": magnetization,
                 "physics_stack": physics_stack,
                 "mesh": obj.get("object_mesh", obj.get("mesh_override")),
+                "object_regions": obj.get("regions") or [],
+                "allocated_region_ids": obj.get("allocated_region_ids") or [],
+                "material_parameter_fields": obj.get("material_parameter_fields") or [],
             }
         )
 
@@ -379,6 +393,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         "table_autosave": study.get("table_autosave"),
         "initial_state": study.get("initial_state"),
         "geometries": geometries,
+        "couplings": scene.get("couplings") or [],
         "current_modules": current_modules.get("modules") or [],
         "excitation_analysis": current_modules.get("excitation_analysis"),
     }
@@ -496,6 +511,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
         "table_autosave": builder.get("table_autosave"),
         "initial_state": builder.get("initial_state"),
         "geometries": builder.get("geometries") or [],
+        "couplings": builder.get("couplings") or [],
         "current_modules": builder.get("current_modules") or [],
         "excitation_analysis": builder.get("excitation_analysis"),
     }

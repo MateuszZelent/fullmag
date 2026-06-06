@@ -9,7 +9,8 @@ use axum::{
 };
 use base64::Engine;
 use fullmag_authoring::{
-    normalize_scene_document_magnetization_assets, MagnetizationAsset, SceneDocument,
+    normalize_scene_document_magnetization_assets, normalize_scene_document_study_pipeline_labels,
+    validate_scene_document, MagnetizationAsset, SceneDocument,
 };
 use fullmag_ir::{TextureMappingIR, TextureProjectionMode, TextureTransform3DIR};
 use fullmag_plan::{sample_preset_texture, TextureSamplePoint};
@@ -111,12 +112,8 @@ pub(crate) async fn current_live_realtime_state_from_snapshot(
         )
     };
     let workspace_revision = current_live_workspace_revision(state).await;
-    let domain_generation_id = snapshot
-        .fem_mesh
-        .as_ref()
-        .and_then(|mesh| mesh.generation_id.as_deref())
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(0);
+    let domain_generation_id =
+        router_v2::handlers::sessions::status::domain_generation_id(snapshot);
     let field_catalog_revision =
         router_v2::handlers::sessions::status::field_catalog_revision(snapshot);
     let field_revision = router_v2::handlers::sessions::status::field_revision(snapshot);
@@ -164,6 +161,8 @@ fn current_live_mesh_resource_fetches(snapshot: &SessionStateResponse) -> Vec<St
     let mut fetches = vec![
         "/v2/sessions/current/meshing/meshes/shared-domain/manifest".to_string(),
         "/v2/sessions/current/meshing/meshes/shared-domain/topology".to_string(),
+        "/v2/sessions/current/meshing/meshes/shared-domain/quality".to_string(),
+        "/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields".to_string(),
     ];
     fetches.extend(mesh.object_segments.iter().map(|segment| {
         format!(
@@ -336,6 +335,17 @@ fn current_live_realtime_changes(
             broad: false,
             domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
             recommended_fetch: Some("/v2/sessions/current/meshing/builds/current".to_string()),
+        });
+        changes.push(RealtimeResourceChange {
+            resource: RealtimeResourceName::MeshBuilds,
+            revision: realtime_state.revisions.mesh_build_revision,
+            resource_id: None,
+            quantity_ids: Vec::new(),
+            broad: false,
+            domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
+            recommended_fetch: Some(
+                "/v2/sessions/current/meshing/builds/latest-successful".to_string(),
+            ),
         });
     }
     let commands_revision = current_live_commands_effective_revision(&realtime_state.revisions);
@@ -513,6 +523,9 @@ mod realtime_change_tests {
             mesh_resource_fetches: vec![
                 "/v2/sessions/current/meshing/meshes/shared-domain/manifest".to_string(),
                 "/v2/sessions/current/meshing/meshes/shared-domain/topology".to_string(),
+                "/v2/sessions/current/meshing/meshes/shared-domain/quality".to_string(),
+                "/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields"
+                    .to_string(),
             ],
         };
 
@@ -522,9 +535,16 @@ mod realtime_change_tests {
             .collect::<BTreeSet<_>>();
 
         assert!(fetches.contains("/v2/sessions/current/data/domain/topology"));
+        assert!(fetches.contains("/v2/sessions/current/meshing/builds/current"));
+        assert!(fetches.contains("/v2/sessions/current/meshing/builds/latest-successful"));
+        assert!(fetches.contains("/v2/sessions/current/meshing/summary"));
         assert!(fetches.contains("/v2/sessions/current/meshing/meshes/shared-domain/manifest"));
         assert!(fetches.contains("/v2/sessions/current/meshing/meshes/shared-domain/topology"));
+        assert!(fetches.contains("/v2/sessions/current/meshing/meshes/shared-domain/quality"));
+        assert!(fetches
+            .contains("/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields"));
         assert!(fetches.contains("/v2/sessions/current/model/scene"));
+        assert!(fetches.contains("/v2/sessions/current/visualization/state"));
     }
 
     #[test]
@@ -567,6 +587,9 @@ mod realtime_change_tests {
             mesh_resource_fetches: vec![
                 "/v2/sessions/current/meshing/meshes/shared-domain/manifest".to_string(),
                 "/v2/sessions/current/meshing/meshes/shared-domain/topology".to_string(),
+                "/v2/sessions/current/meshing/meshes/shared-domain/quality".to_string(),
+                "/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields"
+                    .to_string(),
             ],
         };
 
@@ -1958,8 +1981,8 @@ where
         state.current_control_queue.lock().await.clear();
         state.current_command_responses.lock().await.clear();
         state.current_command_ledger.lock().await.clear();
-        *state.current_control_next_seq.lock().await = 0;
-        let _ = state.current_control_events.send(0);
+        let current_seq = *state.current_control_next_seq.lock().await;
+        let _ = state.current_control_events.send(current_seq);
         let _ = std::fs::remove_dir_all(&state.current_workspace_root);
     }
     let display_selection = state.current_display_selection.read().await.clone();
@@ -2601,6 +2624,9 @@ pub(crate) async fn commit_current_live_scene_document(
     mut scene_document: SceneDocument,
 ) -> Result<SceneDocument, ApiError> {
     normalize_scene_document_magnetization_assets(&mut scene_document);
+    normalize_scene_document_study_pipeline_labels(&mut scene_document);
+    validate_scene_document(&scene_document)
+        .map_err(|error| ApiError::bad_request(error.message))?;
     let preset_texture_count = scene_document
         .magnetization_assets
         .iter()
@@ -2645,7 +2671,7 @@ pub(crate) async fn commit_current_live_scene_document(
             .as_ref()
             .map(|current_scene| current_scene.revision.saturating_add(1))
             .unwrap_or_else(|| scene_document.revision.saturating_add(1));
-        scene_document.version = "scene.v1".to_string();
+        scene_document.version = "scene.v2".to_string();
         scene_document.revision = next_revision;
         let builder_state = match scene_document_builder_projection(&scene_document) {
             Ok(state) => state,

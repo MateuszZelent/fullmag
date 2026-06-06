@@ -501,29 +501,10 @@ impl NativeFdmBackend {
                 .collect()
         });
 
-        // Build exchange LUT when region mask is present.
-        // Default: A_ii = A_material, A_ij (i≠j) = 0 (no inter-region coupling).
-        // User-provided inter_region_exchange triples override specific pairs.
-        let exchange_lut: Option<Vec<f64>> = if region_mask_flat.is_some() {
-            let n = ffi::FULLMAG_FDM_MAX_EXCHANGE_REGIONS;
-            let mut lut = vec![0.0f64; n * n];
-            // Diagonal: self-exchange = material A
-            for r in 0..n {
-                lut[r * n + r] = plan.material.exchange_stiffness;
-            }
-            // Apply caller overrides (symmetric)
-            for &(ri, rj, a_ij) in &plan.inter_region_exchange {
-                let ri = ri as usize;
-                let rj = rj as usize;
-                if ri < n && rj < n {
-                    lut[ri * n + rj] = a_ij;
-                    lut[rj * n + ri] = a_ij;
-                }
-            }
-            Some(lut)
-        } else {
-            None
-        };
+        // Current region-owned semantics keep exchange continuous by default.
+        // Explicit triples are compact pair descriptors; the native backend
+        // expands them into the low-level LUT after applying the default.
+        let exchange_pairs = build_region_exchange_pairs(plan, region_mask_flat.is_some())?;
 
         let current_sign: f64 = if has_slonczewski_stt(plan) {
             match plan.stt_fixed_layer_position.as_deref() {
@@ -548,6 +529,37 @@ impl NativeFdmBackend {
             enable_demag: if plan.enable_demag { 1 } else { 0 },
             has_external_field: if plan.external_field.is_some() { 1 } else { 0 },
             external_field_am: plan.external_field.unwrap_or([0.0, 0.0, 0.0]),
+
+            ms_field: plan
+                .material
+                .ms_field
+                .as_ref()
+                .map_or(std::ptr::null(), |values| values.as_ptr()),
+            ms_field_len: plan
+                .material
+                .ms_field
+                .as_ref()
+                .map_or(0, |values| values.len() as u64),
+            a_field: plan
+                .material
+                .a_field
+                .as_ref()
+                .map_or(std::ptr::null(), |values| values.as_ptr()),
+            a_field_len: plan
+                .material
+                .a_field
+                .as_ref()
+                .map_or(0, |values| values.len() as u64),
+            alpha_field: plan
+                .material
+                .alpha_field
+                .as_ref()
+                .map_or(std::ptr::null(), |values| values.as_ptr()),
+            alpha_field_len: plan
+                .material
+                .alpha_field
+                .as_ref()
+                .map_or(0, |values| values.len() as u64),
 
             current_density_x: plan.current_density.map_or(0.0, |j| j[0]),
             current_density_y: plan.current_density.map_or(0.0, |j| j[1]),
@@ -631,6 +643,22 @@ impl NativeFdmBackend {
             dmi_d_interfacial: plan.interfacial_dmi.unwrap_or(0.0),
             has_bulk_dmi: if plan.bulk_dmi.is_some() { 1 } else { 0 },
             dmi_d_bulk: plan.bulk_dmi.unwrap_or(0.0),
+            dind_field: plan
+                .dind_field
+                .as_ref()
+                .map_or(std::ptr::null(), |values| values.as_ptr()),
+            dind_field_len: plan
+                .dind_field
+                .as_ref()
+                .map_or(0, |values| values.len() as u64),
+            dbulk_field: plan
+                .dbulk_field
+                .as_ref()
+                .map_or(std::ptr::null(), |values| values.as_ptr()),
+            dbulk_field_len: plan
+                .dbulk_field
+                .as_ref()
+                .map_or(0, |values| values.len() as u64),
 
             has_magnetoelastic: if plan.mel_b1.is_some() && plan.mel_uniform_strain.is_some() {
                 1
@@ -685,10 +713,16 @@ impl NativeFdmBackend {
             region_mask_len: region_mask_flat
                 .as_ref()
                 .map_or(0, |mask| mask.len() as u64),
-            exchange_lut: exchange_lut
+            exchange_lut: std::ptr::null(),
+            exchange_lut_len: 0,
+            exchange_pair_default:
+                ffi::fullmag_fdm_exchange_pair_mode::FULLMAG_FDM_EXCHANGE_PAIR_HARMONIC_MEAN,
+            exchange_pairs: exchange_pairs
                 .as_ref()
-                .map_or(std::ptr::null(), |lut| lut.as_ptr()),
-            exchange_lut_len: exchange_lut.as_ref().map_or(0, |lut| lut.len() as u64),
+                .map_or(std::ptr::null(), |pairs| pairs.as_ptr()),
+            exchange_pair_count: exchange_pairs
+                .as_ref()
+                .map_or(0, |pairs| pairs.len() as u64),
             // Boundary correction — wire geometry data from planner when available.
             boundary_correction: match plan.boundary_correction.as_deref() {
                 Some("volume") => ffi::fullmag_fdm_boundary_correction::FULLMAG_FDM_BOUNDARY_VOLUME,
@@ -1919,6 +1953,44 @@ fn snapshot_observable(name: &str) -> Option<ffi::fullmag_fdm_observable> {
     })
 }
 
+#[cfg(feature = "cuda")]
+fn build_region_exchange_pairs(
+    plan: &fullmag_ir::FdmPlanIR,
+    has_region_mask: bool,
+) -> Result<Option<Vec<ffi::fullmag_fdm_exchange_pair_desc>>, RunError> {
+    if !has_region_mask {
+        if plan.inter_region_exchange.is_empty() {
+            return Ok(None);
+        }
+        return Err(RunError {
+            message:
+                "inter_region_exchange overrides require a region_mask; refusing to drop exchange pair intent"
+                    .to_string(),
+        });
+    }
+    Ok(Some(
+        plan.inter_region_exchange
+            .iter()
+            .map(|&(region_i, region_j, inter_exchange)| {
+                if !inter_exchange.is_finite() || inter_exchange < 0.0 {
+                    return Err(RunError {
+                        message: format!(
+                            "inter_region_exchange ({region_i}, {region_j}) must be finite and >= 0"
+                        ),
+                    });
+                }
+                Ok(ffi::fullmag_fdm_exchange_pair_desc {
+                    region_i,
+                    region_j,
+                    mode: ffi::fullmag_fdm_exchange_pair_mode::FULLMAG_FDM_EXCHANGE_PAIR_EXPLICIT,
+                    scale: 1.0,
+                    inter_exchange,
+                })
+            })
+            .collect::<Result<Vec<_>, RunError>>()?,
+    ))
+}
+
 #[cfg(all(test, feature = "cuda"))]
 mod tests {
     use super::*;
@@ -1944,6 +2016,59 @@ mod tests {
             snapshot_observable("H_ANI").is_some(),
             "native CUDA FDM must accept ABI-style H_ANI snapshot names"
         );
+    }
+
+    #[test]
+    fn native_fdm_region_exchange_pairs_leave_default_to_backend() {
+        let mut plan = make_relaxation_precession_test_plan();
+        plan.region_mask = vec![1, 2];
+        plan.initial_magnetization = vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        plan.grid = GridDimensions { cells: [2, 1, 1] };
+        let pairs = build_region_exchange_pairs(&plan, true)
+            .expect("region exchange pairs")
+            .expect("region mask should produce pair list");
+        assert!(pairs.is_empty());
+    }
+
+    #[test]
+    fn native_fdm_region_exchange_pairs_carry_explicit_overrides() {
+        let mut plan = make_relaxation_precession_test_plan();
+        plan.region_mask = vec![1, 2];
+        plan.inter_region_exchange = vec![(1, 2, 4.0e-12)];
+        let pairs = build_region_exchange_pairs(&plan, true)
+            .expect("region exchange pairs")
+            .expect("region mask should produce pair list");
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0].region_i, 1);
+        assert_eq!(pairs[0].region_j, 2);
+        assert_eq!(
+            pairs[0].mode,
+            ffi::fullmag_fdm_exchange_pair_mode::FULLMAG_FDM_EXCHANGE_PAIR_EXPLICIT
+        );
+        assert_eq!(pairs[0].scale, 1.0);
+        assert_eq!(pairs[0].inter_exchange, 4.0e-12);
+    }
+
+    #[test]
+    fn native_fdm_region_exchange_pairs_require_region_mask() {
+        let mut plan = make_relaxation_precession_test_plan();
+        plan.region_mask = Vec::new();
+        plan.inter_region_exchange = vec![(1, 2, 4.0e-12)];
+
+        let err = build_region_exchange_pairs(&plan, false)
+            .expect_err("explicit exchange overrides must not be dropped without a region mask");
+        assert!(err.message.contains("require a region_mask"));
+    }
+
+    #[test]
+    fn native_fdm_region_exchange_pairs_reject_invalid_exchange() {
+        let mut plan = make_relaxation_precession_test_plan();
+        plan.region_mask = vec![1, 2];
+        plan.inter_region_exchange = vec![(1, 2, -1.0e-12)];
+
+        let err = build_region_exchange_pairs(&plan, true)
+            .expect_err("invalid explicit exchange must be rejected before FFI");
+        assert!(err.message.contains("must be finite and >= 0"));
     }
 
     fn make_masked_test_plan(enable_demag: bool, precision: ExecutionPrecision) -> FdmPlanIR {
@@ -2020,6 +2145,8 @@ mod tests {
             temperature: None,
             interfacial_dmi: None,
             bulk_dmi: None,
+            dind_field: None,
+            dbulk_field: None,
             mel_b1: None,
             mel_b2: None,
             mel_uniform_strain: None,
@@ -2104,6 +2231,8 @@ mod tests {
             temperature: None,
             interfacial_dmi: None,
             bulk_dmi: None,
+            dind_field: None,
+            dbulk_field: None,
             mel_b1: None,
             mel_b2: None,
             mel_uniform_strain: None,
@@ -2179,6 +2308,8 @@ mod tests {
             temperature: None,
             interfacial_dmi: None,
             bulk_dmi: None,
+            dind_field: None,
+            dbulk_field: None,
             mel_b1: None,
             mel_b2: None,
             mel_uniform_strain: None,

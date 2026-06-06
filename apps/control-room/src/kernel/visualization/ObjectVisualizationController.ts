@@ -8,7 +8,7 @@ import {
 } from "../api/quantityIds";
 import type { Selection } from "../selection/selectionTypes";
 
-export type VisualizationTargetKind = "airbox" | "object" | "part";
+export type VisualizationTargetKind = "airbox" | "object" | "part" | "region";
 export type VisualizationRenderMode =
   | "points"
   | "surface"
@@ -1095,10 +1095,18 @@ export function hasVisualizationStatePatch(
 }
 
 export function resolveVisualizationTargetFromSelection(
-  selection: Pick<Selection, "kind" | "label" | "nodeId" | "objectId">,
+  selection: Pick<Selection, "kind" | "label" | "nodeId" | "objectId" | "ref">,
 ): VisualizationTargetRef | null {
   if (selection.kind === "airbox.visualization" || selection.kind === "mesh-part-airbox") {
     return AIRBOX_VISUALIZATION_TARGET;
+  }
+
+  if (selection.objectId && selection.ref?.type === "scene-object" && selection.ref.regionId) {
+    return {
+      id: selection.ref.visualizationTargetId,
+      kind: "region",
+      label: selection.label,
+    };
   }
 
   if (selection.objectId) {

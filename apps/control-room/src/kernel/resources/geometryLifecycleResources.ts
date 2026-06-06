@@ -26,10 +26,14 @@ import {
   MESHING_UNIVERSE_QUALITY_PATH,
   MESHING_UNIVERSE_REPORT_PATH,
   MODEL_MATERIAL_PATH,
+  MODEL_MATERIAL_FIELDS_PATH,
+  MODEL_COUPLINGS_PATH,
   MODEL_OBJECT_INTERACTION_PATH,
   MODEL_GEOMETRY_CAPABILITIES_PATH,
   MODEL_GEOMETRY_DIAGNOSTICS_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
+  MODEL_REALIZED_REGIONS_PATH,
+  MODEL_REGION_DIAGNOSTICS_PATH,
   MODEL_REGIONS_PATH,
   MODEL_SCENE_PATH,
 } from "../api/apiPaths";
@@ -37,7 +41,9 @@ import type {
   GeometryDiagnosticsResource,
   GeometryCapabilitiesResource,
   GeometryValidationResource,
+  CouplingListResource,
   MaterialResource,
+  MaterialParameterFieldListResource,
   ObjectInteractionKind,
   ObjectInteractionResource,
   MeshActiveBuildResource,
@@ -61,6 +67,7 @@ import type {
   MeshUniverseConfigResource,
   MeshUniverseQualityResource,
   MeshUniverseReportResource,
+  RegionDiagnosticsResource,
   RegionListResource,
   ResourceRevision,
   SceneResource,
@@ -122,6 +129,12 @@ export const MESH_SHARED_DOMAIN_QUALITY_GATES_RESOURCE_KEY =
 export const MESH_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_RESOURCE_KEY =
   MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH;
 export const MODEL_REGIONS_RESOURCE_KEY = MODEL_REGIONS_PATH;
+export const MODEL_REALIZED_REGIONS_RESOURCE_KEY =
+  MODEL_REALIZED_REGIONS_PATH;
+export const MODEL_REGION_DIAGNOSTICS_RESOURCE_KEY =
+  MODEL_REGION_DIAGNOSTICS_PATH;
+export const MODEL_MATERIAL_FIELDS_RESOURCE_KEY = MODEL_MATERIAL_FIELDS_PATH;
+export const MODEL_COUPLINGS_RESOURCE_KEY = MODEL_COUPLINGS_PATH;
 export const MESH_BUILD_HISTORY_RESOURCE_KEY = MESHING_BUILDS_PATH;
 
 export interface MeshHistogramBinElementsQuery {
@@ -316,7 +329,7 @@ export function useMaterialResource(materialId: string | null | undefined) {
   });
 }
 
-export function useModelRegionsResource() {
+export function useModelRegionsResource(options: ResourceHookOptions = {}) {
   const { api } = useKernel();
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) => api.model.regions({ signal }),
@@ -324,10 +337,82 @@ export function useModelRegionsResource() {
   );
 
   return useResource<RegionListResource>({
+    enabled: options.enabled,
     load,
     resolveRevision: (data) =>
       data?.scene_revision ?? data?.geometry_realization_revision ?? null,
     resourceKey: MODEL_REGIONS_RESOURCE_KEY,
+  });
+}
+
+export function useModelRealizedRegionsResource(
+  options: ResourceHookOptions = {},
+) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.model.realizedRegions({ signal }),
+    [api],
+  );
+
+  return useResource<RegionListResource>({
+    enabled: options.enabled,
+    load,
+    resolveRevision: (data) => data?.geometry_realization_revision ?? null,
+    resourceKey: MODEL_REALIZED_REGIONS_RESOURCE_KEY,
+  });
+}
+
+export function useModelRegionDiagnosticsResource(
+  options: ResourceHookOptions = {},
+) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.model.regionDiagnostics({ signal }),
+    [api],
+  );
+
+  return useResource<RegionDiagnosticsResource>({
+    enabled: options.enabled,
+    load,
+    resolveRevision: (data) => data?.scene_revision ?? null,
+    resourceKey: MODEL_REGION_DIAGNOSTICS_RESOURCE_KEY,
+  });
+}
+
+export function useModelMaterialFieldsResource(
+  options: ResourceHookOptions = {},
+) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.model.materialFields({ signal }),
+    [api],
+  );
+
+  return useResource<MaterialParameterFieldListResource>({
+    enabled: options.enabled,
+    load,
+    resolveRevision: (data) => data?.scene_revision ?? null,
+    resourceKey: MODEL_MATERIAL_FIELDS_RESOURCE_KEY,
+  });
+}
+
+export function useModelCouplingsResource(
+  options: ResourceHookOptions = {},
+) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) => api.model.couplings({ signal }),
+    [api],
+  );
+
+  return useResource<CouplingListResource>({
+    enabled: options.enabled,
+    load,
+    resolveRevision: (data) => data?.scene_revision ?? null,
+    resourceKey: MODEL_COUPLINGS_RESOURCE_KEY,
   });
 }
 

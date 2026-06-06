@@ -4,6 +4,7 @@ import type {
   ExplorerTabId,
   ModelTreeObjectSnapshot,
   ModelTreePhysicsInteractionSnapshot,
+  ModelTreeCouplingSnapshot,
   ModelTreeStudyStageSnapshot,
   ModelTreeSnapshot,
 } from "../explorerTypes";
@@ -11,6 +12,10 @@ import type {
 import { buildCrossSectionNodes } from "./crossSectionExplorerNodes";
 
 import { meshPipelineStatusIsActive } from "@/shared/domain/mesh/buildPipeline";
+import {
+  resolveMeshBuildFreshness,
+  type MeshFreshnessState,
+} from "@/shared/domain/mesh/meshBuildFreshness";
 import {
   formatTorqueT,
   teslaFromApm,
@@ -110,6 +115,23 @@ function regionsNode(
   parentId: string,
   object: ModelTreeObjectSnapshot,
 ): ExplorerNode {
+  if (object.regions && object.regions.length > 0) {
+    return {
+      id: `${parentId}:regions`,
+      kind: "object.regions",
+      label: "Regions",
+      parentId,
+      badge: `${object.regions.length}`,
+      icon: "layers",
+      objectId: object.id,
+      status: "ready",
+      contextCommands: ["workspace.focus-selection"],
+      children: object.regions.map((region) =>
+        authoredRegionNode(`${parentId}:regions`, object, region),
+      ),
+    };
+  }
+
   const regionLabel = object.region ?? object.label;
   const regionId = object.regionId ?? object.region ?? `region:${object.id}`;
   const regionTextureBadge =
@@ -121,6 +143,21 @@ function regionsNode(
     object.magnetization ??
     "inherits object";
   const primaryRegionId = `${parentId}:regions:primary`;
+  const primaryRegion: NonNullable<ModelTreeObjectSnapshot["regions"]>[number] = {
+    enabled: true,
+    id: regionId,
+    label: regionLabel,
+    materialFieldCount:
+      object.materialFields?.filter((field) => field.regionId === regionId).length ?? 0,
+    materialOverrideCount: 0,
+    meshPolicyActive: false,
+    priority: null,
+    realizationPolicy: "inherit",
+    realizationStatus: null,
+    shapeKind: object.geometryKind ?? "object",
+    source: "object",
+    textureOverrideActive: Boolean(object.regionMagnetization),
+  };
   return {
     id: `${parentId}:regions`,
     kind: "object.regions",
@@ -133,7 +170,7 @@ function regionsNode(
     children: [
       {
         id: primaryRegionId,
-        kind: "object.regions",
+        kind: "object.region",
         label: regionLabel,
         parentId: `${parentId}:regions`,
         badge: object.materialLabel ?? object.material ?? "material",
@@ -143,9 +180,43 @@ function regionsNode(
         status: "ready",
         children: [
           {
-            id: `${primaryRegionId}:magnetic-texture`,
-            kind: "object.region-magnetic-texture",
-            label: "Magnetic Texture",
+            id: `${primaryRegionId}:geometry`,
+            kind: "object.region.geometry",
+            label: "Geometry",
+            parentId: primaryRegionId,
+            badge: primaryRegion.shapeKind ?? "object",
+            icon: "braces",
+            objectId: object.id,
+            regionId,
+            status: "ready",
+          },
+          {
+            id: `${primaryRegionId}:magnetic-parameters`,
+            kind: "object.region.magnetic-parameters",
+            label: "Magnetic Parameters",
+            parentId: primaryRegionId,
+            badge: regionMaterialBadge(primaryRegion),
+            icon: "magnet",
+            objectId: object.id,
+            regionId,
+            status: "degraded",
+            children: regionMaterialFieldNodes(primaryRegionId, object, primaryRegion),
+          },
+          {
+            id: `${primaryRegionId}:mesh`,
+            kind: "object.region.mesh",
+            label: "Mesh",
+            parentId: primaryRegionId,
+            badge: "inherits object",
+            icon: "mesh",
+            objectId: object.id,
+            regionId,
+            status: "degraded",
+          },
+          {
+            id: `${primaryRegionId}:texture`,
+            kind: "object.region.texture",
+            label: "Texture",
             parentId: primaryRegionId,
             badge: regionTextureBadge,
             icon: "wave",
@@ -156,10 +227,180 @@ function regionsNode(
                 ? "ready"
                 : "degraded",
           },
+          {
+            id: `${primaryRegionId}:visualization`,
+            kind: "object.region.visualization",
+            label: "Visualization",
+            parentId: primaryRegionId,
+            badge: "display",
+            icon: "sparkles",
+            objectId: object.id,
+            regionId,
+            status: "ready",
+          },
+          {
+            id: `${primaryRegionId}:regions`,
+            kind: "object.region.regions",
+            label: "Regions",
+            parentId: primaryRegionId,
+            badge: "inherits none",
+            icon: "layers",
+            objectId: object.id,
+            regionId,
+            status: "degraded",
+          },
+          {
+            id: `${primaryRegionId}:diagnostics`,
+            kind: "object.region.diagnostics",
+            label: "Diagnostics",
+            parentId: primaryRegionId,
+            badge: "object",
+            icon: "gauge",
+            objectId: object.id,
+            regionId,
+            status: "ready",
+          },
         ],
       },
     ],
   };
+}
+
+function authoredRegionNode(
+  parentId: string,
+  object: ModelTreeObjectSnapshot,
+  region: NonNullable<ModelTreeObjectSnapshot["regions"]>[number],
+): ExplorerNode {
+  const nodeId = `${parentId}:${region.id}`;
+  const status = region.enabled ? "ready" : "degraded";
+  return {
+    id: nodeId,
+    kind: "object.region",
+    label: region.label,
+    parentId,
+    badge: region.realizationStatus ?? region.source,
+    icon: "circle",
+    objectId: object.id,
+    regionId: region.id,
+    status,
+    contextCommands: ["workspace.focus-selection"],
+    children: [
+      {
+        id: `${nodeId}:geometry`,
+        kind: "object.region.geometry",
+        label: "Geometry",
+        parentId: nodeId,
+        badge: region.shapeKind ?? "selector",
+        icon: "braces",
+        objectId: object.id,
+        regionId: region.id,
+        status,
+      },
+      {
+        id: `${nodeId}:magnetic-parameters`,
+        kind: "object.region.magnetic-parameters",
+        label: "Magnetic Parameters",
+        parentId: nodeId,
+        badge: regionMaterialBadge(region),
+        icon: "magnet",
+        objectId: object.id,
+        regionId: region.id,
+        status:
+          region.materialOverrideCount > 0 || region.materialFieldCount > 0
+            ? "ready"
+            : "degraded",
+        children: regionMaterialFieldNodes(nodeId, object, region),
+      },
+      {
+        id: `${nodeId}:mesh`,
+        kind: "object.region.mesh",
+        label: "Mesh",
+        parentId: nodeId,
+        badge: region.meshPolicyActive ? "policy" : "inherits object",
+        icon: "mesh",
+        objectId: object.id,
+        regionId: region.id,
+        status: region.meshPolicyActive ? "ready" : "degraded",
+      },
+      {
+        id: `${nodeId}:texture`,
+        kind: "object.region.texture",
+        label: "Texture",
+        parentId: nodeId,
+        badge: region.textureOverrideActive ? "override" : "inherits object",
+        icon: "wave",
+        objectId: object.id,
+        regionId: region.id,
+        status: region.textureOverrideActive ? "ready" : "degraded",
+      },
+      {
+        id: `${nodeId}:visualization`,
+        kind: "object.region.visualization",
+        label: "Visualization",
+        parentId: nodeId,
+        badge: "display",
+        icon: "sparkles",
+        objectId: object.id,
+        regionId: region.id,
+        status,
+      },
+      {
+        id: `${nodeId}:regions`,
+        kind: "object.region.regions",
+        label: "Regions",
+        parentId: nodeId,
+        badge: "inherits none",
+        icon: "layers",
+        objectId: object.id,
+        regionId: region.id,
+        status: "degraded",
+      },
+      {
+        id: `${nodeId}:diagnostics`,
+        kind: "object.region.diagnostics",
+        label: "Diagnostics",
+        parentId: nodeId,
+        badge: region.realizationPolicy ?? region.realizationStatus ?? "authored",
+        icon: "gauge",
+        objectId: object.id,
+        regionId: region.id,
+        status: region.realizationStatus ? "warning" : "ready",
+      },
+    ],
+  };
+}
+
+function regionMaterialBadge(
+  region: NonNullable<ModelTreeObjectSnapshot["regions"]>[number],
+): string {
+  const parts: string[] = [];
+  if (region.materialOverrideCount > 0) {
+    parts.push(`${region.materialOverrideCount} override`);
+  }
+  if (region.materialFieldCount > 0) {
+    parts.push(`${region.materialFieldCount} field`);
+  }
+  return parts.length > 0 ? parts.join(" / ") : "inherits object";
+}
+
+function regionMaterialFieldNodes(
+  parentId: string,
+  object: ModelTreeObjectSnapshot,
+  region: NonNullable<ModelTreeObjectSnapshot["regions"]>[number],
+): ExplorerNode[] {
+  return (object.materialFields ?? [])
+    .filter((field) => field.regionId === region.id)
+    .map((field) => ({
+      id: `${parentId}:magnetic-parameters:${field.id}`,
+      kind: "object.region.magnetic-parameters" as const,
+      label: field.label,
+      parentId: `${parentId}:magnetic-parameters`,
+      badge: field.realizationStatus ?? "field",
+      icon: "settings" as const,
+      objectId: object.id,
+      regionId: region.id,
+      status: "ready" as const,
+    }));
 }
 
 function magneticParametersNode(
@@ -286,8 +527,46 @@ function meshRootBadge(mesh: ModelTreeSnapshot["mesh"]): string {
   return "not built";
 }
 
+function meshFreshnessState(mesh: ModelTreeSnapshot["mesh"]): MeshFreshnessState {
+  return resolveMeshBuildFreshness({
+    activeBuild: mesh?.activeBuildStatus
+      ? { status: mesh.activeBuildStatus }
+      : null,
+    latestBuild: mesh?.latestBuildStatus
+      ? {
+          source_scene_revision: mesh.latestBuildSourceSceneRevision ?? null,
+          status: mesh.latestBuildStatus,
+        }
+      : null,
+    manifest: mesh?.manifestSourceSceneRevision != null
+      ? { source_scene_revision: mesh.manifestSourceSceneRevision }
+      : null,
+    sceneRevision: mesh?.sourceSceneRevision ?? null,
+    statusMeshRevision: mesh?.meshRevision ?? null,
+  }).state;
+}
+
+function meshFreshnessStatus(
+  freshness: MeshFreshnessState,
+  fallback: ExplorerNodeStatus,
+): ExplorerNodeStatus {
+  if (freshness === "building") return "mesh-building";
+  if (freshness === "current") return "mesh-ready";
+  if (freshness === "failed") return "mesh-failed";
+  if (freshness === "not-built") return "mesh-stale";
+  if (freshness === "stale") return "mesh-stale";
+  return fallback;
+}
+
+function meshFreshnessBadge(freshness: MeshFreshnessState): string {
+  if (freshness === "not-built") return "not built";
+  return freshness;
+}
+
 function meshPolicyNodes(mesh: ModelTreeSnapshot["mesh"]): ExplorerNode {
   const status = meshRootStatus(mesh);
+  const freshness = meshFreshnessState(mesh);
+  const sharedDomainStatus = meshFreshnessStatus(freshness, status);
   const revision = mesh?.meshRevision ?? mesh?.buildRevision ?? "none";
   const partCount = mesh?.partCount ?? 0;
   const objectSegmentCount = mesh?.objectSegmentCount ?? 0;
@@ -314,9 +593,9 @@ function meshPolicyNodes(mesh: ModelTreeSnapshot["mesh"]): ExplorerNode {
         kind: "mesh.shared-domain",
         label: "Shared-Domain Solver Mesh",
         parentId: "model:mesh",
-        badge: mesh?.domainMeshMode ?? "solver mesh",
+        badge: meshFreshnessBadge(freshness),
         icon: "mesh",
-        status,
+        status: sharedDomainStatus,
         contextCommands: ["mesh.build-shared-domain", "mesh.open-shared-domain"],
       },
       {
@@ -511,6 +790,38 @@ function studyNodes(study: ModelTreeSnapshot["study"]): ExplorerNode {
   };
 }
 
+function couplingNodes(couplings: readonly ModelTreeCouplingSnapshot[]): ExplorerNode | null {
+  if (couplings.length === 0) return null;
+  return {
+    id: "model:physics:couplings",
+    kind: "physics.couplings",
+    label: "Couplings",
+    parentId: "model:session",
+    badge: `${couplings.length}`,
+    icon: "activity",
+    status: "ready",
+    contextCommands: ["workspace.focus-selection"],
+    children: couplings.map((coupling) => ({
+      id: `model:physics:couplings:${coupling.id}`,
+      kind: "physics.coupling" as const,
+      label: coupling.label,
+      parentId: "model:physics:couplings",
+      badge: coupling.realizationStatus ?? coupling.kind,
+      icon: "activity" as const,
+      couplingId: coupling.id,
+      status: couplingStatus(coupling),
+      contextCommands: ["workspace.focus-selection"],
+    })),
+  };
+}
+
+function couplingStatus(coupling: ModelTreeCouplingSnapshot): ExplorerNodeStatus {
+  if (!coupling.enabled) return "degraded";
+  if (coupling.realizationStatus?.includes("requires")) return "unsupported";
+  if (coupling.realizationStatus?.includes("pending")) return "warning";
+  return "ready";
+}
+
 function physicsInteractionBadge(
   interaction: ModelTreePhysicsInteractionSnapshot,
 ): string {
@@ -576,6 +887,11 @@ export function buildModelTree(snapshot: ModelTreeSnapshot | null = null): Explo
   );
   if (crossSectionBranch) {
     sessionChildren.push(crossSectionBranch);
+  }
+
+  const couplingBranch = couplingNodes(snapshot?.couplings ?? []);
+  if (couplingBranch) {
+    sessionChildren.push(couplingBranch);
   }
 
   sessionChildren.push(

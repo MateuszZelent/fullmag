@@ -89,6 +89,547 @@ fn bootstrap_example_validates() {
     assert!(ir.validate().is_ok());
 }
 
+#[test]
+fn region_owned_ir_defaults_are_empty_for_legacy_payloads() {
+    let ir = ProblemIR::bootstrap_example();
+    let json = serde_json::to_string(&ir).expect("bootstrap should serialize");
+    let decoded: ProblemIR = serde_json::from_str(&json).expect("bootstrap should deserialize");
+
+    assert!(decoded.object_regions.is_empty());
+    assert!(decoded.material_parameter_fields.is_empty());
+    assert!(decoded.couplings.is_empty());
+}
+
+#[test]
+fn object_region_without_overrides_is_continuous_with_parent_object() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.object_regions.push(ObjectRegionIR {
+        region_id: "reg_strip_core".to_string(),
+        owner_object: "strip".to_string(),
+        name: "core".to_string(),
+        shape: RegionShapeIR::Box {
+            size: [10e-9, 10e-9, 6e-9],
+            center: [0.0, 0.0, 0.0],
+        },
+        frame: RegionFrameIR::Object,
+        enabled: true,
+        priority: 0,
+        mesh_policy: None,
+        material_overrides: Vec::new(),
+        texture_override: None,
+        realization_policy: RegionRealizationPolicyIR::Inherit,
+    });
+
+    assert!(ir.validate().is_ok());
+    assert!(
+        ir.material_parameter_fields.is_empty(),
+        "a region that only identifies a sub-volume must inherit parent material parameters"
+    );
+    assert!(
+        ir.couplings.is_empty(),
+        "a region inside one object must not imply an object-object or RKKY coupling"
+    );
+}
+
+#[test]
+fn object_region_material_field_and_coupling_validate() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.object_regions.push(ObjectRegionIR {
+        region_id: "reg_strip_core".to_string(),
+        owner_object: "strip".to_string(),
+        name: "core".to_string(),
+        shape: RegionShapeIR::Cylinder {
+            radius: 20e-9,
+            height: 6e-9,
+            center: [0.0, 0.0, 0.0],
+            axis: [0.0, 0.0, 1.0],
+        },
+        frame: RegionFrameIR::Object,
+        enabled: true,
+        priority: 10,
+        mesh_policy: Some(RegionMeshPolicyIR {
+            maximum_element_size: Some(1e-9),
+            minimum_element_size: Some(1e-9),
+            transition_distance: Some(80e-9),
+            order: Some(1),
+        }),
+        material_overrides: vec![RegionMaterialOverrideIR {
+            parameter: MaterialParameterNameIR::Ms,
+            value: MaterialParameterFieldIR::Constant {
+                value: serde_json::json!(750e3),
+                unit: Some("A/m".to_string()),
+            },
+            priority: 10,
+            conflict_policy: RegionConflictPolicyIR::Error,
+        }],
+        texture_override: None,
+        realization_policy: RegionRealizationPolicyIR::Inherit,
+    });
+    ir.material_parameter_fields
+        .push(MaterialParameterAssignmentIR {
+            assignment_id: "ms_gradient".to_string(),
+            owner_object: "strip".to_string(),
+            region_id: None,
+            parameter: MaterialParameterNameIR::Ms,
+            value: MaterialParameterFieldIR::Linear {
+                base: 800e3,
+                gradient: [0.0, 1.0e11, 0.0],
+                frame: RegionFrameIR::Object,
+                unit: Some("A/m".to_string()),
+            },
+            priority: 0,
+            conflict_policy: RegionConflictPolicyIR::Error,
+        });
+    ir.couplings.push(CouplingIR {
+        coupling_id: "strip_surface_exchange".to_string(),
+        kind: CouplingKindIR::Exchange,
+        source: CouplingEndpointIR::Surface {
+            object: "strip".to_string(),
+            selector: "top".to_string(),
+        },
+        target: CouplingEndpointIR::Surface {
+            object: "strip".to_string(),
+            selector: "bottom".to_string(),
+        },
+        enabled: true,
+        parameters: CouplingParametersIR::Exchange {
+            mode: ExchangeCouplingModeIR::HarmonicMean,
+            scale: Some(0.5),
+            inter_exchange: None,
+        },
+        capability_policy: CouplingCapabilityPolicyIR::RequireRuntime,
+    });
+
+    assert!(ir.validate().is_ok());
+}
+
+#[test]
+fn object_region_ms_zero_is_rejected() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.object_regions.push(ObjectRegionIR {
+        region_id: "reg_zero_ms".to_string(),
+        owner_object: "strip".to_string(),
+        name: "zero_ms".to_string(),
+        shape: RegionShapeIR::Box {
+            size: [10e-9, 10e-9, 6e-9],
+            center: [0.0, 0.0, 0.0],
+        },
+        frame: RegionFrameIR::Object,
+        enabled: true,
+        priority: 0,
+        mesh_policy: None,
+        material_overrides: vec![RegionMaterialOverrideIR {
+            parameter: MaterialParameterNameIR::Ms,
+            value: MaterialParameterFieldIR::Constant {
+                value: serde_json::json!(0.0),
+                unit: Some("A/m".to_string()),
+            },
+            priority: 0,
+            conflict_policy: RegionConflictPolicyIR::Error,
+        }],
+        texture_override: None,
+        realization_policy: RegionRealizationPolicyIR::Inherit,
+    });
+
+    let errors = ir
+        .validate()
+        .expect_err("Ms=0 inside an active object must be rejected");
+    assert!(errors.iter().any(|error| error.contains("Ms must be > 0")));
+}
+
+#[test]
+fn base_material_invalid_scalars_are_rejected() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.materials[0].saturation_magnetisation = 0.0;
+    ir.materials[0].exchange_stiffness = -1.0e-12;
+    ir.materials[0].damping = -0.1;
+
+    let errors = ir
+        .validate()
+        .expect_err("invalid base material scalars must be rejected");
+    assert!(errors.iter().any(|error| {
+        error.contains("materials[0].saturation_magnetisation") && error.contains("Ms must be > 0")
+    }));
+    assert!(errors.iter().any(|error| {
+        error.contains("materials[0].exchange_stiffness") && error.contains("Aex must be >= 0")
+    }));
+    assert!(errors.iter().any(|error| {
+        error.contains("materials[0].damping") && error.contains("Alpha must be >= 0")
+    }));
+}
+
+#[test]
+fn equal_priority_region_material_assignments_are_rejected() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.object_regions.push(ObjectRegionIR {
+        region_id: "reg_core".to_string(),
+        owner_object: "strip".to_string(),
+        name: "core".to_string(),
+        shape: RegionShapeIR::Box {
+            size: [10e-9, 10e-9, 6e-9],
+            center: [0.0, 0.0, 0.0],
+        },
+        frame: RegionFrameIR::Object,
+        enabled: true,
+        priority: 0,
+        mesh_policy: None,
+        material_overrides: Vec::new(),
+        texture_override: None,
+        realization_policy: RegionRealizationPolicyIR::Inherit,
+    });
+    for (index, value) in [760e3, 780e3].into_iter().enumerate() {
+        ir.material_parameter_fields
+            .push(MaterialParameterAssignmentIR {
+                assignment_id: format!("core_ms_{index}"),
+                owner_object: "strip".to_string(),
+                region_id: Some("reg_core".to_string()),
+                parameter: MaterialParameterNameIR::Ms,
+                value: MaterialParameterFieldIR::Constant {
+                    value: serde_json::json!(value),
+                    unit: Some("A/m".to_string()),
+                },
+                priority: 10,
+                conflict_policy: RegionConflictPolicyIR::Error,
+            });
+    }
+
+    let errors = ir
+        .validate()
+        .expect_err("equal-priority assignments on the same region must conflict");
+    assert!(errors.iter().any(|error| error.contains(
+        "region-owned material parameter conflict: material_parameter_fields[0] and material_parameter_fields[1]"
+    )));
+}
+
+#[test]
+fn object_wide_and_region_material_assignment_same_priority_is_rejected() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.object_regions.push(ObjectRegionIR {
+        region_id: "reg_core".to_string(),
+        owner_object: "strip".to_string(),
+        name: "core".to_string(),
+        shape: RegionShapeIR::Box {
+            size: [10e-9, 10e-9, 6e-9],
+            center: [0.0, 0.0, 0.0],
+        },
+        frame: RegionFrameIR::Object,
+        enabled: true,
+        priority: 0,
+        mesh_policy: None,
+        material_overrides: vec![RegionMaterialOverrideIR {
+            parameter: MaterialParameterNameIR::Ms,
+            value: MaterialParameterFieldIR::Constant {
+                value: serde_json::json!(760e3),
+                unit: Some("A/m".to_string()),
+            },
+            priority: 10,
+            conflict_policy: RegionConflictPolicyIR::Error,
+        }],
+        texture_override: None,
+        realization_policy: RegionRealizationPolicyIR::Inherit,
+    });
+    ir.material_parameter_fields
+        .push(MaterialParameterAssignmentIR {
+            assignment_id: "object_ms".to_string(),
+            owner_object: "strip".to_string(),
+            region_id: None,
+            parameter: MaterialParameterNameIR::Ms,
+            value: MaterialParameterFieldIR::Constant {
+                value: serde_json::json!(800e3),
+                unit: Some("A/m".to_string()),
+            },
+            priority: 10,
+            conflict_policy: RegionConflictPolicyIR::Error,
+        });
+
+    let errors = ir
+        .validate()
+        .expect_err("equal-priority object-wide and region assignments must conflict");
+    assert!(errors.iter().any(|error| error
+        .contains("object_regions[0].material_overrides[0] and material_parameter_fields[0]")));
+}
+
+#[test]
+fn disabled_region_material_assignments_do_not_conflict() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.object_regions.push(ObjectRegionIR {
+        region_id: "reg_core".to_string(),
+        owner_object: "strip".to_string(),
+        name: "core".to_string(),
+        shape: RegionShapeIR::Box {
+            size: [10e-9, 10e-9, 6e-9],
+            center: [0.0, 0.0, 0.0],
+        },
+        frame: RegionFrameIR::Object,
+        enabled: false,
+        priority: 0,
+        mesh_policy: None,
+        material_overrides: vec![RegionMaterialOverrideIR {
+            parameter: MaterialParameterNameIR::Ms,
+            value: MaterialParameterFieldIR::Constant {
+                value: serde_json::json!(760e3),
+                unit: Some("A/m".to_string()),
+            },
+            priority: 10,
+            conflict_policy: RegionConflictPolicyIR::Error,
+        }],
+        texture_override: None,
+        realization_policy: RegionRealizationPolicyIR::Inherit,
+    });
+    ir.material_parameter_fields
+        .push(MaterialParameterAssignmentIR {
+            assignment_id: "disabled_region_ms".to_string(),
+            owner_object: "strip".to_string(),
+            region_id: Some("reg_core".to_string()),
+            parameter: MaterialParameterNameIR::Ms,
+            value: MaterialParameterFieldIR::Constant {
+                value: serde_json::json!(780e3),
+                unit: Some("A/m".to_string()),
+            },
+            priority: 10,
+            conflict_policy: RegionConflictPolicyIR::Error,
+        });
+    ir.material_parameter_fields
+        .push(MaterialParameterAssignmentIR {
+            assignment_id: "object_ms".to_string(),
+            owner_object: "strip".to_string(),
+            region_id: None,
+            parameter: MaterialParameterNameIR::Ms,
+            value: MaterialParameterFieldIR::Constant {
+                value: serde_json::json!(800e3),
+                unit: Some("A/m".to_string()),
+            },
+            priority: 10,
+            conflict_policy: RegionConflictPolicyIR::Error,
+        });
+
+    ir.validate()
+        .expect("disabled region assignments must not create active conflicts");
+}
+
+#[test]
+fn region_material_assignment_must_match_region_owner() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.geometry.entries.push(GeometryEntryIR::Box {
+        name: "other".to_string(),
+        size: [20e-9, 20e-9, 6e-9],
+    });
+    ir.object_regions.push(ObjectRegionIR {
+        region_id: "reg_core".to_string(),
+        owner_object: "strip".to_string(),
+        name: "core".to_string(),
+        shape: RegionShapeIR::Box {
+            size: [10e-9, 10e-9, 6e-9],
+            center: [0.0, 0.0, 0.0],
+        },
+        frame: RegionFrameIR::Object,
+        enabled: true,
+        priority: 0,
+        mesh_policy: None,
+        material_overrides: Vec::new(),
+        texture_override: None,
+        realization_policy: RegionRealizationPolicyIR::Inherit,
+    });
+    ir.material_parameter_fields
+        .push(MaterialParameterAssignmentIR {
+            assignment_id: "other_ms".to_string(),
+            owner_object: "other".to_string(),
+            region_id: Some("reg_core".to_string()),
+            parameter: MaterialParameterNameIR::Ms,
+            value: MaterialParameterFieldIR::Constant {
+                value: serde_json::json!(760e3),
+                unit: Some("A/m".to_string()),
+            },
+            priority: 10,
+            conflict_policy: RegionConflictPolicyIR::Error,
+        });
+
+    let errors = ir
+        .validate()
+        .expect_err("assignment region owner must match assignment owner");
+    assert!(errors.iter().any(|error| error.contains(
+        "material_parameter_fields[0] region_id 'reg_core' belongs to a different owner than 'other'"
+    )));
+}
+
+#[test]
+fn coupling_region_endpoint_must_match_region_owner() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.geometry.entries.push(GeometryEntryIR::Box {
+        name: "other".to_string(),
+        size: [20e-9, 20e-9, 6e-9],
+    });
+    ir.object_regions.push(ObjectRegionIR {
+        region_id: "reg_core".to_string(),
+        owner_object: "strip".to_string(),
+        name: "core".to_string(),
+        shape: RegionShapeIR::Box {
+            size: [10e-9, 10e-9, 6e-9],
+            center: [0.0, 0.0, 0.0],
+        },
+        frame: RegionFrameIR::Object,
+        enabled: true,
+        priority: 0,
+        mesh_policy: None,
+        material_overrides: Vec::new(),
+        texture_override: None,
+        realization_policy: RegionRealizationPolicyIR::Inherit,
+    });
+    ir.couplings.push(CouplingIR {
+        coupling_id: "bad_region_endpoint".to_string(),
+        kind: CouplingKindIR::Exchange,
+        source: CouplingEndpointIR::Region {
+            object: "other".to_string(),
+            region_id: "reg_core".to_string(),
+        },
+        target: CouplingEndpointIR::Object {
+            object: "strip".to_string(),
+        },
+        enabled: true,
+        parameters: CouplingParametersIR::Exchange {
+            mode: ExchangeCouplingModeIR::HarmonicMean,
+            scale: Some(1.0),
+            inter_exchange: None,
+        },
+        capability_policy: CouplingCapabilityPolicyIR::RequireRuntime,
+    });
+
+    let errors = ir
+        .validate()
+        .expect_err("coupling region endpoint owner must match region owner");
+    assert!(errors.iter().any(|error| error.contains(
+        "couplings[0].source.region_id 'reg_core' belongs to a different owner than 'other'"
+    )));
+}
+
+#[test]
+fn coupling_region_endpoint_validates_when_region_owner_matches() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.object_regions.push(ObjectRegionIR {
+        region_id: "reg_core".to_string(),
+        owner_object: "strip".to_string(),
+        name: "core".to_string(),
+        shape: RegionShapeIR::Box {
+            size: [10e-9, 10e-9, 6e-9],
+            center: [0.0, 0.0, 0.0],
+        },
+        frame: RegionFrameIR::Object,
+        enabled: true,
+        priority: 0,
+        mesh_policy: None,
+        material_overrides: Vec::new(),
+        texture_override: None,
+        realization_policy: RegionRealizationPolicyIR::Inherit,
+    });
+    ir.couplings.push(CouplingIR {
+        coupling_id: "region_endpoint".to_string(),
+        kind: CouplingKindIR::Exchange,
+        source: CouplingEndpointIR::Region {
+            object: "strip".to_string(),
+            region_id: "reg_core".to_string(),
+        },
+        target: CouplingEndpointIR::Object {
+            object: "strip".to_string(),
+        },
+        enabled: true,
+        parameters: CouplingParametersIR::Exchange {
+            mode: ExchangeCouplingModeIR::HarmonicMean,
+            scale: Some(1.0),
+            inter_exchange: None,
+        },
+        capability_policy: CouplingCapabilityPolicyIR::RequireRuntime,
+    });
+
+    assert!(ir.validate().is_ok());
+}
+
+#[test]
+fn active_coupling_cannot_target_disabled_region() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.object_regions.push(ObjectRegionIR {
+        region_id: "reg_core".to_string(),
+        owner_object: "strip".to_string(),
+        name: "core".to_string(),
+        shape: RegionShapeIR::Box {
+            size: [10e-9, 10e-9, 6e-9],
+            center: [0.0, 0.0, 0.0],
+        },
+        frame: RegionFrameIR::Object,
+        enabled: false,
+        priority: 0,
+        mesh_policy: None,
+        material_overrides: Vec::new(),
+        texture_override: None,
+        realization_policy: RegionRealizationPolicyIR::Inherit,
+    });
+    ir.couplings.push(CouplingIR {
+        coupling_id: "disabled_region_endpoint".to_string(),
+        kind: CouplingKindIR::Exchange,
+        source: CouplingEndpointIR::Region {
+            object: "strip".to_string(),
+            region_id: "reg_core".to_string(),
+        },
+        target: CouplingEndpointIR::Object {
+            object: "strip".to_string(),
+        },
+        enabled: true,
+        parameters: CouplingParametersIR::Exchange {
+            mode: ExchangeCouplingModeIR::HarmonicMean,
+            scale: Some(1.0),
+            inter_exchange: None,
+        },
+        capability_policy: CouplingCapabilityPolicyIR::RequireRuntime,
+    });
+
+    let errors = ir
+        .validate()
+        .expect_err("active coupling endpoint must not reference disabled region");
+    assert!(errors.iter().any(|error| {
+        error.contains("couplings[0].source.region_id 'reg_core' references disabled object_region")
+    }));
+
+    ir.couplings[0].enabled = false;
+    ir.validate()
+        .expect("disabled coupling may keep a reference to disabled authored region");
+}
+
+#[test]
+fn object_object_exchange_default_is_no_coupling_in_ir() {
+    let ir = ProblemIR::bootstrap_example();
+
+    assert!(ir.couplings.is_empty());
+    assert!(ir.validate().is_ok());
+}
+
+#[test]
+fn rkky_requires_surface_endpoints_and_airbox_is_rejected() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.couplings.push(CouplingIR {
+        coupling_id: "bad_rkky".to_string(),
+        kind: CouplingKindIR::Rkky,
+        source: CouplingEndpointIR::Object {
+            object: "strip".to_string(),
+        },
+        target: CouplingEndpointIR::Surface {
+            object: "airbox".to_string(),
+            selector: "top".to_string(),
+        },
+        enabled: true,
+        parameters: CouplingParametersIR::Rkky { j1: -0.3e-3 },
+        capability_policy: CouplingCapabilityPolicyIR::RequireRuntime,
+    });
+
+    let errors = ir
+        .validate()
+        .expect_err("invalid RKKY endpoints must be rejected");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("endpoints must be surfaces")));
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("must be magnetic, not airbox")));
+}
+
 fn add_valid_magnetoelastic_semantics(ir: &mut ProblemIR) {
     ir.elastic_materials = vec![ElasticMaterialIR {
         name: "elastic".to_string(),
@@ -393,6 +934,9 @@ fn execution_plan_ir_serializes() {
                 saturation_magnetisation: 800e3,
                 exchange_stiffness: 13e-12,
                 damping: 0.02,
+                ms_field: None,
+                a_field: None,
+                alpha_field: None,
                 uniaxial_anisotropy_ku1: None,
                 uniaxial_anisotropy_ku2: None,
                 anisotropy_axis: None,

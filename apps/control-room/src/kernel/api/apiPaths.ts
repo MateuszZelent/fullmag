@@ -363,6 +363,22 @@ export const MODEL_OBJECT_PATH = openApiV2Path(
   "/v2/sessions/current/model/objects/{object_id}",
 );
 
+export const MODEL_OBJECT_REGIONS_PATH = openApiV2Path(
+  "/v2/sessions/current/model/objects/{object_id}/regions",
+);
+
+export const MODEL_OBJECT_REGIONS_REORDER_PATH = openApiV2Path(
+  "/v2/sessions/current/model/objects/{object_id}/regions/reorder",
+);
+
+export const MODEL_OBJECT_REGION_PATH = openApiV2Path(
+  "/v2/sessions/current/model/objects/{object_id}/regions/{region_id}",
+);
+
+export const MODEL_OBJECT_REGION_DUPLICATE_PATH = openApiV2Path(
+  "/v2/sessions/current/model/objects/{object_id}/regions/{region_id}/duplicate",
+);
+
 export const MODEL_OBJECT_GEOMETRY_PATH = openApiV2Path(
   "/v2/sessions/current/model/objects/{object_id}/geometry",
 );
@@ -381,6 +397,22 @@ export const MODEL_MAGNETIZATION_ASSET_PATH = openApiV2Path(
 
 export const MODEL_REGIONS_PATH = openApiV2Path(
   "/v2/sessions/current/model/regions",
+);
+
+export const MODEL_REALIZED_REGIONS_PATH = openApiV2Path(
+  "/v2/sessions/current/model/realized-regions",
+);
+
+export const MODEL_REGION_DIAGNOSTICS_PATH = openApiV2Path(
+  "/v2/sessions/current/model/region-diagnostics",
+);
+
+export const MODEL_MATERIAL_FIELDS_PATH = openApiV2Path(
+  "/v2/sessions/current/model/material-fields",
+);
+
+export const MODEL_COUPLINGS_PATH = openApiV2Path(
+  "/v2/sessions/current/model/couplings",
 );
 
 export const MODEL_REGION_PATH = openApiV2Path(

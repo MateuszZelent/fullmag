@@ -20,6 +20,16 @@ type ExplorerNodeKind =
   | "object.material"
   | "object.physics"
   | "object.regions"
+  | "object.region"
+  | "object.region.geometry"
+  | "object.region.shape"
+  | "object.region.mesh"
+  | "object.region.magnetic-parameters"
+  | "object.region.material"
+  | "object.region.texture"
+  | "object.region.visualization"
+  | "object.region.regions"
+  | "object.region.diagnostics"
   | "object.region-magnetic-texture"
   | "object.magnetic-parameters"
   | "object.magnetic-texture"
@@ -41,6 +51,8 @@ type ExplorerNodeKind =
   | "visualizations-2d.draft"
   | "visualizations-2d.parameter"
   | "visualizations-2d.plot"
+  | "physics.couplings"
+  | "physics.coupling"
   | "study.root"
   | "study.stage.action"
   | "study.stage.eigenmodes"
@@ -110,6 +122,7 @@ export interface ExplorerNode {
   crossSectionPlotId?: string;
   icon?: ExplorerIconToken;
   objectId?: string;
+  couplingId?: string;
   regionId?: string;
   resourceRef?: string;
   stageId?: string;
@@ -131,11 +144,38 @@ export interface ModelTreeObjectSnapshot {
   physicsInteractions?: readonly ModelTreePhysicsInteractionSnapshot[];
   region?: string | null;
   regionId?: string | null;
+  regions?: readonly ModelTreeObjectRegionSnapshot[];
+  materialFields?: readonly ModelTreeMaterialFieldSnapshot[];
   regionMagnetization?: string | null;
   regionMagnetizationKind?: string | null;
   regionMagnetizationLabel?: string | null;
   textureLoadEnabled?: boolean;
   textureTransformAvailable?: boolean;
+}
+
+export interface ModelTreeObjectRegionSnapshot {
+  enabled: boolean;
+  id: string;
+  label: string;
+  materialFieldCount: number;
+  materialOverrideCount: number;
+  meshPolicyActive: boolean;
+  priority?: number | null;
+  realizationPolicy?: string | null;
+  realizationStatus?: string | null;
+  shapeKind?: string | null;
+  source: string;
+  textureOverrideActive: boolean;
+}
+
+export interface ModelTreeMaterialFieldSnapshot {
+  id: string;
+  label: string;
+  ownerObjectId: string;
+  parameter: string;
+  realizationStatus?: string | null;
+  regionId?: string | null;
+  unit?: string | null;
 }
 
 export interface ModelTreeMaterialSnapshot {
@@ -151,7 +191,18 @@ export interface ModelTreePhysicsInteractionSnapshot {
   objectCount: number;
 }
 
+export interface ModelTreeCouplingSnapshot {
+  enabled: boolean;
+  id: string;
+  kind: string;
+  label: string;
+  realizationStatus?: string | null;
+  sourceLabel: string;
+  targetLabel: string;
+}
+
 export interface ModelTreeSnapshot {
+  couplings?: readonly ModelTreeCouplingSnapshot[];
   crossSections?: ModelTreeCrossSectionSnapshot | null;
   materials?: readonly ModelTreeMaterialSnapshot[];
   mesh?: ModelTreeMeshSnapshot | null;
@@ -227,7 +278,10 @@ export interface ModelTreeMeshSnapshot {
   buildRevision?: number | string | null;
   domainMeshMode?: string | null;
   generationId?: string | null;
+  latestBuildSourceSceneRevision?: number | string | null;
+  latestBuildStatus?: string | null;
   lastError?: string | null;
+  manifestSourceSceneRevision?: number | string | null;
   meshName?: string | null;
   meshRevision?: number | string | null;
   objectSegmentCount?: number | null;
@@ -235,4 +289,5 @@ export interface ModelTreeMeshSnapshot {
   qualityStatus?: string | null;
   realizedSizeFieldCount?: number | null;
   regionCount?: number | null;
+  sourceSceneRevision?: number | string | null;
 }

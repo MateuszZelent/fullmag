@@ -17,18 +17,20 @@ try {
     "/v2/sessions/current/meshing/meshes/shared-domain/manifest",
   ).catch(() => null);
   const existingObject = firstSceneObject(initialScene);
+  const objectSize = [6e-8, 6e-8, 8e-9];
   const universe = sceneStudyUniverse(initialScene) ?? sceneUniverse(initialScene) ?? {
     center: [0, 0, 0],
     mode: "box",
     padding: [0, 0, 0],
     size: [3.2e-6, 2.4e-6, 3e-7],
   };
+  const translation = verificationObjectTranslation(existingObject, universe, objectSize);
 
   const createResponse = await postJson("/v2/sessions/current/model/transactions", {
     base_revision: sceneRevision(initialScene),
     geometry: {
       geometry_kind: "Box",
-      geometry_params: { size: [6e-8, 6e-8, 8e-9] },
+      geometry_params: { size: objectSize },
     },
     kind: "create_object",
     magnetization_ref: stringOrNull(existingObject?.magnetization_ref),
@@ -41,7 +43,7 @@ try {
       pivot: [0, 0, 0],
       rotation_quat: [0, 0, 0, 1],
       scale: [1, 1, 1],
-      translation: [-8e-7, -7.5e-7, 0],
+      translation,
     },
     universe,
   });
@@ -137,6 +139,9 @@ async function waitForManifestSegment(targetObjectId, initialRevision) {
 
 async function cleanupObject(targetObjectId, originalScene) {
   const scene = await getJson("/v2/sessions/current/model/scene");
+  if (!sceneObjects(scene).some((object) => object?.id === targetObjectId)) {
+    return;
+  }
   const revision = sceneRevision(scene) ?? cleanupRevision;
   if (typeof revision !== "number") {
     throw new Error("current scene revision is unavailable");
@@ -229,6 +234,31 @@ function sceneObjects(scene) {
 
 function firstSceneObject(scene) {
   return sceneObjects(scene).find((object) => object && typeof object === "object") ?? null;
+}
+
+function verificationObjectTranslation(existingObject, universe, objectSize) {
+  const bounds = objectBounds(existingObject);
+  const center = numberTriple(universe?.center) ?? [0, 0, 0];
+  const universeSize = numberTriple(universe?.size);
+  const objectHalfY = objectSize[1] * 0.5;
+  const objectHalfZ = objectSize[2] * 0.5;
+  const targetY = bounds ? bounds.max[1] + 3.5e-7 : center[1] + 5e-7;
+  const yLimit = universeSize ? center[1] + universeSize[1] * 0.5 - objectHalfY - 1e-8 : null;
+  const y = yLimit === null ? targetY : Math.min(targetY, yLimit);
+  const zLimit = universeSize ? Math.max(0, universeSize[2] * 0.5 - objectHalfZ - 1e-8) : 0;
+  return [center[0], y, Math.min(Math.max(0, -zLimit), zLimit)];
+}
+
+function objectBounds(object) {
+  const min = numberTriple(object?.geometry?.bounds_min);
+  const max = numberTriple(object?.geometry?.bounds_max);
+  return min && max ? { max, min } : null;
+}
+
+function numberTriple(value) {
+  if (!Array.isArray(value) || value.length !== 3) return null;
+  const triple = value.map((entry) => Number(entry));
+  return triple.every((entry) => Number.isFinite(entry)) ? triple : null;
 }
 
 function isRecord(value) {

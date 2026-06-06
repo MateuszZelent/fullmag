@@ -278,6 +278,65 @@ run-headless-bench script:
     FULLMAG_DISABLE_CHARTS=1 FULLMAG_DISABLE_PREVIEW_3D=1 \
     fullmag {{script}} --headless --json
 
+fullmag opt_1="" opt_2="" opt_3="" opt_4="" opt_5="" opt_6="" opt_7="" opt_8="":
+    bash -euo pipefail -c '\
+      build="false"; force="false"; frontend="dev"; backend="auto"; device="auto"; run_mode="interactive"; script=""; web_port="3100"; \
+      for raw in "{{opt_1}}" "{{opt_2}}" "{{opt_3}}" "{{opt_4}}" "{{opt_5}}" "{{opt_6}}" "{{opt_7}}" "{{opt_8}}"; do \
+        [ -n "$raw" ] || continue; \
+        key="${raw%%=*}"; value="$raw"; if [ "$key" != "$raw" ]; then value="${raw#*=}"; fi; \
+        key_lc="$(printf "%s" "$key" | tr "[:upper:]" "[:lower:]")"; value_lc="$(printf "%s" "$value" | tr "[:upper:]" "[:lower:]")"; \
+        case "$key_lc" in \
+          build) build="$value_lc" ;; \
+          force) force="$value_lc" ;; \
+          frontend|ui) frontend="$value_lc" ;; \
+          backend|discretization|engine) backend="$value_lc" ;; \
+          device|execution) device="$value_lc" ;; \
+          mode|run_mode) run_mode="$value_lc" ;; \
+          script) script="$value" ;; \
+          web_port|web-port|port) web_port="$value" ;; \
+          static|dev) frontend="$key_lc" ;; \
+          fem|fdm|auto) backend="$key_lc" ;; \
+          gpu|cpu) device="$key_lc" ;; \
+          interactive|headless) run_mode="$key_lc" ;; \
+          true|false) build="$key_lc" ;; \
+          *) script="$raw" ;; \
+        esac; \
+      done; \
+      case "$build" in 1|true|yes|on) build="true" ;; 0|false|no|off) build="false" ;; *) echo "unsupported build value: $build (expected true or false)" >&2; exit 2 ;; esac; \
+      case "$force" in 1|true|yes|on) force="true"; build="true" ;; 0|false|no|off) force="false" ;; *) echo "unsupported force value: $force (expected true or false)" >&2; exit 2 ;; esac; \
+      case "$frontend" in static|dev) ;; *) echo "unsupported frontend mode: $frontend (expected static or dev)" >&2; exit 2 ;; esac; \
+      case "$backend" in fem|fdm|auto) ;; *) echo "unsupported backend: $backend (expected fem, fdm, or auto)" >&2; exit 2 ;; esac; \
+      case "$device" in gpu|cpu|auto) ;; *) echo "unsupported device: $device (expected gpu, cpu, or auto)" >&2; exit 2 ;; esac; \
+      case "$run_mode" in interactive|headless) ;; *) echo "unsupported run mode: $run_mode (expected interactive or headless)" >&2; exit 2 ;; esac; \
+      if [ -z "$script" ]; then echo "missing script path; example: just fullmag build=False static fem gpu examples/permalloy_skyrmion_relax_300x1000x10nm.py" >&2; exit 2; fi; \
+      if [ ! -f "$script" ]; then echo "script not found: $script" >&2; exit 2; fi; \
+      if [ "$build" = "true" ]; then just ensure-python; elif [ ! -x "{{repo_python}}" ]; then echo "Python env is missing; run with build=True or force=True once." >&2; exit 2; fi; \
+      if [ "$frontend" = "static" ]; then \
+        if [ "$force" = "true" ]; then make web-build-static; \
+        elif [ "$build" = "true" ]; then just build-static-control-room; \
+        elif [ ! -f ".fullmag/local/web/index.html" ] && [ ! -f "apps/control-room/out/index.html" ]; then echo "Static control room is missing; run with build=True or force=True once." >&2; exit 2; fi; \
+      fi; \
+      if [ "$backend" = "fem" ]; then \
+        if [ "$force" = "true" ]; then just rebuild-fem-runtime; \
+        elif [ "$build" = "true" ]; then just ensure-managed-fem-runtime; \
+        elif [ ! -x "{{gpu_runtime_bin}}" ]; then echo "Managed FEM runtime is missing; run with build=True or force=True once." >&2; exit 2; fi; \
+        bin="{{gpu_runtime_bin}}"; path_prefix=""; \
+      else \
+        if [ "$force" = "true" ]; then just build fullmag; \
+        elif [ "$build" = "true" ]; then just build fullmag; \
+        elif [ ! -x "{{local_bin}}/fullmag" ]; then echo "Fullmag binary is missing; run with build=True or force=True once." >&2; exit 2; fi; \
+        bin="{{local_bin}}/fullmag"; path_prefix="{{local_bin}}:$PATH"; \
+      fi; \
+      env_args=(FULLMAG_PYTHON="{{repo_python}}"); \
+      if [ -n "$path_prefix" ]; then env_args+=(PATH="$path_prefix"); fi; \
+      if [ "$backend" = "fem" ]; then env_args+=(FULLMAG_FDM_EXECUTION=cpu); fi; \
+      if [ "$backend" = "fem" ] && [ "$device" != "auto" ]; then env_args+=(FULLMAG_FEM_EXECUTION="$device" FULLMAG_RELAX_DEVICE="$device"); fi; \
+      if [ "$backend" = "fdm" ] && [ "$device" != "auto" ]; then env_args+=(FULLMAG_FDM_EXECUTION="$device"); fi; \
+      cli_args=("$script"); \
+      if [ "$backend" != "auto" ]; then cli_args+=(--backend "$backend"); fi; \
+      if [ "$run_mode" = "headless" ]; then cli_args+=(--headless --json); else if [ "$frontend" = "dev" ]; then cli_args=(--dev -i "${cli_args[@]}"); else cli_args=(-i "${cli_args[@]}"); fi; cli_args+=(--web-port "$web_port"); fi; \
+      env "${env_args[@]}" "$bin" "${cli_args[@]}"'
+
 run-fdm-cpu-smoke:
     just ensure-python
     just build fullmag
@@ -513,6 +572,33 @@ run-permalloy-box-relax-headless fem_execution="gpu" cpu_threads="auto":
     FULLMAG_FEM_EXECUTION="$mode" \
     FULLMAG_CPU_THREADS="$cpu_threads_env" \
     '{{gpu_runtime_bin}}' examples/permalloy_box_relax_300x1000x10nm.py --backend fem --headless --json
+
+run-permalloy-skyrmion-relax fem_execution="gpu":
+    just run-permalloy-skyrmion-relax-interactive "{{fem_execution}}"
+
+run-permalloy-skyrmion-relax-interactive fem_execution="gpu" cpu_threads="auto" web_port="3100":
+    just ensure-python
+    just ensure-managed-fem-runtime
+    mode="{{fem_execution}}"; \
+    case "$mode" in 0|cpu|CPU) mode="cpu" ;; gpu|GPU) mode="gpu" ;; *) echo "unsupported FEM execution mode: $mode (expected cpu or gpu)" >&2; exit 2 ;; esac; \
+    if [ "{{cpu_threads}}" = "auto" ]; then cpu_threads_env=auto; else cpu_threads_env="{{cpu_threads}}"; fi; \
+    FULLMAG_PYTHON="{{repo_python}}" \
+    FULLMAG_FDM_EXECUTION=cpu \
+    FULLMAG_FEM_EXECUTION="$mode" \
+    FULLMAG_CPU_THREADS="$cpu_threads_env" \
+    '{{gpu_runtime_bin}}' --dev -i examples/permalloy_skyrmion_relax_300x1000x10nm.py --web-port "{{web_port}}"
+
+run-permalloy-skyrmion-relax-headless fem_execution="gpu" cpu_threads="auto":
+    just ensure-python
+    just ensure-managed-fem-runtime
+    mode="{{fem_execution}}"; \
+    case "$mode" in 0|cpu|CPU) mode="cpu" ;; gpu|GPU) mode="gpu" ;; *) echo "unsupported FEM execution mode: $mode (expected cpu or gpu)" >&2; exit 2 ;; esac; \
+    if [ "{{cpu_threads}}" = "auto" ]; then cpu_threads_env=auto; else cpu_threads_env="{{cpu_threads}}"; fi; \
+    FULLMAG_PYTHON="{{repo_python}}" \
+    FULLMAG_FDM_EXECUTION=cpu \
+    FULLMAG_FEM_EXECUTION="$mode" \
+    FULLMAG_CPU_THREADS="$cpu_threads_env" \
+    '{{gpu_runtime_bin}}' examples/permalloy_skyrmion_relax_300x1000x10nm.py --backend fem --headless --json
 
 run-nanoflower-headless:
     just ensure-python

@@ -1,4 +1,5 @@
 import type { SelectionRef } from "@/kernel/selection/selectionTypes";
+import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
 import type { KernelApi, ModuleId } from "@/kernel/types";
 import { selectCrossSectionPlot } from "@/kernel/workspace/crossSectionWorkspace";
 
@@ -12,6 +13,16 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       node.kind === "object.material" ||
       node.kind === "object.physics" ||
       node.kind === "object.regions" ||
+      node.kind === "object.region" ||
+      node.kind === "object.region.geometry" ||
+      node.kind === "object.region.shape" ||
+      node.kind === "object.region.mesh" ||
+      node.kind === "object.region.magnetic-parameters" ||
+      node.kind === "object.region.material" ||
+      node.kind === "object.region.texture" ||
+      node.kind === "object.region.visualization" ||
+      node.kind === "object.region.regions" ||
+      node.kind === "object.region.diagnostics" ||
       node.kind === "object.region-magnetic-texture" ||
       node.kind === "object.magnetic-parameters" ||
       node.kind === "object.magnetic-texture" ||
@@ -27,7 +38,10 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       objectId: node.objectId,
       ...(node.regionId ? { regionId: node.regionId } : {}),
       type: "scene-object",
-      visualizationTargetId: `object:${node.objectId}`,
+      visualizationTargetId: visualizationTargetIdForSceneObject(
+        node.objectId,
+        node.regionId,
+      ),
     };
   }
 
@@ -88,6 +102,15 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       stageId: node.stageId,
       stageIndex: node.stageIndex,
       type: "study-stage",
+    };
+  }
+
+  if (node.kind === "physics.coupling" && node.couplingId) {
+    return {
+      couplingId: node.couplingId,
+      kind: "physics.coupling",
+      nodeId: node.id,
+      type: "physics-coupling",
     };
   }
 

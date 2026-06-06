@@ -198,6 +198,7 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain("readViewportCameraSignature");
     expect(smokeScript).toContain('node?.getAttribute("data-camera-up")');
     expect(smokeScript).toContain("assertViewportCameraUpIsWorldUp");
+    expect(smokeScript).toContain("CONTROL_ROOM_SMOKE_SKIP_CAMERA_GESTURES");
   });
 
   it("does not add fixed settle delays to measured camera gesture phases", () => {
@@ -248,6 +249,29 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).not.toContain(
       "GET /v2/sessions/current/model/scene refetch after UI object commit",
     );
+  });
+
+  it("verifies object region authoring without degrading mesh topology", () => {
+    const smokeScript = readFileSync(smokeScriptUrl, "utf8");
+
+    expect(smokeScript).toContain("verifyRegionAuthoringOverlayFlow");
+    expect(smokeScript).toContain("CONTROL_ROOM_SMOKE_REGION_ONLY_OBJECT_ID");
+    expect(smokeScript).toContain("isObjectRegionCreateUrl");
+    expect(smokeScript).toContain("objectRow.dblclick()");
+    expect(smokeScript).toContain("regionsNode.dblclick()");
+    expect(smokeScript).toContain('fillDraftField(page, "Name", regionName)');
+    expect(smokeScript).toContain('shapeSelect.selectOption("cylinder")');
+    expect(smokeScript).toContain("region create button enabled");
+    expect(smokeScript).toContain("createButton.evaluate");
+    expect(smokeScript).toContain('getByRole("button", { name: "Hide regions" })');
+    expect(smokeScript).toContain("assertViewportTopologyNotStale");
+    expect(smokeScript).toContain("topology remains renderable");
+    expect(smokeScript).toContain("edge-only safety view");
+    expect(smokeScript).toContain(
+      "3D viewport canvas change after object region overlay commit",
+    );
+    expect(smokeScript).toContain("Region overlay smoke passed:");
+    expect(smokeScript).toContain("mesh=preserved");
   });
 
   it("does not order websocket refetch proof by probe timestamps", () => {

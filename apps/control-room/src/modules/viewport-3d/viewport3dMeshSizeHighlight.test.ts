@@ -38,6 +38,8 @@ function topologyModelFixture(): Viewport3DTopologyRenderModel {
     fallbackSurfaceIndices: new Uint32Array(),
     fallbackVolumeEdgeIndices: new Uint32Array(),
     magneticParts: [],
+    meshGenerationId: null,
+    meshRevision: null,
     nodeCount: 8,
     positions: Float32Array.from(topologyFixture().positions),
   };

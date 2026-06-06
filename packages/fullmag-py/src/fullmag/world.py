@@ -44,6 +44,7 @@ from fullmag.model.antenna import (
     RfDrive,
     SpinWaveExcitationAnalysis,
 )
+from fullmag.model.couplings import CouplingEndpoint, CouplingRegistry
 from fullmag.model.current_transport import CurrentTransport
 from fullmag.model.energy import BulkDMI, Demag, Exchange, InterfacialDMI, Zeeman
 from fullmag.model.dynamics import (
@@ -57,7 +58,14 @@ from fullmag.model.dynamics import (
 )
 from fullmag.model.outputs import SaveField, SaveScalar, SaveSpectrum, SaveMode, SaveDispersion, SaveResponse, Snapshot, parse_snapshot_quantity
 from fullmag.model.study import Eigenmodes, FrequencyResponse, RelaxStop, Relaxation, TableAutosave, TimeEvolution
-from fullmag.model.structure import Ferromagnet, Material, Region
+from fullmag.model.structure import (
+    Ferromagnet,
+    Material,
+    MaterialParameterAssignment,
+    MaterialParameterField,
+    ObjectRegion,
+    Region,
+)
 from fullmag.model.problem import (
     BackendTarget,
     build_geometry_assets_for_request,
@@ -222,6 +230,132 @@ def _validate_mesh_control_values(
 # Magnet handle — returned by fm.geometry()
 # ---------------------------------------------------------------------------
 
+class RegionRegistry:
+    """Owner-scoped authored region registry."""
+
+    def __init__(self, owner: "MagnetHandle") -> None:
+        self._owner = owner
+
+    def __iter__(self):
+        return iter(self._owner._object_regions)
+
+    def __len__(self) -> int:
+        return len(self._owner._object_regions)
+
+    def __contains__(self, key: object) -> bool:
+        try:
+            self[key]  # type: ignore[index]
+            return True
+        except (KeyError, IndexError, TypeError):
+            return False
+
+    def __getitem__(self, key: int | str) -> ObjectRegion:
+        if isinstance(key, int):
+            return self._owner._object_regions[key]
+        if not isinstance(key, str):
+            raise TypeError("region registry key must be an index, name, or region_id")
+        for region in self._owner._object_regions:
+            if region.name == key or region.region_id == key:
+                return region
+        raise KeyError(key)
+
+    def keys(self) -> tuple[str, ...]:
+        return tuple(region.name for region in self._owner._object_regions)
+
+    def values(self) -> tuple[ObjectRegion, ...]:
+        return tuple(self._owner._object_regions)
+
+    def items(self) -> tuple[tuple[str, ObjectRegion], ...]:
+        return tuple((region.name, region) for region in self._owner._object_regions)
+
+    def allocate_region_id(self, name: str) -> str:
+        require_non_empty(name, "name")
+        candidate = f"{self._owner._name}:r{self._owner._next_region_id_index}"
+        while (
+            candidate in self._owner._allocated_region_ids
+            or any(region.region_id == candidate for region in self._owner._object_regions)
+        ):
+            self._owner._next_region_id_index += 1
+            candidate = f"{self._owner._name}:r{self._owner._next_region_id_index}"
+        self._owner._allocated_region_ids.append(candidate)
+        self._owner._next_region_id_index += 1
+        return candidate
+
+    def reserve_region_id(self, region_id: str) -> str:
+        region_id = require_non_empty(region_id, "region_id")
+        if (
+            region_id in self._owner._allocated_region_ids
+            or any(region.region_id == region_id for region in self._owner._object_regions)
+        ):
+            raise ValueError(
+                f"Magnet '{self._owner._name}' already has or had a region id {region_id!r}"
+            )
+        self._owner._allocated_region_ids.append(region_id)
+        return region_id
+
+    def reserve_id(self, region_id: str) -> str:
+        """Reserve a region id without creating a region."""
+        return self.reserve_region_id(region_id)
+
+
+class StudyRegionRegistry:
+    """Read-only flattened authored region registry for the active study."""
+
+    def __iter__(self):
+        return iter(self.values())
+
+    def __len__(self) -> int:
+        return sum(len(magnet._object_regions) for magnet in _state._magnets)
+
+    def __contains__(self, key: object) -> bool:
+        try:
+            self[key]  # type: ignore[index]
+            return True
+        except (KeyError, IndexError, TypeError):
+            return False
+
+    def __getitem__(self, key: int | str) -> ObjectRegion:
+        regions = self.values()
+        if isinstance(key, int):
+            return regions[key]
+        if not isinstance(key, str):
+            raise TypeError("study region registry key must be an index or flattened name")
+        for magnet in _state._magnets:
+            for region in magnet._object_regions:
+                region_id = str(region.region_id)
+                region_id_suffix = region_id.split(":", 1)[1] if ":" in region_id else region_id
+                if key in {
+                    f"{magnet._name}/{region.name}",
+                    f"{magnet._name}/{region_id_suffix}",
+                    region_id,
+                }:
+                    return region
+        raise KeyError(key)
+
+    def keys(self) -> tuple[str, ...]:
+        return tuple(
+            f"{magnet._name}/{region.name}"
+            for magnet in _state._magnets
+            for region in magnet._object_regions
+        )
+
+    def values(self) -> tuple[ObjectRegion, ...]:
+        return tuple(
+            region
+            for magnet in _state._magnets
+            for region in magnet._object_regions
+        )
+
+    def items(self) -> tuple[tuple[str, ObjectRegion], ...]:
+        return tuple(zip(self.keys(), self.values()))
+
+    def __setitem__(self, key: object, value: object) -> None:
+        raise TypeError("study.regions is read-only; edit regions through the owner object")
+
+    def __delitem__(self, key: object) -> None:
+        raise TypeError("study.regions is read-only; edit regions through the owner object")
+
+
 class MagnetHandle:
     """Per-magnet configuration handle.
 
@@ -252,6 +386,11 @@ class MagnetHandle:
         self._last_mesh_quality: object | None = None
         self.mesh = GeometryMeshHandle(self)
         self._visualization: dict[str, object] | None = None
+        self._object_regions: list[ObjectRegion] = []
+        self._allocated_region_ids: list[str] = []
+        self._next_region_id_index = 1
+        self._material_parameter_assignments: list[MaterialParameterAssignment] = []
+        self.regions = RegionRegistry(self)
 
     def __repr__(self) -> str:
         return f"MagnetHandle({self._name!r}, Ms={self.Ms}, Aex={self.Aex}, m={self._m_value!r})"
@@ -328,7 +467,130 @@ class MagnetHandle:
             material=mat,
             region=region,
             m0=m0,
+            object_regions=tuple(self._object_regions),
+            allocated_region_ids=tuple(self._allocated_region_ids),
+            material_parameter_fields=tuple(self._material_parameter_assignments),
         )
+
+    def add_region(
+        self,
+        name: str,
+        shape: object,
+        *,
+        region_id: str | None = None,
+        frame: str = "object",
+        enabled: bool = True,
+        priority: int = 0,
+        realization_policy: str = "inherit",
+    ) -> ObjectRegion:
+        if name in self.regions:
+            raise ValueError(f"Magnet '{self._name}' already has a region named {name!r}")
+        resolved_region_id = (
+            self.regions.allocate_region_id(name)
+            if region_id is None
+            else self.regions.reserve_region_id(region_id)
+        )
+        region = ObjectRegion(
+            owner_object=self._name,
+            name=name,
+            shape=shape,
+            region_id=resolved_region_id,
+            frame=frame,
+            enabled=enabled,
+            priority=priority,
+            realization_policy=realization_policy,
+        )
+        region._delete_callback = lambda region_id=region.region_id: self.remove_region(region_id)
+        self._object_regions.append(region)
+        return region
+
+    def remove_region(self, region: ObjectRegion | str | int) -> ObjectRegion:
+        index, resolved = self._resolve_region_index(region)
+        removed = self._object_regions.pop(index)
+        removed._delete_callback = None
+        self._material_parameter_assignments = [
+            assignment
+            for assignment in self._material_parameter_assignments
+            if assignment.region_id != removed.region_id
+        ]
+        _state._couplings.remove_region_references(self._name, str(removed.region_id))
+        return removed
+
+    def rename_region(self, region: ObjectRegion | str | int, name: str) -> ObjectRegion:
+        _, resolved = self._resolve_region_index(region)
+        new_name = require_non_empty(name, "name")
+        if new_name != resolved.name and new_name in self.regions:
+            raise ValueError(
+                f"Magnet '{self._name}' already has a region named {new_name!r}"
+            )
+        resolved.name = new_name
+        return resolved
+
+    def reorder_region(self, region: ObjectRegion | str | int, index: int) -> ObjectRegion:
+        current_index, resolved = self._resolve_region_index(region)
+        count = len(self._object_regions)
+        target = int(index)
+        if target < 0:
+            target += count
+        if target < 0 or target >= count:
+            raise IndexError("region reorder index out of range")
+        self._object_regions.pop(current_index)
+        self._object_regions.insert(target, resolved)
+        return resolved
+
+    def _resolve_region_index(self, region: ObjectRegion | str | int) -> tuple[int, ObjectRegion]:
+        if isinstance(region, ObjectRegion):
+            for index, candidate in enumerate(self._object_regions):
+                if candidate is region:
+                    return index, candidate
+            raise KeyError(region.region_id)
+        if isinstance(region, int):
+            resolved = self._object_regions[region]
+            return region, resolved
+        if isinstance(region, str):
+            for index, candidate in enumerate(self._object_regions):
+                if candidate.name == region or candidate.region_id == region:
+                    return index, candidate
+            raise KeyError(region)
+        raise TypeError("region must be an ObjectRegion, region name, region_id, or index")
+
+    def set_material_field(
+        self,
+        parameter: str,
+        value: float | tuple[float, float, float] | MaterialParameterField,
+        *,
+        assignment_id: str | None = None,
+        region: ObjectRegion | str | None = None,
+        unit: str | None = None,
+        priority: int = 0,
+        conflict_policy: str = "error",
+    ) -> "MagnetHandle":
+        field = value if isinstance(value, MaterialParameterField) else MaterialParameterField.constant(value, unit=unit)
+        if isinstance(region, ObjectRegion):
+            region_id = region.region_id
+        elif region is not None:
+            region_key = require_non_empty(region, "region")
+            region_id = self.regions[region_key].region_id if region_key in self.regions else region_key
+        else:
+            region_id = None
+        if assignment_id is None:
+            target = region_id.replace(":", "_") if region_id else "object"
+            assignment_id = f"{self._name}:{target}:{parameter}"
+        self._material_parameter_assignments.append(
+            MaterialParameterAssignment(
+                assignment_id=assignment_id,
+                owner_object=self._name,
+                region_id=region_id,
+                parameter=parameter,
+                value=field,
+                priority=priority,
+                conflict_policy=conflict_policy,
+            )
+        )
+        return self
+
+    def surface(self, selector: str) -> CouplingEndpoint:
+        return CouplingEndpoint.surface(self._name, selector)
 
     def visualization(
         self,
@@ -1526,6 +1788,7 @@ class _WorldState:
 
     # Magnets (ordered)
     _magnets: list[MagnetHandle] = field(default_factory=list)
+    _couplings: CouplingRegistry = field(default_factory=CouplingRegistry)
     _loaded_field_states: dict[tuple[str, str, str], object] = field(default_factory=dict)
 
     # External field
@@ -2999,6 +3262,77 @@ class StudyObjectsHandle:
         self.mesh = StudyObjectsMeshHandle(owner)
 
 
+class StudyCouplingsHandle:
+    def __init__(self, owner: "StudyBuilder") -> None:
+        self._owner = owner
+
+    def exchange(
+        self,
+        source: object,
+        target: object,
+        *,
+        mode: str = "harmonic_mean",
+        scale: float | None = None,
+        inter_exchange: float | None = None,
+        coupling_id: str | None = None,
+        enabled: bool = True,
+        capability_policy: str = "require_runtime",
+    ) -> "StudyBuilder":
+        _state._couplings.exchange(
+            source,
+            target,
+            mode=mode,
+            scale=scale,
+            inter_exchange=inter_exchange,
+            coupling_id=coupling_id,
+            enabled=enabled,
+            capability_policy=capability_policy,
+        )
+        return self._owner
+
+    def rkky(
+        self,
+        source: object,
+        target: object,
+        *,
+        J1: float,
+        coupling_id: str | None = None,
+        enabled: bool = True,
+        capability_policy: str = "require_runtime",
+    ) -> "StudyBuilder":
+        _state._couplings.rkky(
+            source,
+            target,
+            J1=J1,
+            coupling_id=coupling_id,
+            enabled=enabled,
+            capability_policy=capability_policy,
+        )
+        return self._owner
+
+    def interlayer_exchange(
+        self,
+        source: object,
+        target: object,
+        *,
+        J1: float,
+        J2: float | None = None,
+        coupling_id: str | None = None,
+        enabled: bool = True,
+        capability_policy: str = "require_runtime",
+    ) -> "StudyBuilder":
+        _state._couplings.interlayer_exchange(
+            source,
+            target,
+            J1=J1,
+            J2=J2,
+            coupling_id=coupling_id,
+            enabled=enabled,
+            capability_policy=capability_policy,
+        )
+        return self._owner
+
+
 class StudyBuilder:
     """Study-root facade over the current script-local world state."""
 
@@ -3008,6 +3342,8 @@ class StudyBuilder:
         self.universe = StudyUniverseHandle(self)
         self.airbox = StudyAirboxHandle(self)
         self.objects = StudyObjectsHandle(self)
+        self.couplings = StudyCouplingsHandle(self)
+        self.regions = StudyRegionRegistry()
         if problem_name is not None:
             name(problem_name)
 
@@ -5399,6 +5735,7 @@ def _build_problem(
         runtime=rt,
         runtime_metadata=runtime_metadata,
         current_modules=tuple(s._current_modules),
+        couplings=s._couplings.items(),
         excitation_analysis=s._excitation_analysis,
         geometry_asset_cache=s._geometry_asset_cache,
         pbc=s._pbc,

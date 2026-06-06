@@ -12,6 +12,7 @@ import type {
   FieldVectorQuery,
   LiveStatusResource,
   MeshHistogramBinElementsResource,
+  RegionListResource,
   ResourceRevision,
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
@@ -23,6 +24,7 @@ import {
   sameQuantityId,
 } from "@/kernel/api/quantityIds";
 import { useCrossSectionResource } from "@/kernel/resources/crossSectionResources";
+import { useModelRegionsResource } from "@/kernel/resources/geometryLifecycleResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import type {
   ResourceResult,
@@ -65,6 +67,7 @@ import {
 import {
   FULL_FIELD_QUERY,
   resolveViewport3DSelectionBounds,
+  targetForFdmDomain,
   targetForMeshPart,
 } from "../model/viewport3DTargets";
 import {
@@ -73,6 +76,7 @@ import {
 } from "../layers/FdmCuboidLayer";
 import { Viewport3DScene } from "../layers/Viewport3DScene";
 import { buildClipPlaneIntersectionMarkerBuffers } from "../layers/clipPlaneModel";
+import type { RegionOverlayInput } from "../layers/regionOverlayModel";
 import {
   adaptFdmDomainMeta,
   adaptFemSharedDomainManifest,
@@ -123,6 +127,7 @@ import {
 import type { Viewport3DFieldRefreshState } from "../viewport3dRefreshCountdown";
 import {
   isViewport3DTopologyCurrent,
+  isViewport3DTopologyRenderable,
   resolveViewport3DTopologyFreshnessLabel,
   resolveUnknownTopologyProvenanceRefreshKey,
   resolveViewport3DTopologyFreshness,
@@ -142,6 +147,8 @@ import {
 import { getViewport3DVisualProfile } from "../viewport3dVisualProfile";
 
 type Viewport3DSceneProps = ComponentProps<typeof Viewport3DScene>;
+type JsonRecord = Record<string, unknown>;
+
 const EMPTY_AIRBOX_FIELD_VECTOR_PARTS: readonly { id: string }[] = [];
 const VIEWPORT_3D_SCALAR_FIELD_COMPONENTS = new Set([
   "magnitude",
@@ -149,6 +156,78 @@ const VIEWPORT_3D_SCALAR_FIELD_COMPONENTS = new Set([
   "y",
   "z",
 ]);
+
+function asJsonRecord(value: unknown): JsonRecord | null {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
+    ? (value as JsonRecord)
+    : null;
+}
+
+function asNonEmptyString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+export function resolveViewport3DRegionOverlays({
+  objectTransformsById,
+  regionResource,
+  scene,
+}: {
+  objectTransformsById: ReadonlyMap<string, unknown>;
+  regionResource?: RegionListResource | null;
+  scene: unknown;
+}): RegionOverlayInput[] {
+  const overlays: RegionOverlayInput[] = [];
+  const seen = new Set<string>();
+
+  for (const region of regionResource?.regions ?? []) {
+    if (region.source !== "authored_object_region") continue;
+    const regionId = asNonEmptyString(region.region_id);
+    const objectId = asNonEmptyString(region.owner_object_id);
+    if (!regionId || !objectId) continue;
+    seen.add(regionOverlayKey(objectId, regionId));
+    overlays.push({
+      enabled: region.enabled,
+      frame: region.frame,
+      name: region.name,
+      owner_object_id: objectId,
+      owner_transform: objectTransformsById.get(objectId) ?? null,
+      priority: region.priority,
+      region_id: regionId,
+      shape: region.shape,
+    });
+  }
+
+  const sceneRecord = asJsonRecord(scene);
+  if (!Array.isArray(sceneRecord?.objects)) return overlays;
+
+  for (const objectValue of sceneRecord.objects) {
+    const object = asJsonRecord(objectValue);
+    const objectId = asNonEmptyString(object?.id);
+    if (!objectId || !Array.isArray(object?.regions)) continue;
+    for (const regionValue of object.regions) {
+      const region = asJsonRecord(regionValue);
+      const regionId = asNonEmptyString(region?.region_id) ?? asNonEmptyString(region?.id);
+      if (!regionId || seen.has(regionOverlayKey(objectId, regionId))) continue;
+      seen.add(regionOverlayKey(objectId, regionId));
+      overlays.push({
+        enabled: region?.enabled !== false && object.visible !== false,
+        frame: asNonEmptyString(region?.frame),
+        name: asNonEmptyString(region?.name),
+        owner_object_id: objectId,
+        owner_transform: objectTransformsById.get(objectId) ?? asJsonRecord(object?.transform),
+        priority: typeof region?.priority === "number" ? region.priority : null,
+        region_id: regionId,
+        shape: region?.shape,
+      });
+    }
+  }
+
+  return overlays;
+}
+
+function regionOverlayKey(objectId: string, regionId: string): string {
+  return `${objectId}\u0000${regionId}`;
+}
 
 export interface Viewport3DResourceFrameInput {
   dataAvailable: boolean;
@@ -643,6 +722,7 @@ export function useViewport3DSceneModel({
   );
   const domainMeta = useViewport3DDomainMeta();
   const scene = useViewport3DScene();
+  const modelRegions = useModelRegionsResource();
   const universe = useViewport3DUniverse();
   const sharedDomainManifest = useViewport3DSharedDomainManifest();
   const unknownTopologyProvenanceRefreshRef = useRef<string | null>(null);
@@ -665,12 +745,18 @@ export function useViewport3DSceneModel({
             femDomain.magneticParts,
             femDomain.airboxParts,
             femDomain.magneticSurfacePartsByPartId,
+            {
+              meshGenerationId: sharedDomainManifest.data?.generation_id ?? null,
+              meshRevision: sharedDomainManifest.data?.revision ?? null,
+            },
           ),
       ),
     [
       femDomain.airboxParts,
       femDomain.magneticParts,
       femDomain.magneticSurfacePartsByPartId,
+      sharedDomainManifest.data?.generation_id,
+      sharedDomainManifest.data?.revision,
       topology.data,
     ],
   );
@@ -681,6 +767,33 @@ export function useViewport3DSceneModel({
         sharedDomainManifest.data,
       ),
     [scene.data, sharedDomainManifest.data],
+  );
+  const objectTransformsById = useMemo(() => {
+    const sceneRecord = asJsonRecord(scene.data);
+    const transforms = new Map<string, unknown>();
+    if (!sceneRecord || !Array.isArray(sceneRecord.objects)) {
+      return transforms;
+    }
+
+    for (const value of sceneRecord.objects) {
+      const object = asJsonRecord(value);
+      const objectId = asNonEmptyString(object?.id);
+      const transform = asJsonRecord(object?.transform);
+      if (objectId && transform) {
+        transforms.set(objectId, transform);
+      }
+    }
+
+    return transforms;
+  }, [scene.data]);
+  const regionOverlays = useMemo<RegionOverlayInput[]>(
+    () =>
+      resolveViewport3DRegionOverlays({
+        objectTransformsById,
+        regionResource: modelRegions.data,
+        scene: scene.data,
+      }),
+    [modelRegions.data, objectTransformsById, scene.data],
   );
   const topologyFreshness = useMemo(
     () =>
@@ -706,7 +819,8 @@ export function useViewport3DSceneModel({
     sharedDomainManifest.refetch();
   }, [scene.data, sharedDomainManifest]);
   const topologyCurrent = isViewport3DTopologyCurrent(topologyFreshness);
-  const currentTopologyRenderModel = topologyCurrent ? topologyRenderModel : null;
+  const topologyRenderable = isViewport3DTopologyRenderable(topologyFreshness);
+  const currentTopologyRenderModel = topologyRenderable ? topologyRenderModel : null;
   const clipCrossSectionQuery = useMemo(() => {
     const query = resolveCrossSectionQueryFromVisualizationState(renderingState);
     return {
@@ -845,12 +959,9 @@ export function useViewport3DSceneModel({
     );
 
     const fdmDomainId = domainMeta.data?.domain_id ?? null;
-    if (fdmDomain && fdmDomainId) {
-      pushViewportVisualizationTarget(targets, seen, {
-        id: fdmDomainId,
-        kind: "object",
-        label: fdmDomainId,
-      });
+    const fdmTarget = fdmDomain ? targetForFdmDomain(fdmDomainId) : null;
+    if (fdmTarget) {
+      pushViewportVisualizationTarget(targets, seen, fdmTarget);
     }
 
     for (const object of primitiveModel.objects) {
@@ -899,10 +1010,11 @@ export function useViewport3DSceneModel({
   );
   const fdmSettings = useMemo(() => {
     const fdmDomainId = domainMeta.data?.domain_id ?? null;
-    if (!fdmDomain || !fdmDomainId) return fallbackSettings;
+    const fdmTarget = fdmDomain ? targetForFdmDomain(fdmDomainId) : null;
+    if (!fdmTarget) return fallbackSettings;
     return resolveTargetVisualization({
       snapshot: objectVisualizationSnapshot,
-      target: { id: fdmDomainId, kind: "object" },
+      target: fdmTarget,
       visualizationState: renderingState,
     }).effectiveSettings;
   }, [
@@ -1331,6 +1443,12 @@ export function useViewport3DSceneModel({
     vectorScale,
   ]);
   const selectedLabel = selection.label ?? "No selection";
+  const selectedObjectId =
+    selection.ref?.type === "scene-object"
+      ? selection.ref.objectId
+      : selection.objectId;
+  const selectedRegionId =
+    selection.ref?.type === "scene-object" ? selection.ref.regionId ?? null : null;
   const status =
     topology.error?.message ??
     (renderingState?.clip?.enabled ? clipCrossSection.error?.message : null) ??
@@ -1419,6 +1537,12 @@ export function useViewport3DSceneModel({
       status: renderingState?.clip?.enabled ? clipCrossSection.status : "idle",
     },
     {
+      error: modelRegions.error?.message,
+      id: "model-regions",
+      revision: modelRegions.revision,
+      status: modelRegions.status,
+    },
+    {
       error: scene.error?.message,
       id: "scene",
       revision: scene.revision,
@@ -1488,10 +1612,15 @@ export function useViewport3DSceneModel({
     meshQualityRange: meshQualityColors?.range ?? null,
     primitiveModel,
     quantityId,
+    regionOverlays,
     resourceFrameKey,
     selectedLabel,
+    selectedObjectId,
+    selectedRegionId,
     selectionBounds,
     status,
+    renderedMeshRevision: currentTopologyRenderModel?.meshRevision ?? null,
+    topologyRevision: topology.revision,
     topologyFreshness,
     topologyModel: topologyRenderModel,
     vectorColorMode,

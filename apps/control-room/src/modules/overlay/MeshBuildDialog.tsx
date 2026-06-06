@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useReducer, type CSSProperties } from "react";
+import { useEffect, useReducer } from "react";
 
+import { createCommandContext } from "@/kernel/commands/commandContext";
 import {
   useMeshBuildCurrent,
   useMeshBuildLatestSuccessful,
+  useMeshSharedDomainQualityResource,
   useMeshSharedDomainManifestResource,
   useMeshSummaryResource,
 } from "@/kernel/resources/geometryLifecycleResources";
@@ -12,30 +14,29 @@ import {
   shouldLoadRuntimeMeshBuild,
   shouldLoadRuntimeMeshManifest,
   shouldLoadRuntimeMeshSummary,
-  useEngineLogResource,
+  useStudyRuntimeCommandResourceData,
 } from "@/kernel/resources/studyRuntimeResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
-import type { EngineLogResource, LiveStatusResource } from "@/kernel/api/apiTypes";
+import type { JsonObject, LiveStatusResource } from "@/kernel/api/apiTypes";
 import type { KernelApi } from "@/kernel/types";
+import { diffMeshPolicies } from "@/shared/domain/mesh/meshPolicyDiff";
+import { buildMeshSnapshotRows } from "@/shared/domain/mesh/meshBuildSnapshots";
 import {
   normalizeMeshPipelineStatus,
   resolveMeshBuildStatusLabel,
-  type MeshPipelinePhase,
 } from "@/shared/domain/mesh/buildPipeline";
-import { Button } from "@/shared/ui/Button";
 import {
   Dialog,
-  DialogClose,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/Dialog";
+import { MeshBuildConfirmDialogContent } from "./mesh-build/MeshBuildConfirmDialog";
 
-function asRecord(value: unknown): Record<string, unknown> | null {
+function asRecord(value: unknown): JsonObject | null {
   return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
+    ? (value as JsonObject)
     : null;
 }
 
@@ -46,45 +47,11 @@ function text(value: unknown, fallback = "unknown"): string {
   return JSON.stringify(value);
 }
 
-function commandIsMeshBuild(commandId: string): boolean {
-  return commandId === "mesh.build-selected" || commandId === "mesh.build-shared-domain";
-}
-
-function phaseIsComplete(phase: MeshPipelinePhase): boolean {
-  const status = phase.status.toLowerCase();
-  return (
-    status === "done" ||
-    status === "ready" ||
-    status === "completed" ||
-    status === "success"
-  );
-}
-
-function pipelineProgressPercent(phases: readonly MeshPipelinePhase[]): number | null {
-  if (phases.length === 0) return null;
-  const publishedProgress = phases.find(
-    (phase) => phase.progressPercent !== null,
-  )?.progressPercent;
-  if (publishedProgress !== undefined && publishedProgress !== null) {
-    return publishedProgress;
-  }
-  const completeCount = phases.filter(phaseIsComplete).length;
-  return Math.round((completeCount / phases.length) * 100);
-}
-
-function formatDurationMs(value: number | null): string | null {
-  if (value === null) return null;
-  if (value < 1000) return `${value} ms`;
-  const seconds = value / 1000;
-  return `${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds).toString()} s`;
-}
-
-type EngineLogEntry = EngineLogResource["entries"][number];
 type MeshDiagnosticNavigation = {
   readonly bus: {
     emit: (
       event: "footer:tab-requested",
-      payload: { reason?: string; tab: "engine" | "logs" | "telemetry" },
+      payload: { reason?: string; tab: "engine" | "logs" | "mesh" | "telemetry" },
     ) => void;
   };
   readonly layout: Pick<KernelApi["layout"], "setFocusedSlot" | "setPanelVisible">;
@@ -95,160 +62,45 @@ export function openMeshBuildDiagnostics(kernel: MeshDiagnosticNavigation) {
   kernel.layout.setFocusedSlot("panel-bottom");
   kernel.bus.emit("footer:tab-requested", {
     reason: "mesh-build",
-    tab: "engine",
+    tab: "mesh",
   });
 }
 
-function isMeshBuildLogEntry(entry: EngineLogEntry): boolean {
-  const message = entry.message.toLowerCase();
-  return (
-    message.includes("gmsh") ||
-    message.includes("mesh build") ||
-    message.includes("meshing") ||
-    message.includes("remesh")
-  );
-}
-
-function formatLogTime(timestampUnixMs: number): string {
-  return new Date(timestampUnixMs).toISOString().slice(11, 19);
-}
-
-export function MeshBuildLogView({
-  entries,
-  status,
-  total,
-}: {
-  entries: readonly EngineLogEntry[];
-  status: string;
-  total: number;
-}) {
-  const meshEntries = entries.filter(isMeshBuildLogEntry).slice(-8).reverse();
-
-  return (
-    <section className="fm-dialog__mesh-log" aria-label="Mesh build console">
-      <div className="fm-dialog__mesh-log-header">
-        <h3 className="fm-dialog__mesh-log-title">Build console</h3>
-        <span className="fm-dialog__mesh-log-meta">
-          {meshEntries.length} / {total} entries
-        </span>
-      </div>
-      {meshEntries.length > 0 ? (
-        <div className="fm-dialog__mesh-log-list" role="table">
-          {meshEntries.map((entry) => (
-            <div
-              className="fm-dialog__mesh-log-row"
-              role="row"
-              key={`${entry.timestamp_unix_ms}:${entry.level}:${entry.message}`}
-            >
-              <time role="cell">{formatLogTime(entry.timestamp_unix_ms)}</time>
-              <span role="cell" data-level={entry.level}>
-                {entry.level}
-              </span>
-              <span role="cell">{entry.message}</span>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <p className="fm-dialog__mesh-log-empty">
-          {status === "ready" ? "No mesh build log entries." : "Loading mesh build logs."}
-        </p>
-      )}
-    </section>
-  );
-}
-
-export function MeshBuildPipelineView({
-  buildReport,
-  lastSummary,
-  phases,
-}: {
-  buildReport: unknown;
-  lastSummary: Record<string, unknown> | null;
-  phases: readonly MeshPipelinePhase[];
-}) {
-  const buildReportRecord = asRecord(buildReport);
-  const buildMode = text(buildReportRecord?.build_mode, "unknown");
-  const lastElementCount = text(
-    lastSummary?.elements ?? lastSummary?.element_count,
-    "unknown",
-  );
-  const progressPercent = pipelineProgressPercent(phases);
-  const progressPhase = phases.find((phase) => phase.progressPercent !== null);
-  const progressLabel = progressPhase?.progressLabel ?? "Phase progress";
-
-  return (
-    <section className="fm-dialog__mesh-pipeline" aria-label="Mesh build pipeline">
-      <div className="fm-dialog__mesh-pipeline-header">
-        <h3 className="fm-dialog__mesh-pipeline-title">Build pipeline</h3>
-        <span className="fm-dialog__mesh-pipeline-meta">{buildMode}</span>
-      </div>
-      {progressPercent !== null ? (
-        <div
-          className="fm-dialog__mesh-progress"
-          style={
-            {
-              "--fm-mesh-build-progress": `${progressPercent}%`,
-            } as CSSProperties
-          }
-        >
-          <span>{progressLabel}</span>
-          <strong>{progressPercent}%</strong>
-        </div>
-      ) : null}
-      {phases.length > 0 ? (
-        <ol className="fm-dialog__mesh-phase-list">
-          {phases.map((phase) => {
-            const duration = formatDurationMs(phase.durationMs);
-            const progressText =
-              phase.progressPercent !== null
-                ? `${phase.progressLabel ?? "Gmsh progress"} - ${phase.progressPercent}%`
-                : null;
-            const timingText = duration ? `duration ${duration}` : null;
-            const progressDetail = [progressText, timingText].filter(Boolean).join(" / ");
-            return (
-              <li className="fm-dialog__mesh-phase" key={phase.id}>
-                <span className="fm-dialog__mesh-phase-label">{phase.label}</span>
-                <span className="fm-dialog__mesh-phase-status">{phase.status}</span>
-                {progressDetail.length > 0 ? (
-                  <span className="fm-dialog__mesh-phase-progress">{progressDetail}</span>
-                ) : null}
-                {phase.detail.length > 0 ? (
-                  <span className="fm-dialog__mesh-phase-detail">{phase.detail}</span>
-                ) : null}
-              </li>
-            );
-          })}
-        </ol>
-      ) : (
-        <p className="fm-dialog__mesh-pipeline-empty">
-          No active build phases are published.
-        </p>
-      )}
-      <dl className="fm-dialog__mesh-pipeline-summary">
-        <div className="fm-dialog__details-row">
-          <dt className="fm-dialog__details-label">Build mode</dt>
-          <dd className="fm-dialog__details-value">{buildMode}</dd>
-        </div>
-        <div className="fm-dialog__details-row">
-          <dt className="fm-dialog__details-label">Last elements</dt>
-          <dd className="fm-dialog__details-value">{lastElementCount}</dd>
-        </div>
-      </dl>
-    </section>
-  );
-}
-
 interface MeshBuildDialogState {
+  acceptedCommandId: string | null;
+  commandId: "mesh.build-selected" | "mesh.build-shared-domain" | null;
+  errorMessage: string | null;
+  input: unknown;
   lastCommandId: string | null;
   lastCommandStatus: string;
   open: boolean;
+  phase: "pre-build" | "submitting" | "post-build" | "error";
+  source: "inspector" | "palette" | "ribbon" | "test";
+  sourceDetail: string | undefined;
 }
 
 type MeshBuildDialogAction =
   | {
-      commandId: string;
+      commandId: "mesh.build-selected" | "mesh.build-shared-domain";
+      input: unknown;
+      source: "inspector" | "palette" | "ribbon" | "test";
+      sourceDetail: string | undefined;
+      type: "request";
+    }
+  | {
+      commandId: string | null;
       status: string;
-      type: "command";
+      type: "accepted";
+    }
+  | {
+      message: string;
+      type: "error";
+    }
+  | {
+      type: "rendered";
+    }
+  | {
+      type: "submitting";
     }
   | {
       open: boolean;
@@ -262,10 +114,53 @@ function meshBuildDialogReducer(
   if (action.type === "open") {
     return { ...state, open: action.open };
   }
+  if (action.type === "request") {
+    return {
+      acceptedCommandId: null,
+      commandId: action.commandId,
+      errorMessage: null,
+      input: action.input,
+      lastCommandId: action.commandId,
+      lastCommandStatus: "pending-confirmation",
+      open: true,
+      phase: "pre-build",
+      source: action.source,
+      sourceDetail: action.sourceDetail,
+    };
+  }
+  if (action.type === "submitting") {
+    return {
+      ...state,
+      errorMessage: null,
+      lastCommandStatus: "submitting",
+      open: true,
+      phase: "submitting",
+    };
+  }
+  if (action.type === "accepted") {
+    return {
+      ...state,
+      acceptedCommandId: action.commandId,
+      lastCommandId: action.commandId,
+      lastCommandStatus: action.status,
+      open: true,
+      phase: "submitting",
+    };
+  }
+  if (action.type === "rendered") {
+    if (!state.open || state.phase === "pre-build") return state;
+    return {
+      ...state,
+      lastCommandStatus: "rendered",
+      phase: "post-build",
+    };
+  }
   return {
-    lastCommandId: action.commandId,
-    lastCommandStatus: action.status,
+    ...state,
+    errorMessage: action.message,
+    lastCommandStatus: "failed",
     open: true,
+    phase: "error",
   };
 }
 
@@ -314,9 +209,22 @@ function meshBuildDialogRuntimeStatusEquals(
 
 export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
   const [state, dispatch] = useReducer(meshBuildDialogReducer, {
+    acceptedCommandId: null,
+    commandId: null,
+    errorMessage: null,
+    input: undefined,
     lastCommandId: null,
     lastCommandStatus: "pending",
     open: false,
+    phase: "pre-build",
+    source: "ribbon",
+    sourceDetail: undefined,
+  });
+  const resourceData = useStudyRuntimeCommandResourceData();
+  const commandContext = createCommandContext(state.source, kernel, {
+    input: state.input,
+    resourceData,
+    sourceDetail: state.sourceDetail,
   });
   const runtimeStatus = useSessionStatusSelector(
     selectMeshBuildDialogRuntimeStatus,
@@ -334,119 +242,173 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
   const manifest = useMeshSharedDomainManifestResource({
     enabled: shouldLoadRuntimeMeshManifest(state.open, runtimeStatus),
   });
-  const engineLog = useEngineLogResource({ enabled: state.open });
+  const sharedQuality = useMeshSharedDomainQualityResource({
+    enabled: state.open,
+  });
   const activeRecord = asRecord(activeBuild.data?.active_build);
   const pipelinePhases = normalizeMeshPipelineStatus(activeBuild.data?.mesh_pipeline_status);
-  const lastSummary = asRecord(
-    activeBuild.data?.last_build_summary ?? latestBuild.data?.last_success,
-  );
-  const buildReport = activeBuild.data?.shared_domain_build_report;
   const buildStatus = resolveMeshBuildStatusLabel(activeRecord, pipelinePhases);
+  const diffRows = diffMeshPolicies({
+    current: asRecord(summary.data?.effective_airbox_target),
+    draft: asRecord(activeBuild.data?.effective_airbox_target),
+    realized: asRecord(latestBuild.data?.effective_airbox_target),
+    scope: "airbox",
+  }).filter((row) => row.state !== "unchanged");
+  const targetLabel =
+    targetLabelForPendingCommand(state.commandId, state.input) ??
+    targetLabelForBuild(activeBuild.data?.active_build);
+  const currentSummary = [
+    { label: "Mesh", value: manifest.data?.mesh_name ?? "not built" },
+    {
+      label: "Revision",
+      value: String(summary.data?.revision ?? activeBuild.data?.revision ?? "unknown"),
+    },
+    { label: "Build resource", value: activeBuild.status },
+    { label: "Active build", value: buildStatus },
+    {
+      label: "Last error",
+      value:
+        activeBuild.data?.last_build_error ??
+        latestBuild.data?.last_build_error ??
+        "none",
+    },
+  ];
+  const newSummary = [
+    { label: "Requested target", value: targetLabel },
+    {
+      label: "Command",
+      value: state.commandId ?? "none",
+    },
+    {
+      label: "Policy changes",
+      value: diffRows.length === 0 ? "No pending policy diff" : String(diffRows.length),
+    },
+    {
+      label: "Expected result",
+      value: "New mesh revision, manifest, quality and viewport render",
+    },
+  ];
+  const snapshotRows = buildMeshSnapshotRows({
+    current: {
+      build: asRecord(latestBuild.data),
+      manifest: null,
+      quality: null,
+    },
+    next: {
+      build: asRecord(activeBuild.data),
+      manifest: asRecord(manifest.data),
+      quality: asRecord(sharedQuality.data),
+    },
+  });
 
   useEffect(() => {
-    const offSubmitted = kernel.bus.on("command:submitted", ({ commandId }) => {
-      if (!commandIsMeshBuild(commandId)) return;
-      dispatch({ commandId, status: "submitted", type: "command" });
+    const offRequested = kernel.bus.on("mesh:build-confirm-requested", (request) => {
+      dispatch({
+        commandId: request.commandId,
+        input: request.input,
+        source: request.source,
+        sourceDetail: request.sourceDetail,
+        type: "request",
+      });
     });
-    const offCompleted = kernel.bus.on("command:completed", ({ commandId, status }) => {
-      if (!commandIsMeshBuild(commandId)) return;
-      dispatch({ commandId, status, type: "command" });
+    const offSubmitted = kernel.bus.on("mesh:build-submitted", ({ commandId }) => {
+      dispatch({ commandId, status: "accepted", type: "accepted" });
+    });
+    const offRendered = kernel.bus.on("mesh:topology-rendered", () => {
+      dispatch({ type: "rendered" });
     });
     return () => {
+      offRequested();
       offSubmitted();
-      offCompleted();
+      offRendered();
     };
   }, [kernel.bus]);
+
+  async function confirmBuild(): Promise<void> {
+    if (!state.commandId) return;
+    dispatch({ type: "submitting" });
+    const result = await kernel.commands.execute(
+      state.commandId,
+      commandContext,
+      state.input,
+    );
+    if (result.status === "failed") {
+      dispatch({
+        message: result.message ?? "Mesh build command failed.",
+        type: "error",
+      });
+      return;
+    }
+    openMeshBuildDiagnostics(kernel);
+  }
 
   return (
     <Dialog
       open={state.open}
       onOpenChange={(open) => dispatch({ open, type: "open" })}
     >
-      <DialogContent aria-describedby="fm-mesh-build-dialog-description">
+      <DialogContent
+        aria-describedby="fm-mesh-build-dialog-description"
+        className="fm-mesh-build-confirm-dialog"
+      >
         <DialogHeader>
-          <DialogTitle>Mesh Build</DialogTitle>
+          <DialogTitle>
+            {state.phase === "post-build"
+              ? "Mesh Build Complete"
+              : state.phase === "error"
+                ? "Mesh Build Failed"
+                : "Mesh Build Confirmation"}
+          </DialogTitle>
           <DialogDescription id="fm-mesh-build-dialog-description">
-            Backend v2 command status, current build resource, and last successful mesh.
+            Confirm the mesh target and parameter changes. Mesh Jobs tracks the long build log and pipeline.
           </DialogDescription>
         </DialogHeader>
         <div className="fm-dialog__body">
-          <dl className="fm-dialog__details">
-            <div className="fm-dialog__details-row">
-              <dt className="fm-dialog__details-label">Command</dt>
-              <dd className="fm-dialog__details-value">{state.lastCommandId ?? "none"}</dd>
-            </div>
-            <div className="fm-dialog__details-row">
-              <dt className="fm-dialog__details-label">Command state</dt>
-              <dd className="fm-dialog__details-value">{state.lastCommandStatus}</dd>
-            </div>
-            <div className="fm-dialog__details-row">
-              <dt className="fm-dialog__details-label">Build resource</dt>
-              <dd className="fm-dialog__details-value">{activeBuild.status}</dd>
-            </div>
-            <div className="fm-dialog__details-row">
-              <dt className="fm-dialog__details-label">Active build</dt>
-              <dd className="fm-dialog__details-value">
-                {buildStatus}
-              </dd>
-            </div>
-            <div className="fm-dialog__details-row">
-              <dt className="fm-dialog__details-label">Mesh</dt>
-              <dd className="fm-dialog__details-value">
-                {manifest.data?.mesh_name ?? "not built"}
-              </dd>
-            </div>
-            <div className="fm-dialog__details-row">
-              <dt className="fm-dialog__details-label">Revision</dt>
-              <dd className="fm-dialog__details-value">
-                {summary.data?.revision ?? activeBuild.data?.revision ?? "unknown"}
-              </dd>
-            </div>
-            <div className="fm-dialog__details-row">
-              <dt className="fm-dialog__details-label">Last error</dt>
-              <dd className="fm-dialog__details-value">
-                {activeBuild.data?.last_build_error ??
-                  latestBuild.data?.last_build_error ??
-                  "none"}
-              </dd>
-            </div>
-          </dl>
-
-          <MeshBuildPipelineView
-            buildReport={buildReport}
-            lastSummary={lastSummary}
-            phases={pipelinePhases}
-          />
-          <MeshBuildLogView
-            entries={engineLog.data?.entries ?? []}
-            status={engineLog.status}
-            total={engineLog.data?.total ?? 0}
+          <MeshBuildConfirmDialogContent
+            commandId={state.acceptedCommandId ?? state.lastCommandId}
+            commandStatus={state.lastCommandStatus}
+            currentSummary={currentSummary}
+            diffRows={diffRows}
+            errorMessage={state.errorMessage}
+            mode={state.phase}
+            newSummary={newSummary}
+            postBuildRows={snapshotRows}
+            targetLabel={targetLabel}
+            onApplyBuild={() => {
+              void confirmBuild();
+            }}
+            onCancel={() => dispatch({ open: false, type: "open" })}
+            onOpenMeshJobs={() => openMeshBuildDiagnostics(kernel)}
           />
         </div>
-        <DialogFooter>
-          <Button
-            size="sm"
-            type="button"
-            variant="secondary"
-            onClick={() => openMeshBuildDiagnostics(kernel)}
-          >
-            Open diagnostics
-          </Button>
-          <Button
-            size="sm"
-            type="button"
-            variant="secondary"
-            onClick={() => dispatch({ open: false, type: "open" })}
-          >
-            Keep Running
-          </Button>
-          <DialogClose asChild>
-            <Button size="sm" type="button" variant="primary">
-              Close
-            </Button>
-          </DialogClose>
-        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
+}
+
+function targetLabelForPendingCommand(
+  commandId: MeshBuildDialogState["commandId"],
+  input: unknown,
+): string | null {
+  if (commandId === "mesh.build-shared-domain") return "Shared-domain mesh";
+  if (commandId === "mesh.build-selected") {
+    const inputRecord = asRecord(input);
+    const target = asRecord(inputRecord?.mesh_target) ?? asRecord(inputRecord?.target);
+    const objectId = text(target?.object_id ?? inputRecord?.object_id, "selected object");
+    return `Object mesh ${objectId}`;
+  }
+  return null;
+}
+
+function targetLabelForBuild(value: unknown): string {
+  const record = asRecord(value);
+  const target = asRecord(record?.mesh_target) ?? asRecord(record?.target);
+  const kind = text(target?.kind ?? record?.target_kind, "mesh");
+  if (kind === "object_mesh") {
+    return `Object mesh ${text(target?.object_id ?? record?.object_id, "unknown")}`;
+  }
+  if (kind === "study_domain" || kind === "shared_domain") {
+    return "Shared-domain mesh";
+  }
+  return kind;
 }

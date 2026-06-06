@@ -16,6 +16,17 @@ export const FULL_FIELD_QUERY: FieldVectorQuery = {
   scope_kind: "full",
 };
 
+export function targetForFdmDomain(
+  domainId: string | null | undefined,
+): VisualizationTargetRef | null {
+  if (!domainId) return null;
+  return {
+    id: domainId,
+    kind: "object",
+    label: domainId,
+  };
+}
+
 export function targetForMeshPart(
   part: Viewport3DMeshPart,
 ): VisualizationTargetRef {

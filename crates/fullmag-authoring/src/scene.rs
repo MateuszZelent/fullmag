@@ -21,6 +21,8 @@ pub struct SceneDocument {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub objects: Vec<SceneObject>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub couplings: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub materials: Vec<SceneMaterialAsset>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub magnetization_assets: Vec<MagnetizationAsset>,
@@ -77,6 +79,12 @@ pub struct SceneObject {
     pub object_mesh: Option<ScriptBuilderPerGeometryMeshState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mesh_override: Option<ScriptBuilderPerGeometryMeshState>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub regions: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allocated_region_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub material_parameter_fields: Vec<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
     #[serde(default = "default_true")]
@@ -518,7 +526,7 @@ impl Default for SceneEditorState {
 }
 
 fn default_scene_version() -> String {
-    "scene.v1".to_string()
+    "scene.v2".to_string()
 }
 
 fn default_scene_name() -> String {

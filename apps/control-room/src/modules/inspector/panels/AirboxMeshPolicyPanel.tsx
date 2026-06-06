@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 
+import { createCommandContext } from "@/kernel/commands/commandContext";
 import type {
   JsonObject,
   LiveStatusResource,
@@ -49,6 +50,7 @@ import { MeshQualityStatisticsView } from "./MeshQualityStatisticsView";
 import { emitMeshSizeHistogramHover } from "./meshSizeHistogramHover";
 import {
   AIRBOX_GRADING_MODES,
+  airboxMeshPolicyDraftDirty,
   buildAirboxMeshPolicyReplaceRequest,
   defaultUniverseMeshPolicyResource,
   draftFromUniverseMeshPolicyResource,
@@ -167,7 +169,7 @@ function isAirboxPart(part: AirboxMeshPart): boolean {
 export function AirboxMeshPolicyPanel({ selection }: InspectorPanelProps) {
   void selection;
   const kernel = useKernel();
-  const { api, resources } = kernel;
+  const { api, commands, resources } = kernel;
   const runtimeStatus = useSessionStatusSelector(
     selectAirboxMeshPolicyRuntimeStatus,
     { isEqual: airboxMeshPolicyRuntimeStatusEquals },
@@ -204,6 +206,14 @@ export function AirboxMeshPolicyPanel({ selection }: InspectorPanelProps) {
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [pending, setPending] = useState(false);
   const draft = draftState.key === draftKey ? draftState.draft : baseDraft;
+  const isDirty = airboxMeshPolicyDraftDirty(draft, baseDraft);
+  const commandContext = useMemo(
+    () =>
+      createCommandContext("inspector", kernel, {
+        sourceDetail: "airbox-mesh-policy",
+      }),
+    [kernel],
+  );
   const qualityRecord = asRecord(quality.data?.quality);
   const qualityStatistics = normalizeMeshQualityStatistics(quality.data?.quality);
   const airboxPart = useMemo(
@@ -230,11 +240,15 @@ export function AirboxMeshPolicyPanel({ selection }: InspectorPanelProps) {
     }));
   }
 
-  async function applyPolicy(): Promise<void> {
+  async function applyPolicy({
+    silentSuccess = false,
+  }: {
+    silentSuccess?: boolean;
+  } = {}): Promise<{ ok: boolean }> {
     const result = buildAirboxMeshPolicyReplaceRequest(draft);
     if ("error" in result) {
       setFeedback({ kind: "error", message: result.error });
-      return;
+      return { ok: false };
     }
 
     setPending(true);
@@ -243,11 +257,37 @@ export function AirboxMeshPolicyPanel({ selection }: InspectorPanelProps) {
       resources.invalidate(MESH_UNIVERSE_POLICY_RESOURCE_KEY, next.revision);
       resources.invalidate(MESH_BUILD_CURRENT_RESOURCE_KEY, next.revision);
       resources.invalidate(MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY, next.revision);
-      setFeedback({ kind: "success", message: "Universe/airbox mesh policy updated." });
+      if (!silentSuccess) {
+        setFeedback({
+          kind: "success",
+          message: "Policy saved. Current solver mesh is stale until a shared-domain mesh build completes.",
+        });
+      }
+      return { ok: true };
     } catch (error) {
       setFeedback({ kind: "error", message: errorMessage(error) });
+      return { ok: false };
     } finally {
       setPending(false);
+    }
+  }
+
+  async function buildSharedDomainMesh(): Promise<void> {
+    if (isDirty) {
+      const applied = await applyPolicy({ silentSuccess: true });
+      if (!applied.ok) return;
+    }
+
+    try {
+      await commands.execute("mesh.build-shared-domain", commandContext);
+      setFeedback({
+        kind: "success",
+        message: isDirty
+          ? "Policy saved. Shared-domain mesh build submitted."
+          : "Shared-domain mesh build submitted. The Mesh Build monitor will track the command.",
+      });
+    } catch (error) {
+      setFeedback({ kind: "error", message: errorMessage(error) });
     }
   }
 
@@ -266,66 +306,108 @@ export function AirboxMeshPolicyPanel({ selection }: InspectorPanelProps) {
     },
     [kernel],
   );
+  const sections = airboxMeshInspectorSections(selection.kind);
+  const showSection = (section: string) => sections.includes(section);
 
   return (
     <Accordion
+      key={selection.kind ?? "default"}
       className="fm-inspector-panel"
       type="multiple"
-      defaultValue={[
+      defaultValue={sections}
+    >
+      {showSection("summary") ? (
+        <AirboxMeshPolicySummarySection
+          policyStatus={policy.status}
+          qualityStatus={quality.status}
+          reportStatus={report.status}
+          resourceConfigured={Boolean(resource.config)}
+          resourceRevision={resource.revision}
+        />
+      ) : null}
+      {showSection("controls") ? (
+        <AirboxMeshPolicyControlsSection draft={draft} onChange={updateDraft} />
+      ) : null}
+      {showSection("geometry") ? (
+        <AirboxMeshPolicyGeometrySection draft={draft} onChange={updateDraft} />
+      ) : null}
+      {showSection("target") ? (
+        <AirboxMeshPolicyTargetSection
+          effectiveAirbox={effectiveAirbox}
+          qualityRecord={qualityRecord}
+          qualityStatus={quality.status}
+        />
+      ) : null}
+      {showSection("mesh-part") ? (
+        <AirboxMeshPolicyMeshPartSection
+          airboxBoundaryFaceIndices={airboxBoundaryFaceIndices}
+          airboxNodeIndices={airboxNodeIndices}
+          airboxNodeSource={airboxNodeSource}
+          airboxPart={airboxPart}
+          airboxSurfaceFaces={airboxSurfaceFaces}
+          manifestStatus={manifest.status}
+        />
+      ) : null}
+      {showSection("quality-statistics") ? (
+        <AirboxMeshPolicyQualitySection
+          onHoverSizeDistributionBin={hoverSizeDistributionBin}
+          qualityStatistics={qualityStatistics}
+        />
+      ) : null}
+      {showSection("advanced") ? (
+        <AirboxMeshPolicyAdvancedSection draft={draft} onChange={updateDraft} />
+      ) : null}
+      {showSection("transactions") ? (
+        <AirboxMeshPolicyTransactionsSection
+          buildLabel={
+            isDirty ? "Apply & Build Shared-Domain Mesh" : "Build Shared-Domain Mesh"
+          }
+          feedback={feedback}
+          isDirty={isDirty}
+          onApply={() => void applyPolicy()}
+          onBuild={() => void buildSharedDomainMesh()}
+          onRevert={revertPolicyDraft}
+          pending={pending}
+        />
+      ) : null}
+      {showSection("json-report") ? (
+        <JsonResourceSection
+          sectionValue="json-report"
+          title="Universe Report JSON"
+          value={report.data}
+        />
+      ) : null}
+      {showSection("json-quality") ? (
+        <JsonResourceSection
+          sectionValue="json-quality"
+          title="Universe Quality JSON"
+          value={quality.data}
+        />
+      ) : null}
+    </Accordion>
+  );
+}
+
+function airboxMeshInspectorSections(selectionKind: string | null): string[] {
+  switch (selectionKind) {
+    case "airbox.mesh-quality":
+      return ["summary", "mesh-part", "quality-statistics", "json-quality"];
+    case "airbox.mesh":
+      return ["summary", "controls", "geometry", "target", "advanced", "transactions", "json-report"];
+    default:
+      return [
         "summary",
         "controls",
         "geometry",
         "target",
         "mesh-part",
         "quality-statistics",
+        "advanced",
         "transactions",
-      ]}
-    >
-      <AirboxMeshPolicySummarySection
-        policyStatus={policy.status}
-        qualityStatus={quality.status}
-        reportStatus={report.status}
-        resourceConfigured={Boolean(resource.config)}
-        resourceRevision={resource.revision}
-      />
-      <AirboxMeshPolicyControlsSection draft={draft} onChange={updateDraft} />
-      <AirboxMeshPolicyGeometrySection draft={draft} onChange={updateDraft} />
-      <AirboxMeshPolicyTargetSection
-        effectiveAirbox={effectiveAirbox}
-        qualityRecord={qualityRecord}
-        qualityStatus={quality.status}
-      />
-      <AirboxMeshPolicyMeshPartSection
-        airboxBoundaryFaceIndices={airboxBoundaryFaceIndices}
-        airboxNodeIndices={airboxNodeIndices}
-        airboxNodeSource={airboxNodeSource}
-        airboxPart={airboxPart}
-        airboxSurfaceFaces={airboxSurfaceFaces}
-        manifestStatus={manifest.status}
-      />
-      <AirboxMeshPolicyQualitySection
-        onHoverSizeDistributionBin={hoverSizeDistributionBin}
-        qualityStatistics={qualityStatistics}
-      />
-      <AirboxMeshPolicyAdvancedSection draft={draft} onChange={updateDraft} />
-      <AirboxMeshPolicyTransactionsSection
-        feedback={feedback}
-        onApply={() => void applyPolicy()}
-        onRevert={revertPolicyDraft}
-        pending={pending}
-      />
-      <JsonResourceSection
-        sectionValue="json-report"
-        title="Universe Report JSON"
-        value={report.data}
-      />
-      <JsonResourceSection
-        sectionValue="json-quality"
-        title="Universe Quality JSON"
-        value={quality.data}
-      />
-    </Accordion>
-  );
+        "json-report",
+        "json-quality",
+      ];
+  }
 }
 
 function AirboxMeshPolicySummarySection({
@@ -698,19 +780,31 @@ function AirboxMeshPolicyAdvancedSection({
   );
 }
 
-function AirboxMeshPolicyTransactionsSection({
+export function AirboxMeshPolicyTransactionsSection({
+  buildLabel,
   feedback,
+  isDirty,
   onApply,
+  onBuild,
   onRevert,
   pending,
 }: {
+  buildLabel: string;
   feedback: Feedback;
+  isDirty: boolean;
   onApply: () => void;
+  onBuild: () => void;
   onRevert: () => void;
   pending: boolean;
 }) {
   return (
     <InspectorSection value="transactions" title="Transactions">
+      {isDirty ? (
+        <FeedbackBanner
+          kind="warning"
+          message="Unapplied changes. Apply Airbox Policy or Apply & Build before trusting the current airbox mesh."
+        />
+      ) : null}
       <div className="fm-inspector-toolbar">
         <Button
           disabled={pending}
@@ -720,6 +814,15 @@ function AirboxMeshPolicyTransactionsSection({
           onClick={onApply}
         >
           Apply Airbox Policy
+        </Button>
+        <Button
+          disabled={pending}
+          size="sm"
+          type="button"
+          variant="secondary"
+          onClick={onBuild}
+        >
+          {buildLabel}
         </Button>
         <Button
           disabled={pending}

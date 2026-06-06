@@ -56,6 +56,10 @@ import { useVisualizationStateResource } from "@/kernel/visualization/useVisuali
 import { CommandDetailDialog } from "@/shared/runtime/CommandDetailDialog";
 import { Button } from "@/shared/ui/Button";
 import {
+  isMeshBuildConfirmCommandId,
+  requestMeshBuildConfirmation,
+} from "@/kernel/authoring/meshBuildConfirmation";
+import {
   Dialog,
   DialogClose,
   DialogContent,
@@ -326,6 +330,15 @@ export default function RibbonModule({ kernel }: ModuleProps) {
       isGlobalQuantityConfirmationInput(input)
     ) {
       setPendingGlobalQuantity(input);
+      return;
+    }
+    if (isMeshBuildConfirmCommandId(actionId)) {
+      requestMeshBuildConfirmation(kernel.bus, {
+        commandId: actionId,
+        input,
+        source: "ribbon",
+        sourceDetail: "ribbon-action",
+      });
       return;
     }
     void kernel.commands.execute(actionId, commandContext, input);

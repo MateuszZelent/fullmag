@@ -2236,6 +2236,9 @@ mod tests {
             timestamp_unix_ms,
             level: level.to_string(),
             message: message.to_string(),
+            source: None,
+            phase_id: None,
+            command_id: None,
         }
     }
 

@@ -118,6 +118,8 @@ Required sections:
 
 Edits that affect geometry, transform, material mesh semantics, region mapping, universe bounds, or mesh policy require explicit transaction semantics. Safe visualization preferences can still auto-apply through `visualization/state`.
 
+The Build button must never submit a mesh build using an unapplied inspector draft. If a mesh-affecting draft is dirty, the command label becomes Apply & Build and the command first commits the policy resource. Failure to commit the policy blocks the build.
+
 ## 8. Explorer Contract
 
 The explorer derives Geometry nodes from `model/scene`; it never owns object data.

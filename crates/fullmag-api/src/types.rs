@@ -362,6 +362,12 @@ pub(crate) struct EngineLogEntry {
     pub timestamp_unix_ms: u128,
     pub level: String,
     pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

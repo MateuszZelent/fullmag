@@ -61,7 +61,13 @@ describe("geometry lifecycle command contributions", () => {
     const bus = new EventBus<KernelEventMap>();
     const selection = new SelectionController(bus);
     const resources = new ResourceInvalidationController(bus);
+    const meshEvents: unknown[] = [];
+    bus.on("mesh:build-submitted", (event) => meshEvents.push(event));
     selectBox(selection);
+    const layout = {
+      setFocusedSlot: vi.fn(),
+      setPanelVisible: vi.fn(),
+    };
     const submit = vi.fn(async () => ({
       accepted: true,
       command_id: "cmd-1",
@@ -79,6 +85,8 @@ describe("geometry lifecycle command contributions", () => {
       api: {
         commands: { submit },
       } as never,
+      bus,
+      layout: layout as never,
       resources,
       selection,
       source: "test",
@@ -106,6 +114,60 @@ describe("geometry lifecycle command contributions", () => {
         MESHING_OBJECT_QUALITY_PATH.replace("{object_id}", "box"),
       ),
     ).toBe("cmd-1");
+    expect(meshEvents).toEqual([
+      {
+        commandId: "cmd-1",
+        objectId: "box",
+        reason: "selected-object",
+        targetKind: "object_mesh",
+      },
+    ]);
+    expect(layout.setPanelVisible).toHaveBeenCalledWith("bottom", true);
+    expect(layout.setFocusedSlot).toHaveBeenCalledWith("panel-bottom");
+  });
+
+  it("submits shared-domain mesh builds and focuses the mesh jobs footer", async () => {
+    const registry = registryWithLifecycleCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const meshEvents: unknown[] = [];
+    bus.on("mesh:build-submitted", (event) => meshEvents.push(event));
+    const layout = {
+      setFocusedSlot: vi.fn(),
+      setPanelVisible: vi.fn(),
+    };
+    const submit = vi.fn(async () => ({
+      accepted: true,
+      command_id: "cmd-shared",
+      error: null,
+    }));
+
+    const result = await registry.execute("mesh.build-shared-domain", {
+      api: {
+        commands: { submit },
+      } as never,
+      bus,
+      layout: layout as never,
+      resources,
+      source: "test",
+    });
+
+    expect(result).toEqual({ status: "completed" });
+    expect(submit).toHaveBeenCalledWith({
+      kind: "mesh_build",
+      mesh_reason: "shared-domain",
+      mesh_target: { kind: "study_domain" },
+    });
+    expect(resources.getRevision(MESHING_BUILDS_CURRENT_PATH)).toBe("cmd-shared");
+    expect(meshEvents).toEqual([
+      {
+        commandId: "cmd-shared",
+        reason: "shared-domain",
+        targetKind: "study_domain",
+      },
+    ]);
+    expect(layout.setPanelVisible).toHaveBeenCalledWith("bottom", true);
+    expect(layout.setFocusedSlot).toHaveBeenCalledWith("panel-bottom");
   });
 
   it("disables object-scoped commands without object selection", () => {

@@ -5,13 +5,21 @@ import {
   DATA_DOMAIN_META_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
   DATA_FIELDS_PATH,
+  MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
   MESHING_OBJECT_QUALITY_PATH,
   MESHING_OBJECT_REPORT_PATH,
   MESHING_OBJECT_SIZE_FIELD_PATH,
   MESHING_OBJECT_TOPOLOGY_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+  MESHING_SHARED_DOMAIN_QUALITY_PATH,
   MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH,
+  MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH,
+  MESHING_SUMMARY_PATH,
+  MODEL_MATERIAL_FIELDS_PATH,
+  MODEL_REALIZED_REGIONS_PATH,
+  MODEL_REGION_DIAGNOSTICS_PATH,
+  MODEL_REGIONS_PATH,
   MODEL_SCENE_PATH,
   SESSION_CURRENT_PATH,
   SIMULATION_COMMANDS_PATH,
@@ -454,6 +462,7 @@ export class RealtimeInvalidationBridge {
     for (const [resourceKey, revision] of pendingFetches) {
       this.invalidateResource(resourceKey, revision);
       this.resources.invalidatePrefix(resourceKey, revision);
+      this.invalidateSceneDocumentDependents(resourceKey, revision);
       this.invalidateMeshBuildCompletionDependents(resourceKey, revision);
       const dependentStatusRevision =
         this.invalidateRuntimeLifecycleDependents(resourceKey, revision);
@@ -490,11 +499,18 @@ export class RealtimeInvalidationBridge {
     if (recommendedFetch !== MESHING_BUILDS_LATEST_SUCCESSFUL_PATH) return;
 
     this.resources.invalidate(MODEL_SCENE_PATH, revision);
+    this.resources.invalidate(MESHING_BUILDS_CURRENT_PATH, revision);
+    this.resources.invalidate(MESHING_SUMMARY_PATH, revision);
     this.resources.invalidate(MESHING_SHARED_DOMAIN_MANIFEST_PATH, revision);
     this.resources.invalidate(VISUALIZATION_STATE_PATH, revision);
     this.resources.invalidate(DATA_DOMAIN_META_PATH, revision);
     this.resources.invalidate(DATA_DOMAIN_TOPOLOGY_PATH, revision);
+    this.resources.invalidate(MESHING_SHARED_DOMAIN_QUALITY_PATH, revision);
     this.resources.invalidate(MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH, revision);
+    this.resources.invalidate(
+      MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH,
+      revision,
+    );
     this.resources.invalidatePrefix(
       resourceFamilyPrefix(MESHING_OBJECT_TOPOLOGY_PATH),
       revision,
@@ -511,6 +527,18 @@ export class RealtimeInvalidationBridge {
       resourceFamilyPrefix(MESHING_OBJECT_SIZE_FIELD_PATH),
       revision,
     );
+  }
+
+  private invalidateSceneDocumentDependents(
+    recommendedFetch: string,
+    revision: ResourceRevision,
+  ): void {
+    if (recommendedFetch !== MODEL_SCENE_PATH) return;
+    const dependentRevision = dependentResourceRevision(MODEL_SCENE_PATH, revision);
+    this.resources.invalidate(MODEL_REGIONS_PATH, dependentRevision);
+    this.resources.invalidate(MODEL_REALIZED_REGIONS_PATH, dependentRevision);
+    this.resources.invalidate(MODEL_REGION_DIAGNOSTICS_PATH, dependentRevision);
+    this.resources.invalidate(MODEL_MATERIAL_FIELDS_PATH, dependentRevision);
   }
 
   private invalidateRuntimeLifecycleDependents(

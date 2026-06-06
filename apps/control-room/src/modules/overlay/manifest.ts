@@ -24,5 +24,5 @@ export const overlayManifest: ModuleManifest = {
       },
     ],
   },
-  listens: ["command:submitted"],
+  listens: ["mesh:build-confirm-requested", "mesh:topology-rendered"],
 };

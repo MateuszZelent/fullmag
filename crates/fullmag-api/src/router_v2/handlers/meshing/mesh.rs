@@ -26,6 +26,7 @@ use crate::field_slice::{resolve_slice_query, FieldSliceQuery, SlicePlane};
 use crate::field_store::serialize_fem_mesh_topology_binary_v1;
 use crate::schemas::mesh::{
     MeshActiveBuildResource, MeshBuildDiagnosticsResource, MeshBuildHistoryResource,
+    MeshBuildPolicyDiffResource, MeshBuildProvenanceResource, MeshBuildPublishedResourcesResource,
     MeshCapabilitiesResource, MeshHistogramBinElementsResource, MeshInterfaceConfigReplaceRequest,
     MeshInterfaceConfigResource, MeshInterfaceQualityResource, MeshInterfaceReportResource,
     MeshLastSuccessfulBuildResource, MeshObjectConfigEntryResource, MeshObjectConfigReplaceRequest,
@@ -233,6 +234,17 @@ pub async fn get_mesh_active_build(
         revision: snapshot.mesh_build_revision,
         source_scene_revision: provenance.source_scene_revision,
         geometry_realization_revision: provenance.geometry_realization_revision,
+        provenance: Some(mesh_build_provenance_resource(
+            &snapshot,
+            mesh_workspace,
+            provenance,
+        )),
+        published_resources: mesh_build_published_resources(&snapshot, mesh_workspace),
+        resolved_policy: first_workspace_value(
+            mesh_workspace,
+            &[&["resolved_policy"], &["active_build", "resolved_policy"]],
+        ),
+        policy_diff: mesh_build_policy_diff(mesh_workspace),
         active_build: mesh_workspace.get("active_build").cloned(),
         mesh_pipeline_status: mesh_workspace.get("mesh_pipeline_status").cloned(),
         effective_airbox_target: mesh_workspace.get("effective_airbox_target").cloned(),
@@ -249,6 +261,110 @@ pub async fn get_mesh_active_build(
         snapshot.mesh_build_revision
     ));
     Ok(crate::router_v2::handlers::shared::conditional_json_response(&headers, &etag, &body))
+}
+
+fn mesh_build_provenance_resource(
+    snapshot: &SessionStateResponse,
+    mesh_workspace: &Value,
+    provenance: MeshBuildProvenance,
+) -> MeshBuildProvenanceResource {
+    MeshBuildProvenanceResource {
+        command_id: first_workspace_string(
+            mesh_workspace,
+            &[
+                &["active_build", "command_id"],
+                &["last_build_summary", "command_id"],
+            ],
+        ),
+        build_id: first_workspace_string(
+            mesh_workspace,
+            &[
+                &["active_build", "build_id"],
+                &["last_build_summary", "build_id"],
+            ],
+        ),
+        mesh_revision: Some(snapshot.mesh_revision),
+        source_scene_revision: first_workspace_u64(
+            mesh_workspace,
+            &[
+                &["active_build", "source_scene_revision"],
+                &["last_build_summary", "source_scene_revision"],
+            ],
+        )
+        .or(provenance.source_scene_revision),
+        geometry_realization_revision: first_workspace_u64(
+            mesh_workspace,
+            &[
+                &["active_build", "geometry_realization_revision"],
+                &["last_build_summary", "geometry_realization_revision"],
+                &[
+                    "last_build_summary",
+                    "geometry_realization",
+                    "realization_revision",
+                ],
+            ],
+        )
+        .or(provenance.geometry_realization_revision),
+        requested_policy_revision: first_workspace_u64(
+            mesh_workspace,
+            &[
+                &["active_build", "requested_policy_revision"],
+                &["last_build_summary", "requested_policy_revision"],
+            ],
+        ),
+        completed_at_unix_ms: first_workspace_u128(
+            mesh_workspace,
+            &[
+                &["active_build", "completed_at_unix_ms"],
+                &["last_build_summary", "completed_at_unix_ms"],
+            ],
+        ),
+        duration_ms: first_workspace_u64(
+            mesh_workspace,
+            &[
+                &["active_build", "duration_ms"],
+                &["last_build_summary", "duration_ms"],
+            ],
+        ),
+    }
+}
+
+fn mesh_build_published_resources(
+    snapshot: &SessionStateResponse,
+    mesh_workspace: &Value,
+) -> Option<MeshBuildPublishedResourcesResource> {
+    if let Some(value) = first_workspace_value(
+        mesh_workspace,
+        &[
+            &["published_resources"],
+            &["active_build", "published_resources"],
+            &["last_build_summary", "published_resources"],
+        ],
+    ) {
+        if let Ok(resource) = serde_json::from_value(value) {
+            return Some(resource);
+        }
+    }
+    if snapshot.mesh_revision == 0 && snapshot.mesh_build_revision == 0 {
+        return None;
+    }
+    Some(MeshBuildPublishedResourcesResource {
+        mesh_revision: Some(snapshot.mesh_revision),
+        mesh_build_revision: Some(snapshot.mesh_build_revision),
+        manifest: Some("/v2/sessions/current/meshing/meshes/shared-domain/manifest".to_string()),
+        quality: Some("/v2/sessions/current/meshing/meshes/shared-domain/quality".to_string()),
+        realized_size_fields: Some(
+            "/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields".to_string(),
+        ),
+    })
+}
+
+fn mesh_build_policy_diff(mesh_workspace: &Value) -> Option<Vec<MeshBuildPolicyDiffResource>> {
+    first_workspace_value(
+        mesh_workspace,
+        &[&["policy_diff"], &["active_build", "policy_diff"]],
+    )
+    .and_then(|value| serde_json::from_value(value).ok())
 }
 
 fn typed_shared_domain_build_report(
@@ -1887,6 +2003,27 @@ fn first_workspace_value(root: &Value, paths: &[&[&str]]) -> Option<Value> {
     paths
         .iter()
         .find_map(|path| workspace_value_at(root, path).cloned())
+}
+
+fn first_workspace_string(root: &Value, paths: &[&[&str]]) -> Option<String> {
+    paths
+        .iter()
+        .find_map(|path| workspace_value_at(root, path).and_then(Value::as_str))
+        .map(ToOwned::to_owned)
+}
+
+fn first_workspace_u64(root: &Value, paths: &[&[&str]]) -> Option<u64> {
+    paths
+        .iter()
+        .find_map(|path| workspace_value_at(root, path).and_then(Value::as_u64))
+}
+
+fn first_workspace_u128(root: &Value, paths: &[&[&str]]) -> Option<u128> {
+    paths.iter().find_map(|path| {
+        workspace_value_at(root, path)
+            .and_then(Value::as_u64)
+            .map(u128::from)
+    })
 }
 
 fn workspace_mesh_statistics(mesh_workspace: &Value) -> Option<&Value> {

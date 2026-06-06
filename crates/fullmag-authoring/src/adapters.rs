@@ -44,7 +44,7 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
         .collect::<Vec<_>>();
 
     SceneDocument {
-        version: "scene.v1".to_string(),
+        version: "scene.v2".to_string(),
         revision: builder.revision,
         scene: SceneMetadata {
             id: "scene".to_string(),
@@ -54,6 +54,7 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
         },
         universe: builder.universe.clone(),
         objects,
+        couplings: Vec::new(),
         materials,
         magnetization_assets,
         current_modules: SceneCurrentModulesState {
@@ -97,7 +98,7 @@ pub fn scene_document_to_script_builder(
     scene: &SceneDocument,
 ) -> Result<ScriptBuilderState, SceneDocumentValidationError> {
     let mut normalized_scene = scene.clone();
-    normalize_study_pipeline_labels(&mut normalized_scene);
+    normalize_scene_document_study_pipeline_labels(&mut normalized_scene);
     validate_scene_document(&normalized_scene)?;
     let materials = scene
         .materials
@@ -383,7 +384,7 @@ fn builder_mesh_interface_from_scene(
     }
 }
 
-fn normalize_study_pipeline_labels(scene: &mut SceneDocument) {
+pub fn normalize_scene_document_study_pipeline_labels(scene: &mut SceneDocument) {
     if let Some(document) = &mut scene.study.study_pipeline {
         normalize_study_pipeline_node_labels(&mut document.nodes);
     }
@@ -786,6 +787,9 @@ fn scene_object_from_geometry(geometry: &ScriptBuilderGeometryEntry) -> SceneObj
         ),
         object_mesh: geometry.mesh.clone(),
         mesh_override: geometry.mesh.clone(),
+        regions: Vec::new(),
+        allocated_region_ids: Vec::new(),
+        material_parameter_fields: Vec::new(),
         notes: None,
         visible: true,
         locked: false,
@@ -1664,6 +1668,7 @@ mod tests {
         let scene = scene_document_from_script_builder(&builder);
         let round_trip = scene_document_to_script_builder(&scene).expect("scene should validate");
 
+        assert_eq!(scene.version, "scene.v2");
         assert_eq!(round_trip.revision, builder.revision);
         assert_eq!(round_trip.backend, builder.backend);
         assert_eq!(round_trip.external_field, builder.external_field);
@@ -1956,6 +1961,14 @@ mod tests {
         let error = scene_document_to_script_builder(&scene)
             .expect_err("unsupported study pipeline version must fail");
         assert!(error.message.contains("unsupported study pipeline version"));
+    }
+
+    #[test]
+    fn scene_document_validation_accepts_legacy_scene_v1() {
+        let mut scene = scene_document_from_script_builder(&sample_builder());
+        scene.version = "scene.v1".to_string();
+
+        scene_document_to_script_builder(&scene).expect("legacy scene.v1 should validate");
     }
 
     #[test]

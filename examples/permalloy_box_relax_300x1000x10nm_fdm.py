@@ -32,7 +32,7 @@ layer.alpha = 0.1
 layer.m = fm.texture.uniform(0.0, 1.0, 0.0)
 
 # Solver / run setup
-study.demag(realization="poisson_robin")
+# study.demag(realization="poisson_robin")
 study.solver(dt=1e-13, g=2.115)
 study.tableautosave(1e-12, quantities=["time", "step", "mx", "my", "mz", "E_total"])
 study.stages.add_relax(algorithm="llg_overdamped", tol=1e-4, max_steps=1000)

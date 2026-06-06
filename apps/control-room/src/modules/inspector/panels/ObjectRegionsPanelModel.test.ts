@@ -2,9 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildObjectRegionPatch,
+  clampObjectRegionDraftShapeToOwnerBounds,
+  formatRegionPhysicalScalar,
   objectRegionDraftFromModel,
   objectRegionDraftKey,
+  parseRegionPhysicalScalar,
   resolveObjectRegionPanelModel,
+  validateObjectRegionDraft,
 } from "./ObjectRegionsPanelModel";
 
 describe("ObjectRegionsPanelModel", () => {
@@ -72,15 +76,595 @@ describe("ObjectRegionsPanelModel", () => {
     });
     expect(objectRegionDraftFromModel(model)).toEqual({
       enabled: false,
+      frame: "object",
+      materialOverrides: [],
+      meshPolicy: {
+        enabled: false,
+        maximumElementSize: 10e-9,
+        minimumElementSize: 1e-9,
+        order: 1,
+        transitionDistance: 50e-9,
+      },
       name: "free",
+      ownerBounds: null,
+      priority: 0,
+      realizationPolicy: "inherit",
+      shape: {
+        axis: [0, 0, 1],
+        center: [0, 0, 0],
+        height: 100e-9,
+        kind: "box",
+        radius: 50e-9,
+        size: [100e-9, 100e-9, 100e-9],
+      },
     });
     expect(objectRegionDraftKey(model)).toContain("region:free-layer");
   });
 
   it("builds v2 region patch payloads", () => {
-    expect(buildObjectRegionPatch({ enabled: true, name: " free " })).toEqual({
+    expect(
+      buildObjectRegionPatch({
+        enabled: true,
+        frame: "object",
+        materialOverrides: [
+          {
+            conflictPolicy: "higher_priority_wins",
+            parameter: "Ms",
+            priority: 4,
+            unit: "A/m",
+            value: 760e3,
+          },
+        ],
+        meshPolicy: {
+          enabled: true,
+          maximumElementSize: 2e-9,
+          minimumElementSize: 1e-9,
+          order: 1,
+          transitionDistance: 50e-9,
+        },
+        name: " free ",
+        ownerBounds: null,
+        priority: 4,
+        realizationPolicy: "conformal",
+        shape: {
+          axis: [0, 0, 1],
+          center: [1e-9, 2e-9, 0],
+          height: 5e-9,
+          kind: "cylinder",
+          radius: 20e-9,
+          size: [100e-9, 100e-9, 5e-9],
+        },
+      }),
+    ).toEqual({
       enabled: true,
+      frame: "object",
+      material_overrides: [
+        {
+          conflict_policy: "higher_priority_wins",
+          parameter: "Ms",
+          priority: 4,
+          value: {
+            kind: "constant",
+            unit: "A/m",
+            value: 760e3,
+          },
+        },
+      ],
+      mesh_policy: {
+        maximum_element_size: 2e-9,
+        minimum_element_size: 1e-9,
+        order: 1,
+        transition_distance: 50e-9,
+      },
       name: "free",
+      priority: 4,
+      realization_policy: "conformal",
+      shape: {
+        axis: [0, 0, 1],
+        center: [1e-9, 2e-9, 0],
+        height: 5e-9,
+        kind: "cylinder",
+        radius: 20e-9,
+      },
     });
+  });
+
+  it("clamps edited region shapes to the parent object bounds", () => {
+    expect(
+      clampObjectRegionDraftShapeToOwnerBounds(
+        {
+          axis: [0, 0, 1],
+          center: [1e-6, 0, 0],
+          height: 100e-9,
+          kind: "box",
+          radius: 80e-9,
+          size: [200e-9, 200e-9, 100e-9],
+        },
+        {
+          center: [0, 0, 0],
+          size: [100e-9, 50e-9, 10e-9],
+        },
+      ),
+    ).toMatchObject({
+      center: [0, 0, 0],
+      size: [100e-9, 50e-9, 10e-9],
+    });
+
+    expect(
+      clampObjectRegionDraftShapeToOwnerBounds(
+        {
+          axis: [0, 0, 1],
+          center: [1e-6, 0, 0],
+          height: 100e-9,
+          kind: "sphere",
+          radius: 80e-9,
+          size: [200e-9, 200e-9, 100e-9],
+        },
+        {
+          center: [0, 0, 0],
+          size: [100e-9, 50e-9, 10e-9],
+        },
+      ),
+    ).toMatchObject({
+      center: [45e-9, 0, 0],
+      radius: 5e-9,
+    });
+
+    expect(
+      clampObjectRegionDraftShapeToOwnerBounds(
+        {
+          axis: [0, 0, 1],
+          center: [1e-6, 0, 0],
+          height: 100e-9,
+          kind: "cylinder",
+          radius: 80e-9,
+          size: [200e-9, 200e-9, 100e-9],
+        },
+        {
+          center: [0, 0, 0],
+          size: [100e-9, 50e-9, 10e-9],
+        },
+      ),
+    ).toMatchObject({
+      center: [25e-9, 0, 0],
+      height: 10e-9,
+      radius: 25e-9,
+    });
+
+    expect(
+      buildObjectRegionPatch({
+        enabled: true,
+        frame: "object",
+        materialOverrides: [],
+        meshPolicy: {
+          enabled: false,
+          maximumElementSize: 10e-9,
+          minimumElementSize: 1e-9,
+          order: 1,
+          transitionDistance: 50e-9,
+        },
+        name: "oversized",
+        ownerBounds: {
+          center: [0, 0, 0],
+          size: [100e-9, 50e-9, 10e-9],
+        },
+        priority: 0,
+        realizationPolicy: "inherit",
+        shape: {
+          axis: [0, 0, 1],
+          center: [1e-6, 0, 0],
+          height: 100e-9,
+          kind: "cylinder",
+          radius: 80e-9,
+          size: [200e-9, 200e-9, 100e-9],
+        },
+      })["shape"],
+    ).toEqual({
+      axis: [0, 0, 1],
+      center: [25e-9, 0, 0],
+      height: 10e-9,
+      kind: "cylinder",
+      radius: 25e-9,
+    });
+  });
+
+  it("formats and parses SI-scale physical values with scientific notation", () => {
+    expect(formatRegionPhysicalScalar(2e-6)).toBe("2e-6");
+    expect(formatRegionPhysicalScalar(1.25e-11)).toBe("1.25e-11");
+    expect(formatRegionPhysicalScalar(760e3)).toBe("760000");
+    expect(parseRegionPhysicalScalar("1.5e-9")).toBe(1.5e-9);
+    expect(parseRegionPhysicalScalar("not-a-number")).toBeNull();
+  });
+
+  it("validates region drafts before sending physical patches", () => {
+    const validDraft = objectRegionDraftFromModel(
+      resolveObjectRegionPanelModel(
+        {
+          kind: "object.region",
+          label: "Core",
+          moduleSource: "explorer",
+          nodeId: "model:object:film:regions:reg-core",
+          objectId: "film",
+          ref: {
+            kind: "object.region",
+            nodeId: "model:object:film:regions:reg-core",
+            objectId: "film",
+            regionId: "reg-core",
+            type: "scene-object",
+            visualizationTargetId: "object:film",
+          },
+        },
+        {
+          objects: [{ id: "film", name: "Film" }],
+          revision: 1,
+        },
+        {
+          geometry_realization_revision: 0,
+          regions: [
+            {
+              bounds_max: [1, 1, 1],
+              bounds_min: [0, 0, 0],
+              enabled: true,
+              interaction_refs: [],
+              material_ref: "mat-film",
+              mesh_part_ids: [],
+              name: "Core",
+              owner_object_id: "film",
+              region_id: "reg-core",
+              shape: { kind: "box", size: [10e-9, 10e-9, 2e-9] } as never,
+              source: "authored_object_region",
+              source_body_ids: [],
+              source_object_ids: ["film"],
+            },
+          ],
+          scene_revision: 1,
+        },
+      ),
+    );
+
+    expect(validateObjectRegionDraft(validDraft)).toEqual([]);
+    expect(validateObjectRegionDraft({ ...validDraft, name: "  " })).toContain(
+      "Region name is required.",
+    );
+    expect(
+      validateObjectRegionDraft({ ...validDraft, priority: 1.5 }),
+    ).toContain("Region priority must be an integer.");
+    expect(
+      validateObjectRegionDraft({
+        ...validDraft,
+        meshPolicy: {
+          ...validDraft.meshPolicy,
+          enabled: true,
+          maximumElementSize: 1e-9,
+          minimumElementSize: 2e-9,
+        },
+      }),
+    ).toContain("Max element size must be greater than or equal to min element size.");
+    expect(
+      validateObjectRegionDraft({
+        ...validDraft,
+        meshPolicy: {
+          ...validDraft.meshPolicy,
+          enabled: true,
+          order: 1.5,
+        },
+      }),
+    ).toContain("Mesh order must be an integer at least 1.");
+    expect(
+      validateObjectRegionDraft({
+        ...validDraft,
+        shape: { ...validDraft.shape, kind: "sphere", radius: 0 },
+      }),
+    ).toContain("Radius must be greater than zero.");
+    expect(
+      validateObjectRegionDraft({
+        ...validDraft,
+        shape: {
+          ...validDraft.shape,
+          axis: [0, 0, 0],
+          kind: "cylinder",
+        },
+      }),
+    ).toContain("Axis must not be the zero vector.");
+    expect(
+      validateObjectRegionDraft({
+        ...validDraft,
+        materialOverrides: [
+          {
+            conflictPolicy: "error",
+            parameter: "Ms",
+            priority: 1.5,
+            unit: "A/m",
+            value: 800e3,
+          },
+        ],
+      }),
+    ).toContain("Ms override priority must be an integer.");
+  });
+
+  it("prefers the selected authored region and counts parameter fields", () => {
+    const model = resolveObjectRegionPanelModel(
+      {
+        kind: "object.region",
+        label: "Skyrmion core",
+        moduleSource: "explorer",
+        nodeId: "model:object:film:regions:reg-core",
+        objectId: "film",
+        ref: {
+          kind: "object.region",
+          nodeId: "model:object:film:regions:reg-core",
+          objectId: "film",
+          regionId: "reg-core",
+          type: "scene-object",
+          visualizationTargetId: "object:film",
+        },
+      },
+      {
+        objects: [
+          {
+            id: "film",
+            magnetization_ref: "mag-film",
+            material_ref: "mat-film",
+            name: "Film",
+            visible: true,
+          },
+        ],
+        revision: 11,
+      },
+      {
+        geometry_realization_revision: 0,
+        regions: [
+          {
+            bounds_max: [1, 1, 1],
+            bounds_min: [0, 0, 0],
+            enabled: true,
+            interaction_refs: [],
+            magnetization_ref: "mag-core",
+            material_overrides: [{}],
+            material_ref: "mat-film",
+            mesh_part_ids: [],
+            name: "Skyrmion core",
+            owner_object_id: "film",
+            priority: 8,
+            region_id: "reg-core",
+            realization_policy: "conformal",
+            realization_status: "authored_pending_realization",
+            mesh_policy: {
+              maximum_element_size: 1e-9,
+              minimum_element_size: 0.5e-9,
+              order: 1,
+              transition_distance: 20e-9,
+            } as never,
+            shape: {
+              center: [0, 0, 0],
+              kind: "sphere",
+              radius: 15e-9,
+            } as never,
+            source: "authored_object_region",
+            source_body_ids: [],
+            source_object_ids: ["film"],
+            texture_override: {
+              initial_magnetization: {
+                kind: "uniform",
+                value: [0, 0, 1],
+              },
+            } as never,
+          },
+        ],
+        scene_revision: 11,
+      },
+      {
+        fields: [
+          {
+            assignment_id: "field-ms-core",
+            field: {},
+            owner_object_id: "film",
+            parameter: "Ms",
+            source_region_id: "reg-core",
+          },
+        ],
+        scene_revision: 11,
+      } as never,
+    );
+
+    expect(model).toMatchObject({
+      effectiveMagnetizationRef: "mag-core",
+      materialFieldCount: 1,
+      materialOverrideCount: 1,
+      materialOverrides: [
+        {
+          conflictPolicy: "error",
+          parameter: "Ms",
+          priority: 8,
+          unit: "A/m",
+          value: 800000,
+        },
+      ],
+      objectId: "film",
+      priority: 8,
+      realizationPolicy: "conformal",
+      realizationStatus: "authored_pending_realization",
+      regionId: "reg-core",
+      regionMagnetizationRef: "mag-core",
+      regionName: "Skyrmion core",
+      shape: {
+        center: [0, 0, 0],
+        kind: "sphere",
+        radius: 15e-9,
+      },
+      meshPolicy: {
+        enabled: true,
+        maximumElementSize: 1e-9,
+        minimumElementSize: 0.5e-9,
+        order: 1,
+        transitionDistance: 20e-9,
+      },
+      source: "authored_object_region",
+      textureAssignment: "override",
+      textureOverrideKind: "uniform",
+    });
+  });
+
+  it("reports inherited region texture assignment when no local texture ref exists", () => {
+    const model = resolveObjectRegionPanelModel(
+      {
+        kind: "object.region",
+        label: "Shell",
+        moduleSource: "explorer",
+        nodeId: "model:object:film:regions:reg-shell",
+        objectId: "film",
+        ref: {
+          kind: "object.region",
+          nodeId: "model:object:film:regions:reg-shell",
+          objectId: "film",
+          regionId: "reg-shell",
+          type: "scene-object",
+          visualizationTargetId: "object:film",
+        },
+      },
+      {
+        objects: [
+          {
+            id: "film",
+            magnetization_ref: "mag-film",
+            material_ref: "mat-film",
+            name: "Film",
+            visible: true,
+          },
+        ],
+        revision: 12,
+      },
+      {
+        geometry_realization_revision: 0,
+        regions: [
+          {
+            bounds_max: [1, 1, 1],
+            bounds_min: [0, 0, 0],
+            enabled: true,
+            interaction_refs: [],
+            material_ref: "mat-film",
+            mesh_part_ids: [],
+            name: "Shell",
+            owner_object_id: "film",
+            priority: 1,
+            region_id: "reg-shell",
+            source: "authored_object_region",
+            source_body_ids: [],
+            source_object_ids: ["film"],
+          },
+        ],
+        scene_revision: 12,
+      },
+    );
+
+    expect(model).toMatchObject({
+      effectiveMagnetizationRef: "mag-film",
+      regionMagnetizationRef: "inherits object",
+      textureAssignment: "inherited",
+      textureOverrideKind: "none",
+    });
+  });
+
+  it("filters region diagnostics to the selected object region", () => {
+    const model = resolveObjectRegionPanelModel(
+      {
+        kind: "object.region.diagnostics",
+        label: "Core diagnostics",
+        moduleSource: "explorer",
+        nodeId: "model:object:film:regions:reg-core:diagnostics",
+        objectId: "film",
+        ref: {
+          kind: "object.region.diagnostics",
+          nodeId: "model:object:film:regions:reg-core:diagnostics",
+          objectId: "film",
+          regionId: "reg-core",
+          type: "scene-object",
+          visualizationTargetId: "object:film:reg-core",
+        },
+      },
+      {
+        objects: [{ id: "film", name: "Film" }],
+        revision: 14,
+      },
+      {
+        geometry_realization_revision: 0,
+        regions: [
+          {
+            bounds_max: [1, 1, 1],
+            bounds_min: [0, 0, 0],
+            enabled: true,
+            interaction_refs: [],
+            material_ref: "mat-film",
+            mesh_part_ids: [],
+            name: "Core",
+            owner_object_id: "film",
+            region_id: "reg-core",
+            source: "authored_object_region",
+            source_body_ids: [],
+            source_object_ids: ["film"],
+          },
+          {
+            bounds_max: [1, 1, 1],
+            bounds_min: [0, 0, 0],
+            enabled: true,
+            interaction_refs: [],
+            material_ref: "mat-film",
+            mesh_part_ids: [],
+            name: "Shell",
+            owner_object_id: "film",
+            region_id: "reg-shell",
+            source: "authored_object_region",
+            source_body_ids: [],
+            source_object_ids: ["film"],
+          },
+        ],
+        scene_revision: 14,
+      },
+      null,
+      {
+        diagnostics: [
+          {
+            code: "region_mesh_policy_requires_rebuild",
+            diagnostic_id: "diag-core",
+            message: "Region mesh policy will apply on the next explicit mesh rebuild.",
+            owner_object_id: "film",
+            region_id: "reg-core",
+            realization_status: "authored_pending_realization",
+            severity: "warning",
+          },
+          {
+            code: "region_projection_deferred",
+            diagnostic_id: "diag-shell",
+            message: "Shell region projection is deferred.",
+            owner_object_id: "film",
+            region_id: "reg-shell",
+            severity: "warning",
+          },
+          {
+            code: "foreign_region",
+            diagnostic_id: "diag-foreign",
+            message: "Foreign object diagnostic.",
+            owner_object_id: "other-film",
+            region_id: "reg-core",
+            severity: "error",
+          },
+        ],
+        scene_revision: 14,
+      },
+    );
+
+    expect(model.diagnosticCount).toBe(1);
+    expect(model.warningCount).toBe(1);
+    expect(model.errorCount).toBe(0);
+    expect(model.diagnostics).toEqual([
+      {
+        capabilityGate: null,
+        code: "region_mesh_policy_requires_rebuild",
+        diagnosticId: "diag-core",
+        message: "Region mesh policy will apply on the next explicit mesh rebuild.",
+        realizationStatus: "authored_pending_realization",
+        severity: "warning",
+      },
+    ]);
   });
 });

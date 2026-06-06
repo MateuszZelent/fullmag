@@ -27,7 +27,8 @@ import {
 import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
 import {
   isViewport3DTopologyCurrent,
-  resolveStaleTopologyVisualizationSettings,
+  isViewport3DTopologyRenderable,
+  resolveUnavailableTopologyVisualizationSettings,
   type Viewport3DTopologyFreshness,
 } from "../viewport3dTopologyStaleness";
 import type {
@@ -561,12 +562,12 @@ export function resolveAirboxTopologyVisualizationSettings(
   settings: VisualizationTargetSettings,
   topologyFreshness: Viewport3DTopologyFreshness,
 ): VisualizationTargetSettings {
-  if (isViewport3DTopologyCurrent(topologyFreshness)) {
+  if (isViewport3DTopologyRenderable(topologyFreshness)) {
     return settings;
   }
 
   return {
-    ...resolveStaleTopologyVisualizationSettings(settings),
+    ...resolveUnavailableTopologyVisualizationSettings(settings),
     geometryScope: settings.geometryScope,
   };
 }

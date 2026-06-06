@@ -1,6 +1,6 @@
 """Public embedded Python DSL for Fullmag."""
 
-from . import init
+from . import couplings, fields, init, shapes
 from .init import (
     FIELD_STATE_FORMATS,
     MAGNETIZATION_STATE_FORMATS,
@@ -24,6 +24,9 @@ from .model import (
     Box,
     CPWAntenna,
     CurrentTransport,
+    Coupling,
+    CouplingEndpoint,
+    CouplingRegistry,
     DeviceTarget,
     Cylinder,
     Demag,
@@ -61,11 +64,14 @@ from .model import (
     Magnetoelastic,
     MagnetostrictionLaw,
     Material,
+    MaterialParameterAssignment,
+    MaterialParameterField,
     MechanicalBoundaryCondition,
     MechanicalLoad,
     MicrostripAntenna,
     OerstedField,
     OerstedCylinder,
+    ObjectRegion,
     PiecewiseLinear,
     PrescribedStrain,
     Problem,
@@ -73,6 +79,7 @@ from .model import (
     QuasistaticElasticity,
     RfDrive,
     Region,
+    RegionMaterialOverride,
     RelaxStop,
     Relaxation,
     TableAutosave,
@@ -309,8 +316,11 @@ __all__ = [
     "Zeeman",
     "ZhangLiSTT",
     "backend",
+    "couplings",
     "export_stl",
+    "fields",
     "generate_mesh",
+    "shapes",
     "resolve_mesh_size_controls",
     "infer_magnetization_state_format",
     "init",

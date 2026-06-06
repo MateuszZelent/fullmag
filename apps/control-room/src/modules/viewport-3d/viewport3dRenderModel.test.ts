@@ -99,6 +99,21 @@ describe("viewport3dRenderModel performance contracts", () => {
 });
 
 describe("viewport3dRenderModel", () => {
+  it("carries mesh identity metadata through the topology render model", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [],
+      [],
+      undefined,
+      { meshGenerationId: "gen-7", meshRevision: 42 },
+    );
+
+    expect(topologyModel).toMatchObject({
+      meshGenerationId: "gen-7",
+      meshRevision: 42,
+    });
+  });
+
   it("expands tetrahedral element indices into drawable triangle faces", () => {
     expect(Array.from(buildTetraSurfaceIndices(new Uint32Array([0, 1, 2, 3]))))
       .toEqual([0, 1, 2, 0, 1, 3, 0, 2, 3, 1, 2, 3]);

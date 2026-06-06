@@ -226,12 +226,12 @@ describe("selectExplorerNode", () => {
     });
   });
 
-  it("selects region magnetic texture nodes as inspector-only region selections", () => {
+  it("selects primary region texture nodes as region-scoped selections", () => {
     const kernel = makeKernel();
     const node: ExplorerNode = {
-      id: "model:object:free-layer:regions:primary:magnetic-texture",
-      kind: "object.region-magnetic-texture",
-      label: "Magnetic Texture",
+      id: "model:object:free-layer:regions:primary:texture",
+      kind: "object.region.texture",
+      label: "Texture",
       objectId: "free-layer",
       parentId: "model:object:free-layer:regions:primary",
       regionId: "region:free-layer",
@@ -240,16 +240,70 @@ describe("selectExplorerNode", () => {
     selectExplorerNode(kernel, node, "explorer");
 
     expect(kernel.selection.get()).toMatchObject({
-      kind: "object.region-magnetic-texture",
-      label: "Magnetic Texture",
-      nodeId: "model:object:free-layer:regions:primary:magnetic-texture",
+      kind: "object.region.texture",
+      label: "Texture",
+      nodeId: "model:object:free-layer:regions:primary:texture",
       objectId: "free-layer",
       ref: {
-        kind: "object.region-magnetic-texture",
+        kind: "object.region.texture",
         objectId: "free-layer",
         regionId: "region:free-layer",
         type: "scene-object",
-        visualizationTargetId: "object:free-layer",
+        visualizationTargetId: "region:free-layer:region%3Afree-layer",
+      },
+    });
+  });
+
+  it("selects region sub-object nodes with region-scoped visualization targets", () => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      id: "model:object:free-layer:regions:reg-core:visualization",
+      kind: "object.region.visualization",
+      label: "Visualization",
+      objectId: "free-layer",
+      parentId: "model:object:free-layer:regions:reg-core",
+      regionId: "reg-core",
+    };
+
+    selectExplorerNode(kernel, node, "explorer");
+
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "object.region.visualization",
+      label: "Visualization",
+      nodeId: "model:object:free-layer:regions:reg-core:visualization",
+      objectId: "free-layer",
+      ref: {
+        kind: "object.region.visualization",
+        objectId: "free-layer",
+        regionId: "reg-core",
+        type: "scene-object",
+        visualizationTargetId: "region:free-layer:reg-core",
+      },
+    });
+  });
+
+  it("selects authored coupling nodes as coupling selections", () => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      couplingId: "exchange:core-shell",
+      id: "model:physics:couplings:exchange:core-shell",
+      kind: "physics.coupling",
+      label: "core -> shell exchange",
+      parentId: "model:physics:couplings",
+    };
+
+    selectExplorerNode(kernel, node, "explorer");
+
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "physics.coupling",
+      label: "core -> shell exchange",
+      nodeId: "model:physics:couplings:exchange:core-shell",
+      objectId: null,
+      ref: {
+        couplingId: "exchange:core-shell",
+        kind: "physics.coupling",
+        nodeId: "model:physics:couplings:exchange:core-shell",
+        type: "physics-coupling",
       },
     });
   });

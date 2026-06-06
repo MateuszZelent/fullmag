@@ -91,12 +91,17 @@ import {
 } from "./BoundsLayers";
 import { TopologyMeshLayer } from "./TopologyMeshLayer";
 import { MeshSizeHighlightLayer } from "./MeshSizeHighlightLayer";
+import {
+  RegionOverlayLayer,
+  type RegionOverlaySelection,
+} from "./RegionOverlayLayer";
 import { PostProcessingLayer } from "./PostProcessingLayer";
 import { PrimitiveObjectLayer } from "./PrimitiveObjectLayer";
 import { FdmCuboidLayer, type FdmCuboidInstanceModel } from "./FdmCuboidLayer";
 import { Viewport3DLightingRig } from "./Viewport3DLightingRig";
 import { ClipPlaneFramePreviewLayer, ClipPlaneLayer } from "./ClipPlaneLayer";
 import type { ClipPlaneIntersectionMarkerBuffers } from "./clipPlaneModel";
+import type { RegionOverlayInput } from "./regionOverlayModel";
 import {
   getViewport3DVisualProfile,
   type Viewport3DVisualProfileId,
@@ -145,6 +150,7 @@ interface Viewport3DSceneProps {
   onOrbitDebugAnglesChange?: (angles: Viewport3DOrbitDebugAngles) => void;
   onVisualizationFrameCommitted: (revision: number) => void;
   onSelectObject: (object: Viewport3DPrimitiveObject) => void;
+  onSelectRegion: (selection: RegionOverlaySelection) => void;
   onSelectDomain: () => void;
   onSelectPart: (selection: Viewport3DPartSelection) => void;
   orbitDebugAngles: Viewport3DOrbitDebugAngles;
@@ -155,8 +161,12 @@ interface Viewport3DSceneProps {
   resetCameraRevision: number;
   requestDiagnostics: RequestDiagnosticsController;
   resourceFrameKey: string;
+  regionOverlayVisible: boolean;
+  regionOverlays: readonly RegionOverlayInput[];
   rotationMode: Viewport3DRotationMode;
   selectionBounds: Viewport3DBounds | null;
+  selectedObjectId: string | null;
+  selectedRegionId: string | null;
   tracker: Viewport3DResourceTracker;
   topologyFreshness: Viewport3DTopologyFreshness;
   topologyModel: Viewport3DTopologyRenderModel<Viewport3DMeshPart> | null;
@@ -594,7 +604,12 @@ function Viewport3DModelLayerStack({
   onSelectDomain,
   onSelectObject,
   onSelectPart,
+  onSelectRegion,
   primitiveModel,
+  regionOverlayVisible,
+  regionOverlays,
+  selectedObjectId,
+  selectedRegionId,
   topologyFreshness,
   topologyModel,
   tracker,
@@ -628,7 +643,12 @@ function Viewport3DModelLayerStack({
   | "onSelectDomain"
   | "onSelectObject"
   | "onSelectPart"
+  | "onSelectRegion"
   | "primitiveModel"
+  | "regionOverlayVisible"
+  | "regionOverlays"
+  | "selectedObjectId"
+  | "selectedRegionId"
   | "topologyFreshness"
   | "topologyModel"
   | "tracker"
@@ -709,6 +729,14 @@ function Viewport3DModelLayerStack({
           topologyModel={topologyModel}
           vectorColorMode={vectorColorMode}
           vectorStyle={vectorStyle}
+        />
+      ) : null}
+      {regionOverlayVisible && viewport3DOverlayLayersEnabledFromBrowserConfig() ? (
+        <RegionOverlayLayer
+          onSelectRegion={onSelectRegion}
+          regions={regionOverlays}
+          selectedObjectId={selectedObjectId}
+          selectedRegionId={selectedRegionId}
         />
       ) : null}
       {viewport3DMeshSizeHighlightLayerEnabledFromBrowserConfig() ? (
@@ -830,15 +858,20 @@ export function Viewport3DScene({
   onSelectObject,
   onSelectDomain,
   onSelectPart,
+  onSelectRegion,
   orbitDebugAngles,
   orbitDebugCommitRevision,
   orbitDebugRevision,
   primitiveModel,
+  regionOverlayVisible,
+  regionOverlays,
   resetCameraRevision,
   requestDiagnostics,
   resourceFrameKey,
   rotationMode,
   selectionBounds,
+  selectedObjectId,
+  selectedRegionId,
   tracker,
   topologyFreshness,
   topologyModel,
@@ -983,7 +1016,12 @@ export function Viewport3DScene({
         onSelectDomain={onSelectDomain}
         onSelectObject={onSelectObject}
         onSelectPart={onSelectPart}
+        onSelectRegion={onSelectRegion}
         primitiveModel={primitiveModel}
+        regionOverlayVisible={regionOverlayVisible}
+        regionOverlays={regionOverlays}
+        selectedObjectId={selectedObjectId}
+        selectedRegionId={selectedRegionId}
         topologyFreshness={topologyFreshness}
         topologyModel={topologyModel}
         tracker={tracker}

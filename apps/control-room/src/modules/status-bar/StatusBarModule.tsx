@@ -7,6 +7,10 @@ import {
   useSolverStatusResource,
 } from "@/kernel/resources/studyRuntimeResources";
 import {
+  useMeshBuildCurrent,
+  useMeshSharedDomainManifestResource,
+} from "@/kernel/resources/geometryLifecycleResources";
+import {
   formatRuntimeStateLabel,
   resolveEffectiveRuntimeState,
 } from "@/kernel/runtime/runtimeStateDisplay";
@@ -14,11 +18,18 @@ import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 
 import {
   buildStatusBarEngineModel,
+  buildStatusBarMeshModel,
   formatRuntimeBundleVersionLabel,
 } from "./statusBarModel";
 
 function readString(value: unknown, fallback: string): string {
   return typeof value === "string" && value.length > 0 ? value : fallback;
+}
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : null;
 }
 
 function subscribeToMounted(): () => void {
@@ -56,8 +67,22 @@ export default function StatusBarModule() {
     (status) => status.data?.runtime_bundle_version ?? null,
     { enabled: mounted },
   );
+  const meshRevision = useSessionStatusSelector(
+    (status) => status.data?.resources.mesh_revision ?? 0,
+    { enabled: mounted },
+  );
+  const meshBuildRevision = useSessionStatusSelector(
+    (status) => status.data?.resources.mesh_build_revision ?? 0,
+    { enabled: mounted },
+  );
+  const sceneRevision = useSessionStatusSelector(
+    (status) => status.data?.resources.scene_revision ?? null,
+    { enabled: mounted },
+  );
   const currentRun = useCurrentRunResource({ enabled: mounted });
   const solverStatus = useSolverStatusResource({ enabled: mounted });
+  const meshManifest = useMeshSharedDomainManifestResource({ enabled: mounted });
+  const meshBuildCurrent = useMeshBuildCurrent({ enabled: mounted });
   const runtimeState = resolveEffectiveRuntimeState({
     detailedRuntimeState: mounted ? solverStatus.data?.runtime_state : null,
     sessionSolverState: mounted ? solverState : null,
@@ -72,6 +97,17 @@ export default function StatusBarModule() {
   const sessionName = mounted
     ? readString(sessionStatusName, "session unavailable")
     : "—";
+  const activeBuild = readRecord(meshBuildCurrent.data?.active_build);
+  const mesh = buildStatusBarMeshModel({
+    activeBuildStatus:
+      typeof activeBuild?.status === "string" ? activeBuild.status : null,
+    manifestSourceSceneRevision: mounted
+      ? meshManifest.data?.source_scene_revision
+      : null,
+    meshBuildRevision: mounted ? meshBuildRevision : null,
+    meshRevision: mounted ? meshRevision : null,
+    sceneRevision: mounted ? sceneRevision : null,
+  });
   const runtimeVersion = mounted
     ? formatRuntimeBundleVersionLabel(
         readString(runtimeBundleVersion, "runtime unavailable"),
@@ -91,6 +127,10 @@ export default function StatusBarModule() {
       <span className="fm-status-bar__item">{sessionName}</span>
       <span className="fm-status-bar__sep" aria-hidden="true" />
       <span className="fm-status-bar__item">{runtimeVersion}</span>
+      <span className="fm-status-bar__sep" aria-hidden="true" />
+      <span className="fm-status-bar__item" data-state={mesh.state} title={mesh.title}>
+        {mesh.label}
+      </span>
       <span className="fm-status-bar__spacer" aria-hidden="true" />
       <span
         className="fm-status-bar__engine"

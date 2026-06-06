@@ -92,8 +92,14 @@ pub struct ProblemIR {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub geometry_assets: Option<GeometryAssetsIR>,
     pub regions: Vec<RegionIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub object_regions: Vec<ObjectRegionIR>,
     pub materials: Vec<MaterialIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub material_parameter_fields: Vec<MaterialParameterAssignmentIR>,
     pub magnets: Vec<MagnetIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub couplings: Vec<CouplingIR>,
     pub energy_terms: Vec<EnergyTermIR>,
     pub study: StudyIR,
     pub backend_policy: BackendPolicyIR,
@@ -183,8 +189,14 @@ impl<'de> Deserialize<'de> for ProblemIR {
             #[serde(default)]
             geometry_assets: Option<GeometryAssetsIR>,
             regions: Vec<RegionIR>,
+            #[serde(default)]
+            object_regions: Vec<ObjectRegionIR>,
             materials: Vec<MaterialIR>,
+            #[serde(default)]
+            material_parameter_fields: Vec<MaterialParameterAssignmentIR>,
             magnets: Vec<MagnetIR>,
+            #[serde(default)]
+            couplings: Vec<CouplingIR>,
             energy_terms: Vec<EnergyTermIR>,
             study: StudyIR,
             backend_policy: BackendPolicyIR,
@@ -238,8 +250,11 @@ impl<'de> Deserialize<'de> for ProblemIR {
             geometry: wire.geometry,
             geometry_assets: wire.geometry_assets,
             regions: wire.regions,
+            object_regions: wire.object_regions,
             materials: wire.materials,
+            material_parameter_fields: wire.material_parameter_fields,
             magnets: wire.magnets,
+            couplings: wire.couplings,
             energy_terms: wire.energy_terms,
             study: wire.study,
             backend_policy: wire.backend_policy,
@@ -297,6 +312,7 @@ impl ProblemIR {
                 name: "strip".to_string(),
                 geometry: "strip".to_string(),
             }],
+            object_regions: Vec::new(),
             materials: vec![MaterialIR {
                 name: "Py".to_string(),
                 saturation_magnetisation: 800e3,
@@ -323,12 +339,14 @@ impl ProblemIR {
                 dind_field: None,
                 dbulk_field: None,
             }],
+            material_parameter_fields: Vec::new(),
             magnets: vec![MagnetIR {
                 name: "strip".to_string(),
                 region: "strip".to_string(),
                 material: "Py".to_string(),
                 initial_magnetization: Some(InitialMagnetizationIR::RandomSeeded { seed: 42 }),
             }],
+            couplings: Vec::new(),
             energy_terms: vec![EnergyTermIR::Exchange],
             study: StudyIR::TimeEvolution {
                 dynamics: DynamicsIR::Llg {
@@ -451,10 +469,12 @@ impl ProblemIR {
         validate_current_modules(self, &mut errors);
         validate_oersted_energy_terms(self, &mut errors);
         validate_dmi_energy_terms(self, &mut errors);
+        validate_material_scalar_values(self, &mut errors);
         validate_material_dmi_values(self, &mut errors);
         validate_legacy_spin_torque_fields(self, &mut errors);
         validate_spin_torque_modules(self, &mut errors);
         validate_magnetoelastic(self, &mut errors);
+        validate_region_owned_semantics(self, &mut errors);
         if self.regions.is_empty() {
             errors.push("at least one region is required".to_string());
         }
@@ -1291,4 +1311,563 @@ impl ProblemIR {
             notes,
         })
     }
+}
+
+fn validate_region_owned_semantics(problem: &ProblemIR, errors: &mut Vec<String>) {
+    let geometry_names: BTreeSet<&str> = problem
+        .geometry
+        .entries
+        .iter()
+        .map(GeometryEntryIR::name)
+        .collect();
+    let magnet_names: BTreeSet<&str> = problem
+        .magnets
+        .iter()
+        .map(|magnet| magnet.name.as_str())
+        .collect();
+    let region_ids: BTreeSet<&str> = problem
+        .object_regions
+        .iter()
+        .map(|region| region.region_id.as_str())
+        .collect();
+    let region_owner_by_id: BTreeMap<&str, &str> = problem
+        .object_regions
+        .iter()
+        .map(|region| (region.region_id.as_str(), region.owner_object.as_str()))
+        .collect();
+    let region_enabled_by_id: BTreeMap<&str, bool> = problem
+        .object_regions
+        .iter()
+        .map(|region| (region.region_id.as_str(), region.enabled))
+        .collect();
+
+    let mut seen_region_ids = BTreeSet::new();
+    let mut seen_region_names = BTreeSet::new();
+    for (index, region) in problem.object_regions.iter().enumerate() {
+        if region.region_id.trim().is_empty() {
+            errors.push(format!(
+                "object_regions[{index}] region_id must not be empty"
+            ));
+        } else if !seen_region_ids.insert(region.region_id.as_str()) {
+            errors.push(format!(
+                "object_regions[{index}] duplicate region_id '{}'",
+                region.region_id
+            ));
+        }
+        validate_magnetic_object_ref(
+            &format!("object_regions[{index}].owner_object"),
+            region.owner_object.as_str(),
+            &geometry_names,
+            &magnet_names,
+            errors,
+        );
+        if region.name.trim().is_empty() {
+            errors.push(format!("object_regions[{index}] name must not be empty"));
+        } else if !seen_region_names.insert((region.owner_object.as_str(), region.name.as_str())) {
+            errors.push(format!(
+                "object_regions[{index}] duplicate name '{}' for owner '{}'",
+                region.name, region.owner_object
+            ));
+        }
+        validate_object_region_shape(index, &region.shape, errors);
+        if let Some(mesh_policy) = &region.mesh_policy {
+            validate_region_mesh_policy(index, mesh_policy, errors);
+        }
+        for (override_index, material_override) in region.material_overrides.iter().enumerate() {
+            validate_material_parameter_field(
+                &format!("object_regions[{index}].material_overrides[{override_index}]"),
+                material_override.parameter,
+                &material_override.value,
+                errors,
+            );
+        }
+    }
+
+    let mut seen_assignment_ids = BTreeSet::new();
+    for (index, assignment) in problem.material_parameter_fields.iter().enumerate() {
+        if assignment.assignment_id.trim().is_empty() {
+            errors.push(format!(
+                "material_parameter_fields[{index}] assignment_id must not be empty"
+            ));
+        } else if !seen_assignment_ids.insert(assignment.assignment_id.as_str()) {
+            errors.push(format!(
+                "material_parameter_fields[{index}] duplicate assignment_id '{}'",
+                assignment.assignment_id
+            ));
+        }
+        validate_magnetic_object_ref(
+            &format!("material_parameter_fields[{index}].owner_object"),
+            assignment.owner_object.as_str(),
+            &geometry_names,
+            &magnet_names,
+            errors,
+        );
+        if let Some(region_id) = assignment.region_id.as_deref() {
+            if !region_ids.contains(region_id) {
+                errors.push(format!(
+                    "material_parameter_fields[{index}] region_id '{}' does not reference an object_region",
+                    region_id
+                ));
+            } else if region_owner_by_id
+                .get(region_id)
+                .is_some_and(|owner| *owner != assignment.owner_object.as_str())
+            {
+                errors.push(format!(
+                    "material_parameter_fields[{index}] region_id '{}' belongs to a different owner than '{}'",
+                    region_id, assignment.owner_object
+                ));
+            }
+        }
+        validate_material_parameter_field(
+            &format!("material_parameter_fields[{index}]"),
+            assignment.parameter,
+            &assignment.value,
+            errors,
+        );
+    }
+
+    let mut seen_coupling_ids = BTreeSet::new();
+    for (index, coupling) in problem.couplings.iter().enumerate() {
+        if coupling.coupling_id.trim().is_empty() {
+            errors.push(format!("couplings[{index}] coupling_id must not be empty"));
+        } else if !seen_coupling_ids.insert(coupling.coupling_id.as_str()) {
+            errors.push(format!(
+                "couplings[{index}] duplicate coupling_id '{}'",
+                coupling.coupling_id
+            ));
+        }
+        validate_coupling_endpoint(
+            &format!("couplings[{index}].source"),
+            &coupling.source,
+            &geometry_names,
+            &magnet_names,
+            &region_ids,
+            &region_owner_by_id,
+            &region_enabled_by_id,
+            coupling.enabled,
+            errors,
+        );
+        validate_coupling_endpoint(
+            &format!("couplings[{index}].target"),
+            &coupling.target,
+            &geometry_names,
+            &magnet_names,
+            &region_ids,
+            &region_owner_by_id,
+            &region_enabled_by_id,
+            coupling.enabled,
+            errors,
+        );
+        match (&coupling.kind, &coupling.parameters) {
+            (
+                CouplingKindIR::Exchange,
+                CouplingParametersIR::Exchange {
+                    mode,
+                    scale,
+                    inter_exchange,
+                },
+            ) => {
+                if scale.is_some_and(|value| !value.is_finite() || value < 0.0) {
+                    errors.push(format!(
+                        "couplings[{index}] exchange scale must be finite and >= 0"
+                    ));
+                }
+                match mode {
+                    ExchangeCouplingModeIR::HarmonicMean if inter_exchange.is_some() => {
+                        errors.push(format!(
+                            "couplings[{index}] harmonic_mean exchange must not define inter_exchange"
+                        ));
+                    }
+                    ExchangeCouplingModeIR::Explicit => {
+                        if !inter_exchange.is_some_and(f64::is_finite) {
+                            errors.push(format!(
+                                "couplings[{index}] explicit exchange requires finite inter_exchange"
+                            ));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            (CouplingKindIR::Rkky, CouplingParametersIR::Rkky { j1 })
+            | (
+                CouplingKindIR::InterlayerExchange,
+                CouplingParametersIR::InterlayerExchange { j1, .. },
+            ) => {
+                if !j1.is_finite() {
+                    errors.push(format!("couplings[{index}] J1 must be finite"));
+                }
+                if !matches!(coupling.source, CouplingEndpointIR::Surface { .. })
+                    || !matches!(coupling.target, CouplingEndpointIR::Surface { .. })
+                {
+                    errors.push(format!(
+                        "couplings[{index}] rkky/interlayer_exchange endpoints must be surfaces"
+                    ));
+                }
+            }
+            _ => errors.push(format!(
+                "couplings[{index}] kind and parameters kind must match"
+            )),
+        }
+    }
+
+    validate_region_owned_material_conflicts(problem, errors);
+}
+
+fn validate_region_owned_material_conflicts(problem: &ProblemIR, errors: &mut Vec<String>) {
+    #[derive(Clone)]
+    struct MaterialSupport {
+        source: String,
+        owner_object: String,
+        region_id: Option<String>,
+        parameter: MaterialParameterNameIR,
+        priority: i32,
+    }
+
+    fn supports_overlap(left: &MaterialSupport, right: &MaterialSupport) -> bool {
+        left.owner_object == right.owner_object
+            && left.parameter == right.parameter
+            && left.priority == right.priority
+            && (left.region_id.is_none()
+                || right.region_id.is_none()
+                || left.region_id == right.region_id)
+    }
+
+    let mut supports = Vec::new();
+    let enabled_region_ids = problem
+        .object_regions
+        .iter()
+        .filter(|region| region.enabled)
+        .map(|region| region.region_id.as_str())
+        .collect::<BTreeSet<_>>();
+    for (region_index, region) in problem.object_regions.iter().enumerate() {
+        if !region.enabled {
+            continue;
+        }
+        for (override_index, material_override) in region.material_overrides.iter().enumerate() {
+            supports.push(MaterialSupport {
+                source: format!(
+                    "object_regions[{region_index}].material_overrides[{override_index}]"
+                ),
+                owner_object: region.owner_object.clone(),
+                region_id: Some(region.region_id.clone()),
+                parameter: material_override.parameter,
+                priority: material_override.priority,
+            });
+        }
+    }
+    for (assignment_index, assignment) in problem.material_parameter_fields.iter().enumerate() {
+        if assignment
+            .region_id
+            .as_deref()
+            .is_some_and(|region_id| !enabled_region_ids.contains(region_id))
+        {
+            continue;
+        }
+        supports.push(MaterialSupport {
+            source: format!("material_parameter_fields[{assignment_index}]"),
+            owner_object: assignment.owner_object.clone(),
+            region_id: assignment.region_id.clone(),
+            parameter: assignment.parameter,
+            priority: assignment.priority,
+        });
+    }
+
+    for left_index in 0..supports.len() {
+        for right_index in (left_index + 1)..supports.len() {
+            let left = &supports[left_index];
+            let right = &supports[right_index];
+            if supports_overlap(left, right) {
+                errors.push(format!(
+                    "region-owned material parameter conflict: {} and {} both assign {:?} on overlapping support at priority {}; use distinct priorities",
+                    left.source, right.source, left.parameter, left.priority
+                ));
+            }
+        }
+    }
+}
+
+fn validate_magnetic_object_ref(
+    path: &str,
+    object: &str,
+    geometry_names: &BTreeSet<&str>,
+    magnet_names: &BTreeSet<&str>,
+    errors: &mut Vec<String>,
+) {
+    if object.trim().is_empty() {
+        errors.push(format!("{path} must not be empty"));
+    } else if is_airbox_name(object) {
+        errors.push(format!("{path} must be magnetic, not airbox"));
+    } else if !geometry_names.contains(object) && !magnet_names.contains(object) {
+        errors.push(format!(
+            "{path} '{}' does not reference a known geometry or magnet",
+            object
+        ));
+    }
+}
+
+fn validate_object_region_shape(index: usize, shape: &RegionShapeIR, errors: &mut Vec<String>) {
+    match shape {
+        RegionShapeIR::Box { size, center } => {
+            if size.iter().any(|value| !value.is_finite() || *value <= 0.0) {
+                errors.push(format!(
+                    "object_regions[{index}] box size components must be finite and > 0"
+                ));
+            }
+            if !vector_is_finite(center) {
+                errors.push(format!(
+                    "object_regions[{index}] box center must contain finite values"
+                ));
+            }
+        }
+        RegionShapeIR::Cylinder {
+            radius,
+            height,
+            center,
+            axis,
+        } => {
+            if !radius.is_finite() || *radius <= 0.0 {
+                errors.push(format!(
+                    "object_regions[{index}] cylinder radius must be finite and > 0"
+                ));
+            }
+            if !height.is_finite() || *height <= 0.0 {
+                errors.push(format!(
+                    "object_regions[{index}] cylinder height must be finite and > 0"
+                ));
+            }
+            if !vector_is_finite(center) {
+                errors.push(format!(
+                    "object_regions[{index}] cylinder center must contain finite values"
+                ));
+            }
+            if !vector_is_finite(axis) || vector_norm_sq(axis) <= 1e-30 {
+                errors.push(format!(
+                    "object_regions[{index}] cylinder axis must be finite and non-zero"
+                ));
+            }
+        }
+        RegionShapeIR::Sphere { radius, center } => {
+            if !radius.is_finite() || *radius <= 0.0 {
+                errors.push(format!(
+                    "object_regions[{index}] sphere radius must be finite and > 0"
+                ));
+            }
+            if !vector_is_finite(center) {
+                errors.push(format!(
+                    "object_regions[{index}] sphere center must contain finite values"
+                ));
+            }
+        }
+        RegionShapeIR::Csg { expression } => {
+            if expression.name().trim().is_empty() {
+                errors.push(format!(
+                    "object_regions[{index}] csg expression name must not be empty"
+                ));
+            }
+        }
+    }
+}
+
+fn validate_region_mesh_policy(
+    index: usize,
+    policy: &RegionMeshPolicyIR,
+    errors: &mut Vec<String>,
+) {
+    if policy
+        .maximum_element_size
+        .is_some_and(|value| !value.is_finite() || value <= 0.0)
+    {
+        errors.push(format!(
+            "object_regions[{index}] mesh_policy.maximum_element_size must be finite and > 0"
+        ));
+    }
+    if policy
+        .minimum_element_size
+        .is_some_and(|value| !value.is_finite() || value <= 0.0)
+    {
+        errors.push(format!(
+            "object_regions[{index}] mesh_policy.minimum_element_size must be finite and > 0"
+        ));
+    }
+    if policy
+        .transition_distance
+        .is_some_and(|value| !value.is_finite() || value < 0.0)
+    {
+        errors.push(format!(
+            "object_regions[{index}] mesh_policy.transition_distance must be finite and >= 0"
+        ));
+    }
+    if policy.order.is_some_and(|order| order == 0) {
+        errors.push(format!(
+            "object_regions[{index}] mesh_policy.order must be >= 1"
+        ));
+    }
+}
+
+fn validate_material_parameter_field(
+    path: &str,
+    parameter: MaterialParameterNameIR,
+    field: &MaterialParameterFieldIR,
+    errors: &mut Vec<String>,
+) {
+    match field {
+        MaterialParameterFieldIR::Constant { value, .. } => {
+            if let Some(number) = value.as_f64() {
+                validate_material_parameter_number(path, parameter, number, errors);
+            } else if parameter != MaterialParameterNameIR::AnisotropyAxis {
+                errors.push(format!("{path} constant value must be numeric"));
+            }
+        }
+        MaterialParameterFieldIR::Linear { base, gradient, .. } => {
+            validate_material_parameter_number(path, parameter, *base, errors);
+            if !vector_is_finite(gradient) {
+                errors.push(format!("{path} linear gradient must contain finite values"));
+            }
+        }
+        MaterialParameterFieldIR::Radial {
+            center,
+            radius,
+            inside,
+            outside,
+            ..
+        } => {
+            if !vector_is_finite(center) {
+                errors.push(format!("{path} radial center must contain finite values"));
+            }
+            if !radius.is_finite() || *radius <= 0.0 {
+                errors.push(format!("{path} radial radius must be finite and > 0"));
+            }
+            validate_material_parameter_number(path, parameter, *inside, errors);
+            validate_material_parameter_number(path, parameter, *outside, errors);
+        }
+        MaterialParameterFieldIR::Sampled {
+            asset_id,
+            component_count,
+            unit,
+            ..
+        } => {
+            if asset_id.trim().is_empty() {
+                errors.push(format!("{path} sampled asset_id must not be empty"));
+            }
+            if *component_count == 0 {
+                errors.push(format!("{path} sampled component_count must be > 0"));
+            }
+            if unit.trim().is_empty() {
+                errors.push(format!("{path} sampled unit must not be empty"));
+            }
+        }
+    }
+}
+
+fn validate_material_parameter_number(
+    path: &str,
+    parameter: MaterialParameterNameIR,
+    value: f64,
+    errors: &mut Vec<String>,
+) {
+    if !value.is_finite() {
+        errors.push(format!("{path} value must be finite"));
+        return;
+    }
+    match parameter {
+        MaterialParameterNameIR::Ms if value <= 0.0 => {
+            errors.push(format!("{path} Ms must be > 0 in active magnetic objects"));
+        }
+        MaterialParameterNameIR::Aex | MaterialParameterNameIR::Alpha if value < 0.0 => {
+            errors.push(format!("{path} {parameter:?} must be >= 0"));
+        }
+        _ => {}
+    }
+}
+
+fn validate_material_scalar_values(problem: &ProblemIR, errors: &mut Vec<String>) {
+    for (index, material) in problem.materials.iter().enumerate() {
+        validate_material_parameter_number(
+            &format!("materials[{index}].saturation_magnetisation"),
+            MaterialParameterNameIR::Ms,
+            material.saturation_magnetisation,
+            errors,
+        );
+        validate_material_parameter_number(
+            &format!("materials[{index}].exchange_stiffness"),
+            MaterialParameterNameIR::Aex,
+            material.exchange_stiffness,
+            errors,
+        );
+        validate_material_parameter_number(
+            &format!("materials[{index}].damping"),
+            MaterialParameterNameIR::Alpha,
+            material.damping,
+            errors,
+        );
+    }
+}
+
+fn validate_coupling_endpoint(
+    path: &str,
+    endpoint: &CouplingEndpointIR,
+    geometry_names: &BTreeSet<&str>,
+    magnet_names: &BTreeSet<&str>,
+    region_ids: &BTreeSet<&str>,
+    region_owner_by_id: &BTreeMap<&str, &str>,
+    region_enabled_by_id: &BTreeMap<&str, bool>,
+    coupling_enabled: bool,
+    errors: &mut Vec<String>,
+) {
+    let object = match endpoint {
+        CouplingEndpointIR::Object { object }
+        | CouplingEndpointIR::Region { object, .. }
+        | CouplingEndpointIR::Surface { object, .. } => object,
+    };
+    validate_magnetic_object_ref(path, object, geometry_names, magnet_names, errors);
+    match endpoint {
+        CouplingEndpointIR::Region { region_id, .. } => {
+            if region_id.trim().is_empty() {
+                errors.push(format!("{path}.region_id must not be empty"));
+            } else if !region_ids.contains(region_id.as_str()) {
+                errors.push(format!(
+                    "{path}.region_id '{}' does not reference an object_region",
+                    region_id
+                ));
+            } else if region_owner_by_id
+                .get(region_id.as_str())
+                .is_some_and(|owner| *owner != object.as_str())
+            {
+                errors.push(format!(
+                    "{path}.region_id '{}' belongs to a different owner than '{}'",
+                    region_id, object
+                ));
+            } else if coupling_enabled
+                && region_enabled_by_id
+                    .get(region_id.as_str())
+                    .is_some_and(|enabled| !enabled)
+            {
+                errors.push(format!(
+                    "{path}.region_id '{}' references disabled object_region",
+                    region_id
+                ));
+            }
+        }
+        CouplingEndpointIR::Surface { selector, .. } => {
+            if selector.trim().is_empty() {
+                errors.push(format!("{path}.selector must not be empty"));
+            }
+        }
+        CouplingEndpointIR::Object { .. } => {}
+    }
+}
+
+fn is_airbox_name(name: &str) -> bool {
+    matches!(
+        name.trim().to_ascii_lowercase().as_str(),
+        "airbox" | "__air__"
+    )
+}
+
+fn vector_is_finite(vector: &[f64; 3]) -> bool {
+    vector.iter().all(|value| value.is_finite())
+}
+
+fn vector_norm_sq(vector: &[f64; 3]) -> f64 {
+    vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2]
 }

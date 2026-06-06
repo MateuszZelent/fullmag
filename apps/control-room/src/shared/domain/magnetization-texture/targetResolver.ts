@@ -4,6 +4,7 @@ import type {
 } from "./types";
 
 const REGION_TEXTURE_KINDS = new Set([
+  "object.region.texture",
   "object.region-magnetic-texture",
   "ribbon.magnetization-texture.assign-uniform",
   "ribbon.magnetization-texture.assign-random-seeded",
@@ -17,7 +18,7 @@ export function resolveMagnetizationTextureTarget(
   if (!objectId) return null;
 
   const regionId = normalizeId(input.regionId);
-  if (regionId && (REGION_TEXTURE_KINDS.has(input.kind ?? "") || input.kind)) {
+  if (regionId && REGION_TEXTURE_KINDS.has(input.kind ?? "")) {
     return { kind: "region", objectId, regionId };
   }
 

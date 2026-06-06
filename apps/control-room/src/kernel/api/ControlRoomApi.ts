@@ -50,13 +50,21 @@ import {
   MODEL_GEOMETRY_REALIZATION_CURRENT_PATH,
   MODEL_GEOMETRY_REALIZATIONS_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
+  MODEL_COUPLINGS_PATH,
   MODEL_MAGNETIZATION_ASSET_PATH,
+  MODEL_MATERIAL_FIELDS_PATH,
   MODEL_MATERIAL_PATH,
   MODEL_OBJECT_GEOMETRY_PATH,
   MODEL_OBJECT_INTERACTION_PATH,
   MODEL_OBJECT_PATH,
+  MODEL_OBJECT_REGION_DUPLICATE_PATH,
+  MODEL_OBJECT_REGION_PATH,
+  MODEL_OBJECT_REGIONS_REORDER_PATH,
+  MODEL_OBJECT_REGIONS_PATH,
   MODEL_OBJECTS_PATH,
   MODEL_REGION_PATH,
+  MODEL_REGION_DIAGNOSTICS_PATH,
+  MODEL_REALIZED_REGIONS_PATH,
   MODEL_REGIONS_PATH,
   MODEL_SCENE_PATH,
   MODEL_STUDY_PATH,
@@ -102,6 +110,7 @@ import type {
   CommandDetailResource,
   CommandQueueStatusResource,
   CommandResponse,
+  CouplingListResource,
   CpuTelemetryResource,
   CrossSectionImageQuery,
   CrossSectionQuery,
@@ -124,10 +133,12 @@ import type {
   GeometryValidationResource,
   GpuTelemetryResource,
   ImportSessionAssetRequest,
+  JsonObject,
   LiveStatusResource,
   MagnetizationAssetPatchRequest,
   MagnetizationAssetResource,
   MagneticResponseSweepResource,
+  MaterialParameterFieldListResource,
   MaterialPatchRequest,
   MaterialResource,
   MeshActiveBuildResource,
@@ -161,8 +172,13 @@ import type {
   ObjectInteractionPatchRequest,
   ObjectInteractionResource,
   ObjectPatchRequest,
+  ObjectRegionCreateRequest,
+  ObjectRegionDuplicateRequest,
+  ObjectRegionPatchRequest,
+  ObjectRegionReorderRequest,
   RealtimeCommunicationPolicyPatch,
   RealtimeCommunicationPolicyResource,
+  RegionDiagnosticsResource,
   RegionListResource,
   RegionPatchRequest,
   RequestOptions,
@@ -241,6 +257,10 @@ type BinaryOpenApiTransportResult = {
   response: Response;
 };
 
+export interface AuthoringWriteOptions extends RequestOptions {
+  baseRevision?: number;
+}
+
 export interface MeshHistogramBinElementsParams {
   binIndex: number;
   meshId: string;
@@ -250,6 +270,12 @@ export interface MeshHistogramBinElementsParams {
 
 const CHUNKED_TOPOLOGY_THRESHOLD_BYTES = 16 * 1024 * 1024;
 const TOPOLOGY_RANGE_CHUNK_BYTES = 8 * 1024 * 1024;
+
+function baseRevisionPayload(options?: AuthoringWriteOptions): { base_revision?: number } {
+  return options?.baseRevision === undefined
+    ? {}
+    : { base_revision: options.baseRevision };
+}
 
 interface ControlRoomApiOptions {
   baseUrl?: string;
@@ -660,6 +686,68 @@ export class ControlRoomApi {
       this.deleteJson<SceneResource>(MODEL_OBJECT_PATH, options, {
         path: { object_id: objectId },
       }),
+    createRegion: (
+      objectId: string,
+      region: JsonObject,
+      options?: AuthoringWriteOptions,
+    ) =>
+      this.postJson<SceneResource, ObjectRegionCreateRequest>(
+        MODEL_OBJECT_REGIONS_PATH,
+        {
+          ...baseRevisionPayload(options),
+          region,
+        },
+        options,
+        { path: { object_id: objectId } },
+      ),
+    patchObjectRegionResource: (
+      objectId: string,
+      regionId: string,
+      patch: JsonObject,
+      options?: AuthoringWriteOptions,
+    ) =>
+      this.patchJson<SceneResource, ObjectRegionPatchRequest>(
+        MODEL_OBJECT_REGION_PATH,
+        {
+          ...baseRevisionPayload(options),
+          patch,
+        },
+        options,
+        { path: { object_id: objectId, region_id: regionId } },
+      ),
+    deleteRegion: (objectId: string, regionId: string, options?: RequestOptions) =>
+      this.deleteJson<SceneResource>(MODEL_OBJECT_REGION_PATH, options, {
+        path: { object_id: objectId, region_id: regionId },
+      }),
+    duplicateObjectRegion: (
+      objectId: string,
+      regionId: string,
+      request: Omit<ObjectRegionDuplicateRequest, "base_revision"> = {},
+      options?: AuthoringWriteOptions,
+    ) =>
+      this.postJson<SceneResource, ObjectRegionDuplicateRequest>(
+        MODEL_OBJECT_REGION_DUPLICATE_PATH,
+        {
+          ...baseRevisionPayload(options),
+          ...request,
+        },
+        options,
+        { path: { object_id: objectId, region_id: regionId } },
+      ),
+    reorderObjectRegions: (
+      objectId: string,
+      regionIds: string[],
+      options?: AuthoringWriteOptions,
+    ) =>
+      this.postJson<SceneResource, ObjectRegionReorderRequest>(
+        MODEL_OBJECT_REGIONS_REORDER_PATH,
+        {
+          ...baseRevisionPayload(options),
+          region_ids: regionIds,
+        },
+        options,
+        { path: { object_id: objectId } },
+      ),
     geometry: {
       capabilities: (options?: RequestOptions) =>
         this.requestJson<GeometryCapabilitiesResource>(
@@ -772,6 +860,102 @@ export class ControlRoomApi {
       ),
     regions: (options?: RequestOptions) =>
       this.requestJson<RegionListResource>(MODEL_REGIONS_PATH, options),
+    realizedRegions: (options?: RequestOptions) =>
+      this.requestJson<RegionListResource>(
+        MODEL_REALIZED_REGIONS_PATH,
+        options,
+      ),
+    regionDiagnostics: (options?: RequestOptions) =>
+      this.requestJson<RegionDiagnosticsResource>(
+        MODEL_REGION_DIAGNOSTICS_PATH,
+        options,
+      ),
+    materialFields: (options?: RequestOptions) =>
+      this.requestJson<MaterialParameterFieldListResource>(
+        MODEL_MATERIAL_FIELDS_PATH,
+        options,
+      ),
+    couplings: (options?: RequestOptions) =>
+      this.requestJson<CouplingListResource>(MODEL_COUPLINGS_PATH, options),
+    createObjectRegion: (
+      objectId: string,
+      region: JsonObject,
+      options?: AuthoringWriteOptions,
+    ) =>
+      this.model.commitTransaction(
+        {
+          ...baseRevisionPayload(options),
+          kind: "create_object_region",
+          object_id: objectId,
+          region,
+        },
+        options,
+      ),
+    patchObjectRegion: (
+      objectId: string,
+      regionId: string,
+      patch: JsonObject,
+      options?: AuthoringWriteOptions,
+    ) =>
+      this.model.commitTransaction(
+        {
+          ...baseRevisionPayload(options),
+          kind: "patch_object_region",
+          object_id: objectId,
+          patch,
+          region_id: regionId,
+        },
+        options,
+      ),
+    deleteObjectRegion: (
+      objectId: string,
+      regionId: string,
+      options?: AuthoringWriteOptions,
+    ) =>
+      this.model.commitTransaction(
+        {
+          ...baseRevisionPayload(options),
+          kind: "delete_object_region",
+          object_id: objectId,
+          region_id: regionId,
+        },
+        options,
+      ),
+    createCoupling: (
+      coupling: JsonObject,
+      options?: AuthoringWriteOptions,
+    ) =>
+      this.model.commitTransaction(
+        {
+          ...baseRevisionPayload(options),
+          coupling,
+          kind: "create_coupling",
+        },
+        options,
+      ),
+    patchCoupling: (
+      couplingId: string,
+      patch: JsonObject,
+      options?: AuthoringWriteOptions,
+    ) =>
+      this.model.commitTransaction(
+        {
+          ...baseRevisionPayload(options),
+          coupling_id: couplingId,
+          kind: "patch_coupling",
+          patch,
+        },
+        options,
+      ),
+    deleteCoupling: (couplingId: string, options?: AuthoringWriteOptions) =>
+      this.model.commitTransaction(
+        {
+          ...baseRevisionPayload(options),
+          coupling_id: couplingId,
+          kind: "delete_coupling",
+        },
+        options,
+      ),
     patchRegion: (
       regionId: string,
       patch: RegionPatchRequest,

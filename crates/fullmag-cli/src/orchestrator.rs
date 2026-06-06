@@ -7638,10 +7638,10 @@ mod tests {
         fem_interactive_dense_ram_estimate, fem_live_mesh_payload_and_initial_magnetization,
         fem_mesh_payload_from_backend_plan, has_heavy_live_payload,
         interactive_session_should_stay_alive, mesh_build_pipeline_status_json,
-        scripted_stage_execution_state, user_cancelled_stage_completion, wait_for_solve_prompt,
-        wait_for_solve_should_block, wait_for_solve_supported, ActiveSequenceState,
-        LiveProgressCadence, SceneProblemPatch, WaitForSolveCommandAction,
-        LIVE_PROGRESS_PUBLISH_INTERVAL,
+        scripted_stage_execution_state, stage_allows_sampled_continuation_initial_state,
+        user_cancelled_stage_completion, wait_for_solve_prompt, wait_for_solve_should_block,
+        wait_for_solve_supported, ActiveSequenceState, LiveProgressCadence, SceneProblemPatch,
+        WaitForSolveCommandAction, LIVE_PROGRESS_PUBLISH_INTERVAL,
     };
     use crate::live_workspace::bootstrap_live_state;
     use crate::types::{
@@ -7818,7 +7818,8 @@ mod tests {
 
     #[test]
     fn continue_in_place_stage_does_not_allow_sampled_continuation_initial_state() {
-        let mut stage = ResolvedScriptStage::solver(tiny_problem_with_shared_domain_asset(), 1e-12, "flat_run");
+        let mut stage =
+            ResolvedScriptStage::solver(tiny_problem_with_shared_domain_asset(), 1e-12, "flat_run");
         stage.incoming_transition = Some(StageTransitionMetadata::continue_in_place());
 
         assert!(

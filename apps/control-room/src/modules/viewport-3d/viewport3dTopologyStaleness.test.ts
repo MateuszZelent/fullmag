@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   isViewport3DTopologyCurrent,
-  resolveStaleTopologyVisualizationSettings,
+  isViewport3DTopologyRenderable,
+  resolveUnavailableTopologyVisualizationSettings,
   resolveUnknownTopologyProvenanceRefreshKey,
   resolveViewport3DTopologyFreshnessLabel,
   resolveViewport3DTopologyFreshness,
@@ -33,6 +34,87 @@ describe("viewport3dTopologyStaleness", () => {
     ).toBe("current");
   });
 
+  it("keeps shared-domain topology current after region authoring without mesh dirty tags", () => {
+    expect(
+      resolveViewport3DTopologyFreshness(
+        {
+          objects: [
+            {
+              id: "film",
+              regions: [
+                {
+                  region_id: "film:r1",
+                  shape: { height: 2e-9, kind: "cylinder", radius: 50e-9 },
+                },
+              ],
+              tags: ["mesh:ready"],
+            },
+          ],
+          revision: 13,
+        },
+        { source_scene_revision: 12 },
+      ),
+    ).toBe("current");
+  });
+
+  it("treats clean topology coverage as current while manifest provenance refresh is pending", () => {
+    expect(
+      resolveViewport3DTopologyFreshness(
+        {
+          objects: [
+            {
+              id: "film",
+              regions: [
+                {
+                  region_id: "film:r1",
+                  shape: { height: 2e-9, kind: "cylinder", radius: 50e-9 },
+                },
+              ],
+              tags: ["mesh:ready"],
+              visible: true,
+            },
+          ],
+          revision: 13,
+        },
+        {
+          mesh_parts: [
+            {
+              id: "part-film",
+              object_id: "film",
+              role: "magnetic",
+            },
+          ],
+          revision: 4,
+          source_scene_revision: null,
+        },
+      ),
+    ).toBe("current");
+  });
+
+  it("keeps clean FDM domain topology current when no shared-domain manifest exists", () => {
+    expect(
+      resolveViewport3DTopologyFreshness(
+        {
+          objects: [
+            {
+              id: "strip",
+              regions: [
+                {
+                  region_id: "strip:r1",
+                  shape: { height: 2.5e-9, kind: "cylinder", radius: 8e-9 },
+                },
+              ],
+              tags: ["mesh:ready"],
+              visible: true,
+            },
+          ],
+          revision: 3,
+        },
+        null,
+      ),
+    ).toBe("current");
+  });
+
   it("keeps matching manifest provenance current", () => {
     expect(
       resolveViewport3DTopologyFreshness(
@@ -48,9 +130,33 @@ describe("viewport3dTopologyStaleness", () => {
     expect(isViewport3DTopologyCurrent("unknown")).toBe(false);
   });
 
-  it("renders stale topology as an edge ghost without shader, points, or vectors", () => {
+  it("keeps stale topology renderable so region authoring preserves the current view", () => {
+    expect(isViewport3DTopologyRenderable("current")).toBe(true);
+    expect(isViewport3DTopologyRenderable("stale")).toBe(true);
+    expect(isViewport3DTopologyRenderable("unknown")).toBe(false);
+  });
+
+  it("keeps stale topology on the normal render path", () => {
+    const settings = {
+      ...DEFAULT_OBJECT_VISUALIZATION,
+      pointsVisible: true,
+      shaderVisible: true,
+      vectorsVisible: true,
+      wireframeVisible: false,
+    };
+
+    expect(isViewport3DTopologyRenderable("stale")).toBe(true);
+    expect(settings).toMatchObject({
+      pointsVisible: true,
+      shaderVisible: true,
+      vectorsVisible: true,
+      wireframeVisible: false,
+    });
+  });
+
+  it("renders unavailable topology as an edge ghost without shader, points, or vectors", () => {
     expect(
-      resolveStaleTopologyVisualizationSettings({
+      resolveUnavailableTopologyVisualizationSettings({
         ...DEFAULT_OBJECT_VISUALIZATION,
         shaderVisible: true,
         wireframeVisible: false,
@@ -74,9 +180,9 @@ describe("viewport3dTopologyStaleness", () => {
     );
   });
 
-  it("respects hidden targets while resolving stale display settings", () => {
+  it("respects hidden targets while resolving unavailable display settings", () => {
     expect(
-      resolveStaleTopologyVisualizationSettings({
+      resolveUnavailableTopologyVisualizationSettings({
         ...DEFAULT_OBJECT_VISUALIZATION,
         visible: false,
       }),

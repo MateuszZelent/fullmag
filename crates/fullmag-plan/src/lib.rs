@@ -65,6 +65,7 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
     if problem.validation_profile.execution_mode != ExecutionMode::Strict {
         errors.push("only execution_mode='strict' is executable in Phase 1".to_string());
     }
+    validate::validate_region_owned_planning(problem, resolved_backend, &mut errors);
 
     if !errors.is_empty() {
         return Err(PlanError { reasons: errors });

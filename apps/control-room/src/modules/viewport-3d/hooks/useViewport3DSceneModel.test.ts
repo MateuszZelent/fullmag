@@ -7,6 +7,7 @@ import { DEFAULT_CAMERA_REGISTRY_STATE } from "@/kernel/visualization/CameraRegi
 import {
   resolveViewport3DPrimaryFieldRenderOptions,
   resolveViewport3DPrimaryFieldQuery,
+  resolveViewport3DRegionOverlays,
   resolveViewport3DResourceFrameState,
   resolveViewport3DSceneCameraView,
   resolveViewport3DScopedPartVectorFieldRequests,
@@ -64,6 +65,84 @@ describe("useViewport3DSceneModel", () => {
       revision: "etag-1",
       status: "ready",
     });
+  });
+
+  it("builds immediate region overlays from the committed scene while the region resource refreshes", () => {
+    expect(
+      resolveViewport3DRegionOverlays({
+        objectTransformsById: new Map([
+          ["film", { translation: [1, 2, 3] }],
+        ]),
+        regionResource: { geometry_realization_revision: 7, regions: [], scene_revision: 7 },
+        scene: {
+          objects: [
+            {
+              id: "film",
+              regions: [
+                {
+                  name: "core",
+                  region_id: "film:r1",
+                  shape: {
+                    axis: [0, 0, 1],
+                    center: [0, 0, 0],
+                    height: 2e-9,
+                    kind: "cylinder",
+                    radius: 50e-9,
+                  },
+                },
+              ],
+              transform: { translation: [0, 0, 0] },
+              visible: true,
+            },
+          ],
+        },
+      }),
+    ).toMatchObject([
+      {
+        name: "core",
+        owner_object_id: "film",
+        owner_transform: { translation: [1, 2, 3] },
+        region_id: "film:r1",
+      },
+    ]);
+  });
+
+  it("deduplicates scene fallback overlays once the region resource is current", () => {
+    expect(
+      resolveViewport3DRegionOverlays({
+        objectTransformsById: new Map(),
+        regionResource: {
+          geometry_realization_revision: 8,
+          regions: [
+            {
+              bounds_max: [0, 0, 0],
+              bounds_min: [0, 0, 0],
+              enabled: true,
+              interaction_refs: [],
+              material_parameter_fields: [],
+              material_ref: "permalloy",
+              mesh_part_ids: [],
+              name: "core",
+              owner_object_id: "film",
+              owner_path: "film/film:r1",
+              region_id: "film:r1",
+              source: "authored_object_region",
+              source_body_ids: [],
+              source_object_ids: ["film"],
+            },
+          ],
+          scene_revision: 8,
+        },
+        scene: {
+          objects: [
+            {
+              id: "film",
+              regions: [{ name: "core", region_id: "film:r1" }],
+            },
+          ],
+        },
+      }),
+    ).toHaveLength(1);
   });
 
   it("prefers canonical visualization quantity over stale compatibility state", () => {

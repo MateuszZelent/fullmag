@@ -179,7 +179,13 @@ export interface MeshSharedDomainConfigReplaceRequest {
 }
 export type MeshSharedDomainManifestResource =
   components["schemas"]["MeshSharedDomainManifestResource"];
+export type CouplingListResource =
+  components["schemas"]["CouplingListResource"];
 export type RegionListResource = components["schemas"]["RegionListResource"];
+export type RegionDiagnosticsResource =
+  components["schemas"]["RegionDiagnosticsResource"];
+export type MaterialParameterFieldListResource =
+  components["schemas"]["MaterialParameterFieldListResource"];
 export type RegionPatchRequest = components["schemas"]["RegionPatchRequest"];
 export type SolverEnergyCurrentResource =
   components["schemas"]["SolverEnergyCurrentResource"];
@@ -220,6 +226,40 @@ export type AuthoringTransactionRequest =
       kind: "patch_universe";
       sync_study_universe_mesh?: boolean;
       universe: JsonObject;
+    })
+  | (BaseAuthoringTransaction & {
+      kind: "create_object_region";
+      object_id: string;
+      region: JsonObject;
+    })
+  | (BaseAuthoringTransaction & {
+      kind: "patch_object_region";
+      object_id: string;
+      patch: JsonObject;
+      region_id: string;
+    })
+  | (BaseAuthoringTransaction & {
+      kind: "delete_object_region";
+      object_id: string;
+      region_id: string;
+    })
+  | (BaseAuthoringTransaction & {
+      kind: "reorder_object_regions";
+      object_id: string;
+      region_ids: string[];
+    })
+  | (BaseAuthoringTransaction & {
+      coupling: JsonObject;
+      kind: "create_coupling";
+    })
+  | (BaseAuthoringTransaction & {
+      coupling_id: string;
+      kind: "patch_coupling";
+      patch: JsonObject;
+    })
+  | (BaseAuthoringTransaction & {
+      coupling_id: string;
+      kind: "delete_coupling";
     });
 export interface AuthoringTransactionResponse {
   committed_scene: SceneResource;
@@ -243,6 +283,16 @@ export interface ObjectGeometryPatchRequest extends BaseAuthoringTransaction {
   geometry: JsonObject;
   transform?: JsonObject | null;
 }
+export interface ObjectRegionCreateRequest extends BaseAuthoringTransaction {
+  region: JsonObject;
+}
+export type ObjectRegionDuplicateRequest =
+  components["schemas"]["ObjectRegionDuplicateRequest"];
+export interface ObjectRegionPatchRequest extends BaseAuthoringTransaction {
+  patch: JsonObject;
+}
+export type ObjectRegionReorderRequest =
+  components["schemas"]["ObjectRegionReorderRequest"];
 export interface ObjectInteractionPatchRequest {
   enabled?: boolean | null;
   params?: JsonObject;

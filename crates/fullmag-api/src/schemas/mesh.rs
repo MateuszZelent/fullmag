@@ -81,6 +81,57 @@ pub struct MeshBuildPipelinePhaseResource {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct MeshBuildPublishedResourcesResource {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mesh_revision: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mesh_build_revision: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manifest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quality: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub realized_size_fields: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct MeshBuildProvenanceResource {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub build_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mesh_revision: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_scene_revision: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub geometry_realization_revision: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_policy_revision: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed_at_unix_ms: Option<u128>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct MeshBuildPolicyDiffResource {
+    pub scope: String,
+    pub path: String,
+    #[schema(value_type = Object, nullable)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous: Option<Value>,
+    #[schema(value_type = Object, nullable)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested: Option<Value>,
+    #[schema(value_type = Object, nullable)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub realized: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effect: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct MeshBuildDiagnosticsResource {
     /// Detailed mesh-build quality diagnostics. Dashboard quality summaries are transitional projections only.
     #[schema(value_type = Object, nullable)]
@@ -637,6 +688,19 @@ pub struct MeshActiveBuildResource {
     pub source_scene_revision: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub geometry_realization_revision: Option<u64>,
+    /// Typed provenance for the accepted mesh build intent and realized mesh output.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<MeshBuildProvenanceResource>,
+    /// Typed resource revisions and URLs published by the backend after build completion.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published_resources: Option<MeshBuildPublishedResourcesResource>,
+    /// Resolved policy used by the build. This is execution reality, not the authoring draft.
+    #[schema(value_type = Object, nullable)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_policy: Option<Value>,
+    /// Typed policy change summary for UI diff tables.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policy_diff: Option<Vec<MeshBuildPolicyDiffResource>>,
     /// Current active build descriptor and progress metadata.
     #[schema(value_type = Object, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]

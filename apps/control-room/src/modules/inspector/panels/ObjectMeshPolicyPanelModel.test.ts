@@ -8,6 +8,7 @@ import {
   draftFromObjectMeshPolicyResource,
   draftKeyForObjectMeshPolicyResource,
   formatObjectMeshPolicyConfig,
+  objectMeshPolicyDraftDirty,
 } from "./ObjectMeshPolicyPanelModel";
 
 function objectMeshPolicyDraft(
@@ -104,6 +105,28 @@ describe("ObjectMeshPolicyPanelModel", () => {
     expect(draftKeyForObjectMeshPolicyResource("free-layer", present)).toContain(
       "free-layer:7:",
     );
+  });
+
+  it("detects object mesh policy draft changes without JSON or numeric formatting false positives", () => {
+    const base = objectMeshPolicyDraft({
+      configText: "{\n  \"maximum_element_size\": 1e-8\n}",
+      maximumElementSize: "1e-8",
+    });
+
+    expect(
+      objectMeshPolicyDraftDirty(base, {
+        ...base,
+        configText: "{\"maximum_element_size\":0.00000001}",
+        maximumElementSize: "10e-9",
+      }),
+    ).toBe(false);
+
+    expect(
+      objectMeshPolicyDraftDirty(base, {
+        ...base,
+        maximumElementSize: "2e-8",
+      }),
+    ).toBe(true);
   });
 
   it("shows effective object defaults without copying them into raw policy JSON", () => {

@@ -87,9 +87,14 @@ async function assignPreset(
   );
 
   if (target.kind === "region") {
-    await context.api.model.patchRegion(target.regionId, {
-      magnetization_ref: assetId,
-    });
+    await context.api.model.patchObjectRegionResource(
+      target.objectId,
+      target.regionId,
+      {
+        magnetization_ref: assetId,
+      },
+      { baseRevision: assetResponse.scene_revision ?? undefined },
+    );
   } else {
     await context.api.model.patchObject(target.objectId, {
       base_revision: assetResponse.scene_revision,

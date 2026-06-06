@@ -2,7 +2,7 @@
 
 Data: 2026-06-04
 
-Status: plan wdrożeniowy przed implementacją
+Status: plan wdrożeniowy w trakcie implementacji kontraktu
 
 Powiązane dokumenty:
 
@@ -12,9 +12,15 @@ Powiązane dokumenty:
 - `docs/specs/frontend-v2/03-api-integration-layer.md`
 - `docs/specs/frontend-v2/04-state-management.md`
 - `docs/physics/TEMPLATE.md`
+- `docs/physics/0104-material-regions-parameter-fields-and-interface-couplings.md`
 
 Ten dokument opisuje pełną ścieżkę wdrożenia region-owned semantics od fizyki,
 przez Python DSL i `ProblemIR`, po backend, OpenAPI i frontend v2.
+
+Aktualizacja po recenzji: pytania z audytu Claude i drugiego audytu Codex są
+zamknięte jako decyzje kontraktowe w sekcji 4.4. Nie są już opcjonalnymi
+rekomendacjami. Jeżeli implementacja nie potrafi zrealizować którejś decyzji,
+planner/runtime musi użyć capability gate albo zablokować run.
 
 Nie jest to plan kosmetycznej zmiany UI. To zmiana publicznego modelu
 authoringu. Dlatego pierwszym celem jest rozdzielenie pojęć, które obecnie są
@@ -197,6 +203,11 @@ poniższe odpowiedzi jako kontrakt implementacyjny:
 3. Intra-object region-region exchange musi działać od pierwszej wersji jako
    default harmonic mean, bo regiony należą do jednego pola `m`.
    `interfaces.exchange.between()` służy do nadpisania tego defaultu.
+   Region bez lokalnych override'ów materiału, coefficient fieldów, texture
+   override, mesh policy ani explicit exchange override jest tylko
+   selektorem/sub-obiektem authoringu. Nie tworzy granicy materiałowej ani
+   drugiego pola `m`; nawet jeśli runtime zmaterializuje maskę regionu,
+   fizyka pozostaje ciągłym ośrodkiem z parametrami rodzica.
 4. Object-object exchange jest aktywny tylko po jawnym wpisie
    `study.couplings.exchange(...)`. Bez coupling dwa obiekty mają free surface.
 5. RKKY może być authored/provenance w pierwszej wersji, ale jeśli wybrany
@@ -218,6 +229,110 @@ poniższe odpowiedzi jako kontrakt implementacyjny:
     tolerancją i musi zostać rozwiązany do runtime indices: w FDM do par
     sąsiadujących komórek/masek, w FEM do boundary face markers. Named-face
     support jest v2.
+
+### 4.4 Pytania z recenzji i wiążące odpowiedzi
+
+Ta sekcja zamyka pytania z recenzji planu. Implementacja nie może zostawić tych
+odpowiedzi jako warning-only ani authored-only zachowania bez runtime
+realizacji, chyba że punkt jawnie mówi o capability gate.
+
+| Pytanie | Odpowiedź | Warstwa, która to egzekwuje |
+|---|---|---|
+| Czy dwa regiony wewnątrz jednego obiektu mają exchange bez jawnego coupling? | Tak. Domyślnie używają `harmonic_mean(A_i, A_j)` i należą do jednego pola `m`. | ProblemIR validation, runner materialization, FDM/FEM exchange tests |
+| Czy brak explicit object-object coupling oznacza harmonic mean między obiektami? | Nie. Dwa obiekty bez `study.couplings.exchange(...)` mają free surface. | ProblemIR coupling model, planner, backend pair table |
+| Czy region-region exchange może domyślnie być zerowy jak w obecnym FDM ABI? | Nie. Obecny zero-default jest legacy mismatch i musi zostać zastąpiony przez `exchange_pair_default + exchange_pairs`. | FDM ABI, runner, compatibility tests |
+| Czy `interfaces.exchange.between()` tworzy domyślne sprzężenie? | Nie. To jest override istniejącego intra-object defaultu albo explicit object-object coupling. | Python DSL, ProblemIR validation |
+| Czy RKKY unsupported może przejść jako warning? | Nie. Unsupported RKKY blokuje planning/solver start. Nie wolno go degradować do zwykłego exchange. | capability matrix, planner, runtime diagnostics |
+| Czy `Ms=0` wewnątrz aktywnego obiektu jest dozwolone jako void? | Nie. Void modelujemy geometrią albo active mask; aktywne `Ms(x)` musi być dodatnie. | Python validation, ProblemIR validation, backend preflight |
+| Jak sprawdzamy spójność exchange field i energy? | Dodajemy Taylor/directional-derivative test: `E_ex(m + eps dm)` musi zgadzać się z polem `H_ex` używającym tej samej funkcji `A_ij`. | FDM CPU oracle, FDM GPU parity, FEM reference tests |
+| Co oznacza `surface("top")` w v1? | Lokalna bounding-box face z tolerancją. FDM rozwiązuje ją do exposed/contact cell faces, FEM do boundary face markers. | surface selector resolver, OpenAPI, UI inspector |
+| Co z nieregularnymi/nazwanymi powierzchniami? | Są v2. W v1 używamy tylko bbox face selectors albo jawnych markerów, jeżeli istnieją po stronie realized mesh. | DSL docs, ProblemIR validation |
+| Co jeśli sharp `Aex/Ms` region w FEM nie ma conformal boundary? | `strict` blokuje plan. `extended` dopuszcza tylko explicit projection z ostrzeżeniem/provenance. | FEM mesher, planner, UI diagnostics |
+| Czy projection mode jest fizycznie równoważny conformal split? | Nie. Jest kompromisem do gładkich/łagodnych pól. Dla dużych kontrastów, DMI, RKKY i walidacji produkcyjnej wymaga conformal boundary albo blokady. | physics note, planner policy |
+| Czy multilayer FDM + region-owned material/coupling jest w v1? | Nie. Jest out of scope v1 i musi być capability-gated. | planner capability gate, FDM runner |
+| Czy dwa obiekty FDM to dwa backendi? | Nie. Dwa obiekty na jednej siatce FDM materializują się jako jeden plan z cellwise material fields, object/region masks i pair table. | runner materialization, FDM ABI |
+| Czy authored region może być większy niż obiekt rodzic? | Nie. Region shape jest owner-scoped; UI clampuje draft do bounds rodzica, a API powtarza clamp przy create/patch/duplicate, żeby imported albo ręcznie wysłany payload nie mógł wyjść poza ownera. | UI inspector model, OpenAPI authoring handlers, API tests |
+| Co oznacza `enabled=false` na regionie? | Region pozostaje authored draftem i musi walidować swój payload, ale jego attachmenty są runtime-inert: nie tworzą aktywnych konfliktów materiałowych, nie blokują planner capability gates i nie materializują mesh/material/texture policy. Aktywny coupling nie może wskazywać disabled regionu; disabled coupling może zachować taką referencję jako draft. | ProblemIR validation conflict filter, planner gates, UI inspector |
+| Jak działa rejestr regionów? | Rejestr jest owner-scoped: `object.regions` jest modyfikowalne przez metody ownera, a `study.regions` jest read-only flattened view z kluczami `object/region`. | Python DSL, SceneDocument, OpenAPI model resources |
+| Co usuwa `region.delete()`? | Usuwa region authored i wszystkie jego attachmenty: mesh policy, material overrides, texture overrides i coupling/interface references, chyba że referencja zewnętrzna wymaga explicit confirmation w UI. | Python DSL, UI commands, validation |
+| Co z overlapami regionów? | Mesh overlap wybiera mniejszy rozmiar. Material/texture overlap jest rozstrzygany per property przez priority; equal priority dla tego samego parametru jest błędem. | ProblemIR validation, mesh/material report, UI diagnostics |
+| Jak runtime wykrywa kontakt dwóch obiektów? | FDM używa sąsiedztwa cell masks na jednej siatce. FEM wymaga shared-domain boundary/domain markers; brak markerów dla explicit coupling blokuje run. | runner materialization, FDM/FEM backend preflight |
+| Czy `MaterialIR.ms_field` jest authored intent? | Nie. Stare realized payloady zostają compatibility/runtime surface. Nowe authored intent przechodzi przez `MaterialParameterFieldIR` i provenance. | ProblemIR migration, script export, SceneDocument |
+
+Minimalny zestaw testów wynikający bezpośrednio z tych odpowiedzi:
+
+1. `intra_object_region_exchange_defaults_harmonic_mean`.
+2. `object_object_exchange_without_coupling_defaults_none`.
+3. `object_object_exchange_with_harmonic_mean_coupling_builds_pair_table`.
+4. `exchange_scale_zero_disables_interface_exchange`.
+5. `rkky_unsupported_blocks_runtime`.
+6. `ms_zero_in_active_object_is_validation_error`.
+7. `surface_top_selector_resolves_to_runtime_faces`.
+8. `multilayer_fdm_regions_are_capability_gated`.
+9. `exchange_field_energy_directional_derivative_consistency`.
+
+### 4.5 Doprecyzowania po drugiej recenzji
+
+Ta sekcja zamienia pozostałe pytania recenzji w decyzje projektowe. Jeżeli
+niższa warstwa nie potrafi zrealizować decyzji, planner ma zablokować ścieżkę
+albo wymagać jawnego `extended`/projection, zamiast cicho zmienić fizykę.
+
+| Pytanie recenzji | Decyzja | Zmiana w planie implementacji |
+|---|---|---|
+| Czy projection mode ma znany błąd fizyczny dla skokowych `Aex/Ms`? | W v1 nie deklarujemy ilościowej gwarancji błędu dla projection sharp jump. Projection jest tylko świadomym kompromisem dla gładkich albo celowo rozmytych pól. | `strict` blokuje skokowy override bez conformal/domain marker. `extended` wymaga provenance `realization_policy=projected`, diagnostyki kontrastu i ostrzeżenia w UI. |
+| Czy projection może być użyte dla DMI, RKKY albo walidacji produkcyjnej? | Nie jako domyślna realizacja. DMI/RKKY/contact wymagają jawnego interfejsu; validation-grade sharp material boundary wymaga conformal boundary. | Planner odrzuca projection dla RKKY/contact i dla DMI na interfejsie do czasu osobnej noty fizycznej. |
+| Jak runtime znajduje kontakt dwóch obiektów? | Resolver kontaktu jest częścią materializacji, nie częścią authoringu. FDM używa sąsiedztwa masek na jednej siatce; FEM używa boundary/domain markers w shared-domain mesh. | Dodać `ContactInterfaceResolver` w runner/materialization i raportować `resolved_face_count`, `area`, `owner_a`, `owner_b`, `selector_a`, `selector_b`. Brak interfejsu dla explicit coupling blokuje run. |
+| Czy `surface("top")` działa dla nieregularnych kształtów? | W v1 tylko jako lokalny bbox-face selector z tolerancją. Dla nieregularnych/nazwanych powierzchni v1 wymaga realized marker albo odrzuca selector. | OpenAPI/UI muszą pokazać `selector_resolution_status`; named-face support zostaje v2. |
+| Czy stary `RegionIR { name, geometry }` rozszerzamy o nowe pola? | Nie. Stary `RegionIR` jest legacy/body-region compatibility. Nowy model używa `ObjectRegionIR` i `MaterialParameterFieldIR`. | Oznaczyć stary model jako deprecated/compatibility w planie migracji; adapter może z niego produkować read-only body region, ale nie authored object-owned region. |
+| Czy `MaterialIR.ms_field` może zostać użyte jako authored source? | Nie. To realized/runtime payload. Authored gradient albo override przechodzi przez `MaterialParameterFieldIR`, z jednostką, frame, priority i provenance. | Script export i SceneDocument nie mogą serializować authored fields jako stare `MaterialIR.ms_field`. |
+| Czy unsupported authored coupling może zostać zachowany bez wykonania? | Tak jako authored intent w modelu/UI, ale nie w uruchomionym solverze. Solver start musi być zablokowany, jeżeli coupling zmienia fizykę i backend nie ma operatora. | Capability diagnostic ma wskazać konkretny coupling i powód blokady. |
+| Jak zapewniamy spójność exchange energy i field? | Jedna funkcja/kontrakt `A_ij` musi zasilać kernel pola i redukcję energii. | Dodać Taylor/directional-derivative test do FDM CPU oracle i parity dla GPU/FEM, zanim uznamy region exchange za produkcyjny. |
+
+### 4.6 Macierz egzekwowania decyzji
+
+Ta tabela przekłada odpowiedzi z sekcji 4.4 i 4.5 na konkretne miejsca, w
+których plan ma zostać zmieniony podczas implementacji. Jeżeli dana warstwa nie
+ma jeszcze potrzebnego mechanizmu, PR musi dodać capability gate zamiast
+utrzymywać niejawny fallback.
+
+| Decyzja | Wymagana zmiana | Test/gate |
+|---|---|---|
+| Intra-object region exchange = harmonic mean | Runner materialization buduje pair table dla regionów jednego obiektu nawet bez jawnego `CouplingIR`. FDM/FEM dostają resolved pair/coefficient contract. | `intra_object_region_exchange_defaults_harmonic_mean`; directional derivative dla pola i energii. |
+| Inter-object exchange = none bez coupling | Planner nie tworzy pair table między różnymi object ids bez `CouplingIR`. | `object_object_exchange_without_coupling_defaults_none`. |
+| FDM ABI nie może domyślnie zerować nowych regionów | `native/include/fullmag_fdm.h` dostaje `exchange_pair_default`, `exchange_pairs`, cellwise material fields i wersjonowaną ścieżkę legacy. | ABI contract test plus GPU/CPU parity dla harmonic/disabled/explicit pair. |
+| `Ms(x) > 0` w aktywnym magnetyku | Python DSL, ProblemIR validation, runner preflight i native ABI validation odrzucają `Ms <= 0`. | `ms_zero_in_active_object_is_validation_error`; backend validation test. |
+| RKKY unsupported blokuje run | Capability resolver wiąże każdy `CouplingIR` z backend support. Authored-only jest dozwolone tylko w scene/provenance, nie w runtime. | `rkky_unsupported_blocks_runtime_plan`; UI pokazuje blocker diagnostic. |
+| Surface selector v1 = bbox face | Dodać selector resolver z provenance: selector, tolerance, resolved face count, area. | `surface_top_selector_resolves_to_runtime_faces`; unresolved explicit endpoint blocks run. |
+| Contact discovery jest materialization step | Dodać `ContactInterfaceResolver` dla FDM mask adjacency i FEM boundary/domain markers. | Object-object coupling bez contact/marker failuje z `COUPLING_ENDPOINT_UNRESOLVED`. |
+| Projection sharp jump nie jest strict | Planner wykrywa skokowy override i wymaga conformal/domain marker w `strict`; `extended` wymaga explicit `realization_policy=projected`. | `fem_sharp_aex_region_requires_conformal_in_strict`; projection warning/provenance test. |
+| Projection nie obsługuje RKKY/contact/DMI jako default | Planner blokuje te kombinacje do czasu osobnych operatorów/not fizycznych. | Capability gate dla RKKY/contact/DMI projection. |
+| Multilayer FDM + region-owned v1 out of scope | Multilayer plan path odrzuca object regions/material fields/couplings zanim trafi do częściowo obsłużonego native path. | `multilayer_fdm_regions_are_capability_gated`. |
+| `MaterialIR.*_field` nie jest authored source | Script export, SceneDocument i UI authoring używają `MaterialParameterFieldIR`; stare pola pozostają realized/compatibility. | Round-trip nie zapisuje authored gradientu jako `MaterialIR.ms_field`. |
+| Region registry owner-scoped | `object.regions` jest mutable registry; `study.regions` read-only flattened view; delete/rename obsługuje zależności i stable ids. | Python registry/delete/rename tests; UI delete confirmation for external refs. |
+| Overlap per attachment | Mesh/material/texture/coupling rozstrzygają konflikty osobno; equal priority dla tego samego parametru blokuje. | Overlap validation tests i inspector diagnostics. |
+
+### 4.7 Dodatkowe pytania implementacyjne i odpowiedzi
+
+Poniższe pytania nie zmieniają fizyki z sekcji 4.4-4.6, ale zamykają luki
+operacyjne, które mogłyby doprowadzić do dwóch różnych implementacji tego
+samego modelu w Pythonie, OpenAPI i UI.
+
+| Pytanie | Odpowiedź kontraktowa | Konsekwencja wdrożeniowa |
+|---|---|---|
+| Czy `study.couplings.exchange(region_a, region_b)` jest dozwolone dla dwóch regionów tego samego obiektu? | Tak, ale tylko jako override domyślnego intra-object harmonic mean. Nie tworzy drugiego pola `m` ani object-object coupling. | `CouplingIR` musi mieć `scope = intra_object_region_override | object_object | surface_surface`, a walidacja odrzuca niejednoznaczne endpointy. |
+| Czy region material override automatycznie wymusza conformal split? | Nie zawsze. `realization_policy="auto"` w trybie `strict` wybiera conformal/domain marker albo blokuje plan; w `extended` może wybrać projected tylko z jawną diagnostyką. | Planner zapisuje resolved `realization_policy`, a UI pokazuje, czy region jest conformal, projected czy blocked. |
+| Czy region mesh policy i material override muszą mieć ten sam shape? | Domyślnie region ma jeden shape bazowy, ale attachment może mieć własny selector tylko jeśli ma własny `attachment_id` i provenance. | Inspector pokazuje attachmenty pod regionem; script export nie miesza `region.shape` z lokalnym hotspotem mesh. |
+| Czy overlapping regiony mogą niejawnie tworzyć coupling? | Nie. Overlap rozstrzyga wartości pól i mesh policy; coupling wymaga jawnego endpointu albo domyślnego intra-object exchange między sąsiednimi/materialnymi regionami. | Walidacja overlapów nie buduje `CouplingIR`; runner buduje exchange pair table dopiero z resolved material regions i coupling overrides. |
+| Czy airbox może być regionem, endpointem coupling albo właścicielem `Ms/Aex/m`? | Nie. Airbox jest mesh/demag/field domain, nie magnetic material object. | Python DSL, ProblemIR i OpenAPI odrzucają airbox jako owner material parameters, texture albo exchange/RKKY endpoint. |
+| Co dokładnie robi delete authored region w istniejącej sesji? | Usuwa authored region i attachmenty z modelu oraz oznacza zależne realized mesh/material/field assets jako stale. Historyczne artefakty nie są ręcznie kasowane. | API zwraca nową model revision i invalidation event; UI Explorer usuwa authored node, a realized assets pokazują stale/provenance do rebuild. |
+| Czy `film.regions[0]` jest stabilnym identyfikatorem? | Nie. Indeks jest tylko kolejnością authoringu/prezentacji. Stabilnym kluczem jest `region_id`; skrypt eksportuje nazwę dla czytelności i `region_id` dla regionów UI/migracji. | Dokumentacja DSL i UI nie mogą używać indeksu jako trwałej referencji; delete/reorder nie zmienia `region_id`. |
+| Gdzie trafiają edycje regionów z UI? | Przez resource-first authoring transaction z `base_revision`, nie przez lokalny store ani ręczny endpoint w komponencie. | OpenAPI dodaje typed region/coupling transaction requests; `ControlRoomApi` ma jedyne metody write; resource hooks invalidują model resources po revision. |
+| Czy UI może dodać region bez shape? | Nie dla authored region. Dozwolony jest tylko realized/diagnostic mesh part bez authored region semantics. | Region create modal wymaga shape albo wyboru istniejącego realized marker jako selector source. |
+| Czy material gradient może być ograniczony do regionu? | Tak. To nadal `MaterialParameterFieldIR` z `support = region_id`, nie osobny materiał ani ukryty obiekt. | Sampling fieldów musi stosować priority i support mask; overlap equal priority dla tego samego parametru blokuje. |
+| Czy dwa stykające się obiekty mogą mieć zwykły exchange bez explicit coupling, jeśli mają ten sam materiał? | Nie. Granica object-object jest free surface bez `study.couplings.exchange(...)`, niezależnie od podobnych wartości `Ms/Aex`. | Planner nie zgaduje couplingów z nazw/material values; UI może sugerować dodanie coupling, ale nie robi tego automatycznie. |
+| Co jeśli explicit object-object coupling nie ma resolved contact? | Solver start jest blokowany. Authored coupling zostaje w modelu jako intencja, ale runtime nie może udawać, że coupling zadziałał. | `ContactInterfaceResolver` zwraca blocker diagnostic z endpointami, tolerancją i powodem braku kontaktu/markera. |
+| Czy named-face selectors są częścią v1? | Nie jako publiczny kontrakt. v1 obsługuje bbox face selectors i realized markers; named faces wymagają osobnej specyfikacji v2. | Python DSL może zachować future namespace, ale validator odrzuca unsupported selector z jasnym komunikatem. |
+| Jakie pytanie blokuje PR 2, jeżeli zostanie bez odpowiedzi? | Każde pytanie, którego odpowiedź zmienia runtime physics, OpenAPI write contract albo backend capability gate. | PR 2 nie może ruszyć, jeżeli sekcje 4.4-4.7 nie mają mappingu do testu/gate albo świadomie deferred punktu. |
 
 ---
 
@@ -365,7 +480,13 @@ Wymagany kontrakt:
 - `region.delete()` usuwa region i jego attachmenty.
 - `film.remove_region("skyrmion_core")` usuwa region z walidacją zależności.
 - `film.rename_region("old", "new")` aktualizuje referencje nazwowe.
-- `region.region_id` jest stabilne i nie powinno zależeć od nazwy.
+- `region.region_id` jest stabilnym identyfikatorem typu primary key: przydziela
+  go rejestr ownera, rename go nie zmienia, a skasowane id nie jest ponownie
+  używane w tej samej scenie/sesji.
+- UI/backend create może pominąć `region_id`; rejestr przydziela kolejny wolny
+  identyfikator typu `owner:r1`, `owner:r2`, ... . Jawne `region_id` jest
+  używane przy imporcie, migracji i round-trip, gdzie trzeba zachować istniejącą
+  tożsamość.
 - Skrypt eksportuje nazwy, runtime używa stabilnych id.
 
 ### 5.7 Zmiany w istniejących plikach Python
@@ -788,7 +909,9 @@ Planner w `strict`:
 Planner w `extended`:
 
 - może dopuścić projection z warningiem,
-- może dopuścić authored-only coupling z runtime unsupported diagnostic,
+- może zachować authored-only coupling/provenance w modelu,
+- nie może wystartować runtime z unsupported couplingiem wymagającym fizycznego
+  operatora; RKKY/interlayer unsupported blokuje planning/solver start,
 - nie może cicho skasować intentu.
 
 ### 7.5 Testy planner
@@ -1494,41 +1617,73 @@ gałąź `Regions`, ale obecnie jest to syntetyczny jeden region na object.
 Objects
   film
     Geometry
-    Regions
-      skyrmion_core
-        Shape
-        Mesh
-        Material Overrides
-        Texture
-        Diagnostics
-      edge_softening
-        Shape
-        Mesh
-        Material Overrides
-        Texture
-        Diagnostics
     Magnetic Parameters
       Material: film material
       Exchange
       Demag
       Interfacial DMI
+    Texture
     Mesh
     Visualization
+    Regions
+      skyrmion_core
+        Geometry
+        Magnetic Parameters
+          Material Overrides
+          Exchange Overrides
+          Interface Couplings
+        Texture
+        Mesh
+        Visualization
+        Regions
+      edge_softening
+        Geometry
+        Magnetic Parameters
+          Material Overrides
+          Exchange Overrides
+          Interface Couplings
+        Texture
+        Mesh
+        Visualization
+        Regions
 Physics
   Couplings
     film ↔ reference exchange
     layer_a/top ↔ layer_b/bottom RKKY
 ```
 
+Region node ma wyglądać i zachowywać się jak sub-obiekt authoringowy. Różnica
+jest semantyczna, nie UI-owa: region nie tworzy drugiego pola `m` i nie jest
+osobnym material object, ale może mieć własną geometrię selektora, lokalne
+parametry magnetyczne, texture override, mesh policy, visualization override i
+podrzędne regiony. Dlatego Explorer nie może pokazywać regionów jako płaskiej
+listy pod `Regions`; musi pokazywać region jako subtree z tym samym układem
+kategorii, co obiekt rodzic.
+
+Domyślna semantyka regionu to inheritance-first: wszystkie sekcje regionu
+dziedziczą efektywne wartości z rodzica, dopóki użytkownik nie doda lokalnego
+override. Typowe override'y v1 to lokalne zagęszczenie meshu, lokalne parametry
+materiałowe, lokalna tekstura początkowa, lokalny display overlay i lokalne
+interface/coupling overrides. UI musi pokazywać stan `inherited` jako pierwszy
+stan każdej sekcji, a nie kopiować wartości rodzica do regionu jako authored
+payload.
+
+`Regions` pod regionem jest dozwolone dla hierarchicznego authoringu, ale v1
+może ograniczyć głębokość do jednego poziomu capability gate. Jeżeli v1 nie
+obsługuje nested regions, node `Regions` pozostaje widoczny jako disabled/empty
+z diagnostyką `nested_regions_unsupported`, a nie znika z modelu UI.
+
 ### 14.3 Node model
 
 Rozszerzyć explorer types:
 
 - `object.region.root`,
-- `object.region.shape`,
+- `object.region.geometry`,
+- `object.region.magnetic-parameters`,
 - `object.region.mesh`,
-- `object.region.material`,
 - `object.region.texture`,
+- `object.region.visualization`,
+- `object.region.regions`,
 - `object.region.diagnostics`,
 - `physics.coupling`.
 
@@ -1569,6 +1724,8 @@ Coupling node:
 
 - explorer shows zero authored regions as empty `Regions` group,
 - explorer shows multiple authored regions in owner order,
+- explorer shows each region as object-like subtree with `Geometry`,
+  `Magnetic Parameters`, `Texture`, `Mesh`, `Visualization` and `Regions`,
 - deleting object removes child regions from tree,
 - coupling appears under Physics and references endpoints,
 - realized mesh regions do not masquerade as authored regions,
@@ -1582,7 +1739,64 @@ Coupling node:
 
 Nowy inspector dla `object.region.root`:
 
-Sekcje:
+Region inspector używa tej samej mentalnej struktury co object inspector. Każdy
+panel regionu musi jasno pokazać, czy dana wartość jest:
+
+- inherited from parent object,
+- locally overridden on region,
+- blocked by capability/validation,
+- realized from mesh/materialization.
+
+Region panels:
+
+1. Geometry
+   - selector shape,
+   - size/radius/height,
+   - center,
+   - axis,
+   - frame,
+   - transform summary,
+   - nested region support status.
+2. Magnetic Parameters
+   - inherited material summary,
+   - local scalar overrides,
+   - local parameter fields,
+   - exchange override default,
+   - interface/coupling endpoints.
+3. Texture
+   - inherited or override,
+   - preset,
+   - mapping,
+   - transform,
+   - initial-condition scope.
+4. Mesh
+   - enabled,
+   - hmax,
+   - hmin,
+   - transition distance,
+   - growth,
+   - order,
+   - realization mode.
+5. Visualization
+   - overlay visibility,
+   - color,
+   - opacity,
+   - surface/wireframe/vector display,
+   - inherited display defaults.
+6. Regions
+   - child regions if supported,
+   - disabled placeholder and diagnostic if nested regions are capability-gated.
+7. Diagnostics
+   - validation blockers,
+   - overlap,
+   - mesh stale,
+   - projection warnings.
+8. Quality
+   - nodes/elements/tetrahedra,
+   - histogram scoped to region,
+   - min/max element size.
+
+Legacy flat section mapping, jeżeli jakiś panel jeszcze istnieje przejściowo:
 
 1. Identity
    - name,
@@ -1965,9 +2179,10 @@ Dodać osobny opis region/coupling intentu, zamiast przeciążać samo
 
 ```c
 typedef enum {
-    FULLMAG_FDM_EXCHANGE_PAIR_HARMONIC_MEAN = 0,
-    FULLMAG_FDM_EXCHANGE_PAIR_EXPLICIT = 1,
-    FULLMAG_FDM_EXCHANGE_PAIR_DISABLED = 2,
+    FULLMAG_FDM_EXCHANGE_PAIR_UNSPECIFIED = 0,
+    FULLMAG_FDM_EXCHANGE_PAIR_HARMONIC_MEAN = 1,
+    FULLMAG_FDM_EXCHANGE_PAIR_EXPLICIT = 2,
+    FULLMAG_FDM_EXCHANGE_PAIR_DISABLED = 3,
 } fullmag_fdm_exchange_pair_mode;
 
 typedef struct {
@@ -1991,11 +2206,13 @@ Compatibility:
 
 - jeśli `exchange_lut` jest podane, backend może użyć go jako zrealizowanego
   low-level override,
-- jeśli `exchange_pair_default` nie jest ustawiony przez nowy runner, backend
-  musi użyć wartości zależnej od wersji planu: legacy -> disabled/zero,
-  current -> harmonic mean,
+- `FULLMAG_FDM_EXCHANGE_PAIR_UNSPECIFIED=0` jest wyłącznie ścieżką
+  compatibility dla zerowanych legacy callerów i zachowuje disabled/zero
+  cross-region default,
+- nowy runner musi jawnie ustawiać
+  `FULLMAG_FDM_EXCHANGE_PAIR_HARMONIC_MEAN`,
 - jeśli `region_mask` jest podany bez `exchange_lut` i bez `exchange_pairs`,
-  backend ma budować harmonic-mean default dla par regionów, nie free surface,
+  backend ma budować default zgodny z `exchange_pair_default`,
 - free surface wymaga `mode=disabled` albo `scale=0`.
 
 #### 19.5.3 FDM context i upload
@@ -2026,6 +2243,12 @@ Zadania w `backends/fdm/api/c_api.cpp`:
 - alokować i kopiować pola na device,
 - zwalniać pola w destroy path,
 - budować `exchange_lut` z `exchange_pairs` i material fields.
+
+Stan przejściowy jest dozwolony tylko jako fail-fast: ABI i runner mogą
+przenieść wskaźniki `ms_field/a_field/alpha_field/dind_field/dbulk_field`, ale
+native FDM backend musi odrzucić niepuste pola do czasu, gdy kernele exchange,
+LLG damping i DMI faktycznie użyją tych tablic. Nie wolno uploadować tych pól i
+kontynuować z uniform constants, bo byłoby to ciche usunięcie authored physics.
 
 Nie należy dodawać całej logiki samplingowej do FDM backendu. Sampling z
 `fm.fields.linear`/region shape do cell arrays należy do runner/planner
@@ -2430,9 +2653,25 @@ Files:
 - `docs/physics/0104-material-regions-parameter-fields-and-interface-couplings.md`
 - update plan docs if terminology shifts.
 
+Readiness gate:
+
+- section 4.4, 4.5 and 4.7 questions must be answered in the physics note and in
+  this masterplan before PR 2 starts,
+- every answer that changes runtime physics must map to either a concrete test
+  or a capability gate in section 4.6,
+- unresolved questions about intra-object exchange, object-object exchange,
+  `Ms <= 0`, RKKY support, surface selector resolution, FEM projection,
+  contact discovery, FDM ABI defaults, UI authoring transactions, region delete
+  invalidation, airbox ownership, or multilayer FDM block PR 2,
+- authored-only behavior is acceptable only for model/provenance storage; if a
+  selected backend cannot realize the authored physics, planner/runtime must
+  block the run with a diagnostic.
+
 Verification:
 
 - docs checklist complete,
+- section 4.6 has a test/gate row for every review question that affects
+  physics or runtime behavior,
 - no code changes.
 
 ### PR 2: ProblemIR types and validation
@@ -2888,29 +3127,28 @@ Implementation is complete only when:
 
 ## 27. Recommended immediate next step
 
-Następny konkretny krok to PR 1:
+Nota fizyczna 0104 jest już kontraktem bazowym dla implementacji. Następny
+konkretny krok nie polega na ponownym otwieraniu pytań fizycznych, tylko na
+domknięciu ścieżki authoring round-trip i capability gates w tej kolejności:
 
-`docs/physics/0104-material-regions-parameter-fields-and-interface-couplings.md`
+1. Dopiąć canonical Python script export:
+   `Python DSL -> ProblemIR -> SceneDocument -> Python export -> ProblemIR`
+   musi zachować `ObjectRegion`, `MaterialParameterFieldIR`, `CouplingIR`,
+   `region_id`, `priority`, `mode`, `scale`, `J1` i surface selectors.
+2. Utrwalić w plannerze decyzje z sekcji 4.4:
+   unsupported RKKY/interlayer blokuje run, `Ms <= 0` jest błędem, multilayer
+   FDM + region-owned semantics jest capability-gated, a FEM sharp jump w
+   `strict` wymaga conformal/domain marker.
+3. Dopiero potem materializować backend runtime:
+   FDM dostaje cellwise material arrays i `exchange_pair_default +
+   exchange_pairs`; FEM dostaje realized material fields, material region
+   markers i coupling descriptors w dedykowanych modułach pod `backends/fem`,
+   nie jako przypadkowe pola w `Context` albo `mfem_bridge.cpp`.
+4. OpenAPI/UI muszą zostać zaktualizowane razem z resource-first kontraktem:
+   authored regions/material fields/couplings i realized mesh/material regions
+   są osobnymi zasobami, a Explorer/Inspector pokazują je jako różne byty.
 
-Ten PR powinien utrwalić fizyczne decyzje:
-
-- `strict` wymaga conformal boundary dla ostrych skoków, `extended` dopuszcza
-  explicit projection z diagnostyką,
-- intra-object region exchange default = harmonic mean,
-- inter-object exchange default = none/free surface,
-- RKKY unsupported blokuje runtime,
-- airbox quantity exclusions obejmują `m`, `Ms`, `Aex`, anisotropy i DMI,
-- FEM v1 realizuje coefficient fields na element/domain marker albo
-  quadrature/node tylko gdy operator tego wymaga.
-
-Dopiero po tym warto zaczynać kod IR/Python, bo inaczej API będzie wymagało
-przeróbek po pierwszym sporze o fizykę granic.
-
-Dodatkowe decyzje, które nota fizyczna musi utrwalić (po recenzji):
-
-- `Ms=0` wewnątrz obiektu = błąd walidacji,
-- surface selector `surface("top")` resolution w v1 = bounding-box face z
-  FDM/FEM runtime index resolution,
-- multilayer FDM + regiony = out of scope v1 z capability gate,
-- strategia migracji FDM ABI default z `A_ij=0` na
-  `exchange_pair_default + exchange_pairs`.
+Nie wolno skracać tej kolejności przez authored-only runtime behavior. Authored
+intent może być zapisany i pokazany w UI, ale jeżeli wybrany backend nie ma
+wymaganego operatora albo indeksów interfejsu, solver start ma zostać
+zablokowany z diagnostyką capability.

@@ -124,6 +124,7 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
             _export_geometry_entry(magnet, base_problem, source_root=source_root)
             for magnet in base_problem.magnets
         ],
+        "couplings": [coupling.to_ir() for coupling in base_problem.couplings],
         "current_modules": [
             _export_current_module_entry(module) for module in base_problem.current_modules
         ],
@@ -204,6 +205,14 @@ def render_loaded_problem_as_script(
             surface=surface,
         )
     )
+    region_owned_lines = _render_region_owned_authoring(
+        base_problem,
+        magnet_vars,
+        source_root=source_root,
+    )
+    if region_owned_lines:
+        lines.append("")
+        lines.extend(region_owned_lines)
     geom_viz_lines = _render_geometry_visualization_hints(
         base_problem, magnet_vars, base_problem.runtime_metadata
     )
@@ -237,6 +246,11 @@ def render_loaded_problem_as_script(
     if exchange_lines:
         lines.append("")
         lines.extend(exchange_lines)
+
+    coupling_lines = _render_couplings(base_problem, magnet_vars, surface=surface)
+    if coupling_lines:
+        lines.append("")
+        lines.extend(coupling_lines)
 
     demag_lines = _render_demag(base_problem, overrides=overrides, surface=surface)
     if demag_lines:
@@ -786,6 +800,226 @@ def _render_geometry_and_materials(
     if lines[-1] == "":
         lines.pop()
     return lines
+
+
+def _render_region_owned_authoring(
+    problem: Problem,
+    magnet_vars: dict[str, str],
+    *,
+    source_root: Path,
+) -> list[str]:
+    lines: list[str] = []
+    region_vars: dict[str, str] = {}
+    for magnet in problem.magnets:
+        magnet_var = magnet_vars[magnet.name]
+        live_region_ids = {
+            region.region_id for region in magnet.object_regions if region.region_id
+        }
+        for region_id in magnet.allocated_region_ids:
+            if region_id not in live_region_ids:
+                lines.append(f"{magnet_var}.regions.reserve_id({_py_repr(region_id)})")
+        for index, region in enumerate(magnet.object_regions):
+            region_var = _safe_identifier(f"{magnet.name}_{region.name}_region")
+            if region_var in region_vars.values():
+                region_var = f"{region_var}_{index}"
+            region_vars[region.region_id] = region_var
+            kwargs = [
+                _py_repr(region.name),
+                _render_geometry_expr(region.shape, magnet_name=region.name, source_root=source_root),
+            ]
+            optional_kwargs: list[str] = []
+            optional_kwargs.append(f"region_id={_py_repr(region.region_id)}")
+            if region.frame != "object":
+                optional_kwargs.append(f"frame={_py_repr(region.frame)}")
+            if not region.enabled:
+                optional_kwargs.append("enabled=False")
+            if region.priority:
+                optional_kwargs.append(f"priority={int(region.priority)}")
+            if region.realization_policy != "inherit":
+                optional_kwargs.append(
+                    f"realization_policy={_py_repr(region.realization_policy)}"
+                )
+            call_args = ", ".join([*kwargs, *optional_kwargs])
+            lines.append(f"{region_var} = {magnet_var}.add_region({call_args})")
+            for override in region.material_overrides or []:
+                field_expr = _render_material_parameter_field_expr(override.value)
+                lines.append(
+                    f"{region_var}.set_material({_py_repr(override.parameter)}, {field_expr}, "
+                    f"priority={int(override.priority)}, "
+                    f"conflict_policy={_py_repr(override.conflict_policy)})"
+                )
+            if region.mesh_policy:
+                mesh_kwargs = _render_region_mesh_policy_kwargs(region.mesh_policy)
+                if mesh_kwargs:
+                    lines.append(f"{region_var}.mesh({', '.join(mesh_kwargs)})")
+    for magnet in problem.magnets:
+        magnet_var = magnet_vars[magnet.name]
+        for assignment in magnet.material_parameter_fields:
+            field_expr = _render_material_parameter_field_expr(assignment.value)
+            kwargs = [
+                _py_repr(assignment.parameter),
+                field_expr,
+                f"assignment_id={_py_repr(assignment.assignment_id)}",
+            ]
+            if assignment.region_id is not None:
+                region_ref = region_vars.get(assignment.region_id)
+                if region_ref is not None:
+                    kwargs.append(f"region={region_ref}")
+                else:
+                    kwargs.append(f"region={_py_repr(assignment.region_id)}")
+            if assignment.priority:
+                kwargs.append(f"priority={int(assignment.priority)}")
+            if assignment.conflict_policy != "error":
+                kwargs.append(f"conflict_policy={_py_repr(assignment.conflict_policy)}")
+            lines.append(f"{magnet_var}.set_material_field({', '.join(kwargs)})")
+    if lines:
+        return ["# Object-owned regions and material fields", *lines]
+    return []
+
+
+def _render_region_mesh_policy_kwargs(mesh_policy: dict[str, object]) -> list[str]:
+    keys = [
+        "maximum_element_size",
+        "minimum_element_size",
+        "transition_distance",
+        "order",
+    ]
+    kwargs: list[str] = []
+    for key in keys:
+        value = mesh_policy.get(key)
+        if value is not None:
+            kwargs.append(f"{key}={_py_literal(value)}")
+    return kwargs
+
+
+def _render_material_parameter_field_expr(value: object) -> str:
+    payload = value.to_ir() if hasattr(value, "to_ir") else value
+    if not isinstance(payload, dict):
+        raise ValueError("material parameter field must render from a dict payload")
+    kind = payload.get("kind")
+    if kind == "constant":
+        args = [_py_literal(payload.get("value"))]
+        unit = payload.get("unit")
+        if unit is not None:
+            args.append(f"unit={_py_repr(str(unit))}")
+        return f"fm.fields.constant({', '.join(args)})"
+    if kind == "linear":
+        kwargs = [
+            f"base={_py_literal(payload.get('base'))}",
+            f"gradient={_py_literal(payload.get('gradient'))}",
+        ]
+        frame = payload.get("frame")
+        if frame not in (None, "object"):
+            kwargs.append(f"frame={_py_repr(str(frame))}")
+        unit = payload.get("unit")
+        if unit is not None:
+            kwargs.append(f"unit={_py_repr(str(unit))}")
+        return f"fm.fields.linear({', '.join(kwargs)})"
+    if kind == "radial":
+        kwargs = [
+            f"center={_py_literal(payload.get('center'))}",
+            f"radius={_py_literal(payload.get('radius'))}",
+            f"inside={_py_literal(payload.get('inside'))}",
+            f"outside={_py_literal(payload.get('outside'))}",
+        ]
+        frame = payload.get("frame")
+        if frame not in (None, "object"):
+            kwargs.append(f"frame={_py_repr(str(frame))}")
+        unit = payload.get("unit")
+        if unit is not None:
+            kwargs.append(f"unit={_py_repr(str(unit))}")
+        return f"fm.fields.radial({', '.join(kwargs)})"
+    if kind == "sampled":
+        return (
+            "fm.fields.sampled("
+            f"asset_id={_py_repr(str(payload.get('asset_id')))}, "
+            f"component_count={int(payload.get('component_count', 1))}, "
+            f"location={_py_repr(str(payload.get('location')))}, "
+            f"unit={_py_repr(str(payload.get('unit')))}"
+            ")"
+        )
+    raise ValueError(f"unsupported material parameter field kind {kind!r}")
+
+
+def _render_couplings(
+    problem: Problem,
+    magnet_vars: dict[str, str],
+    *,
+    surface: str,
+) -> list[str]:
+    if not problem.couplings:
+        return []
+    root = "study.couplings" if surface == "study" else "fm.couplings.registry()"
+    lines = ["# Couplings"]
+    if surface != "study":
+        lines.append("couplings = fm.couplings.registry()")
+        root = "couplings"
+    for coupling in problem.couplings:
+        source_expr = _render_coupling_endpoint_expr(coupling.source, magnet_vars)
+        target_expr = _render_coupling_endpoint_expr(coupling.target, magnet_vars)
+        params = coupling.parameters
+        if coupling.kind == "exchange":
+            kwargs = [
+                source_expr,
+                target_expr,
+                f"mode={_py_repr(str(params.get('mode', 'harmonic_mean')))}",
+            ]
+            if params.get("scale") is not None:
+                kwargs.append(f"scale={_py_literal(params.get('scale'))}")
+            if params.get("inter_exchange") is not None:
+                kwargs.append(f"inter_exchange={_py_literal(params.get('inter_exchange'))}")
+            kwargs.extend(_render_common_coupling_kwargs(coupling))
+            lines.append(f"{root}.exchange({', '.join(kwargs)})")
+        elif coupling.kind == "rkky":
+            kwargs = [
+                source_expr,
+                target_expr,
+                f"J1={_py_literal(params.get('j1'))}",
+                *_render_common_coupling_kwargs(coupling),
+            ]
+            lines.append(f"{root}.rkky({', '.join(kwargs)})")
+        elif coupling.kind == "interlayer_exchange":
+            kwargs = [
+                source_expr,
+                target_expr,
+                f"J1={_py_literal(params.get('j1'))}",
+            ]
+            if params.get("j2") is not None:
+                kwargs.append(f"J2={_py_literal(params.get('j2'))}")
+            kwargs.extend(_render_common_coupling_kwargs(coupling))
+            lines.append(f"{root}.interlayer_exchange({', '.join(kwargs)})")
+        else:
+            raise ValueError(f"unsupported coupling kind {coupling.kind!r}")
+    return lines
+
+
+def _render_common_coupling_kwargs(coupling: object) -> list[str]:
+    kwargs = [f"coupling_id={_py_repr(coupling.coupling_id)}"]
+    if not coupling.enabled:
+        kwargs.append("enabled=False")
+    if coupling.capability_policy != "require_runtime":
+        kwargs.append(f"capability_policy={_py_repr(coupling.capability_policy)}")
+    return kwargs
+
+
+def _render_coupling_endpoint_expr(endpoint: object, magnet_vars: dict[str, str]) -> str:
+    payload = endpoint.to_ir() if hasattr(endpoint, "to_ir") else endpoint
+    if not isinstance(payload, dict):
+        raise ValueError("coupling endpoint must render from a dict payload")
+    kind = payload.get("kind")
+    object_name = str(payload.get("object"))
+    object_expr = magnet_vars.get(object_name, f"fm.couplings.object({_py_repr(object_name)})")
+    if kind == "object":
+        return object_expr
+    if kind == "surface":
+        selector = str(payload.get("selector"))
+        if object_name in magnet_vars:
+            return f"{object_expr}.surface({_py_repr(selector)})"
+        return f"fm.couplings.surface({_py_repr(object_name)}, {_py_repr(selector)})"
+    if kind == "region":
+        region_id = str(payload.get("region_id"))
+        return f"fm.couplings.region({_py_repr(object_name)}, {_py_repr(region_id)})"
+    raise ValueError(f"unsupported coupling endpoint kind {kind!r}")
 
 
 def _render_geometries_from_override(
@@ -3204,6 +3438,11 @@ def _export_geometry_entry(
         "magnetization": magnetization,
         "physics_stack": physics_stack,
         "mesh": per_mesh,
+        "object_regions": [region.to_ir() for region in magnet.object_regions],
+        "allocated_region_ids": list(magnet.allocated_region_ids),
+        "material_parameter_fields": [
+            assignment.to_ir() for assignment in magnet.material_parameter_fields
+        ],
     }
 
 
@@ -3504,9 +3743,20 @@ def _magnet_variable_names(
     return mapping
 
 
+def _safe_identifier(value: str) -> str:
+    candidate = re.sub(r"[^a-zA-Z0-9_]+", "_", value).strip("_").lower()
+    if not candidate:
+        candidate = "region"
+    if candidate[0].isdigit():
+        candidate = f"r_{candidate}"
+    return candidate
+
+
 def _script_api_surface(problem: Problem) -> str:
     runtime_metadata = _normalize_mapping(problem.runtime_metadata)
     surface = runtime_metadata.get("script_api_surface")
+    if problem.couplings:
+        return "study"
     return "study" if surface == "study" else "flat"
 
 

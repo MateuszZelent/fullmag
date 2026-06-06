@@ -326,7 +326,7 @@ function runtimeReadinessDisabledReason(
   if (!requiresExplicitMesh(status)) return null;
 
   if (status.resources.mesh_revision <= 0) {
-    return "Build a shared-domain mesh before running FEM runtime commands.";
+    return "Build a current shared-domain mesh before running. Open Mesh Jobs or Build Shared-Domain Mesh.";
   }
 
   const manifest = resourceData<MeshSharedDomainManifestResource>(
@@ -337,10 +337,10 @@ function runtimeReadinessDisabledReason(
   if (manifest.source_scene_revision == null) {
     return sharedDomainMeshReadyWithoutSceneProvenance(context)
       ? null
-      : "Shared-domain mesh provenance is unavailable; rebuild the mesh.";
+      : "Build a current shared-domain mesh before running. Open Mesh Jobs or Build Shared-Domain Mesh.";
   }
   if (manifest.source_scene_revision !== sceneRevision) {
-    return "Rebuild the shared-domain mesh for the current scene before running.";
+    return "Build a current shared-domain mesh before running. Open Mesh Jobs or Build Shared-Domain Mesh.";
   }
 
   return null;

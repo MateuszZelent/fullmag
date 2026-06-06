@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildStatusBarEngineModel,
+  buildStatusBarMeshModel,
   formatRuntimeBundleVersionLabel,
 } from "./statusBarModel";
 
@@ -146,5 +147,56 @@ describe("statusBarModel", () => {
     expect(formatRuntimeBundleVersionLabel("2026-05-18")).toBe(
       "Backend built 2026-05-18",
     );
+  });
+
+  it("summarizes current and stale mesh revisions for the status bar", () => {
+    expect(
+      buildStatusBarMeshModel({
+        manifestSourceSceneRevision: 44,
+        meshBuildRevision: 57,
+        meshRevision: 42,
+        sceneRevision: 44,
+      }),
+    ).toMatchObject({
+      label: "Mesh rev 42 | build rev 57 | current",
+      state: "current",
+    });
+
+    expect(
+      buildStatusBarMeshModel({
+        manifestSourceSceneRevision: 40,
+        meshBuildRevision: 57,
+        meshRevision: 42,
+        sceneRevision: 44,
+      }),
+    ).toMatchObject({
+      label: "Mesh rev 42 | scene rev 44 | stale",
+      state: "stale",
+    });
+  });
+
+  it("summarizes missing and active mesh builds for the status bar", () => {
+    expect(
+      buildStatusBarMeshModel({
+        meshBuildRevision: 0,
+        meshRevision: 0,
+        sceneRevision: 3,
+      }),
+    ).toMatchObject({
+      label: "Mesh not built",
+      state: "not-built",
+    });
+
+    expect(
+      buildStatusBarMeshModel({
+        activeBuildStatus: "running",
+        meshBuildRevision: 58,
+        meshRevision: 42,
+        sceneRevision: 44,
+      }),
+    ).toMatchObject({
+      label: "Mesh rev 42 | build rev 58 | building",
+      state: "building",
+    });
   });
 });

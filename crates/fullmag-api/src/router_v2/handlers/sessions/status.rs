@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use axum::extract::State;
 use axum::Json;
+use serde_json::Value;
 
 use crate::error::ApiError;
 use crate::router_v2::handlers::data::field_resolution::live_magnetization_available;
@@ -110,6 +111,7 @@ pub(crate) fn build_live_status(
     let display = build_display_selection_response(&display_sel, &display_presentation);
 
     let is_fem = snapshot.fem_mesh.is_some();
+    let fdm_grid_shape = (!is_fem).then(|| fdm_grid_shape(snapshot, latest.map(|step| step.grid)));
     let cell_count = if is_fem {
         snapshot
             .fem_mesh
@@ -117,18 +119,14 @@ pub(crate) fn build_live_status(
             .map(|m| m.elements.len() as u64)
             .unwrap_or(0)
     } else {
-        latest
-            .map(|s| s.grid[0] as u64 * s.grid[1] as u64 * s.grid[2] as u64)
+        fdm_grid_shape
+            .map(|shape| shape[0] as u64 * shape[1] as u64 * shape[2] as u64)
             .unwrap_or(0)
     };
+    let domain_generation_id = domain_generation_id(snapshot);
 
     let domain = DomainSummary {
-        generation_id: snapshot
-            .fem_mesh
-            .as_ref()
-            .and_then(|m| m.generation_id.as_deref())
-            .and_then(|g| g.parse::<u64>().ok())
-            .unwrap_or(0),
+        generation_id: domain_generation_id,
         discretization: if is_fem { "fem" } else { "fdm" }.into(),
         cell_count,
     };
@@ -227,6 +225,129 @@ pub(crate) fn topology_revision(snapshot: &SessionStateResponse, domain_generati
     } else {
         domain_generation_id
     }
+}
+
+pub(crate) fn domain_generation_id(snapshot: &SessionStateResponse) -> u64 {
+    if let Some(generation_id) = snapshot
+        .fem_mesh
+        .as_ref()
+        .and_then(|m| m.generation_id.as_deref())
+        .and_then(|g| g.parse::<u64>().ok())
+    {
+        return generation_id;
+    }
+
+    fdm_domain_generation_id(snapshot)
+}
+
+pub(crate) fn fdm_grid_shape(
+    snapshot: &SessionStateResponse,
+    latest_grid_shape: Option<[u32; 3]>,
+) -> [u32; 3] {
+    if let Some(shape) = latest_grid_shape.filter(|shape| shape.iter().all(|value| *value > 0)) {
+        return shape;
+    }
+
+    fdm_artifact_layout(snapshot)
+        .and_then(|layout| {
+            layout
+                .get("grid_cells")
+                .or_else(|| layout.get("grid_shape"))
+                .or_else(|| layout.get("shape"))
+        })
+        .and_then(value_array3_u32_positive)
+        .unwrap_or([0, 0, 0])
+}
+
+fn fdm_domain_generation_id(snapshot: &SessionStateResponse) -> u64 {
+    let latest_grid_shape = snapshot
+        .live_state
+        .as_ref()
+        .map(|state| state.latest_step.grid);
+    let grid_shape = fdm_grid_shape(snapshot, latest_grid_shape);
+    if grid_shape.iter().all(|value| *value == 0) {
+        return 0;
+    }
+
+    let mut revision = fnv1a_hash_bytes(0xcbf29ce484222325, b"fdm-domain-v1");
+    for value in grid_shape {
+        revision = fnv1a_hash_u64(revision, value as u64);
+    }
+
+    if let Some(layout) = fdm_artifact_layout(snapshot) {
+        revision = fnv1a_hash_bytes(revision, b"layout");
+        if let Some(origin) = layout
+            .get("origin")
+            .or_else(|| layout.get("grid_origin"))
+            .or_else(|| layout.get("native_origin"))
+            .and_then(value_array3_f64_any_finite)
+        {
+            revision = fnv1a_hash_f64_array(revision, origin);
+        }
+        if let Some(spacing) = layout
+            .get("cell_size")
+            .and_then(value_array3_f64_allow_planar)
+        {
+            revision = fnv1a_hash_f64_array(revision, spacing);
+        }
+    }
+
+    revision.max(1)
+}
+
+fn fdm_artifact_layout(snapshot: &SessionStateResponse) -> Option<&Value> {
+    snapshot
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("artifact_layout"))
+        .filter(|layout| layout.get("backend").and_then(Value::as_str) == Some("fdm"))
+}
+
+fn value_array3_u32_positive(value: &Value) -> Option<[u32; 3]> {
+    let array = value.as_array()?;
+    let values = [
+        u32::try_from(array.first()?.as_u64()?).ok()?,
+        u32::try_from(array.get(1)?.as_u64()?).ok()?,
+        u32::try_from(array.get(2)?.as_u64()?).ok()?,
+    ];
+    values.iter().all(|value| *value > 0).then_some(values)
+}
+
+fn value_array3_f64_any_finite(value: &Value) -> Option<[f64; 3]> {
+    let array = value.as_array()?;
+    let values = [
+        array.first()?.as_f64()?,
+        array.get(1)?.as_f64()?,
+        array.get(2)?.as_f64()?,
+    ];
+    values
+        .iter()
+        .all(|value| value.is_finite())
+        .then_some(values)
+}
+
+fn value_array3_f64_allow_planar(value: &Value) -> Option<[f64; 3]> {
+    let values = value_array3_f64_any_finite(value)?;
+    values.iter().all(|value| *value >= 0.0).then_some(values)
+}
+
+fn fnv1a_hash_bytes(mut hash: u64, bytes: &[u8]) -> u64 {
+    for byte in bytes {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(1099511628211);
+    }
+    hash
+}
+
+fn fnv1a_hash_u64(hash: u64, value: u64) -> u64 {
+    fnv1a_hash_bytes(hash, &value.to_le_bytes())
+}
+
+fn fnv1a_hash_f64_array(mut hash: u64, values: [f64; 3]) -> u64 {
+    for value in values {
+        hash = fnv1a_hash_u64(hash, value.to_bits());
+    }
+    hash
 }
 
 pub(crate) fn field_catalog_revision(snapshot: &SessionStateResponse) -> u64 {

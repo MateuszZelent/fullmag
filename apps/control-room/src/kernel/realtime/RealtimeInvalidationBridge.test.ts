@@ -3,15 +3,24 @@ import { describe, expect, it } from "vitest";
 import { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
 import {
+  DATA_DOMAIN_TOPOLOGY_PATH,
   DATA_FIELDS_PATH,
   DATA_FIELD_VECTOR_PATH,
   DATA_TABLE_ROWS_PATH,
+  MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
   MESHING_OBJECT_QUALITY_PATH,
   MESHING_OBJECT_REPORT_PATH,
   MESHING_OBJECT_SIZE_FIELD_PATH,
   MESHING_OBJECT_TOPOLOGY_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+  MESHING_SHARED_DOMAIN_QUALITY_PATH,
+  MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH,
+  MESHING_SUMMARY_PATH,
+  MODEL_MATERIAL_FIELDS_PATH,
+  MODEL_REALIZED_REGIONS_PATH,
+  MODEL_REGION_DIAGNOSTICS_PATH,
+  MODEL_REGIONS_PATH,
   MODEL_SCENE_PATH,
   SIMULATION_COMMANDS_PATH,
   SIMULATION_RUN_CURRENT_PATH,
@@ -89,6 +98,45 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision("session:status")).toBe(
       dependentRevision(SIMULATION_COMMANDS_PATH, 8),
     );
+  });
+
+  it("refreshes scene-derived region resources when scene document changes", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+
+    const handled = bridge.handleEvent({
+      payload: {
+        changes: [
+          {
+            recommended_fetch: MODEL_SCENE_PATH,
+            resource: "scene_document",
+            revision: 12,
+          },
+        ],
+      },
+      type: "resource.batch_changed",
+    });
+
+    expect(handled).toBe(true);
+    expect(resources.getRevision(MODEL_SCENE_PATH)).toBe(12);
+    expect(resources.getRevision(MODEL_REGIONS_PATH)).toBe(
+      dependentRevision(MODEL_SCENE_PATH, 12),
+    );
+    expect(resources.getRevision(MODEL_REALIZED_REGIONS_PATH)).toBe(
+      dependentRevision(MODEL_SCENE_PATH, 12),
+    );
+    expect(resources.getRevision(MODEL_REGION_DIAGNOSTICS_PATH)).toBe(
+      dependentRevision(MODEL_SCENE_PATH, 12),
+    );
+    expect(resources.getRevision(MODEL_MATERIAL_FIELDS_PATH)).toBe(
+      dependentRevision(MODEL_SCENE_PATH, 12),
+    );
+    expect(resources.getRevision(MESHING_BUILDS_CURRENT_PATH)).toBeNull();
+    expect(
+      resources.getRevision(MESHING_BUILDS_LATEST_SUCCESSFUL_PATH),
+    ).toBeNull();
+    expect(resources.getRevision(DATA_DOMAIN_TOPOLOGY_PATH)).toBeNull();
   });
 
   it("uses dependency revisions that cannot be dropped by older numeric resource namespaces", () => {
@@ -663,9 +711,19 @@ describe("RealtimeInvalidationBridge", () => {
       "mesh-build-9",
     );
     expect(resources.getRevision(MODEL_SCENE_PATH)).toBe("mesh-build-9");
+    expect(resources.getRevision(MESHING_BUILDS_CURRENT_PATH)).toBe(
+      "mesh-build-9",
+    );
+    expect(resources.getRevision(MESHING_SUMMARY_PATH)).toBe("mesh-build-9");
     expect(resources.getRevision(MESHING_SHARED_DOMAIN_MANIFEST_PATH)).toBe(
       "mesh-build-9",
     );
+    expect(resources.getRevision(MESHING_SHARED_DOMAIN_QUALITY_PATH)).toBe(
+      "mesh-build-9",
+    );
+    expect(
+      resources.getRevision(MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH),
+    ).toBe("mesh-build-9");
     expect(resources.getRevision(VISUALIZATION_STATE_PATH)).toBe("mesh-build-9");
     expect(resources.getRevision(objectTopologyKey)).toBe("mesh-build-9");
     expect(resources.getRevision(objectReportKey)).toBe("mesh-build-9");

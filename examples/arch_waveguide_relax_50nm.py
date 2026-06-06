@@ -25,8 +25,9 @@ AIRBOX_VERTICAL_MARGIN = 150e-9
 AIRBOX_X = LENGTH + AIRBOX_LATERAL_MARGIN
 AIRBOX_Y = WIDTH + AIRBOX_LATERAL_MARGIN
 AIRBOX_Z = HEIGHT + AIRBOX_VERTICAL_MARGIN
-AIRBOX_HMAX = 250e-9
-AIRBOX_HMIN = 10e-9
+
+AIRBOX_HMAX = 500e-9
+AIRBOX_HMIN = 20e-9
 
 B_EXT_T = 0.0
 RELAX_TORQUE_TOLERANCE_T = 1e-4
@@ -105,24 +106,32 @@ waveguide.m = fm.texture.neel_skyrmion(300e-9, 40e-9, -1, 1, "xy")
 waveguide.visualization(show=True, mode="surface", active_quantity_id="m")
 # waveguide.m = fm.texture.random(1)
 # Exchange length lex = sqrt(2*Aex/(μ0·Ms²)) ≈ 5.2 nm.
-# Skyrmion-resolution preset: keep the central skyrmion disk at 1 nm while the
-# rest of the magnetic film can stay near 10 nm.
-waveguide.mesh(
+# Skyrmion-resolution preset: central disk at 1 nm, magnetic film near 10 nm.
+waveguide.mesh.thin_film(
     maximum_element_size=10e-9,
-    minimum_element_size=2e-9,
-    transition_distance=120e-9,
+    minimum_element_size=5e-9,
+    interface_maximum_element_size=10e-9,
+    interface_thickness=10e-9,
+    transition_distance="airbox_boundary",
+    edge_maximum_element_size=5e-9,
+    edge_thickness=10e-9,
+    edge_transition_distance="airbox_boundary",
+    corner_maximum_element_size=5e-9,
+    corner_extent=10e-9,
+    corner_transition_distance="airbox_boundary",
+    layers=1,
     order=1,
 )
-# waveguide.mesh.size_field(
-#     "ComponentRestrictedCylinder",
-#     GeometryName="arch_waveguide_geom",
-#     VIn=1e-9,
-#     VOut=10e-9,
-#     Radius=350e-9,
-#     XCenter=0.0,
-#     YCenter=0.0,
-#     ZCenter=0.0,
-# )
+waveguide.mesh.size_field(
+    "ComponentRestrictedCylinder",
+    GeometryName="arch_waveguide_geom",
+    VIn=1e-9,
+    VOut=10e-9,
+    Radius=350e-9,
+    XCenter=0.0,
+    YCenter=0.0,
+    ZCenter=0.0,
+)
 
 # Energy terms
 study.b_ext(B_EXT_T, 0.0, 0.0)
@@ -138,23 +147,15 @@ study.build_domain_mesh()
 
 # Solver — max_error=1e-4 is adequate for relaxation where the physical
 # convergence criterion (torque < tol) dominates over integrator accuracy.
-# study.solver(
-#     integrator="rk23",
-#     max_error=ADAPTIVE_MAX_ERROR,
-#     dt_min=ADAPTIVE_DT_MIN,
-#     gamma=GAMMA,
-# )
+study.solver(
+    integrator="rk23",
+    max_error=ADAPTIVE_MAX_ERROR,
+    dt_min=ADAPTIVE_DT_MIN,
+    gamma=GAMMA,
+)
 
-# Outputs   
 study.tableautosave(10e-12)
 # study.save("m", every=250e-12)
-
-# Stage
-study.stages.add_minimize(
-    method="bb",
-    max_steps=1000,
-    tol=1e-30,
-)
 
 study.stages.add_relax(
     algorithm="llg_overdamped",

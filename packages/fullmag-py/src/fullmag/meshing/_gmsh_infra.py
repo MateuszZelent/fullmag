@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import re
 import threading
 import time
 from typing import Any
@@ -166,6 +167,49 @@ def _normalize_gmsh_log_line(message: str) -> str | None:
     return None
 
 
+_INLINE_PROGRESS_RE = re.compile(r"\[\s*(\d{1,3})%\]")
+
+
+def _progress_from_gmsh_message(message: str | None) -> tuple[int, str]:
+    if not message:
+        return (75, "generating 3D mesh")
+    lower = message.lower()
+    inline = _INLINE_PROGRESS_RE.search(message)
+    raw_percent = int(inline.group(1)) if inline else None
+    if "meshing curve" in lower or "meshing 1d" in lower:
+        if raw_percent is not None:
+            return (min(99, 10 + (raw_percent * 12) // 100), "meshing curves")
+        return (15, "meshing curves")
+    if "meshing surface" in lower or "meshing 2d" in lower:
+        if raw_percent is not None:
+            return (min(99, 22 + (raw_percent * 18) // 100), "meshing surfaces")
+        return (30, "meshing surfaces")
+    if "meshing volume" in lower or "meshing 3d" in lower:
+        if raw_percent is not None:
+            return (min(99, 55 + (raw_percent * 25) // 100), "meshing 3D volume")
+        return (75, "meshing 3D volume")
+    if (
+        "tetrahedrizing" in lower
+        or "reconstructing mesh" in lower
+        or "recovering boundary" in lower
+        or "done tetrahedrizing" in lower
+        or "done reconstructing mesh" in lower
+    ):
+        return (75, "generating 3D mesh")
+    if "optimizing mesh" in lower or "optimization starts" in lower or "edge swaps" in lower:
+        return (85, "optimizing mesh")
+    return (75, "generating 3D mesh")
+
+
+def _format_gmsh_heartbeat(elapsed_s: float, last_message: str | None = None) -> str:
+    percent, label = _progress_from_gmsh_message(last_message)
+    suffix = ""
+    if last_message:
+        last = last_message.removeprefix("Gmsh: ").strip()
+        suffix = f"; last: {last}"
+    return f"Gmsh: meshing in progress ~{percent}% ({label}; {elapsed_s:.1f}s elapsed{suffix})"
+
+
 class _GmshProgressLogger:
     def __init__(
         self,
@@ -181,6 +225,7 @@ class _GmshProgressLogger:
         self._seen_count = 0
         self._started_at = 0.0
         self._last_emit_at = 0.0
+        self._last_normalized_message: str | None = None
 
     def __enter__(self) -> "_GmshProgressLogger":
         self._gmsh.logger.start()
@@ -207,7 +252,7 @@ class _GmshProgressLogger:
             now = time.monotonic()
             if not emitted and now - self._last_emit_at >= self._heartbeat_interval_s:
                 elapsed = now - self._started_at
-                emit_progress(f"Gmsh: meshing in progress ({elapsed:.1f}s elapsed)")
+                emit_progress(_format_gmsh_heartbeat(elapsed, self._last_normalized_message))
                 self._last_emit_at = now
 
     def _flush(self) -> bool:
@@ -224,8 +269,8 @@ class _GmshProgressLogger:
             normalized = _normalize_gmsh_log_line(message)
             if normalized:
                 emit_progress(normalized)
+                self._last_normalized_message = normalized
                 emitted_any = True
                 self._last_emit_at = time.monotonic()
         return emitted_any
-
 

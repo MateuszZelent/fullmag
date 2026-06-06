@@ -1,5 +1,6 @@
 import {
   isVisualizationTopologyCurrent,
+  isVisualizationTopologyRenderable,
   resolveTopologyConstrainedVisualizationSettings,
   resolveVisualizationTopologyFreshness,
   type VisualizationTopologyFreshness,
@@ -20,7 +21,13 @@ export function isViewport3DTopologyCurrent(
   return isVisualizationTopologyCurrent(freshness);
 }
 
-export function resolveStaleTopologyVisualizationSettings(
+export function isViewport3DTopologyRenderable(
+  freshness: Viewport3DTopologyFreshness,
+): boolean {
+  return isVisualizationTopologyRenderable(freshness);
+}
+
+export function resolveUnavailableTopologyVisualizationSettings(
   settings: VisualizationTargetSettings,
 ): VisualizationTargetSettings {
   return resolveTopologyConstrainedVisualizationSettings(settings);

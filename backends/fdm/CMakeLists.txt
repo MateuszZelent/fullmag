@@ -88,6 +88,9 @@ add_test(NAME fdm_source_layout_contract COMMAND source_layout_contract)
 add_executable(multilayer_abi_v2_contract tests/multilayer_abi_v2_contract.cpp)
 add_test(NAME fdm_multilayer_abi_v2_contract COMMAND multilayer_abi_v2_contract)
 
+add_executable(region_owned_abi_contract tests/region_owned_abi_contract.cpp)
+add_test(NAME fdm_region_owned_abi_contract COMMAND region_owned_abi_contract)
+
 if(FULLMAG_ENABLE_CUDA)
     add_executable(smoke_context tests/smoke_context.cpp)
     target_link_libraries(smoke_context PRIVATE fullmag_fdm)

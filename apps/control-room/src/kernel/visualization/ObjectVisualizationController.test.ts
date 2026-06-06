@@ -181,6 +181,7 @@ describe("ObjectVisualizationController", () => {
         label: "Free layer",
         nodeId: "model:object:free-layer:visualization",
         objectId: "free-layer",
+        ref: null,
       }),
     ).toEqual({
       id: "free-layer",
@@ -194,8 +195,30 @@ describe("ObjectVisualizationController", () => {
         label: "Airbox Visualization",
         nodeId: "model:airbox:visualization",
         objectId: null,
+        ref: null,
       }),
     ).toEqual(AIRBOX_VISUALIZATION_TARGET);
+
+    expect(
+      resolveVisualizationTargetFromSelection({
+        kind: "object.region.visualization",
+        label: "Core region",
+        nodeId: "model:object:free-layer:regions:core:visualization",
+        objectId: "free-layer",
+        ref: {
+          kind: "object.region.visualization",
+          nodeId: "model:object:free-layer:regions:core:visualization",
+          objectId: "free-layer",
+          regionId: "region:core",
+          type: "scene-object",
+          visualizationTargetId: "region:free-layer:region%3Acore",
+        },
+      }),
+    ).toEqual({
+      id: "region:free-layer:region%3Acore",
+      kind: "region",
+      label: "Core region",
+    });
   });
 
   it("patches and clears target overrides without storing resource data", () => {
@@ -229,6 +252,27 @@ describe("ObjectVisualizationController", () => {
     expect(controller.getSettings(target)).toMatchObject({
       opacityPercent: 100,
       renderMode: "surface+edges",
+    });
+  });
+
+  it("stores region visualization overrides independently from the owner object", () => {
+    const controller = new ObjectVisualizationController();
+    const objectTarget = { id: "film", kind: "object" as const };
+    const regionTarget = {
+      id: "film:region%3Afilm%3Acore",
+      kind: "region" as const,
+    };
+
+    controller.patchTarget(objectTarget, { visible: false });
+    controller.patchTarget(regionTarget, { opacityPercent: 35 });
+
+    expect(controller.getSnapshot().overrides[visualizationTargetKey(objectTarget)])
+      .toMatchObject({ visible: false });
+    expect(controller.getSnapshot().overrides[visualizationTargetKey(regionTarget)])
+      .toMatchObject({ opacityPercent: 35 });
+    expect(controller.getSettings(regionTarget)).toMatchObject({
+      opacityPercent: 35,
+      visible: true,
     });
   });
 

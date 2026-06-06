@@ -42,6 +42,7 @@ import {
   defaultObjectMeshPolicyResource,
   draftFromObjectMeshPolicyResource,
   draftKeyForObjectMeshPolicyResource,
+  objectMeshPolicyDraftDirty,
   type ObjectMeshPolicyDraft,
 } from "./ObjectMeshPolicyPanelModel";
 
@@ -600,15 +601,19 @@ function ObjectMeshAdvancedJsonSection({
   );
 }
 
-function ObjectMeshTransactionsSection({
+export function ObjectMeshTransactionsSection({
   feedback,
+  isDirty,
   objectId,
   onApply,
   onBuild,
+  buildLabel,
   onRevert,
   pending,
 }: {
+  buildLabel: string;
   feedback: Feedback;
+  isDirty: boolean;
   objectId: string | null | undefined;
   onApply: () => void;
   onBuild: () => void;
@@ -617,12 +622,18 @@ function ObjectMeshTransactionsSection({
 }) {
   return (
     <InspectorSection value="transactions" title="Transactions">
+      {isDirty ? (
+        <FeedbackBanner
+          kind="warning"
+          message="Unapplied changes. Apply Policy or Apply & Build Mesh before trusting the current mesh."
+        />
+      ) : null}
       <div className="fm-inspector-toolbar">
         <Button disabled={pending || !objectId} size="sm" type="button" variant="primary" onClick={onApply}>
           Apply Policy
         </Button>
         <Button disabled={pending || !objectId} size="sm" type="button" variant="secondary" onClick={onBuild}>
-          Build Mesh
+          {buildLabel}
         </Button>
         <Button disabled={pending} size="sm" type="button" variant="ghost" onClick={onRevert}>
           Revert
@@ -662,6 +673,7 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [pending, setPending] = useState(false);
   const draft = draftState.key === draftKey ? draftState.draft : baseDraft;
+  const isDirty = objectMeshPolicyDraftDirty(draft, baseDraft);
   const sizeFieldRecord = asRecord(sizeField.data?.size_field);
   const sizeFields = Array.isArray(recordField(sizeFieldRecord, "size_fields"))
     ? (recordField(sizeFieldRecord, "size_fields") as unknown[])
@@ -703,16 +715,20 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
     }));
   }
 
-  async function applyPolicy(): Promise<void> {
+  async function applyPolicy({
+    silentSuccess = false,
+  }: {
+    silentSuccess?: boolean;
+  } = {}): Promise<{ ok: boolean }> {
     if (!objectId) {
       setFeedback({ kind: "error", message: "No selected scene object." });
-      return;
+      return { ok: false };
     }
 
     const result = buildObjectMeshPolicyReplaceRequest(draft);
     if ("error" in result) {
       setFeedback({ kind: "error", message: result.error });
-      return;
+      return { ok: false };
     }
 
     setPending(true);
@@ -728,9 +744,16 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
       resources.invalidate(MESH_BUILD_CURRENT_RESOURCE_KEY, revision);
       resources.invalidate(MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY, revision);
       resources.invalidate(SCENE_RESOURCE_KEY, revision);
-      setFeedback({ kind: "success", message: "Object mesh policy updated." });
+      if (!silentSuccess) {
+        setFeedback({
+          kind: "success",
+          message: "Policy saved. Current solver mesh is stale until a mesh build completes.",
+        });
+      }
+      return { ok: true };
     } catch (error) {
       setFeedback({ kind: "error", message: errorMessage(error) });
+      return { ok: false };
     } finally {
       setPending(false);
     }
@@ -742,12 +765,19 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
       return;
     }
 
-    setFeedback({
-      kind: "success",
-      message: "Mesh rebuild submitted. The Mesh Build progress dialog will track the command.",
-    });
+    if (isDirty) {
+      const applied = await applyPolicy({ silentSuccess: true });
+      if (!applied.ok) return;
+    }
+
     try {
       await commands.execute("mesh.build-selected", commandContext);
+      setFeedback({
+        kind: "success",
+        message: isDirty
+          ? "Policy saved. Object mesh build submitted."
+          : "Object mesh build submitted. The Mesh Build monitor will track the command.",
+      });
     } catch (error) {
       setFeedback({ kind: "error", message: errorMessage(error) });
     }
@@ -797,7 +827,9 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
       />
       <ObjectMeshAdvancedJsonSection draft={draft} updateDraft={updateDraft} />
       <ObjectMeshTransactionsSection
+        buildLabel={isDirty ? "Apply & Build Mesh" : "Build Mesh"}
         feedback={feedback}
+        isDirty={isDirty}
         objectId={objectId}
         onApply={() => void applyPolicy()}
         onBuild={() => void buildMesh()}

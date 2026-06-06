@@ -2140,7 +2140,7 @@ describe("ControlRoomApi", () => {
     ]);
   });
 
-  it("loads and patches material and region resources through v2 model facade methods", async () => {
+  it("loads and patches material, authored region, and realized region resources through v2 model facade methods", async () => {
     const requests: Array<{ body: unknown; method: string | undefined; url: string }> = [];
     const api = new ControlRoomApi({
       baseUrl: "http://127.0.0.1:8765",
@@ -2150,6 +2150,33 @@ describe("ControlRoomApi", () => {
           method: init?.method,
           url: String(url),
         });
+        if (String(url).includes("/model/region-diagnostics")) {
+          return jsonResponse({
+            diagnostics: [],
+            scene_revision: 3,
+          });
+        }
+        if (String(url).includes("/model/realized-regions")) {
+          return jsonResponse({
+            geometry_realization_revision: 5,
+            regions: [
+              {
+                bounds_max: [1, 1, 1],
+                bounds_min: [0, 0, 0],
+                enabled: true,
+                interaction_refs: [],
+                material_ref: "mat:free layer",
+                mesh_part_ids: [],
+                name: "free layer",
+                region_id: "region:free-layer",
+                source: "realized_geometry_region",
+                source_body_ids: ["body:1"],
+                source_object_ids: ["free-layer"],
+              },
+            ],
+            scene_revision: 4,
+          });
+        }
         if (String(url).includes("/model/regions")) {
           return jsonResponse({
             geometry_realization_revision: 2,
@@ -2172,6 +2199,8 @@ describe("ControlRoomApi", () => {
       properties: { Aex: 1.2e-11, Dind: null, Ms: 8e5, alpha: 0.03 },
     });
     const regions = await api.model.regions();
+    const realizedRegions = await api.model.realizedRegions();
+    const regionDiagnostics = await api.model.regionDiagnostics();
     await api.model.patchRegion("region:free layer", {
       enabled: false,
       name: "free",
@@ -2180,6 +2209,9 @@ describe("ControlRoomApi", () => {
     expect(material.id).toBe("mat:free layer");
     expect(patchedMaterial.properties.alpha).toBe(0.02);
     expect(regions.scene_revision).toBe(1);
+    expect(realizedRegions.scene_revision).toBe(4);
+    expect(realizedRegions.regions[0]?.source).toBe("realized_geometry_region");
+    expect(regionDiagnostics.scene_revision).toBe(3);
     expect(requests).toEqual([
       {
         body: null,
@@ -2200,12 +2232,217 @@ describe("ControlRoomApi", () => {
         url: "http://127.0.0.1:8765/v2/sessions/current/model/regions",
       },
       {
+        body: null,
+        method: "GET",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/realized-regions",
+      },
+      {
+        body: null,
+        method: "GET",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/region-diagnostics",
+      },
+      {
         body: {
           enabled: false,
           name: "free",
         },
         method: "PATCH",
         url: "http://127.0.0.1:8765/v2/sessions/current/model/regions/region%3Afree%20layer",
+      },
+    ]);
+  });
+
+  it("commits object region and coupling writes through model transactions", async () => {
+    const requests: Array<{ body: unknown; method: string | undefined; url: string }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push({
+          body: init?.body ? parseRequestBody(init.body) : null,
+          method: init?.method,
+          url: String(url),
+        });
+        return jsonResponse({
+          committed_scene: { objects: [], revision: requests.length },
+          scene_revision: requests.length,
+          transaction_kind: "region_owned_write",
+        });
+      },
+    });
+
+    await api.model.createObjectRegion("film", {
+      enabled: true,
+      name: "core",
+      shape: { kind: "cylinder", radius: 80e-9 },
+    }, { baseRevision: 4 });
+    await api.model.patchObjectRegion("film", "film/core", {
+      mesh_policy: { maximum_element_size: 1e-9 },
+    }, { baseRevision: 5 });
+    await api.model.deleteObjectRegion("film", "film/core", {
+      baseRevision: 7,
+    });
+    await api.model.createCoupling({
+      coupling_id: "exchange:film:ref",
+      enabled: true,
+      kind: "exchange",
+      parameters: { mode: "harmonic_mean", scale: 1 },
+      source: { object_id: "film" },
+      target: { object_id: "reference" },
+    }, { baseRevision: 8 });
+    await api.model.patchCoupling("exchange:film:ref", {
+      parameters: { mode: "harmonic_mean", scale: 0.5 },
+    }, { baseRevision: 9 });
+    await api.model.deleteCoupling("exchange:film:ref", { baseRevision: 10 });
+
+    expect(requests).toEqual([
+      {
+        body: {
+          base_revision: 4,
+          kind: "create_object_region",
+          object_id: "film",
+          region: {
+            enabled: true,
+            name: "core",
+            shape: { kind: "cylinder", radius: 80e-9 },
+          },
+        },
+        method: "POST",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/transactions",
+      },
+      {
+        body: {
+          base_revision: 5,
+          kind: "patch_object_region",
+          object_id: "film",
+          patch: { mesh_policy: { maximum_element_size: 1e-9 } },
+          region_id: "film/core",
+        },
+        method: "POST",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/transactions",
+      },
+      {
+        body: {
+          base_revision: 7,
+          kind: "delete_object_region",
+          object_id: "film",
+          region_id: "film/core",
+        },
+        method: "POST",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/transactions",
+      },
+      {
+        body: {
+          base_revision: 8,
+          coupling: {
+            coupling_id: "exchange:film:ref",
+            enabled: true,
+            kind: "exchange",
+            parameters: { mode: "harmonic_mean", scale: 1 },
+            source: { object_id: "film" },
+            target: { object_id: "reference" },
+          },
+          kind: "create_coupling",
+        },
+        method: "POST",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/transactions",
+      },
+      {
+        body: {
+          base_revision: 9,
+          coupling_id: "exchange:film:ref",
+          kind: "patch_coupling",
+          patch: { parameters: { mode: "harmonic_mean", scale: 0.5 } },
+        },
+        method: "POST",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/transactions",
+      },
+      {
+        body: {
+          base_revision: 10,
+          coupling_id: "exchange:film:ref",
+          kind: "delete_coupling",
+        },
+        method: "POST",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/transactions",
+      },
+    ]);
+  });
+
+  it("commits object region writes through object region resources", async () => {
+    const requests: Array<{ body: unknown; method: string | undefined; url: string }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push({
+          body: init?.body ? parseRequestBody(init.body) : null,
+          method: init?.method,
+          url: String(url),
+        });
+        return jsonResponse({
+          objects: [],
+          revision: requests.length,
+          scene_revision: requests.length,
+        });
+      },
+    });
+
+    await api.model.createRegion("film", {
+      enabled: true,
+      name: "core",
+      shape: { kind: "cylinder", radius: 80e-9 },
+    }, { baseRevision: 4 });
+    await api.model.patchObjectRegionResource("film", "film:core", {
+      mesh_policy: { maximum_element_size: 1e-9 },
+    }, { baseRevision: 5 });
+    await api.model.duplicateObjectRegion("film", "film:core", {
+      name: "core copy",
+    }, { baseRevision: 6 });
+    await api.model.reorderObjectRegions("film", ["film:core_copy", "film:core"], {
+      baseRevision: 7,
+    });
+    await api.model.deleteRegion("film", "film:core");
+
+    expect(requests).toEqual([
+      {
+        body: {
+          base_revision: 4,
+          region: {
+            enabled: true,
+            name: "core",
+            shape: { kind: "cylinder", radius: 80e-9 },
+          },
+        },
+        method: "POST",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/objects/film/regions",
+      },
+      {
+        body: {
+          base_revision: 5,
+          patch: { mesh_policy: { maximum_element_size: 1e-9 } },
+        },
+        method: "PATCH",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/objects/film/regions/film%3Acore",
+      },
+      {
+        body: {
+          base_revision: 6,
+          name: "core copy",
+        },
+        method: "POST",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/objects/film/regions/film%3Acore/duplicate",
+      },
+      {
+        body: {
+          base_revision: 7,
+          region_ids: ["film:core_copy", "film:core"],
+        },
+        method: "POST",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/objects/film/regions/reorder",
+      },
+      {
+        body: null,
+        method: "DELETE",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/objects/film/regions/film%3Acore",
       },
     ]);
   });

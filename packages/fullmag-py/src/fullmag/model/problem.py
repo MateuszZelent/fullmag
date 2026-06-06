@@ -14,6 +14,7 @@ from fullmag._progress import emit_progress, emit_progress_event
 from fullmag._validation import ensure_unique_names, require_non_empty
 from fullmag.init.textures import PresetTexture
 from fullmag.model.antenna import AntennaFieldSource, SpinWaveExcitationAnalysis
+from fullmag.model.couplings import Coupling
 from fullmag.model.current_transport import CurrentTransport
 from fullmag.model.discretization import DiscretizationHints, FEM
 from fullmag.model.dynamics import LLG
@@ -35,7 +36,13 @@ from fullmag.model.outputs import (
     SaveSpectrum,
     Snapshot,
 )
-from fullmag.model.structure import Ferromagnet, Material, Region
+from fullmag.model.structure import (
+    Ferromagnet,
+    Material,
+    MaterialParameterAssignment,
+    ObjectRegion,
+    Region,
+)
 from fullmag.model.study import Eigenmodes, FrequencyResponse, Relaxation, TimeEvolution
 
 IR_VERSION = "0.2.0"
@@ -970,6 +977,7 @@ class Problem:
     runtime: RuntimeSelection = field(default_factory=RuntimeSelection)
     runtime_metadata: dict[str, object] = field(default_factory=dict)
     current_modules: Sequence[CurrentModule] = ()
+    couplings: Sequence[Coupling] = ()
     excitation_analysis: SpinWaveExcitationAnalysis | None = None
     geometry_asset_cache: dict[str, dict[str, Any] | None] = field(
         default_factory=dict,
@@ -1028,6 +1036,9 @@ class Problem:
         ensure_unique_names((magnet.name for magnet in self.magnets), "magnet names")
         ensure_unique_names(
             (module.name for module in self.current_modules), "current module names"
+        )
+        ensure_unique_names(
+            (coupling.coupling_id for coupling in self.couplings), "coupling ids"
         )
         current_modules_by_name = _current_module_name_map(self.current_modules)
         if self.excitation_analysis is not None:
@@ -1179,7 +1190,15 @@ class Problem:
             "geometry": {"entries": [geometry.to_ir() for geometry in geometries]},
             "geometry_assets": geometry_assets,
             "regions": [region.to_ir() for region in regions],
+            "object_regions": [
+                region.to_ir() for region in self._collect_object_regions()
+            ],
             "materials": [material.to_ir() for material in materials],
+            "material_parameter_fields": [
+                assignment.to_ir()
+                for assignment in self._collect_material_parameter_fields()
+            ],
+            "couplings": [coupling.to_ir() for coupling in self.couplings],
             "magnets": magnets_ir,
             "energy_terms": [term.to_ir() for term in self.energy],
             "current_modules": [module.to_ir() for module in self.current_modules],
@@ -1301,6 +1320,32 @@ class Problem:
                 regions.append(region)
                 seen.add(region.name)
         return regions
+
+    def _collect_object_regions(self) -> list[ObjectRegion]:
+        regions: list[ObjectRegion] = []
+        seen: set[str] = set()
+        for magnet in self.magnets:
+            for region in magnet.object_regions:
+                if region.region_id in seen:
+                    raise ValueError(
+                        f"object region_id '{region.region_id}' is defined multiple times"
+                    )
+                regions.append(region)
+                seen.add(region.region_id)
+        return regions
+
+    def _collect_material_parameter_fields(self) -> list[MaterialParameterAssignment]:
+        assignments: list[MaterialParameterAssignment] = []
+        seen: set[str] = set()
+        for magnet in self.magnets:
+            for assignment in magnet.material_parameter_fields:
+                if assignment.assignment_id in seen:
+                    raise ValueError(
+                        f"material parameter assignment_id '{assignment.assignment_id}' is defined multiple times"
+                    )
+                assignments.append(assignment)
+                seen.add(assignment.assignment_id)
+        return assignments
 
     def _validate_region_consistency(self) -> None:
         seen: dict[str, str] = {}

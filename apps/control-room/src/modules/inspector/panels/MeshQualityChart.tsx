@@ -1,13 +1,18 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 
 import type {
   MeshQualityHistogramBin,
   MeshQualityMetric,
   MeshSizeDistribution,
 } from "@/shared/domain/mesh/qualityStatistics";
+
+import {
+  buildMeshSizeDistributionHoverBin,
+  resolveActiveHistogramBinIndex,
+} from "./meshHistogramHoverState";
 
 const Bar = dynamic(() => import("recharts").then((module) => module.Bar), {
   ssr: false,
@@ -73,6 +78,7 @@ function useChartColors() {
 /* ── Tooltip ── */
 
 interface BinPayload {
+  binIndex?: number;
   binLabel: string;
   count: number;
   fraction: number;
@@ -122,6 +128,45 @@ function ChartTooltipContent({
       </span>
     </div>
   );
+}
+
+function SizeDistributionTooltipContent({
+  active,
+  activeIndex,
+  distribution,
+  onHoverBin,
+  payload,
+}: {
+  active?: boolean;
+  activeIndex?: number | string;
+  distribution: MeshSizeDistribution;
+  onHoverBin?: (bin: MeshSizeDistributionHoverBin | null) => void;
+  payload?: ReadonlyArray<{ payload?: BinPayload }>;
+}) {
+  useEffect(() => {
+    if (!onHoverBin) {
+      return;
+    }
+    const activeIndexFromTooltip = resolveActiveHistogramBinIndex(
+      {
+        activeTooltipIndex: activeIndex,
+        isTooltipActive: active ?? false,
+      },
+      distribution.histogram.length,
+    );
+    const activeIndexFromPayload =
+      typeof payload?.[0]?.payload?.binIndex === "number"
+        ? payload[0].payload.binIndex
+        : null;
+    const index = activeIndexFromTooltip ?? activeIndexFromPayload;
+    onHoverBin(
+      index === null
+        ? null
+        : buildMeshSizeDistributionHoverBin(distribution, index),
+    );
+  }, [active, activeIndex, distribution, onHoverBin, payload]);
+
+  return <ChartTooltipContent active={active} payload={payload} />;
 }
 
 /* ── Tick formatters ── */
@@ -277,7 +322,8 @@ export function SizeDistributionChart({
   const colors = useChartColors();
   const data = useMemo(
     () =>
-      distribution.histogram.map((bin) => ({
+      distribution.histogram.map((bin, binIndex) => ({
+        binIndex,
         binLabel: bin.label,
         count: bin.count,
         fraction: bin.fraction,
@@ -287,20 +333,6 @@ export function SizeDistributionChart({
       })),
     [distribution.histogram],
   );
-  const hoverBin = (index: number) => {
-    const bin = distribution.histogram[index];
-    if (!bin) return;
-    onHoverBin?.({
-      binIndex: index,
-      binLabel: bin.label,
-      count: bin.count,
-      distributionId: distribution.id,
-      distributionLabel: distribution.label,
-      fraction: bin.fraction,
-      hi: bin.hi,
-      lo: bin.lo,
-    });
-  };
 
   if (data.length === 0) return null;
 
@@ -341,7 +373,12 @@ export function SizeDistributionChart({
             allowDecimals={false}
           />
           <Tooltip
-            content={<ChartTooltipContent />}
+            content={
+              <SizeDistributionTooltipContent
+                distribution={distribution}
+                onHoverBin={onHoverBin}
+              />
+            }
             cursor={{ fill: colors.accentMuted, radius: 2 }}
           />
           <ReferenceLine
@@ -373,8 +410,6 @@ export function SizeDistributionChart({
             fill="url(#accentGradient)"
             radius={[4, 4, 0, 0]}
             maxBarSize={32}
-            onMouseEnter={(_entry: unknown, index: number) => hoverBin(index)}
-            onMouseLeave={() => onHoverBin?.(null)}
           />
         </BarChart>
       </ResponsiveContainer>

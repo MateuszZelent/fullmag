@@ -8,7 +8,6 @@ import {
   createDraftObjectId,
   resolveGeometryObjectDraft,
   resolveGeometryObjectPanelModel,
-  resolveObjectMetricsPanelModel,
   summarizeGeometryValidationMessages,
 } from "./geometryObjectPanelModel";
 
@@ -171,8 +170,8 @@ describe("resolveGeometryObjectPanelModel", () => {
       archHeight: "5e-8",
       geometryKind: "ArchWaveguide",
       height: "2e-9",
-      length: "0.0000025",
-      width: "0.000001",
+      length: "2.5e-6",
+      width: "1e-6",
       z0: "-2.5e-8",
     });
     expect(buildGeometryDraftPatch(draft)).toEqual({
@@ -274,38 +273,5 @@ describe("resolveGeometryObjectPanelModel", () => {
         "box",
       ),
     ).toEqual(["Box is outside universe", "Material is missing"]);
-  });
-
-  it("formats object energy and magnetization metrics for the inspector", () => {
-    expect(
-      resolveObjectMetricsPanelModel({
-        energies: {
-          anisotropy: 4,
-          demag: 2,
-          dmi: 5,
-          exchange: 1,
-          total: 15,
-          zeeman: 3,
-        },
-        has_solver_sample: true,
-        magnetization_average: { mx: 0.25, my: 0.5, mz: 0.75 },
-        object_id: "box",
-        revision: 21,
-        source: "solver_per_object",
-        step: 7,
-        time_seconds: 4.2e-12,
-      }),
-    ).toEqual({
-      anisotropy: "4.000000e+0 J",
-      demag: "2.000000e+0 J",
-      dmi: "5.000000e+0 J",
-      exchange: "1.000000e+0 J",
-      magnetization: "(0.250000, 0.500000, 0.750000)",
-      sample: "step 7 @ 4.200000e-12 s",
-      source: "solver_per_object",
-      status: "computed",
-      total: "1.500000e+1 J",
-      zeeman: "3.000000e+0 J",
-    });
   });
 });

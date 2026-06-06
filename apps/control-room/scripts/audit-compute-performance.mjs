@@ -120,13 +120,13 @@ const objectVisualizationPanelPath = path.join(
   appRoot,
   "src/modules/inspector/panels/ObjectVisualizationPanel.tsx",
 );
-const geometryObjectPanelPath = path.join(
+const objectGeneralPanelPath = path.join(
   appRoot,
-  "src/modules/inspector/panels/GeometryObjectPanel.tsx",
+  "src/modules/inspector/panels/ObjectGeneralPanel.tsx",
 );
-const meshDetailsPanelPath = path.join(
+const meshDetailsModelPath = path.join(
   appRoot,
-  "src/modules/inspector/panels/MeshDetailsPanel.tsx",
+  "src/modules/inspector/panels/mesh-details/useMeshDetailsModel.ts",
 );
 const airboxMeshPolicyPanelPath = path.join(
   appRoot,
@@ -291,7 +291,7 @@ checkShellSelectorHooks();
 checkSelectionComparatorHotPath();
 checkObjectVisualizationSelectorHooks();
 checkViewport3DObjectVisualizationSelector();
-checkGeometryObjectPanelVisualizationSelector();
+checkObjectGeneralPanelVisualizationSelector();
 checkCommandShortcutConnector();
 checkFooterDiagnosticsBatching();
 checkPerformanceDiagnosticsExport();
@@ -822,7 +822,7 @@ function checkObjectVisualizationPanelNumberFieldCommitBoundary() {
 }
 
 function checkMeshDetailsPanelSessionStatusSelector() {
-  const source = readFileSync(meshDetailsPanelPath, "utf8");
+  const source = readFileSync(meshDetailsModelPath, "utf8");
   requireTokens(source, "MeshDetailsPanel session status selector", [
     "selectMeshDetailsRuntimeStatus",
     "meshDetailsRuntimeStatusEquals",
@@ -988,9 +988,9 @@ function checkViewport3DObjectVisualizationSelector() {
   ]);
 }
 
-function checkGeometryObjectPanelVisualizationSelector() {
-  const source = readFileSync(geometryObjectPanelPath, "utf8");
-  requireTokens(source, "GeometryObjectPanel visualization selector", [
+function checkObjectGeneralPanelVisualizationSelector() {
+  const source = readFileSync(objectGeneralPanelPath, "utf8");
+  requireTokens(source, "ObjectGeneralPanel visualization selector", [
     "useObjectVisualizationController",
     "useObjectVisualizationSelector",
     "resolveGeometryObjectVisualizationColors",
@@ -998,7 +998,7 @@ function checkGeometryObjectPanelVisualizationSelector() {
     "shaderMonoColor",
     "wireframeColor",
   ]);
-  forbidTokens(source, "GeometryObjectPanel visualization selector", [
+  forbidTokens(source, "ObjectGeneralPanel visualization selector", [
     "useObjectVisualizationRegistry()",
   ]);
 }

@@ -7,6 +7,16 @@ type ObjectSelectionKind =
   | "object.material"
   | "object.physics"
   | "object.regions"
+  | "object.region"
+  | "object.region.geometry"
+  | "object.region.shape"
+  | "object.region.mesh"
+  | "object.region.magnetic-parameters"
+  | "object.region.material"
+  | "object.region.texture"
+  | "object.region.visualization"
+  | "object.region.regions"
+  | "object.region.diagnostics"
   | "object.region-magnetic-texture"
   | "object.magnetic-parameters"
   | "object.magnetic-texture"
@@ -17,6 +27,15 @@ type ObjectSelectionKind =
   | "object.visualization";
 
 type MeshQualitySelectionMetric = CrossSectionQualityMetric;
+export type RegionVisualizationTargetId = `region:${string}:${string}`;
+
+export function visualizationTargetIdForSceneObject(
+  objectId: string,
+  regionId?: string | null,
+): `object:${string}` | RegionVisualizationTargetId {
+  if (!regionId) return `object:${objectId}`;
+  return `region:${objectId}:${encodeURIComponent(regionId)}`;
+}
 
 export type SelectionRef =
   | {
@@ -25,7 +44,7 @@ export type SelectionRef =
       objectId: string;
       regionId?: string;
       type: "scene-object";
-      visualizationTargetId: `object:${string}`;
+      visualizationTargetId: `object:${string}` | RegionVisualizationTargetId;
     }
   | {
       kind: "airbox.mesh" | "airbox.mesh-quality" | "airbox.visualization";
@@ -62,6 +81,12 @@ export type SelectionRef =
       plotId: string;
       type: "cross-section-plot";
       visualizationTargetId: `cross-section:plot:${string}`;
+    }
+  | {
+      couplingId: string;
+      kind: "physics.coupling";
+      nodeId: string;
+      type: "physics-coupling";
     }
   | {
       chartId: string;
@@ -195,6 +220,13 @@ export function selectionRefEquals(
         left.nodeId === right.nodeId &&
         left.plotId === right.plotId &&
         left.visualizationTargetId === right.visualizationTargetId
+      );
+    case "physics-coupling":
+      return (
+        right.type === "physics-coupling" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.couplingId === right.couplingId
       );
     case "analysis-chart":
       return (

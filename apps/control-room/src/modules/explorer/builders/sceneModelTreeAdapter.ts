@@ -1,10 +1,18 @@
-import type { StageExecutionResource } from "@/kernel/api/apiTypes";
+import type {
+  CouplingListResource,
+  MaterialParameterFieldListResource,
+  RegionListResource,
+  StageExecutionResource,
+} from "@/kernel/api/apiTypes";
 import { apmFromTesla } from "@/shared/domain/physics/torqueUnits";
 
 import type {
   ExplorerNodeStatus,
+  ModelTreeCouplingSnapshot,
   ModelTreeMaterialSnapshot,
+  ModelTreeMaterialFieldSnapshot,
   ModelTreeObjectSnapshot,
+  ModelTreeObjectRegionSnapshot,
   ModelTreePhysicsInteractionSnapshot,
   ModelTreeSnapshot,
 } from "../explorerTypes";
@@ -18,8 +26,15 @@ interface SceneLike {
   universe?: unknown;
 }
 
+interface ModelTreeResourceInputs {
+  couplings?: CouplingListResource | null;
+  materialFields?: MaterialParameterFieldListResource | null;
+  regions?: RegionListResource | null;
+}
+
 export function modelTreeSnapshotFromScene(
   scene: SceneLike | null | undefined,
+  resources: ModelTreeResourceInputs = {},
 ): ModelTreeSnapshot {
   const materials = sceneMaterials(scene?.materials);
   const materialById = new Map(
@@ -31,7 +46,17 @@ export function modelTreeSnapshotFromScene(
   const magnetizationById = new Map(
     magnetizationAssets.map((asset) => [asset.id, asset]),
   );
+  const materialFieldsByObject = materialFieldsByOwner(
+    resources.materialFields,
+    scene?.objects,
+  );
+  const authoredRegionsByObject = authoredRegionsByOwner(
+    resources.regions,
+    scene?.objects,
+    materialFieldsByObject,
+  );
   return {
+    couplings: couplingSnapshots(resources.couplings, scene),
     materials,
     objects: Array.isArray(scene?.objects)
       ? scene.objects.reduce<ModelTreeObjectSnapshot[]>((objects, object) => {
@@ -39,6 +64,8 @@ export function modelTreeSnapshotFromScene(
             object,
             materialById,
             magnetizationById,
+            authoredRegionsByObject,
+            materialFieldsByObject,
           );
           if (snapshot) {
             objects.push(snapshot);
@@ -231,6 +258,8 @@ function sceneObjectSnapshot(
   value: unknown,
   materialById: ReadonlyMap<string, ModelTreeMaterialSnapshot>,
   magnetizationById: ReadonlyMap<string, SceneMagnetizationAssetSnapshot>,
+  authoredRegionsByObject: ReadonlyMap<string, ModelTreeObjectRegionSnapshot[]>,
+  materialFieldsByObject: ReadonlyMap<string, ModelTreeMaterialFieldSnapshot[]>,
 ): ModelTreeObjectSnapshot | null {
   if (!value || typeof value !== "object") return null;
   const object = value as Record<string, unknown>;
@@ -272,9 +301,208 @@ function sceneObjectSnapshot(
     regionMagnetization: regionMagnetizationRef,
     regionMagnetizationKind: regionMagnetization?.kind,
     regionMagnetizationLabel: regionMagnetization?.label,
+    regions: authoredRegionsByObject.get(id) ?? [],
+    materialFields: materialFieldsByObject.get(id) ?? [],
     textureTransformAvailable:
       magnetization?.textureTransformAvailable ?? false,
   };
+}
+
+function authoredRegionsByOwner(
+  resource: RegionListResource | null | undefined,
+  sceneObjects: unknown,
+  materialFieldsByObject: ReadonlyMap<string, ModelTreeMaterialFieldSnapshot[]>,
+): Map<string, ModelTreeObjectRegionSnapshot[]> {
+  const byObject = new Map<string, ModelTreeObjectRegionSnapshot[]>();
+  if (resource?.regions?.length) {
+    for (const region of resource.regions) {
+      if (region.source !== "authored_object_region") continue;
+      const owner = stringValue(region.owner_object_id);
+      if (!owner) continue;
+      const fields = materialFieldsByObject.get(owner) ?? [];
+      pushRegionSnapshot(
+        byObject,
+        owner,
+        {
+          enabled: region.enabled !== false,
+          id: region.region_id,
+          label: region.name,
+          materialFieldCount: Math.max(
+            region.material_parameter_fields?.length ?? 0,
+            fields.filter((field) => field.regionId === region.region_id).length,
+          ),
+          materialOverrideCount: region.material_overrides?.length ?? 0,
+          meshPolicyActive: Boolean(region.mesh_policy),
+          priority: region.priority ?? null,
+          realizationPolicy: region.realization_policy ?? null,
+          realizationStatus: region.realization_status ?? null,
+          shapeKind: shapeKind(region.shape),
+          source: region.source,
+          textureOverrideActive: Boolean(region.texture_override),
+        },
+      );
+    }
+    return sortRegionMap(byObject);
+  }
+
+  if (!Array.isArray(sceneObjects)) return byObject;
+  for (const objectValue of sceneObjects) {
+    const object = recordValue(objectValue);
+    const objectId = stringValue(object?.id);
+    if (!objectId || !Array.isArray(object?.regions)) continue;
+    const fields = materialFieldsByObject.get(objectId) ?? [];
+    for (const regionValue of object.regions) {
+      const region = recordValue(regionValue);
+      const id = stringValue(region?.region_id) ?? stringValue(region?.name);
+      if (!id) continue;
+      pushRegionSnapshot(byObject, objectId, {
+        enabled: booleanValue(region?.enabled) ?? true,
+        id,
+        label: stringValue(region?.name) ?? id,
+        materialFieldCount: fields.filter((field) => field.regionId === id).length,
+        materialOverrideCount: arrayLength(region?.material_overrides),
+        meshPolicyActive: Boolean(region?.mesh_policy),
+        priority: numberValue(region?.priority),
+        realizationPolicy: stringValue(region?.realization_policy),
+        realizationStatus: null,
+        shapeKind: shapeKind(region?.shape),
+        source: "authored_object_region",
+        textureOverrideActive: Boolean(region?.texture_override),
+      });
+    }
+  }
+  return sortRegionMap(byObject);
+}
+
+function pushRegionSnapshot(
+  byObject: Map<string, ModelTreeObjectRegionSnapshot[]>,
+  objectId: string,
+  region: ModelTreeObjectRegionSnapshot,
+): void {
+  const regions = byObject.get(objectId) ?? [];
+  if (!regions.some((candidate) => candidate.id === region.id)) {
+    regions.push(region);
+  }
+  byObject.set(objectId, regions);
+}
+
+function sortRegionMap(
+  byObject: Map<string, ModelTreeObjectRegionSnapshot[]>,
+): Map<string, ModelTreeObjectRegionSnapshot[]> {
+  for (const [objectId, regions] of byObject) {
+    byObject.set(
+      objectId,
+      [...regions].sort((left, right) => {
+        const leftPriority = left.priority ?? 0;
+        const rightPriority = right.priority ?? 0;
+        if (leftPriority !== rightPriority) return rightPriority - leftPriority;
+        return left.label.localeCompare(right.label);
+      }),
+    );
+  }
+  return byObject;
+}
+
+function materialFieldsByOwner(
+  resource: MaterialParameterFieldListResource | null | undefined,
+  sceneObjects: unknown,
+): Map<string, ModelTreeMaterialFieldSnapshot[]> {
+  const fields = new Map<string, ModelTreeMaterialFieldSnapshot[]>();
+  const pushField = (field: ModelTreeMaterialFieldSnapshot) => {
+    const ownerFields = fields.get(field.ownerObjectId) ?? [];
+    if (!ownerFields.some((candidate) => candidate.id === field.id)) {
+      ownerFields.push(field);
+    }
+    fields.set(field.ownerObjectId, ownerFields);
+  };
+
+  if (resource?.fields?.length) {
+    for (const field of resource.fields) {
+      pushField({
+        id: field.assignment_id,
+        label: materialFieldLabel(field.parameter, field.unit),
+        ownerObjectId: field.owner_object_id,
+        parameter: field.parameter,
+        realizationStatus: field.realization_status ?? null,
+        regionId: field.source_region_id ?? null,
+        unit: field.unit ?? null,
+      });
+    }
+    return fields;
+  }
+
+  if (!Array.isArray(sceneObjects)) return fields;
+  for (const objectValue of sceneObjects) {
+    const object = recordValue(objectValue);
+    const ownerObjectId = stringValue(object?.id);
+    if (!ownerObjectId || !Array.isArray(object?.material_parameter_fields)) {
+      continue;
+    }
+    for (const fieldValue of object.material_parameter_fields) {
+      const field = recordValue(fieldValue);
+      const parameter = stringValue(field?.parameter);
+      if (!parameter) continue;
+      const id =
+        stringValue(field?.assignment_id) ?? `${ownerObjectId}:${parameter}:field`;
+      const value = recordValue(field?.value);
+      const unit = stringValue(value?.unit);
+      pushField({
+        id,
+        label: materialFieldLabel(parameter, unit),
+        ownerObjectId,
+        parameter,
+        realizationStatus: null,
+        regionId: stringValue(field?.region_id),
+        unit,
+      });
+    }
+  }
+  return fields;
+}
+
+function couplingSnapshots(
+  resource: CouplingListResource | null | undefined,
+  scene: SceneLike | null | undefined,
+): ModelTreeCouplingSnapshot[] {
+  if (resource?.couplings?.length) {
+    return resource.couplings.map((coupling) => ({
+      enabled: coupling.enabled !== false,
+      id: coupling.coupling_id,
+      kind: coupling.coupling_kind,
+      label: couplingLabel(
+        coupling.coupling_kind,
+        endpointLabel(coupling.source),
+        endpointLabel(coupling.target),
+      ),
+      realizationStatus: coupling.realization_status ?? null,
+      sourceLabel: endpointLabel(coupling.source),
+      targetLabel: endpointLabel(coupling.target),
+    }));
+  }
+
+  const sceneRecord = recordValue(scene);
+  if (!Array.isArray(sceneRecord?.couplings)) return [];
+  return sceneRecord.couplings.reduce<ModelTreeCouplingSnapshot[]>(
+    (couplings, couplingValue) => {
+      const coupling = recordValue(couplingValue);
+      const id = stringValue(coupling?.coupling_id);
+      const kind = stringValue(coupling?.kind);
+      if (!id || !kind) return couplings;
+      const sourceLabel = endpointLabel(coupling?.source);
+      const targetLabel = endpointLabel(coupling?.target);
+      couplings.push({
+        enabled: booleanValue(coupling?.enabled) ?? true,
+        id,
+        kind,
+        label: couplingLabel(kind, sourceLabel, targetLabel),
+        realizationStatus: null,
+        sourceLabel,
+        targetLabel,
+      });
+      return couplings;
+    },
+    [],
+  );
 }
 
 function regionOverrideMagnetizationRef(
@@ -431,6 +659,11 @@ function geometryKind(value: unknown): string | null {
   );
 }
 
+function shapeKind(value: unknown): string | null {
+  const shape = recordValue(value);
+  return stringValue(shape?.kind) ?? stringValue(shape?.geometry_kind);
+}
+
 function meshStatusFromTags(value: unknown): ExplorerNodeStatus {
   const tags: string[] = [];
   if (Array.isArray(value)) {
@@ -468,8 +701,46 @@ function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+function booleanValue(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
+function numberValue(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function arrayLength(value: unknown): number {
+  return Array.isArray(value) ? value.length : 0;
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
 function scalarText(value: unknown): string | number | null {
   return typeof value === "string" || typeof value === "number" ? value : null;
+}
+
+function materialFieldLabel(parameter: string, unit: string | null | undefined): string {
+  return unit ? `${parameter} (${unit})` : parameter;
+}
+
+function couplingLabel(kind: string, source: string, target: string): string {
+  return `${source} -> ${target} ${interactionLabel(kind)}`;
+}
+
+function endpointLabel(value: unknown): string {
+  const endpoint = recordValue(value);
+  if (!endpoint) return "endpoint";
+  const object = stringValue(endpoint.object) ?? stringValue(endpoint.object_id);
+  const region = stringValue(endpoint.region_id) ?? stringValue(endpoint.region);
+  const selector = stringValue(endpoint.selector) ?? stringValue(endpoint.surface);
+  if (object && region) return `${object}/${region}`;
+  if (object && selector) return `${object}/${selector}`;
+  if (object) return object;
+  return stringValue(endpoint.label) ?? stringValue(endpoint.kind) ?? "endpoint";
 }
 
 function finiteNumberFromScalar(value: unknown): number | null {

@@ -1390,11 +1390,11 @@ describe("study runtime command contributions", () => {
 
     expect(registry.isEnabled("study.run", noMeshContext)).toBe(false);
     expect(registry.get("study.run")?.disabledReason?.(noMeshContext)).toBe(
-      "Build a shared-domain mesh before running FEM runtime commands.",
+      "Build a current shared-domain mesh before running. Open Mesh Jobs or Build Shared-Domain Mesh.",
     );
     expect(registry.isEnabled("study.run", staleMeshContext)).toBe(false);
     expect(registry.get("study.run")?.disabledReason?.(staleMeshContext)).toBe(
-      "Rebuild the shared-domain mesh for the current scene before running.",
+      "Build a current shared-domain mesh before running. Open Mesh Jobs or Build Shared-Domain Mesh.",
     );
     expect(registry.isEnabled("study.run", currentMeshContext)).toBe(true);
   });
@@ -1423,7 +1423,9 @@ describe("study runtime command contributions", () => {
     expect(registry.isEnabled("study.compute-fields", context)).toBe(false);
     expect(
       registry.get("study.compute-fields")?.disabledReason?.(context),
-    ).toBe("Shared-domain mesh provenance is unavailable; rebuild the mesh.");
+    ).toBe(
+      "Build a current shared-domain mesh before running. Open Mesh Jobs or Build Shared-Domain Mesh.",
+    );
     expect(registry.isEnabled("study.compute-energies", context)).toBe(false);
     expect(registry.isEnabled("study.run", context)).toBe(false);
   });

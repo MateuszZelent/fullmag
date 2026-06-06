@@ -311,15 +311,34 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
 
 type ObjectMaterialPanelState = ReturnType<typeof useObjectMaterialPanelState>;
 
+function materialInspectorSections(selectionKind: string | null): string[] {
+  switch (selectionKind) {
+    case "object.material":
+      return ["parameters", "material-parameters", "actions"];
+    case "object.magnetic-parameters":
+      return ["parameters", "assignment", "uniaxial-anisotropy", "actions"];
+    default:
+      return ["parameters", "assignment", "uniaxial-anisotropy", "material-parameters", "actions"];
+  }
+}
+
 export function ObjectMaterialPanel({ selection }: InspectorPanelProps) {
   const panel = useObjectMaterialPanelState(selection);
-  return <ObjectMaterialPanelView panel={panel} />;
+  const sections = materialInspectorSections(selection.kind);
+  const showSection = (section: string) => sections.includes(section);
+  return <ObjectMaterialPanelView panel={panel} sections={sections} showSection={showSection} selectionKind={selection.kind} />;
 }
 
 function ObjectMaterialPanelView({
   panel,
+  sections,
+  showSection,
+  selectionKind,
 }: {
   panel: ObjectMaterialPanelState;
+  sections: string[];
+  showSection: (section: string) => boolean;
+  selectionKind: string | null;
 }) {
   const {
     anisotropyDraft,
@@ -346,159 +365,176 @@ function ObjectMaterialPanelView({
 
   return (
     <Accordion
+      key={selectionKind ?? "default"}
       className="fm-inspector-panel"
       type="multiple"
-      defaultValue={["parameters", "assignment", "uniaxial-anisotropy", "material-parameters", "actions"]}
+      defaultValue={sections}
     >
-      <InspectorSection value="parameters" title="Magnetic Parameters" collapsible defaultCollapsed={false}>
-        <FieldRow label="Object ID" value={object.objectId} />
-        <FieldRow label="Current material" value={object.material} />
-        <FieldRow
-          label="Material resource"
-          value={material.data?.name ?? materialId ?? "unassigned"}
-        />
-        <FieldRow label="Mode" value={object.mode} />
-        <FieldRow
-          label="Scene revision"
-          value={object.baseRevision === null ? "unknown" : String(object.baseRevision)}
-        />
-        <FieldRow label="Scene fetch" value={scene.status} />
-        <FieldRow label="Material fetch" value={material.status} />
-      </InspectorSection>
+      {showSection("parameters") ? (
+        <InspectorSection value="parameters" title="Magnetic Parameters" collapsible defaultCollapsed={false}>
+          <FieldRow label="Object ID" value={object.objectId} />
+          <FieldRow label="Current material" value={object.material} />
+          <FieldRow
+            label="Material resource"
+            value={material.data?.name ?? materialId ?? "unassigned"}
+          />
+          <FieldRow label="Mode" value={object.mode} />
+          <FieldRow
+            label="Scene revision"
+            value={object.baseRevision === null ? "unknown" : String(object.baseRevision)}
+          />
+          <FieldRow label="Scene fetch" value={scene.status} />
+          <FieldRow label="Material fetch" value={material.status} />
+        </InspectorSection>
+      ) : null}
 
-      <InspectorSection value="assignment" title="Assignment">
-        <FormField
-          label="Material ref"
-          mono={false}
-          type="text"
-          value={draft.materialRef}
-          onChange={(event) => updateDraft({ materialRef: event.target.value })}
-        />
-      </InspectorSection>
+      {showSection("assignment") ? (
+        <InspectorSection value="assignment" title="Assignment">
+          <FormField
+            label="Material ref"
+            mono={false}
+            type="text"
+            value={draft.materialRef}
+            onChange={(event) => updateDraft({ materialRef: event.target.value })}
+          />
+        </InspectorSection>
+      ) : null}
 
-      <InspectorSection value="uniaxial-anisotropy" title="Uniaxial Anisotropy">
-        <FormField
-          label="Present"
-          type="checkbox"
-          checked={anisotropyDraft.present}
-          onChange={(event) =>
-            updateAnisotropyDraft({ present: (event.target as HTMLInputElement).checked })
-          }
-        />
-        <FormField
-          label="Ku1"
-          type="number"
-          unit="J/m³"
-          disabled={!anisotropyDraft.present}
-          value={anisotropyDraft.ku1}
-          onChange={(event) => updateAnisotropyDraft({ ku1: event.target.value })}
-        />
-        <Vector3Field
-          label="Axis"
-          disabled={!anisotropyDraft.present}
-          values={[anisotropyDraft.axisX, anisotropyDraft.axisY, anisotropyDraft.axisZ]}
-          onChange={(index, value) => {
-            const fields = ["axisX", "axisY", "axisZ"] as const;
-            updateAnisotropyDraft({ [fields[index]]: value });
-          }}
-        />
-      </InspectorSection>
-
-      <InspectorSection value="material-parameters" title="Material Parameters">
-        <FormField
-          label="Name"
-          mono={false}
-          type="text"
-          disabled={!material.data}
-          value={draft.materialName}
-          onChange={(event) => updateDraft({ materialName: event.target.value })}
-        />
-        <FormField
-          label="Ms"
-          type="number"
-          unit="A/m"
-          disabled={!material.data}
-          value={draft.ms}
-          onChange={(event) => updateDraft({ ms: event.target.value })}
-        />
-        <FormField
-          label="Aex"
-          type="number"
-          unit="J/m"
-          disabled={!material.data}
-          value={draft.aex}
-          onChange={(event) => updateDraft({ aex: event.target.value })}
-        />
-        <FormField
-          label="alpha"
-          type="number"
-          disabled={!material.data}
-          value={draft.alpha}
-          onChange={(event) => updateDraft({ alpha: event.target.value })}
-        />
-        <FormField
-          label="Dind"
-          type="number"
-          unit="J/m²"
-          disabled={!material.data}
-          value={draft.dind}
-          onChange={(event) => updateDraft({ dind: event.target.value })}
-        />
-        <FormField
-          label="Dbulk"
-          type="number"
-          unit="J/m³"
-          disabled={!material.data}
-          value={draft.dbulk}
-          onChange={(event) => updateDraft({ dbulk: event.target.value })}
-        />
-      </InspectorSection>
-
-      <InspectorSection value="actions" title="Actions">
-        <div className="fm-inspector-toolbar">
-          <Button
-            disabled={pending || object.mode !== "committed"}
-            size="sm"
-            type="button"
-            variant="primary"
-            onClick={() => void applyMaterial()}
-          >
-            Apply Assignment
-          </Button>
-          <Button
-            disabled={pending || !material.data || parametersTargetChanged}
-            size="sm"
-            type="button"
-            variant="primary"
-            onClick={() => void applyParameters()}
-          >
-            Apply Parameters
-          </Button>
-          <Button
-            disabled={pending || object.mode !== "committed"}
-            size="sm"
-            type="button"
-            variant="primary"
-            onClick={() => void applyAnisotropy()}
-          >
-            Apply Anisotropy
-          </Button>
-          <Button
-            disabled={pending}
-            size="sm"
-            type="button"
-            variant="ghost"
-            onClick={() => {
-              setDraftState({ draft: baseDraft, key: draftKey });
-              setAnisotropyDraftState({ draft: baseAnisotropyDraft, key: "" });
-              setFeedback(null);
+      {showSection("uniaxial-anisotropy") ? (
+        <InspectorSection value="uniaxial-anisotropy" title="Uniaxial Anisotropy">
+          <FormField
+            label="Present"
+            type="checkbox"
+            checked={anisotropyDraft.present}
+            onChange={(event) =>
+              updateAnisotropyDraft({ present: (event.target as HTMLInputElement).checked })
+            }
+          />
+          <FormField
+            label="Ku1"
+            type="number"
+            unit="J/m³"
+            disabled={!anisotropyDraft.present}
+            value={anisotropyDraft.ku1}
+            onChange={(event) => updateAnisotropyDraft({ ku1: event.target.value })}
+          />
+          <Vector3Field
+            label="Axis"
+            disabled={!anisotropyDraft.present}
+            values={[anisotropyDraft.axisX, anisotropyDraft.axisY, anisotropyDraft.axisZ]}
+            onChange={(index, value) => {
+              const fields = ["axisX", "axisY", "axisZ"] as const;
+              updateAnisotropyDraft({ [fields[index]]: value });
             }}
-          >
-            Revert
-          </Button>
-        </div>
-        {feedback && <FeedbackBanner kind={feedback.kind} message={feedback.message} />}
-      </InspectorSection>
+          />
+        </InspectorSection>
+      ) : null}
+
+      {showSection("material-parameters") ? (
+        <InspectorSection value="material-parameters" title="Material Parameters">
+          <FormField
+            label="Name"
+            mono={false}
+            type="text"
+            disabled={!material.data}
+            value={draft.materialName}
+            onChange={(event) => updateDraft({ materialName: event.target.value })}
+          />
+          <FormField
+            label="Ms"
+            type="number"
+            unit="A/m"
+            disabled={!material.data}
+            value={draft.ms}
+            onChange={(event) => updateDraft({ ms: event.target.value })}
+          />
+          <FormField
+            label="Aex"
+            type="number"
+            unit="J/m"
+            disabled={!material.data}
+            value={draft.aex}
+            onChange={(event) => updateDraft({ aex: event.target.value })}
+          />
+          <FormField
+            label="alpha"
+            type="number"
+            disabled={!material.data}
+            value={draft.alpha}
+            onChange={(event) => updateDraft({ alpha: event.target.value })}
+          />
+          <FormField
+            label="Dind"
+            type="number"
+            unit="J/m²"
+            disabled={!material.data}
+            value={draft.dind}
+            onChange={(event) => updateDraft({ dind: event.target.value })}
+          />
+          <FormField
+            label="Dbulk"
+            type="number"
+            unit="J/m³"
+            disabled={!material.data}
+            value={draft.dbulk}
+            onChange={(event) => updateDraft({ dbulk: event.target.value })}
+          />
+        </InspectorSection>
+      ) : null}
+
+      {showSection("actions") ? (
+        <InspectorSection value="actions" title="Actions">
+          <div className="fm-inspector-toolbar">
+            {showSection("assignment") ? (
+              <Button
+                disabled={pending || object.mode !== "committed"}
+                size="sm"
+                type="button"
+                variant="primary"
+                onClick={() => void applyMaterial()}
+              >
+                Apply Assignment
+              </Button>
+            ) : null}
+            {showSection("material-parameters") ? (
+              <Button
+                disabled={pending || !material.data || parametersTargetChanged}
+                size="sm"
+                type="button"
+                variant="primary"
+                onClick={() => void applyParameters()}
+              >
+                Apply Parameters
+              </Button>
+            ) : null}
+            {showSection("uniaxial-anisotropy") ? (
+              <Button
+                disabled={pending || object.mode !== "committed"}
+                size="sm"
+                type="button"
+                variant="primary"
+                onClick={() => void applyAnisotropy()}
+              >
+                Apply Anisotropy
+              </Button>
+            ) : null}
+            <Button
+              disabled={pending}
+              size="sm"
+              type="button"
+              variant="ghost"
+              onClick={() => {
+                setDraftState({ draft: baseDraft, key: draftKey });
+                setAnisotropyDraftState({ draft: baseAnisotropyDraft, key: "" });
+                setFeedback(null);
+              }}
+            >
+              Revert
+            </Button>
+          </div>
+          {feedback && <FeedbackBanner kind={feedback.kind} message={feedback.message} />}
+        </InspectorSection>
+      ) : null}
     </Accordion>
   );
 }

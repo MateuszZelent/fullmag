@@ -184,7 +184,7 @@ describe("AppMenuBar", () => {
       errorName: "Error",
       expectedContractVersion: "1.0.0",
       httpStatus: 0,
-      requestUrl: "http://localhost:8081/v2/sessions/current/status",
+      requestUrl: `http://localhost:8081${SESSION_STATUS_PATH}`,
       resourceKey: "session:status",
     });
   });

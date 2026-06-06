@@ -18,6 +18,13 @@ describe("magnetization texture target resolver", () => {
   it("resolves region texture selection to region target", () => {
     expect(
       resolveMagnetizationTextureTarget({
+        kind: "object.region.texture",
+        objectId: "body",
+        regionId: "region:body",
+      }),
+    ).toEqual({ kind: "region", objectId: "body", regionId: "region:body" });
+    expect(
+      resolveMagnetizationTextureTarget({
         kind: "object.region-magnetic-texture",
         objectId: "body",
         regionId: "region:body",
@@ -40,5 +47,22 @@ describe("magnetization texture target resolver", () => {
     expect(sameMagnetizationTextureTarget(explorerTarget, ribbonTarget)).toBe(
       true,
     );
+  });
+
+  it("does not treat non-texture region selections as texture region targets", () => {
+    expect(
+      resolveMagnetizationTextureTarget({
+        kind: "object.region.mesh",
+        objectId: "body",
+        regionId: "region:body",
+      }),
+    ).toEqual({ kind: "object", objectId: "body" });
+    expect(
+      resolveMagnetizationTextureTarget({
+        kind: "object.region.diagnostics",
+        objectId: "body",
+        regionId: "region:body",
+      }),
+    ).toEqual({ kind: "object", objectId: "body" });
   });
 });

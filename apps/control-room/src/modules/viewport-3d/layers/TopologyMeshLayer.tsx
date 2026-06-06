@@ -10,8 +10,8 @@ import type {
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import type { Viewport3DMagnetizationTexturePreview } from "../viewport3dPrimitiveModel";
 import {
-  isViewport3DTopologyCurrent,
-  resolveStaleTopologyVisualizationSettings,
+  isViewport3DTopologyRenderable,
+  resolveUnavailableTopologyVisualizationSettings,
   type Viewport3DTopologyFreshness,
 } from "../viewport3dTopologyStaleness";
 import type {
@@ -60,8 +60,8 @@ export function TopologyMeshLayer({
   topologyFreshness: Viewport3DTopologyFreshness;
   vectorStyle: VectorFieldLayerVectorStyle;
 }) {
-  const topologyCurrent = isViewport3DTopologyCurrent(topologyFreshness);
-  const resolvedFieldModel = topologyCurrent ? fieldModel : null;
+  const topologyRenderable = isViewport3DTopologyRenderable(topologyFreshness);
+  const resolvedFieldModel = topologyRenderable ? fieldModel : null;
 
   if (topologyModel?.magneticParts.length) {
     return (
@@ -103,9 +103,9 @@ export function TopologyMeshLayer({
               onSelectPart={onSelectPart}
               partModel={partModel}
               settings={
-                topologyCurrent
+                topologyRenderable
                   ? settings
-                  : resolveStaleTopologyVisualizationSettings(settings)
+                  : resolveUnavailableTopologyVisualizationSettings(settings)
               }
               topologyModel={topologyModel}
               tracker={tracker}
@@ -122,9 +122,9 @@ export function TopologyMeshLayer({
     <FallbackTopologyMeshLayer
       colors={colors}
       fallbackSettings={
-        topologyCurrent
+        topologyRenderable
           ? fallbackSettings
-          : resolveStaleTopologyVisualizationSettings(fallbackSettings)
+          : resolveUnavailableTopologyVisualizationSettings(fallbackSettings)
       }
       femDomain={femDomain}
       fieldModel={resolvedFieldModel}

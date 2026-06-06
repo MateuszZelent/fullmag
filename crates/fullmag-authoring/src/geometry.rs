@@ -1415,6 +1415,7 @@ mod tests {
                 preset_version: Some(1),
                 ui_label: Some("Uniform".to_string()),
             }],
+            couplings: Vec::new(),
             objects: vec![SceneObject {
                 id: "free".to_string(),
                 name: "free".to_string(),
@@ -1427,6 +1428,9 @@ mod tests {
                 physics_stack: vec![],
                 object_mesh: None,
                 mesh_override: None,
+                regions: Vec::new(),
+                allocated_region_ids: Vec::new(),
+                material_parameter_fields: Vec::new(),
                 notes: None,
                 visible: true,
                 locked: false,

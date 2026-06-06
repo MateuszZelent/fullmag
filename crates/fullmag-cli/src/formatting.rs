@@ -257,6 +257,7 @@ pub(crate) fn current_artifact_layout(
             let total_cells = fdm.grid.cells[0] as usize
                 * fdm.grid.cells[1] as usize
                 * fdm.grid.cells[2] as usize;
+            let origin = fdm_grid_origin(fdm.grid.cells, fdm.cell_size);
             let active_cell_count = fdm
                 .active_mask
                 .as_ref()
@@ -266,6 +267,7 @@ pub(crate) fn current_artifact_layout(
                 "backend": "fdm",
                 "grid_cells": fdm.grid.cells,
                 "cell_size": fdm.cell_size,
+                "origin": origin,
                 "total_cell_count": total_cells,
                 "active_mask_present": fdm.active_mask.is_some(),
                 "active_cell_count": active_cell_count,
@@ -399,6 +401,27 @@ pub(crate) fn current_artifact_layout(
                 "domain_mesh_mode": fem.domain_mesh_mode,
                 "mode_count": fem.count,
             })
+        }
+    }
+}
+
+fn fdm_grid_origin(grid_cells: [u32; 3], cell_size: [f64; 3]) -> [f64; 3] {
+    [
+        -(grid_cells[0] as f64 * cell_size[0]) * 0.5,
+        -(grid_cells[1] as f64 * cell_size[1]) * 0.5,
+        -(grid_cells[2] as f64 * cell_size[2]) * 0.5,
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fdm_grid_origin;
+
+    #[test]
+    fn fdm_grid_origin_centers_single_grid_domain() {
+        let origin = fdm_grid_origin([6, 4, 2], [1.0e-9, 2.0e-9, 5.0e-9]);
+        for (index, expected) in [-3.0e-9, -4.0e-9, -5.0e-9].iter().enumerate() {
+            assert!((origin[index] - expected).abs() < 1e-18, "origin[{index}]");
         }
     }
 }

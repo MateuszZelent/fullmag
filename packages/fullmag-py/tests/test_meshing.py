@@ -72,6 +72,7 @@ from fullmag.meshing.gmsh_bridge import (
     _apply_mesh_options,
     _create_occ_geometry,
     _extract_gmsh_connectivity,
+    _format_gmsh_heartbeat,
     _normalize_gmsh_log_line,
     _resolve_gmsh_thread_count,
     generate_cylinder_mesh,
@@ -4552,6 +4553,15 @@ class MeshScaffoldTests(unittest.TestCase):
             "Gmsh: Tetrahedrizing 737 nodes...",
         )
         self.assertIsNone(_normalize_gmsh_log_line("Info: Meshing curve 3 (Line)"))
+
+    def test_format_gmsh_heartbeat_reports_phase_percent_and_last_message(self) -> None:
+        self.assertEqual(
+            _format_gmsh_heartbeat(
+                85.7,
+                "Gmsh: Tetrahedrizing 737 nodes...",
+            ),
+            "Gmsh: meshing in progress ~75% (generating 3D mesh; 85.7s elapsed; last: Tetrahedrizing 737 nodes...)",
+        )
 
     def test_resolve_gmsh_thread_count_prefers_env_override(self) -> None:
         with patch.dict(os.environ, {"FULLMAG_GMSH_THREADS": "6"}, clear=False):

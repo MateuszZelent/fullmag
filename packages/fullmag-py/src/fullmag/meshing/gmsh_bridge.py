@@ -36,6 +36,7 @@ from ._gmsh_types import (  # noqa: F401  — re-exports
 from ._gmsh_infra import (  # noqa: F401
     _GmshProgressLogger,
     _configure_gmsh_threads,
+    _format_gmsh_heartbeat,
     _import_gmsh,
     _import_meshio,
     _normalize_gmsh_log_line,

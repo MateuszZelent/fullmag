@@ -21,6 +21,81 @@ export interface StatusBarEngineModel {
   title: string;
 }
 
+export interface StatusBarMeshModelInput {
+  activeBuildStatus?: string | null;
+  manifestSourceSceneRevision?: number | string | null;
+  meshBuildRevision: number | string | null;
+  meshRevision: number | string | null;
+  sceneRevision?: number | string | null;
+}
+
+export interface StatusBarMeshModel {
+  label: string;
+  state: "building" | "current" | "not-built" | "stale" | "unknown";
+  title: string;
+}
+
+const ACTIVE_MESH_BUILD_STATUSES = new Set([
+  "active",
+  "building",
+  "generating",
+  "pending",
+  "queued",
+  "running",
+  "started",
+]);
+
+export function buildStatusBarMeshModel(
+  input: StatusBarMeshModelInput,
+): StatusBarMeshModel {
+  const meshRevision = formatRevision(input.meshRevision);
+  const meshBuildRevision = formatRevision(input.meshBuildRevision);
+  const sceneRevision = formatRevision(input.sceneRevision);
+  const sourceSceneRevision = formatRevision(input.manifestSourceSceneRevision);
+  const activeStatus = normalizeToken(input.activeBuildStatus)?.toLowerCase() ?? null;
+  const title = [
+    `mesh_revision=${meshRevision ?? "unavailable"}`,
+    `mesh_build_revision=${meshBuildRevision ?? "unavailable"}`,
+    `scene_revision=${sceneRevision ?? "unavailable"}`,
+    `manifest_source_scene_revision=${sourceSceneRevision ?? "unavailable"}`,
+    `active_build_status=${activeStatus ?? "none"}`,
+  ].join("\n");
+
+  if (activeStatus && ACTIVE_MESH_BUILD_STATUSES.has(activeStatus)) {
+    return {
+      label: `Mesh rev ${meshRevision ?? "none"} | build rev ${meshBuildRevision ?? "pending"} | building`,
+      state: "building",
+      title,
+    };
+  }
+
+  if (!meshRevision || meshRevision === "0") {
+    return { label: "Mesh not built", state: "not-built", title };
+  }
+
+  if (sceneRevision && sourceSceneRevision && sceneRevision === sourceSceneRevision) {
+    return {
+      label: `Mesh rev ${meshRevision} | build rev ${meshBuildRevision ?? "unknown"} | current`,
+      state: "current",
+      title,
+    };
+  }
+
+  if (sceneRevision && sourceSceneRevision && sceneRevision !== sourceSceneRevision) {
+    return {
+      label: `Mesh rev ${meshRevision} | scene rev ${sceneRevision} | stale`,
+      state: "stale",
+      title,
+    };
+  }
+
+  return {
+    label: `Mesh rev ${meshRevision} | provenance unknown`,
+    state: "unknown",
+    title,
+  };
+}
+
 export function buildStatusBarEngineModel(
   run: StatusBarRunReadback | null | undefined,
   solverState?: string | null,
@@ -125,6 +200,16 @@ function normalizeToken(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0
     ? value.trim()
     : null;
+}
+
+function formatRevision(value: unknown): string | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value.trim();
+  }
+  return null;
 }
 
 function humanizeToken(value: string): string {

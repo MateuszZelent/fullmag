@@ -1,8 +1,12 @@
 use fullmag_ir::{
-    BackendTarget, FdmGridAssetIR, FieldRefreshPolicyIR, IntegratorChoice, OutputIR, ProblemIR,
-    RelaxationAlgorithmIR, RelaxationControlIR,
+    BackendTarget, CouplingCapabilityPolicyIR, CouplingEndpointIR, CouplingKindIR,
+    CouplingParametersIR, ExchangeCouplingModeIR, FdmGridAssetIR, FieldRefreshPolicyIR,
+    IntegratorChoice, OutputIR, ProblemIR, RegionRealizationPolicyIR, RelaxationAlgorithmIR,
+    RelaxationControlIR,
 };
 use std::collections::BTreeSet;
+
+use crate::util::runtime_requests_cuda;
 
 pub(crate) fn resolve_auto_backend(problem: &ProblemIR) -> BackendTarget {
     let hints = problem.backend_policy.discretization_hints.as_ref();
@@ -19,6 +23,133 @@ pub(crate) fn resolve_auto_backend(problem: &ProblemIR) -> BackendTarget {
     match (has_fdm, has_fem) {
         (false, true) => BackendTarget::Fem,
         _ => BackendTarget::Fdm,
+    }
+}
+
+pub(crate) fn validate_region_owned_planning(
+    problem: &ProblemIR,
+    resolved_backend: BackendTarget,
+    errors: &mut Vec<String>,
+) {
+    let enabled_region_ids = problem
+        .object_regions
+        .iter()
+        .filter(|region| region.enabled)
+        .map(|region| region.region_id.as_str())
+        .collect::<BTreeSet<_>>();
+    if problem.material_parameter_fields.iter().any(|assignment| {
+        assignment
+            .region_id
+            .as_deref()
+            .is_none_or(|region_id| enabled_region_ids.contains(region_id))
+    }) {
+        errors.push(format!(
+            "region-owned material_parameter_fields are authored in ProblemIR but not yet executable for backend='{}'; planner must not silently drop spatial material fields",
+            resolved_backend.as_str()
+        ));
+    }
+    if problem
+        .object_regions
+        .iter()
+        .any(|region| region.enabled && region.mesh_policy.is_some())
+    {
+        errors.push(format!(
+            "object region mesh_policy is authored in ProblemIR but not yet executable for backend='{}'; planner must not silently ignore region mesh controls",
+            resolved_backend.as_str()
+        ));
+    }
+    if problem
+        .object_regions
+        .iter()
+        .any(|region| region.enabled && !region.material_overrides.is_empty())
+    {
+        errors.push(format!(
+            "object region material_overrides are authored in ProblemIR but not yet executable for backend='{}'; planner must not silently ignore region material overrides",
+            resolved_backend.as_str()
+        ));
+    }
+    if resolved_backend != BackendTarget::Fdm
+        && problem
+            .object_regions
+            .iter()
+            .any(|region| region.enabled && region.texture_override.is_some())
+    {
+        errors.push(format!(
+            "object region texture_override is authored in ProblemIR but not yet executable for backend='{}'; planner must not silently ignore region texture overrides",
+            resolved_backend.as_str()
+        ));
+    }
+    if problem.object_regions.iter().any(|region| {
+        region.enabled
+            && matches!(
+                region.realization_policy,
+                RegionRealizationPolicyIR::Conformal | RegionRealizationPolicyIR::Project
+            )
+    }) {
+        errors.push(format!(
+            "object region realization_policy requests conformal/project realization in ProblemIR but backend='{}' does not yet materialize authored object regions; planner must not silently pretend the requested realization happened",
+            resolved_backend.as_str()
+        ));
+    }
+    for coupling in problem.couplings.iter().filter(|coupling| coupling.enabled) {
+        if region_coupling_is_executable_for_backend(problem, coupling, resolved_backend) {
+            continue;
+        }
+        match coupling.capability_policy {
+            CouplingCapabilityPolicyIR::RequireRuntime => {
+                errors.push(format!(
+                    "coupling '{}' ({:?}) requires runtime support, but backend='{}' does not yet materialize explicit couplings; planner must not silently drop authored coupling intent",
+                    coupling.coupling_id,
+                    coupling.kind,
+                    resolved_backend.as_str()
+                ));
+            }
+            CouplingCapabilityPolicyIR::AuthoredOnly => {
+                errors.push(format!(
+                    "coupling '{}' ({:?}) is authored_only and cannot be used in strict executable planning; use an authoring/export path or a backend with coupling runtime support",
+                    coupling.coupling_id,
+                    coupling.kind
+                ));
+            }
+        }
+    }
+}
+
+fn region_coupling_is_executable_for_backend(
+    problem: &ProblemIR,
+    coupling: &fullmag_ir::CouplingIR,
+    resolved_backend: BackendTarget,
+) -> bool {
+    if resolved_backend != BackendTarget::Fdm
+        || !runtime_requests_cuda(problem)
+        || coupling.capability_policy != CouplingCapabilityPolicyIR::RequireRuntime
+    {
+        return false;
+    }
+    if coupling.kind != CouplingKindIR::Exchange {
+        return false;
+    }
+    if !matches!(coupling.source, CouplingEndpointIR::Region { .. })
+        || !matches!(coupling.target, CouplingEndpointIR::Region { .. })
+    {
+        return false;
+    }
+    match &coupling.parameters {
+        CouplingParametersIR::Exchange {
+            mode: ExchangeCouplingModeIR::Explicit,
+            inter_exchange: Some(value),
+            ..
+        } => value.is_finite() && *value >= 0.0,
+        CouplingParametersIR::Exchange {
+            mode: ExchangeCouplingModeIR::Disabled,
+            ..
+        } => true,
+        CouplingParametersIR::Exchange {
+            mode: ExchangeCouplingModeIR::HarmonicMean,
+            scale,
+            ..
+        } => scale.is_none_or(|value| value.is_finite() && value >= 0.0),
+        _ => false,
     }
 }
 

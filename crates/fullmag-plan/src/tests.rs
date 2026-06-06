@@ -715,6 +715,559 @@ fn fdm_planner_rejects_spatial_material_fields_until_realization_exists() {
     );
 }
 
+fn default_test_object_region() -> fullmag_ir::ObjectRegionIR {
+    fullmag_ir::ObjectRegionIR {
+        region_id: "strip:core".to_string(),
+        owner_object: "strip".to_string(),
+        name: "core".to_string(),
+        shape: fullmag_ir::RegionShapeIR::Cylinder {
+            radius: 20e-9,
+            height: 6e-9,
+            center: [0.0, 0.0, 0.0],
+            axis: [0.0, 0.0, 1.0],
+        },
+        frame: fullmag_ir::RegionFrameIR::Object,
+        enabled: true,
+        priority: 10,
+        mesh_policy: None,
+        material_overrides: Vec::new(),
+        texture_override: None,
+        realization_policy: fullmag_ir::RegionRealizationPolicyIR::Inherit,
+    }
+}
+
+fn test_box_region(
+    region_id: &str,
+    name: &str,
+    center: [f64; 3],
+    priority: i32,
+) -> fullmag_ir::ObjectRegionIR {
+    fullmag_ir::ObjectRegionIR {
+        region_id: region_id.to_string(),
+        owner_object: "strip".to_string(),
+        name: name.to_string(),
+        shape: fullmag_ir::RegionShapeIR::Box {
+            size: [100e-9, 20e-9, 6e-9],
+            center,
+        },
+        frame: fullmag_ir::RegionFrameIR::Object,
+        enabled: true,
+        priority,
+        mesh_policy: None,
+        material_overrides: Vec::new(),
+        texture_override: None,
+        realization_policy: fullmag_ir::RegionRealizationPolicyIR::Inherit,
+    }
+}
+
+#[test]
+fn object_region_mesh_policy_blocks_until_runtime_materialization_exists() {
+    let mut ir = ProblemIR::bootstrap_example();
+    let mut region = default_test_object_region();
+    region.mesh_policy = Some(fullmag_ir::RegionMeshPolicyIR {
+        maximum_element_size: Some(1.0e-9),
+        minimum_element_size: Some(0.5e-9),
+        transition_distance: Some(20.0e-9),
+        order: Some(1),
+    });
+    ir.object_regions.push(region);
+
+    let err = plan(&ir).expect_err("region mesh policy must not be silently dropped");
+    assert!(
+        err.reasons.iter().any(|reason| {
+            reason.contains("object region mesh_policy")
+                && reason.contains("backend='fdm'")
+                && reason.contains("must not silently ignore region mesh controls")
+        }),
+        "unexpected planner errors: {:?}",
+        err.reasons
+    );
+}
+
+#[test]
+fn object_region_material_overrides_block_until_runtime_materialization_exists() {
+    let mut ir = ProblemIR::bootstrap_example();
+    let mut region = default_test_object_region();
+    region.material_overrides = vec![fullmag_ir::RegionMaterialOverrideIR {
+        parameter: fullmag_ir::MaterialParameterNameIR::Ms,
+        value: fullmag_ir::MaterialParameterFieldIR::Constant {
+            value: serde_json::json!(750e3),
+            unit: Some("A/m".to_string()),
+        },
+        priority: 10,
+        conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+    }];
+    ir.object_regions.push(region);
+
+    let err = plan(&ir).expect_err("region material overrides must not be silently dropped");
+    assert!(
+        err.reasons.iter().any(|reason| {
+            reason.contains("object region material_overrides")
+                && reason.contains("backend='fdm'")
+                && reason.contains("must not silently ignore region material overrides")
+        }),
+        "unexpected planner errors: {:?}",
+        err.reasons
+    );
+}
+
+#[test]
+fn disabled_object_region_policies_do_not_block_executable_planning() {
+    let mut ir = ProblemIR::bootstrap_example();
+    let mut region = default_test_object_region();
+    region.enabled = false;
+    region.mesh_policy = Some(fullmag_ir::RegionMeshPolicyIR {
+        maximum_element_size: Some(1.0e-9),
+        minimum_element_size: Some(0.5e-9),
+        transition_distance: Some(20.0e-9),
+        order: Some(1),
+    });
+    region.material_overrides = vec![fullmag_ir::RegionMaterialOverrideIR {
+        parameter: fullmag_ir::MaterialParameterNameIR::Ms,
+        value: fullmag_ir::MaterialParameterFieldIR::Constant {
+            value: serde_json::json!(750e3),
+            unit: Some("A/m".to_string()),
+        },
+        priority: 10,
+        conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+    }];
+    region.realization_policy = fullmag_ir::RegionRealizationPolicyIR::Conformal;
+    ir.object_regions.push(region);
+
+    plan(&ir).expect("disabled object region policies must not affect executable planning");
+}
+
+#[test]
+fn disabled_object_region_material_parameter_fields_do_not_block_planning() {
+    let mut ir = ProblemIR::bootstrap_example();
+    let mut region = default_test_object_region();
+    region.enabled = false;
+    ir.object_regions.push(region);
+    ir.material_parameter_fields
+        .push(fullmag_ir::MaterialParameterAssignmentIR {
+            assignment_id: "disabled_region_ms".to_string(),
+            owner_object: "strip".to_string(),
+            region_id: Some("strip:core".to_string()),
+            parameter: fullmag_ir::MaterialParameterNameIR::Ms,
+            value: fullmag_ir::MaterialParameterFieldIR::Constant {
+                value: serde_json::json!(750e3),
+                unit: Some("A/m".to_string()),
+            },
+            priority: 10,
+            conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+        });
+
+    plan(&ir).expect("material fields scoped to disabled regions must be runtime-inert");
+}
+
+#[test]
+fn fdm_region_texture_override_updates_initial_magnetization_inside_region_only() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.magnets[0].initial_magnetization = Some(InitialMagnetizationIR::Uniform {
+        value: [1.0, 0.0, 0.0],
+    });
+    let mut region = fullmag_ir::ObjectRegionIR {
+        shape: fullmag_ir::RegionShapeIR::Box {
+            size: [100e-9, 20e-9, 6e-9],
+            center: [-50e-9, 0.0, 0.0],
+        },
+        ..default_test_object_region()
+    };
+    region.texture_override = Some(fullmag_ir::RegionTextureOverrideIR {
+        initial_magnetization: fullmag_ir::InitialMagnetizationIR::Uniform {
+            value: [0.0, 0.0, 1.0],
+        },
+    });
+    ir.object_regions.push(region);
+
+    let plan = plan(&ir).expect("FDM should materialize region texture overrides");
+    let fullmag_ir::BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
+        panic!("expected FDM plan");
+    };
+
+    let mut region_cells = 0usize;
+    let mut base_cells = 0usize;
+    for (index, region_index) in fdm.region_mask.iter().enumerate() {
+        if *region_index == 1 {
+            region_cells += 1;
+            assert_eq!(fdm.initial_magnetization[index], [0.0, 0.0, 1.0]);
+        } else {
+            base_cells += 1;
+            assert_eq!(fdm.initial_magnetization[index], [1.0, 0.0, 0.0]);
+        }
+    }
+    assert!(
+        region_cells > 0,
+        "region should cover at least one FDM cell"
+    );
+    assert!(base_cells > 0, "region should not cover the whole FDM grid");
+}
+
+#[test]
+fn disabled_fdm_region_does_not_materialize_mask_or_texture_override() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.magnets[0].initial_magnetization = Some(InitialMagnetizationIR::Uniform {
+        value: [1.0, 0.0, 0.0],
+    });
+    let mut region = fullmag_ir::ObjectRegionIR {
+        enabled: false,
+        shape: fullmag_ir::RegionShapeIR::Box {
+            size: [100e-9, 20e-9, 6e-9],
+            center: [-50e-9, 0.0, 0.0],
+        },
+        ..default_test_object_region()
+    };
+    region.texture_override = Some(fullmag_ir::RegionTextureOverrideIR {
+        initial_magnetization: fullmag_ir::InitialMagnetizationIR::Uniform {
+            value: [0.0, 0.0, 1.0],
+        },
+    });
+    ir.object_regions.push(region);
+
+    let plan = plan(&ir).expect("disabled FDM region should be runtime-inert");
+    let fullmag_ir::BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
+        panic!("expected FDM plan");
+    };
+
+    assert!(
+        fdm.region_mask.iter().all(|region| *region == 0),
+        "disabled region must not allocate a FDM region mask id"
+    );
+    assert!(
+        fdm.initial_magnetization
+            .iter()
+            .all(|value| *value == [1.0, 0.0, 0.0]),
+        "disabled region texture override must not modify initial magnetization"
+    );
+}
+
+#[test]
+fn object_region_explicit_realization_policy_blocks_until_runtime_materialization_exists() {
+    let mut ir = ProblemIR::bootstrap_example();
+    let mut region = default_test_object_region();
+    region.realization_policy = fullmag_ir::RegionRealizationPolicyIR::Conformal;
+    ir.object_regions.push(region);
+
+    let err = plan(&ir).expect_err("region realization policy must not be silently pretended");
+    assert!(
+        err.reasons.iter().any(|reason| {
+            reason.contains("object region realization_policy")
+                && reason.contains("backend='fdm'")
+                && reason.contains("must not silently pretend")
+        }),
+        "unexpected planner errors: {:?}",
+        err.reasons
+    );
+}
+
+#[test]
+fn fdm_region_region_explicit_exchange_lowers_to_region_mask_and_pair_override() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cuda", "device_index": 0}),
+    );
+    ir.object_regions
+        .push(test_box_region("strip:left", "left", [-50e-9, 0.0, 0.0], 1));
+    ir.object_regions.push(test_box_region(
+        "strip:right",
+        "right",
+        [50e-9, 0.0, 0.0],
+        2,
+    ));
+    ir.couplings.push(CouplingIR {
+        coupling_id: "left_right_exchange".to_string(),
+        kind: CouplingKindIR::Exchange,
+        source: CouplingEndpointIR::Region {
+            object: "strip".to_string(),
+            region_id: "strip:left".to_string(),
+        },
+        target: CouplingEndpointIR::Region {
+            object: "strip".to_string(),
+            region_id: "strip:right".to_string(),
+        },
+        enabled: true,
+        parameters: CouplingParametersIR::Exchange {
+            mode: ExchangeCouplingModeIR::Explicit,
+            scale: None,
+            inter_exchange: Some(4.0e-12),
+        },
+        capability_policy: CouplingCapabilityPolicyIR::RequireRuntime,
+    });
+
+    let plan = plan(&ir).expect("region-region explicit exchange should be executable for FDM");
+    let fullmag_ir::BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
+        panic!("expected FDM plan");
+    };
+    assert!(fdm.region_mask.iter().any(|region| *region == 1));
+    assert!(fdm.region_mask.iter().any(|region| *region == 2));
+    assert_eq!(fdm.inter_region_exchange, vec![(1, 2, 4.0e-12)]);
+}
+
+#[test]
+fn fdm_region_region_explicit_exchange_blocks_on_cpu_reference() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.object_regions
+        .push(test_box_region("strip:left", "left", [-50e-9, 0.0, 0.0], 1));
+    ir.object_regions.push(test_box_region(
+        "strip:right",
+        "right",
+        [50e-9, 0.0, 0.0],
+        2,
+    ));
+    ir.couplings.push(CouplingIR {
+        coupling_id: "left_right_exchange".to_string(),
+        kind: CouplingKindIR::Exchange,
+        source: CouplingEndpointIR::Region {
+            object: "strip".to_string(),
+            region_id: "strip:left".to_string(),
+        },
+        target: CouplingEndpointIR::Region {
+            object: "strip".to_string(),
+            region_id: "strip:right".to_string(),
+        },
+        enabled: true,
+        parameters: CouplingParametersIR::Exchange {
+            mode: ExchangeCouplingModeIR::Explicit,
+            scale: None,
+            inter_exchange: Some(4.0e-12),
+        },
+        capability_policy: CouplingCapabilityPolicyIR::RequireRuntime,
+    });
+
+    let err = plan(&ir).expect_err("CPU reference must not ignore explicit region exchange");
+    assert!(
+        err.reasons.iter().any(|reason| {
+            reason.contains("left_right_exchange")
+                && reason.contains("requires runtime support")
+                && reason.contains("must not silently drop authored coupling intent")
+        }),
+        "unexpected planner errors: {:?}",
+        err.reasons
+    );
+}
+
+#[test]
+fn intra_object_region_exchange_defaults_harmonic_mean() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.object_regions
+        .push(test_box_region("strip:left", "left", [-50e-9, 0.0, 0.0], 1));
+    ir.object_regions.push(test_box_region(
+        "strip:right",
+        "right",
+        [50e-9, 0.0, 0.0],
+        2,
+    ));
+
+    let plan = plan(&ir).expect("intra-object region exchange should plan for FDM");
+    let fullmag_ir::BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
+        panic!("expected FDM plan");
+    };
+    assert!(fdm.region_mask.iter().any(|region| *region == 1));
+    assert!(fdm.region_mask.iter().any(|region| *region == 2));
+    assert!(
+        fdm.inter_region_exchange.is_empty(),
+        "FDM plan should carry no zero/free-surface override; native runtime resolves empty overrides with exchange_pair_default=HARMONIC_MEAN"
+    );
+}
+
+#[test]
+fn pure_inherited_region_preserves_parent_material_and_continuous_exchange() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.object_regions.push(default_test_object_region());
+
+    let plan = plan(&ir).expect("pure inherited object region should remain plannable");
+    let fullmag_ir::BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
+        panic!("expected FDM plan");
+    };
+    assert!(
+        fdm.region_mask.iter().any(|region| *region == 1),
+        "authored region may be materialized as a selector mask"
+    );
+    assert_eq!(
+        fdm.inter_region_exchange,
+        Vec::<(u32, u32, f64)>::new(),
+        "a region that only inherits parent properties must not create an explicit free-surface or material-interface exchange override"
+    );
+    assert_eq!(
+        fdm.material.exchange_stiffness, ir.materials[0].exchange_stiffness,
+        "pure region must keep the parent exchange stiffness; continuity is resolved by the native harmonic default"
+    );
+    assert_eq!(
+        fdm.material.saturation_magnetisation, ir.materials[0].saturation_magnetisation,
+        "pure region must keep the parent saturation magnetization"
+    );
+}
+
+#[test]
+fn exchange_scale_zero_disables_interface_exchange() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cuda", "device_index": 0}),
+    );
+    ir.object_regions
+        .push(test_box_region("strip:left", "left", [-50e-9, 0.0, 0.0], 1));
+    ir.object_regions.push(test_box_region(
+        "strip:right",
+        "right",
+        [50e-9, 0.0, 0.0],
+        2,
+    ));
+    ir.couplings.push(CouplingIR {
+        coupling_id: "left_right_disabled_exchange".to_string(),
+        kind: CouplingKindIR::Exchange,
+        source: CouplingEndpointIR::Region {
+            object: "strip".to_string(),
+            region_id: "strip:left".to_string(),
+        },
+        target: CouplingEndpointIR::Region {
+            object: "strip".to_string(),
+            region_id: "strip:right".to_string(),
+        },
+        enabled: true,
+        parameters: CouplingParametersIR::Exchange {
+            mode: ExchangeCouplingModeIR::Disabled,
+            scale: Some(0.0),
+            inter_exchange: None,
+        },
+        capability_policy: CouplingCapabilityPolicyIR::RequireRuntime,
+    });
+
+    let plan = plan(&ir).expect("disabled region exchange override should plan for FDM");
+    let fullmag_ir::BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
+        panic!("expected FDM plan");
+    };
+    assert_eq!(fdm.inter_region_exchange, vec![(1, 2, 0.0)]);
+}
+
+#[test]
+fn explicit_exchange_coupling_blocks_until_runtime_materialization_exists() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.couplings.push(CouplingIR {
+        coupling_id: "strip_self_exchange".to_string(),
+        kind: CouplingKindIR::Exchange,
+        source: CouplingEndpointIR::Surface {
+            object: "strip".to_string(),
+            selector: "top".to_string(),
+        },
+        target: CouplingEndpointIR::Surface {
+            object: "strip".to_string(),
+            selector: "bottom".to_string(),
+        },
+        enabled: true,
+        parameters: CouplingParametersIR::Exchange {
+            mode: ExchangeCouplingModeIR::HarmonicMean,
+            scale: Some(0.5),
+            inter_exchange: None,
+        },
+        capability_policy: CouplingCapabilityPolicyIR::RequireRuntime,
+    });
+
+    let err = plan(&ir).expect_err("explicit coupling must not be silently dropped");
+    assert!(
+        err.reasons.iter().any(|reason| {
+            reason.contains("strip_self_exchange")
+                && reason.contains("requires runtime support")
+                && reason.contains("must not silently drop authored coupling intent")
+        }),
+        "unexpected planner errors: {:?}",
+        err.reasons
+    );
+}
+
+#[test]
+fn authored_only_coupling_blocks_strict_executable_planning() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.couplings.push(CouplingIR {
+        coupling_id: "strip_authored_note".to_string(),
+        kind: CouplingKindIR::Exchange,
+        source: CouplingEndpointIR::Surface {
+            object: "strip".to_string(),
+            selector: "top".to_string(),
+        },
+        target: CouplingEndpointIR::Surface {
+            object: "strip".to_string(),
+            selector: "bottom".to_string(),
+        },
+        enabled: true,
+        parameters: CouplingParametersIR::Exchange {
+            mode: ExchangeCouplingModeIR::Disabled,
+            scale: Some(0.0),
+            inter_exchange: None,
+        },
+        capability_policy: CouplingCapabilityPolicyIR::AuthoredOnly,
+    });
+
+    let err = plan(&ir).expect_err("authored-only coupling must not enter executable planning");
+    assert!(
+        err.reasons.iter().any(|reason| {
+            reason.contains("strip_authored_note")
+                && reason.contains("authored_only")
+                && reason.contains("strict executable planning")
+        }),
+        "unexpected planner errors: {:?}",
+        err.reasons
+    );
+}
+
+#[test]
+fn disabled_coupling_does_not_block_executable_planning() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.couplings.push(CouplingIR {
+        coupling_id: "strip_disabled_exchange".to_string(),
+        kind: CouplingKindIR::Exchange,
+        source: CouplingEndpointIR::Surface {
+            object: "strip".to_string(),
+            selector: "top".to_string(),
+        },
+        target: CouplingEndpointIR::Surface {
+            object: "strip".to_string(),
+            selector: "bottom".to_string(),
+        },
+        enabled: false,
+        parameters: CouplingParametersIR::Exchange {
+            mode: ExchangeCouplingModeIR::HarmonicMean,
+            scale: Some(1.0),
+            inter_exchange: None,
+        },
+        capability_policy: CouplingCapabilityPolicyIR::RequireRuntime,
+    });
+
+    plan(&ir).expect("disabled coupling must not affect executable planning");
+}
+
+#[test]
+fn rkky_unsupported_blocks_runtime_plan() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.couplings.push(CouplingIR {
+        coupling_id: "strip_rkky".to_string(),
+        kind: CouplingKindIR::Rkky,
+        source: CouplingEndpointIR::Surface {
+            object: "strip".to_string(),
+            selector: "top".to_string(),
+        },
+        target: CouplingEndpointIR::Surface {
+            object: "strip".to_string(),
+            selector: "bottom".to_string(),
+        },
+        enabled: true,
+        parameters: CouplingParametersIR::Rkky { j1: -0.3e-3 },
+        capability_policy: CouplingCapabilityPolicyIR::RequireRuntime,
+    });
+
+    let err = plan(&ir).expect_err("unsupported RKKY must block runtime planning");
+    assert!(
+        err.reasons.iter().any(|reason| {
+            reason.contains("strip_rkky")
+                && reason.contains("requires runtime support")
+                && reason.contains("must not silently drop authored coupling intent")
+        }),
+        "unexpected planner errors: {:?}",
+        err.reasons
+    );
+}
+
 #[test]
 fn fdm_magnetoelastic_term_is_rejected_until_fdm_lane_exists() {
     let mut ir = ProblemIR::bootstrap_example();
@@ -1040,10 +1593,14 @@ fn fem_mechanics_observables_are_rejected_until_mechanics_solver_exists() {
     };
 
     let err = plan(&ir).expect_err("mechanics observables need an executable mechanics solver");
-    assert!(err.reasons.iter().any(|reason| reason
-        .contains("field output 'u' requires the quasistatic/elastodynamic mechanics solver")));
-    assert!(err.reasons.iter().any(|reason| reason
-        .contains("scalar output 'E_el' requires the quasistatic/elastodynamic mechanics solver")));
+    assert!(err.reasons.iter().any(|reason| {
+        reason.contains("field output 'u' requires the quasistatic/elastodynamic mechanics solver")
+    }));
+    assert!(err.reasons.iter().any(|reason| {
+        reason.contains(
+            "scalar output 'E_el' requires the quasistatic/elastodynamic mechanics solver",
+        )
+    }));
 }
 
 #[test]
@@ -3422,6 +3979,22 @@ fn stacked_two_body_multilayer_problem() -> ProblemIR {
     ir
 }
 
+fn stacked_two_body_multilayer_problem_with_dmi() -> ProblemIR {
+    let mut ir = stacked_two_body_multilayer_problem();
+    ir.energy_terms = vec![
+        fullmag_ir::EnergyTermIR::Exchange,
+        fullmag_ir::EnergyTermIR::InterfacialDmi {
+            d: 1.5e-3,
+            interface_normal: None,
+        },
+        fullmag_ir::EnergyTermIR::BulkDmi { d: 2.5e-3 },
+        fullmag_ir::EnergyTermIR::Demag {
+            realization: fullmag_ir::RequestedFemDemagIR::Auto,
+        },
+    ];
+    ir
+}
+
 #[test]
 fn multilayer_planner_rejects_thermal_noise_until_rhs_coverage_exists() {
     let mut ir = stacked_two_body_multilayer_problem();
@@ -3452,6 +4025,39 @@ fn multilayer_planner_rejects_spatial_material_fields_until_rhs_coverage_exists(
         "unexpected planner errors: {:?}",
         err.reasons
     );
+}
+
+#[test]
+fn multilayer_planner_rejects_object_regions_until_region_runtime_exists() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    ir.object_regions.push(fullmag_ir::ObjectRegionIR {
+        owner_object: "free".to_string(),
+        region_id: "free:r1".to_string(),
+        ..default_test_object_region()
+    });
+
+    let err = plan(&ir).expect_err("multilayer object regions must not be silently ignored");
+    assert!(
+        err.reasons.iter().any(|reason| {
+            reason.contains("object_regions")
+                && reason.contains("multilayer FDM")
+                && reason.contains("capability-gated out of scope")
+        }),
+        "unexpected planner errors: {:?}",
+        err.reasons
+    );
+}
+
+#[test]
+fn multilayer_planner_ignores_disabled_object_regions() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    let mut region = default_test_object_region();
+    region.owner_object = "free".to_string();
+    region.region_id = "free:r1".to_string();
+    region.enabled = false;
+    ir.object_regions.push(region);
+
+    plan(&ir).expect("disabled object regions must not affect multilayer FDM planning");
 }
 
 #[test]
@@ -3503,83 +4109,7 @@ fn multilayer_planner_rejects_oersted_until_rhs_coverage_exists() {
 
 #[test]
 fn stacked_two_body_problem_lowers_to_multilayer_plan() {
-    let mut ir = ProblemIR::bootstrap_example();
-    ir.geometry.entries = vec![
-        GeometryEntryIR::Translate {
-            name: "free_geom".to_string(),
-            base: std::boxed::Box::new(GeometryEntryIR::Box {
-                name: "free_base".to_string(),
-                size: [40e-9, 20e-9, 2e-9],
-            }),
-            by: [0.0, 0.0, 0.0],
-        },
-        GeometryEntryIR::Translate {
-            name: "ref_geom".to_string(),
-            base: std::boxed::Box::new(GeometryEntryIR::Box {
-                name: "ref_base".to_string(),
-                size: [40e-9, 20e-9, 2e-9],
-            }),
-            by: [0.0, 0.0, 4e-9],
-        },
-    ];
-    ir.regions = vec![
-        fullmag_ir::RegionIR {
-            name: "free_region".to_string(),
-            geometry: "free_geom".to_string(),
-        },
-        fullmag_ir::RegionIR {
-            name: "ref_region".to_string(),
-            geometry: "ref_geom".to_string(),
-        },
-    ];
-    ir.magnets = vec![
-        fullmag_ir::MagnetIR {
-            name: "free".to_string(),
-            region: "free_region".to_string(),
-            material: "Py".to_string(),
-            initial_magnetization: Some(InitialMagnetizationIR::Uniform {
-                value: [1.0, 0.0, 0.0],
-            }),
-        },
-        fullmag_ir::MagnetIR {
-            name: "ref".to_string(),
-            region: "ref_region".to_string(),
-            material: "Py".to_string(),
-            initial_magnetization: Some(InitialMagnetizationIR::Uniform {
-                value: [0.0, 1.0, 0.0],
-            }),
-        },
-    ];
-    ir.energy_terms = vec![
-        fullmag_ir::EnergyTermIR::Exchange,
-        fullmag_ir::EnergyTermIR::InterfacialDmi {
-            d: 1.5e-3,
-            interface_normal: None,
-        },
-        fullmag_ir::EnergyTermIR::BulkDmi { d: 2.5e-3 },
-        fullmag_ir::EnergyTermIR::Demag {
-            realization: fullmag_ir::RequestedFemDemagIR::Auto,
-        },
-    ];
-    ir.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
-        fdm: Some(fullmag_ir::FdmHintsIR {
-            cell: [2e-9, 2e-9, 2e-9],
-            default_cell: Some([2e-9, 2e-9, 2e-9]),
-            per_magnet: None,
-            demag: Some(fullmag_ir::FdmDemagHintsIR {
-                strategy: "multilayer_convolution".to_string(),
-                mode: "two_d_stack".to_string(),
-                allow_single_grid_fallback: false,
-                common_cells: None,
-                common_cells_xy: None,
-            }),
-            boundary_correction: None,
-            boundary_phi_floor: None,
-            boundary_delta_min: None,
-        }),
-        fem: None,
-        hybrid: None,
-    });
+    let mut ir = stacked_two_body_multilayer_problem_with_dmi();
     if let fullmag_ir::StudyIR::TimeEvolution {
         dynamics:
             fullmag_ir::DynamicsIR::Llg {
@@ -3864,6 +4394,37 @@ fn fem_eigen_backend_with_mesh_asset_plans_successfully() {
         }
         other => panic!("expected FEM eigen plan, got {other:?}"),
     }
+}
+
+#[test]
+fn object_object_exchange_without_coupling_defaults_none() {
+    let ir = stacked_two_body_multilayer_problem();
+    assert!(
+        ir.couplings.is_empty(),
+        "separate objects must not synthesize authored coupling intent"
+    );
+
+    let planned = plan(&ir).expect("stacked two-body problem should lower");
+    let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
+        panic!("expected FDM multilayer plan");
+    };
+    assert!(multilayer.enable_exchange);
+    assert_eq!(multilayer.layers.len(), 2);
+    assert_eq!(multilayer.layers[0].material.name, "Py");
+    assert_eq!(multilayer.layers[1].material.name, "Py");
+
+    let serialized =
+        serde_json::to_value(&multilayer).expect("FdmMultilayerPlanIR should serialize");
+    assert!(
+        serialized.get("inter_region_exchange").is_none(),
+        "object-object exchange must remain a free surface unless a coupling is explicit"
+    );
+    assert!(
+        serialized.get("couplings").is_none(),
+        "planner must not synthesize hidden object-object couplings"
+    );
+    assert!(serialized.get("rkky").is_none());
+    assert!(serialized.get("interlayer_exchange").is_none());
 }
 
 #[test]
@@ -4427,11 +4988,9 @@ fn fem_eigen_floquet_dynamic_demag_is_rejected() {
     };
 
     let err = plan(&ir).expect_err("Floquet FEM eigen with dynamic demag is unsupported");
-    assert!(err
-        .reasons
-        .iter()
-        .any(|reason| reason
-            .contains("dynamic demag for Floquet periodic FEM is not implemented yet")));
+    assert!(err.reasons.iter().any(|reason| {
+        reason.contains("dynamic demag for Floquet periodic FEM is not implemented yet")
+    }));
 }
 
 #[test]

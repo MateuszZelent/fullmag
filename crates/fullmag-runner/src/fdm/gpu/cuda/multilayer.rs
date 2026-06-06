@@ -80,6 +80,16 @@ struct NativeStackedCudaPlan {
     global_grid: [u32; 3],
 }
 
+fn disabled_inter_body_exchange_pairs(layer_count: usize) -> Vec<(u32, u32, f64)> {
+    let mut pairs = Vec::new();
+    for left in 0..layer_count {
+        for right in (left + 1)..layer_count {
+            pairs.push(((left + 1) as u32, (right + 1) as u32, 0.0));
+        }
+    }
+    pairs
+}
+
 #[allow(dead_code)]
 pub(crate) fn execute_cuda_fdm_multilayer(
     plan: &FdmMultilayerPlanIR,
@@ -1023,7 +1033,7 @@ fn build_native_stacked_cuda_plan(
             boundary_phi_floor: None,
             boundary_delta_min: None,
             boundary_geometry: None,
-            inter_region_exchange: vec![],
+            inter_region_exchange: disabled_inter_body_exchange_pairs(plan.layers.len()),
             current_density: None,
             stt_degree: None,
             stt_beta: None,
@@ -1044,6 +1054,8 @@ fn build_native_stacked_cuda_plan(
             temperature: None,
             interfacial_dmi: plan.interfacial_dmi,
             bulk_dmi: plan.bulk_dmi,
+            dind_field: None,
+            dbulk_field: None,
             mel_b1: None,
             mel_b2: None,
             mel_uniform_strain: None,
@@ -1386,6 +1398,8 @@ fn single_layer_cuda_plan(plan: &FdmMultilayerPlanIR, layer: &FdmLayerPlanIR) ->
         temperature: None,
         interfacial_dmi: plan.interfacial_dmi,
         bulk_dmi: plan.bulk_dmi,
+        dind_field: None,
+        dbulk_field: None,
         mel_b1: None,
         mel_b2: None,
         mel_uniform_strain: None,
@@ -3025,6 +3039,21 @@ mod tests {
 
         assert_eq!(native.combined_plan.interfacial_dmi, plan.interfacial_dmi);
         assert_eq!(native.combined_plan.bulk_dmi, plan.bulk_dmi);
+    }
+
+    #[test]
+    fn native_stacked_cuda_plan_disables_inter_body_exchange_pairs() {
+        let plan = make_touching_plan(ExecutionPrecision::Double);
+
+        let native = build_native_stacked_cuda_plan(&plan)
+            .expect("native stacked plan should build")
+            .expect("touching plan should be eligible for native stacked fast path");
+
+        assert_eq!(
+            native.combined_plan.inter_region_exchange,
+            vec![(1, 2, 0.0)],
+            "combined single-grid plan must preserve object-object free surfaces explicitly because the native FDM region default is harmonic mean"
+        );
     }
 
     #[test]

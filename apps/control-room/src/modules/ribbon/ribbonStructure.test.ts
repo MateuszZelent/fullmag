@@ -2622,11 +2622,13 @@ describe("ribbon structure", () => {
 
     expect(homeComputeAction).toMatchObject({
       disabled: true,
-      tooltip: "Build a shared-domain mesh before running FEM runtime commands.",
+      tooltip:
+        "Build a current shared-domain mesh before running. Open Mesh Jobs or Build Shared-Domain Mesh.",
     });
     expect(studyComputeAction).toMatchObject({
       disabled: true,
-      tooltip: "Build a shared-domain mesh before running FEM runtime commands.",
+      tooltip:
+        "Build a current shared-domain mesh before running. Open Mesh Jobs or Build Shared-Domain Mesh.",
     });
   });
 

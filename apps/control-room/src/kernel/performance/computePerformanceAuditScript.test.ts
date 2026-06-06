@@ -191,7 +191,7 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("checkViewport3DObjectVisualizationSelector");
     expect(auditScript).toContain("selectViewport3DObjectVisualizationSnapshot");
     expect(auditScript).toContain("viewport3DObjectVisualizationSnapshotEquals");
-    expect(auditScript).toContain("checkGeometryObjectPanelVisualizationSelector");
+    expect(auditScript).toContain("checkObjectGeneralPanelVisualizationSelector");
     expect(auditScript).toContain("useObjectVisualizationController");
     expect(auditScript).toContain("geometryObjectVisualizationColorsEquals");
     expect(auditScript).toContain("resolveGeometryObjectVisualizationColors");

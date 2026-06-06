@@ -410,6 +410,215 @@
               "kind"
             ],
             "type": "object"
+          },
+          {
+            "properties": {
+              "base_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "kind": {
+                "enum": [
+                  "create_object_region"
+                ],
+                "type": "string"
+              },
+              "object_id": {
+                "type": "string"
+              },
+              "region": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "object_id",
+              "region",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "base_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "kind": {
+                "enum": [
+                  "patch_object_region"
+                ],
+                "type": "string"
+              },
+              "object_id": {
+                "type": "string"
+              },
+              "patch": {
+                "type": "object"
+              },
+              "region_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "object_id",
+              "region_id",
+              "patch",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "base_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "kind": {
+                "enum": [
+                  "delete_object_region"
+                ],
+                "type": "string"
+              },
+              "object_id": {
+                "type": "string"
+              },
+              "region_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "object_id",
+              "region_id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "base_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "kind": {
+                "enum": [
+                  "reorder_object_regions"
+                ],
+                "type": "string"
+              },
+              "object_id": {
+                "type": "string"
+              },
+              "region_ids": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "object_id",
+              "region_ids",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "base_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "coupling": {
+                "type": "object"
+              },
+              "kind": {
+                "enum": [
+                  "create_coupling"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "coupling",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "base_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "coupling_id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "patch_coupling"
+                ],
+                "type": "string"
+              },
+              "patch": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "coupling_id",
+              "patch",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "base_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "coupling_id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "delete_coupling"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "coupling_id",
+              "kind"
+            ],
+            "type": "object"
           }
         ]
       },
@@ -1492,6 +1701,69 @@
         ],
         "type": "string"
       },
+      "CouplingListResource": {
+        "properties": {
+          "couplings": {
+            "items": {
+              "$ref": "#/components/schemas/CouplingResource"
+            },
+            "type": "array"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scene_revision",
+          "couplings"
+        ],
+        "type": "object"
+      },
+      "CouplingResource": {
+        "properties": {
+          "capability_policy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "coupling_id": {
+            "type": "string"
+          },
+          "coupling_kind": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "params": {
+            "type": "object"
+          },
+          "realization_status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": "object"
+          },
+          "target": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "coupling_id",
+          "coupling_kind",
+          "enabled",
+          "source",
+          "target",
+          "params"
+        ],
+        "type": "object"
+      },
       "CpuTelemetryResponse": {
         "properties": {
           "load_average_15m": {
@@ -2309,11 +2581,29 @@
       },
       "EngineLogEntry": {
         "properties": {
+          "command_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "level": {
             "type": "string"
           },
           "message": {
             "type": "string"
+          },
+          "phase_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "timestamp_unix_ms": {
             "minimum": 0,
@@ -4420,6 +4710,92 @@
         ],
         "type": "object"
       },
+      "MaterialParameterFieldListResource": {
+        "properties": {
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/MaterialParameterFieldResource"
+            },
+            "type": "array"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scene_revision",
+          "fields"
+        ],
+        "type": "object"
+      },
+      "MaterialParameterFieldResource": {
+        "properties": {
+          "assignment_id": {
+            "type": "string"
+          },
+          "field": {
+            "type": "object"
+          },
+          "frame": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "location": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "owner_object_id": {
+            "type": "string"
+          },
+          "owner_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "parameter": {
+            "type": "string"
+          },
+          "priority": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "realization_status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source_region_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "assignment_id",
+          "owner_object_id",
+          "parameter",
+          "field"
+        ],
+        "type": "object"
+      },
       "MaterialPatchRequest": {
         "properties": {
           "name": {
@@ -4603,6 +4979,45 @@
             },
             "type": [
               "array",
+              "null"
+            ]
+          },
+          "policy_diff": {
+            "description": "Typed policy change summary for UI diff tables.",
+            "items": {
+              "$ref": "#/components/schemas/MeshBuildPolicyDiffResource"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "provenance": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MeshBuildProvenanceResource",
+                "description": "Typed provenance for the accepted mesh build intent and realized mesh output."
+              }
+            ]
+          },
+          "published_resources": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MeshBuildPublishedResourcesResource",
+                "description": "Typed resource revisions and URLs published by the backend after build completion."
+              }
+            ]
+          },
+          "resolved_policy": {
+            "description": "Resolved policy used by the build. This is execution reality, not the authoring draft.",
+            "type": [
+              "object",
               "null"
             ]
           },
@@ -4794,6 +5209,148 @@
             ]
           },
           "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "MeshBuildPolicyDiffResource": {
+        "properties": {
+          "effect": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "previous": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "realized": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "requested": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "scope": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope",
+          "path"
+        ],
+        "type": "object"
+      },
+      "MeshBuildProvenanceResource": {
+        "properties": {
+          "build_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "command_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "completed_at_unix_ms": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "duration_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "geometry_realization_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "mesh_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "requested_policy_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "source_scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "MeshBuildPublishedResourcesResource": {
+        "properties": {
+          "manifest": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mesh_build_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "mesh_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "realized_size_fields": {
             "type": [
               "string",
               "null"
@@ -6697,6 +7254,85 @@
         },
         "type": "object"
       },
+      "ObjectRegionCreateRequest": {
+        "properties": {
+          "base_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "region": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "region"
+        ],
+        "type": "object"
+      },
+      "ObjectRegionDuplicateRequest": {
+        "properties": {
+          "base_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "ObjectRegionPatchRequest": {
+        "properties": {
+          "base_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "patch": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "patch"
+        ],
+        "type": "object"
+      },
+      "ObjectRegionReorderRequest": {
+        "properties": {
+          "base_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "region_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "region_ids"
+        ],
+        "type": "object"
+      },
       "PrimitiveGeometryCapability": {
         "properties": {
           "boolean": {
@@ -7278,6 +7914,69 @@
         ],
         "type": "object"
       },
+      "RegionDiagnosticResource": {
+        "properties": {
+          "capability_gate": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "code": {
+            "type": "string"
+          },
+          "diagnostic_id": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "owner_object_id": {
+            "type": "string"
+          },
+          "realization_status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "region_id": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "diagnostic_id",
+          "severity",
+          "code",
+          "message",
+          "region_id",
+          "owner_object_id"
+        ],
+        "type": "object"
+      },
+      "RegionDiagnosticsResource": {
+        "properties": {
+          "diagnostics": {
+            "items": {
+              "$ref": "#/components/schemas/RegionDiagnosticResource"
+            },
+            "type": "array"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scene_revision",
+          "diagnostics"
+        ],
+        "type": "object"
+      },
       "RegionListResource": {
         "properties": {
           "geometry_realization_revision": {
@@ -7350,6 +8049,12 @@
           "enabled": {
             "type": "boolean"
           },
+          "frame": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "interaction_refs": {
             "items": {
               "type": "string"
@@ -7362,6 +8067,18 @@
               "null"
             ]
           },
+          "material_overrides": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "material_parameter_fields": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
           "material_ref": {
             "type": "string"
           },
@@ -7371,11 +8088,60 @@
             },
             "type": "array"
           },
+          "mesh_policy": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "name": {
             "type": "string"
           },
+          "owner_object_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "owner_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "priority": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "realization_policy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "realization_status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "region_id": {
             "type": "string"
+          },
+          "region_kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "shape": {
+            "type": [
+              "object",
+              "null"
+            ]
           },
           "source": {
             "type": "string"
@@ -7391,6 +8157,12 @@
               "type": "string"
             },
             "type": "array"
+          },
+          "texture_override": {
+            "type": [
+              "object",
+              "null"
+            ]
           }
         },
         "required": [
@@ -8046,6 +8818,12 @@
       },
       "SceneObjectResource": {
         "properties": {
+          "allocated_region_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "geometry": {
             "additionalProperties": true,
             "type": [
@@ -8067,6 +8845,12 @@
               "string",
               "null"
             ]
+          },
+          "material_parameter_fields": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
           },
           "material_ref": {
             "type": [
@@ -8120,6 +8904,12 @@
             "additionalProperties": true,
             "type": "object"
           },
+          "regions": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
           "tags": {
             "items": {
               "type": "string"
@@ -8158,6 +8948,12 @@
       },
       "SceneResource": {
         "properties": {
+          "couplings": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
           "current_modules": {
             "additionalProperties": true,
             "type": [
@@ -11473,6 +12269,7 @@
           "airbox",
           "object",
           "part",
+          "region",
           "selection"
         ],
         "type": "string"
@@ -16933,6 +17730,29 @@
         ]
       }
     },
+    "/v2/sessions/current/model/couplings": {
+      "get": {
+        "operationId": "model_get_sessions_current_model_couplings",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CouplingListResource"
+                }
+              }
+            },
+            "description": "Current authored coupling resources"
+          },
+          "404": {
+            "description": "No active workspace or scene document"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
     "/v2/sessions/current/model/geometry/capabilities": {
       "get": {
         "operationId": "model_get_sessions_current_model_geometry_capabilities",
@@ -17170,6 +17990,29 @@
           },
           "409": {
             "description": "Base scene revision does not match current scene revision"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/material-fields": {
+      "get": {
+        "operationId": "model_get_sessions_current_model_material_fields",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterialParameterFieldListResource"
+                }
+              }
+            },
+            "description": "Current authored material parameter field resources"
+          },
+          "404": {
+            "description": "No active workspace or scene document"
           }
         },
         "tags": [
@@ -17504,6 +18347,299 @@
         ]
       }
     },
+    "/v2/sessions/current/model/objects/{object_id}/regions": {
+      "post": {
+        "operationId": "model_post_sessions_current_model_objects_object_id_regions",
+        "parameters": [
+          {
+            "description": "Canonical scene object id",
+            "in": "path",
+            "name": "object_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ObjectRegionCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SceneResource"
+                }
+              }
+            },
+            "description": "Committed canonical scene after object region creation"
+          },
+          "400": {
+            "description": "Invalid object region payload"
+          },
+          "404": {
+            "description": "No active workspace, scene document, or object"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/objects/{object_id}/regions/reorder": {
+      "post": {
+        "operationId": "model_post_sessions_current_model_objects_object_id_regions_reorder",
+        "parameters": [
+          {
+            "description": "Canonical scene object id",
+            "in": "path",
+            "name": "object_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ObjectRegionReorderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SceneResource"
+                }
+              }
+            },
+            "description": "Committed canonical scene after object region reorder"
+          },
+          "400": {
+            "description": "Invalid object region reorder request"
+          },
+          "404": {
+            "description": "No active workspace, scene document, object, or region"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/objects/{object_id}/regions/{region_id}": {
+      "delete": {
+        "operationId": "model_delete_sessions_current_model_objects_object_id_regions_region_id",
+        "parameters": [
+          {
+            "description": "Canonical scene object id",
+            "in": "path",
+            "name": "object_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Authored object region id or name",
+            "in": "path",
+            "name": "region_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SceneResource"
+                }
+              }
+            },
+            "description": "Committed canonical scene after object region deletion"
+          },
+          "404": {
+            "description": "No active workspace, scene document, object, or region"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      },
+      "patch": {
+        "operationId": "model_patch_sessions_current_model_objects_object_id_regions_region_id",
+        "parameters": [
+          {
+            "description": "Canonical scene object id",
+            "in": "path",
+            "name": "object_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Authored object region id or name",
+            "in": "path",
+            "name": "region_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ObjectRegionPatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SceneResource"
+                }
+              }
+            },
+            "description": "Committed canonical scene after object region patch"
+          },
+          "400": {
+            "description": "Invalid object region patch"
+          },
+          "404": {
+            "description": "No active workspace, scene document, object, or region"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/objects/{object_id}/regions/{region_id}/duplicate": {
+      "post": {
+        "operationId": "model_post_sessions_current_model_objects_object_id_regions_region_id_duplicate",
+        "parameters": [
+          {
+            "description": "Canonical scene object id",
+            "in": "path",
+            "name": "object_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Authored object region id or name",
+            "in": "path",
+            "name": "region_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ObjectRegionDuplicateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SceneResource"
+                }
+              }
+            },
+            "description": "Committed canonical scene after object region duplication"
+          },
+          "400": {
+            "description": "Invalid object region duplicate request"
+          },
+          "404": {
+            "description": "No active workspace, scene document, object, or region"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/realized-regions": {
+      "get": {
+        "operationId": "model_get_sessions_current_model_realized_regions",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegionListResource"
+                }
+              }
+            },
+            "description": "Current geometry-realized body region resources"
+          },
+          "404": {
+            "description": "No active workspace or scene document"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/region-diagnostics": {
+      "get": {
+        "operationId": "model_get_sessions_current_model_region_diagnostics",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegionDiagnosticsResource"
+                }
+              }
+            },
+            "description": "Current authored object region diagnostics"
+          },
+          "404": {
+            "description": "No active workspace or scene document"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
     "/v2/sessions/current/model/regions": {
       "get": {
         "operationId": "model_get_sessions_current_model_regions",
@@ -17516,7 +18652,7 @@
                 }
               }
             },
-            "description": "Current object-derived region resources"
+            "description": "Current authored object region resources"
           },
           "404": {
             "description": "No active workspace or scene document"

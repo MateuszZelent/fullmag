@@ -159,6 +159,17 @@ describe("magnetization texture draft model", () => {
     });
 
     expect(
+      buildMagnetizationAssignmentPatch(
+        { kind: "region", objectId: "body", regionId: "region:body" },
+        "mag-region",
+        9,
+      ),
+    ).toEqual({
+      path: "region",
+      payload: { magnetization_ref: "mag-region" },
+    });
+
+    expect(
       buildMagnetizationAssetPatch(
         {
           id: "mag-object",

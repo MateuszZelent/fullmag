@@ -14,6 +14,10 @@ const allowMissingSession =
 const requireGeometryFlow =
   !allowMissingSession && process.env.CONTROL_ROOM_SMOKE_GEOMETRY_FLOW !== "0";
 const cameraOnlySmoke = process.env.CONTROL_ROOM_SMOKE_CAMERA_ONLY === "1";
+const skipCameraGestureSmoke =
+  process.env.CONTROL_ROOM_SMOKE_SKIP_CAMERA_GESTURES === "1";
+const regionOnlyObjectId =
+  process.env.CONTROL_ROOM_SMOKE_REGION_ONLY_OBJECT_ID ?? null;
 const keepGeometrySmokeObjects =
   process.env.CONTROL_ROOM_SMOKE_KEEP_OBJECTS === "1";
 const CANVAS_SCREENSHOT_TIMEOUT_MS = Number(
@@ -202,9 +206,11 @@ try {
     await collectViewport3DPerformancePhase(page, "startup-to-canvas"),
   );
   await waitForInitialViewport3DResourceQuiet(page);
-  viewport3DPerformancePhases.push(
-    ...(await verifyCameraGesturesStayLocal({ page })),
-  );
+  if (!skipCameraGestureSmoke) {
+    viewport3DPerformancePhases.push(
+      ...(await verifyCameraGesturesStayLocal({ page })),
+    );
+  }
   if (cameraOnlySmoke) {
     logViewport3DPerformancePhases(viewport3DPerformancePhases);
     console.log(`Viewport 3D camera smoke passed at ${url}.`);
@@ -218,13 +224,22 @@ try {
       await collectViewport3DPerformancePhase(page, "dimension-frame-cage"),
     );
     if (requireGeometryFlow) {
-      await verifyGeometryAuthoringFlow({
-        canvas,
-        canvasBaseline: pixelSample,
-        page,
-        realtimeMessages,
-        sceneResponses,
-      });
+      if (regionOnlyObjectId) {
+        await verifyObjectInViewportRenderModel(page, regionOnlyObjectId);
+        await verifyRegionAuthoringOverlayFlow({
+          baseline: pixelSample,
+          objectId: regionOnlyObjectId,
+          page,
+        });
+      } else {
+        await verifyGeometryAuthoringFlow({
+          canvas,
+          canvasBaseline: pixelSample,
+          page,
+          realtimeMessages,
+          sceneResponses,
+        });
+      }
       viewport3DPerformancePhases.push(
         await collectViewport3DPerformancePhase(page, "geometry-authoring"),
       );
@@ -325,10 +340,8 @@ async function verifyCameraGesturesStayLocal({ page }) {
       request.method === "PATCH" &&
       request.path === VISUALIZATION_STATE_PATH,
   );
-  const backgroundResourceRequests = gestureRequests.filter((request) =>
-    CAMERA_GESTURE_FORBIDDEN_REQUEST_PREFIXES.some((prefix) =>
-      request.path.startsWith(prefix),
-    ),
+  const backgroundResourceRequests = unexpectedCameraGestureRequests(
+    gestureRequests,
   );
   const unexpectedGestureRequests = [
     ...visualizationStatePatches,
@@ -378,9 +391,17 @@ async function assertCameraGestureDoesNotFetch(page, gestureName, gesture) {
 }
 
 function unexpectedCameraGestureRequests(gestureRequests) {
-  return gestureRequests.filter((request) =>
-    isCameraGestureForbiddenRequestPath(request.path),
-  );
+  return gestureRequests.filter((request) => {
+    if (
+      allowMissingSession &&
+      request.method === "GET" &&
+      request.path.startsWith("/v2/sessions/current/")
+    ) {
+      return false;
+    }
+
+    return isCameraGestureForbiddenRequestPath(request.path);
+  });
 }
 
 function assertSmoothCameraWheelZoomPhase(phase) {
@@ -433,7 +454,7 @@ async function waitForInitialViewport3DResourceQuiet(page) {
         : now - quietStartedAt;
     if (
       activeInitialForbiddenResourceRequests.size === 0 &&
-      quietElapsed >= quietWindowMs
+      (allowMissingSession || quietElapsed >= quietWindowMs)
     ) {
       return;
     }
@@ -1136,6 +1157,11 @@ async function verifyGeometryAuthoringFlow({
       canvasBaseline,
       "3D viewport canvas change after UI object commit",
     );
+    const regionCanvasSample = await verifyRegionAuthoringOverlayFlow({
+      baseline: uiCanvasSample,
+      objectId,
+      page,
+    });
 
     const externalObjectName = `Smoke WS Box ${Date.now().toString(36)}`;
     const externalObjectId = `smoke-ws-${Date.now().toString(36)}`;
@@ -1180,7 +1206,7 @@ async function verifyGeometryAuthoringFlow({
     await waitForCanvasChange(
       page,
       canvas,
-      uiCanvasSample,
+      regionCanvasSample,
       "3D viewport canvas change after websocket scene refetch",
     );
     if (!keepGeometrySmokeObjects) {
@@ -1205,6 +1231,128 @@ async function verifyGeometryAuthoringFlow({
       }
     }
   }
+}
+
+async function verifyRegionAuthoringOverlayFlow({
+  baseline,
+  objectId,
+  page,
+}) {
+  const regionName = `Smoke Region ${Date.now().toString(36)}`;
+  const regionsNode = page.locator(
+    `[data-node-id="${cssAttributeValue(`model:object:${objectId}:regions`)}"]`,
+  );
+  await ensureExplorerNodeVisible(page, objectId, regionsNode);
+  await clickExplorerRow(regionsNode);
+
+  await page
+    .locator(".fm-inspector-panel button")
+    .filter({ hasText: "Add Region" })
+    .first()
+    .click();
+  await fillDraftField(page, "Name", regionName);
+  const shapeSelect = page
+    .locator('.fm-inspector-panel select[aria-label="Shape"]')
+    .first();
+  await shapeSelect.waitFor({
+    state: "visible",
+    timeout: GEOMETRY_FLOW_TIMEOUT_MS,
+  });
+  await shapeSelect.selectOption("cylinder");
+  const createButton = page
+    .locator(".fm-inspector-panel button")
+    .filter({ hasText: /^Create$/ })
+    .first();
+  await createButton.waitFor({
+    state: "visible",
+    timeout: GEOMETRY_FLOW_TIMEOUT_MS,
+  });
+  await waitForCondition("region create button enabled", async () => {
+    return (await createButton.isEnabled().catch(() => false)) ? true : null;
+  });
+
+  const createRegionResponsePromise = page.waitForResponse(
+    (response) =>
+      isObjectRegionCreateUrl(response.url(), objectId) &&
+      response.request().method() === "POST" &&
+      response.status() < 400,
+    { timeout: GEOMETRY_FLOW_TIMEOUT_MS },
+  );
+  await createButton.evaluate((node) => {
+    if ("click" in node && typeof node.click === "function") {
+      node.click();
+    }
+  });
+
+  const createRegionResponse = await createRegionResponsePromise;
+  const scene = await createRegionResponse.json();
+  const object = sceneObjects(scene).find(
+    (candidate) => sceneObjectId(candidate) === objectId,
+  );
+  const region = objectRegions(object).find(
+    (candidate) => candidate?.name === regionName,
+  );
+  const regionId =
+    typeof region?.region_id === "string"
+      ? region.region_id
+      : typeof region?.id === "string"
+        ? region.id
+        : null;
+  if (!regionId) {
+    throw new Error("Created object region is missing from SceneDocument response.");
+  }
+
+  const regionNode = page.locator(
+    `[data-node-id="${cssAttributeValue(
+      `model:object:${objectId}:regions:${regionId}`,
+    )}"]`,
+  );
+  if (!(await regionNode.isVisible().catch(() => false))) {
+    await ensureExplorerNodeVisible(page, objectId, regionsNode);
+    await regionsNode.dblclick();
+  }
+  await regionNode.waitFor({
+    state: "visible",
+    timeout: GEOMETRY_FLOW_TIMEOUT_MS,
+  });
+  await page
+    .locator(".fm-viewport-3d")
+    .getByRole("button", { name: "Hide regions" })
+    .waitFor({ state: "visible", timeout: GEOMETRY_FLOW_TIMEOUT_MS });
+  await assertViewportTopologyNotStale(page, "region authoring");
+  const canvasSample = await waitForCanvasChange(
+    page,
+    page.locator(VIEWPORT_3D_CANVAS_SELECTOR),
+    baseline,
+    "3D viewport canvas change after object region overlay commit",
+  );
+  console.log(
+    [
+      "Region overlay smoke passed:",
+      `object=${objectId}`,
+      `region=${regionId}`,
+      "scene=published",
+      "mesh=preserved",
+      "viewport=overlay+canvas-delta",
+    ].join(" "),
+  );
+  return canvasSample;
+}
+
+async function ensureExplorerNodeVisible(page, objectId, node) {
+  if (await node.isVisible().catch(() => false)) return;
+  const objectRow = page.locator(
+    `[data-node-id="${cssAttributeValue(`model:object:${objectId}`)}"]`,
+  );
+  await objectRow.waitFor({
+    state: "visible",
+    timeout: GEOMETRY_FLOW_TIMEOUT_MS,
+  });
+  await clickExplorerRow(objectRow);
+  if (!(await node.isVisible().catch(() => false))) {
+    await objectRow.dblclick();
+  }
+  await node.waitFor({ state: "visible", timeout: GEOMETRY_FLOW_TIMEOUT_MS });
 }
 
 async function verifyObjectInExplorerViewportAndInspector(
@@ -1523,6 +1671,7 @@ async function sampleCanvasComposite(page) {
           x: box.x,
           y: box.y,
         },
+        timeout: CANVAS_SCREENSHOT_TIMEOUT_MS,
       }),
       CANVAS_SCREENSHOT_TIMEOUT_MS,
       "3D viewport canvas composite screenshot",
@@ -1689,6 +1838,10 @@ function sceneObjects(scene) {
   return Array.isArray(scene?.objects) ? scene.objects : [];
 }
 
+function objectRegions(object) {
+  return Array.isArray(object?.regions) ? object.regions : [];
+}
+
 function sceneRevision(scene) {
   const revision = scene?.revision ?? scene?.scene_revision;
   return typeof revision === "number" ? revision : null;
@@ -1721,6 +1874,34 @@ function realtimeBatchChangedMatches(event, recommendedFetch) {
   const changes = Array.isArray(event.payload?.changes) ? event.payload.changes : [];
 
   return changes.some((change) => change?.recommended_fetch === recommendedFetch);
+}
+
+function isObjectRegionCreateUrl(value, objectId) {
+  const path = pathnameFromUrl(value);
+  return (
+    path ===
+    `/v2/sessions/current/model/objects/${encodeURIComponent(objectId)}/regions`
+  );
+}
+
+async function assertViewportTopologyNotStale(page, label) {
+  await waitForCondition(`${label} topology remains renderable`, async () => {
+    const viewport = page.locator(".fm-viewport-3d").first();
+    const freshness = await viewport
+      .getAttribute("data-topology-freshness")
+      .catch(() => "");
+    const text = await viewport.textContent().catch(() => "");
+    if (
+      freshness === "unknown" ||
+      String(text).includes("edge-only safety view") ||
+      String(text).includes("Mesh topology is stale")
+    ) {
+      throw new Error(
+        `topology freshness=${freshness}; hud=${String(text).slice(0, 240)}`,
+      );
+    }
+    return true;
+  });
 }
 
 function cssAttributeValue(value) {

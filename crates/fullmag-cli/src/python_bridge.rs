@@ -333,6 +333,10 @@ pub(crate) fn map_remesh_progress_message(message: &str) -> Option<RemeshTermina
         return None;
     }
 
+    if let Some(progress) = parse_gmsh_heartbeat_progress(message) {
+        return Some(progress);
+    }
+
     if let Some(progress) = parse_gmsh_inline_progress(message) {
         return Some(progress);
     }
@@ -411,6 +415,32 @@ pub(crate) fn map_remesh_progress_message(message: &str) -> Option<RemeshTermina
     }
 
     None
+}
+
+fn parse_gmsh_heartbeat_progress(message: &str) -> Option<RemeshTerminalProgress> {
+    let trimmed = message.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    let marker = "meshing in progress ~";
+    let start = lower.find(marker)? + marker.len();
+    let percent_end = trimmed[start..].find('%')?;
+    let percent = trimmed[start..start + percent_end]
+        .trim()
+        .parse::<u8>()
+        .ok()?
+        .min(99);
+    let label = if lower.contains("(meshing curves;") {
+        "meshing curves"
+    } else if lower.contains("(meshing surfaces;") {
+        "meshing surfaces"
+    } else if lower.contains("(meshing 3d volume;") {
+        "meshing 3D volume"
+    } else if lower.contains("(optimizing mesh;") {
+        "optimizing mesh"
+    } else {
+        "generating 3D mesh"
+    };
+
+    Some(RemeshTerminalProgress { percent, label })
 }
 
 fn parse_gmsh_inline_progress(message: &str) -> Option<RemeshTerminalProgress> {
@@ -1103,6 +1133,15 @@ mod tests {
             Some(RemeshTerminalProgress {
                 percent: 18,
                 label: "meshing curves",
+            })
+        );
+        assert_eq!(
+            map_remesh_progress_message(
+                "Gmsh: meshing in progress ~75% (generating 3D mesh; 85.7s elapsed; last: Tetrahedrizing 737 nodes...)"
+            ),
+            Some(RemeshTerminalProgress {
+                percent: 75,
+                label: "generating 3D mesh",
             })
         );
     }

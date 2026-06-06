@@ -90,6 +90,8 @@ function airboxTopology(): Viewport3DTopologyRenderModel<Viewport3DMeshPart> {
     fallbackSurfaceIndices: new Uint32Array(),
     fallbackVolumeEdgeIndices: new Uint32Array(),
     magneticParts: [],
+    meshGenerationId: null,
+    meshRevision: null,
     nodeCount: 4,
     positions: new Float32Array(),
   };

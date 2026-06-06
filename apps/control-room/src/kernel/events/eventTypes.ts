@@ -59,7 +59,23 @@ export interface KernelEventMap {
   };
   "footer:tab-requested": {
     reason?: string;
-    tab: "engine" | "logs" | "telemetry";
+    tab: "engine" | "logs" | "mesh" | "telemetry";
+  };
+  "mesh:build-confirm-requested": {
+    commandId: "mesh.build-selected" | "mesh.build-shared-domain";
+    input?: unknown;
+    source: "inspector" | "palette" | "ribbon" | "test";
+    sourceDetail?: string;
+  };
+  "mesh:build-submitted": {
+    commandId: string;
+    objectId?: string;
+    reason: string;
+    targetKind: "object_mesh" | "study_domain";
+  };
+  "mesh:topology-rendered": {
+    meshRevision: number | string;
+    rendererId: string;
   };
   "command:submitted": {
     commandId: string;

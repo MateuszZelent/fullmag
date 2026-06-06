@@ -91,6 +91,26 @@ typedef enum {
 } fullmag_fdm_boundary_correction;
 
 typedef enum {
+    /*
+     * Compatibility default for zero-initialized legacy callers.  When a
+     * region_mask is present and no explicit exchange_lut is provided, this
+     * keeps the historical free-surface cross-region behavior.
+     */
+    FULLMAG_FDM_EXCHANGE_PAIR_UNSPECIFIED   = 0,
+    FULLMAG_FDM_EXCHANGE_PAIR_HARMONIC_MEAN = 1,
+    FULLMAG_FDM_EXCHANGE_PAIR_EXPLICIT      = 2,
+    FULLMAG_FDM_EXCHANGE_PAIR_DISABLED      = 3,
+} fullmag_fdm_exchange_pair_mode;
+
+typedef struct {
+    uint32_t region_i;
+    uint32_t region_j;
+    fullmag_fdm_exchange_pair_mode mode;
+    double scale;
+    double inter_exchange;
+} fullmag_fdm_exchange_pair_desc;
+
+typedef enum {
     FULLMAG_FDM_STATS_FULL = 0,  /* default: preserve existing per-step diagnostics */
     FULLMAG_FDM_STATS_NONE = 1,  /* step returns only step/time/dt metadata */
 } fullmag_fdm_stats_mode;
@@ -198,6 +218,13 @@ typedef struct {
     int                        has_external_field;
     double                     external_field_am[3]; /* H_ext in A/m */
 
+    const double              *ms_field;         /* optional f64[cell_count], Ms(x) [A/m] */
+    uint64_t                   ms_field_len;
+    const double              *a_field;          /* optional f64[cell_count], A(x) [J/m] */
+    uint64_t                   a_field_len;
+    const double              *alpha_field;      /* optional f64[cell_count], alpha(x) */
+    uint64_t                   alpha_field_len;
+
     int                        has_uniaxial_anisotropy;
     double                     uniaxial_anisotropy_constant; /* K_u1 (J/m^3) */
     double                     uniaxial_anisotropy_k2;       /* K_u2 (J/m^3) */
@@ -221,6 +248,10 @@ typedef struct {
     double                     dmi_D_interfacial;     /* D_ind (J/m^2) */
     int                        has_bulk_dmi;
     double                     dmi_D_bulk;            /* D_bulk (J/m^2) */
+    const double              *dind_field;            /* optional f64[cell_count], D_ind(x) */
+    uint64_t                   dind_field_len;
+    const double              *dbulk_field;           /* optional f64[cell_count], D_bulk(x) */
+    uint64_t                   dbulk_field_len;
 
     /* Magnetoelastic coupling — prescribed strain B1/B2 model */
     int                        has_magnetoelastic;    /* 1 = enabled */
@@ -294,7 +325,7 @@ typedef struct {
      * Optional region/body ids for exchange barriers.
      * Neighboring active cells with different non-zero region ids are treated
      * according to the exchange LUT (see below).  When no LUT is provided,
-     * cross-region exchange coupling defaults to zero (free surface).
+     * cross-region exchange coupling is resolved from exchange_pair_default.
      * Length must equal cell_count when present.
      */
     const uint32_t            *region_mask;
@@ -311,10 +342,16 @@ typedef struct {
      *   - Free surface semantics by setting A_ij = 0
      *
      * When NULL and region_mask is present, the backend auto-builds a default
-     * LUT with A_ii = material.exchange_stiffness and A_ij(i!=j) = 0.
+     * LUT from exchange_pair_default.  Legacy UNSPECIFIED keeps the historical
+     * A_ii = material.exchange_stiffness and A_ij(i!=j) = 0 behavior.  Current
+     * region-owned semantics must set HARMONIC_MEAN so region-region exchange
+     * inside one object remains continuous by default.
      */
     const double              *exchange_lut;
     uint64_t                   exchange_lut_len; /* must be MAX_EXCHANGE_REGIONS^2 when present */
+    fullmag_fdm_exchange_pair_mode exchange_pair_default;
+    const fullmag_fdm_exchange_pair_desc *exchange_pairs;
+    uint64_t                   exchange_pair_count;
 
     /*
      * Boundary correction tier:

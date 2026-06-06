@@ -42,7 +42,8 @@ use crate::quantity_data_plane::{
     projection_empty_mask_cache_key, scalar_projection_cache_key, slice_cache_key,
 };
 use crate::router_v2::handlers::sessions::status::{
-    field_catalog_revision as current_field_catalog_revision, field_quantity_revision,
+    domain_generation_id, field_catalog_revision as current_field_catalog_revision,
+    field_quantity_revision,
 };
 use crate::schemas::fields::*;
 use crate::types::AppState;
@@ -171,12 +172,7 @@ pub async fn get_field_catalog(
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
 
-    let gen_id = snapshot
-        .fem_mesh
-        .as_ref()
-        .and_then(|m| m.generation_id.as_deref())
-        .and_then(|g| g.parse::<u64>().ok())
-        .unwrap_or(0);
+    let gen_id = domain_generation_id(snapshot);
 
     let mut quantities = Vec::new();
 
@@ -269,12 +265,7 @@ pub async fn get_field_meta(
     let unit = quantity_unit(quantity_id).to_string();
     let location = quantity_spatial_domain(quantity_id).to_string();
 
-    let gen_id = snapshot
-        .fem_mesh
-        .as_ref()
-        .and_then(|m| m.generation_id.as_deref())
-        .and_then(|g| g.parse::<u64>().ok())
-        .unwrap_or(0);
+    let gen_id = domain_generation_id(snapshot);
 
     if snapshot
         .latest_fields
@@ -762,12 +753,7 @@ pub async fn get_field_vector(
     let component = parse_component(query.component.as_deref(), n_comp)?;
 
     let field_revision = field_quantity_revision(snapshot, quantity_id);
-    let gen_id_str = snapshot
-        .fem_mesh
-        .as_ref()
-        .and_then(|mesh| mesh.generation_id.as_deref())
-        .unwrap_or("0");
-    let gen_id: u64 = gen_id_str.parse().unwrap_or(0);
+    let gen_id = domain_generation_id(snapshot);
 
     // Collect raw values under the lock, then drop the lock before any heavy work
     let latest_field_values = || {
@@ -1611,12 +1597,7 @@ async fn build_slice_matrix(
     resolved.component = component;
 
     let field_revision = field_quantity_revision(snapshot, &quantity_id);
-    let gen_id: u64 = snapshot
-        .fem_mesh
-        .as_ref()
-        .and_then(|m| m.generation_id.as_deref())
-        .and_then(|g| g.parse().ok())
-        .unwrap_or(0);
+    let gen_id = domain_generation_id(snapshot);
     let fdm_field = extract_fdm_field(snapshot, quantity_id, n_comp)
         .ok_or_else(|| ApiError::not_found(format!("field '{}' not available", quantity_id)))?;
     let fem_field = extract_fem_field(snapshot, quantity_id, n_comp);
@@ -1760,12 +1741,7 @@ async fn build_projection_matrix(
     let n_comp: usize = spec.map(|s| s.n_comp as usize).unwrap_or(3);
     let resolved = resolve_projection_query(&projection_query_from_matrix(query), n_comp)?;
     let field_revision = field_quantity_revision(snapshot, &quantity_id);
-    let gen_id: u64 = snapshot
-        .fem_mesh
-        .as_ref()
-        .and_then(|m| m.generation_id.as_deref())
-        .and_then(|g| g.parse().ok())
-        .unwrap_or(0);
+    let gen_id = domain_generation_id(snapshot);
     let fdm_field = extract_fdm_field(snapshot, quantity_id, n_comp)
         .ok_or_else(|| ApiError::not_found(format!("field '{}' not available", quantity_id)))?;
     let fem_field = extract_fem_field(snapshot, quantity_id, n_comp);
@@ -1833,12 +1809,7 @@ pub async fn get_field_projection_meta(
     let n_comp: usize = spec.map(|s| s.n_comp as usize).unwrap_or(3);
     let resolved = resolve_projection_query(&query, n_comp)?;
     let field_revision = field_quantity_revision(snapshot, &quantity_id);
-    let gen_id: u64 = snapshot
-        .fem_mesh
-        .as_ref()
-        .and_then(|m| m.generation_id.as_deref())
-        .and_then(|g| g.parse().ok())
-        .unwrap_or(0);
+    let gen_id = domain_generation_id(snapshot);
     let fdm_field = extract_fdm_field(snapshot, &quantity_id, n_comp)
         .ok_or_else(|| ApiError::not_found(format!("field '{}' not available", quantity_id)))?;
     let fem_field = extract_fem_field(snapshot, &quantity_id, n_comp);
@@ -1982,12 +1953,7 @@ pub async fn get_field_projection_scalar(
     let n_comp: usize = spec.map(|s| s.n_comp as usize).unwrap_or(3);
     let resolved = resolve_projection_query(&query, n_comp)?;
     let field_revision = field_quantity_revision(snapshot, &quantity_id);
-    let gen_id: u64 = snapshot
-        .fem_mesh
-        .as_ref()
-        .and_then(|m| m.generation_id.as_deref())
-        .and_then(|g| g.parse().ok())
-        .unwrap_or(0);
+    let gen_id = domain_generation_id(snapshot);
     let fdm_field = extract_fdm_field(snapshot, &quantity_id, n_comp)
         .ok_or_else(|| ApiError::not_found(format!("field '{}' not available", quantity_id)))?;
     let fem_field = extract_fem_field(snapshot, &quantity_id, n_comp);
@@ -2090,12 +2056,7 @@ pub async fn get_field_projection_profile(
     let n_comp: usize = spec.map(|s| s.n_comp as usize).unwrap_or(3);
     let resolved = resolve_projection_profile_query(&query, n_comp)?;
     let field_revision = field_quantity_revision(snapshot, &quantity_id);
-    let gen_id: u64 = snapshot
-        .fem_mesh
-        .as_ref()
-        .and_then(|m| m.generation_id.as_deref())
-        .and_then(|g| g.parse().ok())
-        .unwrap_or(0);
+    let gen_id = domain_generation_id(snapshot);
     let fem_field = extract_fem_field(snapshot, &quantity_id, n_comp).ok_or_else(|| {
         ApiError::conflict(
             "projection profile requires a nodal FEM field matching the current mesh",
@@ -2171,12 +2132,7 @@ pub async fn get_field_projection_empty_mask(
     let n_comp: usize = spec.map(|s| s.n_comp as usize).unwrap_or(3);
     let resolved = resolve_projection_query(&query, n_comp)?;
     let field_revision = field_quantity_revision(snapshot, &quantity_id);
-    let gen_id: u64 = snapshot
-        .fem_mesh
-        .as_ref()
-        .and_then(|m| m.generation_id.as_deref())
-        .and_then(|g| g.parse().ok())
-        .unwrap_or(0);
+    let gen_id = domain_generation_id(snapshot);
     let fdm_field = extract_fdm_field(snapshot, &quantity_id, n_comp)
         .ok_or_else(|| ApiError::not_found(format!("field '{}' not available", quantity_id)))?;
     let fem_field = extract_fem_field(snapshot, &quantity_id, n_comp);
@@ -2565,12 +2521,7 @@ pub async fn get_field_slice_meta(
     }
 
     let field_revision = field_quantity_revision(snapshot, &quantity_id);
-    let gen_id_str = snapshot
-        .fem_mesh
-        .as_ref()
-        .and_then(|mesh| mesh.generation_id.as_deref())
-        .unwrap_or("0");
-    let gen_id: u64 = gen_id_str.parse().unwrap_or(0);
+    let gen_id = domain_generation_id(snapshot);
 
     let fdm_field = extract_fdm_field(snapshot, &quantity_id, n_comp)
         .ok_or_else(|| ApiError::not_found(format!("field '{}' not available", quantity_id)))?;
@@ -2752,12 +2703,7 @@ pub async fn get_field_slice_scalar(
         ));
     }
     let field_revision = field_quantity_revision(snapshot, &quantity_id);
-    let gen_id: u64 = snapshot
-        .fem_mesh
-        .as_ref()
-        .and_then(|m| m.generation_id.as_deref())
-        .and_then(|g| g.parse().ok())
-        .unwrap_or(0);
+    let gen_id = domain_generation_id(snapshot);
 
     let fdm_field = extract_fdm_field(snapshot, &quantity_id, n_comp)
         .ok_or_else(|| ApiError::not_found(format!("field '{}' not available", quantity_id)))?;
@@ -2881,12 +2827,7 @@ pub async fn get_field_slice_arrows(
         ));
     }
     let field_revision = field_quantity_revision(snapshot, &quantity_id);
-    let gen_id: u64 = snapshot
-        .fem_mesh
-        .as_ref()
-        .and_then(|m| m.generation_id.as_deref())
-        .and_then(|g| g.parse().ok())
-        .unwrap_or(0);
+    let gen_id = domain_generation_id(snapshot);
 
     let fdm_field = extract_fdm_field(snapshot, &quantity_id, n_comp)
         .ok_or_else(|| ApiError::not_found(format!("field '{}' not available", quantity_id)))?;

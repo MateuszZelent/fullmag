@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 import warnings
 
 from fullmag._validation import as_vector3, require_non_empty, require_non_negative, require_positive, require_finite
@@ -157,6 +158,379 @@ class Region:
         return {"name": self.name, "geometry": self.geometry.geometry_name}
 
 
+_MATERIAL_PARAMETER_NAMES = {
+    "Ms",
+    "Aex",
+    "Alpha",
+    "Ku1",
+    "Ku2",
+    "AnisotropyAxis",
+    "Kc1",
+    "Kc2",
+    "Kc3",
+    "Dind",
+    "Dbulk",
+}
+
+_REGION_FRAMES = {"object", "world"}
+_REGION_REALIZATION_POLICIES = {"inherit", "conformal", "project"}
+_REGION_CONFLICT_POLICIES = {"error", "higher_priority_wins", "min_mesh_size_wins"}
+_MATERIAL_FIELD_LOCATIONS = {"cell", "node", "element", "quadrature"}
+
+
+@dataclass(frozen=True, slots=True)
+class MaterialParameterField:
+    """Authored spatial material parameter field for object-owned regions."""
+
+    payload: dict[str, object]
+
+    @staticmethod
+    def constant(value: float | tuple[float, float, float], unit: str | None = None) -> "MaterialParameterField":
+        if isinstance(value, (list, tuple)):
+            resolved_value: object = list(as_vector3(value, "value"))
+        else:
+            resolved_value = require_finite(float(value), "value")
+        payload: dict[str, object] = {"kind": "constant", "value": resolved_value}
+        if unit is not None:
+            payload["unit"] = require_non_empty(unit, "unit")
+        return MaterialParameterField(payload)
+
+    @staticmethod
+    def linear(
+        *,
+        base: float,
+        gradient: tuple[float, float, float],
+        frame: str = "object",
+        unit: str | None = None,
+    ) -> "MaterialParameterField":
+        normalized_frame = _normalize_choice(frame, _REGION_FRAMES, "frame")
+        payload: dict[str, object] = {
+            "kind": "linear",
+            "base": require_finite(float(base), "base"),
+            "gradient": list(as_vector3(gradient, "gradient")),
+            "frame": normalized_frame,
+        }
+        if unit is not None:
+            payload["unit"] = require_non_empty(unit, "unit")
+        return MaterialParameterField(payload)
+
+    @staticmethod
+    def radial(
+        *,
+        center: tuple[float, float, float],
+        radius: float,
+        inside: float,
+        outside: float,
+        frame: str = "object",
+        unit: str | None = None,
+    ) -> "MaterialParameterField":
+        normalized_frame = _normalize_choice(frame, _REGION_FRAMES, "frame")
+        payload: dict[str, object] = {
+            "kind": "radial",
+            "center": list(as_vector3(center, "center")),
+            "radius": require_positive(float(radius), "radius"),
+            "inside": require_finite(float(inside), "inside"),
+            "outside": require_finite(float(outside), "outside"),
+            "frame": normalized_frame,
+        }
+        if unit is not None:
+            payload["unit"] = require_non_empty(unit, "unit")
+        return MaterialParameterField(payload)
+
+    @staticmethod
+    def sampled(
+        *,
+        asset_id: str,
+        component_count: int,
+        location: str,
+        unit: str,
+    ) -> "MaterialParameterField":
+        if component_count < 1:
+            raise ValueError("component_count must be >= 1")
+        return MaterialParameterField(
+            {
+                "kind": "sampled",
+                "asset_id": require_non_empty(asset_id, "asset_id"),
+                "component_count": int(component_count),
+                "location": _normalize_choice(location, _MATERIAL_FIELD_LOCATIONS, "location"),
+                "unit": require_non_empty(unit, "unit"),
+            }
+        )
+
+    def to_ir(self) -> dict[str, object]:
+        return dict(self.payload)
+
+
+@dataclass(frozen=True, slots=True)
+class RegionMaterialOverride:
+    parameter: str
+    value: MaterialParameterField
+    priority: int = 0
+    conflict_policy: str = "error"
+
+    def __post_init__(self) -> None:
+        parameter = _normalize_parameter_name(self.parameter)
+        _normalize_choice(self.conflict_policy, _REGION_CONFLICT_POLICIES, "conflict_policy")
+        _validate_material_parameter_field(parameter, self.value)
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "parameter": _normalize_parameter_name(self.parameter),
+            "value": self.value.to_ir(),
+            "priority": int(self.priority),
+            "conflict_policy": _normalize_choice(
+                self.conflict_policy,
+                _REGION_CONFLICT_POLICIES,
+                "conflict_policy",
+            ),
+        }
+
+
+class ObjectRegionMaterialProxy:
+    def __init__(self, owner: "ObjectRegion") -> None:
+        object.__setattr__(self, "_owner", owner)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        self._owner.set_material(name, value)
+
+
+@dataclass(slots=True)
+class ObjectRegion:
+    """Authored region owned by one magnetic object."""
+
+    owner_object: str
+    name: str
+    shape: object
+    region_id: str | None = None
+    frame: str = "object"
+    enabled: bool = True
+    priority: int = 0
+    realization_policy: str = "inherit"
+    mesh_policy: dict[str, object] | None = None
+    material_overrides: list[RegionMaterialOverride] | None = None
+    _delete_callback: Callable[[], None] | None = field(default=None, repr=False, compare=False)
+    material: ObjectRegionMaterialProxy = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.owner_object = require_non_empty(self.owner_object, "owner_object")
+        self.name = require_non_empty(self.name, "name")
+        if self.region_id is None:
+            self.region_id = f"{self.owner_object}:{self.name}"
+        else:
+            self.region_id = require_non_empty(self.region_id, "region_id")
+        self.frame = _normalize_choice(self.frame, _REGION_FRAMES, "frame")
+        self.realization_policy = _normalize_choice(
+            self.realization_policy,
+            _REGION_REALIZATION_POLICIES,
+            "realization_policy",
+        )
+        if self.material_overrides is None:
+            self.material_overrides = []
+        self.material = ObjectRegionMaterialProxy(self)
+
+    def set_material(
+        self,
+        parameter: str,
+        value: float | tuple[float, float, float] | MaterialParameterField,
+        *,
+        unit: str | None = None,
+        priority: int | None = None,
+        conflict_policy: str = "error",
+    ) -> "ObjectRegion":
+        field = value if isinstance(value, MaterialParameterField) else MaterialParameterField.constant(value, unit=unit)
+        override = RegionMaterialOverride(
+            parameter=_normalize_parameter_name(parameter),
+            value=field,
+            priority=self.priority if priority is None else int(priority),
+            conflict_policy=conflict_policy,
+        )
+        self.material_overrides = [
+            existing
+            for existing in self.material_overrides or []
+            if _normalize_parameter_name(existing.parameter) != override.parameter
+        ]
+        self.material_overrides.append(override)
+        return self
+
+    def mesh(
+        self,
+        *,
+        maximum_element_size: float | None = None,
+        minimum_element_size: float | None = None,
+        transition_distance: float | None = None,
+        order: int | None = None,
+    ) -> "ObjectRegion":
+        mesh_policy: dict[str, object] = {}
+        if maximum_element_size is not None:
+            mesh_policy["maximum_element_size"] = require_positive(
+                float(maximum_element_size),
+                "maximum_element_size",
+            )
+        if minimum_element_size is not None:
+            mesh_policy["minimum_element_size"] = require_positive(
+                float(minimum_element_size),
+                "minimum_element_size",
+            )
+        if transition_distance is not None:
+            require_non_negative(float(transition_distance), "transition_distance")
+            mesh_policy["transition_distance"] = float(transition_distance)
+        if order is not None:
+            if int(order) < 1:
+                raise ValueError("order must be >= 1")
+            mesh_policy["order"] = int(order)
+        self.mesh_policy = mesh_policy or None
+        return self
+
+    def delete(self) -> None:
+        if self._delete_callback is None:
+            raise RuntimeError("region is not attached to an owner registry")
+        self._delete_callback()
+
+    def to_ir(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "region_id": self.region_id,
+            "owner_object": self.owner_object,
+            "name": self.name,
+            "shape": _region_shape_to_ir(self.shape),
+            "frame": self.frame,
+            "enabled": bool(self.enabled),
+            "priority": int(self.priority),
+            "material_overrides": [
+                override.to_ir() for override in (self.material_overrides or [])
+            ],
+            "realization_policy": self.realization_policy,
+        }
+        if self.mesh_policy is not None:
+            payload["mesh_policy"] = dict(self.mesh_policy)
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
+class MaterialParameterAssignment:
+    assignment_id: str
+    owner_object: str
+    parameter: str
+    value: MaterialParameterField
+    region_id: str | None = None
+    priority: int = 0
+    conflict_policy: str = "error"
+
+    def __post_init__(self) -> None:
+        _validate_material_parameter_field(
+            _normalize_parameter_name(self.parameter),
+            self.value,
+        )
+
+    def to_ir(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "assignment_id": require_non_empty(self.assignment_id, "assignment_id"),
+            "owner_object": require_non_empty(self.owner_object, "owner_object"),
+            "parameter": _normalize_parameter_name(self.parameter),
+            "value": self.value.to_ir(),
+            "priority": int(self.priority),
+            "conflict_policy": _normalize_choice(
+                self.conflict_policy,
+                _REGION_CONFLICT_POLICIES,
+                "conflict_policy",
+            ),
+        }
+        if self.region_id is not None:
+            payload["region_id"] = require_non_empty(self.region_id, "region_id")
+        return payload
+
+
+def _normalize_choice(value: str, allowed: set[str], name: str) -> str:
+    normalized = require_non_empty(str(value), name).strip().lower()
+    if normalized not in allowed:
+        raise ValueError(f"{name} must be one of {sorted(allowed)!r}, got {value!r}")
+    return normalized
+
+
+def _normalize_parameter_name(value: str) -> str:
+    aliases = {
+        "a": "Aex",
+        "aex": "Aex",
+        "alpha": "Alpha",
+        "anisotropy_axis": "AnisotropyAxis",
+        "anisu": "AnisotropyAxis",
+        "dbulk": "Dbulk",
+        "dind": "Dind",
+        "kc1": "Kc1",
+        "kc2": "Kc2",
+        "kc3": "Kc3",
+        "ku1": "Ku1",
+        "ku2": "Ku2",
+        "ms": "Ms",
+    }
+    stripped = require_non_empty(value, "parameter")
+    parameter = aliases.get(stripped.lower(), stripped)
+    if parameter not in _MATERIAL_PARAMETER_NAMES:
+        raise ValueError(
+            f"parameter must be one of {sorted(_MATERIAL_PARAMETER_NAMES)!r}, got {value!r}"
+        )
+    return parameter
+
+
+def _validate_material_parameter_field(parameter: str, field_value: MaterialParameterField) -> None:
+    payload = field_value.to_ir()
+    if payload.get("kind") != "constant":
+        return
+    value = payload.get("value")
+    if not isinstance(value, (int, float)):
+        return
+    scalar = float(value)
+    if parameter == "Ms" and scalar <= 0.0:
+        raise ValueError("Ms must be > 0")
+    if parameter in {"Aex", "Alpha"} and scalar < 0.0:
+        raise ValueError(f"{parameter} must be >= 0")
+
+
+def _region_shape_to_ir(shape: object) -> dict[str, object]:
+    if hasattr(shape, "to_ir"):
+        shape_ir = shape.to_ir()
+    elif isinstance(shape, dict):
+        shape_ir = dict(shape)
+    else:
+        raise TypeError("region shape must be a Fullmag geometry or shape IR dict")
+
+    kind = shape_ir.get("kind")
+    if kind == "translate":
+        base = shape_ir.get("base")
+        if not isinstance(base, dict):
+            raise TypeError("translated region shape base must be a shape IR dict")
+        translated = _region_shape_to_ir(base)
+        offset = as_vector3(shape_ir.get("by"), "shape.center")
+        center = as_vector3(translated.get("center", (0.0, 0.0, 0.0)), "shape.center")
+        translated["center"] = [center[index] + offset[index] for index in range(3)]
+        return translated
+    if kind == "box":
+        return {
+            "kind": "box",
+            "size": list(as_vector3(shape_ir.get("size"), "shape.size")),
+            "center": list(as_vector3(shape_ir.get("center", (0.0, 0.0, 0.0)), "shape.center")),
+        }
+    if kind == "cylinder":
+        return {
+            "kind": "cylinder",
+            "radius": require_positive(float(shape_ir.get("radius")), "shape.radius"),
+            "height": require_positive(float(shape_ir.get("height")), "shape.height"),
+            "center": list(as_vector3(shape_ir.get("center", (0.0, 0.0, 0.0)), "shape.center")),
+            "axis": list(as_vector3(shape_ir.get("axis", (0.0, 0.0, 1.0)), "shape.axis")),
+        }
+    if kind == "ellipsoid":
+        radii = as_vector3(shape_ir.get("radii"), "shape.radii")
+        if radii[0] != radii[1] or radii[0] != radii[2]:
+            raise ValueError("object region v1 supports spherical ellipsoids only")
+        return {
+            "kind": "sphere",
+            "radius": require_positive(float(radii[0]), "shape.radius"),
+            "center": list(as_vector3(shape_ir.get("center", (0.0, 0.0, 0.0)), "shape.center")),
+        }
+    if kind in {"sphere", "csg"}:
+        return shape_ir
+    raise ValueError(f"unsupported object region shape kind {kind!r}")
+
+
 @dataclass(frozen=True, slots=True)
 class Ferromagnet:
     name: str
@@ -165,6 +539,9 @@ class Ferromagnet:
     region: Region | None = None
     m0: InitialMagnetization | None = None
     mesh: PerObjectMeshRecipe | None = None
+    object_regions: tuple[ObjectRegion, ...] = ()
+    allocated_region_ids: tuple[str, ...] = ()
+    material_parameter_fields: tuple[MaterialParameterAssignment, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "name", require_non_empty(self.name, "name"))

@@ -14,8 +14,8 @@ const appMenuSource = readFileSync(
   join(process.cwd(), "src/kernel/layout/AppMenuBar.tsx"),
   "utf8",
 );
-const geometryObjectPanelSource = readFileSync(
-  join(process.cwd(), "src/modules/inspector/panels/GeometryObjectPanel.tsx"),
+const objectGeneralPanelSource = readFileSync(
+  join(process.cwd(), "src/modules/inspector/panels/ObjectGeneralPanel.tsx"),
   "utf8",
 );
 const viewportModuleSource = readFileSync(
@@ -61,11 +61,11 @@ describe("object visualization subscription performance contracts", () => {
   });
 
   it("keeps geometry object color editing off the full visualization snapshot", () => {
-    expect(geometryObjectPanelSource).toContain("useObjectVisualizationController");
-    expect(geometryObjectPanelSource).toContain("useObjectVisualizationSelector");
-    expect(geometryObjectPanelSource).toContain("geometryObjectVisualizationColorsEquals");
-    expect(geometryObjectPanelSource).toContain("resolveGeometryObjectVisualizationColors");
-    expect(geometryObjectPanelSource).not.toContain("useObjectVisualizationRegistry()");
+    expect(objectGeneralPanelSource).toContain("useObjectVisualizationController");
+    expect(objectGeneralPanelSource).toContain("useObjectVisualizationSelector");
+    expect(objectGeneralPanelSource).toContain("geometryObjectVisualizationColorsEquals");
+    expect(objectGeneralPanelSource).toContain("resolveGeometryObjectVisualizationColors");
+    expect(objectGeneralPanelSource).not.toContain("useObjectVisualizationRegistry()");
   });
 
   it("keeps viewport rendering off the full visualization registry snapshot", () => {

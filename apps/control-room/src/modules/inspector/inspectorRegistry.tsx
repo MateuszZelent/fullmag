@@ -2,16 +2,26 @@ import type { Selection } from "@/kernel/selection/selectionTypes";
 
 import { AirboxMeshPolicyPanel } from "./panels/AirboxMeshPolicyPanel";
 import { ChartInspectorPanel } from "./panels/ChartInspectorPanel";
+import { CouplingInspectorPanel } from "./panels/CouplingInspectorPanel";
 import { CrossSectionInspectorPanel } from "./panels/CrossSectionInspectorPanel";
 import { GeometryObjectPanel } from "./panels/GeometryObjectPanel";
 import { MeshDetailsPanel } from "./panels/MeshDetailsPanel";
+import { ObjectGeneralPanel } from "./panels/ObjectGeneralPanel";
 import { ObjectMagneticTexturePanel } from "./panels/ObjectMagneticTexturePanel";
 import { ObjectMaterialPanel } from "./panels/ObjectMaterialPanel";
 import { ObjectMeshPolicyPanel } from "./panels/ObjectMeshPolicyPanel";
-import { ObjectRegionsPanel } from "./panels/ObjectRegionsPanel";
+import {
+  ObjectRegionDiagnosticsPanel,
+  ObjectRegionGeometryPanel,
+  ObjectRegionMagneticParametersPanel,
+  ObjectRegionMeshPanel,
+  ObjectRegionNestedRegionsPanel,
+  ObjectRegionOverviewPanel,
+} from "./panels/ObjectRegionsPanel";
 import { ObjectVisualizationPanel } from "./panels/ObjectVisualizationPanel";
 import { PhysicsInteractionPanel } from "./panels/PhysicsInteractionPanel";
 import { PlaceholderPanel } from "./panels/PlaceholderPanel";
+import { RegionsListPanel } from "./panels/RegionsListPanel";
 import { StudyInspectorPanel } from "./panels/StudyInspectorPanel";
 import { StudyStageInspectorRouter } from "./panels/StudyStageInspectorRouter";
 import type { InspectorPanelContribution } from "./inspectorTypes";
@@ -24,9 +34,15 @@ const PANELS: InspectorPanelContribution[] = [
     component: ChartInspectorPanel,
   },
   {
+    id: "object-general",
+    title: "Object General",
+    selectionKinds: ["object.root"],
+    component: ObjectGeneralPanel,
+  },
+  {
     id: "geometry-object",
-    title: "Geometry Object",
-    selectionKinds: ["object.root", "object.geometry", "builder.primitive"],
+    title: "Geometry",
+    selectionKinds: ["object.geometry", "builder.primitive"],
     component: GeometryObjectPanel,
   },
   {
@@ -36,6 +52,7 @@ const PANELS: InspectorPanelContribution[] = [
       "airbox.visualization",
       "mesh-part-airbox",
       "object.visualization",
+      "object.region.visualization",
       "mesh-part",
     ],
     component: ObjectVisualizationPanel,
@@ -47,6 +64,12 @@ const PANELS: InspectorPanelContribution[] = [
     component: PhysicsInteractionPanel,
   },
   {
+    id: "physics-coupling",
+    title: "Coupling",
+    selectionKinds: ["physics.coupling"],
+    component: CouplingInspectorPanel,
+  },
+  {
     id: "object-material",
     title: "Magnetic Parameters",
     selectionKinds: ["object.magnetic-parameters", "object.material"],
@@ -56,7 +79,52 @@ const PANELS: InspectorPanelContribution[] = [
     id: "object-regions",
     title: "Object Regions",
     selectionKinds: ["object.regions"],
-    component: ObjectRegionsPanel,
+    component: RegionsListPanel,
+  },
+  {
+    id: "object-region",
+    title: "Object Region",
+    selectionKinds: ["object.region"],
+    component: ObjectRegionOverviewPanel,
+  },
+  {
+    id: "object-region-geometry",
+    title: "Region Geometry",
+    selectionKinds: ["object.region.geometry", "object.region.shape"],
+    component: ObjectRegionGeometryPanel,
+  },
+  {
+    id: "object-region-magnetic-parameters",
+    title: "Region Magnetic Parameters",
+    selectionKinds: [
+      "object.region.magnetic-parameters",
+      "object.region.material",
+    ],
+    component: ObjectRegionMagneticParametersPanel,
+  },
+  {
+    id: "object-region-mesh",
+    title: "Region Mesh",
+    selectionKinds: ["object.region.mesh"],
+    component: ObjectRegionMeshPanel,
+  },
+  {
+    id: "object-region-texture",
+    title: "Region Texture",
+    selectionKinds: ["object.region.texture", "object.region-magnetic-texture"],
+    component: ObjectMagneticTexturePanel,
+  },
+  {
+    id: "object-region-regions",
+    title: "Nested Regions",
+    selectionKinds: ["object.region.regions"],
+    component: ObjectRegionNestedRegionsPanel,
+  },
+  {
+    id: "object-region-diagnostics",
+    title: "Region Diagnostics",
+    selectionKinds: ["object.region.diagnostics"],
+    component: ObjectRegionDiagnosticsPanel,
   },
   {
     id: "object-magnetic-texture",
@@ -66,7 +134,6 @@ const PANELS: InspectorPanelContribution[] = [
       "object.magnetic-texture.asset",
       "object.magnetic-texture.load",
       "object.magnetic-texture.transform",
-      "object.region-magnetic-texture",
     ],
     component: ObjectMagneticTexturePanel,
   },

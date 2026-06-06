@@ -83,6 +83,25 @@ pub enum fullmag_fdm_boundary_correction {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fdm_exchange_pair_mode {
+    FULLMAG_FDM_EXCHANGE_PAIR_UNSPECIFIED = 0,
+    FULLMAG_FDM_EXCHANGE_PAIR_HARMONIC_MEAN = 1,
+    FULLMAG_FDM_EXCHANGE_PAIR_EXPLICIT = 2,
+    FULLMAG_FDM_EXCHANGE_PAIR_DISABLED = 3,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_exchange_pair_desc {
+    pub region_i: u32,
+    pub region_j: u32,
+    pub mode: fullmag_fdm_exchange_pair_mode,
+    pub scale: f64,
+    pub inter_exchange: f64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum fullmag_fdm_stats_mode {
     FULLMAG_FDM_STATS_FULL = 0,
     FULLMAG_FDM_STATS_NONE = 1,
@@ -207,6 +226,13 @@ pub struct fullmag_fdm_plan_desc {
     pub has_external_field: i32,
     pub external_field_am: [f64; 3],
 
+    pub ms_field: *const f64,
+    pub ms_field_len: u64,
+    pub a_field: *const f64,
+    pub a_field_len: u64,
+    pub alpha_field: *const f64,
+    pub alpha_field_len: u64,
+
     // Uniaxial anisotropy
     pub has_uniaxial_anisotropy: i32,
     pub uniaxial_anisotropy_constant: f64,
@@ -233,6 +259,10 @@ pub struct fullmag_fdm_plan_desc {
     pub dmi_d_interfacial: f64,
     pub has_bulk_dmi: i32,
     pub dmi_d_bulk: f64,
+    pub dind_field: *const f64,
+    pub dind_field_len: u64,
+    pub dbulk_field: *const f64,
+    pub dbulk_field_len: u64,
 
     // Magnetoelastic coupling
     pub has_magnetoelastic: i32,
@@ -295,6 +325,9 @@ pub struct fullmag_fdm_plan_desc {
     pub region_mask_len: u64,
     pub exchange_lut: *const f64,
     pub exchange_lut_len: u64,
+    pub exchange_pair_default: fullmag_fdm_exchange_pair_mode,
+    pub exchange_pairs: *const fullmag_fdm_exchange_pair_desc,
+    pub exchange_pair_count: u64,
     // Boundary correction
     pub boundary_correction: fullmag_fdm_boundary_correction,
     pub boundary_phi_floor: f64,

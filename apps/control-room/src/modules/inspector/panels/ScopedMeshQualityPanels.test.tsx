@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import type { Selection } from "@/kernel/selection/selectionTypes";
+import { Accordion } from "@/shared/ui/Accordion";
 
 vi.mock("@/kernel/KernelContext", () => ({
   useKernel: () => ({
@@ -308,8 +309,14 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
   }),
 }));
 
-import { AirboxMeshPolicyPanel } from "./AirboxMeshPolicyPanel";
-import { ObjectMeshPolicyPanel } from "./ObjectMeshPolicyPanel";
+import {
+  AirboxMeshPolicyPanel,
+  AirboxMeshPolicyTransactionsSection,
+} from "./AirboxMeshPolicyPanel";
+import {
+  ObjectMeshPolicyPanel,
+  ObjectMeshTransactionsSection,
+} from "./ObjectMeshPolicyPanel";
 
 const objectSelection: Selection = {
   kind: "object.mesh",
@@ -325,6 +332,15 @@ const airboxSelection: Selection = {
   label: "Airbox mesh",
   moduleSource: "inspector",
   nodeId: "airbox:mesh",
+  objectId: null,
+  ref: null,
+};
+
+const airboxQualitySelection: Selection = {
+  kind: "airbox.mesh-quality",
+  label: "Airbox quality",
+  moduleSource: "inspector",
+  nodeId: "airbox:mesh-quality",
   objectId: null,
   ref: null,
 };
@@ -351,9 +367,48 @@ describe("scoped mesh quality panels", () => {
     expect(html).toContain("ObjectCoreRelaxation");
   });
 
+  it("warns when object mesh policy edits are not applied", () => {
+    const html = renderToStaticMarkup(
+      <Accordion type="multiple" defaultValue={["transactions"]}>
+        <ObjectMeshTransactionsSection
+          buildLabel="Apply & Build Mesh"
+          feedback={null}
+          isDirty
+          objectId="waveguide"
+          onApply={vi.fn()}
+          onBuild={vi.fn()}
+          onRevert={vi.fn()}
+          pending={false}
+        />
+      </Accordion>,
+    );
+
+    expect(html).toContain("Unapplied changes");
+    expect(html).toContain("Apply Policy or Apply &amp; Build Mesh");
+  });
+
+  it("warns when airbox mesh policy edits are not applied", () => {
+    const html = renderToStaticMarkup(
+      <Accordion type="multiple" defaultValue={["transactions"]}>
+        <AirboxMeshPolicyTransactionsSection
+          buildLabel="Apply & Build Shared-Domain Mesh"
+          feedback={null}
+          isDirty
+          onApply={vi.fn()}
+          onBuild={vi.fn()}
+          onRevert={vi.fn()}
+          pending={false}
+        />
+      </Accordion>,
+    );
+
+    expect(html).toContain("Unapplied changes");
+    expect(html).toContain("Apply Airbox Policy or Apply &amp; Build");
+  });
+
   it("renders airbox quality histograms in the airbox mesh panel", () => {
     const html = renderToStaticMarkup(
-      <AirboxMeshPolicyPanel selection={airboxSelection} />,
+      <AirboxMeshPolicyPanel selection={airboxQualitySelection} />,
     );
 
     expect(html).toContain("Airbox Quality Distributions");
@@ -368,5 +423,20 @@ describe("scoped mesh quality panels", () => {
     expect(html).toContain("Tetrahedra");
     expect(html).toContain("59,244");
     expect(html).toContain("explicit node_indices");
+  });
+
+  it("renders airbox mesh policy inputs in the airbox mesh panel", () => {
+    const html = renderToStaticMarkup(
+      <AirboxMeshPolicyPanel selection={airboxSelection} />,
+    );
+
+    expect(html).toContain("Element Size Parameters");
+    expect(html).toContain("Maximum element size");
+    expect(html).toContain("Minimum element size");
+    expect(html).toContain("Maximum element growth rate");
+    expect(html).toContain("Curvature factor");
+    expect(html).toContain("Airbox Geometry");
+    expect(html).toContain("Padding X");
+    expect(html).toContain("Size X");
   });
 });

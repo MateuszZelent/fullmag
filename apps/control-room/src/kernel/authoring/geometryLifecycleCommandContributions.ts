@@ -311,6 +311,28 @@ function invalidateSharedDomainMeshResources(
   context.resources?.invalidate(MODEL_SCENE_PATH, revision);
 }
 
+function focusMeshJobs(context: CommandContext): void {
+  context.layout?.setPanelVisible("bottom", true);
+  context.layout?.setFocusedSlot("panel-bottom");
+  context.bus?.emit("footer:tab-requested", {
+    reason: "mesh-build",
+    tab: "mesh",
+  });
+}
+
+function emitMeshBuildSubmitted(
+  context: CommandContext,
+  payload: {
+    commandId: string;
+    objectId?: string;
+    reason: string;
+    targetKind: "object_mesh" | "study_domain";
+  },
+): void {
+  context.bus?.emit("mesh:build-submitted", payload);
+  focusMeshJobs(context);
+}
+
 function jsonValue(value: unknown): JsonValue | undefined {
   if (
     value === null ||
@@ -606,11 +628,14 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
       if (!response.accepted) {
         return { message: response.error ?? "Mesh build rejected.", status: "failed" };
       }
-      invalidateObjectMeshResources(
-        context,
+      const revision = response.command_id ?? `mesh-build:${Date.now()}`;
+      invalidateObjectMeshResources(context, objectId, revision);
+      emitMeshBuildSubmitted(context, {
+        commandId: revision,
         objectId,
-        response.command_id ?? `mesh-build:${Date.now()}`,
-      );
+        reason: "selected-object",
+        targetKind: "object_mesh",
+      });
       return { status: "completed" };
     },
   },
@@ -630,10 +655,16 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
         mesh_target: { kind: "study_domain" },
       });
       if (response.accepted) {
+        const revision = response.command_id ?? `mesh-build:${Date.now()}`;
         invalidateSharedDomainMeshResources(
           context,
-          response.command_id ?? `mesh-build:${Date.now()}`,
+          revision,
         );
+        emitMeshBuildSubmitted(context, {
+          commandId: revision,
+          reason: "shared-domain",
+          targetKind: "study_domain",
+        });
       }
       return response.accepted
         ? { status: "completed" }

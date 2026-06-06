@@ -1284,6 +1284,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/model/couplings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_couplings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/model/geometry/capabilities": {
         parameters: {
             query?: never;
@@ -1396,6 +1412,22 @@ export interface paths {
         patch: operations["model_patch_sessions_current_model_magnetization_assets_asset_id"];
         trace?: never;
     };
+    "/v2/sessions/current/model/material-fields": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_material_fields"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/model/materials/{material_id}": {
         parameters: {
             query?: never;
@@ -1474,6 +1506,102 @@ export interface paths {
         options?: never;
         head?: never;
         patch: operations["model_patch_sessions_current_model_objects_object_id_interactions_interaction_kind"];
+        trace?: never;
+    };
+    "/v2/sessions/current/model/objects/{object_id}/regions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["model_post_sessions_current_model_objects_object_id_regions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/model/objects/{object_id}/regions/reorder": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["model_post_sessions_current_model_objects_object_id_regions_reorder"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/model/objects/{object_id}/regions/{region_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["model_delete_sessions_current_model_objects_object_id_regions_region_id"];
+        options?: never;
+        head?: never;
+        patch: operations["model_patch_sessions_current_model_objects_object_id_regions_region_id"];
+        trace?: never;
+    };
+    "/v2/sessions/current/model/objects/{object_id}/regions/{region_id}/duplicate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["model_post_sessions_current_model_objects_object_id_regions_region_id_duplicate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/model/realized-regions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_realized_regions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/model/region-diagnostics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_region_diagnostics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/v2/sessions/current/model/regions": {
@@ -2160,6 +2288,54 @@ export interface components {
             kind: "patch_universe";
             sync_study_universe_mesh?: boolean;
             universe: Record<string, never>;
+        } | {
+            /** Format: int64 */
+            base_revision?: number | null;
+            /** @enum {string} */
+            kind: "create_object_region";
+            object_id: string;
+            region: Record<string, never>;
+        } | {
+            /** Format: int64 */
+            base_revision?: number | null;
+            /** @enum {string} */
+            kind: "patch_object_region";
+            object_id: string;
+            patch: Record<string, never>;
+            region_id: string;
+        } | {
+            /** Format: int64 */
+            base_revision?: number | null;
+            /** @enum {string} */
+            kind: "delete_object_region";
+            object_id: string;
+            region_id: string;
+        } | {
+            /** Format: int64 */
+            base_revision?: number | null;
+            /** @enum {string} */
+            kind: "reorder_object_regions";
+            object_id: string;
+            region_ids: string[];
+        } | {
+            /** Format: int64 */
+            base_revision?: number | null;
+            coupling: Record<string, never>;
+            /** @enum {string} */
+            kind: "create_coupling";
+        } | {
+            /** Format: int64 */
+            base_revision?: number | null;
+            coupling_id: string;
+            /** @enum {string} */
+            kind: "patch_coupling";
+            patch: Record<string, never>;
+        } | {
+            /** Format: int64 */
+            base_revision?: number | null;
+            coupling_id: string;
+            /** @enum {string} */
+            kind: "delete_coupling";
         };
         AuthoringTransactionResponse: {
             committed_scene: Record<string, never>;
@@ -2413,6 +2589,21 @@ export interface components {
         };
         /** @enum {string} */
         CompressionProfile: "speed" | "balanced" | "smallest";
+        CouplingListResource: {
+            couplings: components["schemas"]["CouplingResource"][];
+            /** Format: int64 */
+            scene_revision: number;
+        };
+        CouplingResource: {
+            capability_policy?: string | null;
+            coupling_id: string;
+            coupling_kind: string;
+            enabled: boolean;
+            params: Record<string, never>;
+            realization_status?: string | null;
+            source: Record<string, never>;
+            target: Record<string, never>;
+        };
         CpuTelemetryResponse: {
             /** Format: double */
             load_average_15m?: number | null;
@@ -2624,8 +2815,11 @@ export interface components {
             zeeman?: number | null;
         };
         EngineLogEntry: {
+            command_id?: string | null;
             level: string;
             message: string;
+            phase_id?: string | null;
+            source?: string | null;
             timestamp_unix_ms: number;
         };
         EngineLogResource: {
@@ -3218,6 +3412,25 @@ export interface components {
             /** Format: int64 */
             scene_revision: number;
         };
+        MaterialParameterFieldListResource: {
+            fields: components["schemas"]["MaterialParameterFieldResource"][];
+            /** Format: int64 */
+            scene_revision: number;
+        };
+        MaterialParameterFieldResource: {
+            assignment_id: string;
+            field: Record<string, never>;
+            frame?: string | null;
+            location?: string | null;
+            owner_object_id: string;
+            owner_path?: string | null;
+            parameter: string;
+            /** Format: int64 */
+            priority?: number | null;
+            realization_status?: string | null;
+            source_region_id?: string | null;
+            unit?: string | null;
+        };
         MaterialPatchRequest: {
             name?: string | null;
             properties?: null | components["schemas"]["MaterialPropertiesPatchRequest"];
@@ -3261,6 +3474,12 @@ export interface components {
             last_build_summary?: Record<string, never> | null;
             /** @description Build/pipeline state for build panels. */
             mesh_pipeline_status?: components["schemas"]["MeshBuildPipelinePhaseResource"][] | null;
+            /** @description Typed policy change summary for UI diff tables. */
+            policy_diff?: components["schemas"]["MeshBuildPolicyDiffResource"][] | null;
+            provenance?: null | components["schemas"]["MeshBuildProvenanceResource"];
+            published_resources?: null | components["schemas"]["MeshBuildPublishedResourcesResource"];
+            /** @description Resolved policy used by the build. This is execution reality, not the authoring draft. */
+            resolved_policy?: Record<string, never> | null;
             /** Format: int64 */
             revision: number;
             shared_domain_build_report?: null | components["schemas"]["MeshSharedDomainBuildReportResource"];
@@ -3306,6 +3525,38 @@ export interface components {
             /** Format: int32 */
             progress_percent?: number | null;
             status?: string | null;
+        };
+        MeshBuildPolicyDiffResource: {
+            effect?: string | null;
+            path: string;
+            previous?: Record<string, never> | null;
+            realized?: Record<string, never> | null;
+            requested?: Record<string, never> | null;
+            scope: string;
+        };
+        MeshBuildProvenanceResource: {
+            build_id?: string | null;
+            command_id?: string | null;
+            completed_at_unix_ms?: number | null;
+            /** Format: int64 */
+            duration_ms?: number | null;
+            /** Format: int64 */
+            geometry_realization_revision?: number | null;
+            /** Format: int64 */
+            mesh_revision?: number | null;
+            /** Format: int64 */
+            requested_policy_revision?: number | null;
+            /** Format: int64 */
+            source_scene_revision?: number | null;
+        };
+        MeshBuildPublishedResourcesResource: {
+            manifest?: string | null;
+            /** Format: int64 */
+            mesh_build_revision?: number | null;
+            /** Format: int64 */
+            mesh_revision?: number | null;
+            quality?: string | null;
+            realized_size_fields?: string | null;
         };
         MeshCapabilitiesResource: {
             /** @description Meshing adaptivity capability/state only. UI-wide gating remains owned by `status.capabilities`. */
@@ -3797,6 +4048,26 @@ export interface components {
             transform?: Record<string, never> | null;
             visible?: boolean | null;
         };
+        ObjectRegionCreateRequest: {
+            /** Format: int64 */
+            base_revision?: number | null;
+            region: Record<string, never>;
+        };
+        ObjectRegionDuplicateRequest: {
+            /** Format: int64 */
+            base_revision?: number | null;
+            name?: string | null;
+        };
+        ObjectRegionPatchRequest: {
+            /** Format: int64 */
+            base_revision?: number | null;
+            patch: Record<string, never>;
+        };
+        ObjectRegionReorderRequest: {
+            /** Format: int64 */
+            base_revision?: number | null;
+            region_ids: string[];
+        };
         PrimitiveGeometryCapability: {
             boolean: boolean;
             category: string;
@@ -3942,6 +4213,21 @@ export interface components {
         RecoveryListResponse: {
             snapshots: components["schemas"]["RecoveryEntry"][];
         };
+        RegionDiagnosticResource: {
+            capability_gate?: string | null;
+            code: string;
+            diagnostic_id: string;
+            message: string;
+            owner_object_id: string;
+            realization_status?: string | null;
+            region_id: string;
+            severity: string;
+        };
+        RegionDiagnosticsResource: {
+            diagnostics: components["schemas"]["RegionDiagnosticResource"][];
+            /** Format: int64 */
+            scene_revision: number;
+        };
         RegionListResource: {
             /** Format: int64 */
             geometry_realization_revision: number;
@@ -3958,15 +4244,28 @@ export interface components {
             bounds_max: number[];
             bounds_min: number[];
             enabled: boolean;
+            frame?: string | null;
             interaction_refs: string[];
             magnetization_ref?: string | null;
+            material_overrides?: Record<string, never>[];
+            material_parameter_fields?: Record<string, never>[];
             material_ref: string;
             mesh_part_ids: string[];
+            mesh_policy?: Record<string, never> | null;
             name: string;
+            owner_object_id?: string | null;
+            owner_path?: string | null;
+            /** Format: int64 */
+            priority?: number | null;
+            realization_policy?: string | null;
+            realization_status?: string | null;
             region_id: string;
+            region_kind?: string | null;
+            shape?: Record<string, never> | null;
             source: string;
             source_body_ids: string[];
             source_object_ids: string[];
+            texture_override?: Record<string, never> | null;
         };
         ResolvedFallbackResource: {
             fallback_engine: string;
@@ -4139,12 +4438,14 @@ export interface components {
             source_of_truth: string;
         };
         SceneObjectResource: {
+            allocated_region_ids?: string[];
             geometry?: {
                 [key: string]: unknown;
             } | null;
             id: string;
             locked?: boolean | null;
             magnetization_ref?: string | null;
+            material_parameter_fields?: Record<string, never>[];
             material_ref?: string | null;
             mesh_override?: {
                 [key: string]: unknown;
@@ -4161,6 +4462,7 @@ export interface components {
             region_overrides?: {
                 [key: string]: unknown;
             };
+            regions?: Record<string, never>[];
             tags?: string[];
             transform?: {
                 [key: string]: unknown;
@@ -4171,6 +4473,7 @@ export interface components {
             merge_patch: Record<string, never>;
         };
         SceneResource: {
+            couplings?: Record<string, never>[];
             current_modules?: {
                 [key: string]: unknown;
             } | null;
@@ -4947,7 +5250,7 @@ export interface components {
             wireframe_visible: boolean;
         };
         /** @enum {string} */
-        VisualizationScopeKind: "full" | "magnetic" | "airbox" | "object" | "part" | "selection";
+        VisualizationScopeKind: "full" | "magnetic" | "airbox" | "object" | "part" | "region" | "selection";
         VisualizationStatePatch: {
             active_quantity_id?: string | null;
             auto_contrast?: boolean | null;
@@ -8466,6 +8769,33 @@ export interface operations {
             };
         };
     };
+    model_get_sessions_current_model_couplings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current authored coupling resources */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CouplingListResource"];
+                };
+            };
+            /** @description No active workspace or scene document */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     model_get_sessions_current_model_geometry_capabilities: {
         parameters: {
             query?: never;
@@ -8713,6 +9043,33 @@ export interface operations {
             };
             /** @description Base scene revision does not match current scene revision */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_get_sessions_current_model_material_fields: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current authored material parameter field resources */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaterialParameterFieldListResource"];
+                };
+            };
+            /** @description No active workspace or scene document */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9009,6 +9366,260 @@ export interface operations {
             };
         };
     };
+    model_post_sessions_current_model_objects_object_id_regions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Canonical scene object id */
+                object_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ObjectRegionCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Committed canonical scene after object region creation */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SceneResource"];
+                };
+            };
+            /** @description Invalid object region payload */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace, scene document, or object */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_post_sessions_current_model_objects_object_id_regions_reorder: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Canonical scene object id */
+                object_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ObjectRegionReorderRequest"];
+            };
+        };
+        responses: {
+            /** @description Committed canonical scene after object region reorder */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SceneResource"];
+                };
+            };
+            /** @description Invalid object region reorder request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace, scene document, object, or region */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_delete_sessions_current_model_objects_object_id_regions_region_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Canonical scene object id */
+                object_id: string;
+                /** @description Authored object region id or name */
+                region_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Committed canonical scene after object region deletion */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SceneResource"];
+                };
+            };
+            /** @description No active workspace, scene document, object, or region */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_patch_sessions_current_model_objects_object_id_regions_region_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Canonical scene object id */
+                object_id: string;
+                /** @description Authored object region id or name */
+                region_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ObjectRegionPatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Committed canonical scene after object region patch */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SceneResource"];
+                };
+            };
+            /** @description Invalid object region patch */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace, scene document, object, or region */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_post_sessions_current_model_objects_object_id_regions_region_id_duplicate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Canonical scene object id */
+                object_id: string;
+                /** @description Authored object region id or name */
+                region_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ObjectRegionDuplicateRequest"];
+            };
+        };
+        responses: {
+            /** @description Committed canonical scene after object region duplication */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SceneResource"];
+                };
+            };
+            /** @description Invalid object region duplicate request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace, scene document, object, or region */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_get_sessions_current_model_realized_regions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current geometry-realized body region resources */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegionListResource"];
+                };
+            };
+            /** @description No active workspace or scene document */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_get_sessions_current_model_region_diagnostics: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current authored object region diagnostics */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegionDiagnosticsResource"];
+                };
+            };
+            /** @description No active workspace or scene document */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     model_get_sessions_current_model_regions: {
         parameters: {
             query?: never;
@@ -9018,7 +9629,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Current object-derived region resources */
+            /** @description Current authored object region resources */
             200: {
                 headers: {
                     [name: string]: unknown;

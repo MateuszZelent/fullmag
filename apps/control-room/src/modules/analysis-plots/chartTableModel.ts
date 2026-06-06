@@ -1,3 +1,4 @@
+import { DATA_TABLE_ROWS_PATH } from "@/kernel/api/apiPaths";
 import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
 import type {
   AnalysisChartCursorPoint,
@@ -376,7 +377,10 @@ function resolveXAxisId(columnIds: readonly string[], xAxisId: string): string {
 }
 
 function tableRowsSourceKey(tableId: string): string {
-  return `/v2/sessions/current/data/tables/${encodeURIComponent(tableId)}/rows`;
+  return DATA_TABLE_ROWS_PATH.replace(
+    "{table_id}",
+    encodeURIComponent(tableId),
+  );
 }
 
 export { yAxisIdsAfterXAxisSelection };

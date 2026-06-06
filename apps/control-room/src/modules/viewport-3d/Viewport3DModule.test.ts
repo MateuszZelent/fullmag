@@ -1,8 +1,11 @@
 import { readFileSync } from "node:fs";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { resolveViewport3DMeshQualityLegend } from "./Viewport3DModule";
+import {
+  notifyMeshTopologyRendered,
+  resolveViewport3DMeshQualityLegend,
+} from "./Viewport3DModule";
 
 describe("resolveViewport3DMeshQualityLegend", () => {
   it("describes the active mesh quality metric and range", () => {
@@ -18,6 +21,55 @@ describe("resolveViewport3DMeshQualityLegend", () => {
     expect(resolveViewport3DMeshQualityLegend(false, "gamma", { max: 1, min: 0 }))
       .toBeNull();
     expect(resolveViewport3DMeshQualityLegend(true, "gamma", null)).toBeNull();
+  });
+});
+
+describe("notifyMeshTopologyRendered", () => {
+  it("emits one topology-rendered event per mesh revision", () => {
+    const emit = vi.fn();
+    const lastRevision = { current: null as string | number | null };
+
+    notifyMeshTopologyRendered({
+      bus: { emit },
+      lastRevision,
+      meshRevision: 7,
+      rendererId: "viewport-3d-main",
+    });
+    notifyMeshTopologyRendered({
+      bus: { emit },
+      lastRevision,
+      meshRevision: 7,
+      rendererId: "viewport-3d-main",
+    });
+    notifyMeshTopologyRendered({
+      bus: { emit },
+      lastRevision,
+      meshRevision: "8",
+      rendererId: "viewport-3d-main",
+    });
+
+    expect(emit).toHaveBeenCalledTimes(2);
+    expect(emit).toHaveBeenNthCalledWith(1, "mesh:topology-rendered", {
+      meshRevision: 7,
+      rendererId: "viewport-3d-main",
+    });
+    expect(emit).toHaveBeenNthCalledWith(2, "mesh:topology-rendered", {
+      meshRevision: "8",
+      rendererId: "viewport-3d-main",
+    });
+  });
+
+  it("does not emit before a real topology revision is known", () => {
+    const emit = vi.fn();
+
+    notifyMeshTopologyRendered({
+      bus: { emit },
+      lastRevision: { current: null },
+      meshRevision: null,
+      rendererId: "viewport-3d-main",
+    });
+
+    expect(emit).not.toHaveBeenCalled();
   });
 });
 
@@ -145,5 +197,18 @@ describe("Viewport3DModule scene wiring", () => {
     expect(source).toContain("orbitDebugRevision");
     expect(source).toContain("orbitDebugCommitRevision");
     expect(source).toContain("onAnglesCommit={commitOrbitDebugAngles}");
+  });
+
+  it("shows authored region overlays as an independent layer by default", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DModule.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain(
+      "const [regionOverlayVisible, setRegionOverlayVisible] = useState(true);",
+    );
+    expect(source).toContain("Show regions");
+    expect(source).toContain("Hide regions");
   });
 });

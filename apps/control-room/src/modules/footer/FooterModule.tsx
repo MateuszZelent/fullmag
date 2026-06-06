@@ -6,6 +6,7 @@ import {
   ClipboardCheck,
   FileText,
   Gauge,
+  Hammer,
   Trash2,
 } from "lucide-react";
 import {
@@ -33,9 +34,10 @@ import {
 import { CommandAuditTable } from "./CommandAuditTable";
 import { FooterDiagnostics } from "./FooterDiagnostics";
 import { FooterTelemetry } from "./FooterTelemetry";
+import { MeshJobsPanel } from "./MeshJobsPanel";
 import { TransportLogTable } from "./TransportLogTable";
 
-type FooterTabId = "engine" | "logs" | "telemetry";
+type FooterTabId = "engine" | "logs" | "mesh" | "telemetry";
 
 const EMPTY_DIAGNOSTIC_ENTRIES: RequestDiagnosticEntry[] = [];
 
@@ -81,6 +83,10 @@ function FooterModuleContent({ kernel }: ModuleProps) {
             <FileText size={14} aria-hidden="true" />
             Engine
           </TabsTrigger>
+          <TabsTrigger value="mesh" className="fm-footer__tab">
+            <Hammer size={14} aria-hidden="true" />
+            Mesh Jobs
+          </TabsTrigger>
         </TabsList>
         <div className="fm-footer__summary" aria-label="Footer log summary">
           <span className="fm-footer__summary-item">HTTP + WS + Perf</span>
@@ -112,6 +118,10 @@ function FooterModuleContent({ kernel }: ModuleProps) {
 
       <TabsContent value="engine" className="fm-footer__content">
         {activeTab === "engine" ? <FooterDiagnostics /> : null}
+      </TabsContent>
+
+      <TabsContent value="mesh" className="fm-footer__content">
+        {activeTab === "mesh" ? <MeshJobsPanel /> : null}
       </TabsContent>
     </Tabs>
   );

@@ -81,6 +81,14 @@ pub struct SceneObjectResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(additional_properties, nullable)]
     pub mesh_override: Option<BTreeMap<String, Value>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schema(value_type = Vec<Object>)]
+    pub regions: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allocated_region_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schema(value_type = Vec<Object>)]
+    pub material_parameter_fields: Vec<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -118,6 +126,9 @@ pub struct SceneResource {
     pub materials: Vec<SceneMaterialResource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub magnetization_assets: Vec<BTreeMap<String, Value>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schema(value_type = Vec<Object>)]
+    pub couplings: Vec<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(additional_properties, nullable)]
     pub current_modules: Option<BTreeMap<String, Value>>,
@@ -136,6 +147,37 @@ impl SceneResource {
     pub fn from_scene_document(scene: SceneDocument) -> Result<Self, serde_json::Error> {
         serde_json::from_value(serde_json::to_value(scene)?)
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ObjectRegionCreateRequest {
+    #[serde(default)]
+    pub base_revision: Option<u64>,
+    #[schema(value_type = Object)]
+    pub region: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ObjectRegionPatchRequest {
+    #[serde(default)]
+    pub base_revision: Option<u64>,
+    #[schema(value_type = Object)]
+    pub patch: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ObjectRegionDuplicateRequest {
+    #[serde(default)]
+    pub base_revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ObjectRegionReorderRequest {
+    #[serde(default)]
+    pub base_revision: Option<u64>,
+    pub region_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -331,8 +373,37 @@ pub struct RegionResource {
     pub region_id: String,
     pub name: String,
     pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_object_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_path: Option<String>,
     pub source_object_ids: Vec<String>,
     pub source_body_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Object, nullable)]
+    pub shape: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Object, nullable)]
+    pub mesh_policy: Option<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schema(value_type = Vec<Object>)]
+    pub material_overrides: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schema(value_type = Vec<Object>)]
+    pub material_parameter_fields: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Object, nullable)]
+    pub texture_override: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realization_policy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realization_status: Option<String>,
     pub material_ref: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub magnetization_ref: Option<String>,
@@ -348,6 +419,78 @@ pub struct RegionListResource {
     pub scene_revision: u64,
     pub geometry_realization_revision: u64,
     pub regions: Vec<RegionResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct RegionDiagnosticResource {
+    pub diagnostic_id: String,
+    pub severity: String,
+    pub code: String,
+    pub message: String,
+    pub region_id: String,
+    pub owner_object_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realization_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability_gate: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct RegionDiagnosticsResource {
+    pub scene_revision: u64,
+    pub diagnostics: Vec<RegionDiagnosticResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct MaterialParameterFieldResource {
+    pub assignment_id: String,
+    pub owner_object_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_path: Option<String>,
+    pub parameter: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_region_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+    #[schema(value_type = Object)]
+    pub field: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realization_status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct MaterialParameterFieldListResource {
+    pub scene_revision: u64,
+    pub fields: Vec<MaterialParameterFieldResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CouplingResource {
+    pub coupling_id: String,
+    pub coupling_kind: String,
+    pub enabled: bool,
+    #[schema(value_type = Object)]
+    pub source: Value,
+    #[schema(value_type = Object)]
+    pub target: Value,
+    #[schema(value_type = Object)]
+    pub params: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability_policy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realization_status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CouplingListResource {
+    pub scene_revision: u64,
+    pub couplings: Vec<CouplingResource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -498,6 +641,51 @@ pub enum AuthoringTransactionRequest {
         universe: Value,
         #[serde(default = "default_true")]
         sync_study_universe_mesh: bool,
+    },
+    CreateObjectRegion {
+        #[serde(default)]
+        base_revision: Option<u64>,
+        object_id: String,
+        #[schema(value_type = Object)]
+        region: Value,
+    },
+    PatchObjectRegion {
+        #[serde(default)]
+        base_revision: Option<u64>,
+        object_id: String,
+        region_id: String,
+        #[schema(value_type = Object)]
+        patch: Value,
+    },
+    DeleteObjectRegion {
+        #[serde(default)]
+        base_revision: Option<u64>,
+        object_id: String,
+        region_id: String,
+    },
+    ReorderObjectRegions {
+        #[serde(default)]
+        base_revision: Option<u64>,
+        object_id: String,
+        region_ids: Vec<String>,
+    },
+    CreateCoupling {
+        #[serde(default)]
+        base_revision: Option<u64>,
+        #[schema(value_type = Object)]
+        coupling: Value,
+    },
+    PatchCoupling {
+        #[serde(default)]
+        base_revision: Option<u64>,
+        coupling_id: String,
+        #[schema(value_type = Object)]
+        patch: Value,
+    },
+    DeleteCoupling {
+        #[serde(default)]
+        base_revision: Option<u64>,
+        coupling_id: String,
     },
 }
 
