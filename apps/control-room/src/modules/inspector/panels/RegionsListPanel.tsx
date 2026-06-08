@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
 import {
+  useModelRegionDiagnosticsResource,
   useModelRegionsResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
@@ -28,6 +29,7 @@ import {
   type RegionsListItem,
 } from "./RegionsListPanelModel";
 import { publishRegionAuthoringScene } from "./regionAuthoringInvalidation";
+import { syncAuthoringScriptBestEffort } from "./ObjectMagneticTexturePanelViewModel";
 
 type Feedback =
   | {
@@ -58,13 +60,31 @@ function regionSummary(item: RegionsListItem): string {
   ].join(" · ");
 }
 
+function diagnosticSummary(item: RegionsListItem): string | null {
+  if (item.diagnosticCount === 0) return null;
+  return [
+    item.conflictCount > 0 ? `${item.conflictCount} conflict` : null,
+    item.errorCount > 0 ? `${item.errorCount} error` : null,
+    item.warningCount > 0 ? `${item.warningCount} warning` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 export function RegionsListPanel({ selection }: InspectorPanelProps) {
   const { api, resources, selection: selectionController } = useKernel();
   const scene = useSceneResource();
   const regions = useModelRegionsResource();
+  const regionDiagnostics = useModelRegionDiagnosticsResource();
   const model = useMemo(
-    () => resolveRegionsListPanelModel(selection, scene.data, regions.data ?? null),
-    [regions.data, scene.data, selection],
+    () =>
+      resolveRegionsListPanelModel(
+        selection,
+        scene.data,
+        regions.data ?? null,
+        regionDiagnostics.data ?? null,
+      ),
+    [regionDiagnostics.data, regions.data, scene.data, selection],
   );
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState<NewRegionDraft>(defaultNewRegionDraft);
@@ -135,11 +155,21 @@ export function RegionsListPanel({ selection }: InspectorPanelProps) {
           realizationStatus: "authored_pending",
           regionId: createdRegionId,
           shapeKind: draft.shapeKind,
+          conflictCount: 0,
+          diagnosticCount: 0,
+          errorCount: 0,
+          warningCount: 0,
         });
       }
       setDraft(defaultNewRegionDraft());
       setAdding(false);
-      setFeedback({ kind: "success", message: "Object region created." });
+      const syncWarning = await syncAuthoringScriptBestEffort(api);
+      setFeedback({
+        kind: "success",
+        message: syncWarning
+          ? `Object region created. Authoring script sync skipped: ${syncWarning}`
+          : "Object region created.",
+      });
     } catch (error) {
       setFeedback({ kind: "error", message: errorMessage(error) });
     } finally {
@@ -172,34 +202,42 @@ export function RegionsListPanel({ selection }: InspectorPanelProps) {
           {model.items.length === 0 ? (
             <div className="fm-region-list__empty">No authored regions.</div>
           ) : (
-            model.items.map((item) => (
-              <button
-                key={item.regionId}
-                className="fm-region-card"
-                type="button"
-                role="listitem"
-                onClick={() => selectRegion(item)}
-              >
-                <span
-                  className={`fm-region-card__dot fm-region-card__dot--${item.colorIndex}`}
-                  aria-hidden="true"
-                />
-                <span className="fm-region-card__body">
-                  <span className="fm-region-card__title-row">
-                    <span className="fm-region-card__title">{item.name}</span>
-                    <span className="fm-region-card__status">
-                      {item.enabled ? "enabled" : "disabled"}
+            model.items.map((item) => {
+              const diagnostics = diagnosticSummary(item);
+              return (
+                <button
+                  key={item.regionId}
+                  className="fm-region-card"
+                  type="button"
+                  role="listitem"
+                  onClick={() => selectRegion(item)}
+                >
+                  <span
+                    className={`fm-region-card__dot fm-region-card__dot--${item.colorIndex}`}
+                    aria-hidden="true"
+                  />
+                  <span className="fm-region-card__body">
+                    <span className="fm-region-card__title-row">
+                      <span className="fm-region-card__title">{item.name}</span>
+                      <span className="fm-region-card__status">
+                        {item.enabled ? "enabled" : "disabled"}
+                      </span>
                     </span>
+                    <span className="fm-region-card__meta">
+                      {regionSummary(item)}
+                    </span>
+                    <span className="fm-region-card__meta">
+                      {item.realizationStatus}
+                    </span>
+                    {diagnostics ? (
+                      <span className="fm-region-card__meta">
+                        {diagnostics}
+                      </span>
+                    ) : null}
                   </span>
-                  <span className="fm-region-card__meta">
-                    {regionSummary(item)}
-                  </span>
-                  <span className="fm-region-card__meta">
-                    {item.realizationStatus}
-                  </span>
-                </span>
-              </button>
-            ))
+                </button>
+              );
+            })
           )}
         </div>
       </InspectorSection>
@@ -265,8 +303,12 @@ export function RegionsListPanel({ selection }: InspectorPanelProps) {
         <FieldRow label="Object" value={model.objectLabel} />
         <FieldRow label="Object ID" value={model.objectId} />
         <FieldRow label="Region count" value={String(model.items.length)} />
+        <FieldRow label="Region conflicts" value={String(model.conflictCount)} />
+        <FieldRow label="Region errors" value={String(model.errorCount)} />
+        <FieldRow label="Region warnings" value={String(model.warningCount)} />
         <FieldRow label="Scene fetch" value={scene.status} />
         <FieldRow label="Regions fetch" value={regions.status} />
+        <FieldRow label="Diagnostics fetch" value={regionDiagnostics.status} />
         {feedback && <FeedbackBanner kind={feedback.kind} message={feedback.message} />}
       </InspectorSection>
     </Accordion>

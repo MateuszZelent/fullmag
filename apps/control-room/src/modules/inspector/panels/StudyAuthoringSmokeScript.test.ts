@@ -23,6 +23,9 @@ describe("study authoring UI smoke script", () => {
     expect(smokeScript).toContain("Save globals");
     expect(smokeScript).toContain("Save stages");
     expect(smokeScript).toContain("model/transactions");
+    expect(smokeScript).toContain("model/objects/film/regions");
+    expect(smokeScript).toContain("waitForRegionScriptSyncCount");
+    expect(smokeScript).toContain("assertCreatedRegion");
     expect(smokeScript).toContain("assertGlobalTransaction");
     expect(smokeScript).toContain("assertStageTransaction");
     expect(smokeScript).toContain('entrypoint_kind !== "flat_relax"');

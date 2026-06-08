@@ -964,31 +964,56 @@ pub(crate) fn apply_current_live_metadata(current: &mut SessionStateResponse, me
             let mut fdm_grid = None;
 
             if let Some(backend_plan) = plan_val.get("backend_plan") {
-                let kind = backend_plan.get("kind").and_then(|k| k.as_str()).unwrap_or("");
+                let kind = backend_plan
+                    .get("kind")
+                    .and_then(|k| k.as_str())
+                    .unwrap_or("");
                 if kind == "fdm" {
                     if let Some(material) = backend_plan.get("material") {
-                        if let Some(val) = material.get("ms_field").and_then(|v| serde_json::from_value::<Vec<f64>>(v.clone()).ok()) {
+                        if let Some(val) = material
+                            .get("ms_field")
+                            .and_then(|v| serde_json::from_value::<Vec<f64>>(v.clone()).ok())
+                        {
                             ms_field = Some(val);
                         }
-                        if let Some(val) = material.get("a_field").and_then(|v| serde_json::from_value::<Vec<f64>>(v.clone()).ok()) {
+                        if let Some(val) = material
+                            .get("a_field")
+                            .and_then(|v| serde_json::from_value::<Vec<f64>>(v.clone()).ok())
+                        {
                             a_field = Some(val);
                         }
-                        if let Some(val) = material.get("alpha_field").and_then(|v| serde_json::from_value::<Vec<f64>>(v.clone()).ok()) {
+                        if let Some(val) = material
+                            .get("alpha_field")
+                            .and_then(|v| serde_json::from_value::<Vec<f64>>(v.clone()).ok())
+                        {
                             alpha_field = Some(val);
                         }
                     }
-                    if let Some(grid) = backend_plan.get("grid").and_then(|g| g.get("cells")).and_then(|c| serde_json::from_value::<[u32; 3]>(c.clone()).ok()) {
+                    if let Some(grid) = backend_plan
+                        .get("grid")
+                        .and_then(|g| g.get("cells"))
+                        .and_then(|c| serde_json::from_value::<[u32; 3]>(c.clone()).ok())
+                    {
                         fdm_grid = Some(grid);
                     }
                 } else if kind == "fem" {
                     if let Some(material) = backend_plan.get("material") {
-                        if let Some(val) = material.get("ms_field").and_then(|v| serde_json::from_value::<Vec<f64>>(v.clone()).ok()) {
+                        if let Some(val) = material
+                            .get("ms_field")
+                            .and_then(|v| serde_json::from_value::<Vec<f64>>(v.clone()).ok())
+                        {
                             ms_field = Some(val);
                         }
-                        if let Some(val) = material.get("a_field").and_then(|v| serde_json::from_value::<Vec<f64>>(v.clone()).ok()) {
+                        if let Some(val) = material
+                            .get("a_field")
+                            .and_then(|v| serde_json::from_value::<Vec<f64>>(v.clone()).ok())
+                        {
                             a_field = Some(val);
                         }
-                        if let Some(val) = material.get("alpha_field").and_then(|v| serde_json::from_value::<Vec<f64>>(v.clone()).ok()) {
+                        if let Some(val) = material
+                            .get("alpha_field")
+                            .and_then(|v| serde_json::from_value::<Vec<f64>>(v.clone()).ok())
+                        {
                             alpha_field = Some(val);
                         }
                     }

@@ -1280,6 +1280,7 @@ async function verifyRegionAuthoringOverlayFlow({
       response.status() < 400,
     { timeout: GEOMETRY_FLOW_TIMEOUT_MS },
   );
+  const scriptSyncResponsePromise = waitForRegionAuthoringScriptSync(page);
   await createButton.evaluate((node) => {
     if ("click" in node && typeof node.click === "function") {
       node.click();
@@ -1287,6 +1288,7 @@ async function verifyRegionAuthoringOverlayFlow({
   });
 
   const createRegionResponse = await createRegionResponsePromise;
+  await scriptSyncResponsePromise;
   const scene = await createRegionResponse.json();
   const object = sceneObjects(scene).find(
     (candidate) => sceneObjectId(candidate) === objectId,
@@ -1334,11 +1336,22 @@ async function verifyRegionAuthoringOverlayFlow({
       `object=${objectId}`,
       `region=${regionId}`,
       "scene=published",
+      "script=region-authoring-synced",
       "mesh=preserved",
       "viewport=overlay+canvas-delta",
     ].join(" "),
   );
   return canvasSample;
+}
+
+async function waitForRegionAuthoringScriptSync(page) {
+  return page.waitForResponse(
+    (response) =>
+      pathnameFromUrl(response.url()) === "/v2/sessions/current/model/syncs" &&
+      response.request().method() === "POST" &&
+      response.status() < 400,
+    { timeout: GEOMETRY_FLOW_TIMEOUT_MS },
+  );
 }
 
 async function ensureExplorerNodeVisible(page, objectId, node) {

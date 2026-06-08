@@ -871,6 +871,7 @@ pub(crate) async fn export_field_state(
             snapshot.artifacts.push(crate::types::ArtifactEntry {
                 path: artifact_ref.clone(),
                 kind: "field_state".to_string(),
+                region_owned_provenance: crate::types::region_owned_artifact_provenance(snapshot),
             });
             snapshot.state_version = snapshot.state_version.saturating_add(1);
         }
@@ -964,6 +965,7 @@ pub(crate) async fn import_field_state(
             snapshot.artifacts.push(crate::types::ArtifactEntry {
                 path: req.artifact_ref.clone(),
                 kind: "field_state".to_string(),
+                region_owned_provenance: crate::types::region_owned_artifact_provenance(snapshot),
             });
             snapshot.state_version = snapshot.state_version.saturating_add(1);
         }
@@ -1024,6 +1026,7 @@ pub(crate) async fn import_field_state(
         snapshot.artifacts.push(crate::types::ArtifactEntry {
             path: req.artifact_ref.clone(),
             kind: "field_state".to_string(),
+            region_owned_provenance: crate::types::region_owned_artifact_provenance(snapshot),
         });
     }
     let field_revision = field_revision(snapshot);

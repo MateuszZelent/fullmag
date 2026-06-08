@@ -16,6 +16,7 @@ import { publishRegionAuthoringScene } from "../regionAuthoringInvalidation";
 import {
   ObjectRegionMetadataSection,
   ObjectRegionActionsSection,
+  ObjectRegionInlineDiagnostics,
   type RegionSubPanelProps,
 } from "./shared";
 import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
@@ -28,6 +29,7 @@ import {
   isEditableMaterialField,
   materialFieldDraftFromAssignment,
   materialFieldDraftKey,
+  materialFieldRealizationRows,
   materialFieldFromDraft,
   MATERIAL_FIELD_PARAMETERS,
   sceneObjectMaterialFields,
@@ -106,6 +108,7 @@ export function ObjectRegionMagneticParametersPanel({
   draft,
   pending,
   canWriteRegion,
+  couplingDependencies,
   updateMaterialOverride,
   addMaterialOverride,
   removeMaterialOverride,
@@ -271,6 +274,10 @@ export function ObjectRegionMagneticParametersPanel({
       <ObjectRegionMetadataSection model={model} />
 
       <InspectorSection value="material" title="Material Overrides">
+        <ObjectRegionInlineDiagnostics
+          capabilityGates={["regions.material_override"]}
+          model={model}
+        />
         <FieldRow label="Overrides" value={model.materialOverrideCount} />
         <FieldRow label="Parameter fields" value={model.materialFieldCount} />
 
@@ -293,72 +300,85 @@ export function ObjectRegionMagneticParametersPanel({
           <FieldRow label="Local overrides" value="inherits object material" />
         ) : null}
 
-        {draft.materialOverrides.map((override, index) => (
-          <div className="fm-region-override" key={`${override.parameter}:${index}`} style={{ borderTop: "1px solid var(--fm-border, #ccc)", paddingTop: "12px", marginTop: "12px" }}>
-            <FormField label={`Override ${index + 1}`}>
-              <select
-                value={override.parameter}
-                onChange={(e) =>
+        {draft.materialOverrides.map((override, index) => {
+          const parentInfo = getParentParamInfo(
+            override.parameter,
+            model.objectId,
+            model.materialRef,
+            materialFields,
+            sceneData,
+          );
+          return (
+            <div className="fm-region-override" key={`${override.parameter}:${index}`} style={{ borderTop: "1px solid var(--fm-border, #ccc)", paddingTop: "12px", marginTop: "12px" }}>
+              <FormField label={`Override ${index + 1}`}>
+                <select
+                  value={override.parameter}
+                  onChange={(e) =>
+                    updateMaterialOverride(index, {
+                      parameter: e.target.value as RegionMaterialParameter,
+                    })
+                  }
+                >
+                  <option value="ms">Ms</option>
+                  <option value="aex">Aex</option>
+                  <option value="alpha">alpha</option>
+                  <option value="ku1">Ku1</option>
+                </select>
+              </FormField>
+              <FieldRow
+                label="Inherited parent"
+                value={`${parentInfo.value} ${parentInfo.unit}`.trim()}
+              />
+              <PhysicalScalarField
+                label="Local override"
+                unit={override.unit}
+                value={override.value}
+                onValueChange={(next) => updateMaterialOverride(index, { value: next })}
+              />
+              <FormField
+                label="Unit"
+                mono={false}
+                type="text"
+                value={override.unit}
+                onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                  updateMaterialOverride(index, { unit: event.target.value })
+                }
+              />
+              <FormField
+                label="Override priority"
+                type="number"
+                step={1}
+                value={String(override.priority)}
+                onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                  updateMaterialOverride(index, { priority: Number(event.target.value) })
+                }
+              />
+              <FormField
+                label="Conflict"
+                type="select"
+                value={override.conflictPolicy}
+                onChange={(event: ChangeEvent<HTMLSelectElement>) =>
                   updateMaterialOverride(index, {
-                    parameter: e.target.value as RegionMaterialParameter,
+                    conflictPolicy: event.target.value as RegionMaterialConflictPolicy,
                   })
                 }
               >
-                <option value="ms">Ms</option>
-                <option value="aex">Aex</option>
-                <option value="alpha">alpha</option>
-                <option value="ku1">Ku1</option>
-              </select>
-            </FormField>
-            <PhysicalScalarField
-              label="Value"
-              unit={override.unit}
-              value={override.value}
-              onValueChange={(next) => updateMaterialOverride(index, { value: next })}
-            />
-            <FormField
-              label="Unit"
-              mono={false}
-              type="text"
-              value={override.unit}
-              onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                updateMaterialOverride(index, { unit: event.target.value })
-              }
-            />
-            <FormField
-              label="Override priority"
-              type="number"
-              step={1}
-              value={String(override.priority)}
-              onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                updateMaterialOverride(index, { priority: Number(event.target.value) })
-              }
-            />
-            <FormField
-              label="Conflict"
-              type="select"
-              value={override.conflictPolicy}
-              onChange={(event: ChangeEvent<HTMLSelectElement>) =>
-                updateMaterialOverride(index, {
-                  conflictPolicy: event.target.value as RegionMaterialConflictPolicy,
-                })
-              }
-            >
-              <option value="error">Error</option>
-              <option value="higher_priority_wins">Higher Priority Wins</option>
-            </FormField>
-            <div className="fm-inspector-toolbar" style={{ marginTop: "8px" }}>
-              <Button
-                size="sm"
-                type="button"
-                variant="ghost"
-                onClick={() => removeMaterialOverride(index)}
-              >
-                Remove Override
-              </Button>
+                <option value="error">Error</option>
+                <option value="higher_priority_wins">Higher Priority Wins</option>
+              </FormField>
+              <div className="fm-inspector-toolbar" style={{ marginTop: "8px" }}>
+                <Button
+                  size="sm"
+                  type="button"
+                  variant="ghost"
+                  onClick={() => removeMaterialOverride(index)}
+                >
+                  Remove Override
+                </Button>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
         <div className="fm-inspector-toolbar" style={{ marginTop: "12px" }}>
           <Button
             size="sm"
@@ -377,7 +397,12 @@ export function ObjectRegionMagneticParametersPanel({
         {fieldDrafts.length === 0 ? (
           <FieldRow label="Region fields" value="no local parameter fields" />
         ) : null}
-        {fieldDrafts.map((field, index) => (
+        {fieldDrafts.map((field, index) => {
+          const realizationRows = materialFieldRealizationRows(
+            field.assignmentId,
+            materialFields,
+          );
+          return (
           <div
             className="fm-region-override"
             key={field.assignmentId}
@@ -413,6 +438,13 @@ export function ObjectRegionMagneticParametersPanel({
               <option value="linear">Linear gradient</option>
               <option value="radial">Radial gradient</option>
             </FormField>
+            {realizationRows.map((row) => (
+              <FieldRow
+                key={`realization:${field.assignmentId}:${row.label}`}
+                label={row.label}
+                value={row.value}
+              />
+            ))}
             {field.kind === "constant" ? (
               <PhysicalScalarField
                 label="Value"
@@ -548,7 +580,8 @@ export function ObjectRegionMagneticParametersPanel({
               </Button>
             </div>
           </div>
-        ))}
+          );
+        })}
         <div className="fm-inspector-toolbar" style={{ marginTop: "12px" }}>
           <Button
             disabled={fieldPending || !canWriteRegion}
@@ -589,6 +622,7 @@ export function ObjectRegionMagneticParametersPanel({
       <ObjectRegionActionsSection
         pending={pending}
         canWriteRegion={canWriteRegion}
+        couplingDependencies={couplingDependencies}
         applyRegion={applyRegion}
         revert={revert}
         duplicateRegion={duplicateRegion}

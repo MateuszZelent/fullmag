@@ -2,33 +2,37 @@
 
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
 use axum::Json;
+use axum::extract::{Path, State};
 use serde_json::Value;
 
 use crate::error::ApiError;
-use crate::schemas::authoring::{
-    AuthoringTransactionRequest, AuthoringTransactionResponse, CouplingListResource,
-    CouplingResource, GeometryRealizationRequest, MagnetizationAssetPatchRequest,
-    MagnetizationAssetResource, MaterialParameterFieldListResource, MaterialParameterFieldResource,
-    MaterialPatchRequest, MaterialPropertiesResource, MaterialReferenceResource, MaterialResource,
-    NullableF64PatchValue, NullableStringPatchValue, NullableU32PatchValue, ObjectCreateRequest,
-    ObjectGeometryPatchRequest, ObjectInteractionPatchRequest, ObjectInteractionResource,
-    ObjectPatchRequest, ObjectRegionCreateRequest, ObjectRegionDuplicateRequest,
-    ObjectRegionPatchRequest, ObjectRegionReorderRequest, RegionDiagnosticResource,
-    RegionDiagnosticsResource, RegionListResource, RegionPatchRequest, RegionResource,
-    ScenePatchRequest, SceneResource, StudyRuntimePatchRequest, StudyRuntimeResource,
-    UniverseFitRequest, UniversePatchRequest, UniverseResource,
-};
-use crate::types::{AppState, LatestFields, ScriptSourceResponse, ScriptSyncRequest, ScriptSyncResponse};
 use crate::router_v2::handlers::data::field_resolution::flatten_json_field_values;
+use crate::schemas::authoring::{
+    AuthoringTransactionRequest, AuthoringTransactionResponse, CouplingEndpointResolutionResource,
+    CouplingListResource, CouplingResource, GeometryRealizationRequest,
+    MagnetizationAssetPatchRequest, MagnetizationAssetResource, MaterialParameterFieldListResource,
+    MaterialParameterFieldResource, MaterialPatchRequest, MaterialPropertiesResource,
+    MaterialReferenceResource, MaterialResource, NullableF64PatchValue, NullableStringPatchValue,
+    NullableU32PatchValue, ObjectCreateRequest, ObjectGeometryPatchRequest,
+    ObjectInteractionPatchRequest, ObjectInteractionResource, ObjectPatchRequest,
+    ObjectRegionCreateRequest, ObjectRegionDuplicateRequest, ObjectRegionPatchRequest,
+    ObjectRegionReorderRequest, RegionDiagnosticResource, RegionDiagnosticsResource,
+    RegionListResource, RegionPatchRequest, RegionResource, SceneCouplingPatch, ScenePatchRequest,
+    SceneResource, StudyRuntimePatchRequest, StudyRuntimeResource, UniverseFitRequest,
+    UniversePatchRequest, UniverseResource,
+};
+use crate::types::{
+    AppState, LatestFields, ScriptSourceResponse, ScriptSyncRequest, ScriptSyncResponse,
+};
 use fullmag_authoring::{
-    geometry_capabilities, realize_geometry_scene, validate_geometry_scene, GeometryBackendTarget,
-    GeometryCapabilitiesResource, GeometryDiagnostic, GeometryDiagnosticsResource,
-    GeometryRealizationSnapshot, GeometryRegionCandidate, GeometryValidationResource,
-    MagnetizationAsset, SceneDocument, SceneGeometry, SceneMaterialAsset, SceneMaterialReference,
-    SceneObject, SceneRegionOverride, ScriptBuilderMagneticInteractionEntry,
-    ScriptBuilderMagneticInteractionKind, ScriptBuilderUniverseState, Transform3D,
+    GeometryBackendTarget, GeometryCapabilitiesResource, GeometryDiagnostic,
+    GeometryDiagnosticsResource, GeometryRealizationSnapshot, GeometryRegionCandidate,
+    GeometryValidationResource, MagnetizationAsset, SceneDocument, SceneGeometry,
+    SceneMaterialAsset, SceneMaterialReference, SceneObject, SceneRegionOverride,
+    ScriptBuilderMagneticInteractionEntry, ScriptBuilderMagneticInteractionKind,
+    ScriptBuilderUniverseState, Transform3D, geometry_capabilities, realize_geometry_scene,
+    validate_geometry_scene,
 };
 
 #[utoipa::path(
@@ -552,9 +556,25 @@ pub async fn get_authoring_couplings(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<CouplingListResource>, ApiError> {
     let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let (execution_plan, fem_mesh) = state
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
+        .map(|snapshot| {
+            let execution_plan = snapshot
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("execution_plan"))
+                .and_then(|value| {
+                    serde_json::from_value::<fullmag_ir::ExecutionPlanIR>(value.clone()).ok()
+                });
+            (execution_plan, snapshot.fem_mesh.clone())
+        })
+        .unwrap_or((None, None));
     Ok(Json(CouplingListResource {
         scene_revision: scene.revision,
-        couplings: authored_coupling_resources(&scene),
+        couplings: authored_coupling_resources(&scene, execution_plan.as_ref(), fem_mesh.as_ref()),
     }))
 }
 
@@ -612,7 +632,10 @@ fn authored_region_resources(scene: &SceneDocument) -> Vec<RegionResource> {
                 if let Some(resource) = region_resource_for_authored_region(
                     object,
                     override_region_id,
-                    object.region_name.as_deref().unwrap_or(override_region_id.as_str()),
+                    object
+                        .region_name
+                        .as_deref()
+                        .unwrap_or(override_region_id.as_str()),
                     &object.id,
                     None,
                     None,
@@ -710,6 +733,34 @@ fn authored_region_diagnostics(scene: &SceneDocument) -> Vec<RegionDiagnosticRes
                 capability_gate: Some("regions.realized_materialization".to_string()),
             });
         }
+        if region.frame.as_deref() == Some("world") {
+            diagnostics.push(RegionDiagnosticResource {
+                diagnostic_id: format!("region:{}:world-frame-materialization", region.region_id),
+                severity: "warning".to_string(),
+                code: "region_world_frame_materialization_unsupported".to_string(),
+                message: "World-frame authored regions cannot be clamped to the owner object and require an explicit realized materialization path before execution.".to_string(),
+                region_id: region.region_id.clone(),
+                owner_object_id: owner.clone(),
+                realization_status: region.realization_status.clone(),
+                capability_gate: Some("regions.realized_materialization".to_string()),
+            });
+        }
+        if region
+            .shape
+            .as_ref()
+            .is_some_and(|shape| matches!(shape, fullmag_authoring::SceneRegionShape::Csg { .. }))
+        {
+            diagnostics.push(RegionDiagnosticResource {
+                diagnostic_id: format!("region:{}:csg-materialization", region.region_id),
+                severity: "warning".to_string(),
+                code: "region_csg_materialization_unsupported".to_string(),
+                message: "CSG authored regions are valid authoring intent, but v1 materialization must prove a compatible realized region before execution.".to_string(),
+                region_id: region.region_id.clone(),
+                owner_object_id: owner.clone(),
+                realization_status: region.realization_status.clone(),
+                capability_gate: Some("regions.realized_materialization".to_string()),
+            });
+        }
         if region.mesh_policy.is_some() {
             diagnostics.push(RegionDiagnosticResource {
                 diagnostic_id: format!("region:{}:mesh-policy-pending", region.region_id),
@@ -776,8 +827,20 @@ fn region_resource_for_authored_region(
         .or_else(|| object.region_overrides.get(&canonical_region_id))
         .and_then(|override_entry| override_entry.magnetization_ref.clone());
 
-    let frame_str = frame.map(|f| serde_json::to_value(&f).unwrap().as_str().unwrap().to_string());
-    let realization_policy_str = realization_policy.map(|p| serde_json::to_value(&p).unwrap().as_str().unwrap().to_string());
+    let frame_str = frame.map(|f| {
+        serde_json::to_value(&f)
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string()
+    });
+    let realization_policy_str = realization_policy.map(|p| {
+        serde_json::to_value(&p)
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string()
+    });
 
     Some(RegionResource {
         region_id: region_id.to_string(),
@@ -832,7 +895,11 @@ fn material_field_resource(
     field: &fullmag_authoring::SceneMaterialParameterAssignment,
     latest_fields: Option<&LatestFields>,
 ) -> Option<MaterialParameterFieldResource> {
-    let parameter = serde_json::to_value(&field.parameter).unwrap().as_str().unwrap().to_string();
+    let parameter = serde_json::to_value(&field.parameter)
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_string();
     let unit = match &field.value {
         fullmag_authoring::SceneMaterialParameterField::Constant { unit, .. } => unit.clone(),
         fullmag_authoring::SceneMaterialParameterField::Linear { unit, .. } => unit.clone(),
@@ -840,12 +907,30 @@ fn material_field_resource(
         fullmag_authoring::SceneMaterialParameterField::Sampled { unit, .. } => Some(unit.clone()),
     };
     let frame = match &field.value {
-        fullmag_authoring::SceneMaterialParameterField::Linear { frame, .. } => Some(serde_json::to_value(frame).unwrap().as_str().unwrap().to_string()),
-        fullmag_authoring::SceneMaterialParameterField::Radial { frame, .. } => Some(serde_json::to_value(frame).unwrap().as_str().unwrap().to_string()),
+        fullmag_authoring::SceneMaterialParameterField::Linear { frame, .. } => Some(
+            serde_json::to_value(frame)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string(),
+        ),
+        fullmag_authoring::SceneMaterialParameterField::Radial { frame, .. } => Some(
+            serde_json::to_value(frame)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string(),
+        ),
         _ => None,
     };
     let location = match &field.value {
-        fullmag_authoring::SceneMaterialParameterField::Sampled { location, .. } => Some(serde_json::to_value(location).unwrap().as_str().unwrap().to_string()),
+        fullmag_authoring::SceneMaterialParameterField::Sampled { location, .. } => Some(
+            serde_json::to_value(location)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string(),
+        ),
         _ => None,
     };
 
@@ -916,7 +1001,11 @@ fn material_field_resource(
     })
 }
 
-fn authored_coupling_resources(scene: &SceneDocument) -> Vec<CouplingResource> {
+fn authored_coupling_resources(
+    scene: &SceneDocument,
+    execution_plan: Option<&fullmag_ir::ExecutionPlanIR>,
+    fem_mesh: Option<&fullmag_runner::FemMeshPayload>,
+) -> Vec<CouplingResource> {
     scene
         .couplings
         .iter()
@@ -926,19 +1015,215 @@ fn authored_coupling_resources(scene: &SceneDocument) -> Vec<CouplingResource> {
                 fullmag_authoring::SceneCouplingKind::Rkky => "rkky",
                 fullmag_authoring::SceneCouplingKind::InterlayerExchange => "interlayer_exchange",
             };
-            let capability_policy = serde_json::to_value(&coupling.capability_policy).unwrap().as_str().unwrap().to_string();
+            let capability_policy = serde_json::to_value(&coupling.capability_policy)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string();
             CouplingResource {
                 coupling_id: coupling.coupling_id.clone(),
                 coupling_kind: kind.to_string(),
                 enabled: coupling.enabled,
                 source: coupling.source.clone(),
                 target: coupling.target.clone(),
+                source_resolution: coupling_endpoint_resolution(
+                    &coupling.source,
+                    execution_plan,
+                    fem_mesh,
+                ),
+                target_resolution: coupling_endpoint_resolution(
+                    &coupling.target,
+                    execution_plan,
+                    fem_mesh,
+                ),
                 params: coupling.parameters.clone(),
                 capability_policy: Some(capability_policy),
                 realization_status: Some(coupling_realization_status(kind).to_string()),
+                blocker_reason: coupling_blocker_reason(coupling),
             }
         })
         .collect()
+}
+
+fn coupling_endpoint_resolution(
+    endpoint: &fullmag_authoring::SceneCouplingEndpoint,
+    execution_plan: Option<&fullmag_ir::ExecutionPlanIR>,
+    fem_mesh: Option<&fullmag_runner::FemMeshPayload>,
+) -> CouplingEndpointResolutionResource {
+    match endpoint {
+        fullmag_authoring::SceneCouplingEndpoint::Object { object } => {
+            CouplingEndpointResolutionResource {
+                status: "authored_endpoint_valid".to_string(),
+                object_id: object.clone(),
+                region_id: None,
+                selector: None,
+                tolerance: None,
+                resolved_face_count: None,
+                area: None,
+                reason: None,
+            }
+        }
+        fullmag_authoring::SceneCouplingEndpoint::Region { object, region_id } => {
+            CouplingEndpointResolutionResource {
+                status: "authored_endpoint_valid".to_string(),
+                object_id: object.clone(),
+                region_id: Some(region_id.clone()),
+                selector: None,
+                tolerance: None,
+                resolved_face_count: None,
+                area: None,
+                reason: None,
+            }
+        }
+        fullmag_authoring::SceneCouplingEndpoint::Surface { object, selector } => {
+            let resolved = match execution_plan {
+                Some(fullmag_ir::ExecutionPlanIR {
+                    backend_plan: fullmag_ir::BackendPlanIR::Fem(plan),
+                    ..
+                }) => Some(fullmag_plan::resolve_fem_surface_selector(
+                    &plan.mesh,
+                    &plan.mesh_parts,
+                    object,
+                    selector,
+                    None,
+                )),
+                _ => fem_mesh.map(|mesh| {
+                    let (mesh, mesh_parts) = coupling_resolution_mesh(mesh);
+                    fullmag_plan::resolve_fem_surface_selector(
+                        &mesh,
+                        &mesh_parts,
+                        object,
+                        selector,
+                        None,
+                    )
+                }),
+            };
+            let Some(resolved) = resolved else {
+                return CouplingEndpointResolutionResource {
+                    status: "pending_mesh_resolution".to_string(),
+                    object_id: object.clone(),
+                    region_id: None,
+                    selector: Some(selector.clone()),
+                    tolerance: None,
+                    resolved_face_count: None,
+                    area: None,
+                    reason: Some(
+                        "No current FEM execution plan is available for mesh-backed surface resolution."
+                            .to_string(),
+                    ),
+                };
+            };
+            match resolved {
+                Ok(resolved) => CouplingEndpointResolutionResource {
+                    status: "resolved".to_string(),
+                    object_id: object.clone(),
+                    region_id: None,
+                    selector: Some(resolved.selector),
+                    tolerance: Some(resolved.tolerance),
+                    resolved_face_count: Some(resolved.surface_faces.len() as u64),
+                    area: Some(resolved.area),
+                    reason: None,
+                },
+                Err(reason) => CouplingEndpointResolutionResource {
+                    status: "unresolved".to_string(),
+                    object_id: object.clone(),
+                    region_id: None,
+                    selector: Some(selector.clone()),
+                    tolerance: None,
+                    resolved_face_count: Some(0),
+                    area: None,
+                    reason: Some(reason),
+                },
+            }
+        }
+    }
+}
+
+fn coupling_resolution_mesh(
+    mesh: &fullmag_runner::FemMeshPayload,
+) -> (fullmag_ir::MeshIR, Vec<fullmag_ir::FemMeshPartIR>) {
+    let mesh_ir = fullmag_ir::MeshIR {
+        mesh_name: mesh.mesh_name.clone(),
+        nodes: mesh.nodes.clone(),
+        elements: mesh.elements.clone(),
+        element_markers: mesh.element_markers.clone(),
+        boundary_faces: mesh.boundary_faces.clone(),
+        boundary_markers: mesh.boundary_markers.clone(),
+        periodic_boundary_pairs: mesh.periodic_boundary_pairs.clone(),
+        periodic_node_pairs: mesh.periodic_node_pairs.clone(),
+        per_domain_quality: Default::default(),
+    };
+    let mesh_parts = mesh
+        .mesh_parts
+        .iter()
+        .filter_map(|part| {
+            let role = match part.role.as_str() {
+                "magnetic_object" => fullmag_ir::FemMeshPartRole::MagneticObject,
+                "air" => fullmag_ir::FemMeshPartRole::Air,
+                "interface" => fullmag_ir::FemMeshPartRole::Interface,
+                "outer_boundary" => fullmag_ir::FemMeshPartRole::OuterBoundary,
+                _ => return None,
+            };
+            Some(fullmag_ir::FemMeshPartIR {
+                id: part.id.clone(),
+                label: part.label.clone(),
+                role,
+                object_id: part.object_id.clone(),
+                geometry_id: part.geometry_id.clone(),
+                material_id: part.material_id.clone(),
+                element_selector: fullmag_ir::FemMeshPartSelector::ElementRange {
+                    start: part.element_start,
+                    count: part.element_count,
+                },
+                boundary_face_selector: fullmag_ir::FemMeshPartSelector::BoundaryFaceRange {
+                    start: part.boundary_face_start,
+                    count: part.boundary_face_count,
+                },
+                node_selector: fullmag_ir::FemMeshPartSelector::NodeRange {
+                    start: part.node_start,
+                    count: part.node_count,
+                },
+                boundary_face_indices: part.boundary_face_indices.clone(),
+                node_indices: part.node_indices.clone(),
+                surface_faces: part.surface_faces.clone(),
+                bounds_min: part.bounds_min,
+                bounds_max: part.bounds_max,
+                parent_id: None,
+            })
+        })
+        .collect();
+    (mesh_ir, mesh_parts)
+}
+
+fn coupling_blocker_reason(coupling: &fullmag_authoring::SceneCoupling) -> Option<String> {
+    if !coupling.enabled {
+        return None;
+    }
+    match coupling.kind {
+        fullmag_authoring::SceneCouplingKind::Rkky => Some(
+            "RKKY runtime operator is not available for the selected backend; solver start remains blocked."
+                .to_string(),
+        ),
+        fullmag_authoring::SceneCouplingKind::InterlayerExchange => Some(
+            "Interlayer exchange runtime operator is not available for the selected backend; solver start remains blocked."
+                .to_string(),
+        ),
+        fullmag_authoring::SceneCouplingKind::Exchange
+            if matches!(
+                &coupling.source,
+                fullmag_authoring::SceneCouplingEndpoint::Surface { .. }
+            ) || matches!(
+                &coupling.target,
+                fullmag_authoring::SceneCouplingEndpoint::Surface { .. }
+            ) =>
+        {
+            Some(
+                "Surface exchange runtime operator is not available; endpoint resolution is preview-only."
+                    .to_string(),
+            )
+        }
+        fullmag_authoring::SceneCouplingKind::Exchange => None,
+    }
 }
 
 fn coupling_realization_status(kind: &str) -> &'static str {
@@ -2148,7 +2433,9 @@ fn apply_delete_material_transaction(
     let before = scene.materials.len();
     scene.materials.retain(|entry| entry.id != material_id);
     if scene.materials.len() == before {
-        return Err(ApiError::not_found(format!("material not found: {material_id}")));
+        return Err(ApiError::not_found(format!(
+            "material not found: {material_id}"
+        )));
     }
     Ok(())
 }
@@ -2248,15 +2535,18 @@ fn apply_delete_object_transaction(
     object_id: &str,
 ) -> Result<(), ApiError> {
     check_base_scene_revision(scene, base_revision)?;
-    let before = scene.objects.len();
+    let removed_object = scene
+        .objects
+        .iter()
+        .find(|object| object.id == object_id || object.name == object_id)
+        .cloned()
+        .ok_or_else(|| ApiError::not_found(format!("object not found: {object_id}")))?;
     scene
         .objects
-        .retain(|object| object.id != object_id && object.name != object_id);
-    if scene.objects.len() == before {
-        return Err(ApiError::not_found(format!(
-            "object not found: {object_id}"
-        )));
-    }
+        .retain(|object| object.id != removed_object.id);
+    scene.couplings.retain(|coupling| {
+        !coupling_references_object(coupling, &removed_object.id, &removed_object.name)
+    });
     mark_all_object_meshes_dirty(scene);
     Ok(())
 }
@@ -2323,9 +2613,11 @@ fn apply_create_object_region_transaction(
         return Err(ApiError::bad_request("object region requires name"));
     }
     let region_id = allocate_object_region_id(object);
-    if object.regions.iter().any(|entry| {
-        entry.region_id == region_id || entry.name == *region_name
-    }) {
+    if object
+        .regions
+        .iter()
+        .any(|entry| entry.region_id == region_id || entry.name == *region_name)
+    {
         return Err(ApiError::conflict(format!(
             "object region already exists: {region_name}"
         )));
@@ -2347,7 +2639,7 @@ fn apply_patch_object_region_transaction(
     check_base_scene_revision(scene, base_revision)?;
     if patch.id.is_some() || patch.region_id.is_some() || patch.owner_object.is_some() {
         return Err(ApiError::bad_request(
-            "object region patch cannot modify identity fields: region_id, id, owner_object"
+            "object region patch cannot modify identity fields: region_id, id, owner_object",
         ));
     }
 
@@ -2356,16 +2648,21 @@ fn apply_patch_object_region_transaction(
     }
     let object = find_scene_object_mut(scene, object_id)?;
     if let Some(region_name) = &patch.name {
-        if object.regions.iter().any(|entry| {
-            entry.region_id != region_id && &entry.name == region_name
-        }) {
+        if object
+            .regions
+            .iter()
+            .any(|entry| entry.region_id != region_id && &entry.name == region_name)
+        {
             return Err(ApiError::conflict(format!(
                 "object region already exists: {region_name}"
             )));
         }
     }
     let owner_bounds = object_region_owner_bounds(object);
-    let region = object.regions.iter_mut().find(|r| r.region_id == region_id)
+    let region = object
+        .regions
+        .iter_mut()
+        .find(|r| r.region_id == region_id)
         .ok_or_else(|| ApiError::not_found(format!("object region not found: {region_id}")))?;
 
     if let Some(name) = patch.name {
@@ -2389,8 +2686,12 @@ fn apply_patch_object_region_transaction(
     if let Some(texture_override) = patch.texture_override {
         region.texture_override = texture_override;
     }
+    if let Some(material_transition) = patch.material_transition {
+        region.material_transition = material_transition;
+    }
     if let Some(realization_policy) = patch.realization_policy {
-        region.realization_policy = realization_policy.unwrap_or(fullmag_authoring::SceneRegionRealizationPolicy::Inherit);
+        region.realization_policy =
+            realization_policy.unwrap_or(fullmag_authoring::SceneRegionRealizationPolicy::Inherit);
     }
     if let Some(priority) = patch.priority {
         region.priority = priority;
@@ -2416,7 +2717,11 @@ fn apply_patch_object_material_fields_transaction(
             )));
         }
         if let Some(region_id) = &field.region_id {
-            if !object.regions.iter().any(|region| region.region_id == *region_id) {
+            if !object
+                .regions
+                .iter()
+                .any(|region| region.region_id == *region_id)
+            {
                 return Err(ApiError::bad_request(format!(
                     "material field '{}' references unknown region '{}'",
                     field.assignment_id, region_id
@@ -2554,22 +2859,30 @@ fn apply_patch_coupling_transaction(
     scene: &mut SceneDocument,
     base_revision: Option<u64>,
     coupling_id: &str,
-    patch: Value,
+    patch: SceneCouplingPatch,
 ) -> Result<(), ApiError> {
     check_base_scene_revision(scene, base_revision)?;
+    if patch.coupling_id.is_some() {
+        return Err(ApiError::bad_request(
+            "coupling patch cannot modify identity field: coupling_id",
+        ));
+    }
     let coupling_index = scene
         .couplings
         .iter()
         .position(|entry| entry.coupling_id == coupling_id)
         .ok_or_else(|| ApiError::not_found(format!("coupling not found: {coupling_id}")))?;
     let coupling = &scene.couplings[coupling_index];
-    let mut coupling_val = serde_json::to_value(coupling).map_err(|error| {
-        ApiError::internal(format!("failed to serialize coupling: {error}"))
+    let mut coupling_val = serde_json::to_value(coupling)
+        .map_err(|error| ApiError::internal(format!("failed to serialize coupling: {error}")))?;
+    let patch = serde_json::to_value(patch).map_err(|error| {
+        ApiError::internal(format!("failed to serialize coupling patch: {error}"))
     })?;
     merge_patch_value(&mut coupling_val, &patch);
-    let patched: fullmag_authoring::SceneCoupling = serde_json::from_value(coupling_val).map_err(|error| {
-        ApiError::bad_request(format!("invalid patch payload for coupling: {error}"))
-    })?;
+    let patched: fullmag_authoring::SceneCoupling =
+        serde_json::from_value(coupling_val).map_err(|error| {
+            ApiError::bad_request(format!("invalid patch payload for coupling: {error}"))
+        })?;
     ensure_active_coupling_targets_enabled_regions(scene, &patched)?;
     scene.couplings[coupling_index] = patched;
     Ok(())
@@ -2689,7 +3002,10 @@ struct ObjectRegionOwnerBounds {
     size: [f64; 3],
 }
 
-fn clamp_object_region_shape_to_owner(object: &SceneObject, region: &mut fullmag_authoring::SceneObjectRegion) {
+fn clamp_object_region_shape_to_owner(
+    object: &SceneObject,
+    region: &mut fullmag_authoring::SceneObjectRegion,
+) {
     clamp_object_region_shape_to_owner_bounds(object_region_owner_bounds(object), region);
 }
 
@@ -2761,7 +3077,10 @@ fn owner_bounds_from_center_size(
     Some(ObjectRegionOwnerBounds { center, size })
 }
 
-fn clamp_shape_to_owner_bounds(shape: &mut fullmag_authoring::SceneRegionShape, owner_bounds: ObjectRegionOwnerBounds) {
+fn clamp_shape_to_owner_bounds(
+    shape: &mut fullmag_authoring::SceneRegionShape,
+    owner_bounds: ObjectRegionOwnerBounds,
+) {
     match shape {
         fullmag_authoring::SceneRegionShape::Box { size, center } => {
             let half_extents = [
@@ -2788,7 +3107,12 @@ fn clamp_shape_to_owner_bounds(shape: &mut fullmag_authoring::SceneRegionShape, 
             *center = clamp_center_to_owner(*center, half_extents, owner_bounds);
             *radius = r;
         }
-        fullmag_authoring::SceneRegionShape::Cylinder { radius, height, center, axis } => {
+        fullmag_authoring::SceneRegionShape::Cylinder {
+            radius,
+            height,
+            center,
+            axis,
+        } => {
             let norm = axis.iter().map(|value| value * value).sum::<f64>().sqrt();
             let unit = if norm > 1e-15 {
                 axis.map(|value| value / norm)
@@ -2805,12 +3129,9 @@ fn clamp_shape_to_owner_bounds(shape: &mut fullmag_authoring::SceneRegionShape, 
             }
             let mut r = (*radius).max(0.0);
             for index in 0..3 {
-                let radial_factor = (1.0 - axis_abs[index] * axis_abs[index])
-                    .max(0.0)
-                    .sqrt();
+                let radial_factor = (1.0 - axis_abs[index] * axis_abs[index]).max(0.0).sqrt();
                 if radial_factor > 1e-15 {
-                    let available =
-                        (owner_half[index] - axis_abs[index] * half_height).max(0.0);
+                    let available = (owner_half[index] - axis_abs[index] * half_height).max(0.0);
                     r = r.min(available / radial_factor);
                 }
             }
@@ -2846,9 +3167,6 @@ fn clamp_f64(value: f64, min: f64, max: f64) -> f64 {
     value.max(min).min(max)
 }
 
-
-
-
 fn allocate_object_region_id(object: &mut SceneObject) -> String {
     seed_allocated_region_ids(object);
     let owner = if object.id.trim().is_empty() {
@@ -2879,11 +3197,7 @@ fn allocate_object_region_name(object: &SceneObject, source_name: &str) -> Strin
     };
     let mut candidate = base.clone();
     let mut suffix = 2_u64;
-    while object
-        .regions
-        .iter()
-        .any(|entry| entry.name == candidate)
-    {
+    while object.regions.iter().any(|entry| entry.name == candidate) {
         candidate = format!("{base} {suffix}");
         suffix += 1;
     }
@@ -2940,9 +3254,22 @@ fn canonical_region_id_for_object(object: &SceneObject, requested_region_id: &st
     requested_region_id.to_string()
 }
 
-fn coupling_references_region(coupling: &fullmag_authoring::SceneCoupling, object_id: &str, region_id: &str) -> bool {
+fn coupling_references_region(
+    coupling: &fullmag_authoring::SceneCoupling,
+    object_id: &str,
+    region_id: &str,
+) -> bool {
     endpoint_references_region(&coupling.source, object_id, region_id)
         || endpoint_references_region(&coupling.target, object_id, region_id)
+}
+
+fn coupling_references_object(
+    coupling: &fullmag_authoring::SceneCoupling,
+    object_id: &str,
+    object_name: &str,
+) -> bool {
+    endpoint_references_object(&coupling.source, object_id, object_name)
+        || endpoint_references_object(&coupling.target, object_id, object_name)
 }
 
 fn ensure_region_has_no_active_couplings(
@@ -2972,14 +3299,20 @@ fn ensure_active_coupling_targets_enabled_regions(
         return Ok(());
     }
 
-    let check_endpoint = |endpoint: &fullmag_authoring::SceneCouplingEndpoint, field_name: &str| -> Result<(), ApiError> {
-        if let fullmag_authoring::SceneCouplingEndpoint::Region { object: object_id, region_id } = endpoint {
+    let check_endpoint = |endpoint: &fullmag_authoring::SceneCouplingEndpoint,
+                          field_name: &str|
+     -> Result<(), ApiError> {
+        if let fullmag_authoring::SceneCouplingEndpoint::Region {
+            object: object_id,
+            region_id,
+        } = endpoint
+        {
             if scene.objects.iter().any(|object| {
                 object.id == *object_id
-                    && object.regions.iter().any(|region| {
-                        region.region_id == *region_id
-                            && !region.enabled
-                    })
+                    && object
+                        .regions
+                        .iter()
+                        .any(|region| region.region_id == *region_id && !region.enabled)
             }) {
                 let coupling_id = &coupling.coupling_id;
                 return Err(ApiError::conflict(format!(
@@ -2995,12 +3328,31 @@ fn ensure_active_coupling_targets_enabled_regions(
     Ok(())
 }
 
-fn endpoint_references_region(endpoint: &fullmag_authoring::SceneCouplingEndpoint, object_id: &str, region_id: &str) -> bool {
+fn endpoint_references_region(
+    endpoint: &fullmag_authoring::SceneCouplingEndpoint,
+    object_id: &str,
+    region_id: &str,
+) -> bool {
     match endpoint {
-        fullmag_authoring::SceneCouplingEndpoint::Region { object, region_id: r_id } => {
-            object == object_id && r_id == region_id
-        }
+        fullmag_authoring::SceneCouplingEndpoint::Region {
+            object,
+            region_id: r_id,
+        } => object == object_id && r_id == region_id,
         _ => false,
+    }
+}
+
+fn endpoint_references_object(
+    endpoint: &fullmag_authoring::SceneCouplingEndpoint,
+    object_id: &str,
+    object_name: &str,
+) -> bool {
+    match endpoint {
+        fullmag_authoring::SceneCouplingEndpoint::Object { object }
+        | fullmag_authoring::SceneCouplingEndpoint::Surface { object, .. }
+        | fullmag_authoring::SceneCouplingEndpoint::Region { object, .. } => {
+            object == object_id || object == object_name
+        }
     }
 }
 

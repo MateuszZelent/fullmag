@@ -1,8 +1,8 @@
 # Material regions, parameter fields, and interface couplings
 
-- Status: draft
+- Status: accepted implementation contract
 - Owners: Fullmag core
-- Last updated: 2026-06-06
+- Last updated: 2026-06-08
 - Related ADRs: `docs/adr/0011-resource-first-api.md`, `docs/adr/0013-frontend-v2-module-kernel.md`
 - Related specs: `docs/specs/resource-first-control-room-api-v2.md`
 - Related plans:
@@ -135,6 +135,46 @@ exchange stiffness `Aex` on both sides.
    note.
 9. Full RKKY runtime support is capability-gated. If authored RKKY cannot be
    realized by the selected backend, the run is blocked.
+
+### 2.4 Region-local material transition semantics
+
+For one continuous magnetic object, a region-local material parameter change
+does not automatically imply a sharp material interface. The authored region is
+a support selector; the material transition describes how the parent parameter
+and local region parameter are blended near the selector boundary.
+
+Supported authored transition intents are:
+
+- `mesh_relative(cells=N)`: smooth transition width tied to the local mesh scale,
+- `metric(width=...)`: smooth transition width tied to a physical SI distance,
+- `sharp`: discontinuous coefficient jump that may require conformal FEM
+  realization.
+
+Smooth transitions also define where the transition is anchored relative to the
+region boundary:
+
+- `scope="boundary"`: transition spans both sides of the region boundary,
+- `scope="inside"`: transition is consumed only inside the region,
+- `scope="outside"`: transition is consumed only outside the region.
+
+The default for region-local `Ms` and `Aex` overrides in one object is:
+
+```text
+mesh_relative(cells=3, scope="boundary")
+```
+
+With signed distance `d(x) < 0` inside the authored region and `d(x) > 0`
+outside, a smooth region-local defect realizes:
+
+```text
+p(x) = p_parent + w(d(x), h_local(x)) (p_region - p_parent)
+```
+
+where `p` is the material parameter and `w` is a smooth weight determined by
+the authored transition kind, width, and scope. A smooth transition requires a
+supported signed-distance evaluator for the authored region shape. Unsupported
+shapes must capability-block instead of silently falling back to a bounding-box
+distance or binary mask.
 
 ## 3. Numerical interpretation
 

@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
 import {
+  useModelCouplingsResource,
   useModelMaterialFieldsResource,
   useModelRegionDiagnosticsResource,
   useModelRegionsResource,
@@ -21,12 +22,14 @@ import {
   objectRegionDraftFromModel,
   objectRegionDraftKey,
   parseRegionPhysicalScalar,
+  resolveRegionCouplingDependencies,
   resolveObjectRegionPanelModel,
   validateObjectRegionDraft,
   type ObjectRegionDraft,
   type RegionMeshPolicyDraft,
   type RegionShapeDraft,
 } from "./ObjectRegionsPanelModel";
+import { syncAuthoringScriptBestEffort } from "./ObjectMagneticTexturePanelViewModel";
 import { findLastRegionSelection, regionNodeId } from "./RegionsListPanelModel";
 import { publishRegionAuthoringScene } from "./regionAuthoringInvalidation";
 
@@ -118,6 +121,7 @@ export function ObjectRegionsPanel({ selection }: InspectorPanelProps) {
   const regions = useModelRegionsResource();
   const materialFields = useModelMaterialFieldsResource();
   const regionDiagnostics = useModelRegionDiagnosticsResource();
+  const couplings = useModelCouplingsResource();
 
   const model = useMemo(
     () =>
@@ -143,6 +147,15 @@ export function ObjectRegionsPanel({ selection }: InspectorPanelProps) {
 
   const canWriteRegion =
     model.mode === "committed" && model.source === "authored_object_region";
+  const couplingDependencies = useMemo(
+    () =>
+      resolveRegionCouplingDependencies(
+        model.objectId,
+        model.regionId,
+        couplings.data ?? null,
+      ),
+    [couplings.data, model.objectId, model.regionId],
+  );
 
   function updateDraft(patch: Partial<ObjectRegionDraft>): void {
     setDraftState((current) => ({
@@ -259,7 +272,13 @@ export function ObjectRegionsPanel({ selection }: InspectorPanelProps) {
       );
       const revision = revisionFromScene(response);
       publishRegionAuthoringScene(resources, response, revision);
-      setFeedback({ kind: "success", message: "Object region updated." });
+      const syncWarning = await syncAuthoringScriptBestEffort(api);
+      setFeedback({
+        kind: "success",
+        message: syncWarning
+          ? `Object region updated. Authoring script sync skipped: ${syncWarning}`
+          : "Object region updated.",
+      });
     } catch (error) {
       setFeedback({ kind: "error", message: errorMessage(error) });
     } finally {
@@ -291,7 +310,13 @@ export function ObjectRegionsPanel({ selection }: InspectorPanelProps) {
       if (duplicated) {
         selectRegion(duplicated.regionId, duplicated.name);
       }
-      setFeedback({ kind: "success", message: "Object region duplicated." });
+      const syncWarning = await syncAuthoringScriptBestEffort(api);
+      setFeedback({
+        kind: "success",
+        message: syncWarning
+          ? `Object region duplicated. Authoring script sync skipped: ${syncWarning}`
+          : "Object region duplicated.",
+      });
     } catch (error) {
       setFeedback({ kind: "error", message: errorMessage(error) });
     } finally {
@@ -337,7 +362,13 @@ export function ObjectRegionsPanel({ selection }: InspectorPanelProps) {
           "inspector",
         );
       }
-      setFeedback({ kind: "success", message: "Object region deleted." });
+      const syncWarning = await syncAuthoringScriptBestEffort(api);
+      setFeedback({
+        kind: "success",
+        message: syncWarning
+          ? `Object region deleted. Authoring script sync skipped: ${syncWarning}`
+          : "Object region deleted.",
+      });
     } catch (error) {
       setFeedback({ kind: "error", message: errorMessage(error) });
     } finally {
@@ -366,6 +397,7 @@ export function ObjectRegionsPanel({ selection }: InspectorPanelProps) {
     },
     feedback,
     materialFields: materialFields.data ?? null,
+    couplingDependencies,
   };
 
   switch (selection.kind) {

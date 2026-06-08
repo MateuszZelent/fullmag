@@ -2,7 +2,7 @@ use crate::{SceneDocument, StudyPipelineDocument, StudyPipelineNode};
 use fullmag_ir::{
     CouplingEndpointIR, CouplingIR, CouplingKindIR, CouplingParametersIR, ExchangeCouplingModeIR,
     MaterialParameterAssignmentIR, MaterialParameterFieldIR, MaterialParameterNameIR,
-    ObjectRegionIR, RegionFrameIR, RegionMeshPolicyIR, RegionShapeIR,
+    MaterialTransitionSpecIR, ObjectRegionIR, RegionFrameIR, RegionMeshPolicyIR, RegionShapeIR,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -313,8 +313,7 @@ mod tests {
         let error =
             validate_scene_document(&scene).expect_err("scene.v1 must reject object regions");
         assert!(
-            error.message.contains("authored object regions")
-                && error.message.contains("scene.v2"),
+            error.message.contains("authored object regions") && error.message.contains("scene.v2"),
             "{}",
             error.message
         );
@@ -325,8 +324,7 @@ mod tests {
         let error =
             validate_scene_document(&scene).expect_err("scene.v1 must reject allocated region ids");
         assert!(
-            error.message.contains("allocated_region_ids")
-                && error.message.contains("scene.v2"),
+            error.message.contains("allocated_region_ids") && error.message.contains("scene.v2"),
             "{}",
             error.message
         );
@@ -349,13 +347,16 @@ mod tests {
         scene.objects[0].regions.clear();
         scene.objects[0].allocated_region_ids.clear();
         scene.objects[0].material_parameter_fields.clear();
-        scene.couplings.push(serde_json::from_value(serde_json::json!({
-            "coupling_id": "draft_exchange",
-            "kind": "exchange",
-            "source": { "kind": "object", "object": "body" },
-            "target": { "kind": "object", "object": "body" },
-            "parameters": { "kind": "exchange", "mode": "disabled" }
-        })).unwrap());
+        scene.couplings.push(
+            serde_json::from_value(serde_json::json!({
+                "coupling_id": "draft_exchange",
+                "kind": "exchange",
+                "source": { "kind": "object", "object": "body" },
+                "target": { "kind": "object", "object": "body" },
+                "parameters": { "kind": "exchange", "mode": "disabled" }
+            }))
+            .unwrap(),
+        );
         let error = validate_scene_document(&scene)
             .expect_err("scene.v1 must reject region-owned couplings");
         assert!(
@@ -368,14 +369,39 @@ mod tests {
     #[test]
     fn scene_document_validation_rejects_region_ms_zero() {
         let mut scene = region_owned_scene();
-        scene.objects[0].regions[0].material_overrides[0].value = crate::SceneMaterialParameterField::Constant {
-            value: crate::SceneMaterialParameterValue::Scalar(0.0),
-            unit: Some("A/m".to_string()),
-        };
+        scene.objects[0].regions[0].material_overrides[0].value =
+            crate::SceneMaterialParameterField::Constant {
+                value: crate::SceneMaterialParameterValue::Scalar(0.0),
+                unit: Some("A/m".to_string()),
+            };
 
         let error = validate_scene_document(&scene).expect_err("Ms=0 must be rejected");
         assert!(
             error.message.contains("Ms must be > 0"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn scene_document_validation_rejects_unsupported_surface_selector() {
+        let mut scene = region_owned_scene();
+        scene.couplings.push(
+            serde_json::from_value(serde_json::json!({
+                "coupling_id": "body_surface_exchange",
+                "kind": "exchange",
+                "source": { "kind": "surface", "object": "body", "selector": "named_face" },
+                "target": { "kind": "surface", "object": "body", "selector": "bottom" },
+                "parameters": { "kind": "exchange", "mode": "disabled" }
+            }))
+            .expect("surface coupling should deserialize"),
+        );
+
+        let error = validate_scene_document(&scene)
+            .expect_err("v1 must reject unsupported named surface selectors");
+        assert!(error.message.contains("named_face"), "{}", error.message);
+        assert!(
+            error.message.contains("top/bottom/left/right/front/back"),
             "{}",
             error.message
         );
@@ -398,19 +424,22 @@ mod tests {
     #[test]
     fn scene_document_validation_rejects_object_frame_region_outside_owner_bounds() {
         let mut scene = region_owned_scene();
-        if let crate::SceneRegionShape::Cylinder { radius, .. } = &mut scene.objects[0].regions[0].shape {
+        if let crate::SceneRegionShape::Cylinder { radius, .. } =
+            &mut scene.objects[0].regions[0].shape
+        {
             *radius = 2.0e-6;
         }
 
-        let error =
-            validate_scene_document(&scene).expect_err("oversized region must be rejected");
+        let error = validate_scene_document(&scene).expect_err("oversized region must be rejected");
         assert!(
             error.message.contains("REGION_OUTSIDE_OWNER_BOUNDS"),
             "{}",
             error.message
         );
 
-        if let crate::SceneRegionShape::Cylinder { radius, center, .. } = &mut scene.objects[0].regions[0].shape {
+        if let crate::SceneRegionShape::Cylinder { radius, center, .. } =
+            &mut scene.objects[0].regions[0].shape
+        {
             *radius = 8.0e-8;
             *center = [1.0e-6, 0.0, 0.0];
         }
@@ -447,14 +476,17 @@ mod tests {
     #[test]
     fn scene_document_validation_rejects_invalid_region_coupling_endpoint() {
         let mut scene = region_owned_scene();
-        scene.couplings.push(serde_json::from_value(serde_json::json!({
-            "coupling_id": "bad_rkky",
-            "kind": "rkky",
-            "source": { "kind": "object", "object": "body" },
-            "target": { "kind": "region", "object": "body", "region_id": "body:r1" },
-            "parameters": { "kind": "rkky", "j1": -3.0e-4 },
-            "capability_policy": "require_runtime"
-        })).unwrap());
+        scene.couplings.push(
+            serde_json::from_value(serde_json::json!({
+                "coupling_id": "bad_rkky",
+                "kind": "rkky",
+                "source": { "kind": "object", "object": "body" },
+                "target": { "kind": "region", "object": "body", "region_id": "body:r1" },
+                "parameters": { "kind": "rkky", "j1": -3.0e-4 },
+                "capability_policy": "require_runtime"
+            }))
+            .unwrap(),
+        );
 
         let error = validate_scene_document(&scene).expect_err("RKKY requires surface endpoints");
         assert!(
@@ -487,12 +519,14 @@ mod tests {
     #[test]
     fn scene_document_validation_rejects_equal_priority_material_conflicts() {
         let mut scene = region_owned_scene();
-        scene.objects[0].material_parameter_fields[0].parameter = crate::SceneMaterialParameterName::Ms;
+        scene.objects[0].material_parameter_fields[0].parameter =
+            crate::SceneMaterialParameterName::Ms;
         scene.objects[0].material_parameter_fields[0].priority = 10;
-        scene.objects[0].material_parameter_fields[0].value = crate::SceneMaterialParameterField::Constant {
-            value: crate::SceneMaterialParameterValue::Scalar(700000.0),
-            unit: Some("A/m".to_string()),
-        };
+        scene.objects[0].material_parameter_fields[0].value =
+            crate::SceneMaterialParameterField::Constant {
+                value: crate::SceneMaterialParameterValue::Scalar(700000.0),
+                unit: Some("A/m".to_string()),
+            };
 
         let error =
             validate_scene_document(&scene).expect_err("equal-priority conflict must be rejected");
@@ -578,6 +612,12 @@ fn validate_region_owned_scene_payloads(
                 validate_region_mesh_policy(
                     &format!("objects['{}'].regions[{index}]", object.id),
                     mesh_policy,
+                )?;
+            }
+            if let Some(material_transition) = &region.material_transition {
+                validate_material_transition(
+                    &format!("objects['{}'].regions[{index}]", object.id),
+                    material_transition,
                 )?;
             }
             for (override_index, material_override) in region.material_overrides.iter().enumerate()
@@ -860,9 +900,7 @@ fn validate_object_region_inside_owner_bounds(
     Ok(())
 }
 
-fn object_region_owner_bounds(
-    geometry: &crate::SceneGeometry,
-) -> Option<ObjectRegionOwnerBounds> {
+fn object_region_owner_bounds(geometry: &crate::SceneGeometry) -> Option<ObjectRegionOwnerBounds> {
     if let (Some(min), Some(max)) = (geometry.bounds_min, geometry.bounds_max) {
         return owner_bounds_from_min_max(min, max);
     }
@@ -894,10 +932,7 @@ fn object_region_owner_bounds(
     owner_bounds_from_center_size(center, size)
 }
 
-fn owner_bounds_from_min_max(
-    min: [f64; 3],
-    max: [f64; 3],
-) -> Option<ObjectRegionOwnerBounds> {
+fn owner_bounds_from_min_max(min: [f64; 3], max: [f64; 3]) -> Option<ObjectRegionOwnerBounds> {
     owner_bounds_from_center_size(
         [
             0.5 * (min[0] + max[0]),
@@ -948,10 +983,7 @@ fn region_shape_local_aabb(shape: &RegionShapeIR) -> Option<([f64; 3], [f64; 3])
     }
 }
 
-fn vec3_param(
-    params: &serde_json::Map<String, Value>,
-    key: &str,
-) -> Option<[f64; 3]> {
+fn vec3_param(params: &serde_json::Map<String, Value>, key: &str) -> Option<[f64; 3]> {
     let values = params.get(key)?.as_array()?;
     if values.len() != 3 {
         return None;
@@ -1001,6 +1033,25 @@ fn validate_region_mesh_policy(
         )));
     }
     Ok(())
+}
+
+fn validate_material_transition(
+    path: &str,
+    transition: &MaterialTransitionSpecIR,
+) -> Result<(), SceneDocumentValidationError> {
+    match transition {
+        MaterialTransitionSpecIR::MeshRelative { cells, .. } if *cells == 0 => {
+            Err(SceneDocumentValidationError::new(format!(
+                "{path}.material_transition.cells must be >= 1"
+            )))
+        }
+        MaterialTransitionSpecIR::Metric { width, .. } if !width.is_finite() || *width <= 0.0 => {
+            Err(SceneDocumentValidationError::new(format!(
+                "{path}.material_transition.width must be finite and > 0"
+            )))
+        }
+        _ => Ok(()),
+    }
 }
 
 fn validate_material_parameter_field(
@@ -1124,9 +1175,19 @@ fn validate_coupling_endpoint(
         }
     }
     if let CouplingEndpointIR::Surface { selector, .. } = endpoint {
-        if selector.trim().is_empty() {
+        let normalized = selector.trim().to_ascii_lowercase();
+        if normalized.is_empty() {
             return Err(SceneDocumentValidationError::new(format!(
                 "{path}.selector must not be empty"
+            )));
+        }
+        if !matches!(
+            normalized.as_str(),
+            "top" | "bottom" | "left" | "right" | "front" | "back"
+        ) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path}.selector '{}' is unsupported in v1; use top/bottom/left/right/front/back",
+                selector
             )));
         }
     }

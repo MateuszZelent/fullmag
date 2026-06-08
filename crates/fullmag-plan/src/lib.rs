@@ -18,10 +18,12 @@ mod fem;
 mod geometry;
 mod magnetization_textures;
 mod material;
+mod material_transition;
 mod mesh;
 mod oersted;
 pub mod quantities;
 mod spin_torque;
+mod surface_selectors;
 mod util;
 mod validate;
 
@@ -33,6 +35,7 @@ pub use quantities::{
     default_capability_matrix, validate_quantity_requests, BackendFamily, CapabilityMatrix,
     QuantityCapability,
 };
+pub use surface_selectors::{resolve_fem_surface_selector, ResolvedFemSurfaceSelector};
 pub use util::generate_random_unit_vectors;
 
 /// Plans a `ProblemIR` into an `ExecutionPlanIR`.

@@ -8,6 +8,7 @@ import type {
 import {
   buildMagnetizationAssetPatch,
   buildMagnetizationAssignmentPatch,
+  buildRegionTextureOverridePatch,
   resolveMagnetizationTextureModel,
 } from "./draftModel";
 import type { MagnetizationTextureTarget } from "./types";
@@ -147,26 +148,48 @@ describe("magnetization texture draft model", () => {
       payload: { base_revision: 9, magnetization_ref: "mag-object" },
     });
 
-    expect(
-      buildMagnetizationAssignmentPatch(
-        { kind: "region", objectId: "body", regionId: "region:body" },
-        null,
-        9,
-      ),
-    ).toEqual({
-      path: "region",
-      payload: { magnetization_ref: null },
+    expect(buildRegionTextureOverridePatch(null)).toEqual({
+      texture_override: null,
     });
 
     expect(
-      buildMagnetizationAssignmentPatch(
-        { kind: "region", objectId: "body", regionId: "region:body" },
-        "mag-region",
-        9,
-      ),
+      buildRegionTextureOverridePatch({
+        id: "mag-region",
+        kind: "preset_texture",
+        mapping: {
+          clamp_mode: "none",
+          projection: "object_local",
+          space: "object",
+        },
+        name: "Region texture",
+        preset_kind: "vortex",
+        preset_params: { chirality: 1, polarity: -1 },
+        texture_transform: {
+          pivot: [0, 0, 0],
+          rotation_quat: [0, 0, 0, 1],
+          scale: [1, 1, 1],
+          translation: [2, 0, 0],
+        },
+      }),
     ).toEqual({
-      path: "region",
-      payload: { magnetization_ref: "mag-region" },
+      texture_override: {
+        initial_magnetization: {
+          kind: "preset_texture",
+          mapping: {
+            clamp_mode: "none",
+            projection: "object_local",
+            space: "object",
+          },
+          preset_kind: "vortex",
+          preset_params: { chirality: 1, polarity: -1 },
+          texture_transform: {
+            pivot: [0, 0, 0],
+            rotation_quat: [0, 0, 0, 1],
+            scale: [1, 1, 1],
+            translation: [2, 0, 0],
+          },
+        },
+      },
     });
 
     expect(

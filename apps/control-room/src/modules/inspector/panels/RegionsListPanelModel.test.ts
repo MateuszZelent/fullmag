@@ -97,6 +97,37 @@ describe("RegionsListPanelModel", () => {
         ],
         scene_revision: 12,
       },
+      {
+        diagnostics: [
+          {
+            capability_gate: "regions.material_override",
+            code: "region.material.conflict",
+            diagnostic_id: "diag-high-conflict",
+            message: "Region material override conflicts with another region.",
+            owner_object_id: "film",
+            realization_status: "blocked",
+            region_id: "reg-high",
+            severity: "error",
+          },
+          {
+            code: "region.mesh.deferred",
+            diagnostic_id: "diag-low-warning",
+            message: "Region mesh policy is deferred by the selected backend.",
+            owner_object_id: "film",
+            region_id: "reg-low",
+            severity: "warning",
+          },
+          {
+            code: "region.material.conflict",
+            diagnostic_id: "diag-other-conflict",
+            message: "Other object conflict.",
+            owner_object_id: "other",
+            region_id: "reg-other",
+            severity: "error",
+          },
+        ],
+        scene_revision: 12,
+      },
     );
 
     expect(model).toMatchObject({
@@ -115,16 +146,30 @@ describe("RegionsListPanelModel", () => {
     ]);
     expect(model.items[0]).toMatchObject({
       colorIndex: 0,
+      conflictCount: 1,
+      diagnosticCount: 1,
       enabled: false,
+      errorCount: 1,
       priority: 8,
       realizationPolicy: "conformal",
       realizationStatus: "authored_pending_realization",
       shapeKind: "cylinder",
+      warningCount: 0,
     });
     expect(model.items[1]).toMatchObject({
       colorIndex: 1,
+      conflictCount: 0,
+      diagnosticCount: 1,
+      errorCount: 0,
       priority: 1,
       shapeKind: "box",
+      warningCount: 1,
+    });
+    expect(model).toMatchObject({
+      conflictCount: 1,
+      diagnosticCount: 2,
+      errorCount: 1,
+      warningCount: 1,
     });
   });
 

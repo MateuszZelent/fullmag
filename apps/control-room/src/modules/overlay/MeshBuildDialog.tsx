@@ -6,6 +6,7 @@ import { createCommandContext } from "@/kernel/commands/commandContext";
 import {
   useMeshBuildCurrent,
   useMeshBuildLatestSuccessful,
+  useModelRegionDiagnosticsResource,
   useMeshSharedDomainQualityResource,
   useMeshSharedDomainManifestResource,
   useMeshSummaryResource,
@@ -33,6 +34,7 @@ import {
   DialogTitle,
 } from "@/shared/ui/Dialog";
 import { MeshBuildConfirmDialogContent } from "./mesh-build/MeshBuildConfirmDialog";
+import { buildRegionMeshBuildReasonRows } from "./mesh-build/meshBuildRegionReasons";
 import { openMeshBuildDiagnostics } from "./meshBuildDiagnosticsNavigation";
 
 function asRecord(value: unknown): JsonObject | null {
@@ -236,6 +238,9 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
   const sharedQuality = useMeshSharedDomainQualityResource({
     enabled: state.open,
   });
+  const regionDiagnostics = useModelRegionDiagnosticsResource({
+    enabled: state.open,
+  });
 
   const currentSnapshot = state.open ? snapshotBefore : null;
 
@@ -271,6 +276,7 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
         "none",
     },
   ];
+  const regionReasonRows = buildRegionMeshBuildReasonRows(regionDiagnostics.data);
   const newSummary = [
     { label: "Requested target", value: targetLabel },
     {
@@ -285,6 +291,7 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
       label: "Expected result",
       value: "New mesh revision, manifest, quality and viewport render",
     },
+    ...regionReasonRows,
   ];
   const snapshotRows = buildMeshSnapshotRows({
     current: currentSnapshot?.stats ?? {

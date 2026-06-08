@@ -1,6 +1,6 @@
 //! Native OpenAPI v2 spec assembly.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use utoipa::OpenApi;
 
 #[derive(OpenApi)]
@@ -334,6 +334,7 @@ use utoipa::OpenApi;
         crate::schemas::authoring::ObjectRegionCreateRequest,
         crate::schemas::authoring::ObjectRegionPatchRequest,
         crate::schemas::authoring::SceneObjectRegionPatch,
+        crate::schemas::authoring::SceneCouplingPatch,
         crate::schemas::authoring::ObjectRegionDuplicateRequest,
         crate::schemas::authoring::ObjectRegionReorderRequest,
         crate::schemas::authoring::GeometryRealizationRequest,
@@ -357,6 +358,7 @@ use utoipa::OpenApi;
         crate::schemas::authoring::RegionPatchRequest,
         crate::schemas::authoring::MaterialParameterFieldResource,
         crate::schemas::authoring::MaterialParameterFieldListResource,
+        crate::schemas::authoring::CouplingEndpointResolutionResource,
         crate::schemas::authoring::CouplingResource,
         crate::schemas::authoring::CouplingListResource,
         crate::schemas::authoring::UniverseResource,
@@ -381,6 +383,7 @@ use utoipa::OpenApi;
         crate::schemas::common::HostEngineEntry,
         crate::schemas::common::RuntimeCapabilityMatrix,
         crate::types::ArtifactEntry,
+        crate::types::RegionOwnedArtifactProvenance,
         crate::field_slice::SlicePlane,
         crate::types::ImportSessionAssetRequest,
         crate::types::SessionAssetImportResponse,

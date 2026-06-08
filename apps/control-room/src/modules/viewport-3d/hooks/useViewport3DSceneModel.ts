@@ -157,6 +157,7 @@ import { getViewport3DVisualProfile } from "../viewport3dVisualProfile";
 
 type Viewport3DSceneProps = ComponentProps<typeof Viewport3DScene>;
 type JsonRecord = Record<string, unknown>;
+type SceneRegionShape = components["schemas"]["SceneRegionShape"];
 
 const EMPTY_AIRBOX_FIELD_VECTOR_PARTS: readonly { id: string }[] = [];
 const VIEWPORT_3D_SCALAR_FIELD_COMPONENTS = new Set([
@@ -174,6 +175,49 @@ function asJsonRecord(value: unknown): JsonRecord | null {
 
 function asNonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function sceneRegionShape(value: unknown): SceneRegionShape | null {
+  const shape = asJsonRecord(value);
+  if (!shape) return null;
+  const kind = asNonEmptyString(shape.kind);
+  if (kind === "box") {
+    return isFiniteNumberVector(shape.center, 3) && isFiniteNumberVector(shape.size, 3)
+      ? { center: shape.center, kind, size: shape.size }
+      : null;
+  }
+  if (kind === "cylinder") {
+    return isFiniteNumberVector(shape.axis, 3) &&
+      isFiniteNumberVector(shape.center, 3) &&
+      isPositiveFiniteNumber(shape.height) &&
+      isPositiveFiniteNumber(shape.radius)
+      ? {
+          axis: shape.axis,
+          center: shape.center,
+          height: shape.height,
+          kind,
+          radius: shape.radius,
+        }
+      : null;
+  }
+  if (kind === "sphere") {
+    return isFiniteNumberVector(shape.center, 3) && isPositiveFiniteNumber(shape.radius)
+      ? { center: shape.center, kind, radius: shape.radius }
+      : null;
+  }
+  return null;
+}
+
+function isFiniteNumberVector(value: unknown, length: number): value is number[] {
+  return (
+    Array.isArray(value) &&
+    value.length === length &&
+    value.every((entry) => typeof entry === "number" && Number.isFinite(entry))
+  );
+}
+
+function isPositiveFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
 export function resolveViewport3DRegionOverlays({
@@ -221,6 +265,8 @@ export function resolveViewport3DRegionOverlays({
       const regionId = asNonEmptyString(region?.region_id) ?? asNonEmptyString(region?.id);
       if (!regionId || seen.has(regionOverlayKey(objectId, regionId))) continue;
       if (realizedRegionKeys?.has(regionOverlayKey(objectId, regionId))) continue;
+      const shape = sceneRegionShape(region?.shape);
+      if (!shape) continue;
       seen.add(regionOverlayKey(objectId, regionId));
       overlays.push({
         enabled: region?.enabled !== false && object.visible !== false,
@@ -230,7 +276,7 @@ export function resolveViewport3DRegionOverlays({
         owner_transform: objectTransformsById.get(objectId) ?? asJsonRecord(object?.transform),
         priority: typeof region?.priority === "number" ? region.priority : null,
         region_id: regionId,
-        shape: region?.shape as components["schemas"]["SceneRegionShape"] | undefined,
+        shape,
       });
     }
   }
@@ -257,6 +303,21 @@ export function resolveViewport3DMeshBackedRegionKeys(
     }
   }
   return keys;
+}
+
+export function filterViewport3DMeshBackedRegionOverlays(
+  regions: readonly RegionOverlayInput[],
+  meshBackedRegionKeys: ReadonlySet<string>,
+): RegionOverlayInput[] {
+  return regions.filter((region) => {
+    const objectId = asNonEmptyString(region.owner_object_id);
+    const regionId = asNonEmptyString(region.region_id);
+    return Boolean(
+      objectId &&
+        regionId &&
+        meshBackedRegionKeys.has(regionOverlayKey(objectId, regionId)),
+    );
+  });
 }
 
 export function resolveViewport3DRegionTargetByPartId(
@@ -960,25 +1021,17 @@ export function useViewport3DSceneModel({
   }, [scene.data, sharedDomainManifest]);
   const topologyCurrent = isViewport3DTopologyCurrent(topologyFreshness);
   const topologyRenderable = isViewport3DTopologyRenderable(topologyFreshness);
-  const meshRegionOverlays = topologyCurrent ? allRegionOverlays : [];
-  const regionOverlays = useMemo<RegionOverlayInput[]>(
+  const meshRegionOverlays = useMemo(
     () =>
       topologyCurrent
-        ? []
-        : resolveViewport3DRegionOverlays({
-            objectTransformsById,
-            realizedRegionKeys: meshBackedRegionKeys,
-            regionResource: modelRegions.data,
-            scene: scene.data,
-          }),
-    [
-      meshBackedRegionKeys,
-      modelRegions.data,
-      objectTransformsById,
-      scene.data,
-      topologyCurrent,
-    ],
+        ? filterViewport3DMeshBackedRegionOverlays(
+            allRegionOverlays,
+            meshBackedRegionKeys,
+          )
+        : [],
+    [allRegionOverlays, meshBackedRegionKeys, topologyCurrent],
   );
+  const regionOverlays = allRegionOverlays;
   const currentTopologyRenderModel = topologyRenderable ? topologyRenderModel : null;
   const clipCrossSectionQuery = useMemo(() => {
     const query = resolveCrossSectionQueryFromVisualizationState(renderingState);

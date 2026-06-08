@@ -18,6 +18,7 @@ import type {
   VisualizationStatePatch,
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
+import { quantityUnitForColorbar } from "@/kernel/api/quantityIds";
 import { viewport3DOrbitDebugEnabledFromBrowserConfig } from "@/kernel/browserFullmagConfig";
 import type { MeshSizeHistogramHighlight } from "@/kernel/events/eventTypes";
 import { useMeshHistogramBinElementsResource } from "@/kernel/resources/geometryLifecycleResources";
@@ -60,6 +61,7 @@ import {
 } from "./layers/CameraControls";
 import { Viewport3DScene } from "./layers/Viewport3DScene";
 import type { RegionOverlaySelection } from "./layers/RegionOverlayLayer";
+import type { RegionOverlayMode } from "./regionOverlayMode";
 import { Viewport3DCameraDialog } from "./components/Viewport3DCameraDialog";
 import { Viewport3DSettingsDialog } from "./components/Viewport3DSettingsDialog";
 import {
@@ -106,6 +108,19 @@ interface MeshQualityRange {
   min: number;
 }
 
+interface Viewport3DColorbarLegendInput {
+  colorMode: string;
+  quantityId: string;
+  range: MeshQualityRange | null;
+  unit?: string | null;
+}
+
+interface Viewport3DColorbarLegend {
+  label: string;
+  maxLabel: string;
+  minLabel: string;
+}
+
 interface Viewport3DInspectHover {
   inspectRevision: number;
   sample: Viewport3DInspectSample;
@@ -140,6 +155,37 @@ export function resolveViewport3DMeshQualityLegend(
   if (!visible || !range) return null;
   const metricLabel = metric === "sicn" ? "SICN" : metric;
   return `Mesh quality ${metricLabel} ${formatLegendValue(range.min)} to ${formatLegendValue(range.max)}`;
+}
+
+export function resolveViewport3DColorbarLegend({
+  colorMode,
+  quantityId,
+  range,
+  unit,
+}: Viewport3DColorbarLegendInput): Viewport3DColorbarLegend | null {
+  const normalizedMode = colorMode.trim().toLowerCase();
+  if (
+    normalizedMode === "orientation" ||
+    normalizedMode === "hsl_sphere" ||
+    normalizedMode === "hsl" ||
+    normalizedMode === "monochrome" ||
+    !range ||
+    !Number.isFinite(range.min) ||
+    !Number.isFinite(range.max)
+  ) {
+    return null;
+  }
+
+  const component =
+    normalizedMode === "x" || normalizedMode === "y" || normalizedMode === "z"
+      ? ` ${normalizedMode}`
+      : "";
+  const unitLabel = unit?.trim() ? ` [${unit.trim()}]` : "";
+  return {
+    label: `${quantityId}${component}${unitLabel}`,
+    maxLabel: formatLegendValue(range.max),
+    minLabel: formatLegendValue(range.min),
+  };
 }
 
 function useMeshSizeHistogramHighlight(
@@ -185,7 +231,7 @@ interface Viewport3DFrameProps
     patch: NonNullable<VisualizationStatePatch["camera"]>,
   ) => void;
   onClearSelection: () => void;
-  onRegionOverlayVisibleChange: (visible: boolean) => void;
+  onRegionOverlayModeChange: (mode: RegionOverlayMode) => void;
   quantityId: string;
   renderedMeshRevision: number | string | null;
   selectedLabel: string;
@@ -210,7 +256,8 @@ export default function Viewport3DModule({
   const resourceCounts = useViewport3DResourceCounts(tracker);
   const commandState = useViewport3DCommandState();
   const meshSizeHighlight = useMeshSizeHistogramHighlight(kernel.bus);
-  const [regionOverlayVisible, setRegionOverlayVisible] = useState(true);
+  const [regionOverlayMode, setRegionOverlayMode] =
+    useState<RegionOverlayMode>("both");
   const meshHistogramBinElements = useMeshHistogramBinElementsResource(
     meshSizeHighlight?.resource ?? null,
   );
@@ -304,7 +351,7 @@ export default function Viewport3DModule({
       kernel={kernel}
       onCameraPatch={patchCameraState}
       onClearSelection={clear}
-      onRegionOverlayVisibleChange={setRegionOverlayVisible}
+      onRegionOverlayModeChange={setRegionOverlayMode}
       onSelectDomain={onSelectDomain}
       onSelectObject={onSelectObject}
       onSelectPart={onSelectPart}
@@ -318,7 +365,7 @@ export default function Viewport3DModule({
       inspectRevision={commandState.widgets.inspectRevision}
       requestDiagnostics={kernel.diagnostics}
       resetCameraRevision={commandState.resetCameraRevision}
-      regionOverlayVisible={regionOverlayVisible}
+      regionOverlayMode={regionOverlayMode}
       rotationMode={commandState.widgets.rotationMode}
       scaleLabelsVisible={commandState.widgets.scaleLabelsVisible}
       scaleUnitMode={commandState.widgets.scaleUnitMode}
@@ -418,7 +465,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   meshQualityRange,
   onCameraPatch,
   onClearSelection,
-  onRegionOverlayVisibleChange,
+  onRegionOverlayModeChange,
   quantityId,
   selectedLabel,
   slotId,
@@ -465,6 +512,17 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     meshQualityMetric,
     meshQualityRange,
   );
+  const activeScalarColors =
+    sceneProps.fdmSurfaceColors ??
+    sceneProps.fieldModel?.scalarColorsByMode.get(sceneProps.vectorColorMode) ??
+    sceneProps.fieldModel?.scalarColors ??
+    null;
+  const colorbarLegend = resolveViewport3DColorbarLegend({
+    colorMode: sceneProps.vectorColorMode,
+    quantityId,
+    range: activeScalarColors?.range ?? null,
+    unit: quantityUnitForColorbar(quantityId),
+  });
   const onVisualizationFrameCommitted = useCallback((revision: number) => {
     sendVisualizationAck({
       effectiveRenderMode: visualizationEffectiveRenderMode,
@@ -603,18 +661,39 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           </span>
         ) : null}
         <span>{status}</span>
-        {sceneProps.regionOverlays.length > 0 ? (
-          <Button
-            aria-pressed={sceneProps.regionOverlayVisible}
-            size="sm"
-            type="button"
-            variant="ghost"
-            onClick={() =>
-              onRegionOverlayVisibleChange(!sceneProps.regionOverlayVisible)
-            }
+        {sceneProps.regionOverlays.length > 0 ||
+        sceneProps.meshRegionOverlays.length > 0 ? (
+          <fieldset
+            aria-label="Region overlays"
+            className="fm-viewport-3d__region-modes"
           >
-            {sceneProps.regionOverlayVisible ? "Hide regions" : "Show regions"}
-          </Button>
+            {(
+              [
+                ["authored", "Authored"],
+                ["realized", "Realized"],
+                ["both", "Both"],
+              ] as const
+            ).map(([mode, label]) => (
+              <Button
+                key={mode}
+                aria-pressed={sceneProps.regionOverlayMode === mode}
+                disabled={
+                  mode === "realized" &&
+                  sceneProps.meshRegionOverlays.length === 0
+                }
+                size="sm"
+                type="button"
+                variant={
+                  sceneProps.regionOverlayMode === mode
+                    ? "primary"
+                    : "secondary"
+                }
+                onClick={() => onRegionOverlayModeChange(mode)}
+              >
+                {label}
+              </Button>
+            ))}
+          </fieldset>
         ) : null}
         <Viewport3DFieldRefreshCountdown refresh={fieldRefresh} />
         <span>{diagnostics}</span>
@@ -669,6 +748,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           {discretizationKind}
         </div>
       )}
+      {colorbarLegend ? <Viewport3DColorbar legend={colorbarLegend} /> : null}
       {visibleInspectHover ? (
         <Viewport3DInspectTooltip hover={visibleInspectHover} />
       ) : null}
@@ -700,6 +780,30 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
 });
 
 const INSPECT_TOOLTIP_OFFSET_PX = 14;
+
+const Viewport3DColorbar = memo(function Viewport3DColorbar({
+  legend,
+}: {
+  legend: Viewport3DColorbarLegend;
+}) {
+  return (
+    <aside
+      aria-label={`Color range: ${legend.label}, ${legend.minLabel} to ${legend.maxLabel}`}
+      className="fm-viewport-3d__colorbar"
+    >
+      <div className="fm-viewport-3d__colorbar-header">{legend.label}</div>
+      <div className="fm-viewport-3d__colorbar-row">
+        <span className="fm-viewport-3d__colorbar-limit">
+          {legend.minLabel}
+        </span>
+        <span aria-hidden="true" className="fm-viewport-3d__colorbar-ramp" />
+        <span className="fm-viewport-3d__colorbar-limit">
+          {legend.maxLabel}
+        </span>
+      </div>
+    </aside>
+  );
+});
 
 const Viewport3DInspectTooltip = memo(function Viewport3DInspectTooltip({
   hover,

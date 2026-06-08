@@ -231,6 +231,11 @@ pub fn register_standard_providers(registry: &mut QuantityRegistry) {
         EdenAni,
         EdenDmi,
         EdenTotal,
+        MatMs,
+        MatAex,
+        MatAlpha,
+        MatDind,
+        MatDbulk,
     ] {
         registry.register(Box::new(SpatialScalarFieldProvider::new(id)));
     }
@@ -259,11 +264,11 @@ mod tests {
     use crate::GlobalQuantityRow;
 
     #[test]
-    fn standard_providers_register_all_39() {
+    fn standard_providers_register_all_44() {
         let mut reg = QuantityRegistry::new();
         register_standard_providers(&mut reg);
-        // 22 vector + 8 spatial-scalar + 9 global scalar providers = 39.
-        assert_eq!(reg.len(), 39);
+        // 22 vector + 13 spatial-scalar + 9 global scalar providers = 44.
+        assert_eq!(reg.len(), 44);
     }
 
     #[test]

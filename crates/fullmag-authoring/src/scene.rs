@@ -781,6 +781,8 @@ pub struct SceneObjectRegion {
     pub material_overrides: Vec<SceneRegionMaterialOverride>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub texture_override: Option<SceneTextureOverride>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material_transition: Option<SceneMaterialTransition>,
     #[serde(default)]
     pub realization_policy: SceneRegionRealizationPolicy,
 }
@@ -838,6 +840,31 @@ pub struct SceneRegionMeshPolicy {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SceneMaterialTransition {
+    MeshRelative {
+        cells: u32,
+        #[serde(default)]
+        scope: SceneMaterialTransitionScope,
+    },
+    Metric {
+        width: f64,
+        #[serde(default)]
+        scope: SceneMaterialTransitionScope,
+    },
+    Sharp,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SceneMaterialTransitionScope {
+    #[default]
+    Boundary,
+    Inside,
+    Outside,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 pub struct SceneRegionMaterialOverride {
     pub parameter: SceneMaterialParameterName,
     pub value: SceneMaterialParameterField,
@@ -860,7 +887,11 @@ pub enum SceneMaterialParameterName {
     Ku1,
     #[serde(alias = "Ku2", alias = "ku2")]
     Ku2,
-    #[serde(alias = "AnisotropyAxis", alias = "anisotropyAxis", alias = "anisotropy_axis")]
+    #[serde(
+        alias = "AnisotropyAxis",
+        alias = "anisotropyAxis",
+        alias = "anisotropy_axis"
+    )]
     AnisotropyAxis,
     #[serde(alias = "Kc1", alias = "kc1")]
     Kc1,

@@ -10,6 +10,7 @@ import {
 import {
   resolveViewport3DPrimaryFieldRenderOptions,
   resolveViewport3DPrimaryFieldQuery,
+  filterViewport3DMeshBackedRegionOverlays,
   resolveViewport3DMeshBackedRegionKeys,
   resolveViewport3DPartVisualizationSettings,
   resolveViewport3DRegionOverlays,
@@ -110,6 +111,65 @@ describe("useViewport3DSceneModel", () => {
         owner_object_id: "film",
         owner_transform: { translation: [1, 2, 3] },
         region_id: "film:r1",
+      },
+    ]);
+  });
+
+  it("normalizes fallback scene region shapes through the generated OpenAPI shape contract", () => {
+    expect(
+      resolveViewport3DRegionOverlays({
+        objectTransformsById: new Map(),
+        regionResource: { geometry_realization_revision: 7, regions: [], scene_revision: 7 },
+        scene: {
+          objects: [
+            {
+              id: "film",
+              regions: [
+                {
+                  name: "good",
+                  region_id: "film:good",
+                  shape: {
+                    center: [0, 0, 0],
+                    kind: "sphere",
+                    radius: 2,
+                  },
+                },
+                {
+                  name: "bad",
+                  region_id: "film:bad",
+                  shape: {
+                    center: [0, 0, 0],
+                    kind: "sphere",
+                    radius: "2",
+                  },
+                },
+                {
+                  name: "csg",
+                  region_id: "film:csg",
+                  shape: {
+                    expression: {},
+                    kind: "csg",
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    ).toEqual([
+      {
+        enabled: true,
+        frame: null,
+        name: "good",
+        owner_object_id: "film",
+        owner_transform: null,
+        priority: null,
+        region_id: "film:good",
+        shape: {
+          center: [0, 0, 0],
+          kind: "sphere",
+          radius: 2,
+        },
       },
     ]);
   });
@@ -235,6 +295,26 @@ describe("useViewport3DSceneModel", () => {
         ],
       ]),
     );
+  });
+
+  it("keeps only mesh-backed regions in the realized overlay input", () => {
+    const regions = [
+      {
+        owner_object_id: "film",
+        region_id: "film:core",
+      },
+      {
+        owner_object_id: "film",
+        region_id: "film:edge",
+      },
+    ] as never;
+
+    expect(
+      filterViewport3DMeshBackedRegionOverlays(
+        regions,
+        new Set(["film\u0000film:core"]),
+      ),
+    ).toEqual([regions[0]]);
   });
 
   it("keeps parent visualization active for mesh-backed region parts", () => {

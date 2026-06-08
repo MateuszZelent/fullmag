@@ -251,10 +251,7 @@ impl ExchangeLlgProblem {
                     let src_index = self.grid.index(x, y, z);
                     let dst_index = padded_index(px, py, x, y, z);
                     let moment = if self.is_active(src_index) {
-                        scale(
-                            magnetization[src_index],
-                            self.ms_at(src_index),
-                        )
+                        scale(magnetization[src_index], self.ms_at(src_index))
                     } else {
                         [0.0, 0.0, 0.0]
                     };
@@ -731,7 +728,16 @@ impl ExchangeLlgProblem {
                 .par_iter_mut()
                 .enumerate()
                 .for_each(|(flat_index, h)| {
-                    let h_ex = self.cell_exchange_field(flat_index, magnetization, px, py, pz, dx2, dy2, dz2);
+                    let h_ex = self.cell_exchange_field(
+                        flat_index,
+                        magnetization,
+                        px,
+                        py,
+                        pz,
+                        dx2,
+                        dy2,
+                        dz2,
+                    );
                     h[0] += h_ex[0];
                     h[1] += h_ex[1];
                     h[2] += h_ex[2];
@@ -740,7 +746,8 @@ impl ExchangeLlgProblem {
         #[cfg(not(feature = "parallel"))]
         {
             for flat_index in 0..grid.cell_count() {
-                let h_ex = self.cell_exchange_field(flat_index, magnetization, px, py, pz, dx2, dy2, dz2);
+                let h_ex =
+                    self.cell_exchange_field(flat_index, magnetization, px, py, pz, dx2, dy2, dz2);
                 let h = &mut h_eff[flat_index];
                 h[0] += h_ex[0];
                 h[1] += h_ex[1];
@@ -768,10 +775,7 @@ impl ExchangeLlgProblem {
                     let src_index = self.grid.index(x, y, z);
                     let dst_index = padded_index(px, py, x, y, z);
                     let moment = if self.is_active(src_index) {
-                        scale(
-                            magnetization[src_index],
-                            self.ms_at(src_index),
-                        )
+                        scale(magnetization[src_index], self.ms_at(src_index))
                     } else {
                         [0.0, 0.0, 0.0]
                     };
@@ -3328,7 +3332,12 @@ impl ExchangeLlgProblem {
         scale(add(precession_term, scale(damping, alpha)), -gamma_bar)
     }
 
-    pub(crate) fn llg_rhs_from_field_at(&self, i: usize, magnetization: Vector3, field: Vector3) -> Vector3 {
+    pub(crate) fn llg_rhs_from_field_at(
+        &self,
+        i: usize,
+        magnetization: Vector3,
+        field: Vector3,
+    ) -> Vector3 {
         let alpha = self.alpha_at(i);
         let gamma_bar = self.dynamics.gyromagnetic_ratio / (1.0 + alpha * alpha);
         let precession = cross(magnetization, field);

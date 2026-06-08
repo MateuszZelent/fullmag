@@ -431,7 +431,9 @@ impl ExchangeLlgProblem {
                 )));
             }
             if field.iter().any(|&v| !v.is_finite() || v <= 0.0) {
-                return Err(EngineError::new("ms_field contains non-finite or non-positive values".to_string()));
+                return Err(EngineError::new(
+                    "ms_field contains non-finite or non-positive values".to_string(),
+                ));
             }
         }
         if let Some(ref field) = a_field {
@@ -443,7 +445,9 @@ impl ExchangeLlgProblem {
                 )));
             }
             if field.iter().any(|&v| !v.is_finite() || v < 0.0) {
-                return Err(EngineError::new("a_field contains non-finite or negative values".to_string()));
+                return Err(EngineError::new(
+                    "a_field contains non-finite or negative values".to_string(),
+                ));
             }
         }
         if let Some(ref field) = alpha_field {
@@ -455,7 +459,9 @@ impl ExchangeLlgProblem {
                 )));
             }
             if field.iter().any(|&v| !v.is_finite() || v < 0.0) {
-                return Err(EngineError::new("alpha_field contains non-finite or negative values".to_string()));
+                return Err(EngineError::new(
+                    "alpha_field contains non-finite or negative values".to_string(),
+                ));
             }
         }
         self.ms_field = ms_field;

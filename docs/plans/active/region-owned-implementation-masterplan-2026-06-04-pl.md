@@ -358,7 +358,10 @@ Docelowe namespace w `packages/fullmag-py/src/fullmag/__init__.py`:
 - `piecewise(regions, default)`,
 - `sampled(values, layout, frame, units)`.
 
-Pierwsza wersja może mieć `constant`, `linear`, `radial` i region override.
+Pierwsza wersja publicznego DSL zamyka `constant`, `linear`, `radial`,
+`sampled` oraz region override. `piecewise(regions, default)` zostaje celowo
+deferred do wersji po stabilizacji konfliktów overlap i script-export
+canonicalizacji; nie jest wymagany do zamknięcia v1 punktów 1-6.
 
 ### 5.2 Nowe klasy Python
 
@@ -368,6 +371,13 @@ Pliki:
 - `packages/fullmag-py/src/fullmag/model/material_fields.py`
 - `packages/fullmag-py/src/fullmag/model/couplings.py`
 - `packages/fullmag-py/src/fullmag/model/shapes.py`
+
+Status implementacyjny v1: publiczne namespace `fm.shapes`, `fm.fields` i
+`fm.couplings` są osobnymi modułami, natomiast descriptors region/material-field
+są skupione w `packages/fullmag-py/src/fullmag/model/structure.py`. Ten układ
+jest akceptowany dla v1, bo nie zmienia publicznego kontraktu DSL. Ewentualne
+rozbicie na `model/regions.py` i `model/material_fields.py` jest refaktorem
+organizacyjnym, nie warunkiem semantycznego zamknięcia punktów 1-6.
 
 Klasy:
 
@@ -824,6 +834,15 @@ Normalizacja powinna:
 - wyprowadzić `requires_mesh_rebuild`,
 - wyprowadzić `requires_material_field_realization`,
 - oznaczyć `requires_conformal_region_boundary`.
+
+Status implementacyjny v1: `fullmag-ir` odpowiada za typowanie, walidację i
+zachowanie publicznych `region_id`; nie jest właścicielem plannerowych
+freshness/capability flags. Wyprowadzenie `requires_mesh_rebuild`,
+`requires_material_field_realization` i `requires_conformal_region_boundary`
+jest realizowane w warstwach planner/authoring/runtime diagnostics, gdzie znany
+jest aktualny mesh, tryb wykonania i asset provenance. Dla punktów 1-6 wymagane
+jest więc: typed IR, walidacja IR i stabilne id/reference semantics; pełne
+runtime freshness/capability metadata należy audytować w sekcjach 7-19.
 
 ---
 
@@ -2883,9 +2902,11 @@ Verification:
 Files:
 
 - `examples/arch_waveguide_relax_50nm.py`,
-- new minimal examples for two-material coupling,
-- docs user guide,
-- migration note.
+- `examples/region_owned_gradient_ms.py`,
+- `examples/skyrmion_core_mesh_refinement.py`,
+- `examples/two_object_couplings.py`,
+- `docs/guides/region-owned-authoring.md`,
+- `docs/guides/region-owned-migration.md`.
 
 Verification:
 

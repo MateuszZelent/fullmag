@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import type { CouplingListResource } from "@/kernel/api/apiTypes";
@@ -22,6 +24,19 @@ function couplingSelection(couplingId: string): Selection {
 }
 
 describe("CouplingInspectorPanelModel", () => {
+  it("keeps coupling repair actions wired to existing model transactions", () => {
+    const source = readFileSync(
+      new URL("./CouplingInspectorPanel.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("api.model.patchCoupling(");
+    expect(source).toContain("api.model.deleteCoupling(");
+    expect(source).toContain('model.enabled ? "Disable Coupling" : "Enable Coupling"');
+    expect(source).toContain("MODEL_COUPLINGS_RESOURCE_KEY");
+    expect(source).toContain("publishCommittedSceneResource(");
+  });
+
   it("resolves selected authored coupling details", () => {
     const resource: CouplingListResource = {
       couplings: [
@@ -31,8 +46,22 @@ describe("CouplingInspectorPanelModel", () => {
           enabled: true,
           params: { kind: "exchange", mode: "harmonic_mean", scale: 0.5 } as never,
           realization_status: "authored_pending_realization",
+          blocker_reason: "Surface exchange runtime operator is unavailable.",
           source: { kind: "region", object: "film", region_id: "film:r1" } as never,
+          source_resolution: {
+            status: "authored_endpoint_valid",
+            object_id: "film",
+            region_id: "film:r1",
+          },
           target: { kind: "surface", object: "film", selector: "top" } as never,
+          target_resolution: {
+            status: "resolved",
+            object_id: "film",
+            selector: "top",
+            tolerance: 1e-12,
+            resolved_face_count: 12,
+            area: 4e-14,
+          },
         },
       ],
       scene_revision: 7,
@@ -48,8 +77,19 @@ describe("CouplingInspectorPanelModel", () => {
       kind: "exchange",
       mode: "found",
       parameters: { mode: "harmonic_mean", scale: 0.5 },
-      source: { label: "film/film:r1", regionId: "film:r1" },
-      target: { label: "film/top", selector: "top" },
+      blockerReason: "Surface exchange runtime operator is unavailable.",
+      source: {
+        label: "film/film:r1",
+        regionId: "film:r1",
+        resolutionStatus: "authored_endpoint_valid",
+      },
+      target: {
+        label: "film/top",
+        selector: "top",
+        resolutionStatus: "resolved",
+        resolvedFaceCount: 12,
+        area: 4e-14,
+      },
     });
   });
 

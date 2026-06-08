@@ -2538,7 +2538,9 @@ fn spatial_material_fields_cpu_reference_reaches_oracle() {
     }
 
     let plan = FdmPlanIR {
-        grid: GridDimensions { cells: [nx, ny, nz] },
+        grid: GridDimensions {
+            cells: [nx, ny, nz],
+        },
         cell_size: [5e-9, 5e-9, 5e-9],
         region_mask: vec![0; n],
         active_mask: None,

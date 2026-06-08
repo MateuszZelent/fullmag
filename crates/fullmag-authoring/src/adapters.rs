@@ -500,6 +500,20 @@ fn geometry_override_value(geo: &ScriptBuilderGeometryEntry) -> Value {
             .map(geometry_mesh_override_value)
             .unwrap_or(Value::Null),
     );
+    map.insert(
+        "object_regions".to_string(),
+        serde_json::to_value(&geo.object_regions).unwrap_or_else(|_| Value::Array(Vec::new())),
+    );
+    map.insert(
+        "allocated_region_ids".to_string(),
+        serde_json::to_value(&geo.allocated_region_ids)
+            .unwrap_or_else(|_| Value::Array(Vec::new())),
+    );
+    map.insert(
+        "material_parameter_fields".to_string(),
+        serde_json::to_value(&geo.material_parameter_fields)
+            .unwrap_or_else(|_| Value::Array(Vec::new())),
+    );
     Value::Object(map)
 }
 
@@ -1346,9 +1360,15 @@ impl From<crate::SceneRegionFrame> for fullmag_ir::RegionFrameIR {
 impl From<crate::SceneRegionRealizationPolicy> for fullmag_ir::RegionRealizationPolicyIR {
     fn from(policy: crate::SceneRegionRealizationPolicy) -> Self {
         match policy {
-            crate::SceneRegionRealizationPolicy::Inherit => fullmag_ir::RegionRealizationPolicyIR::Inherit,
-            crate::SceneRegionRealizationPolicy::Conformal => fullmag_ir::RegionRealizationPolicyIR::Conformal,
-            crate::SceneRegionRealizationPolicy::Project => fullmag_ir::RegionRealizationPolicyIR::Project,
+            crate::SceneRegionRealizationPolicy::Inherit => {
+                fullmag_ir::RegionRealizationPolicyIR::Inherit
+            }
+            crate::SceneRegionRealizationPolicy::Conformal => {
+                fullmag_ir::RegionRealizationPolicyIR::Conformal
+            }
+            crate::SceneRegionRealizationPolicy::Project => {
+                fullmag_ir::RegionRealizationPolicyIR::Project
+            }
         }
     }
 }
@@ -1364,6 +1384,42 @@ impl From<crate::SceneRegionMeshPolicy> for fullmag_ir::RegionMeshPolicyIR {
     }
 }
 
+impl From<crate::SceneMaterialTransitionScope> for fullmag_ir::MaterialTransitionScopeIR {
+    fn from(scope: crate::SceneMaterialTransitionScope) -> Self {
+        match scope {
+            crate::SceneMaterialTransitionScope::Boundary => {
+                fullmag_ir::MaterialTransitionScopeIR::Boundary
+            }
+            crate::SceneMaterialTransitionScope::Inside => {
+                fullmag_ir::MaterialTransitionScopeIR::Inside
+            }
+            crate::SceneMaterialTransitionScope::Outside => {
+                fullmag_ir::MaterialTransitionScopeIR::Outside
+            }
+        }
+    }
+}
+
+impl From<crate::SceneMaterialTransition> for fullmag_ir::MaterialTransitionSpecIR {
+    fn from(transition: crate::SceneMaterialTransition) -> Self {
+        match transition {
+            crate::SceneMaterialTransition::MeshRelative { cells, scope } => {
+                fullmag_ir::MaterialTransitionSpecIR::MeshRelative {
+                    cells,
+                    scope: scope.into(),
+                }
+            }
+            crate::SceneMaterialTransition::Metric { width, scope } => {
+                fullmag_ir::MaterialTransitionSpecIR::Metric {
+                    width,
+                    scope: scope.into(),
+                }
+            }
+            crate::SceneMaterialTransition::Sharp => fullmag_ir::MaterialTransitionSpecIR::Sharp,
+        }
+    }
+}
+
 impl From<crate::SceneMaterialParameterName> for fullmag_ir::MaterialParameterNameIR {
     fn from(name: crate::SceneMaterialParameterName) -> Self {
         match name {
@@ -1372,7 +1428,9 @@ impl From<crate::SceneMaterialParameterName> for fullmag_ir::MaterialParameterNa
             crate::SceneMaterialParameterName::Alpha => fullmag_ir::MaterialParameterNameIR::Alpha,
             crate::SceneMaterialParameterName::Ku1 => fullmag_ir::MaterialParameterNameIR::Ku1,
             crate::SceneMaterialParameterName::Ku2 => fullmag_ir::MaterialParameterNameIR::Ku2,
-            crate::SceneMaterialParameterName::AnisotropyAxis => fullmag_ir::MaterialParameterNameIR::AnisotropyAxis,
+            crate::SceneMaterialParameterName::AnisotropyAxis => {
+                fullmag_ir::MaterialParameterNameIR::AnisotropyAxis
+            }
             crate::SceneMaterialParameterName::Kc1 => fullmag_ir::MaterialParameterNameIR::Kc1,
             crate::SceneMaterialParameterName::Kc2 => fullmag_ir::MaterialParameterNameIR::Kc2,
             crate::SceneMaterialParameterName::Kc3 => fullmag_ir::MaterialParameterNameIR::Kc3,
@@ -1387,8 +1445,12 @@ impl From<crate::SceneMaterialFieldLocation> for fullmag_ir::MaterialFieldLocati
         match loc {
             crate::SceneMaterialFieldLocation::Cell => fullmag_ir::MaterialFieldLocationIR::Cell,
             crate::SceneMaterialFieldLocation::Node => fullmag_ir::MaterialFieldLocationIR::Node,
-            crate::SceneMaterialFieldLocation::Element => fullmag_ir::MaterialFieldLocationIR::Element,
-            crate::SceneMaterialFieldLocation::Quadrature => fullmag_ir::MaterialFieldLocationIR::Quadrature,
+            crate::SceneMaterialFieldLocation::Element => {
+                fullmag_ir::MaterialFieldLocationIR::Element
+            }
+            crate::SceneMaterialFieldLocation::Quadrature => {
+                fullmag_ir::MaterialFieldLocationIR::Quadrature
+            }
         }
     }
 }
@@ -1402,32 +1464,43 @@ impl From<crate::SceneMaterialParameterField> for fullmag_ir::MaterialParameterF
                     unit,
                 }
             }
-            crate::SceneMaterialParameterField::Linear { base, gradient, frame, unit } => {
-                fullmag_ir::MaterialParameterFieldIR::Linear {
-                    base,
-                    gradient,
-                    frame: frame.into(),
-                    unit,
-                }
-            }
-            crate::SceneMaterialParameterField::Radial { center, radius, inside, outside, frame, unit } => {
-                fullmag_ir::MaterialParameterFieldIR::Radial {
-                    center,
-                    radius,
-                    inside,
-                    outside,
-                    frame: frame.into(),
-                    unit,
-                }
-            }
-            crate::SceneMaterialParameterField::Sampled { asset_id, component_count, location, unit } => {
-                fullmag_ir::MaterialParameterFieldIR::Sampled {
-                    asset_id,
-                    component_count,
-                    location: location.into(),
-                    unit,
-                }
-            }
+            crate::SceneMaterialParameterField::Linear {
+                base,
+                gradient,
+                frame,
+                unit,
+            } => fullmag_ir::MaterialParameterFieldIR::Linear {
+                base,
+                gradient,
+                frame: frame.into(),
+                unit,
+            },
+            crate::SceneMaterialParameterField::Radial {
+                center,
+                radius,
+                inside,
+                outside,
+                frame,
+                unit,
+            } => fullmag_ir::MaterialParameterFieldIR::Radial {
+                center,
+                radius,
+                inside,
+                outside,
+                frame: frame.into(),
+                unit,
+            },
+            crate::SceneMaterialParameterField::Sampled {
+                asset_id,
+                component_count,
+                location,
+                unit,
+            } => fullmag_ir::MaterialParameterFieldIR::Sampled {
+                asset_id,
+                component_count,
+                location: location.into(),
+                unit,
+            },
         }
     }
 }
@@ -1436,8 +1509,12 @@ impl From<crate::SceneRegionConflictPolicy> for fullmag_ir::RegionConflictPolicy
     fn from(policy: crate::SceneRegionConflictPolicy) -> Self {
         match policy {
             crate::SceneRegionConflictPolicy::Error => fullmag_ir::RegionConflictPolicyIR::Error,
-            crate::SceneRegionConflictPolicy::HigherPriorityWins => fullmag_ir::RegionConflictPolicyIR::HigherPriorityWins,
-            crate::SceneRegionConflictPolicy::MinMeshSizeWins => fullmag_ir::RegionConflictPolicyIR::MinMeshSizeWins,
+            crate::SceneRegionConflictPolicy::HigherPriorityWins => {
+                fullmag_ir::RegionConflictPolicyIR::HigherPriorityWins
+            }
+            crate::SceneRegionConflictPolicy::MinMeshSizeWins => {
+                fullmag_ir::RegionConflictPolicyIR::MinMeshSizeWins
+            }
         }
     }
 }
@@ -1521,9 +1598,17 @@ impl From<crate::SceneRegionShape> for fullmag_ir::RegionShapeIR {
             crate::SceneRegionShape::Box { size, center } => {
                 fullmag_ir::RegionShapeIR::Box { size, center }
             }
-            crate::SceneRegionShape::Cylinder { radius, height, center, axis } => {
-                fullmag_ir::RegionShapeIR::Cylinder { radius, height, center, axis }
-            }
+            crate::SceneRegionShape::Cylinder {
+                radius,
+                height,
+                center,
+                axis,
+            } => fullmag_ir::RegionShapeIR::Cylinder {
+                radius,
+                height,
+                center,
+                axis,
+            },
             crate::SceneRegionShape::Sphere { radius, center } => {
                 fullmag_ir::RegionShapeIR::Sphere { radius, center }
             }
@@ -1547,6 +1632,7 @@ impl From<crate::SceneObjectRegion> for fullmag_ir::ObjectRegionIR {
             mesh_policy: r.mesh_policy.map(Into::into),
             material_overrides: r.material_overrides.into_iter().map(Into::into).collect(),
             texture_override: r.texture_override.map(Into::into),
+            material_transition: r.material_transition.map(Into::into),
             realization_policy: r.realization_policy.into(),
         }
     }
@@ -1571,7 +1657,9 @@ impl From<crate::SceneCouplingKind> for fullmag_ir::CouplingKindIR {
         match k {
             crate::SceneCouplingKind::Exchange => fullmag_ir::CouplingKindIR::Exchange,
             crate::SceneCouplingKind::Rkky => fullmag_ir::CouplingKindIR::Rkky,
-            crate::SceneCouplingKind::InterlayerExchange => fullmag_ir::CouplingKindIR::InterlayerExchange,
+            crate::SceneCouplingKind::InterlayerExchange => {
+                fullmag_ir::CouplingKindIR::InterlayerExchange
+            }
         }
     }
 }
@@ -1595,9 +1683,15 @@ impl From<crate::SceneCouplingEndpoint> for fullmag_ir::CouplingEndpointIR {
 impl From<crate::SceneExchangeCouplingMode> for fullmag_ir::ExchangeCouplingModeIR {
     fn from(mode: crate::SceneExchangeCouplingMode) -> Self {
         match mode {
-            crate::SceneExchangeCouplingMode::HarmonicMean => fullmag_ir::ExchangeCouplingModeIR::HarmonicMean,
-            crate::SceneExchangeCouplingMode::Explicit => fullmag_ir::ExchangeCouplingModeIR::Explicit,
-            crate::SceneExchangeCouplingMode::Disabled => fullmag_ir::ExchangeCouplingModeIR::Disabled,
+            crate::SceneExchangeCouplingMode::HarmonicMean => {
+                fullmag_ir::ExchangeCouplingModeIR::HarmonicMean
+            }
+            crate::SceneExchangeCouplingMode::Explicit => {
+                fullmag_ir::ExchangeCouplingModeIR::Explicit
+            }
+            crate::SceneExchangeCouplingMode::Disabled => {
+                fullmag_ir::ExchangeCouplingModeIR::Disabled
+            }
         }
     }
 }
@@ -1605,13 +1699,15 @@ impl From<crate::SceneExchangeCouplingMode> for fullmag_ir::ExchangeCouplingMode
 impl From<crate::SceneCouplingParameters> for fullmag_ir::CouplingParametersIR {
     fn from(params: crate::SceneCouplingParameters) -> Self {
         match params {
-            crate::SceneCouplingParameters::Exchange { mode, scale, inter_exchange } => {
-                fullmag_ir::CouplingParametersIR::Exchange {
-                    mode: mode.into(),
-                    scale,
-                    inter_exchange,
-                }
-            }
+            crate::SceneCouplingParameters::Exchange {
+                mode,
+                scale,
+                inter_exchange,
+            } => fullmag_ir::CouplingParametersIR::Exchange {
+                mode: mode.into(),
+                scale,
+                inter_exchange,
+            },
             crate::SceneCouplingParameters::Rkky { j1 } => {
                 fullmag_ir::CouplingParametersIR::Rkky { j1 }
             }
@@ -1625,8 +1721,12 @@ impl From<crate::SceneCouplingParameters> for fullmag_ir::CouplingParametersIR {
 impl From<crate::SceneCouplingCapabilityPolicy> for fullmag_ir::CouplingCapabilityPolicyIR {
     fn from(policy: crate::SceneCouplingCapabilityPolicy) -> Self {
         match policy {
-            crate::SceneCouplingCapabilityPolicy::RequireRuntime => fullmag_ir::CouplingCapabilityPolicyIR::RequireRuntime,
-            crate::SceneCouplingCapabilityPolicy::AuthoredOnly => fullmag_ir::CouplingCapabilityPolicyIR::AuthoredOnly,
+            crate::SceneCouplingCapabilityPolicy::RequireRuntime => {
+                fullmag_ir::CouplingCapabilityPolicyIR::RequireRuntime
+            }
+            crate::SceneCouplingCapabilityPolicy::AuthoredOnly => {
+                fullmag_ir::CouplingCapabilityPolicyIR::AuthoredOnly
+            }
         }
     }
 }
@@ -1920,6 +2020,7 @@ mod tests {
                     }),
                     material_overrides: Vec::new(),
                     texture_override: None,
+                    material_transition: None,
                     realization_policy: crate::SceneRegionRealizationPolicy::Inherit,
                 }],
                 allocated_region_ids: vec!["flower:r1".to_string()],
@@ -2252,6 +2353,34 @@ mod tests {
                 .and_then(|mesh| mesh.get("corner_maximum_element_size"))
                 .and_then(Value::as_f64),
             Some(5e-9)
+        );
+        assert_eq!(
+            projection
+                .rewrite_overrides
+                .get("geometries")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(Value::as_object)
+                .and_then(|geo| geo.get("object_regions"))
+                .and_then(Value::as_array)
+                .and_then(|regions| regions.first())
+                .and_then(Value::as_object)
+                .and_then(|region| region.get("region_id"))
+                .and_then(Value::as_str),
+            Some("flower:r1")
+        );
+        assert_eq!(
+            projection
+                .rewrite_overrides
+                .get("geometries")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(Value::as_object)
+                .and_then(|geo| geo.get("allocated_region_ids"))
+                .and_then(Value::as_array)
+                .and_then(|region_ids| region_ids.first())
+                .and_then(Value::as_str),
+            Some("flower:r1")
         );
     }
 

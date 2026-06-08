@@ -159,17 +159,17 @@ pub(crate) fn validate_region_owned_planning(
             if !region.enabled {
                 continue;
             }
-            let has_sharp_override =
-                region.material_overrides.iter().any(|over| {
-                    matches!(
-                        over.parameter,
-                        fullmag_ir::MaterialParameterNameIR::Ms
-                            | fullmag_ir::MaterialParameterNameIR::Aex
-                    ) && matches!(
-                        over.value,
-                        fullmag_ir::MaterialParameterFieldIR::Constant { .. }
-                    )
-                }) || problem.material_parameter_fields.iter().any(|assignment| {
+            let has_sharp_override = region.material_overrides.iter().any(|over| {
+                matches!(
+                    over.parameter,
+                    fullmag_ir::MaterialParameterNameIR::Ms
+                        | fullmag_ir::MaterialParameterNameIR::Aex
+                ) && matches!(
+                    over.value,
+                    fullmag_ir::MaterialParameterFieldIR::Constant { .. }
+                ) && crate::material_transition::region_transition_is_sharp(region, over.parameter)
+            }) || problem.material_parameter_fields.iter().any(
+                |assignment| {
                     assignment.region_id.as_deref() == Some(region.region_id.as_str())
                         && matches!(
                             assignment.parameter,
@@ -180,7 +180,12 @@ pub(crate) fn validate_region_owned_planning(
                             assignment.value,
                             fullmag_ir::MaterialParameterFieldIR::Constant { .. }
                         )
-                });
+                        && crate::material_transition::region_transition_is_sharp(
+                            region,
+                            assignment.parameter,
+                        )
+                },
+            );
 
             if has_sharp_override {
                 let conformal = region.realization_policy != RegionRealizationPolicyIR::Project

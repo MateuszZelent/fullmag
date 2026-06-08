@@ -23,6 +23,17 @@ const CANONICAL_QUANTITY_IDS: Record<string, string> = {
   h_mel: "H_mel",
   h_oe: "H_oe",
   h_therm: "H_therm",
+  material_a: "mat_aex",
+  material_aex: "mat_aex",
+  material_alpha: "mat_alpha",
+  material_dbulk: "mat_dbulk",
+  material_dind: "mat_dind",
+  material_ms: "mat_ms",
+  mat_aex: "mat_aex",
+  mat_alpha: "mat_alpha",
+  mat_dbulk: "mat_dbulk",
+  mat_dind: "mat_dind",
+  mat_ms: "mat_ms",
   torque: "torque",
 };
 
@@ -50,10 +61,50 @@ const MAGNETIC_ONLY_QUANTITY_IDS = new Set([
   "eden_ani",
   "eden_dmi",
   "eden_total",
+  "mat_ms",
+  "mat_aex",
+  "mat_alpha",
+  "mat_dind",
+  "mat_dbulk",
   "dm_dt",
   "torque_stt",
   "torque_sot",
 ]);
+
+const QUANTITY_UNITS: Record<string, string> = {
+  E_ani: "J",
+  E_demag: "J",
+  E_dmi: "J",
+  E_ex: "J",
+  E_ext: "J",
+  E_total: "J",
+  H_ani: "A/m",
+  H_ani_cubic: "A/m",
+  H_ant: "A/m",
+  H_demag: "A/m",
+  H_dmi: "A/m",
+  H_dmi_bulk: "A/m",
+  H_eff: "A/m",
+  H_ex: "A/m",
+  H_ext: "A/m",
+  H_mel: "A/m",
+  H_oe: "A/m",
+  H_therm: "A/m",
+  dm_dt: "1/s",
+  eden_ani: "J/m³",
+  eden_demag: "J/m³",
+  eden_dmi: "J/m³",
+  eden_ex: "J/m³",
+  eden_ext: "J/m³",
+  eden_total: "J/m³",
+  m: "1",
+  mat_aex: "J/m",
+  mat_alpha: "1",
+  mat_dbulk: "J/m³",
+  mat_dind: "J/m²",
+  mat_ms: "A/m",
+  torque: "T",
+};
 
 export function resolveCanonicalQuantityId(quantityId: string): string {
   const trimmed = quantityId.trim();
@@ -77,4 +128,8 @@ export function sameQuantityId(
 
 export function isMagneticOnlyQuantityId(quantityId: string): boolean {
   return MAGNETIC_ONLY_QUANTITY_IDS.has(resolveCanonicalQuantityId(quantityId));
+}
+
+export function quantityUnitForColorbar(quantityId: string): string {
+  return QUANTITY_UNITS[resolveCanonicalQuantityId(quantityId)] ?? "";
 }

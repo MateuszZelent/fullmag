@@ -48,13 +48,13 @@ Aktualne wdrozenie ma juz silne fundamenty:
 | Fizyka | w duzej mierze gotowe | Nota `0104` definiuje obiekty, regiony, material fields, RKKY, exchange i airbox. |
 | Python DSL | w duzej mierze gotowe | Sa `RegionRegistry`, `ObjectRegion`, `MaterialParameterField`, `CouplingRegistry`, `fm.shapes`, `fm.fields`, `fm.couplings`. |
 | `ProblemIR` | w duzej mierze gotowe | Sa `object_regions`, `material_parameter_fields`, `couplings` i walidacja z testami shape/mesh_policy/material_overrides/coupling. |
-| SceneDocument | w duzej mierze gotowe | Sa typed structs: `SceneObjectRegion`, `SceneRegionShape` (enum Box/Cylinder/Sphere/Csg), `SceneRegionMeshPolicy`, `SceneRegionMaterialOverride`, `SceneMaterialParameterValue`, `SceneTextureOverride`, `SceneCoupling`, `SceneCouplingEndpoint`, `SceneCouplingParameters`. Wszystkie maja `utoipa::ToSchema`. Pozostaly dlug kontraktu to glownie raw/merge patch payloady (`ObjectRegionPatchRequest.patch: Value`) i reczne typy frontend facade, nie podstawowa scene schema. |
+| SceneDocument | w duzej mierze gotowe | Sa typed structs: `SceneObjectRegion`, `SceneRegionShape` (enum Box/Cylinder/Sphere/Csg), `SceneRegionMeshPolicy`, `SceneRegionMaterialOverride`, `SceneMaterialParameterValue`, `SceneTextureOverride`, `SceneCoupling`, `SceneCouplingEndpoint`, `SceneCouplingParameters` i `SceneObjectRegionPatch`. Wszystkie maja `utoipa::ToSchema`. Pozostaly dlug kontraktu to glownie raw/merge patch payloady poza object-region create/patch i reczne parsery frontendowe w czesci modeli, nie podstawowa scene schema. |
 | Planner | w duzej mierze gotowe | Sa capability gates dla: material_parameter_fields, material_overrides, mesh_policy, texture_override, realization_policy (conformal/project), coupling executability. `validate_region_owned_planning()` blokuje run z czytelnymi komunikatami. FDM CUDA exchange pairs sa executable. |
-| FDM runtime | czesciowo gotowe | Planner materializuje authored `object_regions` do `region_mask` dla FDM single-grid (`materialize_object_region_mask`) i stosuje region texture overrides oraz region-region exchange overrides. Native FDM ABI ma `region_mask`, `exchange_pair_default`, `exchange_lut` i pola `ms_field`/`a_field`/`alpha_field`. Brak produkcyjnej realizacji region material fields/overrides i mesh policy; brakuje tez szerokich testow fizycznych na non-trivial authored region masks. |
+| FDM runtime | czesciowo gotowe | Planner materializuje authored `object_regions` do `region_mask` dla FDM single-grid (`materialize_object_region_mask`), stosuje region texture overrides, region-region exchange overrides oraz materializuje wspierane `Ms/Aex/alpha` material fields/overrides do cellwise `ms_field`/`a_field`/`alpha_field`. Native FDM ABI ma `region_mask`, `exchange_pair_default`, `exchange_lut` i pola material field. Nadal brakuje produkcyjnego mesh policy runtime, CPU/GPU physics parity dla non-trivial region masks i szerszych testow fizycznych. |
 | FEM runtime | w duzej mierze gotowe | Native FEM ABI/runner/backend maja per-node material fields (`ms_field`, `a_field`, `alpha_field` itd.) oraz runtime seam dla per-element `Ms/A` coefficientow uzywanych przez discontinuous conformal domains przy jednym wspolnym polu H1 `m`. Planner materializuje strict conformal constant `Ms/Aex` authored regions z realnymi markerami domeny do `ms_element_field` / `a_element_field`, runner przekazuje te arrays do native ABI, a planner automatycznie wlacza consistent-mass exchange projection dla elementowego `Ms`. Strict-conformal managed CPU smoke `tests/fem_region_owned_validation/spatial_fields_smoke.py` przeszedl do konca przez `fem_cpu_native`. |
-| OpenAPI v2 | w duzej mierze gotowe | Sa zasoby regionow/couplingow/material_fields/diagnostics i CRUD regionow. Typed schemas z `utoipa::ToSchema` generuja jawne OpenAPI schematy. Pozostaje doprecyzowac typed patch contract, bo wygenerowany `ObjectRegionPatchRequest.patch` jest raw object, a `apiTypes.ts` nadal uzywa `JsonObject` dla create/patch facade. |
-| Control Room | w duzej mierze gotowe | Explorer ma pelne 7 sub-node'ow per region (Geometry, Magnetic Parameters, Mesh, Texture, Visualization, Regions, Diagnostics). Inspector registry routuje kazdy `object.region.*` kind. Region overlay model jest kompletny (box/cylinder/sphere z transform/style/selection). `regionAuthoringInvalidation` poprawnie wyklucza mesh resources. Bounds clamping dziala w UI. Brak: dedykowane panele per sub-node (wszystko w monolitycznym `ObjectRegionsPanel.tsx`), frontend nie konsumuje generated types (parsuje `shape` jako `unknown` przez `asRecord()`). |
-| Testy | czesciowo gotowe | Sa testy IR/Python/API/frontend/planner, testy invalidation (`regionAuthoringInvalidation.test.ts` — explicit assert nie invaliduje mesh), testy explorer tree, testy region overlay model, testy CUDA exchange pairs. Brakuje pelnych testow fizycznych z non-trivial region mask, round-trip testow, browser proof. |
+| OpenAPI v2 | w duzej mierze gotowe | Sa zasoby regionow/couplingow/material_fields/diagnostics i CRUD regionow. Typed schemas z `utoipa::ToSchema` generuja jawne OpenAPI schematy. `ObjectRegionCreateRequest.region` i `ObjectRegionPatchRequest.patch` uzywaja wygenerowanych `SceneObjectRegion` / `SceneObjectRegionPatch`; control-room transaction facade konsumuje te generated types. Pozostaja raw/merge patch granice poza object-region create/patch oraz reczne parsery frontendowe w czesci modeli. |
+| Control Room | w duzej mierze gotowe | Explorer ma pelne 7 sub-node'ow per region (Geometry, Magnetic Parameters, Mesh, Texture, Visualization, Regions, Diagnostics). Inspector registry routuje kazdy `object.region.*` kind. Region overlay model jest kompletny (box/cylinder/sphere z transform/style/selection). Dedykowane pliki paneli istnieja dla Overview, Geometry, Magnetic Parameters, Mesh, Texture, Visualization, Regions i Diagnostics. `regionAuthoringInvalidation` poprawnie wyklucza mesh resources. Bounds clamping dziala w UI. Brak: frontend nie konsumuje generated types (parsuje `shape` jako `unknown` przez `asRecord()`). |
+| Testy | czesciowo gotowe | Sa testy IR/Python/API/frontend/planner, testy invalidation (`regionAuthoringInvalidation.test.ts` — explicit assert nie invaliduje mesh), testy explorer tree, testy region overlay model, testy CUDA exchange pairs oraz fixture-backed Playwright proof dla UI region create -> script sync. Brakuje pelnych testow fizycznych z non-trivial region mask i release-gate runtime proofow. |
 
 Najpilniejsze regresje do zamkniecia:
 
@@ -129,7 +129,7 @@ meshu.
 | Zachowac ostatni dobry mesh | Invalidation wyklucza mesh resources. Trzeba utrzymac zasade: ostatni successful topology zostaje renderowany az do jawnego `Build Mesh`. |
 | Rozroznic `stale` od `unknown` | `resolveVisualizationRenderResolution()` degraduje do edge-only safety view tylko dla `topologyFreshness=unknown`; `stale` jest renderowalne. Testy musza pilnowac, ze region authoring daje co najwyzej renderowalne stale, nigdy unknown. |
 | Naprawic overlay po Create Region | Overlay model dziala (`regionOverlayModel.ts`). Do potwierdzenia: czy material/mesh shading glownego obiektu nie zmienia sie. |
-| Clamp region shape do owner bounds | UI clamp gotowy w `ObjectRegionsPanelModel.ts`; API clamp gotowy w `authoring.rs` (`clamp_object_region_shape_to_owner*`) dla create/patch/duplicate. Pozostaje rozszerzyc testy na world-frame/CSG/imported payload diagnostics. |
+| Clamp region shape do owner bounds | Gotowe dla obecnego kontraktu v1. UI clamp jest w `ObjectRegionsPanelModel.ts`; API clamp jest w `authoring.rs` (`clamp_object_region_shape_to_owner*`) dla object-frame create/patch/duplicate. Full-scene/imported object-frame payload poza ownerem daje `REGION_OUTSIDE_OWNER_BOUNDS`, a `model/region-diagnostics` raportuje osobne warningi dla world-frame i CSG materialization blockers (`authoring_region_diagnostics_report_world_frame_and_csg_materialization_blockers`). Region Identity inspector pokazuje te materialization blockers inline przez `regions.realized_materialization`. |
 | Zablokowac region poza parentem w importowanych payloadach | SceneDocument/API validation musi odrzucic albo clampowac payloady spoza bounds, z deterministycznym raportem. CRUD clamp nie wystarcza dla recznie importowanych scene payloadow. |
 
 ### Pliki i obszary
@@ -183,17 +183,17 @@ OpenAPI i TypeScript powinny miec jeden typed contract, zamiast `Value` /
 | `SceneTextureOverride` | `scene.rs:917` | Gotowe. Typed struct z `SceneInitialMagnetization` (Uniform/RandomSeeded/SampledField/PresetTexture). |
 | `SceneCoupling` | `scene.rs:1003` | Gotowe. Typed struct z `SceneCouplingKind`, `SceneCouplingEndpoint`, `SceneCouplingParameters`, `SceneCouplingCapabilityPolicy`. |
 | `utoipa::ToSchema` | Wszystkie structs | Gotowe. OpenAPI generation produkuje typed schemas. |
-| Typed generated region schemas | `openapi-v2-types.ts` | Gotowe dla `SceneObjectRegion`, `SceneRegionShape`, `SceneMaterialParameterValue`, `SceneCoupling`. Problem zostaje w raw patch schema i recznej facade `apiTypes.ts`. |
+| Typed generated region schemas | `openapi-v2-types.ts` | Gotowe dla `SceneObjectRegion`, `SceneObjectRegionPatch`, `SceneRegionShape`, `SceneMaterialParameterValue`, `SceneCoupling` i `SceneCouplingPatch`. Control-room object-region create/patch oraz coupling patch facade uzywaja generated types. Pozostaja raw/merge patch granice poza typed authoring transactions oraz reczne parsery frontendowe w czesci modeli. |
 
 ### Zakres (pozostale prace)
 
 | Zadanie | Szczegoly |
 |---|---|
-| Zastapic raw patch schema typowanym kontraktem | `ObjectRegionPatchRequest.patch` jest `serde_json::Value`, co w OpenAPI generuje slaby object shape. Docelowo dodac typed patch DTO albo jawny JSON Merge Patch schema z walidacja pol. |
+| Zastapic raw patch schema typowanym kontraktem | Gotowe dla object-region create/patch i coupling patch: `ObjectRegionPatchRequest.patch` jest `SceneObjectRegionPatch`, `AuthoringTransactionRequest::PatchCoupling.patch` jest `SceneCouplingPatch`, a OpenAPI/generator przenosza oba typed DTO do control-room facade. `SceneCouplingPatch` nie reklamuje juz `coupling_id` jako patchowalnego pola; identity pozostaje w transaction envelope i runtime rejection path. Pozostaje doprecyzowac pozostale raw/merge patch granice, np. scene merge patch. |
 | Zachowac migration bridge | Stare scene.v1 payloady przechodza przez adapter, ale zapis scene.v2 uzywa typed fields. |
-| Wymusic konsumpcje generated types w frontend facade i modelach | `apiTypes.ts` nadal definiuje `ObjectRegionCreateRequest.region: JsonObject` i `ObjectRegionPatchRequest.patch: JsonObject`; modele (`ObjectRegionsPanelModel.ts`, `RegionsListPanelModel.ts`, `regionOverlayModel.ts`) czesto parsuja `shape` jako `unknown` przez `asRecord()`. Trzeba przejsc na generated `components["schemas"]["SceneObjectRegion"]` i typed draft mappers. |
-| Usunac duplicate parsers w UI | `ownerBoundsForObject()` jest zduplikowana w `ObjectRegionsPanelModel.ts` i `RegionsListPanelModel.ts`. `sceneModelTreeAdapter` ma niezalezne parsery raw JSON. |
-| Dodac round-trip test | Brak testu Python -> SceneDocument -> UI resource -> export Python ktory weryfikuje zachowanie region IDs i overrides. |
+| Wymusic konsumpcje generated types w frontend facade i modelach | Gotowe dla `apiTypes.ts` i `ControlRoomApi` object-region create/patch transaction facade: uzywaja generated `components["schemas"]["SceneObjectRegion"]` i `SceneObjectRegionPatch`. `sceneModelTreeAdapter` uzywa generated `SceneResource` / `SceneMaterialParameterAssignment` dla scene-authored material fields i respektuje typed `owner_object`. Pozostaje szerszy audit modeli, ktore nadal parsuja czesc regionowych payloadow jako `unknown` przez `asRecord()`. |
+| Usunac duplicate parsers w UI | `ownerBoundsForObject()` jest zduplikowana w `ObjectRegionsPanelModel.ts` i `RegionsListPanelModel.ts`. `sceneModelTreeAdapter` ma jeszcze niezalezne parsery raw JSON dla czesci scene fallback, ale material-field owner path zostal zawiazany do generated scene assignment type. |
+| Dodac round-trip test | Gotowe dla Python -> SceneDocument -> export Python, v2 API script sync oraz fixture-backed browser write path. `test_scene_document_region_edits_export_as_canonical_python`, `authoring_script_sync_uses_session_scene_document_region_edits` i `pnpm --dir apps/control-room smoke:study-authoring-ui` weryfikuja zachowanie UI-edited `region_id`, mesh policy, material override, material field region reference oraz UI region create -> `POST model/syncs`. |
 
 ### Akceptacja
 
@@ -260,15 +260,15 @@ jakosci inspektorow, nie struktury drzewa.
 
 | Node | Inspector docelowy | Stan | Pozostale prace |
 |---|---|---|---|
-| `object.regions` | `RegionsListPanel` | Czesciowo gotowe | Lista, create, duplicate, reorder, delete dzialaja. Brak: summary conflicts. |
-| `object.region` | `ObjectRegionOverviewPanel` | Brak dedykowanego panelu | Obecnie obslugiwany w monolitycznym `ObjectRegionsPanel.tsx` (26KB). Nalezy wydzielic osobny komponent. |
-| `object.region.geometry` | `ObjectRegionGeometryPanel` | Brak dedykowanego panelu | Logika modelu jest w `ObjectRegionsPanelModel.ts` (shape draft). Brak osobnego pliku panelu. |
-| `object.region.magnetic-parameters` | `ObjectRegionMagneticParametersPanel` | Brak dedykowanego panelu | Model ma `RegionMaterialOverrideDraft`. Brak: inherited values preview obok local override. |
-| `object.region.mesh` | `ObjectRegionMeshPanel` | Brak dedykowanego panelu | Model ma `RegionMeshPolicyDraft` z walidacja. Brak osobnego pliku panelu. |
-| `object.region.texture` | `ObjectRegionTexturePanel` | Czesciowo gotowe | Routuje do `ObjectMagneticTexturePanel` z widokiem `"region"`. |
-| `object.region.visualization` | `ObjectRegionVisualizationPanel` | Czesciowo gotowe | Routuje do `ObjectVisualizationPanel`. Brak: overlay visibility/color controls. |
-| `object.region.regions` | `ObjectRegionNestedRegionsPanel` | Brak dedykowanego panelu | Drzewo pokazuje node z badge `"inherits none"`. Brak explicit unsupported message. |
-| `object.region.diagnostics` | `ObjectRegionDiagnosticsPanel` | Brak dedykowanego panelu | Model ma `ObjectRegionDiagnosticItem` z `capabilityGate`, `realizationStatus`. Brak osobnego pliku panelu. |
+| `object.regions` | `RegionsListPanel` | Gotowe | Lista, create, duplicate, reorder, delete dzialaja. Summary conflicts sa liczone z `RegionDiagnosticsResource` w `RegionsListPanelModel.ts` i pokazywane w `RegionsListPanel.tsx`. |
+| `object.region` | `ObjectRegionOverviewPanel` | Gotowe | Dedykowany plik `panels/region/ObjectRegionOverviewPanel.tsx`, routowany przez `inspectorRegistry.test.tsx`. |
+| `object.region.geometry` | `ObjectRegionGeometryPanel` | Gotowe | Dedykowany plik `panels/region/ObjectRegionGeometryPanel.tsx`, shape draft dalej wspoldzieli model z `ObjectRegionsPanelModel.ts`. |
+| `object.region.magnetic-parameters` | `ObjectRegionMagneticParametersPanel` | Gotowe | Dedykowany plik `panels/region/ObjectRegionMagneticParametersPanel.tsx`; panel pokazuje inherited parent value przy braku override i obok local override value w override row. |
+| `object.region.mesh` | `ObjectRegionMeshPanel` | Gotowe | Dedykowany plik `panels/region/ObjectRegionMeshPanel.tsx`, model ma `RegionMeshPolicyDraft` z walidacja. |
+| `object.region.texture` | `ObjectRegionTexturePanel` | Gotowe | Dedykowany panel region texture uzywa wspolnych magnetic-texture sekcji, buduje typed `SceneObjectRegionPatch.texture_override` przez `buildRegionTextureOverridePatch()` i zapisuje przez object-region transaction path. |
+| `object.region.visualization` | `ObjectRegionVisualizationPanel` | Gotowe | Routuje do `ObjectVisualizationPanel` z regionowym `visualizationTargetId`; wspolny panel ma controls dla Visible, Surface/Wireframe, solid color, wireframe color i opacity. |
+| `object.region.regions` | `ObjectRegionNestedRegionsPanel` | Gotowe | Dedykowany plik `panels/region/ObjectRegionNestedRegionsPanel.tsx` pokazuje explicit unsupported/current-state message. |
+| `object.region.diagnostics` | `ObjectRegionDiagnosticsPanel` | Gotowe | Dedykowany plik `panels/region/ObjectRegionDiagnosticsPanel.tsx`, model ma `ObjectRegionDiagnosticItem` z `capabilityGate`, `realizationStatus`. |
 
 ### UX wymagania
 
@@ -379,7 +379,7 @@ diagnostics.
 | Conflict resolution | Per-parameter priority; equal priority overlap jest bledem. Nie zaimplementowane w runtime. |
 | Field assets | Runtime zapisuje realized `Ms`, `Aex`, `alpha`, anisotropy/DMI fields z provenance. Nie zaimplementowane. |
 | Data-plane resource | Dodac zasoby material fields/membership tam, gdzie payload jest duzy. Nie zaimplementowane. |
-| UI realized preview | Inspector pokazuje authored value, ale nie realized status, sample count, min/max, warnings. |
+| UI realized preview | Gotowe. Material-fields inspector renderuje realization status, sample count, min/max/mean i warnings z `MaterialParameterFieldResource` przez `materialFieldRealizationRows()`. |
 | Backend payload | FDM i FEM dostaja jawne arrays albo coefficient descriptors, bez zgadywania z UI. Nie zaimplementowane. |
 
 ### Priorytet parametrow
@@ -432,10 +432,10 @@ oracle i CUDA parity.
 
 | Zadanie | Szczegoly |
 |---|---|
-| Domknac material fields z authored region overrides | **GLOWNY BLOKER.** FDM plan nadal ustawia `ms_field: None`, `a_field: None`, `alpha_field: None` dla region-owned overrides. Trzeba zmaterializowac `MaterialParameterAssignmentIR` / `material_overrides` do cellwise fields. |
+| Domknac material fields z authored region overrides | Czesciowo gotowe. FDM plan uzywa `resolve_spatial_parameter()` i materializuje wspierane `MaterialParameterAssignmentIR` / `material_overrides` dla `Ms`, `Aex`, `alpha` do cellwise fields, pomijajac uniform fields. Pozostaje kwalifikacja pozostalych parametrow, sampled field payloadow i backend parity. |
 | CPU oracle — material fields i region exchange | CPU FDM reference musi byc oracle dla `Ms_i`, `A_i`, `alpha_i`, region mask oraz exchange pair semantics. Nie wystarczy CUDA-only transport. |
 | CUDA payload — material fields | Native CUDA ABI ma pola `ms_field`/`a_field`/`alpha_field`, ale backend obecnie odrzuca/nie kwalifikuje non-zero field payloady. Trzeba zaimplementowac albo capability-gate'owac kazdy parametr osobno. |
-| Test authored shape -> mask -> exchange | Testy exchange pairs istnieja, ale trzeba dodac przypadek z Python/ProblemIR authored regions, ktory przechodzi przez `materialize_object_region_mask()` do runtime planu. |
+| Test authored shape -> mask -> exchange | Czesciowo gotowe. Testy planera obejmuja authored region mask, texture override, material override do `ms_field` i region-region exchange override. Pozostaje Python-to-plan end-to-end i backend parity. |
 | Directional derivative | Test spojnosc `E_ex` i `H_ex` dla niejednorodnego `Aex`. Brak testu. |
 | Multilayer gate | Multilayer + active region-owned material/coupling pozostaje blokowane albo osobno kwalifikowane do osobnego rollout. |
 | Testy fizyczne z non-trivial region mask | `physics_validation.rs` uzywa `region_mask: vec![0; n]` — brak testow z dwoma regionami. |
@@ -551,12 +551,12 @@ prowadic do cichego uruchomienia z pomieta fizyka.
 
 | Zadanie | Szczegoly |
 |---|---|
-| Surface selector resolver | `surface("top")` v1 = local bounding-box face + tolerance. Nie zaimplementowane. |
+| Surface selector resolver | Czesciowo gotowe. `fullmag-plan::resolve_fem_surface_selector()` realizuje v1 `top/bottom/left/right/front/back` jako lokalna bbox face z tolerancja, ogranicza kandydatow do magnetycznego `FemMeshPartIR` obiektu i raportuje face indices, triangles, nodes oraz area. `ProblemIR` i `SceneDocument` odrzucaja inne/named-face selectors. `GET model/couplings` niesie teraz preview rozdzielczosci z aktualnego FEM execution planu albo opublikowanego FEM mesh payloadu. Pozostaje podlaczenie resolved faces do executable coupling planu/provenance i operatora backendu. |
 | FDM contact discovery | Coupling surface/object/region endpointy materializuja sie do par sasiednich cell faces. Nie zaimplementowane. |
 | FEM boundary markers | Coupling endpointy wymagaja shared boundary markers albo blokady. Nie zaimplementowane. |
-| RKKY runtime gate | Unsupported RKKY blokuje run w plannerze (capability gate istnieje). Do weryfikacji: czy RKKY `CouplingKindIR` jest poprawnie odrzucane. |
-| Coupling inspector | UI ma `CouplingInspectorPanel.tsx`, ale brak: endpoint resolution preview, runtime status, blocked reason detail. |
-| Delete behavior | API guard istnieje: `ensure_region_has_no_active_couplings()` blokuje region referencjonowany przez aktywny coupling. Brakuje pelnego UX: pokazania zaleznosci, akcji disable/delete coupling oraz testow dla surface/object endpoint variants. |
+| RKKY runtime gate | Zweryfikowane. `rkky_unsupported_blocks_runtime_plan` potwierdza, ze RKKY `CouplingKindIR` blokuje runtime planning z komunikatem `requires runtime support` i `must not silently drop authored coupling intent`. |
+| Coupling inspector | Czesciowo gotowe. Inspector pokazuje source/target resolution status, liczbe faces, area, tolerance, resolution detail, jawny runtime blocker oraz akcje Enable/Disable i Delete Coupling oparte o istniejace model transactions. Pozostaje runtime operator status po zaimplementowaniu backendu. |
+| Delete behavior | Czesciowo gotowe. API guard `ensure_region_has_no_active_couplings()` blokuje disable regionu referencjonowanego przez aktywny coupling; delete region usuwa region-owned couplings; delete object usuwa authored couplings z object/surface/region endpointem wskazujacym usuwany obiekt. Coupling inspector pozwala jawnie disable/delete coupling, a region Actions pokazuje aktywne coupling dependencies i blokuje Delete Region z komunikatem `Delete Coupling first`. Pozostaje backend/operator provenance po wdrozeniu executable couplingow. |
 
 ### Akceptacja
 
@@ -566,6 +566,40 @@ prowadic do cichego uruchomienia z pomieta fizyka.
 | `rkky` unsupported | Planner blokuje run. |
 | Delete region with active coupling | UI/API nie zostawia dangling active coupling. |
 | Object-object no coupling | Planner nie syntetyzuje ukrytego exchange. |
+
+### Postep 2026-06-08
+
+- Dodano kanoniczna walidacje selectorow v1 w `ProblemIR` i `SceneDocument`:
+  tylko `top/bottom/left/right/front/back` jest akceptowane; named faces pozostaja
+  jawnie poza v1.
+- Dodano FEM planner resolver bbox-face z tolerancja, area i resolved topology
+  metadata. Resolver obsluguje boundary face ranges/indices oraz
+  `FemMeshPartIR.surface_faces`.
+- `GET /v2/sessions/current/model/couplings` publikuje typed
+  `source_resolution`/`target_resolution` oraz `blocker_reason`. Preview korzysta
+  z aktualnego FEM execution planu lub opublikowanego FEM mesh payloadu i nie
+  promuje capability operatora.
+- Coupling Inspector pokazuje status resolucji endpointow, face count, area,
+  tolerance, detail oraz jawny powod blokady runtime.
+- Testy:
+  - `coupling_surface_selector_rejects_named_faces_in_v1`,
+  - `scene_document_validation_rejects_unsupported_surface_selector`,
+  - `fem_top_surface_selector_resolves_bbox_faces`,
+  - `fem_surface_selector_rejects_unknown_bbox_face`,
+  - `authoring_coupling_resource_resolves_bbox_surface_from_current_fem_mesh`,
+  - `authoring_coupling_resource_does_not_treat_unknown_mesh_part_as_magnetic`.
+- Ten krok nie zmienia capability statusu couplingow. FEM RKKY/interlayer i
+  surface exchange pozostaja nieexecutowalne, dopoki resolved faces nie sa
+  niesione przez runtime plan i backend nie ma odpowiadajacego operatora.
+
+### Postep 2026-06-08: delete object coupling cleanup
+
+- `delete_object` w `model/transactions` usuwa authored couplingi, ktorych
+  endpoint `object`, `surface` albo `region` wskazuje usuwany obiekt.
+- Test `authoring_delete_object_removes_object_and_surface_couplings` pokrywa
+  object-object exchange i surface-surface RKKY, zeby committed scene nie
+  zostawial dangling coupling endpointow.
+- To nie implementuje runtime contact discovery ani operatorow couplingow.
 
 ## 13. Etap 8: realized regions, membership i viewport produkcyjny
 
@@ -592,9 +626,9 @@ uzytkownik zadeklarowal, i co mesher/runtime faktycznie zrealizowal.
 | Mesh-backed region visualization | Czesciowo gotowe. `MeshSharedDomainManifestResource.regions[]` raportuje authored object regions, gdy aktualny FEM mesh ma part/segment z `geometry_id=region_id`; viewport ukrywa wtedy authored primitive overlay i renderuje odpowiadajace mesh parts przez target `region:*`, wiec wireframe po rebuildzie pochodzi z prawdziwej topologii. |
 | Realized membership resource | `model/realized-regions` istnieje jako lista zrealizowanych region resources, ale nie niesie pelnego node/element membership payloadu do kolorowania czesciowego membership na wspolnym mesh parcie. Potrzebny osobny data-plane membership resource albo rozszerzenie mesh-region resource dla projection/non-segmented cases. |
 | Realized overlay | Mesh-backed conformal region parts renderuja sie przez prawdziwy mesh. Membership-color overlay dla regionow, ktore nie sa osobnym mesh partem, pozostaje niezaimplementowany. |
-| Mode switch | UI pozwala przelaczyc authored shape / realized membership / both. Nie zaimplementowane. |
+| Mode switch | Gotowe dla dostepnych reprezentacji. Lokalny segmented control viewportu przelacza `authored` / `realized` / `both`; realized jest niedostepny bez current mesh-backed regionu. Tryb nie mutuje fizyki ani `visualization/state`. |
 | Selection sync | Explorer <-> Inspector dziala. Viewport -> Explorer selection do weryfikacji. |
-| Safety view discipline | Safety wireframe tylko przy rzeczywiscie brakujacej/niezgodnej topologii, nie przy zwyklym authoringu. `regionAuthoringInvalidation` wyklucza mesh resources, ale end-to-end viewport behavior do weryfikacji. |
+| Safety view discipline | Safety wireframe tylko przy rzeczywiscie brakujacej/niezgodnej topologii, nie przy zwyklym authoringu. `regionAuthoringInvalidation` wyklucza mesh resources, unit tests pokrywaja region authoring bez `mesh:dirty`; end-to-end viewport behavior pozostaje release gate. |
 
 ### Akceptacja
 
@@ -604,6 +638,26 @@ uzytkownik zadeklarowal, i co mesher/runtime faktycznie zrealizowal.
 | Build mesh after region | Realized overlay pokazuje membership. |
 | Select region in viewport | Explorer i Inspector wybieraja ten region. |
 | Hide overlay | Glowny mesh zostaje bez zmian. |
+
+### Postep 2026-06-08: tryb overlay
+
+- Dodano typed `RegionOverlayMode = authored | realized | both`.
+- Authored layer zawsze zachowuje kanoniczny primitive intent; realized layer
+  dostaje tylko regiony potwierdzone przez current shared-domain manifest jako
+  mesh-backed.
+- Segmented control w HUD jest interaktywny mimo `pointer-events: none` na
+  pasywnym HUD i domyslnie wybiera `both`.
+- Bez aktualnego mesh-backed regionu opcja `realized` jest jawnie disabled.
+- Playwright screenshot fixture zawiera authored region i sprawdza widocznosc
+  kontrolki, stan domyslny, przejscie do `authored` oraz nieblank canvas.
+- Fallback `scene.objects[].regions[].shape` w viewport adapterze przechodzi
+  przez typed normalizer zgodny z generated OpenAPI `SceneRegionShape`; invalid
+  payload i `csg` nie tworza authored overlay inputu.
+- Unit coverage potwierdza, ze region authoring bez `mesh:dirty` nie przelacza
+  topologii w `unknown`, a `stale` topologia pozostaje renderowalna normalna
+  sciezka zamiast edge-only safety view.
+- Nadal brakuje osobnego membership data-plane dla projection/non-segmented
+  regions; ten krok nie deklaruje takiego przypadku jako realized.
 
 ### Komendy weryfikacyjne
 
@@ -635,11 +689,11 @@ zrealizowana przez wybrany backend, a ktora jest zablokowana albo deferred.
 
 | Zadanie | Szczegoly |
 |---|---|
-| Capability vocabulary | Jedne nazwy capability w Python, planner, API i UI. Planner uzywa dlugich stringow, UI nie mapuje ich na user-friendly nazwy. |
-| Diagnostics inline w inspectorze | Region diagnostics resource istnieje, ale inspector nie renderuje blokerow inline przy odpowiednich polach (np. mesh policy, material field). |
-| Build dialog | Mesh build dialog pokazuje region-related diff i rebuild reasons. Nie zaimplementowane. |
-| Run blocker | Simulation run pokazuje region-owned blockers przed startem solvera. Planner blokuje, ale UI nie wyswietla blokerow w sposob user-friendly. |
-| Provenance | Artifacts zapisuja authored intent i resolved reality. Nie zaimplementowane. |
+| Capability vocabulary | Czesciowo gotowe. Control-room ma wspolny katalog `regionCapabilityCatalog.ts` dla stabilnych gates `regions.mesh_policy`, `regions.material_override`, `regions.conformal_or_projected_boundary` i `regions.realized_materialization`; inline inspector i runtime command blockers uzywaja tych samych user-facing nazw. Pozostaje wspolny katalog dla Python/planner/API/UI zamiast frontend-only katalogu prezentacyjnego. |
+| Diagnostics inline w inspectorze | Gotowe dla istniejacych region capability diagnostics. Mesh Policy, Material Overrides i Region Identity renderuja warning/error przy odpowiednich polach; pelny panel Diagnostics zachowuje wszystkie szczegoly. |
+| Build dialog | Gotowe dla region mesh-policy diagnostics. Mesh build dialog pokazuje regionowy powod przebudowy `region mesh policy changed` z istniejacego `model/region-diagnostics` resource. |
+| Run blocker | Gotowe dla region-owned warning/error diagnostics. `study.run` i pokrewne runtime commands zwracaja user-facing disabled reason z konkretnego region diagnostic message przed startem solvera. |
+| Provenance | Czesciowo gotowe. `ArtifactEntry.region_owned_provenance` niesie control-plane summary dla field-state/API-created artifact entries: `scene_revision`, liczbe authored regions, material parameter fields, couplings oraz blocked/deferred diagnostic counts. Pozostaje zapis pelnego artifact payload/provenance dla realized backend reality i run-stage outputs. |
 
 ### Akceptacja
 
@@ -648,7 +702,47 @@ zrealizowana przez wybrany backend, a ktora jest zablokowana albo deferred.
 | Unsupported FEM projection strict | UI pokazuje bloker przed run. |
 | FDM multilayer + active region | Planner blokuje z jasnym komunikatem. |
 | Region overlap equal priority | Diagnostics wskazuje konflikt parametru. |
-| Mesh rebuild dialog | Pokazuje `region mesh policy changed`, nie ogolne `topology stale`. |
+
+### Postep 2026-06-08: inline diagnostics
+
+- Dodano frontendowy katalog `regionCapabilityCatalog.ts`, zeby inspector i
+  runtime command gating uzywaly tych samych nazw capability.
+- Dodano wspolny mapper `resolveRegionInlineDiagnostics()`, ktory filtruje po
+  stabilnym `capability_gate`, nadaje user-facing label i zachowuje severity
+  `warning`/`error`.
+- `regions.mesh_policy` jest widoczne inline w panelu Mesh Policy.
+- `regions.material_override` jest widoczne inline w panelu Material Overrides.
+- `regions.conformal_or_projected_boundary` jest widoczne inline przy wyborze
+  Realization w Region Identity.
+
+### Postep 2026-06-08: artifact provenance metadata
+
+- `GET /v2/sessions/current/data/artifacts` expose opcjonalne
+  `region_owned_provenance` na wpisie artifactu.
+- Field-state export/import artifact entries zapisuje summary z aktywnego
+  `SceneDocument`: scene revision, authored region count, material parameter
+  field count, coupling count oraz liczbe blocked/deferred region diagnostics.
+- To jest metadata indeksu artifactow. Nie zastepuje pelnego artifact payload
+  ani provenance realized backend reality dla run-stage outputs.
+- Komponenty nadal korzystaja z centralnego `model/region-diagnostics` resource
+  przez istniejacy hook; nie dodano transportu ani drugiego store.
+
+### Postep 2026-06-08: mesh rebuild dialog
+
+- Mesh build confirmation dialog laduje istniejacy
+  `model/region-diagnostics` resource tylko kiedy dialog jest otwarty.
+- `regions.mesh_policy` warning/error diagnostics sa streszczane w New Mesh
+  Request jako `Rebuild reasons: region mesh policy changed`.
+- Nie dodano endpointu, drugiego store ani lokalnego komponentowego transportu.
+
+### Postep 2026-06-08: run blocker UX
+
+- `study.run`, `study.compute-fields` i `study.compute-energies` sprawdzaja
+  istniejacy `model/region-diagnostics` snapshot w command registry.
+- Region-owned `warning`/`error` diagnostics z `regions.*` capability gate
+  wylaczaja runtime command przed startem solvera.
+- Disabled reason pokazuje shared capability label i konkretny komunikat
+  diagnostyczny zamiast ogolnego mesh/readiness statusu.
 
 ## 15. Etap 10: przyklady, migracja i dokumentacja uzytkownika
 
@@ -660,21 +754,105 @@ Regiony maja byc zrozumiale dla uzytkownika i reprodukowalne w skryptach.
 
 | Dokument / przyklad | Zawartosc |
 |---|---|
-| User guide: Regions | Kiedy uzyc regionu, kiedy osobnego obiektu, kiedy coupling. |
-| User guide: Mesh refinement | Lokalny region mesh policy, skyrmion core, edge refinement, airbox transition. |
-| User guide: Material fields | `Ms(x)`, `Aex(x)`, gradienty, sharp jumps, priority. |
-| User guide: Couplings | object-object exchange, disabled/free surface, RKKY limitations. |
-| Migration note | `scene.v1` -> `scene.v2`, legacy `RegionIR`, old `region_overrides`. |
-| Example: skyrmion core | Region cylinder z lokalnym mesh `1 nm` i parent bulk `10 nm`. |
-| Example: two objects | Dwa styczne materialy, explicit exchange/RKKY. |
-| Example: gradient `Ms` | Jeden obiekt, region/field gradient, brak fizycznego rozdzielenia. |
+| User guide: Regions | Gotowe. `docs/guides/region-owned-authoring.md` opisuje kiedy uzyc regionu, kiedy osobnego obiektu, kiedy coupling. |
+| User guide: Mesh refinement | Gotowe. `docs/guides/region-owned-authoring.md` opisuje lokalny region mesh policy, skyrmion core i separacje airbox. |
+| User guide: Material fields | Gotowe. `docs/guides/region-owned-authoring.md` opisuje `Ms(x)`, `Aex(x)`, gradienty, sharp jumps, priority/projection constraints. |
+| User guide: Couplings | Gotowe. `docs/guides/region-owned-authoring.md` opisuje object-object exchange, disabled/free surface i RKKY limitations. |
+| Migration note | Gotowe. `docs/guides/region-owned-migration.md` opisuje `scene.v1` -> `scene.v2`, legacy `RegionIR` i old `region_overrides`. |
+| Example: skyrmion core | Gotowe. `examples/skyrmion_core_mesh_refinement.py` pokazuje region cylinder z lokalnym mesh `1 nm` i parent bulk `10 nm`. |
+| Example: two objects | Gotowe. `examples/two_object_couplings.py` pokazuje dwa fizyczne obiekty, explicit object-object exchange oraz surface-surface RKKY authored intent. |
+| Example: gradient `Ms` | Gotowe. `examples/region_owned_gradient_ms.py` pokazuje jeden fizyczny obiekt, authored region jako support pola `Ms(x)`, brak drugiego obiektu i brak couplingow. |
+
+### Postep 2026-06-08: canonical script export
+
+- Region-owned script export zachowuje `object.add_region`, region material
+  fields, texture overrides i `study.couplings.*` w round-trip tescie Python ->
+  SceneDocument -> Python.
+- Coupling endpointy odnoszace sie do authored regions sa eksportowane przez
+  lokalne zmienne regionow, np. `study.couplings.exchange(film_core_region,
+  film_shell_region, ...)`, zamiast przez runtime `region_id` helpers.
+- Fallback `fm.couplings.region(object, region_id)` pozostaje tylko dla
+  endpointow, ktorych region nie zostal wyrenderowany jako authored local
+  variable w tym skrypcie.
+
+### Postep 2026-06-08: gradient `Ms` example
+
+- Dodano `examples/region_owned_gradient_ms.py`.
+- Przyklad laduje sie przez publiczne API jako jeden `permalloy_track` object,
+  jeden authored region `gradient_window` i jeden `MaterialParameterFieldIR`
+  dla `Ms` wsparty na tym regionie.
+- Test `test_region_owned_gradient_ms_example_keeps_one_physical_object`
+  pilnuje, ze przyklad nie tworzy drugiego obiektu ani ukrytych couplingow.
+
+### Postep 2026-06-08: two-object coupling example
+
+- Dodano `examples/two_object_couplings.py`.
+- Przyklad deklaruje dwa osobne obiekty `free_layer` i `reference_layer`.
+- `study.couplings.exchange(...)` zapisuje jawny object-object exchange z
+  `mode="explicit"` i `inter_exchange=6.5e-12`.
+- `study.couplings.rkky(...)` zapisuje jawny surface-surface RKKY intent dla
+  `free_layer.surface("top")` i `reference_layer.surface("bottom")`.
+- Test `test_two_object_couplings_example_uses_explicit_exchange_and_rkky`
+  pilnuje dokladnego `ProblemIR` endpoint/parameter contractu.
+
+### Postep 2026-06-08: skyrmion-core mesh refinement example
+
+- Dodano `examples/skyrmion_core_mesh_refinement.py`.
+- Przyklad deklaruje jeden `permalloy_track` object z bulk mesh policy
+  `maximum_element_size=10e-9`.
+- Region `skyrmion_core` jest cylindrycznym authored regionem z lokalnym
+  `minimum_element_size=1e-9`, `maximum_element_size=1e-9` i
+  `transition_distance=40e-9`.
+- Test `test_skyrmion_core_mesh_refinement_example_scopes_region_mesh_policy`
+  pilnuje, ze mesh refinement jest region-scoped w `ProblemIR` i nie tworzy
+  drugiego physical object.
+
+### Postep 2026-06-08: scene-document region export round-trip
+
+- Dodano `test_scene_document_region_edits_export_as_canonical_python`.
+- Test symuluje UI-edited `SceneDocument`: zmieniony `region_id`, nazwe
+  regionu, lokalny mesh policy, material override i
+  `material_parameter_fields[].region_id`.
+- `rewrite_loaded_problem_script(..., overrides=builder_overrides_from_scene_document(scene))`
+  renderuje teraz region-owned authoring z `overrides["geometries"]`, nie ze
+  starego `LoadedProblem`, gdy scene document dostarcza aktualny stan UI.
+- Export zachowuje lokalna zmienna regionu i uzywa jej dla
+  `set_material_field(..., region=...)`, zamiast fallbacku na string region id.
+
+### Postep 2026-06-08: v2 API script sync region export proof
+
+- `scene_document_problem_projection()` przenosi teraz do
+  `rewrite_overrides.geometries[]` takze `object_regions`,
+  `allocated_region_ids` i `material_parameter_fields`.
+- Dodano unit assertion w `scene_problem_projection_uses_scene_revision`, zeby
+  projection layer nie zgubil region-owned arrays przed Python helperem.
+- Dodano route test
+  `authoring_script_sync_uses_session_scene_document_region_edits`, ktory
+  ustawia `snapshot.scene_document`, wywoluje
+  `POST /v2/sessions/current/model/syncs` bez manualnych overrides i sprawdza
+  zapisany canonical Python.
+- To jest API/resource proof dla script sync.
+
+### Postep 2026-06-08: browser region authoring script-sync proof
+
+- `RegionsListPanel` i `ObjectRegionsPanel` wywoluja
+  `syncAuthoringScriptBestEffort(api)` po udanym create/update/duplicate/delete
+  authored regionu.
+- Fixture-backed `smoke-study-authoring-ui.mjs` tworzy region przez UI,
+  sprawdza `SceneDocument` response (`film:r1`, cylinder) i potwierdza
+  `POST /v2/sessions/current/model/syncs`.
+- Smoke przeszedl na aktywnym dev serverze:
+  `CONTROL_ROOM_URL=http://localhost:45017/workspace pnpm --dir apps/control-room smoke:study-authoring-ui`
+  z wynikiem `3 model transactions and 1 authoring script syncs`.
 
 ### Akceptacja
 
 | Test | Wymagany wynik |
 |---|---|
-| Export UI-authored region script | Skrypt uzywa `object.add_region`, `fm.shapes`, `fm.fields`, `study.couplings`. |
-| Run example skyrmion core | Mesh pokazuje lokalne zageszczenie tylko w core. |
+| Export UI-authored region script | Gotowe dla obecnego UI write path. Testy Python script export, v2 API script sync i fixture-backed Playwright smoke uzywaja `object.add_region`, `fm.fields`, region texture override, `study.couplings`, lokalnych zmiennych regionow dla region coupling endpointow, scene-document overrides dla UI-edited `region_id`/mesh/material fields oraz UI region create -> `POST model/syncs`. |
+| Gradient `Ms` example | Gotowe. Przyklad zachowuje jeden physical object i region-scoped material field. |
+| Two-object coupling example | Gotowe. Przyklad zachowuje dwa physical objects i jawne exchange/RKKY couplings. |
+| Run example skyrmion core | Czesciowo gotowe. Example contract weryfikuje authored parent/core mesh policies; runtime mesh density proof pozostaje gate release. |
 | Read docs by new user | Nie da sie pomylic regionu z drugim materialem fizycznym. |
 
 ## 16. Etap 11: pelna walidacja release candidate
@@ -735,10 +913,10 @@ build moze byc odnotowany jako nie dotyczy.
 
 | Ryzyko | Skutek | Mitigacja | Stan mitigacji |
 |---|---|---|---|
-| Authoring invaliduje mesh payload albo dirty tags | Uzytkownik widzi edge-only safety view po Add Region. | Rozdzielic stale metadata od latest successful mesh resource i pilnowac, ze authoring nie ustawia `mesh:dirty`/`mesh:building`. | Czesciowo zmitigowane: `regionAuthoringInvalidation` wyklucza mesh resources, a stale topology jest renderowalne. Do weryfikacji browser: brak `topologyFreshness=unknown` po region CRUD. |
-| Raw patch kontrakt dla regionow | Drift miedzy API, UI i Python export w operacjach patch, mimo typed SceneDocument. | Typed patch DTO albo scisle izolowany merge-patch boundary z walidacja. | Czesciowo zmitigowane: scene structs i generated schemas sa typed; pozostaje `ObjectRegionPatchRequest.patch: Value` i reczna frontend facade `JsonObject`. |
-| Frontend nie konsumuje generated types | Drift miedzy backend schema a frontend parsowaniem. | Frontend modele musza uzywac generated types zamiast recznego `asRecord()` parsowania. | Aktywne ryzyko: frontend parsuje `shape` jako `unknown`, nie korzysta konsekwentnie z typed imports. |
-| FDM region-owned fields nie sa materializowane | Region mask/coupling scaffold dziala, ale lokalne `Ms`/`Aex`/`alpha` i mesh policy nie zmieniaja solver payloadu. | Materializowac authored overrides/fields do `ms_field`/`a_field`/`alpha_field` lub capability-gate'owac kazdy parametr per backend. | Czesciowo zmitigowane: authored shape -> `region_mask`, texture override i exchange overrides sa w plannerze; material fields/mesh policy nadal blokery produkcyjne. |
+| Authoring invaliduje mesh payload albo dirty tags | Uzytkownik widzi edge-only safety view po Add Region. | Rozdzielic stale metadata od latest successful mesh resource i pilnowac, ze authoring nie ustawia `mesh:dirty`/`mesh:building`. | Czesciowo zmitigowane: `regionAuthoringInvalidation` wyklucza mesh resources, `stale` topology jest renderowalne, a unit tests pokrywaja region authoring bez `mesh:dirty`. Do weryfikacji browser: brak `topologyFreshness=unknown` po region CRUD. |
+| Raw patch kontrakt dla regionow | Drift miedzy API, UI i Python export w operacjach patch, mimo typed SceneDocument. | Typed patch DTO albo scisle izolowany merge-patch boundary z walidacja. | Zmitigowane dla object-region create/patch: `ObjectRegionPatchRequest.patch` jest typed `SceneObjectRegionPatch`, a control-room facade uzywa generated types. Pozostaja raw/merge patch granice poza object-region create/patch. |
+| Frontend nie konsumuje generated types | Drift miedzy backend schema a frontend parsowaniem. | Frontend modele musza uzywac generated types zamiast recznego `asRecord()` parsowania. | Zmitigowane dla viewport region overlay: API resource i SceneDocument fallback normalizuja `shape` przez generated OpenAPI `SceneRegionShape`; invalid/csg payload nie trafia do overlay inputu. Pozostaje szerszy audit innych regionowych parserow frontendowych. |
+| FDM region-owned fields nie sa materializowane | Region mask/coupling scaffold dziala, ale lokalne material fields musza dotrzec do solver payloadu. | Materializowac authored overrides/fields do `ms_field`/`a_field`/`alpha_field` lub capability-gate'owac kazdy parametr per backend. | Czesciowo zmitigowane: planner materializuje wspierane `Ms/Aex/alpha` fields/overrides do cellwise payloadow i testy `fdm_` to potwierdzaja. Nadal otwarte: mesh policy runtime, pozostale parametry, sampled field payloady oraz CPU/GPU physics parity. |
 | Material fields bez runtime | UI pozwala zadeklarowac fizyke, ktora solver ignoruje. | Capability blockers do czasu pelnej materializacji. | Zmitigowane: planner blokuje run z czytelnymi komunikatami. |
 | FEM conformal split kruchy | Degenerate tetrahedra albo bledna fizyka granicy. | V1 tylko ograniczone shapes, quality gate, projection explicit extended. | Czesciowo zmitigowane: planner capability gate istnieje. |
 | Coupling authored-only | Solver startuje bez RKKY/exchange intent. | Unsupported coupling zawsze blokuje executable plan. | Zmitigowane: planner blokuje z `RequireRuntime`/`AuthoredOnly` policy. |

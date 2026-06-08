@@ -797,6 +797,12 @@
   overflow-wrap: break-word;
 }
 
+.fm-region-inline-diagnostics {
+  display: grid;
+  gap: var(--fm-space-1);
+  margin-bottom: var(--fm-space-2);
+}
+
 /* ── Validation list ── */
 .fm-inspector-validation-list {
   display: grid;

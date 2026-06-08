@@ -275,6 +275,9 @@ describe("viewport smoke projection round-trip", () => {
     );
     expect(smokeScript).toContain("Region overlay smoke passed:");
     expect(smokeScript).toContain("mesh=preserved");
+    expect(smokeScript).toContain("waitForRegionAuthoringScriptSync");
+    expect(smokeScript).toContain("/v2/sessions/current/model/syncs");
+    expect(smokeScript).toContain("script=region-authoring-synced");
   });
 
   it("does not order websocket refetch proof by probe timestamps", () => {

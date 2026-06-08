@@ -124,6 +124,7 @@ or short dashboard summaries, but must not copy full read-model payloads from an
 | `simulation/solver/energies/*` | current and historical energy samples |
 | `data/tables/default/rows` | table-shaped scalar history for ECharts windows, including `cursor`, `from_row`/`to_row`, `from_t`/`to_t`, `limit`, `target_points`, `decimation`, and `include_tail` query identity; JSON rows are the control-plane/debug view, while `rows.bin` is the production data-plane payload for chart values |
 | `data/scalars` | compatibility projection of the default scalar table, not a second scalar-history owner |
+| `data/artifacts` | artifact index entries; entries may expose optional region-owned authoring provenance summaries (`scene_revision`, authored region count, material field count, coupling count, blocked/deferred diagnostic counts) but must not inline heavy artifact payloads |
 | `meshing/summary` | lightweight mesh dashboard summary and revision pointers |
 | `meshing/builds` | mesh build history collection |
 | `meshing/builds/current` | current build/pipeline state, current resolved build target, and mesh provenance (`source_scene_revision`, `geometry_realization_revision`) |
@@ -173,6 +174,7 @@ Current object-authoring routes:
 | `/v2/sessions/current/model/materials/{material_id}` | `PATCH` | Patch a material asset referenced by an object. Shared-asset semantics are explicit until object-private material assets are introduced. |
 | `/v2/sessions/current/model/regions` | `GET` | Read authored object-region resources from the canonical scene. |
 | `/v2/sessions/current/model/realized-regions` | `GET` | Read geometry-realized body-region resources derived from the current scene realization. |
+| `/v2/sessions/current/model/couplings` | `GET` | Read authored couplings, runtime capability/blocker status, and mesh-backed source/target endpoint resolution diagnostics. Surface resolution is a preview and does not imply that the selected backend implements the coupling operator. |
 | `/v2/sessions/current/model/regions/{region_id}` | `PATCH` | Patch an object-derived region name/visibility and return the committed scene. |
 | `/v2/sessions/current/model/transactions` | `POST` | Commit an explicit semantic authoring transaction. |
 | `/v2/sessions/current/model/geometry/capabilities` | `GET` | Read backend-owned primitive/CSG capability matrix. |
@@ -193,7 +195,16 @@ Current object-authoring routes:
 - `commit_object_transform`;
 - `patch_universe`.
 
-The response includes `transaction_kind`, `scene_revision`, and `committed_scene`. Direct object and region mutation routes also return the committed scene. Material mutation returns the committed material asset and must invalidate `model/scene` because material changes can synchronize interaction state such as interfacial DMI. There is currently no `GET /v2/sessions/current/model/objects/{object_id}` read route; browser consumers refresh object state from `model/scene` and derive object panels from that snapshot.
+`delete_object` also removes authored couplings whose object, surface, or
+region endpoint references the deleted object, so the committed scene cannot
+retain dangling coupling endpoints. The response includes `transaction_kind`,
+`scene_revision`, and `committed_scene`. Direct object and region mutation
+routes also return the committed scene. Material mutation returns the committed
+material asset and must invalidate `model/scene` because material changes can
+synchronize interaction state such as interfacial DMI. There is currently no
+`GET /v2/sessions/current/model/objects/{object_id}` read route; browser
+consumers refresh object state from `model/scene` and derive object panels from
+that snapshot.
 
 Solver/runtime endpoints stay global study/run resources. Per-object physics and mesh authoring uses `model/objects/*`, `model/regions/*`, `model/materials/*`, `model/objects/*/interactions/*`, and `meshing/policies/objects/*`; it must not create screen-shaped solver endpoints for Explorer rows.
 

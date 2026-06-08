@@ -8,6 +8,7 @@ import { PhysicalScalarField } from "../ObjectRegionsPanel";
 import {
   ObjectRegionMetadataSection,
   ObjectRegionActionsSection,
+  ObjectRegionInlineDiagnostics,
   type RegionSubPanelProps,
 } from "./shared";
 
@@ -16,6 +17,7 @@ export function ObjectRegionMeshPanel({
   draft,
   pending,
   canWriteRegion,
+  couplingDependencies,
   updateMeshPolicy,
   applyRegion,
   revert,
@@ -34,6 +36,10 @@ export function ObjectRegionMeshPanel({
       <ObjectRegionMetadataSection model={model} />
 
       <InspectorSection value="mesh" title="Mesh Policy">
+        <ObjectRegionInlineDiagnostics
+          capabilityGates={["regions.mesh_policy"]}
+          model={model}
+        />
         <FormField
           label="Enable mesh policy"
           type="checkbox"
@@ -74,6 +80,7 @@ export function ObjectRegionMeshPanel({
       <ObjectRegionActionsSection
         pending={pending}
         canWriteRegion={canWriteRegion}
+        couplingDependencies={couplingDependencies}
         applyRegion={applyRegion}
         revert={revert}
         duplicateRegion={duplicateRegion}

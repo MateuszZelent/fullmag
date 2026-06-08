@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 import warnings
 
 from fullmag._validation import as_vector3, require_non_empty, require_non_negative, require_positive, require_finite
-from fullmag.init import InitialMagnetization
+from fullmag.init import InitialMagnetization, SampledMagnetization
 from fullmag.init.magnetization import UniformMagnetization
 from fullmag.model.discretization import PerObjectMeshRecipe
 from fullmag.model.geometry import Geometry
@@ -175,6 +175,8 @@ _MATERIAL_PARAMETER_NAMES = {
 _REGION_FRAMES = {"object", "world"}
 _REGION_REALIZATION_POLICIES = {"inherit", "conformal", "project"}
 _REGION_CONFLICT_POLICIES = {"error", "higher_priority_wins", "min_mesh_size_wins"}
+_MATERIAL_TRANSITION_KINDS = {"mesh_relative", "metric", "sharp"}
+_MATERIAL_TRANSITION_SCOPES = {"boundary", "inside", "outside"}
 _MATERIAL_FIELD_LOCATIONS = {"cell", "node", "element", "quadrature"}
 
 
@@ -286,6 +288,64 @@ class RegionMaterialOverride:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class RegionTextureOverride:
+    initial_magnetization: InitialMagnetization
+
+    def __post_init__(self) -> None:
+        if not hasattr(self.initial_magnetization, "to_ir"):
+            raise TypeError("region texture override must be an initial magnetization or texture preset")
+        if isinstance(self.initial_magnetization, SampledMagnetization):
+            raise ValueError(
+                "region texture override does not support sampled_field initial magnetization in v1"
+            )
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "initial_magnetization": self.initial_magnetization.to_ir(),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class MaterialTransitionSpec:
+    kind: str
+    cells: int | None = None
+    width: float | None = None
+    scope: str = "boundary"
+
+    def __post_init__(self) -> None:
+        kind = _normalize_choice(self.kind, _MATERIAL_TRANSITION_KINDS, "kind")
+        object.__setattr__(self, "kind", kind)
+        scope = _normalize_choice(self.scope, _MATERIAL_TRANSITION_SCOPES, "scope")
+        object.__setattr__(self, "scope", scope)
+        if kind == "mesh_relative":
+            if self.cells is None:
+                raise ValueError("cells is required for mesh_relative material transition")
+            cells = int(self.cells)
+            if cells < 1:
+                raise ValueError("cells must be >= 1")
+            object.__setattr__(self, "cells", cells)
+            object.__setattr__(self, "width", None)
+        elif kind == "metric":
+            if self.width is None:
+                raise ValueError("width is required for metric material transition")
+            object.__setattr__(self, "width", require_positive(float(self.width), "width"))
+            object.__setattr__(self, "cells", None)
+        else:
+            object.__setattr__(self, "cells", None)
+            object.__setattr__(self, "width", None)
+
+    def to_ir(self) -> dict[str, object]:
+        payload: dict[str, object] = {"kind": self.kind}
+        if self.cells is not None:
+            payload["cells"] = int(self.cells)
+        if self.width is not None:
+            payload["width"] = float(self.width)
+        if self.kind != "sharp":
+            payload["scope"] = self.scope
+        return payload
+
+
 class ObjectRegionMaterialProxy:
     def __init__(self, owner: "ObjectRegion") -> None:
         object.__setattr__(self, "_owner", owner)
@@ -308,6 +368,8 @@ class ObjectRegion:
     realization_policy: str = "inherit"
     mesh_policy: dict[str, object] | None = None
     material_overrides: list[RegionMaterialOverride] | None = None
+    material_transition_spec: MaterialTransitionSpec | None = None
+    texture_override: RegionTextureOverride | None = None
     _delete_callback: Callable[[], None] | None = field(default=None, repr=False, compare=False)
     material: ObjectRegionMaterialProxy = field(init=False, repr=False)
 
@@ -328,6 +390,23 @@ class ObjectRegion:
             self.material_overrides = []
         self.material = ObjectRegionMaterialProxy(self)
 
+    @property
+    def texture(self) -> InitialMagnetization | None:
+        if self.texture_override is None:
+            return None
+        return self.texture_override.initial_magnetization
+
+    @texture.setter
+    def texture(self, value: InitialMagnetization | None) -> None:
+        if value is None:
+            self.texture_override = None
+        else:
+            self.set_texture(value)
+
+    def set_texture(self, value: InitialMagnetization) -> "ObjectRegion":
+        self.texture_override = RegionTextureOverride(value)
+        return self
+
     def set_material(
         self,
         parameter: str,
@@ -338,6 +417,8 @@ class ObjectRegion:
         conflict_policy: str = "error",
     ) -> "ObjectRegion":
         field = value if isinstance(value, MaterialParameterField) else MaterialParameterField.constant(value, unit=unit)
+        if self.material_transition_spec is None:
+            self.material_transition_spec = _default_region_transition_for_parameter(parameter)
         override = RegionMaterialOverride(
             parameter=_normalize_parameter_name(parameter),
             value=field,
@@ -350,6 +431,39 @@ class ObjectRegion:
             if _normalize_parameter_name(existing.parameter) != override.parameter
         ]
         self.material_overrides.append(override)
+        return self
+
+    def set_material_field(
+        self,
+        parameter: str,
+        value: float | tuple[float, float, float] | MaterialParameterField,
+        *,
+        unit: str | None = None,
+        priority: int | None = None,
+        conflict_policy: str = "error",
+    ) -> "ObjectRegion":
+        return self.set_material(
+            parameter,
+            value,
+            unit=unit,
+            priority=priority,
+            conflict_policy=conflict_policy,
+        )
+
+    def material_transition(
+        self,
+        *,
+        cells: int | None = None,
+        width: float | None = None,
+        kind: str = "mesh_relative",
+        scope: str = "boundary",
+    ) -> "ObjectRegion":
+        self.material_transition_spec = MaterialTransitionSpec(
+            kind=kind,
+            cells=cells,
+            width=width,
+            scope=scope,
+        )
         return self
 
     def mesh(
@@ -402,6 +516,10 @@ class ObjectRegion:
         }
         if self.mesh_policy is not None:
             payload["mesh_policy"] = dict(self.mesh_policy)
+        if self.material_transition_spec is not None:
+            payload["material_transition"] = self.material_transition_spec.to_ir()
+        if self.texture_override is not None:
+            payload["texture_override"] = self.texture_override.to_ir()
         return payload
 
 
@@ -469,6 +587,12 @@ def _normalize_parameter_name(value: str) -> str:
             f"parameter must be one of {sorted(_MATERIAL_PARAMETER_NAMES)!r}, got {value!r}"
         )
     return parameter
+
+
+def _default_region_transition_for_parameter(parameter: str) -> MaterialTransitionSpec | None:
+    if _normalize_parameter_name(parameter) in {"Ms", "Aex"}:
+        return MaterialTransitionSpec(kind="mesh_relative", cells=3, scope="boundary")
+    return None
 
 
 def _parameter_name_to_ir(value: str) -> str:

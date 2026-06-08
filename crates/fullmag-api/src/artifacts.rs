@@ -25,6 +25,7 @@ pub(crate) fn collect_artifacts(
                 out.push(ArtifactEntry {
                     path: relative,
                     kind: "zarr".to_string(),
+                    region_owned_provenance: None,
                 });
                 continue;
             }
@@ -47,6 +48,7 @@ pub(crate) fn collect_artifacts(
         out.push(ArtifactEntry {
             path: relative,
             kind: kind.to_string(),
+            region_owned_provenance: None,
         });
     }
     out.sort_by(|lhs, rhs| lhs.path.cmp(&rhs.path));

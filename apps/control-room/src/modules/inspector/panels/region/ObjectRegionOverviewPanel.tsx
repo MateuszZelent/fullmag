@@ -9,6 +9,7 @@ import type { RegionEditRealizationPolicy } from "../ObjectRegionsPanelModel";
 import {
   ObjectRegionMetadataSection,
   ObjectRegionActionsSection,
+  ObjectRegionInlineDiagnostics,
   type RegionSubPanelProps,
 } from "./shared";
 
@@ -17,6 +18,7 @@ export function ObjectRegionOverviewPanel({
   draft,
   pending,
   canWriteRegion,
+  couplingDependencies,
   updateDraft,
   applyRegion,
   revert,
@@ -35,6 +37,13 @@ export function ObjectRegionOverviewPanel({
       <ObjectRegionMetadataSection model={model} />
 
       <InspectorSection value="identity" title="Region Identity">
+        <ObjectRegionInlineDiagnostics
+          capabilityGates={[
+            "regions.realized_materialization",
+            "regions.conformal_or_projected_boundary",
+          ]}
+          model={model}
+        />
         <FormField
           label="Region name"
           mono={false}
@@ -83,6 +92,7 @@ export function ObjectRegionOverviewPanel({
       <ObjectRegionActionsSection
         pending={pending}
         canWriteRegion={canWriteRegion}
+        couplingDependencies={couplingDependencies}
         applyRegion={applyRegion}
         revert={revert}
         duplicateRegion={duplicateRegion}

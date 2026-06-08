@@ -2228,6 +2228,7 @@ export interface components {
         ArtifactEntry: {
             kind: string;
             path: string;
+            region_owned_provenance?: null | components["schemas"]["RegionOwnedArtifactProvenance"];
         };
         AuthoringTransactionRequest: {
             /** @enum {string} */
@@ -2328,6 +2329,13 @@ export interface components {
         } | {
             /** Format: int64 */
             base_revision?: number | null;
+            fields: components["schemas"]["SceneMaterialParameterAssignment"][];
+            /** @enum {string} */
+            kind: "patch_object_material_fields";
+            object_id: string;
+        } | {
+            /** Format: int64 */
+            base_revision?: number | null;
             /** @enum {string} */
             kind: "delete_object_region";
             object_id: string;
@@ -2351,7 +2359,7 @@ export interface components {
             coupling_id: string;
             /** @enum {string} */
             kind: "patch_coupling";
-            patch: Record<string, never>;
+            patch: components["schemas"]["SceneCouplingPatch"];
         } | {
             /** Format: int64 */
             base_revision?: number | null;
@@ -2611,12 +2619,26 @@ export interface components {
         };
         /** @enum {string} */
         CompressionProfile: "speed" | "balanced" | "smallest";
+        CouplingEndpointResolutionResource: {
+            /** Format: double */
+            area?: number | null;
+            object_id: string;
+            reason?: string | null;
+            region_id?: string | null;
+            /** Format: int64 */
+            resolved_face_count?: number | null;
+            selector?: string | null;
+            status: string;
+            /** Format: double */
+            tolerance?: number | null;
+        };
         CouplingListResource: {
             couplings: components["schemas"]["CouplingResource"][];
             /** Format: int64 */
             scene_revision: number;
         };
         CouplingResource: {
+            blocker_reason?: string | null;
             capability_policy?: string | null;
             coupling_id: string;
             coupling_kind: string;
@@ -2624,7 +2646,9 @@ export interface components {
             params: components["schemas"]["SceneCouplingParameters"];
             realization_status?: string | null;
             source: components["schemas"]["SceneCouplingEndpoint"];
+            source_resolution: components["schemas"]["CouplingEndpointResolutionResource"];
             target: components["schemas"]["SceneCouplingEndpoint"];
+            target_resolution: components["schemas"]["CouplingEndpointResolutionResource"];
         };
         CpuTelemetryResponse: {
             /** Format: double */
@@ -4277,6 +4301,20 @@ export interface components {
             /** Format: int64 */
             scene_revision: number;
         };
+        RegionOwnedArtifactProvenance: {
+            /** Format: int64 */
+            authored_region_count: number;
+            /** Format: int64 */
+            blocked_diagnostic_count: number;
+            /** Format: int64 */
+            coupling_count: number;
+            /** Format: int64 */
+            deferred_diagnostic_count: number;
+            /** Format: int64 */
+            material_parameter_field_count: number;
+            /** Format: int64 */
+            scene_revision: number;
+        };
         RegionPatchRequest: {
             enabled?: boolean | null;
             magnetization_ref?: null | components["schemas"]["NullableStringPatchValue"];
@@ -4515,6 +4553,14 @@ export interface components {
             /** @enum {string} */
             kind: "interlayer_exchange";
         };
+        SceneCouplingPatch: {
+            capability_policy?: null | components["schemas"]["SceneCouplingCapabilityPolicy"];
+            enabled?: boolean | null;
+            kind?: null | components["schemas"]["SceneCouplingKind"];
+            parameters?: null | components["schemas"]["SceneCouplingParameters"];
+            source?: null | components["schemas"]["SceneCouplingEndpoint"];
+            target?: null | components["schemas"]["SceneCouplingEndpoint"];
+        };
         /** @enum {string} */
         SceneExchangeCouplingMode: "harmonic_mean" | "explicit" | "disabled";
         SceneInitialMagnetization: {
@@ -4597,6 +4643,24 @@ export interface components {
             };
             references?: components["schemas"]["MaterialReferenceResource"][];
         };
+        SceneMaterialTransition: {
+            /** Format: int32 */
+            cells: number;
+            /** @enum {string} */
+            kind: "mesh_relative";
+            scope?: components["schemas"]["SceneMaterialTransitionScope"];
+        } | {
+            /** @enum {string} */
+            kind: "metric";
+            scope?: components["schemas"]["SceneMaterialTransitionScope"];
+            /** Format: double */
+            width: number;
+        } | {
+            /** @enum {string} */
+            kind: "sharp";
+        };
+        /** @enum {string} */
+        SceneMaterialTransitionScope: "boundary" | "inside" | "outside";
         SceneMetadataResource: {
             authoring_schema: string;
             id: string;
@@ -4607,6 +4671,7 @@ export interface components {
             enabled?: boolean;
             frame?: components["schemas"]["SceneRegionFrame"];
             material_overrides?: components["schemas"]["SceneRegionMaterialOverride"][];
+            material_transition?: null | components["schemas"]["SceneMaterialTransition"];
             mesh_policy?: null | components["schemas"]["SceneRegionMeshPolicy"];
             name: string;
             owner_object?: string;
@@ -4622,6 +4687,7 @@ export interface components {
             frame?: null | components["schemas"]["SceneRegionFrame"];
             id?: unknown;
             material_overrides?: components["schemas"]["SceneRegionMaterialOverride"][] | null;
+            material_transition?: null | components["schemas"]["SceneMaterialTransition"];
             mesh_policy?: null | components["schemas"]["SceneRegionMeshPolicy"];
             name?: string | null;
             owner_object?: unknown;

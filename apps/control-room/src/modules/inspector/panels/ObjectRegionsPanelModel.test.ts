@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import type { CouplingListResource } from "@/kernel/api/apiTypes";
+
 import {
   buildObjectRegionPatch,
   clampObjectRegionDraftShapeToOwnerBounds,
@@ -7,11 +9,69 @@ import {
   objectRegionDraftFromModel,
   objectRegionDraftKey,
   parseRegionPhysicalScalar,
+  resolveRegionCouplingDependencies,
   resolveObjectRegionPanelModel,
   validateObjectRegionDraft,
 } from "./ObjectRegionsPanelModel";
 
 describe("ObjectRegionsPanelModel", () => {
+  it("summarizes active coupling dependencies for a selected object region", () => {
+    const couplings: CouplingListResource = {
+      couplings: [
+        {
+          blocker_reason: "runtime unavailable",
+          capability_policy: "require_runtime",
+          coupling_id: "exchange:core-shell",
+          coupling_kind: "exchange",
+          enabled: true,
+          params: { kind: "exchange", mode: "harmonic_mean", scale: 1.0 } as never,
+          realization_status: "authored_pending_realization",
+          source: { kind: "region", object: "film", region_id: "film:core" } as never,
+          source_resolution: {
+            object_id: "film",
+            region_id: "film:core",
+            status: "authored_endpoint_valid",
+          },
+          target: { kind: "region", object: "film", region_id: "film:shell" } as never,
+          target_resolution: {
+            object_id: "film",
+            region_id: "film:shell",
+            status: "authored_endpoint_valid",
+          },
+        },
+        {
+          coupling_id: "exchange:disabled",
+          coupling_kind: "exchange",
+          enabled: false,
+          params: { kind: "exchange", mode: "harmonic_mean", scale: 1.0 } as never,
+          source: { kind: "region", object: "film", region_id: "film:core" } as never,
+          source_resolution: {
+            object_id: "film",
+            region_id: "film:core",
+            status: "authored_endpoint_valid",
+          },
+          target: { kind: "object", object: "film" } as never,
+          target_resolution: {
+            object_id: "film",
+            status: "authored_endpoint_valid",
+          },
+        },
+      ],
+      scene_revision: 4,
+    };
+
+    expect(
+      resolveRegionCouplingDependencies("film", "film:core", couplings),
+    ).toEqual([
+      {
+        couplingId: "exchange:core-shell",
+        endpointRole: "source",
+        kind: "exchange",
+        status: "authored_pending_realization",
+      },
+    ]);
+  });
+
   it("resolves object-derived regions from scene and region resources", () => {
     const model = resolveObjectRegionPanelModel(
       {

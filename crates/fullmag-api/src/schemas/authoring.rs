@@ -172,6 +172,8 @@ pub struct SceneObjectRegionPatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub texture_override: Option<Option<fullmag_authoring::SceneTextureOverride>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material_transition: Option<Option<fullmag_authoring::SceneMaterialTransition>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub realization_policy: Option<Option<fullmag_authoring::SceneRegionRealizationPolicy>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<i32>,
@@ -188,6 +190,25 @@ pub struct ObjectRegionPatchRequest {
     #[serde(default)]
     pub base_revision: Option<u64>,
     pub patch: SceneObjectRegionPatch,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SceneCouplingPatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<fullmag_authoring::SceneCouplingKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<fullmag_authoring::SceneCouplingEndpoint>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<fullmag_authoring::SceneCouplingEndpoint>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<fullmag_authoring::SceneCouplingParameters>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability_policy: Option<fullmag_authoring::SceneCouplingCapabilityPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(ignore)]
+    pub coupling_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -514,17 +535,39 @@ pub struct MaterialParameterFieldListResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CouplingEndpointResolutionResource {
+    pub status: String,
+    pub object_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selector: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tolerance: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_face_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct CouplingResource {
     pub coupling_id: String,
     pub coupling_kind: String,
     pub enabled: bool,
     pub source: fullmag_authoring::SceneCouplingEndpoint,
     pub target: fullmag_authoring::SceneCouplingEndpoint,
+    pub source_resolution: CouplingEndpointResolutionResource,
+    pub target_resolution: CouplingEndpointResolutionResource,
     pub params: fullmag_authoring::SceneCouplingParameters,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capability_policy: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub realization_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocker_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -742,8 +785,7 @@ pub enum AuthoringTransactionRequest {
         #[serde(default)]
         base_revision: Option<u64>,
         coupling_id: String,
-        #[schema(value_type = Object)]
-        patch: Value,
+        patch: SceneCouplingPatch,
     },
     DeleteCoupling {
         #[serde(default)]

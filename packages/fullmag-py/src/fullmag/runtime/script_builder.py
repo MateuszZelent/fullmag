@@ -205,10 +205,11 @@ def render_loaded_problem_as_script(
             surface=surface,
         )
     )
-    region_owned_lines = _render_region_owned_authoring(
+    region_owned_lines, region_vars = _render_region_owned_authoring(
         base_problem,
         magnet_vars,
         source_root=source_root,
+        overrides=overrides,
     )
     if region_owned_lines:
         lines.append("")
@@ -247,7 +248,12 @@ def render_loaded_problem_as_script(
         lines.append("")
         lines.extend(exchange_lines)
 
-    coupling_lines = _render_couplings(base_problem, magnet_vars, surface=surface)
+    coupling_lines = _render_couplings(
+        base_problem,
+        magnet_vars,
+        region_vars=region_vars,
+        surface=surface,
+    )
     if coupling_lines:
         lines.append("")
         lines.extend(coupling_lines)
@@ -807,7 +813,16 @@ def _render_region_owned_authoring(
     magnet_vars: dict[str, str],
     *,
     source_root: Path,
-) -> list[str]:
+    overrides: dict[str, object],
+) -> tuple[list[str], dict[str, str]]:
+    geometries_override = overrides.get("geometries")
+    if isinstance(geometries_override, list):
+        return _render_region_owned_authoring_from_override(
+            geometries_override,
+            magnet_vars=magnet_vars,
+            source_root=source_root,
+        )
+
     lines: list[str] = []
     region_vars: dict[str, str] = {}
     for magnet in problem.magnets:
@@ -841,6 +856,13 @@ def _render_region_owned_authoring(
                 )
             call_args = ", ".join([*kwargs, *optional_kwargs])
             lines.append(f"{region_var} = {magnet_var}.add_region({call_args})")
+            transition = getattr(region, "material_transition_spec", None)
+            if transition is not None:
+                transition_kwargs = _render_material_transition_kwargs(transition.to_ir())
+                if transition_kwargs:
+                    lines.append(
+                        f"{region_var}.material_transition({', '.join(transition_kwargs)})"
+                    )
             for override in region.material_overrides or []:
                 field_expr = _render_material_parameter_field_expr(override.value)
                 lines.append(
@@ -852,6 +874,12 @@ def _render_region_owned_authoring(
                 mesh_kwargs = _render_region_mesh_policy_kwargs(region.mesh_policy)
                 if mesh_kwargs:
                     lines.append(f"{region_var}.mesh({', '.join(mesh_kwargs)})")
+            if region.texture_override is not None:
+                texture_expr = _render_initial_magnetization_expr(
+                    region.texture_override.initial_magnetization,
+                    source_root=source_root,
+                )
+                lines.append(f"{region_var}.texture = {texture_expr}")
     for magnet in problem.magnets:
         magnet_var = magnet_vars[magnet.name]
         for assignment in magnet.material_parameter_fields:
@@ -873,8 +901,200 @@ def _render_region_owned_authoring(
                 kwargs.append(f"conflict_policy={_py_repr(assignment.conflict_policy)}")
             lines.append(f"{magnet_var}.set_material_field({', '.join(kwargs)})")
     if lines:
-        return ["# Object-owned regions and material fields", *lines]
-    return []
+        return ["# Object-owned regions and material fields", *lines], region_vars
+    return [], region_vars
+
+
+def _render_region_owned_authoring_from_override(
+    geometries: list[object],
+    *,
+    magnet_vars: dict[str, str],
+    source_root: Path,
+) -> tuple[list[str], dict[str, str]]:
+    lines: list[str] = []
+    region_vars: dict[str, str] = {}
+    for geo_obj in geometries:
+        g = _normalize_mapping(geo_obj)
+        magnet_name = str(g.get("name", ""))
+        magnet_var = magnet_vars.get(magnet_name, "body")
+        raw_regions = g.get("object_regions")
+        object_regions = raw_regions if isinstance(raw_regions, list) else []
+        live_region_ids = {
+            str(region.get("region_id"))
+            for region in object_regions
+            if isinstance(region, dict) and region.get("region_id")
+        }
+        allocated_region_ids = g.get("allocated_region_ids")
+        if isinstance(allocated_region_ids, list):
+            for raw_region_id in allocated_region_ids:
+                region_id = str(raw_region_id)
+                if region_id not in live_region_ids:
+                    lines.append(f"{magnet_var}.regions.reserve_id({_py_repr(region_id)})")
+        for index, raw_region in enumerate(object_regions):
+            region = _normalize_mapping(raw_region)
+            region_id = str(region.get("region_id") or region.get("id") or "")
+            if not region_id:
+                continue
+            region_name = str(region.get("name") or region_id.rsplit(":", 1)[-1])
+            region_var = _safe_identifier(f"{magnet_name}_{region_name}_region")
+            if region_var in region_vars.values():
+                region_var = f"{region_var}_{index}"
+            region_vars[region_id] = region_var
+            kwargs = [
+                _py_repr(region_name),
+                _render_region_shape_expr_from_payload(
+                    region.get("shape"),
+                    region_name=region_name,
+                    source_root=source_root,
+                ),
+            ]
+            optional_kwargs = [f"region_id={_py_repr(region_id)}"]
+            frame = region.get("frame")
+            if isinstance(frame, str) and frame != "object":
+                optional_kwargs.append(f"frame={_py_repr(frame)}")
+            if region.get("enabled") is False:
+                optional_kwargs.append("enabled=False")
+            priority = region.get("priority")
+            if priority:
+                optional_kwargs.append(f"priority={int(priority)}")
+            realization_policy = region.get("realization_policy")
+            if isinstance(realization_policy, str) and realization_policy != "inherit":
+                optional_kwargs.append(
+                    f"realization_policy={_py_repr(realization_policy)}"
+                )
+            call_args = ", ".join([*kwargs, *optional_kwargs])
+            lines.append(f"{region_var} = {magnet_var}.add_region({call_args})")
+            transition = _normalize_mapping(region.get("material_transition"))
+            if transition:
+                transition_kwargs = _render_material_transition_kwargs(transition)
+                if transition_kwargs:
+                    lines.append(
+                        f"{region_var}.material_transition({', '.join(transition_kwargs)})"
+                    )
+            material_overrides = region.get("material_overrides")
+            if isinstance(material_overrides, list):
+                for raw_override in material_overrides:
+                    override = _normalize_mapping(raw_override)
+                    field_expr = _render_material_parameter_field_expr(override.get("value"))
+                    lines.append(
+                        f"{region_var}.set_material({_py_repr(str(override.get('parameter')))}, {field_expr}, "
+                        f"priority={int(override.get('priority', 0))}, "
+                        f"conflict_policy={_py_repr(str(override.get('conflict_policy', 'error')))})"
+                    )
+            mesh_policy = _normalize_mapping(region.get("mesh_policy"))
+            if mesh_policy:
+                mesh_kwargs = _render_region_mesh_policy_kwargs(mesh_policy)
+                if mesh_kwargs:
+                    lines.append(f"{region_var}.mesh({', '.join(mesh_kwargs)})")
+            texture_override = _normalize_mapping(region.get("texture_override"))
+            texture = texture_override.get("initial_magnetization")
+            if isinstance(texture, dict):
+                texture_expr = _render_initial_magnetization_expr_from_payload(
+                    texture,
+                    source_root=source_root,
+                )
+                if texture_expr is not None:
+                    lines.append(f"{region_var}.texture = {texture_expr}")
+    for geo_obj in geometries:
+        g = _normalize_mapping(geo_obj)
+        magnet_name = str(g.get("name", ""))
+        magnet_var = magnet_vars.get(magnet_name, "body")
+        raw_assignments = g.get("material_parameter_fields")
+        assignments = raw_assignments if isinstance(raw_assignments, list) else []
+        for raw_assignment in assignments:
+            assignment = _normalize_mapping(raw_assignment)
+            field_expr = _render_material_parameter_field_expr(assignment.get("value"))
+            kwargs = [
+                _py_repr(str(assignment.get("parameter"))),
+                field_expr,
+                f"assignment_id={_py_repr(str(assignment.get('assignment_id')))}",
+            ]
+            region_id = assignment.get("region_id")
+            if isinstance(region_id, str) and region_id:
+                region_ref = region_vars.get(region_id)
+                if region_ref is not None:
+                    kwargs.append(f"region={region_ref}")
+                else:
+                    kwargs.append(f"region={_py_repr(region_id)}")
+            priority = assignment.get("priority")
+            if priority:
+                kwargs.append(f"priority={int(priority)}")
+            conflict_policy = assignment.get("conflict_policy")
+            if isinstance(conflict_policy, str) and conflict_policy != "error":
+                kwargs.append(f"conflict_policy={_py_repr(conflict_policy)}")
+            lines.append(f"{magnet_var}.set_material_field({', '.join(kwargs)})")
+    if lines:
+        return ["# Object-owned regions and material fields", *lines], region_vars
+    return [], region_vars
+
+
+def _render_region_shape_expr_from_payload(
+    raw_shape: object,
+    *,
+    region_name: str,
+    source_root: Path,
+) -> str:
+    shape = _normalize_mapping(raw_shape)
+    kind = str(shape.get("kind") or "box")
+    if kind == "box":
+        params = {"size": shape.get("size")}
+        return _render_geometry_expr_from_override(
+            "Box",
+            params,
+            name=region_name,
+            source_root=source_root,
+        )
+    if kind == "cylinder":
+        params = {
+            "radius": shape.get("radius"),
+            "height": shape.get("height"),
+        }
+        return _render_geometry_expr_from_override(
+            "Cylinder",
+            params,
+            name=region_name,
+            source_root=source_root,
+        )
+    if kind == "sphere":
+        radius = shape.get("radius")
+        params = {"rx": radius, "ry": radius, "rz": radius}
+        return _render_geometry_expr_from_override(
+            "Ellipsoid",
+            params,
+            name=region_name,
+            source_root=source_root,
+        )
+    return _render_geometry_expr_from_override(
+        "Box",
+        {},
+        name=region_name,
+        source_root=source_root,
+    )
+
+
+def _render_initial_magnetization_expr_from_payload(
+    payload: dict[str, object],
+    *,
+    source_root: Path,
+) -> str | None:
+    kind = str(payload.get("kind") or "")
+    if kind == "uniform":
+        value = payload.get("value")
+        if isinstance(value, list) and len(value) == 3:
+            return (
+                "fm.texture.uniform("
+                f"{_py_number(float(value[0]))}, "
+                f"{_py_number(float(value[1]))}, "
+                f"{_py_number(float(value[2]))})"
+            )
+    if kind == "random":
+        seed = payload.get("seed")
+        return f"fm.texture.random(seed={int(seed) if seed is not None else 1})"
+    if kind in {"file", "sampled"}:
+        source_path = payload.get("source_path")
+        if isinstance(source_path, str) and source_path:
+            return f"fm.texture.loadfile({_py_repr(_relativize_path(source_path, source_root))})"
+    return None
 
 
 def _render_region_mesh_policy_kwargs(mesh_policy: dict[str, object]) -> list[str]:
@@ -889,6 +1109,21 @@ def _render_region_mesh_policy_kwargs(mesh_policy: dict[str, object]) -> list[st
         value = mesh_policy.get(key)
         if value is not None:
             kwargs.append(f"{key}={_py_literal(value)}")
+    return kwargs
+
+
+def _render_material_transition_kwargs(transition: dict[str, object]) -> list[str]:
+    kind = str(transition.get("kind") or "")
+    kwargs: list[str] = []
+    if kind and kind != "mesh_relative":
+        kwargs.append(f"kind={_py_repr(kind)}")
+    if transition.get("cells") is not None:
+        kwargs.append(f"cells={int(transition['cells'])}")
+    if transition.get("width") is not None:
+        kwargs.append(f"width={_py_literal(transition['width'])}")
+    scope = transition.get("scope")
+    if isinstance(scope, str) and scope != "boundary" and kind != "sharp":
+        kwargs.append(f"scope={_py_repr(scope)}")
     return kwargs
 
 
@@ -945,6 +1180,7 @@ def _render_couplings(
     problem: Problem,
     magnet_vars: dict[str, str],
     *,
+    region_vars: dict[str, str] | None = None,
     surface: str,
 ) -> list[str]:
     if not problem.couplings:
@@ -955,8 +1191,16 @@ def _render_couplings(
         lines.append("couplings = fm.couplings.registry()")
         root = "couplings"
     for coupling in problem.couplings:
-        source_expr = _render_coupling_endpoint_expr(coupling.source, magnet_vars)
-        target_expr = _render_coupling_endpoint_expr(coupling.target, magnet_vars)
+        source_expr = _render_coupling_endpoint_expr(
+            coupling.source,
+            magnet_vars,
+            region_vars=region_vars,
+        )
+        target_expr = _render_coupling_endpoint_expr(
+            coupling.target,
+            magnet_vars,
+            region_vars=region_vars,
+        )
         params = coupling.parameters
         if coupling.kind == "exchange":
             kwargs = [
@@ -1002,7 +1246,12 @@ def _render_common_coupling_kwargs(coupling: object) -> list[str]:
     return kwargs
 
 
-def _render_coupling_endpoint_expr(endpoint: object, magnet_vars: dict[str, str]) -> str:
+def _render_coupling_endpoint_expr(
+    endpoint: object,
+    magnet_vars: dict[str, str],
+    *,
+    region_vars: dict[str, str] | None = None,
+) -> str:
     payload = endpoint.to_ir() if hasattr(endpoint, "to_ir") else endpoint
     if not isinstance(payload, dict):
         raise ValueError("coupling endpoint must render from a dict payload")
@@ -1018,6 +1267,9 @@ def _render_coupling_endpoint_expr(endpoint: object, magnet_vars: dict[str, str]
         return f"fm.couplings.surface({_py_repr(object_name)}, {_py_repr(selector)})"
     if kind == "region":
         region_id = str(payload.get("region_id"))
+        region_expr = (region_vars or {}).get(region_id)
+        if region_expr is not None:
+            return region_expr
         return f"fm.couplings.region({_py_repr(object_name)}, {_py_repr(region_id)})"
     raise ValueError(f"unsupported coupling endpoint kind {kind!r}")
 
@@ -2954,10 +3206,6 @@ def _render_initial_magnetization(
     magnet_var: str,
     source_root: Path,
 ) -> str | list[str]:
-    if isinstance(initializer, UniformMagnetization):
-        return f"{magnet_var}.m = fm.texture.uniform({_py_number(initializer.value[0])}, {_py_number(initializer.value[1])}, {_py_number(initializer.value[2])})"
-    if isinstance(initializer, RandomMagnetization):
-        return f"{magnet_var}.m = fm.texture.random(seed={initializer.seed})"
     if isinstance(initializer, SampledMagnetization):
         if initializer.source_path:
             kwargs = []
@@ -2973,6 +3221,18 @@ def _render_initial_magnetization(
         raise ValueError(
             "canonical flat-script rewrite requires sampled-field initial magnetization to come from loadfile(...)"
         )
+    return f"{magnet_var}.m = {_render_initial_magnetization_expr(initializer, source_root=source_root)}"
+
+
+def _render_initial_magnetization_expr(
+    initializer: object,
+    *,
+    source_root: Path,
+) -> str:
+    if isinstance(initializer, UniformMagnetization):
+        return f"fm.texture.uniform({_py_number(initializer.value[0])}, {_py_number(initializer.value[1])}, {_py_number(initializer.value[2])})"
+    if isinstance(initializer, RandomMagnetization):
+        return f"fm.texture.random(seed={initializer.seed})"
     if isinstance(initializer, PresetTexture):
         preset_expr = _render_preset_texture_expr(
             initializer.preset_kind,
@@ -2982,7 +3242,7 @@ def _render_initial_magnetization(
             ui_label=initializer.ui_label,
             preview_proxy=initializer.preview_proxy,
         )
-        return f"{magnet_var}.m = {preset_expr}"
+        return preset_expr
     raise ValueError(
         f"unsupported initial magnetization kind for canonical rewrite: {type(initializer).__name__}"
     )

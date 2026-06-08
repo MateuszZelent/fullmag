@@ -1,4 +1,7 @@
-import type { SceneResource } from "@/kernel/api/apiTypes";
+import type {
+  MaterialParameterFieldListResource,
+  SceneResource,
+} from "@/kernel/api/apiTypes";
 import type { components } from "@/kernel/api/generated/openapi-v2-types";
 
 export type SceneMaterialParameterAssignment =
@@ -33,6 +36,11 @@ export interface MaterialFieldDraft {
 export interface MaterialFieldDraftState {
   fields: MaterialFieldDraft[];
   key: string;
+}
+
+export interface MaterialFieldRealizationRow {
+  label: string;
+  value: string;
 }
 
 export const MATERIAL_FIELD_PARAMETERS: SceneMaterialParameterName[] = [
@@ -210,6 +218,50 @@ export function materialFieldDraftKey(
   fields: readonly SceneMaterialParameterAssignment[],
 ): string {
   return JSON.stringify(fields);
+}
+
+function formatRealizedValue(value: number, unit: string | null | undefined): string {
+  return `${value} ${unit ?? ""}`.trim();
+}
+
+export function materialFieldRealizationRows(
+  assignmentId: string,
+  materialFields: MaterialParameterFieldListResource | null | undefined,
+): MaterialFieldRealizationRow[] {
+  const field = materialFields?.fields.find(
+    (entry) => entry.assignment_id === assignmentId,
+  );
+  if (!field) return [];
+
+  const rows: MaterialFieldRealizationRow[] = [];
+  if (field.realization_status) {
+    rows.push({ label: "Realization", value: field.realization_status });
+  }
+  if (typeof field.sample_count === "number") {
+    rows.push({ label: "Samples", value: String(field.sample_count) });
+  }
+  if (typeof field.min === "number") {
+    rows.push({
+      label: "Min",
+      value: formatRealizedValue(field.min, field.unit),
+    });
+  }
+  if (typeof field.max === "number") {
+    rows.push({
+      label: "Max",
+      value: formatRealizedValue(field.max, field.unit),
+    });
+  }
+  if (typeof field.mean === "number") {
+    rows.push({
+      label: "Mean",
+      value: formatRealizedValue(field.mean, field.unit),
+    });
+  }
+  if (field.warnings?.length) {
+    rows.push({ label: "Warnings", value: field.warnings.join("; ") });
+  }
+  return rows;
 }
 
 export function sceneObjectMaterialFields(

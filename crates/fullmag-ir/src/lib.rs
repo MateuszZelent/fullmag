@@ -1192,33 +1192,11 @@ impl ProblemIR {
                 ));
             }
             if let Some(initial_magnetization) = &magnet.initial_magnetization {
-                match initial_magnetization {
-                    InitialMagnetizationIR::Uniform { .. } => {}
-                    InitialMagnetizationIR::RandomSeeded { seed } => {
-                        if *seed == 0 {
-                            errors.push(format!(
-                                "magnet '{}' random_seeded seed must be positive",
-                                magnet.name
-                            ));
-                        }
-                    }
-                    InitialMagnetizationIR::SampledField { values } => {
-                        if values.is_empty() {
-                            errors.push(format!(
-                                "magnet '{}' sampled_field values must not be empty",
-                                magnet.name
-                            ));
-                        }
-                    }
-                    InitialMagnetizationIR::PresetTexture { preset_kind, .. } => {
-                        if preset_kind.trim().is_empty() {
-                            errors.push(format!(
-                                "magnet '{}' preset_texture preset_kind must not be empty",
-                                magnet.name
-                            ));
-                        }
-                    }
-                }
+                validate_initial_magnetization(
+                    &format!("magnet '{}'", magnet.name),
+                    initial_magnetization,
+                    &mut errors,
+                );
             }
         }
 
@@ -1373,11 +1351,23 @@ fn validate_region_owned_semantics(problem: &ProblemIR, errors: &mut Vec<String>
         if let Some(mesh_policy) = &region.mesh_policy {
             validate_region_mesh_policy(index, mesh_policy, errors);
         }
+        validate_material_transition(
+            &format!("object_regions[{index}].material_transition"),
+            &region.material_transition,
+            errors,
+        );
         for (override_index, material_override) in region.material_overrides.iter().enumerate() {
             validate_material_parameter_field(
                 &format!("object_regions[{index}].material_overrides[{override_index}]"),
                 material_override.parameter,
                 &material_override.value,
+                errors,
+            );
+        }
+        if let Some(texture_override) = &region.texture_override {
+            validate_initial_magnetization(
+                &format!("object_regions[{index}].texture_override.initial_magnetization"),
+                &texture_override.initial_magnetization,
                 errors,
             );
         }
@@ -1511,6 +1501,33 @@ fn validate_region_owned_semantics(problem: &ProblemIR, errors: &mut Vec<String>
     }
 
     validate_region_owned_material_conflicts(problem, errors);
+}
+
+fn validate_initial_magnetization(
+    path: &str,
+    initial_magnetization: &InitialMagnetizationIR,
+    errors: &mut Vec<String>,
+) {
+    match initial_magnetization {
+        InitialMagnetizationIR::Uniform { .. } => {}
+        InitialMagnetizationIR::RandomSeeded { seed } => {
+            if *seed == 0 {
+                errors.push(format!("{path} random_seeded seed must be positive"));
+            }
+        }
+        InitialMagnetizationIR::SampledField { values } => {
+            if values.is_empty() {
+                errors.push(format!("{path} sampled_field values must not be empty"));
+            }
+        }
+        InitialMagnetizationIR::PresetTexture { preset_kind, .. } => {
+            if preset_kind.trim().is_empty() {
+                errors.push(format!(
+                    "{path} preset_texture preset_kind must not be empty"
+                ));
+            }
+        }
+    }
 }
 
 fn validate_region_owned_material_conflicts(problem: &ProblemIR, errors: &mut Vec<String>) {
@@ -1704,6 +1721,24 @@ fn validate_region_mesh_policy(
     }
 }
 
+fn validate_material_transition(
+    path: &str,
+    transition: &Option<MaterialTransitionSpecIR>,
+    errors: &mut Vec<String>,
+) {
+    match transition {
+        Some(MaterialTransitionSpecIR::MeshRelative { cells, .. }) if *cells == 0 => {
+            errors.push(format!("{path}.cells must be >= 1"));
+        }
+        Some(MaterialTransitionSpecIR::Metric { width, .. })
+            if !width.is_finite() || *width <= 0.0 =>
+        {
+            errors.push(format!("{path}.width must be finite and > 0"));
+        }
+        _ => {}
+    }
+}
+
 fn validate_material_parameter_field(
     path: &str,
     parameter: MaterialParameterNameIR,
@@ -1849,8 +1884,17 @@ fn validate_coupling_endpoint(
             }
         }
         CouplingEndpointIR::Surface { selector, .. } => {
-            if selector.trim().is_empty() {
+            let normalized = selector.trim().to_ascii_lowercase();
+            if normalized.is_empty() {
                 errors.push(format!("{path}.selector must not be empty"));
+            } else if !matches!(
+                normalized.as_str(),
+                "top" | "bottom" | "left" | "right" | "front" | "back"
+            ) {
+                errors.push(format!(
+                    "{path}.selector '{}' is unsupported in v1; use top/bottom/left/right/front/back",
+                    selector
+                ));
             }
         }
         CouplingEndpointIR::Object { .. } => {}

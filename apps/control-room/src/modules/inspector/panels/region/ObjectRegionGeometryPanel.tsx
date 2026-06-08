@@ -17,6 +17,7 @@ export function ObjectRegionGeometryPanel({
   draft,
   pending,
   canWriteRegion,
+  couplingDependencies,
   updateShape,
   updateShapeVector,
   applyRegion,
@@ -126,6 +127,7 @@ export function ObjectRegionGeometryPanel({
       <ObjectRegionActionsSection
         pending={pending}
         canWriteRegion={canWriteRegion}
+        couplingDependencies={couplingDependencies}
         applyRegion={applyRegion}
         revert={revert}
         duplicateRegion={duplicateRegion}

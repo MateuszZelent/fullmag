@@ -52,6 +52,16 @@ pub enum QuantityId {
     EdenDmi,
     /// Spatial total energy density (J/m³).
     EdenTotal,
+    /// Resolved saturation magnetization material parameter (A/m).
+    MatMs,
+    /// Resolved exchange stiffness material parameter (J/m).
+    MatAex,
+    /// Resolved Gilbert damping material parameter (dimensionless).
+    MatAlpha,
+    /// Resolved interfacial DMI material parameter (J/m²).
+    MatDind,
+    /// Resolved bulk DMI material parameter (J/m³).
+    MatDbulk,
     /// Magnetization rate of change (spatial vector field).
     DmDt,
     /// Spin-transfer torque — adiabatic / field-like (spatial vector field).
@@ -100,6 +110,11 @@ impl QuantityId {
             Self::EdenAni => "eden_ani",
             Self::EdenDmi => "eden_dmi",
             Self::EdenTotal => "eden_total",
+            Self::MatMs => "mat_ms",
+            Self::MatAex => "mat_aex",
+            Self::MatAlpha => "mat_alpha",
+            Self::MatDind => "mat_dind",
+            Self::MatDbulk => "mat_dbulk",
             Self::DmDt => "dm_dt",
             Self::TorqueStt => "torque_stt",
             Self::TorqueSot => "torque_sot",
@@ -145,6 +160,11 @@ impl QuantityId {
         Self::EdenAni,
         Self::EdenDmi,
         Self::EdenTotal,
+        Self::MatMs,
+        Self::MatAex,
+        Self::MatAlpha,
+        Self::MatDind,
+        Self::MatDbulk,
         Self::DmDt,
         Self::TorqueStt,
         Self::TorqueSot,
@@ -214,6 +234,11 @@ pub fn normalize_quantity_id(requested: &str) -> Result<QuantityId, QuantityIdEr
         "eden_ani" => Ok(QuantityId::EdenAni),
         "eden_dmi" => Ok(QuantityId::EdenDmi),
         "eden_total" => Ok(QuantityId::EdenTotal),
+        "mat_ms" | "material_ms" => Ok(QuantityId::MatMs),
+        "mat_aex" | "material_aex" | "material_a" => Ok(QuantityId::MatAex),
+        "mat_alpha" | "material_alpha" => Ok(QuantityId::MatAlpha),
+        "mat_dind" | "material_dind" => Ok(QuantityId::MatDind),
+        "mat_dbulk" | "material_dbulk" => Ok(QuantityId::MatDbulk),
         "dm_dt" => Ok(QuantityId::DmDt),
         "torque_stt" => Ok(QuantityId::TorqueStt),
         "torque_sot" => Ok(QuantityId::TorqueSot),

@@ -141,6 +141,7 @@ fn object_region_without_overrides_is_continuous_with_parent_object() {
         mesh_policy: None,
         material_overrides: Vec::new(),
         texture_override: None,
+        material_transition: None,
         realization_policy: RegionRealizationPolicyIR::Inherit,
     });
 
@@ -187,6 +188,7 @@ fn object_region_material_field_and_coupling_validate() {
             conflict_policy: RegionConflictPolicyIR::Error,
         }],
         texture_override: None,
+        material_transition: None,
         realization_policy: RegionRealizationPolicyIR::Inherit,
     });
     ir.material_parameter_fields
@@ -252,6 +254,7 @@ fn object_region_ms_zero_is_rejected() {
             conflict_policy: RegionConflictPolicyIR::Error,
         }],
         texture_override: None,
+        material_transition: None,
         realization_policy: RegionRealizationPolicyIR::Inherit,
     });
 
@@ -259,6 +262,139 @@ fn object_region_ms_zero_is_rejected() {
         .validate()
         .expect_err("Ms=0 inside an active object must be rejected");
     assert!(errors.iter().any(|error| error.contains("Ms must be > 0")));
+}
+
+#[test]
+fn object_region_texture_override_initial_magnetization_is_validated() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.object_regions.push(ObjectRegionIR {
+        region_id: "reg_bad_texture".to_string(),
+        owner_object: "strip".to_string(),
+        name: "bad_texture".to_string(),
+        shape: RegionShapeIR::Box {
+            size: [10e-9, 10e-9, 6e-9],
+            center: [0.0, 0.0, 0.0],
+        },
+        frame: RegionFrameIR::Object,
+        enabled: true,
+        priority: 0,
+        mesh_policy: None,
+        material_overrides: Vec::new(),
+        texture_override: Some(RegionTextureOverrideIR {
+            initial_magnetization: InitialMagnetizationIR::PresetTexture {
+                preset_kind: "".to_string(),
+                preset_params: Default::default(),
+                mapping: Default::default(),
+                texture_transform: Default::default(),
+            },
+        }),
+        material_transition: None,
+        realization_policy: RegionRealizationPolicyIR::Inherit,
+    });
+
+    let errors = ir
+        .validate()
+        .expect_err("region texture override initial magnetization must be validated");
+    assert!(errors.iter().any(|error| {
+        error.contains("object_regions[0].texture_override.initial_magnetization")
+            && error.contains("preset_texture preset_kind must not be empty")
+    }));
+}
+
+#[test]
+fn object_region_material_transition_round_trips() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.object_regions.push(ObjectRegionIR {
+        region_id: "reg_soft_transition".to_string(),
+        owner_object: "strip".to_string(),
+        name: "soft_transition".to_string(),
+        shape: RegionShapeIR::Box {
+            size: [10e-9, 10e-9, 6e-9],
+            center: [0.0, 0.0, 0.0],
+        },
+        frame: RegionFrameIR::Object,
+        enabled: true,
+        priority: 0,
+        mesh_policy: None,
+        material_overrides: Vec::new(),
+        texture_override: None,
+        material_transition: Some(MaterialTransitionSpecIR::MeshRelative {
+            cells: 3,
+            scope: MaterialTransitionScopeIR::Boundary,
+        }),
+        realization_policy: RegionRealizationPolicyIR::Inherit,
+    });
+
+    let json = serde_json::to_string(&ir).expect("ProblemIR should serialize");
+    assert!(json.contains(r#""kind":"mesh_relative""#));
+    assert!(json.contains(r#""cells":3"#));
+    assert!(json.contains(r#""scope":"boundary""#));
+    let decoded: ProblemIR = serde_json::from_str(&json).expect("ProblemIR should deserialize");
+    assert_eq!(
+        decoded.object_regions[0].material_transition,
+        Some(MaterialTransitionSpecIR::MeshRelative {
+            cells: 3,
+            scope: MaterialTransitionScopeIR::Boundary,
+        })
+    );
+    decoded
+        .validate()
+        .expect("valid transition must pass IR validation");
+}
+
+#[test]
+fn object_region_material_transition_invalid_widths_are_rejected() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.object_regions.push(ObjectRegionIR {
+        region_id: "reg_bad_transition".to_string(),
+        owner_object: "strip".to_string(),
+        name: "bad_transition".to_string(),
+        shape: RegionShapeIR::Box {
+            size: [10e-9, 10e-9, 6e-9],
+            center: [0.0, 0.0, 0.0],
+        },
+        frame: RegionFrameIR::Object,
+        enabled: true,
+        priority: 0,
+        mesh_policy: None,
+        material_overrides: Vec::new(),
+        texture_override: None,
+        material_transition: Some(MaterialTransitionSpecIR::MeshRelative {
+            cells: 0,
+            scope: MaterialTransitionScopeIR::Boundary,
+        }),
+        realization_policy: RegionRealizationPolicyIR::Inherit,
+    });
+    ir.object_regions.push(ObjectRegionIR {
+        region_id: "reg_bad_metric_transition".to_string(),
+        owner_object: "strip".to_string(),
+        name: "bad_metric_transition".to_string(),
+        shape: RegionShapeIR::Box {
+            size: [10e-9, 10e-9, 6e-9],
+            center: [0.0, 0.0, 0.0],
+        },
+        frame: RegionFrameIR::Object,
+        enabled: true,
+        priority: 0,
+        mesh_policy: None,
+        material_overrides: Vec::new(),
+        texture_override: None,
+        material_transition: Some(MaterialTransitionSpecIR::Metric {
+            width: -1e-9,
+            scope: MaterialTransitionScopeIR::Inside,
+        }),
+        realization_policy: RegionRealizationPolicyIR::Inherit,
+    });
+
+    let errors = ir
+        .validate()
+        .expect_err("invalid material transition widths must fail validation");
+    assert!(errors.iter().any(|error| {
+        error.contains("object_regions[0].material_transition.cells must be >= 1")
+    }));
+    assert!(errors.iter().any(|error| {
+        error.contains("object_regions[1].material_transition.width must be finite and > 0")
+    }));
 }
 
 #[test]
@@ -299,6 +435,7 @@ fn equal_priority_region_material_assignments_are_rejected() {
         mesh_policy: None,
         material_overrides: Vec::new(),
         texture_override: None,
+        material_transition: None,
         realization_policy: RegionRealizationPolicyIR::Inherit,
     });
     for (index, value) in [760e3, 780e3].into_iter().enumerate() {
@@ -350,6 +487,7 @@ fn object_wide_and_region_material_assignment_same_priority_is_rejected() {
             conflict_policy: RegionConflictPolicyIR::Error,
         }],
         texture_override: None,
+        material_transition: None,
         realization_policy: RegionRealizationPolicyIR::Inherit,
     });
     ir.material_parameter_fields
@@ -398,6 +536,7 @@ fn disabled_region_material_assignments_do_not_conflict() {
             conflict_policy: RegionConflictPolicyIR::Error,
         }],
         texture_override: None,
+        material_transition: None,
         realization_policy: RegionRealizationPolicyIR::Inherit,
     });
     ir.material_parameter_fields
@@ -452,6 +591,7 @@ fn region_material_assignment_must_match_region_owner() {
         mesh_policy: None,
         material_overrides: Vec::new(),
         texture_override: None,
+        material_transition: None,
         realization_policy: RegionRealizationPolicyIR::Inherit,
     });
     ir.material_parameter_fields
@@ -497,6 +637,7 @@ fn coupling_region_endpoint_must_match_region_owner() {
         mesh_policy: None,
         material_overrides: Vec::new(),
         texture_override: None,
+        material_transition: None,
         realization_policy: RegionRealizationPolicyIR::Inherit,
     });
     ir.couplings.push(CouplingIR {
@@ -543,6 +684,7 @@ fn coupling_region_endpoint_validates_when_region_owner_matches() {
         mesh_policy: None,
         material_overrides: Vec::new(),
         texture_override: None,
+        material_transition: None,
         realization_policy: RegionRealizationPolicyIR::Inherit,
     });
     ir.couplings.push(CouplingIR {
@@ -584,6 +726,7 @@ fn active_coupling_cannot_target_disabled_region() {
         mesh_policy: None,
         material_overrides: Vec::new(),
         texture_override: None,
+        material_transition: None,
         realization_policy: RegionRealizationPolicyIR::Inherit,
     });
     ir.couplings.push(CouplingIR {
@@ -623,6 +766,37 @@ fn object_object_exchange_default_is_no_coupling_in_ir() {
 
     assert!(ir.couplings.is_empty());
     assert!(ir.validate().is_ok());
+}
+
+#[test]
+fn coupling_surface_selector_rejects_named_faces_in_v1() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.couplings.push(CouplingIR {
+        coupling_id: "unsupported_surface".to_string(),
+        kind: CouplingKindIR::Exchange,
+        source: CouplingEndpointIR::Surface {
+            object: "strip".to_string(),
+            selector: "named_face".to_string(),
+        },
+        target: CouplingEndpointIR::Surface {
+            object: "strip".to_string(),
+            selector: "bottom".to_string(),
+        },
+        enabled: true,
+        parameters: CouplingParametersIR::Exchange {
+            mode: ExchangeCouplingModeIR::Disabled,
+            scale: Some(0.0),
+            inter_exchange: None,
+        },
+        capability_policy: CouplingCapabilityPolicyIR::RequireRuntime,
+    });
+
+    let errors = ir
+        .validate()
+        .expect_err("v1 must reject unsupported named surface selectors");
+    assert!(errors.iter().any(|error| {
+        error.contains("named_face") && error.contains("top/bottom/left/right/front/back")
+    }));
 }
 
 #[test]

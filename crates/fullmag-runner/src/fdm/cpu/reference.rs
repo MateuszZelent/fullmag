@@ -1516,7 +1516,15 @@ fn direct_field_values_available(name: &str) -> bool {
 fn direct_scalar_values_available(name: &str) -> bool {
     matches!(
         name,
-        "eden_ex" | "eden_demag" | "eden_ext" | "eden_ani" | "eden_dmi" | "eden_total"
+        "eden_ex"
+            | "eden_demag"
+            | "eden_ext"
+            | "eden_ani"
+            | "eden_dmi"
+            | "eden_total"
+            | "mat_ms"
+            | "mat_aex"
+            | "mat_alpha"
     )
 }
 
@@ -1606,6 +1614,15 @@ impl<'a> DirectFieldSnapshotCache<'a> {
                 }
                 Ok(total)
             }
+            "mat_ms" => Ok((0..self.state.magnetization().len())
+                .map(|index| self.problem.ms_at(index))
+                .collect()),
+            "mat_aex" => Ok((0..self.state.magnetization().len())
+                .map(|index| self.problem.a_at(index))
+                .collect()),
+            "mat_alpha" => Ok((0..self.state.magnetization().len())
+                .map(|index| self.problem.alpha_at(index))
+                .collect()),
             _ => Err(RunError {
                 message: format!("snapshot '{}': scalar quantity not available", name),
             }),
@@ -2030,6 +2047,66 @@ mod tests {
             direct_h_eff_assembly_call_count(),
             1,
             "H_eff and torque preview should share one direct effective-field assembly"
+        );
+    }
+
+    #[test]
+    fn snapshot_vector_fields_exposes_resolved_fdm_material_scalars() {
+        reset_observe_state_calls();
+
+        let plan = FdmPlanIR {
+            material: FdmMaterialIR {
+                ms_field: Some(vec![
+                    8.0e5, 7.0e5, 6.0e5, 5.0e5, 4.0e5, 3.0e5, 2.0e5, 1.0e5, 8.1e5, 7.1e5,
+                    6.1e5, 5.1e5, 4.1e5, 3.1e5, 2.1e5, 1.1e5,
+                ]),
+                a_field: Some(vec![
+                    1.0e-11, 1.1e-11, 1.2e-11, 1.3e-11, 1.4e-11, 1.5e-11, 1.6e-11,
+                    1.7e-11, 1.8e-11, 1.9e-11, 2.0e-11, 2.1e-11, 2.2e-11, 2.3e-11,
+                    2.4e-11, 2.5e-11,
+                ]),
+                alpha_field: Some(vec![
+                    0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10, 0.11,
+                    0.12, 0.13, 0.14, 0.15, 0.16,
+                ]),
+                ..make_test_plan().material
+            },
+            ..make_test_plan()
+        };
+
+        let fields = snapshot_vector_fields(
+            &plan,
+            &["mat_ms", "mat_aex", "mat_alpha"],
+            &LivePreviewRequest {
+                auto_scale_enabled: false,
+                ..Default::default()
+            },
+        )
+        .expect("material scalar previews should build");
+
+        assert_eq!(
+            fields
+                .iter()
+                .map(|field| field.quantity.as_str())
+                .collect::<Vec<_>>(),
+            vec!["mat_ms", "mat_aex", "mat_alpha"]
+        );
+        assert_eq!(
+            fields[0].vector_field_values,
+            plan.material.ms_field.as_ref().expect("ms field").clone()
+        );
+        assert_eq!(
+            fields[1].vector_field_values,
+            plan.material.a_field.as_ref().expect("a field").clone()
+        );
+        assert_eq!(
+            fields[2].vector_field_values,
+            plan.material.alpha_field.as_ref().expect("alpha field").clone()
+        );
+        assert_eq!(
+            observe_state_call_count(),
+            0,
+            "material scalar previews should not force a full observables pass"
         );
     }
 

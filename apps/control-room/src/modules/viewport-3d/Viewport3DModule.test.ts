@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   notifyMeshTopologyRendered,
+  resolveViewport3DColorbarLegend,
   resolveViewport3DMeshQualityLegend,
 } from "./Viewport3DModule";
 
@@ -21,6 +22,57 @@ describe("resolveViewport3DMeshQualityLegend", () => {
     expect(resolveViewport3DMeshQualityLegend(false, "gamma", { max: 1, min: 0 }))
       .toBeNull();
     expect(resolveViewport3DMeshQualityLegend(true, "gamma", null)).toBeNull();
+  });
+});
+
+describe("resolveViewport3DColorbarLegend", () => {
+  it("describes numeric component coloring with quantity, component, unit, and range", () => {
+    expect(
+      resolveViewport3DColorbarLegend({
+        colorMode: "x",
+        quantityId: "m",
+        range: { max: 0.75, min: -0.25 },
+        unit: "1",
+      }),
+    ).toEqual({
+      label: "m x [1]",
+      maxLabel: "0.75",
+      minLabel: "-0.25",
+    });
+  });
+
+  it("describes material scalar coloring without a vector component suffix", () => {
+    expect(
+      resolveViewport3DColorbarLegend({
+        colorMode: "magnitude",
+        quantityId: "mat_ms",
+        range: { max: 800e3, min: 400e3 },
+        unit: "A/m",
+      }),
+    ).toEqual({
+      label: "mat_ms [A/m]",
+      maxLabel: "800000",
+      minLabel: "400000",
+    });
+  });
+
+  it("stays hidden for orientation and HSL sphere coloring", () => {
+    expect(
+      resolveViewport3DColorbarLegend({
+        colorMode: "orientation",
+        quantityId: "m",
+        range: { max: 1, min: 0 },
+        unit: "1",
+      }),
+    ).toBeNull();
+    expect(
+      resolveViewport3DColorbarLegend({
+        colorMode: "hsl_sphere",
+        quantityId: "m",
+        range: { max: 1, min: 0 },
+        unit: "1",
+      }),
+    ).toBeNull();
   });
 });
 
@@ -199,16 +251,24 @@ describe("Viewport3DModule scene wiring", () => {
     expect(source).toContain("onAnglesCommit={commitOrbitDebugAngles}");
   });
 
-  it("shows authored region overlays as an independent layer by default", () => {
+  it("offers authored, realized, and combined region overlay modes", () => {
     const source = readFileSync(
       new URL("./Viewport3DModule.tsx", import.meta.url),
       "utf8",
     );
 
-    expect(source).toContain(
-      "const [regionOverlayVisible, setRegionOverlayVisible] = useState(true);",
+    expect(source).toContain('useState<RegionOverlayMode>("both")');
+    expect(source).toContain('aria-label="Region overlays"');
+    expect(source).toContain("Authored");
+    expect(source).toContain("Realized");
+    expect(source).toContain("Both");
+
+    const styles = readFileSync(
+      new URL("../../design/styles/viewport-3d.css", import.meta.url),
+      "utf8",
     );
-    expect(source).toContain("Show regions");
-    expect(source).toContain("Hide regions");
+    expect(styles).toMatch(
+      /\.fm-viewport-3d__region-modes\s*\{[\s\S]*?pointer-events:\s*auto;/,
+    );
   });
 });

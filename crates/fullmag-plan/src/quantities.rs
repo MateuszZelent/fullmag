@@ -106,7 +106,7 @@ pub fn default_capability_matrix() -> CapabilityMatrix {
     for id in [HAni, HDmi, HMel, HAniCubic, HDmiBulk] {
         m.set(FdmCpuReference, id, Derived);
     }
-    for id in [EAni, EDmi] {
+    for id in [EAni, EDmi, MatMs, MatAex, MatAlpha] {
         m.set(FdmCpuReference, id, Derived);
     }
     // Planned for FDM CPU
@@ -121,7 +121,9 @@ pub fn default_capability_matrix() -> CapabilityMatrix {
     for id in [HAni, HDmi, EAni, EDmi] {
         m.set(FdmCuda, id, Derived);
     }
-    for id in [HMel, HAniCubic, HDmiBulk, HOe, HTherm] {
+    for id in [
+        HMel, HAniCubic, HDmiBulk, HOe, HTherm, MatMs, MatAex, MatAlpha,
+    ] {
         m.set(FdmCuda, id, Planned);
     }
 
@@ -132,7 +134,9 @@ pub fn default_capability_matrix() -> CapabilityMatrix {
     for id in [HAni, HDmi, EAni, EDmi] {
         m.set(FemCpuNative, id, Derived);
     }
-    for id in [HAnt, HMel, HAniCubic, HDmiBulk, HOe, HTherm] {
+    for id in [
+        HAnt, HMel, HAniCubic, HDmiBulk, HOe, HTherm, MatMs, MatAex, MatAlpha, MatDind, MatDbulk,
+    ] {
         m.set(FemCpuNative, id, Planned);
     }
     // Eigenmodes on FEM
@@ -147,7 +151,9 @@ pub fn default_capability_matrix() -> CapabilityMatrix {
     for id in [HAni, HDmi, EAni, EDmi] {
         m.set(FemGpu, id, Derived);
     }
-    for id in [HAnt, HMel, HAniCubic, HDmiBulk, HOe, HTherm] {
+    for id in [
+        HAnt, HMel, HAniCubic, HDmiBulk, HOe, HTherm, MatMs, MatAex, MatAlpha, MatDind, MatDbulk,
+    ] {
         m.set(FemGpu, id, Planned);
     }
     for id in [ModeAmplitude, ModeReal, ModeImag, ModePhase] {

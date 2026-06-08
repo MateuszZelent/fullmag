@@ -104,6 +104,11 @@ import { ClipPlaneFramePreviewLayer, ClipPlaneLayer } from "./ClipPlaneLayer";
 import type { ClipPlaneIntersectionMarkerBuffers } from "./clipPlaneModel";
 import type { RegionOverlayInput } from "./regionOverlayModel";
 import {
+  regionOverlayModeShowsAuthored,
+  regionOverlayModeShowsRealized,
+  type RegionOverlayMode,
+} from "../regionOverlayMode";
+import {
   getViewport3DVisualProfile,
   type Viewport3DVisualProfileId,
 } from "../viewport3dVisualProfile";
@@ -164,7 +169,7 @@ interface Viewport3DSceneProps {
   resetCameraRevision: number;
   requestDiagnostics: RequestDiagnosticsController;
   resourceFrameKey: string;
-  regionOverlayVisible: boolean;
+  regionOverlayMode: RegionOverlayMode;
   regionOverlays: readonly RegionOverlayInput[];
   rotationMode: Viewport3DRotationMode;
   selectionBounds: Viewport3DBounds | null;
@@ -612,7 +617,7 @@ function Viewport3DModelLayerStack({
   onSelectPart,
   onSelectRegion,
   primitiveModel,
-  regionOverlayVisible,
+  regionOverlayMode,
   regionOverlays,
   selectedObjectId,
   selectedRegionId,
@@ -654,7 +659,7 @@ function Viewport3DModelLayerStack({
   | "onSelectPart"
   | "onSelectRegion"
   | "primitiveModel"
-  | "regionOverlayVisible"
+  | "regionOverlayMode"
   | "regionOverlays"
   | "selectedObjectId"
   | "selectedRegionId"
@@ -741,7 +746,8 @@ function Viewport3DModelLayerStack({
           vectorStyle={vectorStyle}
         />
       ) : null}
-      {regionOverlayVisible && viewport3DOverlayLayersEnabledFromBrowserConfig() ? (
+      {regionOverlayModeShowsRealized(regionOverlayMode) &&
+      viewport3DOverlayLayersEnabledFromBrowserConfig() ? (
         <RegionMeshOverlayLayer
           getRegionSettings={getRegionSettings}
           magneticParts={femDomain.magneticParts}
@@ -753,7 +759,8 @@ function Viewport3DModelLayerStack({
           tracker={tracker}
         />
       ) : null}
-      {regionOverlayVisible && viewport3DOverlayLayersEnabledFromBrowserConfig() ? (
+      {regionOverlayModeShowsAuthored(regionOverlayMode) &&
+      viewport3DOverlayLayersEnabledFromBrowserConfig() ? (
         <RegionOverlayLayer
           getRegionSettings={getRegionSettings}
           onSelectRegion={onSelectRegion}
@@ -888,7 +895,7 @@ export function Viewport3DScene({
   orbitDebugCommitRevision,
   orbitDebugRevision,
   primitiveModel,
-  regionOverlayVisible,
+  regionOverlayMode,
   regionOverlays,
   resetCameraRevision,
   requestDiagnostics,
@@ -1046,7 +1053,7 @@ export function Viewport3DScene({
         onSelectPart={onSelectPart}
         onSelectRegion={onSelectRegion}
         primitiveModel={primitiveModel}
-        regionOverlayVisible={regionOverlayVisible}
+        regionOverlayMode={regionOverlayMode}
         regionOverlays={regionOverlays}
         selectedObjectId={selectedObjectId}
         selectedRegionId={selectedRegionId}

@@ -156,6 +156,8 @@ pub struct ObjectRegionIR {
     pub texture_override: Option<RegionTextureOverrideIR>,
     #[serde(default)]
     pub realization_policy: RegionRealizationPolicyIR,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material_transition: Option<MaterialTransitionSpecIR>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -195,6 +197,34 @@ pub enum RegionRealizationPolicyIR {
     Inherit,
     Conformal,
     Project,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MaterialTransitionSpecIR {
+    MeshRelative {
+        cells: u32,
+        #[serde(default = "default_material_transition_scope")]
+        scope: MaterialTransitionScopeIR,
+    },
+    Metric {
+        width: f64,
+        #[serde(default = "default_material_transition_scope")]
+        scope: MaterialTransitionScopeIR,
+    },
+    Sharp,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MaterialTransitionScopeIR {
+    Boundary,
+    Inside,
+    Outside,
+}
+
+fn default_material_transition_scope() -> MaterialTransitionScopeIR {
+    MaterialTransitionScopeIR::Boundary
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

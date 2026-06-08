@@ -4,7 +4,7 @@ use crate::descriptor::{NormalizationHint, QuantityDomain, QuantityLocation, Qua
 use crate::id::{normalize_quantity_id, QuantityId};
 use crate::{QuantityComponent, QuantityShape};
 
-const CATALOG: [QuantitySpec; 39] = [
+const CATALOG: [QuantitySpec; 44] = [
     QuantitySpec {
         id: QuantityId::M,
         label: "Magnetization",
@@ -763,6 +763,111 @@ const CATALOG: [QuantitySpec; 39] = [
         supports_export: true,
     },
     QuantitySpec {
+        id: QuantityId::MatMs,
+        label: "Material Ms",
+        description: "Resolved saturation magnetization distribution",
+        shape: QuantityShape::SpatialScalar,
+        unit: "A/m",
+        interactive_preview: true,
+        cached_preview: false,
+        quick_access_label: Some("Ms"),
+        scalar_metric_key: None,
+        ui_exposed: true,
+        n_comp: 1,
+        location: QuantityLocation::Cell,
+        domain: QuantityDomain::MagneticOnly,
+        normalization_hint: NormalizationHint::None,
+        default_component: QuantityComponent::Magnitude,
+        supports_preview_2d: true,
+        supports_preview_3d: true,
+        supports_history: false,
+        supports_export: true,
+    },
+    QuantitySpec {
+        id: QuantityId::MatAex,
+        label: "Material Aex",
+        description: "Resolved exchange stiffness distribution",
+        shape: QuantityShape::SpatialScalar,
+        unit: "J/m",
+        interactive_preview: true,
+        cached_preview: false,
+        quick_access_label: Some("Aex"),
+        scalar_metric_key: None,
+        ui_exposed: true,
+        n_comp: 1,
+        location: QuantityLocation::Cell,
+        domain: QuantityDomain::MagneticOnly,
+        normalization_hint: NormalizationHint::None,
+        default_component: QuantityComponent::Magnitude,
+        supports_preview_2d: true,
+        supports_preview_3d: true,
+        supports_history: false,
+        supports_export: true,
+    },
+    QuantitySpec {
+        id: QuantityId::MatAlpha,
+        label: "Material alpha",
+        description: "Resolved Gilbert damping distribution",
+        shape: QuantityShape::SpatialScalar,
+        unit: "1",
+        interactive_preview: true,
+        cached_preview: false,
+        quick_access_label: Some("alpha"),
+        scalar_metric_key: None,
+        ui_exposed: true,
+        n_comp: 1,
+        location: QuantityLocation::Cell,
+        domain: QuantityDomain::MagneticOnly,
+        normalization_hint: NormalizationHint::None,
+        default_component: QuantityComponent::Magnitude,
+        supports_preview_2d: true,
+        supports_preview_3d: true,
+        supports_history: false,
+        supports_export: true,
+    },
+    QuantitySpec {
+        id: QuantityId::MatDind,
+        label: "Material Dind",
+        description: "Resolved interfacial DMI distribution",
+        shape: QuantityShape::SpatialScalar,
+        unit: "J/m²",
+        interactive_preview: true,
+        cached_preview: false,
+        quick_access_label: Some("Dind"),
+        scalar_metric_key: None,
+        ui_exposed: true,
+        n_comp: 1,
+        location: QuantityLocation::Cell,
+        domain: QuantityDomain::MagneticOnly,
+        normalization_hint: NormalizationHint::None,
+        default_component: QuantityComponent::Magnitude,
+        supports_preview_2d: true,
+        supports_preview_3d: true,
+        supports_history: false,
+        supports_export: true,
+    },
+    QuantitySpec {
+        id: QuantityId::MatDbulk,
+        label: "Material Dbulk",
+        description: "Resolved bulk DMI distribution",
+        shape: QuantityShape::SpatialScalar,
+        unit: "J/m³",
+        interactive_preview: true,
+        cached_preview: false,
+        quick_access_label: Some("Dbulk"),
+        scalar_metric_key: None,
+        ui_exposed: true,
+        n_comp: 1,
+        location: QuantityLocation::Cell,
+        domain: QuantityDomain::MagneticOnly,
+        normalization_hint: NormalizationHint::None,
+        default_component: QuantityComponent::Magnitude,
+        supports_preview_2d: true,
+        supports_preview_3d: true,
+        supports_history: false,
+        supports_export: true,
+    },
+    QuantitySpec {
         id: QuantityId::DmDt,
         label: "dm/dt",
         description: "Rate of magnetization change (spatial vector)",
@@ -898,6 +1003,33 @@ mod tests {
             assert_eq!(spec.unit, unit);
             assert!(!spec.interactive_preview);
             assert!(!spec.cached_preview);
+        }
+    }
+
+    #[test]
+    fn material_parameter_quantities_are_spatial_scalars_for_viewport_debugging() {
+        let expected = [
+            ("mat_ms", "Material Ms", "A/m"),
+            ("mat_aex", "Material Aex", "J/m"),
+            ("mat_alpha", "Material alpha", "1"),
+            ("mat_dind", "Material Dind", "J/m²"),
+            ("mat_dbulk", "Material Dbulk", "J/m³"),
+        ];
+
+        for (id, label, unit) in expected {
+            let spec = quantity_spec(id).expect("material quantity should be catalogued");
+            assert_eq!(
+                normalize_quantity_id(id).expect("known quantity").as_str(),
+                id
+            );
+            assert_eq!(spec.label, label);
+            assert_eq!(spec.shape, QuantityShape::SpatialScalar);
+            assert_eq!(spec.unit, unit);
+            assert_eq!(spec.n_comp, 1);
+            assert_eq!(spec.domain, QuantityDomain::MagneticOnly);
+            assert!(spec.interactive_preview);
+            assert!(spec.ui_exposed);
+            assert!(spec.supports_preview_3d);
         }
     }
 }

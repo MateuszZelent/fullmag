@@ -4,6 +4,7 @@ import type {
   ObjectPatchRequest,
   RegionPatchRequest,
 } from "@/kernel/api/apiTypes";
+import type { components } from "@/kernel/api/generated/openapi-v2-types";
 
 export type MagnetizationTextureTarget =
   | { kind: "object"; objectId: string }
@@ -48,3 +49,6 @@ export interface MagnetizationTextureModel {
 export type MagnetizationAssignmentPatch =
   | { path: "object"; payload: ObjectPatchRequest }
   | { path: "region"; payload: RegionPatchRequest };
+
+export type RegionTextureOverridePatch =
+  components["schemas"]["SceneObjectRegionPatch"];

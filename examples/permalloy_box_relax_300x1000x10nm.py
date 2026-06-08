@@ -19,7 +19,7 @@ study.universe(
 study.universe.mesh(minimum_element_size=10e-9, maximum_element_size=250e-9)
 study.airbox.visualization(show=True, mode="vectors", active_quantity_id="h_eff", wireframe=False)
 
-hole_radius = 30e-9
+hole_radius = 40e-9
 hole_height = 30e-9
 hole_refinement_radius = hole_radius + 30e-9
 
@@ -38,8 +38,10 @@ hole_refinement = body.add_region(
     "hole_refinement",
     fm.Cylinder(radius=hole_refinement_radius, height=hole_height),
     priority=10,
+    realization_policy="conformal",
 )
-hole_refinement.mesh(minimum_element_size=1e-9, maximum_element_size=2e-9, order=1)
+hole_refinement.mesh(minimum_element_size=0.5e-9, maximum_element_size=1e-9, order=1)
+hole_refinement.material.Ms = 400e3
 
 study.demag(realization="poisson_robin")
 study.build_domain_mesh()

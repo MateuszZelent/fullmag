@@ -116,6 +116,9 @@ fn fdm_quantity_is_active(engine: FdmEngine, plan: &FdmPlanIR, id: QuantityId) -
                 | QuantityId::EdenAni
                 | QuantityId::EdenDmi
                 | QuantityId::EdenTotal
+                | QuantityId::MatMs
+                | QuantityId::MatAex
+                | QuantityId::MatAlpha
         ),
         FdmEngine::CudaFdm => matches!(
             id,
@@ -155,6 +158,7 @@ fn fdm_plan_enables_quantity(plan: &FdmPlanIR, id: QuantityId) -> bool {
         }
         QuantityId::EdenDmi => plan.interfacial_dmi.is_some() || plan.bulk_dmi.is_some(),
         QuantityId::EdenTotal => true,
+        QuantityId::MatMs | QuantityId::MatAex | QuantityId::MatAlpha => true,
         QuantityId::HAnt
         | QuantityId::U
         | QuantityId::Eps
@@ -172,6 +176,8 @@ fn fdm_plan_enables_quantity(plan: &FdmPlanIR, id: QuantityId) -> bool {
         | QuantityId::ModeReal
         | QuantityId::ModeImag
         | QuantityId::ModePhase
+        | QuantityId::MatDind
+        | QuantityId::MatDbulk
         | QuantityId::DmDt
         | QuantityId::TorqueStt
         | QuantityId::TorqueSot => false,
@@ -255,6 +261,11 @@ fn fem_plan_enables_quantity(plan: &FemPlanIR, id: QuantityId) -> bool {
         | QuantityId::EdenAni
         | QuantityId::EdenDmi
         | QuantityId::EdenTotal
+        | QuantityId::MatMs
+        | QuantityId::MatAex
+        | QuantityId::MatAlpha
+        | QuantityId::MatDind
+        | QuantityId::MatDbulk
         | QuantityId::DmDt
         | QuantityId::TorqueStt
         | QuantityId::TorqueSot => false,

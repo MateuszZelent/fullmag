@@ -10,7 +10,9 @@ import type {
   MagnetizationAssignmentPatch,
   MagnetizationTextureModel,
   MagnetizationTextureTarget,
+  RegionTextureOverridePatch,
 } from "./types";
+import type { components } from "@/kernel/api/generated/openapi-v2-types";
 
 interface ResolveModelInput {
   regionList: RegionListResource | null;
@@ -80,6 +82,25 @@ export function buildMagnetizationAssetPatch(
   return {
     asset: asset as unknown as JsonObject,
     base_revision: baseRevision,
+  };
+}
+
+export function buildRegionTextureOverridePatch(
+  asset: MagnetizationAssetDraft | null,
+): RegionTextureOverridePatch {
+  if (!asset) {
+    return { texture_override: null };
+  }
+  return {
+    texture_override: {
+      initial_magnetization: {
+        kind: "preset_texture",
+        mapping: asset.mapping,
+        preset_kind: asset.preset_kind ?? asset.kind,
+        preset_params: asset.preset_params,
+        texture_transform: asset.texture_transform,
+      } satisfies components["schemas"]["SceneInitialMagnetization"],
+    },
   };
 }
 

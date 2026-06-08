@@ -771,6 +771,9 @@ fn sharp_constant_region_parameter(
     region: &fullmag_ir::ObjectRegionIR,
     parameter: fullmag_ir::MaterialParameterNameIR,
 ) -> Result<Option<f64>, PlanError> {
+    if !crate::material_transition::region_transition_is_sharp(region, parameter) {
+        return Ok(None);
+    }
     let mut candidates: Vec<(i32, f64, String)> = Vec::new();
     for material_override in &region.material_overrides {
         if material_override.parameter != parameter {
@@ -963,12 +966,20 @@ fn gather_fem_material_field_plans(
                                         over.value,
                                         fullmag_ir::MaterialParameterFieldIR::Constant { .. }
                                     )
+                                    && crate::material_transition::region_transition_is_sharp(
+                                        region,
+                                        over.parameter,
+                                    )
                             }) || problem.material_parameter_fields.iter().any(|assignment| {
                                 assignment.region_id.as_deref() == Some(region.region_id.as_str())
                                     && assignment.parameter == plan.parameter
                                     && matches!(
                                         assignment.value,
                                         fullmag_ir::MaterialParameterFieldIR::Constant { .. }
+                                    )
+                                    && crate::material_transition::region_transition_is_sharp(
+                                        region,
+                                        assignment.parameter,
                                     )
                             });
                         if has_sharp {

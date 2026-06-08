@@ -6,14 +6,20 @@ interface JsonRecord {
 }
 
 export interface CouplingInspectorEndpoint {
+  area: number | null;
   label: string;
   objectId: string;
   regionId: string | null;
+  resolutionReason: string | null;
+  resolutionStatus: string;
+  resolvedFaceCount: number | null;
   selector: string | null;
+  tolerance: number | null;
   kind: string;
 }
 
 export interface CouplingInspectorModel {
+  blockerReason: string | null;
   couplingId: string | null;
   enabled: boolean;
   kind: string;
@@ -36,6 +42,10 @@ function asString(value: unknown): string | null {
     : null;
 }
 
+function asNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 function selectedCouplingId(selection: Selection): string | null {
   if (selection.ref?.type === "physics-coupling") {
     return selection.ref.couplingId;
@@ -53,16 +63,26 @@ function endpointLabel(endpoint: JsonRecord | null): string {
   return objectId;
 }
 
-function endpointModel(endpoint: unknown): CouplingInspectorEndpoint | null {
+function endpointModel(
+  endpoint: unknown,
+  resolution: unknown,
+): CouplingInspectorEndpoint | null {
   const record = asRecord(endpoint);
   if (!record) return null;
+  const resolutionRecord = asRecord(resolution);
   const objectId = asString(record.object) ?? "";
   return {
+    area: asNumber(resolutionRecord?.area),
     kind: asString(record.kind) ?? "object",
     label: endpointLabel(record),
     objectId,
     regionId: asString(record.region_id),
+    resolutionReason: asString(resolutionRecord?.reason),
+    resolutionStatus:
+      asString(resolutionRecord?.status) ?? "resolution_unavailable",
+    resolvedFaceCount: asNumber(resolutionRecord?.resolved_face_count),
     selector: asString(record.selector),
+    tolerance: asNumber(resolutionRecord?.tolerance),
   };
 }
 
@@ -73,6 +93,7 @@ export function resolveCouplingInspectorModel(
   const couplingId = selectedCouplingId(selection);
   if (!couplingId) {
     return {
+      blockerReason: null,
       couplingId: null,
       enabled: false,
       kind: "none",
@@ -89,6 +110,7 @@ export function resolveCouplingInspectorModel(
   );
   if (!coupling) {
     return {
+      blockerReason: null,
       couplingId,
       enabled: false,
       kind: "missing",
@@ -101,13 +123,14 @@ export function resolveCouplingInspectorModel(
   }
 
   return {
+    blockerReason: asString(coupling.blocker_reason),
     couplingId,
     enabled: coupling.enabled !== false,
     kind: coupling.coupling_kind,
     mode: "found",
     parameters: asRecord(coupling.params) ?? {},
     realizationStatus: coupling.realization_status ?? "authored_pending",
-    source: endpointModel(coupling.source),
-    target: endpointModel(coupling.target),
+    source: endpointModel(coupling.source, coupling.source_resolution),
+    target: endpointModel(coupling.target, coupling.target_resolution),
   };
 }

@@ -6,6 +6,7 @@ import {
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
+  MODEL_REGION_DIAGNOSTICS_PATH,
   MODEL_SCENE_PATH,
   MODEL_STUDY_PATH,
   PERSISTENCE_CHECKPOINTS_PATH,
@@ -33,6 +34,7 @@ import type {
   MeshSharedDomainManifestResource,
   CurrentRunResource,
   FieldStateTargetRef,
+  RegionDiagnosticsResource,
   RuntimeCommandPrecondition,
   RuntimeCommandTarget,
   SolverProfileResource,
@@ -48,6 +50,7 @@ import {
   resolveMeshBuildStatusLabel,
 } from "@/shared/domain/mesh/buildPipeline";
 import { DEFAULT_RELAX_TORQUE_APM } from "@/shared/domain/physics/torqueUnits";
+import { regionRuntimeBlockerPrefix } from "@/shared/domain/region/regionCapabilityCatalog";
 import {
   applyControlRoomUiState,
   exportControlRoomUiState,
@@ -319,6 +322,9 @@ function runtimeReadinessDisabledReason(
     return "Resolve geometry validation blockers before running runtime commands.";
   }
 
+  const regionBlocker = regionOwnedRuntimeBlockerReason(context);
+  if (regionBlocker) return regionBlocker;
+
   if (isMeshBuildRunning(context)) {
     return "A mesh build is still running.";
   }
@@ -344,6 +350,23 @@ function runtimeReadinessDisabledReason(
   }
 
   return null;
+}
+
+function regionOwnedRuntimeBlockerReason(context: CommandContext): string | null {
+  const resource = resourceData<RegionDiagnosticsResource>(
+    context,
+    MODEL_REGION_DIAGNOSTICS_PATH,
+  );
+  const diagnostic = resource?.diagnostics.find((entry) => {
+    const gate = entry.capability_gate ?? "";
+    const severity = entry.severity.toLowerCase();
+    return (
+      gate.startsWith("regions.") &&
+      (severity === "warning" || severity === "error" || severity === "fatal")
+    );
+  });
+  if (!diagnostic) return null;
+  return `${regionRuntimeBlockerPrefix(diagnostic.capability_gate)}: ${diagnostic.message}`;
 }
 
 function isMeshBuildRunning(context: CommandContext): boolean {

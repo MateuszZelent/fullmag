@@ -1,6 +1,83 @@
 use super::*;
 
 #[test]
+fn fem_top_surface_selector_resolves_bbox_faces() {
+    let mesh = MeshIR {
+        mesh_name: "box".to_string(),
+        nodes: vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 1.0],
+            [0.0, 1.0, 1.0],
+        ],
+        elements: vec![[0, 1, 2, 3]],
+        element_markers: vec![1],
+        boundary_faces: vec![[0, 1, 2], [3, 4, 5]],
+        boundary_markers: vec![10, 20],
+        periodic_boundary_pairs: Vec::new(),
+        periodic_node_pairs: Vec::new(),
+        per_domain_quality: std::collections::HashMap::new(),
+    };
+    let mesh_parts = vec![fullmag_ir::FemMeshPartIR {
+        id: "part:film".to_string(),
+        label: "film".to_string(),
+        role: fullmag_ir::FemMeshPartRole::MagneticObject,
+        object_id: Some("film".to_string()),
+        geometry_id: Some("film".to_string()),
+        material_id: None,
+        element_selector: fullmag_ir::FemMeshPartSelector::ElementRange { start: 0, count: 1 },
+        boundary_face_selector: fullmag_ir::FemMeshPartSelector::BoundaryFaceRange {
+            start: 0,
+            count: 2,
+        },
+        node_selector: fullmag_ir::FemMeshPartSelector::NodeRange { start: 0, count: 6 },
+        boundary_face_indices: Vec::new(),
+        node_indices: Vec::new(),
+        surface_faces: Vec::new(),
+        bounds_min: Some([0.0, 0.0, 0.0]),
+        bounds_max: Some([1.0, 1.0, 1.0]),
+        parent_id: None,
+    }];
+
+    let resolved = resolve_fem_surface_selector(&mesh, &mesh_parts, "film", "top", None)
+        .expect("top selector should resolve");
+
+    assert_eq!(resolved.selector, "top");
+    assert_eq!(resolved.boundary_face_indices, vec![1]);
+    assert_eq!(resolved.surface_faces, vec![[3, 4, 5]]);
+    assert_eq!(resolved.node_indices, vec![3, 4, 5]);
+    assert!((resolved.area - 0.5).abs() < 1e-12);
+}
+
+#[test]
+fn fem_surface_selector_rejects_unknown_bbox_face() {
+    let mesh = MeshIR {
+        mesh_name: "box".to_string(),
+        nodes: vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        elements: vec![[0, 1, 2, 3]],
+        element_markers: vec![1],
+        boundary_faces: vec![[0, 1, 2]],
+        boundary_markers: vec![1],
+        periodic_boundary_pairs: Vec::new(),
+        periodic_node_pairs: Vec::new(),
+        per_domain_quality: std::collections::HashMap::new(),
+    };
+
+    let error = resolve_fem_surface_selector(&mesh, &[], "film", "named_face", None)
+        .expect_err("v1 must reject named faces");
+
+    assert!(error.contains("named_face"));
+    assert!(error.contains("top/bottom/left/right/front/back"));
+}
+
+#[test]
 fn fem_domain_full_sampled_field_copies_by_global_node_indices() {
     let mesh = MeshIR {
         mesh_name: "shared".to_string(),
@@ -841,6 +918,7 @@ fn fem_plan_maps_geometry_and_object_region_to_one_continuous_object() {
         mesh_policy: None,
         material_overrides: Vec::new(),
         texture_override: None,
+        material_transition: None,
         realization_policy: fullmag_ir::RegionRealizationPolicyIR::Conformal,
     });
     let domain_asset = ir
@@ -937,6 +1015,7 @@ fn fem_inherited_mesh_policy_region_does_not_change_physics_contract() {
         }),
         material_overrides: Vec::new(),
         texture_override: None,
+        material_transition: None,
         realization_policy: fullmag_ir::RegionRealizationPolicyIR::Inherit,
     });
 
@@ -1076,6 +1155,7 @@ fn default_test_object_region() -> fullmag_ir::ObjectRegionIR {
         mesh_policy: None,
         material_overrides: Vec::new(),
         texture_override: None,
+        material_transition: None,
         realization_policy: fullmag_ir::RegionRealizationPolicyIR::Inherit,
     }
 }
@@ -1100,6 +1180,7 @@ fn test_box_region(
         mesh_policy: None,
         material_overrides: Vec::new(),
         texture_override: None,
+        material_transition: None,
         realization_policy: fullmag_ir::RegionRealizationPolicyIR::Inherit,
     }
 }
@@ -1205,6 +1286,14 @@ fn fdm_object_region_material_overrides_materialize_to_cell_fields() {
     assert_eq!(
         plan.common.material_field_plans[0].parameter,
         fullmag_ir::MaterialParameterNameIR::Ms
+    );
+    assert!(
+        plan.common.material_field_plans[0].requires_sampling,
+        "smooth region transition must require sampling even for constant overrides"
+    );
+    assert!(
+        plan.common.material_field_plans[0].requires_mesh_revision,
+        "mesh_relative region transition must depend on the mesh revision"
     );
     let fullmag_ir::BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
         panic!("expected FDM plan");
@@ -1350,6 +1439,29 @@ fn disabled_fdm_region_does_not_materialize_mask_or_texture_override() {
             .iter()
             .all(|value| *value == [1.0, 0.0, 0.0]),
         "disabled region texture override must not modify initial magnetization"
+    );
+}
+
+#[test]
+fn fem_region_texture_override_is_rejected_until_runtime_materialization_exists() {
+    let mut ir = fem_minimal_test_ir();
+    let mut region = default_test_object_region();
+    region.texture_override = Some(fullmag_ir::RegionTextureOverrideIR {
+        initial_magnetization: fullmag_ir::InitialMagnetizationIR::Uniform {
+            value: [0.0, 0.0, 1.0],
+        },
+    });
+    ir.object_regions.push(region);
+
+    let err = plan(&ir).expect_err("FEM must not silently ignore region texture overrides");
+    assert!(
+        err.reasons.iter().any(|reason| {
+            reason.contains("object region texture_override")
+                && reason.contains("backend='fem'")
+                && reason.contains("must not silently ignore region texture overrides")
+        }),
+        "unexpected planner errors: {:?}",
+        err.reasons
     );
 }
 
@@ -4903,6 +5015,7 @@ fn fem_eigen_shared_domain_region_samples_equilibrium_once_per_object() {
         mesh_policy: None,
         material_overrides: Vec::new(),
         texture_override: None,
+        material_transition: None,
         realization_policy: fullmag_ir::RegionRealizationPolicyIR::Conformal,
     });
     ir.study = fullmag_ir::StudyIR::Eigenmodes {
@@ -6587,6 +6700,7 @@ fn fem_sharp_assignment_requires_conformal_in_strict() {
         mesh_policy: None,
         material_overrides: Vec::new(),
         texture_override: None,
+        material_transition: Some(fullmag_ir::MaterialTransitionSpecIR::Sharp),
         realization_policy: fullmag_ir::RegionRealizationPolicyIR::Inherit,
     });
     ir.material_parameter_fields
@@ -6613,6 +6727,54 @@ fn fem_sharp_assignment_requires_conformal_in_strict() {
         }),
         "unexpected planner errors: {:?}",
         err.reasons
+    );
+}
+
+#[test]
+fn fem_default_region_ms_transition_does_not_require_conformal_boundary() {
+    let mut ir = fem_minimal_test_ir();
+    ir.object_regions.push(fullmag_ir::ObjectRegionIR {
+        region_id: "strip:smooth_defect".to_string(),
+        owner_object: "strip".to_string(),
+        name: "smooth_defect".to_string(),
+        shape: fullmag_ir::RegionShapeIR::Box {
+            size: [0.2, 0.2, 0.2],
+            center: [0.5, 0.5, 0.5],
+        },
+        frame: fullmag_ir::RegionFrameIR::Object,
+        enabled: true,
+        priority: 20,
+        mesh_policy: None,
+        material_overrides: vec![fullmag_ir::RegionMaterialOverrideIR {
+            parameter: fullmag_ir::MaterialParameterNameIR::Ms,
+            value: fullmag_ir::MaterialParameterFieldIR::Constant {
+                value: serde_json::json!(700e3),
+                unit: Some("A/m".to_string()),
+            },
+            priority: 20,
+            conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+        }],
+        texture_override: None,
+        material_transition: None,
+        realization_policy: fullmag_ir::RegionRealizationPolicyIR::Inherit,
+    });
+    ir.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Strict;
+
+    let planned =
+        plan(&ir).expect("default smooth Ms transition must not require a conformal FEM boundary");
+    let ms_plan = planned
+        .common
+        .material_field_plans
+        .iter()
+        .find(|plan| plan.parameter == fullmag_ir::MaterialParameterNameIR::Ms)
+        .expect("smooth region Ms override must produce a material field plan");
+    assert!(
+        ms_plan.requires_sampling,
+        "smooth region Ms override must be realized by sampling"
+    );
+    assert!(
+        ms_plan.requires_mesh_revision,
+        "mesh_relative smooth region Ms override must depend on the mesh revision"
     );
 }
 
@@ -6652,6 +6814,7 @@ fn fem_sharp_aex_region_requires_conformal_in_strict() {
             },
         ],
         texture_override: None,
+        material_transition: Some(fullmag_ir::MaterialTransitionSpecIR::Sharp),
         realization_policy: fullmag_ir::RegionRealizationPolicyIR::Inherit,
     };
     ir.object_regions.push(region);
@@ -6704,6 +6867,7 @@ fn fem_sharp_aex_conformal_region_lowers_to_element_coefficient_field() {
             },
         ],
         texture_override: None,
+        material_transition: Some(fullmag_ir::MaterialTransitionSpecIR::Sharp),
         realization_policy: fullmag_ir::RegionRealizationPolicyIR::Conformal,
     };
     ir.object_regions.push(region);
@@ -6785,6 +6949,7 @@ fn fem_sharp_aex_conformal_marker_metadata_without_mesh_domain_still_blocks() {
             conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
         }],
         texture_override: None,
+        material_transition: Some(fullmag_ir::MaterialTransitionSpecIR::Sharp),
         realization_policy: fullmag_ir::RegionRealizationPolicyIR::Conformal,
     });
     if let Some(assets) = ir.geometry_assets.as_mut() {
@@ -6836,6 +7001,7 @@ fn fem_sharp_aex_region_requires_project_policy_in_extended_without_conformal_ma
             conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
         }],
         texture_override: None,
+        material_transition: Some(fullmag_ir::MaterialTransitionSpecIR::Sharp),
         realization_policy: fullmag_ir::RegionRealizationPolicyIR::Inherit,
     };
     ir.object_regions.push(region);
@@ -6878,6 +7044,7 @@ fn fem_sharp_aex_region_allows_projection_in_extended_with_warning() {
             conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
         }],
         texture_override: None,
+        material_transition: Some(fullmag_ir::MaterialTransitionSpecIR::Sharp),
         realization_policy: fullmag_ir::RegionRealizationPolicyIR::Project,
     };
     ir.object_regions.push(region);
@@ -6944,6 +7111,7 @@ fn fem_sharp_aex_project_policy_with_real_marker_still_uses_projection_warning()
             conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
         }],
         texture_override: None,
+        material_transition: Some(fullmag_ir::MaterialTransitionSpecIR::Sharp),
         realization_policy: fullmag_ir::RegionRealizationPolicyIR::Project,
     };
     ir.object_regions.push(region);

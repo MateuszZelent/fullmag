@@ -132,6 +132,16 @@
           },
           "path": {
             "type": "string"
+          },
+          "region_owned_provenance": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RegionOwnedArtifactProvenance"
+              }
+            ]
           }
         },
         "required": [
@@ -581,6 +591,39 @@
                   "null"
                 ]
               },
+              "fields": {
+                "items": {
+                  "$ref": "#/components/schemas/SceneMaterialParameterAssignment"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "enum": [
+                  "patch_object_material_fields"
+                ],
+                "type": "string"
+              },
+              "object_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "object_id",
+              "fields",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "base_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "kind": {
                 "enum": [
                   "delete_object_region"
@@ -680,7 +723,7 @@
                 "type": "string"
               },
               "patch": {
-                "type": "object"
+                "$ref": "#/components/schemas/SceneCouplingPatch"
               }
             },
             "required": [
@@ -1797,6 +1840,61 @@
         ],
         "type": "string"
       },
+      "CouplingEndpointResolutionResource": {
+        "properties": {
+          "area": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "object_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "region_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resolved_face_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "selector": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "tolerance": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "status",
+          "object_id"
+        ],
+        "type": "object"
+      },
       "CouplingListResource": {
         "properties": {
           "couplings": {
@@ -1819,6 +1917,12 @@
       },
       "CouplingResource": {
         "properties": {
+          "blocker_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "capability_policy": {
             "type": [
               "string",
@@ -1846,8 +1950,14 @@
           "source": {
             "$ref": "#/components/schemas/SceneCouplingEndpoint"
           },
+          "source_resolution": {
+            "$ref": "#/components/schemas/CouplingEndpointResolutionResource"
+          },
           "target": {
             "$ref": "#/components/schemas/SceneCouplingEndpoint"
+          },
+          "target_resolution": {
+            "$ref": "#/components/schemas/CouplingEndpointResolutionResource"
           }
         },
         "required": [
@@ -1856,6 +1966,8 @@
           "enabled",
           "source",
           "target",
+          "source_resolution",
+          "target_resolution",
           "params"
         ],
         "type": "object"
@@ -8191,6 +8303,49 @@
         ],
         "type": "object"
       },
+      "RegionOwnedArtifactProvenance": {
+        "properties": {
+          "authored_region_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "blocked_diagnostic_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "coupling_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "deferred_diagnostic_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "material_parameter_field_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scene_revision",
+          "authored_region_count",
+          "material_parameter_field_count",
+          "coupling_count",
+          "blocked_diagnostic_count",
+          "deferred_diagnostic_count"
+        ],
+        "type": "object"
+      },
       "RegionPatchRequest": {
         "properties": {
           "enabled": {
@@ -9168,6 +9323,67 @@
           }
         ]
       },
+      "SceneCouplingPatch": {
+        "properties": {
+          "capability_policy": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneCouplingCapabilityPolicy"
+              }
+            ]
+          },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "kind": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneCouplingKind"
+              }
+            ]
+          },
+          "parameters": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneCouplingParameters"
+              }
+            ]
+          },
+          "source": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneCouplingEndpoint"
+              }
+            ]
+          },
+          "target": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneCouplingEndpoint"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
       "SceneExchangeCouplingMode": {
         "enum": [
           "harmonic_mean",
@@ -9522,6 +9738,77 @@
         ],
         "type": "object"
       },
+      "SceneMaterialTransition": {
+        "oneOf": [
+          {
+            "properties": {
+              "cells": {
+                "format": "int32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "enum": [
+                  "mesh_relative"
+                ],
+                "type": "string"
+              },
+              "scope": {
+                "$ref": "#/components/schemas/SceneMaterialTransitionScope"
+              }
+            },
+            "required": [
+              "cells",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "metric"
+                ],
+                "type": "string"
+              },
+              "scope": {
+                "$ref": "#/components/schemas/SceneMaterialTransitionScope"
+              },
+              "width": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "width",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "sharp"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SceneMaterialTransitionScope": {
+        "enum": [
+          "boundary",
+          "inside",
+          "outside"
+        ],
+        "type": "string"
+      },
       "SceneMetadataResource": {
         "properties": {
           "authoring_schema": {
@@ -9558,6 +9845,16 @@
               "$ref": "#/components/schemas/SceneRegionMaterialOverride"
             },
             "type": "array"
+          },
+          "material_transition": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneMaterialTransition"
+              }
+            ]
           },
           "mesh_policy": {
             "oneOf": [
@@ -9631,6 +9928,16 @@
             "type": [
               "array",
               "null"
+            ]
+          },
+          "material_transition": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneMaterialTransition"
+              }
             ]
           },
           "mesh_policy": {

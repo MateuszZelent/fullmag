@@ -87,6 +87,9 @@ try {
   const canvas = page.locator(VIEWPORT_3D_CANVAS_SELECTOR);
   await canvas.waitFor({ state: "visible", timeout: 15_000 });
   await waitForCanvasClipBox(page);
+  if (useMainPageFdmFixture) {
+    await verifyRegionOverlayModeControl(page);
+  }
 
   const detectedScene = await detectScene(page);
   if (requiredScenes.has("object")) {
@@ -262,7 +265,7 @@ async function installFdmFixtureApi(page, fixtureRequests) {
       return;
     }
     if (path === "/v2/sessions/current/model/scene") {
-      await fulfillJson(route, { objects: [], revision: 0, schema_version: 1 });
+      await fulfillJson(route, fdmSceneWithRegionFixture());
       return;
     }
     if (path === "/v2/sessions/current/model/universe") {
@@ -283,6 +286,57 @@ async function installFdmFixtureApi(page, fixtureRequests) {
 
     await fulfillEmpty(route, 204);
   });
+}
+
+function fdmSceneWithRegionFixture() {
+  return {
+    objects: [
+      {
+        id: "fixture-region-owner",
+        regions: [
+          {
+            enabled: true,
+            frame: "object",
+            name: "Fixture core",
+            region_id: "fixture-region-owner:core",
+            shape: {
+              center: [0, 0, 0],
+              kind: "sphere",
+              radius: 1.5e-7,
+            },
+          },
+        ],
+        transform: { translation: [0, 0, 0] },
+        visible: true,
+      },
+    ],
+    revision: 1,
+    schema_version: 2,
+  };
+}
+
+async function verifyRegionOverlayModeControl(page) {
+  const control = page.getByRole("group", { name: "Region overlays" });
+  await control.waitFor({ state: "visible", timeout: 15_000 });
+  const authored = control.getByRole("button", { exact: true, name: "Authored" });
+  const realized = control.getByRole("button", { exact: true, name: "Realized" });
+  const both = control.getByRole("button", { exact: true, name: "Both" });
+
+  if ((await both.getAttribute("aria-pressed")) !== "true") {
+    throw new Error("Region overlay mode must default to Both.");
+  }
+  if (!(await realized.isDisabled())) {
+    throw new Error(
+      "Realized region overlay mode must be disabled without mesh-backed regions.",
+    );
+  }
+  await authored.click();
+  if ((await authored.getAttribute("aria-pressed")) !== "true") {
+    throw new Error("Authored region overlay mode did not become active.");
+  }
+  console.log(
+    "Viewport 3D region overlay mode control passed (default=both, authored selectable, realized unavailable without mesh).",
+  );
 }
 
 async function ensureObjectScene(page) {
@@ -961,7 +1015,8 @@ function isIgnorableConsoleError(text) {
   return (
     allowMissingSession &&
     text.includes("/v2/sessions/current/events/ws") &&
-    text.includes("Unexpected response code: 404")
+    (text.includes("Unexpected response code: 404") ||
+      text.includes("net::ERR_CONNECTION_REFUSED"))
   );
 }
 

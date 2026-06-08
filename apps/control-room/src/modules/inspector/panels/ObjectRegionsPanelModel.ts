@@ -1,5 +1,6 @@
 import type { components } from "@/kernel/api/generated/openapi-v2-types";
 import type {
+  CouplingListResource,
   MaterialParameterFieldListResource,
   RegionDiagnosticsResource,
   RegionListResource,
@@ -49,6 +50,13 @@ export interface ObjectRegionDiagnosticItem {
   message: string;
   realizationStatus: string | null;
   severity: string;
+}
+
+export interface RegionCouplingDependency {
+  couplingId: string;
+  endpointRole: "source" | "target";
+  kind: string;
+  status: string;
 }
 
 export interface ObjectRegionPanelModel {
@@ -110,6 +118,47 @@ function asString(value: unknown): string | null {
 
 function asNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function endpointReferencesRegion(
+  endpoint: unknown,
+  objectId: string,
+  regionId: string,
+): boolean {
+  const record = asRecord(endpoint);
+  return (
+    asString(record?.kind) === "region" &&
+    asString(record?.object) === objectId &&
+    asString(record?.region_id) === regionId
+  );
+}
+
+export function resolveRegionCouplingDependencies(
+  objectId: string,
+  regionId: string,
+  couplings: CouplingListResource | null | undefined,
+): RegionCouplingDependency[] {
+  const dependencies: RegionCouplingDependency[] = [];
+  for (const coupling of couplings?.couplings ?? []) {
+    if (!coupling.enabled) continue;
+    if (endpointReferencesRegion(coupling.source, objectId, regionId)) {
+      dependencies.push({
+        couplingId: coupling.coupling_id,
+        endpointRole: "source",
+        kind: coupling.coupling_kind,
+        status: coupling.realization_status ?? "authored",
+      });
+    }
+    if (endpointReferencesRegion(coupling.target, objectId, regionId)) {
+      dependencies.push({
+        couplingId: coupling.coupling_id,
+        endpointRole: "target",
+        kind: coupling.coupling_kind,
+        status: coupling.realization_status ?? "authored",
+      });
+    }
+  }
+  return dependencies;
 }
 
 function numberIsPositive(value: number): boolean {

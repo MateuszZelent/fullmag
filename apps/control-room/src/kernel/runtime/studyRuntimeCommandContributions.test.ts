@@ -9,6 +9,7 @@ import {
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
+  MODEL_REGION_DIAGNOSTICS_PATH,
   PERSISTENCE_CHECKPOINTS_PATH,
   PERSISTENCE_EXPORTS_PATH,
   PERSISTENCE_FIELD_STATE_EXPORTS_PATH,
@@ -88,6 +89,7 @@ function runtimeResourceData({
   discretization = "fdm",
   explicitTopology = false,
   geometryValidation = { diagnostics: [] },
+  regionDiagnostics = { diagnostics: [], scene_revision: 0 },
   meshBuildCurrent = null,
   meshBuildStatus = "idle",
   meshPipelineStatus = null,
@@ -111,6 +113,7 @@ function runtimeResourceData({
   discretization?: string;
   explicitTopology?: boolean;
   geometryValidation?: unknown;
+  regionDiagnostics?: unknown;
   meshBuildCurrent?: unknown;
   meshBuildStatus?: string;
   meshPipelineStatus?: Array<{
@@ -145,6 +148,7 @@ function runtimeResourceData({
           }
         : null,
     [MODEL_GEOMETRY_VALIDATION_PATH]: geometryValidation,
+    [MODEL_REGION_DIAGNOSTICS_PATH]: regionDiagnostics,
     [SESSION_STATUS_RESOURCE_KEY]: {
       capabilities: {
         algorithms_available: [],
@@ -1357,6 +1361,37 @@ describe("study runtime command contributions", () => {
     };
 
     expect(registry.isEnabled("study.run", pipelineContext)).toBe(false);
+  });
+
+  it("blocks runtime start commands for region-owned capability diagnostics", () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const context = {
+      api: {} as never,
+      resourceData: runtimeResourceData({
+        regionDiagnostics: {
+          scene_revision: 3,
+          diagnostics: [
+            {
+              capability_gate: "regions.material_override",
+              code: "region_material_realization_pending",
+              diagnostic_id: "region:r1:material-pending",
+              message:
+                "Region material override is authored; planner/runtime must materialize it or block execution rather than silently dropping it.",
+              owner_object_id: "obj1",
+              realization_status: "authored",
+              region_id: "r1",
+              severity: "warning",
+            },
+          ],
+        },
+      }),
+      source: "test" as const,
+    };
+
+    expect(registry.isEnabled("study.run", context)).toBe(false);
+    expect(registry.get("study.run")?.disabledReason?.(context)).toBe(
+      "Regional material realization blocker: Region material override is authored; planner/runtime must materialize it or block execution rather than silently dropping it.",
+    );
   });
 
   it("requires current shared-domain mesh provenance for FEM runtime start commands", () => {

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { ControlRoomApi } from "./ControlRoomApi";
-import type { LiveStatusResource } from "./apiTypes";
+import type { AuthoringTransactionRequest, LiveStatusResource } from "./apiTypes";
 import { RequestDiagnosticsController } from "./RequestDiagnosticsController";
 
 const contractHeaders = { "x-api-contract-version": "1.0.0" };
@@ -2290,7 +2290,7 @@ describe("ControlRoomApi", () => {
       target: { kind: "object", object: "reference" },
     }, { baseRevision: 8 });
     await api.model.patchCoupling("exchange:film:ref", {
-      parameters: { mode: "harmonic_mean", scale: 0.5 },
+      parameters: { kind: "exchange", mode: "harmonic_mean", scale: 0.5 },
     }, { baseRevision: 9 });
     await api.model.deleteCoupling("exchange:film:ref", { baseRevision: 10 });
 
@@ -2351,7 +2351,7 @@ describe("ControlRoomApi", () => {
           base_revision: 9,
           coupling_id: "exchange:film:ref",
           kind: "patch_coupling",
-          patch: { parameters: { mode: "harmonic_mean", scale: 0.5 } },
+          patch: { parameters: { kind: "exchange", mode: "harmonic_mean", scale: 0.5 } },
         },
         method: "POST",
         url: "http://127.0.0.1:8765/v2/sessions/current/model/transactions",
@@ -2366,6 +2366,29 @@ describe("ControlRoomApi", () => {
         url: "http://127.0.0.1:8765/v2/sessions/current/model/transactions",
       },
     ]);
+  });
+
+  it("keeps coupling transaction patches on the generated typed contract", () => {
+    const patchTransaction = {
+      coupling_id: "exchange:film:ref",
+      kind: "patch_coupling",
+      patch: {
+        parameters: { kind: "exchange", mode: "harmonic_mean", scale: 0.5 },
+      },
+    } satisfies AuthoringTransactionRequest;
+
+    expect(patchTransaction.patch.parameters.kind).toBe("exchange");
+
+    const rawIdentityPatch = {
+      coupling_id: "exchange:film:ref",
+      kind: "patch_coupling",
+      patch: {
+        // @ts-expect-error coupling identity belongs to the transaction envelope.
+        coupling_id: "other",
+      },
+    } satisfies AuthoringTransactionRequest;
+
+    expect(rawIdentityPatch.kind).toBe("patch_coupling");
   });
 
   it("commits material library writes through model transactions", async () => {

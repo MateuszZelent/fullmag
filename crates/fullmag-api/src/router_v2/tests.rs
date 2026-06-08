@@ -10,15 +10,15 @@
 //! - unknown-route fallback.
 
 use axum::body::Body;
-use axum::http::{header, Method, Request, StatusCode};
+use axum::http::{Method, Request, StatusCode, header};
 use tower::ServiceExt; // for `oneshot`
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fs;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
-use tokio::sync::{watch, Mutex, RwLock};
+use std::sync::atomic::AtomicU64;
+use tokio::sync::{Mutex, RwLock, watch};
 
 use crate::feature_flags::FeatureFlags;
 use crate::schemas::realtime::{
@@ -4697,8 +4697,8 @@ async fn mesh_active_build_returns_projection_from_mesh_workspace() {
     assert_eq!(json["effective_per_object_targets"]["body"]["hmax"], "2e-9");
     assert_eq!(json["last_build_summary"]["elements"], 42);
     assert_eq!(
-        json["last_build_summary"]["shared_domain_build_report"]["effective_per_object_targets"]
-            ["body"]["edge_hmax"],
+        json["last_build_summary"]["shared_domain_build_report"]["effective_per_object_targets"]["body"]
+            ["edge_hmax"],
         1.8e-9
     );
     assert_eq!(
@@ -4710,8 +4710,7 @@ async fn mesh_active_build_returns_projection_from_mesh_workspace() {
         "component_aware"
     );
     assert_eq!(
-        json["shared_domain_build_report"]["effective_per_object_targets"]["body"]
-            ["edge_maximum_element_size"],
+        json["shared_domain_build_report"]["effective_per_object_targets"]["body"]["edge_maximum_element_size"],
         1.8e-9
     );
     assert_eq!(
@@ -6368,22 +6367,25 @@ async fn mesh_shared_domain_manifest_returns_tree_metadata() {
             bounds_max: Some([0.75, 0.75, 0.75]),
         });
         let mut scene = sample_scene_document();
-        scene.objects[0].regions.push(fullmag_authoring::SceneObjectRegion {
-            region_id: "body:core".to_string(),
-            owner_object: "body".to_string(),
-            name: "Core".to_string(),
-            shape: fullmag_authoring::SceneRegionShape::Sphere {
-                center: [0.5, 0.5, 0.5],
-                radius: 0.25,
-            },
-            frame: fullmag_authoring::SceneRegionFrame::Object,
-            enabled: true,
-            priority: 10,
-            mesh_policy: None,
-            material_overrides: Vec::new(),
-            texture_override: None,
-            realization_policy: fullmag_authoring::SceneRegionRealizationPolicy::Conformal,
-        });
+        scene.objects[0]
+            .regions
+            .push(fullmag_authoring::SceneObjectRegion {
+                region_id: "body:core".to_string(),
+                owner_object: "body".to_string(),
+                name: "Core".to_string(),
+                shape: fullmag_authoring::SceneRegionShape::Sphere {
+                    center: [0.5, 0.5, 0.5],
+                    radius: 0.25,
+                },
+                frame: fullmag_authoring::SceneRegionFrame::Object,
+                enabled: true,
+                priority: 10,
+                mesh_policy: None,
+                material_overrides: Vec::new(),
+                texture_override: None,
+                material_transition: None,
+                realization_policy: fullmag_authoring::SceneRegionRealizationPolicy::Conformal,
+            });
         snapshot.fem_mesh = Some(mesh);
         snapshot.mesh_revision = 41;
         snapshot.scene_document = Some(scene);
@@ -6424,7 +6426,10 @@ async fn mesh_shared_domain_manifest_returns_tree_metadata() {
     assert_eq!(json["regions"][0]["mesh_part_ids"][0], "body");
     assert_eq!(json["regions"][0]["element_count"], 2);
     assert_eq!(json["regions"][1]["region_id"], "body:core");
-    assert_eq!(json["regions"][1]["source_region_candidate_id"], "body:core");
+    assert_eq!(
+        json["regions"][1]["source_region_candidate_id"],
+        "body:core"
+    );
     assert_eq!(json["regions"][1]["source_object_ids"][0], "body");
     assert_eq!(json["regions"][1]["mesh_part_ids"][0], "part:body:core");
     assert_eq!(json["regions"][1]["element_count"], 1);
@@ -6461,8 +6466,8 @@ async fn mesh_shared_domain_manifest_reports_clean_scene_provenance_without_buil
 }
 
 #[tokio::test]
-async fn mesh_shared_domain_manifest_keeps_provenance_unknown_for_dirty_scene_without_build_summary(
-) {
+async fn mesh_shared_domain_manifest_keeps_provenance_unknown_for_dirty_scene_without_build_summary()
+ {
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document();
     scene.revision = 94;
@@ -7016,10 +7021,132 @@ async fn authoring_script_source_returns_current_python_source() {
     let json = body_json(response).await;
     assert_eq!(json["script_path"], script_path.display().to_string());
     assert_eq!(json["bytes"], 22);
-    assert!(json["source"]
-        .as_str()
-        .expect("source string")
-        .contains("from fullmag import *"));
+    assert!(
+        json["source"]
+            .as_str()
+            .expect("source string")
+            .contains("from fullmag import *")
+    );
+}
+
+#[tokio::test]
+async fn authoring_script_sync_uses_session_scene_document_region_edits() {
+    let mut state = test_app_state_with_live_session().await;
+    let script_dir = std::env::temp_dir().join(format!(
+        "fullmag-api-region-script-sync-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos(),
+    ));
+    fs::create_dir_all(&script_dir).expect("failed to create script dir");
+    let script_path = script_dir.join("scene.py");
+    {
+        let state_mut = Arc::get_mut(&mut state).expect("test state should be uniquely owned");
+        state_mut.repo_root = crate::script::repo_root();
+        state_mut.current_workspace_root = script_dir.clone();
+    }
+    fs::write(
+        &script_path,
+        r#"
+import fullmag as fm
+
+study = fm.study("api_region_sync")
+study.engine("fem")
+
+body = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="body")
+body.Ms = 800e3
+body.Aex = 13e-12
+body.alpha = 0.1
+body.m = fm.texture.uniform(1, 0, 0)
+
+study.exchange()
+study.run(1e-12)
+"#,
+    )
+    .expect("failed to write test script");
+
+    let mut scene_value = serde_json::to_value(sample_scene_document()).expect("serialize scene");
+    scene_value["objects"][0]["regions"] = serde_json::json!([
+        {
+            "region_id": "body:ui-core",
+            "owner_object": "body",
+            "name": "ui_core",
+            "shape": {
+                "kind": "cylinder",
+                "radius": 1.0e-8,
+                "height": 5.0e-9,
+                "axis": [0.0, 0.0, 1.0],
+                "center": [0.0, 0.0, 0.0]
+            },
+            "frame": "object",
+            "enabled": true,
+            "priority": 0,
+            "material_overrides": [
+                {
+                    "parameter": "ms",
+                    "value": { "kind": "constant", "value": 700000.0, "unit": "A/m" },
+                    "priority": 5,
+                    "conflict_policy": "higher_priority_wins"
+                }
+            ],
+            "mesh_policy": {
+                "maximum_element_size": 1.0e-9,
+                "minimum_element_size": 1.0e-9,
+                "transition_distance": 2.0e-8,
+                "order": 1
+            },
+            "realization_policy": "inherit"
+        }
+    ]);
+    scene_value["objects"][0]["allocated_region_ids"] = serde_json::json!(["body:ui-core"]);
+    scene_value["objects"][0]["material_parameter_fields"] = serde_json::json!([
+        {
+            "assignment_id": "field:ui-core-alpha",
+            "owner_object": "body",
+            "parameter": "alpha",
+            "value": { "kind": "constant", "value": 0.05, "unit": "dimensionless" },
+            "region_id": "body:ui-core",
+            "priority": 6,
+            "conflict_policy": "higher_priority_wins"
+        }
+    ]);
+    let scene: fullmag_authoring::SceneDocument =
+        serde_json::from_value(scene_value).expect("scene value should deserialize");
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path = script_path.display().to_string();
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/syncs")
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = response.status();
+    let json = body_json(response).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["written"], true);
+    let rewritten = fs::read_to_string(&script_path).expect("script should be rewritten");
+    assert!(rewritten.contains("body_ui_core_region = body.add_region(\"ui_core\""));
+    assert!(rewritten.contains("region_id=\"body:ui-core\""));
+    assert!(rewritten.contains(
+        "body_ui_core_region.set_material(\"ms\", fm.fields.constant(700000, unit=\"A/m\"), priority=5"
+    ));
+    assert!(rewritten.contains(
+        "body.set_material_field(\"alpha\", fm.fields.constant(0.05, unit=\"dimensionless\"), assignment_id=\"field:ui-core-alpha\", region=body_ui_core_region"
+    ));
+
+    let _ = fs::remove_dir_all(&script_dir);
 }
 
 #[tokio::test]
@@ -7156,21 +7283,27 @@ async fn authoring_geometry_capabilities_returns_backend_matrix() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
-    assert!(json["primitive_capabilities"]
-        .as_array()
-        .expect("primitive capabilities")
-        .iter()
-        .any(|entry| entry["id"] == "box" && entry["fem"] == true));
-    assert!(json["primitive_capabilities"]
-        .as_array()
-        .expect("primitive capabilities")
-        .iter()
-        .any(|entry| entry["id"] == "arch_waveguide" && entry["status"] == "production"));
-    assert!(json["csg_capabilities"]
-        .as_array()
-        .expect("csg capabilities")
-        .iter()
-        .any(|entry| entry["op"] == "subtract" && entry["status"] == "production"));
+    assert!(
+        json["primitive_capabilities"]
+            .as_array()
+            .expect("primitive capabilities")
+            .iter()
+            .any(|entry| entry["id"] == "box" && entry["fem"] == true)
+    );
+    assert!(
+        json["primitive_capabilities"]
+            .as_array()
+            .expect("primitive capabilities")
+            .iter()
+            .any(|entry| entry["id"] == "arch_waveguide" && entry["status"] == "production")
+    );
+    assert!(
+        json["csg_capabilities"]
+            .as_array()
+            .expect("csg capabilities")
+            .iter()
+            .any(|entry| entry["op"] == "subtract" && entry["status"] == "production")
+    );
 }
 
 #[tokio::test]
@@ -7286,9 +7419,11 @@ async fn authoring_transactions_create_transform_and_delete_objects() {
         .find(|object| object["id"] == "box_001")
         .expect("created object present");
     assert_eq!(created_object["geometry"]["geometry_kind"], "Box");
-    assert!(created_object["tags"]
-        .as_array()
-        .is_some_and(|tags| tags.iter().any(|tag| tag == "mesh:dirty")));
+    assert!(
+        created_object["tags"]
+            .as_array()
+            .is_some_and(|tags| tags.iter().any(|tag| tag == "mesh:dirty"))
+    );
     assert_eq!(
         create_json["committed_scene"]["universe"]["size"][0],
         300e-9
@@ -7352,11 +7487,13 @@ async fn authoring_transactions_create_transform_and_delete_objects() {
     assert_eq!(delete_response.status(), StatusCode::OK);
     let delete_json = body_json(delete_response).await;
     assert_eq!(delete_json["transaction_kind"], "delete_object");
-    assert!(!delete_json["committed_scene"]["objects"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|object| object["id"] == "box_001"));
+    assert!(
+        !delete_json["committed_scene"]["objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|object| object["id"] == "box_001")
+    );
 }
 
 #[tokio::test]
@@ -7416,9 +7553,11 @@ async fn authoring_transactions_mutate_object_regions_and_couplings() {
     let core_region_id = format!("{object_id}:r1");
     assert_eq!(created_object["regions"][0]["region_id"], core_region_id);
     assert_eq!(created_object["allocated_region_ids"][0], core_region_id);
-    assert!(!created_object["tags"]
-        .as_array()
-        .is_some_and(|tags| tags.iter().any(|tag| tag == "mesh:dirty")));
+    assert!(
+        !created_object["tags"]
+            .as_array()
+            .is_some_and(|tags| tags.iter().any(|tag| tag == "mesh:dirty"))
+    );
 
     let patch_region_response = app
         .clone()
@@ -7539,6 +7678,74 @@ async fn authoring_transactions_mutate_object_regions_and_couplings() {
     assert!(deleted_regions.is_none_or(|regions| regions.is_empty()));
     let deleted_couplings = delete_region_json["committed_scene"]["couplings"].as_array();
     assert!(deleted_couplings.is_none_or(|couplings| couplings.is_empty()));
+}
+
+#[tokio::test]
+async fn authoring_delete_object_removes_object_and_surface_couplings() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 60;
+    let object_id = scene.objects[0].id.clone();
+    scene.couplings.push(
+        serde_json::from_value(serde_json::json!({
+            "coupling_id": "body_reference_exchange",
+            "kind": "exchange",
+            "enabled": true,
+            "source": { "kind": "object", "object": object_id },
+            "target": { "kind": "object", "object": "reference" },
+            "parameters": { "kind": "exchange", "mode": "harmonic_mean", "scale": 1.0 }
+        }))
+        .expect("object coupling should deserialize"),
+    );
+    scene.couplings.push(
+        serde_json::from_value(serde_json::json!({
+            "coupling_id": "body_reference_rkky",
+            "kind": "rkky",
+            "enabled": true,
+            "source": { "kind": "surface", "object": object_id, "selector": "top" },
+            "target": { "kind": "surface", "object": "reference", "selector": "bottom" },
+            "parameters": { "kind": "rkky", "J1": -0.0003 },
+            "capability_policy": "require_runtime"
+        }))
+        .expect("surface coupling should deserialize"),
+    );
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/transactions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "delete_object",
+                        "base_revision": 60,
+                        "object_id": object_id
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let json = body_json(response).await;
+
+    assert_eq!(status, StatusCode::OK, "{json:#}");
+    assert!(
+        json["committed_scene"]["objects"]
+            .as_array()
+            .is_none_or(|objects| objects.iter().all(|object| object["id"] != object_id))
+    );
+    assert!(
+        json["committed_scene"]["couplings"]
+            .as_array()
+            .is_none_or(|couplings| couplings.is_empty())
+    );
 }
 
 #[tokio::test]
@@ -7683,9 +7890,11 @@ async fn authoring_coupling_transactions_reject_active_disabled_region_endpoint(
 #[tokio::test]
 async fn authoring_object_region_resource_crud_allocates_stable_region_id() {
     fn assert_object_region_authoring_keeps_mesh_current(object: &serde_json::Value) {
-        assert!(!object["tags"]
-            .as_array()
-            .is_some_and(|tags| tags.iter().any(|tag| tag == "mesh:dirty")));
+        assert!(
+            !object["tags"]
+                .as_array()
+                .is_some_and(|tags| tags.iter().any(|tag| tag == "mesh:dirty"))
+        );
     }
 
     let state = test_app_state_with_live_session().await;
@@ -8144,11 +8353,13 @@ async fn authoring_geometry_realization_reports_blocked_csg() {
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
     assert_eq!(json["status"], "blocked");
-    assert!(json["diagnostics"]
-        .as_array()
-        .expect("diagnostics")
-        .iter()
-        .any(|entry| entry["code"] == "GEOMETRY_CSG_OP_UNSUPPORTED"));
+    assert!(
+        json["diagnostics"]
+            .as_array()
+            .expect("diagnostics")
+            .iter()
+            .any(|entry| entry["code"] == "GEOMETRY_CSG_OP_UNSUPPORTED")
+    );
 }
 
 #[tokio::test]
@@ -8243,10 +8454,12 @@ async fn authoring_geometry_realization_returns_object_derived_region_candidates
     assert_eq!(json["realization_revision"], 21);
     assert_eq!(json["region_candidates"][0]["object_id"], "body");
     assert_eq!(json["region_candidates"][0]["material_ref"], "mat:body");
-    assert!(json["region_candidates"][0]["source_body_ids"][0]
-        .as_str()
-        .unwrap()
-        .starts_with("body:body:"));
+    assert!(
+        json["region_candidates"][0]["source_body_ids"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("body:body:")
+    );
 }
 
 #[tokio::test]
@@ -8332,11 +8545,13 @@ async fn authoring_region_owned_resources_expose_authored_payloads() {
     let regions = body_json(regions_response).await;
     assert_eq!(status, StatusCode::OK, "{regions:#}");
     assert_eq!(regions["regions"].as_array().unwrap().len(), 1);
-    assert!(regions["regions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .all(|region| region["source"] == "authored_object_region"));
+    assert!(
+        regions["regions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|region| region["source"] == "authored_object_region")
+    );
     let authored_region = regions["regions"]
         .as_array()
         .unwrap()
@@ -8391,10 +8606,12 @@ async fn authoring_region_owned_resources_expose_authored_payloads() {
     assert_eq!(realized_region["owner_object_id"], "body");
     assert_eq!(realized_region["region_id"], "region:body");
     assert_eq!(realized_region["source_object_ids"][0], "body");
-    assert!(realized_region["source_body_ids"][0]
-        .as_str()
-        .unwrap()
-        .starts_with("body:body:"));
+    assert!(
+        realized_region["source_body_ids"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("body:body:")
+    );
     assert_eq!(realized_region["material_ref"], "mat:body");
     assert_eq!(realized_region["realization_status"], "realized");
     assert!(realized_region["shape"].is_null());
@@ -8424,12 +8641,14 @@ async fn authoring_region_owned_resources_expose_authored_payloads() {
     assert!(diagnostic_codes.contains("region_mesh_policy_requires_rebuild"));
     assert!(diagnostic_codes.contains("region_material_realization_pending"));
     assert!(diagnostic_codes.contains("region_realization_policy_capability_gated"));
-    assert!(diagnostics["diagnostics"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .all(|diagnostic| diagnostic["region_id"] == "body:core"
-            && diagnostic["owner_object_id"] == "body"));
+    assert!(
+        diagnostics["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|diagnostic| diagnostic["region_id"] == "body:core"
+                && diagnostic["owner_object_id"] == "body")
+    );
 
     let fields_response = app
         .clone()
@@ -8478,6 +8697,27 @@ async fn authoring_region_owned_resources_expose_authored_payloads() {
     assert_eq!(
         couplings["couplings"][0]["realization_status"],
         "requires_runtime_capability"
+    );
+    assert_eq!(
+        couplings["couplings"][0]["source_resolution"]["status"],
+        "pending_mesh_resolution"
+    );
+    assert_eq!(
+        couplings["couplings"][0]["source_resolution"]["object_id"],
+        "body"
+    );
+    assert_eq!(
+        couplings["couplings"][0]["source_resolution"]["selector"],
+        "top"
+    );
+    assert_eq!(
+        couplings["couplings"][0]["target_resolution"]["status"],
+        "pending_mesh_resolution"
+    );
+    assert!(
+        couplings["couplings"][0]["blocker_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("RKKY runtime operator"))
     );
 
     // REDO ETAP 4 Test: Add execution plan metadata and apply it to verify realized field status/statistics
@@ -8553,6 +8793,128 @@ async fn authoring_region_owned_resources_expose_authored_payloads() {
 }
 
 #[tokio::test]
+async fn authoring_coupling_resource_resolves_bbox_surface_from_current_fem_mesh() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.couplings.push(
+        serde_json::from_value(serde_json::json!({
+            "coupling_id": "body_top_rkky",
+            "kind": "rkky",
+            "source": { "kind": "surface", "object": "body", "selector": "top" },
+            "target": { "kind": "surface", "object": "body", "selector": "top" },
+            "enabled": true,
+            "parameters": { "kind": "rkky", "J1": -0.0003 },
+            "capability_policy": "require_runtime"
+        }))
+        .expect("surface coupling should deserialize"),
+    );
+    let mut mesh = sample_fem_mesh_payload_with_manifest();
+    mesh.nodes[0] = [0.0, 0.0, 1.0];
+    mesh.nodes[1] = [1.0, 0.0, 1.0];
+    mesh.nodes[2] = [0.0, 1.0, 1.0];
+    mesh.boundary_faces[0] = [0, 1, 2];
+    if let Some(body_part) = mesh
+        .mesh_parts
+        .iter_mut()
+        .find(|part| part.object_id.as_deref() == Some("body"))
+    {
+        body_part.surface_faces = vec![[0, 1, 2]];
+    }
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+        snapshot.fem_mesh = Some(mesh);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/model/couplings")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let json = body_json(response).await;
+
+    assert_eq!(status, StatusCode::OK, "{json:#}");
+    assert_eq!(
+        json["couplings"][0]["source_resolution"]["status"],
+        "resolved"
+    );
+    assert_eq!(
+        json["couplings"][0]["source_resolution"]["resolved_face_count"],
+        1
+    );
+    assert_eq!(json["couplings"][0]["source_resolution"]["area"], 0.5);
+    assert!(
+        json["couplings"][0]["source_resolution"]["tolerance"]
+            .as_f64()
+            .is_some_and(|value| value > 0.0)
+    );
+    assert_eq!(
+        json["couplings"][0]["target_resolution"]["status"],
+        "resolved"
+    );
+    assert_eq!(
+        json["couplings"][0]["realization_status"],
+        "requires_runtime_capability"
+    );
+}
+
+#[tokio::test]
+async fn authoring_coupling_resource_does_not_treat_unknown_mesh_part_as_magnetic() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.couplings.push(
+        serde_json::from_value(serde_json::json!({
+            "coupling_id": "body_top_rkky",
+            "kind": "rkky",
+            "source": { "kind": "surface", "object": "body", "selector": "top" },
+            "target": { "kind": "surface", "object": "body", "selector": "top" },
+            "enabled": true,
+            "parameters": { "kind": "rkky", "J1": -0.0003 },
+            "capability_policy": "require_runtime"
+        }))
+        .expect("surface coupling should deserialize"),
+    );
+    let mut mesh = sample_fem_mesh_payload_with_manifest();
+    mesh.nodes[0] = [0.0, 0.0, 1.0];
+    mesh.nodes[1] = [1.0, 0.0, 1.0];
+    mesh.nodes[2] = [0.0, 1.0, 1.0];
+    mesh.boundary_faces[0] = [0, 1, 2];
+    mesh.mesh_parts[1].role = "unsupported_role".to_string();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+        snapshot.fem_mesh = Some(mesh);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/model/couplings")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let json = body_json(response).await;
+
+    assert_eq!(status, StatusCode::OK, "{json:#}");
+    assert_eq!(
+        json["couplings"][0]["source_resolution"]["status"],
+        "unresolved"
+    );
+}
+
+#[tokio::test]
 async fn authoring_scene_commit_rejects_invalid_region_owned_payloads() {
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document();
@@ -8590,10 +8952,90 @@ async fn authoring_scene_commit_rejects_invalid_region_owned_payloads() {
     let status = response.status();
     let json = body_json(response).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{json:#}");
-    assert!(json["error"]
-        .as_str()
-        .unwrap_or("")
-        .contains("Ms must be > 0"));
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Ms must be > 0")
+    );
+}
+
+#[tokio::test]
+async fn authoring_region_diagnostics_report_world_frame_and_csg_materialization_blockers() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 44;
+    scene.objects[0].regions.push(
+        serde_json::from_value(serde_json::json!({
+            "region_id": "body:world-region",
+            "owner_object": "body",
+            "name": "world-region",
+            "shape": {
+                "kind": "box",
+                "size": [0.25, 0.25, 0.25],
+                "center": [3.0, 0.0, 0.0]
+            },
+            "frame": "world",
+            "enabled": true
+        }))
+        .unwrap(),
+    );
+    scene.objects[0].regions.push(
+        serde_json::from_value(serde_json::json!({
+            "region_id": "body:csg-region",
+            "owner_object": "body",
+            "name": "csg-region",
+            "shape": {
+                "kind": "csg",
+                "expression": {
+                    "kind": "box",
+                    "name": "csg_core",
+                    "size": [0.25, 0.25, 0.25]
+                }
+            },
+            "frame": "object",
+            "enabled": true
+        }))
+        .unwrap(),
+    );
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/model/region-diagnostics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let json = body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{json:#}");
+    let diagnostics = json["diagnostics"].as_array().expect("diagnostics array");
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["region_id"] == "body:world-region"
+                && diagnostic["code"] == "region_world_frame_materialization_unsupported"
+                && diagnostic["severity"] == "warning"
+                && diagnostic["capability_gate"] == "regions.realized_materialization"
+        }),
+        "{json:#}"
+    );
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["region_id"] == "body:csg-region"
+                && diagnostic["code"] == "region_csg_materialization_unsupported"
+                && diagnostic["severity"] == "warning"
+                && diagnostic["capability_gate"] == "regions.realized_materialization"
+        }),
+        "{json:#}"
+    );
 }
 
 #[tokio::test]
@@ -8630,9 +9072,11 @@ async fn authoring_region_patch_commits_name_without_mesh_dirty() {
     let object = &json["objects"][0];
     assert_eq!(object["region_name"], "renamed_region");
     assert_eq!(object["visible"], false);
-    assert!(!object["tags"]
-        .as_array()
-        .is_some_and(|tags| tags.iter().any(|tag| tag == "mesh:dirty")));
+    assert!(
+        !object["tags"]
+            .as_array()
+            .is_some_and(|tags| tags.iter().any(|tag| tag == "mesh:dirty"))
+    );
 }
 
 #[tokio::test]
@@ -8898,11 +9342,13 @@ async fn authoring_object_resource_crud_commits_scene() {
     assert_eq!(create_response.status(), StatusCode::OK);
     let create_json = body_json(create_response).await;
     let create_revision = create_json["revision"].as_u64().unwrap();
-    assert!(create_json["objects"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|object| object["id"] == "object_crud"));
+    assert!(
+        create_json["objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|object| object["id"] == "object_crud")
+    );
 
     let patch_response = app
         .clone()
@@ -8933,11 +9379,13 @@ async fn authoring_object_resource_crud_commits_scene() {
         .expect("patched object present");
     assert_eq!(patched_object["name"], "Object CRUD Renamed");
     assert_eq!(patched_object["region_name"], "crud_region");
-    assert!(patched_object["tags"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|tag| tag == "mesh:dirty"));
+    assert!(
+        patched_object["tags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tag| tag == "mesh:dirty")
+    );
 
     let delete_response = app
         .oneshot(
@@ -8951,11 +9399,13 @@ async fn authoring_object_resource_crud_commits_scene() {
         .unwrap();
     assert_eq!(delete_response.status(), StatusCode::OK);
     let delete_json = body_json(delete_response).await;
-    assert!(!delete_json["objects"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|object| object["id"] == "object_crud"));
+    assert!(
+        !delete_json["objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|object| object["id"] == "object_crud")
+    );
 }
 
 #[tokio::test]
@@ -10595,11 +11045,13 @@ async fn solver_status_endpoint_returns_detailed_read_model() {
     assert_eq!(json["max_torque_Apm"], 13.0);
     assert_eq!(json["max_torque"], 14.0);
     assert_eq!(json["last_error"], "latest runtime error");
-    assert!(json["warnings"]
-        .as_array()
-        .is_some_and(|warnings| warnings.iter().any(|warning| {
-            warning == "sharp Aex in region 'film:core' uses projected approximation"
-        })));
+    assert!(
+        json["warnings"]
+            .as_array()
+            .is_some_and(|warnings| warnings.iter().any(|warning| {
+                warning == "sharp Aex in region 'film:core' uses projected approximation"
+            }))
+    );
 }
 
 #[tokio::test]
@@ -10955,9 +11407,11 @@ async fn session_export_returns_fms_payload_with_session() {
     let json = body_json(response).await;
     assert_eq!(json["session_id"], "test-session");
     assert_eq!(json["profile"], "compact");
-    assert!(json["fms_base64"]
-        .as_str()
-        .is_some_and(|value| !value.is_empty()));
+    assert!(
+        json["fms_base64"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
     assert!(json["size_bytes"].as_u64().unwrap_or(0) > 0);
 
     let _ = fs::remove_dir_all(&repo_root);
@@ -11109,9 +11563,11 @@ async fn session_checkpoint_create_captures_live_magnetization() {
         .as_str()
         .expect("checkpoint artifact_ref should be present")
         .to_string();
-    assert!(json["checkpoint"]["checksum"]
-        .as_str()
-        .is_some_and(|value| !value.is_empty()));
+    assert!(
+        json["checkpoint"]["checksum"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
 
     let stage_after_create_response = app
         .clone()
@@ -11134,11 +11590,13 @@ async fn session_checkpoint_create_captures_live_magnetization() {
         stage_after_create["stages"][1]["state_transition"],
         "preserved"
     );
-    assert!(stage_after_create["stages"][1]["artifact_refs"]
-        .as_array()
-        .expect("stage artifact_refs should be an array")
-        .iter()
-        .any(|value| value.as_str() == Some(checkpoint_artifact_ref.as_str())));
+    assert!(
+        stage_after_create["stages"][1]["artifact_refs"]
+            .as_array()
+            .expect("stage artifact_refs should be an array")
+            .iter()
+            .any(|value| value.as_str() == Some(checkpoint_artifact_ref.as_str()))
+    );
 
     let detail_response = app
         .clone()
@@ -11276,9 +11734,11 @@ async fn field_state_export_inspect_and_apply_round_trips_live_magnetization() {
     assert_eq!(exported["target"]["id"], "body");
     assert_eq!(exported["format"], "h5");
     assert_eq!(exported["point_count"], 2);
-    assert!(exported["artifact_ref"]
-        .as_str()
-        .is_some_and(|value| value.ends_with("body-final.h5")));
+    assert!(
+        exported["artifact_ref"]
+            .as_str()
+            .is_some_and(|value| value.ends_with("body-final.h5"))
+    );
     let artifact_ref = exported["artifact_ref"]
         .as_str()
         .expect("field-state export should include artifact_ref")
@@ -12064,10 +12524,12 @@ async fn artifacts_list_returns_304_when_etag_matches() {
             crate::types::ArtifactEntry {
                 path: "results/final.ovf".into(),
                 kind: "field".into(),
+                region_owned_provenance: None,
             },
             crate::types::ArtifactEntry {
                 path: "plots/energy.csv".into(),
                 kind: "table".into(),
+                region_owned_provenance: None,
             },
         ];
     }
@@ -12172,13 +12634,13 @@ async fn asyncapi_document_matches_realtime_rust_schema_names() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let json = body_json(response).await;
-    let async_revision_properties = json["components"]["schemas"]["RealtimeResourceRevisionMap"]
-        ["properties"]
-        .as_object()
-        .expect("revision map properties should be an object")
-        .keys()
-        .cloned()
-        .collect::<BTreeSet<_>>();
+    let async_revision_properties =
+        json["components"]["schemas"]["RealtimeResourceRevisionMap"]["properties"]
+            .as_object()
+            .expect("revision map properties should be an object")
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>();
     let rust_revision_properties = serde_json::to_value(RealtimeResourceRevisionMap {
         topology_revision: 1,
         field_catalog_revision: 1,
@@ -12210,18 +12672,18 @@ async fn asyncapi_document_matches_realtime_rust_schema_names() {
     .collect::<BTreeSet<_>>();
     assert_eq!(async_revision_properties, rust_revision_properties);
 
-    let async_resource_names = json["components"]["schemas"]["RealtimeResourceChange"]
-        ["properties"]["resource"]["enum"]
-        .as_array()
-        .expect("resource enum should be an array")
-        .iter()
-        .map(|value| {
-            value
-                .as_str()
-                .expect("resource enum values should be strings")
-                .to_string()
-        })
-        .collect::<BTreeSet<_>>();
+    let async_resource_names =
+        json["components"]["schemas"]["RealtimeResourceChange"]["properties"]["resource"]["enum"]
+            .as_array()
+            .expect("resource enum should be an array")
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .expect("resource enum values should be strings")
+                    .to_string()
+            })
+            .collect::<BTreeSet<_>>();
     let rust_resource_names = [
         RealtimeResourceName::Display,
         RealtimeResourceName::Workspace,
@@ -12724,6 +13186,90 @@ async fn field_vector_etag_stays_stable_when_only_snapshot_state_version_changes
         .unwrap();
 
     assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
+}
+
+#[tokio::test]
+async fn artifacts_list_exposes_region_owned_provenance_metadata() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 41;
+    let region: fullmag_authoring::SceneObjectRegion = serde_json::from_value(serde_json::json!({
+        "region_id": "body:core",
+        "owner_object": "body",
+        "name": "core",
+        "shape": { "kind": "sphere", "radius": 3.0e-8, "center": [0.0, 0.0, 0.0] },
+        "frame": "object",
+        "enabled": true,
+        "priority": 7,
+        "mesh_policy": { "maximum_element_size": 1.0e-9 },
+        "material_overrides": [{
+            "parameter": "Ms",
+            "value": { "kind": "constant", "value": 760000.0, "unit": "A/m" },
+            "priority": 7,
+            "conflict_policy": "error"
+        }],
+        "realization_policy": "conformal"
+    }))
+    .unwrap();
+    scene.objects[0].regions.push(region);
+    let field: fullmag_authoring::SceneMaterialParameterAssignment =
+        serde_json::from_value(serde_json::json!({
+            "assignment_id": "body_core_ms_gradient",
+            "owner_object": "body",
+            "parameter": "Ms",
+            "region_id": "body:core",
+            "priority": 3,
+            "conflict_policy": "error",
+            "value": {
+                "kind": "linear",
+                "base": 760000.0,
+                "gradient": [0.0, 1.0e11, 0.0],
+                "unit": "A/m",
+                "frame": "object"
+            }
+        }))
+        .unwrap();
+    scene.objects[0].material_parameter_fields.push(field);
+    let coupling: fullmag_authoring::SceneCoupling = serde_json::from_value(serde_json::json!({
+        "coupling_id": "body_core_exchange",
+        "kind": "exchange",
+        "source": { "kind": "region", "object": "body", "region_id": "body:core" },
+        "target": { "kind": "object", "object": "body" },
+        "enabled": true,
+        "parameters": { "kind": "exchange", "mode": "explicit", "inter_exchange": 6.5e-12 },
+        "capability_policy": "require_runtime"
+    }))
+    .unwrap();
+    scene.couplings.push(coupling);
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.artifacts = vec![crate::types::ArtifactEntry {
+            path: "results/final.ovf".into(),
+            kind: "field".into(),
+            region_owned_provenance: crate::types::region_owned_artifact_provenance(snapshot),
+        }];
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/artifacts")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json: serde_json::Value = body_json(response).await;
+    let provenance = &json[0]["region_owned_provenance"];
+    assert_eq!(provenance["scene_revision"], 41);
+    assert_eq!(provenance["authored_region_count"], 1);
+    assert_eq!(provenance["material_parameter_field_count"], 1);
+    assert_eq!(provenance["coupling_count"], 1);
+    assert_eq!(provenance["blocked_diagnostic_count"], 3);
+    assert_eq!(provenance["deferred_diagnostic_count"], 1);
 }
 
 #[tokio::test]
@@ -14430,9 +14976,11 @@ async fn field_slice_matrix_json_uses_exact_fem_tetra_path() {
         .filter_map(|value| value.as_f64())
         .collect();
     assert!(!finite_values.is_empty());
-    assert!(finite_values
-        .iter()
-        .all(|value| (*value - 2.0).abs() < 1.0e-12));
+    assert!(
+        finite_values
+            .iter()
+            .all(|value| (*value - 2.0).abs() < 1.0e-12)
+    );
     assert!(json["matrix_hash"].as_str().unwrap_or("").starts_with('"'));
 }
 
@@ -14463,9 +15011,11 @@ async fn field_slice_matrix_json_supports_fem_slab_mean() {
         .filter_map(|value| value.as_f64())
         .collect();
     assert!(!finite_values.is_empty());
-    assert!(finite_values
-        .iter()
-        .all(|value| (*value - 2.0).abs() < 1.0e-12));
+    assert!(
+        finite_values
+            .iter()
+            .all(|value| (*value - 2.0).abs() < 1.0e-12)
+    );
 }
 
 #[tokio::test]
@@ -15119,6 +15669,43 @@ fn openapi_v2_has_no_public_v1_paths() {
     assert!(
         public_v1_paths.is_empty(),
         "OpenAPI v2 must not expose public v1 paths: {public_v1_paths:?}"
+    );
+}
+
+#[test]
+fn openapi_authoring_transaction_uses_typed_coupling_patch() {
+    let value = crate::openapi_v2::openapi_json();
+    let schemas = value
+        .get("components")
+        .and_then(|value| value.get("schemas"))
+        .and_then(|value| value.as_object())
+        .expect("OpenAPI schemas must be present");
+    let variants = schemas["AuthoringTransactionRequest"]["oneOf"]
+        .as_array()
+        .expect("AuthoringTransactionRequest should be oneOf variants");
+    let patch_coupling = variants
+        .iter()
+        .find(|variant| {
+            variant["properties"]["kind"]["enum"]
+                .as_array()
+                .is_some_and(|values| values.iter().any(|value| value == "patch_coupling"))
+        })
+        .expect("patch_coupling transaction variant should be present");
+
+    assert_eq!(
+        patch_coupling["properties"]["patch"]["$ref"],
+        "#/components/schemas/SceneCouplingPatch"
+    );
+    assert!(
+        schemas.contains_key("SceneCouplingPatch"),
+        "SceneCouplingPatch schema must be generated"
+    );
+    let patch_properties = schemas["SceneCouplingPatch"]["properties"]
+        .as_object()
+        .expect("SceneCouplingPatch must expose object properties");
+    assert!(
+        !patch_properties.contains_key("coupling_id"),
+        "SceneCouplingPatch must not advertise coupling_id as patchable"
     );
 }
 

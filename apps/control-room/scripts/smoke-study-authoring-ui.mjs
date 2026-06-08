@@ -26,6 +26,7 @@ if (!playwright?.chromium) {
 
 let sceneRevision = 1;
 const transactions = [];
+const scriptSyncs = [];
 const fixtureRequests = [];
 const failedResponses = [];
 const scene = {
@@ -40,7 +41,26 @@ const scene = {
   editor: {},
   magnetization_assets: [],
   materials: [],
-  objects: [],
+  objects: [
+    {
+      allocated_region_ids: [],
+      geometry: {
+        geometry_kind: "Box",
+        geometry_params: { size: [200e-9, 80e-9, 5e-9] },
+      },
+      id: "film",
+      material_ref: null,
+      name: "Film",
+      region_name: "film",
+      regions: [],
+      transform: {
+        pivot: [0, 0, 0],
+        rotation_quat: [0, 0, 0, 1],
+        scale: [1, 1, 1],
+        translation: [0, 0, 0],
+      },
+    },
+  ],
   outputs: { items: [] },
   study: {
     demag_enabled: true,
@@ -112,6 +132,33 @@ await page.route("**/v2/**", async (route) => {
       scene.revision = sceneRevision;
     }
     await fulfillJson(route, { scene_revision: sceneRevision });
+    return;
+  }
+
+  if (request.method() === "POST" && pathname === "/v2/sessions/current/model/syncs") {
+    scriptSyncs.push(request.postDataJSON());
+    await fulfillJson(route, {
+      revision: sceneRevision,
+      scene_revision: sceneRevision,
+      synced: true,
+    });
+    return;
+  }
+
+  if (request.method() === "POST" && pathname === "/v2/sessions/current/model/objects/film/regions") {
+    const payload = request.postDataJSON();
+    const region = {
+      ...(payload?.region ?? {}),
+      owner_object: "film",
+      owner_object_id: "film",
+      region_id: payload?.region?.region_id || `film:r${scene.objects[0].regions.length + 1}`,
+      source: "authored_object_region",
+    };
+    scene.objects[0].regions.push(region);
+    scene.objects[0].allocated_region_ids.push(region.region_id);
+    sceneRevision += 1;
+    scene.revision = sceneRevision;
+    await fulfillJson(route, scene);
     return;
   }
 
@@ -208,13 +255,14 @@ try {
 
   assertGlobalTransaction(transactions[0]);
   assertStageTransaction(transactions[2]);
+  await createObjectRegionAndAssertScriptSync();
 
   if (errors.length > 0) {
     throw new Error(`Browser errors:\n${errors.join("\n")}`);
   }
 
   console.log(
-    `Study authoring UI smoke passed at ${workspaceUrl} with ${transactions.length} model transactions.`,
+    `Study authoring UI smoke passed at ${workspaceUrl} with ${transactions.length} model transactions and ${scriptSyncs.length} authoring script syncs.`,
   );
 } finally {
   await browser.close();
@@ -223,6 +271,18 @@ try {
 function resourceForPath(pathname) {
   if (pathname === "/v2/sessions/current/status") return sessionStatus();
   if (pathname === "/v2/sessions/current/model/scene") return scene;
+  if (pathname === "/v2/sessions/current/model/regions") {
+    return modelRegions();
+  }
+  if (pathname === "/v2/sessions/current/model/material-fields") {
+    return { fields: [], revision: sceneRevision, scene_revision: sceneRevision };
+  }
+  if (pathname === "/v2/sessions/current/model/couplings") {
+    return { couplings: [], revision: sceneRevision, scene_revision: sceneRevision };
+  }
+  if (pathname === "/v2/sessions/current/model/region-diagnostics") {
+    return { diagnostics: [], revision: sceneRevision, scene_revision: sceneRevision };
+  }
   if (pathname === "/v2/sessions/current/model/study") {
     return {
       backend: scene.study.backend ?? null,
@@ -263,6 +323,9 @@ function resourceForPath(pathname) {
   if (pathname === "/v2/sessions/current/model/geometry/validation") {
     return { diagnostics: [], revision: sceneRevision, valid: true };
   }
+  if (pathname === "/v2/sessions/current/simulation/objects/film/metrics") {
+    return objectMetrics("film");
+  }
   if (pathname === "/v2/sessions/current/persistence/checkpoints") {
     return {
       checkpoints: [
@@ -284,6 +347,118 @@ function resourceForPath(pathname) {
     return { returned_rows: 0, revision: sceneRevision, rows: [], total_rows: 0 };
   }
   return { revision: sceneRevision };
+}
+
+async function createObjectRegionAndAssertScriptSync() {
+  const regionsNode = page.locator('[data-node-id="model:object:film:regions"]');
+  if (!(await regionsNode.isVisible().catch(() => false))) {
+    const objectNode = page.locator('[data-node-id="model:object:film"]');
+    await objectNode.waitFor({ state: "visible", timeout: timeoutMs });
+    if ((await objectNode.getAttribute("aria-expanded")) === "false") {
+      await objectNode.dblclick();
+    }
+  }
+  await regionsNode.waitFor({ state: "visible", timeout: timeoutMs });
+  await clickExplorerRow(regionsNode);
+
+  const inspector = page.locator(".fm-inspector");
+  try {
+    await inspector.locator("h2", { hasText: "Object Regions" }).waitFor({
+      state: "visible",
+      timeout: timeoutMs,
+    });
+  } catch (error) {
+    const regionsActive = await regionsNode.getAttribute("data-active");
+    const regionsText = await regionsNode.textContent().catch(() => "");
+    const inspectorText = await inspector.textContent().catch(() => "");
+    throw new Error(
+      `Regions node did not open Object Regions inspector. active=${regionsActive}, row=${JSON.stringify(regionsText?.slice(0, 500))}, inspector=${JSON.stringify(inspectorText?.slice(0, 1500))}, errors=${JSON.stringify(errors)}. ${error}`,
+    );
+  }
+  await inspector
+    .locator(".fm-inspector-panel button")
+    .filter({ hasText: "Add Region" })
+    .first()
+    .click();
+  const regionName = "Script Sync Region";
+  await inspector.getByLabel("Name").fill(regionName);
+  await inspector.locator('select[aria-label="Shape"]').selectOption("cylinder");
+
+  const previousSyncCount = scriptSyncs.length;
+  const createRegionResponse = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname ===
+        "/v2/sessions/current/model/objects/film/regions" &&
+      response.request().method() === "POST" &&
+      response.status() < 400,
+    { timeout: timeoutMs },
+  );
+  await inspector.getByRole("button", { name: /^Create$/ }).click();
+  const createdScene = await (await createRegionResponse).json();
+  assertCreatedRegion(createdScene, regionName);
+  await waitForRegionScriptSyncCount(previousSyncCount + 1);
+}
+
+async function clickExplorerRow(row) {
+  await row.evaluate((node) => {
+    node.scrollIntoView({ block: "center", inline: "nearest" });
+    if ("click" in node && typeof node.click === "function") {
+      node.click();
+    }
+  });
+}
+
+function assertCreatedRegion(createdScene, regionName) {
+  const object = Array.isArray(createdScene?.objects)
+    ? createdScene.objects.find((candidate) => candidate?.id === "film")
+    : null;
+  const region = Array.isArray(object?.regions)
+    ? object.regions.find((candidate) => candidate?.name === regionName)
+    : null;
+  if (!region || region.region_id !== "film:r1" || region.shape?.kind !== "cylinder") {
+    throw new Error(
+      `Created region did not round-trip through SceneDocument: ${JSON.stringify(region)}`,
+    );
+  }
+}
+
+async function waitForRegionScriptSyncCount(count) {
+  const deadline = Date.now() + timeoutMs;
+  while (scriptSyncs.length < count && Date.now() < deadline) {
+    await page.waitForTimeout(50);
+  }
+  if (scriptSyncs.length < count) {
+    throw new Error(`Expected ${count} authoring script syncs, saw ${scriptSyncs.length}.`);
+  }
+}
+
+function modelRegions() {
+  const object = scene.objects[0];
+  return {
+    geometry_realization_revision: 0,
+    regions: object.regions.map((region) => ({
+      bounds_max: [100e-9, 40e-9, 2.5e-9],
+      bounds_min: [-100e-9, -40e-9, -2.5e-9],
+      enabled: region.enabled !== false,
+      interaction_refs: [],
+      material_parameter_fields: [],
+      material_overrides: region.material_overrides ?? [],
+      material_ref: object.material_ref,
+      mesh_part_ids: [],
+      mesh_policy: region.mesh_policy ?? null,
+      name: region.name,
+      owner_object_id: object.id,
+      priority: region.priority ?? 0,
+      region_id: region.region_id,
+      region_kind: "object_region",
+      realization_status: region.realization_status ?? "authored_pending_realization",
+      shape: region.shape,
+      source: "authored_object_region",
+      source_body_ids: [],
+      source_object_ids: [object.id],
+    })),
+    scene_revision: sceneRevision,
+  };
 }
 
 async function fulfillJson(route, body, status = 200) {
@@ -337,6 +512,10 @@ function sessionStatus() {
     energies: {},
     metrics: {
       steps_per_second: null,
+      total: {
+        steps: 0,
+        time_seconds: 0,
+      },
       total_steps: 0,
       uptime_seconds: 0,
     },
@@ -373,6 +552,30 @@ function sessionStatus() {
     solver: {
       state: "idle",
     },
+  };
+}
+
+function objectMetrics(objectId) {
+  return {
+    energies: {
+      anisotropy: 0,
+      demag: 0,
+      dmi: 0,
+      exchange: 0,
+      total: 0,
+      zeeman: 0,
+    },
+    has_solver_sample: false,
+    magnetization_average: {
+      mx: 1,
+      my: 0,
+      mz: 0,
+    },
+    object_id: objectId,
+    revision: sceneRevision,
+    source: "fixture",
+    step: 0,
+    time_seconds: 0,
   };
 }
 

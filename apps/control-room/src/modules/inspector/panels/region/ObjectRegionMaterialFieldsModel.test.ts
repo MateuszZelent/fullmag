@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  materialFieldRealizationRows,
   isEditableMaterialField,
   materialFieldDraftFromAssignment,
   materialFieldFromDraft,
@@ -45,6 +46,43 @@ describe("ObjectRegionMaterialFieldsModel", () => {
       objectId: "permalloy_box",
       regionId: "hole_shell",
     })).toEqual(assignment);
+  });
+
+  it("builds realized field preview rows from the material-fields resource", () => {
+    expect(
+      materialFieldRealizationRows("field:linear", {
+        fields: [
+          {
+            assignment_id: "field:linear",
+            field: {
+              base: 810000,
+              frame: "object",
+              gradient: [1, 2, 3],
+              kind: "linear",
+              unit: "A/m",
+            },
+            max: 820000,
+            mean: 815000,
+            min: 810000,
+            owner_object_id: "permalloy_box",
+            parameter: "ms",
+            realization_status: "realized",
+            sample_count: 64,
+            source_region_id: "hole_shell",
+            unit: "A/m",
+            warnings: ["projected to nearest cell center"],
+          },
+        ],
+        scene_revision: 12,
+      }),
+    ).toEqual([
+      { label: "Realization", value: "realized" },
+      { label: "Samples", value: "64" },
+      { label: "Min", value: "810000 A/m" },
+      { label: "Max", value: "820000 A/m" },
+      { label: "Mean", value: "815000 A/m" },
+      { label: "Warnings", value: "projected to nearest cell center" },
+    ]);
   });
 
   it("serializes radial material fields with center, radius, and conflict policy", () => {

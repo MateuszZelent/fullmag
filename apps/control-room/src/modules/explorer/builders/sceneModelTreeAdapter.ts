@@ -2,6 +2,7 @@ import type {
   CouplingListResource,
   MaterialParameterFieldListResource,
   RegionListResource,
+  SceneResource,
   StageExecutionResource,
 } from "@/kernel/api/apiTypes";
 import { apmFromTesla } from "@/shared/domain/physics/torqueUnits";
@@ -21,10 +22,15 @@ interface SceneLike {
   [key: string]: unknown;
   magnetization_assets?: unknown;
   materials?: unknown;
-  objects?: unknown;
+  objects?: SceneResource["objects"] | unknown;
   study?: unknown;
   universe?: unknown;
 }
+
+type SceneObjectResource = NonNullable<SceneResource["objects"]>[number];
+type SceneMaterialParameterAssignment = NonNullable<
+  SceneObjectResource["material_parameter_fields"]
+>[number];
 
 interface ModelTreeResourceInputs {
   couplings?: CouplingListResource | null;
@@ -435,29 +441,42 @@ function materialFieldsByOwner(
   for (const objectValue of sceneObjects) {
     const object = recordValue(objectValue);
     const ownerObjectId = stringValue(object?.id);
-    if (!ownerObjectId || !Array.isArray(object?.material_parameter_fields)) {
+    if (!ownerObjectId) {
       continue;
     }
-    for (const fieldValue of object.material_parameter_fields) {
-      const field = recordValue(fieldValue);
-      const parameter = stringValue(field?.parameter);
-      if (!parameter) continue;
-      const id =
-        stringValue(field?.assignment_id) ?? `${ownerObjectId}:${parameter}:field`;
-      const value = recordValue(field?.value);
-      const unit = stringValue(value?.unit);
+    for (const field of sceneMaterialParameterAssignments(
+      object?.material_parameter_fields,
+    )) {
+      const owner = field.owner_object || ownerObjectId;
+      const unit = field.value.unit ?? null;
       pushField({
-        id,
-        label: materialFieldLabel(parameter, unit),
-        ownerObjectId,
-        parameter,
+        id: field.assignment_id,
+        label: materialFieldLabel(field.parameter, unit),
+        ownerObjectId: owner,
+        parameter: field.parameter,
         realizationStatus: null,
-        regionId: stringValue(field?.region_id),
+        regionId: field.region_id ?? null,
         unit,
       });
     }
   }
   return fields;
+}
+
+function sceneMaterialParameterAssignments(
+  value: unknown,
+): SceneMaterialParameterAssignment[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is SceneMaterialParameterAssignment => {
+    const assignment = recordValue(item);
+    const field = recordValue(assignment?.value);
+    return Boolean(
+      stringValue(assignment?.assignment_id) &&
+        stringValue(assignment?.owner_object) &&
+        stringValue(assignment?.parameter) &&
+        stringValue(field?.kind),
+    );
+  });
 }
 
 function couplingSnapshots(

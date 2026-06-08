@@ -6,10 +6,12 @@ import type { MaterialParameterFieldListResource } from "@/kernel/api/apiTypes";
 import type {
   ObjectRegionDraft,
   ObjectRegionPanelModel,
+  RegionCouplingDependency,
   RegionMaterialOverrideDraft,
   RegionMeshPolicyDraft,
   RegionShapeDraft,
 } from "../ObjectRegionsPanelModel";
+import { resolveRegionInlineDiagnostics } from "./regionDiagnosticPresentation";
 
 export interface RegionSubPanelProps {
   model: ObjectRegionPanelModel;
@@ -27,11 +29,38 @@ export interface RegionSubPanelProps {
   addMaterialOverride: () => void;
   removeMaterialOverride: (index: number) => void;
   materialFields: MaterialParameterFieldListResource | null;
+  couplingDependencies: RegionCouplingDependency[];
   applyRegion: () => Promise<void>;
   duplicateRegion: () => Promise<void>;
   deleteRegion: () => Promise<void>;
   revert: () => void;
   feedback: { kind: "error" | "success"; message: string } | null;
+}
+
+export function ObjectRegionInlineDiagnostics({
+  capabilityGates,
+  model,
+}: {
+  capabilityGates: readonly string[];
+  model: ObjectRegionPanelModel;
+}) {
+  const diagnostics = resolveRegionInlineDiagnostics(
+    model.diagnostics,
+    capabilityGates,
+  );
+  if (diagnostics.length === 0) return null;
+
+  return (
+    <div className="fm-region-inline-diagnostics">
+      {diagnostics.map((diagnostic) => (
+        <FeedbackBanner
+          key={diagnostic.diagnosticId}
+          kind={diagnostic.kind}
+          message={diagnostic.message}
+        />
+      ))}
+    </div>
+  );
 }
 
 export function ObjectRegionMetadataSection({ model }: { model: ObjectRegionPanelModel }) {
@@ -64,6 +93,7 @@ export function ObjectRegionActionsSection({
   duplicateRegion,
   deleteRegion,
   feedback,
+  couplingDependencies,
 }: {
   pending: boolean;
   canWriteRegion: boolean;
@@ -72,7 +102,18 @@ export function ObjectRegionActionsSection({
   duplicateRegion: () => Promise<void>;
   deleteRegion: () => Promise<void>;
   feedback: { kind: "error" | "success"; message: string } | null;
+  couplingDependencies: RegionCouplingDependency[];
 }) {
+  const hasActiveCouplings = couplingDependencies.length > 0;
+  const couplingSummary =
+    couplingDependencies.length === 0
+      ? "none"
+      : couplingDependencies
+          .map(
+            (dependency) =>
+              `${dependency.couplingId} (${dependency.endpointRole}, ${dependency.status})`,
+          )
+          .join("; ");
   return (
     <InspectorSection value="actions" title="Actions">
       <div className="fm-inspector-toolbar">
@@ -106,19 +147,32 @@ export function ObjectRegionActionsSection({
         </Button>
         <span className="fm-inspector-toolbar__spacer" />
         <Button
-          disabled={pending || !canWriteRegion}
+          disabled={pending || !canWriteRegion || hasActiveCouplings}
           size="sm"
           type="button"
           variant="danger"
-          title={canWriteRegion ? undefined : "Select an authored object region"}
+          title={
+            hasActiveCouplings
+              ? "Delete Coupling first"
+              : canWriteRegion
+                ? undefined
+                : "Select an authored object region"
+          }
           onClick={() => void deleteRegion()}
         >
           Delete Region
         </Button>
       </div>
+      <FieldRow label="Active couplings" value={couplingSummary} />
       <FieldRow
         label="Write actions"
-        value={canWriteRegion ? "available" : "authored regions only"}
+        value={
+          hasActiveCouplings
+            ? "Delete Coupling first"
+            : canWriteRegion
+              ? "available"
+              : "authored regions only"
+        }
       />
       {feedback && <FeedbackBanner kind={feedback.kind} message={feedback.message} />}
     </InspectorSection>

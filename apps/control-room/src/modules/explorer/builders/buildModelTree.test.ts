@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import type { SceneResource } from "@/kernel/api/apiTypes";
+
 import { buildModelTree, flattenExplorerNodes } from "./buildModelTree";
 import {
   modelTreeSnapshotFromScene,
@@ -385,6 +387,58 @@ describe("buildModelTree", () => {
       kind: "physics.coupling",
       status: "warning",
     });
+  });
+
+  it("uses typed scene material field owner_object when projecting region field nodes", () => {
+    const scene: SceneResource = {
+      objects: [
+        {
+          id: "film-a",
+          material_parameter_fields: [
+            {
+              assignment_id: "field-ms-core",
+              owner_object: "film-b",
+              parameter: "ms",
+              region_id: "reg-core",
+              value: { kind: "constant", unit: "A/m", value: 800000 },
+            },
+          ],
+        },
+        {
+          id: "film-b",
+          regions: [
+            {
+              name: "Core",
+              region_id: "reg-core",
+              shape: { center: [0, 0, 0], kind: "sphere", radius: 1e-9 },
+            },
+          ],
+        },
+      ],
+    };
+
+    const flattened = flattenExplorerNodes(
+      buildModelTree(modelTreeSnapshotFromScene(scene)),
+    );
+
+    expect(
+      flattened.find(
+        (node) =>
+          node.id ===
+          "model:object:film-b:regions:reg-core:magnetic-parameters:field-ms-core",
+      ),
+    ).toMatchObject({
+      badge: "field",
+      kind: "object.region.magnetic-parameters",
+      label: "ms (A/m)",
+      objectId: "film-b",
+      regionId: "reg-core",
+    });
+    expect(
+      flattened.map((node) => node.id),
+    ).not.toContain(
+      "model:object:film-a:regions:reg-core:magnetic-parameters:field-ms-core",
+    );
   });
 
   it("shows object texture load nodes only after activation", () => {

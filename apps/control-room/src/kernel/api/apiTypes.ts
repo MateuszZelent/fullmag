@@ -280,7 +280,7 @@ export type AuthoringTransactionRequest =
   | (BaseAuthoringTransaction & {
       coupling_id: string;
       kind: "patch_coupling";
-      patch: JsonObject;
+      patch: components["schemas"]["SceneCouplingPatch"];
     })
   | (BaseAuthoringTransaction & {
       coupling_id: string;

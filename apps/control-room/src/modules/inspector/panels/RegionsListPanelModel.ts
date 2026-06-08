@@ -1,4 +1,8 @@
-import type { RegionListResource, SceneResource } from "@/kernel/api/apiTypes";
+import type {
+  RegionDiagnosticsResource,
+  RegionListResource,
+  SceneResource,
+} from "@/kernel/api/apiTypes";
 import type { components } from "@/kernel/api/generated/openapi-v2-types";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import {
@@ -14,7 +18,10 @@ export type RegionShapeKind = "box" | "cylinder" | "sphere";
 
 export interface RegionsListItem {
   colorIndex: number;
+  conflictCount: number;
+  diagnosticCount: number;
   enabled: boolean;
+  errorCount: number;
   name: string;
   objectId: string;
   priority: number;
@@ -22,15 +29,20 @@ export interface RegionsListItem {
   realizationStatus: string;
   regionId: string;
   shapeKind: string;
+  warningCount: number;
 }
 
 export interface RegionsListPanelModel {
+  conflictCount: number;
+  diagnosticCount: number;
+  errorCount: number;
   items: RegionsListItem[];
   mode: "committed" | "missing";
   objectId: string;
   ownerBounds: RegionOwnerBounds | null;
   objectLabel: string;
   revision: number | null;
+  warningCount: number;
 }
 
 export interface NewRegionDraft {
@@ -94,22 +106,48 @@ function shapeKindForRegion(region: RegionListResource["regions"][number]): stri
   return asString(shape?.kind) ?? "region";
 }
 
+function isConflictDiagnostic(
+  diagnostic: RegionDiagnosticsResource["diagnostics"][number],
+): boolean {
+  return (
+    diagnostic.code.toLowerCase().includes("conflict") ||
+    diagnostic.message.toLowerCase().includes("conflict")
+  );
+}
 
+function diagnosticsForRegion(
+  objectId: string,
+  regionId: string,
+  regionDiagnostics: RegionDiagnosticsResource | null,
+): RegionDiagnosticsResource["diagnostics"] {
+  return (
+    regionDiagnostics?.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.owner_object_id === objectId &&
+        diagnostic.region_id === regionId,
+    ) ?? []
+  );
+}
 
 export function resolveRegionsListPanelModel(
   selection: Selection,
   scene: SceneResource | null,
   regions: RegionListResource | null,
+  regionDiagnostics: RegionDiagnosticsResource | null = null,
 ): RegionsListPanelModel {
   const { object, objectId, revision } = sceneObjectForSelection(selection, scene);
   if (!object || !objectId) {
     return {
+      conflictCount: 0,
+      diagnosticCount: 0,
+      errorCount: 0,
       items: [],
       mode: "missing",
       objectId: objectId ?? "none",
       ownerBounds: null,
       objectLabel: objectId ?? "none",
       revision,
+      warningCount: 0,
     };
   }
 
@@ -124,25 +162,44 @@ export function resolveRegionsListPanelModel(
       if (priorityDelta !== 0) return priorityDelta;
       return left.name.localeCompare(right.name);
     })
-    .map((region, index) => ({
-      colorIndex: index % 8,
-      enabled: region.enabled,
-      name: region.name,
-      objectId,
-      priority: region.priority ?? 0,
-      realizationPolicy: region.realization_policy ?? "inherit",
-      realizationStatus: region.realization_status ?? "authored_pending",
-      regionId: region.region_id,
-      shapeKind: shapeKindForRegion(region),
-    }));
+    .map((region, index) => {
+      const diagnostics = diagnosticsForRegion(
+        objectId,
+        region.region_id,
+        regionDiagnostics,
+      );
+      return {
+        colorIndex: index % 8,
+        conflictCount: diagnostics.filter(isConflictDiagnostic).length,
+        diagnosticCount: diagnostics.length,
+        enabled: region.enabled,
+        errorCount: diagnostics.filter(
+          (diagnostic) => diagnostic.severity === "error",
+        ).length,
+        name: region.name,
+        objectId,
+        priority: region.priority ?? 0,
+        realizationPolicy: region.realization_policy ?? "inherit",
+        realizationStatus: region.realization_status ?? "authored_pending",
+        regionId: region.region_id,
+        shapeKind: shapeKindForRegion(region),
+        warningCount: diagnostics.filter(
+          (diagnostic) => diagnostic.severity === "warning",
+        ).length,
+      };
+    });
 
   return {
+    conflictCount: items.reduce((total, item) => total + item.conflictCount, 0),
+    diagnosticCount: items.reduce((total, item) => total + item.diagnosticCount, 0),
+    errorCount: items.reduce((total, item) => total + item.errorCount, 0),
     items,
     mode: "committed",
     objectId,
     ownerBounds: ownerBoundsForObject(object),
     objectLabel: asString(object.name) ?? objectId,
     revision,
+    warningCount: items.reduce((total, item) => total + item.warningCount, 0),
   };
 }
 

@@ -83,6 +83,7 @@ from .structure import (
     ObjectRegion,
     Region,
     RegionMaterialOverride,
+    RegionTextureOverride,
 )
 from .study import Eigenmodes, FloquetBC, FrequencyResponse, PeriodicBC, RelaxStop, Relaxation, TableAutosave, TimeEvolution
 from .eigen import KPath, KPoint, ModeTracking
@@ -158,6 +159,7 @@ __all__ = [
     "RfDrive",
     "Region",
     "RegionMaterialOverride",
+    "RegionTextureOverride",
     "Relaxation",
     "RuntimeSelection",
     "Pulse",

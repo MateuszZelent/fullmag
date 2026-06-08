@@ -289,6 +289,72 @@ pub(crate) struct RunManifest {
 pub(crate) struct ArtifactEntry {
     pub path: String,
     pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region_owned_provenance: Option<RegionOwnedArtifactProvenance>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
+pub(crate) struct RegionOwnedArtifactProvenance {
+    pub scene_revision: u64,
+    pub authored_region_count: u64,
+    pub material_parameter_field_count: u64,
+    pub coupling_count: u64,
+    pub blocked_diagnostic_count: u64,
+    pub deferred_diagnostic_count: u64,
+}
+
+pub(crate) fn region_owned_artifact_provenance(
+    snapshot: &SessionStateResponse,
+) -> Option<RegionOwnedArtifactProvenance> {
+    let scene = snapshot.scene_document.as_ref()?;
+    let authored_region_count = scene
+        .objects
+        .iter()
+        .map(|object| object.regions.len() as u64)
+        .sum::<u64>();
+    let material_parameter_field_count = scene
+        .objects
+        .iter()
+        .map(|object| object.material_parameter_fields.len() as u64)
+        .sum::<u64>();
+    let coupling_count = scene.couplings.len() as u64;
+    if authored_region_count == 0 && material_parameter_field_count == 0 && coupling_count == 0 {
+        return None;
+    }
+
+    let mut blocked_diagnostic_count = 0;
+    let mut deferred_diagnostic_count = 0;
+    for object in &scene.objects {
+        for region in &object.regions {
+            deferred_diagnostic_count += 1;
+            if region.mesh_policy.is_some() {
+                blocked_diagnostic_count += 1;
+            }
+            let region_has_material_parameter_field = object
+                .material_parameter_fields
+                .iter()
+                .any(|field| field.region_id.as_deref() == Some(&region.region_id));
+            if !region.material_overrides.is_empty() || region_has_material_parameter_field {
+                blocked_diagnostic_count += 1;
+            }
+            if matches!(
+                region.realization_policy,
+                fullmag_authoring::SceneRegionRealizationPolicy::Conformal
+                    | fullmag_authoring::SceneRegionRealizationPolicy::Project
+            ) {
+                blocked_diagnostic_count += 1;
+            }
+        }
+    }
+
+    Some(RegionOwnedArtifactProvenance {
+        scene_revision: scene.revision,
+        authored_region_count,
+        material_parameter_field_count,
+        coupling_count,
+        blocked_diagnostic_count,
+        deferred_diagnostic_count,
+    })
 }
 
 #[allow(dead_code)]

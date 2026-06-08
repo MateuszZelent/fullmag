@@ -5,7 +5,6 @@ import {
   MODEL_GEOMETRY_DIAGNOSTICS_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
 } from "@/kernel/api/apiPaths";
-import type { RegionPatchRequest } from "@/kernel/api/apiTypes";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
 import {
@@ -17,7 +16,7 @@ import {
 } from "@/kernel/resources/geometryLifecycleResources";
 import {
   buildMagnetizationAssetPatch as buildTextureAssetPatch,
-  buildMagnetizationAssignmentPatch as buildTextureAssignmentPatch,
+  buildRegionTextureOverridePatch,
 } from "@/shared/domain/magnetization-texture/draftModel";
 import { Accordion } from "@/shared/ui/Accordion";
 import {
@@ -120,14 +119,11 @@ export function ObjectRegionTexturePanel({
         asset.id,
         buildTextureAssetPatch(asset, model.baseRevision),
       );
-      const patch = buildTextureAssignmentPatch(
-        target,
-        asset.id,
-        assetResponse.scene_revision ?? model.baseRevision,
-      );
-      const response = await api.model.patchRegion(
+      const response = await api.model.patchObjectRegionResource(
+        target.objectId,
         target.regionId,
-        patch.payload as RegionPatchRequest,
+        buildRegionTextureOverridePatch(asset),
+        { baseRevision: assetResponse.scene_revision ?? model.baseRevision ?? undefined },
       );
       const revision =
         typeof response.revision === "number"
@@ -160,10 +156,11 @@ export function ObjectRegionTexturePanel({
     const target = { kind: "region" as const, objectId: model.objectId, regionId: model.regionId! };
     setPending(true);
     try {
-      const patch = buildTextureAssignmentPatch(target, null, model.baseRevision);
-      const response = await api.model.patchRegion(
+      const response = await api.model.patchObjectRegionResource(
+        target.objectId,
         target.regionId,
-        patch.payload as RegionPatchRequest,
+        buildRegionTextureOverridePatch(null),
+        { baseRevision: model.baseRevision ?? undefined },
       );
       const revision =
         typeof response.revision === "number"

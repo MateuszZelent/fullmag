@@ -133,7 +133,6 @@ import type {
   GeometryValidationResource,
   GpuTelemetryResource,
   ImportSessionAssetRequest,
-  JsonObject,
   LiveStatusResource,
   MagnetizationAssetPatchRequest,
   MagnetizationAssetResource,
@@ -993,7 +992,7 @@ export class ControlRoomApi {
       ),
     patchCoupling: (
       couplingId: string,
-      patch: JsonObject,
+      patch: components["schemas"]["SceneCouplingPatch"],
       options?: AuthoringWriteOptions,
     ) =>
       this.model.commitTransaction(

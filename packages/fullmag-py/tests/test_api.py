@@ -284,6 +284,14 @@ class ProblemApiTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Ms must be > 0"):
             region.material.Ms = 0.0
 
+    def test_object_region_rejects_sampled_texture_override(self) -> None:
+        fm.reset()
+        layer = fm.geometry(fm.Box(size=(20e-9, 20e-9, 2e-9)), name="film")
+        region = layer.add_region("core", fm.Box(size=(5e-9, 5e-9, 2e-9)))
+
+        with self.assertRaisesRegex(ValueError, "sampled_field initial magnetization"):
+            region.texture = fm.init.SampledMagnetization([(1.0, 0.0, 0.0)])
+
     def test_region_registries_are_owner_scoped_and_study_read_only(self) -> None:
         fm.reset()
         study = fm.study("region_registry")
@@ -622,6 +630,12 @@ class ProblemApiTests(unittest.TestCase):
                         transition_distance=40e-9,
                         order=1,
                     )
+                    core.texture = fm.texture.neel_skyrmion(
+                        radius=20e-9,
+                        wall_width=4e-9,
+                        chirality=1,
+                        core_polarity=-1,
+                    )
                     film.set_material_field(
                         "Ms",
                         fm.fields.linear(
@@ -692,18 +706,68 @@ class ProblemApiTests(unittest.TestCase):
         self.assertIn("film_core_region = film.add_region", exported)
         self.assertIn('region_id="film:core_region"', exported)
         self.assertIn('fm.fields.constant(760000, unit="A/m")', exported)
+        self.assertIn("film_core_region.texture = fm.texture.neel_skyrmion", exported)
         self.assertIn("film.set_material_field", exported)
         self.assertIn("study.couplings.rkky", exported)
         self.assertIn('film.surface("top")', exported)
 
         original_ir = loaded.problem.to_ir(include_geometry_assets=False)
         reloaded_ir = reloaded.problem.to_ir(include_geometry_assets=False)
+        texture_override = original_ir["object_regions"][0]["texture_override"]
+        self.assertEqual(
+            texture_override["initial_magnetization"]["kind"],
+            "preset_texture",
+        )
+        self.assertEqual(
+            texture_override["initial_magnetization"]["preset_kind"],
+            "neel_skyrmion",
+        )
         self.assertEqual(reloaded_ir["object_regions"], original_ir["object_regions"])
         self.assertEqual(
             reloaded_ir["material_parameter_fields"],
             original_ir["material_parameter_fields"],
         )
         self.assertEqual(reloaded_ir["couplings"], original_ir["couplings"])
+
+    def test_script_builder_rewrites_region_coupling_endpoints_to_region_variables(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            script_path = Path(tmp_dir) / "region_coupling.py"
+            script_path.write_text(
+                textwrap.dedent(
+                    """
+                    import fullmag as fm
+
+                    study = fm.study("region_coupling")
+                    film = study.geometry(
+                        fm.Box(size=(100e-9, 50e-9, 2e-9), name="film"),
+                        name="film",
+                    )
+                    film.Ms = 800e3
+                    film.Aex = 13e-12
+                    core = film.add_region("core", fm.Cylinder(radius=15e-9, height=2e-9))
+                    shell = film.add_region("shell", fm.Box(size=(80e-9, 40e-9, 2e-9)))
+                    study.couplings.exchange(
+                        core,
+                        shell,
+                        mode="explicit",
+                        inter_exchange=6.5e-12,
+                        coupling_id="core_shell_exchange",
+                    )
+                    study.exchange()
+                    """
+                ).strip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            loaded = load_problem_from_script(script_path, lightweight_assets=True)
+            exported = rewrite_loaded_problem_script(loaded)["rendered_source"]
+
+        self.assertIn(
+            "study.couplings.exchange(film_core_region, film_shell_region",
+            exported,
+        )
+        self.assertNotIn("fm.couplings.region", exported)
 
     def test_demag_fredkin_koehler_lowers_to_ir(self) -> None:
         self.assertEqual(
@@ -1751,6 +1815,82 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(relax_dynamics["integrator"], "rk45")
         self.assertEqual(relax_dynamics["adaptive_timestep"]["atol"], 1e-4)
         self.assertEqual(relax_dynamics["adaptive_timestep"]["dt_min"], 1e-17)
+
+    def test_region_owned_gradient_ms_example_keeps_one_physical_object(self) -> None:
+        example_path = (
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "region_owned_gradient_ms.py"
+        )
+        loaded = load_problem_from_script(example_path, lightweight_assets=True)
+
+        ir = loaded.problem.to_ir(include_geometry_assets=False)
+        self.assertEqual(len(ir["geometry"]["entries"]), 1)
+        self.assertEqual(len(ir["object_regions"]), 1)
+        self.assertEqual(len(ir["material_parameter_fields"]), 1)
+
+        region_ir = ir["object_regions"][0]
+        field_ir = ir["material_parameter_fields"][0]
+        self.assertEqual(region_ir["owner_object"], "permalloy_track")
+        self.assertEqual(field_ir["owner_object"], "permalloy_track")
+        self.assertEqual(field_ir["region_id"], region_ir["region_id"])
+        self.assertEqual(field_ir["parameter"], "ms")
+        self.assertEqual(field_ir["value"]["kind"], "linear")
+        self.assertEqual(ir["couplings"], [])
+
+    def test_two_object_couplings_example_uses_explicit_exchange_and_rkky(self) -> None:
+        example_path = (
+            Path(__file__).resolve().parents[3] / "examples" / "two_object_couplings.py"
+        )
+        loaded = load_problem_from_script(example_path, lightweight_assets=True)
+
+        ir = loaded.problem.to_ir(include_geometry_assets=False)
+        self.assertEqual(len(ir["geometry"]["entries"]), 2)
+        self.assertEqual(len(ir["couplings"]), 2)
+
+        couplings_by_id = {entry["coupling_id"]: entry for entry in ir["couplings"]}
+        exchange = couplings_by_id["free_layer_reference_exchange"]
+        self.assertEqual(exchange["kind"], "exchange")
+        self.assertEqual(exchange["source"], {"kind": "object", "object": "free_layer"})
+        self.assertEqual(exchange["target"], {"kind": "object", "object": "reference_layer"})
+        self.assertEqual(exchange["parameters"]["mode"], "explicit")
+        self.assertEqual(exchange["parameters"]["inter_exchange"], 6.5e-12)
+
+        rkky = couplings_by_id["free_layer_reference_rkky"]
+        self.assertEqual(rkky["kind"], "rkky")
+        self.assertEqual(
+            rkky["source"],
+            {"kind": "surface", "object": "free_layer", "selector": "top"},
+        )
+        self.assertEqual(
+            rkky["target"],
+            {"kind": "surface", "object": "reference_layer", "selector": "bottom"},
+        )
+        self.assertEqual(rkky["parameters"], {"kind": "rkky", "j1": -0.0003})
+
+    def test_skyrmion_core_mesh_refinement_example_scopes_region_mesh_policy(self) -> None:
+        example_path = (
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "skyrmion_core_mesh_refinement.py"
+        )
+        loaded = load_problem_from_script(example_path, lightweight_assets=True)
+
+        ir = loaded.problem.to_ir(include_geometry_assets=False)
+        self.assertEqual(len(ir["geometry"]["entries"]), 1)
+        self.assertEqual(len(ir["object_regions"]), 1)
+
+        mesh_workflow = loaded.problem.runtime_metadata["mesh_workflow"]
+        self.assertEqual(mesh_workflow["per_geometry"][0]["geometry"], "permalloy_track")
+        self.assertEqual(mesh_workflow["per_geometry"][0]["maximum_element_size"], 10e-9)
+
+        core_region = ir["object_regions"][0]
+        self.assertEqual(core_region["owner_object"], "permalloy_track")
+        self.assertEqual(core_region["name"], "skyrmion_core")
+        self.assertEqual(core_region["shape"]["kind"], "cylinder")
+        self.assertEqual(core_region["mesh_policy"]["maximum_element_size"], 1e-9)
+        self.assertEqual(core_region["mesh_policy"]["minimum_element_size"], 1e-9)
+        self.assertEqual(core_region["mesh_policy"]["transition_distance"], 40e-9)
 
     def test_study_builder_sets_surface_and_universe_metadata(self) -> None:
         fm.reset()
@@ -3390,6 +3530,83 @@ class ProblemApiTests(unittest.TestCase):
 
         rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
         self.assertIn('body.region_name = "core"', rewritten)
+
+    def test_scene_document_region_edits_export_as_canonical_python(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("scene_region_export")
+        study.engine("fem")
+
+        body = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="body")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.texture.uniform(1, 0, 0)
+
+        core = body.add_region(
+            "core",
+            fm.Cylinder(radius=10e-9, height=5e-9),
+            region_id="body:core",
+        )
+        core.mesh(maximum_element_size=3e-9)
+        core.set_material("ms", fm.fields.constant(760e3, unit="A/m"), priority=2)
+
+        study.exchange()
+        study.run(1e-12)
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_scene_region_export.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+
+            draft = export_builder_draft(loaded)
+            scene = build_scene_document_from_builder(draft)
+            scene_region = scene["objects"][0]["regions"][0]
+            scene_region["region_id"] = "body:ui-core"
+            scene_region["name"] = "ui_core"
+            scene_region["mesh_policy"] = {
+                "maximum_element_size": 1e-9,
+                "minimum_element_size": 1e-9,
+                "transition_distance": 20e-9,
+                "order": 1,
+            }
+            scene_region["material_overrides"] = [
+                {
+                    "parameter": "ms",
+                    "value": {"kind": "constant", "value": 700e3, "unit": "A/m"},
+                    "priority": 5,
+                    "conflict_policy": "higher_priority_wins",
+                }
+            ]
+            scene["objects"][0]["material_parameter_fields"] = [
+                {
+                    "assignment_id": "field:ui-core-alpha",
+                    "parameter": "alpha",
+                    "value": {"kind": "constant", "value": 0.05, "unit": "dimensionless"},
+                    "region_id": "body:ui-core",
+                    "priority": 6,
+                    "conflict_policy": "higher_priority_wins",
+                }
+            ]
+
+            rewritten = rewrite_loaded_problem_script(
+                loaded,
+                overrides=builder_overrides_from_scene_document(scene),
+            )["rendered_source"]
+
+        self.assertIn('region_id="body:ui-core"', rewritten)
+        self.assertIn('body_ui_core_region = body.add_region("ui_core"', rewritten)
+        self.assertIn('body_ui_core_region.mesh(maximum_element_size=1e-09', rewritten)
+        self.assertIn(
+            'body_ui_core_region.set_material("ms", fm.fields.constant(700000, unit="A/m"), priority=5',
+            rewritten,
+        )
+        self.assertIn(
+            'body.set_material_field("alpha", fm.fields.constant(0.05, unit="dimensionless"), assignment_id="field:ui-core-alpha", region=body_ui_core_region',
+            rewritten,
+        )
 
     def test_builder_draft_exports_structured_csg_geometry(self) -> None:
         script = """
