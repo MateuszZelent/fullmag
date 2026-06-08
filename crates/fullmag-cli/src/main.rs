@@ -839,6 +839,7 @@ mod tests {
                     geometry_name: "strip".to_string(),
                     marker: 1,
                 }],
+                object_region_markers: Vec::new(),
                 build_report: None,
             }),
         });
@@ -969,6 +970,8 @@ mod tests {
                 dind_field: None,
                 dbulk_field: None,
             },
+            ms_element_field: None,
+            a_element_field: None,
             region_materials: Vec::new(),
             enable_exchange: true,
             enable_demag: true,

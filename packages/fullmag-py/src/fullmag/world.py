@@ -1769,6 +1769,7 @@ class _WorldState:
     _gpu_count: int = 0
     _device_index: int | None = None
     _precision: str | None = None
+    _execution_mode: str | None = None
     _cpu_threads: int | None = None
     _boundary_correction: str | None = None  # "none" | "volume" | "full"
 
@@ -1782,6 +1783,7 @@ class _WorldState:
     _study_universe: StudyUniverseConfig | None = None
     _domain_mesh_source: str | None = None
     _domain_region_markers: list[dict[str, object]] | None = None
+    _domain_object_region_markers: list[dict[str, object]] | None = None
     _exchange_enabled: bool = True
     _demag_enabled: bool = True
     _demag_realization: str | None = None
@@ -2672,8 +2674,10 @@ def _estimate_auto_hmax() -> float:
     )
 
 
-def _normalize_domain_region_markers(
+def _normalize_domain_region_marker_table(
     region_markers: Any,
+    *,
+    label: str,
 ) -> list[dict[str, object]]:
     if isinstance(region_markers, dict):
         items = region_markers.items()
@@ -2687,18 +2691,18 @@ def _normalize_domain_region_markers(
                 geometry_name, marker = entry
             else:
                 raise TypeError(
-                    "region_markers entries must be {'geometry_name': ..., 'marker': ...} mappings "
+                    f"{label} entries must be {{'geometry_name': ..., 'marker': ...}} mappings "
                     "or (geometry_name, marker) pairs"
                 )
             if not isinstance(geometry_name, str) or not geometry_name.strip():
-                raise ValueError("region_markers geometry_name must be a non-empty string")
+                raise ValueError(f"{label} geometry_name must be a non-empty string")
             if not isinstance(marker, int) or marker <= 0:
-                raise ValueError("region_markers marker must be a positive int")
+                raise ValueError(f"{label} marker must be a positive int")
             normalized_items.append((geometry_name, marker))
         items = normalized_items
     else:
         raise TypeError(
-            "region_markers must be a mapping, list of mappings, or list of (geometry_name, marker) pairs"
+            f"{label} must be a mapping, list of mappings, or list of (geometry_name, marker) pairs"
         )
 
     normalized: list[dict[str, object]] = []
@@ -2706,19 +2710,25 @@ def _normalize_domain_region_markers(
     seen_markers: set[int] = set()
     for geometry_name, marker in items:
         if not isinstance(geometry_name, str) or not geometry_name.strip():
-            raise ValueError("region_markers geometry_name must be a non-empty string")
+            raise ValueError(f"{label} geometry_name must be a non-empty string")
         if not isinstance(marker, int) or marker <= 0:
-            raise ValueError("region_markers marker must be a positive int")
+            raise ValueError(f"{label} marker must be a positive int")
         if geometry_name in seen_geometry_names:
-            raise ValueError(f"region_markers duplicates geometry_name {geometry_name!r}")
+            raise ValueError(f"{label} duplicates geometry_name {geometry_name!r}")
         if marker in seen_markers:
-            raise ValueError(f"region_markers duplicates marker {marker}")
+            raise ValueError(f"{label} duplicates marker {marker}")
         seen_geometry_names.add(geometry_name)
         seen_markers.add(marker)
         normalized.append({"geometry_name": geometry_name, "marker": marker})
     if not normalized:
-        raise ValueError("region_markers must not be empty")
+        raise ValueError(f"{label} must not be empty")
     return normalized
+
+
+def _normalize_domain_region_markers(
+    region_markers: Any,
+) -> list[dict[str, object]]:
+    return _normalize_domain_region_marker_table(region_markers, label="region_markers")
 
 
 def reset() -> None:
@@ -3381,6 +3391,10 @@ class StudyBuilder:
         device(spec, precision=precision)
         return self
 
+    def mode(self, execution_mode: str) -> "StudyBuilder":
+        mode(execution_mode)
+        return self
+
     def threads(self, cpu_threads: int) -> "StudyBuilder":
         threads(cpu_threads)
         return self
@@ -3543,8 +3557,13 @@ class StudyBuilder:
         source: str | Path,
         *,
         region_markers: Any,
+        object_region_markers: Any | None = None,
     ) -> "StudyBuilder":
-        domain_mesh(source, region_markers=region_markers)
+        domain_mesh(
+            source,
+            region_markers=region_markers,
+            object_region_markers=object_region_markers,
+        )
         return self
 
     def geometry(self, shape: object, name: str = "body") -> MagnetHandle:
@@ -3936,6 +3955,14 @@ def device(spec: str, *, precision: str | None = None) -> None:
         _state._precision = precision.lower()
 
 
+def mode(execution_mode: str) -> None:
+    """Set execution policy: ``"strict"``, ``"extended"``, or ``"hybrid"``."""
+    normalized = str(execution_mode).strip().lower()
+    if normalized not in {"strict", "extended", "hybrid"}:
+        raise ValueError("execution_mode must be 'strict', 'extended', or 'hybrid'")
+    _state._execution_mode = normalized
+
+
 def threads(cpu_threads: int) -> None:
     """Set requested CPU thread count for the next run."""
     resolved = int(cpu_threads)
@@ -4239,6 +4266,7 @@ def domain_mesh(
     source: str | Path,
     *,
     region_markers: Any,
+    object_region_markers: Any | None = None,
 ) -> None:
     """Attach an explicit shared-domain FEM mesh asset.
 
@@ -4251,12 +4279,36 @@ def domain_mesh(
         `{"left": 1, "right": 2}`,
         `[("left", 1), ("right", 2)]`,
         or `[{"geometry_name": "left", "marker": 1}, ...]`.
+    object_region_markers : mapping | sequence, optional
+        Authored object-region marker table for precomputed conformal region
+        splits. These markers must already exist in the mesh element marker
+        array; Fullmag does not synthesize conformal region markers from shapes.
     """
     rendered_source = str(Path(source))
     if not rendered_source.strip():
         raise ValueError("domain_mesh source must not be empty")
     _state._domain_mesh_source = rendered_source
     _state._domain_region_markers = _normalize_domain_region_markers(region_markers)
+    normalized_object_region_markers = (
+        _normalize_domain_region_marker_table(
+            object_region_markers,
+            label="object_region_markers",
+        )
+        if object_region_markers is not None
+        else None
+    )
+    if normalized_object_region_markers:
+        region_marker_ids = {
+            int(entry["marker"])
+            for entry in _state._domain_region_markers
+        }
+        for entry in normalized_object_region_markers:
+            marker = int(entry["marker"])
+            if marker in region_marker_ids:
+                raise ValueError(
+                    f"object_region_markers marker {marker} duplicates a region_markers marker"
+                )
+    _state._domain_object_region_markers = normalized_object_region_markers
 
 
 def interactive(enabled: bool = True) -> None:
@@ -4946,6 +4998,10 @@ def _collect_mesh_workflow_metadata() -> dict[str, object] | None:
         mesh_workflow["domain_mesh_mode"] = "explicit_shared_domain_mesh"
         mesh_workflow["domain_mesh_source"] = _state._domain_mesh_source
         mesh_workflow["domain_region_markers"] = list(_state._domain_region_markers or [])
+        if _state._domain_object_region_markers is not None:
+            mesh_workflow["domain_object_region_markers"] = list(
+                _state._domain_object_region_markers
+            )
     elif _state._study_universe is not None:
         mesh_workflow["domain_mesh_mode"] = "generated_shared_domain_mesh"
     return mesh_workflow
@@ -5634,6 +5690,8 @@ def _build_problem(
         rt = rt.gpu(s._gpu_count)
     if s._precision is not None:
         rt = rt.precision(s._precision)
+    if s._execution_mode is not None:
+        rt = rt.mode(s._execution_mode)
     if s._cpu_threads is not None:
         rt = rt.threads(s._cpu_threads)
 

@@ -104,6 +104,7 @@ void mfem_context_lifecycle_is_owned_by_runtime_module() {
             runtime_header.find("mfem::GridFunction *gf_a") != std::string::npos &&
             runtime_header.find("mfem::GridFunction *gf_ms") != std::string::npos &&
             runtime_header.find("mfem::Coefficient *a_coeff") != std::string::npos &&
+            runtime_header.find("mfem::Coefficient *ms_coeff") != std::string::npos &&
             runtime_header.find("bool ready") != std::string::npos,
         "MFEM context runtime state must own mesh/FES/GridFunction lifecycle handles and component buffers");
     check(
@@ -124,6 +125,7 @@ void mfem_context_lifecycle_is_owned_by_runtime_module() {
              "mfem::GridFunction *mfem_gf_a",
              "mfem::GridFunction *mfem_gf_ms",
              "mfem::Coefficient *mfem_a_coeff",
+             "mfem::Coefficient *mfem_ms_coeff",
              "bool mfem_ready",
          }) {
         check(
@@ -355,11 +357,39 @@ void runtime_headers_document_module_boundaries() {
         "state I/O runtime header must document its non-owning module boundary");
 }
 
+void mfem_context_uses_elementwise_material_coefficients_when_present() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string runtime =
+        read_text_file(root / "cpu" / "mfem" / "runtime" / "mfem_context.cpp");
+    const std::string exchange_operator_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "exchange_operator.hpp");
+
+    check(
+        runtime.find("class ElementwiseScalarCoefficient") != std::string::npos,
+        "MFEM context must define an elementwise material coefficient adapter");
+    check(
+        runtime.find("ctx.material_fields.A_element_field.empty()") != std::string::npos &&
+            runtime.find("new ElementwiseScalarCoefficient(") != std::string::npos,
+        "MFEM context must select elementwise A coefficient when A_element_field is present");
+    check(
+        runtime.find("ctx.material_fields.Ms_element_field.empty()") != std::string::npos,
+        "MFEM context must select elementwise Ms coefficient when Ms_element_field is present");
+    check(
+        runtime.find("per-element Ms coefficient requires consistent-mass exchange projection") !=
+            std::string::npos,
+        "MFEM context must reject elementwise Ms with lumped exchange projection");
+    check(
+        exchange_operator_header.find("mfem::Coefficient &a_coeff") != std::string::npos &&
+            exchange_operator_header.find("mfem::Coefficient &ms_coeff") != std::string::npos,
+        "exchange operator must accept generic MFEM coefficients, not only GridFunctionCoefficient");
+}
+
 } // namespace
 
 int main() {
     mfem_context_lifecycle_is_owned_by_runtime_module();
     mfem_runtime_pointers_are_typed();
+    mfem_context_uses_elementwise_material_coefficients_when_present();
     runtime_source_files_document_module_boundaries();
     runtime_headers_document_module_boundaries();
     return 0;

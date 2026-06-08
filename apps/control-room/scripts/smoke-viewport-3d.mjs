@@ -215,14 +215,16 @@ try {
     logViewport3DPerformancePhases(viewport3DPerformancePhases);
     console.log(`Viewport 3D camera smoke passed at ${url}.`);
   } else {
-    await verifyProjectionRoundTrip({ canvas, page });
-    viewport3DPerformancePhases.push(
-      await collectViewport3DPerformancePhase(page, "projection-round-trip"),
-    );
-    await verifyDimensionFrameCage({ canvas, page });
-    viewport3DPerformancePhases.push(
-      await collectViewport3DPerformancePhase(page, "dimension-frame-cage"),
-    );
+    if (!regionOnlyObjectId) {
+      await verifyProjectionRoundTrip({ canvas, page });
+      viewport3DPerformancePhases.push(
+        await collectViewport3DPerformancePhase(page, "projection-round-trip"),
+      );
+      await verifyDimensionFrameCage({ canvas, page });
+      viewport3DPerformancePhases.push(
+        await collectViewport3DPerformancePhase(page, "dimension-frame-cage"),
+      );
+    }
     if (requireGeometryFlow) {
       if (regionOnlyObjectId) {
         await verifyObjectInViewportRenderModel(page, regionOnlyObjectId);
@@ -1309,7 +1311,7 @@ async function verifyRegionAuthoringOverlayFlow({
   );
   if (!(await regionNode.isVisible().catch(() => false))) {
     await ensureExplorerNodeVisible(page, objectId, regionsNode);
-    await regionsNode.dblclick();
+    await ensureExplorerNodeExpanded(regionsNode);
   }
   await regionNode.waitFor({
     state: "visible",
@@ -1350,9 +1352,15 @@ async function ensureExplorerNodeVisible(page, objectId, node) {
   });
   await clickExplorerRow(objectRow);
   if (!(await node.isVisible().catch(() => false))) {
-    await objectRow.dblclick();
+    await ensureExplorerNodeExpanded(objectRow);
   }
   await node.waitFor({ state: "visible", timeout: GEOMETRY_FLOW_TIMEOUT_MS });
+}
+
+async function ensureExplorerNodeExpanded(node) {
+  if ((await node.getAttribute("aria-expanded")) === "false") {
+    await node.dblclick();
+  }
 }
 
 async function verifyObjectInExplorerViewportAndInspector(

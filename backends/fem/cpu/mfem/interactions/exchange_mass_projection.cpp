@@ -127,23 +127,10 @@ bool apply_periodic_consistent_mass_component(
         return false;
     }
 
-    std::vector<double> reduced_ms(static_cast<size_t>(n_reduced), ctx.material_fields.material.saturation_magnetisation);
-    for (uint32_t reduced = 0; reduced < n_reduced; ++reduced) {
-        const uint32_t representative = ctx.mesh.periodic_representative_nodes[static_cast<size_t>(reduced)];
-        reduced_ms[static_cast<size_t>(reduced)] = scalar_field_value(
-            ctx.material_fields.Ms_field,
-            static_cast<size_t>(representative),
-            ctx.material_fields.material.saturation_magnetisation);
-    }
     double *h_host = audited_host_write(h_component);
     for (int i = 0; i < ndofs; ++i) {
         const uint32_t reduced = ctx.mesh.periodic_reduced_node[static_cast<size_t>(i)];
-        const double Ms = reduced_ms[static_cast<size_t>(reduced)];
-        if (Ms <= 0.0) {
-            h_host[i] = 0.0;
-        } else {
-            h_host[i] = -(2.0 / (kMu0 * Ms)) * solution[static_cast<size_t>(reduced)];
-        }
+        h_host[i] = -(2.0 / kMu0) * solution[static_cast<size_t>(reduced)];
     }
     copy_mfem_vector_to_host(h_component, h_component_host);
     return true;
@@ -261,6 +248,7 @@ bool apply_exchange_component_mass_projection(
             if (ctx->exchange.mfem.consistent_mass_solver == nullptr) {
                 ctx->exchange.mfem.consistent_mass_solver = new mfem::CGSolver();
                 ctx->exchange.mfem.consistent_mass_solver->SetRelTol(1e-10);
+                ctx->exchange.mfem.consistent_mass_solver->SetAbsTol(0.0);
                 ctx->exchange.mfem.consistent_mass_solver->SetMaxIter(200);
                 ctx->exchange.mfem.consistent_mass_solver->SetPrintLevel(0);
                 ctx->exchange.mfem.consistent_mass_solver->SetOperator(mass_form);
@@ -269,6 +257,7 @@ bool apply_exchange_component_mass_projection(
         } else {
             local_solver = std::make_unique<mfem::CGSolver>();
             local_solver->SetRelTol(1e-10);
+            local_solver->SetAbsTol(0.0);
             local_solver->SetMaxIter(200);
             local_solver->SetPrintLevel(0);
             local_solver->SetOperator(mass_form);
@@ -276,16 +265,7 @@ bool apply_exchange_component_mass_projection(
         }
         h_component = 0.0;
         cg_solver->Mult(tmp, h_component);
-        const double *ms_host = audited_host_read(ms_field);
-        double *h_host = audited_host_read_write(h_component);
-        for (int i = 0; i < ndofs; ++i) {
-            const double Ms_i = ms_host[i];
-            if (Ms_i <= 0.0) {
-                h_host[i] = 0.0;
-            } else {
-                h_host[i] = -(2.0 / (kMu0 * Ms_i)) * h_host[i];
-            }
-        }
+        h_component *= -(2.0 / kMu0);
     } else {
         const double *tmp_host = audited_host_read(tmp);
         const double *inv_mass_host = audited_host_read(inv_lumped_mass);

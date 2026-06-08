@@ -4,6 +4,8 @@ import type { ThreeEvent } from "@react-three/fiber";
 import { useMemo } from "react";
 import { Quaternion, Vector3 } from "three";
 
+import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
+
 import {
   buildRegionOverlayModels,
   type RegionOverlayInput,
@@ -17,6 +19,7 @@ export interface RegionOverlaySelection {
 }
 
 export interface RegionOverlayLayerProps {
+  getRegionSettings?: (region: RegionOverlayInput) => VisualizationTargetSettings;
   onSelectRegion?: (selection: RegionOverlaySelection) => void;
   regions: readonly RegionOverlayInput[];
   selectedObjectId?: string | null;
@@ -40,6 +43,7 @@ function resolveCssColorToken(color: string): string {
 }
 
 export function RegionOverlayLayer({
+  getRegionSettings,
   onSelectRegion,
   regions,
   selectedObjectId = null,
@@ -50,11 +54,12 @@ export function RegionOverlayLayer({
   const models = useMemo(
     () =>
       buildRegionOverlayModels(regions, {
+        resolveSettings: getRegionSettings,
         selectedObjectId,
         selectedRegionId,
         theme,
       }),
-    [regions, selectedObjectId, selectedRegionId, theme],
+    [getRegionSettings, regions, selectedObjectId, selectedRegionId, theme],
   );
 
   if (!visible || models.length === 0) return null;
@@ -83,6 +88,10 @@ function RegionOverlayShape({
     event.stopPropagation();
     onSelectRegion?.({ objectId: model.objectId, regionId: model.regionId });
   };
+  const handleClick = (event: ThreeEvent<MouseEvent>) => {
+    event.stopPropagation();
+    onSelectRegion?.({ objectId: model.objectId, regionId: model.regionId });
+  };
 
   const quaternion = useMemo(() => {
     if (model.kind !== "cylinder") return undefined;
@@ -95,7 +104,10 @@ function RegionOverlayShape({
   );
 
   const wireframeScale = model.style.wireframeScale;
-  const color = resolveCssColorToken(model.color);
+  const fillColor = resolveCssColorToken(model.style.surfaceColor ?? model.color);
+  const wireframeColor = resolveCssColorToken(
+    model.style.wireframeColor ?? model.color,
+  );
 
   return (
     <group
@@ -108,29 +120,40 @@ function RegionOverlayShape({
         position={model.center}
         quaternion={quaternion}
       >
-        <mesh onPointerDown={handlePointerDown} renderOrder={42}>
-          <RegionOverlayGeometry model={model} />
-          <meshBasicMaterial
-            color={color}
-            depthWrite={false}
-            opacity={model.style.fillOpacity}
-            transparent
-          />
-        </mesh>
-        <mesh
-          onPointerDown={handlePointerDown}
-          renderOrder={43}
-          scale={[wireframeScale, wireframeScale, wireframeScale]}
-        >
-          <RegionOverlayGeometry model={model} />
-          <meshBasicMaterial
-            color={color}
-            depthWrite={false}
-            opacity={model.style.wireframeOpacity}
-            transparent
-            wireframe
-          />
-        </mesh>
+        {model.style.fillVisible ? (
+          <mesh
+            onClick={handleClick}
+            onPointerDown={handlePointerDown}
+            renderOrder={42}
+          >
+            <RegionOverlayGeometry model={model} />
+            <meshBasicMaterial
+              color={fillColor}
+              depthTest={false}
+              depthWrite={false}
+              opacity={model.style.fillOpacity}
+              transparent
+            />
+          </mesh>
+        ) : null}
+        {model.style.wireframeVisible ? (
+          <mesh
+            onClick={handleClick}
+            onPointerDown={handlePointerDown}
+            renderOrder={43}
+            scale={[wireframeScale, wireframeScale, wireframeScale]}
+          >
+            <RegionOverlayGeometry model={model} />
+            <meshBasicMaterial
+              color={wireframeColor}
+              depthTest={false}
+              depthWrite={false}
+              opacity={model.style.wireframeOpacity}
+              transparent
+              wireframe
+            />
+          </mesh>
+        ) : null}
       </group>
     </group>
   );

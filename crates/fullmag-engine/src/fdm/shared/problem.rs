@@ -32,6 +32,9 @@ pub struct ExchangeLlgProblem {
     /// Monotonically increasing step counter for the thermal RNG.
     /// Incremented by each accepted step.
     thermal_step_counter: AtomicU64,
+    pub ms_field: Option<Vec<f64>>,
+    pub a_field: Option<Vec<f64>>,
+    pub alpha_field: Option<Vec<f64>>,
 }
 
 impl ExchangeLlgProblem {
@@ -91,6 +94,9 @@ impl ExchangeLlgProblem {
             thermal_dt: 1e-13,
             thermal_seed: 42,
             thermal_step_counter: AtomicU64::new(0),
+            ms_field: None,
+            a_field: None,
+            alpha_field: None,
         })
     }
 
@@ -408,6 +414,76 @@ impl ExchangeLlgProblem {
     pub fn advance_thermal_step(&self) {
         self.thermal_step_counter.fetch_add(1, Ordering::Relaxed);
     }
+
+    pub fn with_spatial_fields(
+        mut self,
+        ms_field: Option<Vec<f64>>,
+        a_field: Option<Vec<f64>>,
+        alpha_field: Option<Vec<f64>>,
+    ) -> Result<Self> {
+        let n = self.grid.cell_count();
+        if let Some(ref field) = ms_field {
+            if field.len() != n {
+                return Err(EngineError::new(format!(
+                    "ms_field length {} does not match grid cell count {}",
+                    field.len(),
+                    n
+                )));
+            }
+            if field.iter().any(|&v| !v.is_finite() || v <= 0.0) {
+                return Err(EngineError::new("ms_field contains non-finite or non-positive values".to_string()));
+            }
+        }
+        if let Some(ref field) = a_field {
+            if field.len() != n {
+                return Err(EngineError::new(format!(
+                    "a_field length {} does not match grid cell count {}",
+                    field.len(),
+                    n
+                )));
+            }
+            if field.iter().any(|&v| !v.is_finite() || v < 0.0) {
+                return Err(EngineError::new("a_field contains non-finite or negative values".to_string()));
+            }
+        }
+        if let Some(ref field) = alpha_field {
+            if field.len() != n {
+                return Err(EngineError::new(format!(
+                    "alpha_field length {} does not match grid cell count {}",
+                    field.len(),
+                    n
+                )));
+            }
+            if field.iter().any(|&v| !v.is_finite() || v < 0.0) {
+                return Err(EngineError::new("alpha_field contains non-finite or negative values".to_string()));
+            }
+        }
+        self.ms_field = ms_field;
+        self.a_field = a_field;
+        self.alpha_field = alpha_field;
+        Ok(self)
+    }
+
+    pub fn ms_at(&self, i: usize) -> f64 {
+        self.ms_field
+            .as_ref()
+            .map(|values| values[i])
+            .unwrap_or(self.material.saturation_magnetisation)
+    }
+
+    pub fn a_at(&self, i: usize) -> f64 {
+        self.a_field
+            .as_ref()
+            .map(|values| values[i])
+            .unwrap_or(self.material.exchange_stiffness)
+    }
+
+    pub fn alpha_at(&self, i: usize) -> f64 {
+        self.alpha_field
+            .as_ref()
+            .map(|values| values[i])
+            .unwrap_or(self.material.damping)
+    }
 }
 
 fn zero_vectors(len: usize) -> Vec<Vector3> {
@@ -429,6 +505,9 @@ impl Clone for ExchangeLlgProblem {
             thermal_dt: self.thermal_dt,
             thermal_seed: self.thermal_seed,
             thermal_step_counter: AtomicU64::new(self.thermal_step_counter.load(Ordering::Relaxed)),
+            ms_field: self.ms_field.clone(),
+            a_field: self.a_field.clone(),
+            alpha_field: self.alpha_field.clone(),
         }
     }
 }
@@ -444,5 +523,8 @@ impl PartialEq for ExchangeLlgProblem {
             && self.temperature == other.temperature
             && self.thermal_dt == other.thermal_dt
             && self.thermal_seed == other.thermal_seed
+            && self.ms_field == other.ms_field
+            && self.a_field == other.a_field
+            && self.alpha_field == other.alpha_field
     }
 }

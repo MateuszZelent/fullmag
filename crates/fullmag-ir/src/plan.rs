@@ -5,9 +5,10 @@ use crate::{
     ExchangeBoundaryCondition, ExecutionMode, ExecutionPrecision, FdmDemagPeriodicityIR,
     FdmMultilayerPlanIR, FdmPeriodicityIR, FemDomainMeshAssetIR, FemLinearSolverPolicy,
     FemSharedDomainBuildReportIR, FieldRefreshPolicyIR, IntegratorChoice, KSamplingIR,
-    MagnetostrictionLawIR, MaterialIR, MechanicalBoundaryConditionIR, MechanicalLoadIR, MeshIR,
-    ModeTrackingIR, OerstedRealization, OutputIR, RelaxStopIR, RelaxationAlgorithmIR, SeedPolicy,
-    SpinWaveBoundaryConditionIR, ThermalSeedConfig,
+    MagnetostrictionLawIR, MaterialFieldLocationIR, MaterialIR, MaterialParameterNameIR,
+    MechanicalBoundaryConditionIR, MechanicalLoadIR, MeshIR, ModeTrackingIR, OerstedRealization,
+    OutputIR, RelaxStopIR, RelaxationAlgorithmIR, SeedPolicy, SpinWaveBoundaryConditionIR,
+    ThermalSeedConfig,
 };
 use serde::{Deserialize, Serialize};
 
@@ -33,6 +34,8 @@ pub struct CommonPlanMeta {
     pub requested_backend: BackendTarget,
     pub resolved_backend: BackendTarget,
     pub execution_mode: ExecutionMode,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub material_field_plans: Vec<MaterialFieldPlan>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -496,6 +499,16 @@ pub struct FemPlanIR {
     pub hmax: f64,
     pub initial_magnetization: Vec<[f64; 3]>,
     pub material: MaterialIR,
+    /// FEM-only discontinuous per-element saturation magnetization coefficients [A/m].
+    /// Used for conformal authored regions that share one magnetization field but need
+    /// sharp material jumps across domain markers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ms_element_field: Option<Vec<f64>>,
+    /// FEM-only discontinuous per-element exchange stiffness coefficients [J/m].
+    /// Used for conformal authored regions that share one magnetization field but need
+    /// sharp material jumps across domain markers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub a_element_field: Option<Vec<f64>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub region_materials: Vec<FemRegionMaterialIR>,
     pub enable_exchange: bool,
@@ -816,4 +829,61 @@ mod tests {
         assert!(!RequestedFemDemagIR::Fmm.requires_airbox());
         assert!(!RequestedFemDemagIR::Fmm.is_implemented());
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MaterialFieldPlan {
+    pub object_id: String,
+    pub parameter: MaterialParameterNameIR,
+    pub source_kind: MaterialFieldSourceKind,
+    pub realization_location: MaterialFieldLocationIR,
+    pub requires_sampling: bool,
+    pub requires_mesh_revision: bool,
+    pub warnings: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realization_method: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub statistics: Option<MaterialFieldStatisticsIR>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MaterialFieldStatisticsIR {
+    pub sample_count: usize,
+    pub min: f64,
+    pub max: f64,
+    pub mean: f64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MaterialFieldSourceKind {
+    Parent,
+    Override,
+    Gradient,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MaterialFieldAssetIR {
+    pub asset_id: String,
+    pub parameter: MaterialParameterNameIR,
+    pub owner_object_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_region_id: Option<String>,
+    pub mesh_id: String,
+    pub mesh_generation_id: String,
+    pub location: MaterialFieldLocationIR,
+    pub component_count: u32,
+    pub unit: String,
+    pub values: Vec<f64>,
+    pub min: f64,
+    pub max: f64,
+    pub mean: f64,
+    pub provenance: MaterialFieldProvenanceIR,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MaterialFieldProvenanceIR {
+    pub source_kind: MaterialFieldSourceKind,
+    pub algorithm: String,
+    pub timing_ms: f64,
 }

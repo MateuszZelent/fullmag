@@ -101,6 +101,30 @@ fn region_owned_ir_defaults_are_empty_for_legacy_payloads() {
 }
 
 #[test]
+fn fem_domain_mesh_asset_rejects_object_region_marker_id_collisions() {
+    let asset = FemDomainMeshAssetIR {
+        mesh_source: Some("domain.json".to_string()),
+        mesh: None,
+        region_markers: vec![FemDomainRegionMarkerIR {
+            geometry_name: "film".to_string(),
+            marker: 1,
+        }],
+        object_region_markers: vec![FemDomainRegionMarkerIR {
+            geometry_name: "film:core".to_string(),
+            marker: 1,
+        }],
+        build_report: None,
+    };
+
+    let errors = asset
+        .validate()
+        .expect_err("object-region markers must not collide with object markers");
+    assert!(errors.iter().any(|error| {
+        error.contains("object_region_markers marker 1 duplicates a region_markers marker")
+    }));
+}
+
+#[test]
 fn object_region_without_overrides_is_continuous_with_parent_object() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.object_regions.push(ObjectRegionIR {
@@ -920,6 +944,7 @@ fn execution_plan_ir_serializes() {
             requested_backend: BackendTarget::Auto,
             resolved_backend: BackendTarget::Fdm,
             execution_mode: ExecutionMode::Strict,
+            material_field_plans: Vec::new(),
         },
         backend_plan: BackendPlanIR::Fdm(FdmPlanIR {
             grid: GridDimensions {
@@ -1505,6 +1530,8 @@ fn problem_ir_validation_accepts_valid_mesh_semantics() {
                 operation_statuses: Vec::new(),
                 thin_film_diagnostics: Vec::new(),
                 degraded: false,
+                authored_regions_count: None,
+                realized_regions_count: None,
             }),
         }),
     });
@@ -1569,7 +1596,9 @@ fn shared_domain_build_report_preserves_full_mesh_v2_fields() {
             "actual_method": "layered_surface_tetrahedral",
             "warnings": ["requested through-thickness layer count is below 4"]
         }],
-        "degraded": false
+        "degraded": false,
+        "authored_regions_count": 3,
+        "realized_regions_count": 2
     });
 
     let report: FemSharedDomainBuildReportIR =
@@ -1587,6 +1616,8 @@ fn shared_domain_build_report_preserves_full_mesh_v2_fields() {
         report.thin_film_diagnostics[0].actual_method.as_deref(),
         Some("layered_surface_tetrahedral")
     );
+    assert_eq!(report.authored_regions_count, Some(3));
+    assert_eq!(report.realized_regions_count, Some(2));
 
     let round_trip = serde_json::to_value(&report).expect("full mesh v2 report should serialize");
     assert_eq!(
@@ -1606,6 +1637,8 @@ fn shared_domain_build_report_preserves_full_mesh_v2_fields() {
         round_trip["thin_film_diagnostics"][0]["warnings"][0],
         "requested through-thickness layer count is below 4"
     );
+    assert_eq!(round_trip["authored_regions_count"], 3);
+    assert_eq!(round_trip["realized_regions_count"], 2);
 }
 
 #[test]

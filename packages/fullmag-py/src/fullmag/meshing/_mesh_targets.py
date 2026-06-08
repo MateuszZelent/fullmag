@@ -461,12 +461,15 @@ class SharedDomainBuildReport:
     effective_per_object_targets: dict[str, ResolvedSharedObjectTarget]
     used_size_field_kinds: list[str]
     region_markers: list[dict[str, object]] = field(default_factory=list)
+    object_region_markers: list[dict[str, object]] = field(default_factory=list)
     size_fields_realized: list[dict[str, object]] = field(default_factory=list)
     operation_statuses: list["MeshOperationStatus"] = field(default_factory=list)
     thin_film_diagnostics: list["ThinFilmDiagnostic"] = field(default_factory=list)
     selector_resolution: list[dict[str, object]] = field(default_factory=list)
     orphan_entities: list[dict[str, object]] = field(default_factory=list)
     degraded: bool = False
+    authored_regions_count: int = 0
+    realized_regions_count: int = 0
 
     def to_dict(self) -> dict[str, object]:
         """Serialize to a plain-dict form suitable for JSON / IR embedding."""
@@ -500,6 +503,9 @@ class SharedDomainBuildReport:
                 for name, target in self.effective_per_object_targets.items()
             },
             "region_markers": [dict(marker) for marker in self.region_markers],
+            "object_region_markers": [
+                dict(marker) for marker in self.object_region_markers
+            ],
             "used_size_field_kinds": list(self.used_size_field_kinds),
             "size_fields_realized": [dict(field) for field in self.size_fields_realized],
             "operation_statuses": [status.to_dict() for status in self.operation_statuses],
@@ -511,6 +517,8 @@ class SharedDomainBuildReport:
             ],
             "orphan_entities": [dict(entity) for entity in self.orphan_entities],
             "degraded": self.degraded,
+            "authored_regions_count": self.authored_regions_count,
+            "realized_regions_count": self.realized_regions_count,
         }
 
 

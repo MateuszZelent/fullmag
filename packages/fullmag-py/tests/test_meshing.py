@@ -4734,7 +4734,7 @@ class FieldStackAcceptanceTests(unittest.TestCase):
         )
         self.assertEqual(len(fields), 1)
         self.assertAlmostEqual(fields[0]["params"]["DistMax"], 50e-9)
-        self.assertEqual(fields[0]["params"]["Source"], "explicit")
+        self.assertEqual(fields[0]["params"]["Source"], "transition_distance")
 
     def test_transition_field_preserves_explicit_interface_shell_before_ramp(self) -> None:
         left = fm.Box(2.0, 2.0, 2.0, name="left")
@@ -6592,6 +6592,816 @@ class FieldStackAcceptanceTests(unittest.TestCase):
         self.assertEqual(region_markers, [{"geometry_name": "waveguide", "marker": 1}])
         self.assertEqual(report.build_mode, "conformal_occ")
         self.assertFalse(report.degraded)
+
+
+class RegionMeshPolicyTests(unittest.TestCase):
+    def test_conformal_box_region_gets_distinct_domain_marker(self) -> None:
+        try:
+            import gmsh  # noqa: F401
+        except ImportError:
+            self.skipTest("gmsh not available")
+
+        owner = fm.Box(size=(100e-9, 100e-9, 100e-9), name="owner")
+        mesh, parent_markers, report = (
+            realize_fem_domain_mesh_asset_from_components_with_report(
+                geometries=[owner],
+                hints=fm.FEM(order=1, hmax=30e-9),
+                study_universe={
+                    "mode": "manual",
+                    "size": [220e-9, 220e-9, 220e-9],
+                    "center": [0.0, 0.0, 0.0],
+                    "airbox_hmax": 60e-9,
+                },
+                object_regions=[
+                    {
+                        "region_id": "owner:core",
+                        "owner_object": "owner",
+                        "owner_geometry_name": "owner",
+                        "name": "core",
+                        "enabled": True,
+                        "frame": "object",
+                        "realization_policy": "conformal",
+                        "shape": {
+                            "kind": "box",
+                            "size": [40e-9, 40e-9, 40e-9],
+                            "center": [0.0, 0.0, 0.0],
+                        },
+                    }
+                ],
+            )
+        )
+
+        parent_marker = int(parent_markers[0]["marker"])
+        self.assertEqual(
+            report.object_region_markers,
+            [{"geometry_name": "owner:core", "marker": 2}],
+        )
+        marker_values = set(int(value) for value in mesh.element_markers)
+        self.assertIn(parent_marker, marker_values)
+        self.assertIn(2, marker_values)
+        self.assertGreater(np.count_nonzero(mesh.element_markers == 2), 0)
+
+    def test_conformal_region_interface_is_not_exported_as_boundary_face(self) -> None:
+        try:
+            import gmsh  # noqa: F401
+        except ImportError:
+            self.skipTest("gmsh not available")
+
+        owner = fm.Box(size=(100e-9, 100e-9, 100e-9), name="owner")
+        mesh, _parent_markers, _report = (
+            realize_fem_domain_mesh_asset_from_components_with_report(
+                geometries=[owner],
+                hints=fm.FEM(order=1, hmax=30e-9),
+                study_universe={
+                    "mode": "manual",
+                    "size": [220e-9, 220e-9, 220e-9],
+                    "center": [0.0, 0.0, 0.0],
+                    "airbox_hmax": 60e-9,
+                },
+                object_regions=[
+                    {
+                        "region_id": "owner:core",
+                        "owner_object": "owner",
+                        "owner_geometry_name": "owner",
+                        "name": "core",
+                        "enabled": True,
+                        "frame": "object",
+                        "realization_policy": "conformal",
+                        "shape": {
+                            "kind": "box",
+                            "size": [40e-9, 40e-9, 40e-9],
+                            "center": [0.0, 0.0, 0.0],
+                        },
+                    }
+                ],
+            )
+        )
+
+        face_to_markers: dict[tuple[int, int, int], set[int]] = {}
+        for element, marker in zip(mesh.elements, mesh.element_markers, strict=True):
+            a, b, c, d = (int(node) for node in element)
+            for face in ((a, b, c), (a, b, d), (a, c, d), (b, c, d)):
+                face_to_markers.setdefault(tuple(sorted(face)), set()).add(int(marker))
+
+        leaked_internal_faces = [
+            face
+            for face in mesh.boundary_faces
+            if len(face_to_markers.get(tuple(sorted(int(node) for node in face)), set())) > 1
+            and all(
+                marker > 0
+                for marker in face_to_markers[tuple(sorted(int(node) for node in face))]
+            )
+        ]
+        self.assertEqual(
+            leaked_internal_faces,
+            [],
+            "region/parent interfaces are internal material-continuity surfaces, not physical boundary faces",
+        )
+
+    def test_conformal_cylinder_region_gets_distinct_domain_marker(self) -> None:
+        try:
+            import gmsh  # noqa: F401
+        except ImportError:
+            self.skipTest("gmsh not available")
+
+        owner = fm.Box(size=(100e-9, 100e-9, 100e-9), name="owner")
+        mesh, _parent_markers, report = (
+            realize_fem_domain_mesh_asset_from_components_with_report(
+                geometries=[owner],
+                hints=fm.FEM(order=1, hmax=30e-9),
+                study_universe={
+                    "mode": "manual",
+                    "size": [220e-9, 220e-9, 220e-9],
+                    "center": [0.0, 0.0, 0.0],
+                    "airbox_hmax": 60e-9,
+                },
+                object_regions=[
+                    {
+                        "region_id": "owner:cylinder",
+                        "owner_object": "owner",
+                        "owner_geometry_name": "owner",
+                        "name": "cylinder",
+                        "enabled": True,
+                        "frame": "object",
+                        "realization_policy": "conformal",
+                        "shape": {
+                            "kind": "cylinder",
+                            "radius": 20e-9,
+                            "height": 50e-9,
+                            "center": [0.0, 0.0, 0.0],
+                            "axis": [0.0, 1.0, 0.0],
+                        },
+                    }
+                ],
+            )
+        )
+
+        self.assertEqual(
+            report.object_region_markers,
+            [{"geometry_name": "owner:cylinder", "marker": 2}],
+        )
+        self.assertGreater(np.count_nonzero(mesh.element_markers == 2), 0)
+
+    def test_inherited_cylinder_region_does_not_create_domain_marker(self) -> None:
+        try:
+            import gmsh  # noqa: F401
+        except ImportError:
+            self.skipTest("gmsh not available")
+
+        owner = fm.Box(size=(100e-9, 100e-9, 100e-9), name="owner")
+        mesh, _parent_markers, report = (
+            realize_fem_domain_mesh_asset_from_components_with_report(
+                geometries=[owner],
+                hints=fm.FEM(order=1, hmax=30e-9),
+                study_universe={
+                    "mode": "manual",
+                    "size": [220e-9, 220e-9, 220e-9],
+                    "center": [0.0, 0.0, 0.0],
+                    "airbox_hmax": 60e-9,
+                },
+                object_regions=[
+                    {
+                        "region_id": "owner:cylinder",
+                        "owner_object": "owner",
+                        "owner_geometry_name": "owner",
+                        "name": "cylinder",
+                        "enabled": True,
+                        "frame": "object",
+                        "realization_policy": "inherit",
+                        "shape": {
+                            "kind": "cylinder",
+                            "radius": 20e-9,
+                            "height": 50e-9,
+                            "center": [0.0, 0.0, 0.0],
+                            "axis": [0.0, 1.0, 0.0],
+                        },
+                    }
+                ],
+            )
+        )
+
+        self.assertEqual(
+            report.object_region_markers,
+            [],
+        )
+        self.assertEqual(np.count_nonzero(mesh.element_markers == 2), 0)
+        self.assertGreater(np.count_nonzero(mesh.element_markers == 1), 0)
+
+    def test_conformal_region_is_clipped_to_owner_csg_topology(self) -> None:
+        try:
+            import gmsh  # noqa: F401
+        except ImportError:
+            self.skipTest("gmsh not available")
+
+        owner = fm.Difference(
+            base=fm.Box(size=(300e-9, 1000e-9, 30e-9)),
+            tool=fm.Cylinder(radius=30e-9, height=30e-9),
+            name="owner",
+        )
+        mesh, _parent_markers, report = (
+            realize_fem_domain_mesh_asset_from_components_with_report(
+                geometries=[owner],
+                hints=fm.FEM(order=1, hmax=50e-9),
+                study_universe={
+                    "mode": "manual",
+                    "size": [700e-9, 1400e-9, 180e-9],
+                    "center": [0.0, 0.0, 0.0],
+                    "airbox_hmax": 150e-9,
+                },
+                object_regions=[
+                    {
+                        "region_id": "owner:hole_refinement",
+                        "owner_object": "owner",
+                        "owner_geometry_name": "owner",
+                        "name": "hole_refinement",
+                        "enabled": True,
+                        "frame": "object",
+                        "realization_policy": "conformal",
+                        "shape": {
+                            "kind": "cylinder",
+                            "radius": 60e-9,
+                            "height": 30e-9,
+                            "center": [0.0, 0.0, 0.0],
+                            "axis": [0.0, 0.0, 1.0],
+                        },
+                    }
+                ],
+            )
+        )
+
+        self.assertEqual(
+            report.object_region_markers,
+            [{"geometry_name": "owner:hole_refinement", "marker": 2}],
+        )
+        self.assertGreater(np.count_nonzero(mesh.element_markers == 2), 0)
+        self.assertGreater(np.count_nonzero(mesh.element_markers == 1), 0)
+
+    def test_conformal_region_outside_owner_is_rejected(self) -> None:
+        try:
+            import gmsh  # noqa: F401
+        except ImportError:
+            self.skipTest("gmsh not available")
+
+        owner = fm.Box(size=(100e-9, 100e-9, 100e-9), name="owner")
+        with self.assertRaisesRegex(
+            ValueError,
+            "must be fully contained inside its owner geometry",
+        ):
+            realize_fem_domain_mesh_asset_from_components_with_report(
+                geometries=[owner],
+                hints=fm.FEM(order=1, hmax=30e-9),
+                study_universe={
+                    "mode": "manual",
+                    "size": [300e-9, 300e-9, 300e-9],
+                    "center": [0.0, 0.0, 0.0],
+                    "airbox_hmax": 60e-9,
+                },
+                object_regions=[
+                    {
+                        "region_id": "owner:oversized",
+                        "owner_object": "owner",
+                        "owner_geometry_name": "owner",
+                        "name": "oversized",
+                        "enabled": True,
+                        "frame": "object",
+                        "realization_policy": "conformal",
+                        "shape": {
+                            "kind": "box",
+                            "size": [140e-9, 40e-9, 40e-9],
+                            "center": [0.0, 0.0, 0.0],
+                        },
+                    }
+                ],
+            )
+
+    def test_overlapping_conformal_regions_are_rejected(self) -> None:
+        try:
+            import gmsh  # noqa: F401
+        except ImportError:
+            self.skipTest("gmsh not available")
+
+        owner = fm.Box(size=(100e-9, 100e-9, 100e-9), name="owner")
+        with self.assertRaisesRegex(
+            ValueError,
+            "does not support overlapping regions 'owner:outer' and 'owner:inner'",
+        ):
+            realize_fem_domain_mesh_asset_from_components_with_report(
+                geometries=[owner],
+                hints=fm.FEM(order=1, hmax=30e-9),
+                study_universe={
+                    "mode": "manual",
+                    "size": [220e-9, 220e-9, 220e-9],
+                    "center": [0.0, 0.0, 0.0],
+                    "airbox_hmax": 60e-9,
+                },
+                object_regions=[
+                    {
+                        "region_id": "owner:outer",
+                        "owner_object": "owner",
+                        "owner_geometry_name": "owner",
+                        "name": "outer",
+                        "enabled": True,
+                        "frame": "object",
+                        "realization_policy": "conformal",
+                        "shape": {
+                            "kind": "box",
+                            "size": [60e-9, 60e-9, 60e-9],
+                            "center": [0.0, 0.0, 0.0],
+                        },
+                    },
+                    {
+                        "region_id": "owner:inner",
+                        "owner_object": "owner",
+                        "owner_geometry_name": "owner",
+                        "name": "inner",
+                        "enabled": True,
+                        "frame": "object",
+                        "realization_policy": "conformal",
+                        "shape": {
+                            "kind": "box",
+                            "size": [30e-9, 30e-9, 30e-9],
+                            "center": [0.0, 0.0, 0.0],
+                        },
+                    },
+                ],
+            )
+
+    def test_region_mesh_policy_owner_alias_matches_geometry_name(self) -> None:
+        waveguide = fm.ArchWaveguide(
+            length=180e-9,
+            width=60e-9,
+            height=4e-9,
+            arch_height=0.0,
+            name="waveguide_geom",
+        )
+        object_regions = [
+            {
+                "owner_object": "waveguide",
+                "enabled": True,
+                "shape": {
+                    "kind": "cylinder",
+                    "radius": 10e-9,
+                    "height": 20e-9,
+                    "center": [0.0, 0.0, 0.0],
+                    "axis": [0.0, 0.0, 1.0],
+                },
+                "mesh_policy": {
+                    "maximum_element_size": 2e-9,
+                    "minimum_element_size": 1e-9,
+                    "transition_distance": 5e-9,
+                    "order": 1,
+                },
+            }
+        ]
+
+        fields = _build_field_stack(
+            [waveguide],
+            default_hmax=50e-9,
+            per_geometry=[{"geometry": "waveguide", "hmax": 10e-9}],
+            object_regions=object_regions,
+        )
+
+        region_fields = [
+            field for field in fields
+            if field.get("params", {}).get("Source") == "region_mesh_policy"
+        ]
+        self.assertEqual(len(region_fields), 1)
+        self.assertEqual(region_fields[0]["kind"], "ComponentRestrictedGradedCylinder")
+        self.assertEqual(region_fields[0]["params"]["GeometryName"], "waveguide_geom")
+        self.assertEqual(region_fields[0]["params"]["VOut"], 10e-9)
+
+    def test_difference_hole_region_mesh_policy_builds_local_refinement_field(self) -> None:
+        hole_radius = 50e-9
+        geometry = fm.Difference(
+            base=fm.Box(300e-9, 1000e-9, 30e-9),
+            tool=fm.Cylinder(radius=hole_radius, height=30e-9),
+            name="permalloy_box",
+        )
+        object_regions = [
+            {
+                "owner_object": "permalloy_box",
+                "name": "hole_refinement",
+                "enabled": True,
+                "shape": {
+                    "kind": "cylinder",
+                    "radius": hole_radius + 30e-9,
+                    "height": 30e-9,
+                    "center": [0.0, 0.0, 0.0],
+                    "axis": [0.0, 0.0, 1.0],
+                },
+                "mesh_policy": {
+                    "minimum_element_size": 2e-9,
+                    "maximum_element_size": 5e-9,
+                    "transition_distance": 30e-9,
+                    "order": 1,
+                },
+            }
+        ]
+
+        fields = _build_field_stack(
+            [geometry],
+            default_hmax=50e-9,
+            per_geometry=[{"geometry": "permalloy_box", "hmax": 50e-9}],
+            object_regions=object_regions,
+        )
+
+        region_fields = [
+            field
+            for field in fields
+            if field.get("params", {}).get("Source") == "region_mesh_policy"
+        ]
+        self.assertEqual(len(region_fields), 1)
+        self.assertEqual(region_fields[0]["kind"], "ComponentRestrictedGradedCylinder")
+        self.assertEqual(region_fields[0]["params"]["GeometryName"], "permalloy_box")
+        self.assertEqual(region_fields[0]["params"]["Radius"], hole_radius + 30e-9)
+        self.assertEqual(region_fields[0]["params"]["VIn"], 5e-9)
+        self.assertEqual(region_fields[0]["params"]["MinimumElementSize"], 2e-9)
+        self.assertEqual(region_fields[0]["params"]["TransitionDistance"], 30e-9)
+
+    def test_runtime_mesh_options_uses_direct_object_regions_for_local_refinement(self) -> None:
+        hole_radius = 50e-9
+        geometry = fm.Difference(
+            base=fm.Box(300e-9, 1000e-9, 30e-9),
+            tool=fm.Cylinder(radius=hole_radius, height=30e-9),
+            name="permalloy_box",
+        )
+        object_regions = [
+            {
+                "owner_object": "permalloy_box",
+                "name": "hole_refinement",
+                "enabled": True,
+                "shape": {
+                    "kind": "cylinder",
+                    "radius": hole_radius + 30e-9,
+                    "height": 30e-9,
+                    "center": [0.0, 0.0, 0.0],
+                    "axis": [0.0, 0.0, 1.0],
+                },
+                "mesh_policy": {
+                    "minimum_element_size": 2e-9,
+                    "maximum_element_size": 5e-9,
+                    "transition_distance": 30e-9,
+                    "order": 1,
+                },
+            }
+        ]
+
+        mesh_options = _mesh_options_from_runtime_metadata(
+            {"per_geometry": [{"geometry": "permalloy_box", "hmax": 50e-9}]},
+            geometries=[geometry],
+            default_hmax=50e-9,
+            object_regions=object_regions,
+        )
+
+        region_fields = [
+            field
+            for field in mesh_options.size_fields
+            if field.get("params", {}).get("Source") == "region_mesh_policy"
+        ]
+        self.assertEqual(len(region_fields), 1)
+        self.assertEqual(region_fields[0]["kind"], "ComponentRestrictedGradedCylinder")
+        self.assertEqual(region_fields[0]["params"]["GeometryName"], "permalloy_box")
+        self.assertEqual(region_fields[0]["params"]["Radius"], hole_radius + 30e-9)
+        self.assertEqual(region_fields[0]["params"]["VIn"], 5e-9)
+
+    def test_region_mesh_policy_fields_and_axes(self) -> None:
+        # Create waveguide geometry
+        waveguide = fm.ArchWaveguide(
+            length=180e-9,
+            width=60e-9,
+            height=4e-9,
+            arch_height=0.0,
+            name="waveguide",
+        )
+
+        # We will mock the object_regions input parameter to _build_field_stack
+        # 1. Graded Cylinder along Z-axis
+        # 2. Graded Cylinder along arbitrary axis [1, 0, 0]
+        # 3. Non-graded Cylinder along Y-axis [0, 1, 0]
+        # 4. Box and Sphere
+        object_regions = [
+            {
+                "owner_object": "waveguide",
+                "enabled": True,
+                "shape": {
+                    "kind": "cylinder",
+                    "radius": 10e-9,
+                    "height": 20e-9,
+                    "center": [0.0, 0.0, 0.0],
+                    "axis": [0.0, 0.0, 1.0],
+                },
+                "mesh_policy": {
+                    "maximum_element_size": 2e-9,
+                    "minimum_element_size": 1e-9,
+                    "transition_distance": 5e-9,
+                    "order": 1,
+                }
+            },
+            {
+                "owner_object": "waveguide",
+                "enabled": True,
+                "shape": {
+                    "kind": "cylinder",
+                    "radius": 15e-9,
+                    "height": 30e-9,
+                    "center": [5e-9, 10e-9, 2e-9],
+                    "axis": [1.0, 0.0, 0.0],
+                },
+                "mesh_policy": {
+                    "maximum_element_size": 3e-9,
+                    "minimum_element_size": 1.5e-9,
+                    "transition_distance": 8e-9,
+                    "order": 2,
+                }
+            },
+            {
+                "owner_object": "waveguide",
+                "enabled": True,
+                "shape": {
+                    "kind": "cylinder",
+                    "radius": 20e-9,
+                    "height": 40e-9,
+                    "center": [0.0, 0.0, 0.0],
+                    "axis": [0.0, 1.0, 0.0],
+                },
+                "mesh_policy": {
+                    "maximum_element_size": 4e-9,
+                }
+            },
+            {
+                "owner_object": "waveguide",
+                "enabled": True,
+                "shape": {
+                    "kind": "box",
+                    "size": [10e-9, 10e-9, 10e-9],
+                    "center": [0.0, 0.0, 0.0],
+                },
+                "mesh_policy": {
+                    "maximum_element_size": 2e-9,
+                    "transition_distance": 5e-9,
+                }
+            },
+            {
+                "owner_object": "waveguide",
+                "enabled": True,
+                "shape": {
+                    "kind": "sphere",
+                    "radius": 8e-9,
+                    "center": [0.0, 0.0, 0.0],
+                },
+                "mesh_policy": {
+                    "maximum_element_size": 2e-9,
+                    "transition_distance": 4e-9,
+                }
+            }
+        ]
+
+        fields = _build_field_stack(
+            [waveguide],
+            default_hmax=50e-9,
+            per_geometry=[],
+            object_regions=object_regions,
+        )
+
+        region_fields = [f for f in fields if f.get("params", {}).get("Source") == "region_mesh_policy"]
+        self.assertEqual(len(region_fields), 5)
+
+        graded_z = [f for f in region_fields if f["kind"] == "ComponentRestrictedGradedCylinder" and f["params"]["Axis"] == [0.0, 0.0, 1.0]][0]
+        self.assertEqual(graded_z["params"]["MinimumElementSize"], 1e-9)
+        self.assertEqual(graded_z["params"]["Order"], 1)
+
+        graded_x = [f for f in region_fields if f["kind"] == "ComponentRestrictedGradedCylinder" and f["params"]["Axis"] == [1.0, 0.0, 0.0]][0]
+        self.assertEqual(graded_x["params"]["MinimumElementSize"], 1.5e-9)
+        self.assertEqual(graded_x["params"]["Order"], 2)
+
+        non_graded_y = [f for f in region_fields if f["kind"] == "ComponentRestrictedCylinder"][0]
+        self.assertEqual(non_graded_y["params"]["Axis"], [0.0, 1.0, 0.0])
+
+        for i, rf in enumerate(region_fields):
+            if i < 4:
+                rf["_gmsh_status"] = "applied"
+            else:
+                rf["_gmsh_status"] = "ignored"
+
+        mesh_workflow = {
+            "mesh_options": {
+                "scene_problem_patch": {
+                    "object_regions": object_regions
+                }
+            }
+        }
+
+        report = _build_shared_domain_build_report(
+            [waveguide],
+            fm.FEM(order=1, hmax=20e-9),
+            airbox=AirboxOptions(maximum_element_size=100e-9),
+            mesh_workflow=mesh_workflow,
+            per_object_recipes=None,
+            size_fields=fields,
+            region_markers=[],
+            build_mode="conformal_occ",
+            fallbacks_triggered=[],
+            mesh_options=MeshOptions(),
+        )
+
+        self.assertEqual(report.authored_regions_count, 5)
+        self.assertEqual(report.realized_regions_count, 4)
+
+    def test_arch_waveguide_skyrmion_core_refinement_actual_mesh_density(self) -> None:
+        try:
+            import gmsh
+        except ImportError:
+            self.skipTest("gmsh not available")
+        import math
+
+        # Create waveguide
+        waveguide = fm.ArchWaveguide(
+            length=180e-9,
+            width=60e-9,
+            height=40e-9,
+            arch_height=0.0,
+            name="waveguide",
+        )
+
+        # Region for skyrmion core refinement
+        object_regions = [
+            {
+                "owner_object": "waveguide",
+                "enabled": True,
+                "shape": {
+                    "kind": "cylinder",
+                    "radius": 15e-9,
+                    "height": 10e-9,
+                    "center": [0.0, 0.0, 0.0],
+                    "axis": [0.0, 0.0, 1.0],
+                },
+                "mesh_policy": {
+                    "maximum_element_size": 3e-9,
+                    "minimum_element_size": 1.5e-9,
+                    "transition_distance": 5e-9,
+                    "order": 1,
+                },
+            }
+        ]
+
+        per_object_recipes = {
+            "waveguide": PerObjectMeshRecipe(hmax=20e-9, hmin=5e-9),
+        }
+        study_universe = {
+            "mode": "manual",
+            "size": [400e-9, 200e-9, 100e-9],
+            "center": [0.0, 0.0, 0.0],
+            "airbox_hmax": 50e-9,
+            "airbox_hmin": 10e-9,
+        }
+
+        mesh_workflow = {
+            "mesh_options": {
+                "scene_problem_patch": {
+                    "object_regions": object_regions
+                }
+            }
+        }
+
+        mesh, region_markers, report = realize_fem_domain_mesh_asset_from_components_with_report(
+            geometries=[waveguide],
+            hints=fm.FEM(order=1, hmax=20e-9),
+            study_universe=study_universe,
+            per_object_recipes=None,
+            mesh_workflow=mesh_workflow,
+        )
+
+        waveguide_marker = None
+        for entry in region_markers:
+            if entry.get("geometry_name") == "waveguide":
+                waveguide_marker = entry.get("marker")
+        self.assertIsNotNone(waveguide_marker)
+
+        # Calculate edge lengths for elements inside the refined cylinder region vs bulk
+        nodes = mesh.nodes
+        elements = mesh.elements
+        element_markers = mesh.element_markers
+
+        region_edge_lengths = []
+        bulk_edge_lengths = []
+
+        for i, tet in enumerate(elements):
+            if element_markers[i] != waveguide_marker:
+                continue
+            centroid = nodes[tet].mean(axis=0)
+            # Center of cylinder is [0, 0, 0], radius is 15e-9
+            dist_xy = math.sqrt(centroid[0]**2 + centroid[1]**2)
+
+            edges = [
+                (tet[0], tet[1]), (tet[0], tet[2]), (tet[0], tet[3]),
+                (tet[1], tet[2]), (tet[1], tet[3]), (tet[2], tet[3])
+            ]
+            for u, v in edges:
+                length = np.linalg.norm(nodes[u] - nodes[v])
+                if dist_xy <= 15e-9:
+                    region_edge_lengths.append(length)
+                else:
+                    bulk_edge_lengths.append(length)
+
+        self.assertTrue(len(region_edge_lengths) > 0)
+        self.assertTrue(len(bulk_edge_lengths) > 0)
+
+        median_region = np.median(region_edge_lengths)
+        median_bulk = np.median(bulk_edge_lengths)
+
+        # Assert localized refinement inside the region
+        self.assertLessEqual(median_region, 5e-9)
+        self.assertGreaterEqual(median_bulk, 10e-9)
+
+    def test_disabled_policy_invariance(self) -> None:
+        try:
+            import gmsh
+        except ImportError:
+            self.skipTest("gmsh not available")
+
+        waveguide = fm.ArchWaveguide(
+            length=180e-9,
+            width=60e-9,
+            height=40e-9,
+            arch_height=0.0,
+            name="waveguide",
+        )
+
+        # Disabled region policy
+        object_regions = [
+            {
+                "owner_object": "waveguide",
+                "enabled": False,
+                "shape": {
+                    "kind": "cylinder",
+                    "radius": 15e-9,
+                    "height": 10e-9,
+                    "center": [0.0, 0.0, 0.0],
+                    "axis": [0.0, 0.0, 1.0],
+                },
+                "mesh_policy": {
+                    "maximum_element_size": 3e-9,
+                    "minimum_element_size": 1.5e-9,
+                    "transition_distance": 5e-9,
+                    "order": 1,
+                },
+            }
+        ]
+
+        per_object_recipes = {
+            "waveguide": PerObjectMeshRecipe(hmax=20e-9, hmin=5e-9),
+        }
+        study_universe = {
+            "mode": "manual",
+            "size": [400e-9, 200e-9, 100e-9],
+            "center": [0.0, 0.0, 0.0],
+            "airbox_hmax": 50e-9,
+            "airbox_hmin": 10e-9,
+        }
+
+        mesh_workflow = {
+            "mesh_options": {
+                "scene_problem_patch": {
+                    "object_regions": object_regions
+                }
+            }
+        }
+
+        mesh, region_markers, report = realize_fem_domain_mesh_asset_from_components_with_report(
+            geometries=[waveguide],
+            hints=fm.FEM(order=1, hmax=20e-9),
+            study_universe=study_universe,
+            per_object_recipes=None,
+            mesh_workflow=mesh_workflow,
+        )
+
+        waveguide_marker = None
+        for entry in region_markers:
+            if entry.get("geometry_name") == "waveguide":
+                waveguide_marker = entry.get("marker")
+        self.assertIsNotNone(waveguide_marker)
+
+        # Calculate edge lengths everywhere in the waveguide
+        nodes = mesh.nodes
+        elements = mesh.elements
+        element_markers = mesh.element_markers
+
+        edge_lengths = []
+        for i, tet in enumerate(elements):
+            if element_markers[i] != waveguide_marker:
+                continue
+            edges = [
+                (tet[0], tet[1]), (tet[0], tet[2]), (tet[0], tet[3]),
+                (tet[1], tet[2]), (tet[1], tet[3]), (tet[2], tet[3])
+            ]
+            for u, v in edges:
+                edge_lengths.append(np.linalg.norm(nodes[u] - nodes[v]))
+
+        self.assertTrue(len(edge_lengths) > 0)
+        median_overall = np.median(edge_lengths)
+
+        # Assert no refinement is applied (median is close to bulk/20e-9 and certainly coarse)
+        self.assertGreaterEqual(median_overall, 10e-9)
 
 
 if __name__ == "__main__":

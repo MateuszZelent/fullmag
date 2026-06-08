@@ -140,6 +140,8 @@ import type {
   MagneticResponseSweepResource,
   MaterialParameterFieldListResource,
   MaterialPatchRequest,
+  MaterialPropertiesResource,
+  MaterialReferenceResource,
   MaterialResource,
   MeshActiveBuildResource,
   MeshBuildHistoryResource,
@@ -247,6 +249,7 @@ import {
 } from "./generated/openapi-v2-client";
 import type { OpenApiV2Path } from "./generated/openapi-v2-paths";
 import type { RequestDiagnosticsController } from "./RequestDiagnosticsController";
+import type { components } from "./generated/openapi-v2-types";
 
 type FetchLike = typeof fetch;
 type PathParams = Record<string, string | number>;
@@ -688,7 +691,7 @@ export class ControlRoomApi {
       }),
     createRegion: (
       objectId: string,
-      region: JsonObject,
+      region: components["schemas"]["SceneObjectRegion"],
       options?: AuthoringWriteOptions,
     ) =>
       this.postJson<SceneResource, ObjectRegionCreateRequest>(
@@ -703,7 +706,7 @@ export class ControlRoomApi {
     patchObjectRegionResource: (
       objectId: string,
       regionId: string,
-      patch: JsonObject,
+      patch: components["schemas"]["SceneObjectRegionPatch"],
       options?: AuthoringWriteOptions,
     ) =>
       this.patchJson<SceneResource, ObjectRegionPatchRequest>(
@@ -830,6 +833,24 @@ export class ControlRoomApi {
       this.requestJson<MaterialResource>(MODEL_MATERIAL_PATH, options, {
         path: { material_id: materialId },
       }),
+    createMaterial: (
+      materialId: string,
+      name: string,
+      properties: MaterialPropertiesResource,
+      references: MaterialReferenceResource[] = [],
+      options?: AuthoringWriteOptions,
+    ) =>
+      this.model.commitTransaction(
+        {
+          ...baseRevisionPayload(options),
+          kind: "create_material",
+          material_id: materialId,
+          name,
+          properties,
+          references,
+        },
+        options,
+      ),
     magnetizationAsset: (assetId: string, options?: RequestOptions) =>
       this.requestJson<MagnetizationAssetResource>(
         MODEL_MAGNETIZATION_ASSET_PATH,
@@ -846,6 +867,29 @@ export class ControlRoomApi {
         patch,
         options,
         { path: { material_id: materialId } },
+      ),
+    patchMaterialAsset: (
+      materialId: string,
+      patch: MaterialPatchRequest,
+      options?: AuthoringWriteOptions,
+    ) =>
+      this.model.commitTransaction(
+        {
+          ...baseRevisionPayload(options),
+          kind: "patch_material",
+          material_id: materialId,
+          patch,
+        },
+        options,
+      ),
+    deleteMaterial: (materialId: string, options?: AuthoringWriteOptions) =>
+      this.model.commitTransaction(
+        {
+          ...baseRevisionPayload(options),
+          kind: "delete_material",
+          material_id: materialId,
+        },
+        options,
       ),
     patchMagnetizationAsset: (
       assetId: string,
@@ -879,7 +923,7 @@ export class ControlRoomApi {
       this.requestJson<CouplingListResource>(MODEL_COUPLINGS_PATH, options),
     createObjectRegion: (
       objectId: string,
-      region: JsonObject,
+      region: components["schemas"]["SceneObjectRegion"],
       options?: AuthoringWriteOptions,
     ) =>
       this.model.commitTransaction(
@@ -894,7 +938,7 @@ export class ControlRoomApi {
     patchObjectRegion: (
       objectId: string,
       regionId: string,
-      patch: JsonObject,
+      patch: components["schemas"]["SceneObjectRegionPatch"],
       options?: AuthoringWriteOptions,
     ) =>
       this.model.commitTransaction(
@@ -904,6 +948,20 @@ export class ControlRoomApi {
           object_id: objectId,
           patch,
           region_id: regionId,
+        },
+        options,
+      ),
+    patchObjectMaterialFields: (
+      objectId: string,
+      fields: components["schemas"]["SceneMaterialParameterAssignment"][],
+      options?: AuthoringWriteOptions,
+    ) =>
+      this.model.commitTransaction(
+        {
+          ...baseRevisionPayload(options),
+          fields,
+          kind: "patch_object_material_fields",
+          object_id: objectId,
         },
         options,
       ),
@@ -922,7 +980,7 @@ export class ControlRoomApi {
         options,
       ),
     createCoupling: (
-      coupling: JsonObject,
+      coupling: components["schemas"]["SceneCoupling"],
       options?: AuthoringWriteOptions,
     ) =>
       this.model.commitTransaction(

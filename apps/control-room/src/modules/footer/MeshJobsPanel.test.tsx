@@ -10,6 +10,7 @@ describe("MeshJobsPanel", () => {
       activeTitle: "Running study_domain mesh build",
       historyRows: [
         {
+          id: "mesh-history-test-1",
           elements: "120",
           mesh: "mesh-2",
           nodes: "80",

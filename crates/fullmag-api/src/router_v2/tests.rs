@@ -132,6 +132,9 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
             },
             physics_stack: vec![],
             mesh: None,
+            object_regions: Vec::new(),
+            allocated_region_ids: Vec::new(),
+            material_parameter_fields: Vec::new(),
         }],
         mesh_interfaces: Vec::new(),
         current_modules: Vec::new(),
@@ -879,6 +882,13 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
         });
         snapshot.metadata = Some(serde_json::json!({
             "execution_plan": {
+                "common": {
+                    "material_field_plans": [{
+                        "warnings": [
+                            "sharp Aex in region 'film:core' uses projected approximation"
+                        ]
+                    }]
+                },
                 "backend_plan": {
                     "kind": "fdm",
                     "integrator": "rk45"
@@ -4200,7 +4210,7 @@ async fn mesh_summary_returns_404_without_mesh_workspace() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(response.status(), StatusCode::OK);
 }
 
 #[tokio::test]
@@ -5119,6 +5129,93 @@ async fn mesh_build_command_enqueues_remesh_via_mesh_family() {
             .and_then(serde_json::Value::as_str),
         Some("linear")
     );
+}
+
+#[tokio::test]
+async fn mesh_build_command_lowers_difference_geometry_from_scene() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut scene = sample_scene_document();
+        scene.objects[0].id = "permalloy_box".to_string();
+        scene.objects[0].name = "permalloy_box".to_string();
+        scene.objects[0].geometry = fullmag_authoring::SceneGeometry {
+            geometry_kind: "Difference".to_string(),
+            geometry_params: serde_json::json!({
+                "base": {
+                    "geometry_kind": "Box",
+                    "geometry_params": {
+                        "size": [300e-9, 1000e-9, 30e-9]
+                    }
+                },
+                "tool": {
+                    "geometry_kind": "Cylinder",
+                    "geometry_params": {
+                        "radius": 50e-9,
+                        "height": 30e-9
+                    }
+                }
+            }),
+            bounds_min: None,
+            bounds_max: None,
+        };
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "mesh_build",
+                        "mesh_target": { "kind": "object_mesh", "object_id": "permalloy_box" },
+                        "mesh_reason": "permalloy_box_difference_regression"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = response.status();
+    if status != StatusCode::OK {
+        let body = body_bytes(response).await;
+        panic!(
+            "expected Difference mesh build command to be accepted, got {status}: {}",
+            String::from_utf8_lossy(&body)
+        );
+    }
+
+    let queue = state.current_control_queue.lock().await;
+    let command = queue.front().expect("remesh command enqueued");
+    let mesh_options = command
+        .mesh_options
+        .as_ref()
+        .expect("mesh options should include scene_problem_patch");
+    let geometry = mesh_options
+        .get("scene_problem_patch")
+        .and_then(|value| value.get("geometry_entries"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|items| items.first())
+        .unwrap_or_else(|| {
+            panic!(
+                "scene_problem_patch should contain one geometry entry, got: {}",
+                serde_json::to_string_pretty(mesh_options).unwrap()
+            )
+        });
+    assert_eq!(geometry["kind"], "difference");
+    assert_eq!(geometry["name"], "permalloy_box");
+    assert_eq!(geometry["base"]["kind"], "box");
+    assert_eq!(
+        geometry["base"]["size"],
+        serde_json::json!([300e-9, 1000e-9, 30e-9])
+    );
+    assert_eq!(geometry["tool"]["kind"], "cylinder");
+    assert_eq!(geometry["tool"]["radius"], serde_json::json!(50e-9));
 }
 
 #[tokio::test]
@@ -6240,9 +6337,56 @@ async fn response_magnetic_sweep_v1_missing_artifact_returns_404() {
 async fn mesh_shared_domain_manifest_returns_tree_metadata() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.fem_mesh = Some(sample_fem_mesh_payload_with_manifest());
+        let mut mesh = sample_fem_mesh_payload_with_manifest();
+        mesh.object_segments.push(FemMeshObjectSegment {
+            object_id: "body".to_string(),
+            geometry_id: Some("body_core".to_string()),
+            node_start: 0,
+            node_count: 4,
+            element_start: 0,
+            element_count: 1,
+            boundary_face_start: 0,
+            boundary_face_count: 1,
+        });
+        mesh.mesh_parts.push(FemMeshPartPayload {
+            id: "part:body:core".to_string(),
+            label: "Core".to_string(),
+            role: "magnetic_object".to_string(),
+            object_id: Some("body".to_string()),
+            geometry_id: Some("body_core".to_string()),
+            material_id: Some("mat-body".to_string()),
+            element_start: 0,
+            element_count: 1,
+            boundary_face_start: 0,
+            boundary_face_count: 1,
+            boundary_face_indices: vec![0],
+            node_start: 0,
+            node_count: 4,
+            node_indices: vec![0, 1, 2, 3],
+            surface_faces: vec![[0, 1, 2]],
+            bounds_min: Some([0.25, 0.25, 0.25]),
+            bounds_max: Some([0.75, 0.75, 0.75]),
+        });
+        let mut scene = sample_scene_document();
+        scene.objects[0].regions.push(fullmag_authoring::SceneObjectRegion {
+            region_id: "body:core".to_string(),
+            owner_object: "body".to_string(),
+            name: "Core".to_string(),
+            shape: fullmag_authoring::SceneRegionShape::Sphere {
+                center: [0.5, 0.5, 0.5],
+                radius: 0.25,
+            },
+            frame: fullmag_authoring::SceneRegionFrame::Object,
+            enabled: true,
+            priority: 10,
+            mesh_policy: None,
+            material_overrides: Vec::new(),
+            texture_override: None,
+            realization_policy: fullmag_authoring::SceneRegionRealizationPolicy::Conformal,
+        });
+        snapshot.fem_mesh = Some(mesh);
         snapshot.mesh_revision = 41;
-        snapshot.scene_document = Some(sample_scene_document());
+        snapshot.scene_document = Some(scene);
         snapshot.mesh_workspace = Some(serde_json::json!({
             "last_build_summary": {
                 "source_scene_revision": 3,
@@ -6278,7 +6422,12 @@ async fn mesh_shared_domain_manifest_returns_tree_metadata() {
     assert_eq!(json["regions"][0]["source_object_ids"][0], "body");
     assert_eq!(json["regions"][0]["material_ref"], "mat:body");
     assert_eq!(json["regions"][0]["mesh_part_ids"][0], "body");
-    assert_eq!(json["regions"][0]["element_count"], 1);
+    assert_eq!(json["regions"][0]["element_count"], 2);
+    assert_eq!(json["regions"][1]["region_id"], "body:core");
+    assert_eq!(json["regions"][1]["source_region_candidate_id"], "body:core");
+    assert_eq!(json["regions"][1]["source_object_ids"][0], "body");
+    assert_eq!(json["regions"][1]["mesh_part_ids"][0], "part:body:core");
+    assert_eq!(json["regions"][1]["element_count"], 1);
 }
 
 #[tokio::test]
@@ -7137,7 +7286,7 @@ async fn authoring_transactions_create_transform_and_delete_objects() {
         .find(|object| object["id"] == "box_001")
         .expect("created object present");
     assert_eq!(created_object["geometry"]["geometry_kind"], "Box");
-    assert!(!created_object["tags"]
+    assert!(created_object["tags"]
         .as_array()
         .is_some_and(|tags| tags.iter().any(|tag| tag == "mesh:dirty")));
     assert_eq!(
@@ -7827,6 +7976,42 @@ async fn authoring_object_region_resource_crud_allocates_stable_region_id() {
     );
     assert_object_region_authoring_keeps_mesh_current(&sphere_patch_json["objects"][0]);
 
+    let oblique_patch_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!(
+                    "/v2/sessions/current/model/objects/{object_id}/regions/{region_id}"
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "base_revision": sphere_patch_json["revision"].as_u64().unwrap(),
+                        "patch": {
+                            "shape": {
+                                "axis": [1.0, 1.0, 0.0],
+                                "center": [0.0, 0.0, 0.0],
+                                "height": 1.0,
+                                "kind": "cylinder",
+                                "radius": 1.0
+                            }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(oblique_patch_response.status(), StatusCode::OK);
+    let oblique_patch_json = body_json(oblique_patch_response).await;
+    let oblique_radius = oblique_patch_json["objects"][0]["regions"][1]["shape"]["radius"]
+        .as_f64()
+        .expect("oblique cylinder radius");
+    assert!((oblique_radius - (2.0_f64.sqrt() - 1.0) * 0.5).abs() < 1e-12);
+    assert_object_region_authoring_keeps_mesh_current(&oblique_patch_json["objects"][0]);
+
     let delete_response = app
         .oneshot(
             Request::builder()
@@ -8069,11 +8254,11 @@ async fn authoring_region_owned_resources_expose_authored_payloads() {
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document();
     scene.revision = 31;
-    scene.objects[0].regions.push(serde_json::json!({
+    let region: fullmag_authoring::SceneObjectRegion = serde_json::from_value(serde_json::json!({
         "region_id": "body:core",
         "owner_object": "body",
         "name": "core",
-        "shape": { "kind": "cylinder", "radius": 3.0e-8, "height": 2.0e-9 },
+        "shape": { "kind": "cylinder", "radius": 3.0e-8, "height": 2.0e-9, "center": [0.0, 0.0, 0.0], "axis": [0.0, 0.0, 1.0] },
         "frame": "object",
         "enabled": true,
         "priority": 7,
@@ -8089,10 +8274,16 @@ async fn authoring_region_owned_resources_expose_authored_payloads() {
             "initial_magnetization": { "kind": "uniform", "value": [0.0, 0.0, 1.0] }
         },
         "realization_policy": "conformal"
-    }));
-    scene.objects[0]
-        .material_parameter_fields
-        .push(serde_json::json!({
+    })).unwrap();
+    scene.objects[0].regions.push(region);
+    scene.objects[0].region_overrides.insert(
+        "body:core".to_string(),
+        fullmag_authoring::SceneRegionOverride {
+            magnetization_ref: Some("mag:core".to_string()),
+        },
+    );
+    let field: fullmag_authoring::SceneMaterialParameterAssignment =
+        serde_json::from_value(serde_json::json!({
             "assignment_id": "body_core_ms_gradient",
             "owner_object": "body",
             "parameter": "Ms",
@@ -8106,8 +8297,10 @@ async fn authoring_region_owned_resources_expose_authored_payloads() {
                 "unit": "A/m",
                 "frame": "object"
             }
-        }));
-    scene.couplings.push(serde_json::json!({
+        }))
+        .unwrap();
+    scene.objects[0].material_parameter_fields.push(field);
+    let coupling: fullmag_authoring::SceneCoupling = serde_json::from_value(serde_json::json!({
         "coupling_id": "body_top_reference_bottom_rkky",
         "kind": "rkky",
         "source": { "kind": "surface", "object": "body", "selector": "top" },
@@ -8115,12 +8308,14 @@ async fn authoring_region_owned_resources_expose_authored_payloads() {
         "enabled": true,
         "parameters": { "kind": "rkky", "J1": -0.0003 },
         "capability_policy": "require_runtime"
-    }));
+    }))
+    .unwrap();
+    scene.couplings.push(coupling);
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.scene_document = Some(scene);
         snapshot.session.script_path.clear();
     }
-    let app = build_v2_router().with_state(state);
+    let app = build_v2_router().with_state(state.clone());
 
     let regions_response = app
         .clone()
@@ -8158,7 +8353,7 @@ async fn authoring_region_owned_resources_expose_authored_payloads() {
         authored_region["mesh_policy"]["maximum_element_size"],
         1.0e-9
     );
-    assert_eq!(authored_region["material_overrides"][0]["parameter"], "Ms");
+    assert_eq!(authored_region["material_overrides"][0]["parameter"], "ms");
     assert_eq!(authored_region["magnetization_ref"], "mag:core");
     assert_eq!(
         authored_region["texture_override"]["initial_magnetization"]["kind"],
@@ -8256,7 +8451,7 @@ async fn authoring_region_owned_resources_expose_authored_payloads() {
     );
     assert_eq!(fields["fields"][0]["owner_object_id"], "body");
     assert_eq!(fields["fields"][0]["source_region_id"], "body:core");
-    assert_eq!(fields["fields"][0]["parameter"], "Ms");
+    assert_eq!(fields["fields"][0]["parameter"], "ms");
     assert_eq!(fields["fields"][0]["unit"], "A/m");
     assert_eq!(fields["fields"][0]["frame"], "object");
 
@@ -8279,18 +8474,89 @@ async fn authoring_region_owned_resources_expose_authored_payloads() {
     );
     assert_eq!(couplings["couplings"][0]["coupling_kind"], "rkky");
     assert_eq!(couplings["couplings"][0]["source"]["selector"], "top");
-    assert_eq!(couplings["couplings"][0]["params"]["J1"], -0.0003);
+    assert_eq!(couplings["couplings"][0]["params"]["j1"], -0.0003);
     assert_eq!(
         couplings["couplings"][0]["realization_status"],
         "requires_runtime_capability"
     );
+
+    // REDO ETAP 4 Test: Add execution plan metadata and apply it to verify realized field status/statistics
+    let plan_json = serde_json::json!({
+        "common": {
+            "ir_version": "1.0.0",
+            "requested_backend": "fdm",
+            "resolved_backend": "fdm",
+            "execution_mode": "relaxation",
+            "material_field_plans": []
+        },
+        "backend_plan": {
+            "kind": "fdm",
+            "grid": { "cells": [4, 1, 1] },
+            "cell_size": [1e-9, 1e-9, 1e-9],
+            "region_mask": [0, 0, 0, 0],
+            "initial_magnetization": [],
+            "material": {
+                "name": "body",
+                "saturation_magnetisation": 800000.0,
+                "exchange_stiffness": 1.3e-11,
+                "damping": 0.5,
+                "ms_field": [760000.0, 770000.0, 780000.0, 790000.0],
+                "a_field": [1.3e-11, 1.3e-11, 1.3e-11, 1.3e-11],
+                "alpha_field": [0.5, 0.5, 0.5, 0.5]
+            },
+            "enable_exchange": true,
+            "enable_demag": true,
+            "gyromagnetic_ratio": 2.21e5,
+            "precision": "double",
+            "exchange_bc": "free",
+            "integrator": "heun"
+        },
+        "output_plan": { "quantities": [] },
+        "provenance": { "git_commit": "unknown" }
+    });
+
+    let metadata = serde_json::json!({
+        "execution_plan": plan_json
+    });
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        crate::session::apply_current_live_metadata(snapshot, metadata);
+    }
+
+    let fields_response_realized = build_v2_router()
+        .with_state(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/model/material-fields")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status_realized = fields_response_realized.status();
+    let fields_realized = body_json(fields_response_realized).await;
+    assert_eq!(status_realized, StatusCode::OK, "{fields_realized:#}");
+
+    // Find our assignment_id "body_core_ms_gradient"
+    let field_list = fields_realized["fields"].as_array().unwrap();
+    let ms_field_res = field_list
+        .iter()
+        .find(|f| f["assignment_id"] == "body_core_ms_gradient")
+        .unwrap();
+
+    assert_eq!(ms_field_res["realization_status"], "realized");
+    assert_eq!(ms_field_res["sample_count"], 4);
+    assert_eq!(ms_field_res["min"], 760000.0);
+    assert_eq!(ms_field_res["max"], 790000.0);
+    assert_eq!(ms_field_res["mean"], 775000.0);
 }
 
 #[tokio::test]
 async fn authoring_scene_commit_rejects_invalid_region_owned_payloads() {
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document();
-    scene.objects[0].regions.push(serde_json::json!({
+    let region: fullmag_authoring::SceneObjectRegion = serde_json::from_value(serde_json::json!({
         "region_id": "body:core",
         "owner_object": "body",
         "name": "core",
@@ -8305,7 +8571,9 @@ async fn authoring_scene_commit_rejects_invalid_region_owned_payloads() {
             "parameter": "Ms",
             "value": { "kind": "constant", "value": 0.0, "unit": "A/m" }
         }]
-    }));
+    }))
+    .unwrap();
+    scene.objects[0].regions.push(region);
     let app = build_v2_router().with_state(state);
 
     let response = app
@@ -10327,6 +10595,11 @@ async fn solver_status_endpoint_returns_detailed_read_model() {
     assert_eq!(json["max_torque_Apm"], 13.0);
     assert_eq!(json["max_torque"], 14.0);
     assert_eq!(json["last_error"], "latest runtime error");
+    assert!(json["warnings"]
+        .as_array()
+        .is_some_and(|warnings| warnings.iter().any(|warning| {
+            warning == "sharp Aex in region 'film:core' uses projected approximation"
+        })));
 }
 
 #[tokio::test]
@@ -11102,7 +11375,8 @@ async fn uploaded_h5_field_state_can_be_inspected_and_applied() {
         .canonicalize()
         .expect("workspace root should resolve");
     let python_path = workspace_root.join("packages/fullmag-py/src");
-    let python = std::process::Command::new("python3")
+    let python_exe = crate::script::python_executable(&workspace_root);
+    let python = std::process::Command::new(&python_exe)
         .arg("-c")
         .arg(format!(
             "import fullmag as fm; fm.save_field_state({path:?}, [[0.0, 0.0, 1.0], [1.0, 0.0, 0.0]], quantity=fm.m, target_kind='object', target_id='body')",
@@ -11226,7 +11500,8 @@ async fn uploaded_zarr_zip_field_state_can_be_inspected_and_applied() {
         .canonicalize()
         .expect("workspace root should resolve");
     let python_path = workspace_root.join("packages/fullmag-py/src");
-    let python = std::process::Command::new("python3")
+    let python_exe = crate::script::python_executable(&workspace_root);
+    let python = std::process::Command::new(&python_exe)
         .arg("-c")
         .arg(format!(
             "import fullmag as fm; fm.save_field_state({path:?}, [[0.0, 0.0, 1.0], [1.0, 0.0, 0.0]], quantity=fm.m, target_kind='object', target_id='body')",
@@ -11343,7 +11618,8 @@ async fn uploaded_airbox_h5_field_state_can_be_attached_without_apply_shape_chec
         .canonicalize()
         .expect("workspace root should resolve");
     let python_path = workspace_root.join("packages/fullmag-py/src");
-    let python = std::process::Command::new("python3")
+    let python_exe = crate::script::python_executable(&workspace_root);
+    let python = std::process::Command::new(&python_exe)
         .arg("-c")
         .arg(format!(
             "import fullmag as fm; fm.save_field_state({path:?}, [[10.0, 0.0, 0.0], [0.0, 20.0, 0.0], [0.0, 0.0, 30.0]], quantity=fm.H_eff, target_kind='airbox', target_id='airbox')",

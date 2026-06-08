@@ -109,7 +109,7 @@ describe("ObjectRegionsPanelModel", () => {
         materialOverrides: [
           {
             conflictPolicy: "higher_priority_wins",
-            parameter: "Ms",
+            parameter: "ms",
             priority: 4,
             unit: "A/m",
             value: 760e3,
@@ -141,7 +141,7 @@ describe("ObjectRegionsPanelModel", () => {
       material_overrides: [
         {
           conflict_policy: "higher_priority_wins",
-          parameter: "Ms",
+          parameter: "ms",
           priority: 4,
           value: {
             kind: "constant",
@@ -268,12 +268,73 @@ describe("ObjectRegionsPanelModel", () => {
     });
   });
 
+  it("clamps an oblique cylinder by its full axis-aligned extent", () => {
+    const clamped = clampObjectRegionDraftShapeToOwnerBounds(
+      {
+        axis: [1, 1, 0],
+        center: [0, 0, 0],
+        height: 2,
+        kind: "cylinder",
+        radius: 1,
+        size: [2, 2, 2],
+      },
+      {
+        center: [0, 0, 0],
+        size: [2, 2, 2],
+      },
+    );
+
+    expect(clamped.height).toBeCloseTo(2);
+    expect(clamped.radius).toBeCloseTo(Math.SQRT2 - 1);
+  });
+
+  it("does not clamp world-frame coordinates against object-local bounds", () => {
+    const patch = buildObjectRegionPatch({
+      enabled: true,
+      frame: "world",
+      materialOverrides: [],
+      meshPolicy: {
+        enabled: false,
+        maximumElementSize: 10e-9,
+        minimumElementSize: 1e-9,
+        order: 1,
+        transitionDistance: 50e-9,
+      },
+      name: "world region",
+      ownerBounds: {
+        center: [0, 0, 0],
+        size: [1, 1, 1],
+      },
+      priority: 0,
+      realizationPolicy: "inherit",
+      shape: {
+        axis: [0, 0, 1],
+        center: [10, 0, 0],
+        height: 2,
+        kind: "sphere",
+        radius: 2,
+        size: [2, 2, 2],
+      },
+    });
+
+    expect(patch.shape).toEqual({
+      center: [10, 0, 0],
+      kind: "sphere",
+      radius: 2,
+    });
+  });
+
   it("formats and parses SI-scale physical values with scientific notation", () => {
     expect(formatRegionPhysicalScalar(2e-6)).toBe("2e-6");
     expect(formatRegionPhysicalScalar(1.25e-11)).toBe("1.25e-11");
     expect(formatRegionPhysicalScalar(760e3)).toBe("760000");
     expect(parseRegionPhysicalScalar("1.5e-9")).toBe(1.5e-9);
+    expect(parseRegionPhysicalScalar("1 nm")).toBe(1e-9);
+    expect(parseRegionPhysicalScalar("2.5 um")).toBeCloseTo(2.5e-6);
+    expect(parseRegionPhysicalScalar("800 kA/m")).toBe(800e3);
+    expect(parseRegionPhysicalScalar("13 pJ/m")).toBeCloseTo(13e-12);
     expect(parseRegionPhysicalScalar("not-a-number")).toBeNull();
+    expect(parseRegionPhysicalScalar("1 banana")).toBeNull();
   });
 
   it("validates region drafts before sending physical patches", () => {
@@ -372,14 +433,14 @@ describe("ObjectRegionsPanelModel", () => {
         materialOverrides: [
           {
             conflictPolicy: "error",
-            parameter: "Ms",
+            parameter: "ms",
             priority: 1.5,
             unit: "A/m",
             value: 800e3,
           },
         ],
       }),
-    ).toContain("Ms override priority must be an integer.");
+    ).toContain("ms override priority must be an integer.");
   });
 
   it("prefers the selected authored region and counts parameter fields", () => {
@@ -420,7 +481,17 @@ describe("ObjectRegionsPanelModel", () => {
             enabled: true,
             interaction_refs: [],
             magnetization_ref: "mag-core",
-            material_overrides: [{}],
+            material_overrides: [
+              {
+                conflict_policy: "error",
+                parameter: "ms",
+                priority: 8,
+                value: {
+                  kind: "constant",
+                  value: 800000,
+                },
+              },
+            ],
             material_ref: "mat-film",
             mesh_part_ids: [],
             name: "Skyrmion core",
@@ -459,7 +530,7 @@ describe("ObjectRegionsPanelModel", () => {
             assignment_id: "field-ms-core",
             field: {},
             owner_object_id: "film",
-            parameter: "Ms",
+            parameter: "ms",
             source_region_id: "reg-core",
           },
         ],
@@ -474,7 +545,7 @@ describe("ObjectRegionsPanelModel", () => {
       materialOverrides: [
         {
           conflictPolicy: "error",
-          parameter: "Ms",
+          parameter: "ms",
           priority: 8,
           unit: "A/m",
           value: 800000,

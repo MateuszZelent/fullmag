@@ -611,6 +611,92 @@ pub(crate) fn plan_fdm(
         return Err(PlanError { reasons: errors });
     }
 
+    let sample_points =
+        grid_sample_points(grid_cells, cell_size, native_origin, active_mask.as_ref());
+    let point_coords: Vec<[f64; 3]> = sample_points.iter().map(|p| p.position_world).collect();
+
+    // Resolve Ms field
+    let ms_field_resolved = crate::material::resolve_spatial_parameter(
+        problem,
+        magnet.name.as_str(),
+        fullmag_ir::MaterialParameterNameIR::Ms,
+        material.saturation_magnetisation,
+        &point_coords,
+        [0.0, 0.0, 0.0],
+    );
+    let ms_field_opt = match ms_field_resolved {
+        Ok(v) => {
+            let is_uniform = v
+                .iter()
+                .all(|&val| (val - material.saturation_magnetisation).abs() <= 1e-12);
+            if is_uniform {
+                None
+            } else {
+                Some(v)
+            }
+        }
+        Err(e) => {
+            errors.push(e);
+            return Err(PlanError { reasons: errors });
+        }
+    };
+
+    // Resolve Aex field
+    let aex_field_resolved = crate::material::resolve_spatial_parameter(
+        problem,
+        magnet.name.as_str(),
+        fullmag_ir::MaterialParameterNameIR::Aex,
+        material.exchange_stiffness,
+        &point_coords,
+        [0.0, 0.0, 0.0],
+    );
+    let aex_field_opt = match aex_field_resolved {
+        Ok(v) => {
+            let is_uniform = v
+                .iter()
+                .all(|&val| (val - material.exchange_stiffness).abs() <= 1e-12);
+            if is_uniform {
+                None
+            } else {
+                Some(v)
+            }
+        }
+        Err(e) => {
+            errors.push(e);
+            return Err(PlanError { reasons: errors });
+        }
+    };
+
+    // Resolve alpha field
+    let alpha_field_resolved = crate::material::resolve_spatial_parameter(
+        problem,
+        magnet.name.as_str(),
+        fullmag_ir::MaterialParameterNameIR::Alpha,
+        material.damping,
+        &point_coords,
+        [0.0, 0.0, 0.0],
+    );
+    let alpha_field_opt = match alpha_field_resolved {
+        Ok(v) => {
+            let is_uniform = v.iter().all(|&val| (val - material.damping).abs() <= 1e-12);
+            if is_uniform {
+                None
+            } else {
+                Some(v)
+            }
+        }
+        Err(e) => {
+            errors.push(e);
+            return Err(PlanError { reasons: errors });
+        }
+    };
+
+    let material_field_plans = crate::material::build_material_field_plans(
+        problem,
+        magnet.name.as_str(),
+        fullmag_ir::MaterialFieldLocationIR::Cell,
+    );
+
     let geometry_label = match &shape {
         GeometryShape::Box { .. } if used_precomputed_asset => format!(
             "Box geometry used precomputed FDM grid asset: {}x{}x{} cells",
@@ -667,9 +753,9 @@ pub(crate) fn plan_fdm(
             saturation_magnetisation: material.saturation_magnetisation,
             exchange_stiffness: material.exchange_stiffness,
             damping: material.damping,
-            ms_field: None,
-            a_field: None,
-            alpha_field: None,
+            ms_field: ms_field_opt,
+            a_field: aex_field_opt,
+            alpha_field: alpha_field_opt,
             uniaxial_anisotropy_ku1: material.uniaxial_anisotropy,
             uniaxial_anisotropy_ku2: material.uniaxial_anisotropy_k2,
             anisotropy_axis: material.anisotropy_axis,
@@ -922,6 +1008,7 @@ pub(crate) fn plan_fdm(
             requested_backend: problem.backend_policy.requested_backend,
             resolved_backend,
             execution_mode: problem.validation_profile.execution_mode,
+            material_field_plans,
         },
         backend_plan: BackendPlanIR::Fdm(fdm_plan),
         output_plan: OutputPlanIR {
@@ -974,15 +1061,6 @@ fn reject_fdm_spatial_material_fields(problem: &ProblemIR, lane: &str, errors: &
 
 fn fdm_spatial_material_field_names(material: &fullmag_ir::MaterialIR) -> Vec<&'static str> {
     let mut fields = Vec::new();
-    if material.ms_field.is_some() {
-        fields.push("ms_field");
-    }
-    if material.a_field.is_some() {
-        fields.push("a_field");
-    }
-    if material.alpha_field.is_some() {
-        fields.push("alpha_field");
-    }
     if material.ku_field.is_some() {
         fields.push("ku_field");
     }
@@ -1679,6 +1757,7 @@ pub(crate) fn plan_fdm_multilayer(
             requested_backend: problem.backend_policy.requested_backend,
             resolved_backend,
             execution_mode: problem.validation_profile.execution_mode,
+            material_field_plans: Vec::new(),
         },
         backend_plan: BackendPlanIR::FdmMultilayer(plan),
         output_plan: OutputPlanIR {

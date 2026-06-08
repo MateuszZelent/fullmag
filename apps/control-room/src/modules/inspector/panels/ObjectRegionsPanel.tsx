@@ -10,19 +10,13 @@ import {
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
-import { Accordion } from "@/shared/ui/Accordion";
-import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
-import { FeedbackBanner } from "../primitives/FeedbackBanner";
-import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
-import { InspectorSection } from "../primitives/InspectorSection";
 import {
   buildObjectRegionPatch,
   clampObjectRegionDraftShapeToOwnerBounds,
   defaultMaterialOverrideDraft,
-  defaultMaterialOverrideUnit,
   formatRegionPhysicalScalar,
   objectRegionDraftFromModel,
   objectRegionDraftKey,
@@ -30,15 +24,21 @@ import {
   resolveObjectRegionPanelModel,
   validateObjectRegionDraft,
   type ObjectRegionDraft,
-  type RegionEditRealizationPolicy,
-  type RegionMaterialConflictPolicy,
-  type RegionMaterialParameter,
-  type RegionEditShapeKind,
   type RegionMeshPolicyDraft,
   type RegionShapeDraft,
 } from "./ObjectRegionsPanelModel";
 import { findLastRegionSelection, regionNodeId } from "./RegionsListPanelModel";
 import { publishRegionAuthoringScene } from "./regionAuthoringInvalidation";
+
+import { ObjectRegionDiagnosticsPanel as ObjectRegionDiagnosticsPanelImpl } from "./region/ObjectRegionDiagnosticsPanel";
+import { ObjectRegionGeometryPanel as ObjectRegionGeometryPanelImpl } from "./region/ObjectRegionGeometryPanel";
+import { ObjectRegionMagneticParametersPanel as ObjectRegionMagneticParametersPanelImpl } from "./region/ObjectRegionMagneticParametersPanel";
+import { ObjectRegionMeshPanel as ObjectRegionMeshPanelImpl } from "./region/ObjectRegionMeshPanel";
+import { ObjectRegionNestedRegionsPanel as ObjectRegionNestedRegionsPanelImpl } from "./region/ObjectRegionNestedRegionsPanel";
+import { ObjectRegionOverviewPanel as ObjectRegionOverviewPanelImpl } from "./region/ObjectRegionOverviewPanel";
+import { ObjectRegionTexturePanel as ObjectRegionTexturePanelImpl } from "./region/ObjectRegionTexturePanel";
+import { ObjectRegionVisualizationPanel as ObjectRegionVisualizationPanelImpl } from "./region/ObjectRegionVisualizationPanel";
+import type { RegionSubPanelProps } from "./region/shared";
 
 interface DraftState {
   draft: ObjectRegionDraft;
@@ -52,7 +52,7 @@ type Feedback =
     }
   | null;
 
-function PhysicalScalarField({
+export function PhysicalScalarField({
   disabled,
   label,
   unit,
@@ -112,42 +112,13 @@ function revisionFromScene(scene: unknown): number {
   return Date.now();
 }
 
-function regionInspectorSections(selectionKind: string | null): string[] {
-  switch (selectionKind) {
-    case "object.region.geometry":
-    case "object.region.shape":
-      return ["regions", "shape", "actions"];
-    case "object.region.mesh":
-      return ["regions", "mesh", "actions"];
-    case "object.region.magnetic-parameters":
-    case "object.region.material":
-      return ["regions", "material", "actions"];
-    case "object.region.regions":
-      return ["regions"];
-    case "object.region.texture":
-      return ["regions", "texture", "actions"];
-    case "object.region.diagnostics":
-      return ["regions", "diagnostics"];
-    default:
-      return [
-        "regions",
-        "identity",
-        "shape",
-        "material",
-        "mesh",
-        "texture",
-        "diagnostics",
-        "actions",
-      ];
-  }
-}
-
 export function ObjectRegionsPanel({ selection }: InspectorPanelProps) {
   const { api, resources, selection: selectionController } = useKernel();
   const scene = useSceneResource();
   const regions = useModelRegionsResource();
   const materialFields = useModelMaterialFieldsResource();
   const regionDiagnostics = useModelRegionDiagnosticsResource();
+
   const model = useMemo(
     () =>
       resolveObjectRegionPanelModel(
@@ -159,6 +130,7 @@ export function ObjectRegionsPanel({ selection }: InspectorPanelProps) {
       ),
     [materialFields.data, regionDiagnostics.data, regions.data, scene.data, selection],
   );
+
   const baseDraft = useMemo(() => objectRegionDraftFromModel(model), [model]);
   const draftKey = objectRegionDraftKey(model);
   const [draftState, setDraftState] = useState<DraftState>({
@@ -168,10 +140,9 @@ export function ObjectRegionsPanel({ selection }: InspectorPanelProps) {
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [pending, setPending] = useState(false);
   const draft = draftState.key === draftKey ? draftState.draft : baseDraft;
+
   const canWriteRegion =
     model.mode === "committed" && model.source === "authored_object_region";
-  const sections = regionInspectorSections(selection.kind ?? "object.region");
-  const showSection = (section: string) => sections.includes(section);
 
   function updateDraft(patch: Partial<ObjectRegionDraft>): void {
     setDraftState((current) => ({
@@ -192,6 +163,7 @@ export function ObjectRegionsPanel({ selection }: InspectorPanelProps) {
       shape: clampObjectRegionDraftShapeToOwnerBounds(
         nextShape,
         draft.ownerBounds,
+        draft.frame,
       ),
     });
   }
@@ -373,405 +345,50 @@ export function ObjectRegionsPanel({ selection }: InspectorPanelProps) {
     }
   }
 
-  return (
-    <Accordion
-      className="fm-inspector-panel"
-      type="multiple"
-      defaultValue={sections}
-    >
-      <InspectorSection value="regions" title="Object Regions" collapsible defaultCollapsed={false}>
-        <FieldRow label="Object ID" value={model.objectId} />
-        <FieldRow label="Region ID" value={model.regionId} />
-        <FieldRow label="Source" value={model.source} />
-        <FieldRow label="Material ref" value={model.materialRef} />
-        <FieldRow label="Magnetization ref" value={model.magnetizationRef} />
-        <FieldRow
-          label="Material overrides"
-          value={String(model.materialOverrideCount)}
-        />
-        <FieldRow label="Parameter fields" value={String(model.materialFieldCount)} />
-        <FieldRow
-          label="Priority"
-          value={model.priority === null ? "default" : String(model.priority)}
-        />
-        <FieldRow
-          label="Realization"
-          value={
-            model.realizationStatus ??
-            model.realizationPolicy ??
-            "inherits object"
-          }
-        />
-        <FieldRow label="Scene fetch" value={scene.status} />
-        <FieldRow label="Regions fetch" value={regions.status} />
-        <FieldRow label="Material fields fetch" value={materialFields.status} />
-        <FieldRow label="Diagnostics fetch" value={regionDiagnostics.status} />
-      </InspectorSection>
+  const subProps: RegionSubPanelProps = {
+    model,
+    draft,
+    pending,
+    canWriteRegion,
+    updateDraft,
+    updateShape,
+    updateShapeVector,
+    updateMeshPolicy,
+    updateMaterialOverride,
+    addMaterialOverride,
+    removeMaterialOverride,
+    applyRegion,
+    duplicateRegion,
+    deleteRegion,
+    revert: () => {
+      setDraftState({ draft: baseDraft, key: draftKey });
+      setFeedback(null);
+    },
+    feedback,
+    materialFields: materialFields.data ?? null,
+  };
 
-      {showSection("identity") ? (
-      <InspectorSection value="identity" title="Region Identity">
-        <FormField
-          label="Region name"
-          mono={false}
-          type="text"
-          value={draft.name}
-          onChange={(event) => updateDraft({ name: event.target.value })}
-        />
-        <FormField
-          label="Enabled"
-          type="checkbox"
-          checked={draft.enabled}
-          onChange={(event) => updateDraft({ enabled: event.target.checked })}
-        />
-        <FormField
-          label="Priority"
-          type="number"
-          step={1}
-          value={String(draft.priority)}
-          onChange={(event) => updateDraft({ priority: Number(event.target.value) })}
-        />
-        <FormField
-          label="Frame"
-          type="select"
-          value={draft.frame}
-          onChange={(event) => updateDraft({ frame: event.target.value })}
-        >
-          <option value="object">Object</option>
-          <option value="world">World</option>
-        </FormField>
-        <FormField
-          label="Realization"
-          type="select"
-          value={draft.realizationPolicy}
-          onChange={(event) =>
-            updateDraft({
-              realizationPolicy: event.target.value as RegionEditRealizationPolicy,
-            })
-          }
-        >
-          <option value="inherit">Inherit</option>
-          <option value="conformal">Conformal</option>
-          <option value="project">Project</option>
-        </FormField>
-      </InspectorSection>
-      ) : null}
-
-      {showSection("shape") ? (
-      <InspectorSection value="shape" title="Shape">
-        <FormField
-          label="Kind"
-          type="select"
-          value={draft.shape.kind}
-          onChange={(event) =>
-            updateShape({ kind: event.target.value as RegionEditShapeKind })
-          }
-        >
-          <option value="box">Box</option>
-          <option value="cylinder">Cylinder</option>
-          <option value="sphere">Sphere</option>
-        </FormField>
-        <PhysicalScalarField
-          label="Center X"
-          unit="m"
-          value={draft.shape.center[0]}
-          onValueChange={(next) => updateShapeVector("center", 0, next)}
-        />
-        <PhysicalScalarField
-          label="Center Y"
-          unit="m"
-          value={draft.shape.center[1]}
-          onValueChange={(next) => updateShapeVector("center", 1, next)}
-        />
-        <PhysicalScalarField
-          label="Center Z"
-          unit="m"
-          value={draft.shape.center[2]}
-          onValueChange={(next) => updateShapeVector("center", 2, next)}
-        />
-        {draft.shape.kind === "box" ? (
-          <>
-            <PhysicalScalarField
-              label="Size X"
-              unit="m"
-              value={draft.shape.size[0]}
-              onValueChange={(next) => updateShapeVector("size", 0, next)}
-            />
-            <PhysicalScalarField
-              label="Size Y"
-              unit="m"
-              value={draft.shape.size[1]}
-              onValueChange={(next) => updateShapeVector("size", 1, next)}
-            />
-            <PhysicalScalarField
-              label="Size Z"
-              unit="m"
-              value={draft.shape.size[2]}
-              onValueChange={(next) => updateShapeVector("size", 2, next)}
-            />
-          </>
-        ) : null}
-        {draft.shape.kind === "cylinder" || draft.shape.kind === "sphere" ? (
-          <PhysicalScalarField
-            label="Radius"
-            unit="m"
-            value={draft.shape.radius}
-            onValueChange={(next) => updateShape({ radius: next })}
-          />
-        ) : null}
-        {draft.shape.kind === "cylinder" ? (
-          <>
-            <PhysicalScalarField
-              label="Height"
-              unit="m"
-              value={draft.shape.height}
-              onValueChange={(next) => updateShape({ height: next })}
-            />
-            <PhysicalScalarField
-              label="Axis X"
-              value={draft.shape.axis[0]}
-              onValueChange={(next) => updateShapeVector("axis", 0, next)}
-            />
-            <PhysicalScalarField
-              label="Axis Y"
-              value={draft.shape.axis[1]}
-              onValueChange={(next) => updateShapeVector("axis", 1, next)}
-            />
-            <PhysicalScalarField
-              label="Axis Z"
-              value={draft.shape.axis[2]}
-              onValueChange={(next) => updateShapeVector("axis", 2, next)}
-            />
-          </>
-        ) : null}
-      </InspectorSection>
-      ) : null}
-
-      {showSection("mesh") ? (
-      <InspectorSection value="mesh" title="Mesh Policy">
-        <FormField
-          label="Enable mesh policy"
-          type="checkbox"
-          checked={draft.meshPolicy.enabled}
-          onChange={(event) => updateMeshPolicy({ enabled: event.target.checked })}
-        />
-        <PhysicalScalarField
-          label="Max element size"
-          unit="m"
-          value={draft.meshPolicy.maximumElementSize}
-          disabled={!draft.meshPolicy.enabled}
-          onValueChange={(next) => updateMeshPolicy({ maximumElementSize: next })}
-        />
-        <PhysicalScalarField
-          label="Min element size"
-          unit="m"
-          value={draft.meshPolicy.minimumElementSize}
-          disabled={!draft.meshPolicy.enabled}
-          onValueChange={(next) => updateMeshPolicy({ minimumElementSize: next })}
-        />
-        <PhysicalScalarField
-          label="Transition distance"
-          unit="m"
-          value={draft.meshPolicy.transitionDistance}
-          disabled={!draft.meshPolicy.enabled}
-          onValueChange={(next) => updateMeshPolicy({ transitionDistance: next })}
-        />
-        <FormField
-          label="Order"
-          type="number"
-          step={1}
-          value={String(draft.meshPolicy.order)}
-          disabled={!draft.meshPolicy.enabled}
-          onChange={(event) => updateMeshPolicy({ order: Number(event.target.value) })}
-        />
-      </InspectorSection>
-      ) : null}
-
-      {showSection("material") ? (
-      <InspectorSection value="material" title="Material Overrides">
-        <FieldRow label="Overrides" value={model.materialOverrideCount} />
-        <FieldRow label="Parameter fields" value={model.materialFieldCount} />
-        {draft.materialOverrides.length === 0 ? (
-          <FieldRow label="Local overrides" value="inherits object material" />
-        ) : null}
-        {draft.materialOverrides.map((override, index) => (
-          <div className="fm-region-override" key={`${override.parameter}:${index}`}>
-            <FormField
-              label={`Override ${index + 1}`}
-              type="select"
-              value={override.parameter}
-              onChange={(event) => {
-                const parameter = event.target.value as RegionMaterialParameter;
-                updateMaterialOverride(index, {
-                  parameter,
-                  unit: defaultMaterialOverrideUnit(parameter),
-                });
-              }}
-            >
-              <option value="Ms">Ms</option>
-              <option value="Aex">Aex</option>
-              <option value="alpha">alpha</option>
-              <option value="Ku1">Ku1</option>
-            </FormField>
-            <PhysicalScalarField
-              label="Value"
-              unit={override.unit}
-              value={override.value}
-              onValueChange={(next) => updateMaterialOverride(index, { value: next })}
-            />
-            <FormField
-              label="Unit"
-              mono={false}
-              type="text"
-              value={override.unit}
-              onChange={(event) =>
-                updateMaterialOverride(index, { unit: event.target.value })
-              }
-            />
-            <FormField
-              label="Override priority"
-              type="number"
-              step={1}
-              value={String(override.priority)}
-              onChange={(event) =>
-                updateMaterialOverride(index, { priority: Number(event.target.value) })
-              }
-            />
-            <FormField
-              label="Conflict"
-              type="select"
-              value={override.conflictPolicy}
-              onChange={(event) =>
-                updateMaterialOverride(index, {
-                  conflictPolicy: event.target.value as RegionMaterialConflictPolicy,
-                })
-              }
-            >
-              <option value="error">Error</option>
-              <option value="higher_priority_wins">Higher Priority Wins</option>
-            </FormField>
-            <div className="fm-inspector-toolbar">
-              <Button
-                size="sm"
-                type="button"
-                variant="ghost"
-                onClick={() => removeMaterialOverride(index)}
-              >
-                Remove Override
-              </Button>
-            </div>
-          </div>
-        ))}
-        <div className="fm-inspector-toolbar">
-          <Button
-            size="sm"
-            type="button"
-            variant="ghost"
-            onClick={addMaterialOverride}
-          >
-            Add Override
-          </Button>
-        </div>
-      </InspectorSection>
-      ) : null}
-
-      {showSection("texture") ? (
-      <InspectorSection value="texture" title="Texture Override">
-        <FieldRow label="Assignment" value={model.textureAssignment} />
-        <FieldRow label="Effective texture ref" value={model.effectiveMagnetizationRef} />
-        <FieldRow label="Region texture ref" value={model.regionMagnetizationRef} />
-        <FieldRow label="Texture override" value={model.textureOverrideKind} />
-        <FieldRow
-          label="Editor"
-          value="Use the region Texture node for preset and transform edits"
-        />
-      </InspectorSection>
-      ) : null}
-
-      {showSection("diagnostics") ? (
-      <InspectorSection value="diagnostics" title="Diagnostics">
-        <FieldRow label="Mode" value={model.mode} />
-        <FieldRow label="Source" value={model.source} />
-        <FieldRow
-          label="Realization policy"
-          value={model.realizationPolicy ?? "inherit"}
-        />
-        <FieldRow
-          label="Realization status"
-          value={model.realizationStatus ?? "authored"}
-        />
-        <FieldRow label="Scene revision" value={model.revision ?? "unknown"} />
-        <FieldRow label="Region diagnostics" value={String(model.diagnosticCount)} />
-        <FieldRow label="Warnings" value={String(model.warningCount)} />
-        <FieldRow label="Errors" value={String(model.errorCount)} />
-        {model.diagnostics.length === 0 ? (
-          <FieldRow label="Messages" value="none" />
-        ) : (
-          model.diagnostics.map((diagnostic) => (
-            <FieldRow
-              key={diagnostic.diagnosticId}
-              label={diagnostic.severity}
-              value={`${diagnostic.code}: ${diagnostic.message}`}
-            />
-          ))
-        )}
-      </InspectorSection>
-      ) : null}
-
-      {showSection("actions") ? (
-      <InspectorSection value="actions" title="Actions">
-        <div className="fm-inspector-toolbar">
-          <Button
-            disabled={pending || !canWriteRegion}
-            size="sm"
-            type="button"
-            variant="primary"
-            title={canWriteRegion ? undefined : "Select an authored object region"}
-            onClick={() => void applyRegion()}
-          >
-            Apply Region
-          </Button>
-          <Button
-            size="sm"
-            type="button"
-            variant="ghost"
-            onClick={() => {
-              setDraftState({ draft: baseDraft, key: draftKey });
-              setFeedback(null);
-            }}
-          >
-            Revert
-          </Button>
-          <Button
-            disabled={pending || !canWriteRegion}
-            size="sm"
-            type="button"
-            variant="ghost"
-            title={canWriteRegion ? undefined : "Select an authored object region"}
-            onClick={() => void duplicateRegion()}
-          >
-            Duplicate Region
-          </Button>
-          <span className="fm-inspector-toolbar__spacer" />
-          <Button
-            disabled={pending || !canWriteRegion}
-            size="sm"
-            type="button"
-            variant="danger"
-            title={canWriteRegion ? undefined : "Select an authored object region"}
-            onClick={() => void deleteRegion()}
-          >
-            Delete Region
-          </Button>
-        </div>
-        <FieldRow
-          label="Write actions"
-          value={canWriteRegion ? "available" : "authored regions only"}
-        />
-        {feedback && <FeedbackBanner kind={feedback.kind} message={feedback.message} />}
-      </InspectorSection>
-      ) : null}
-    </Accordion>
-  );
+  switch (selection.kind) {
+    case "object.region.geometry":
+    case "object.region.shape":
+      return <ObjectRegionGeometryPanelImpl {...subProps} />;
+    case "object.region.magnetic-parameters":
+    case "object.region.material":
+      return <ObjectRegionMagneticParametersPanelImpl {...subProps} />;
+    case "object.region.mesh":
+      return <ObjectRegionMeshPanelImpl {...subProps} />;
+    case "object.region.regions":
+      return <ObjectRegionNestedRegionsPanelImpl {...subProps} />;
+    case "object.region.diagnostics":
+      return <ObjectRegionDiagnosticsPanelImpl {...subProps} />;
+    case "object.region.texture":
+      return <ObjectRegionTexturePanelImpl {...subProps} />;
+    case "object.region.visualization":
+      return <ObjectRegionVisualizationPanelImpl {...subProps} />;
+    case "object.region":
+    default:
+      return <ObjectRegionOverviewPanelImpl {...subProps} />;
+  }
 }
 
 export function ObjectRegionOverviewPanel(props: InspectorPanelProps) {
@@ -791,6 +408,10 @@ export function ObjectRegionMeshPanel(props: InspectorPanelProps) {
 }
 
 export function ObjectRegionTexturePanel(props: InspectorPanelProps) {
+  return <ObjectRegionsPanel {...props} />;
+}
+
+export function ObjectRegionVisualizationPanel(props: InspectorPanelProps) {
   return <ObjectRegionsPanel {...props} />;
 }
 

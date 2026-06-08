@@ -1397,6 +1397,7 @@ mod tests {
                     dind: None,
                     dbulk: None,
                 },
+                references: Vec::new(),
             }],
             magnetization_assets: vec![crate::MagnetizationAsset {
                 id: "mag:free".to_string(),

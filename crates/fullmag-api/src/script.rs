@@ -3,8 +3,8 @@
 use crate::error::ApiError;
 use crate::types::*;
 use fullmag_authoring::{
-    scene_document_from_script_builder, scene_document_problem_projection,
-    scene_document_to_script_builder, SceneDocument, ScriptBuilderState,
+    SceneDocument, ScriptBuilderState, scene_document_problem_projection,
+    scene_document_to_script_builder,
 };
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -165,15 +165,15 @@ pub(crate) fn rewrite_script_via_python_helper(
     })
 }
 
-pub(crate) fn load_script_builder_state(
+pub(crate) fn load_scene_document_state(
     repo_root: &Path,
     _workspace_root: &Path,
     script_path: &Path,
-) -> Result<ScriptBuilderState, ApiError> {
+) -> Result<SceneDocument, ApiError> {
     let helper_args = vec![
         "-m".to_string(),
         "fullmag.runtime.helper".to_string(),
-        "export-builder-draft".to_string(),
+        "export-scene-document".to_string(),
         "--script".to_string(),
         script_path.display().to_string(),
     ];
@@ -181,25 +181,16 @@ pub(crate) fn load_script_builder_state(
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(ApiError::internal(format!(
-            "python builder helper failed: {}",
+            "python scene document helper failed: {}",
             stderr.trim()
         )));
     }
-    serde_json::from_slice::<ScriptBuilderState>(&output.stdout).map_err(|error| {
+    serde_json::from_slice::<SceneDocument>(&output.stdout).map_err(|error| {
         ApiError::internal(format!(
-            "failed to deserialize builder draft response: {}",
+            "failed to deserialize scene document response: {}",
             error
         ))
     })
-}
-
-pub(crate) fn load_scene_document_state(
-    repo_root: &Path,
-    workspace_root: &Path,
-    script_path: &Path,
-) -> Result<SceneDocument, ApiError> {
-    let builder = load_script_builder_state(repo_root, workspace_root, script_path)?;
-    Ok(scene_document_from_script_builder(&builder))
 }
 
 pub(crate) fn scene_document_builder_projection(
@@ -213,6 +204,31 @@ pub(crate) fn scene_document_overrides(scene_document: &SceneDocument) -> Result
     Ok(scene_document_problem_projection(scene_document)
         .map_err(|error| ApiError::bad_request(error.message))?
         .rewrite_overrides)
+}
+
+pub(crate) fn python_executable(repo_root: &Path) -> String {
+    if let Ok(preferred) = std::env::var("FULLMAG_PYTHON") {
+        return preferred;
+    }
+    let real_root = if repo_root.join("packages/fullmag-py/src/fullmag").exists() {
+        repo_root.to_path_buf()
+    } else {
+        self::repo_root()
+    };
+    let local_python = real_root
+        .join(".fullmag")
+        .join("local")
+        .join("python")
+        .join("bin")
+        .join("python");
+    if local_python.is_file() {
+        return local_python.display().to_string();
+    }
+    let repo_python = real_root.join(".venv").join("bin").join("python");
+    if repo_python.is_file() {
+        return repo_python.display().to_string();
+    }
+    "python3".to_string()
 }
 
 pub(crate) fn run_python_helper(
@@ -357,5 +373,38 @@ mod tests {
         assert_eq!(builder.mesh.adaptive_max_passes, 5);
         assert_eq!(builder.mesh.growth_rate, "");
         assert_eq!(builder.mesh.narrow_regions, 0);
+    }
+
+    #[test]
+    fn load_scene_document_state_preserves_script_object_regions() {
+        let root = repo_root();
+        let script_path = root.join("examples/permalloy_box_relax_300x1000x10nm.py");
+        let scene = load_scene_document_state(&root, &root, &script_path)
+            .expect("permalloy script should export a scene document");
+        let object = scene
+            .objects
+            .iter()
+            .find(|object| object.id == "permalloy_box")
+            .expect("permalloy_box object should be exported");
+        let region = object
+            .regions
+            .iter()
+            .find(|region| region.name == "hole_refinement")
+            .expect("hole_refinement region should be exported");
+
+        assert_eq!(region.region_id, "permalloy_box:r1");
+        assert_eq!(region.owner_object, "permalloy_box");
+        assert_eq!(
+            region.realization_policy,
+            fullmag_authoring::SceneRegionRealizationPolicy::Inherit
+        );
+        assert_eq!(
+            region
+                .mesh_policy
+                .as_ref()
+                .expect("hole_refinement region should include mesh policy")
+                .maximum_element_size,
+            Some(5.0e-9)
+        );
     }
 }

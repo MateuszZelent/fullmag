@@ -521,6 +521,15 @@ pub(crate) fn build_snapshot_problem_and_state(
     if let Some(dt) = plan.fixed_timestep {
         problem.thermal_dt = dt;
     }
+    let problem = problem
+        .with_spatial_fields(
+            plan.material.ms_field.clone(),
+            plan.material.a_field.clone(),
+            plan.material.alpha_field.clone(),
+        )
+        .map_err(|e| RunError {
+            message: format!("Spatial fields: {}", e),
+        })?;
     let state = problem
         .new_state(plan.initial_magnetization.clone())
         .map_err(|e| RunError {

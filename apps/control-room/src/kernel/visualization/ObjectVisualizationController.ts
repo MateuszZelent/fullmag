@@ -116,7 +116,7 @@ export const DEFAULT_OBJECT_VISUALIZATION: VisualizationTargetSettings = {
   opacityPercent: 100,
   pointColor: "var(--fm-border-strong)",
   pointsVisible: false,
-  primitiveVisible: false,
+  primitiveVisible: true,
   renderMode: "surface+edges",
   shaderColorMode: "orientation",
   shaderMonoColor: "var(--fm-surface-magnetic)",
@@ -370,10 +370,12 @@ export function resolveDefaultVisualizationSettings(
 }
 
 export function resolveTargetVisualization({
+  inheritedSettings,
   snapshot,
   target,
   visualizationState,
 }: {
+  inheritedSettings?: VisualizationTargetSettings;
   snapshot: ObjectVisualizationSnapshot;
   target: VisualizationTargetRef;
   visualizationState?: VisualizationStateResource | null;
@@ -388,7 +390,11 @@ export function resolveTargetVisualization({
     target,
   );
   const settings = normalizeVisualizationSettings({
-    ...resolveDefaultVisualizationSettings(snapshot, target.kind, baseSettings),
+    ...resolveDefaultVisualizationSettings(
+      snapshot,
+      target.kind,
+      inheritedSettings ?? baseSettings,
+    ),
     ...(backendOverride ?? {}),
     ...(localOverride ?? {}),
   });

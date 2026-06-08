@@ -13,10 +13,15 @@ import {
   type SurfaceColorSource,
   type VisualizationGeometryScope,
   type VisualizationColorMode,
+  type VisualizationTargetKind,
   type VisualizationTargetPatch,
   type VisualizationTargetRef,
   type VisualizationTargetSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
+import {
+  resolveVisualizationTopologyFreshness,
+  type VisualizationTopologyFreshness,
+} from "@/kernel/visualization/visualizationDisplayResolution";
 export {
   resolveVisualizationRenderResolution,
 } from "@/kernel/visualization/visualizationDisplayResolution";
@@ -33,6 +38,23 @@ export const SURFACE_COLOR_SOURCE_ITEMS: Array<{
   { value: "magnitude", label: "Magnitude |m|" },
   { value: "colormap", label: "Colormap" },
 ];
+
+export function resolveObjectVisualizationPanelTopologyFreshness({
+  manifest,
+  scene,
+  targetKind,
+}: {
+  manifest: unknown;
+  scene: unknown;
+  targetKind: VisualizationTargetKind;
+}): VisualizationTopologyFreshness | null {
+  if (targetKind === "region") {
+    return null;
+  }
+  return scene && manifest
+    ? resolveVisualizationTopologyFreshness(scene, manifest)
+    : null;
+}
 
 export const VISUALIZATION_COLOR_MODE_ITEMS: Array<{
   label: string;
@@ -263,6 +285,21 @@ function meshPartMatchesVisualizationTarget(
     return part.role === "air" || part.role === "airbox";
   }
 
+  if (target.kind === "region") {
+    const regionTarget = parseRegionVisualizationTargetId(target.id);
+    if (!regionTarget) return false;
+    const objectAliases = meshIdAliases(regionTarget.objectId);
+    const objectMatch = meshIdAliases(part.object_id).size === 0
+      ? true
+      : aliasesIntersect(meshIdAliases(part.object_id), objectAliases);
+    const regionAliases = meshIdAliases(regionTarget.regionId);
+    return (
+      objectMatch &&
+      (aliasesIntersect(meshIdAliases(part.geometry_id), regionAliases) ||
+        aliasesIntersect(meshIdAliases(part.id), regionAliases))
+    );
+  }
+
   const targetAliases = meshIdAliases(target.id);
   const partValues =
     target.kind === "part"
@@ -275,6 +312,28 @@ function meshPartMatchesVisualizationTarget(
     }
     return false;
   });
+}
+
+function parseRegionVisualizationTargetId(
+  targetId: string,
+): { objectId: string; regionId: string } | null {
+  const match = /^region:([^:]+):(.+)$/.exec(targetId);
+  if (!match) return null;
+  try {
+    return {
+      objectId: decodeURIComponent(match[1]),
+      regionId: decodeURIComponent(match[2]),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function aliasesIntersect(left: Set<string>, right: Set<string>): boolean {
+  for (const value of left) {
+    if (right.has(value)) return true;
+  }
+  return false;
 }
 
 function meshIdAliases(value: string | null | undefined): Set<string> {

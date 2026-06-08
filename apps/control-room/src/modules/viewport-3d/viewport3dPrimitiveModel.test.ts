@@ -97,6 +97,110 @@ describe("viewport3dPrimitiveModel", () => {
     );
   });
 
+  it("preserves Box-Cylinder Difference semantics for primitive CSG preview", () => {
+    const model = buildViewport3DPrimitiveRenderModel(
+      {
+        objects: [
+          {
+            geometry: {
+              geometry_kind: "Difference",
+              geometry_params: {
+                base: {
+                  geometry_kind: "Box",
+                  geometry_params: { size: [300e-9, 1000e-9, 30e-9] },
+                },
+                tool: {
+                  geometry_kind: "Cylinder",
+                  geometry_params: {
+                    height: 30e-9,
+                    radius: 30e-9,
+                  },
+                },
+              },
+            },
+            id: "permalloy_box",
+            name: "Permalloy box",
+          },
+        ],
+        revision: 8,
+      },
+      null,
+    );
+
+    expect(model.objects[0]).toMatchObject({
+      bounds: {
+        size: [300e-9, 1000e-9, 30e-9],
+      },
+      csgPreview: {
+        boxSize: [300e-9, 1000e-9, 30e-9],
+        cylinderAxis: [0, 0, 1],
+        cylinderCenter: [0, 0, 0],
+        cylinderHeight: 30e-9,
+        cylinderRadius: 30e-9,
+        kind: "box-cylinder-difference",
+      },
+      kind: "box-cylinder-difference",
+    });
+  });
+
+  it("shows primitive CSG fallback when a previous mesh predates the current scene", () => {
+    const manifest: MeshSharedDomainManifestResource = {
+      mesh_id: "mesh-1",
+      mesh_name: "Mesh",
+      mesh_parts: [
+        {
+          boundary_face_count: 0,
+          boundary_face_start: 0,
+          element_count: 0,
+          element_start: 0,
+          id: "part-box",
+          label: "Box",
+          node_count: 0,
+          node_start: 0,
+          object_id: "permalloy_box",
+          role: "magnetic",
+        },
+      ],
+      revision: 2,
+      source_scene_revision: 7,
+    };
+
+    const model = buildViewport3DPrimitiveRenderModel(
+      {
+        objects: [
+          {
+            geometry: {
+              geometry_kind: "Difference",
+              geometry_params: {
+                base: {
+                  geometry_kind: "Box",
+                  geometry_params: { size: [300e-9, 1000e-9, 30e-9] },
+                },
+                tool: {
+                  geometry_kind: "Cylinder",
+                  geometry_params: {
+                    height: 30e-9,
+                    radius: 30e-9,
+                  },
+                },
+              },
+            },
+            id: "permalloy_box",
+            name: "Permalloy box",
+          },
+        ],
+        revision: 8,
+      },
+      manifest,
+    );
+
+    expect(model.objects[0]).toMatchObject({
+      fallbackLabel: "stale primitive",
+      kind: "box-cylinder-difference",
+      meshState: "mesh-stale",
+    });
+  });
+
   it("attaches committed magnetization texture preview metadata", () => {
     const model = buildViewport3DPrimitiveRenderModel(
       {

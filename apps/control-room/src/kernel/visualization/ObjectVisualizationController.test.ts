@@ -25,6 +25,7 @@ describe("ObjectVisualizationController", () => {
       geometryScope: "surface",
       opacityPercent: 100,
       pointColor: "var(--fm-border-strong)",
+      primitiveVisible: true,
       renderMode: "surface+edges",
       shaderColorMode: "orientation",
       shaderMonoColor: "var(--fm-surface-magnetic)",
@@ -273,6 +274,38 @@ describe("ObjectVisualizationController", () => {
     expect(controller.getSettings(regionTarget)).toMatchObject({
       opacityPercent: 35,
       visible: true,
+    });
+  });
+
+  it("inherits owner visualization settings before applying region overrides", () => {
+    const controller = new ObjectVisualizationController();
+    const objectTarget = { id: "film", kind: "object" as const };
+    const regionTarget = {
+      id: "region:film:film%3Acore",
+      kind: "region" as const,
+    };
+
+    controller.patchTarget(objectTarget, {
+      shaderVisible: false,
+      vectorsVisible: true,
+      wireframeVisible: true,
+    });
+    controller.patchTarget(regionTarget, { wireframeVisible: false });
+
+    const owner = resolveTargetVisualization({
+      snapshot: controller.getSnapshot(),
+      target: objectTarget,
+    });
+    const region = resolveTargetVisualization({
+      inheritedSettings: owner.settings,
+      snapshot: controller.getSnapshot(),
+      target: regionTarget,
+    });
+
+    expect(region.settings).toMatchObject({
+      shaderVisible: false,
+      vectorsVisible: true,
+      wireframeVisible: false,
     });
   });
 

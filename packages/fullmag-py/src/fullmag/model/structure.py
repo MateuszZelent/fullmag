@@ -275,7 +275,7 @@ class RegionMaterialOverride:
 
     def to_ir(self) -> dict[str, object]:
         return {
-            "parameter": _normalize_parameter_name(self.parameter),
+            "parameter": _parameter_name_to_ir(self.parameter),
             "value": self.value.to_ir(),
             "priority": int(self.priority),
             "conflict_policy": _normalize_choice(
@@ -425,7 +425,7 @@ class MaterialParameterAssignment:
         payload: dict[str, object] = {
             "assignment_id": require_non_empty(self.assignment_id, "assignment_id"),
             "owner_object": require_non_empty(self.owner_object, "owner_object"),
-            "parameter": _normalize_parameter_name(self.parameter),
+            "parameter": _parameter_name_to_ir(self.parameter),
             "value": self.value.to_ir(),
             "priority": int(self.priority),
             "conflict_policy": _normalize_choice(
@@ -469,6 +469,22 @@ def _normalize_parameter_name(value: str) -> str:
             f"parameter must be one of {sorted(_MATERIAL_PARAMETER_NAMES)!r}, got {value!r}"
         )
     return parameter
+
+
+def _parameter_name_to_ir(value: str) -> str:
+    return {
+        "Ms": "ms",
+        "Aex": "aex",
+        "Alpha": "alpha",
+        "Ku1": "ku1",
+        "Ku2": "ku2",
+        "AnisotropyAxis": "anisotropy_axis",
+        "Kc1": "kc1",
+        "Kc2": "kc2",
+        "Kc3": "kc3",
+        "Dind": "dind",
+        "Dbulk": "dbulk",
+    }[_normalize_parameter_name(value)]
 
 
 def _validate_material_parameter_field(parameter: str, field_value: MaterialParameterField) -> None:

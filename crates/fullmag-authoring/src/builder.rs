@@ -2,7 +2,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-use crate::scene::{MagnetizationMapping, TextureTransform3D};
+use crate::scene::{
+    MagnetizationMapping, SceneMaterialParameterAssignment, SceneObjectRegion, TextureTransform3D,
+};
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ScriptBuilderSolverState {
@@ -632,6 +634,12 @@ pub struct ScriptBuilderGeometryEntry {
     pub physics_stack: Vec<ScriptBuilderMagneticInteractionEntry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mesh: Option<ScriptBuilderPerGeometryMeshState>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub object_regions: Vec<SceneObjectRegion>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allocated_region_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub material_parameter_fields: Vec<SceneMaterialParameterAssignment>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]

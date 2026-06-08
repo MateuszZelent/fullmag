@@ -2516,3 +2516,63 @@ fn fem_eigen_single_k_dispersion_request_writes_v2_dispersion_artifact() {
         "single-k dispersion.csv residual_norm column should be populated, row={first_row}"
     );
 }
+
+#[test]
+fn spatial_material_fields_cpu_reference_reaches_oracle() {
+    let nx = 4u32;
+    let ny = 4u32;
+    let nz = 1u32;
+    let n = (nx * ny * nz) as usize;
+
+    let m0 = vec![[0.0, 1.0, 0.0]; n];
+
+    // Non-uniform Ms field: left half is 800e3, right half is 400e3
+    let mut ms_field = vec![0.0; n];
+    let mut a_field = vec![0.0; n];
+    let mut alpha_field = vec![0.0; n];
+    for flat_idx in 0..n {
+        let x = flat_idx % nx as usize;
+        ms_field[flat_idx] = if x < 2 { 800.0e3 } else { 400.0e3 };
+        a_field[flat_idx] = if x < 2 { 13.0e-12 } else { 6.5e-12 };
+        alpha_field[flat_idx] = if x < 2 { 0.5 } else { 0.1 };
+    }
+
+    let plan = FdmPlanIR {
+        grid: GridDimensions { cells: [nx, ny, nz] },
+        cell_size: [5e-9, 5e-9, 5e-9],
+        region_mask: vec![0; n],
+        active_mask: None,
+        initial_magnetization: m0,
+        material: FdmMaterialIR {
+            name: "Py_varying".to_string(),
+            saturation_magnetisation: 800e3,
+            exchange_stiffness: 13e-12,
+            damping: 0.5,
+            ms_field: Some(ms_field),
+            a_field: Some(a_field),
+            alpha_field: Some(alpha_field),
+            ..Default::default()
+        },
+        gyromagnetic_ratio: 2.211e5,
+        precision: ExecutionPrecision::Double,
+        exchange_bc: ExchangeBoundaryCondition::Neumann,
+        integrator: IntegratorChoice::Heun,
+        fixed_timestep: Some(1e-13),
+        relaxation: Some(RelaxationControlIR {
+            algorithm: RelaxationAlgorithmIR::LlgOverdamped,
+            stop: fullmag_ir::RelaxStopIR {
+                torque_tolerance_apm: Some(1e-4),
+                energy_tolerance_j: None,
+                max_steps: Some(10),
+                max_pseudotime_s: None,
+                max_physical_time_s: None,
+            },
+        }),
+        enable_exchange: true,
+        enable_demag: false,
+        ..Default::default()
+    };
+
+    let result = fullmag_runner::run_reference_fdm(&plan, 1e-9, &[]).expect("run should succeed");
+    assert_eq!(result.status, RunStatus::Completed);
+}

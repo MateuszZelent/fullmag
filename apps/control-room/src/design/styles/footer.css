@@ -425,10 +425,16 @@
 
 .fm-footer-diagnostics__profile-table {
   display: grid;
+  border-spacing: 0;
   min-width: 0;
   min-height: 0;
   align-content: start;
   overflow: auto;
+}
+
+.fm-footer-diagnostics__profile-table thead,
+.fm-footer-diagnostics__profile-table tbody {
+  display: contents;
 }
 
 .fm-footer-diagnostics__profile-row {
@@ -454,6 +460,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-align: left;
+  font-weight: inherit;
 }
 
 .fm-footer-diagnostics__phase-stack {

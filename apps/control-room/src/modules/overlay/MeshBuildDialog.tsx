@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useReducer } from "react";
+import { useEffect, useReducer, useState } from "react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import {
@@ -33,6 +33,7 @@ import {
   DialogTitle,
 } from "@/shared/ui/Dialog";
 import { MeshBuildConfirmDialogContent } from "./mesh-build/MeshBuildConfirmDialog";
+import { openMeshBuildDiagnostics } from "./meshBuildDiagnosticsNavigation";
 
 function asRecord(value: unknown): JsonObject | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -45,25 +46,6 @@ function text(value: unknown, fallback = "unknown"): string {
   if (typeof value === "string") return value;
   if (typeof value === "number" || typeof value === "boolean") return String(value);
   return JSON.stringify(value);
-}
-
-type MeshDiagnosticNavigation = {
-  readonly bus: {
-    emit: (
-      event: "footer:tab-requested",
-      payload: { reason?: string; tab: "engine" | "logs" | "mesh" | "telemetry" },
-    ) => void;
-  };
-  readonly layout: Pick<KernelApi["layout"], "setFocusedSlot" | "setPanelVisible">;
-};
-
-export function openMeshBuildDiagnostics(kernel: MeshDiagnosticNavigation) {
-  kernel.layout.setPanelVisible("bottom", true);
-  kernel.layout.setFocusedSlot("panel-bottom");
-  kernel.bus.emit("footer:tab-requested", {
-    reason: "mesh-build",
-    tab: "mesh",
-  });
 }
 
 interface MeshBuildDialogState {
@@ -220,6 +202,15 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
     source: "ribbon",
     sourceDetail: undefined,
   });
+  const [snapshotBefore, setSnapshotBefore] = useState<{
+    policy: JsonObject | null;
+    stats: {
+      build: JsonObject | null;
+      manifest: JsonObject | null;
+      quality: JsonObject | null;
+    };
+  } | null>(null);
+
   const resourceData = useStudyRuntimeCommandResourceData();
   const commandContext = createCommandContext(state.source, kernel, {
     input: state.input,
@@ -231,10 +222,10 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
     { enabled: state.open, isEqual: meshBuildDialogRuntimeStatusEquals },
   );
   const activeBuild = useMeshBuildCurrent({
-    enabled: shouldLoadRuntimeMeshBuild(state.open, runtimeStatus),
+    enabled: state.open && (shouldLoadRuntimeMeshBuild(state.open, runtimeStatus) || state.phase === "submitting"),
   });
   const latestBuild = useMeshBuildLatestSuccessful({
-    enabled: shouldLoadRuntimeMeshBuild(state.open, runtimeStatus),
+    enabled: state.open && (shouldLoadRuntimeMeshBuild(state.open, runtimeStatus) || state.phase === "submitting"),
   });
   const summary = useMeshSummaryResource({
     enabled: shouldLoadRuntimeMeshSummary(state.open, runtimeStatus),
@@ -245,15 +236,22 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
   const sharedQuality = useMeshSharedDomainQualityResource({
     enabled: state.open,
   });
+
+  const currentSnapshot = state.open ? snapshotBefore : null;
+
   const activeRecord = asRecord(activeBuild.data?.active_build);
   const pipelinePhases = normalizeMeshPipelineStatus(activeBuild.data?.mesh_pipeline_status);
   const buildStatus = resolveMeshBuildStatusLabel(activeRecord, pipelinePhases);
+
   const diffRows = diffMeshPolicies({
-    current: asRecord(summary.data?.effective_airbox_target),
-    draft: asRecord(activeBuild.data?.effective_airbox_target),
+    current: currentSnapshot?.policy ?? asRecord(summary.data?.effective_airbox_target),
+    draft: state.phase === "post-build"
+      ? asRecord(latestBuild.data?.effective_airbox_target)
+      : asRecord(activeBuild.data?.effective_airbox_target),
     realized: asRecord(latestBuild.data?.effective_airbox_target),
     scope: "airbox",
-  }).filter((row) => row.state !== "unchanged");
+  });
+
   const targetLabel =
     targetLabelForPendingCommand(state.commandId, state.input) ??
     targetLabelForBuild(activeBuild.data?.active_build);
@@ -281,7 +279,7 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
     },
     {
       label: "Policy changes",
-      value: diffRows.length === 0 ? "No pending policy diff" : String(diffRows.length),
+      value: diffRows.filter((r) => r.state !== "unchanged").length === 0 ? "No pending policy diff" : String(diffRows.filter((r) => r.state !== "unchanged").length),
     },
     {
       label: "Expected result",
@@ -289,7 +287,7 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
     },
   ];
   const snapshotRows = buildMeshSnapshotRows({
-    current: {
+    current: currentSnapshot?.stats ?? {
       build: asRecord(latestBuild.data),
       manifest: null,
       quality: null,
@@ -303,6 +301,14 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
 
   useEffect(() => {
     const offRequested = kernel.bus.on("mesh:build-confirm-requested", (request) => {
+      setSnapshotBefore({
+        policy: asRecord(summary.data?.effective_airbox_target),
+        stats: {
+          build: asRecord(latestBuild.data),
+          manifest: asRecord(manifest.data),
+          quality: asRecord(sharedQuality.data),
+        },
+      });
       dispatch({
         commandId: request.commandId,
         input: request.input,
@@ -322,7 +328,73 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
       offSubmitted();
       offRendered();
     };
-  }, [kernel.bus]);
+  }, [
+    kernel.bus,
+    summary.data,
+    latestBuild.data,
+    manifest.data,
+    sharedQuality.data,
+  ]);
+
+  // Polling fallback while in "submitting" phase to ensure we query status every 1000ms.
+  const { refetch: refetchActive } = activeBuild;
+  const { refetch: refetchLatest } = latestBuild;
+  useEffect(() => {
+    if (!state.open || state.phase !== "submitting") return;
+
+    const intervalId = setInterval(() => {
+      void refetchActive();
+      void refetchLatest();
+    }, 1000);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [state.open, state.phase, refetchActive, refetchLatest]);
+
+  // Query-based success/failure transition detection (decoupled from the 3D viewport).
+  useEffect(() => {
+    if (!state.open || state.phase !== "submitting") return;
+
+    const activeRecord = asRecord(activeBuild.data?.active_build);
+    const pipelinePhases = normalizeMeshPipelineStatus(activeBuild.data?.mesh_pipeline_status);
+    const isReady = pipelinePhases.some(
+      (p) =>
+        p.id === "ready" &&
+        (p.status === "active" || p.status === "done" || p.status === "completed")
+    );
+
+    const hasFailedPhase = pipelinePhases.some(
+      (p) => p.status === "warning" || p.status === "failed"
+    );
+    const lastError = activeBuild.data?.last_build_error;
+
+    if (lastError || hasFailedPhase) {
+      dispatch({
+        message: lastError ?? "Mesh build failed during background execution.",
+        type: "error",
+      });
+      return;
+    }
+
+    const prevRev = snapshotBefore?.stats?.build?.revision;
+    const previousRevision = typeof prevRev === "number" ? prevRev : 0;
+    const currentRevision = latestBuild.data?.revision ?? 0;
+
+    const isSuccess =
+      (activeBuild.data && !activeRecord && isReady) ||
+      (latestBuild.data && currentRevision > previousRevision);
+
+    if (isSuccess) {
+      dispatch({ type: "rendered" });
+    }
+  }, [
+    state.open,
+    state.phase,
+    activeBuild.data,
+    latestBuild.data,
+    snapshotBefore,
+  ]);
 
   async function confirmBuild(): Promise<void> {
     if (!state.commandId) return;

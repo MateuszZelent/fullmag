@@ -388,6 +388,10 @@ pub struct MeshSharedDomainBuildReportResource {
     pub thin_film_diagnostics: Vec<MeshThinFilmDiagnosticResource>,
     #[serde(default)]
     pub degraded: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authored_regions_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub realized_regions_count: Option<u32>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]

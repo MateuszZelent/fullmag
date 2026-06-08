@@ -3,6 +3,8 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 repo_root := justfile_directory()
 local_bin := repo_root + "/.fullmag/local/bin"
 repo_python := repo_root + "/.fullmag/local/python/bin/python"
+local_web_root := repo_root + "/.fullmag/local/web"
+control_room_static_out := repo_root + "/apps/control-room/out"
 
 default:
     @just --list
@@ -11,8 +13,8 @@ help:
     @just --list
 
 ensure-python:
-    mkdir -p .fullmag/local
-    if [ ! -x "{{repo_python}}" ]; then python3 -m venv .fullmag/local/python; fi
+    mkdir -p "{{repo_root}}/.fullmag/local"
+    if [ ! -x "{{repo_python}}" ]; then python3 -m venv "{{repo_root}}/.fullmag/local/python"; fi
     "{{repo_python}}" -m pip install 'numpy>=1.24' 'scipy>=1.10' 'gmsh>=4.12' 'meshio>=5.3' 'trimesh>=4.2' 'h5py>=3.8' 'zarr>=2.18,<3' 'rich>=13.7'
 
 build target="fullmag" cpu_only="0":
@@ -314,7 +316,7 @@ fullmag opt_1="" opt_2="" opt_3="" opt_4="" opt_5="" opt_6="" opt_7="" opt_8="":
       if [ "$frontend" = "static" ]; then \
         if [ "$force" = "true" ]; then make web-build-static; \
         elif [ "$build" = "true" ]; then just build-static-control-room; \
-        elif [ ! -f ".fullmag/local/web/index.html" ] && [ ! -f "apps/control-room/out/index.html" ]; then echo "Static control room is missing; run with build=True or force=True once." >&2; exit 2; fi; \
+        elif [ ! -f "{{local_web_root}}/index.html" ] && [ ! -f "{{control_room_static_out}}/index.html" ]; then echo "Static control room is missing; run with build=True or force=True once." >&2; exit 2; fi; \
       fi; \
       if [ "$backend" = "fem" ]; then \
         if [ "$force" = "true" ]; then just rebuild-fem-runtime; \

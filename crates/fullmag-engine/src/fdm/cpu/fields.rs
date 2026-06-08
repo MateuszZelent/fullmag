@@ -143,48 +143,76 @@ impl ExchangeLlgProblem {
     // Individual field terms (allocating)
     // ===================================================================
 
+    pub(crate) fn cell_exchange_field(
+        &self,
+        flat_index: usize,
+        magnetization: &[Vector3],
+        px: bool,
+        py: bool,
+        pz: bool,
+        dx2: f64,
+        dy2: f64,
+        dz2: f64,
+    ) -> Vector3 {
+        if !self.is_active(flat_index) {
+            return [0.0, 0.0, 0.0];
+        }
+        let grid = self.grid;
+        let x = flat_index % grid.nx;
+        let y = (flat_index / grid.nx) % grid.ny;
+        let z = flat_index / (grid.nx * grid.ny);
+        let center = magnetization[flat_index];
+        let ai = self.a_at(flat_index);
+        let ms_i = self.ms_at(flat_index);
+
+        let sample_neighbor_contrib = |nx: usize, ny: usize, nz: usize, dist2: f64| -> Vector3 {
+            let neighbor_index = grid.index(nx, ny, nz);
+            if self.is_active(neighbor_index) {
+                let aj = self.a_at(neighbor_index);
+                let aij = if ai == 0.0 || aj == 0.0 {
+                    0.0
+                } else {
+                    2.0 * ai * aj / (ai + aj)
+                };
+                let coeff = 2.0 * aij / (MU0 * ms_i * dist2);
+                scale(sub(magnetization[neighbor_index], center), coeff)
+            } else {
+                [0.0, 0.0, 0.0]
+            }
+        };
+
+        let x_minus_idx = neighbor_index(x, grid.nx, -1, px);
+        let x_plus_idx = neighbor_index(x, grid.nx, 1, px);
+        let y_minus_idx = neighbor_index(y, grid.ny, -1, py);
+        let y_plus_idx = neighbor_index(y, grid.ny, 1, py);
+        let z_minus_idx = neighbor_index(z, grid.nz, -1, pz);
+        let z_plus_idx = neighbor_index(z, grid.nz, 1, pz);
+
+        let h_x_minus = sample_neighbor_contrib(x_minus_idx, y, z, dx2);
+        let h_x_plus = sample_neighbor_contrib(x_plus_idx, y, z, dx2);
+        let h_y_minus = sample_neighbor_contrib(x, y_minus_idx, z, dy2);
+        let h_y_plus = sample_neighbor_contrib(x, y_plus_idx, z, dy2);
+        let h_z_minus = sample_neighbor_contrib(x, y, z_minus_idx, dz2);
+        let h_z_plus = sample_neighbor_contrib(x, y, z_plus_idx, dz2);
+
+        [
+            h_x_minus[0] + h_x_plus[0] + h_y_minus[0] + h_y_plus[0] + h_z_minus[0] + h_z_plus[0],
+            h_x_minus[1] + h_x_plus[1] + h_y_minus[1] + h_y_plus[1] + h_z_minus[1] + h_z_plus[1],
+            h_x_minus[2] + h_x_plus[2] + h_y_minus[2] + h_y_plus[2] + h_z_minus[2] + h_z_plus[2],
+        ]
+    }
+
     pub(crate) fn exchange_field_from_vectors(&self, magnetization: &[Vector3]) -> Vec<Vector3> {
-        let prefactor =
-            2.0 * self.material.exchange_stiffness / (MU0 * self.material.saturation_magnetisation);
+        let grid = self.grid;
         let dx2 = self.cell_size.dx * self.cell_size.dx;
         let dy2 = self.cell_size.dy * self.cell_size.dy;
         let dz2 = self.cell_size.dz * self.cell_size.dz;
-        let grid = self.grid;
         let px = matches!(self.boundary_policy.x, AxisBoundary::Periodic);
         let py = matches!(self.boundary_policy.y, AxisBoundary::Periodic);
         let pz = matches!(self.boundary_policy.z, AxisBoundary::Periodic);
 
         let compute_cell = |flat_index: usize| -> Vector3 {
-            if !self.is_active(flat_index) {
-                return [0.0, 0.0, 0.0];
-            }
-            let x = flat_index % grid.nx;
-            let y = (flat_index / grid.nx) % grid.ny;
-            let z = flat_index / (grid.nx * grid.ny);
-            let center = magnetization[flat_index];
-            let sample_neighbor = |nx: usize, ny: usize, nz: usize| -> Vector3 {
-                let neighbor_index = grid.index(nx, ny, nz);
-                if self.is_active(neighbor_index) {
-                    magnetization[neighbor_index]
-                } else {
-                    center
-                }
-            };
-            let x_minus = sample_neighbor(neighbor_index(x, grid.nx, -1, px), y, z);
-            let x_plus = sample_neighbor(neighbor_index(x, grid.nx, 1, px), y, z);
-            let y_minus = sample_neighbor(x, neighbor_index(y, grid.ny, -1, py), z);
-            let y_plus = sample_neighbor(x, neighbor_index(y, grid.ny, 1, py), z);
-            let z_minus = sample_neighbor(x, y, neighbor_index(z, grid.nz, -1, pz));
-            let z_plus = sample_neighbor(x, y, neighbor_index(z, grid.nz, 1, pz));
-
-            let mut laplacian = [0.0, 0.0, 0.0];
-            for component in 0..3 {
-                laplacian[component] =
-                    (x_plus[component] - 2.0 * center[component] + x_minus[component]) / dx2
-                        + (y_plus[component] - 2.0 * center[component] + y_minus[component]) / dy2
-                        + (z_plus[component] - 2.0 * center[component] + z_minus[component]) / dz2;
-            }
-            scale(laplacian, prefactor)
+            self.cell_exchange_field(flat_index, magnetization, px, py, pz, dx2, dy2, dz2)
         };
 
         #[cfg(feature = "parallel")]
@@ -225,7 +253,7 @@ impl ExchangeLlgProblem {
                     let moment = if self.is_active(src_index) {
                         scale(
                             magnetization[src_index],
-                            self.material.saturation_magnetisation,
+                            self.ms_at(src_index),
                         )
                     } else {
                         [0.0, 0.0, 0.0]
@@ -379,13 +407,11 @@ impl ExchangeLlgProblem {
     }
 
     pub fn anisotropy_field(&self, magnetization: &[Vector3]) -> Vec<Vector3> {
-        let ms = self.material.saturation_magnetisation;
         let has_uni = self.terms.uniaxial_anisotropy.is_some();
         let has_cub = self.terms.cubic_anisotropy.is_some();
         if !has_uni && !has_cub {
             return zero_vectors(self.grid.cell_count());
         }
-        let ms_safe = ms.max(1e-30);
         magnetization
             .iter()
             .enumerate()
@@ -393,6 +419,7 @@ impl ExchangeLlgProblem {
                 if !self.is_active(i) {
                     return [0.0, 0.0, 0.0];
                 }
+                let ms_safe = self.ms_at(i).max(1e-30);
                 let mut h = [0.0f64, 0.0, 0.0];
                 if let Some(ref uni) = self.terms.uniaxial_anisotropy {
                     let n = norm(uni.axis).max(1e-30);
@@ -593,8 +620,6 @@ impl ExchangeLlgProblem {
             Some(d) if d.abs() > 0.0 => d,
             _ => return zero_vectors(self.grid.cell_count()),
         };
-        let ms = self.material.saturation_magnetisation.max(1e-30);
-        let pf = 2.0 * d / (MU0 * ms);
         let nx = self.grid.nx;
         let ny = self.grid.ny;
         let _nz = self.grid.nz;
@@ -608,6 +633,8 @@ impl ExchangeLlgProblem {
                 if !self.is_active(flat) {
                     return [0.0, 0.0, 0.0];
                 }
+                let ms = self.ms_at(flat).max(1e-30);
+                let pf = 2.0 * d / (MU0 * ms);
                 let x = flat % nx;
                 let y = (flat / nx) % ny;
                 let z = flat / (nx * ny);
@@ -640,8 +667,6 @@ impl ExchangeLlgProblem {
             Some(d) if d.abs() > 0.0 => d,
             _ => return zero_vectors(self.grid.cell_count()),
         };
-        let ms = self.material.saturation_magnetisation.max(1e-30);
-        let pf = -2.0 * d / (MU0 * ms);
         let nx = self.grid.nx;
         let ny = self.grid.ny;
         let nz = self.grid.nz;
@@ -657,6 +682,8 @@ impl ExchangeLlgProblem {
                 if !self.is_active(flat) {
                     return [0.0, 0.0, 0.0];
                 }
+                let ms = self.ms_at(flat).max(1e-30);
+                let pf = -2.0 * d / (MU0 * ms);
                 let x = flat % nx;
                 let y = (flat / nx) % ny;
                 let z = flat / (nx * ny);
@@ -690,12 +717,10 @@ impl ExchangeLlgProblem {
     // ===================================================================
 
     pub(crate) fn exchange_field_add_into(&self, magnetization: &[Vector3], h_eff: &mut [Vector3]) {
-        let prefactor =
-            2.0 * self.material.exchange_stiffness / (MU0 * self.material.saturation_magnetisation);
+        let _grid = self.grid;
         let dx2 = self.cell_size.dx * self.cell_size.dx;
         let dy2 = self.cell_size.dy * self.cell_size.dy;
         let dz2 = self.cell_size.dz * self.cell_size.dz;
-        let grid = self.grid;
         let px = matches!(self.boundary_policy.x, AxisBoundary::Periodic);
         let py = matches!(self.boundary_policy.y, AxisBoundary::Periodic);
         let pz = matches!(self.boundary_policy.z, AxisBoundary::Periodic);
@@ -706,68 +731,20 @@ impl ExchangeLlgProblem {
                 .par_iter_mut()
                 .enumerate()
                 .for_each(|(flat_index, h)| {
-                    if !self.is_active(flat_index) {
-                        return;
-                    }
-                    let x = flat_index % grid.nx;
-                    let y = (flat_index / grid.nx) % grid.ny;
-                    let z = flat_index / (grid.nx * grid.ny);
-                    let center = magnetization[flat_index];
-                    let sample = |nx: usize, ny: usize, nz: usize| -> Vector3 {
-                        let ni = grid.index(nx, ny, nz);
-                        if self.is_active(ni) {
-                            magnetization[ni]
-                        } else {
-                            center
-                        }
-                    };
-                    let x_minus = sample(neighbor_index(x, grid.nx, -1, px), y, z);
-                    let x_plus = sample(neighbor_index(x, grid.nx, 1, px), y, z);
-                    let y_minus = sample(x, neighbor_index(y, grid.ny, -1, py), z);
-                    let y_plus = sample(x, neighbor_index(y, grid.ny, 1, py), z);
-                    let z_minus = sample(x, y, neighbor_index(z, grid.nz, -1, pz));
-                    let z_plus = sample(x, y, neighbor_index(z, grid.nz, 1, pz));
-
-                    for c in 0..3 {
-                        h[c] += prefactor
-                            * ((x_plus[c] - 2.0 * center[c] + x_minus[c]) / dx2
-                                + (y_plus[c] - 2.0 * center[c] + y_minus[c]) / dy2
-                                + (z_plus[c] - 2.0 * center[c] + z_minus[c]) / dz2);
-                    }
+                    let h_ex = self.cell_exchange_field(flat_index, magnetization, px, py, pz, dx2, dy2, dz2);
+                    h[0] += h_ex[0];
+                    h[1] += h_ex[1];
+                    h[2] += h_ex[2];
                 });
         }
         #[cfg(not(feature = "parallel"))]
         {
             for flat_index in 0..grid.cell_count() {
-                if !self.is_active(flat_index) {
-                    continue;
-                }
-                let x = flat_index % grid.nx;
-                let y = (flat_index / grid.nx) % grid.ny;
-                let z = flat_index / (grid.nx * grid.ny);
-                let center = magnetization[flat_index];
-                let sample = |nx: usize, ny: usize, nz: usize| -> Vector3 {
-                    let ni = grid.index(nx, ny, nz);
-                    if self.is_active(ni) {
-                        magnetization[ni]
-                    } else {
-                        center
-                    }
-                };
-                let x_minus = sample(neighbor_index(x, grid.nx, -1, px), y, z);
-                let x_plus = sample(neighbor_index(x, grid.nx, 1, px), y, z);
-                let y_minus = sample(x, neighbor_index(y, grid.ny, -1, py), z);
-                let y_plus = sample(x, neighbor_index(y, grid.ny, 1, py), z);
-                let z_minus = sample(x, y, neighbor_index(z, grid.nz, -1, pz));
-                let z_plus = sample(x, y, neighbor_index(z, grid.nz, 1, pz));
-
+                let h_ex = self.cell_exchange_field(flat_index, magnetization, px, py, pz, dx2, dy2, dz2);
                 let h = &mut h_eff[flat_index];
-                for c in 0..3 {
-                    h[c] += prefactor
-                        * ((x_plus[c] - 2.0 * center[c] + x_minus[c]) / dx2
-                            + (y_plus[c] - 2.0 * center[c] + y_minus[c]) / dy2
-                            + (z_plus[c] - 2.0 * center[c] + z_minus[c]) / dz2);
-                }
+                h[0] += h_ex[0];
+                h[1] += h_ex[1];
+                h[2] += h_ex[2];
             }
         }
     }
@@ -793,7 +770,7 @@ impl ExchangeLlgProblem {
                     let moment = if self.is_active(src_index) {
                         scale(
                             magnetization[src_index],
-                            self.material.saturation_magnetisation,
+                            self.ms_at(src_index),
                         )
                     } else {
                         [0.0, 0.0, 0.0]
@@ -1385,7 +1362,8 @@ impl ExchangeLlgProblem {
         debug_assert!(h_eff.len() >= n);
         debug_assert!(out.len() >= n);
         for i in 0..n {
-            let rhs = self.llg_rhs_from_field(
+            let rhs = self.llg_rhs_from_field_at(
+                i,
                 [magnetization.x[i], magnetization.y[i], magnetization.z[i]],
                 [h_eff.x[i], h_eff.y[i], h_eff.z[i]],
             );
@@ -1406,7 +1384,7 @@ impl ExchangeLlgProblem {
         debug_assert!(h_eff.len() >= n);
         debug_assert!(out.len() >= n);
         for i in 0..n {
-            out[i] = self.llg_rhs_from_field(magnetization[i], h_eff[i]);
+            out[i] = self.llg_rhs_from_field_at(i, magnetization[i], h_eff[i]);
         }
         self.direct_torques_add_into(magnetization, out);
     }
@@ -1461,13 +1439,11 @@ impl ExchangeLlgProblem {
         magnetization: &[Vector3],
         h_eff: &mut [Vector3],
     ) {
-        let ms = self.material.saturation_magnetisation;
         let has_uni = self.terms.uniaxial_anisotropy.is_some();
         let has_cub = self.terms.cubic_anisotropy.is_some();
         if !has_uni && !has_cub {
             return;
         }
-        let ms_safe = ms.max(1e-30);
 
         let uni_data = self.terms.uniaxial_anisotropy.as_ref().map(|uni| {
             let n = norm(uni.axis).max(1e-30);
@@ -1487,6 +1463,7 @@ impl ExchangeLlgProblem {
             if !self.is_active(i) {
                 return;
             }
+            let ms_safe = self.ms_at(i).max(1e-30);
             if let Some((u, ku1, ku2)) = &uni_data {
                 let m_dot_u = dot(*m, *u);
                 let coeff = 2.0 * ku1 / (MU0 * ms_safe) * m_dot_u
@@ -1528,8 +1505,6 @@ impl ExchangeLlgProblem {
             Some(d) if d.abs() > 0.0 => d,
             _ => return,
         };
-        let ms = self.material.saturation_magnetisation.max(1e-30);
-        let pf = 2.0 * d / (MU0 * ms);
         let nx = self.grid.nx;
         let ny = self.grid.ny;
         let dx = self.cell_size.dx;
@@ -1542,6 +1517,8 @@ impl ExchangeLlgProblem {
             if !self.is_active(flat) {
                 return;
             }
+            let ms = self.ms_at(flat).max(1e-30);
+            let pf = 2.0 * d / (MU0 * ms);
             let x = flat % nx;
             let y = (flat / nx) % ny;
             let z = flat / (nx * ny);
@@ -1588,8 +1565,6 @@ impl ExchangeLlgProblem {
             Some(d) if d.abs() > 0.0 => d,
             _ => return,
         };
-        let ms = self.material.saturation_magnetisation.max(1e-30);
-        let pf = -2.0 * d / (MU0 * ms);
         let nx = self.grid.nx;
         let ny = self.grid.ny;
         let nz = self.grid.nz;
@@ -1605,6 +1580,8 @@ impl ExchangeLlgProblem {
             if !self.is_active(flat) {
                 return;
             }
+            let ms = self.ms_at(flat).max(1e-30);
+            let pf = -2.0 * d / (MU0 * ms);
             let x = flat % nx;
             let y = (flat / nx) % ny;
             let z = flat / (nx * ny);
@@ -2813,13 +2790,13 @@ impl ExchangeLlgProblem {
                 .par_iter_mut()
                 .enumerate()
                 .for_each(|(i, out)| {
-                    *out = self.llg_rhs_from_field(magnetization[i], h_eff[i]);
+                    *out = self.llg_rhs_from_field_at(i, magnetization[i], h_eff[i]);
                 });
         }
         #[cfg(not(feature = "parallel"))]
         {
             for i in 0..n {
-                rhs_out[i] = self.llg_rhs_from_field(magnetization[i], h_eff[i]);
+                rhs_out[i] = self.llg_rhs_from_field_at(i, magnetization[i], h_eff[i]);
             }
         }
 
@@ -2883,13 +2860,13 @@ impl ExchangeLlgProblem {
                 .par_iter_mut()
                 .enumerate()
                 .for_each(|(i, out)| {
-                    *out = self.llg_rhs_from_field(magnetization[i], h_eff[i]);
+                    *out = self.llg_rhs_from_field_at(i, magnetization[i], h_eff[i]);
                 });
         }
         #[cfg(not(feature = "parallel"))]
         {
             for i in 0..n {
-                rhs_out[i] = self.llg_rhs_from_field(magnetization[i], h_eff[i]);
+                rhs_out[i] = self.llg_rhs_from_field_at(i, magnetization[i], h_eff[i]);
             }
         }
 
@@ -3275,7 +3252,8 @@ impl ExchangeLlgProblem {
         let mut rhs: Vec<Vector3> = magnetization
             .iter()
             .zip(effective_field.iter())
-            .map(|(m, h)| self.llg_rhs_from_field(*m, *h))
+            .enumerate()
+            .map(|(i, (m, h))| self.llg_rhs_from_field_at(i, *m, *h))
             .collect();
 
         if let Some(ref zl) = self.terms.zhang_li_stt {
@@ -3350,6 +3328,19 @@ impl ExchangeLlgProblem {
         scale(add(precession_term, scale(damping, alpha)), -gamma_bar)
     }
 
+    pub(crate) fn llg_rhs_from_field_at(&self, i: usize, magnetization: Vector3, field: Vector3) -> Vector3 {
+        let alpha = self.alpha_at(i);
+        let gamma_bar = self.dynamics.gyromagnetic_ratio / (1.0 + alpha * alpha);
+        let precession = cross(magnetization, field);
+        let damping = cross(magnetization, precession);
+        let precession_term = if self.dynamics.precession_enabled {
+            precession
+        } else {
+            [0.0, 0.0, 0.0]
+        };
+        scale(add(precession_term, scale(damping, alpha)), -gamma_bar)
+    }
+
     // ===================================================================
     // Energy calculations
     // ===================================================================
@@ -3357,7 +3348,6 @@ impl ExchangeLlgProblem {
     pub fn exchange_energy_from_vectors(&self, magnetization: &[Vector3]) -> f64 {
         let cell_volume = self.cell_size.volume();
         let grid = self.grid;
-        let a = self.material.exchange_stiffness;
         let dx2 = self.cell_size.dx * self.cell_size.dx;
         let dy2 = self.cell_size.dy * self.cell_size.dy;
         let dz2 = self.cell_size.dz * self.cell_size.dz;
@@ -3370,26 +3360,45 @@ impl ExchangeLlgProblem {
             let y = (flat_index / grid.nx) % grid.ny;
             let z = flat_index / (grid.nx * grid.ny);
             let center = magnetization[flat_index];
+            let ai = self.a_at(flat_index);
             let mut e = 0.0;
             if x + 1 < grid.nx {
                 let neighbor_index = grid.index(x + 1, y, z);
                 if self.is_active(neighbor_index) {
+                    let aj = self.a_at(neighbor_index);
+                    let aij = if ai == 0.0 || aj == 0.0 {
+                        0.0
+                    } else {
+                        2.0 * ai * aj / (ai + aj)
+                    };
                     let neighbor = magnetization[neighbor_index];
-                    e += a * cell_volume * squared_norm(sub(neighbor, center)) / dx2;
+                    e += aij * cell_volume * squared_norm(sub(neighbor, center)) / dx2;
                 }
             }
             if y + 1 < grid.ny {
                 let neighbor_index = grid.index(x, y + 1, z);
                 if self.is_active(neighbor_index) {
+                    let aj = self.a_at(neighbor_index);
+                    let aij = if ai == 0.0 || aj == 0.0 {
+                        0.0
+                    } else {
+                        2.0 * ai * aj / (ai + aj)
+                    };
                     let neighbor = magnetization[neighbor_index];
-                    e += a * cell_volume * squared_norm(sub(neighbor, center)) / dy2;
+                    e += aij * cell_volume * squared_norm(sub(neighbor, center)) / dy2;
                 }
             }
             if z + 1 < grid.nz {
                 let neighbor_index = grid.index(x, y, z + 1);
                 if self.is_active(neighbor_index) {
+                    let aj = self.a_at(neighbor_index);
+                    let aij = if ai == 0.0 || aj == 0.0 {
+                        0.0
+                    } else {
+                        2.0 * ai * aj / (ai + aj)
+                    };
                     let neighbor = magnetization[neighbor_index];
-                    e += a * cell_volume * squared_norm(sub(neighbor, center)) / dz2;
+                    e += aij * cell_volume * squared_norm(sub(neighbor, center)) / dz2;
                 }
             }
             e
@@ -3482,9 +3491,9 @@ impl ExchangeLlgProblem {
         field: &[Vector3],
         prefactor: f64,
     ) -> Vec<f64> {
-        let ms = self.material.saturation_magnetisation;
         let compute = |i: usize| {
             if self.is_active(i) {
+                let ms = self.ms_at(i);
                 prefactor * MU0 * ms * dot(magnetization[i], field[i])
             } else {
                 0.0

@@ -349,6 +349,7 @@ def build_geometry_assets_for_request(
     discretization: DiscretizationHints | None,
     study_universe: dict[str, object] | None = None,
     mesh_workflow: dict[str, object] | None = None,
+    object_regions: Sequence[dict[str, object]] | None = None,
     asset_cache: dict[str, dict[str, Any] | None] | None = None,
 ) -> dict[str, Any] | None:
     if discretization is None:
@@ -361,6 +362,7 @@ def build_geometry_assets_for_request(
             "discretization": discretization.to_ir(),
             "study_universe": study_universe,
             "mesh_workflow": mesh_workflow,
+            "object_regions": list(object_regions or []),
         },
         sort_keys=True,
     )
@@ -374,9 +376,11 @@ def build_geometry_assets_for_request(
     }
     explicit_domain_mesh_source = None
     explicit_domain_region_markers = None
+    explicit_domain_object_region_markers = None
     if isinstance(mesh_workflow, dict):
         source_value = mesh_workflow.get("domain_mesh_source")
         region_markers_value = mesh_workflow.get("domain_region_markers")
+        object_region_markers_value = mesh_workflow.get("domain_object_region_markers")
         if isinstance(source_value, str) and source_value.strip():
             explicit_domain_mesh_source = source_value
             if not isinstance(region_markers_value, list) or not region_markers_value:
@@ -398,6 +402,40 @@ def build_geometry_assets_for_request(
                 explicit_domain_region_markers.append(
                     {"geometry_name": geometry_name, "marker": marker}
                 )
+            if object_region_markers_value is not None:
+                if not isinstance(object_region_markers_value, list):
+                    raise ValueError(
+                        "domain_object_region_markers entries must be mappings with geometry_name and marker"
+                    )
+                explicit_domain_object_region_markers = []
+                seen_object_region_markers: set[int] = set()
+                seen_object_region_geometries: set[str] = set()
+                for entry in object_region_markers_value:
+                    if not isinstance(entry, dict):
+                        raise ValueError(
+                            "domain_object_region_markers entries must be mappings with geometry_name and marker"
+                        )
+                    geometry_name = entry.get("geometry_name")
+                    marker = entry.get("marker")
+                    if not isinstance(geometry_name, str) or not geometry_name.strip():
+                        raise ValueError(
+                            "domain_object_region_markers geometry_name must be a non-empty string"
+                        )
+                    if not isinstance(marker, int) or marker <= 0:
+                        raise ValueError("domain_object_region_markers marker must be a positive int")
+                    if geometry_name in seen_object_region_geometries:
+                        raise ValueError(
+                            f"domain_object_region_markers duplicates geometry_name {geometry_name!r}"
+                        )
+                    if marker in seen_object_region_markers:
+                        raise ValueError(
+                            f"domain_object_region_markers duplicates marker {marker}"
+                        )
+                    seen_object_region_geometries.add(geometry_name)
+                    seen_object_region_markers.add(marker)
+                    explicit_domain_object_region_markers.append(
+                        {"geometry_name": geometry_name, "marker": marker}
+                    )
 
     if discretization.fdm is not None:
         from fullmag.model.geometry import Cylinder, ImportedGeometry
@@ -428,6 +466,9 @@ def build_geometry_assets_for_request(
         from fullmag.meshing import (
             realize_fem_domain_mesh_asset_from_components,
             realize_fem_mesh_asset,
+        )
+        from fullmag.meshing.asset_pipeline import (
+            realize_fem_domain_mesh_asset_from_components_with_report,
         )
         from fullmag.meshing.gmsh_bridge import MeshData
 
@@ -519,27 +560,49 @@ def build_geometry_assets_for_request(
                 "mesh_source": explicit_domain_mesh_source,
                 "mesh": None,
                 "region_markers": explicit_domain_region_markers,
+                "object_region_markers": explicit_domain_object_region_markers or [],
             }
         elif study_universe is not None:
-            domain_mesh, region_markers = (
-                realize_fem_domain_mesh_asset_from_components(
-                    list(geometries),
-                    discretization.fem,
-                    study_universe=study_universe,
-                    mesh_workflow=mesh_workflow,
+            authored_regions = list(object_regions or [])
+            if authored_regions:
+                domain_mesh, region_markers, build_report = (
+                    realize_fem_domain_mesh_asset_from_components_with_report(
+                        list(geometries),
+                        discretization.fem,
+                        study_universe=study_universe,
+                        mesh_workflow=mesh_workflow,
+                        object_regions=authored_regions,
+                    )
                 )
-            )
+            else:
+                domain_mesh, region_markers = (
+                    realize_fem_domain_mesh_asset_from_components(
+                        list(geometries),
+                        discretization.fem,
+                        study_universe=study_universe,
+                        mesh_workflow=mesh_workflow,
+                    )
+                )
+                build_report = None
             domain_mesh_ir = domain_mesh.to_ir("study_domain")
             is_valid = validate_mesh_ir(domain_mesh_ir)
             if is_valid is False:
                 raise ValueError(
                     "generated shared FEM domain mesh asset failed Rust validation"
                 )
-            assets["fem_domain_mesh_asset"] = {
+            domain_asset = {
                 "mesh_source": None,
                 "mesh": domain_mesh_ir,
                 "region_markers": region_markers,
+                "object_region_markers": (
+                    build_report.object_region_markers
+                    if build_report is not None
+                    else []
+                ),
             }
+            if build_report is not None:
+                domain_asset["build_report"] = build_report.to_dict()
+            assets["fem_domain_mesh_asset"] = domain_asset
 
     if (
         not assets["fdm_grid_assets"]
@@ -1100,6 +1163,7 @@ class Problem:
         )
         materials = self._collect_materials()
         regions = self._collect_regions()
+        object_regions = self._collect_object_regions()
         geometries = [
             resolve_geometry_sources(geometry, source_root=source_root)
             for geometry in self._collect_geometries()
@@ -1152,12 +1216,24 @@ class Problem:
         )
         geometry_assets = None
         if include_geometry_assets:
+            owner_geometry_names = {
+                magnet.name: magnet.geometry.geometry_name for magnet in self.magnets
+            }
+            object_region_mesh_specs = []
+            for region in object_regions:
+                payload = region.to_ir()
+                payload["owner_geometry_name"] = owner_geometry_names.get(
+                    region.owner_object,
+                    "",
+                )
+                object_region_mesh_specs.append(payload)
             geometry_assets = build_geometry_assets_for_request(
                 requested_backend=runtime.backend_target,
                 geometries=geometries,
                 discretization=discretization,
                 study_universe=study_universe,
                 mesh_workflow=mesh_workflow,
+                object_regions=object_region_mesh_specs,
                 asset_cache=effective_asset_cache,
             )
         magnets_ir = [magnet.to_ir() for magnet in self.magnets]
@@ -1191,7 +1267,7 @@ class Problem:
             "geometry_assets": geometry_assets,
             "regions": [region.to_ir() for region in regions],
             "object_regions": [
-                region.to_ir() for region in self._collect_object_regions()
+                region.to_ir() for region in object_regions
             ],
             "materials": [material.to_ir() for material in materials],
             "material_parameter_fields": [

@@ -143,28 +143,33 @@ function MeshBuildPostBuildSummary({
           Mesh resources were published and rendered by the viewport.
         </p>
       ) : (
-        <div
-          className="fm-mesh-build-confirm__diff fm-mesh-build-confirm__diff--summary"
-          role="table"
-        >
-          <div
-            className="fm-mesh-build-confirm__diff-row fm-mesh-build-confirm__diff-row--header"
-            role="row"
-          >
-            <span role="columnheader">Metric</span>
-            <span role="columnheader">Current</span>
-            <span role="columnheader">New</span>
-            <span role="columnheader">Group</span>
-          </div>
-          {visibleRows.map((row) => (
-            <div className="fm-mesh-build-confirm__diff-row" key={row.id} role="row">
-              <span role="cell">{row.label}</span>
-              <span role="cell">{row.currentValue}</span>
-              <span role="cell">{row.nextValue}</span>
-              <span role="cell">{row.group}</span>
-            </div>
-          ))}
-        </div>
+        <table className="fm-mesh-build-confirm__diff fm-mesh-build-confirm__diff--summary">
+          <thead>
+            <tr className="fm-mesh-build-confirm__diff-row fm-mesh-build-confirm__diff-row--header">
+              <th scope="col">Metric</th>
+              <th scope="col">Current</th>
+              <th scope="col">New</th>
+              <th scope="col">Group</th>
+            </tr>
+          </thead>
+          <tbody>
+            {visibleRows.map((row) => {
+              const hasChanged = row.currentValue !== row.nextValue;
+              return (
+                <tr
+                  className="fm-mesh-build-confirm__diff-row"
+                  data-state={hasChanged ? "changed" : "unchanged"}
+                  key={row.id}
+                >
+                  <td className="font-bold">{row.label}</td>
+                  <td>{row.currentValue}</td>
+                  <td className={hasChanged ? "font-bold text-success" : ""}>{row.nextValue}</td>
+                  <td className="opacity-70">{row.group}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       )}
     </section>
   );

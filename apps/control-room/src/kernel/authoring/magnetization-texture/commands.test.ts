@@ -18,12 +18,12 @@ describe("magnetization texture commands", () => {
       asset: { id: "mag:body:region:body:uniform" },
       scene_revision: 6,
     }));
-    const patchObjectRegionResource = vi.fn(async () => ({ revision: 7 }));
+    const patchRegion = vi.fn(async () => ({ revision: 7 }));
     const context = {
       api: {
         model: {
           patchMagnetizationAsset,
-          patchObjectRegionResource,
+          patchRegion,
         },
       },
       resourceData: {
@@ -66,13 +66,11 @@ describe("magnetization texture commands", () => {
         base_revision: 5,
       }),
     );
-    expect(patchObjectRegionResource).toHaveBeenCalledWith(
-      "body",
+    expect(patchRegion).toHaveBeenCalledWith(
       "region:body",
       {
         magnetization_ref: "mag:body:region:body:uniform",
       },
-      { baseRevision: 6 },
     );
   });
 

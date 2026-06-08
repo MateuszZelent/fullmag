@@ -353,6 +353,8 @@ mod tests {
                 dind_field: None,
                 dbulk_field: None,
             },
+            ms_element_field: None,
+            a_element_field: None,
             region_materials: Vec::new(),
             external_field: None,
             current_modules: Vec::new(),

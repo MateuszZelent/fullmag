@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   magneticTextureInspectorView,
   syncAuthoringScriptBestEffort,
-} from "./ObjectMagneticTexturePanel";
+} from "./ObjectMagneticTexturePanelViewModel";
 
 describe("ObjectMagneticTexturePanel", () => {
   it("does not propagate canonical script rewrite failures from texture save", async () => {

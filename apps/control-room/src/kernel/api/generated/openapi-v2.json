@@ -308,6 +308,102 @@
               },
               "kind": {
                 "enum": [
+                  "create_material"
+                ],
+                "type": "string"
+              },
+              "material_id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "properties": {
+                "$ref": "#/components/schemas/MaterialPropertiesResource"
+              },
+              "references": {
+                "items": {
+                  "$ref": "#/components/schemas/MaterialReferenceResource"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "material_id",
+              "name",
+              "properties",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "base_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "kind": {
+                "enum": [
+                  "patch_material"
+                ],
+                "type": "string"
+              },
+              "material_id": {
+                "type": "string"
+              },
+              "patch": {
+                "$ref": "#/components/schemas/MaterialPatchRequest"
+              }
+            },
+            "required": [
+              "material_id",
+              "patch",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "base_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "kind": {
+                "enum": [
+                  "delete_material"
+                ],
+                "type": "string"
+              },
+              "material_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "material_id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "base_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "kind": {
+                "enum": [
                   "delete_object"
                 ],
                 "type": "string"
@@ -431,7 +527,7 @@
                 "type": "string"
               },
               "region": {
-                "type": "object"
+                "$ref": "#/components/schemas/SceneObjectRegion"
               }
             },
             "required": [
@@ -461,7 +557,7 @@
                 "type": "string"
               },
               "patch": {
-                "type": "object"
+                "$ref": "#/components/schemas/SceneObjectRegionPatch"
               },
               "region_id": {
                 "type": "string"
@@ -549,7 +645,7 @@
                 ]
               },
               "coupling": {
-                "type": "object"
+                "$ref": "#/components/schemas/SceneCoupling"
               },
               "kind": {
                 "enum": [
@@ -1739,7 +1835,7 @@
             "type": "boolean"
           },
           "params": {
-            "type": "object"
+            "$ref": "#/components/schemas/SceneCouplingParameters"
           },
           "realization_status": {
             "type": [
@@ -1748,10 +1844,10 @@
             ]
           },
           "source": {
-            "type": "object"
+            "$ref": "#/components/schemas/SceneCouplingEndpoint"
           },
           "target": {
-            "type": "object"
+            "$ref": "#/components/schemas/SceneCouplingEndpoint"
           }
         },
         "required": [
@@ -4736,7 +4832,7 @@
             "type": "string"
           },
           "field": {
-            "type": "object"
+            "$ref": "#/components/schemas/SceneMaterialParameterField"
           },
           "frame": {
             "type": [
@@ -4747,6 +4843,27 @@
           "location": {
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "max": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "mean": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "min": {
+            "format": "double",
+            "type": [
+              "number",
               "null"
             ]
           },
@@ -4775,6 +4892,14 @@
               "null"
             ]
           },
+          "sample_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "source_region_id": {
             "type": [
               "string",
@@ -4784,6 +4909,15 @@
           "unit": {
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
               "null"
             ]
           }
@@ -4812,6 +4946,15 @@
               {
                 "$ref": "#/components/schemas/MaterialPropertiesPatchRequest"
               }
+            ]
+          },
+          "references": {
+            "items": {
+              "$ref": "#/components/schemas/MaterialReferenceResource"
+            },
+            "type": [
+              "array",
+              "null"
             ]
           }
         },
@@ -4909,6 +5052,29 @@
         ],
         "type": "object"
       },
+      "MaterialReferenceResource": {
+        "properties": {
+          "citation": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "MaterialResource": {
         "properties": {
           "id": {
@@ -4919,6 +5085,12 @@
           },
           "properties": {
             "$ref": "#/components/schemas/MaterialPropertiesResource"
+          },
+          "references": {
+            "items": {
+              "$ref": "#/components/schemas/MaterialReferenceResource"
+            },
+            "type": "array"
           }
         },
         "required": [
@@ -6453,6 +6625,14 @@
       },
       "MeshSharedDomainBuildReportResource": {
         "properties": {
+          "authored_regions_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "build_mode": {
             "type": "string"
           },
@@ -6496,6 +6676,14 @@
               "$ref": "#/components/schemas/MeshOperationStatusResource"
             },
             "type": "array"
+          },
+          "realized_regions_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "region_markers": {
             "items": {
@@ -7265,7 +7453,7 @@
             ]
           },
           "region": {
-            "type": "object"
+            "$ref": "#/components/schemas/SceneObjectRegion"
           }
         },
         "required": [
@@ -7303,7 +7491,7 @@
             ]
           },
           "patch": {
-            "type": "object"
+            "$ref": "#/components/schemas/SceneObjectRegionPatch"
           }
         },
         "required": [
@@ -8069,13 +8257,13 @@
           },
           "material_overrides": {
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/SceneRegionMaterialOverride"
             },
             "type": "array"
           },
           "material_parameter_fields": {
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/SceneMaterialParameterAssignment"
             },
             "type": "array"
           },
@@ -8089,9 +8277,13 @@
             "type": "array"
           },
           "mesh_policy": {
-            "type": [
-              "object",
-              "null"
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneRegionMeshPolicy"
+              }
             ]
           },
           "name": {
@@ -8138,9 +8330,13 @@
             ]
           },
           "shape": {
-            "type": [
-              "object",
-              "null"
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneRegionShape"
+              }
             ]
           },
           "source": {
@@ -8159,9 +8355,13 @@
             "type": "array"
           },
           "texture_override": {
-            "type": [
-              "object",
-              "null"
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneTextureOverride"
+              }
             ]
           }
         },
@@ -8773,6 +8973,529 @@
         ],
         "type": "object"
       },
+      "SceneCoupling": {
+        "properties": {
+          "capability_policy": {
+            "$ref": "#/components/schemas/SceneCouplingCapabilityPolicy"
+          },
+          "coupling_id": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SceneCouplingKind"
+          },
+          "parameters": {
+            "$ref": "#/components/schemas/SceneCouplingParameters"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SceneCouplingEndpoint"
+          },
+          "target": {
+            "$ref": "#/components/schemas/SceneCouplingEndpoint"
+          }
+        },
+        "required": [
+          "coupling_id",
+          "kind",
+          "source",
+          "target",
+          "parameters"
+        ],
+        "type": "object"
+      },
+      "SceneCouplingCapabilityPolicy": {
+        "enum": [
+          "require_runtime",
+          "authored_only"
+        ],
+        "type": "string"
+      },
+      "SceneCouplingEndpoint": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "object"
+                ],
+                "type": "string"
+              },
+              "object": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "object",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "region"
+                ],
+                "type": "string"
+              },
+              "object": {
+                "type": "string"
+              },
+              "region_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "object",
+              "region_id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "surface"
+                ],
+                "type": "string"
+              },
+              "object": {
+                "type": "string"
+              },
+              "selector": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "object",
+              "selector",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SceneCouplingKind": {
+        "enum": [
+          "exchange",
+          "rkky",
+          "interlayer_exchange"
+        ],
+        "type": "string"
+      },
+      "SceneCouplingParameters": {
+        "oneOf": [
+          {
+            "properties": {
+              "inter_exchange": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "kind": {
+                "enum": [
+                  "exchange"
+                ],
+                "type": "string"
+              },
+              "mode": {
+                "$ref": "#/components/schemas/SceneExchangeCouplingMode"
+              },
+              "scale": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "mode",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "j1": {
+                "format": "double",
+                "type": "number"
+              },
+              "kind": {
+                "enum": [
+                  "rkky"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "j1",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "j1": {
+                "format": "double",
+                "type": "number"
+              },
+              "j2": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "kind": {
+                "enum": [
+                  "interlayer_exchange"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "j1",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SceneExchangeCouplingMode": {
+        "enum": [
+          "harmonic_mean",
+          "explicit",
+          "disabled"
+        ],
+        "type": "string"
+      },
+      "SceneInitialMagnetization": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "uniform"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "value",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "random_seeded"
+                ],
+                "type": "string"
+              },
+              "seed": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "seed",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "sampled_field"
+                ],
+                "type": "string"
+              },
+              "values": {
+                "items": {
+                  "items": {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  "type": "array"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "values",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "preset_texture"
+                ],
+                "type": "string"
+              },
+              "mapping": {
+                "$ref": "#/components/schemas/SceneTextureMapping"
+              },
+              "preset_kind": {
+                "type": "string"
+              },
+              "preset_params": {
+                "additionalProperties": {},
+                "propertyNames": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "texture_transform": {
+                "$ref": "#/components/schemas/SceneTextureTransform3D"
+              }
+            },
+            "required": [
+              "preset_kind",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SceneMaterialFieldLocation": {
+        "enum": [
+          "cell",
+          "node",
+          "element",
+          "quadrature"
+        ],
+        "type": "string"
+      },
+      "SceneMaterialParameterAssignment": {
+        "properties": {
+          "assignment_id": {
+            "type": "string"
+          },
+          "conflict_policy": {
+            "$ref": "#/components/schemas/SceneRegionConflictPolicy"
+          },
+          "owner_object": {
+            "type": "string"
+          },
+          "parameter": {
+            "$ref": "#/components/schemas/SceneMaterialParameterName"
+          },
+          "priority": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "region_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "value": {
+            "$ref": "#/components/schemas/SceneMaterialParameterField"
+          }
+        },
+        "required": [
+          "assignment_id",
+          "owner_object",
+          "parameter",
+          "value"
+        ],
+        "type": "object"
+      },
+      "SceneMaterialParameterField": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "constant"
+                ],
+                "type": "string"
+              },
+              "unit": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "value": {
+                "$ref": "#/components/schemas/SceneMaterialParameterValue"
+              }
+            },
+            "required": [
+              "value",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "base": {
+                "format": "double",
+                "type": "number"
+              },
+              "frame": {
+                "$ref": "#/components/schemas/SceneRegionFrame"
+              },
+              "gradient": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "enum": [
+                  "linear"
+                ],
+                "type": "string"
+              },
+              "unit": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "base",
+              "gradient",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "center": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "frame": {
+                "$ref": "#/components/schemas/SceneRegionFrame"
+              },
+              "inside": {
+                "format": "double",
+                "type": "number"
+              },
+              "kind": {
+                "enum": [
+                  "radial"
+                ],
+                "type": "string"
+              },
+              "outside": {
+                "format": "double",
+                "type": "number"
+              },
+              "radius": {
+                "format": "double",
+                "type": "number"
+              },
+              "unit": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "center",
+              "radius",
+              "inside",
+              "outside",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "asset_id": {
+                "type": "string"
+              },
+              "component_count": {
+                "format": "int32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "enum": [
+                  "sampled"
+                ],
+                "type": "string"
+              },
+              "location": {
+                "$ref": "#/components/schemas/SceneMaterialFieldLocation"
+              },
+              "unit": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "asset_id",
+              "component_count",
+              "location",
+              "unit",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SceneMaterialParameterName": {
+        "enum": [
+          "ms",
+          "aex",
+          "alpha",
+          "ku1",
+          "ku2",
+          "anisotropy_axis",
+          "kc1",
+          "kc2",
+          "kc3",
+          "dind",
+          "dbulk"
+        ],
+        "type": "string"
+      },
+      "SceneMaterialParameterValue": {
+        "oneOf": [
+          {
+            "format": "double",
+            "type": "number"
+          },
+          {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          }
+        ]
+      },
       "SceneMaterialResource": {
         "properties": {
           "id": {
@@ -8784,6 +9507,12 @@
           "properties": {
             "additionalProperties": true,
             "type": "object"
+          },
+          "references": {
+            "items": {
+              "$ref": "#/components/schemas/MaterialReferenceResource"
+            },
+            "type": "array"
           }
         },
         "required": [
@@ -8814,6 +9543,152 @@
           "source_of_truth",
           "authoring_schema"
         ],
+        "type": "object"
+      },
+      "SceneObjectRegion": {
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "frame": {
+            "$ref": "#/components/schemas/SceneRegionFrame"
+          },
+          "material_overrides": {
+            "items": {
+              "$ref": "#/components/schemas/SceneRegionMaterialOverride"
+            },
+            "type": "array"
+          },
+          "mesh_policy": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneRegionMeshPolicy"
+              }
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner_object": {
+            "type": "string"
+          },
+          "priority": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "realization_policy": {
+            "$ref": "#/components/schemas/SceneRegionRealizationPolicy"
+          },
+          "region_id": {
+            "type": "string"
+          },
+          "shape": {
+            "$ref": "#/components/schemas/SceneRegionShape"
+          },
+          "texture_override": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneTextureOverride"
+              }
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "shape"
+        ],
+        "type": "object"
+      },
+      "SceneObjectRegionPatch": {
+        "properties": {
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "frame": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneRegionFrame"
+              }
+            ]
+          },
+          "id": {},
+          "material_overrides": {
+            "items": {
+              "$ref": "#/components/schemas/SceneRegionMaterialOverride"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "mesh_policy": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneRegionMeshPolicy"
+              }
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "owner_object": {},
+          "priority": {
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "realization_policy": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneRegionRealizationPolicy"
+              }
+            ]
+          },
+          "region_id": {},
+          "shape": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneRegionShape"
+              }
+            ]
+          },
+          "texture_override": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneTextureOverride"
+              }
+            ]
+          }
+        },
         "type": "object"
       },
       "SceneObjectResource": {
@@ -8848,7 +9723,7 @@
           },
           "material_parameter_fields": {
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/SceneMaterialParameterAssignment"
             },
             "type": "array"
           },
@@ -8906,7 +9781,7 @@
           },
           "regions": {
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/SceneObjectRegion"
             },
             "type": "array"
           },
@@ -8946,11 +9821,209 @@
         ],
         "type": "object"
       },
+      "SceneRegionConflictPolicy": {
+        "enum": [
+          "error",
+          "higher_priority_wins",
+          "min_mesh_size_wins"
+        ],
+        "type": "string"
+      },
+      "SceneRegionFrame": {
+        "enum": [
+          "object",
+          "world"
+        ],
+        "type": "string"
+      },
+      "SceneRegionMaterialOverride": {
+        "properties": {
+          "conflict_policy": {
+            "$ref": "#/components/schemas/SceneRegionConflictPolicy"
+          },
+          "parameter": {
+            "$ref": "#/components/schemas/SceneMaterialParameterName"
+          },
+          "priority": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "value": {
+            "$ref": "#/components/schemas/SceneMaterialParameterField"
+          }
+        },
+        "required": [
+          "parameter",
+          "value"
+        ],
+        "type": "object"
+      },
+      "SceneRegionMeshPolicy": {
+        "properties": {
+          "maximum_element_size": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "minimum_element_size": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "order": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "transition_distance": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "SceneRegionRealizationPolicy": {
+        "enum": [
+          "inherit",
+          "conformal",
+          "project"
+        ],
+        "type": "string"
+      },
+      "SceneRegionShape": {
+        "oneOf": [
+          {
+            "properties": {
+              "center": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "enum": [
+                  "box"
+                ],
+                "type": "string"
+              },
+              "size": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "size",
+              "center",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "axis": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "center": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "height": {
+                "format": "double",
+                "type": "number"
+              },
+              "kind": {
+                "enum": [
+                  "cylinder"
+                ],
+                "type": "string"
+              },
+              "radius": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "radius",
+              "height",
+              "center",
+              "axis",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "center": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "enum": [
+                  "sphere"
+                ],
+                "type": "string"
+              },
+              "radius": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "radius",
+              "center",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "expression": {
+                "type": "object"
+              },
+              "kind": {
+                "enum": [
+                  "csg"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "expression",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "SceneResource": {
         "properties": {
           "couplings": {
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/SceneCoupling"
             },
             "type": "array"
           },
@@ -9042,6 +10115,64 @@
               "string",
               "null"
             ]
+          }
+        },
+        "type": "object"
+      },
+      "SceneTextureMapping": {
+        "properties": {
+          "clamp_mode": {
+            "type": "string"
+          },
+          "projection": {
+            "type": "string"
+          },
+          "space": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SceneTextureOverride": {
+        "properties": {
+          "initial_magnetization": {
+            "$ref": "#/components/schemas/SceneInitialMagnetization"
+          }
+        },
+        "required": [
+          "initial_magnetization"
+        ],
+        "type": "object"
+      },
+      "SceneTextureTransform3D": {
+        "properties": {
+          "pivot": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "rotation_quat": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "scale": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "translation": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
           }
         },
         "type": "object"

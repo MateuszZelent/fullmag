@@ -1641,7 +1641,8 @@ fn convert_field_state_with_python(
         python_path_value.push(existing);
     }
 
-    let output = std::process::Command::new("python3")
+    let python_exe = crate::script::python_executable(repo_root);
+    let output = std::process::Command::new(&python_exe)
         .arg("-m")
         .arg("fullmag.init.field_state_cli")
         .arg(artifact_path)
@@ -1686,7 +1687,8 @@ fn write_field_state_with_python(
         python_path_value.push(existing);
     }
 
-    let output = std::process::Command::new("python3")
+    let python_exe = crate::script::python_executable(repo_root);
+    let output = std::process::Command::new(&python_exe)
         .arg("-m")
         .arg("fullmag.init.field_state_cli")
         .arg("write")

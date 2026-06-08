@@ -82,13 +82,11 @@ pub struct SceneObjectResource {
     #[schema(additional_properties, nullable)]
     pub mesh_override: Option<BTreeMap<String, Value>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    #[schema(value_type = Vec<Object>)]
-    pub regions: Vec<Value>,
+    pub regions: Vec<fullmag_authoring::SceneObjectRegion>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allocated_region_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    #[schema(value_type = Vec<Object>)]
-    pub material_parameter_fields: Vec<Value>,
+    pub material_parameter_fields: Vec<fullmag_authoring::SceneMaterialParameterAssignment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -105,6 +103,8 @@ pub struct SceneMaterialResource {
     pub name: String,
     #[schema(additional_properties)]
     pub properties: BTreeMap<String, Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<MaterialReferenceResource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -127,8 +127,7 @@ pub struct SceneResource {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub magnetization_assets: Vec<BTreeMap<String, Value>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    #[schema(value_type = Vec<Object>)]
-    pub couplings: Vec<Value>,
+    pub couplings: Vec<fullmag_authoring::SceneCoupling>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(additional_properties, nullable)]
     pub current_modules: Option<BTreeMap<String, Value>>,
@@ -153,16 +152,42 @@ impl SceneResource {
 pub struct ObjectRegionCreateRequest {
     #[serde(default)]
     pub base_revision: Option<u64>,
-    #[schema(value_type = Object)]
-    pub region: Value,
+    pub region: fullmag_authoring::SceneObjectRegion,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SceneObjectRegionPatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape: Option<fullmag_authoring::SceneRegionShape>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame: Option<fullmag_authoring::SceneRegionFrame>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh_policy: Option<Option<fullmag_authoring::SceneRegionMeshPolicy>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material_overrides: Option<Vec<fullmag_authoring::SceneRegionMaterialOverride>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub texture_override: Option<Option<fullmag_authoring::SceneTextureOverride>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realization_policy: Option<Option<fullmag_authoring::SceneRegionRealizationPolicy>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region_id: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_object: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ObjectRegionPatchRequest {
     #[serde(default)]
     pub base_revision: Option<u64>,
-    #[schema(value_type = Object)]
-    pub patch: Value,
+    pub patch: SceneObjectRegionPatch,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -194,10 +219,22 @@ pub struct MaterialPropertiesResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct MaterialReferenceResource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub citation: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct MaterialResource {
     pub id: String,
     pub name: String,
     pub properties: MaterialPropertiesResource,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<MaterialReferenceResource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -236,6 +273,8 @@ pub struct MaterialPropertiesPatchRequest {
 pub struct MaterialPatchRequest {
     pub name: Option<String>,
     pub properties: Option<MaterialPropertiesPatchRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub references: Option<Vec<MaterialReferenceResource>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -386,20 +425,15 @@ pub struct RegionResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frame: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schema(value_type = Object, nullable)]
-    pub shape: Option<Value>,
+    pub shape: Option<fullmag_authoring::SceneRegionShape>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schema(value_type = Object, nullable)]
-    pub mesh_policy: Option<Value>,
+    pub mesh_policy: Option<fullmag_authoring::SceneRegionMeshPolicy>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    #[schema(value_type = Vec<Object>)]
-    pub material_overrides: Vec<Value>,
+    pub material_overrides: Vec<fullmag_authoring::SceneRegionMaterialOverride>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    #[schema(value_type = Vec<Object>)]
-    pub material_parameter_fields: Vec<Value>,
+    pub material_parameter_fields: Vec<fullmag_authoring::SceneMaterialParameterAssignment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schema(value_type = Object, nullable)]
-    pub texture_override: Option<Value>,
+    pub texture_override: Option<fullmag_authoring::SceneTextureOverride>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub realization_policy: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -458,10 +492,19 @@ pub struct MaterialParameterFieldResource {
     pub frame: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location: Option<String>,
-    #[schema(value_type = Object)]
-    pub field: Value,
+    pub field: fullmag_authoring::SceneMaterialParameterField,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub realization_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mean: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warnings: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -475,12 +518,9 @@ pub struct CouplingResource {
     pub coupling_id: String,
     pub coupling_kind: String,
     pub enabled: bool,
-    #[schema(value_type = Object)]
-    pub source: Value,
-    #[schema(value_type = Object)]
-    pub target: Value,
-    #[schema(value_type = Object)]
-    pub params: Value,
+    pub source: fullmag_authoring::SceneCouplingEndpoint,
+    pub target: fullmag_authoring::SceneCouplingEndpoint,
+    pub params: fullmag_authoring::SceneCouplingParameters,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capability_policy: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -616,6 +656,26 @@ pub enum AuthoringTransactionRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         study_universe_mesh: Option<Value>,
     },
+    CreateMaterial {
+        #[serde(default)]
+        base_revision: Option<u64>,
+        material_id: String,
+        name: String,
+        properties: MaterialPropertiesResource,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        references: Vec<MaterialReferenceResource>,
+    },
+    PatchMaterial {
+        #[serde(default)]
+        base_revision: Option<u64>,
+        material_id: String,
+        patch: MaterialPatchRequest,
+    },
+    DeleteMaterial {
+        #[serde(default)]
+        base_revision: Option<u64>,
+        material_id: String,
+    },
     DeleteObject {
         #[serde(default)]
         base_revision: Option<u64>,
@@ -646,16 +706,20 @@ pub enum AuthoringTransactionRequest {
         #[serde(default)]
         base_revision: Option<u64>,
         object_id: String,
-        #[schema(value_type = Object)]
-        region: Value,
+        region: fullmag_authoring::SceneObjectRegion,
     },
     PatchObjectRegion {
         #[serde(default)]
         base_revision: Option<u64>,
         object_id: String,
         region_id: String,
-        #[schema(value_type = Object)]
-        patch: Value,
+        patch: SceneObjectRegionPatch,
+    },
+    PatchObjectMaterialFields {
+        #[serde(default)]
+        base_revision: Option<u64>,
+        object_id: String,
+        fields: Vec<fullmag_authoring::SceneMaterialParameterAssignment>,
     },
     DeleteObjectRegion {
         #[serde(default)]
@@ -672,8 +736,7 @@ pub enum AuthoringTransactionRequest {
     CreateCoupling {
         #[serde(default)]
         base_revision: Option<u64>,
-        #[schema(value_type = Object)]
-        coupling: Value,
+        coupling: fullmag_authoring::SceneCoupling,
     },
     PatchCoupling {
         #[serde(default)]

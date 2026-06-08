@@ -35,6 +35,7 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
             id: material_id_for_geometry(&geometry.name),
             name: format!("{} material", geometry.name),
             properties: geometry.material.clone(),
+            references: Vec::new(),
         })
         .collect::<Vec<_>>();
     let magnetization_assets = builder
@@ -170,6 +171,9 @@ pub fn scene_document_to_script_builder(
                     .object_mesh
                     .clone()
                     .or_else(|| object.mesh_override.clone()),
+                object_regions: object.regions.clone(),
+                allocated_region_ids: object.allocated_region_ids.clone(),
+                material_parameter_fields: object.material_parameter_fields.clone(),
             })
         })
         .collect::<Result<Vec<_>, SceneDocumentValidationError>>()?;
@@ -787,9 +791,9 @@ fn scene_object_from_geometry(geometry: &ScriptBuilderGeometryEntry) -> SceneObj
         ),
         object_mesh: geometry.mesh.clone(),
         mesh_override: geometry.mesh.clone(),
-        regions: Vec::new(),
-        allocated_region_ids: Vec::new(),
-        material_parameter_fields: Vec::new(),
+        regions: geometry.object_regions.clone(),
+        allocated_region_ids: geometry.allocated_region_ids.clone(),
+        material_parameter_fields: geometry.material_parameter_fields.clone(),
         notes: None,
         visible: true,
         locked: false,
@@ -1330,6 +1334,317 @@ fn parse_optional_text_u64(raw: &str) -> Value {
         .map_or(Value::Null, Value::from)
 }
 
+impl From<crate::SceneRegionFrame> for fullmag_ir::RegionFrameIR {
+    fn from(frame: crate::SceneRegionFrame) -> Self {
+        match frame {
+            crate::SceneRegionFrame::Object => fullmag_ir::RegionFrameIR::Object,
+            crate::SceneRegionFrame::World => fullmag_ir::RegionFrameIR::World,
+        }
+    }
+}
+
+impl From<crate::SceneRegionRealizationPolicy> for fullmag_ir::RegionRealizationPolicyIR {
+    fn from(policy: crate::SceneRegionRealizationPolicy) -> Self {
+        match policy {
+            crate::SceneRegionRealizationPolicy::Inherit => fullmag_ir::RegionRealizationPolicyIR::Inherit,
+            crate::SceneRegionRealizationPolicy::Conformal => fullmag_ir::RegionRealizationPolicyIR::Conformal,
+            crate::SceneRegionRealizationPolicy::Project => fullmag_ir::RegionRealizationPolicyIR::Project,
+        }
+    }
+}
+
+impl From<crate::SceneRegionMeshPolicy> for fullmag_ir::RegionMeshPolicyIR {
+    fn from(policy: crate::SceneRegionMeshPolicy) -> Self {
+        fullmag_ir::RegionMeshPolicyIR {
+            maximum_element_size: policy.maximum_element_size,
+            minimum_element_size: policy.minimum_element_size,
+            transition_distance: policy.transition_distance,
+            order: policy.order,
+        }
+    }
+}
+
+impl From<crate::SceneMaterialParameterName> for fullmag_ir::MaterialParameterNameIR {
+    fn from(name: crate::SceneMaterialParameterName) -> Self {
+        match name {
+            crate::SceneMaterialParameterName::Ms => fullmag_ir::MaterialParameterNameIR::Ms,
+            crate::SceneMaterialParameterName::Aex => fullmag_ir::MaterialParameterNameIR::Aex,
+            crate::SceneMaterialParameterName::Alpha => fullmag_ir::MaterialParameterNameIR::Alpha,
+            crate::SceneMaterialParameterName::Ku1 => fullmag_ir::MaterialParameterNameIR::Ku1,
+            crate::SceneMaterialParameterName::Ku2 => fullmag_ir::MaterialParameterNameIR::Ku2,
+            crate::SceneMaterialParameterName::AnisotropyAxis => fullmag_ir::MaterialParameterNameIR::AnisotropyAxis,
+            crate::SceneMaterialParameterName::Kc1 => fullmag_ir::MaterialParameterNameIR::Kc1,
+            crate::SceneMaterialParameterName::Kc2 => fullmag_ir::MaterialParameterNameIR::Kc2,
+            crate::SceneMaterialParameterName::Kc3 => fullmag_ir::MaterialParameterNameIR::Kc3,
+            crate::SceneMaterialParameterName::Dind => fullmag_ir::MaterialParameterNameIR::Dind,
+            crate::SceneMaterialParameterName::Dbulk => fullmag_ir::MaterialParameterNameIR::Dbulk,
+        }
+    }
+}
+
+impl From<crate::SceneMaterialFieldLocation> for fullmag_ir::MaterialFieldLocationIR {
+    fn from(loc: crate::SceneMaterialFieldLocation) -> Self {
+        match loc {
+            crate::SceneMaterialFieldLocation::Cell => fullmag_ir::MaterialFieldLocationIR::Cell,
+            crate::SceneMaterialFieldLocation::Node => fullmag_ir::MaterialFieldLocationIR::Node,
+            crate::SceneMaterialFieldLocation::Element => fullmag_ir::MaterialFieldLocationIR::Element,
+            crate::SceneMaterialFieldLocation::Quadrature => fullmag_ir::MaterialFieldLocationIR::Quadrature,
+        }
+    }
+}
+
+impl From<crate::SceneMaterialParameterField> for fullmag_ir::MaterialParameterFieldIR {
+    fn from(field: crate::SceneMaterialParameterField) -> Self {
+        match field {
+            crate::SceneMaterialParameterField::Constant { value, unit } => {
+                fullmag_ir::MaterialParameterFieldIR::Constant {
+                    value: serde_json::to_value(value).unwrap(),
+                    unit,
+                }
+            }
+            crate::SceneMaterialParameterField::Linear { base, gradient, frame, unit } => {
+                fullmag_ir::MaterialParameterFieldIR::Linear {
+                    base,
+                    gradient,
+                    frame: frame.into(),
+                    unit,
+                }
+            }
+            crate::SceneMaterialParameterField::Radial { center, radius, inside, outside, frame, unit } => {
+                fullmag_ir::MaterialParameterFieldIR::Radial {
+                    center,
+                    radius,
+                    inside,
+                    outside,
+                    frame: frame.into(),
+                    unit,
+                }
+            }
+            crate::SceneMaterialParameterField::Sampled { asset_id, component_count, location, unit } => {
+                fullmag_ir::MaterialParameterFieldIR::Sampled {
+                    asset_id,
+                    component_count,
+                    location: location.into(),
+                    unit,
+                }
+            }
+        }
+    }
+}
+
+impl From<crate::SceneRegionConflictPolicy> for fullmag_ir::RegionConflictPolicyIR {
+    fn from(policy: crate::SceneRegionConflictPolicy) -> Self {
+        match policy {
+            crate::SceneRegionConflictPolicy::Error => fullmag_ir::RegionConflictPolicyIR::Error,
+            crate::SceneRegionConflictPolicy::HigherPriorityWins => fullmag_ir::RegionConflictPolicyIR::HigherPriorityWins,
+            crate::SceneRegionConflictPolicy::MinMeshSizeWins => fullmag_ir::RegionConflictPolicyIR::MinMeshSizeWins,
+        }
+    }
+}
+
+impl From<crate::SceneRegionMaterialOverride> for fullmag_ir::RegionMaterialOverrideIR {
+    fn from(o: crate::SceneRegionMaterialOverride) -> Self {
+        fullmag_ir::RegionMaterialOverrideIR {
+            parameter: o.parameter.into(),
+            value: o.value.into(),
+            priority: o.priority,
+            conflict_policy: o.conflict_policy.into(),
+        }
+    }
+}
+
+impl From<crate::SceneTextureMapping> for fullmag_ir::TextureMappingIR {
+    fn from(m: crate::SceneTextureMapping) -> Self {
+        let projection = match m.projection.trim().to_ascii_lowercase().as_str() {
+            "planar_xy" | "planarxy" => fullmag_ir::TextureProjectionMode::PlanarXy,
+            "planar_xz" | "planarxz" => fullmag_ir::TextureProjectionMode::PlanarXz,
+            "planar_yz" | "planaryz" => fullmag_ir::TextureProjectionMode::PlanarYz,
+            _ => fullmag_ir::TextureProjectionMode::ObjectLocal,
+        };
+        fullmag_ir::TextureMappingIR {
+            space: m.space,
+            projection,
+            clamp_mode: m.clamp_mode,
+        }
+    }
+}
+
+impl From<crate::SceneTextureTransform3D> for fullmag_ir::TextureTransform3DIR {
+    fn from(t: crate::SceneTextureTransform3D) -> Self {
+        fullmag_ir::TextureTransform3DIR {
+            translation: t.translation,
+            rotation_quat: t.rotation_quat,
+            scale: t.scale,
+            pivot: t.pivot,
+        }
+    }
+}
+
+impl From<crate::SceneInitialMagnetization> for fullmag_ir::InitialMagnetizationIR {
+    fn from(mag: crate::SceneInitialMagnetization) -> Self {
+        match mag {
+            crate::SceneInitialMagnetization::Uniform { value } => {
+                fullmag_ir::InitialMagnetizationIR::Uniform { value }
+            }
+            crate::SceneInitialMagnetization::RandomSeeded { seed } => {
+                fullmag_ir::InitialMagnetizationIR::RandomSeeded { seed }
+            }
+            crate::SceneInitialMagnetization::SampledField { values } => {
+                fullmag_ir::InitialMagnetizationIR::SampledField { values }
+            }
+            crate::SceneInitialMagnetization::PresetTexture {
+                preset_kind,
+                preset_params,
+                mapping,
+                texture_transform,
+            } => fullmag_ir::InitialMagnetizationIR::PresetTexture {
+                preset_kind,
+                preset_params,
+                mapping: mapping.into(),
+                texture_transform: texture_transform.into(),
+            },
+        }
+    }
+}
+
+impl From<crate::SceneTextureOverride> for fullmag_ir::RegionTextureOverrideIR {
+    fn from(o: crate::SceneTextureOverride) -> Self {
+        fullmag_ir::RegionTextureOverrideIR {
+            initial_magnetization: o.initial_magnetization.into(),
+        }
+    }
+}
+
+impl From<crate::SceneRegionShape> for fullmag_ir::RegionShapeIR {
+    fn from(shape: crate::SceneRegionShape) -> Self {
+        match shape {
+            crate::SceneRegionShape::Box { size, center } => {
+                fullmag_ir::RegionShapeIR::Box { size, center }
+            }
+            crate::SceneRegionShape::Cylinder { radius, height, center, axis } => {
+                fullmag_ir::RegionShapeIR::Cylinder { radius, height, center, axis }
+            }
+            crate::SceneRegionShape::Sphere { radius, center } => {
+                fullmag_ir::RegionShapeIR::Sphere { radius, center }
+            }
+            crate::SceneRegionShape::Csg { expression } => {
+                fullmag_ir::RegionShapeIR::Csg { expression }
+            }
+        }
+    }
+}
+
+impl From<crate::SceneObjectRegion> for fullmag_ir::ObjectRegionIR {
+    fn from(r: crate::SceneObjectRegion) -> Self {
+        fullmag_ir::ObjectRegionIR {
+            region_id: r.region_id,
+            owner_object: r.owner_object,
+            name: r.name,
+            shape: r.shape.into(),
+            frame: r.frame.into(),
+            enabled: r.enabled,
+            priority: r.priority,
+            mesh_policy: r.mesh_policy.map(Into::into),
+            material_overrides: r.material_overrides.into_iter().map(Into::into).collect(),
+            texture_override: r.texture_override.map(Into::into),
+            realization_policy: r.realization_policy.into(),
+        }
+    }
+}
+
+impl From<crate::SceneMaterialParameterAssignment> for fullmag_ir::MaterialParameterAssignmentIR {
+    fn from(a: crate::SceneMaterialParameterAssignment) -> Self {
+        fullmag_ir::MaterialParameterAssignmentIR {
+            assignment_id: a.assignment_id,
+            owner_object: a.owner_object,
+            region_id: a.region_id,
+            parameter: a.parameter.into(),
+            value: a.value.into(),
+            priority: a.priority,
+            conflict_policy: a.conflict_policy.into(),
+        }
+    }
+}
+
+impl From<crate::SceneCouplingKind> for fullmag_ir::CouplingKindIR {
+    fn from(k: crate::SceneCouplingKind) -> Self {
+        match k {
+            crate::SceneCouplingKind::Exchange => fullmag_ir::CouplingKindIR::Exchange,
+            crate::SceneCouplingKind::Rkky => fullmag_ir::CouplingKindIR::Rkky,
+            crate::SceneCouplingKind::InterlayerExchange => fullmag_ir::CouplingKindIR::InterlayerExchange,
+        }
+    }
+}
+
+impl From<crate::SceneCouplingEndpoint> for fullmag_ir::CouplingEndpointIR {
+    fn from(ep: crate::SceneCouplingEndpoint) -> Self {
+        match ep {
+            crate::SceneCouplingEndpoint::Object { object } => {
+                fullmag_ir::CouplingEndpointIR::Object { object }
+            }
+            crate::SceneCouplingEndpoint::Region { object, region_id } => {
+                fullmag_ir::CouplingEndpointIR::Region { object, region_id }
+            }
+            crate::SceneCouplingEndpoint::Surface { object, selector } => {
+                fullmag_ir::CouplingEndpointIR::Surface { object, selector }
+            }
+        }
+    }
+}
+
+impl From<crate::SceneExchangeCouplingMode> for fullmag_ir::ExchangeCouplingModeIR {
+    fn from(mode: crate::SceneExchangeCouplingMode) -> Self {
+        match mode {
+            crate::SceneExchangeCouplingMode::HarmonicMean => fullmag_ir::ExchangeCouplingModeIR::HarmonicMean,
+            crate::SceneExchangeCouplingMode::Explicit => fullmag_ir::ExchangeCouplingModeIR::Explicit,
+            crate::SceneExchangeCouplingMode::Disabled => fullmag_ir::ExchangeCouplingModeIR::Disabled,
+        }
+    }
+}
+
+impl From<crate::SceneCouplingParameters> for fullmag_ir::CouplingParametersIR {
+    fn from(params: crate::SceneCouplingParameters) -> Self {
+        match params {
+            crate::SceneCouplingParameters::Exchange { mode, scale, inter_exchange } => {
+                fullmag_ir::CouplingParametersIR::Exchange {
+                    mode: mode.into(),
+                    scale,
+                    inter_exchange,
+                }
+            }
+            crate::SceneCouplingParameters::Rkky { j1 } => {
+                fullmag_ir::CouplingParametersIR::Rkky { j1 }
+            }
+            crate::SceneCouplingParameters::InterlayerExchange { j1, j2 } => {
+                fullmag_ir::CouplingParametersIR::InterlayerExchange { j1, j2 }
+            }
+        }
+    }
+}
+
+impl From<crate::SceneCouplingCapabilityPolicy> for fullmag_ir::CouplingCapabilityPolicyIR {
+    fn from(policy: crate::SceneCouplingCapabilityPolicy) -> Self {
+        match policy {
+            crate::SceneCouplingCapabilityPolicy::RequireRuntime => fullmag_ir::CouplingCapabilityPolicyIR::RequireRuntime,
+            crate::SceneCouplingCapabilityPolicy::AuthoredOnly => fullmag_ir::CouplingCapabilityPolicyIR::AuthoredOnly,
+        }
+    }
+}
+
+impl From<crate::SceneCoupling> for fullmag_ir::CouplingIR {
+    fn from(c: crate::SceneCoupling) -> Self {
+        fullmag_ir::CouplingIR {
+            coupling_id: c.coupling_id,
+            kind: c.kind.into(),
+            source: c.source.into(),
+            target: c.target.into(),
+            enabled: c.enabled,
+            parameters: c.parameters.into(),
+            capability_policy: c.capability_policy.into(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1584,6 +1899,31 @@ mod tests {
                     }],
                     build_requested: true,
                 }),
+                object_regions: vec![crate::SceneObjectRegion {
+                    region_id: "flower:r1".to_string(),
+                    owner_object: "flower".to_string(),
+                    name: "hole_refinement".to_string(),
+                    shape: crate::SceneRegionShape::Cylinder {
+                        radius: 40e-9,
+                        height: 30e-9,
+                        center: [0.0, 0.0, 0.0],
+                        axis: [0.0, 0.0, 1.0],
+                    },
+                    frame: crate::SceneRegionFrame::Object,
+                    enabled: true,
+                    priority: 10,
+                    mesh_policy: Some(crate::SceneRegionMeshPolicy {
+                        maximum_element_size: Some(5e-9),
+                        minimum_element_size: Some(2e-9),
+                        transition_distance: Some(30e-9),
+                        order: Some(1),
+                    }),
+                    material_overrides: Vec::new(),
+                    texture_override: None,
+                    realization_policy: crate::SceneRegionRealizationPolicy::Inherit,
+                }],
+                allocated_region_ids: vec!["flower:r1".to_string()],
+                material_parameter_fields: Vec::new(),
             }],
             mesh_interfaces: vec![ScriptBuilderMeshInterfaceState {
                 interface_id: "object:flower|air".to_string(),
@@ -1683,6 +2023,18 @@ mod tests {
         assert_eq!(
             round_trip.geometries[0].physics_stack,
             builder.geometries[0].physics_stack
+        );
+        assert_eq!(
+            scene.objects[0].regions[0].name,
+            builder.geometries[0].object_regions[0].name
+        );
+        assert_eq!(
+            round_trip.geometries[0].object_regions,
+            builder.geometries[0].object_regions
+        );
+        assert_eq!(
+            round_trip.geometries[0].allocated_region_ids,
+            builder.geometries[0].allocated_region_ids
         );
         assert_eq!(
             round_trip.geometries[0]

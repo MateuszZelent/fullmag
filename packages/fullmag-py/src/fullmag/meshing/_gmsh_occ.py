@@ -24,6 +24,11 @@ from ._airbox_grading import (
 from .gmsh_bridge import AirboxOptions, MeshOptions, _import_gmsh
 
 
+def _region_uses_conformal_occ_realization(region: dict[str, object]) -> bool:
+    policy = region.get("realization_policy")
+    return policy == "conformal"
+
+
 def _component_interface_size_targets(options: MeshOptions) -> dict[str, float]:
     targets: dict[str, float] = {}
     for field in options.size_fields:
@@ -126,6 +131,123 @@ def is_occ_compatible(geometries: list[Geometry]) -> bool:
     return True
 
 
+def _geometry_translation(geometry: Geometry) -> tuple[float, float, float]:
+    if isinstance(geometry, Translate):
+        nested = _geometry_translation(geometry.geometry)
+        return (
+            nested[0] + geometry.offset[0],
+            nested[1] + geometry.offset[1],
+            nested[2] + geometry.offset[2],
+        )
+    return (0.0, 0.0, 0.0)
+
+
+def _dimtags_bounding_box(
+    gmsh: object,
+    dimtags: list[tuple[int, int]],
+) -> tuple[float, float, float, float, float, float]:
+    bounds = [
+        gmsh.model.getBoundingBox(dim, tag)  # type: ignore[attr-defined]
+        for dim, tag in dimtags
+    ]
+    return (
+        min(bound[0] for bound in bounds),
+        min(bound[1] for bound in bounds),
+        min(bound[2] for bound in bounds),
+        max(bound[3] for bound in bounds),
+        max(bound[4] for bound in bounds),
+        max(bound[5] for bound in bounds),
+    )
+
+
+def _bounding_box_contains(
+    outer: tuple[float, float, float, float, float, float],
+    inner: tuple[float, float, float, float, float, float],
+) -> bool:
+    characteristic_length = max(
+        *(abs(value) for value in outer),
+        *(abs(value) for value in inner),
+        outer[3] - outer[0],
+        outer[4] - outer[1],
+        outer[5] - outer[2],
+        1.0,
+    )
+    tolerance = characteristic_length * 1.0e-7
+    return all(
+        inner[axis] >= outer[axis] - tolerance
+        and inner[axis + 3] <= outer[axis + 3] + tolerance
+        for axis in range(3)
+    )
+
+
+def _add_conformal_region_to_occ(
+    gmsh: object,
+    region: dict[str, object],
+    owner_geometry: Geometry,
+    *,
+    scale: float,
+) -> tuple[int, int]:
+    shape = region.get("shape")
+    if not isinstance(shape, dict):
+        raise ValueError("conformal object region requires a shape mapping")
+    center_value = shape.get("center", [0.0, 0.0, 0.0])
+    if not isinstance(center_value, (list, tuple)) or len(center_value) != 3:
+        raise ValueError("conformal object region shape.center must contain three values")
+    center = tuple(float(value) for value in center_value)
+    if region.get("frame", "object") == "object":
+        translation = _geometry_translation(owner_geometry)
+        center = tuple(center[index] + translation[index] for index in range(3))
+    center_scaled = tuple(value * scale for value in center)
+    kind = shape.get("kind")
+    if kind == "box":
+        size_value = shape.get("size")
+        if not isinstance(size_value, (list, tuple)) or len(size_value) != 3:
+            raise ValueError("conformal box region requires shape.size with three values")
+        size = tuple(float(value) * scale for value in size_value)
+        if min(size) <= 0.0:
+            raise ValueError("conformal box region dimensions must be positive")
+        tag = gmsh.model.occ.addBox(  # type: ignore[attr-defined]
+            center_scaled[0] - size[0] / 2.0,
+            center_scaled[1] - size[1] / 2.0,
+            center_scaled[2] - size[2] / 2.0,
+            size[0],
+            size[1],
+            size[2],
+        )
+        return (3, int(tag))
+    if kind == "cylinder":
+        radius = float(shape.get("radius", 0.0)) * scale
+        height = float(shape.get("height", 0.0)) * scale
+        axis_value = shape.get("axis", [0.0, 0.0, 1.0])
+        if not isinstance(axis_value, (list, tuple)) or len(axis_value) != 3:
+            raise ValueError("conformal cylinder region axis must contain three values")
+        axis = tuple(float(value) for value in axis_value)
+        axis_norm = math.sqrt(sum(value * value for value in axis))
+        if radius <= 0.0 or height <= 0.0 or axis_norm <= 0.0:
+            raise ValueError(
+                "conformal cylinder region requires positive radius/height and non-zero axis"
+            )
+        unit = tuple(value / axis_norm for value in axis)
+        base = tuple(
+            center_scaled[index] - 0.5 * height * unit[index]
+            for index in range(3)
+        )
+        direction = tuple(height * value for value in unit)
+        tag = gmsh.model.occ.addCylinder(  # type: ignore[attr-defined]
+            base[0],
+            base[1],
+            base[2],
+            direction[0],
+            direction[1],
+            direction[2],
+            radius,
+        )
+        return (3, int(tag))
+    raise ValueError(
+        f"automatic conformal object-region meshing supports box/cylinder, got {kind!r}"
+    )
+
+
 def generate_shared_domain_mesh_via_occ(
     geometries: list[Geometry],
     *,
@@ -133,6 +255,7 @@ def generate_shared_domain_mesh_via_occ(
     order: int = 1,
     airbox: AirboxOptions | None = None,
     options: MeshOptions | None = None,
+    object_regions: list[dict[str, object]] | None = None,
 ) -> SharedDomainMeshResult:
     """Generate a conformal shared-domain mesh with native OCC fragment."""
     if not geometries:
@@ -184,7 +307,49 @@ def generate_shared_domain_mesh_via_occ(
             magnetic_tags.extend(comp_volume_tags)
             magnetic_tags_by_geometry[geom.geometry_name] = comp_volume_tags
 
+        geometry_by_name = {geometry.geometry_name: geometry for geometry in geometries}
+        conformal_regions = [
+            region
+            for region in (object_regions or [])
+            if region.get("enabled", True)
+            and _region_uses_conformal_occ_realization(region)
+        ]
+        region_tags_by_id: dict[str, tuple[int, int]] = {}
+        region_owner_by_id: dict[str, str] = {}
+        for region in conformal_regions:
+            region_id = str(region.get("region_id", "")).strip()
+            owner_geometry_name = str(region.get("owner_geometry_name", "")).strip()
+            if not region_id or not owner_geometry_name:
+                raise ValueError(
+                    "conformal object region requires region_id and owner_geometry_name"
+                )
+            owner_geometry = geometry_by_name.get(owner_geometry_name)
+            if owner_geometry is None:
+                raise ValueError(
+                    f"conformal object region '{region_id}' references unknown owner geometry "
+                    f"'{owner_geometry_name}'"
+                )
+            region_tags_by_id[region_id] = _add_conformal_region_to_occ(
+                gmsh,
+                region,
+                owner_geometry,
+                scale=SCALE,
+            )
+            region_owner_by_id[region_id] = owner_geometry_name
+
         gmsh.model.occ.synchronize()
+
+        for region_id, region_dimtag in region_tags_by_id.items():
+            owner_bounds = _dimtags_bounding_box(
+                gmsh,
+                magnetic_tags_by_geometry[region_owner_by_id[region_id]],
+            )
+            region_bounds = _dimtags_bounding_box(gmsh, [region_dimtag])
+            if not _bounding_box_contains(owner_bounds, region_bounds):
+                raise ValueError(
+                    f"conformal object region '{region_id}' must be fully contained "
+                    "inside its owner geometry bounds"
+                )
 
         # 2 - Define Airbox geometry in OCC
         has_airbox = airbox_scaled is not None
@@ -228,7 +393,11 @@ def generate_shared_domain_mesh_via_occ(
         outer_dimtags = [(3, outer_tag)]
 
         # 3 - Conforming OCC Fragment
-        _result, result_map = gmsh.model.occ.fragment(outer_dimtags, magnetic_tags)
+        region_input_tags = list(region_tags_by_id.values())
+        _result, result_map = gmsh.model.occ.fragment(
+            outer_dimtags,
+            magnetic_tags + region_input_tags,
+        )
         gmsh.model.occ.synchronize()
 
         if not result_map:
@@ -256,6 +425,43 @@ def generate_shared_domain_mesh_via_occ(
             component_volume_tags[geom.geometry_name] = comp_vols
             all_magnetic_vols.extend(comp_vols)
 
+        region_volume_tags: dict[str, list[int]] = {}
+        region_result_index = len(outer_dimtags) + len(magnetic_tags)
+        for region_id in region_tags_by_id:
+            if region_result_index >= len(result_map):
+                raise RuntimeError("OCC fragment returned an incomplete object-region map")
+            region_vols = sorted(
+                {
+                    tag
+                    for dim, tag in result_map[region_result_index]
+                    if dim == 3
+                }
+            )
+            region_result_index += 1
+            owner_volumes = set(
+                component_volume_tags[region_owner_by_id[region_id]]
+            )
+            clipped_region_volumes = sorted(set(region_vols).intersection(owner_volumes))
+            if not clipped_region_volumes:
+                raise ValueError(
+                    f"conformal object region '{region_id}' does not intersect "
+                    "its owner geometry"
+                )
+            region_volume_tags[region_id] = clipped_region_volumes
+
+        region_ids = list(region_volume_tags)
+        for index, region_id in enumerate(region_ids):
+            volumes = set(region_volume_tags[region_id])
+            for other_region_id in region_ids[index + 1 :]:
+                shared_volumes = volumes.intersection(
+                    region_volume_tags[other_region_id]
+                )
+                if shared_volumes:
+                    raise ValueError(
+                        "automatic conformal object-region meshing does not support "
+                        f"overlapping regions '{region_id}' and '{other_region_id}'"
+                    )
+
         magnetic_volume_set = set(all_magnetic_vols)
         air_vols = sorted(
             {
@@ -275,17 +481,39 @@ def generate_shared_domain_mesh_via_occ(
 
         # 5 - Establish Physical Groups (stable markers for MeshIR)
         component_marker_tags: dict[str, int] = {}
+        all_region_volumes = {
+            volume
+            for volumes in region_volume_tags.values()
+            for volume in volumes
+        }
         for idx, geom in enumerate(geometries):
             marker = 1 + idx
             component_marker_tags[geom.geometry_name] = marker
+            parent_volumes = sorted(
+                set(component_volume_tags[geom.geometry_name]) - all_region_volumes
+            )
+            if not parent_volumes:
+                raise ValueError(
+                    f"conformal regions consume the complete owner geometry "
+                    f"'{geom.geometry_name}'"
+                )
             gmsh.model.addPhysicalGroup(
                 3,
-                component_volume_tags[geom.geometry_name],
+                parent_volumes,
                 tag=marker,
             )
             gmsh.model.setPhysicalName(3, marker, geom.geometry_name)
 
-        air_tag = 1 + len(geometries)
+        object_region_marker_tags: dict[str, int] = {}
+        for offset, (region_id, volume_tags) in enumerate(
+            region_volume_tags.items(),
+            start=1 + len(geometries),
+        ):
+            object_region_marker_tags[region_id] = offset
+            gmsh.model.addPhysicalGroup(3, volume_tags, tag=offset)
+            gmsh.model.setPhysicalName(3, offset, region_id)
+
+        air_tag = 1 + len(geometries) + len(region_volume_tags)
         gmsh.model.addPhysicalGroup(3, air_vols, tag=air_tag)
         gmsh.model.setPhysicalName(3, air_tag, "air")
 
@@ -510,6 +738,7 @@ def generate_shared_domain_mesh_via_occ(
             component_surface_tags=component_surface_tags,
             interface_surface_tags=interface_list,
             outer_boundary_surface_tags=gamma_out,
+            object_region_marker_tags=object_region_marker_tags,
             selector_resolution=report.selector_resolution,
             boundary_layer_result=report.boundary_layer_result,
             orphan_entities=orphan_entities,

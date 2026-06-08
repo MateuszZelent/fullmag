@@ -593,6 +593,25 @@
   font-size: var(--fm-font-size-xs);
 }
 
+.fm-inspector-checkbox-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--fm-space-2);
+  align-items: center;
+  min-height: 28px;
+  color: var(--fm-text-primary);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-inspector-checkbox-row input {
+  margin: 0;
+}
+
+.fm-inspector-checkbox-row__meta {
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+}
+
 /* ── Inspector toolbar (action bar at section bottom) ── */
 .fm-inspector-toolbar {
   display: flex;
@@ -1346,6 +1365,9 @@ button.fm-mesh-detail-list__item:focus-visible {
   display: flex;
   flex-wrap: wrap;
   gap: var(--fm-space-1);
+  min-inline-size: 0;
+  margin: 0;
+  border: 0;
   padding: var(--fm-space-1);
 }
 
@@ -1702,6 +1724,9 @@ button.fm-study-stage-card:focus-visible {
 .fm-visualization-part-toggles {
   display: grid;
   gap: 2px;
+  min-inline-size: 0;
+  margin: 0;
+  border: 0;
   padding: var(--fm-space-1) var(--fm-space-2);
 }
 

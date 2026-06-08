@@ -2273,7 +2273,7 @@ describe("ControlRoomApi", () => {
     await api.model.createObjectRegion("film", {
       enabled: true,
       name: "core",
-      shape: { kind: "cylinder", radius: 80e-9 },
+      shape: { kind: "cylinder", radius: 80e-9, axis: [0, 0, 1], center: [0, 0, 0], height: 100e-9 },
     }, { baseRevision: 4 });
     await api.model.patchObjectRegion("film", "film/core", {
       mesh_policy: { maximum_element_size: 1e-9 },
@@ -2285,9 +2285,9 @@ describe("ControlRoomApi", () => {
       coupling_id: "exchange:film:ref",
       enabled: true,
       kind: "exchange",
-      parameters: { mode: "harmonic_mean", scale: 1 },
-      source: { object_id: "film" },
-      target: { object_id: "reference" },
+      parameters: { kind: "exchange", mode: "harmonic_mean", scale: 1 },
+      source: { kind: "object", object: "film" },
+      target: { kind: "object", object: "reference" },
     }, { baseRevision: 8 });
     await api.model.patchCoupling("exchange:film:ref", {
       parameters: { mode: "harmonic_mean", scale: 0.5 },
@@ -2303,7 +2303,7 @@ describe("ControlRoomApi", () => {
           region: {
             enabled: true,
             name: "core",
-            shape: { kind: "cylinder", radius: 80e-9 },
+            shape: { kind: "cylinder", radius: 80e-9, axis: [0, 0, 1], center: [0, 0, 0], height: 100e-9 },
           },
         },
         method: "POST",
@@ -2337,9 +2337,9 @@ describe("ControlRoomApi", () => {
             coupling_id: "exchange:film:ref",
             enabled: true,
             kind: "exchange",
-            parameters: { mode: "harmonic_mean", scale: 1 },
-            source: { object_id: "film" },
-            target: { object_id: "reference" },
+            parameters: { kind: "exchange", mode: "harmonic_mean", scale: 1 },
+            source: { kind: "object", object: "film" },
+            target: { kind: "object", object: "reference" },
           },
           kind: "create_coupling",
         },
@@ -2368,6 +2368,81 @@ describe("ControlRoomApi", () => {
     ]);
   });
 
+  it("commits material library writes through model transactions", async () => {
+    const requests: Array<{ body: unknown; method: string | undefined; url: string }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push({
+          body: init?.body ? parseRequestBody(init.body) : null,
+          method: init?.method,
+          url: String(url),
+        });
+        return jsonResponse({
+          committed_scene: { materials: [{ id: "mat:permalloy" }], revision: 12 },
+          scene_revision: 12,
+          transaction_kind: "material",
+        });
+      },
+    });
+
+    await api.model.createMaterial(
+      "mat:permalloy",
+      "Permalloy",
+      { Aex: 1.3e-11, Dbulk: null, Dind: null, Ms: 8e5, alpha: 0.01 },
+      [{ label: "Reference", url: "https://doi.org/10.1063/1.3072096" }],
+      { baseRevision: 9 },
+    );
+    await api.model.patchMaterialAsset(
+      "mat:permalloy",
+      {
+        name: "Permalloy updated",
+        properties: { alpha: 0.02 },
+        references: [{ label: "Updated", url: "https://doi.org/10.1063/1.3072096" }],
+      },
+      { baseRevision: 10 },
+    );
+    await api.model.deleteMaterial("mat:permalloy", { baseRevision: 11 });
+
+    expect(requests).toEqual([
+      {
+        body: {
+          base_revision: 9,
+          kind: "create_material",
+          material_id: "mat:permalloy",
+          name: "Permalloy",
+          properties: { Aex: 1.3e-11, Dbulk: null, Dind: null, Ms: 8e5, alpha: 0.01 },
+          references: [{ label: "Reference", url: "https://doi.org/10.1063/1.3072096" }],
+        },
+        method: "POST",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/transactions",
+      },
+      {
+        body: {
+          base_revision: 10,
+          kind: "patch_material",
+          material_id: "mat:permalloy",
+          patch: {
+            name: "Permalloy updated",
+            properties: { alpha: 0.02 },
+            references: [{ label: "Updated", url: "https://doi.org/10.1063/1.3072096" }],
+          },
+        },
+        method: "POST",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/transactions",
+      },
+      {
+        body: {
+          base_revision: 11,
+          kind: "delete_material",
+          material_id: "mat:permalloy",
+        },
+        method: "POST",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/transactions",
+      },
+    ]);
+  });
+
   it("commits object region writes through object region resources", async () => {
     const requests: Array<{ body: unknown; method: string | undefined; url: string }> = [];
     const api = new ControlRoomApi({
@@ -2389,7 +2464,7 @@ describe("ControlRoomApi", () => {
     await api.model.createRegion("film", {
       enabled: true,
       name: "core",
-      shape: { kind: "cylinder", radius: 80e-9 },
+      shape: { kind: "cylinder", radius: 80e-9, axis: [0, 0, 1], center: [0, 0, 0], height: 100e-9 },
     }, { baseRevision: 4 });
     await api.model.patchObjectRegionResource("film", "film:core", {
       mesh_policy: { maximum_element_size: 1e-9 },
@@ -2409,7 +2484,7 @@ describe("ControlRoomApi", () => {
           region: {
             enabled: true,
             name: "core",
-            shape: { kind: "cylinder", radius: 80e-9 },
+            shape: { kind: "cylinder", radius: 80e-9, axis: [0, 0, 1], center: [0, 0, 0], height: 100e-9 },
           },
         },
         method: "POST",
@@ -2443,6 +2518,76 @@ describe("ControlRoomApi", () => {
         body: null,
         method: "DELETE",
         url: "http://127.0.0.1:8765/v2/sessions/current/model/objects/film/regions/film%3Acore",
+      },
+    ]);
+  });
+
+  it("commits object material fields through model transactions", async () => {
+    const requests: Array<{ body: unknown; method: string | undefined; url: string }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push({
+          body: init?.body ? parseRequestBody(init.body) : null,
+          method: init?.method,
+          url: String(url),
+        });
+        return jsonResponse({
+          committed_scene: { objects: [{ id: "film" }], revision: 12 },
+          scene_revision: 12,
+          transaction_kind: "patch_object_material_fields",
+        });
+      },
+    });
+
+    await api.model.patchObjectMaterialFields(
+      "film",
+      [
+        {
+          assignment_id: "film:core:ms",
+          conflict_policy: "higher_priority_wins",
+          owner_object: "film",
+          parameter: "ms",
+          priority: 10,
+          region_id: "film:core",
+          value: {
+            frame: "object",
+            gradient: [1, 0, 0],
+            kind: "linear",
+            base: 8e5,
+            unit: "A/m",
+          },
+        },
+      ],
+      { baseRevision: 11 },
+    );
+
+    expect(requests).toEqual([
+      {
+        body: {
+          base_revision: 11,
+          fields: [
+            {
+              assignment_id: "film:core:ms",
+              conflict_policy: "higher_priority_wins",
+              owner_object: "film",
+              parameter: "ms",
+              priority: 10,
+              region_id: "film:core",
+              value: {
+                frame: "object",
+                gradient: [1, 0, 0],
+                kind: "linear",
+                base: 8e5,
+                unit: "A/m",
+              },
+            },
+          ],
+          kind: "patch_object_material_fields",
+          object_id: "film",
+        },
+        method: "POST",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/transactions",
       },
     ]);
   });

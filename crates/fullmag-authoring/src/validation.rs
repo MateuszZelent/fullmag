@@ -4,7 +4,6 @@ use fullmag_ir::{
     MaterialParameterAssignmentIR, MaterialParameterFieldIR, MaterialParameterNameIR,
     ObjectRegionIR, RegionFrameIR, RegionMeshPolicyIR, RegionShapeIR,
 };
-use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
@@ -350,13 +349,13 @@ mod tests {
         scene.objects[0].regions.clear();
         scene.objects[0].allocated_region_ids.clear();
         scene.objects[0].material_parameter_fields.clear();
-        scene.couplings.push(serde_json::json!({
+        scene.couplings.push(serde_json::from_value(serde_json::json!({
             "coupling_id": "draft_exchange",
             "kind": "exchange",
             "source": { "kind": "object", "object": "body" },
             "target": { "kind": "object", "object": "body" },
             "parameters": { "kind": "exchange", "mode": "disabled" }
-        }));
+        })).unwrap());
         let error = validate_scene_document(&scene)
             .expect_err("scene.v1 must reject region-owned couplings");
         assert!(
@@ -369,8 +368,10 @@ mod tests {
     #[test]
     fn scene_document_validation_rejects_region_ms_zero() {
         let mut scene = region_owned_scene();
-        scene.objects[0].regions[0]["material_overrides"][0]["value"]["value"] =
-            serde_json::json!(0.0);
+        scene.objects[0].regions[0].material_overrides[0].value = crate::SceneMaterialParameterField::Constant {
+            value: crate::SceneMaterialParameterValue::Scalar(0.0),
+            unit: Some("A/m".to_string()),
+        };
 
         let error = validate_scene_document(&scene).expect_err("Ms=0 must be rejected");
         assert!(
@@ -383,7 +384,7 @@ mod tests {
     #[test]
     fn scene_document_validation_rejects_region_owner_mismatch() {
         let mut scene = region_owned_scene();
-        scene.objects[0].regions[0]["owner_object"] = serde_json::json!("other");
+        scene.objects[0].regions[0].owner_object = "other".to_string();
 
         let error =
             validate_scene_document(&scene).expect_err("region owner mismatch must be rejected");
@@ -397,7 +398,9 @@ mod tests {
     #[test]
     fn scene_document_validation_rejects_object_frame_region_outside_owner_bounds() {
         let mut scene = region_owned_scene();
-        scene.objects[0].regions[0]["shape"]["radius"] = serde_json::json!(2.0e-6);
+        if let crate::SceneRegionShape::Cylinder { radius, .. } = &mut scene.objects[0].regions[0].shape {
+            *radius = 2.0e-6;
+        }
 
         let error =
             validate_scene_document(&scene).expect_err("oversized region must be rejected");
@@ -407,8 +410,10 @@ mod tests {
             error.message
         );
 
-        scene.objects[0].regions[0]["shape"]["radius"] = serde_json::json!(8.0e-8);
-        scene.objects[0].regions[0]["shape"]["center"] = serde_json::json!([1.0e-6, 0.0, 0.0]);
+        if let crate::SceneRegionShape::Cylinder { radius, center, .. } = &mut scene.objects[0].regions[0].shape {
+            *radius = 8.0e-8;
+            *center = [1.0e-6, 0.0, 0.0];
+        }
         let error = validate_scene_document(&scene)
             .expect_err("region center outside owner bounds must be rejected");
         assert!(
@@ -419,16 +424,37 @@ mod tests {
     }
 
     #[test]
+    fn scene_document_validation_uses_full_oblique_cylinder_extent() {
+        let mut scene = region_owned_scene();
+        scene.objects[0].geometry.bounds_min = Some([-1.0, -1.0, -1.0]);
+        scene.objects[0].geometry.bounds_max = Some([1.0, 1.0, 1.0]);
+        scene.objects[0].regions[0].shape = crate::SceneRegionShape::Cylinder {
+            radius: 1.0,
+            height: 2.0,
+            center: [0.0, 0.0, 0.0],
+            axis: [1.0, 1.0, 0.0],
+        };
+
+        let error = validate_scene_document(&scene)
+            .expect_err("oblique cylinder AABB exceeds parent bounds");
+        assert!(
+            error.message.contains("REGION_OUTSIDE_OWNER_BOUNDS"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
     fn scene_document_validation_rejects_invalid_region_coupling_endpoint() {
         let mut scene = region_owned_scene();
-        scene.couplings.push(serde_json::json!({
+        scene.couplings.push(serde_json::from_value(serde_json::json!({
             "coupling_id": "bad_rkky",
             "kind": "rkky",
             "source": { "kind": "object", "object": "body" },
             "target": { "kind": "region", "object": "body", "region_id": "body:r1" },
-            "parameters": { "kind": "rkky", "J1": -3.0e-4 },
+            "parameters": { "kind": "rkky", "j1": -3.0e-4 },
             "capability_policy": "require_runtime"
-        }));
+        })).unwrap());
 
         let error = validate_scene_document(&scene).expect_err("RKKY requires surface endpoints");
         assert!(
@@ -461,10 +487,12 @@ mod tests {
     #[test]
     fn scene_document_validation_rejects_equal_priority_material_conflicts() {
         let mut scene = region_owned_scene();
-        scene.objects[0].material_parameter_fields[0]["parameter"] = serde_json::json!("Ms");
-        scene.objects[0].material_parameter_fields[0]["priority"] = serde_json::json!(10);
-        scene.objects[0].material_parameter_fields[0]["value"] =
-            serde_json::json!({ "kind": "constant", "value": 700000.0, "unit": "A/m" });
+        scene.objects[0].material_parameter_fields[0].parameter = crate::SceneMaterialParameterName::Ms;
+        scene.objects[0].material_parameter_fields[0].priority = 10;
+        scene.objects[0].material_parameter_fields[0].value = crate::SceneMaterialParameterField::Constant {
+            value: crate::SceneMaterialParameterValue::Scalar(700000.0),
+            unit: Some("A/m".to_string()),
+        };
 
         let error =
             validate_scene_document(&scene).expect_err("equal-priority conflict must be rejected");
@@ -506,10 +534,7 @@ fn validate_region_owned_scene_payloads(
         }
 
         for (index, value) in object.regions.iter().enumerate() {
-            let region: ObjectRegionIR = parse_region_owned_scene_value(
-                &format!("objects['{}'].regions[{index}]", object.id),
-                value,
-            )?;
+            let region: ObjectRegionIR = value.clone().into();
             if region.region_id.trim().is_empty() {
                 return Err(SceneDocumentValidationError::new(format!(
                     "objects['{}'].regions[{index}] region_id must not be empty",
@@ -583,13 +608,7 @@ fn validate_region_owned_scene_payloads(
     let mut assignment_ids = BTreeSet::new();
     for object in &scene.objects {
         for (index, value) in object.material_parameter_fields.iter().enumerate() {
-            let assignment: MaterialParameterAssignmentIR = parse_region_owned_scene_value(
-                &format!(
-                    "objects['{}'].material_parameter_fields[{index}]",
-                    object.id
-                ),
-                value,
-            )?;
+            let assignment: MaterialParameterAssignmentIR = value.clone().into();
             if assignment.assignment_id.trim().is_empty() {
                 return Err(SceneDocumentValidationError::new(format!(
                     "objects['{}'].material_parameter_fields[{index}] assignment_id must not be empty",
@@ -657,8 +676,7 @@ fn validate_region_owned_scene_payloads(
 
     let mut coupling_ids = BTreeSet::new();
     for (index, value) in scene.couplings.iter().enumerate() {
-        let coupling: CouplingIR =
-            parse_region_owned_scene_value(&format!("couplings[{index}]"), value)?;
+        let coupling: CouplingIR = value.clone().into();
         if coupling.coupling_id.trim().is_empty() {
             return Err(SceneDocumentValidationError::new(format!(
                 "couplings[{index}] coupling_id must not be empty"
@@ -724,63 +742,6 @@ fn scene_material_supports_overlap(
         && (left.region_id.is_none()
             || right.region_id.is_none()
             || left.region_id == right.region_id)
-}
-
-fn parse_region_owned_scene_value<T: DeserializeOwned>(
-    path: &str,
-    value: &Value,
-) -> Result<T, SceneDocumentValidationError> {
-    let mut normalized = value.clone();
-    normalize_region_owned_aliases(&mut normalized);
-    serde_json::from_value(normalized)
-        .map_err(|error| SceneDocumentValidationError::new(format!("{path} is invalid: {error}")))
-}
-
-fn normalize_region_owned_aliases(value: &mut Value) {
-    match value {
-        Value::Array(items) => {
-            for item in items {
-                normalize_region_owned_aliases(item);
-            }
-        }
-        Value::Object(object) => {
-            if let Some(parameter) = object.get("parameter").and_then(Value::as_str) {
-                if let Some(normalized) = normalize_material_parameter_name(parameter) {
-                    object.insert(
-                        "parameter".to_string(),
-                        Value::String(normalized.to_string()),
-                    );
-                }
-            }
-            if let Some(j1) = object.remove("J1") {
-                object.entry("j1".to_string()).or_insert(j1);
-            }
-            if let Some(j2) = object.remove("J2") {
-                object.entry("j2".to_string()).or_insert(j2);
-            }
-            for nested in object.values_mut() {
-                normalize_region_owned_aliases(nested);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn normalize_material_parameter_name(parameter: &str) -> Option<&'static str> {
-    match parameter.trim() {
-        "Ms" | "ms" => Some("ms"),
-        "Aex" | "aex" => Some("aex"),
-        "Alpha" | "alpha" => Some("alpha"),
-        "Ku1" | "ku1" => Some("ku1"),
-        "Ku2" | "ku2" => Some("ku2"),
-        "AnisotropyAxis" | "anisotropyAxis" | "anisotropy_axis" => Some("anisotropy_axis"),
-        "Kc1" | "kc1" => Some("kc1"),
-        "Kc2" | "kc2" => Some("kc2"),
-        "Kc3" | "kc3" => Some("kc3"),
-        "Dind" | "dind" => Some("dind"),
-        "Dbulk" | "dbulk" => Some("dbulk"),
-        _ => None,
-    }
 }
 
 fn validate_scene_object_ref(
@@ -971,23 +932,19 @@ fn region_shape_local_aabb(shape: &RegionShapeIR) -> Option<([f64; 3], [f64; 3])
             height,
             axis,
         } => {
-            let dominant_axis = dominant_axis_index(*axis);
-            let mut half_extents = [*radius; 3];
-            half_extents[dominant_axis] = *height * 0.5;
+            let norm = axis.iter().map(|value| value * value).sum::<f64>().sqrt();
+            if norm <= 1e-15 {
+                return None;
+            }
+            let unit = axis.map(|value| value / norm);
+            let half_height = *height * 0.5;
+            let half_extents = [0, 1, 2].map(|index| {
+                unit[index].abs() * half_height
+                    + *radius * (1.0 - unit[index] * unit[index]).max(0.0).sqrt()
+            });
             Some((*center, half_extents))
         }
         RegionShapeIR::Csg { .. } => None,
-    }
-}
-
-fn dominant_axis_index(axis: [f64; 3]) -> usize {
-    let abs = [axis[0].abs(), axis[1].abs(), axis[2].abs()];
-    if abs[0] >= abs[1] && abs[0] >= abs[2] {
-        0
-    } else if abs[1] >= abs[2] {
-        1
-    } else {
-        2
     }
 }
 

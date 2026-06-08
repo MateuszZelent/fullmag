@@ -144,6 +144,7 @@ describe("RegionsListPanelModel", () => {
         size: [200e-9, 100e-9, 20e-9],
       }),
     ).toEqual({
+      region_id: "",
       enabled: true,
       frame: "object",
       name: "Core",
@@ -228,13 +229,16 @@ describe("RegionsListPanelModel", () => {
       buildNewRegionPayload(
         { name: " Core ", priority: 7, shapeKind: "cylinder" },
         model.ownerBounds,
-      )["shape"],
-    ).toEqual({
-      axis: [0, 0, 1],
-      center: [0, 0, 0],
-      height: 10e-9,
-      kind: "cylinder",
-      radius: 25e-9,
+      ),
+    ).toMatchObject({
+      realization_policy: "inherit",
+      shape: {
+        axis: [0, 0, 1],
+        center: [0, 0, 0],
+        height: 10e-9,
+        kind: "cylinder",
+        radius: 25e-9,
+      },
     });
   });
 

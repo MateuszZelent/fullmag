@@ -2265,6 +2265,28 @@ export interface components {
             /** Format: int64 */
             base_revision?: number | null;
             /** @enum {string} */
+            kind: "create_material";
+            material_id: string;
+            name: string;
+            properties: components["schemas"]["MaterialPropertiesResource"];
+            references?: components["schemas"]["MaterialReferenceResource"][];
+        } | {
+            /** Format: int64 */
+            base_revision?: number | null;
+            /** @enum {string} */
+            kind: "patch_material";
+            material_id: string;
+            patch: components["schemas"]["MaterialPatchRequest"];
+        } | {
+            /** Format: int64 */
+            base_revision?: number | null;
+            /** @enum {string} */
+            kind: "delete_material";
+            material_id: string;
+        } | {
+            /** Format: int64 */
+            base_revision?: number | null;
+            /** @enum {string} */
             kind: "delete_object";
             object_id: string;
         } | {
@@ -2294,14 +2316,14 @@ export interface components {
             /** @enum {string} */
             kind: "create_object_region";
             object_id: string;
-            region: Record<string, never>;
+            region: components["schemas"]["SceneObjectRegion"];
         } | {
             /** Format: int64 */
             base_revision?: number | null;
             /** @enum {string} */
             kind: "patch_object_region";
             object_id: string;
-            patch: Record<string, never>;
+            patch: components["schemas"]["SceneObjectRegionPatch"];
             region_id: string;
         } | {
             /** Format: int64 */
@@ -2320,7 +2342,7 @@ export interface components {
         } | {
             /** Format: int64 */
             base_revision?: number | null;
-            coupling: Record<string, never>;
+            coupling: components["schemas"]["SceneCoupling"];
             /** @enum {string} */
             kind: "create_coupling";
         } | {
@@ -2599,10 +2621,10 @@ export interface components {
             coupling_id: string;
             coupling_kind: string;
             enabled: boolean;
-            params: Record<string, never>;
+            params: components["schemas"]["SceneCouplingParameters"];
             realization_status?: string | null;
-            source: Record<string, never>;
-            target: Record<string, never>;
+            source: components["schemas"]["SceneCouplingEndpoint"];
+            target: components["schemas"]["SceneCouplingEndpoint"];
         };
         CpuTelemetryResponse: {
             /** Format: double */
@@ -3419,21 +3441,31 @@ export interface components {
         };
         MaterialParameterFieldResource: {
             assignment_id: string;
-            field: Record<string, never>;
+            field: components["schemas"]["SceneMaterialParameterField"];
             frame?: string | null;
             location?: string | null;
+            /** Format: double */
+            max?: number | null;
+            /** Format: double */
+            mean?: number | null;
+            /** Format: double */
+            min?: number | null;
             owner_object_id: string;
             owner_path?: string | null;
             parameter: string;
             /** Format: int64 */
             priority?: number | null;
             realization_status?: string | null;
+            /** Format: int64 */
+            sample_count?: number | null;
             source_region_id?: string | null;
             unit?: string | null;
+            warnings?: string[] | null;
         };
         MaterialPatchRequest: {
             name?: string | null;
             properties?: null | components["schemas"]["MaterialPropertiesPatchRequest"];
+            references?: components["schemas"]["MaterialReferenceResource"][] | null;
         };
         MaterialPropertiesPatchRequest: {
             Aex?: null | components["schemas"]["NullableF64PatchValue"];
@@ -3455,10 +3487,16 @@ export interface components {
             /** Format: double */
             alpha: number;
         };
+        MaterialReferenceResource: {
+            citation?: string | null;
+            label?: string | null;
+            url?: string | null;
+        };
         MaterialResource: {
             id: string;
             name: string;
             properties: components["schemas"]["MaterialPropertiesResource"];
+            references?: components["schemas"]["MaterialReferenceResource"][];
         };
         MeshActiveBuildResource: {
             /** @description Current active build descriptor and progress metadata. */
@@ -3836,6 +3874,8 @@ export interface components {
             universe_config?: Record<string, never> | null;
         };
         MeshSharedDomainBuildReportResource: {
+            /** Format: int32 */
+            authored_regions_count?: number | null;
             build_mode: string;
             degraded?: boolean;
             /** Format: double */
@@ -3846,6 +3886,8 @@ export interface components {
             };
             fallbacks_triggered?: string[];
             operation_statuses?: components["schemas"]["MeshOperationStatusResource"][];
+            /** Format: int32 */
+            realized_regions_count?: number | null;
             region_markers?: components["schemas"]["MeshDomainRegionMarkerResource"][];
             size_fields_realized?: components["schemas"]["MeshRealizedSizeFieldResource"][];
             thin_film_diagnostics?: components["schemas"]["MeshThinFilmDiagnosticResource"][];
@@ -4051,7 +4093,7 @@ export interface components {
         ObjectRegionCreateRequest: {
             /** Format: int64 */
             base_revision?: number | null;
-            region: Record<string, never>;
+            region: components["schemas"]["SceneObjectRegion"];
         };
         ObjectRegionDuplicateRequest: {
             /** Format: int64 */
@@ -4061,7 +4103,7 @@ export interface components {
         ObjectRegionPatchRequest: {
             /** Format: int64 */
             base_revision?: number | null;
-            patch: Record<string, never>;
+            patch: components["schemas"]["SceneObjectRegionPatch"];
         };
         ObjectRegionReorderRequest: {
             /** Format: int64 */
@@ -4247,11 +4289,11 @@ export interface components {
             frame?: string | null;
             interaction_refs: string[];
             magnetization_ref?: string | null;
-            material_overrides?: Record<string, never>[];
-            material_parameter_fields?: Record<string, never>[];
+            material_overrides?: components["schemas"]["SceneRegionMaterialOverride"][];
+            material_parameter_fields?: components["schemas"]["SceneMaterialParameterAssignment"][];
             material_ref: string;
             mesh_part_ids: string[];
-            mesh_policy?: Record<string, never> | null;
+            mesh_policy?: null | components["schemas"]["SceneRegionMeshPolicy"];
             name: string;
             owner_object_id?: string | null;
             owner_path?: string | null;
@@ -4261,11 +4303,11 @@ export interface components {
             realization_status?: string | null;
             region_id: string;
             region_kind?: string | null;
-            shape?: Record<string, never> | null;
+            shape?: null | components["schemas"]["SceneRegionShape"];
             source: string;
             source_body_ids: string[];
             source_object_ids: string[];
-            texture_override?: Record<string, never> | null;
+            texture_override?: null | components["schemas"]["SceneTextureOverride"];
         };
         ResolvedFallbackResource: {
             fallback_engine: string;
@@ -4424,18 +4466,171 @@ export interface components {
             /** Format: int64 */
             total_rows: number;
         };
+        SceneCoupling: {
+            capability_policy?: components["schemas"]["SceneCouplingCapabilityPolicy"];
+            coupling_id: string;
+            enabled?: boolean;
+            kind: components["schemas"]["SceneCouplingKind"];
+            parameters: components["schemas"]["SceneCouplingParameters"];
+            source: components["schemas"]["SceneCouplingEndpoint"];
+            target: components["schemas"]["SceneCouplingEndpoint"];
+        };
+        /** @enum {string} */
+        SceneCouplingCapabilityPolicy: "require_runtime" | "authored_only";
+        SceneCouplingEndpoint: {
+            /** @enum {string} */
+            kind: "object";
+            object: string;
+        } | {
+            /** @enum {string} */
+            kind: "region";
+            object: string;
+            region_id: string;
+        } | {
+            /** @enum {string} */
+            kind: "surface";
+            object: string;
+            selector: string;
+        };
+        /** @enum {string} */
+        SceneCouplingKind: "exchange" | "rkky" | "interlayer_exchange";
+        SceneCouplingParameters: {
+            /** Format: double */
+            inter_exchange?: number | null;
+            /** @enum {string} */
+            kind: "exchange";
+            mode: components["schemas"]["SceneExchangeCouplingMode"];
+            /** Format: double */
+            scale?: number | null;
+        } | {
+            /** Format: double */
+            j1: number;
+            /** @enum {string} */
+            kind: "rkky";
+        } | {
+            /** Format: double */
+            j1: number;
+            /** Format: double */
+            j2?: number | null;
+            /** @enum {string} */
+            kind: "interlayer_exchange";
+        };
+        /** @enum {string} */
+        SceneExchangeCouplingMode: "harmonic_mean" | "explicit" | "disabled";
+        SceneInitialMagnetization: {
+            /** @enum {string} */
+            kind: "uniform";
+            value: number[];
+        } | {
+            /** @enum {string} */
+            kind: "random_seeded";
+            /** Format: int64 */
+            seed: number;
+        } | {
+            /** @enum {string} */
+            kind: "sampled_field";
+            values: number[][];
+        } | {
+            /** @enum {string} */
+            kind: "preset_texture";
+            mapping?: components["schemas"]["SceneTextureMapping"];
+            preset_kind: string;
+            preset_params?: {
+                [key: string]: unknown;
+            };
+            texture_transform?: components["schemas"]["SceneTextureTransform3D"];
+        };
+        /** @enum {string} */
+        SceneMaterialFieldLocation: "cell" | "node" | "element" | "quadrature";
+        SceneMaterialParameterAssignment: {
+            assignment_id: string;
+            conflict_policy?: components["schemas"]["SceneRegionConflictPolicy"];
+            owner_object: string;
+            parameter: components["schemas"]["SceneMaterialParameterName"];
+            /** Format: int32 */
+            priority?: number;
+            region_id?: string | null;
+            value: components["schemas"]["SceneMaterialParameterField"];
+        };
+        SceneMaterialParameterField: {
+            /** @enum {string} */
+            kind: "constant";
+            unit?: string | null;
+            value: components["schemas"]["SceneMaterialParameterValue"];
+        } | {
+            /** Format: double */
+            base: number;
+            frame?: components["schemas"]["SceneRegionFrame"];
+            gradient: number[];
+            /** @enum {string} */
+            kind: "linear";
+            unit?: string | null;
+        } | {
+            center: number[];
+            frame?: components["schemas"]["SceneRegionFrame"];
+            /** Format: double */
+            inside: number;
+            /** @enum {string} */
+            kind: "radial";
+            /** Format: double */
+            outside: number;
+            /** Format: double */
+            radius: number;
+            unit?: string | null;
+        } | {
+            asset_id: string;
+            /** Format: int32 */
+            component_count: number;
+            /** @enum {string} */
+            kind: "sampled";
+            location: components["schemas"]["SceneMaterialFieldLocation"];
+            unit: string;
+        };
+        /** @enum {string} */
+        SceneMaterialParameterName: "ms" | "aex" | "alpha" | "ku1" | "ku2" | "anisotropy_axis" | "kc1" | "kc2" | "kc3" | "dind" | "dbulk";
+        SceneMaterialParameterValue: number | number[];
         SceneMaterialResource: {
             id: string;
             name: string;
             properties: {
                 [key: string]: unknown;
             };
+            references?: components["schemas"]["MaterialReferenceResource"][];
         };
         SceneMetadataResource: {
             authoring_schema: string;
             id: string;
             name: string;
             source_of_truth: string;
+        };
+        SceneObjectRegion: {
+            enabled?: boolean;
+            frame?: components["schemas"]["SceneRegionFrame"];
+            material_overrides?: components["schemas"]["SceneRegionMaterialOverride"][];
+            mesh_policy?: null | components["schemas"]["SceneRegionMeshPolicy"];
+            name: string;
+            owner_object?: string;
+            /** Format: int32 */
+            priority?: number;
+            realization_policy?: components["schemas"]["SceneRegionRealizationPolicy"];
+            region_id?: string;
+            shape: components["schemas"]["SceneRegionShape"];
+            texture_override?: null | components["schemas"]["SceneTextureOverride"];
+        };
+        SceneObjectRegionPatch: {
+            enabled?: boolean | null;
+            frame?: null | components["schemas"]["SceneRegionFrame"];
+            id?: unknown;
+            material_overrides?: components["schemas"]["SceneRegionMaterialOverride"][] | null;
+            mesh_policy?: null | components["schemas"]["SceneRegionMeshPolicy"];
+            name?: string | null;
+            owner_object?: unknown;
+            /** Format: int32 */
+            priority?: number | null;
+            realization_policy?: null | components["schemas"]["SceneRegionRealizationPolicy"];
+            region_id?: unknown;
+            shape?: null | components["schemas"]["SceneRegionShape"];
+            texture_override?: null | components["schemas"]["SceneTextureOverride"];
         };
         SceneObjectResource: {
             allocated_region_ids?: string[];
@@ -4445,7 +4640,7 @@ export interface components {
             id: string;
             locked?: boolean | null;
             magnetization_ref?: string | null;
-            material_parameter_fields?: Record<string, never>[];
+            material_parameter_fields?: components["schemas"]["SceneMaterialParameterAssignment"][];
             material_ref?: string | null;
             mesh_override?: {
                 [key: string]: unknown;
@@ -4462,7 +4657,7 @@ export interface components {
             region_overrides?: {
                 [key: string]: unknown;
             };
-            regions?: Record<string, never>[];
+            regions?: components["schemas"]["SceneObjectRegion"][];
             tags?: string[];
             transform?: {
                 [key: string]: unknown;
@@ -4472,8 +4667,56 @@ export interface components {
         ScenePatchRequest: {
             merge_patch: Record<string, never>;
         };
+        /** @enum {string} */
+        SceneRegionConflictPolicy: "error" | "higher_priority_wins" | "min_mesh_size_wins";
+        /** @enum {string} */
+        SceneRegionFrame: "object" | "world";
+        SceneRegionMaterialOverride: {
+            conflict_policy?: components["schemas"]["SceneRegionConflictPolicy"];
+            parameter: components["schemas"]["SceneMaterialParameterName"];
+            /** Format: int32 */
+            priority?: number;
+            value: components["schemas"]["SceneMaterialParameterField"];
+        };
+        SceneRegionMeshPolicy: {
+            /** Format: double */
+            maximum_element_size?: number | null;
+            /** Format: double */
+            minimum_element_size?: number | null;
+            /** Format: int32 */
+            order?: number | null;
+            /** Format: double */
+            transition_distance?: number | null;
+        };
+        /** @enum {string} */
+        SceneRegionRealizationPolicy: "inherit" | "conformal" | "project";
+        SceneRegionShape: {
+            center: number[];
+            /** @enum {string} */
+            kind: "box";
+            size: number[];
+        } | {
+            axis: number[];
+            center: number[];
+            /** Format: double */
+            height: number;
+            /** @enum {string} */
+            kind: "cylinder";
+            /** Format: double */
+            radius: number;
+        } | {
+            center: number[];
+            /** @enum {string} */
+            kind: "sphere";
+            /** Format: double */
+            radius: number;
+        } | {
+            expression: Record<string, never>;
+            /** @enum {string} */
+            kind: "csg";
+        };
         SceneResource: {
-            couplings?: Record<string, never>[];
+            couplings?: components["schemas"]["SceneCoupling"][];
             current_modules?: {
                 [key: string]: unknown;
             } | null;
@@ -4500,6 +4743,20 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             version?: string | null;
+        };
+        SceneTextureMapping: {
+            clamp_mode?: string;
+            projection?: string;
+            space?: string;
+        };
+        SceneTextureOverride: {
+            initial_magnetization: components["schemas"]["SceneInitialMagnetization"];
+        };
+        SceneTextureTransform3D: {
+            pivot?: number[];
+            rotation_quat?: number[];
+            scale?: number[];
+            translation?: number[];
         };
         ScriptSourceResponse: {
             bytes: number;

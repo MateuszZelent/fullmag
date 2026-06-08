@@ -13,7 +13,9 @@ struct Context;
  * Runtime owner for scalar and optional per-node material fields.
  *
  * The scalar material constants are the fallback values for empty per-node
- * fields. Non-empty vectors must have one value per FEM node.
+ * fields. Non-empty node vectors must have one value per FEM node. Non-empty
+ * element vectors must have one value per FEM element and are used for
+ * discontinuous conformal-domain coefficients.
  */
 struct FemMaterialFieldsRuntimeState {
     fullmag_fem_material_desc material{};
@@ -27,14 +29,17 @@ struct FemMaterialFieldsRuntimeState {
     std::vector<double> Kc1_field;
     std::vector<double> Kc2_field;
     std::vector<double> Kc3_field;
+    std::vector<double> Ms_element_field;
+    std::vector<double> A_element_field;
 };
 
 /*
  * Own FEM scalar and per-node material field import.
  *
- * The module copies scalar material constants and optional per-node material
- * arrays from the ABI plan into the module-owned material field state, then
- * validates both per-node fallback fields and scalar material constants.
+ * The module copies scalar material constants, optional per-node material
+ * arrays, and optional per-element discontinuous material coefficients from
+ * the ABI plan into the module-owned material field state, then validates both
+ * field payloads and scalar material constants.
  *
  * It does not own mesh topology, magnetization initialization, field-buffer
  * sizing, runtime device selection, or interaction field computation.

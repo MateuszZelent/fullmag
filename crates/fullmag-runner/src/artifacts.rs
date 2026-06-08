@@ -1541,6 +1541,7 @@ mod tests {
                 requested_backend: fullmag_ir::BackendTarget::Fdm,
                 resolved_backend: fullmag_ir::BackendTarget::Fdm,
                 execution_mode: ExecutionMode::Strict,
+                material_field_plans: Vec::new(),
             },
             backend_plan: BackendPlanIR::Fdm(FdmPlanIR {
                 grid: GridDimensions { cells: [4, 2, 1] },
@@ -1616,6 +1617,7 @@ mod tests {
                 requested_backend: fullmag_ir::BackendTarget::Fdm,
                 resolved_backend: fullmag_ir::BackendTarget::Fdm,
                 execution_mode: ExecutionMode::Strict,
+                material_field_plans: Vec::new(),
             },
             backend_plan: BackendPlanIR::FdmMultilayer(FdmMultilayerPlanIR {
                 mode: "multilayer_convolution".to_string(),
@@ -1685,6 +1687,7 @@ mod tests {
                 requested_backend: fullmag_ir::BackendTarget::Fem,
                 resolved_backend: fullmag_ir::BackendTarget::Fem,
                 execution_mode: ExecutionMode::Strict,
+                material_field_plans: Vec::new(),
             },
             backend_plan: BackendPlanIR::Fem(FemPlanIR {
                 mesh_name: "unit_tet".to_string(),
@@ -1747,6 +1750,8 @@ mod tests {
                     dind_field: None,
                     dbulk_field: None,
                 },
+                ms_element_field: None,
+                a_element_field: None,
                 region_materials: Vec::new(),
                 enable_exchange: true,
                 enable_demag: false,

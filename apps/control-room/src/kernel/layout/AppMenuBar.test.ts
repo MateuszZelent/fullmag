@@ -107,6 +107,17 @@ describe("app menu command model", () => {
     });
   });
 
+  it("exposes the material library from the Tools menu", () => {
+    const toolsMenu = MAIN_MENUS.find((menu) => menu.id === "tools");
+    const materialLibraryItem = toolsMenu?.children?.find(
+      (item) => item.id === "tools.material-library",
+    );
+
+    expect(materialLibraryItem).toMatchObject({
+      label: "Material Library",
+    });
+  });
+
   it("exposes the field data preview from the Tools menu", () => {
     const toolsMenu = MAIN_MENUS.find((menu) => menu.id === "tools");
     const dataPreviewItem = toolsMenu?.children?.find(

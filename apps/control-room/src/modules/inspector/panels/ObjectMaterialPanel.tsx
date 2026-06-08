@@ -391,11 +391,24 @@ function ObjectMaterialPanelView({
       {showSection("assignment") ? (
         <InspectorSection value="assignment" title="Assignment">
           <FormField
-            label="Material ref"
-            mono={false}
-            type="text"
+            label="Material"
+            type="select"
             value={draft.materialRef}
             onChange={(event) => updateDraft({ materialRef: event.target.value })}
+          >
+            <option value="">Unassigned</option>
+            {scene.data?.materials?.map((material) => (
+              <option key={material.id} value={material.id}>
+                {material.name} ({material.id})
+              </option>
+            ))}
+          </FormField>
+          <FieldRow
+            label="Selected"
+            value={
+              scene.data?.materials?.find((material) => material.id === draft.materialRef)
+                ?.name ?? draft.materialRef ?? "unassigned"
+            }
           />
         </InspectorSection>
       ) : null}

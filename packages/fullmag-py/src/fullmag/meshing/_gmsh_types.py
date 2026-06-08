@@ -1361,6 +1361,7 @@ class SharedDomainMeshResult:
     component_surface_tags: dict[str, list[int]]
     interface_surface_tags: list[int]
     outer_boundary_surface_tags: list[int]
+    object_region_marker_tags: dict[str, int] = field(default_factory=dict)
     selector_resolution: list[dict[str, object]] = field(default_factory=list)
     boundary_layer_result: dict[str, object] | None = None
     orphan_entities: list[dict[str, object]] = field(default_factory=list)

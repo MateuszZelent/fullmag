@@ -11,10 +11,12 @@ const appMenuBarSourceUrl = new URL("./AppMenuBar.tsx", import.meta.url);
 
 import {
   AppMenuBar,
+} from "./AppMenuBar";
+import {
   resolveApiConnectionErrorDetails,
   resolveHeaderSessionDisplay,
   resolveHydrationSafeHeaderSessionSource,
-} from "./AppMenuBar";
+} from "./AppMenuBarHeaderModel";
 
 describe("AppMenuBar", () => {
   it("selects only header display fields from session status", () => {

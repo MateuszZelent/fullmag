@@ -334,6 +334,13 @@ add_test(NAME fem_anisotropy_contract COMMAND fem_anisotropy_contract)
 
 add_executable(fem_exchange_contract tests/exchange_contract.cpp)
 target_link_libraries(fem_exchange_contract PRIVATE fullmag_fem)
+if(FULLMAG_USE_MFEM_STACK)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_exchange_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_exchange_contract PRIVATE mfem)
+    endif()
+endif()
 target_include_directories(fem_exchange_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/include

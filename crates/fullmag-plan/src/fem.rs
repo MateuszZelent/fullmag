@@ -24,8 +24,7 @@ use crate::validate::{
     planned_study_controls, validate_eigen_outputs, validate_executable_outputs,
 };
 
-const FEM_AIRBOX_DEMAG_REQUIRED_MESSAGE: &str =
-    "FEM demag requires a conformal shared-domain mesh with air and a Poisson airbox realization (Robin or Dirichlet).";
+const FEM_AIRBOX_DEMAG_REQUIRED_MESSAGE: &str = "FEM demag requires a conformal shared-domain mesh with air and a Poisson airbox realization (Robin or Dirichlet).";
 const CUBIC_AXIS_ORTHOGONALITY_DOT_TOL: f64 = 1e-3;
 const CUBIC_AXIS_ORTHOGONALITY_CROSS_MIN_NORM: f64 = 1e-6;
 const CUBIC_AXIS_VALIDATION_ERROR: &str =
@@ -226,6 +225,20 @@ fn remap_segment_object_ids(
                     .get(&seg_id[..seg_id.len() - 5])
                     .copied();
             }
+            if mapped_object_id.is_none() {
+                mapped_object_id =
+                    geometry_to_object_id
+                        .iter()
+                        .find_map(|(geometry_id, object_id)| {
+                            if plan_object_ids_match(seg_id, geometry_id)
+                                || plan_object_ids_match(seg_id, object_id)
+                            {
+                                Some(*object_id)
+                            } else {
+                                None
+                            }
+                        });
+            }
             let Some(mapped_object_id) = mapped_object_id else {
                 return Err(PlanError {
                     reasons: vec![format!(
@@ -251,38 +264,52 @@ fn remap_segment_object_ids(
         .collect()
 }
 
+fn segment_matches_magnet_entry(
+    segment: &fullmag_ir::FemObjectSegmentIR,
+    entry: &MagnetPlanningEntry,
+) -> bool {
+    plan_object_ids_match(&segment.object_id, &entry.geometry_name)
+        || plan_object_ids_match(&segment.object_id, &entry.magnet_name)
+        || segment
+            .geometry_id
+            .as_deref()
+            .map(|geometry_id| plan_object_ids_match(geometry_id, &entry.geometry_name))
+            .unwrap_or(false)
+}
+
 fn segment_node_indices_from_parts(
     mesh_parts: &[fullmag_ir::FemMeshPartIR],
     segment: &fullmag_ir::FemObjectSegmentIR,
 ) -> Option<Vec<usize>> {
-    mesh_parts
-        .iter()
-        .find(|part| {
-            part.role == fullmag_ir::FemMeshPartRole::MagneticObject
-                && (part
-                    .object_id
-                    .as_deref()
-                    .map(|id| plan_object_ids_match(id, segment.object_id.as_str()))
-                    .unwrap_or(false)
-                    || part
-                        .geometry_id
+    let matching_part = segment
+        .geometry_id
+        .as_deref()
+        .and_then(|segment_geometry_id| {
+            mesh_parts.iter().find(|part| {
+                part.role == fullmag_ir::FemMeshPartRole::MagneticObject
+                    && part.geometry_id.as_deref().is_some_and(|part_geometry_id| {
+                        plan_object_ids_match(part_geometry_id, segment_geometry_id)
+                    })
+                    && !part.node_indices.is_empty()
+            })
+        })
+        .or_else(|| {
+            mesh_parts.iter().find(|part| {
+                part.role == fullmag_ir::FemMeshPartRole::MagneticObject
+                    && part
+                        .object_id
                         .as_deref()
-                        .map(|id| {
-                            segment
-                                .geometry_id
-                                .as_deref()
-                                .map(|g_id| plan_object_ids_match(id, g_id))
-                                .unwrap_or(false)
-                        })
-                        .unwrap_or(false))
-                && !part.node_indices.is_empty()
-        })
-        .map(|part| {
-            part.node_indices
-                .iter()
-                .map(|index| *index as usize)
-                .collect()
-        })
+                        .is_some_and(|id| plan_object_ids_match(id, segment.object_id.as_str()))
+                    && !part.node_indices.is_empty()
+            })
+        });
+
+    matching_part.map(|part| {
+        part.node_indices
+            .iter()
+            .map(|index| *index as usize)
+            .collect()
+    })
 }
 
 fn segment_node_indices(
@@ -369,6 +396,7 @@ fn domain_initial_node_indices(
     Ok(indices)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn assign_domain_initial_for_segment(
     target: &mut [[f64; 3]],
     mesh: &fullmag_ir::MeshIR,
@@ -376,7 +404,23 @@ pub(crate) fn assign_domain_initial_for_segment(
     segment: &fullmag_ir::FemObjectSegmentIR,
     entry: &MagnetPlanningEntry,
 ) -> Result<(), PlanError> {
-    let node_indices = domain_initial_node_indices(mesh, mesh_parts, segment)?;
+    assign_domain_initial_for_segments(target, mesh, mesh_parts, &[segment], entry)
+}
+
+pub(crate) fn assign_domain_initial_for_segments(
+    target: &mut [[f64; 3]],
+    mesh: &fullmag_ir::MeshIR,
+    mesh_parts: &[fullmag_ir::FemMeshPartIR],
+    segments: &[&fullmag_ir::FemObjectSegmentIR],
+    entry: &MagnetPlanningEntry,
+) -> Result<(), PlanError> {
+    let mut node_indices = Vec::new();
+    for segment in segments {
+        node_indices.extend(domain_initial_node_indices(mesh, mesh_parts, segment)?);
+    }
+    node_indices.sort_unstable();
+    node_indices.dedup();
+
     if let Some(fullmag_ir::InitialMagnetizationIR::SampledField { values }) =
         entry.initial_magnetization.as_ref()
     {
@@ -595,6 +639,7 @@ fn resolve_interfacial_dmi_normal(
 }
 
 fn build_region_material_fields(
+    problem: &ProblemIR,
     base_material: &fullmag_ir::MaterialIR,
     mesh: &fullmag_ir::MeshIR,
     object_segments: &[fullmag_ir::FemObjectSegmentIR],
@@ -626,10 +671,47 @@ fn build_region_material_fields(
             continue;
         };
         let node_indices = segment_node_indices(mesh_parts, segment, node_count)?;
-        for index in node_indices {
-            ms_values[index] = region_material.saturation_magnetisation;
-            a_values[index] = region_material.exchange_stiffness;
-            alpha_values[index] = region_material.damping;
+        if node_indices.is_empty() {
+            continue;
+        }
+
+        let points: Vec<[f64; 3]> = node_indices.iter().map(|&idx| mesh.nodes[idx]).collect();
+        let object_translation = crate::material::object_translation(problem, &segment.object_id);
+
+        let ms_resolved = crate::material::resolve_spatial_parameter(
+            problem,
+            &segment.object_id,
+            fullmag_ir::MaterialParameterNameIR::Ms,
+            region_material.saturation_magnetisation,
+            &points,
+            object_translation,
+        )
+        .map_err(|e| PlanError { reasons: vec![e] })?;
+
+        let aex_resolved = crate::material::resolve_spatial_parameter(
+            problem,
+            &segment.object_id,
+            fullmag_ir::MaterialParameterNameIR::Aex,
+            region_material.exchange_stiffness,
+            &points,
+            object_translation,
+        )
+        .map_err(|e| PlanError { reasons: vec![e] })?;
+
+        let alpha_resolved = crate::material::resolve_spatial_parameter(
+            problem,
+            &segment.object_id,
+            fullmag_ir::MaterialParameterNameIR::Alpha,
+            region_material.damping,
+            &points,
+            object_translation,
+        )
+        .map_err(|e| PlanError { reasons: vec![e] })?;
+
+        for (i, &index) in node_indices.iter().enumerate() {
+            ms_values[index] = ms_resolved[i];
+            a_values[index] = aex_resolved[i];
+            alpha_values[index] = alpha_resolved[i];
             ku_values[index] = region_material.uniaxial_anisotropy.unwrap_or(0.0);
             ku2_values[index] = region_material.uniaxial_anisotropy_k2.unwrap_or(0.0);
             kc1_values[index] = region_material.cubic_anisotropy_kc1.unwrap_or(0.0);
@@ -675,6 +757,297 @@ fn build_region_material_fields(
     Ok(material)
 }
 
+fn material_field_constant_value(field: &fullmag_ir::MaterialParameterFieldIR) -> Option<f64> {
+    match field {
+        fullmag_ir::MaterialParameterFieldIR::Constant { value, .. } => value
+            .as_f64()
+            .or_else(|| value.as_i64().map(|value| value as f64)),
+        _ => None,
+    }
+}
+
+fn sharp_constant_region_parameter(
+    problem: &ProblemIR,
+    region: &fullmag_ir::ObjectRegionIR,
+    parameter: fullmag_ir::MaterialParameterNameIR,
+) -> Result<Option<f64>, PlanError> {
+    let mut candidates: Vec<(i32, f64, String)> = Vec::new();
+    for material_override in &region.material_overrides {
+        if material_override.parameter != parameter {
+            continue;
+        }
+        if let Some(value) = material_field_constant_value(&material_override.value) {
+            candidates.push((
+                material_override.priority,
+                value,
+                format!("region_override:{}", region.region_id),
+            ));
+        }
+    }
+    for assignment in &problem.material_parameter_fields {
+        if assignment.owner_object != region.owner_object
+            || assignment.region_id.as_deref() != Some(region.region_id.as_str())
+            || assignment.parameter != parameter
+        {
+            continue;
+        }
+        if let Some(value) = material_field_constant_value(&assignment.value) {
+            candidates.push((
+                assignment.priority,
+                value,
+                format!("assignment:{}", assignment.assignment_id),
+            ));
+        }
+    }
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+    candidates.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.2.cmp(&right.2)));
+    let priority = candidates[0].0;
+    let winners = candidates
+        .iter()
+        .filter(|candidate| candidate.0 == priority)
+        .collect::<Vec<_>>();
+    let value = winners[0].1;
+    if winners
+        .iter()
+        .any(|candidate| (candidate.1 - value).abs() > 1e-18)
+    {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "conflicting sharp constant {:?} values at priority {} for conformal region '{}': {}",
+                parameter,
+                priority,
+                region.region_id,
+                winners
+                    .iter()
+                    .map(|candidate| candidate.2.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )],
+        });
+    }
+    Ok(Some(value))
+}
+
+fn build_conformal_region_element_fields(
+    problem: &ProblemIR,
+    base_material: &fullmag_ir::MaterialIR,
+    mesh: &fullmag_ir::MeshIR,
+    object_segments: &[fullmag_ir::FemObjectSegmentIR],
+    magnet_materials: &BTreeMap<String, fullmag_ir::MaterialIR>,
+) -> Result<(Option<Vec<f64>>, Option<Vec<f64>>), PlanError> {
+    let element_count = mesh.elements.len();
+    if element_count == 0 || mesh.element_markers.len() != element_count {
+        return Ok((None, None));
+    }
+
+    let mut ms_values = vec![base_material.saturation_magnetisation; element_count];
+    let mut a_values = vec![base_material.exchange_stiffness; element_count];
+    for segment in object_segments {
+        if segment.object_id == AIR_OBJECT_SEGMENT_ID {
+            continue;
+        }
+        let Some(material) = magnet_materials.get(&segment.object_id) else {
+            continue;
+        };
+        let start = segment.element_start as usize;
+        let end = start.saturating_add(segment.element_count as usize);
+        if end > element_count {
+            return Err(PlanError {
+                reasons: vec![format!(
+                    "FEM object segment '{}' element range {}..{} exceeds mesh element count {}",
+                    segment.object_id, start, end, element_count
+                )],
+            });
+        }
+        for element_index in start..end {
+            ms_values[element_index] = material.saturation_magnetisation;
+            a_values[element_index] = material.exchange_stiffness;
+        }
+    }
+
+    let mut marker_to_region = BTreeMap::new();
+    if let Some(domain_asset) = problem
+        .geometry_assets
+        .as_ref()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_ref())
+    {
+        for marker in &domain_asset.object_region_markers {
+            if mesh
+                .element_markers
+                .iter()
+                .any(|mesh_marker| *mesh_marker == marker.marker)
+            {
+                marker_to_region.insert(marker.marker, marker.geometry_name.clone());
+            }
+        }
+    }
+    if marker_to_region.is_empty() {
+        return Ok((None, None));
+    }
+
+    let mut region_by_key: BTreeMap<String, &fullmag_ir::ObjectRegionIR> = BTreeMap::new();
+    for region in problem
+        .object_regions
+        .iter()
+        .filter(|region| region.enabled)
+    {
+        region_by_key.insert(region.region_id.clone(), region);
+        region_by_key.insert(region.name.clone(), region);
+    }
+
+    let mut ms_changed = false;
+    let mut a_changed = false;
+    for (element_index, marker) in mesh.element_markers.iter().copied().enumerate() {
+        let Some(region_key) = marker_to_region.get(&marker) else {
+            continue;
+        };
+        let Some(region) = region_by_key.get(region_key) else {
+            continue;
+        };
+        let owner_material = magnet_materials
+            .get(&region.owner_object)
+            .unwrap_or(base_material);
+        ms_values[element_index] = owner_material.saturation_magnetisation;
+        a_values[element_index] = owner_material.exchange_stiffness;
+        if let Some(value) = sharp_constant_region_parameter(
+            problem,
+            region,
+            fullmag_ir::MaterialParameterNameIR::Ms,
+        )? {
+            ms_values[element_index] = value;
+            ms_changed = true;
+        }
+        if let Some(value) = sharp_constant_region_parameter(
+            problem,
+            region,
+            fullmag_ir::MaterialParameterNameIR::Aex,
+        )? {
+            a_values[element_index] = value;
+            a_changed = true;
+        }
+    }
+
+    Ok((
+        ms_changed.then_some(ms_values),
+        a_changed.then_some(a_values),
+    ))
+}
+
+fn gather_fem_material_field_plans(
+    problem: &ProblemIR,
+    material: &fullmag_ir::MaterialIR,
+    node_count: usize,
+) -> Vec<fullmag_ir::MaterialFieldPlan> {
+    let mut material_field_plans = Vec::new();
+    let is_extended =
+        problem.validation_profile.execution_mode == fullmag_ir::ExecutionMode::Extended;
+    for magnet in &problem.magnets {
+        let mut plans = crate::material::build_material_field_plans(
+            problem,
+            &magnet.name,
+            fullmag_ir::MaterialFieldLocationIR::Node,
+        );
+        for plan in &mut plans {
+            if is_extended
+                && (plan.parameter == fullmag_ir::MaterialParameterNameIR::Ms
+                    || plan.parameter == fullmag_ir::MaterialParameterNameIR::Aex)
+            {
+                for region in &problem.object_regions {
+                    if region.enabled && region.owner_object == magnet.name {
+                        let has_sharp =
+                            region.material_overrides.iter().any(|over| {
+                                over.parameter == plan.parameter
+                                    && matches!(
+                                        over.value,
+                                        fullmag_ir::MaterialParameterFieldIR::Constant { .. }
+                                    )
+                            }) || problem.material_parameter_fields.iter().any(|assignment| {
+                                assignment.region_id.as_deref() == Some(region.region_id.as_str())
+                                    && assignment.parameter == plan.parameter
+                                    && matches!(
+                                        assignment.value,
+                                        fullmag_ir::MaterialParameterFieldIR::Constant { .. }
+                                    )
+                            });
+                        if has_sharp {
+                            let has_conformal_marker =
+                                crate::validate::region_is_conformal(problem, region);
+                            if region.realization_policy
+                                == fullmag_ir::RegionRealizationPolicyIR::Project
+                            {
+                                let reason = if has_conformal_marker {
+                                    "explicit project policy was requested despite an available conformal domain marker"
+                                } else {
+                                    "no domain marker was found in the mesh"
+                                };
+                                plan.warnings.push(format!(
+                                    "sharp parameter override for {:?} in region '{}' requires conformal boundary, but {reason}; projected approximation will be used",
+                                    plan.parameter, region.region_id
+                                ));
+                            } else if !has_conformal_marker {
+                                plan.warnings.push(format!(
+                                    "sharp parameter override for {:?} in region '{}' requires conformal boundary, but no domain marker was found in the mesh; projected approximation will be used",
+                                    plan.parameter, region.region_id
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            let (values, fallback) = match plan.parameter {
+                fullmag_ir::MaterialParameterNameIR::Ms => (
+                    material.ms_field.as_deref(),
+                    material.saturation_magnetisation,
+                ),
+                fullmag_ir::MaterialParameterNameIR::Aex => {
+                    (material.a_field.as_deref(), material.exchange_stiffness)
+                }
+                fullmag_ir::MaterialParameterNameIR::Alpha => {
+                    (material.alpha_field.as_deref(), material.damping)
+                }
+                _ => (None, 0.0),
+            };
+            let (sample_count, min, max, mean) = if let Some(values) = values {
+                let min = values.iter().copied().fold(f64::INFINITY, f64::min);
+                let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                let mean = values.iter().sum::<f64>() / values.len() as f64;
+                (values.len(), min, max, mean)
+            } else {
+                (node_count, fallback, fallback, fallback)
+            };
+            plan.realization_method = Some(
+                if plan
+                    .warnings
+                    .iter()
+                    .any(|warning| warning.contains("projected approximation"))
+                {
+                    "projected_nodal_sampling"
+                } else if problem.object_regions.iter().any(|region| {
+                    region.enabled
+                        && region.owner_object == magnet.name
+                        && region.realization_policy
+                            == fullmag_ir::RegionRealizationPolicyIR::Conformal
+                }) {
+                    "conformal_domain_nodal_sampling"
+                } else {
+                    "nodal_sampling"
+                }
+                .to_string(),
+            );
+            plan.statistics = Some(fullmag_ir::MaterialFieldStatisticsIR {
+                sample_count,
+                min,
+                max,
+                mean,
+            });
+        }
+        material_field_plans.extend(plans);
+    }
+    material_field_plans
+}
+
 pub(crate) fn plan_fem(
     problem: &ProblemIR,
     resolved_backend: BackendTarget,
@@ -708,11 +1081,9 @@ pub(crate) fn plan_fem(
         .collect();
 
     let resolved_domain_mesh_asset =
-        resolve_fem_domain_mesh_asset(problem, runtime_requests_cuda(problem)).map_err(
-            |message| PlanError {
-                reasons: vec![message],
-            },
-        )?;
+        resolve_fem_domain_mesh_asset(problem, true).map_err(|message| PlanError {
+            reasons: vec![message],
+        })?;
     let requested_demag_realization = requested_fem_demag_realization(problem);
     // Commit 4: fail early when study_universe requires a shared domain mesh
     // but no fem_domain_mesh_asset was provided.
@@ -1022,9 +1393,12 @@ pub(crate) fn plan_fem(
         if let Some(domain_asset) = resolved_domain_mesh_asset.as_ref() {
             let mut initial = vec![[0.0, 0.0, 0.0]; domain_asset.mesh.nodes.len()];
             for entry in &magnet_entries {
-                let Some(segment) = domain_asset.object_segments.iter().find(|segment| {
-                    plan_object_ids_match(&segment.object_id, &entry.geometry_name)
-                }) else {
+                let matching_segments = domain_asset
+                    .object_segments
+                    .iter()
+                    .filter(|segment| segment_matches_magnet_entry(segment, entry))
+                    .collect::<Vec<_>>();
+                if matching_segments.is_empty() {
                     return Err(PlanError {
                         reasons: vec![format!(
                             "shared-domain FEM mesh asset is missing a segment for geometry '{}'",
@@ -1032,11 +1406,11 @@ pub(crate) fn plan_fem(
                         )],
                     });
                 };
-                assign_domain_initial_for_segment(
+                assign_domain_initial_for_segments(
                     &mut initial,
                     &domain_asset.mesh,
                     &domain_asset.mesh_parts,
-                    segment,
+                    &matching_segments,
                     entry,
                 )?;
             }
@@ -1135,17 +1509,30 @@ pub(crate) fn plan_fem(
     } else {
         Vec::new()
     };
-    let material = if has_heterogeneous_materials {
-        build_region_material_fields(
-            &base_material,
-            &mesh,
-            &object_segments,
-            &resolved_mesh_parts,
-            &magnet_materials,
-        )?
-    } else {
-        base_material.clone()
-    };
+
+    let mut material = build_region_material_fields(
+        problem,
+        &base_material,
+        &mesh,
+        &object_segments,
+        &resolved_mesh_parts,
+        &magnet_materials,
+    )?;
+    let (ms_element_field, a_element_field) = build_conformal_region_element_fields(
+        problem,
+        &base_material,
+        &mesh,
+        &object_segments,
+        &magnet_materials,
+    )?;
+    if ms_element_field.is_some() {
+        material.ms_field = None;
+    }
+    if a_element_field.is_some() {
+        material.a_field = None;
+    }
+    let requires_consistent_mass_exchange = ms_element_field.is_some();
+
     if interfacial_dmi.is_none() {
         interfacial_dmi = material.interfacial_dmi;
     }
@@ -1163,7 +1550,7 @@ pub(crate) fn plan_fem(
             Err(reason) => {
                 return Err(PlanError {
                     reasons: vec![reason],
-                })
+                });
             }
         }
     }
@@ -1254,6 +1641,8 @@ pub(crate) fn plan_fem(
         hmax: fem_hints.hmax,
         initial_magnetization,
         material,
+        ms_element_field,
+        a_element_field,
         region_materials,
         enable_exchange,
         enable_demag,
@@ -1307,7 +1696,11 @@ pub(crate) fn plan_fem(
         oersted_realization: None,
         gpu_device_index: None,
         mfem_device_string: None,
-        use_consistent_mass: None,
+        use_consistent_mass: if requires_consistent_mass_exchange {
+            Some(true)
+        } else {
+            None
+        },
     };
 
     // ── Extract Oersted realizations from energy terms ──
@@ -1420,6 +1813,23 @@ pub(crate) fn plan_fem(
     if let Some(note) = universe_note {
         provenance_notes.push(note);
     }
+    let material_field_plans =
+        gather_fem_material_field_plans(problem, &fem_plan.material, n_nodes);
+    for field_plan in &material_field_plans {
+        if let Some(statistics) = &field_plan.statistics {
+            provenance_notes.push(format!(
+                "material field {:?} on '{}': method={} samples={} min={:.6e} max={:.6e} mean={:.6e}",
+                field_plan.parameter,
+                field_plan.object_id,
+                field_plan.realization_method.as_deref().unwrap_or("unknown"),
+                statistics.sample_count,
+                statistics.min,
+                statistics.max,
+                statistics.mean,
+            ));
+        }
+        provenance_notes.extend(field_plan.warnings.iter().cloned());
+    }
 
     Ok(ExecutionPlanIR {
         common: CommonPlanMeta {
@@ -1427,6 +1837,7 @@ pub(crate) fn plan_fem(
             requested_backend: problem.backend_policy.requested_backend,
             resolved_backend,
             execution_mode: problem.validation_profile.execution_mode,
+            material_field_plans,
         },
         backend_plan: BackendPlanIR::Fem(fem_plan),
         output_plan: OutputPlanIR {
@@ -1486,7 +1897,7 @@ pub(crate) fn plan_fem_eigen(
         .collect();
 
     let resolved_domain_mesh_asset =
-        resolve_fem_domain_mesh_asset(problem, false).map_err(|message| PlanError {
+        resolve_fem_domain_mesh_asset(problem, true).map_err(|message| PlanError {
             reasons: vec![message],
         })?;
     let requested_demag_realization = requested_fem_demag_realization(problem);
@@ -1862,9 +2273,12 @@ pub(crate) fn plan_fem_eigen(
         if let Some(domain_asset) = resolved_domain_mesh_asset.as_ref() {
             let mut equilibrium = vec![[0.0, 0.0, 0.0]; domain_asset.mesh.nodes.len()];
             for entry in &magnet_entries {
-                let Some(segment) = domain_asset.object_segments.iter().find(|segment| {
-                    plan_object_ids_match(&segment.object_id, &entry.geometry_name)
-                }) else {
+                let matching_segments = domain_asset
+                    .object_segments
+                    .iter()
+                    .filter(|segment| segment_matches_magnet_entry(segment, entry))
+                    .collect::<Vec<_>>();
+                if matching_segments.is_empty() {
                     return Err(PlanError {
                         reasons: vec![format!(
                             "shared-domain FEM mesh asset is missing a segment for geometry '{}'",
@@ -1872,11 +2286,11 @@ pub(crate) fn plan_fem_eigen(
                         )],
                     });
                 };
-                assign_domain_initial_for_segment(
+                assign_domain_initial_for_segments(
                     &mut equilibrium,
                     &domain_asset.mesh,
                     &domain_asset.mesh_parts,
-                    segment,
+                    &matching_segments,
                     entry,
                 )?;
             }
@@ -2022,6 +2436,28 @@ pub(crate) fn plan_fem_eigen(
         "study: eigenmodes operator={:?} count={} normalization={:?} damping_policy={:?}",
         fem_plan.operator.kind, fem_plan.count, fem_plan.normalization, fem_plan.damping_policy
     );
+    let material_field_plans =
+        gather_fem_material_field_plans(problem, &fem_plan.material, fem_plan.mesh.nodes.len());
+    let mut provenance_notes = vec![
+        if resolved_domain_mesh_asset.is_some() {
+            "Bootstrap FEM eigen planner using study-level shared-domain mesh asset".to_string()
+        } else {
+            "Bootstrap FEM eigen planner with separate FemEigenPlanIR".to_string()
+        },
+        format!("mesh asset: {mesh_name} ({n_nodes} nodes, {n_elements} elements)"),
+        format!(
+            "active terms: exchange={}, demag={}, zeeman={}",
+            enable_exchange,
+            enable_demag && operator.include_demag,
+            external_field.is_some()
+        ),
+        study_note,
+        "FEM eigen execution currently targets the transitional CPU FEM baseline; native MFEM/SLEPc integration remains future work"
+            .to_string(),
+    ];
+    for field_plan in &material_field_plans {
+        provenance_notes.extend(field_plan.warnings.iter().cloned());
+    }
 
     Ok(ExecutionPlanIR {
         common: CommonPlanMeta {
@@ -2029,30 +2465,14 @@ pub(crate) fn plan_fem_eigen(
             requested_backend: problem.backend_policy.requested_backend,
             resolved_backend,
             execution_mode: problem.validation_profile.execution_mode,
+            material_field_plans,
         },
         backend_plan: BackendPlanIR::FemEigen(fem_plan),
         output_plan: OutputPlanIR {
             outputs: problem.study.sampling().outputs.clone(),
         },
         provenance: ProvenancePlanIR {
-            notes: vec![
-                if resolved_domain_mesh_asset.is_some() {
-                    "Bootstrap FEM eigen planner using study-level shared-domain mesh asset"
-                        .to_string()
-                } else {
-                    "Bootstrap FEM eigen planner with separate FemEigenPlanIR".to_string()
-                },
-                format!("mesh asset: {mesh_name} ({n_nodes} nodes, {n_elements} elements)"),
-                format!(
-                    "active terms: exchange={}, demag={}, zeeman={}",
-                    enable_exchange,
-                    enable_demag && operator.include_demag,
-                    external_field.is_some()
-                ),
-                study_note,
-                "FEM eigen execution currently targets the transitional CPU FEM baseline; native MFEM/SLEPc integration remains future work"
-                    .to_string(),
-            ],
+            notes: provenance_notes,
         },
     })
 }

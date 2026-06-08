@@ -264,7 +264,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     renderSettings.vectorsVisible ||
     renderSettings.boundsVisible;
 
-  if (!geometry || (!renderSettings.visible && !hasAnyVisibleSubLayer)) return null;
+  if (!geometry || !renderSettings.visible || !hasAnyVisibleSubLayer) return null;
   const meshColor = resolveMeshPartSurfaceMaterialColor(
     renderSettings,
     colors.mesh,

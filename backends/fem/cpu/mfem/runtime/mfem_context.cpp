@@ -67,6 +67,27 @@ void debug_checkpoint(const char *stage)
     std::fflush(stderr);
 }
 
+class ElementwiseScalarCoefficient final : public mfem::Coefficient {
+public:
+    ElementwiseScalarCoefficient(const std::vector<double> &values, double fallback)
+        : values_(values), fallback_(fallback)
+    {
+    }
+
+    double Eval(mfem::ElementTransformation &T, const mfem::IntegrationPoint &) override
+    {
+        const int element = T.ElementNo;
+        if (element >= 0 && static_cast<size_t>(element) < values_.size()) {
+            return values_[static_cast<size_t>(element)];
+        }
+        return fallback_;
+    }
+
+private:
+    const std::vector<double> &values_;
+    double fallback_;
+};
+
 } // namespace
 
 bool context_initialize_mfem(Context &ctx, std::string &error)
@@ -186,7 +207,6 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
         auto *gf_mz = new mfem::GridFunction(fes);
         auto *gf_a = new mfem::GridFunction(fes);
         auto *gf_ms = new mfem::GridFunction(fes);
-        auto *a_coeff = new mfem::GridFunctionCoefficient(gf_a);
         gf_mx->UseDevice(true);
         gf_my->UseDevice(true);
         gf_mz->UseDevice(true);
@@ -211,7 +231,34 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
                 ctx.material_fields.material.saturation_magnetisation);
         }
 
-        if (!initialize_exchange_operator_mfem(ctx, *mesh, *fes, *a_coeff, error)) {
+        if (!ctx.material_fields.Ms_element_field.empty() &&
+            !ctx.exchange.mfem.use_consistent_mass) {
+            error = "per-element Ms coefficient requires consistent-mass exchange projection";
+            delete gf_ms;
+            delete gf_a;
+            delete gf_mx;
+            delete gf_my;
+            delete gf_mz;
+            delete fes;
+            delete fec;
+            delete mesh;
+            return false;
+        }
+
+        mfem::Coefficient *a_coeff = ctx.material_fields.A_element_field.empty()
+            ? static_cast<mfem::Coefficient *>(new mfem::GridFunctionCoefficient(gf_a))
+            : static_cast<mfem::Coefficient *>(new ElementwiseScalarCoefficient(
+                  ctx.material_fields.A_element_field,
+                  ctx.material_fields.material.exchange_stiffness));
+        mfem::Coefficient *ms_coeff = ctx.material_fields.Ms_element_field.empty()
+            ? static_cast<mfem::Coefficient *>(new mfem::GridFunctionCoefficient(gf_ms))
+            : static_cast<mfem::Coefficient *>(new ElementwiseScalarCoefficient(
+                  ctx.material_fields.Ms_element_field,
+                  ctx.material_fields.material.saturation_magnetisation));
+
+        if (!initialize_exchange_operator_mfem(
+                ctx, *mesh, *fes, *a_coeff, *ms_coeff, error)) {
+            delete ms_coeff;
             delete a_coeff;
             delete gf_ms;
             delete gf_a;
@@ -233,6 +280,7 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
         ctx.mfem_context.gf_a = gf_a;
         ctx.mfem_context.gf_ms = gf_ms;
         ctx.mfem_context.a_coeff = a_coeff;
+        ctx.mfem_context.ms_coeff = ms_coeff;
         ctx.mfem_context.ready = true;
         debug_checkpoint("context_initialize_mfem:done");
         return true;
@@ -274,6 +322,7 @@ void context_destroy_mfem(Context &ctx)
     destroy_dmi_workspace(ctx);
 
     delete static_cast<mfem::Coefficient *>(ctx.mfem_context.a_coeff);
+    delete static_cast<mfem::Coefficient *>(ctx.mfem_context.ms_coeff);
     delete static_cast<mfem::Vector *>(ctx.exchange.mfem.out_vec);
     delete static_cast<mfem::Vector *>(ctx.exchange.mfem.tmp_vec);
     delete static_cast<mfem::Vector *>(ctx.exchange.mfem.inv_lumped_mass);
@@ -295,6 +344,7 @@ void context_destroy_mfem(Context &ctx)
     ctx.exchange.mfem.mass_form = nullptr;
     ctx.exchange.mfem.exchange_form = nullptr;
     ctx.mfem_context.a_coeff = nullptr;
+    ctx.mfem_context.ms_coeff = nullptr;
     ctx.exchange.mfem.out_vec = nullptr;
     ctx.exchange.mfem.tmp_vec = nullptr;
     ctx.exchange.mfem.inv_lumped_mass = nullptr;

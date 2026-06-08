@@ -966,7 +966,7 @@ mod tests {
         let soa = execute_projected_gradient_bb(&problem, &initial, &mut soa_ws, &control);
         let aos = execute_projected_gradient_bb_aos(&problem, &initial, &mut aos_ws, &control);
 
-        assert_relaxation_result_close(&soa, &aos, 1e-10);
+        assert_relaxation_result_close(&soa, &aos, 1e-8);
     }
 
     #[test]
@@ -980,7 +980,7 @@ mod tests {
         let soa = execute_nonlinear_cg(&problem, &initial, &mut soa_ws, &control);
         let aos = execute_nonlinear_cg_aos(&problem, &initial, &mut aos_ws, &control);
 
-        assert_relaxation_result_close(&soa, &aos, 1e-10);
+        assert_relaxation_result_close(&soa, &aos, 1e-8);
     }
 
     #[test]

@@ -27,12 +27,15 @@ export function MeshJobsPanel() {
   const engineLog = useEngineLogResource();
 
   useEffect(() => {
-    return kernel.bus.on("mesh:topology-rendered", (event) => {
+    const unsubscribe = kernel.bus.on("mesh:topology-rendered", (event) => {
       setViewportConfirmation({
         meshRevision: event.meshRevision,
         rendererId: event.rendererId,
       });
     });
+    return () => {
+      unsubscribe();
+    };
   }, [kernel.bus]);
 
   const model = buildMeshJobsModel({
@@ -74,9 +77,9 @@ export function MeshJobsPanelView({
             {activeStatus}
           </span>
         </div>
-        <div className="fm-footer__empty" role="status">
+        <output className="fm-footer__empty">
           {model.activeTitle}
-        </div>
+        </output>
       </section>
 
       <section className="fm-footer-diagnostics__panel" aria-label="Mesh build pipeline">
@@ -86,27 +89,28 @@ export function MeshJobsPanelView({
             {model.phaseRows.length} phases
           </span>
         </div>
-        <div className="fm-footer-diagnostics__profile-table" role="table">
-          <div
-            className="fm-footer-diagnostics__profile-row fm-footer-diagnostics__profile-row--header"
-            role="row"
-          >
-            <span role="columnheader">Phase</span>
-            <span role="columnheader">Status</span>
-            <span role="columnheader">Progress</span>
-            <span role="columnheader">Detail</span>
-          </div>
-          {model.phaseRows.map((phase) => (
-            <div className="fm-footer-diagnostics__profile-row" role="row" key={phase.id}>
-              <span role="cell">{phase.label}</span>
-              <span role="cell">{phase.status}</span>
-              <span role="cell">
-                {phase.progressPercent === null ? "-" : `${phase.progressPercent}%`}
-              </span>
-              <span role="cell">{phase.detail || "-"}</span>
-            </div>
-          ))}
-        </div>
+        <table className="fm-footer-diagnostics__profile-table">
+          <thead>
+            <tr className="fm-footer-diagnostics__profile-row fm-footer-diagnostics__profile-row--header">
+              <th scope="col">Phase</th>
+              <th scope="col">Status</th>
+              <th scope="col">Progress</th>
+              <th scope="col">Detail</th>
+            </tr>
+          </thead>
+          <tbody>
+            {model.phaseRows.map((phase) => (
+              <tr className="fm-footer-diagnostics__profile-row" key={phase.id}>
+                <td>{phase.label}</td>
+                <td>{phase.status}</td>
+                <td>
+                  {phase.progressPercent === null ? "-" : `${phase.progressPercent}%`}
+                </td>
+                <td>{phase.detail || "-"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </section>
 
       <section className="fm-footer-diagnostics__panel" aria-label="Published mesh output">
@@ -116,14 +120,16 @@ export function MeshJobsPanelView({
             resources
           </span>
         </div>
-        <div className="fm-footer-diagnostics__profile-table" role="table">
-          {model.publishedRows.map((row) => (
-            <div className="fm-footer-diagnostics__profile-row" role="row" key={row.label}>
-              <span role="cell">{row.label}</span>
-              <span role="cell">{row.value}</span>
-            </div>
-          ))}
-        </div>
+        <table className="fm-footer-diagnostics__profile-table">
+          <tbody>
+            {model.publishedRows.map((row) => (
+              <tr className="fm-footer-diagnostics__profile-row" key={row.label}>
+                <th scope="row">{row.label}</th>
+                <td>{row.value}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </section>
 
       <section className="fm-footer-diagnostics__panel" aria-label="Latest successful mesh">
@@ -133,14 +139,16 @@ export function MeshJobsPanelView({
             {historyCount} builds
           </span>
         </div>
-        <div className="fm-footer-diagnostics__profile-table" role="table">
-          {model.latestRows.map((row) => (
-            <div className="fm-footer-diagnostics__profile-row" role="row" key={row.label}>
-              <span role="cell">{row.label}</span>
-              <span role="cell">{row.value}</span>
-            </div>
-          ))}
-        </div>
+        <table className="fm-footer-diagnostics__profile-table">
+          <tbody>
+            {model.latestRows.map((row) => (
+              <tr className="fm-footer-diagnostics__profile-row" key={row.label}>
+                <th scope="row">{row.label}</th>
+                <td>{row.value}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </section>
 
       <section className="fm-footer-diagnostics__panel" aria-label="Mesh build history">
@@ -150,27 +158,28 @@ export function MeshJobsPanelView({
             {historyCount} builds
           </span>
         </div>
-        <div className="fm-footer-diagnostics__profile-table" role="table">
-          <div
-            className="fm-footer-diagnostics__profile-row fm-footer-diagnostics__profile-row--header"
-            role="row"
-          >
-            <span role="columnheader">Mesh</span>
-            <span role="columnheader">Target</span>
-            <span role="columnheader">Reason</span>
-            <span role="columnheader">Nodes</span>
-            <span role="columnheader">Elements</span>
-          </div>
-          {model.historyRows.map((row, index) => (
-            <div className="fm-footer-diagnostics__profile-row" role="row" key={`${row.mesh}:${index}`}>
-              <span role="cell">{row.mesh}</span>
-              <span role="cell">{row.target}</span>
-              <span role="cell">{row.reason}</span>
-              <span role="cell">{row.nodes}</span>
-              <span role="cell">{row.elements}</span>
-            </div>
-          ))}
-        </div>
+        <table className="fm-footer-diagnostics__profile-table">
+          <thead>
+            <tr className="fm-footer-diagnostics__profile-row fm-footer-diagnostics__profile-row--header">
+              <th scope="col">Mesh</th>
+              <th scope="col">Target</th>
+              <th scope="col">Reason</th>
+              <th scope="col">Nodes</th>
+              <th scope="col">Elements</th>
+            </tr>
+          </thead>
+          <tbody>
+            {model.historyRows.map((row) => (
+              <tr className="fm-footer-diagnostics__profile-row" key={row.id}>
+                <td>{row.mesh}</td>
+                <td>{row.target}</td>
+                <td>{row.reason}</td>
+                <td>{row.nodes}</td>
+                <td>{row.elements}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </section>
 
       <section className="fm-footer-diagnostics__panel" aria-label="Viewport mesh confirmation">
@@ -180,14 +189,16 @@ export function MeshJobsPanelView({
             diagnostic
           </span>
         </div>
-        <div className="fm-footer-diagnostics__profile-table" role="table">
-          {model.viewportRows.map((row) => (
-            <div className="fm-footer-diagnostics__profile-row" role="row" key={row.label}>
-              <span role="cell">{row.label}</span>
-              <span role="cell">{row.value}</span>
-            </div>
-          ))}
-        </div>
+        <table className="fm-footer-diagnostics__profile-table">
+          <tbody>
+            {model.viewportRows.map((row) => (
+              <tr className="fm-footer-diagnostics__profile-row" key={row.label}>
+                <th scope="row">{row.label}</th>
+                <td>{row.value}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </section>
 
       <section className="fm-footer-diagnostics__panel" aria-label="Mesh build log">

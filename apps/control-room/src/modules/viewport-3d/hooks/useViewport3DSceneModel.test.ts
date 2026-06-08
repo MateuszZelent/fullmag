@@ -3,11 +3,18 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_CAMERA_REGISTRY_STATE } from "@/kernel/visualization/CameraRegistryController";
+import {
+  ObjectVisualizationController,
+} from "@/kernel/visualization/ObjectVisualizationController";
 
 import {
   resolveViewport3DPrimaryFieldRenderOptions,
   resolveViewport3DPrimaryFieldQuery,
+  resolveViewport3DMeshBackedRegionKeys,
+  resolveViewport3DPartVisualizationSettings,
   resolveViewport3DRegionOverlays,
+  resolveViewport3DRegionSelectionBounds,
+  resolveViewport3DRegionTargetByPartId,
   resolveViewport3DResourceFrameState,
   resolveViewport3DSceneCameraView,
   resolveViewport3DScopedPartVectorFieldRequests,
@@ -143,6 +150,168 @@ describe("useViewport3DSceneModel", () => {
         },
       }),
     ).toHaveLength(1);
+  });
+
+  it("hides authored primitive overlays once a region is backed by current mesh parts", () => {
+    expect(
+      resolveViewport3DRegionOverlays({
+        objectTransformsById: new Map(),
+        realizedRegionKeys: new Set(["film\u0000film:r1"]),
+        regionResource: {
+          geometry_realization_revision: 8,
+          regions: [
+            {
+              bounds_max: [0, 0, 0],
+              bounds_min: [0, 0, 0],
+              enabled: true,
+              interaction_refs: [],
+              material_parameter_fields: [],
+              material_ref: "permalloy",
+              mesh_part_ids: [],
+              name: "core",
+              owner_object_id: "film",
+              owner_path: "film/film:r1",
+              region_id: "film:r1",
+              shape: {
+                center: [0, 0, 0],
+                kind: "sphere",
+                radius: 1,
+              },
+              source: "authored_object_region",
+              source_body_ids: [],
+              source_object_ids: ["film"],
+            },
+          ],
+          scene_revision: 8,
+        },
+        scene: {
+          objects: [
+            {
+              id: "film",
+              regions: [
+                {
+                  name: "core",
+                  region_id: "film:r1",
+                  shape: {
+                    center: [0, 0, 0],
+                    kind: "sphere",
+                    radius: 1,
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    ).toEqual([]);
+  });
+
+  it("maps mesh-backed region parts to the same visualization target as authored overlays", () => {
+    const regions = [
+      {
+        bounds_max: [1, 1, 1],
+        bounds_min: [0, 0, 0],
+        element_count: 12,
+        mesh_part_ids: ["part:film:core"],
+        name: "Core",
+        region_id: "film:core",
+        source_object_ids: ["film"],
+        source_region_candidate_id: "film:core",
+      },
+    ] as never;
+
+    expect(resolveViewport3DMeshBackedRegionKeys(regions)).toEqual(
+      new Set(["film\u0000film:core"]),
+    );
+    expect(resolveViewport3DRegionTargetByPartId(regions)).toEqual(
+      new Map([
+        [
+          "part:film:core",
+          {
+            id: "region:film:film%3Acore",
+            kind: "region",
+            label: "Core",
+          },
+        ],
+      ]),
+    );
+  });
+
+  it("keeps parent visualization active for mesh-backed region parts", () => {
+    const visualization = new ObjectVisualizationController();
+    const part = {
+      id: "part:film:core",
+      label: "Core",
+      object_id: "film",
+    } as never;
+    const regionTarget = {
+      id: "region:film:film%3Acore",
+      kind: "region" as const,
+    };
+    visualization.patchTarget(
+      { id: "film", kind: "object" },
+      {
+        shaderVisible: false,
+        vectorsVisible: true,
+        wireframeVisible: true,
+      },
+    );
+    visualization.patchTarget(regionTarget, { wireframeVisible: false });
+
+    expect(
+      resolveViewport3DPartVisualizationSettings({
+        objectVisualizationSnapshot: visualization.getSnapshot(),
+        part,
+        regionTarget,
+      }),
+    ).toMatchObject({
+      shaderVisible: false,
+      vectorsVisible: true,
+      wireframeVisible: false,
+    });
+  });
+
+  it("resolves selected region bounds from region overlays instead of whole object bounds", () => {
+    expect(
+      resolveViewport3DRegionSelectionBounds(
+        {
+          kind: "object.region.visualization",
+          label: "Core",
+          moduleSource: "explorer",
+          nodeId: "node-region",
+          objectId: "film",
+          ref: {
+            kind: "object.region.visualization",
+            nodeId: "node-region",
+            objectId: "film",
+            regionId: "film:r1",
+            type: "scene-object",
+            visualizationTargetId: "region:film:film%3Ar1",
+          },
+        },
+        [
+          {
+            enabled: true,
+            frame: "object",
+            name: "core",
+            owner_object_id: "film",
+            owner_transform: { translation: [1, 2, 3] },
+            region_id: "film:r1",
+            shape: {
+              axis: [0, 0, 1],
+              center: [0.5, 0, 0],
+              height: 2,
+              kind: "cylinder",
+              radius: 4,
+            },
+          },
+        ],
+      ),
+    ).toEqual({
+      center: [1.5, 2, 3],
+      radius: expect.closeTo(Math.hypot(8, 8, 2) / 2),
+      size: [8, 8, 2],
+    });
   });
 
   it("prefers canonical visualization quantity over stale compatibility state", () => {

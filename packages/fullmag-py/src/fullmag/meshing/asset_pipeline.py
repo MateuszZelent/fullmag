@@ -1051,6 +1051,7 @@ def realize_fem_domain_mesh_asset(
     mesh_workflow: Mapping[str, object] | None = None,
     per_object_recipes: dict[str, PerObjectMeshRecipe] | None = None,
     assembly_policy: SharedMeshAssemblyPolicy | None = None,
+    object_regions: list[dict[str, object]] | None = None,
 ) -> tuple[MeshData, list[dict[str, object]]]:
     mesh, region_markers, _report = _realize_fem_domain_mesh_asset_from_components_impl(
         geometries,
@@ -1059,6 +1060,7 @@ def realize_fem_domain_mesh_asset(
         mesh_workflow=mesh_workflow,
         per_object_recipes=per_object_recipes,
         assembly_policy=assembly_policy,
+        object_regions=object_regions,
     )
     return mesh, region_markers
 
@@ -1071,6 +1073,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
     mesh_workflow: Mapping[str, object] | None = None,
     per_object_recipes: dict[str, PerObjectMeshRecipe] | None = None,
     assembly_policy: SharedMeshAssemblyPolicy | None = None,
+    object_regions: list[dict[str, object]] | None = None,
 ) -> tuple[MeshData, list[dict[str, object]], SharedDomainBuildReport]:
     """Component-aware shared FEM domain mesh with stable geometry identity.
 
@@ -1090,6 +1093,14 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             "shared FEM domain mesh generation requires a declared study universe "
             "(manual size/center or auto padding)"
         )
+    from ._gmsh_occ import _region_uses_conformal_occ_realization
+
+    conformal_object_regions = [
+        region
+        for region in (object_regions or [])
+        if region.get("enabled", True)
+        and _region_uses_conformal_occ_realization(region)
+    ]
     single_geometry_occ_direct = False
     if (
         isinstance(mesh_workflow, Mapping)
@@ -1097,6 +1108,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
     ):
         single_geometry_occ_direct = (
             len(geometries) == 1 and not isinstance(geometries[0], ImportedGeometry)
+            and not conformal_object_regions
         )
 
     bounds_by_name: dict[str, tuple] = {}
@@ -1114,6 +1126,11 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
         from ._gmsh_occ import is_occ_compatible
 
         conformal_occ_direct = is_occ_compatible(geometries)
+        if conformal_object_regions and not conformal_occ_direct:
+            raise ValueError(
+                "automatic conformal object-region meshing requires OCC-compatible "
+                "owner geometries"
+            )
 
     with tempfile.TemporaryDirectory(prefix="fullmag-fem-domain-components-") as tmp_dir:
         component_descriptors: list[ComponentDescriptor] = []
@@ -1187,6 +1204,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             airbox_bounds=airbox_bounds,
             component_aware=True,
             per_object_recipes=per_object_recipes,
+            object_regions=object_regions,
         )
         if per_object_recipes:
             _policy = assembly_policy if assembly_policy is not None else SharedMeshAssemblyPolicy()
@@ -1305,6 +1323,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                                 order=hints.order,
                                 airbox=airbox,
                                 options=mesh_options,
+                                object_regions=object_regions,
                             )
                             try:
                                 result.mesh.validate_strict(
@@ -1364,6 +1383,8 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                             f"{len(result.component_volume_tags)} components"
                         )
                 except Exception as primary_exc:
+                    if conformal_object_regions:
+                        raise
                     # If conformal OCC failed, fall back safely to component-aware STL mesh
                     if build_mode == "conformal_occ":
                         build_mode = "component_aware"
@@ -1407,6 +1428,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                             airbox_bounds=airbox_bounds,
                             component_aware=False,
                             per_object_recipes=per_object_recipes,
+                            object_regions=object_regions,
                         )
                         if per_object_recipes:
                             _policy = (
@@ -1493,6 +1515,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
     source_markers = np.asarray(mesh.element_markers, dtype=np.int32)
     assigned_markers = np.zeros(mesh.n_elements, dtype=np.int32)
     region_markers: list[dict[str, object]] = []
+    object_region_markers: list[dict[str, object]] = []
     if result is not None:
         for used_marker, geometry in enumerate(geometries, start=1):
             source_marker = result.component_marker_tags.get(geometry.geometry_name)
@@ -1505,6 +1528,20 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             region_markers.append(
                 {"geometry_name": geometry.geometry_name, "marker": used_marker}
             )
+        next_marker = len(geometries) + 1
+        for region in conformal_object_regions:
+            region_id = str(region.get("region_id", "")).strip()
+            source_marker = result.object_region_marker_tags.get(region_id)
+            if source_marker is None:
+                raise ValueError(
+                    f"conformal shared FEM domain mesh is missing marker for "
+                    f"object region '{region_id}'"
+                )
+            assigned_markers[source_markers == source_marker] = next_marker
+            object_region_markers.append(
+                {"geometry_name": region_id, "marker": next_marker}
+            )
+            next_marker += 1
     else:
         marker_mapping = _match_geometry_bounds_to_source_markers(geometries, mesh)
         if marker_mapping is not None:
@@ -1581,6 +1618,19 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
         boundary_layer_result=result.boundary_layer_result if result is not None else None,
         orphan_entities=result.orphan_entities if result is not None else [],
     )
+    if object_regions is not None:
+        report = _dc_replace(
+            report,
+            object_region_markers=object_region_markers,
+            authored_regions_count=max(
+                report.authored_regions_count,
+                len(object_regions),
+            ),
+            realized_regions_count=max(
+                report.realized_regions_count,
+                len(object_region_markers),
+            ),
+        )
     emit_progress_event(
         {
             "kind": "mesh_build_summary",
@@ -1604,6 +1654,7 @@ def realize_fem_domain_mesh_asset_from_components(
     mesh_workflow: Mapping[str, object] | None = None,
     per_object_recipes: dict[str, PerObjectMeshRecipe] | None = None,
     assembly_policy: SharedMeshAssemblyPolicy | None = None,
+    object_regions: list[dict[str, object]] | None = None,
 ) -> tuple[MeshData, list[dict[str, object]]]:
     mesh, region_markers, _report = _realize_fem_domain_mesh_asset_from_components_impl(
         geometries,
@@ -1612,6 +1663,7 @@ def realize_fem_domain_mesh_asset_from_components(
         mesh_workflow=mesh_workflow,
         per_object_recipes=per_object_recipes,
         assembly_policy=assembly_policy,
+        object_regions=object_regions,
     )
     return mesh, region_markers
 
@@ -1624,6 +1676,7 @@ def realize_fem_domain_mesh_asset_from_components_with_report(
     mesh_workflow: Mapping[str, object] | None = None,
     per_object_recipes: dict[str, PerObjectMeshRecipe] | None = None,
     assembly_policy: SharedMeshAssemblyPolicy | None = None,
+    object_regions: list[dict[str, object]] | None = None,
 ) -> tuple[MeshData, list[dict[str, object]], SharedDomainBuildReport]:
     return _realize_fem_domain_mesh_asset_from_components_impl(
         geometries,
@@ -1632,6 +1685,7 @@ def realize_fem_domain_mesh_asset_from_components_with_report(
         mesh_workflow=mesh_workflow,
         per_object_recipes=per_object_recipes,
         assembly_policy=assembly_policy,
+        object_regions=object_regions,
     )
 
 

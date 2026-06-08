@@ -937,7 +937,7 @@ struct CurrentLiveApplyFlags {
     clear_preview_cache: bool,
 }
 
-fn apply_current_live_metadata(current: &mut SessionStateResponse, metadata: Value) {
+pub(crate) fn apply_current_live_metadata(current: &mut SessionStateResponse, metadata: Value) {
     current.metadata = Some(metadata);
     if let Some(metadata) = current.metadata.as_ref() {
         if let Some(value) = metadata.get("capabilities") {
@@ -954,6 +954,86 @@ fn apply_current_live_metadata(current: &mut SessionStateResponse, metadata: Val
             .and_then(serde_json::Value::as_str)
         {
             current.session_protocol_version = value.to_string();
+        }
+
+        // REDO ETAP 4: Extract realized parameter fields from execution plan and populate latest_fields
+        if let Some(plan_val) = metadata.get("execution_plan") {
+            let mut ms_field = None;
+            let mut a_field = None;
+            let mut alpha_field = None;
+            let mut fdm_grid = None;
+
+            if let Some(backend_plan) = plan_val.get("backend_plan") {
+                let kind = backend_plan.get("kind").and_then(|k| k.as_str()).unwrap_or("");
+                if kind == "fdm" {
+                    if let Some(material) = backend_plan.get("material") {
+                        if let Some(val) = material.get("ms_field").and_then(|v| serde_json::from_value::<Vec<f64>>(v.clone()).ok()) {
+                            ms_field = Some(val);
+                        }
+                        if let Some(val) = material.get("a_field").and_then(|v| serde_json::from_value::<Vec<f64>>(v.clone()).ok()) {
+                            a_field = Some(val);
+                        }
+                        if let Some(val) = material.get("alpha_field").and_then(|v| serde_json::from_value::<Vec<f64>>(v.clone()).ok()) {
+                            alpha_field = Some(val);
+                        }
+                    }
+                    if let Some(grid) = backend_plan.get("grid").and_then(|g| g.get("cells")).and_then(|c| serde_json::from_value::<[u32; 3]>(c.clone()).ok()) {
+                        fdm_grid = Some(grid);
+                    }
+                } else if kind == "fem" {
+                    if let Some(material) = backend_plan.get("material") {
+                        if let Some(val) = material.get("ms_field").and_then(|v| serde_json::from_value::<Vec<f64>>(v.clone()).ok()) {
+                            ms_field = Some(val);
+                        }
+                        if let Some(val) = material.get("a_field").and_then(|v| serde_json::from_value::<Vec<f64>>(v.clone()).ok()) {
+                            a_field = Some(val);
+                        }
+                        if let Some(val) = material.get("alpha_field").and_then(|v| serde_json::from_value::<Vec<f64>>(v.clone()).ok()) {
+                            alpha_field = Some(val);
+                        }
+                    }
+                }
+            }
+
+            if let Some(vals) = ms_field {
+                let val = if let Some(grid) = fdm_grid {
+                    json!({
+                        "layout": { "grid_cells": grid },
+                        "values": vals
+                    })
+                } else {
+                    json!({
+                        "values": vals
+                    })
+                };
+                current.latest_fields.insert("Ms".to_string(), val);
+            }
+            if let Some(vals) = a_field {
+                let val = if let Some(grid) = fdm_grid {
+                    json!({
+                        "layout": { "grid_cells": grid },
+                        "values": vals
+                    })
+                } else {
+                    json!({
+                        "values": vals
+                    })
+                };
+                current.latest_fields.insert("Aex".to_string(), val);
+            }
+            if let Some(vals) = alpha_field {
+                let val = if let Some(grid) = fdm_grid {
+                    json!({
+                        "layout": { "grid_cells": grid },
+                        "values": vals
+                    })
+                } else {
+                    json!({
+                        "values": vals
+                    })
+                };
+                current.latest_fields.insert("alpha".to_string(), val);
+            }
         }
     }
 }

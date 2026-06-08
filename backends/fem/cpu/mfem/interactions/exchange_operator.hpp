@@ -3,8 +3,8 @@
 #include <string>
 
 namespace mfem {
+class Coefficient;
 class FiniteElementSpace;
-class GridFunctionCoefficient;
 class Mesh;
 } // namespace mfem
 
@@ -29,7 +29,8 @@ bool initialize_exchange_operator_mfem(
     Context &ctx,
     mfem::Mesh &mesh,
     mfem::FiniteElementSpace &fes,
-    mfem::GridFunctionCoefficient &a_coeff,
+    mfem::Coefficient &a_coeff,
+    mfem::Coefficient &ms_coeff,
     std::string &error);
 
 } // namespace fullmag::fem

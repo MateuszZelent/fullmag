@@ -42,6 +42,7 @@ struct MfemContextRuntimeState {
     mfem::GridFunction *gf_a = nullptr;
     mfem::GridFunction *gf_ms = nullptr;
     mfem::Coefficient *a_coeff = nullptr;
+    mfem::Coefficient *ms_coeff = nullptr;
     bool ready = false;
 };
 

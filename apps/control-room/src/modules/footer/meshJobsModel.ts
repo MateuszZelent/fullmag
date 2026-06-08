@@ -13,12 +13,13 @@ export interface MeshJobsLogRow {
   time: string;
 }
 
-export interface MeshJobsSummaryRow {
+interface MeshJobsSummaryRow {
   label: string;
   value: string;
 }
 
 export interface MeshJobsHistoryRow {
+  id: string;
   elements: string;
   mesh: string;
   nodes: string;
@@ -117,16 +118,27 @@ function publishedRows(
 function historyRows(
   history: MeshJobsModelInput["history"],
 ): MeshJobsHistoryRow[] {
-  return (history?.history ?? [])
+  const list = history?.history ?? [];
+  return list
     .slice()
     .reverse()
-    .map((entry) => ({
-      elements: text(entry.element_count),
-      mesh: text(entry.mesh_name),
-      nodes: text(entry.node_count),
-      reason: text(entry.mesh_reason),
-      target: text(entry.mesh_target),
-    }));
+    .map((entry, reverseIdx) => {
+      const originalIndex = list.length - 1 - reverseIdx;
+      const id = text(
+        entry.mesh_revision ??
+          entry.revision ??
+          entry.timestamp_unix_ms ??
+          `mesh-history-${originalIndex}`,
+      );
+      return {
+        id,
+        elements: text(entry.element_count),
+        mesh: text(entry.mesh_name),
+        nodes: text(entry.node_count),
+        reason: text(entry.mesh_reason),
+        target: text(entry.mesh_target),
+      };
+    });
 }
 
 function viewportRows(

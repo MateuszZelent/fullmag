@@ -76,7 +76,7 @@ py-install:
 	docker compose run --rm --no-deps dev bash -lc "python3 -m venv .venv && . .venv/bin/activate && pip install -e 'packages/fullmag-py[meshing]'"
 
 py-test:
-	docker compose run --rm --no-deps dev bash -lc "python3 -m venv .venv && . .venv/bin/activate && pip install -e 'packages/fullmag-py[meshing]' && python -m unittest discover -s packages/fullmag-py/tests -v"
+	docker compose run --rm --no-deps dev bash -lc "python3 -m venv .venv && . .venv/bin/activate && pip install pytest pytest-mock -e 'packages/fullmag-py[meshing]' && python -m unittest discover -s packages/fullmag-py/tests -v"
 
 repo-check:
 	docker compose run --rm --no-deps dev python3 scripts/check_repo_consistency.py

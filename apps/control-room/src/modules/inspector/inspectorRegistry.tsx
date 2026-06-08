@@ -17,6 +17,8 @@ import {
   ObjectRegionMeshPanel,
   ObjectRegionNestedRegionsPanel,
   ObjectRegionOverviewPanel,
+  ObjectRegionTexturePanel,
+  ObjectRegionVisualizationPanel,
 } from "./panels/ObjectRegionsPanel";
 import { ObjectVisualizationPanel } from "./panels/ObjectVisualizationPanel";
 import { PhysicsInteractionPanel } from "./panels/PhysicsInteractionPanel";
@@ -52,7 +54,6 @@ const PANELS: InspectorPanelContribution[] = [
       "airbox.visualization",
       "mesh-part-airbox",
       "object.visualization",
-      "object.region.visualization",
       "mesh-part",
     ],
     component: ObjectVisualizationPanel,
@@ -112,7 +113,13 @@ const PANELS: InspectorPanelContribution[] = [
     id: "object-region-texture",
     title: "Region Texture",
     selectionKinds: ["object.region.texture", "object.region-magnetic-texture"],
-    component: ObjectMagneticTexturePanel,
+    component: ObjectRegionTexturePanel,
+  },
+  {
+    id: "object-region-visualization",
+    title: "Region Visualization",
+    selectionKinds: ["object.region.visualization"],
+    component: ObjectRegionVisualizationPanel,
   },
   {
     id: "object-region-regions",

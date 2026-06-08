@@ -3146,7 +3146,22 @@ fn mesh_manifest_regions(scene: &SceneDocument, mesh: &FemMeshPayload) -> Vec<Me
     scene
         .objects
         .iter()
-        .filter_map(|object| mesh_manifest_region_for_object(object, mesh))
+        .flat_map(|object| {
+            let mut regions = Vec::new();
+            if let Some(region) = mesh_manifest_region_for_object(object, mesh) {
+                regions.push(region);
+            }
+            regions.extend(
+                object
+                    .regions
+                    .iter()
+                    .filter(|region| region.enabled)
+                    .filter_map(|region| {
+                        mesh_manifest_region_for_object_region(object, region, mesh)
+                    }),
+            );
+            regions
+        })
         .collect()
 }
 
@@ -3194,6 +3209,67 @@ fn mesh_manifest_region_for_object(
     })
 }
 
+fn mesh_manifest_region_for_object_region(
+    object: &SceneObject,
+    region: &fullmag_authoring::SceneObjectRegion,
+    mesh: &FemMeshPayload,
+) -> Option<MeshRegionResource> {
+    let region_id = region.region_id.trim();
+    let region_name = region.name.trim();
+    if region_id.is_empty() && region_name.is_empty() {
+        return None;
+    }
+    let geometry_aliases = region_geometry_aliases(region_id, region_name);
+    let matches_region_geometry = |geometry_id: Option<&str>| {
+        geometry_id
+            .map(|id| geometry_aliases.contains(id))
+            .unwrap_or(false)
+    };
+    let mesh_part_ids = mesh
+        .mesh_parts
+        .iter()
+        .filter(|part| {
+            part.object_id
+                .as_deref()
+                .map(|id| object_ids_match(id, &object.id))
+                .unwrap_or(false)
+                && matches_region_geometry(part.geometry_id.as_deref())
+        })
+        .map(|part| part.id.clone())
+        .collect::<Vec<_>>();
+    let element_count = mesh
+        .object_segments
+        .iter()
+        .filter(|segment| {
+            object_ids_match(&segment.object_id, &object.id)
+                && matches_region_geometry(segment.geometry_id.as_deref())
+        })
+        .map(|segment| segment.element_count)
+        .sum::<u32>();
+    if mesh_part_ids.is_empty() && element_count == 0 {
+        return None;
+    }
+    let bounds = region_mesh_bounds(object, region, mesh);
+    let candidate_id = if !region_id.is_empty() {
+        region_id.to_string()
+    } else {
+        region.name.clone()
+    };
+    Some(MeshRegionResource {
+        region_id: candidate_id.clone(),
+        name: region.name.clone(),
+        source_object_ids: vec![object.id.clone()],
+        source_region_candidate_id: Some(candidate_id),
+        material_ref: object.material_ref.clone(),
+        magnetization_ref: object.magnetization_ref.clone(),
+        mesh_part_ids,
+        element_count: Some(element_count),
+        cell_count: None,
+        bounds_min: bounds.map(|(min, _)| min),
+        bounds_max: bounds.map(|(_, max)| max),
+    })
+}
+
 fn object_mesh_bounds(object: &SceneObject, mesh: &FemMeshPayload) -> Option<([f64; 3], [f64; 3])> {
     mesh.mesh_parts
         .iter()
@@ -3208,6 +3284,38 @@ fn object_mesh_bounds(object: &SceneObject, mesh: &FemMeshPayload) -> Option<([f
             })
         })
         .or_else(|| object.geometry.bounds_min.zip(object.geometry.bounds_max))
+}
+
+fn region_mesh_bounds(
+    object: &SceneObject,
+    region: &fullmag_authoring::SceneObjectRegion,
+    mesh: &FemMeshPayload,
+) -> Option<([f64; 3], [f64; 3])> {
+    let region_id = region.region_id.trim();
+    let region_name = region.name.trim();
+    let geometry_aliases = region_geometry_aliases(region_id, region_name);
+    mesh.mesh_parts
+        .iter()
+        .filter(|part| {
+            part.object_id
+                .as_deref()
+                .map(|id| object_ids_match(id, &object.id))
+                .unwrap_or(false)
+                && part
+                    .geometry_id
+                    .as_deref()
+                    .map(|id| geometry_aliases.contains(id))
+                    .unwrap_or(false)
+        })
+        .filter_map(|part| part.bounds_min.zip(part.bounds_max))
+        .fold(None, |current, (min, max)| {
+            Some(match current {
+                Some((current_min, current_max)) => {
+                    (min_vec3(current_min, min), max_vec3(current_max, max))
+                }
+                None => (min, max),
+            })
+        })
 }
 
 fn min_vec3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
@@ -3225,6 +3333,28 @@ fn object_ids_match(a: &str, b: &str) -> bool {
     let clean_a = a.strip_suffix("_geom").unwrap_or(a);
     let clean_b = b.strip_suffix("_geom").unwrap_or(b);
     clean_a == clean_b
+}
+
+fn region_geometry_aliases(region_id: &str, region_name: &str) -> BTreeSet<String> {
+    let mut aliases = BTreeSet::new();
+    push_region_geometry_aliases(&mut aliases, region_id);
+    push_region_geometry_aliases(&mut aliases, region_name);
+    aliases
+}
+
+fn push_region_geometry_aliases(aliases: &mut BTreeSet<String>, value: &str) {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    aliases.insert(trimmed.to_string());
+    if let Some(clean) = trimmed.strip_suffix("_geom") {
+        aliases.insert(clean.to_string());
+    } else {
+        aliases.insert(format!("{trimmed}_geom"));
+    }
+    aliases.insert(trimmed.replace(':', "_"));
+    aliases.insert(trimmed.replace(':', "%3A"));
 }
 
 fn subset_object_mesh(mesh: &FemMeshPayload, object_id: &str) -> Option<FemMeshPayload> {

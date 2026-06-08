@@ -210,6 +210,14 @@ typedef struct {
     const double *kc2_field;          uint64_t kc2_field_len;
     const double *kc3_field;          uint64_t kc3_field_len;
 
+    /* Per-element material coefficients for discontinuous conformal domains.
+       NULL + 0 = use per-node field/scalar fallback. When present, length must
+       equal mesh.n_elements. These fields preserve one shared H1 magnetization
+       space while allowing discontinuous A/Ms coefficients across conformal
+       internal domain boundaries. */
+    const double *ms_element_field;    uint64_t ms_element_field_len;
+    const double *a_element_field;     uint64_t a_element_field_len;
+
     /* Spin-transfer torque */
     int                        has_zhang_li_stt;
     int                        has_slonczewski_stt;

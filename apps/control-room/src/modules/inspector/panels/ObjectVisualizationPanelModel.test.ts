@@ -20,6 +20,7 @@ import {
   buildVisualizationPanelSections,
   colorPickerInputValue,
   geometryScopeDisplayPatch,
+  resolveObjectVisualizationPanelTopologyFreshness,
   resolveVisualizationVectorBudgetRange,
   shouldLoadObjectVisualizationFieldCatalog,
   SURFACE_COLOR_SOURCE_ITEMS,
@@ -74,6 +75,26 @@ describe("ObjectVisualizationPanelModel", () => {
       label: "exchange_field",
       value: "exchange_field",
     });
+  });
+
+  it("does not force region visualization through mesh topology safety mode", () => {
+    const scene = { objects: [{ id: "film", tags: ["mesh:dirty"] }], revision: 2 };
+    const staleManifest = { source_scene_revision: 1 };
+
+    expect(
+      resolveObjectVisualizationPanelTopologyFreshness({
+        manifest: staleManifest,
+        scene,
+        targetKind: "region",
+      }),
+    ).toBeNull();
+    expect(
+      resolveObjectVisualizationPanelTopologyFreshness({
+        manifest: staleManifest,
+        scene,
+        targetKind: "object",
+      }),
+    ).toBe("stale");
   });
 
   it("does not load the field catalog on object selection until surface coloring requests it", () => {
@@ -353,6 +374,68 @@ describe("ObjectVisualizationPanelModel", () => {
       availableNodeCount: 912,
       exact: true,
       max: 912,
+    });
+  });
+
+  it("scales region arrow budgets to mesh parts with encoded region target ids", () => {
+    const meshParts: MeshPart[] = [
+      meshPart({
+        geometry_id: "hole_refinement",
+        id: "part:permalloy_box:hole_refinement",
+        label: "Hole refinement",
+        node_count: 512,
+        object_id: "permalloy_box",
+        role: "object",
+      }),
+      meshPart({
+        geometry_id: "permalloy_box_geom",
+        id: "part:permalloy_box",
+        label: "Permalloy box",
+        node_count: 2048,
+        object_id: "permalloy_box",
+        role: "object",
+      }),
+    ];
+
+    expect(
+      resolveVisualizationVectorBudgetRange({
+        meshParts,
+        target: {
+          id: "region:permalloy_box:hole_refinement",
+          kind: "region",
+        },
+      }),
+    ).toMatchObject({
+      availableNodeCount: 512,
+      exact: true,
+      max: 512,
+    });
+  });
+
+  it("scales region arrow budgets when region ids are URL-encoded", () => {
+    const meshParts: MeshPart[] = [
+      meshPart({
+        geometry_id: "film:core",
+        id: "part:film:core",
+        label: "Core",
+        node_count: 123,
+        object_id: "film",
+        role: "object",
+      }),
+    ];
+
+    expect(
+      resolveVisualizationVectorBudgetRange({
+        meshParts,
+        target: {
+          id: "region:film:film%3Acore",
+          kind: "region",
+        },
+      }),
+    ).toMatchObject({
+      availableNodeCount: 123,
+      exact: true,
+      max: 123,
     });
   });
 

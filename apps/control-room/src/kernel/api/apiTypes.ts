@@ -112,6 +112,10 @@ export type SolverProfileResource =
   components["schemas"]["SolverProfileResource"];
 export type MaterialPatchRequest =
   components["schemas"]["MaterialPatchRequest"];
+export type MaterialPropertiesResource =
+  components["schemas"]["MaterialPropertiesResource"];
+export type MaterialReferenceResource =
+  components["schemas"]["MaterialReferenceResource"];
 export type MaterialResource = components["schemas"]["MaterialResource"];
 export type MagnetizationAssetPatchRequest =
   components["schemas"]["MagnetizationAssetPatchRequest"];
@@ -209,6 +213,22 @@ export type AuthoringTransactionRequest =
       kind: "create_object";
     })
   | (BaseAuthoringTransaction & {
+      kind: "create_material";
+      material_id: string;
+      name: string;
+      properties: MaterialPropertiesResource;
+      references?: MaterialReferenceResource[];
+    })
+  | (BaseAuthoringTransaction & {
+      kind: "patch_material";
+      material_id: string;
+      patch: MaterialPatchRequest;
+    })
+  | (BaseAuthoringTransaction & {
+      kind: "delete_material";
+      material_id: string;
+    })
+  | (BaseAuthoringTransaction & {
       kind: "delete_object";
       object_id: string;
     })
@@ -230,13 +250,18 @@ export type AuthoringTransactionRequest =
   | (BaseAuthoringTransaction & {
       kind: "create_object_region";
       object_id: string;
-      region: JsonObject;
+      region: components["schemas"]["SceneObjectRegion"];
     })
   | (BaseAuthoringTransaction & {
       kind: "patch_object_region";
       object_id: string;
-      patch: JsonObject;
+      patch: components["schemas"]["SceneObjectRegionPatch"];
       region_id: string;
+    })
+  | (BaseAuthoringTransaction & {
+      fields: components["schemas"]["SceneMaterialParameterAssignment"][];
+      kind: "patch_object_material_fields";
+      object_id: string;
     })
   | (BaseAuthoringTransaction & {
       kind: "delete_object_region";
@@ -249,7 +274,7 @@ export type AuthoringTransactionRequest =
       region_ids: string[];
     })
   | (BaseAuthoringTransaction & {
-      coupling: JsonObject;
+      coupling: components["schemas"]["SceneCoupling"];
       kind: "create_coupling";
     })
   | (BaseAuthoringTransaction & {
@@ -284,12 +309,12 @@ export interface ObjectGeometryPatchRequest extends BaseAuthoringTransaction {
   transform?: JsonObject | null;
 }
 export interface ObjectRegionCreateRequest extends BaseAuthoringTransaction {
-  region: JsonObject;
+  region: components["schemas"]["SceneObjectRegion"];
 }
 export type ObjectRegionDuplicateRequest =
   components["schemas"]["ObjectRegionDuplicateRequest"];
 export interface ObjectRegionPatchRequest extends BaseAuthoringTransaction {
-  patch: JsonObject;
+  patch: components["schemas"]["SceneObjectRegionPatch"];
 }
 export type ObjectRegionReorderRequest =
   components["schemas"]["ObjectRegionReorderRequest"];

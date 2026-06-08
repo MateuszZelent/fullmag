@@ -186,7 +186,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(region_ir["shape"]["kind"], "cylinder")
         self.assertEqual(region_ir["shape"]["radius"], 30e-9)
         self.assertEqual(region_ir["mesh_policy"]["maximum_element_size"], 1e-9)
-        self.assertEqual(region_ir["material_overrides"][0]["parameter"], "Ms")
+        self.assertEqual(region_ir["material_overrides"][0]["parameter"], "ms")
         self.assertEqual(
             region_ir["material_overrides"][0]["value"],
             {"kind": "constant", "value": 750e3, "unit": "A/m"},
@@ -195,9 +195,86 @@ class ProblemApiTests(unittest.TestCase):
         assignment_ir = ir["material_parameter_fields"][0]
         self.assertEqual(assignment_ir["assignment_id"], "track_ms_gradient")
         self.assertEqual(assignment_ir["owner_object"], "track")
-        self.assertEqual(assignment_ir["parameter"], "Ms")
+        self.assertEqual(assignment_ir["parameter"], "ms")
         self.assertEqual(assignment_ir["value"]["kind"], "linear")
         self.assertEqual(assignment_ir["value"]["frame"], "object")
+
+    def test_permalloy_difference_hole_region_lowers_to_ir(self) -> None:
+        fm.reset()
+        fm.engine("fem")
+        hole_radius = 50e-9
+        hole_height = 30e-9
+        layer = fm.geometry(
+            fm.Box(300e-9, 1000e-9, hole_height)
+            - fm.Cylinder(radius=hole_radius, height=hole_height),
+            name="permalloy_box",
+        )
+        layer.Ms = 800e3
+        layer.Aex = 13e-12
+        layer.alpha = 0.5
+        layer.mesh(minimum_element_size=10e-9, maximum_element_size=50e-9, order=1)
+        hole_refinement = layer.add_region(
+            "hole_refinement",
+            fm.Cylinder(radius=hole_radius + 30e-9, height=hole_height),
+            priority=10,
+        )
+        hole_refinement.mesh(
+            minimum_element_size=2e-9,
+            maximum_element_size=5e-9,
+            transition_distance=30e-9,
+            order=1,
+        )
+        fm.demag(realization="poisson_robin")
+
+        ir = flat_world._build_problem().to_ir(include_geometry_assets=False)
+
+        geometry = ir["geometry"]["entries"][0]
+        self.assertEqual(geometry["kind"], "difference")
+        self.assertEqual(geometry["base"]["kind"], "box")
+        self.assertEqual(geometry["tool"]["kind"], "cylinder")
+        self.assertEqual(geometry["tool"]["radius"], hole_radius)
+        self.assertEqual(len(ir["object_regions"]), 1)
+        region_ir = ir["object_regions"][0]
+        self.assertEqual(region_ir["owner_object"], "permalloy_box")
+        self.assertEqual(region_ir["name"], "hole_refinement")
+        self.assertEqual(region_ir["shape"]["kind"], "cylinder")
+        self.assertEqual(region_ir["shape"]["radius"], hole_radius + 30e-9)
+        self.assertEqual(region_ir["mesh_policy"]["minimum_element_size"], 2e-9)
+        self.assertEqual(region_ir["mesh_policy"]["maximum_element_size"], 5e-9)
+        self.assertEqual(region_ir["mesh_policy"]["transition_distance"], 30e-9)
+
+    def test_problem_asset_build_receives_owner_geometry_for_object_regions(self) -> None:
+        fm.reset()
+        fm.engine("fem")
+        layer = fm.geometry(
+            fm.Box(size=(200e-9, 80e-9, 4e-9), name="track_geometry"),
+            name="track",
+        )
+        layer.Ms = 800e3
+        layer.Aex = 13e-12
+        layer.alpha = 0.01
+        layer.add_region(
+            "core",
+            fm.Cylinder(radius=30e-9, height=4e-9),
+            region_id="track:core",
+            realization_policy="conformal",
+        )
+        fm.exchange()
+
+        with patch(
+            "fullmag.model.problem.build_geometry_assets_for_request",
+            return_value=None,
+        ) as build_assets:
+            flat_world._build_problem().to_ir(include_geometry_assets=True)
+
+        object_regions = build_assets.call_args.kwargs["object_regions"]
+        self.assertEqual(len(object_regions), 1)
+        self.assertEqual(object_regions[0]["region_id"], "track:core")
+        self.assertEqual(object_regions[0]["owner_object"], "track")
+        self.assertEqual(
+            object_regions[0]["owner_geometry_name"],
+            "track_geom",
+        )
 
     def test_object_region_rejects_zero_ms_override(self) -> None:
         fm.reset()
@@ -1112,6 +1189,27 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(runtime["gpu_count"], 1)
         self.assertEqual(runtime["device_index"], 0)
         self.assertEqual(runtime["cpu_threads"], 8)
+
+    def test_study_execution_mode_serializes_to_ir(self) -> None:
+        fm.reset()
+        study = fm.study("projection_mode")
+        study.engine("fem").mode("extended")
+        film = study.geometry(
+            fm.Box(size=(20e-9, 20e-9, 2e-9), name="film"),
+            name="film",
+        )
+        film.Ms = 800e3
+        film.Aex = 13e-12
+
+        ir = flat_world._build_problem().to_ir(include_geometry_assets=False)
+
+        self.assertEqual(ir["validation_profile"]["execution_mode"], "extended")
+        self.assertEqual(
+            ir["problem_meta"]["runtime_metadata"]["runtime_selection"][
+                "execution_mode"
+            ],
+            "extended",
+        )
 
     def test_random_initializer_serializes_to_ir(self) -> None:
         initializer = fm.texture.random(seed=42)
@@ -2172,6 +2270,7 @@ class ProblemApiTests(unittest.TestCase):
         study.domain_mesh(
             "prebuilt_domain.json",
             region_markers={"left": 1, "right": 2},
+            object_region_markers={"left:skyrmion_core": 3},
         )
         left = study.geometry(fm.Box(20e-9, 20e-9, 10e-9), name="left")
         left.Ms = 800e3
@@ -2200,6 +2299,12 @@ class ProblemApiTests(unittest.TestCase):
             [
                 {"geometry_name": "left", "marker": 1},
                 {"geometry_name": "right", "marker": 2},
+            ],
+        )
+        self.assertEqual(
+            workflow["domain_object_region_markers"],
+            [
+                {"geometry_name": "left:skyrmion_core", "marker": 3},
             ],
         )
 
@@ -2233,12 +2338,33 @@ class ProblemApiTests(unittest.TestCase):
                 {"geometry_name": "right", "marker": 2},
             ],
         )
+        self.assertEqual(
+            ir["geometry_assets"]["fem_domain_mesh_asset"]["object_region_markers"],
+            [
+                {"geometry_name": "left:skyrmion_core", "marker": 3},
+            ],
+        )
 
         rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
         self.assertIn(
-            'study.domain_mesh(source="prebuilt_domain.json", region_markers={"left": 1, "right": 2})',
+            'study.domain_mesh(source="prebuilt_domain.json", region_markers={"left": 1, "right": 2}, object_region_markers={"left:skyrmion_core": 3})',
             rewritten,
         )
+
+    def test_study_domain_mesh_rejects_object_region_marker_collisions(self) -> None:
+        fm.reset()
+        study = fm.study("invalid_explicit_shared_domain")
+        study.engine("fem")
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "object_region_markers marker 1 duplicates a region_markers marker",
+        ):
+            study.domain_mesh(
+                "prebuilt_domain.json",
+                region_markers={"film": 1},
+                object_region_markers={"film:core": 1},
+            )
 
     def test_manual_study_universe_expands_box_fdm_grid_asset_domain(self) -> None:
         fm.reset()

@@ -43,7 +43,7 @@ describe("MeshBuildConfirmDialog", () => {
     expect(html).toContain("airbox_hmax");
     expect(html).toContain("Accept &amp; Build");
     expect(html).toContain("Open Mesh Jobs");
-    expect(html).toContain(">New</span>");
+    expect(html).toContain(">New</th>");
     expect(html).not.toContain("Build console");
     expect(html).not.toContain("Gmsh");
   });

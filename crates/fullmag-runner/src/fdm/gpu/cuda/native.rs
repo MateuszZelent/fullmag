@@ -162,6 +162,16 @@ impl NativeFdmBackend {
     }
 
     pub fn create_multilayer_v2(plan: &fullmag_ir::FdmMultilayerPlanIR) -> Result<Self, RunError> {
+        for layer in &plan.layers {
+            if layer.material.ms_field.is_some()
+                || layer.material.a_field.is_some()
+                || layer.material.alpha_field.is_some()
+            {
+                return Err(RunError {
+                    message: "FDM CUDA native does not yet support cellwise material fields (Ms/Aex/alpha); use FDM CPU reference or disable region material overrides".to_string(),
+                });
+            }
+        }
         let precision = match plan.precision {
             fullmag_ir::ExecutionPrecision::Single => {
                 ffi::fullmag_fdm_precision::FULLMAG_FDM_PRECISION_SINGLE
@@ -396,8 +406,15 @@ impl NativeFdmBackend {
         })
     }
 
-    /// Create a new backend from an FDM execution plan.
     pub fn create(plan: &fullmag_ir::FdmPlanIR) -> Result<Self, RunError> {
+        if plan.material.ms_field.is_some()
+            || plan.material.a_field.is_some()
+            || plan.material.alpha_field.is_some()
+        {
+            return Err(RunError {
+                message: "FDM CUDA native does not yet support cellwise material fields (Ms/Aex/alpha); use FDM CPU reference or disable region material overrides".to_string(),
+            });
+        }
         let grid = ffi::fullmag_fdm_grid_desc {
             nx: plan.grid.cells[0],
             ny: plan.grid.cells[1],

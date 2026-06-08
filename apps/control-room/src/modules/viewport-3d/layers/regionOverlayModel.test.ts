@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import type { components } from "@/kernel/api/generated/openapi-v2-types";
 
 import {
+  buildRegionMeshOverlayModels,
   buildRegionOverlayModels,
   resolveRegionOverlayColor,
   resolveRegionOverlayStyle,
@@ -66,8 +68,10 @@ describe("regionOverlayModel", () => {
       selected: false,
       style: {
         fillOpacity: 0.14,
+        fillVisible: true,
         wireframeOpacity: 0.72,
         wireframeScale: 1.004,
+        wireframeVisible: true,
       },
     });
     expect(models[2]).toMatchObject({
@@ -124,7 +128,7 @@ describe("regionOverlayModel", () => {
         owner_object_id: "film",
         priority: 0,
         region_id: "film:core",
-        shape: { center: [0, 0, 0], kind: "sphere", radius: 1 },
+        shape: { center: [0, 0, 0], kind: "sphere" as const, radius: 1 },
       },
       {
         enabled: true,
@@ -132,7 +136,7 @@ describe("regionOverlayModel", () => {
         owner_object_id: "reference",
         priority: 0,
         region_id: "reference:core",
-        shape: { center: [0, 0, 0], kind: "sphere", radius: 1 },
+        shape: { center: [0, 0, 0], kind: "sphere" as const, radius: 1 },
       },
     ];
 
@@ -213,21 +217,88 @@ describe("regionOverlayModel", () => {
   });
 
   it("uses selected and disabled opacity states", () => {
-    expect(resolveRegionOverlayStyle({ enabled: true, selected: false })).toEqual({
+    expect(resolveRegionOverlayStyle({ enabled: true, selected: false })).toMatchObject({
       fillOpacity: 0.14,
+      fillVisible: true,
       wireframeOpacity: 0.72,
       wireframeScale: 1.004,
+      wireframeVisible: true,
     });
-    expect(resolveRegionOverlayStyle({ enabled: true, selected: true })).toEqual({
+    expect(resolveRegionOverlayStyle({ enabled: true, selected: true })).toMatchObject({
       fillOpacity: 0.25,
+      fillVisible: true,
       wireframeOpacity: 1,
       wireframeScale: 1.008,
+      wireframeVisible: true,
     });
-    expect(resolveRegionOverlayStyle({ enabled: false, selected: true })).toEqual({
-      fillOpacity: 0.08,
-      wireframeOpacity: 0.38,
+    expect(resolveRegionOverlayStyle({ enabled: false, selected: true })).toMatchObject({
+      fillOpacity: 0,
+      fillVisible: false,
+      wireframeOpacity: 0,
       wireframeScale: 1.008,
+      wireframeVisible: false,
     });
+  });
+
+  it("applies per-region visualization target settings to authored overlays", () => {
+    const [surfaceOnly] = buildRegionOverlayModels(
+      [
+        {
+          enabled: true,
+          name: "Core",
+          owner_object_id: "film",
+          priority: 0,
+          region_id: "film:core",
+          shape: { center: [0, 0, 0], kind: "sphere", radius: 1 },
+        },
+      ],
+      {
+        resolveSettings: () =>
+          ({
+            opacityPercent: 50,
+            shaderMonoColor: "#123456",
+            shaderVisible: true,
+            visible: true,
+            wireframeColor: "#abcdef",
+            wireframeOpacityPercent: 80,
+            wireframeVisible: false,
+          }) as never,
+      },
+    );
+
+    expect(surfaceOnly).toMatchObject({
+      style: {
+        fillOpacity: 0.07,
+        fillVisible: true,
+        surfaceColor: "#123456",
+        wireframeOpacity: 0,
+        wireframeVisible: false,
+        wireframeColor: "#abcdef",
+      },
+    });
+
+    expect(
+      buildRegionOverlayModels(
+        [
+          {
+            enabled: true,
+            name: "Core",
+            owner_object_id: "film",
+            priority: 0,
+            region_id: "film:core",
+            shape: { center: [0, 0, 0], kind: "sphere", radius: 1 },
+          },
+        ],
+        {
+          resolveSettings: () =>
+            ({
+              shaderVisible: true,
+              visible: false,
+              wireframeVisible: true,
+            }) as never,
+        },
+      ),
+    ).toEqual([]);
   });
 
   it("drops invalid or unsupported authored shapes", () => {
@@ -246,10 +317,130 @@ describe("regionOverlayModel", () => {
         owner_object_id: "film",
         priority: 1,
         region_id: "film:bad-shape",
-        shape: { center: [0, 0, 0], kind: "torus", radius: 1 },
+        shape: { center: [0, 0, 0], kind: "torus", radius: 1 } as unknown as components["schemas"]["SceneRegionShape"],
       },
     ]);
 
     expect(models).toEqual([]);
+  });
+
+  it("builds mesh-backed overlay indices from current owner topology", () => {
+    const topology = {
+      boundaryFaceCount: 0,
+      boundaryFaces: new Uint32Array(),
+      boundaryMarkers: new Uint32Array(),
+      elementCount: 2,
+      elementMarkers: Uint32Array.from([1, 1]),
+      indices: Uint32Array.from([0, 1, 2, 3, 1, 2, 3, 4]),
+      nodeCount: 5,
+      positions: Float64Array.from([
+        0, 0, 0,
+        1, 0, 0,
+        0, 1, 0,
+        0, 0, 1,
+        10, 0, 0,
+      ]),
+    };
+
+    const models = buildRegionMeshOverlayModels(
+      [
+        {
+          enabled: true,
+          name: "Core",
+          owner_object_id: "film",
+          priority: 0,
+          region_id: "film:core",
+          shape: { center: [0.25, 0.25, 0.25], kind: "sphere", radius: 0.5 },
+        },
+      ],
+      topology,
+      [{ element_count: 2, element_start: 0, object_id: "film" }],
+    );
+
+    expect(models).toHaveLength(1);
+    expect(models[0]).toMatchObject({
+      objectId: "film",
+      regionId: "film:core",
+      style: {
+        fillVisible: true,
+        wireframeVisible: true,
+      },
+    });
+    expect(Array.from(models[0].surfaceIndices ?? [])).toHaveLength(12);
+    expect(Array.from(models[0].edgeIndices ?? [])).toEqual([
+      0, 1, 0, 2, 0, 3, 1, 2, 1, 3, 2, 3,
+    ]);
+  });
+
+  it("keeps mesh-backed overlays scoped to the owner object and region settings", () => {
+    const topology = {
+      boundaryFaceCount: 0,
+      boundaryFaces: new Uint32Array(),
+      boundaryMarkers: new Uint32Array(),
+      elementCount: 2,
+      elementMarkers: Uint32Array.from([1, 1]),
+      indices: Uint32Array.from([0, 1, 2, 3, 1, 2, 3, 4]),
+      nodeCount: 5,
+      positions: Float64Array.from([
+        0, 0, 0,
+        1, 0, 0,
+        0, 1, 0,
+        0, 0, 1,
+        10, 0, 0,
+      ]),
+    };
+
+    const models = buildRegionMeshOverlayModels(
+      [
+        {
+          enabled: true,
+          name: "Core",
+          owner_object_id: "film",
+          priority: 0,
+          region_id: "film:core",
+          shape: { center: [0.25, 0.25, 0.25], kind: "sphere", radius: 0.5 },
+        },
+      ],
+      topology,
+      [{ element_count: 2, element_start: 0, object_id: "other-film" }],
+      {
+        resolveSettings: () =>
+          ({
+            shaderVisible: true,
+            visible: true,
+            wireframeVisible: false,
+          }) as never,
+      },
+    );
+
+    expect(models).toEqual([]);
+
+    const [surfaceOnly] = buildRegionMeshOverlayModels(
+      [
+        {
+          enabled: true,
+          name: "Core",
+          owner_object_id: "film",
+          priority: 0,
+          region_id: "film:core",
+          shape: { center: [0.25, 0.25, 0.25], kind: "sphere", radius: 0.5 },
+        },
+      ],
+      topology,
+      [{ element_count: 2, element_start: 0, object_id: "film" }],
+      {
+        resolveSettings: () =>
+          ({
+            shaderVisible: true,
+            visible: true,
+            wireframeVisible: false,
+          }) as never,
+      },
+    );
+
+    expect(surfaceOnly?.style).toMatchObject({
+      fillVisible: true,
+      wireframeVisible: false,
+    });
   });
 });

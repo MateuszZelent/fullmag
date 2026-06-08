@@ -2,7 +2,7 @@
 
 import type { RequestDiagnosticsController } from "@/kernel/api/RequestDiagnosticsController";
 import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
-import type { DecodedFieldVector } from "@/kernel/api/codecs";
+import type { DecodedFieldVector, DecodedTopology } from "@/kernel/api/codecs";
 import {
   viewport3DAirboxLayerEnabledFromBrowserConfig,
   viewport3DBoundsLayersEnabledFromBrowserConfig,
@@ -95,6 +95,7 @@ import {
   RegionOverlayLayer,
   type RegionOverlaySelection,
 } from "./RegionOverlayLayer";
+import { RegionMeshOverlayLayer } from "./RegionMeshOverlayLayer";
 import { PostProcessingLayer } from "./PostProcessingLayer";
 import { PrimitiveObjectLayer } from "./PrimitiveObjectLayer";
 import { FdmCuboidLayer, type FdmCuboidInstanceModel } from "./FdmCuboidLayer";
@@ -143,6 +144,7 @@ interface Viewport3DSceneProps {
   maxVectorGlyphs: number;
   meshQualityColors: ScalarColorBuffer | null;
   meshQualityOverlayVisible: boolean;
+  meshRegionOverlays: readonly RegionOverlayInput[];
   meshSizeHighlightModel: Viewport3DMeshSizeHighlightModel | null;
   onCameraChange: (camera: Viewport3DCameraChange) => Promise<void> | void;
   onCameraInteractionEnd?: () => void;
@@ -157,6 +159,7 @@ interface Viewport3DSceneProps {
   orbitDebugCommitRevision: number;
   orbitDebugRevision: number;
   fallbackSettings: VisualizationTargetSettings;
+  getRegionSettings: (region: RegionOverlayInput) => VisualizationTargetSettings;
   primitiveModel: Viewport3DPrimitiveRenderModel | null;
   resetCameraRevision: number;
   requestDiagnostics: RequestDiagnosticsController;
@@ -169,6 +172,7 @@ interface Viewport3DSceneProps {
   selectedRegionId: string | null;
   tracker: Viewport3DResourceTracker;
   topologyFreshness: Viewport3DTopologyFreshness;
+  topology: DecodedTopology | null | undefined;
   topologyModel: Viewport3DTopologyRenderModel<Viewport3DMeshPart> | null;
   vectorColorMode: string;
   vectorScale: number;
@@ -589,6 +593,7 @@ function Viewport3DModelLayerStack({
   fieldVector,
   fallbackSettings,
   femDomain,
+  getRegionSettings,
   getObjectSettings,
   getPartSettings,
   inspectEnabled,
@@ -598,6 +603,7 @@ function Viewport3DModelLayerStack({
   maxVectorGlyphs,
   meshQualityColors,
   meshQualityOverlayVisible,
+  meshRegionOverlays,
   meshSizeHighlightModel,
   onInspectClear,
   onInspectSample,
@@ -611,6 +617,7 @@ function Viewport3DModelLayerStack({
   selectedObjectId,
   selectedRegionId,
   topologyFreshness,
+  topology,
   topologyModel,
   tracker,
   vectorColorMode,
@@ -629,12 +636,14 @@ function Viewport3DModelLayerStack({
   | "fieldVector"
   | "fallbackSettings"
   | "femDomain"
+  | "getRegionSettings"
   | "getObjectSettings"
   | "getPartSettings"
   | "magnetizationTexturePreviews"
   | "maxVectorGlyphs"
   | "meshQualityColors"
   | "meshQualityOverlayVisible"
+  | "meshRegionOverlays"
   | "meshSizeHighlightModel"
   | "inspectEnabled"
   | "inspectQuantityId"
@@ -649,6 +658,7 @@ function Viewport3DModelLayerStack({
   | "regionOverlays"
   | "selectedObjectId"
   | "selectedRegionId"
+  | "topology"
   | "topologyFreshness"
   | "topologyModel"
   | "tracker"
@@ -732,7 +742,20 @@ function Viewport3DModelLayerStack({
         />
       ) : null}
       {regionOverlayVisible && viewport3DOverlayLayersEnabledFromBrowserConfig() ? (
+        <RegionMeshOverlayLayer
+          getRegionSettings={getRegionSettings}
+          magneticParts={femDomain.magneticParts}
+          onSelectRegion={onSelectRegion}
+          regions={meshRegionOverlays}
+          selectedObjectId={selectedObjectId}
+          selectedRegionId={selectedRegionId}
+          topology={topology}
+          tracker={tracker}
+        />
+      ) : null}
+      {regionOverlayVisible && viewport3DOverlayLayersEnabledFromBrowserConfig() ? (
         <RegionOverlayLayer
+          getRegionSettings={getRegionSettings}
           onSelectRegion={onSelectRegion}
           regions={regionOverlays}
           selectedObjectId={selectedObjectId}
@@ -845,10 +868,12 @@ export function Viewport3DScene({
   fallbackSettings,
   getObjectSettings,
   getPartSettings,
+  getRegionSettings,
   magnetizationTexturePreviews,
   maxVectorGlyphs,
   meshQualityColors,
   meshQualityOverlayVisible,
+  meshRegionOverlays,
   meshSizeHighlightModel,
   onCameraChange,
   onCameraInteractionEnd,
@@ -873,6 +898,7 @@ export function Viewport3DScene({
   selectedObjectId,
   selectedRegionId,
   tracker,
+  topology,
   topologyFreshness,
   topologyModel,
   vectorColorMode,
@@ -1005,11 +1031,13 @@ export function Viewport3DScene({
         femDomain={femDomain}
         getObjectSettings={getObjectSettings}
         getPartSettings={getPartSettings}
+        getRegionSettings={getRegionSettings}
         magnetizationTexturePreviews={magnetizationTexturePreviews}
         materialProfile={materialProfile}
         maxVectorGlyphs={maxVectorGlyphs}
         meshQualityColors={meshQualityColors}
         meshQualityOverlayVisible={meshQualityOverlayVisible}
+        meshRegionOverlays={meshRegionOverlays}
         meshSizeHighlightModel={meshSizeHighlightModel}
         onInspectClear={onInspectClear}
         onInspectSample={onInspectSample}
@@ -1022,6 +1050,7 @@ export function Viewport3DScene({
         regionOverlays={regionOverlays}
         selectedObjectId={selectedObjectId}
         selectedRegionId={selectedRegionId}
+        topology={topology}
         topologyFreshness={topologyFreshness}
         topologyModel={topologyModel}
         tracker={tracker}

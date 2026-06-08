@@ -21,7 +21,7 @@ pub struct SceneDocument {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub objects: Vec<SceneObject>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub couplings: Vec<Value>,
+    pub couplings: Vec<SceneCoupling>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub materials: Vec<SceneMaterialAsset>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -80,11 +80,11 @@ pub struct SceneObject {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mesh_override: Option<ScriptBuilderPerGeometryMeshState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub regions: Vec<Value>,
+    pub regions: Vec<SceneObjectRegion>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allocated_region_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub material_parameter_fields: Vec<Value>,
+    pub material_parameter_fields: Vec<SceneMaterialParameterAssignment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
     #[serde(default = "default_true")]
@@ -149,6 +149,18 @@ pub struct SceneMaterialAsset {
     pub id: String,
     pub name: String,
     pub properties: ScriptBuilderMaterialState,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<SceneMaterialReference>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct SceneMaterialReference {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub citation: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -745,4 +757,333 @@ fn default_mesh() -> ScriptBuilderMeshState {
         adaptive_max_passes: 5,
         adaptive_error_tolerance: String::new(),
     }
+}
+
+// Strongly typed Scene Document region structures
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, utoipa::ToSchema)]
+pub struct SceneObjectRegion {
+    #[serde(default)]
+    pub region_id: String,
+    #[serde(default)]
+    pub owner_object: String,
+    pub name: String,
+    pub shape: SceneRegionShape,
+    #[serde(default)]
+    pub frame: SceneRegionFrame,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub priority: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh_policy: Option<SceneRegionMeshPolicy>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub material_overrides: Vec<SceneRegionMaterialOverride>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub texture_override: Option<SceneTextureOverride>,
+    #[serde(default)]
+    pub realization_policy: SceneRegionRealizationPolicy,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, utoipa::ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SceneRegionShape {
+    Box {
+        size: [f64; 3],
+        center: [f64; 3],
+    },
+    Cylinder {
+        radius: f64,
+        height: f64,
+        center: [f64; 3],
+        axis: [f64; 3],
+    },
+    Sphere {
+        radius: f64,
+        center: [f64; 3],
+    },
+    Csg {
+        #[schema(value_type = Object)]
+        expression: Box<fullmag_ir::GeometryEntryIR>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SceneRegionFrame {
+    #[default]
+    Object,
+    World,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SceneRegionRealizationPolicy {
+    #[default]
+    Inherit,
+    Conformal,
+    Project,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
+pub struct SceneRegionMeshPolicy {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_element_size: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_element_size: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transition_distance: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
+pub struct SceneRegionMaterialOverride {
+    pub parameter: SceneMaterialParameterName,
+    pub value: SceneMaterialParameterField,
+    #[serde(default)]
+    pub priority: i32,
+    #[serde(default)]
+    pub conflict_policy: SceneRegionConflictPolicy,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SceneMaterialParameterName {
+    #[serde(alias = "Ms", alias = "ms")]
+    Ms,
+    #[serde(alias = "Aex", alias = "aex")]
+    Aex,
+    #[serde(alias = "Alpha", alias = "alpha")]
+    Alpha,
+    #[serde(alias = "Ku1", alias = "ku1")]
+    Ku1,
+    #[serde(alias = "Ku2", alias = "ku2")]
+    Ku2,
+    #[serde(alias = "AnisotropyAxis", alias = "anisotropyAxis", alias = "anisotropy_axis")]
+    AnisotropyAxis,
+    #[serde(alias = "Kc1", alias = "kc1")]
+    Kc1,
+    #[serde(alias = "Kc2", alias = "kc2")]
+    Kc2,
+    #[serde(alias = "Kc3", alias = "kc3")]
+    Kc3,
+    #[serde(alias = "Dind", alias = "dind")]
+    Dind,
+    #[serde(alias = "Dbulk", alias = "dbulk")]
+    Dbulk,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
+#[serde(untagged)]
+pub enum SceneMaterialParameterValue {
+    Scalar(f64),
+    Vector([f64; 3]),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SceneMaterialParameterField {
+    Constant {
+        value: SceneMaterialParameterValue,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unit: Option<String>,
+    },
+    Linear {
+        base: f64,
+        gradient: [f64; 3],
+        #[serde(default)]
+        frame: SceneRegionFrame,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unit: Option<String>,
+    },
+    Radial {
+        center: [f64; 3],
+        radius: f64,
+        inside: f64,
+        outside: f64,
+        #[serde(default)]
+        frame: SceneRegionFrame,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unit: Option<String>,
+    },
+    Sampled {
+        asset_id: String,
+        component_count: u32,
+        location: SceneMaterialFieldLocation,
+        unit: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SceneMaterialFieldLocation {
+    Cell,
+    Node,
+    Element,
+    Quadrature,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SceneRegionConflictPolicy {
+    #[default]
+    Error,
+    #[serde(rename = "higher_priority_wins")]
+    HigherPriorityWins,
+    #[serde(rename = "min_mesh_size_wins")]
+    MinMeshSizeWins,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
+pub struct SceneTextureOverride {
+    pub initial_magnetization: SceneInitialMagnetization,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SceneInitialMagnetization {
+    Uniform {
+        value: [f64; 3],
+    },
+    #[serde(alias = "random")]
+    RandomSeeded {
+        seed: u64,
+    },
+    SampledField {
+        values: Vec<[f64; 3]>,
+    },
+    PresetTexture {
+        preset_kind: String,
+        #[serde(default, alias = "params")]
+        preset_params: BTreeMap<String, serde_json::Value>,
+        #[serde(default)]
+        mapping: SceneTextureMapping,
+        #[serde(default)]
+        texture_transform: SceneTextureTransform3D,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
+pub struct SceneTextureMapping {
+    #[serde(default = "default_mapping_space")]
+    pub space: String,
+    #[serde(default = "default_mapping_projection")]
+    pub projection: String,
+    #[serde(default = "default_mapping_clamp_mode")]
+    pub clamp_mode: String,
+}
+
+impl Default for SceneTextureMapping {
+    fn default() -> Self {
+        Self {
+            space: default_mapping_space(),
+            projection: default_mapping_projection(),
+            clamp_mode: default_mapping_clamp_mode(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
+pub struct SceneTextureTransform3D {
+    #[serde(default = "zero_vec3")]
+    pub translation: [f64; 3],
+    #[serde(default = "identity_quat")]
+    pub rotation_quat: [f64; 4],
+    #[serde(default = "one_vec3")]
+    pub scale: [f64; 3],
+    #[serde(default = "zero_vec3")]
+    pub pivot: [f64; 3],
+}
+
+impl Default for SceneTextureTransform3D {
+    fn default() -> Self {
+        Self {
+            translation: [0.0, 0.0, 0.0],
+            rotation_quat: [0.0, 0.0, 0.0, 1.0],
+            scale: [1.0, 1.0, 1.0],
+            pivot: [0.0, 0.0, 0.0],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
+pub struct SceneMaterialParameterAssignment {
+    pub assignment_id: String,
+    pub owner_object: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region_id: Option<String>,
+    pub parameter: SceneMaterialParameterName,
+    pub value: SceneMaterialParameterField,
+    #[serde(default)]
+    pub priority: i32,
+    #[serde(default)]
+    pub conflict_policy: SceneRegionConflictPolicy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
+pub struct SceneCoupling {
+    pub coupling_id: String,
+    pub kind: SceneCouplingKind,
+    pub source: SceneCouplingEndpoint,
+    pub target: SceneCouplingEndpoint,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    pub parameters: SceneCouplingParameters,
+    #[serde(default)]
+    pub capability_policy: SceneCouplingCapabilityPolicy,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SceneCouplingKind {
+    Exchange,
+    Rkky,
+    InterlayerExchange,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SceneCouplingEndpoint {
+    Object { object: String },
+    Region { object: String, region_id: String },
+    Surface { object: String, selector: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SceneCouplingParameters {
+    Exchange {
+        mode: SceneExchangeCouplingMode,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scale: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        inter_exchange: Option<f64>,
+    },
+    Rkky {
+        #[serde(alias = "J1")]
+        j1: f64,
+    },
+    InterlayerExchange {
+        #[serde(alias = "J1")]
+        j1: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        j2: Option<f64>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SceneExchangeCouplingMode {
+    HarmonicMean,
+    Explicit,
+    Disabled,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SceneCouplingCapabilityPolicy {
+    #[default]
+    RequireRuntime,
+    AuthoredOnly,
 }

@@ -15,9 +15,11 @@ use crate::session::effective_runtime_status_code;
 use crate::types::{AppState, CommandLifecycleState, SessionCommand, TrackedCommandRecord};
 use fullmag_authoring::{
     geometry_blocks_solver_run, realize_geometry_scene, GeometryBackendTarget,
-    GeometryRealizationSnapshot, SceneDocument, SceneObject,
+    GeometryRealizationSnapshot, SceneDocument, SceneGeometry, SceneObject,
 };
-use fullmag_ir::{GeometryEntryIR, InitialMagnetizationIR, MagnetIR, MaterialIR, RegionIR};
+use fullmag_ir::{
+    GeometryEntryIR, InitialMagnetizationIR, MagnetIR, MaterialIR, ObjectRegionIR, RegionIR,
+};
 
 const MU0_T_PER_APM: f64 = 4.0 * std::f64::consts::PI * 1.0e-7;
 
@@ -410,6 +412,8 @@ fn scene_problem_patch_for_mesh(scene: &SceneDocument) -> Result<serde_json::Val
     let mut materials = Vec::with_capacity(scene.objects.len());
     let mut magnets = Vec::with_capacity(scene.objects.len());
 
+    let mut object_regions = Vec::new();
+
     for object in &scene.objects {
         let geometry_name = object.id.clone();
         let region_name = object.id.clone();
@@ -430,6 +434,10 @@ fn scene_problem_patch_for_mesh(scene: &SceneDocument) -> Result<serde_json::Val
             geometry: geometry_name,
             name: region_name.clone(),
         });
+        for region in &object.regions {
+            let ir: ObjectRegionIR = region.clone().into();
+            object_regions.push(ir);
+        }
         materials.push(MaterialIR {
             alpha_field: None,
             a_field: None,
@@ -479,6 +487,7 @@ fn scene_problem_patch_for_mesh(scene: &SceneDocument) -> Result<serde_json::Val
         "magnets": magnets,
         "materials": materials,
         "regions": regions,
+        "object_regions": object_regions,
         "source_scene_revision": scene.revision,
         "universe": study_universe_for_problem_patch(scene)?,
     }))
@@ -532,69 +541,7 @@ fn scene_object_geometry_entry(
         )));
     }
 
-    let params = &object.geometry.geometry_params;
-    let base = match object.geometry.geometry_kind.as_str() {
-        "Box" => GeometryEntryIR::Box {
-            name: geometry_name.to_string(),
-            size: vec3_param(params, "size")
-                .or_else(|| vec3_param(params, "dimensions"))
-                .ok_or_else(|| {
-                    ApiError::bad_request(format!(
-                        "Box object '{}' is missing size/dimensions",
-                        object.id
-                    ))
-                })?,
-        },
-        "Cylinder" => GeometryEntryIR::Cylinder {
-            height: number_param(params, "height", &object.id)?,
-            name: geometry_name.to_string(),
-            radius: number_param(params, "radius", &object.id)?,
-        },
-        "SinWaveguide" => GeometryEntryIR::SinWaveguide {
-            amplitude: number_param(params, "amplitude", &object.id)?,
-            height: number_param(params, "height", &object.id)?,
-            length: number_param(params, "length", &object.id)?,
-            name: geometry_name.to_string(),
-            period: number_param(params, "period", &object.id)?,
-            phase: optional_number_param(params, "phase").unwrap_or(0.0),
-            width: number_param(params, "width", &object.id)?,
-            z0: optional_number_param(params, "z0").unwrap_or(0.0),
-        },
-        "ArchWaveguide" => GeometryEntryIR::ArchWaveguide {
-            arch_height: number_param(params, "arch_height", &object.id)?,
-            height: number_param(params, "height", &object.id)?,
-            length: number_param(params, "length", &object.id)?,
-            name: geometry_name.to_string(),
-            width: number_param(params, "width", &object.id)?,
-            z0: optional_number_param(params, "z0").unwrap_or(0.0),
-        },
-        "Ellipsoid" => GeometryEntryIR::Ellipsoid {
-            name: geometry_name.to_string(),
-            radii: vec3_param(params, "radii").unwrap_or([
-                number_param(params, "rx", &object.id)?,
-                number_param(params, "ry", &object.id)?,
-                number_param(params, "rz", &object.id)?,
-            ]),
-        },
-        "Sphere" => GeometryEntryIR::Sphere {
-            name: geometry_name.to_string(),
-            radius: number_param(params, "radius", &object.id)?,
-        },
-        "Ellipse" => GeometryEntryIR::Ellipse {
-            height: number_param(params, "height", &object.id)?,
-            name: geometry_name.to_string(),
-            radii: vec2_param(params, "radii").unwrap_or([
-                number_param(params, "rx", &object.id)?,
-                number_param(params, "ry", &object.id)?,
-            ]),
-        },
-        other => {
-            return Err(ApiError::bad_request(format!(
-                "mesh build cannot lower geometry kind '{}' for object '{}'",
-                other, object.id
-            )));
-        }
-    };
+    let base = scene_geometry_entry(&object.geometry, geometry_name, &object.id)?;
 
     if is_zero_vec3(object.transform.translation) {
         Ok(base)
@@ -605,6 +552,110 @@ fn scene_object_geometry_entry(
             name: geometry_name.to_string(),
         })
     }
+}
+
+fn scene_geometry_entry(
+    geometry: &SceneGeometry,
+    geometry_name: &str,
+    object_id: &str,
+) -> Result<GeometryEntryIR, ApiError> {
+    let params = &geometry.geometry_params;
+    match geometry.geometry_kind.as_str() {
+        "Box" => Ok(GeometryEntryIR::Box {
+            name: geometry_name.to_string(),
+            size: vec3_param(params, "size")
+                .or_else(|| vec3_param(params, "dimensions"))
+                .ok_or_else(|| {
+                    ApiError::bad_request(format!(
+                        "Box object '{}' is missing size/dimensions",
+                        object_id
+                    ))
+                })?,
+        }),
+        "Cylinder" => Ok(GeometryEntryIR::Cylinder {
+            height: number_param(params, "height", object_id)?,
+            name: geometry_name.to_string(),
+            radius: number_param(params, "radius", object_id)?,
+        }),
+        "SinWaveguide" => Ok(GeometryEntryIR::SinWaveguide {
+            amplitude: number_param(params, "amplitude", object_id)?,
+            height: number_param(params, "height", object_id)?,
+            length: number_param(params, "length", object_id)?,
+            name: geometry_name.to_string(),
+            period: number_param(params, "period", object_id)?,
+            phase: optional_number_param(params, "phase").unwrap_or(0.0),
+            width: number_param(params, "width", object_id)?,
+            z0: optional_number_param(params, "z0").unwrap_or(0.0),
+        }),
+        "ArchWaveguide" => Ok(GeometryEntryIR::ArchWaveguide {
+            arch_height: number_param(params, "arch_height", object_id)?,
+            height: number_param(params, "height", object_id)?,
+            length: number_param(params, "length", object_id)?,
+            name: geometry_name.to_string(),
+            width: number_param(params, "width", object_id)?,
+            z0: optional_number_param(params, "z0").unwrap_or(0.0),
+        }),
+        "Ellipsoid" => Ok(GeometryEntryIR::Ellipsoid {
+            name: geometry_name.to_string(),
+            radii: vec3_param(params, "radii").unwrap_or([
+                number_param(params, "rx", object_id)?,
+                number_param(params, "ry", object_id)?,
+                number_param(params, "rz", object_id)?,
+            ]),
+        }),
+        "Sphere" => Ok(GeometryEntryIR::Sphere {
+            name: geometry_name.to_string(),
+            radius: number_param(params, "radius", object_id)?,
+        }),
+        "Ellipse" => Ok(GeometryEntryIR::Ellipse {
+            height: number_param(params, "height", object_id)?,
+            name: geometry_name.to_string(),
+            radii: vec2_param(params, "radii").unwrap_or([
+                number_param(params, "rx", object_id)?,
+                number_param(params, "ry", object_id)?,
+            ]),
+        }),
+        "Difference" => {
+            let base = nested_scene_geometry_param(params, "base", object_id)?;
+            let tool = nested_scene_geometry_param(params, "tool", object_id)?;
+            Ok(GeometryEntryIR::Difference {
+                name: geometry_name.to_string(),
+                base: Box::new(scene_geometry_entry(
+                    &base,
+                    &format!("{geometry_name}_base"),
+                    object_id,
+                )?),
+                tool: Box::new(scene_geometry_entry(
+                    &tool,
+                    &format!("{geometry_name}_tool"),
+                    object_id,
+                )?),
+            })
+        }
+        other => Err(ApiError::bad_request(format!(
+            "mesh build cannot lower geometry kind '{}' for object '{}'",
+            other, object_id
+        ))),
+    }
+}
+
+fn nested_scene_geometry_param(
+    params: &serde_json::Value,
+    key: &str,
+    object_id: &str,
+) -> Result<SceneGeometry, ApiError> {
+    let value = params.get(key).ok_or_else(|| {
+        ApiError::bad_request(format!(
+            "Difference object '{}' is missing '{}' geometry",
+            object_id, key
+        ))
+    })?;
+    serde_json::from_value(value.clone()).map_err(|error| {
+        ApiError::bad_request(format!(
+            "Difference object '{}' has invalid '{}' geometry: {error}",
+            object_id, key
+        ))
+    })
 }
 
 fn initial_magnetization_for_object(

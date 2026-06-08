@@ -2,13 +2,7 @@
 
 import type { ThreeEvent } from "@react-three/fiber";
 import { useEffect, useMemo } from "react";
-import {
-  BoxGeometry,
-  BufferAttribute,
-  BufferGeometry,
-  CylinderGeometry,
-  SphereGeometry,
-} from "three";
+import { BufferAttribute, BufferGeometry, SphereGeometry } from "three";
 import {
   RENDER_POLICIES,
   materialPolicyProps,
@@ -33,40 +27,13 @@ import {
   wireframeColorFromSettings,
   wireframeOpacityFromSettings,
 } from "./viewport3DLayerSettings";
-
-export function trackPrimitiveObjectGeometry(
-  tracker: Viewport3DResourceTracker,
-  object: Viewport3DPrimitiveObject,
-): BufferGeometry {
-  return tracker.track("geometry", createPrimitiveObjectGeometry(object));
-}
-
-export function releasePrimitiveObjectGeometry(
-  tracker: Viewport3DResourceTracker,
-  geometry: BufferGeometry,
-): void {
-  tracker.release("geometry", geometry);
-}
-
-export function buildPrimitiveTransformGizmoSegments(
-  object: Viewport3DPrimitiveObject,
-): Float32Array {
-  const length = Math.max(Math.max(...object.bounds.size) * 0.36, 1e-12);
-  return Float32Array.from([
-    0, 0, 0,
-    length, 0, 0,
-    0, 0, 0,
-    0, length, 0,
-    0, 0, 0,
-    0, 0, length,
-  ]);
-}
-
-export function shouldRenderPrimitiveTransformGizmo(
-  settings: VisualizationTargetSettings,
-): boolean {
-  return settings.visible && settings.wireframeVisible;
-}
+import {
+  buildPrimitiveTransformGizmoSegments,
+  releasePrimitiveObjectGeometry,
+  shouldRenderPrimitiveObject,
+  shouldRenderPrimitiveTransformGizmo,
+  trackPrimitiveObjectGeometry,
+} from "./PrimitiveObjectLayerModel";
 
 export function PrimitiveObjectLayer({
   colors,
@@ -144,7 +111,7 @@ function PrimitiveObject({
     [edgeGeometry, tracker],
   );
 
-  if (!settings.visible || settings.primitiveVisible === false) return null;
+  if (!shouldRenderPrimitiveObject(object, settings)) return null;
 
 
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
@@ -171,9 +138,15 @@ function PrimitiveObject({
     >
       {settings.shaderVisible ? (
         <mesh
+          onPointerDown={handlePointerDown}
           renderOrder={surfaceMaterialPolicyProps(opacity).transparent
             ? RENDER_POLICIES.contextSurface.renderOrder
             : RENDER_POLICIES.solidSurface.renderOrder}
+          userData={{
+            fallbackLabel: object.fallbackLabel,
+            objectId: object.objectId,
+            primitive: true,
+          }}
         >
           <primitive attach="geometry" object={geometry} />
           <meshStandardMaterial
@@ -187,7 +160,13 @@ function PrimitiveObject({
       {settings.wireframeVisible && edgeGeometry ? (
         <lineSegments
           geometry={edgeGeometry}
+          onPointerDown={handlePointerDown}
           renderOrder={RENDER_POLICIES.featureEdges.renderOrder}
+          userData={{
+            fallbackLabel: object.fallbackLabel,
+            objectId: object.objectId,
+            primitive: true,
+          }}
         >
           <lineBasicMaterial
             color={wireframeColorFromSettings(settings, colors.wire)}
@@ -200,7 +179,14 @@ function PrimitiveObject({
         </lineSegments>
       ) : null}
       {settings.boundsVisible ? (
-        <mesh>
+        <mesh
+          onPointerDown={handlePointerDown}
+          userData={{
+            fallbackLabel: object.fallbackLabel,
+            objectId: object.objectId,
+            primitive: true,
+          }}
+        >
           <boxGeometry
             args={[
               Math.max(object.bounds.size[0], 1e-9),
@@ -303,17 +289,4 @@ function PrimitiveObjectGizmo({
       ) : null}
     </>
   );
-}
-
-export function createPrimitiveObjectGeometry(
-  object: Viewport3DPrimitiveObject,
-): BufferGeometry {
-  const [x, y, z] = object.bounds.size;
-  if (object.kind === "sphere") {
-    return new SphereGeometry(Math.max(x, y, z) / 2, 32, 16);
-  }
-  if (object.kind === "cylinder") {
-    return new CylinderGeometry(x / 2, x / 2, y, 32, 1);
-  }
-  return new BoxGeometry(x, y, z);
 }

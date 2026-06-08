@@ -100,6 +100,109 @@ mod tests {
         assert!(terms.external_field.is_none());
     }
 
+    #[test]
+    fn spatial_material_fields_exchange_energy_field_taylor_consistency() {
+        let grid = GridShape::new(4, 3, 1).unwrap();
+        let cs = CellSize::new(5.0e-9, 5.0e-9, 5.0e-9).unwrap();
+
+        // Nonuniform A_i: left half (x < 2) is 10e-12, right half (x >= 2) is 20e-12
+        let mut a_field = vec![0.0; grid.cell_count()];
+        // Nonuniform Ms_i: varying around 800e3
+        let mut ms_field = vec![0.0; grid.cell_count()];
+
+        for flat_idx in 0..grid.cell_count() {
+            let x = flat_idx % grid.nx;
+            a_field[flat_idx] = if x < 2 { 10.0e-12 } else { 20.0e-12 };
+            ms_field[flat_idx] = 800.0e3 + 50.0e3 * (x as f64);
+        }
+
+        let problem = ExchangeLlgProblem::with_terms_and_mask(
+            grid,
+            cs,
+            MaterialParameters::new(800.0e3, 13.0e-12, 0.5).unwrap(),
+            LlgConfig::default(),
+            EffectiveFieldTerms {
+                exchange: true,
+                demag: false,
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap()
+        .with_spatial_fields(Some(ms_field), Some(a_field), None)
+        .unwrap();
+
+        // Non-collinear magnetization
+        let mut m = vec![[0.0; 3]; grid.cell_count()];
+        for i in 0..grid.cell_count() {
+            let angle = (i as f64) * 0.45;
+            m[i] = [angle.cos(), angle.sin(), 0.0];
+        }
+        let state = problem.new_state(m.clone()).unwrap();
+
+        // Tangent perturbation dm with dm_i dot m_i = 0
+        let mut dm = vec![[0.0; 3]; grid.cell_count()];
+        for i in 0..grid.cell_count() {
+            let m_i = m[i];
+            dm[i] = [-m_i[1], m_i[0], 0.0];
+        }
+
+        // Calculate analytical directional derivative:
+        // dE = - \sum_i \mu_0 * V_cell * M_{s,i} * \vec{H}_{ex,i} \cdot \vec{dm}_i
+        let h_ex = problem.exchange_field(&state).unwrap();
+        let cell_volume = cs.volume();
+        let mut analytic_derivative = 0.0;
+        for i in 0..grid.cell_count() {
+            let dot_prod = h_ex[i][0] * dm[i][0] + h_ex[i][1] * dm[i][1] + h_ex[i][2] * dm[i][2];
+            analytic_derivative += -MU0 * cell_volume * problem.ms_at(i) * dot_prod;
+        }
+
+        // Finite difference
+        let eps = 1e-7;
+
+        // Plus perturbation state
+        let mut m_plus = vec![[0.0; 3]; grid.cell_count()];
+        for i in 0..grid.cell_count() {
+            let pert = [
+                m[i][0] + eps * dm[i][0],
+                m[i][1] + eps * dm[i][1],
+                m[i][2] + eps * dm[i][2],
+            ];
+            let norm = (pert[0] * pert[0] + pert[1] * pert[1] + pert[2] * pert[2]).sqrt();
+            m_plus[i] = [pert[0] / norm, pert[1] / norm, pert[2] / norm];
+        }
+        let state_plus = problem.new_state(m_plus).unwrap();
+        let e_plus = problem.exchange_energy(&state_plus).unwrap();
+
+        // Minus perturbation state
+        let mut m_minus = vec![[0.0; 3]; grid.cell_count()];
+        for i in 0..grid.cell_count() {
+            let pert = [
+                m[i][0] - eps * dm[i][0],
+                m[i][1] - eps * dm[i][1],
+                m[i][2] - eps * dm[i][2],
+            ];
+            let norm = (pert[0] * pert[0] + pert[1] * pert[1] + pert[2] * pert[2]).sqrt();
+            m_minus[i] = [pert[0] / norm, pert[1] / norm, pert[2] / norm];
+        }
+        let state_minus = problem.new_state(m_minus).unwrap();
+        let e_minus = problem.exchange_energy(&state_minus).unwrap();
+
+        let finite_diff_derivative = (e_plus - e_minus) / (2.0 * eps);
+
+        let abs_diff = (finite_diff_derivative - analytic_derivative).abs();
+        let rel_diff = abs_diff / analytic_derivative.abs().max(1.0e-15);
+
+        assert!(
+            rel_diff < 1e-4 || abs_diff < 1e-20,
+            "Taylor consistency failed: finite_diff={}, analytic={}, rel_diff={}, abs_diff={}",
+            finite_diff_derivative,
+            analytic_derivative,
+            rel_diff,
+            abs_diff
+        );
+    }
+
     fn demag_problem(nx: usize, ny: usize, nz: usize) -> ExchangeLlgProblem {
         let grid = GridShape::new(nx, ny, nz).expect("valid grid");
         ExchangeLlgProblem::with_terms(

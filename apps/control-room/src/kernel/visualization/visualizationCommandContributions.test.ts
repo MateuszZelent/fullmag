@@ -48,6 +48,56 @@ describe("visualization target commands", () => {
       });
   });
 
+  it("patches the selected region target without changing its parent object", async () => {
+    const commands = new CommandRegistry();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    const visualization = new ObjectVisualizationController();
+    for (const command of VISUALIZATION_TARGET_COMMANDS) {
+      commands.register(command);
+    }
+    selection.set(
+      {
+        kind: "object.region.visualization",
+        label: "Core",
+        nodeId: "model:object:free-layer:regions:core:visualization",
+        objectId: "free-layer",
+        ref: {
+          kind: "object.region.visualization",
+          nodeId: "model:object:free-layer:regions:core:visualization",
+          objectId: "free-layer",
+          regionId: "region:core",
+          type: "scene-object",
+          visualizationTargetId: "region:free-layer:region%3Acore",
+        },
+      },
+      "test",
+    );
+
+    const result = await commands.execute(
+      "visualization.target.set-wireframe-visible",
+      {
+        selection,
+        source: "test",
+        visualization,
+      },
+      false,
+    );
+
+    expect(result.status).toBe("completed");
+    expect(
+      visualization.getSettings({
+        id: "region:free-layer:region%3Acore",
+        kind: "region",
+      }),
+    ).toMatchObject({
+      wireframeVisible: false,
+    });
+    expect(visualization.getSettings({ id: "free-layer", kind: "object" }))
+      .toMatchObject({
+        wireframeVisible: true,
+      });
+  });
+
   it("clears selected object overrides through the command registry", async () => {
     const commands = new CommandRegistry();
     const selection = new SelectionController(new EventBus<KernelEventMap>());

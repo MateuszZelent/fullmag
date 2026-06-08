@@ -17,6 +17,7 @@ mod fdm;
 mod fem;
 mod geometry;
 mod magnetization_textures;
+mod material;
 mod mesh;
 mod oersted;
 pub mod quantities;
@@ -62,8 +63,8 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
         }
     };
 
-    if problem.validation_profile.execution_mode != ExecutionMode::Strict {
-        errors.push("only execution_mode='strict' is executable in Phase 1".to_string());
+    if problem.validation_profile.execution_mode == ExecutionMode::Hybrid {
+        errors.push("execution_mode='hybrid' is not supported by the current planner".to_string());
     }
     validate::validate_region_owned_planning(problem, resolved_backend, &mut errors);
 

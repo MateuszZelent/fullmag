@@ -7,7 +7,12 @@ import type { Selection } from "@/kernel/selection/selectionTypes";
 import { magnetizationHslRgb } from "./orientation/magnetizationColor";
 import type { Viewport3DBounds } from "./viewport3dRenderModel";
 
-type Viewport3DPrimitiveKind = "box" | "cylinder" | "sphere" | "unsupported";
+type Viewport3DPrimitiveKind =
+  | "box"
+  | "box-cylinder-difference"
+  | "cylinder"
+  | "sphere"
+  | "unsupported";
 type Viewport3DPrimitiveMeshState =
   | "primitive-only"
   | "mesh-stale"
@@ -16,6 +21,7 @@ type Viewport3DPrimitiveMeshState =
 
 export interface Viewport3DPrimitiveObject {
   bounds: Viewport3DBounds;
+  csgPreview: Viewport3DPrimitiveCsgPreview | null;
   fallbackLabel: string;
   geometryKey: string;
   kind: Viewport3DPrimitiveKind;
@@ -25,6 +31,18 @@ export interface Viewport3DPrimitiveObject {
   objectId: string;
   sceneRevision: number;
 }
+
+export interface Viewport3DBoxCylinderDifferencePreview {
+  boxSize: [number, number, number];
+  cylinderAxis: [number, number, number];
+  cylinderCenter: [number, number, number];
+  cylinderHeight: number;
+  cylinderRadius: number;
+  kind: "box-cylinder-difference";
+}
+
+export type Viewport3DPrimitiveCsgPreview =
+  Viewport3DBoxCylinderDifferencePreview;
 
 export interface Viewport3DMagnetizationTexturePreview {
   assetId: string;
@@ -91,6 +109,71 @@ function lowerGeometryKind(value: unknown): Viewport3DPrimitiveKind {
   return "unsupported";
 }
 
+function geometryDescriptorKind(value: unknown): string {
+  if (typeof value === "string") return value.toLowerCase();
+  const record = asRecord(value);
+  return asString(record?.geometry_kind ?? record?.kind)?.toLowerCase() ?? "";
+}
+
+function geometryDescriptorParams(value: unknown): JsonRecord | null {
+  return asRecord(asRecord(value)?.geometry_params);
+}
+
+function geometryDescriptorSize(value: unknown): [number, number, number] | null {
+  const params = geometryDescriptorParams(value);
+  return asVec3(params?.size) ?? asVec3(params?.dimensions);
+}
+
+function geometryDescriptorTranslation(value: unknown): [number, number, number] {
+  const params = geometryDescriptorParams(value);
+  return asVec3(params?.translation) ?? [0, 0, 0];
+}
+
+function geometryDescriptorAxis(value: unknown): [number, number, number] {
+  const params = geometryDescriptorParams(value);
+  return asVec3(params?.axis) ?? [0, 0, 1];
+}
+
+function csgPreviewFromGeometry(
+  geometry: JsonRecord,
+): Viewport3DPrimitiveCsgPreview | null {
+  if (geometryDescriptorKind(geometry.geometry_kind ?? geometry.kind) !== "difference") {
+    return null;
+  }
+
+  const params = asRecord(geometry.geometry_params);
+  const base = asRecord(params?.base);
+  const tool = asRecord(params?.tool);
+  if (!base || !tool) return null;
+
+  const baseKind = geometryDescriptorKind(base.geometry_kind ?? base.kind);
+  const toolKind = geometryDescriptorKind(tool.geometry_kind ?? tool.kind);
+  if (baseKind !== "box" || toolKind !== "cylinder") return null;
+
+  const boxSize = geometryDescriptorSize(base);
+  const toolParams = geometryDescriptorParams(tool);
+  const cylinderRadius = asNumber(toolParams?.radius);
+  const cylinderHeight = asNumber(toolParams?.height);
+  if (
+    !boxSize ||
+    cylinderRadius === null ||
+    cylinderRadius <= 0 ||
+    cylinderHeight === null ||
+    cylinderHeight <= 0
+  ) {
+    return null;
+  }
+
+  return {
+    boxSize,
+    cylinderAxis: geometryDescriptorAxis(tool),
+    cylinderCenter: geometryDescriptorTranslation(tool),
+    cylinderHeight,
+    cylinderRadius,
+    kind: "box-cylinder-difference",
+  };
+}
+
 function boundsFromMinMax(
   min: [number, number, number],
   max: [number, number, number],
@@ -121,7 +204,9 @@ function boundsFromGeometry(
   if (min && max) return boundsFromMinMax(min, max);
 
   const params = asRecord(geometry.geometry_params);
+  const csgPreview = csgPreviewFromGeometry(geometry);
   const size =
+    csgPreview?.boxSize ??
     asVec3(params?.size) ??
     asVec3(params?.dimensions) ??
     radiusSize(params?.radius) ??
@@ -179,7 +264,7 @@ function addObjectIdAlias(
 
 function objectMeshState(
   objectId: string,
-  _sceneRevision: number,
+  sceneRevision: number,
   manifest: MeshSharedDomainManifestResource | null | undefined,
   object?: JsonRecord | null,
 ): Viewport3DPrimitiveMeshState | "mesh-ready" {
@@ -196,8 +281,25 @@ function objectMeshState(
   if (tags.includes("mesh:dirty") || tags.includes("mesh:building")) {
     return "mesh-stale";
   }
+  if (objectHasCsgPreview(object) && manifestSceneRevision(manifest) !== sceneRevision) {
+    return "mesh-stale";
+  }
 
   return "mesh-ready";
+}
+
+function manifestSceneRevision(
+  manifest: MeshSharedDomainManifestResource | null | undefined,
+): number | null {
+  const revision = manifest?.source_scene_revision;
+  return typeof revision === "number" && Number.isFinite(revision)
+    ? revision
+    : null;
+}
+
+function objectHasCsgPreview(object: JsonRecord | null | undefined): boolean {
+  const geometry = asRecord(object?.geometry);
+  return Boolean(geometry && csgPreviewFromGeometry(geometry));
 }
 
 function magnetizationAssetById(scene: JsonRecord, assetId: string | null): JsonRecord | null {
@@ -317,6 +419,12 @@ function geometryKey(
   ].join(":");
 }
 
+function primitiveKindFromGeometry(geometry: JsonRecord): Viewport3DPrimitiveKind {
+  const csgPreview = csgPreviewFromGeometry(geometry);
+  if (csgPreview) return csgPreview.kind;
+  return lowerGeometryKind(geometry.geometry_kind ?? geometry.kind);
+}
+
 function primitiveKeyValue(value: unknown): string {
   if (value === null) return "null";
   if (Array.isArray(value)) {
@@ -359,12 +467,14 @@ export function buildViewport3DPrimitiveRenderModel(
 
     const state = objectMeshState(objectId, sceneRevision, manifest, object);
     const transform = asRecord(object.transform);
+    const csgPreview = csgPreviewFromGeometry(geometry);
     return [
       {
         bounds: boundsFromGeometry(geometry, transform),
+        csgPreview,
         fallbackLabel: fallbackLabel(state),
         geometryKey: geometryKey(objectId, geometry, transform),
-        kind: lowerGeometryKind(geometry.geometry_kind ?? geometry.kind),
+        kind: primitiveKindFromGeometry(geometry),
         label: asString(object.name) ?? objectId,
         magnetizationTexturePreview: magnetizationTexturePreview(
           sceneRecord,

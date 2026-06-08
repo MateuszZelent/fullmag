@@ -2633,6 +2633,7 @@ mod tests {
                     geometry_name: "strip".to_string(),
                     marker: 1,
                 }],
+                object_region_markers: Vec::new(),
                 build_report: None,
             }),
         });

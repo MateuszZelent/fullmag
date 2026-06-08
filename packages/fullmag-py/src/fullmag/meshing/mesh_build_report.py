@@ -96,6 +96,32 @@ def _build_shared_domain_build_report(
         airbox=airbox,
         operation_statuses=operation_statuses,
     )
+    authored_regions_count = 0
+    if isinstance(mesh_workflow, Mapping):
+        raw_mesh_opts = mesh_workflow.get("mesh_options")
+        if isinstance(raw_mesh_opts, Mapping):
+            patch = raw_mesh_opts.get("scene_problem_patch")
+            if isinstance(patch, Mapping):
+                object_regions = patch.get("object_regions")
+                if isinstance(object_regions, list):
+                    for region in object_regions:
+                        if not region.get("enabled", True):
+                            continue
+                        mesh_policy = region.get("mesh_policy")
+                        if not mesh_policy or mesh_policy.get("maximum_element_size") is None:
+                            continue
+                        authored_regions_count += 1
+
+    realized_regions_count = 0
+    for field_desc in (size_fields or []):
+        if not isinstance(field_desc, dict):
+            continue
+        params = field_desc.get("params")
+        if not isinstance(params, dict):
+            continue
+        if params.get("Source") == "region_mesh_policy" and field_desc.get("_gmsh_status") == "applied":
+            realized_regions_count += 1
+
     size_fields_realized = _realized_size_field_report(size_fields)
     return SharedDomainBuildReport(
         build_mode=build_mode,
@@ -110,6 +136,8 @@ def _build_shared_domain_build_report(
         selector_resolution=[dict(item) for item in selector_resolution or []],
         orphan_entities=[dict(item) for item in orphan_entities or []],
         degraded=degraded,
+        authored_regions_count=authored_regions_count,
+        realized_regions_count=realized_regions_count,
     )
 
 

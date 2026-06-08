@@ -30,6 +30,7 @@ import type {
 import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
 import type { CommandContext } from "@/kernel/commands/commandTypes";
 import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
+import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
 import { STUDY_RUNTIME_COMMANDS } from "@/kernel/runtime/studyRuntimeCommandContributions";
 import {
   AIRBOX_VISUALIZATION_TARGET,
@@ -658,6 +659,70 @@ describe("ribbon structure", () => {
             quantity: { active_quantity_id: "H_eff" },
             scope: "airbox",
             scope_id: "airbox",
+          },
+        ],
+      },
+    ]);
+    await vi.waitFor(() =>
+      expect(invalidations).toEqual([[VISUALIZATION_STATE_PATH, 41]]),
+    );
+  });
+
+  it("patches selected region display controls through region-scoped overrides", async () => {
+    const { context, invalidations, patches } = createVisualizationRibbonContext({
+      overrides: [],
+      quantity: { active_quantity_id: "m" },
+      revision: 7,
+    });
+    const selection = {
+      kind: "object.region.visualization" as const,
+      label: "Core",
+      moduleSource: "test",
+      nodeId: "model:object:free-layer:regions:core:visualization",
+      objectId: "free-layer",
+      ref: {
+        kind: "object.region.visualization" as const,
+        nodeId: "model:object:free-layer:regions:core:visualization",
+        objectId: "free-layer",
+        regionId: "region:core",
+        type: "scene-object" as const,
+        visualizationTargetId: visualizationTargetIdForSceneObject(
+          "free-layer",
+          "region:core",
+        ),
+      },
+    };
+    const content = buildRibbonTabContent("view", {
+      ...context,
+      selection,
+    });
+    const selectedGroup = content?.groups.find(
+      (group) => group.id === "view-selected-display",
+    );
+    const renderAction = selectedGroup?.actions.find(
+      (action) => action.id === "view-selected-render",
+    );
+    const wireframeNode = renderAction?.menu?.find(
+      (node) => node.type === "checkbox" && node.id === "selected:wireframe",
+    );
+
+    expect(wireframeNode).toMatchObject({
+      checked: true,
+      commandId: "visualization.target.set-wireframe-visible",
+    });
+    if (wireframeNode?.type !== "checkbox") {
+      throw new Error("Expected selected region wireframe control");
+    }
+
+    await runRibbonNode(wireframeNode, false, { ...context, selection });
+
+    expect(patches).toEqual([
+      {
+        overrides: [
+          {
+            display: { wireframe: { visible: false } },
+            scope: "region",
+            scope_id: "region:free-layer:region%3Acore",
           },
         ],
       },

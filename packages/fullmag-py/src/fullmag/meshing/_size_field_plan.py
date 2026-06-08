@@ -39,6 +39,7 @@ from ._mesh_targets import (
     _coerce_positive_float,
     _lookup_geometry_name_alias,
     _parse_per_geometry_overrides,
+    _geometry_name_aliases,
 )
 
 _NO_OP_FIELD_SIZE = 1.0e22
@@ -1128,6 +1129,7 @@ def _build_field_stack(
     bounds_by_name: dict[str, tuple] | None = None,
     airbox_bounds: tuple[Sequence[float], Sequence[float]] | None = None,
     component_aware: bool = False,
+    object_regions: list[dict] | None = None,
 ) -> list[dict[str, object]]:
     """Full field stack: bulk + interface + transition + manual hotspots.
 
@@ -1185,14 +1187,191 @@ def _build_field_stack(
     if hotspot_fields:
         fields.extend(hotspot_fields)
 
+    # Layer 5: Region-owned mesh policies
+    region_fields = []
+    if object_regions:
+        from fullmag.model.domain_frame import geometry_bounds
+        for region in object_regions:
+            if not region.get("enabled", True):
+                continue
+            owner = region.get("owner_object")
+            aliases = _geometry_name_aliases(owner)
+            geometry = next((g for g in geometries if g.geometry_name in aliases), None)
+
+            mesh_policy = region.get("mesh_policy")
+            if not mesh_policy or mesh_policy.get("maximum_element_size") is None:
+                continue
+
+            if geometry is None:
+                emit_progress(
+                    f"Gmsh: warning - owner geometry '{owner}' for region '{region.get('name')}' not found "
+                    "in mesh geometries; skipping region mesh policy"
+                )
+                continue
+
+            r_hmax = float(mesh_policy["maximum_element_size"])
+            r_hmin = mesh_policy.get("minimum_element_size")
+            if r_hmin is not None:
+                r_hmin = float(r_hmin)
+            r_order = mesh_policy.get("order")
+            if r_order is not None:
+                r_order = int(r_order)
+            r_trans = mesh_policy.get("transition_distance")
+            if r_trans is not None:
+                r_trans = float(r_trans)
+
+            shape = region.get("shape", {})
+            kind = shape.get("kind")
+            if not kind:
+                continue
+
+            if kind not in ("box", "cylinder", "sphere"):
+                emit_progress(
+                    f"Gmsh: warning - region '{region.get('name')}' has unsupported shape kind '{kind}'; "
+                    "skipping region mesh policy"
+                )
+                continue
+
+            bounds = geometry_bounds(geometry, source_root=None)
+            if bounds is None or bounds[0] is None or bounds[1] is None:
+                continue
+            g_min, g_max = bounds
+            owner_center = [0.5 * (g_min[i] + g_max[i]) for i in range(3)]
+
+            frame = region.get("frame", "object")
+            raw_center = shape.get("center", [0.0, 0.0, 0.0])
+            if frame == "object":
+                region_center = [float(raw_center[i]) + owner_center[i] for i in range(3)]
+            else:
+                region_center = [float(raw_center[i]) for i in range(3)]
+
+            owner_override = override_by_name.get(owner, {}) if override_by_name else {}
+            parent_hmax = owner_override.get("hmax") or default_hmax
+
+            common_params = {
+                "GeometryName": geometry.geometry_name,
+                "Source": "region_mesh_policy",
+            }
+            if r_hmin is not None:
+                common_params["MinimumElementSize"] = r_hmin
+            if r_order is not None:
+                common_params["Order"] = r_order
+
+            region_field_count_before = len(region_fields)
+            if kind == "box":
+                size = shape.get("size", [0.0, 0.0, 0.0])
+                if r_trans is not None and r_trans > 0.0:
+                    region_fields.append({
+                        "kind": "ComponentRestrictedGradedBox",
+                        "params": {
+                            **common_params,
+                            "VIn": r_hmax,
+                            "VOut": float(parent_hmax),
+                            "TransitionDistance": r_trans,
+                            "Size": [float(v) for v in size],
+                            "Center": region_center,
+                        }
+                    })
+                else:
+                    region_fields.append({
+                        "kind": "ComponentRestrictedBox",
+                        "params": {
+                            **common_params,
+                            "VIn": r_hmax,
+                            "VOut": float(_NO_OP_FIELD_SIZE),
+                            "XMin": float(region_center[0] - 0.5 * float(size[0])),
+                            "XMax": float(region_center[0] + 0.5 * float(size[0])),
+                            "YMin": float(region_center[1] - 0.5 * float(size[1])),
+                            "YMax": float(region_center[1] + 0.5 * float(size[1])),
+                            "ZMin": float(region_center[2] - 0.5 * float(size[2])),
+                            "ZMax": float(region_center[2] + 0.5 * float(size[2])),
+                        }
+                    })
+            elif kind == "cylinder":
+                radius = float(shape.get("radius", 0.0))
+                height = float(shape.get("height", 0.0))
+                axis = [float(v) for v in shape.get("axis", [0.0, 0.0, 1.0])]
+                if r_trans is not None and r_trans > 0.0:
+                    region_fields.append({
+                        "kind": "ComponentRestrictedGradedCylinder",
+                        "params": {
+                            **common_params,
+                            "VIn": r_hmax,
+                            "VOut": float(parent_hmax),
+                            "TransitionDistance": r_trans,
+                            "Radius": radius,
+                            "Height": height,
+                            "Center": region_center,
+                            "Axis": axis,
+                        }
+                    })
+                else:
+                    region_fields.append({
+                        "kind": "ComponentRestrictedCylinder",
+                        "params": {
+                            **common_params,
+                            "VIn": r_hmax,
+                            "VOut": float(_NO_OP_FIELD_SIZE),
+                            "Radius": radius,
+                            "XCenter": float(region_center[0]),
+                            "YCenter": float(region_center[1]),
+                            "ZCenter": float(region_center[2]),
+                            "Axis": axis,
+                        }
+                    })
+            elif kind == "sphere":
+                radius = float(shape.get("radius", 0.0))
+                if r_trans is not None and r_trans > 0.0:
+                    region_fields.append({
+                        "kind": "ComponentRestrictedGradedSphere",
+                        "params": {
+                            **common_params,
+                            "VIn": r_hmax,
+                            "VOut": float(parent_hmax),
+                            "TransitionDistance": r_trans,
+                            "Radius": radius,
+                            "Center": region_center,
+                        }
+                    })
+                else:
+                    region_fields.append({
+                        "kind": "ComponentRestrictedSphere",
+                        "params": {
+                            **common_params,
+                            "VIn": r_hmax,
+                            "VOut": float(_NO_OP_FIELD_SIZE),
+                            "Radius": radius,
+                            "XCenter": float(region_center[0]),
+                            "YCenter": float(region_center[1]),
+                            "ZCenter": float(region_center[2]),
+                        }
+                    })
+
+            if len(region_fields) > region_field_count_before:
+                field = region_fields[-1]
+                region_label = region.get("name") or region.get("region_id") or "<unnamed>"
+                hmin_label = f", hmin={r_hmin:g}" if r_hmin is not None else ""
+                transition_label = (
+                    f", transition={r_trans:g}" if r_trans is not None else ""
+                )
+                emit_progress(
+                    "Region mesh policy active: "
+                    f"region '{region_label}' on '{geometry.geometry_name}' "
+                    f"uses {field['kind']} hmax={r_hmax:g}{hmin_label}{transition_label}"
+                )
+
+    if region_fields:
+        fields.extend(region_fields)
+
     if fields:
         emit_progress(
             f"Field stack: {len(fields)} fields "
-            f"(bulk={len(fields) - len(interface_fields) - len(transition_fields) - len(perimeter_fields) - len(hotspot_fields)}, "
+            f"(bulk={len(fields) - len(interface_fields) - len(transition_fields) - len(perimeter_fields) - len(hotspot_fields) - len(region_fields)}, "
             f"interface={len(interface_fields)}, "
             f"transition={len(transition_fields)}, "
             f"perimeter={len(perimeter_fields)}, "
-            f"hotspots={len(hotspot_fields)})"
+            f"hotspots={len(hotspot_fields)}, "
+            f"regions={len(region_fields)})"
         )
 
     return fields
@@ -1281,6 +1460,7 @@ def _mesh_options_from_runtime_metadata(
     airbox_bounds: tuple[Sequence[float], Sequence[float]] | None = None,
     component_aware: bool = False,
     per_object_recipes: dict[str, PerObjectMeshRecipe] | None = None,
+    object_regions: list[dict] | None = None,
     include_size_fields: bool = True,
 ) -> MeshOptions:
     raw_mesh_options = (
@@ -1386,6 +1566,8 @@ def _mesh_options_from_runtime_metadata(
             if isinstance(raw_mesh_options.get("size_fields"), list)
             else []
         )
+        patch = raw_mesh_options.get("scene_problem_patch")
+        patch_object_regions = patch.get("object_regions") if isinstance(patch, Mapping) else None
         size_fields.extend(
             _build_field_stack(
                 geometries,
@@ -1394,6 +1576,7 @@ def _mesh_options_from_runtime_metadata(
                 bounds_by_name=bounds_by_name,
                 airbox_bounds=airbox_bounds,
                 component_aware=component_aware,
+                object_regions=patch_object_regions or object_regions,
             )
         )
     optimize = _mesh_option_value("optimize")

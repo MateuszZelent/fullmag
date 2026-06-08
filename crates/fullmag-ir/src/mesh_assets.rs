@@ -324,6 +324,10 @@ pub struct FemSharedDomainBuildReportIR {
     /// size fields, or lost component identity).
     #[serde(default)]
     pub degraded: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authored_regions_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub realized_regions_count: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -334,6 +338,8 @@ pub struct FemDomainMeshAssetIR {
     pub mesh: Option<MeshIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub region_markers: Vec<FemDomainRegionMarkerIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub object_region_markers: Vec<FemDomainRegionMarkerIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_report: Option<FemSharedDomainBuildReportIR>,
 }
@@ -377,6 +383,39 @@ impl FemDomainMeshAssetIR {
             if !seen_geometries.insert(region.geometry_name.as_str()) {
                 errors.push(format!(
                     "fem_domain_mesh_asset.region_markers geometry '{}' is duplicated",
+                    region.geometry_name
+                ));
+            }
+        }
+        let mut seen_object_region_markers = BTreeSet::new();
+        let mut seen_object_region_geometries = BTreeSet::new();
+        for region in &self.object_region_markers {
+            if region.geometry_name.trim().is_empty() {
+                errors.push(
+                    "fem_domain_mesh_asset.object_region_markers geometry_name must not be empty"
+                        .to_string(),
+                );
+            }
+            if region.marker == 0 {
+                errors.push(
+                    "fem_domain_mesh_asset.object_region_markers markers must be > 0".to_string(),
+                );
+            }
+            if seen_markers.contains(&region.marker) {
+                errors.push(format!(
+                    "fem_domain_mesh_asset.object_region_markers marker {} duplicates a region_markers marker",
+                    region.marker
+                ));
+            }
+            if !seen_object_region_markers.insert(region.marker) {
+                errors.push(format!(
+                    "fem_domain_mesh_asset.object_region_markers marker {} is duplicated",
+                    region.marker
+                ));
+            }
+            if !seen_object_region_geometries.insert(region.geometry_name.as_str()) {
+                errors.push(format!(
+                    "fem_domain_mesh_asset.object_region_markers geometry '{}' is duplicated",
                     region.geometry_name
                 ));
             }

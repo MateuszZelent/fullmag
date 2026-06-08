@@ -249,6 +249,7 @@ mod tests {
                 requested_backend: BackendTarget::Fdm,
                 resolved_backend: BackendTarget::Fdm,
                 execution_mode: ExecutionMode::Strict,
+                material_field_plans: Vec::new(),
             },
             backend_plan: BackendPlanIR::Fdm(fdm.clone()),
             output_plan: OutputPlanIR {

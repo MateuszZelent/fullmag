@@ -2,7 +2,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, ValueEnum};
 use fullmag_ir::{
     BackendPlanIR, BackendTarget, DiscretizationHintsIR, DynamicsIR, ExecutionPlanIR, FemHintsIR,
-    GeometryEntryIR, MagnetIR, MaterialIR, ProblemIR, RegionIR, RelaxationAlgorithmIR, StudyIR,
+    GeometryEntryIR, MagnetIR, MaterialIR, ObjectRegionIR, ProblemIR, RegionIR,
+    RelaxationAlgorithmIR, StudyIR,
 };
 use std::ffi::OsString;
 use std::fs;
@@ -840,6 +841,8 @@ struct SceneProblemPatch {
     #[serde(default)]
     regions: Vec<RegionIR>,
     #[serde(default)]
+    object_regions: Vec<ObjectRegionIR>,
+    #[serde(default)]
     universe: Option<serde_json::Value>,
 }
 
@@ -866,6 +869,7 @@ fn apply_scene_problem_patch(problem: &mut ProblemIR, patch: &SceneProblemPatch)
     problem.regions = patch.regions.clone();
     problem.materials = patch.materials.clone();
     problem.magnets = patch.magnets.clone();
+    problem.object_regions = patch.object_regions.clone();
     if let Some(universe) = patch.universe.as_ref() {
         problem
             .problem_meta
@@ -8149,6 +8153,8 @@ mod tests {
                 dind_field: None,
                 dbulk_field: None,
             },
+            ms_element_field: None,
+            a_element_field: None,
             region_materials: Vec::new(),
             enable_exchange: true,
             enable_demag: true,
@@ -8279,6 +8285,8 @@ mod tests {
                 dind_field: None,
                 dbulk_field: None,
             },
+            ms_element_field: None,
+            a_element_field: None,
             region_materials: Vec::new(),
             enable_exchange: true,
             enable_demag: true,
@@ -8376,6 +8384,7 @@ mod tests {
                         per_domain_quality: Default::default(),
                     }),
                     region_markers: Vec::new(),
+                    object_region_markers: Vec::new(),
                     build_report: None,
                 }),
             }),
@@ -8429,6 +8438,9 @@ mod tests {
             air_box_policy: None,
             pbc: None,
             mesh_semantics: None,
+            couplings: Vec::new(),
+            material_parameter_fields: Vec::new(),
+            object_regions: Vec::new(),
         }
     }
 
@@ -8780,6 +8792,7 @@ mod tests {
                 },
             ],
             materials: vec![test_material("mat_left"), test_material("mat_right")],
+            object_regions: Vec::new(),
             magnets: vec![
                 MagnetIR {
                     name: "left_magnet".to_string(),

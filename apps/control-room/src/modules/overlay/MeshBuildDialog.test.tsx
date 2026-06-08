@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { openMeshBuildDiagnostics } from "./MeshBuildDialog";
+import { openMeshBuildDiagnostics } from "./meshBuildDiagnosticsNavigation";
 
 describe("MeshBuildDialog", () => {
   it("opens the bottom engine diagnostics tab from mesh build context", () => {

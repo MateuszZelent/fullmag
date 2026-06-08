@@ -118,15 +118,22 @@ exchange stiffness `Aex` on both sides.
 1. One material object owns one reduced magnetization field `m`.
 2. Authored object regions do not create independent fields.
 3. Smooth material variation is modeled as a material parameter field.
-4. Sharp internal jumps in one object are allowed, but FEM requires conformal
+4. An object region with `realization_policy="inherit"` and only a
+   `mesh_policy` is mesh-size-only. It may change element density, but it must
+   not create an FEM object-region domain marker, a separate magnetic material,
+   a material coefficient field, a local texture override, or duplicated
+   magnetization degrees of freedom. If an OCC/Gmsh realization returns
+   coincident but topologically duplicated nodes on an intra-object region
+   interface, Fullmag must merge those nodes before FEM execution.
+5. Sharp internal jumps in one object are allowed, but FEM requires conformal
    boundary/domain markers in strict mode.
-5. Projection mode for a sharp FEM jump is an explicit extended-mode
+6. Projection mode for a sharp FEM jump is an explicit extended-mode
    approximation and must be reported.
-6. `Ms(x) > 0` is required for every active magnetic cell/node/element. A void
+7. `Ms(x) > 0` is required for every active magnetic cell/node/element. A void
    is represented by geometry or active masks, not by `Ms=0`.
-7. DMI interfaces between distinct materials are deferred to a separate physics
+8. DMI interfaces between distinct materials are deferred to a separate physics
    note.
-8. Full RKKY runtime support is capability-gated. If authored RKKY cannot be
+9. Full RKKY runtime support is capability-gated. If authored RKKY cannot be
    realized by the selected backend, the run is blocked.
 
 ## 3. Numerical interpretation
@@ -200,7 +207,9 @@ implemented path.
 FEM realizes material fields as coefficients over elements, nodes, or
 quadrature points. For sharp piecewise constants, strict mode requires a
 conformal region boundary or domain marker so the weak form can preserve the
-material interface.
+material interface. A conformal authored-region marker is valid only when the
+shared-domain mesh actually contains elements with that marker; metadata alone
+must not satisfy strict conformal planning.
 
 For exchange:
 
@@ -210,6 +219,18 @@ E_ex = integral_Omega A(x) grad m : grad m dV
 
 and the weak form naturally imposes flux continuity at conformal internal
 interfaces unless an explicit surface coupling changes the condition.
+
+For consistent-mass exchange projection with spatial `Ms(x)`, the discrete
+field equation uses the `Ms`-weighted mass matrix:
+
+```text
+M_Ms H_ex = -(2 / mu0) K_A m
+```
+
+where `(M_Ms)_ij = integral Ms(x) phi_i phi_j dV`. Solving an unweighted mass
+system and dividing its solution nodewise by `Ms_i` is not equivalent when
+`Ms` varies spatially. The lumped path may use the corresponding diagonal
+approximation `M_lumped,ii * Ms_i`.
 
 Projection mode:
 
@@ -296,6 +317,22 @@ study.couplings.rkky(
     J1=-0.3e-3,
 )
 ```
+
+Precomputed shared-domain FEM meshes may carry authored-region conformal
+markers explicitly:
+
+```python
+study.domain_mesh(
+    "prebuilt_domain.json",
+    region_markers={"waveguide": 1},
+    object_region_markers={"waveguide:skyrmion_core": 2},
+)
+```
+
+`object_region_markers` are not generated from region shapes by this API. They
+are declarations that the referenced marker IDs already exist in the mesh
+element marker array. The planner must reject metadata-only markers that do not
+appear in the mesh topology.
 
 ### 4.2 ProblemIR representation
 
@@ -427,8 +464,17 @@ must include:
 - DMI interface physics between distinct material objects is deferred to a
   separate note.
 - Named faces and arbitrary feature selectors are deferred to selector v2.
-- Automatic conformal CSG split for arbitrary region shapes is deferred. V1
-  should start with aligned box-in-box and z-aligned cylinder-in-box.
+- Automatic conformal CSG split for arbitrary region shapes is deferred.
+- Production strict-conformal runtime mapping still requires discontinuous
+  element/domain `A` and `Ms` coefficients while retaining one shared
+  magnetization field across the internal interface. Duplicating interface
+  magnetization DOFs is not an acceptable realization of an intra-object
+  material region.
+  Conformal v1 supports box and cylinder regions fully contained in an
+  OCC-compatible owner geometry. The cylinder axis may be arbitrary. Other
+  shapes remain projection-only or require a precomputed shared-domain mesh.
+  Every authored-region marker must occur in the actual element marker array;
+  marker metadata alone is invalid.
 - Multilayer FDM plus region-owned material/coupling is deferred behind a
   capability gate.
 - Runtime texture authoring is deferred; region texture override in v1 is an

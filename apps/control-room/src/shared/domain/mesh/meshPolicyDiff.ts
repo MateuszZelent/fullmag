@@ -142,7 +142,7 @@ export function diffMeshPolicies(input: MeshPolicyDiffInput): MeshPolicyDiffRow[
   const draft = flatten(input.draft ?? {});
   const realized = flatten(input.realized ?? {});
   const paths = [...new Set([...current.keys(), ...draft.keys(), ...realized.keys()])]
-    .sort((left, right) => left.localeCompare(right));
+    .toSorted((left, right) => left.localeCompare(right));
 
   return paths.map((path) => {
     const currentValue = current.get(path) ?? MISSING;

@@ -4,15 +4,15 @@ use std::sync::Arc;
 
 use axum::extract::{Path, State};
 use axum::Json;
-use serde_json::{Number, Value};
+use serde_json::Value;
 
 use crate::error::ApiError;
 use crate::schemas::authoring::{
     AuthoringTransactionRequest, AuthoringTransactionResponse, CouplingListResource,
     CouplingResource, GeometryRealizationRequest, MagnetizationAssetPatchRequest,
     MagnetizationAssetResource, MaterialParameterFieldListResource, MaterialParameterFieldResource,
-    MaterialPatchRequest, MaterialPropertiesResource, MaterialResource, NullableF64PatchValue,
-    NullableStringPatchValue, NullableU32PatchValue, ObjectCreateRequest,
+    MaterialPatchRequest, MaterialPropertiesResource, MaterialReferenceResource, MaterialResource,
+    NullableF64PatchValue, NullableStringPatchValue, NullableU32PatchValue, ObjectCreateRequest,
     ObjectGeometryPatchRequest, ObjectInteractionPatchRequest, ObjectInteractionResource,
     ObjectPatchRequest, ObjectRegionCreateRequest, ObjectRegionDuplicateRequest,
     ObjectRegionPatchRequest, ObjectRegionReorderRequest, RegionDiagnosticResource,
@@ -20,13 +20,14 @@ use crate::schemas::authoring::{
     ScenePatchRequest, SceneResource, StudyRuntimePatchRequest, StudyRuntimeResource,
     UniverseFitRequest, UniversePatchRequest, UniverseResource,
 };
-use crate::types::{AppState, ScriptSourceResponse, ScriptSyncRequest, ScriptSyncResponse};
+use crate::types::{AppState, LatestFields, ScriptSourceResponse, ScriptSyncRequest, ScriptSyncResponse};
+use crate::router_v2::handlers::data::field_resolution::flatten_json_field_values;
 use fullmag_authoring::{
     geometry_capabilities, realize_geometry_scene, validate_geometry_scene, GeometryBackendTarget,
     GeometryCapabilitiesResource, GeometryDiagnostic, GeometryDiagnosticsResource,
     GeometryRealizationSnapshot, GeometryRegionCandidate, GeometryValidationResource,
-    MagnetizationAsset, SceneDocument, SceneGeometry, SceneMaterialAsset, SceneObject,
-    SceneRegionOverride, ScriptBuilderMagneticInteractionEntry,
+    MagnetizationAsset, SceneDocument, SceneGeometry, SceneMaterialAsset, SceneMaterialReference,
+    SceneObject, SceneRegionOverride, ScriptBuilderMagneticInteractionEntry,
     ScriptBuilderMagneticInteractionKind, ScriptBuilderUniverseState, Transform3D,
 };
 
@@ -530,9 +531,11 @@ pub async fn get_authoring_material_fields(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<MaterialParameterFieldListResource>, ApiError> {
     let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let guard = state.current_live_state.read().await;
+    let latest_fields = guard.as_ref().map(|snapshot| &snapshot.latest_fields);
     Ok(Json(MaterialParameterFieldListResource {
         scene_revision: scene.revision,
-        fields: authored_material_field_resources(&scene),
+        fields: authored_material_field_resources(&scene, latest_fields),
     }))
 }
 
@@ -560,18 +563,32 @@ fn authored_region_resources(scene: &SceneDocument) -> Vec<RegionResource> {
         .objects
         .iter()
         .flat_map(|object| {
-            let fields = object
-                .material_parameter_fields
-                .iter()
-                .filter_map(|field| material_field_resource(object, field))
-                .collect::<Vec<_>>();
             let mut represented_region_ids = Vec::new();
             let mut resources = object
                 .regions
                 .iter()
                 .filter_map(|region| {
-                    let resource =
-                        region_resource_for_authored_region(object, region, fields.clone())?;
+                    let region_fields = object
+                        .material_parameter_fields
+                        .iter()
+                        .filter(|field| field.region_id.as_deref() == Some(&region.region_id))
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    let resource = region_resource_for_authored_region(
+                        object,
+                        &region.region_id,
+                        &region.name,
+                        &region.owner_object,
+                        Some(region.priority),
+                        Some(region.frame),
+                        Some(region.shape.clone()),
+                        region.mesh_policy.clone(),
+                        region.material_overrides.clone(),
+                        region_fields,
+                        region.texture_override.clone(),
+                        Some(region.realization_policy),
+                        region.enabled,
+                    )?;
                     represented_region_ids.push(resource.region_id.clone());
                     represented_region_ids
                         .push(canonical_region_id_for_object(object, &resource.region_id));
@@ -586,14 +603,27 @@ fn authored_region_resources(scene: &SceneDocument) -> Vec<RegionResource> {
                 }) {
                     continue;
                 }
-                let region = serde_json::json!({
-                    "region_id": override_region_id,
-                    "owner_object": object.id,
-                    "name": object.region_name.as_deref().unwrap_or(override_region_id.as_str()),
-                });
-                if let Some(resource) =
-                    region_resource_for_authored_region(object, &region, fields.clone())
-                {
+                let region_fields = object
+                    .material_parameter_fields
+                    .iter()
+                    .filter(|field| field.region_id.as_deref() == Some(override_region_id))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if let Some(resource) = region_resource_for_authored_region(
+                    object,
+                    override_region_id,
+                    object.region_name.as_deref().unwrap_or(override_region_id.as_str()),
+                    &object.id,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Vec::new(),
+                    region_fields,
+                    None,
+                    None,
+                    true,
+                ) {
                     resources.push(resource);
                 }
             }
@@ -726,46 +756,46 @@ fn authored_region_diagnostics(scene: &SceneDocument) -> Vec<RegionDiagnosticRes
 
 fn region_resource_for_authored_region(
     object: &SceneObject,
-    region: &Value,
-    material_fields: Vec<MaterialParameterFieldResource>,
+    region_id: &str,
+    name: &str,
+    owner_object: &str,
+    priority: Option<i32>,
+    frame: Option<fullmag_authoring::SceneRegionFrame>,
+    shape: Option<fullmag_authoring::SceneRegionShape>,
+    mesh_policy: Option<fullmag_authoring::SceneRegionMeshPolicy>,
+    material_overrides: Vec<fullmag_authoring::SceneRegionMaterialOverride>,
+    material_parameter_fields: Vec<fullmag_authoring::SceneMaterialParameterAssignment>,
+    texture_override: Option<fullmag_authoring::SceneTextureOverride>,
+    realization_policy: Option<fullmag_authoring::SceneRegionRealizationPolicy>,
+    enabled: bool,
 ) -> Option<RegionResource> {
-    let map = region.as_object()?;
-    let region_id = value_string(map.get("region_id")).unwrap_or_else(|| {
-        let name = value_string(map.get("name")).unwrap_or_else(|| "region".to_string());
-        format!("{}:{name}", object.id)
-    });
-    let name = value_string(map.get("name")).unwrap_or_else(|| region_id.clone());
-    let owner_object = value_string(map.get("owner_object")).unwrap_or_else(|| object.id.clone());
-    let region_fields = material_fields
-        .into_iter()
-        .filter(|field| field.source_region_id.as_deref() == Some(region_id.as_str()))
-        .map(|field| serde_json::to_value(field).unwrap_or_else(|_| Value::Null))
-        .filter(|value| !value.is_null())
-        .collect::<Vec<_>>();
-    let canonical_region_id = canonical_region_id_for_object(object, &region_id);
+    let canonical_region_id = canonical_region_id_for_object(object, region_id);
     let magnetization_ref = object
         .region_overrides
-        .get(&region_id)
+        .get(region_id)
         .or_else(|| object.region_overrides.get(&canonical_region_id))
-        .and_then(|override_entry| override_entry.magnetization_ref.clone())
-        .or_else(|| value_string(map.get("magnetization_ref")));
+        .and_then(|override_entry| override_entry.magnetization_ref.clone());
+
+    let frame_str = frame.map(|f| serde_json::to_value(&f).unwrap().as_str().unwrap().to_string());
+    let realization_policy_str = realization_policy.map(|p| serde_json::to_value(&p).unwrap().as_str().unwrap().to_string());
+
     Some(RegionResource {
-        region_id: region_id.clone(),
-        name,
+        region_id: region_id.to_string(),
+        name: name.to_string(),
         source: "authored_object_region".to_string(),
         region_kind: Some("object_region".to_string()),
-        owner_object_id: Some(owner_object.clone()),
+        owner_object_id: Some(owner_object.to_string()),
         owner_path: Some(format!("{owner_object}/{region_id}")),
-        source_object_ids: vec![owner_object],
+        source_object_ids: vec![owner_object.to_string()],
         source_body_ids: Vec::new(),
-        priority: value_i64(map.get("priority")),
-        frame: value_string(map.get("frame")),
-        shape: map.get("shape").cloned(),
-        mesh_policy: map.get("mesh_policy").cloned(),
-        material_overrides: value_array(map.get("material_overrides")),
-        material_parameter_fields: region_fields,
-        texture_override: map.get("texture_override").cloned(),
-        realization_policy: value_string(map.get("realization_policy")),
+        priority: priority.map(|p| p as i64),
+        frame: frame_str,
+        shape,
+        mesh_policy,
+        material_overrides,
+        material_parameter_fields,
+        texture_override,
+        realization_policy: realization_policy_str,
         realization_status: Some("authored_pending_realization".to_string()),
         material_ref: object.material_ref.clone(),
         magnetization_ref,
@@ -775,13 +805,16 @@ fn region_resource_for_authored_region(
             .map(|entry| magnetic_interaction_kind_id(entry.kind).to_string())
             .collect(),
         mesh_part_ids: Vec::new(),
-        enabled: value_bool(map.get("enabled")).unwrap_or(true) && object.visible,
+        enabled: enabled && object.visible,
         bounds_min: object.geometry.bounds_min.unwrap_or([0.0; 3]),
         bounds_max: object.geometry.bounds_max.unwrap_or([0.0; 3]),
     })
 }
 
-fn authored_material_field_resources(scene: &SceneDocument) -> Vec<MaterialParameterFieldResource> {
+fn authored_material_field_resources(
+    scene: &SceneDocument,
+    latest_fields: Option<&LatestFields>,
+) -> Vec<MaterialParameterFieldResource> {
     scene
         .objects
         .iter()
@@ -789,42 +822,97 @@ fn authored_material_field_resources(scene: &SceneDocument) -> Vec<MaterialParam
             object
                 .material_parameter_fields
                 .iter()
-                .filter_map(|field| material_field_resource(object, field))
+                .filter_map(|field| material_field_resource(object, field, latest_fields))
         })
         .collect()
 }
 
 fn material_field_resource(
-    object: &SceneObject,
-    field: &Value,
+    _object: &SceneObject,
+    field: &fullmag_authoring::SceneMaterialParameterAssignment,
+    latest_fields: Option<&LatestFields>,
 ) -> Option<MaterialParameterFieldResource> {
-    let map = field.as_object()?;
-    let assignment_id = value_string(map.get("assignment_id")).unwrap_or_else(|| {
-        let parameter =
-            value_string(map.get("parameter")).unwrap_or_else(|| "parameter".to_string());
-        format!("{}:{parameter}:field", object.id)
-    });
-    let owner_object = value_string(map.get("owner_object")).unwrap_or_else(|| object.id.clone());
-    let parameter = value_string(map.get("parameter"))?;
-    let value = map.get("value").cloned().unwrap_or(Value::Null);
+    let parameter = serde_json::to_value(&field.parameter).unwrap().as_str().unwrap().to_string();
+    let unit = match &field.value {
+        fullmag_authoring::SceneMaterialParameterField::Constant { unit, .. } => unit.clone(),
+        fullmag_authoring::SceneMaterialParameterField::Linear { unit, .. } => unit.clone(),
+        fullmag_authoring::SceneMaterialParameterField::Radial { unit, .. } => unit.clone(),
+        fullmag_authoring::SceneMaterialParameterField::Sampled { unit, .. } => Some(unit.clone()),
+    };
+    let frame = match &field.value {
+        fullmag_authoring::SceneMaterialParameterField::Linear { frame, .. } => Some(serde_json::to_value(frame).unwrap().as_str().unwrap().to_string()),
+        fullmag_authoring::SceneMaterialParameterField::Radial { frame, .. } => Some(serde_json::to_value(frame).unwrap().as_str().unwrap().to_string()),
+        _ => None,
+    };
+    let location = match &field.value {
+        fullmag_authoring::SceneMaterialParameterField::Sampled { location, .. } => Some(serde_json::to_value(location).unwrap().as_str().unwrap().to_string()),
+        _ => None,
+    };
+
+    let mut realization_status = Some("authored_pending_realization".to_string());
+    let mut min = None;
+    let mut max = None;
+    let mut mean = None;
+    let mut sample_count = None;
+    let warnings = None;
+
+    if let Some(fields) = latest_fields {
+        let lookup_keys = match parameter.as_str() {
+            "ms" | "Ms" => &["Ms", "ms"][..],
+            "aex" | "Aex" => &["Aex", "aex"][..],
+            "alpha" => &["alpha"][..],
+            other => &[other][..],
+        };
+        let mut raw_val = None;
+        for key in lookup_keys {
+            if let Some(val) = fields.get(*key) {
+                raw_val = Some(val);
+                break;
+            }
+        }
+
+        if let Some(raw_val) = raw_val {
+            let values = flatten_json_field_values(raw_val);
+            if !values.is_empty() {
+                realization_status = Some("realized".to_string());
+                sample_count = Some(values.len() as u64);
+
+                let mut current_min = values[0];
+                let mut current_max = values[0];
+                let mut sum = 0.0;
+                for &v in &values {
+                    if v < current_min {
+                        current_min = v;
+                    }
+                    if v > current_max {
+                        current_max = v;
+                    }
+                    sum += v;
+                }
+                min = Some(current_min);
+                max = Some(current_max);
+                mean = Some(sum / values.len() as f64);
+            }
+        }
+    }
+
     Some(MaterialParameterFieldResource {
-        assignment_id,
-        owner_object_id: owner_object.clone(),
-        owner_path: Some(owner_object),
+        assignment_id: field.assignment_id.clone(),
+        owner_object_id: field.owner_object.clone(),
+        owner_path: Some(field.owner_object.clone()),
         parameter,
-        source_region_id: value_string(map.get("region_id")),
-        priority: value_i64(map.get("priority")),
-        unit: value
-            .as_object()
-            .and_then(|value_map| value_string(value_map.get("unit"))),
-        frame: value
-            .as_object()
-            .and_then(|value_map| value_string(value_map.get("frame"))),
-        location: value
-            .as_object()
-            .and_then(|value_map| value_string(value_map.get("location"))),
-        field: value,
-        realization_status: Some("authored_pending_realization".to_string()),
+        source_region_id: field.region_id.clone(),
+        priority: Some(field.priority as i64),
+        unit,
+        frame,
+        location,
+        field: field.value.clone(),
+        realization_status,
+        min,
+        max,
+        mean,
+        sample_count,
+        warnings,
     })
 }
 
@@ -832,23 +920,23 @@ fn authored_coupling_resources(scene: &SceneDocument) -> Vec<CouplingResource> {
     scene
         .couplings
         .iter()
-        .filter_map(|coupling| {
-            let map = coupling.as_object()?;
-            let coupling_id = value_string(map.get("coupling_id"))?;
-            let kind = value_string(map.get("kind"))?;
-            Some(CouplingResource {
-                coupling_id,
-                coupling_kind: kind.clone(),
-                enabled: value_bool(map.get("enabled")).unwrap_or(true),
-                source: map.get("source").cloned().unwrap_or(Value::Null),
-                target: map.get("target").cloned().unwrap_or(Value::Null),
-                params: map
-                    .get("parameters")
-                    .cloned()
-                    .unwrap_or_else(|| serde_json::json!({ "kind": kind })),
-                capability_policy: value_string(map.get("capability_policy")),
-                realization_status: Some(coupling_realization_status(&kind).to_string()),
-            })
+        .map(|coupling| {
+            let kind = match coupling.kind {
+                fullmag_authoring::SceneCouplingKind::Exchange => "exchange",
+                fullmag_authoring::SceneCouplingKind::Rkky => "rkky",
+                fullmag_authoring::SceneCouplingKind::InterlayerExchange => "interlayer_exchange",
+            };
+            let capability_policy = serde_json::to_value(&coupling.capability_policy).unwrap().as_str().unwrap().to_string();
+            CouplingResource {
+                coupling_id: coupling.coupling_id.clone(),
+                coupling_kind: kind.to_string(),
+                enabled: coupling.enabled,
+                source: coupling.source.clone(),
+                target: coupling.target.clone(),
+                params: coupling.parameters.clone(),
+                capability_policy: Some(capability_policy),
+                realization_status: Some(coupling_realization_status(kind).to_string()),
+            }
         })
         .collect()
 }
@@ -858,22 +946,6 @@ fn coupling_realization_status(kind: &str) -> &'static str {
         "rkky" | "interlayer_exchange" => "requires_runtime_capability",
         _ => "authored_pending_realization",
     }
-}
-
-fn value_string(value: Option<&Value>) -> Option<String> {
-    value
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
-fn value_bool(value: Option<&Value>) -> Option<bool> {
-    value.and_then(Value::as_bool)
-}
-
-fn value_i64(value: Option<&Value>) -> Option<i64> {
-    value.and_then(Value::as_i64)
 }
 
 fn value_f64(value: Option<&Value>) -> Option<f64> {
@@ -896,10 +968,6 @@ fn value_vec3(value: Option<&Value>) -> Option<[f64; 3]> {
         .iter()
         .all(|value| value.is_finite())
         .then_some(resolved)
-}
-
-fn value_array(value: Option<&Value>) -> Vec<Value> {
-    value.and_then(Value::as_array).cloned().unwrap_or_default()
 }
 
 #[utoipa::path(
@@ -1168,38 +1236,7 @@ pub async fn patch_authoring_material(
         .find(|entry| entry.id == material_id)
         .ok_or_else(|| ApiError::not_found(format!("material not found: {material_id}")))?;
 
-    if let Some(name) = req.name {
-        material.name = name;
-    }
-    if let Some(properties) = req.properties {
-        if let Some(value) = properties.ms {
-            material.properties.ms = match value {
-                NullableF64PatchValue::Value(value) => Some(value),
-                NullableF64PatchValue::Null => None,
-            };
-        }
-        if let Some(value) = properties.aex {
-            material.properties.aex = match value {
-                NullableF64PatchValue::Value(value) => Some(value),
-                NullableF64PatchValue::Null => None,
-            };
-        }
-        if let Some(value) = properties.alpha {
-            material.properties.alpha = value;
-        }
-        if let Some(value) = properties.dind {
-            material.properties.dind = match value {
-                NullableF64PatchValue::Value(value) => Some(value),
-                NullableF64PatchValue::Null => None,
-            };
-        }
-        if let Some(value) = properties.dbulk {
-            material.properties.dbulk = match value {
-                NullableF64PatchValue::Value(value) => Some(value),
-                NullableF64PatchValue::Null => None,
-            };
-        }
-    }
+    apply_material_patch_to_asset(material, req)?;
 
     sync_interfacial_dmi_for_material(&mut scene, &material_id);
     sync_bulk_dmi_for_material(&mut scene, &material_id);
@@ -1448,6 +1485,52 @@ pub async fn commit_authoring_transaction(
                 crate::commit_current_live_scene_document(&state, current_scene).await?;
             ("create_object", committed)
         }
+        AuthoringTransactionRequest::CreateMaterial {
+            base_revision,
+            material_id,
+            name,
+            properties,
+            references,
+        } => {
+            let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+            apply_create_material_transaction(
+                &mut current_scene,
+                base_revision,
+                material_id,
+                name,
+                properties,
+                references,
+            )?;
+            let committed =
+                crate::commit_current_live_scene_document(&state, current_scene).await?;
+            ("create_material", committed)
+        }
+        AuthoringTransactionRequest::PatchMaterial {
+            base_revision,
+            material_id,
+            patch,
+        } => {
+            let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+            apply_patch_material_transaction(
+                &mut current_scene,
+                base_revision,
+                &material_id,
+                patch,
+            )?;
+            let committed =
+                crate::commit_current_live_scene_document(&state, current_scene).await?;
+            ("patch_material", committed)
+        }
+        AuthoringTransactionRequest::DeleteMaterial {
+            base_revision,
+            material_id,
+        } => {
+            let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+            apply_delete_material_transaction(&mut current_scene, base_revision, &material_id)?;
+            let committed =
+                crate::commit_current_live_scene_document(&state, current_scene).await?;
+            ("delete_material", committed)
+        }
         AuthoringTransactionRequest::DeleteObject {
             base_revision,
             object_id,
@@ -1534,6 +1617,22 @@ pub async fn commit_authoring_transaction(
             let committed =
                 crate::commit_current_live_scene_document(&state, current_scene).await?;
             ("patch_object_region", committed)
+        }
+        AuthoringTransactionRequest::PatchObjectMaterialFields {
+            base_revision,
+            object_id,
+            fields,
+        } => {
+            let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+            apply_patch_object_material_fields_transaction(
+                &mut current_scene,
+                base_revision,
+                &object_id,
+                fields,
+            )?;
+            let committed =
+                crate::commit_current_live_scene_document(&state, current_scene).await?;
+            ("patch_object_material_fields", committed)
         }
         AuthoringTransactionRequest::DeleteObjectRegion {
             base_revision,
@@ -1976,6 +2075,161 @@ fn upsert_material_asset(scene: &mut SceneDocument, material: SceneMaterialAsset
     scene.materials.push(material);
 }
 
+fn apply_create_material_transaction(
+    scene: &mut SceneDocument,
+    base_revision: Option<u64>,
+    material_id: String,
+    name: String,
+    properties: MaterialPropertiesResource,
+    references: Vec<MaterialReferenceResource>,
+) -> Result<(), ApiError> {
+    check_base_scene_revision(scene, base_revision)?;
+    let material_id = material_id.trim();
+    if material_id.is_empty() {
+        return Err(ApiError::bad_request("material_id must not be empty"));
+    }
+    if scene.materials.iter().any(|entry| entry.id == material_id) {
+        return Err(ApiError::conflict(format!(
+            "material already exists: {material_id}"
+        )));
+    }
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(ApiError::bad_request("material name must not be empty"));
+    }
+    scene.materials.push(SceneMaterialAsset {
+        id: material_id.to_string(),
+        name: name.to_string(),
+        properties: fullmag_authoring::ScriptBuilderMaterialState {
+            ms: properties.ms,
+            aex: properties.aex,
+            alpha: properties.alpha,
+            dind: properties.dind,
+            dbulk: properties.dbulk,
+        },
+        references: material_references_from_resources(references)?,
+    });
+    Ok(())
+}
+
+fn apply_patch_material_transaction(
+    scene: &mut SceneDocument,
+    base_revision: Option<u64>,
+    material_id: &str,
+    patch: MaterialPatchRequest,
+) -> Result<(), ApiError> {
+    check_base_scene_revision(scene, base_revision)?;
+    let material = scene
+        .materials
+        .iter_mut()
+        .find(|entry| entry.id == material_id)
+        .ok_or_else(|| ApiError::not_found(format!("material not found: {material_id}")))?;
+    apply_material_patch_to_asset(material, patch)?;
+    sync_interfacial_dmi_for_material(scene, material_id);
+    sync_bulk_dmi_for_material(scene, material_id);
+    Ok(())
+}
+
+fn apply_delete_material_transaction(
+    scene: &mut SceneDocument,
+    base_revision: Option<u64>,
+    material_id: &str,
+) -> Result<(), ApiError> {
+    check_base_scene_revision(scene, base_revision)?;
+    if scene
+        .objects
+        .iter()
+        .any(|object| object.material_ref == material_id)
+    {
+        return Err(ApiError::conflict(format!(
+            "material '{material_id}' is assigned to at least one object"
+        )));
+    }
+    let before = scene.materials.len();
+    scene.materials.retain(|entry| entry.id != material_id);
+    if scene.materials.len() == before {
+        return Err(ApiError::not_found(format!("material not found: {material_id}")));
+    }
+    Ok(())
+}
+
+fn apply_material_patch_to_asset(
+    material: &mut SceneMaterialAsset,
+    req: MaterialPatchRequest,
+) -> Result<(), ApiError> {
+    if let Some(name) = req.name {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(ApiError::bad_request("material name must not be empty"));
+        }
+        material.name = name.to_string();
+    }
+    if let Some(properties) = req.properties {
+        if let Some(value) = properties.ms {
+            material.properties.ms = match value {
+                NullableF64PatchValue::Value(value) => Some(value),
+                NullableF64PatchValue::Null => None,
+            };
+        }
+        if let Some(value) = properties.aex {
+            material.properties.aex = match value {
+                NullableF64PatchValue::Value(value) => Some(value),
+                NullableF64PatchValue::Null => None,
+            };
+        }
+        if let Some(value) = properties.alpha {
+            material.properties.alpha = value;
+        }
+        if let Some(value) = properties.dind {
+            material.properties.dind = match value {
+                NullableF64PatchValue::Value(value) => Some(value),
+                NullableF64PatchValue::Null => None,
+            };
+        }
+        if let Some(value) = properties.dbulk {
+            material.properties.dbulk = match value {
+                NullableF64PatchValue::Value(value) => Some(value),
+                NullableF64PatchValue::Null => None,
+            };
+        }
+    }
+    if let Some(references) = req.references {
+        material.references = material_references_from_resources(references)?;
+    }
+    Ok(())
+}
+
+fn material_references_from_resources(
+    references: Vec<MaterialReferenceResource>,
+) -> Result<Vec<SceneMaterialReference>, ApiError> {
+    references
+        .into_iter()
+        .map(|reference| {
+            let label = trimmed_optional(reference.label);
+            let url = trimmed_optional(reference.url);
+            if let Some(url) = &url {
+                if !(url.starts_with("https://") || url.starts_with("http://")) {
+                    return Err(ApiError::bad_request(
+                        "material reference url must start with http:// or https://",
+                    ));
+                }
+            }
+            Ok(SceneMaterialReference {
+                label,
+                url,
+                citation: trimmed_optional(reference.citation),
+            })
+        })
+        .collect()
+}
+
+fn trimmed_optional(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    })
+}
+
 fn upsert_magnetization_asset(scene: &mut SceneDocument, asset: MagnetizationAsset) {
     if let Some(existing) = scene
         .magnetization_assets
@@ -2060,30 +2314,24 @@ fn apply_create_object_region_transaction(
     scene: &mut SceneDocument,
     base_revision: Option<u64>,
     object_id: &str,
-    mut region: Value,
+    mut region: fullmag_authoring::SceneObjectRegion,
 ) -> Result<(), ApiError> {
     check_base_scene_revision(scene, base_revision)?;
     let object = find_scene_object_mut(scene, object_id)?;
-    let region_name = value_string(region.get("name"))
-        .ok_or_else(|| ApiError::bad_request("object region requires name"))?;
+    let region_name = &region.name;
+    if region_name.trim().is_empty() {
+        return Err(ApiError::bad_request("object region requires name"));
+    }
     let region_id = allocate_object_region_id(object);
     if object.regions.iter().any(|entry| {
-        value_id(entry, &["region_id", "id"]).as_deref() == Some(region_id.as_str())
-            || value_string(entry.get("name")).as_deref() == Some(region_name.as_str())
+        entry.region_id == region_id || entry.name == *region_name
     }) {
         return Err(ApiError::conflict(format!(
             "object region already exists: {region_name}"
         )));
     }
-    if let Some(map) = region.as_object_mut() {
-        map.remove("id");
-        map.insert("region_id".to_string(), Value::String(region_id));
-        map.insert("owner_object".to_string(), Value::String(object.id.clone()));
-    } else {
-        return Err(ApiError::bad_request(
-            "object region payload must be an object",
-        ));
-    }
+    region.region_id = region_id;
+    region.owner_object = object.id.clone();
     clamp_object_region_shape_to_owner(object, &mut region);
     object.regions.push(region);
     Ok(())
@@ -2094,18 +2342,22 @@ fn apply_patch_object_region_transaction(
     base_revision: Option<u64>,
     object_id: &str,
     region_id: &str,
-    patch: Value,
+    patch: crate::schemas::authoring::SceneObjectRegionPatch,
 ) -> Result<(), ApiError> {
     check_base_scene_revision(scene, base_revision)?;
-    reject_object_region_identity_patch(&patch)?;
-    if value_bool(patch.get("enabled")) == Some(false) {
+    if patch.id.is_some() || patch.region_id.is_some() || patch.owner_object.is_some() {
+        return Err(ApiError::bad_request(
+            "object region patch cannot modify identity fields: region_id, id, owner_object"
+        ));
+    }
+
+    if patch.enabled == Some(false) {
         ensure_region_has_no_active_couplings(scene, object_id, region_id)?;
     }
     let object = find_scene_object_mut(scene, object_id)?;
-    if let Some(region_name) = value_string(patch.get("name")) {
+    if let Some(region_name) = &patch.name {
         if object.regions.iter().any(|entry| {
-            !value_matches_id(entry, region_id, &["region_id", "id", "name"])
-                && value_string(entry.get("name")).as_deref() == Some(region_name.as_str())
+            entry.region_id != region_id && &entry.name == region_name
         }) {
             return Err(ApiError::conflict(format!(
                 "object region already exists: {region_name}"
@@ -2113,9 +2365,67 @@ fn apply_patch_object_region_transaction(
         }
     }
     let owner_bounds = object_region_owner_bounds(object);
-    let region = find_object_region_mut(object, region_id)?;
-    merge_patch_value(region, &patch);
+    let region = object.regions.iter_mut().find(|r| r.region_id == region_id)
+        .ok_or_else(|| ApiError::not_found(format!("object region not found: {region_id}")))?;
+
+    if let Some(name) = patch.name {
+        region.name = name;
+    }
+    if let Some(enabled) = patch.enabled {
+        region.enabled = enabled;
+    }
+    if let Some(shape) = patch.shape {
+        region.shape = shape;
+    }
+    if let Some(frame) = patch.frame {
+        region.frame = frame;
+    }
+    if let Some(mesh_policy) = patch.mesh_policy {
+        region.mesh_policy = mesh_policy;
+    }
+    if let Some(material_overrides) = patch.material_overrides {
+        region.material_overrides = material_overrides;
+    }
+    if let Some(texture_override) = patch.texture_override {
+        region.texture_override = texture_override;
+    }
+    if let Some(realization_policy) = patch.realization_policy {
+        region.realization_policy = realization_policy.unwrap_or(fullmag_authoring::SceneRegionRealizationPolicy::Inherit);
+    }
+    if let Some(priority) = patch.priority {
+        region.priority = priority;
+    }
+
     clamp_object_region_shape_to_owner_bounds(owner_bounds, region);
+    Ok(())
+}
+
+fn apply_patch_object_material_fields_transaction(
+    scene: &mut SceneDocument,
+    base_revision: Option<u64>,
+    object_id: &str,
+    fields: Vec<fullmag_authoring::SceneMaterialParameterAssignment>,
+) -> Result<(), ApiError> {
+    check_base_scene_revision(scene, base_revision)?;
+    let object = find_scene_object_mut(scene, object_id)?;
+    for field in &fields {
+        if field.owner_object != object.id {
+            return Err(ApiError::bad_request(format!(
+                "material field '{}' owner_object '{}' must match '{}'",
+                field.assignment_id, field.owner_object, object.id
+            )));
+        }
+        if let Some(region_id) = &field.region_id {
+            if !object.regions.iter().any(|region| region.region_id == *region_id) {
+                return Err(ApiError::bad_request(format!(
+                    "material field '{}' references unknown region '{}'",
+                    field.assignment_id, region_id
+                )));
+            }
+        }
+    }
+    object.material_parameter_fields = fields;
+    mark_object_mesh_dirty(object);
     Ok(())
 }
 
@@ -2128,9 +2438,7 @@ fn apply_delete_object_region_transaction(
     check_base_scene_revision(scene, base_revision)?;
     let object = find_scene_object_mut(scene, object_id)?;
     let before = object.regions.len();
-    object
-        .regions
-        .retain(|entry| !value_matches_id(entry, region_id, &["region_id", "id", "name"]));
+    object.regions.retain(|entry| entry.region_id != region_id);
     if object.regions.len() == before {
         return Err(ApiError::not_found(format!(
             "object region not found: {region_id}"
@@ -2138,7 +2446,7 @@ fn apply_delete_object_region_transaction(
     }
     object
         .material_parameter_fields
-        .retain(|field| value_string(field.get("region_id")).as_deref() != Some(region_id));
+        .retain(|field| field.region_id.as_deref() != Some(region_id));
     scene
         .couplings
         .retain(|coupling| !coupling_references_region(coupling, object_id, region_id));
@@ -2157,22 +2465,21 @@ fn apply_duplicate_object_region_transaction(
     let source = object
         .regions
         .iter()
-        .find(|entry| value_matches_id(entry, region_id, &["region_id", "id", "name"]))
+        .find(|entry| entry.region_id == region_id)
         .cloned()
         .ok_or_else(|| ApiError::not_found(format!("object region not found: {region_id}")))?;
-    let source_name = value_string(source.get("name"))
-        .ok_or_else(|| ApiError::bad_request("source object region has no name"))?;
+    let source_name = &source.name;
     let duplicate_name = requested_name
         .as_deref()
         .and_then(|value| {
             let trimmed = value.trim();
             (!trimmed.is_empty()).then(|| trimmed.to_string())
         })
-        .unwrap_or_else(|| allocate_object_region_name(object, &source_name));
+        .unwrap_or_else(|| allocate_object_region_name(object, source_name));
     if object
         .regions
         .iter()
-        .any(|entry| value_string(entry.get("name")).as_deref() == Some(duplicate_name.as_str()))
+        .any(|entry| entry.name == duplicate_name)
     {
         return Err(ApiError::conflict(format!(
             "object region already exists: {duplicate_name}"
@@ -2180,16 +2487,9 @@ fn apply_duplicate_object_region_transaction(
     }
     let duplicate_region_id = allocate_object_region_id(object);
     let mut duplicate = source;
-    if let Some(map) = duplicate.as_object_mut() {
-        map.insert("name".to_string(), Value::String(duplicate_name));
-        map.insert("region_id".to_string(), Value::String(duplicate_region_id));
-        map.insert("owner_object".to_string(), Value::String(object.id.clone()));
-        map.remove("id");
-    } else {
-        return Err(ApiError::bad_request(
-            "object region payload must be an object",
-        ));
-    }
+    duplicate.name = duplicate_name;
+    duplicate.region_id = duplicate_region_id;
+    duplicate.owner_object = object.id.clone();
     clamp_object_region_shape_to_owner(object, &mut duplicate);
     object.regions.push(duplicate);
     Ok(())
@@ -2213,7 +2513,7 @@ fn apply_reorder_object_regions_transaction(
         let index = object
             .regions
             .iter()
-            .position(|entry| value_matches_id(entry, &region_id, &["region_id", "id", "name"]))
+            .position(|entry| entry.region_id == region_id)
             .ok_or_else(|| ApiError::bad_request(format!("unknown region id: {region_id}")))?;
         reordered.push(object.regions.remove(index));
     }
@@ -2229,22 +2529,21 @@ fn apply_reorder_object_regions_transaction(
 fn apply_create_coupling_transaction(
     scene: &mut SceneDocument,
     base_revision: Option<u64>,
-    coupling: Value,
+    coupling: fullmag_authoring::SceneCoupling,
 ) -> Result<(), ApiError> {
     check_base_scene_revision(scene, base_revision)?;
-    let coupling_id = value_id(&coupling, &["coupling_id", "id"])
-        .ok_or_else(|| ApiError::bad_request("coupling requires coupling_id"))?;
+    let coupling_id = &coupling.coupling_id;
+    if coupling_id.trim().is_empty() {
+        return Err(ApiError::bad_request("coupling requires coupling_id"));
+    }
     if scene
         .couplings
         .iter()
-        .any(|entry| value_matches_id(entry, &coupling_id, &["coupling_id", "id"]))
+        .any(|entry| entry.coupling_id == *coupling_id)
     {
         return Err(ApiError::conflict(format!(
             "coupling already exists: {coupling_id}"
         )));
-    }
-    if !coupling.is_object() {
-        return Err(ApiError::bad_request("coupling payload must be an object"));
     }
     ensure_active_coupling_targets_enabled_regions(scene, &coupling)?;
     scene.couplings.push(coupling);
@@ -2261,10 +2560,16 @@ fn apply_patch_coupling_transaction(
     let coupling_index = scene
         .couplings
         .iter()
-        .position(|entry| value_matches_id(entry, coupling_id, &["coupling_id", "id"]))
+        .position(|entry| entry.coupling_id == coupling_id)
         .ok_or_else(|| ApiError::not_found(format!("coupling not found: {coupling_id}")))?;
-    let mut patched = scene.couplings[coupling_index].clone();
-    merge_patch_value(&mut patched, &patch);
+    let coupling = &scene.couplings[coupling_index];
+    let mut coupling_val = serde_json::to_value(coupling).map_err(|error| {
+        ApiError::internal(format!("failed to serialize coupling: {error}"))
+    })?;
+    merge_patch_value(&mut coupling_val, &patch);
+    let patched: fullmag_authoring::SceneCoupling = serde_json::from_value(coupling_val).map_err(|error| {
+        ApiError::bad_request(format!("invalid patch payload for coupling: {error}"))
+    })?;
     ensure_active_coupling_targets_enabled_regions(scene, &patched)?;
     scene.couplings[coupling_index] = patched;
     Ok(())
@@ -2279,7 +2584,7 @@ fn apply_delete_coupling_transaction(
     let before = scene.couplings.len();
     scene
         .couplings
-        .retain(|entry| !value_matches_id(entry, coupling_id, &["coupling_id", "id"]));
+        .retain(|entry| entry.coupling_id != coupling_id);
     if scene.couplings.len() == before {
         return Err(ApiError::not_found(format!(
             "coupling not found: {coupling_id}"
@@ -2378,41 +2683,27 @@ fn find_scene_object_mut<'a>(
         .ok_or_else(|| ApiError::not_found(format!("object not found: {object_id}")))
 }
 
-fn find_object_region_mut<'a>(
-    object: &'a mut SceneObject,
-    region_id: &str,
-) -> Result<&'a mut Value, ApiError> {
-    object
-        .regions
-        .iter_mut()
-        .find(|entry| value_matches_id(entry, region_id, &["region_id", "id", "name"]))
-        .ok_or_else(|| ApiError::not_found(format!("object region not found: {region_id}")))
-}
-
 #[derive(Clone, Copy)]
 struct ObjectRegionOwnerBounds {
     center: [f64; 3],
     size: [f64; 3],
 }
 
-fn clamp_object_region_shape_to_owner(object: &SceneObject, region: &mut Value) {
+fn clamp_object_region_shape_to_owner(object: &SceneObject, region: &mut fullmag_authoring::SceneObjectRegion) {
     clamp_object_region_shape_to_owner_bounds(object_region_owner_bounds(object), region);
 }
 
 fn clamp_object_region_shape_to_owner_bounds(
     owner_bounds: Option<ObjectRegionOwnerBounds>,
-    region: &mut Value,
+    region: &mut fullmag_authoring::SceneObjectRegion,
 ) {
+    if region.frame != fullmag_authoring::SceneRegionFrame::Object {
+        return;
+    }
     let Some(owner_bounds) = owner_bounds else {
         return;
     };
-    let Some(region_map) = region.as_object_mut() else {
-        return;
-    };
-    let Some(shape) = region_map.get_mut("shape") else {
-        return;
-    };
-    clamp_shape_value_to_owner_bounds(shape, owner_bounds);
+    clamp_shape_to_owner_bounds(&mut region.shape, owner_bounds);
 }
 
 fn object_region_owner_bounds(object: &SceneObject) -> Option<ObjectRegionOwnerBounds> {
@@ -2470,82 +2761,68 @@ fn owner_bounds_from_center_size(
     Some(ObjectRegionOwnerBounds { center, size })
 }
 
-fn clamp_shape_value_to_owner_bounds(shape: &mut Value, owner_bounds: ObjectRegionOwnerBounds) {
-    let Some(shape_map) = shape.as_object_mut() else {
-        return;
-    };
-    let Some(kind) = value_string(shape_map.get("kind")) else {
-        return;
-    };
-    let center = value_vec3(shape_map.get("center")).unwrap_or(owner_bounds.center);
-    match kind.as_str() {
-        "box" => {
-            let size = value_vec3(shape_map.get("size")).unwrap_or(owner_bounds.size);
+fn clamp_shape_to_owner_bounds(shape: &mut fullmag_authoring::SceneRegionShape, owner_bounds: ObjectRegionOwnerBounds) {
+    match shape {
+        fullmag_authoring::SceneRegionShape::Box { size, center } => {
             let half_extents = [
                 clamp_f64(size[0].max(0.0), 0.0, owner_bounds.size[0]) * 0.5,
                 clamp_f64(size[1].max(0.0), 0.0, owner_bounds.size[1]) * 0.5,
                 clamp_f64(size[2].max(0.0), 0.0, owner_bounds.size[2]) * 0.5,
             ];
-            shape_map.insert(
-                "center".to_string(),
-                vec3_value(clamp_center_to_owner(center, half_extents, owner_bounds)),
-            );
-            shape_map.insert(
-                "size".to_string(),
-                vec3_value([
-                    half_extents[0] * 2.0,
-                    half_extents[1] * 2.0,
-                    half_extents[2] * 2.0,
-                ]),
-            );
+            *center = clamp_center_to_owner(*center, half_extents, owner_bounds);
+            *size = [
+                half_extents[0] * 2.0,
+                half_extents[1] * 2.0,
+                half_extents[2] * 2.0,
+            ];
         }
-        "sphere" => {
-            let radius = clamp_f64(
-                value_f64(shape_map.get("radius")).unwrap_or(owner_bounds.size[0] * 0.5),
-                0.0,
-                owner_bounds
-                    .size
-                    .iter()
-                    .copied()
-                    .fold(f64::INFINITY, f64::min)
-                    * 0.5,
-            );
-            let half_extents = [radius, radius, radius];
-            shape_map.insert(
-                "center".to_string(),
-                vec3_value(clamp_center_to_owner(center, half_extents, owner_bounds)),
-            );
-            shape_map.insert("radius".to_string(), f64_value(radius));
+        fullmag_authoring::SceneRegionShape::Sphere { radius, center } => {
+            let max_r = owner_bounds
+                .size
+                .iter()
+                .copied()
+                .fold(f64::INFINITY, f64::min)
+                * 0.5;
+            let r = clamp_f64(*radius, 0.0, max_r);
+            let half_extents = [r, r, r];
+            *center = clamp_center_to_owner(*center, half_extents, owner_bounds);
+            *radius = r;
         }
-        "cylinder" => {
-            let axis = value_vec3(shape_map.get("axis")).unwrap_or([0.0, 0.0, 1.0]);
-            let dominant_axis = dominant_axis_index(axis);
-            let radial_axes = match dominant_axis {
-                0 => [1, 2],
-                1 => [0, 2],
-                _ => [0, 1],
+        fullmag_authoring::SceneRegionShape::Cylinder { radius, height, center, axis } => {
+            let norm = axis.iter().map(|value| value * value).sum::<f64>().sqrt();
+            let unit = if norm > 1e-15 {
+                axis.map(|value| value / norm)
+            } else {
+                [0.0, 0.0, 1.0]
             };
-            let radius = clamp_f64(
-                value_f64(shape_map.get("radius"))
-                    .unwrap_or(owner_bounds.size[radial_axes[0]] * 0.25),
-                0.0,
-                owner_bounds.size[radial_axes[0]].min(owner_bounds.size[radial_axes[1]]) * 0.5,
-            );
-            let height = clamp_f64(
-                value_f64(shape_map.get("height")).unwrap_or(owner_bounds.size[dominant_axis]),
-                0.0,
-                owner_bounds.size[dominant_axis],
-            );
-            let mut half_extents = [radius, radius, radius];
-            half_extents[dominant_axis] = height * 0.5;
-            shape_map.insert(
-                "center".to_string(),
-                vec3_value(clamp_center_to_owner(center, half_extents, owner_bounds)),
-            );
-            shape_map.insert("height".to_string(), f64_value(height));
-            shape_map.insert("radius".to_string(), f64_value(radius));
+            let axis_abs = unit.map(f64::abs);
+            let owner_half = owner_bounds.size.map(|value| value * 0.5);
+            let mut half_height = (*height).max(0.0) * 0.5;
+            for index in 0..3 {
+                if axis_abs[index] > 1e-15 {
+                    half_height = half_height.min(owner_half[index] / axis_abs[index]);
+                }
+            }
+            let mut r = (*radius).max(0.0);
+            for index in 0..3 {
+                let radial_factor = (1.0 - axis_abs[index] * axis_abs[index])
+                    .max(0.0)
+                    .sqrt();
+                if radial_factor > 1e-15 {
+                    let available =
+                        (owner_half[index] - axis_abs[index] * half_height).max(0.0);
+                    r = r.min(available / radial_factor);
+                }
+            }
+            let half_extents = [0, 1, 2].map(|index| {
+                axis_abs[index] * half_height
+                    + r * (1.0 - axis_abs[index] * axis_abs[index]).max(0.0).sqrt()
+            });
+            *center = clamp_center_to_owner(*center, half_extents, owner_bounds);
+            *height = half_height * 2.0;
+            *radius = r;
         }
-        _ => {}
+        fullmag_authoring::SceneRegionShape::Csg { .. } => {}
     }
 }
 
@@ -2565,46 +2842,12 @@ fn clamp_center_to_owner(
     })
 }
 
-fn dominant_axis_index(axis: [f64; 3]) -> usize {
-    let abs = [axis[0].abs(), axis[1].abs(), axis[2].abs()];
-    if abs[0] >= abs[1] && abs[0] >= abs[2] {
-        0
-    } else if abs[1] >= abs[2] {
-        1
-    } else {
-        2
-    }
-}
-
 fn clamp_f64(value: f64, min: f64, max: f64) -> f64 {
     value.max(min).min(max)
 }
 
-fn vec3_value(value: [f64; 3]) -> Value {
-    Value::Array(value.into_iter().map(f64_value).collect())
-}
 
-fn f64_value(value: f64) -> Value {
-    Number::from_f64(value)
-        .map(Value::Number)
-        .unwrap_or(Value::Null)
-}
 
-fn reject_object_region_identity_patch(patch: &Value) -> Result<(), ApiError> {
-    let Some(map) = patch.as_object() else {
-        return Err(ApiError::bad_request(
-            "object region patch payload must be an object",
-        ));
-    };
-    for key in ["region_id", "id", "owner_object"] {
-        if map.contains_key(key) {
-            return Err(ApiError::bad_request(format!(
-                "object region patch cannot modify {key}"
-            )));
-        }
-    }
-    Ok(())
-}
 
 fn allocate_object_region_id(object: &mut SceneObject) -> String {
     seed_allocated_region_ids(object);
@@ -2639,7 +2882,7 @@ fn allocate_object_region_name(object: &SceneObject, source_name: &str) -> Strin
     while object
         .regions
         .iter()
-        .any(|entry| value_string(entry.get("name")).as_deref() == Some(candidate.as_str()))
+        .any(|entry| entry.name == candidate)
     {
         candidate = format!("{base} {suffix}");
         suffix += 1;
@@ -2651,7 +2894,7 @@ fn seed_allocated_region_ids(object: &mut SceneObject) {
     let existing_ids: Vec<String> = object
         .regions
         .iter()
-        .filter_map(|region| value_id(region, &["region_id", "id"]))
+        .map(|region| region.region_id.clone())
         .collect();
     for region_id in existing_ids {
         if !object
@@ -2697,22 +2940,9 @@ fn canonical_region_id_for_object(object: &SceneObject, requested_region_id: &st
     requested_region_id.to_string()
 }
 
-fn value_id(value: &Value, fields: &[&str]) -> Option<String> {
-    fields
-        .iter()
-        .find_map(|field| value_string(value.get(*field)))
-}
-
-fn value_matches_id(value: &Value, requested_id: &str, fields: &[&str]) -> bool {
-    value_id(value, fields).as_deref() == Some(requested_id)
-}
-
-fn coupling_references_region(coupling: &Value, object_id: &str, region_id: &str) -> bool {
-    ["source", "target"].iter().any(|field| {
-        coupling
-            .get(*field)
-            .is_some_and(|endpoint| endpoint_references_region(endpoint, object_id, region_id))
-    })
+fn coupling_references_region(coupling: &fullmag_authoring::SceneCoupling, object_id: &str, region_id: &str) -> bool {
+    endpoint_references_region(&coupling.source, object_id, region_id)
+        || endpoint_references_region(&coupling.target, object_id, region_id)
 }
 
 fn ensure_region_has_no_active_couplings(
@@ -2720,13 +2950,13 @@ fn ensure_region_has_no_active_couplings(
     object_id: &str,
     region_id: &str,
 ) -> Result<(), ApiError> {
-    if let Some(coupling_id) = scene
+    if let Some(coupling) = scene
         .couplings
         .iter()
-        .filter(|coupling| value_bool(coupling.get("enabled")).unwrap_or(true))
+        .filter(|coupling| coupling.enabled)
         .find(|coupling| coupling_references_region(coupling, object_id, region_id))
-        .and_then(|coupling| value_id(coupling, &["coupling_id", "id"]))
     {
+        let coupling_id = &coupling.coupling_id;
         return Err(ApiError::conflict(format!(
             "object region '{region_id}' is referenced by active coupling '{coupling_id}'; disable or delete the coupling before disabling the region"
         )));
@@ -2736,49 +2966,42 @@ fn ensure_region_has_no_active_couplings(
 
 fn ensure_active_coupling_targets_enabled_regions(
     scene: &SceneDocument,
-    coupling: &Value,
+    coupling: &fullmag_authoring::SceneCoupling,
 ) -> Result<(), ApiError> {
-    if !value_bool(coupling.get("enabled")).unwrap_or(true) {
+    if !coupling.enabled {
         return Ok(());
     }
-    for field in ["source", "target"] {
-        let Some(endpoint) = coupling.get(field) else {
-            continue;
-        };
-        let Some((object_id, region_id)) = endpoint_region_ref(endpoint) else {
-            continue;
-        };
-        if scene.objects.iter().any(|object| {
-            object.id == object_id
-                && object.regions.iter().any(|region| {
-                    value_matches_id(region, &region_id, &["region_id", "id", "name"])
-                        && !value_bool(region.get("enabled")).unwrap_or(true)
-                })
-        }) {
-            let coupling_id = value_id(coupling, &["coupling_id", "id"])
-                .unwrap_or_else(|| "coupling".to_string());
-            return Err(ApiError::conflict(format!(
-                "coupling '{coupling_id}' {field}.region_id '{region_id}' references disabled object_region"
-            )));
+
+    let check_endpoint = |endpoint: &fullmag_authoring::SceneCouplingEndpoint, field_name: &str| -> Result<(), ApiError> {
+        if let fullmag_authoring::SceneCouplingEndpoint::Region { object: object_id, region_id } = endpoint {
+            if scene.objects.iter().any(|object| {
+                object.id == *object_id
+                    && object.regions.iter().any(|region| {
+                        region.region_id == *region_id
+                            && !region.enabled
+                    })
+            }) {
+                let coupling_id = &coupling.coupling_id;
+                return Err(ApiError::conflict(format!(
+                    "coupling '{coupling_id}' {field_name}.region_id '{region_id}' references disabled object_region"
+                )));
+            }
         }
-    }
+        Ok(())
+    };
+
+    check_endpoint(&coupling.source, "source")?;
+    check_endpoint(&coupling.target, "target")?;
     Ok(())
 }
 
-fn endpoint_region_ref(endpoint: &Value) -> Option<(String, String)> {
-    if value_string(endpoint.get("kind")).as_deref() != Some("region") {
-        return None;
+fn endpoint_references_region(endpoint: &fullmag_authoring::SceneCouplingEndpoint, object_id: &str, region_id: &str) -> bool {
+    match endpoint {
+        fullmag_authoring::SceneCouplingEndpoint::Region { object, region_id: r_id } => {
+            object == object_id && r_id == region_id
+        }
+        _ => false,
     }
-    Some((
-        value_string(endpoint.get("object"))?,
-        value_string(endpoint.get("region_id"))?,
-    ))
-}
-
-fn endpoint_references_region(endpoint: &Value, object_id: &str, region_id: &str) -> bool {
-    value_string(endpoint.get("kind")).as_deref() == Some("region")
-        && value_string(endpoint.get("object")).as_deref() == Some(object_id)
-        && value_string(endpoint.get("region_id")).as_deref() == Some(region_id)
 }
 
 fn mark_object_mesh_dirty(object: &mut SceneObject) {
@@ -2814,6 +3037,15 @@ fn build_material_resource(material: &fullmag_authoring::SceneMaterialAsset) -> 
             dind: material.properties.dind,
             dbulk: material.properties.dbulk,
         },
+        references: material
+            .references
+            .iter()
+            .map(|reference| MaterialReferenceResource {
+                label: reference.label.clone(),
+                url: reference.url.clone(),
+                citation: reference.citation.clone(),
+            })
+            .collect(),
     }
 }
 

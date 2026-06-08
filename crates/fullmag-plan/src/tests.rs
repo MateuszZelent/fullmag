@@ -399,7 +399,18 @@ fn analyze_detects_interface_between_touching_markers() {
 
     assert_eq!(
         analysis.ordered_regions,
-        vec![("left".to_string(), 1), ("right".to_string(), 2)]
+        vec![
+            crate::mesh::SharedDomainRegionEntry {
+                object_id: "left".to_string(),
+                geometry_id: "left".to_string(),
+                marker: 1,
+            },
+            crate::mesh::SharedDomainRegionEntry {
+                object_id: "right".to_string(),
+                geometry_id: "right".to_string(),
+                marker: 2,
+            },
+        ]
     );
     assert_eq!(analysis.shared_interface_nodes.len(), 3);
     assert!(analysis
@@ -630,6 +641,339 @@ fn pack_duplicates_shared_interface_nodes_per_region() {
 }
 
 #[test]
+fn pack_preserves_shared_interface_nodes_within_one_object() {
+    let mesh = MeshIR {
+        mesh_name: "object_with_region".to_string(),
+        nodes: vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, -1.0],
+        ],
+        elements: vec![[0, 1, 2, 3], [0, 1, 2, 4]],
+        element_markers: vec![1, 2],
+        boundary_faces: Vec::new(),
+        boundary_markers: Vec::new(),
+        periodic_boundary_pairs: Vec::new(),
+        periodic_node_pairs: Vec::new(),
+        per_domain_quality: std::collections::HashMap::new(),
+    };
+    let analysis = crate::mesh::SharedDomainAnalysis {
+        node_owner: vec![1, 1, 1, 1, 2],
+        face_owner: std::collections::BTreeMap::new(),
+        ordered_regions: vec![
+            crate::mesh::SharedDomainRegionEntry {
+                object_id: "body".to_string(),
+                geometry_id: "body_geom".to_string(),
+                marker: 1,
+            },
+            crate::mesh::SharedDomainRegionEntry {
+                object_id: "body".to_string(),
+                geometry_id: "body:refinement".to_string(),
+                marker: 2,
+            },
+        ],
+        shared_interface_nodes: vec![(0, vec![1, 2]), (1, vec![1, 2]), (2, vec![1, 2])],
+        interface_faces: vec![crate::mesh::SharedInterfaceFace {
+            face: [0, 1, 2],
+            markers: vec![1, 2],
+        }],
+    };
+
+    let (packed, segments, mesh_parts) = crate::mesh::pack_mesh_by_analysis(&mesh, &analysis)
+        .expect("packing should preserve one H1 field within an object");
+
+    assert_eq!(packed.nodes.len(), 5);
+    assert_eq!(packed.elements, vec![[0, 1, 2, 3], [0, 1, 2, 4]]);
+    assert_eq!(segments.len(), 2);
+    assert_eq!(segments[0].object_id, "body");
+    assert_eq!(segments[1].object_id, "body");
+    let region_part = mesh_parts
+        .iter()
+        .find(|part| part.geometry_id.as_deref() == Some("body:refinement"))
+        .expect("region mesh part should exist");
+    assert_eq!(region_part.node_indices, vec![0, 1, 2, 4]);
+    let interface_part = mesh_parts
+        .iter()
+        .find(|part| part.id == "part:interface:1:2")
+        .expect("same-object interface mesh part should exist");
+    assert_eq!(interface_part.object_id.as_deref(), Some("body"));
+    assert_eq!(interface_part.parent_id.as_deref(), Some("part:body"));
+
+    let entry = crate::mesh::MagnetPlanningEntry {
+        magnet_name: "body".to_string(),
+        geometry_name: "body_geom".to_string(),
+        initial_magnetization: Some(InitialMagnetizationIR::RandomSeeded { seed: 17 }),
+    };
+    let expected = crate::mesh::initial_vectors_for_magnet(
+        "body",
+        &packed.mesh_name,
+        entry.initial_magnetization.as_ref(),
+        packed.nodes.len(),
+        Some(&packed.nodes),
+        Some(&packed.nodes),
+    )
+    .expect("whole-object initial texture should sample");
+    let mut actual = vec![[0.0, 0.0, 0.0]; packed.nodes.len()];
+    crate::fem::assign_domain_initial_for_segments(
+        &mut actual,
+        &packed,
+        &mesh_parts,
+        &segments.iter().collect::<Vec<_>>(),
+        &entry,
+    )
+    .expect("segmented object initial texture should sample once");
+    assert_eq!(actual, expected);
+
+    let textured_entry = crate::mesh::MagnetPlanningEntry {
+        magnet_name: "body".to_string(),
+        geometry_name: "body_geom".to_string(),
+        initial_magnetization: Some(InitialMagnetizationIR::PresetTexture {
+            preset_kind: "neel_skyrmion".to_string(),
+            preset_params: std::collections::BTreeMap::from([
+                ("core_polarity".to_string(), serde_json::json!(1)),
+                ("chirality".to_string(), serde_json::json!(1)),
+                ("plane".to_string(), serde_json::json!("xy")),
+                ("radius".to_string(), serde_json::json!(0.75)),
+                ("wall_width".to_string(), serde_json::json!(0.2)),
+            ]),
+            mapping: fullmag_ir::TextureMappingIR::default(),
+            texture_transform: fullmag_ir::TextureTransform3DIR::default(),
+        }),
+    };
+    let expected_texture = crate::mesh::initial_vectors_for_magnet(
+        "body",
+        &packed.mesh_name,
+        textured_entry.initial_magnetization.as_ref(),
+        packed.nodes.len(),
+        Some(&packed.nodes),
+        Some(&packed.nodes),
+    )
+    .expect("whole-object preset texture should sample");
+    let mut actual_texture = vec![[0.0, 0.0, 0.0]; packed.nodes.len()];
+    crate::fem::assign_domain_initial_for_segments(
+        &mut actual_texture,
+        &packed,
+        &mesh_parts,
+        &segments.iter().collect::<Vec<_>>(),
+        &textured_entry,
+    )
+    .expect("segmented object preset texture should sample once");
+    assert_eq!(actual_texture, expected_texture);
+}
+
+#[test]
+fn pack_merges_coincident_interface_nodes_within_one_object() {
+    let mesh = MeshIR {
+        mesh_name: "object_region_with_duplicated_interface_nodes".to_string(),
+        nodes: vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, -1.0],
+        ],
+        elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+        element_markers: vec![1, 2],
+        boundary_faces: Vec::new(),
+        boundary_markers: Vec::new(),
+        periodic_boundary_pairs: Vec::new(),
+        periodic_node_pairs: Vec::new(),
+        per_domain_quality: std::collections::HashMap::new(),
+    };
+    let analysis = crate::mesh::SharedDomainAnalysis {
+        node_owner: vec![1, 1, 1, 1, 2, 2, 2, 2],
+        face_owner: std::collections::BTreeMap::new(),
+        ordered_regions: vec![
+            crate::mesh::SharedDomainRegionEntry {
+                object_id: "body".to_string(),
+                geometry_id: "body_geom".to_string(),
+                marker: 1,
+            },
+            crate::mesh::SharedDomainRegionEntry {
+                object_id: "body".to_string(),
+                geometry_id: "body:refinement".to_string(),
+                marker: 2,
+            },
+        ],
+        shared_interface_nodes: Vec::new(),
+        interface_faces: Vec::new(),
+    };
+
+    let (packed, segments, mesh_parts) = crate::mesh::pack_mesh_by_analysis(&mesh, &analysis)
+        .expect("same-object coincident region nodes should merge");
+
+    assert_eq!(packed.nodes.len(), 5);
+    assert_eq!(packed.elements, vec![[0, 1, 2, 3], [0, 1, 2, 4]]);
+    assert_eq!(segments.len(), 2);
+    assert_eq!(segments[0].object_id, "body");
+    assert_eq!(segments[1].object_id, "body");
+    let region_part = mesh_parts
+        .iter()
+        .find(|part| part.geometry_id.as_deref() == Some("body:refinement"))
+        .expect("region mesh part should exist");
+    assert_eq!(region_part.node_indices, vec![0, 1, 2, 4]);
+}
+
+#[test]
+fn fem_plan_maps_geometry_and_object_region_to_one_continuous_object() {
+    let mut ir = fem_minimal_test_ir();
+    ir.geometry.entries[0] = GeometryEntryIR::Box {
+        name: "strip_geom".to_string(),
+        size: [1.0, 1.0, 1.0],
+    };
+    ir.regions[0].geometry = "strip_geom".to_string();
+    ir.object_regions.push(fullmag_ir::ObjectRegionIR {
+        region_id: "strip:refinement".to_string(),
+        owner_object: "strip".to_string(),
+        name: "refinement".to_string(),
+        shape: fullmag_ir::RegionShapeIR::Box {
+            size: [0.5, 0.5, 0.5],
+            center: [0.0, 0.0, 0.0],
+        },
+        frame: fullmag_ir::RegionFrameIR::Object,
+        enabled: true,
+        priority: 10,
+        mesh_policy: None,
+        material_overrides: Vec::new(),
+        texture_override: None,
+        realization_policy: fullmag_ir::RegionRealizationPolicyIR::Conformal,
+    });
+    let domain_asset = ir
+        .geometry_assets
+        .as_mut()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
+        .expect("FEM domain asset should exist");
+    domain_asset.mesh = Some(MeshIR {
+        mesh_name: "strip_with_refinement".to_string(),
+        nodes: vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, -1.0],
+        ],
+        elements: vec![[0, 1, 2, 3], [0, 1, 2, 4]],
+        element_markers: vec![1, 2],
+        boundary_faces: Vec::new(),
+        boundary_markers: Vec::new(),
+        periodic_boundary_pairs: Vec::new(),
+        periodic_node_pairs: Vec::new(),
+        per_domain_quality: std::collections::HashMap::new(),
+    });
+    domain_asset.region_markers[0].geometry_name = "strip_geom".to_string();
+    domain_asset
+        .object_region_markers
+        .push(fullmag_ir::FemDomainRegionMarkerIR {
+            geometry_name: "strip:refinement".to_string(),
+            marker: 2,
+        });
+
+    let planned = plan(&ir).expect("mesh-only region should preserve one continuous FEM object");
+    let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+        panic!("expected FEM plan");
+    };
+
+    assert_eq!(fem.mesh.nodes.len(), 5);
+    assert_eq!(fem.mesh.elements, vec![[0, 1, 2, 3], [0, 1, 2, 4]]);
+    assert_eq!(fem.initial_magnetization.len(), 5);
+    assert_eq!(fem.object_segments.len(), 2);
+    assert!(fem
+        .object_segments
+        .iter()
+        .all(|segment| segment.object_id == "strip"));
+    assert!(
+        fem.ms_element_field.is_none(),
+        "mesh-only object region must not introduce a discontinuous Ms element field"
+    );
+    assert!(
+        fem.a_element_field.is_none(),
+        "mesh-only object region must not introduce a discontinuous Aex element field"
+    );
+    assert!(
+        fem.material.ms_field.is_none(),
+        "mesh-only object region must not introduce a nodal Ms field"
+    );
+    assert!(
+        fem.material.a_field.is_none(),
+        "mesh-only object region must not introduce a nodal Aex field"
+    );
+    assert!(
+        fem.region_materials.is_empty(),
+        "mesh-only object region must not create a separate FEM region material"
+    );
+}
+
+#[test]
+fn fem_inherited_mesh_policy_region_does_not_change_physics_contract() {
+    let mut ir = fem_minimal_test_ir();
+    let baseline_plan = plan(&ir).expect("baseline FEM plan should succeed");
+    let BackendPlanIR::Fem(baseline_fem) = baseline_plan.backend_plan else {
+        panic!("expected baseline FEM plan");
+    };
+
+    ir.object_regions.push(fullmag_ir::ObjectRegionIR {
+        region_id: "strip:local_refinement".to_string(),
+        owner_object: "strip".to_string(),
+        name: "local_refinement".to_string(),
+        shape: fullmag_ir::RegionShapeIR::Cylinder {
+            radius: 0.25,
+            height: 1.0,
+            center: [0.0, 0.0, 0.0],
+            axis: [0.0, 0.0, 1.0],
+        },
+        frame: fullmag_ir::RegionFrameIR::Object,
+        enabled: true,
+        priority: 10,
+        mesh_policy: Some(fullmag_ir::RegionMeshPolicyIR {
+            maximum_element_size: Some(0.1),
+            minimum_element_size: Some(0.05),
+            transition_distance: Some(0.5),
+            order: Some(1),
+        }),
+        material_overrides: Vec::new(),
+        texture_override: None,
+        realization_policy: fullmag_ir::RegionRealizationPolicyIR::Inherit,
+    });
+
+    let planned = plan(&ir).expect("inherited mesh-only region should plan");
+    let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+        panic!("expected FEM plan");
+    };
+
+    assert_eq!(
+        fem.object_segments
+            .iter()
+            .filter(|segment| segment.object_id == "strip")
+            .count(),
+        1,
+        "inherited mesh-only region must not become a separate magnetic segment"
+    );
+    assert!(
+        fem.region_materials.is_empty(),
+        "single-object inherited mesh-only region must not create region_materials"
+    );
+    assert!(
+        fem.ms_element_field.is_none() && fem.a_element_field.is_none(),
+        "inherited mesh-only region must not create discontinuous element coefficient fields"
+    );
+    assert!(
+        fem.material.ms_field.is_none()
+            && fem.material.a_field.is_none()
+            && fem.material.alpha_field.is_none(),
+        "inherited mesh-only region must not create nodal material fields"
+    );
+    assert!(
+        fem.initial_magnetization == baseline_fem.initial_magnetization,
+        "inherited mesh-only region must preserve the parent initial texture"
+    );
+}
+
+#[test]
 fn pack_produces_same_result_as_before() {
     let mesh = MeshIR {
         mesh_name: "shared_ok".to_string(),
@@ -785,14 +1129,44 @@ fn object_region_mesh_policy_blocks_until_runtime_materialization_exists() {
 }
 
 #[test]
-fn object_region_material_overrides_block_until_runtime_materialization_exists() {
+fn csg_region_mesh_policy_rejected_for_fem() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fem;
+    let mut region = default_test_object_region();
+    region.shape = fullmag_ir::RegionShapeIR::Csg {
+        expression: std::boxed::Box::new(fullmag_ir::GeometryEntryIR::Box {
+            name: "csg_part".to_string(),
+            size: [10e-9, 10e-9, 6e-9],
+        }),
+    };
+    region.mesh_policy = Some(fullmag_ir::RegionMeshPolicyIR {
+        maximum_element_size: Some(1.0e-9),
+        minimum_element_size: Some(0.5e-9),
+        transition_distance: Some(20.0e-9),
+        order: Some(1),
+    });
+    ir.object_regions.push(region);
+
+    let err = plan(&ir).expect_err("CSG region mesh policy must be blocked for FEM");
+    assert!(
+        err.reasons.iter().any(|reason| {
+            reason.contains("has CSG shape, which is not supported for mesh_policy")
+                && reason.contains("CSG region mesh policies are not implemented")
+        }),
+        "unexpected planner errors: {:?}",
+        err.reasons
+    );
+}
+
+#[test]
+fn unsupported_object_region_material_override_still_blocks_planning() {
     let mut ir = ProblemIR::bootstrap_example();
     let mut region = default_test_object_region();
     region.material_overrides = vec![fullmag_ir::RegionMaterialOverrideIR {
-        parameter: fullmag_ir::MaterialParameterNameIR::Ms,
+        parameter: fullmag_ir::MaterialParameterNameIR::Ku1,
         value: fullmag_ir::MaterialParameterFieldIR::Constant {
-            value: serde_json::json!(750e3),
-            unit: Some("A/m".to_string()),
+            value: serde_json::json!(5.0e4),
+            unit: Some("J/m^3".to_string()),
         },
         priority: 10,
         conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
@@ -808,6 +1182,44 @@ fn object_region_material_overrides_block_until_runtime_materialization_exists()
         }),
         "unexpected planner errors: {:?}",
         err.reasons
+    );
+}
+
+#[test]
+fn fdm_object_region_material_overrides_materialize_to_cell_fields() {
+    let mut ir = ProblemIR::bootstrap_example();
+    let mut region = default_test_object_region();
+    region.material_overrides = vec![fullmag_ir::RegionMaterialOverrideIR {
+        parameter: fullmag_ir::MaterialParameterNameIR::Ms,
+        value: fullmag_ir::MaterialParameterFieldIR::Constant {
+            value: serde_json::json!(750e3),
+            unit: Some("A/m".to_string()),
+        },
+        priority: 10,
+        conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+    }];
+    ir.object_regions.push(region);
+
+    let plan = plan(&ir).expect("FDM should materialize supported region material overrides");
+    assert_eq!(plan.common.material_field_plans.len(), 1);
+    assert_eq!(
+        plan.common.material_field_plans[0].parameter,
+        fullmag_ir::MaterialParameterNameIR::Ms
+    );
+    let fullmag_ir::BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
+        panic!("expected FDM plan");
+    };
+    let ms_field = fdm
+        .material
+        .ms_field
+        .expect("region Ms override must produce a non-uniform Ms field");
+    assert!(
+        ms_field.iter().any(|value| (*value - 750e3).abs() <= 1e-12),
+        "region cells should receive the override value"
+    );
+    assert!(
+        ms_field.iter().any(|value| (*value - 800e3).abs() <= 1e-12),
+        "parent cells should keep the base material value"
     );
 }
 
@@ -1402,6 +1814,7 @@ fn fem_shared_domain_ir_for_magnetoelastic() -> ProblemIR {
                 geometry_name: "strip".to_string(),
                 marker: 1,
             }],
+            object_region_markers: Vec::new(),
             build_report: None,
         }),
     });
@@ -1658,6 +2071,7 @@ fn fem_backend_with_mesh_asset_plans_successfully() {
                 geometry_name: "strip".to_string(),
                 marker: 1,
             }],
+            object_region_markers: Vec::new(),
             build_report: None,
         }),
     });
@@ -1758,6 +2172,7 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
                 geometry_name: "strip".to_string(),
                 marker: 1,
             }],
+            object_region_markers: Vec::new(),
             build_report: None,
         }),
     });
@@ -1844,6 +2259,7 @@ fn fem_backend_interfacial_dmi_defaults_interface_normal_to_z_in_strict_mode() {
                 geometry_name: "strip".to_string(),
                 marker: 1,
             }],
+            object_region_markers: Vec::new(),
             build_report: None,
         }),
     });
@@ -1916,6 +2332,7 @@ fn fem_plan_serializes_mesh_parts() {
                 geometry_name: "strip".to_string(),
                 marker: 1,
             }],
+            object_region_markers: Vec::new(),
             build_report: None,
         }),
     });
@@ -2000,6 +2417,7 @@ fn fem_backend_with_air_elements_lowers_study_universe_to_air_box_config() {
                 geometry_name: "strip".to_string(),
                 marker: 1,
             }],
+            object_region_markers: Vec::new(),
             build_report: None,
         }),
     });
@@ -2097,6 +2515,7 @@ fn fem_backend_with_air_elements_accepts_marker_99_in_strict_mode() {
                 geometry_name: "strip".to_string(),
                 marker: 1,
             }],
+            object_region_markers: Vec::new(),
             build_report: None,
         }),
     });
@@ -2186,6 +2605,7 @@ fn fem_backend_with_air_elements_rejects_unknown_boundary_marker_in_strict_mode(
                 geometry_name: "strip".to_string(),
                 marker: 1,
             }],
+            object_region_markers: Vec::new(),
             build_report: None,
         }),
     });
@@ -3133,6 +3553,7 @@ fn fem_plan_conformal_shared_domain_duplicates_interface_nodes_for_cuda() {
                     marker: 2,
                 },
             ],
+            object_region_markers: Vec::new(),
             build_report: None,
         }),
     });
@@ -3253,6 +3674,7 @@ fn fem_plan_four_body_shared_domain_populates_region_materials_on_cuda() {
                     marker: 4,
                 },
             ],
+            object_region_markers: Vec::new(),
             build_report: None,
         }),
     });
@@ -3338,6 +3760,7 @@ fn attach_unit_fem_domain_mesh(ir: &mut ProblemIR) {
                 geometry_name: "strip".to_string(),
                 marker: 1,
             }],
+            object_region_markers: Vec::new(),
             build_report: None,
         }),
     });
@@ -3634,6 +4057,7 @@ fn single_precision_is_rejected_for_phase_one_cpu_execution() {
                 geometry_name: "strip".to_string(),
                 marker: 1,
             }],
+            object_region_markers: Vec::new(),
             build_report: None,
         }),
     });
@@ -3704,6 +4128,7 @@ fn single_precision_is_rejected_with_gpu_specific_reason_when_cuda_device_reques
                 geometry_name: "strip".to_string(),
                 marker: 1,
             }],
+            object_region_markers: Vec::new(),
             build_report: None,
         }),
     });
@@ -4428,6 +4853,103 @@ fn object_object_exchange_without_coupling_defaults_none() {
 }
 
 #[test]
+fn fem_eigen_shared_domain_region_samples_equilibrium_once_per_object() {
+    let mut ir = fem_minimal_test_ir();
+    ir.magnets[0].initial_magnetization = Some(InitialMagnetizationIR::RandomSeeded { seed: 17 });
+    ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+        fdm_grid_assets: vec![],
+        fem_mesh_assets: vec![],
+        fem_domain_mesh_asset: Some(fullmag_ir::FemDomainMeshAssetIR {
+            mesh_source: None,
+            mesh: Some(fullmag_ir::MeshIR {
+                mesh_name: "strip_with_region".to_string(),
+                nodes: vec![
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [1.0, 1.0, 1.0],
+                ],
+                elements: vec![[0, 1, 2, 3], [0, 1, 2, 4]],
+                element_markers: vec![1, 2],
+                boundary_faces: vec![[0, 1, 3], [1, 2, 4]],
+                boundary_markers: vec![10, 10],
+                periodic_boundary_pairs: Vec::new(),
+                periodic_node_pairs: Vec::new(),
+                per_domain_quality: std::collections::HashMap::new(),
+            }),
+            region_markers: vec![fullmag_ir::FemDomainRegionMarkerIR {
+                geometry_name: "strip".to_string(),
+                marker: 1,
+            }],
+            object_region_markers: vec![fullmag_ir::FemDomainRegionMarkerIR {
+                geometry_name: "strip:refinement".to_string(),
+                marker: 2,
+            }],
+            build_report: None,
+        }),
+    });
+    ir.object_regions.push(fullmag_ir::ObjectRegionIR {
+        region_id: "strip:refinement".to_string(),
+        owner_object: "strip".to_string(),
+        name: "refinement".to_string(),
+        shape: fullmag_ir::RegionShapeIR::Box {
+            size: [0.5, 0.5, 0.5],
+            center: [0.0, 0.0, 0.0],
+        },
+        frame: fullmag_ir::RegionFrameIR::Object,
+        priority: 0,
+        enabled: true,
+        mesh_policy: None,
+        material_overrides: Vec::new(),
+        texture_override: None,
+        realization_policy: fullmag_ir::RegionRealizationPolicyIR::Conformal,
+    });
+    ir.study = fullmag_ir::StudyIR::Eigenmodes {
+        dynamics: ir.study.dynamics().clone(),
+        operator: fullmag_ir::EigenOperatorConfigIR {
+            kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+            include_demag: false,
+        },
+        count: 3,
+        target: fullmag_ir::EigenTargetIR::Lowest,
+        equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
+        k_sampling: Some(fullmag_ir::KSamplingIR::Single {
+            k_vector: [0.0, 0.0, 0.0],
+        }),
+        normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
+        damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
+        spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+        sampling: fullmag_ir::SamplingIR {
+            table_autosave: None,
+            outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
+                quantity: "eigenfrequency".to_string(),
+            }],
+        },
+        mode_tracking: None,
+    };
+
+    let planned = plan(&ir).expect("shared-domain region FEM eigen planning should succeed");
+    let BackendPlanIR::FemEigen(fem) = planned.backend_plan else {
+        panic!("expected FEM eigen plan");
+    };
+    let expected = crate::mesh::initial_vectors_for_magnet(
+        "strip",
+        &fem.mesh.mesh_name,
+        ir.magnets[0].initial_magnetization.as_ref(),
+        fem.mesh.nodes.len(),
+        Some(&fem.mesh.nodes),
+        Some(&fem.mesh.nodes),
+    )
+    .expect("whole-object equilibrium should sample");
+
+    assert_eq!(fem.object_segments.len(), 2);
+    assert_eq!(fem.object_segments[0].object_id, "strip");
+    assert_eq!(fem.object_segments[1].object_id, "strip");
+    assert_eq!(fem.equilibrium_magnetization, expected);
+}
+
+#[test]
 fn fem_eigen_backend_interfacial_dmi_defaults_interface_normal_to_z_in_strict_mode() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.backend_policy.requested_backend = BackendTarget::Fem;
@@ -4566,6 +5088,7 @@ fn fem_eigen_auto_demag_resolves_to_poisson_robin_on_shared_domain_mesh_with_air
                 geometry_name: "strip".to_string(),
                 marker: 1,
             }],
+            object_region_markers: Vec::new(),
             build_report: None,
         }),
     });
@@ -4945,6 +5468,7 @@ fn fem_eigen_floquet_dynamic_demag_is_rejected() {
                 geometry_name: "strip".to_string(),
                 marker: 1,
             }],
+            object_region_markers: Vec::new(),
             build_report: None,
         }),
     });
@@ -5291,6 +5815,7 @@ fn fem_plan_succeeds_when_shared_domain_has_domain_mesh_asset() {
                 geometry_name: "strip".to_string(),
             }],
             mesh_source: None,
+            object_region_markers: Vec::new(),
             build_report: None,
         }),
     });
@@ -5564,6 +6089,7 @@ fn fem_domain_mesh_asset_accepts_optional_build_report() {
             per_domain_quality: std::collections::HashMap::new(),
         }),
         region_markers: vec![],
+        object_region_markers: Vec::new(),
         build_report: Some(fullmag_ir::FemSharedDomainBuildReportIR {
             build_mode: "component_aware".to_string(),
             fallbacks_triggered: vec![],
@@ -5576,6 +6102,8 @@ fn fem_domain_mesh_asset_accepts_optional_build_report() {
             operation_statuses: vec![],
             thin_film_diagnostics: vec![],
             degraded: false,
+            authored_regions_count: None,
+            realized_regions_count: None,
         }),
     };
     assert!(asset.validate().is_ok());
@@ -5604,6 +6132,7 @@ fn fem_domain_mesh_asset_accepts_optional_build_report() {
             per_domain_quality: std::collections::HashMap::new(),
         }),
         region_markers: vec![],
+        object_region_markers: Vec::new(),
         build_report: None,
     };
     assert!(asset_no_report.validate().is_ok());
@@ -5824,4 +6353,662 @@ fn fdm_cuda_general_oersted_field_plans() {
         }
         _ => panic!("expected FDM plan"),
     }
+}
+
+fn fem_minimal_test_ir() -> ProblemIR {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fem;
+    ir.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
+        fdm: None,
+        fem: Some(fullmag_ir::FemHintsIR {
+            order: 1,
+            hmax: 2e-9,
+            mesh: None,
+            demag_solver_policy: None,
+        }),
+        hybrid: None,
+    });
+    ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+        fdm_grid_assets: vec![],
+        fem_mesh_assets: vec![],
+        fem_domain_mesh_asset: Some(fullmag_ir::FemDomainMeshAssetIR {
+            mesh_source: None,
+            mesh: Some(fullmag_ir::MeshIR {
+                mesh_name: "strip".to_string(),
+                nodes: vec![
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                ],
+                elements: vec![[0, 1, 2, 3]],
+                element_markers: vec![1],
+                boundary_faces: vec![[0, 1, 2]],
+                boundary_markers: vec![1],
+                periodic_boundary_pairs: Vec::new(),
+                periodic_node_pairs: Vec::new(),
+                per_domain_quality: std::collections::HashMap::new(),
+            }),
+            region_markers: vec![fullmag_ir::FemDomainRegionMarkerIR {
+                geometry_name: "strip".to_string(),
+                marker: 1,
+            }],
+            object_region_markers: Vec::new(),
+            build_report: None,
+        }),
+    });
+    ir
+}
+
+#[test]
+fn fdm_linear_ms_field_plans_cell_sampling() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.material_parameter_fields
+        .push(fullmag_ir::MaterialParameterAssignmentIR {
+            assignment_id: "linear_ms".to_string(),
+            owner_object: "strip".to_string(),
+            region_id: None,
+            parameter: fullmag_ir::MaterialParameterNameIR::Ms,
+            value: fullmag_ir::MaterialParameterFieldIR::Linear {
+                base: 800e3,
+                gradient: [1e9, 0.0, 0.0],
+                frame: fullmag_ir::RegionFrameIR::Object,
+                unit: Some("A/m".to_string()),
+            },
+            priority: 10,
+            conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+        });
+
+    let planned = plan(&ir).expect("FDM planning with linear Ms should succeed");
+
+    assert!(planned.common.material_field_plans.iter().any(|p| {
+        p.parameter == fullmag_ir::MaterialParameterNameIR::Ms
+            && p.source_kind == fullmag_ir::MaterialFieldSourceKind::Gradient
+            && p.realization_location == fullmag_ir::MaterialFieldLocationIR::Cell
+            && p.requires_sampling
+    }));
+
+    let BackendPlanIR::Fdm(fdm_plan) = &planned.backend_plan else {
+        panic!("expected FDM plan");
+    };
+    let ms_field = fdm_plan
+        .material
+        .ms_field
+        .as_ref()
+        .expect("expected ms_field to be populated");
+    assert_eq!(ms_field.len(), 3000); // 100 * 10 * 3
+    assert!(ms_field[0] != ms_field[2999]);
+}
+
+#[test]
+fn fem_linear_ms_field_plans_coefficient_sampling() {
+    let mut ir = fem_minimal_test_ir();
+    ir.material_parameter_fields
+        .push(fullmag_ir::MaterialParameterAssignmentIR {
+            assignment_id: "linear_ms".to_string(),
+            owner_object: "strip".to_string(),
+            region_id: None,
+            parameter: fullmag_ir::MaterialParameterNameIR::Ms,
+            value: fullmag_ir::MaterialParameterFieldIR::Linear {
+                base: 800e3,
+                gradient: [1e9, 0.0, 0.0],
+                frame: fullmag_ir::RegionFrameIR::Object,
+                unit: Some("A/m".to_string()),
+            },
+            priority: 10,
+            conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+        });
+
+    let planned = plan(&ir).expect("FEM planning with linear Ms should succeed");
+
+    assert!(planned.common.material_field_plans.iter().any(|p| {
+        p.parameter == fullmag_ir::MaterialParameterNameIR::Ms
+            && p.source_kind == fullmag_ir::MaterialFieldSourceKind::Gradient
+            && p.realization_location == fullmag_ir::MaterialFieldLocationIR::Node
+            && p.requires_sampling
+    }));
+
+    let BackendPlanIR::Fem(fem_plan) = &planned.backend_plan else {
+        panic!("expected FEM plan");
+    };
+    let ms_field = fem_plan
+        .material
+        .ms_field
+        .as_ref()
+        .expect("expected ms_field to be populated");
+    assert_eq!(ms_field.len(), 4); // 4 nodes
+    assert_eq!(ms_field[0], 800e3);
+    assert_eq!(ms_field[1], 800e3 + 1e9);
+}
+
+#[test]
+fn fem_object_frame_material_field_uses_owner_translation() {
+    let mut ir = fem_minimal_test_ir();
+    ir.geometry.entries = vec![fullmag_ir::GeometryEntryIR::Translate {
+        name: "strip_geom".to_string(),
+        base: Box::new(fullmag_ir::GeometryEntryIR::Box {
+            name: "strip_base".to_string(),
+            size: [1.0, 1.0, 1.0],
+        }),
+        by: [10.0, 0.0, 0.0],
+    }];
+    ir.regions = vec![fullmag_ir::RegionIR {
+        name: "strip_region".to_string(),
+        geometry: "strip_geom".to_string(),
+    }];
+    ir.magnets[0].region = "strip_region".to_string();
+    if let Some(assets) = ir.geometry_assets.as_mut() {
+        let domain_asset = assets
+            .fem_domain_mesh_asset
+            .as_mut()
+            .expect("expected shared FEM domain asset");
+        domain_asset.region_markers[0].geometry_name = "strip_geom".to_string();
+        let mesh = domain_asset.mesh.as_mut().expect("expected inline mesh");
+        mesh.nodes = vec![
+            [10.0, 0.0, 0.0],
+            [11.0, 0.0, 0.0],
+            [10.0, 1.0, 0.0],
+            [10.0, 0.0, 1.0],
+        ];
+    }
+    ir.material_parameter_fields
+        .push(fullmag_ir::MaterialParameterAssignmentIR {
+            assignment_id: "translated_linear_ms".to_string(),
+            owner_object: "strip".to_string(),
+            region_id: None,
+            parameter: fullmag_ir::MaterialParameterNameIR::Ms,
+            value: fullmag_ir::MaterialParameterFieldIR::Linear {
+                base: 800e3,
+                gradient: [1e9, 0.0, 0.0],
+                frame: fullmag_ir::RegionFrameIR::Object,
+                unit: Some("A/m".to_string()),
+            },
+            priority: 10,
+            conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+        });
+
+    let planned = plan(&ir).expect("translated object-frame field should plan");
+    let BackendPlanIR::Fem(fem_plan) = &planned.backend_plan else {
+        panic!("expected FEM plan");
+    };
+    let ms_field = fem_plan
+        .material
+        .ms_field
+        .as_ref()
+        .expect("expected translated Ms field");
+    assert_eq!(ms_field[0], 800e3);
+    assert_eq!(ms_field[1], 800e3 + 1e9);
+}
+
+#[test]
+fn fem_sampled_ms_must_remain_positive_on_every_node() {
+    let mut ir = fem_minimal_test_ir();
+    ir.material_parameter_fields
+        .push(fullmag_ir::MaterialParameterAssignmentIR {
+            assignment_id: "invalid_linear_ms".to_string(),
+            owner_object: "strip".to_string(),
+            region_id: None,
+            parameter: fullmag_ir::MaterialParameterNameIR::Ms,
+            value: fullmag_ir::MaterialParameterFieldIR::Linear {
+                base: 1.0,
+                gradient: [-2.0, 0.0, 0.0],
+                frame: fullmag_ir::RegionFrameIR::Object,
+                unit: Some("A/m".to_string()),
+            },
+            priority: 10,
+            conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+        });
+
+    let err = plan(&ir).expect_err("sampled Ms <= 0 must block FEM planning");
+    assert!(
+        err.reasons.iter().any(|reason| {
+            reason.contains("resolved region-owned material parameter Ms")
+                && reason.contains("invalid value")
+        }),
+        "unexpected planner errors: {:?}",
+        err.reasons
+    );
+}
+
+#[test]
+fn fem_sharp_assignment_requires_conformal_in_strict() {
+    let mut ir = fem_minimal_test_ir();
+    ir.object_regions.push(fullmag_ir::ObjectRegionIR {
+        region_id: "strip:assigned_defect".to_string(),
+        owner_object: "strip".to_string(),
+        name: "assigned_defect".to_string(),
+        shape: fullmag_ir::RegionShapeIR::Box {
+            size: [0.2, 0.2, 0.2],
+            center: [0.5, 0.5, 0.5],
+        },
+        frame: fullmag_ir::RegionFrameIR::Object,
+        enabled: true,
+        priority: 20,
+        mesh_policy: None,
+        material_overrides: Vec::new(),
+        texture_override: None,
+        realization_policy: fullmag_ir::RegionRealizationPolicyIR::Inherit,
+    });
+    ir.material_parameter_fields
+        .push(fullmag_ir::MaterialParameterAssignmentIR {
+            assignment_id: "assigned_aex".to_string(),
+            owner_object: "strip".to_string(),
+            region_id: Some("strip:assigned_defect".to_string()),
+            parameter: fullmag_ir::MaterialParameterNameIR::Aex,
+            value: fullmag_ir::MaterialParameterFieldIR::Constant {
+                value: serde_json::json!(5e-12),
+                unit: Some("J/m".to_string()),
+            },
+            priority: 20,
+            conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+        });
+    ir.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Strict;
+
+    let err = plan(&ir)
+        .expect_err("sharp region-scoped assignment must require conformal FEM realization");
+    assert!(
+        err.reasons.iter().any(|reason| {
+            reason.contains("sharp parameter override for Aex/Ms")
+                && reason.contains("strip:assigned_defect")
+        }),
+        "unexpected planner errors: {:?}",
+        err.reasons
+    );
+}
+
+#[test]
+fn fem_sharp_aex_region_requires_conformal_in_strict() {
+    let mut ir = fem_minimal_test_ir();
+    let region = fullmag_ir::ObjectRegionIR {
+        region_id: "strip:defect".to_string(),
+        owner_object: "strip".to_string(),
+        name: "defect".to_string(),
+        shape: fullmag_ir::RegionShapeIR::Sphere {
+            radius: 0.1,
+            center: [0.5, 0.5, 0.5],
+        },
+        frame: fullmag_ir::RegionFrameIR::Object,
+        enabled: true,
+        priority: 20,
+        mesh_policy: None,
+        material_overrides: vec![
+            fullmag_ir::RegionMaterialOverrideIR {
+                parameter: fullmag_ir::MaterialParameterNameIR::Aex,
+                value: fullmag_ir::MaterialParameterFieldIR::Constant {
+                    value: serde_json::json!(5e-12),
+                    unit: Some("J/m".to_string()),
+                },
+                priority: 20,
+                conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+            },
+            fullmag_ir::RegionMaterialOverrideIR {
+                parameter: fullmag_ir::MaterialParameterNameIR::Ms,
+                value: fullmag_ir::MaterialParameterFieldIR::Constant {
+                    value: serde_json::json!(700e3),
+                    unit: Some("A/m".to_string()),
+                },
+                priority: 20,
+                conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+            },
+        ],
+        texture_override: None,
+        realization_policy: fullmag_ir::RegionRealizationPolicyIR::Inherit,
+    };
+    ir.object_regions.push(region);
+    ir.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Strict;
+
+    let err =
+        plan(&ir).expect_err("sharp Aex override in non-conformal region must fail in strict mode");
+    assert!(
+        err.reasons.iter().any(|reason| {
+            reason.contains("sharp parameter override for Aex/Ms in region 'strip:defect' requires a conformal boundary (domain marker) in strict mode")
+        }),
+        "unexpected planner errors: {:?}",
+        err.reasons
+    );
+}
+
+#[test]
+fn fem_sharp_aex_conformal_region_lowers_to_element_coefficient_field() {
+    let mut ir = fem_minimal_test_ir();
+    let region = fullmag_ir::ObjectRegionIR {
+        region_id: "strip:conformal_defect".to_string(),
+        owner_object: "strip".to_string(),
+        name: "conformal_defect".to_string(),
+        shape: fullmag_ir::RegionShapeIR::Box {
+            size: [0.2, 0.2, 0.2],
+            center: [0.0, 0.0, 0.0],
+        },
+        frame: fullmag_ir::RegionFrameIR::Object,
+        enabled: true,
+        priority: 20,
+        mesh_policy: None,
+        material_overrides: vec![
+            fullmag_ir::RegionMaterialOverrideIR {
+                parameter: fullmag_ir::MaterialParameterNameIR::Aex,
+                value: fullmag_ir::MaterialParameterFieldIR::Constant {
+                    value: serde_json::json!(5e-12),
+                    unit: Some("J/m".to_string()),
+                },
+                priority: 20,
+                conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+            },
+            fullmag_ir::RegionMaterialOverrideIR {
+                parameter: fullmag_ir::MaterialParameterNameIR::Ms,
+                value: fullmag_ir::MaterialParameterFieldIR::Constant {
+                    value: serde_json::json!(700e3),
+                    unit: Some("A/m".to_string()),
+                },
+                priority: 20,
+                conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+            },
+        ],
+        texture_override: None,
+        realization_policy: fullmag_ir::RegionRealizationPolicyIR::Conformal,
+    };
+    ir.object_regions.push(region);
+    if let Some(assets) = ir.geometry_assets.as_mut() {
+        if let Some(domain_asset) = assets.fem_domain_mesh_asset.as_mut() {
+            if let Some(mesh) = domain_asset.mesh.as_mut() {
+                mesh.nodes = vec![
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [1.0, 1.0, 1.0],
+                    [0.0, 0.0, 0.0],
+                    [0.05, 0.0, 0.0],
+                    [0.0, 0.05, 0.0],
+                    [0.0, 0.0, 0.05],
+                ];
+                mesh.elements = vec![[0, 1, 2, 3], [4, 5, 6, 7]];
+                mesh.element_markers = vec![1, 2];
+                mesh.boundary_faces = vec![[0, 1, 2], [4, 5, 6]];
+                mesh.boundary_markers = vec![1, 2];
+            }
+            domain_asset
+                .object_region_markers
+                .push(fullmag_ir::FemDomainRegionMarkerIR {
+                    geometry_name: "strip:conformal_defect".to_string(),
+                    marker: 2,
+                });
+        }
+    }
+    ir.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Strict;
+
+    let planned = plan(&ir).expect("strict conformal sharp Aex should lower to element fields");
+    let BackendPlanIR::Fem(fem) = &planned.backend_plan else {
+        panic!("expected FEM plan");
+    };
+    assert!(
+        fem.material.a_field.is_none(),
+        "sharp conformal Aex must not be represented as a projected nodal field"
+    );
+    let a_element_field = fem
+        .a_element_field
+        .as_ref()
+        .expect("expected conformal Aex element coefficient field");
+    assert_eq!(a_element_field.len(), 2);
+    assert_eq!(a_element_field[0], fem.material.exchange_stiffness);
+    assert_eq!(a_element_field[1], 5e-12);
+    let ms_element_field = fem
+        .ms_element_field
+        .as_ref()
+        .expect("expected conformal Ms element coefficient field");
+    assert_eq!(ms_element_field.len(), 2);
+    assert_eq!(ms_element_field[0], fem.material.saturation_magnetisation);
+    assert_eq!(ms_element_field[1], 700e3);
+    assert_eq!(fem.use_consistent_mass, Some(true));
+}
+
+#[test]
+fn fem_sharp_aex_conformal_marker_metadata_without_mesh_domain_still_blocks() {
+    let mut ir = fem_minimal_test_ir();
+    ir.object_regions.push(fullmag_ir::ObjectRegionIR {
+        region_id: "strip:fake_conformal_defect".to_string(),
+        owner_object: "strip".to_string(),
+        name: "fake_conformal_defect".to_string(),
+        shape: fullmag_ir::RegionShapeIR::Box {
+            size: [0.2, 0.2, 0.2],
+            center: [0.0, 0.0, 0.0],
+        },
+        frame: fullmag_ir::RegionFrameIR::Object,
+        enabled: true,
+        priority: 20,
+        mesh_policy: None,
+        material_overrides: vec![fullmag_ir::RegionMaterialOverrideIR {
+            parameter: fullmag_ir::MaterialParameterNameIR::Aex,
+            value: fullmag_ir::MaterialParameterFieldIR::Constant {
+                value: serde_json::json!(5e-12),
+                unit: Some("J/m".to_string()),
+            },
+            priority: 20,
+            conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+        }],
+        texture_override: None,
+        realization_policy: fullmag_ir::RegionRealizationPolicyIR::Conformal,
+    });
+    if let Some(assets) = ir.geometry_assets.as_mut() {
+        if let Some(domain_asset) = assets.fem_domain_mesh_asset.as_mut() {
+            domain_asset
+                .object_region_markers
+                .push(fullmag_ir::FemDomainRegionMarkerIR {
+                    geometry_name: "strip:fake_conformal_defect".to_string(),
+                    marker: 2,
+                });
+        }
+    }
+    ir.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Strict;
+
+    let err = plan(&ir)
+        .expect_err("metadata-only object_region_marker must not satisfy strict conformal policy");
+    assert!(
+        err.reasons.iter().any(|reason| {
+            reason.contains("sharp parameter override for Aex/Ms")
+                && reason.contains("requires a conformal boundary")
+        }),
+        "unexpected planner errors: {:?}",
+        err.reasons
+    );
+}
+
+#[test]
+fn fem_sharp_aex_region_requires_project_policy_in_extended_without_conformal_marker() {
+    let mut ir = fem_minimal_test_ir();
+    let region = fullmag_ir::ObjectRegionIR {
+        region_id: "strip:defect".to_string(),
+        owner_object: "strip".to_string(),
+        name: "defect".to_string(),
+        shape: fullmag_ir::RegionShapeIR::Sphere {
+            radius: 0.1,
+            center: [0.5, 0.5, 0.5],
+        },
+        frame: fullmag_ir::RegionFrameIR::Object,
+        enabled: true,
+        priority: 20,
+        mesh_policy: None,
+        material_overrides: vec![fullmag_ir::RegionMaterialOverrideIR {
+            parameter: fullmag_ir::MaterialParameterNameIR::Aex,
+            value: fullmag_ir::MaterialParameterFieldIR::Constant {
+                value: serde_json::json!(5e-12),
+                unit: Some("J/m".to_string()),
+            },
+            priority: 20,
+            conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+        }],
+        texture_override: None,
+        realization_policy: fullmag_ir::RegionRealizationPolicyIR::Inherit,
+    };
+    ir.object_regions.push(region);
+    ir.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Extended;
+
+    let err = plan(&ir)
+        .expect_err("extended FEM projection must require explicit realization_policy='project'");
+    assert!(
+        err.reasons.iter().any(|reason| {
+            reason.contains("requires conformal boundary")
+                && reason.contains("to allow projection, set realization_policy='project'")
+        }),
+        "unexpected planner errors: {:?}",
+        err.reasons
+    );
+}
+
+#[test]
+fn fem_sharp_aex_region_allows_projection_in_extended_with_warning() {
+    let mut ir = fem_minimal_test_ir();
+    let region = fullmag_ir::ObjectRegionIR {
+        region_id: "strip:defect".to_string(),
+        owner_object: "strip".to_string(),
+        name: "defect".to_string(),
+        shape: fullmag_ir::RegionShapeIR::Sphere {
+            radius: 0.1,
+            center: [0.5, 0.5, 0.5],
+        },
+        frame: fullmag_ir::RegionFrameIR::Object,
+        enabled: true,
+        priority: 20,
+        mesh_policy: None,
+        material_overrides: vec![fullmag_ir::RegionMaterialOverrideIR {
+            parameter: fullmag_ir::MaterialParameterNameIR::Aex,
+            value: fullmag_ir::MaterialParameterFieldIR::Constant {
+                value: serde_json::json!(5e-12),
+                unit: Some("J/m".to_string()),
+            },
+            priority: 20,
+            conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+        }],
+        texture_override: None,
+        realization_policy: fullmag_ir::RegionRealizationPolicyIR::Project,
+    };
+    ir.object_regions.push(region);
+    ir.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Extended;
+
+    let planned = plan(&ir).expect("sharp Aex override in non-conformal region must be allowed in extended mode with project policy");
+
+    let aex_plan = planned
+        .common
+        .material_field_plans
+        .iter()
+        .find(|p| p.parameter == fullmag_ir::MaterialParameterNameIR::Aex)
+        .expect("expected material field plan for Aex");
+    assert!(
+        aex_plan.warnings.iter().any(|warning| {
+            warning.contains("sharp parameter override for Aex")
+                && warning.contains("in region 'strip:defect' requires conformal boundary, but no domain marker was found in the mesh; projected approximation will be used")
+        }),
+        "expected projection warning in Aex plan, got warnings: {:?}",
+        aex_plan.warnings
+    );
+    assert_eq!(
+        aex_plan.realization_method.as_deref(),
+        Some("projected_nodal_sampling")
+    );
+    let statistics = aex_plan
+        .statistics
+        .as_ref()
+        .expect("projected nodal field must expose realization statistics");
+    assert_eq!(statistics.sample_count, 4);
+    assert!(
+        planned
+            .provenance
+            .notes
+            .iter()
+            .any(|note| { note.contains("projected approximation will be used") }),
+        "projection warning must be preserved in execution provenance: {:?}",
+        planned.provenance.notes
+    );
+}
+
+#[test]
+fn fem_sharp_aex_project_policy_with_real_marker_still_uses_projection_warning() {
+    let mut ir = fem_minimal_test_ir();
+    let region = fullmag_ir::ObjectRegionIR {
+        region_id: "strip:projected_conformal_defect".to_string(),
+        owner_object: "strip".to_string(),
+        name: "projected_conformal_defect".to_string(),
+        shape: fullmag_ir::RegionShapeIR::Box {
+            size: [0.2, 0.2, 0.2],
+            center: [0.0, 0.0, 0.0],
+        },
+        frame: fullmag_ir::RegionFrameIR::Object,
+        enabled: true,
+        priority: 20,
+        mesh_policy: None,
+        material_overrides: vec![fullmag_ir::RegionMaterialOverrideIR {
+            parameter: fullmag_ir::MaterialParameterNameIR::Aex,
+            value: fullmag_ir::MaterialParameterFieldIR::Constant {
+                value: serde_json::json!(5e-12),
+                unit: Some("J/m".to_string()),
+            },
+            priority: 20,
+            conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+        }],
+        texture_override: None,
+        realization_policy: fullmag_ir::RegionRealizationPolicyIR::Project,
+    };
+    ir.object_regions.push(region);
+    if let Some(assets) = ir.geometry_assets.as_mut() {
+        if let Some(domain_asset) = assets.fem_domain_mesh_asset.as_mut() {
+            if let Some(mesh) = domain_asset.mesh.as_mut() {
+                mesh.nodes = vec![
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [1.0, 1.0, 1.0],
+                    [0.0, 0.0, 0.0],
+                    [0.05, 0.0, 0.0],
+                    [0.0, 0.05, 0.0],
+                    [0.0, 0.0, 0.05],
+                ];
+                mesh.elements = vec![[0, 1, 2, 3], [4, 5, 6, 7]];
+                mesh.element_markers = vec![1, 2];
+                mesh.boundary_faces = vec![[0, 1, 2], [4, 5, 6]];
+                mesh.boundary_markers = vec![1, 2];
+            }
+            domain_asset
+                .object_region_markers
+                .push(fullmag_ir::FemDomainRegionMarkerIR {
+                    geometry_name: "strip:projected_conformal_defect".to_string(),
+                    marker: 2,
+                });
+        }
+    }
+    ir.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Extended;
+
+    let planned = plan(&ir).expect(
+        "explicit Project policy must be allowed in extended mode even when a real marker exists",
+    );
+    let aex_plan = planned
+        .common
+        .material_field_plans
+        .iter()
+        .find(|p| p.parameter == fullmag_ir::MaterialParameterNameIR::Aex)
+        .expect("expected material field plan for Aex");
+    assert_eq!(
+        aex_plan.realization_method.as_deref(),
+        Some("projected_nodal_sampling")
+    );
+    assert!(
+        aex_plan.warnings.iter().any(|warning| {
+            warning.contains("explicit project policy was requested despite an available conformal domain marker")
+                && warning.contains("projected approximation will be used")
+        }),
+        "expected explicit-project warning, got warnings: {:?}",
+        aex_plan.warnings
+    );
+    assert!(
+        !aex_plan
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("no domain marker was found")),
+        "projected conformal-marker warning must not claim that the marker is missing: {:?}",
+        aex_plan.warnings
+    );
+    assert!(
+        planned.provenance.notes.iter().any(|note| {
+            note.contains("explicit project policy was requested despite an available conformal domain marker")
+        }),
+        "explicit-project warning must be preserved in execution provenance: {:?}",
+        planned.provenance.notes
+    );
 }

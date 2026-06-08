@@ -257,8 +257,11 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain("verifyRegionAuthoringOverlayFlow");
     expect(smokeScript).toContain("CONTROL_ROOM_SMOKE_REGION_ONLY_OBJECT_ID");
     expect(smokeScript).toContain("isObjectRegionCreateUrl");
-    expect(smokeScript).toContain("objectRow.dblclick()");
-    expect(smokeScript).toContain("regionsNode.dblclick()");
+    expect(smokeScript).toContain("if (!regionOnlyObjectId)");
+    expect(smokeScript).toContain("ensureExplorerNodeExpanded");
+    expect(smokeScript).toContain(
+      'if ((await node.getAttribute("aria-expanded")) === "false")',
+    );
     expect(smokeScript).toContain('fillDraftField(page, "Name", regionName)');
     expect(smokeScript).toContain('shapeSelect.selectOption("cylinder")');
     expect(smokeScript).toContain("region create button enabled");

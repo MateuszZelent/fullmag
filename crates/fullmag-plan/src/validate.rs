@@ -26,6 +26,31 @@ pub(crate) fn resolve_auto_backend(problem: &ProblemIR) -> BackendTarget {
     }
 }
 
+pub(crate) fn region_is_conformal(
+    problem: &ProblemIR,
+    region: &fullmag_ir::ObjectRegionIR,
+) -> bool {
+    if let Some(assets) = &problem.geometry_assets {
+        if let Some(domain_asset) = &assets.fem_domain_mesh_asset {
+            let mesh_markers = crate::mesh::load_fem_domain_mesh_asset(domain_asset)
+                .ok()
+                .map(|mesh| {
+                    mesh.element_markers
+                        .iter()
+                        .copied()
+                        .collect::<BTreeSet<_>>()
+                });
+            return domain_asset.object_region_markers.iter().any(|marker| {
+                (marker.geometry_name == region.name || marker.geometry_name == region.region_id)
+                    && mesh_markers
+                        .as_ref()
+                        .is_some_and(|markers| markers.contains(&marker.marker))
+            });
+        }
+    }
+    false
+}
+
 pub(crate) fn validate_region_owned_planning(
     problem: &ProblemIR,
     resolved_backend: BackendTarget,
@@ -37,32 +62,60 @@ pub(crate) fn validate_region_owned_planning(
         .filter(|region| region.enabled)
         .map(|region| region.region_id.as_str())
         .collect::<BTreeSet<_>>();
-    if problem.material_parameter_fields.iter().any(|assignment| {
-        assignment
+    let has_unsupported_fields = problem.material_parameter_fields.iter().any(|assignment| {
+        let is_active_region = assignment
             .region_id
             .as_deref()
-            .is_none_or(|region_id| enabled_region_ids.contains(region_id))
-    }) {
+            .is_none_or(|region_id| enabled_region_ids.contains(region_id));
+        is_active_region
+            && !matches!(
+                assignment.parameter,
+                fullmag_ir::MaterialParameterNameIR::Ms
+                    | fullmag_ir::MaterialParameterNameIR::Aex
+                    | fullmag_ir::MaterialParameterNameIR::Alpha
+            )
+    });
+    if has_unsupported_fields {
         errors.push(format!(
             "region-owned material_parameter_fields are authored in ProblemIR but not yet executable for backend='{}'; planner must not silently drop spatial material fields",
             resolved_backend.as_str()
         ));
     }
-    if problem
-        .object_regions
-        .iter()
-        .any(|region| region.enabled && region.mesh_policy.is_some())
+    if resolved_backend != BackendTarget::Fem
+        && problem
+            .object_regions
+            .iter()
+            .any(|region| region.enabled && region.mesh_policy.is_some())
     {
         errors.push(format!(
             "object region mesh_policy is authored in ProblemIR but not yet executable for backend='{}'; planner must not silently ignore region mesh controls",
             resolved_backend.as_str()
         ));
     }
-    if problem
-        .object_regions
-        .iter()
-        .any(|region| region.enabled && !region.material_overrides.is_empty())
-    {
+    if resolved_backend == BackendTarget::Fem {
+        for region in problem.object_regions.iter().filter(|r| r.enabled) {
+            if region.mesh_policy.is_some() {
+                if matches!(region.shape, fullmag_ir::RegionShapeIR::Csg { .. }) {
+                    errors.push(format!(
+                        "object region '{}' has CSG shape, which is not supported for mesh_policy; CSG region mesh policies are not implemented",
+                        region.name
+                    ));
+                }
+            }
+        }
+    }
+    let has_unsupported_overrides = problem.object_regions.iter().any(|region| {
+        region.enabled
+            && region.material_overrides.iter().any(|over| {
+                !matches!(
+                    over.parameter,
+                    fullmag_ir::MaterialParameterNameIR::Ms
+                        | fullmag_ir::MaterialParameterNameIR::Aex
+                        | fullmag_ir::MaterialParameterNameIR::Alpha
+                )
+            })
+    });
+    if has_unsupported_overrides {
         errors.push(format!(
             "object region material_overrides are authored in ProblemIR but not yet executable for backend='{}'; planner must not silently ignore region material overrides",
             resolved_backend.as_str()
@@ -79,17 +132,76 @@ pub(crate) fn validate_region_owned_planning(
             resolved_backend.as_str()
         ));
     }
-    if problem.object_regions.iter().any(|region| {
-        region.enabled
-            && matches!(
-                region.realization_policy,
-                RegionRealizationPolicyIR::Conformal | RegionRealizationPolicyIR::Project
-            )
-    }) {
+
+    if resolved_backend != BackendTarget::Fem
+        && problem.object_regions.iter().any(|region| {
+            region.enabled
+                && matches!(
+                    region.realization_policy,
+                    fullmag_ir::RegionRealizationPolicyIR::Conformal
+                        | fullmag_ir::RegionRealizationPolicyIR::Project
+                )
+        })
+    {
         errors.push(format!(
             "object region realization_policy requests conformal/project realization in ProblemIR but backend='{}' does not yet materialize authored object regions; planner must not silently pretend the requested realization happened",
             resolved_backend.as_str()
         ));
+    }
+
+    if resolved_backend == BackendTarget::Fem {
+        let is_strict =
+            problem.validation_profile.execution_mode == fullmag_ir::ExecutionMode::Strict;
+        let is_extended =
+            problem.validation_profile.execution_mode == fullmag_ir::ExecutionMode::Extended;
+
+        for region in &problem.object_regions {
+            if !region.enabled {
+                continue;
+            }
+            let has_sharp_override =
+                region.material_overrides.iter().any(|over| {
+                    matches!(
+                        over.parameter,
+                        fullmag_ir::MaterialParameterNameIR::Ms
+                            | fullmag_ir::MaterialParameterNameIR::Aex
+                    ) && matches!(
+                        over.value,
+                        fullmag_ir::MaterialParameterFieldIR::Constant { .. }
+                    )
+                }) || problem.material_parameter_fields.iter().any(|assignment| {
+                    assignment.region_id.as_deref() == Some(region.region_id.as_str())
+                        && matches!(
+                            assignment.parameter,
+                            fullmag_ir::MaterialParameterNameIR::Ms
+                                | fullmag_ir::MaterialParameterNameIR::Aex
+                        )
+                        && matches!(
+                            assignment.value,
+                            fullmag_ir::MaterialParameterFieldIR::Constant { .. }
+                        )
+                });
+
+            if has_sharp_override {
+                let conformal = region.realization_policy != RegionRealizationPolicyIR::Project
+                    && region_is_conformal(problem, region);
+                if !conformal {
+                    if is_strict {
+                        errors.push(format!(
+                            "sharp parameter override for Aex/Ms in region '{}' requires a conformal boundary (domain marker) in strict mode; projection is not allowed in strict mode",
+                            region.region_id
+                        ));
+                    } else if is_extended {
+                        if region.realization_policy != RegionRealizationPolicyIR::Project {
+                            errors.push(format!(
+                                "sharp parameter override for Aex/Ms in region '{}' requires conformal boundary, but no domain marker was found in the mesh; to allow projection, set realization_policy='project' and run in extended mode",
+                                region.region_id
+                            ));
+                        }
+                    }
+                }
+            }
+        }
     }
     for coupling in problem.couplings.iter().filter(|coupling| coupling.enabled) {
         if region_coupling_is_executable_for_backend(problem, coupling, resolved_backend) {

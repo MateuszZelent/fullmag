@@ -60,6 +60,9 @@ export function EChartsSurface({
       nextStatus,
     "loading",
   );
+  const updateRendererStatus = (status: ChartRendererStatus) => {
+    setRendererStatus(status);
+  };
   const hasSamples = series.some((item) => item.points.length > 0);
   const overlay = chartStatusOverlay({
     dataStatus,
@@ -101,7 +104,7 @@ export function EChartsSurface({
         try {
           chart = echarts.init(element, undefined, { renderer: "canvas" });
         } catch {
-          if (!disposed) setRendererStatus("error");
+          if (!disposed) updateRendererStatus("error");
           return;
         }
         chartRef.current = chart;
@@ -117,7 +120,7 @@ export function EChartsSurface({
           if (!point) return;
           onPointSelectRef.current?.(point);
         });
-        setRendererStatus("ready");
+        updateRendererStatus("ready");
         if (modelRef.current.length > 0) {
           scheduleChartOptionUpdate({
             chart,
@@ -157,7 +160,7 @@ export function EChartsSurface({
         resizeObserver.observe(element);
       })
       .catch(() => {
-        if (!disposed) setRendererStatus("error");
+        if (!disposed) updateRendererStatus("error");
       });
 
     return () => {
@@ -169,8 +172,11 @@ export function EChartsSurface({
       resizeSchedulerRef.current = null;
       setOptionSchedulerRef.current = null;
       cleanupChartEvents?.();
-      if (chartRef.current) {
-        chartRef.current.dispose();
+      const chart = chartRef.current;
+      if (chart) {
+        chart.off("dataZoom");
+        chart.off("click");
+        chart.dispose();
         recordChartInstanceDisposed();
       }
       chartRef.current = null;

@@ -30,6 +30,20 @@ describe("MeshPartLayer", () => {
     );
   });
 
+  it("uses target visibility as the master display gate for mesh-backed parts", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("./MeshPartLayer.tsx", import.meta.url)),
+      "utf8",
+    );
+
+    expect(source).toContain(
+      "if (!geometry || !renderSettings.visible || !hasAnyVisibleSubLayer) return null;",
+    );
+    expect(source).not.toContain(
+      "(!renderSettings.visible && !hasAnyVisibleSubLayer)",
+    );
+  });
+
   it("uses volume edges for full magnetic-object wireframe and surface edges for surface mode", () => {
     const surfaceEdges = new Uint32Array([0, 1, 1, 2]);
     const volumeEdges = new Uint32Array([0, 1, 1, 2, 2, 3, 0, 3]);

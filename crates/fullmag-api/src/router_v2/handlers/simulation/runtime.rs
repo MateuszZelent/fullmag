@@ -208,6 +208,20 @@ pub async fn get_solver_status(
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
     let latest = snapshot.live_state.as_ref().map(|value| &value.latest_step);
     let runtime_status = build_runtime_status_view(&effective_runtime_status_code(snapshot));
+    let mut warnings = material_field_plan_warnings(snapshot.metadata.as_ref());
+    for warning in snapshot
+        .engine_log
+        .iter()
+        .filter(|entry| entry.level.eq_ignore_ascii_case("warn"))
+        .map(|entry| entry.message.clone())
+    {
+        if !warnings.contains(&warning) {
+            warnings.push(warning);
+        }
+    }
+    if warnings.len() > 8 {
+        warnings.drain(0..warnings.len() - 8);
+    }
 
     Ok(Json(SolverStatusResource {
         revision: snapshot.state_version,
@@ -247,17 +261,7 @@ pub async fn get_solver_status(
             .rev()
             .find(|entry| entry.level.eq_ignore_ascii_case("error"))
             .map(|entry| entry.message.clone()),
-        warnings: snapshot
-            .engine_log
-            .iter()
-            .filter(|entry| entry.level.eq_ignore_ascii_case("warn"))
-            .map(|entry| entry.message.clone())
-            .rev()
-            .take(8)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect(),
+        warnings,
     }))
 }
 
@@ -1023,6 +1027,21 @@ fn metadata_string(metadata: Option<&Value>, path: &[&str]) -> Option<String> {
         current = current.get(*key)?;
     }
     current.as_str().map(ToOwned::to_owned)
+}
+
+fn material_field_plan_warnings(metadata: Option<&Value>) -> Vec<String> {
+    metadata
+        .and_then(|value| value.get("execution_plan"))
+        .and_then(|value| value.get("common"))
+        .and_then(|value| value.get("material_field_plans"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|plan| plan.get("warnings").and_then(Value::as_array))
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 fn stage_stop_reason_string(reason: &fullmag_ir::StageStopReason) -> String {

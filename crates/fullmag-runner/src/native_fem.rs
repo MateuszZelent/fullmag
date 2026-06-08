@@ -230,6 +230,164 @@ fn infer_native_runtime_element_markers(
 }
 
 #[cfg(feature = "fem-gpu")]
+fn native_markers_from_element_selector(
+    selector: &fullmag_ir::FemMeshPartSelector,
+    mesh_element_markers: &[u32],
+) -> BTreeSet<u32> {
+    match selector {
+        fullmag_ir::FemMeshPartSelector::ElementMarkerSet { markers } => markers
+            .iter()
+            .copied()
+            .filter(|marker| *marker != 0)
+            .collect(),
+        fullmag_ir::FemMeshPartSelector::ElementRange { start, count } => {
+            let start = *start as usize;
+            let end = start
+                .saturating_add(*count as usize)
+                .min(mesh_element_markers.len());
+            if start >= end {
+                return BTreeSet::new();
+            }
+            mesh_element_markers[start..end]
+                .iter()
+                .copied()
+                .filter(|marker| *marker != 0)
+                .collect()
+        }
+        _ => BTreeSet::new(),
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn native_magnetic_markers_from_object_segments(plan: &fullmag_ir::FemPlanIR) -> BTreeSet<u32> {
+    if plan.mesh.element_markers.is_empty() {
+        return BTreeSet::new();
+    }
+    let mut markers = BTreeSet::new();
+    for segment in &plan.object_segments {
+        if segment.element_count == 0 {
+            continue;
+        }
+        let start = segment.element_start as usize;
+        let end = start
+            .saturating_add(segment.element_count as usize)
+            .min(plan.mesh.element_markers.len());
+        if start >= end {
+            continue;
+        }
+        markers.extend(
+            plan.mesh.element_markers[start..end]
+                .iter()
+                .copied()
+                .filter(|marker| *marker != 0),
+        );
+    }
+    markers
+}
+
+#[cfg(feature = "fem-gpu")]
+fn native_magnetic_markers_from_mesh_parts(plan: &fullmag_ir::FemPlanIR) -> BTreeSet<u32> {
+    if plan.mesh.element_markers.is_empty() {
+        return BTreeSet::new();
+    }
+    let mut markers = BTreeSet::new();
+    for part in &plan.mesh_parts {
+        if part.role != fullmag_ir::FemMeshPartRole::MagneticObject {
+            continue;
+        }
+        markers.extend(native_markers_from_element_selector(
+            &part.element_selector,
+            &plan.mesh.element_markers,
+        ));
+    }
+    markers
+}
+
+#[cfg(feature = "fem-gpu")]
+fn normalized_native_runtime_element_markers(
+    plan: &fullmag_ir::FemPlanIR,
+) -> Result<Option<Vec<u32>>, RunError> {
+    if plan.mesh.element_markers.is_empty() {
+        return infer_native_runtime_element_markers(plan);
+    }
+
+    let distinct_nonzero = plan
+        .mesh
+        .element_markers
+        .iter()
+        .copied()
+        .filter(|marker| *marker != 0)
+        .collect::<BTreeSet<_>>();
+    if distinct_nonzero.is_empty() {
+        return Ok(Some(vec![0; plan.mesh.element_markers.len()]));
+    }
+
+    let magnetic_markers = if !plan.region_materials.is_empty() {
+        let markers = plan
+            .region_materials
+            .iter()
+            .map(|region| region.element_marker)
+            .collect::<BTreeSet<_>>();
+        let unknown = distinct_nonzero
+            .difference(&markers)
+            .copied()
+            .collect::<Vec<_>>();
+        if !unknown.is_empty() {
+            return Err(RunError {
+                message: format!(
+                    "ambiguous native FEM magnetic region contract: mesh contains non-zero element markers {:?} that are not declared in region_materials",
+                    unknown
+                ),
+            });
+        }
+        markers
+    } else if distinct_nonzero.len() > 1 {
+        let mut inferred = native_magnetic_markers_from_object_segments(plan);
+        inferred.extend(native_magnetic_markers_from_mesh_parts(plan));
+        if inferred.is_empty() {
+            return Err(RunError {
+                message: format!(
+                    "ambiguous native FEM magnetic region contract: mesh uses multiple non-zero element markers {:?} without region_materials. Refusing to guess which regions are magnetic.",
+                    distinct_nonzero
+                ),
+            });
+        } else {
+            let unknown = distinct_nonzero
+                .difference(&inferred)
+                .copied()
+                .collect::<Vec<_>>();
+            if !unknown.is_empty() {
+                return Err(RunError {
+                    message: format!(
+                        "ambiguous native FEM magnetic region contract: mesh contains non-zero element markers {:?} that are not covered by object_segments/mesh_parts-inferred magnetic markers {:?}",
+                        unknown, inferred
+                    ),
+                });
+            }
+            inferred
+        }
+    } else {
+        distinct_nonzero
+    };
+
+    if magnetic_markers.contains(&0) {
+        return Err(RunError {
+            message:
+                "invalid native FEM plan: magnetic runtime markers must not include element_marker=0"
+                    .to_string(),
+        });
+    }
+
+    Ok(Some(
+        plan.mesh
+            .element_markers
+            .iter()
+            .map(|marker| u32::from(magnetic_markers.contains(marker)))
+            .collect(),
+    ))
+}
+
+#[cfg(feature = "fem-gpu")]
 pub(crate) struct NativeFemBackend {
     handle: *mut ffi::fullmag_fem_backend,
     magnetic_node_mask: Vec<bool>,
@@ -409,7 +567,7 @@ impl NativeFemBackend {
         eager_initial_effective_field: bool,
     ) -> Result<Self, RunError> {
         configure_managed_openmpi_environment();
-        let inferred_element_markers = infer_native_runtime_element_markers(plan)?;
+        let inferred_element_markers = normalized_native_runtime_element_markers(plan)?;
         let runtime_plan;
         let plan = if let Some(element_markers) = inferred_element_markers {
             runtime_plan = {
@@ -834,6 +992,16 @@ impl NativeFemBackend {
                 .kc3_field
                 .as_ref()
                 .map_or(0, |v| v.len() as u64),
+            ms_element_field: plan
+                .ms_element_field
+                .as_deref()
+                .map_or(std::ptr::null(), |s| s.as_ptr()),
+            ms_element_field_len: plan.ms_element_field.as_ref().map_or(0, |v| v.len() as u64),
+            a_element_field: plan
+                .a_element_field
+                .as_deref()
+                .map_or(std::ptr::null(), |s| s.as_ptr()),
+            a_element_field_len: plan.a_element_field.as_ref().map_or(0, |v| v.len() as u64),
             has_zhang_li_stt: if has_zhang_li_stt(plan) { 1 } else { 0 },
             has_slonczewski_stt: if has_slonczewski_stt(plan) { 1 } else { 0 },
             stt_current_density_am2: plan.current_density.unwrap_or([0.0, 0.0, 0.0]),
@@ -1747,9 +1915,10 @@ mod tests {
     use fullmag_engine::{EffectiveFieldTerms, LlgConfig, MaterialParameters, TimeIntegrator};
     use fullmag_ir::{
         AdaptiveTimeStepIR, AirBoxConfigIR, ExchangeBoundaryCondition, ExecutionPrecision,
-        FemLinearSolverPolicy, FemMeshPartIR, FemMeshPartRole, FemMeshPartSelector, FemPlanIR,
-        IntegratorChoice, MaterialIR, MeshIR, MeshPeriodicBoundaryPairIR, MeshPeriodicNodePairIR,
-        RelaxStopIR, RelaxationAlgorithmIR, RelaxationControlIR, ResolvedFemDemagIR,
+        FemLinearSolverPolicy, FemMeshPartIR, FemMeshPartRole, FemMeshPartSelector,
+        FemObjectSegmentIR, FemPlanIR, IntegratorChoice, MaterialIR, MeshIR,
+        MeshPeriodicBoundaryPairIR, MeshPeriodicNodePairIR, RelaxStopIR, RelaxationAlgorithmIR,
+        RelaxationControlIR, ResolvedFemDemagIR,
     };
 
     struct EnvVarGuard {
@@ -1835,6 +2004,8 @@ mod tests {
                 dind_field: None,
                 dbulk_field: None,
             },
+            ms_element_field: None,
+            a_element_field: None,
             region_materials: Vec::new(),
             enable_exchange: true,
             enable_demag: false,
@@ -1985,6 +2156,85 @@ mod tests {
     }
 
     #[test]
+    fn native_runtime_markers_normalize_mesh_only_object_region_markers() {
+        let mut plan = make_test_plan();
+        plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
+        plan.mesh.nodes.push([2.0, 0.0, 0.0]);
+        plan.mesh.elements = vec![[0, 1, 2, 3], [0, 1, 2, 4], [1, 2, 3, 4]];
+        plan.mesh.element_markers = vec![1, 2, 0];
+        plan.object_segments = vec![
+            FemObjectSegmentIR {
+                object_id: "film".to_string(),
+                geometry_id: Some("film".to_string()),
+                node_start: 0,
+                node_count: 4,
+                element_start: 0,
+                element_count: 1,
+                boundary_face_start: 0,
+                boundary_face_count: 0,
+            },
+            FemObjectSegmentIR {
+                object_id: "film".to_string(),
+                geometry_id: Some("film:refinement".to_string()),
+                node_start: 0,
+                node_count: 5,
+                element_start: 1,
+                element_count: 1,
+                boundary_face_start: 0,
+                boundary_face_count: 0,
+            },
+            FemObjectSegmentIR {
+                object_id: "__air__".to_string(),
+                geometry_id: None,
+                node_start: 0,
+                node_count: 0,
+                element_start: 2,
+                element_count: 1,
+                boundary_face_start: 0,
+                boundary_face_count: 0,
+            },
+        ];
+
+        let markers = normalized_native_runtime_element_markers(&plan)
+            .expect("mesh-only region markers should normalize")
+            .expect("non-empty element markers should produce runtime markers");
+
+        assert_eq!(markers, vec![1, 1, 0]);
+    }
+
+    #[test]
+    fn native_runtime_markers_reject_unexplained_multiple_nonzero_markers() {
+        let mut plan = make_test_plan();
+        plan.mesh.elements = vec![[0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3]];
+        plan.mesh.element_markers = vec![1, 2, 0];
+        plan.object_segments.clear();
+        plan.mesh_parts.clear();
+        plan.region_materials.clear();
+
+        let error = normalized_native_runtime_element_markers(&plan)
+            .expect_err("unexplained multiple nonzero markers must be rejected");
+
+        assert!(error.message.contains("without region_materials"));
+    }
+
+    #[test]
+    fn native_runtime_markers_reject_region_materials_missing_mesh_marker() {
+        let mut plan = make_test_plan();
+        plan.mesh.elements = vec![[0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3]];
+        plan.mesh.element_markers = vec![1, 2, 0];
+        plan.region_materials = vec![fullmag_ir::FemRegionMaterialIR {
+            object_id: "film".to_string(),
+            element_marker: 1,
+            material: plan.material.clone(),
+        }];
+
+        let error = normalized_native_runtime_element_markers(&plan)
+            .expect_err("region_materials must declare every nonzero mesh marker");
+
+        assert!(error.message.contains("not declared in region_materials"));
+    }
+
+    #[test]
     fn native_fem_disables_precession_for_llg_overdamped_relaxation() {
         let mut plan = make_test_plan();
         assert!(native_fem_precession_enabled(&plan));
@@ -2032,6 +2282,10 @@ mod tests {
         assert!(
             plan_desc_body.contains("precession_enabled: if native_fem_precession_enabled(plan)"),
             "native FEM FFI plan must lower llg_overdamped into the native precession flag"
+        );
+        assert!(
+            plan_desc_body.contains(".ms_element_field") && plan_desc_body.contains(".a_element_field"),
+            "native FEM FFI plan must pass FEM per-element material coefficient arrays through to the native ABI"
         );
     }
 
@@ -3076,6 +3330,8 @@ mod tests {
                 dind_field: None,
                 dbulk_field: None,
             },
+            ms_element_field: None,
+            a_element_field: None,
             region_materials: Vec::new(),
             enable_exchange: true,
             enable_demag: false,

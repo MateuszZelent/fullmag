@@ -1,5 +1,5 @@
+import type { components } from "@/kernel/api/generated/openapi-v2-types";
 import type {
-  JsonObject,
   MaterialParameterFieldListResource,
   RegionDiagnosticsResource,
   RegionListResource,
@@ -31,7 +31,7 @@ export interface RegionShapeDraft {
   size: [number, number, number];
 }
 
-export type RegionMaterialParameter = "Aex" | "Ms" | "alpha" | "Ku1";
+export type RegionMaterialParameter = "aex" | "ms" | "alpha" | "ku1";
 export type RegionMaterialConflictPolicy = "error" | "higher_priority_wins";
 
 export interface RegionMaterialOverrideDraft {
@@ -57,7 +57,7 @@ export interface ObjectRegionPanelModel {
   enabled: boolean;
   effectiveMagnetizationRef: string;
   errorCount: number;
-  frame: string;
+  frame: components["schemas"]["SceneRegionFrame"];
   magnetizationRef: string;
   materialRef: string;
   materialFieldCount: number;
@@ -82,7 +82,7 @@ export interface ObjectRegionPanelModel {
 }
 
 export interface ObjectRegionDraft {
-  frame: string;
+  frame: components["schemas"]["SceneRegionFrame"];
   meshPolicy: RegionMeshPolicyDraft;
   materialOverrides: RegionMaterialOverrideDraft[];
   enabled: boolean;
@@ -112,10 +112,6 @@ function asNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function finiteOrDefault(value: unknown, fallback: number): number {
-  return asNumber(value) ?? fallback;
-}
-
 function numberIsPositive(value: number): boolean {
   return Number.isFinite(value) && value > 0;
 }
@@ -140,23 +136,34 @@ export function formatRegionPhysicalScalar(value: number): string {
 export function parseRegionPhysicalScalar(value: string): number | null {
   const trimmed = value.trim();
   if (trimmed.length === 0) return null;
-  const parsed = Number(trimmed);
-  return Number.isFinite(parsed) ? parsed : null;
+  const match = trimmed.match(
+    /^([+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d+)?)\s*([^\s]+)?$/,
+  );
+  if (!match) return null;
+  const parsed = Number(match[1]);
+  if (!Number.isFinite(parsed)) return null;
+  const unit = (match[2] ?? "").replace("μ", "u");
+  const factor = physicalScalarUnitFactor(unit);
+  return factor === null ? null : parsed * factor;
 }
 
-function finiteVector3OrDefault(
-  value: unknown,
-  fallback: [number, number, number],
-): [number, number, number] {
-  if (!Array.isArray(value) || value.length < 3) return fallback;
-  return [
-    finiteOrDefault(value[0], fallback[0]),
-    finiteOrDefault(value[1], fallback[1]),
-    finiteOrDefault(value[2], fallback[2]),
-  ];
+function physicalScalarUnitFactor(unit: string): number | null {
+  if (unit.length === 0) return 1;
+  const normalized = unit.toLowerCase();
+  if (normalized === "m") return 1;
+  if (normalized === "nm") return 1e-9;
+  if (normalized === "um") return 1e-6;
+  if (normalized === "mm") return 1e-3;
+  if (normalized === "a/m") return 1;
+  if (normalized === "ka/m") return 1e3;
+  if (normalized === "ma/m") return 1e6;
+  if (normalized === "j/m") return 1;
+  if (normalized === "pj/m") return 1e-12;
+  if (normalized === "nj/m") return 1e-9;
+  return null;
 }
 
-function ownerBoundsForObject(object: JsonRecord | null): RegionOwnerBounds | null {
+export function ownerBoundsForObject(object: JsonRecord | null): RegionOwnerBounds | null {
   const geometry = asRecord(object?.geometry);
   const min = finiteVector3(geometry?.bounds_min ?? object?.bounds_min);
   const max = finiteVector3(geometry?.bounds_max ?? object?.bounds_max);
@@ -236,26 +243,61 @@ function halfExtentsForShape(
     return [radius, radius, radius];
   }
 
-  const dominantAxis = dominantAxisIndex(shape.axis);
-  const radius = Math.min(
-    Math.max(shape.radius, 0),
-    ownerBounds.size[(dominantAxis + 1) % 3] / 2,
-    ownerBounds.size[(dominantAxis + 2) % 3] / 2,
-  );
-  const halfHeight = Math.min(
-    Math.max(shape.height, 0),
-    ownerBounds.size[dominantAxis],
-  ) / 2;
-  const extents: [number, number, number] = [radius, radius, radius];
-  extents[dominantAxis] = halfHeight;
-  return extents;
+  return clampCylinderDimensions(shape, ownerBounds).halfExtents;
 }
 
-function dominantAxisIndex(axis: [number, number, number]): 0 | 1 | 2 {
-  const abs = axis.map((entry) => Math.abs(entry));
-  if (abs[0] >= abs[1] && abs[0] >= abs[2]) return 0;
-  if (abs[1] >= abs[2]) return 1;
-  return 2;
+function normalizedAxis(
+  axis: [number, number, number],
+): [number, number, number] {
+  const norm = Math.hypot(axis[0], axis[1], axis[2]);
+  return norm > 1e-15
+    ? [axis[0] / norm, axis[1] / norm, axis[2] / norm]
+    : [0, 0, 1];
+}
+
+function clampCylinderDimensions(
+  shape: RegionShapeDraft,
+  ownerBounds: RegionOwnerBounds,
+): {
+  halfExtents: [number, number, number];
+  height: number;
+  radius: number;
+} {
+  const axis = normalizedAxis(shape.axis).map(Math.abs) as [
+    number,
+    number,
+    number,
+  ];
+  const ownerHalf = ownerBounds.size.map((value) => value * 0.5) as [
+    number,
+    number,
+    number,
+  ];
+  let halfHeight = Math.max(shape.height, 0) * 0.5;
+  for (let index = 0; index < 3; index += 1) {
+    if (axis[index] > 1e-15) {
+      halfHeight = Math.min(halfHeight, ownerHalf[index] / axis[index]);
+    }
+  }
+
+  let radius = Math.max(shape.radius, 0);
+  for (let index = 0; index < 3; index += 1) {
+    const radialFactor = Math.sqrt(Math.max(0, 1 - axis[index] ** 2));
+    if (radialFactor > 1e-15) {
+      const available = Math.max(0, ownerHalf[index] - axis[index] * halfHeight);
+      radius = Math.min(radius, available / radialFactor);
+    }
+  }
+
+  return {
+    halfExtents: [0, 1, 2].map(
+      (index) =>
+        axis[index] * halfHeight +
+        radius * Math.sqrt(Math.max(0, 1 - axis[index] ** 2)),
+    ) as [number, number, number],
+    height: halfHeight * 2,
+    radius,
+  };
 }
 
 function clampCenterToOwnerBounds(
@@ -273,8 +315,9 @@ function clampCenterToOwnerBounds(
 export function clampObjectRegionDraftShapeToOwnerBounds(
   shape: RegionShapeDraft,
   ownerBounds: RegionOwnerBounds | null,
+  frame = "object",
 ): RegionShapeDraft {
-  if (!ownerBounds) return shape;
+  if (!ownerBounds || frame !== "object") return shape;
   const halfExtents = halfExtentsForShape(shape, ownerBounds);
   const center = clampCenterToOwnerBounds(shape.center, halfExtents, ownerBounds);
 
@@ -297,14 +340,12 @@ export function clampObjectRegionDraftShapeToOwnerBounds(
     };
   }
 
-  const dominantAxis = dominantAxisIndex(shape.axis);
-  const radialAxes: [0 | 1 | 2, 0 | 1 | 2] =
-    dominantAxis === 0 ? [1, 2] : dominantAxis === 1 ? [0, 2] : [0, 1];
+  const cylinder = clampCylinderDimensions(shape, ownerBounds);
   return {
     ...shape,
     center,
-    height: halfExtents[dominantAxis] * 2,
-    radius: Math.min(halfExtents[radialAxes[0]], halfExtents[radialAxes[1]]),
+    height: cylinder.height,
+    radius: cylinder.radius,
   };
 }
 
@@ -313,8 +354,11 @@ function normalizeRealizationPolicy(value: string | null): RegionEditRealization
 }
 
 function normalizeMaterialParameter(value: string | null): RegionMaterialParameter {
-  if (value === "Aex" || value === "alpha" || value === "Ku1") return value;
-  return "Ms";
+  const lc = value?.toLowerCase();
+  if (lc === "aex") return "aex";
+  if (lc === "alpha") return "alpha";
+  if (lc === "ku1") return "ku1";
+  return "ms";
 }
 
 function normalizeConflictPolicy(value: string | null): RegionMaterialConflictPolicy {
@@ -324,68 +368,86 @@ function normalizeConflictPolicy(value: string | null): RegionMaterialConflictPo
 }
 
 function resolveShapeDraft(region: RegionListResource["regions"][number] | null): RegionShapeDraft {
-  const shape = asRecord(region?.shape);
-  const kind = asString(shape?.kind);
+  const shape = region?.shape;
+  const kind = shape?.kind;
   const resolvedKind: RegionEditShapeKind =
     kind === "cylinder" || kind === "sphere" ? kind : "box";
+
+  const center: [number, number, number] = shape && "center" in shape && Array.isArray(shape.center) && shape.center.length === 3
+    ? (shape.center as [number, number, number])
+    : [0, 0, 0];
+  const axis: [number, number, number] = shape && "axis" in shape && Array.isArray(shape.axis) && shape.axis.length === 3
+    ? (shape.axis as [number, number, number])
+    : [0, 0, 1];
+  const size: [number, number, number] = shape && "size" in shape && Array.isArray(shape.size) && shape.size.length === 3
+    ? (shape.size as [number, number, number])
+    : [100e-9, 100e-9, 100e-9];
+  const radius = shape && "radius" in shape && typeof shape.radius === "number"
+    ? shape.radius
+    : 50e-9;
+  const height = shape && "height" in shape && typeof shape.height === "number"
+    ? shape.height
+    : 100e-9;
+
   return {
-    axis: finiteVector3OrDefault(shape?.axis, [0, 0, 1]),
-    center: finiteVector3OrDefault(shape?.center, [0, 0, 0]),
-    height: finiteOrDefault(shape?.height, 100e-9),
+    axis,
+    center,
+    height,
     kind: resolvedKind,
-    radius: finiteOrDefault(shape?.radius, 50e-9),
-    size: finiteVector3OrDefault(shape?.size, [100e-9, 100e-9, 100e-9]),
+    radius,
+    size,
   };
 }
 
 function resolveMeshPolicyDraft(region: RegionListResource["regions"][number] | null): RegionMeshPolicyDraft {
-  const meshPolicy = asRecord(region?.mesh_policy);
+  const policy = region?.mesh_policy;
   return {
-    enabled: Boolean(meshPolicy),
-    maximumElementSize: finiteOrDefault(meshPolicy?.maximum_element_size, 10e-9),
-    minimumElementSize: finiteOrDefault(meshPolicy?.minimum_element_size, 1e-9),
-    order: Math.max(1, Math.round(finiteOrDefault(meshPolicy?.order, 1))),
-    transitionDistance: finiteOrDefault(meshPolicy?.transition_distance, 50e-9),
+    enabled: Boolean(policy),
+    maximumElementSize: policy?.maximum_element_size ?? 10e-9,
+    minimumElementSize: policy?.minimum_element_size ?? 1e-9,
+    order: Math.max(1, Math.round(policy?.order ?? 1)),
+    transitionDistance: policy?.transition_distance ?? 50e-9,
   };
 }
 
 function resolveMaterialOverrideDrafts(
   region: RegionListResource["regions"][number] | null,
 ): RegionMaterialOverrideDraft[] {
-  return (region?.material_overrides ?? [])
-    .map(asRecord)
-    .filter((override): override is JsonRecord => Boolean(override))
-    .map((override) => {
-      const value = asRecord(override.value);
-      return {
-        conflictPolicy: normalizeConflictPolicy(asString(override.conflict_policy)),
-        parameter: normalizeMaterialParameter(asString(override.parameter)),
-        priority: Math.round(finiteOrDefault(override.priority, region?.priority ?? 0)),
-        unit: asString(value?.unit) ?? defaultMaterialOverrideUnit(asString(override.parameter)),
-        value: finiteOrDefault(value?.value, defaultMaterialOverrideValue(asString(override.parameter))),
-      };
-    });
+  return (region?.material_overrides ?? []).map((override) => {
+    const field = override.value;
+    const value = field?.kind === "constant" && typeof field.value === "number" ? field.value : 0;
+    const unit = field?.kind === "constant" ? (field.unit ?? "") : "";
+    return {
+      conflictPolicy: normalizeConflictPolicy(override.conflict_policy ?? null),
+      parameter: normalizeMaterialParameter(override.parameter as string),
+      priority: Math.round(override.priority ?? region?.priority ?? 0),
+      unit: unit || defaultMaterialOverrideUnit(override.parameter as RegionMaterialParameter),
+      value: value || defaultMaterialOverrideValue(override.parameter as RegionMaterialParameter),
+    };
+  });
 }
 
 function textureOverrideKind(
   region: RegionListResource["regions"][number] | null,
 ): string {
-  const textureOverride = asRecord(region?.texture_override);
-  const initial = asRecord(textureOverride?.initial_magnetization);
-  return asString(initial?.kind) ?? "none";
+  return region?.texture_override?.initial_magnetization?.kind ?? "none";
 }
 
-export function defaultMaterialOverrideUnit(parameter: string | null): string {
-  if (parameter === "Aex") return "J/m";
+export function defaultMaterialOverrideUnit(
+  parameter: RegionMaterialParameter,
+): string {
+  if (parameter === "aex") return "J/m";
   if (parameter === "alpha") return "";
-  if (parameter === "Ku1") return "J/m^3";
+  if (parameter === "ku1") return "J/m^3";
   return "A/m";
 }
 
-export function defaultMaterialOverrideValue(parameter: string | null): number {
-  if (parameter === "Aex") return 1e-11;
+export function defaultMaterialOverrideValue(
+  parameter: RegionMaterialParameter,
+): number {
+  if (parameter === "aex") return 1e-11;
   if (parameter === "alpha") return 0.1;
-  if (parameter === "Ku1") return 0;
+  if (parameter === "ku1") return 0;
   return 800e3;
 }
 
@@ -394,7 +456,7 @@ export function defaultMaterialOverrideDraft(
 ): RegionMaterialOverrideDraft {
   return {
     conflictPolicy: "error",
-    parameter: "Ms",
+    parameter: "ms",
     priority,
     unit: "A/m",
     value: 800e3,
@@ -570,11 +632,11 @@ export function resolveObjectRegionPanelModel(
   return {
     diagnosticCount: diagnostics.length,
     diagnostics,
-    enabled: region?.enabled ?? object.visible !== false,
+    enabled: region?.enabled ?? true,
     effectiveMagnetizationRef,
     errorCount,
-    frame: asString(region?.frame) ?? "object",
-    magnetizationRef: effectiveMagnetizationRef,
+    frame: (region?.frame as components["schemas"]["SceneRegionFrame"]) ?? "object",
+    magnetizationRef: region?.magnetization_ref ?? "unassigned",
     materialRef: region?.material_ref ?? asString(object.material_ref) ?? "unassigned",
     materialFieldCount,
     materialOverrideCount: region?.material_overrides?.length ?? 0,
@@ -721,15 +783,15 @@ export function validateObjectRegionDraft(draft: ObjectRegionDraft): string[] {
       errors.push(`${override.parameter} override value must be finite.`);
     }
     if (
-      override.parameter === "Ms" &&
+      override.parameter === "ms" &&
       !numberIsPositive(override.value)
     ) {
       errors.push("Ms override must be greater than zero.");
     }
     if (
-      (override.parameter === "Aex" ||
+      (override.parameter === "aex" ||
         override.parameter === "alpha" ||
-        override.parameter === "Ku1") &&
+        override.parameter === "ku1") &&
       override.value < 0
     ) {
       errors.push(`${override.parameter} override must be non-negative.`);
@@ -740,12 +802,13 @@ export function validateObjectRegionDraft(draft: ObjectRegionDraft): string[] {
 
 export function buildObjectRegionPatch(
   draft: ObjectRegionDraft,
-): JsonObject {
+): components["schemas"]["SceneObjectRegionPatch"] {
   const clampedShape = clampObjectRegionDraftShapeToOwnerBounds(
     draft.shape,
     draft.ownerBounds,
+    draft.frame,
   );
-  const shape: JsonObject =
+  const shape: components["schemas"]["SceneRegionShape"] =
     clampedShape.kind === "cylinder"
       ? {
           axis: clampedShape.axis,
@@ -765,7 +828,7 @@ export function buildObjectRegionPatch(
             kind: "box",
             size: clampedShape.size,
           };
-  const meshPolicy: JsonObject | null = draft.meshPolicy.enabled
+  const meshPolicy: components["schemas"]["SceneRegionMeshPolicy"] | null = draft.meshPolicy.enabled
     ? {
         maximum_element_size: draft.meshPolicy.maximumElementSize,
         minimum_element_size: draft.meshPolicy.minimumElementSize,
@@ -773,8 +836,8 @@ export function buildObjectRegionPatch(
         transition_distance: draft.meshPolicy.transitionDistance,
       }
     : null;
-  const materialOverrides = draft.materialOverrides.map((override) => {
-    const value: JsonObject = {
+  const materialOverrides: components["schemas"]["SceneRegionMaterialOverride"][] = draft.materialOverrides.map((override) => {
+    const value: components["schemas"]["SceneMaterialParameterField"] = {
       kind: "constant",
       value: override.value,
     };

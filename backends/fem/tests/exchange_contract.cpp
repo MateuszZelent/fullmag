@@ -8,7 +8,13 @@
 
 #include "context.hpp"
 #include "cpu/mfem/interactions/exchange.hpp"
+#include "cpu/mfem/interactions/exchange_mass_projection.hpp"
 
+#if FULLMAG_HAS_MFEM_STACK
+#include <mfem.hpp>
+#endif
+
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -46,7 +52,7 @@ std::filesystem::path fem_source_root() {
 }
 
 std::filesystem::path repo_root() {
-    return fem_source_root().parent_path().parent_path().parent_path();
+    return fem_source_root().parent_path().parent_path();
 }
 
 void exchange_responsibilities_are_owned_by_separate_modules() {
@@ -471,6 +477,237 @@ void progress_report_marks_exchange_split_contract_covered() {
         "progress report must keep exchange runtime validation separate from module split coverage");
 }
 
+#if FULLMAG_HAS_MFEM_STACK
+class TestElementwiseScalarCoefficient final : public mfem::Coefficient {
+public:
+    explicit TestElementwiseScalarCoefficient(const std::vector<double> &values)
+        : values_(values)
+    {
+    }
+
+    double Eval(mfem::ElementTransformation &T, const mfem::IntegrationPoint &) override
+    {
+        const int element = T.ElementNo;
+        check(
+            element >= 0 && static_cast<size_t>(element) < values_.size(),
+            "elementwise test coefficient element index must be in range");
+        return values_[static_cast<size_t>(element)];
+    }
+
+private:
+    const std::vector<double> &values_;
+};
+
+double exchange_energy(
+    mfem::BilinearForm &exchange_form,
+    const mfem::GridFunction &magnetization)
+{
+    mfem::Vector residual(magnetization.Size());
+    exchange_form.Mult(magnetization, residual);
+    return magnetization * residual;
+}
+
+void spatial_a_and_ms_exchange_pass_directional_derivative() {
+    constexpr double mu0 = 1.2566370614359172953850573533118e-6;
+    mfem::Mesh mesh = mfem::Mesh::MakeCartesian3D(
+        1, 1, 1, mfem::Element::TETRAHEDRON, 1.0, 1.0, 1.0);
+    mfem::H1_FECollection fec(1, 3);
+    mfem::FiniteElementSpace fes(&mesh, &fec);
+
+    mfem::GridFunction a_field(&fes);
+    mfem::GridFunction ms_field(&fes);
+    mfem::GridFunction magnetization(&fes);
+    mfem::GridFunction perturbation(&fes);
+    mfem::FunctionCoefficient a_function(
+        [](const mfem::Vector &x) { return 1.0e-11 * (1.0 + 0.4 * x[0]); });
+    mfem::FunctionCoefficient ms_function(
+        [](const mfem::Vector &x) { return 7.0e5 + 2.0e5 * x[1]; });
+    mfem::FunctionCoefficient m_function(
+        [](const mfem::Vector &x) { return 0.2 + 0.3 * x[0] - 0.1 * x[2]; });
+    mfem::FunctionCoefficient direction_function(
+        [](const mfem::Vector &x) { return -0.15 + 0.2 * x[1] + 0.05 * x[2]; });
+    a_field.ProjectCoefficient(a_function);
+    ms_field.ProjectCoefficient(ms_function);
+    magnetization.ProjectCoefficient(m_function);
+    perturbation.ProjectCoefficient(direction_function);
+
+    mfem::GridFunctionCoefficient a_coeff(&a_field);
+    mfem::GridFunctionCoefficient ms_coeff(&ms_field);
+    mfem::BilinearForm exchange_form(&fes);
+    exchange_form.AddDomainIntegrator(new mfem::DiffusionIntegrator(a_coeff));
+    exchange_form.Assemble();
+    exchange_form.Finalize();
+    mfem::BilinearForm volume_mass_form(&fes);
+    volume_mass_form.AddDomainIntegrator(new mfem::MassIntegrator());
+    volume_mass_form.Assemble();
+    volume_mass_form.Finalize();
+    mfem::BilinearForm ms_mass_form(&fes);
+    ms_mass_form.AddDomainIntegrator(new mfem::MassIntegrator(ms_coeff));
+    ms_mass_form.Assemble();
+    ms_mass_form.Finalize();
+
+    mfem::Vector ones;
+    mfem::Vector lumped;
+    mfem::Vector inv_lumped;
+    std::vector<double> host_lumped;
+    fullmag::fem::prepare_exchange_mass_lumping(
+        volume_mass_form, ones, lumped, inv_lumped, host_lumped);
+    mfem::Vector residual;
+    mfem::Vector h_component;
+    residual.SetSize(fes.GetNDofs());
+    h_component.SetSize(fes.GetNDofs());
+    std::vector<double> h_host;
+    double energy = 0.0;
+    check(
+        fullmag::fem::apply_exchange_component_mass_projection(
+            nullptr,
+            false,
+            exchange_form,
+            magnetization,
+            ms_field,
+            inv_lumped,
+            ms_mass_form,
+            true,
+            residual,
+            h_component,
+            h_host,
+            &energy),
+        "spatial A/Ms consistent-mass exchange projection must succeed");
+
+    constexpr double epsilon = 1.0e-6;
+    mfem::GridFunction plus(magnetization);
+    mfem::GridFunction minus(magnetization);
+    plus.Add(epsilon, perturbation);
+    minus.Add(-epsilon, perturbation);
+    const double finite_difference =
+        (exchange_energy(exchange_form, plus) -
+         exchange_energy(exchange_form, minus)) /
+        (2.0 * epsilon);
+
+    mfem::Vector weighted_h(h_component.Size());
+    ms_mass_form.Mult(h_component, weighted_h);
+    const double field_derivative = -mu0 * (perturbation * weighted_h);
+    const double scale = std::max(
+        1.0e-30,
+        std::max(std::abs(finite_difference), std::abs(field_derivative)));
+    check(
+        std::abs(finite_difference - field_derivative) / scale < 1.0e-8,
+        "spatial A/Ms exchange field must match exchange-energy directional derivative");
+    check(
+        std::abs(energy - exchange_energy(exchange_form, magnetization)) < 1.0e-24,
+        "exchange projection must report the same spatial-A energy used by the field");
+}
+
+mfem::Mesh two_tet_marker_mesh() {
+    mfem::Mesh mesh(3, 5, 2, 0, 3);
+    const double v0[] = {0.0, 0.0, 0.0};
+    const double v1[] = {1.0, 0.0, 0.0};
+    const double v2[] = {0.0, 1.0, 0.0};
+    const double v3[] = {0.0, 0.0, 1.0};
+    const double v4[] = {1.0, 1.0, 1.0};
+    mesh.AddVertex(v0);
+    mesh.AddVertex(v1);
+    mesh.AddVertex(v2);
+    mesh.AddVertex(v3);
+    mesh.AddVertex(v4);
+    const int tet0[] = {0, 1, 2, 3};
+    const int tet1[] = {1, 2, 3, 4};
+    mesh.AddTet(tet0, 1);
+    mesh.AddTet(tet1, 2);
+    mesh.FinalizeTopology();
+    mesh.Finalize(false, true);
+    return mesh;
+}
+
+void sharp_element_a_and_ms_exchange_pass_directional_derivative() {
+    constexpr double mu0 = 1.2566370614359172953850573533118e-6;
+    mfem::Mesh mesh = two_tet_marker_mesh();
+    mfem::H1_FECollection fec(1, 3);
+    mfem::FiniteElementSpace fes(&mesh, &fec);
+
+    std::vector<double> a_element = {13.0e-12, 5.0e-12};
+    std::vector<double> ms_element = {800.0e3, 700.0e3};
+    TestElementwiseScalarCoefficient a_coeff(a_element);
+    TestElementwiseScalarCoefficient ms_coeff(ms_element);
+
+    mfem::GridFunction ms_dummy(&fes);
+    mfem::GridFunction magnetization(&fes);
+    mfem::GridFunction perturbation(&fes);
+    mfem::ConstantCoefficient ms_scalar(800.0e3);
+    mfem::FunctionCoefficient m_function(
+        [](const mfem::Vector &x) { return 0.2 + 0.25 * x[0] - 0.08 * x[1] + 0.12 * x[2]; });
+    mfem::FunctionCoefficient direction_function(
+        [](const mfem::Vector &x) { return -0.1 + 0.18 * x[0] + 0.07 * x[1] - 0.03 * x[2]; });
+    ms_dummy.ProjectCoefficient(ms_scalar);
+    magnetization.ProjectCoefficient(m_function);
+    perturbation.ProjectCoefficient(direction_function);
+
+    mfem::BilinearForm exchange_form(&fes);
+    exchange_form.AddDomainIntegrator(new mfem::DiffusionIntegrator(a_coeff));
+    exchange_form.Assemble();
+    exchange_form.Finalize();
+    mfem::BilinearForm volume_mass_form(&fes);
+    volume_mass_form.AddDomainIntegrator(new mfem::MassIntegrator());
+    volume_mass_form.Assemble();
+    volume_mass_form.Finalize();
+    mfem::BilinearForm ms_mass_form(&fes);
+    ms_mass_form.AddDomainIntegrator(new mfem::MassIntegrator(ms_coeff));
+    ms_mass_form.Assemble();
+    ms_mass_form.Finalize();
+
+    mfem::Vector ones;
+    mfem::Vector lumped;
+    mfem::Vector inv_lumped;
+    std::vector<double> host_lumped;
+    fullmag::fem::prepare_exchange_mass_lumping(
+        volume_mass_form, ones, lumped, inv_lumped, host_lumped);
+    mfem::Vector residual;
+    mfem::Vector h_component;
+    residual.SetSize(fes.GetNDofs());
+    h_component.SetSize(fes.GetNDofs());
+    std::vector<double> h_host;
+    double energy = 0.0;
+    check(
+        fullmag::fem::apply_exchange_component_mass_projection(
+            nullptr,
+            false,
+            exchange_form,
+            magnetization,
+            ms_dummy,
+            inv_lumped,
+            ms_mass_form,
+            true,
+            residual,
+            h_component,
+            h_host,
+            &energy),
+        "sharp element A/Ms consistent-mass exchange projection must succeed");
+
+    constexpr double epsilon = 1.0e-6;
+    mfem::GridFunction plus(magnetization);
+    mfem::GridFunction minus(magnetization);
+    plus.Add(epsilon, perturbation);
+    minus.Add(-epsilon, perturbation);
+    const double finite_difference =
+        (exchange_energy(exchange_form, plus) -
+         exchange_energy(exchange_form, minus)) /
+        (2.0 * epsilon);
+
+    mfem::Vector weighted_h(h_component.Size());
+    ms_mass_form.Mult(h_component, weighted_h);
+    const double field_derivative = -mu0 * (perturbation * weighted_h);
+    const double scale = std::max(
+        1.0e-30,
+        std::max(std::abs(finite_difference), std::abs(field_derivative)));
+    check(
+        std::abs(finite_difference - field_derivative) / scale < 1.0e-8,
+        "sharp element A/Ms exchange field must match exchange-energy directional derivative");
+    check(
+        std::abs(energy - exchange_energy(exchange_form, magnetization)) < 1.0e-24,
+        "sharp element exchange projection must report the same spatial-A energy used by the field");
+}
+#endif
+
 #if !FULLMAG_HAS_MFEM_STACK
 void disabled_exchange_is_zero_without_mfem_stack() {
     auto ctx = make_context();
@@ -525,6 +762,10 @@ int main() {
     exchange_source_files_document_module_boundaries();
     exchange_plan_fields_are_imported_by_aggregate();
     progress_report_marks_exchange_split_contract_covered();
+#if FULLMAG_HAS_MFEM_STACK
+    spatial_a_and_ms_exchange_pass_directional_derivative();
+    sharp_element_a_and_ms_exchange_pass_directional_derivative();
+#endif
 #if !FULLMAG_HAS_MFEM_STACK
     disabled_exchange_is_zero_without_mfem_stack();
     active_exchange_reports_mfem_requirement_without_stack();

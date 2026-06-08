@@ -1919,6 +1919,10 @@ def _study_global_mesh_config(problem: Problem, overrides: dict[str, object]) ->
             config["domain_mesh_source"] = mesh_workflow.get("domain_mesh_source")
         if mesh_workflow.get("domain_region_markers") is not None:
             config["domain_region_markers"] = mesh_workflow.get("domain_region_markers")
+        if mesh_workflow.get("domain_object_region_markers") is not None:
+            config["domain_object_region_markers"] = mesh_workflow.get(
+                "domain_object_region_markers"
+            )
     else:
         config = dict(mesh_options)
         fem_info = _normalize_mapping(mesh_workflow.get("fem"))
@@ -1947,6 +1951,10 @@ def _study_global_mesh_config(problem: Problem, overrides: dict[str, object]) ->
                 config["domain_mesh_source"] = mesh_workflow.get("domain_mesh_source")
             if mesh_workflow.get("domain_region_markers") is not None:
                 config["domain_region_markers"] = mesh_workflow.get("domain_region_markers")
+            if mesh_workflow.get("domain_object_region_markers") is not None:
+                config["domain_object_region_markers"] = mesh_workflow.get(
+                    "domain_object_region_markers"
+                )
 
     if mesh_override:
         for key, value in mesh_override.items():
@@ -2140,6 +2148,22 @@ def _render_domain_mesh_call(
         f"source={_py_repr(_relativize_path(source_value, source_root))}",
         f"region_markers={_py_literal(rendered_markers)}",
     ]
+    raw_object_region_markers = mesh_config.get("domain_object_region_markers")
+    if isinstance(raw_object_region_markers, list) and raw_object_region_markers:
+        rendered_object_region_markers = {}
+        for raw_entry in raw_object_region_markers:
+            entry = _normalize_mapping(raw_entry)
+            geometry_name = entry.get("geometry_name")
+            marker = entry.get("marker")
+            if not isinstance(geometry_name, str) or not geometry_name.strip():
+                continue
+            if not isinstance(marker, (int, float)):
+                continue
+            rendered_object_region_markers[geometry_name] = int(marker)
+        if rendered_object_region_markers:
+            kwargs.append(
+                f"object_region_markers={_py_literal(rendered_object_region_markers)}"
+            )
     return f"{_surface_call(surface, 'domain_mesh')}({', '.join(kwargs)})"
 
 

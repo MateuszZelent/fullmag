@@ -49,6 +49,7 @@ interface DraftState {
 }
 
 interface InteractionSelectionState {
+  active?: boolean;
   interactionId: PhysicsInteractionId;
   nodeId: string | null;
 }
@@ -155,8 +156,26 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
         values: { ...nextDraft.values, region_id: selectedRegionId },
       };
     }
+    if (
+      state.interactionSelection.nodeId === selection.nodeId &&
+      state.interactionSelection.interactionId === interactionId &&
+      typeof state.interactionSelection.active === "boolean"
+    ) {
+      return {
+        ...nextDraft,
+        enabled: state.interactionSelection.active,
+        present: state.interactionSelection.active,
+      };
+    }
     return nextDraft;
-  }, [interactionId, resource, scene.data, selectedRegionId]);
+  }, [
+    interactionId,
+    resource,
+    scene.data,
+    selectedRegionId,
+    selection.nodeId,
+    state.interactionSelection,
+  ]);
   const draftKey = draftKeyForInteraction(objectId, baseDraft);
   const [draftState, setDraftState] = useState<DraftState>({
     draft: baseDraft,
@@ -262,13 +281,25 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
     >
       <PhysicsInteractionSelectionSection
         interactionId={interactionId}
+        draft={draft}
         objectId={objectId}
+        sceneData={scene.data}
         selectedRegionId={selectedRegionId}
         onHelpOpen={() => dispatch({ type: "setHelpOpen", open: true })}
         onInteractionChange={(nextInteractionId) =>
           dispatch({
             type: "setInteractionSelection",
             selection: {
+              interactionId: nextInteractionId,
+              nodeId: selection.nodeId,
+            },
+          })
+        }
+        onInteractionToggle={(nextInteractionId, active) =>
+          dispatch({
+            type: "setInteractionSelection",
+            selection: {
+              active,
               interactionId: nextInteractionId,
               nodeId: selection.nodeId,
             },
@@ -317,18 +348,25 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
 }
 
 function PhysicsInteractionSelectionSection({
+  draft,
   interactionId,
   objectId,
   onHelpOpen,
   onInteractionChange,
+  onInteractionToggle,
+  sceneData,
   selectedRegionId,
 }: {
+  draft: PhysicsInteractionDraft;
   interactionId: PhysicsInteractionId;
   objectId: string | null | undefined;
   onHelpOpen: () => void;
   onInteractionChange: (interactionId: PhysicsInteractionId) => void;
+  onInteractionToggle: (interactionId: PhysicsInteractionId, active: boolean) => void;
+  sceneData: Parameters<typeof draftFromStudyScene>[1];
   selectedRegionId: string | null;
 }) {
+  const options = interactionSelectOptions();
   return (
     <InspectorSection
       value="interaction"
@@ -340,6 +378,19 @@ function PhysicsInteractionSelectionSection({
       {selectedRegionId ? (
         <FieldRow label="Region ID" value={selectedRegionId} />
       ) : null}
+      <div className="fm-region-inherited-parameters" style={{ marginBottom: "8px" }}>
+        {options.map((option) => (
+          <PhysicsInteractionChecklistRow
+            key={option.id}
+            draft={draft}
+            interactionId={interactionId}
+            objectId={objectId}
+            option={option}
+            sceneData={sceneData}
+            onToggle={onInteractionToggle}
+          />
+        ))}
+      </div>
       <FormField
         label="Interaction"
         type="select"
@@ -348,7 +399,7 @@ function PhysicsInteractionSelectionSection({
           onInteractionChange(event.target.value as PhysicsInteractionId)
         }
       >
-        {interactionSelectOptions().map((option) => (
+        {options.map((option) => (
           <option key={option.id} value={option.id}>
             {option.label}
           </option>
@@ -367,6 +418,58 @@ function PhysicsInteractionSelectionSection({
         </Button>
       </div>
     </InspectorSection>
+  );
+}
+
+function PhysicsInteractionChecklistRow({
+  draft,
+  interactionId,
+  objectId,
+  onToggle,
+  option,
+  sceneData,
+}: {
+  draft: PhysicsInteractionDraft;
+  interactionId: PhysicsInteractionId;
+  objectId: string | null | undefined;
+  onToggle: (interactionId: PhysicsInteractionId, active: boolean) => void;
+  option: PhysicsInteractionSpec;
+  sceneData: Parameters<typeof draftFromStudyScene>[1];
+}) {
+  const objectInteractionKind = isWritableObjectInteraction(option.id)
+    ? option.id
+    : "exchange";
+  const objectInteraction = useObjectInteractionResource(
+    objectId,
+    objectInteractionKind,
+    { enabled: Boolean(objectId && isWritableObjectInteraction(option.id)) },
+  );
+  const selected = option.id === interactionId;
+  const objectActive = Boolean(
+    objectInteraction.data?.present && objectInteraction.data?.enabled,
+  );
+  const studyDraft = isWritableStudyInteraction(option.id)
+    ? draftFromStudyScene(option.id, sceneData)
+    : null;
+  const checked = selected
+    ? draft.present && draft.enabled
+    : objectActive || Boolean(studyDraft?.present && studyDraft.enabled);
+  const disabled = isDeferredInteraction(option.id);
+
+  return (
+    <label className="fm-inspector-checkbox-row">
+      <input
+        className="fm-inspector-checkbox"
+        checked={checked}
+        disabled={disabled}
+        type="checkbox"
+        onChange={(event) => onToggle(option.id, event.target.checked)}
+      />
+      <span>{option.label}</span>
+      <span className="fm-inspector-checkbox-row__meta">
+        {statusLabel(option.availability)}
+      </span>
+    </label>
   );
 }
 

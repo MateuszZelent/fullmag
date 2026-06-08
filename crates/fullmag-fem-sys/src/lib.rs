@@ -242,6 +242,10 @@ pub struct fullmag_fem_plan_desc {
     pub kc2_field_len: u64,
     pub kc3_field: *const f64,
     pub kc3_field_len: u64,
+    pub ms_element_field: *const f64,
+    pub ms_element_field_len: u64,
+    pub a_element_field: *const f64,
+    pub a_element_field_len: u64,
     // Spin-transfer torque
     pub has_zhang_li_stt: i32,
     pub has_slonczewski_stt: i32,
@@ -618,6 +622,17 @@ mod tests {
         assert_eq!(plan.eager_initial_effective_field, 0);
         assert_eq!(plan.has_precession_enabled, 0);
         assert_eq!(plan.precession_enabled, 0);
+    }
+
+    /// Verify plan desc carries optional discontinuous per-element A/Ms coefficients.
+    #[test]
+    fn plan_desc_has_element_material_coefficient_fields() {
+        let plan = std::mem::MaybeUninit::<fullmag_fem_plan_desc>::zeroed();
+        let plan = unsafe { plan.assume_init() };
+        assert!(plan.ms_element_field.is_null());
+        assert_eq!(plan.ms_element_field_len, 0);
+        assert!(plan.a_element_field.is_null());
+        assert_eq!(plan.a_element_field_len, 0);
     }
 
     /// Verify native solver policy ABI carries the Hypre print level knob.

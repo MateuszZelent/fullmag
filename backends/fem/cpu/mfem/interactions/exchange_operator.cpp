@@ -24,11 +24,13 @@ bool initialize_exchange_operator_mfem(
     Context &ctx,
     mfem::Mesh &mesh,
     mfem::FiniteElementSpace &fes,
-    mfem::GridFunctionCoefficient &a_coeff,
+    mfem::Coefficient &a_coeff,
+    mfem::Coefficient &ms_coeff,
     std::string &error)
 {
     auto exchange_form = std::make_unique<mfem::BilinearForm>(&fes);
     auto mass_form = std::make_unique<mfem::BilinearForm>(&fes);
+    auto volume_mass_form = std::make_unique<mfem::BilinearForm>(&fes);
     auto mass_ones = std::make_unique<mfem::Vector>(fes.GetNDofs());
     auto mass_lumped = std::make_unique<mfem::Vector>(fes.GetNDofs());
     auto inv_lumped_mass = std::make_unique<mfem::Vector>(fes.GetNDofs());
@@ -87,12 +89,18 @@ bool initialize_exchange_operator_mfem(
 
     mass_form->SetAssemblyLevel(mfem::AssemblyLevel::LEGACY);
     mass_form->AddDomainIntegrator(
-        new mfem::MassIntegrator(),
+        new mfem::MassIntegrator(ms_coeff),
         magnetic_attr_marker);
     mass_form->Assemble();
     mass_form->Finalize();
+    volume_mass_form->SetAssemblyLevel(mfem::AssemblyLevel::LEGACY);
+    volume_mass_form->AddDomainIntegrator(
+        new mfem::MassIntegrator(),
+        magnetic_attr_marker);
+    volume_mass_form->Assemble();
+    volume_mass_form->Finalize();
     prepare_exchange_mass_lumping(
-        *mass_form,
+        *volume_mass_form,
         *mass_ones,
         *mass_lumped,
         *inv_lumped_mass,

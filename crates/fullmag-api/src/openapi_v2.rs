@@ -333,6 +333,7 @@ use utoipa::OpenApi;
         crate::schemas::authoring::ObjectPatchRequest,
         crate::schemas::authoring::ObjectRegionCreateRequest,
         crate::schemas::authoring::ObjectRegionPatchRequest,
+        crate::schemas::authoring::SceneObjectRegionPatch,
         crate::schemas::authoring::ObjectRegionDuplicateRequest,
         crate::schemas::authoring::ObjectRegionReorderRequest,
         crate::schemas::authoring::GeometryRealizationRequest,

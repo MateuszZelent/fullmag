@@ -52,7 +52,6 @@ import {
   useMeshSharedDomainManifestResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
-import { resolveVisualizationTopologyFreshness } from "@/kernel/visualization/visualizationDisplayResolution";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
@@ -66,6 +65,7 @@ import {
   buildVisualizationPanelSections,
   colorPickerInputValue,
   resolveVisualizationVectorBudgetRange,
+  resolveObjectVisualizationPanelTopologyFreshness,
   resolveVisualizationRenderResolution,
   shouldLoadObjectVisualizationFieldCatalog,
   SURFACE_COLOR_SOURCE_ITEMS,
@@ -137,6 +137,7 @@ const OBJECT_VISUALIZATION_TARGET_KINDS: readonly VisualizationTargetKind[] = [
   "airbox",
   "object",
   "part",
+  "region",
 ];
 
 function selectObjectVisualizationPanelSnapshot(
@@ -411,7 +412,7 @@ function VisualizationRenderModeSection({
 }) {
   return (
     <InspectorSection title="Render Mode">
-      <div className="fm-visualization-segments" role="group" aria-label="Render mode">
+      <fieldset className="fm-visualization-segments" aria-label="Render mode">
         {RENDER_MODES.map((mode) => (
           <Button
             key={mode.value}
@@ -424,7 +425,7 @@ function VisualizationRenderModeSection({
             {mode.label}
           </Button>
         ))}
-      </div>
+      </fieldset>
     </InspectorSection>
   );
 }
@@ -606,7 +607,7 @@ function VisualizationVectorsSection({
 
   return (
     <InspectorSection title="Vectors">
-      <div className="fm-visualization-segments" role="group" aria-label="Vector coloring">
+      <fieldset className="fm-visualization-segments" aria-label="Vector coloring">
         {VISUALIZATION_COLOR_MODE_ITEMS.map((mode) => (
           <Button
             key={mode.value}
@@ -619,7 +620,7 @@ function VisualizationVectorsSection({
             {mode.label}
           </Button>
         ))}
-      </div>
+      </fieldset>
       <ColorField disabled={pending || sectionDisabled("vectors")} label="Vector mono color" value={settings.vectorMonoColor} onChange={(value) => patchColor("vectorMonoColor", value)} />
       <NumberField disabled={pending || sectionDisabled("vectors")} label="Vector alpha" max={100} min={0} step={1} unit="%" value={settings.vectorAlphaPercent} onChange={(value) => patchNumber("vectorAlphaPercent", value)} />
       <NumberField disabled={pending || sectionDisabled("vectors")} label="Vector thickness" max={8} min={0.1} step={0.1} value={settings.vectorThickness} onChange={(value) => patchNumber("vectorThickness", value)} />
@@ -663,7 +664,7 @@ function VisualizationVectorsSection({
       {settings.vectorSurfaceOffsetEnabled ? (
         <NumberField disabled={pending || sectionDisabled("vectors")} label="Extra surface gap" max={1} min={0} step={0.01} value={settings.vectorSurfaceOffsetScale} onChange={(value) => patchNumber("vectorSurfaceOffsetScale", value)} />
       ) : null}
-      <div className="fm-visualization-segments" role="group" aria-label="Arrow extent">
+      <fieldset className="fm-visualization-segments" aria-label="Arrow extent">
         {GEOMETRY_SCOPES.map((scope) => (
           <Button
             key={scope.value}
@@ -676,9 +677,9 @@ function VisualizationVectorsSection({
             {scope.label}
           </Button>
         ))}
-      </div>
+      </fieldset>
       {meshParts && meshParts.length > 1 && onTogglePartVectors && (
-        <div className="fm-visualization-part-toggles" role="group" aria-label="Per-part vector visibility">
+        <fieldset className="fm-visualization-part-toggles" aria-label="Per-part vector visibility">
           <span className="fm-visualization-part-toggles__label">Surfaces</span>
           {meshParts.map((part) => (
             <label key={part.id} className="fm-visualization-part-toggle">
@@ -691,7 +692,7 @@ function VisualizationVectorsSection({
               <span>{part.label}</span>
             </label>
           ))}
-        </div>
+        </fieldset>
       )}
     </InspectorSection>
   );
@@ -708,7 +709,7 @@ function VisualizationGeometryScopeSection({
 }) {
   return (
     <InspectorSection title="Geometry Scope">
-      <div className="fm-visualization-segments" role="group" aria-label="Geometry scope">
+      <fieldset className="fm-visualization-segments" aria-label="Geometry scope">
         {GEOMETRY_SCOPES.map((scope) => (
           <Button
             key={scope.value}
@@ -721,7 +722,7 @@ function VisualizationGeometryScopeSection({
             {scope.label}
           </Button>
         ))}
-      </div>
+      </fieldset>
     </InspectorSection>
   );
 }
@@ -797,6 +798,13 @@ function useObjectVisualizationPanelState(
     const targets: VisualizationTargetRef[] = [];
     if (target) {
       targets.push(target);
+      if (target.kind === "region" && selection.objectId) {
+        targets.push({
+          id: selection.objectId,
+          kind: "object",
+          label: selection.label,
+        });
+      }
     }
 
     for (const part of manifest.data?.mesh_parts ?? []) {
@@ -809,7 +817,7 @@ function useObjectVisualizationPanelState(
     }
 
     return targets;
-  }, [manifest.data?.mesh_parts, target]);
+  }, [manifest.data?.mesh_parts, selection.label, selection.objectId, target]);
   const selectPanelSnapshot = useCallback(
     (snapshot: ObjectVisualizationSnapshot) =>
       selectObjectVisualizationPanelSnapshot(snapshot, visualizationTargets),
@@ -818,8 +826,21 @@ function useObjectVisualizationPanelState(
   const snapshot = useObjectVisualizationSelector(selectPanelSnapshot, {
     isEqual: objectVisualizationPanelSnapshotEquals,
   });
+  const inheritedSettings =
+    target?.kind === "region" && selection.objectId
+      ? resolveTargetVisualization({
+          snapshot,
+          target: {
+            id: selection.objectId,
+            kind: "object",
+            label: selection.label,
+          },
+          visualizationState: visualizationState.data,
+        }).settings
+      : undefined;
   const targetVisualization = target
     ? resolveTargetVisualization({
+        inheritedSettings,
         snapshot,
         target,
         visualizationState: visualizationState.data,
@@ -842,10 +863,13 @@ function useObjectVisualizationPanelState(
       part.role === "air" || part.role === "airbox" ? [part.id] : [],
     ) ?? [];
   const vectorDomain = visualizationState.data?.layers?.vectors?.domain ?? "auto";
-  const topologyFreshness =
-    scene.data && manifest.data
-      ? resolveVisualizationTopologyFreshness(scene.data, manifest.data)
-      : null;
+  const topologyFreshness = target
+    ? resolveObjectVisualizationPanelTopologyFreshness({
+        manifest: manifest.data,
+        scene: scene.data,
+        targetKind: target.kind,
+      })
+    : null;
   const renderResolution = settings && effectiveSettings
     ? resolveVisualizationRenderResolution({
         effectiveSettings,

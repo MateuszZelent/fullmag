@@ -20,7 +20,8 @@ bool initialize_exchange_operator_mfem(
     Context &,
     mfem::Mesh &,
     mfem::FiniteElementSpace &,
-    mfem::GridFunctionCoefficient &,
+    mfem::Coefficient &,
+    mfem::Coefficient &,
     std::string &error)
 {
     error = "Native FEM exchange requires the MFEM stack";

@@ -6,7 +6,7 @@ import {
   MODEL_GEOMETRY_DIAGNOSTICS_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
 } from "@/kernel/api/apiPaths";
-import type { JsonObject } from "@/kernel/api/apiTypes";
+import type { RegionPatchRequest } from "@/kernel/api/apiTypes";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
 import {
@@ -39,13 +39,18 @@ import {
   resolveObjectMagneticTexturePanelModel,
   type ObjectMagneticTextureDraft,
 } from "./ObjectMagneticTexturePanelModel";
+import {
+  magneticTextureInspectorView,
+  syncAuthoringScriptBestEffort,
+  type MagneticTexturePanelModel,
+} from "./ObjectMagneticTexturePanelViewModel";
 
 interface DraftState {
   draft: ObjectMagneticTextureDraft;
   key: string;
 }
 
-type Feedback =
+export type MagneticTextureFeedback =
   | {
       kind: "error" | "success";
       message: string;
@@ -67,53 +72,7 @@ function targetFromModel(
   return { kind: "object", objectId: model.objectId };
 }
 
-interface AuthoringScriptSyncApi {
-  model: {
-    syncAuthoringScript: (request: Record<string, never>) => Promise<unknown>;
-  };
-}
-
-export async function syncAuthoringScriptBestEffort(
-  api: AuthoringScriptSyncApi,
-): Promise<string | null> {
-  try {
-    await api.model.syncAuthoringScript({});
-    return null;
-  } catch (error) {
-    return errorMessage(error);
-  }
-}
-
-type MagneticTexturePanelModel = ReturnType<
-  typeof resolveObjectMagneticTexturePanelModel
->;
-
-type MagneticTextureInspectorView =
-  | "overview"
-  | "asset"
-  | "load"
-  | "region"
-  | "transform";
-
-export function magneticTextureInspectorView(
-  selectionKind: string | null,
-): MagneticTextureInspectorView {
-  switch (selectionKind) {
-    case "object.magnetic-texture.asset":
-      return "asset";
-    case "object.magnetic-texture.load":
-      return "load";
-    case "object.magnetic-texture.transform":
-      return "transform";
-    case "object.region.texture":
-    case "object.region-magnetic-texture":
-      return "region";
-    default:
-      return "overview";
-  }
-}
-
-type UpdateMagneticTextureDraft = (
+export type UpdateMagneticTextureDraft = (
   patch: Partial<ObjectMagneticTextureDraft>,
 ) => void;
 
@@ -142,7 +101,7 @@ function MagneticTextureSummarySection({
   );
 }
 
-function MagneticTextureAssignmentSection({
+export function MagneticTextureAssignmentSection({
   draft,
   model,
   updateDraft,
@@ -344,7 +303,7 @@ function NormalAxisSelect({
   );
 }
 
-function MagneticTexturePresetParametersSection({
+export function MagneticTexturePresetParametersSection({
   draft,
   updateDraft,
 }: {
@@ -493,7 +452,7 @@ function MagneticTexturePresetParametersSection({
   );
 }
 
-function MagneticTextureTransformSection({
+export function MagneticTextureTransformSection({
   draft,
   model,
   updateDraft,
@@ -573,7 +532,7 @@ function MagneticTextureTransformSection({
   );
 }
 
-function MagneticTextureMappingSection({
+export function MagneticTextureMappingSection({
   draft,
   updateDraft,
 }: {
@@ -610,7 +569,7 @@ function MagneticTextureMappingSection({
   );
 }
 
-function MagneticTextureRawAssetSection({
+export function MagneticTextureRawAssetSection({
   model,
 }: {
   model: MagneticTexturePanelModel;
@@ -623,13 +582,13 @@ function MagneticTextureRawAssetSection({
   );
 }
 
-function MagneticTextureLoadFileSection({
+export function MagneticTextureLoadFileSection({
   feedback,
   model,
   onLoad,
   pending,
 }: {
-  feedback: Feedback;
+  feedback: MagneticTextureFeedback;
   model: MagneticTexturePanelModel;
   onLoad: () => void;
   pending: boolean;
@@ -656,7 +615,7 @@ function MagneticTextureLoadFileSection({
   );
 }
 
-function MagneticTextureActionsSection({
+export function MagneticTextureActionsSection({
   dirty,
   feedback,
   model,
@@ -667,7 +626,7 @@ function MagneticTextureActionsSection({
   pending,
 }: {
   dirty: boolean;
-  feedback: Feedback;
+  feedback: MagneticTextureFeedback;
   model: MagneticTexturePanelModel;
   onClear: () => void;
   onActivateLoad: () => void;
@@ -746,7 +705,7 @@ export function ObjectMagneticTexturePanel({
     draft: baseDraft,
     key: draftKey,
   });
-  const [feedback, setFeedback] = useState<Feedback>(null);
+  const [feedback, setFeedback] = useState<MagneticTextureFeedback>(null);
   const [pending, setPending] = useState(false);
   const draft = draftState.key === draftKey ? draftState.draft : baseDraft;
   const dirty = JSON.stringify(draft) !== JSON.stringify(baseDraft);
@@ -795,11 +754,9 @@ export function ObjectMagneticTexturePanel({
       );
       const response =
         target.kind === "region"
-          ? await api.model.patchObjectRegionResource(
-              target.objectId,
+          ? await api.model.patchRegion(
               target.regionId,
-              patch.payload as JsonObject,
-              { baseRevision: assetResponse.scene_revision ?? undefined },
+              patch.payload as RegionPatchRequest,
             )
           : await api.model.patchObject(model.objectId, patch.payload);
       const revision =
@@ -841,11 +798,9 @@ export function ObjectMagneticTexturePanel({
       const patch = buildTextureAssignmentPatch(target, null, model.baseRevision);
       const response =
         target.kind === "region"
-          ? await api.model.patchObjectRegionResource(
-              target.objectId,
+          ? await api.model.patchRegion(
               target.regionId,
-              patch.payload as JsonObject,
-              { baseRevision: model.baseRevision ?? undefined },
+              patch.payload as RegionPatchRequest,
             )
           : await api.model.patchObject(model.objectId, patch.payload);
       const revision =

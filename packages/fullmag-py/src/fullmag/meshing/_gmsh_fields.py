@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+import math
 import numpy as np
 
 from fullmag._progress import emit_progress
@@ -56,6 +57,11 @@ FIELD_SCHEMAS: dict[str, set[str]] = {
     "ComponentRestrictedBox": {"GeometryName", "VIn", "XMin", "XMax", "YMin", "YMax", "ZMin", "ZMax"},
     "ComponentRestrictedRectangularPerimeter": {"GeometryName", "VIn", "Extent", "Mode", "AxisA", "AxisB", "XMin", "XMax", "YMin", "YMax", "ZMin", "ZMax"},
     "ComponentRestrictedCylinder": {"GeometryName", "VIn", "Radius", "XCenter", "YCenter"},
+    "ComponentRestrictedSphere": {"GeometryName", "VIn", "Radius", "XCenter", "YCenter", "ZCenter"},
+    "ComponentRestrictedMathEval": {"GeometryName", "F"},
+    "ComponentRestrictedGradedBox": {"GeometryName", "VIn", "VOut", "TransitionDistance", "Size", "Center"},
+    "ComponentRestrictedGradedCylinder": {"GeometryName", "VIn", "VOut", "TransitionDistance", "Radius", "Height", "Center"},
+    "ComponentRestrictedGradedSphere": {"GeometryName", "VIn", "VOut", "TransitionDistance", "Radius", "Center"},
     "SurfaceDistanceThreshold": {"GeometryName", "SizeMin", "SizeMax", "DistMin", "DistMax"},
     "InterfaceShellThreshold": {"GeometryName", "SizeMin", "SizeMax", "DistMin", "DistMax"},
     "TransitionShellThreshold": {"GeometryName", "SizeMin", "SizeMax", "DistMin", "DistMax"},
@@ -1168,6 +1174,7 @@ def _add_component_restricted_cylinder_field(
     ycenter: float,
     zcenter: float,
     component_volume_tags: dict[str, list[int]] | None,
+    axis: Sequence[float] = (0.0, 0.0, 1.0),
     hscale: float = 1.0,
 ) -> int | None:
     volume_tags = _component_volume_tags_for_geometry(geometry_name, component_volume_tags)
@@ -1184,9 +1191,66 @@ def _add_component_restricted_cylinder_field(
     gmsh.model.mesh.field.setNumber(field_id, "XCenter", float(xcenter) * hscale)
     gmsh.model.mesh.field.setNumber(field_id, "YCenter", float(ycenter) * hscale)
     gmsh.model.mesh.field.setNumber(field_id, "ZCenter", float(zcenter) * hscale)
-    gmsh.model.mesh.field.setNumber(field_id, "XAxis", 0.0)
-    gmsh.model.mesh.field.setNumber(field_id, "YAxis", 0.0)
-    gmsh.model.mesh.field.setNumber(field_id, "ZAxis", 1.0)
+    gmsh.model.mesh.field.setNumber(field_id, "XAxis", float(axis[0]))
+    gmsh.model.mesh.field.setNumber(field_id, "YAxis", float(axis[1]))
+    gmsh.model.mesh.field.setNumber(field_id, "ZAxis", float(axis[2]))
+
+    restricted = gmsh.model.mesh.field.add("Restrict")
+    gmsh.model.mesh.field.setNumber(restricted, "InField", field_id)
+    gmsh.model.mesh.field.setNumbers(restricted, "VolumesList", volume_tags)
+    return restricted
+
+
+def _add_component_restricted_sphere_field(
+    gmsh: Any,
+    *,
+    geometry_name: str,
+    vin: float,
+    vout: float,
+    radius: float,
+    xcenter: float,
+    ycenter: float,
+    zcenter: float,
+    component_volume_tags: dict[str, list[int]] | None,
+    hscale: float = 1.0,
+) -> int | None:
+    volume_tags = _component_volume_tags_for_geometry(geometry_name, component_volume_tags)
+    if not volume_tags:
+        emit_progress(
+            f"Gmsh: warning - no recovered component volumes for '{geometry_name}', skipping restricted sphere refinement"
+        )
+        return None
+
+    field_id = gmsh.model.mesh.field.add("Ball")
+    gmsh.model.mesh.field.setNumber(field_id, "VIn", float(vin) * hscale)
+    gmsh.model.mesh.field.setNumber(field_id, "VOut", float(vout) * hscale)
+    gmsh.model.mesh.field.setNumber(field_id, "Radius", float(radius) * hscale)
+    gmsh.model.mesh.field.setNumber(field_id, "XCenter", float(xcenter) * hscale)
+    gmsh.model.mesh.field.setNumber(field_id, "YCenter", float(ycenter) * hscale)
+    gmsh.model.mesh.field.setNumber(field_id, "ZCenter", float(zcenter) * hscale)
+
+    restricted = gmsh.model.mesh.field.add("Restrict")
+    gmsh.model.mesh.field.setNumber(restricted, "InField", field_id)
+    gmsh.model.mesh.field.setNumbers(restricted, "VolumesList", volume_tags)
+    return restricted
+
+
+def _add_component_restricted_matheval_field(
+    gmsh: Any,
+    *,
+    geometry_name: str,
+    expr: str,
+    component_volume_tags: dict[str, list[int]] | None,
+) -> int | None:
+    volume_tags = _component_volume_tags_for_geometry(geometry_name, component_volume_tags)
+    if not volume_tags:
+        emit_progress(
+            f"Gmsh: warning - no recovered component volumes for '{geometry_name}', skipping restricted MathEval refinement"
+        )
+        return None
+
+    field_id = gmsh.model.mesh.field.add("MathEval")
+    gmsh.model.mesh.field.setString(field_id, "F", expr)
 
     restricted = gmsh.model.mesh.field.add("Restrict")
     gmsh.model.mesh.field.setNumber(restricted, "InField", field_id)
@@ -1505,7 +1569,196 @@ def _configure_mesh_size_fields(
                 ycenter=float(params.get("YCenter")),
                 zcenter=float(params.get("ZCenter", 0.0)),
                 component_volume_tags=component_volume_tags,
+                axis=params.get("Axis", (0.0, 0.0, 1.0)),
                 hscale=hscale,
+            )
+            if fid is not None:
+                field_ids.append(fid)
+                _mark_field(config, status="applied", field_id=fid)
+            else:
+                _mark_field(config, status="ignored", reason="no recovered component volumes")
+            continue
+        if kind == "ComponentRestrictedSphere":
+            geometry_name = params.get("GeometryName")
+            if not isinstance(geometry_name, str) or not geometry_name.strip():
+                emit_progress("Gmsh: warning - ComponentRestrictedSphere is missing GeometryName; skipping")
+                _mark_field(config, status="ignored", reason="missing GeometryName")
+                continue
+            fid = _add_component_restricted_sphere_field(
+                gmsh,
+                geometry_name=geometry_name,
+                vin=float(params.get("VIn")),
+                vout=float(params.get("VOut", 1.0e22)),
+                radius=float(params.get("Radius")),
+                xcenter=float(params.get("XCenter")),
+                ycenter=float(params.get("YCenter")),
+                zcenter=float(params.get("ZCenter", 0.0)),
+                component_volume_tags=component_volume_tags,
+                hscale=hscale,
+            )
+            if fid is not None:
+                field_ids.append(fid)
+                _mark_field(config, status="applied", field_id=fid)
+            else:
+                _mark_field(config, status="ignored", reason="no recovered component volumes")
+            continue
+        if kind == "ComponentRestrictedMathEval":
+            geometry_name = params.get("GeometryName")
+            if not isinstance(geometry_name, str) or not geometry_name.strip():
+                emit_progress("Gmsh: warning - ComponentRestrictedMathEval is missing GeometryName; skipping")
+                _mark_field(config, status="ignored", reason="missing GeometryName")
+                continue
+            fid = _add_component_restricted_matheval_field(
+                gmsh,
+                geometry_name=geometry_name,
+                expr=str(params.get("F")),
+                component_volume_tags=component_volume_tags,
+            )
+            if fid is not None:
+                field_ids.append(fid)
+                _mark_field(config, status="applied", field_id=fid)
+            else:
+                _mark_field(config, status="ignored", reason="no recovered component volumes")
+            continue
+        if kind == "ComponentRestrictedGradedBox":
+            geometry_name = params.get("GeometryName")
+            if not isinstance(geometry_name, str) or not geometry_name.strip():
+                emit_progress("Gmsh: warning - ComponentRestrictedGradedBox is missing GeometryName; skipping")
+                _mark_field(config, status="ignored", reason="missing GeometryName")
+                continue
+            vin = float(params["VIn"])
+            vout = float(params["VOut"])
+            trans = float(params["TransitionDistance"])
+            size = [float(v) for v in params["Size"]]
+            center = [float(v) for v in params["Center"]]
+
+            x_c_scaled = center[0] * hscale
+            y_c_scaled = center[1] * hscale
+            z_c_scaled = center[2] * hscale
+
+            dx = f"Max(Abs(x - {_math_number(x_c_scaled)}) - {_math_number(0.5 * size[0] * hscale)}, 0)"
+            dy = f"Max(Abs(y - {_math_number(y_c_scaled)}) - {_math_number(0.5 * size[1] * hscale)}, 0)"
+            dz = f"Max(Abs(z - {_math_number(z_c_scaled)}) - {_math_number(0.5 * size[2] * hscale)}, 0)"
+            distance_expr = f"Sqrt(({dx})*({dx}) + ({dy})*({dy}) + ({dz})*({dz}))"
+
+            span = trans * hscale
+            ramp = f"({distance_expr}) / {_math_number(span)}"
+
+            expr = _geometric_size_profile_expression(
+                size_min=vin * hscale,
+                size_max=vout * hscale,
+                ramp=ramp,
+                growth_rate=1.2,
+            )
+            fid = _add_component_restricted_matheval_field(
+                gmsh,
+                geometry_name=geometry_name,
+                expr=expr,
+                component_volume_tags=component_volume_tags,
+            )
+            if fid is not None:
+                field_ids.append(fid)
+                _mark_field(config, status="applied", field_id=fid)
+            else:
+                _mark_field(config, status="ignored", reason="no recovered component volumes")
+            continue
+        if kind == "ComponentRestrictedGradedCylinder":
+            geometry_name = params.get("GeometryName")
+            if not isinstance(geometry_name, str) or not geometry_name.strip():
+                emit_progress("Gmsh: warning - ComponentRestrictedGradedCylinder is missing GeometryName; skipping")
+                _mark_field(config, status="ignored", reason="missing GeometryName")
+                continue
+            vin = float(params["VIn"])
+            vout = float(params["VOut"])
+            trans = float(params["TransitionDistance"])
+            radius = float(params["Radius"])
+            height = float(params["Height"])
+            center = [float(v) for v in params["Center"]]
+            axis = params.get("Axis", [0.0, 0.0, 1.0])
+            axis = [float(v) for v in axis]
+            axis_len = math.sqrt(sum(v * v for v in axis))
+            if axis_len > 0.0:
+                ax, ay, az = [v / axis_len for v in axis]
+            else:
+                ax, ay, az = 0.0, 0.0, 1.0
+
+            x_c_scaled = center[0] * hscale
+            y_c_scaled = center[1] * hscale
+            z_c_scaled = center[2] * hscale
+
+            xc_num = _math_number(x_c_scaled)
+            yc_num = _math_number(y_c_scaled)
+            zc_num = _math_number(z_c_scaled)
+            ax_num = _math_number(ax)
+            ay_num = _math_number(ay)
+            az_num = _math_number(az)
+
+            # va = projection along the unit axis vector
+            va = f"((x - {xc_num})*{ax_num} + (y - {yc_num})*{ay_num} + (z - {zc_num})*{az_num})"
+            # da = axial distance outside the cylinder length bounds
+            da = f"Max(Abs({va}) - {_math_number(0.5 * height * hscale)}, 0)"
+            # vr_sq = squared distance perpendicular to the axis
+            v_sq = f"((x - {xc_num})*(x - {xc_num}) + (y - {yc_num})*(y - {yc_num}) + (z - {zc_num})*(z - {zc_num}))"
+            vr_sq = f"Max({v_sq} - ({va})*({va}), 0)"
+            # dr = radial distance outside the cylinder radius bounds
+            dr = f"Max(Sqrt({vr_sq}) - {_math_number(radius * hscale)}, 0)"
+
+            distance_expr = f"Sqrt(({dr})*({dr}) + ({da})*({da}))"
+
+            span = trans * hscale
+            ramp = f"({distance_expr}) / {_math_number(span)}"
+
+            expr = _geometric_size_profile_expression(
+                size_min=vin * hscale,
+                size_max=vout * hscale,
+                ramp=ramp,
+                growth_rate=1.2,
+            )
+            fid = _add_component_restricted_matheval_field(
+                gmsh,
+                geometry_name=geometry_name,
+                expr=expr,
+                component_volume_tags=component_volume_tags,
+            )
+            if fid is not None:
+                field_ids.append(fid)
+                _mark_field(config, status="applied", field_id=fid)
+            else:
+                _mark_field(config, status="ignored", reason="no recovered component volumes")
+            continue
+        if kind == "ComponentRestrictedGradedSphere":
+            geometry_name = params.get("GeometryName")
+            if not isinstance(geometry_name, str) or not geometry_name.strip():
+                emit_progress("Gmsh: warning - ComponentRestrictedGradedSphere is missing GeometryName; skipping")
+                _mark_field(config, status="ignored", reason="missing GeometryName")
+                continue
+            vin = float(params["VIn"])
+            vout = float(params["VOut"])
+            trans = float(params["TransitionDistance"])
+            radius = float(params["Radius"])
+            center = [float(v) for v in params["Center"]]
+
+            x_c_scaled = center[0] * hscale
+            y_c_scaled = center[1] * hscale
+            z_c_scaled = center[2] * hscale
+
+            d = f"Sqrt((x - {_math_number(x_c_scaled)})*(x - {_math_number(x_c_scaled)}) + (y - {_math_number(y_c_scaled)})*(y - {_math_number(y_c_scaled)}) + (z - {_math_number(z_c_scaled)})*(z - {_math_number(z_c_scaled)}))"
+            distance_expr = f"Max({d} - {_math_number(radius * hscale)}, 0)"
+
+            span = trans * hscale
+            ramp = f"({distance_expr}) / {_math_number(span)}"
+
+            expr = _geometric_size_profile_expression(
+                size_min=vin * hscale,
+                size_max=vout * hscale,
+                ramp=ramp,
+                growth_rate=1.2,
+            )
+            fid = _add_component_restricted_matheval_field(
+                gmsh,
+                geometry_name=geometry_name,
+                expr=expr,
+                component_volume_tags=component_volume_tags,
             )
             if fid is not None:
                 field_ids.append(fid)

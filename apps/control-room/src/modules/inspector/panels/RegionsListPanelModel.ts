@@ -1,9 +1,10 @@
-import type {
-  JsonObject,
-  RegionListResource,
-  SceneResource,
-} from "@/kernel/api/apiTypes";
+import type { RegionListResource, SceneResource } from "@/kernel/api/apiTypes";
+import type { components } from "@/kernel/api/generated/openapi-v2-types";
 import type { Selection } from "@/kernel/selection/selectionTypes";
+import {
+  ownerBoundsForObject,
+  type RegionOwnerBounds,
+} from "./ObjectRegionsPanelModel";
 
 interface JsonRecord {
   [key: string]: unknown;
@@ -38,10 +39,6 @@ export interface NewRegionDraft {
   shapeKind: RegionShapeKind;
 }
 
-export interface RegionOwnerBounds {
-  center: [number, number, number];
-  size: [number, number, number];
-}
 
 function asRecord(value: unknown): JsonRecord | null {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value)
@@ -55,14 +52,6 @@ function asString(value: unknown): string | null {
 
 function asNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function asVec3(value: unknown): [number, number, number] | null {
-  return Array.isArray(value) &&
-    value.length === 3 &&
-    value.every((entry) => typeof entry === "number" && Number.isFinite(entry))
-    ? [value[0], value[1], value[2]]
-    : null;
 }
 
 function selectedObjectId(selection: Selection): string | null {
@@ -105,53 +94,7 @@ function shapeKindForRegion(region: RegionListResource["regions"][number]): stri
   return asString(shape?.kind) ?? "region";
 }
 
-function ownerBoundsForObject(object: JsonRecord | null): RegionOwnerBounds | null {
-  const geometry = asRecord(object?.geometry);
-  const min = asVec3(geometry?.bounds_min ?? object?.bounds_min);
-  const max = asVec3(geometry?.bounds_max ?? object?.bounds_max);
-  if (!min || !max) return ownerBoundsFromGeometryParams(geometry);
-  const size: [number, number, number] = [
-    max[0] - min[0],
-    max[1] - min[1],
-    max[2] - min[2],
-  ];
-  if (size.some((entry) => entry <= 0 || !Number.isFinite(entry))) return null;
-  return {
-    center: [
-      (min[0] + max[0]) / 2,
-      (min[1] + max[1]) / 2,
-      (min[2] + max[2]) / 2,
-    ],
-    size,
-  };
-}
 
-function ownerBoundsFromGeometryParams(geometry: JsonRecord | null): RegionOwnerBounds | null {
-  const params = asRecord(geometry?.geometry_params);
-  const kind = asString(geometry?.geometry_kind);
-  const center = asVec3(params?.center) ?? [0, 0, 0];
-  let size: [number, number, number] | null = null;
-  if (kind === "Box") {
-    size = asVec3(params?.size);
-  } else if (kind === "Cylinder") {
-    const radius = asNumber(params?.radius);
-    const height = asNumber(params?.height);
-    if (radius && height) {
-      size = [radius * 2, radius * 2, height];
-    }
-  } else if (kind === "ArchWaveguide") {
-    const length = asNumber(params?.length);
-    const width = asNumber(params?.width);
-    const height = asNumber(params?.height);
-    if (length && width && height) {
-      size = [length, width, height];
-    }
-  }
-  if (!size || size.some((entry) => entry <= 0 || !Number.isFinite(entry))) {
-    return null;
-  }
-  return { center, size };
-}
 
 export function resolveRegionsListPanelModel(
   selection: Selection,
@@ -228,7 +171,7 @@ export function validateNewRegionDraft(draft: NewRegionDraft): string[] {
 export function buildNewRegionPayload(
   draft: NewRegionDraft,
   ownerBounds: RegionOwnerBounds | null = null,
-): JsonObject {
+): components["schemas"]["SceneObjectRegion"] {
   const name = draft.name.trim();
   const priority = Number.isFinite(draft.priority) ? draft.priority : 0;
   const center = ownerBounds?.center ?? [0, 0, 0];
@@ -238,7 +181,7 @@ export function buildNewRegionPayload(
     number,
     number,
   ];
-  let shape: JsonObject;
+  let shape: components["schemas"]["SceneRegionShape"];
   if (draft.shapeKind === "cylinder") {
     shape = {
       axis: [0, 0, 1],
@@ -262,6 +205,7 @@ export function buildNewRegionPayload(
   }
 
   return {
+    region_id: "",
     enabled: true,
     frame: "object",
     name,

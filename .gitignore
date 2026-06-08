@@ -84,3 +84,7 @@ docs/reports/23.04.2026/*
 *.cubin
 *.fatbin
 *.ptx
+target-host/*
+apps/control-room/target-host/*
+target_agent/*
+target_tmp/debug/*

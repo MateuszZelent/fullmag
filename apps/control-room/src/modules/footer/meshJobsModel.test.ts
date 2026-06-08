@@ -102,6 +102,7 @@ describe("meshJobsModel", () => {
     });
     expect(model.historyRows).toEqual([
       {
+        id: "mesh-history-1",
         elements: "120",
         mesh: "mesh-2",
         nodes: "80",
@@ -109,6 +110,7 @@ describe("meshJobsModel", () => {
         target: "study_domain",
       },
       {
+        id: "mesh-history-0",
         elements: "90",
         mesh: "mesh-1",
         nodes: "50",

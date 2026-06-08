@@ -112,13 +112,17 @@ pub(crate) fn build_mesh_parts_from_segments(
             } else {
                 mesh_bounds_from_node_indices(mesh, &node_indices)
             };
+            let part_identity = segment
+                .geometry_id
+                .as_deref()
+                .unwrap_or(segment.object_id.as_str());
             let label = if role == FemMeshPartRole::Air {
                 "Airbox".to_string()
             } else {
-                segment.object_id.clone()
+                part_identity.to_string()
             };
             FemMeshPartIR {
-                id: format!("part:{}", segment.object_id),
+                id: format!("part:{part_identity}"),
                 label,
                 role: role.clone(),
                 object_id: match role {
@@ -346,6 +350,22 @@ fn sorted_face_key(face: [u32; 3]) -> (u32, u32, u32) {
     (nodes[0], nodes[1], nodes[2])
 }
 
+fn canonical_coordinate_bits(value: f64) -> u64 {
+    if value == 0.0 {
+        0.0f64.to_bits()
+    } else {
+        value.to_bits()
+    }
+}
+
+fn coordinate_key(point: [f64; 3]) -> [u64; 3] {
+    [
+        canonical_coordinate_bits(point[0]),
+        canonical_coordinate_bits(point[1]),
+        canonical_coordinate_bits(point[2]),
+    ]
+}
+
 pub(crate) fn load_fem_domain_mesh_asset(asset: &FemDomainMeshAssetIR) -> Result<MeshIR, String> {
     match (&asset.mesh, &asset.mesh_source) {
         (Some(mesh), _) => Ok(mesh.clone()),
@@ -360,9 +380,16 @@ pub(crate) fn load_fem_domain_mesh_asset(asset: &FemDomainMeshAssetIR) -> Result
 pub(crate) struct SharedDomainAnalysis {
     pub node_owner: Vec<u32>,
     pub face_owner: BTreeMap<(u32, u32, u32), u32>,
-    pub ordered_regions: Vec<(String, u32)>,
+    pub ordered_regions: Vec<SharedDomainRegionEntry>,
     pub shared_interface_nodes: Vec<(u32, Vec<u32>)>,
     pub interface_faces: Vec<SharedInterfaceFace>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SharedDomainRegionEntry {
+    pub object_id: String,
+    pub geometry_id: String,
+    pub marker: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -371,24 +398,36 @@ pub(crate) struct SharedInterfaceFace {
     pub markers: Vec<u32>,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn analyze_shared_domain_mesh(
     mesh: &MeshIR,
     region_markers: &[FemDomainRegionMarkerIR],
 ) -> Result<SharedDomainAnalysis, String> {
-    if region_markers.is_empty() {
+    let ordered_regions = region_markers
+        .iter()
+        .map(|region| SharedDomainRegionEntry {
+            object_id: region.geometry_name.clone(),
+            geometry_id: region.geometry_name.clone(),
+            marker: region.marker,
+        })
+        .collect::<Vec<_>>();
+    analyze_shared_domain_mesh_with_entries(mesh, ordered_regions)
+}
+
+fn analyze_shared_domain_mesh_with_entries(
+    mesh: &MeshIR,
+    ordered_regions: Vec<SharedDomainRegionEntry>,
+) -> Result<SharedDomainAnalysis, String> {
+    if ordered_regions.is_empty() {
         return Err(
             "fem_domain_mesh_asset.region_markers must describe at least one magnetic region"
                 .to_string(),
         );
     }
 
-    let ordered_regions = region_markers
-        .iter()
-        .map(|region| (region.geometry_name.clone(), region.marker))
-        .collect::<Vec<_>>();
     let marker_to_object = ordered_regions
         .iter()
-        .map(|(object_id, marker)| (*marker, object_id.clone()))
+        .map(|entry| (entry.marker, entry.object_id.clone()))
         .collect::<BTreeMap<_, _>>();
 
     for &marker in &mesh.element_markers {
@@ -527,30 +566,56 @@ pub(crate) fn pack_mesh_by_analysis(
         .map(|(node_index, markers)| (*node_index as usize, markers.clone()))
         .collect::<BTreeMap<_, _>>();
 
-    let mut reordered_nodes = Vec::with_capacity(
-        mesh.nodes.len() + analysis.shared_interface_nodes.len() * ordered_regions.len(),
-    );
+    let mut reordered_nodes = Vec::with_capacity(mesh.nodes.len());
     let mut node_start_by_marker = BTreeMap::new();
     let mut node_count_by_marker = BTreeMap::new();
-    let mut node_map_by_marker = BTreeMap::<u32, BTreeMap<usize, u32>>::new();
-    for (_object_id, marker) in ordered_regions {
-        node_start_by_marker.insert(*marker, reordered_nodes.len() as u32);
-        let marker_node_map = node_map_by_marker.entry(*marker).or_default();
+    let mut node_map_by_object = BTreeMap::<String, BTreeMap<usize, u32>>::new();
+    let mut coordinate_map_by_object = BTreeMap::<String, BTreeMap<[u64; 3], u32>>::new();
+    for entry in ordered_regions {
+        let marker = entry.marker;
+        node_start_by_marker.insert(marker, reordered_nodes.len() as u32);
+        let object_node_map = node_map_by_object
+            .entry(entry.object_id.clone())
+            .or_default();
+        let object_coordinate_map = coordinate_map_by_object
+            .entry(entry.object_id.clone())
+            .or_default();
         for (node_index, owner) in analysis.node_owner.iter().enumerate() {
             let shared_with_marker = shared_markers_by_node
                 .get(&node_index)
-                .map(|markers| markers.contains(marker))
+                .map(|markers| markers.contains(&marker))
                 .unwrap_or(false);
-            if *owner == *marker || shared_with_marker {
-                marker_node_map.insert(node_index, reordered_nodes.len() as u32);
-                reordered_nodes.push(mesh.nodes[node_index]);
+            if (*owner == marker || shared_with_marker)
+                && !object_node_map.contains_key(&node_index)
+            {
+                let key = coordinate_key(mesh.nodes[node_index]);
+                if let Some(existing_index) = object_coordinate_map.get(&key) {
+                    object_node_map.insert(node_index, *existing_index);
+                } else {
+                    let new_index = reordered_nodes.len() as u32;
+                    object_node_map.insert(node_index, new_index);
+                    object_coordinate_map.insert(key, new_index);
+                    reordered_nodes.push(mesh.nodes[node_index]);
+                }
             }
         }
         let start = *node_start_by_marker
-            .get(marker)
+            .get(&marker)
             .expect("node_start inserted above");
-        node_count_by_marker.insert(*marker, reordered_nodes.len() as u32 - start);
+        node_count_by_marker.insert(marker, reordered_nodes.len() as u32 - start);
     }
+    let node_map_by_marker = ordered_regions
+        .iter()
+        .map(|entry| {
+            (
+                entry.marker,
+                node_map_by_object
+                    .get(&entry.object_id)
+                    .cloned()
+                    .unwrap_or_default(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     let mut air_node_map = BTreeMap::<usize, u32>::new();
     for (node_index, owner) in analysis.node_owner.iter().enumerate() {
         if *owner == AIR_REGION_MARKER {
@@ -598,24 +663,25 @@ pub(crate) fn pack_mesh_by_analysis(
     let mut reordered_markers = Vec::with_capacity(mesh.element_markers.len());
     let mut element_start_by_marker = BTreeMap::new();
     let mut element_count_by_marker = BTreeMap::new();
-    for (_object_id, marker) in ordered_regions {
-        element_start_by_marker.insert(*marker, reordered_elements.len() as u32);
+    for entry in ordered_regions {
+        let marker = entry.marker;
+        element_start_by_marker.insert(marker, reordered_elements.len() as u32);
         for (element_index, element) in mesh.elements.iter().enumerate() {
-            if mesh.element_markers[element_index] != *marker {
+            if mesh.element_markers[element_index] != marker {
                 continue;
             }
             reordered_elements.push([
-                remap_node(element[0], *marker)?,
-                remap_node(element[1], *marker)?,
-                remap_node(element[2], *marker)?,
-                remap_node(element[3], *marker)?,
+                remap_node(element[0], marker)?,
+                remap_node(element[1], marker)?,
+                remap_node(element[2], marker)?,
+                remap_node(element[3], marker)?,
             ]);
-            reordered_markers.push(*marker);
+            reordered_markers.push(marker);
         }
         let start = *element_start_by_marker
-            .get(marker)
+            .get(&marker)
             .expect("element_start inserted above");
-        element_count_by_marker.insert(*marker, reordered_elements.len() as u32 - start);
+        element_count_by_marker.insert(marker, reordered_elements.len() as u32 - start);
     }
     for (element_index, element) in mesh.elements.iter().enumerate() {
         if mesh.element_markers[element_index] != 0 {
@@ -634,28 +700,29 @@ pub(crate) fn pack_mesh_by_analysis(
     let mut reordered_boundary_markers = Vec::with_capacity(mesh.boundary_markers.len());
     let mut boundary_start_by_marker = BTreeMap::new();
     let mut boundary_count_by_marker = BTreeMap::new();
-    for (_object_id, marker) in ordered_regions {
-        boundary_start_by_marker.insert(*marker, reordered_boundary_faces.len() as u32);
+    for entry in ordered_regions {
+        let marker = entry.marker;
+        boundary_start_by_marker.insert(marker, reordered_boundary_faces.len() as u32);
         for (face_index, face) in mesh.boundary_faces.iter().enumerate() {
             let owner = analysis
                 .face_owner
                 .get(&sorted_face_key(*face))
                 .copied()
                 .unwrap_or(0);
-            if owner != *marker {
+            if owner != marker {
                 continue;
             }
             reordered_boundary_faces.push([
-                remap_node(face[0], *marker)?,
-                remap_node(face[1], *marker)?,
-                remap_node(face[2], *marker)?,
+                remap_node(face[0], marker)?,
+                remap_node(face[1], marker)?,
+                remap_node(face[2], marker)?,
             ]);
             reordered_boundary_markers.push(mesh.boundary_markers[face_index]);
         }
         let start = *boundary_start_by_marker
-            .get(marker)
+            .get(&marker)
             .expect("boundary_start inserted above");
-        boundary_count_by_marker.insert(*marker, reordered_boundary_faces.len() as u32 - start);
+        boundary_count_by_marker.insert(marker, reordered_boundary_faces.len() as u32 - start);
     }
     for (face_index, face) in mesh.boundary_faces.iter().enumerate() {
         let owner = analysis
@@ -676,41 +743,41 @@ pub(crate) fn pack_mesh_by_analysis(
 
     let mut object_segments = ordered_regions
         .iter()
-        .map(|(object_id, marker)| FemObjectSegmentIR {
-            object_id: object_id.clone(),
-            geometry_id: Some(object_id.clone()),
-            node_start: *node_start_by_marker.get(marker).unwrap_or(&0),
-            node_count: *node_count_by_marker.get(marker).unwrap_or(&0),
-            element_start: *element_start_by_marker.get(marker).unwrap_or(&0),
-            element_count: *element_count_by_marker.get(marker).unwrap_or(&0),
-            boundary_face_start: *boundary_start_by_marker.get(marker).unwrap_or(&0),
-            boundary_face_count: *boundary_count_by_marker.get(marker).unwrap_or(&0),
+        .map(|entry| FemObjectSegmentIR {
+            object_id: entry.object_id.clone(),
+            geometry_id: Some(entry.geometry_id.clone()),
+            node_start: *node_start_by_marker.get(&entry.marker).unwrap_or(&0),
+            node_count: *node_count_by_marker.get(&entry.marker).unwrap_or(&0),
+            element_start: *element_start_by_marker.get(&entry.marker).unwrap_or(&0),
+            element_count: *element_count_by_marker.get(&entry.marker).unwrap_or(&0),
+            boundary_face_start: *boundary_start_by_marker.get(&entry.marker).unwrap_or(&0),
+            boundary_face_count: *boundary_count_by_marker.get(&entry.marker).unwrap_or(&0),
         })
         .collect::<Vec<_>>();
     let air_node_start = ordered_regions
         .last()
-        .and_then(|(_, marker)| {
+        .and_then(|entry| {
             node_start_by_marker
-                .get(marker)
-                .zip(node_count_by_marker.get(marker))
+                .get(&entry.marker)
+                .zip(node_count_by_marker.get(&entry.marker))
                 .map(|(start, count)| start + count)
         })
         .unwrap_or(0);
     let air_element_start = ordered_regions
         .last()
-        .and_then(|(_, marker)| {
+        .and_then(|entry| {
             element_start_by_marker
-                .get(marker)
-                .zip(element_count_by_marker.get(marker))
+                .get(&entry.marker)
+                .zip(element_count_by_marker.get(&entry.marker))
                 .map(|(start, count)| start + count)
         })
         .unwrap_or(0);
     let air_boundary_face_start = ordered_regions
         .last()
-        .and_then(|(_, marker)| {
+        .and_then(|entry| {
             boundary_start_by_marker
-                .get(marker)
-                .zip(boundary_count_by_marker.get(marker))
+                .get(&entry.marker)
+                .zip(boundary_count_by_marker.get(&entry.marker))
                 .map(|(start, count)| start + count)
         })
         .unwrap_or(0);
@@ -754,6 +821,20 @@ pub(crate) fn pack_mesh_by_analysis(
         &object_segments,
         FemDomainMeshModeIR::SharedDomainMeshWithAir,
     );
+    for (segment, part) in object_segments.iter().zip(mesh_parts.iter_mut()) {
+        if part.role != FemMeshPartRole::MagneticObject {
+            continue;
+        }
+        let node_indices = explicit_node_indices_for_segment(&reordered_mesh, segment);
+        if node_indices.is_empty() {
+            continue;
+        }
+        part.bounds_min =
+            mesh_bounds_from_node_indices(&reordered_mesh, &node_indices).map(|(min, _)| min);
+        part.bounds_max =
+            mesh_bounds_from_node_indices(&reordered_mesh, &node_indices).map(|(_, max)| max);
+        part.node_indices = node_indices;
+    }
 
     let (outer_boundary_marker, _marker_source) = select_airbox_boundary_marker(&reordered_mesh);
     let outer_boundary_face_indices = reordered_mesh
@@ -788,7 +869,12 @@ pub(crate) fn pack_mesh_by_analysis(
     let marker_to_label = analysis
         .ordered_regions
         .iter()
-        .map(|(label, marker)| (*marker, label.clone()))
+        .map(|entry| (entry.marker, entry.geometry_id.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let marker_to_object_id = analysis
+        .ordered_regions
+        .iter()
+        .map(|entry| (entry.marker, entry.object_id.clone()))
         .collect::<BTreeMap<_, _>>();
     let mut interface_surface_faces = BTreeMap::<(u32, u32), Vec<[u32; 3]>>::new();
     let mut interface_node_sets = BTreeMap::<(u32, u32), BTreeSet<u32>>::new();
@@ -845,7 +931,7 @@ pub(crate) fn pack_mesh_by_analysis(
             .unwrap_or_default();
         let bounds = mesh_bounds_from_node_indices(&reordered_mesh, &node_indices);
         let owning_object_id =
-            interface_air_magnetic_owner_id(left_marker, right_marker, &marker_to_label);
+            interface_air_magnetic_owner_id(left_marker, right_marker, &marker_to_object_id);
         mesh_parts.push(FemMeshPartIR {
             id: format!("part:interface:{left_marker}:{right_marker}"),
             label: format!("{left_label} ↔ {right_label}"),
@@ -873,6 +959,14 @@ fn interface_air_magnetic_owner_id(
     right_marker: u32,
     marker_to_label: &BTreeMap<u32, String>,
 ) -> Option<String> {
+    if left_marker != AIR_REGION_MARKER && right_marker != AIR_REGION_MARKER {
+        let left_owner = marker_to_label.get(&left_marker)?;
+        let right_owner = marker_to_label.get(&right_marker)?;
+        if left_owner == right_owner {
+            return Some(left_owner.clone());
+        }
+        return None;
+    }
     let magnetic_marker = match (
         left_marker == AIR_REGION_MARKER,
         right_marker == AIR_REGION_MARKER,
@@ -884,6 +978,7 @@ fn interface_air_magnetic_owner_id(
     marker_to_label.get(&magnetic_marker).cloned()
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn reorder_shared_domain_mesh(
     mesh: &MeshIR,
     region_markers: &[FemDomainRegionMarkerIR],
@@ -892,6 +987,59 @@ pub(crate) fn reorder_shared_domain_mesh(
     let analysis = analyze_shared_domain_mesh(mesh, region_markers)?;
     validate_packing_constraints(&analysis, &mesh.mesh_name, solver_supports_conformal)?;
     pack_mesh_by_analysis(mesh, &analysis)
+}
+
+fn shared_domain_region_entries_for_problem(
+    mesh: &MeshIR,
+    problem: &ProblemIR,
+    asset: &FemDomainMeshAssetIR,
+) -> Vec<SharedDomainRegionEntry> {
+    let object_id_for_geometry = |geometry_name: &str| {
+        problem
+            .regions
+            .iter()
+            .find(|region| region.geometry == geometry_name)
+            .and_then(|region| {
+                problem
+                    .magnets
+                    .iter()
+                    .find(|magnet| magnet.region == region.name)
+            })
+            .map(|magnet| magnet.name.clone())
+            .unwrap_or_else(|| geometry_name.to_string())
+    };
+    let mut entries = asset
+        .region_markers
+        .iter()
+        .map(|region| SharedDomainRegionEntry {
+            object_id: object_id_for_geometry(&region.geometry_name),
+            geometry_id: region.geometry_name.clone(),
+            marker: region.marker,
+        })
+        .collect::<Vec<_>>();
+
+    let mesh_markers = mesh
+        .element_markers
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    for marker in &asset.object_region_markers {
+        if !mesh_markers.contains(&marker.marker) {
+            continue;
+        }
+        let Some(region) = problem.object_regions.iter().find(|region| {
+            region.enabled
+                && (marker.geometry_name == region.region_id || marker.geometry_name == region.name)
+        }) else {
+            continue;
+        };
+        entries.push(SharedDomainRegionEntry {
+            object_id: region.owner_object.clone(),
+            geometry_id: marker.geometry_name.clone(),
+            marker: marker.marker,
+        });
+    }
+    entries
 }
 
 pub(crate) fn resolve_fem_domain_mesh_asset(
@@ -906,8 +1054,10 @@ pub(crate) fn resolve_fem_domain_mesh_asset(
         return Ok(None);
     };
     let mesh = load_fem_domain_mesh_asset(asset)?;
-    let (mesh, object_segments, mesh_parts) =
-        reorder_shared_domain_mesh(&mesh, &asset.region_markers, solver_supports_conformal)?;
+    let region_entries = shared_domain_region_entries_for_problem(&mesh, problem, asset);
+    let analysis = analyze_shared_domain_mesh_with_entries(&mesh, region_entries)?;
+    validate_packing_constraints(&analysis, &mesh.mesh_name, solver_supports_conformal)?;
+    let (mesh, object_segments, mesh_parts) = pack_mesh_by_analysis(&mesh, &analysis)?;
     Ok(Some(ResolvedFemDomainMeshAsset {
         mesh,
         mesh_source: asset.mesh_source.clone(),

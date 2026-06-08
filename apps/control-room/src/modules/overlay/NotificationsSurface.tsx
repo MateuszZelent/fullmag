@@ -1,44 +1,24 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { X } from "lucide-react";
+import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 
 import type { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
-
-interface MeshRenderedNotification {
-  meshRevision: number | string;
-  rendererId: string;
-  type: "mesh-rendered";
-}
-
-type NotificationEvent = MeshRenderedNotification;
-
-export interface NotificationItem {
-  detail: string;
-  id: string;
-  kind: "success";
-  title: string;
-}
-
-function notificationId(event: NotificationEvent): string {
-  return `mesh-rendered:${event.rendererId}:${event.meshRevision}`;
-}
-
-export function buildNotificationItems(
-  _bus: EventBus<KernelEventMap>,
-  events: readonly NotificationEvent[],
-): NotificationItem[] {
-  return events.slice(-3).map((event) => ({
-    detail: `Mesh rev ${event.meshRevision}; viewport updated by ${event.rendererId}.`,
-    id: notificationId(event),
-    kind: "success",
-    title: "Mesh built",
-  }));
-}
+import { Button } from "@/shared/ui/Button";
+import {
+  buildNotificationItem,
+  dismissNotificationItems,
+  NOTIFICATION_TTL_MS,
+  pushNotificationItem,
+  type NotificationItem,
+} from "./NotificationsSurfaceModel";
 
 export function NotificationsView({
+  onDismiss,
   notifications,
 }: {
+  onDismiss?: (notificationId: string) => void;
   notifications: readonly NotificationItem[];
 }) {
   if (notifications.length === 0) return null;
@@ -50,15 +30,28 @@ export function NotificationsView({
       className="fm-notifications"
     >
       {notifications.map((notification) => (
-        <div
+        <output
           className="fm-notifications__toast"
           data-kind={notification.kind}
           key={notification.id}
-          role="status"
         >
-          <strong>{notification.title}</strong>
+          <div className="fm-notifications__toast-header">
+            <strong>{notification.title}</strong>
+            {onDismiss ? (
+              <Button
+                aria-label={`Dismiss ${notification.title}`}
+                className="fm-notifications__close"
+                onClick={() => onDismiss(notification.id)}
+                size="icon"
+                type="button"
+                variant="ghost"
+              >
+                <X aria-hidden="true" size={14} />
+              </Button>
+            ) : null}
+          </div>
           <span>{notification.detail}</span>
-        </div>
+        </output>
       ))}
     </aside>
   );
@@ -69,20 +62,75 @@ export function NotificationsSurface({
 }: {
   bus: EventBus<KernelEventMap>;
 }) {
-  const [events, setEvents] = useState<NotificationEvent[]>([]);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const dismissTimers = useRef<Map<string, ReturnType<typeof setTimeout>> | null>(null);
+  if (dismissTimers.current === null) {
+    dismissTimers.current = new Map();
+  }
+
+  const dismissNotification = useCallback((notificationId: string) => {
+    const timers = dismissTimers.current;
+    if (timers === null) return;
+    const timer = timers.get(notificationId);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      timers.delete(notificationId);
+    }
+    setNotifications((current) =>
+      dismissNotificationItems(current, notificationId),
+    );
+  }, []);
+
+  const scheduleDismiss = useCallback(
+    (notificationId: string) => {
+      const timers = dismissTimers.current;
+      if (timers === null) return;
+      const existing = timers.get(notificationId);
+      if (existing !== undefined) {
+        clearTimeout(existing);
+      }
+      const timer = setTimeout(() => {
+        timers.delete(notificationId);
+        setNotifications((current) =>
+          dismissNotificationItems(current, notificationId),
+        );
+      }, NOTIFICATION_TTL_MS);
+      timers.set(notificationId, timer);
+    },
+    [],
+  );
+
+  const handleMeshTopologyRendered = useEffectEvent(
+    (payload: KernelEventMap["mesh:topology-rendered"]) => {
+      const notification = buildNotificationItem({
+        meshRevision: payload.meshRevision,
+        rendererId: payload.rendererId,
+        type: "mesh-rendered",
+      });
+      setNotifications((current) =>
+        pushNotificationItem(current, notification),
+      );
+      scheduleDismiss(notification.id);
+    },
+  );
 
   useEffect(() => {
-    return bus.on("mesh:topology-rendered", (payload) => {
-      setEvents((current) => [
-        ...current.slice(-2),
-        {
-          meshRevision: payload.meshRevision,
-          rendererId: payload.rendererId,
-          type: "mesh-rendered",
-        },
-      ]);
-    });
+    const timers = dismissTimers.current;
+    if (timers === null) return;
+    const unsubscribe = bus.on("mesh:topology-rendered", handleMeshTopologyRendered);
+    return () => {
+      unsubscribe();
+      for (const timer of timers.values()) {
+        clearTimeout(timer);
+      }
+      timers.clear();
+    };
   }, [bus]);
 
-  return <NotificationsView notifications={buildNotificationItems(bus, events)} />;
+  return (
+    <NotificationsView
+      notifications={notifications}
+      onDismiss={dismissNotification}
+    />
+  );
 }

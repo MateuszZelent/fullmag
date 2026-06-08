@@ -8,9 +8,10 @@ import {
   buildPrimitiveTransformGizmoSegments,
   createPrimitiveObjectGeometry,
   releasePrimitiveObjectGeometry,
+  shouldRenderPrimitiveObject,
   shouldRenderPrimitiveTransformGizmo,
   trackPrimitiveObjectGeometry,
-} from "./PrimitiveObjectLayer";
+} from "./PrimitiveObjectLayerModel";
 
 function primitiveObject(
   kind: Viewport3DPrimitiveObject["kind"],
@@ -21,6 +22,7 @@ function primitiveObject(
       radius: 2,
       size: [2, 4, 6],
     },
+    csgPreview: null,
     fallbackLabel: "primitive",
     geometryKey: `object:${kind}`,
     kind,
@@ -43,6 +45,79 @@ describe("PrimitiveObjectLayer geometry resources", () => {
     expect(createPrimitiveObjectGeometry(primitiveObject("cylinder")).type).toBe(
       "CylinderGeometry",
     );
+  });
+
+  it("creates a visible CSG preview for box-minus-cylinder objects", () => {
+    const geometry = createPrimitiveObjectGeometry({
+      ...primitiveObject("box-cylinder-difference"),
+      bounds: {
+        center: [0, 0, 0],
+        radius: 5,
+        size: [10, 20, 2],
+      },
+      csgPreview: {
+        boxSize: [10, 20, 2],
+        cylinderAxis: [0, 0, 1],
+        cylinderCenter: [0, 0, 0],
+        cylinderHeight: 2,
+        cylinderRadius: 2,
+        kind: "box-cylinder-difference",
+      },
+    });
+
+    expect(geometry.type).toBe("ExtrudeGeometry");
+    expect(geometry.attributes.position.count).toBeGreaterThan(
+      createPrimitiveObjectGeometry(primitiveObject("box")).attributes.position.count,
+    );
+  });
+
+  it("keeps cardinal-axis CSG previews in the owner box bounds", () => {
+    for (const axis of [
+      [1, 0, 0],
+      [0, 1, 0],
+      [0, 0, 1],
+    ] satisfies Array<[number, number, number]>) {
+      const geometry = createPrimitiveObjectGeometry({
+        ...primitiveObject("box-cylinder-difference"),
+        bounds: {
+          center: [0, 0, 0],
+          radius: 5,
+          size: [10, 20, 2],
+        },
+        csgPreview: {
+          boxSize: [10, 20, 2],
+          cylinderAxis: axis,
+          cylinderCenter: [0, 0, 0],
+          cylinderHeight: 10,
+          cylinderRadius: 0.4,
+          kind: "box-cylinder-difference",
+        },
+      });
+
+      geometry.computeBoundingBox();
+      const box = geometry.boundingBox;
+
+      expect(geometry.type).toBe("ExtrudeGeometry");
+      expect((box?.max.x ?? 0) - (box?.min.x ?? 0)).toBeCloseTo(10);
+      expect((box?.max.y ?? 0) - (box?.min.y ?? 0)).toBeCloseTo(20);
+      expect((box?.max.z ?? 0) - (box?.min.z ?? 0)).toBeCloseTo(2);
+    }
+  });
+
+  it("falls back to a box preview for unsupported non-cardinal CSG cylinder axes", () => {
+    const geometry = createPrimitiveObjectGeometry({
+      ...primitiveObject("box-cylinder-difference"),
+      csgPreview: {
+        boxSize: [10, 20, 2],
+        cylinderAxis: [1, 1, 0],
+        cylinderCenter: [0, 0, 0],
+        cylinderHeight: 10,
+        cylinderRadius: 2,
+        kind: "box-cylinder-difference",
+      },
+    });
+
+    expect(geometry.type).toBe("BoxGeometry");
   });
 
   it("tracks and releases primitive geometry through the viewport tracker", () => {
@@ -81,5 +156,20 @@ describe("PrimitiveObjectLayer geometry resources", () => {
     ).toBe(false);
     expect(shouldRenderPrimitiveTransformGizmo(DEFAULT_OBJECT_VISUALIZATION))
       .toBe(true);
+  });
+
+  it("does not render primitive surface for mesh-ready objects", () => {
+    expect(
+      shouldRenderPrimitiveObject(
+        { ...primitiveObject("box"), meshState: "mesh-ready" },
+        { ...DEFAULT_OBJECT_VISUALIZATION, primitiveVisible: true },
+      ),
+    ).toBe(false);
+    expect(
+      shouldRenderPrimitiveObject(
+        { ...primitiveObject("box"), meshState: "primitive-only" },
+        { ...DEFAULT_OBJECT_VISUALIZATION, primitiveVisible: true },
+      ),
+    ).toBe(true);
   });
 });

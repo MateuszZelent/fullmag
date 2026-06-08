@@ -62,11 +62,14 @@ function text(value: unknown): string | null {
 }
 
 function titleFromId(id: string): string {
-  return id
-    .split(/[-_]/)
-    .filter(Boolean)
-    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
-    .join(" ");
+  const parts = id.split(/[-_]/);
+  const result: string[] = [];
+  for (const part of parts) {
+    if (part) {
+      result.push(part.slice(0, 1).toUpperCase() + part.slice(1));
+    }
+  }
+  return result.join(" ");
 }
 
 function percent(value: unknown): number | null {
