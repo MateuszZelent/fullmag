@@ -320,6 +320,56 @@ export function filterViewport3DMeshBackedRegionOverlays(
   });
 }
 
+export function resolveViewport3DMeshBackedRegionOverlays({
+  manifestRegions,
+  regions,
+}: {
+  manifestRegions: MeshSharedDomainManifestResource["regions"] | null | undefined;
+  regions: readonly RegionOverlayInput[];
+}): RegionOverlayInput[] {
+  const authoredByKey = new Map<string, RegionOverlayInput>();
+  for (const region of regions) {
+    const objectId = asNonEmptyString(region.owner_object_id);
+    const regionId = asNonEmptyString(region.region_id);
+    if (objectId && regionId) {
+      authoredByKey.set(regionOverlayKey(objectId, regionId), region);
+    }
+  }
+
+  const overlays: RegionOverlayInput[] = [];
+  const seen = new Set<string>();
+  for (const manifestRegion of manifestRegions ?? []) {
+    const regionId = asNonEmptyString(manifestRegion.source_region_candidate_id);
+    const meshPartIds = (manifestRegion.mesh_part_ids ?? [])
+      .map(asNonEmptyString)
+      .filter((entry): entry is string => Boolean(entry));
+    if (!regionId || meshPartIds.length === 0) continue;
+
+    for (const sourceObjectId of manifestRegion.source_object_ids ?? []) {
+      const objectId = asNonEmptyString(sourceObjectId);
+      if (!objectId) continue;
+      const key = regionOverlayKey(objectId, regionId);
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      const authored = authoredByKey.get(key);
+      overlays.push({
+        enabled: authored?.enabled ?? true,
+        frame: authored?.frame ?? null,
+        mesh_part_ids: meshPartIds,
+        name: manifestRegion.name ?? authored?.name ?? regionId,
+        owner_object_id: objectId,
+        owner_transform: authored?.owner_transform ?? null,
+        priority: authored?.priority ?? null,
+        region_id: regionId,
+        shape: authored?.shape ?? null,
+      });
+    }
+  }
+
+  return overlays;
+}
+
 export function resolveViewport3DRegionTargetByPartId(
   regions: MeshSharedDomainManifestResource["regions"] | null | undefined,
 ): Map<string, VisualizationTargetRef> {
@@ -389,6 +439,30 @@ export function resolveViewport3DRegionSelectionBounds(
   });
   const region = models.find((entry) => entry.regionId === regionId);
   return region ? regionOverlayBounds(region) : null;
+}
+
+export function resolveViewport3DRegionSelectionScope(selection: Selection): {
+  selectedObjectId: string | null;
+  selectedRegionId: string | null;
+} {
+  if (selection.ref?.type === "scene-object") {
+    return {
+      selectedObjectId: selection.ref.objectId,
+      selectedRegionId: selection.ref.regionId ?? null,
+    };
+  }
+
+  if (selection.kind?.startsWith("object.")) {
+    return {
+      selectedObjectId: selection.objectId,
+      selectedRegionId: null,
+    };
+  }
+
+  return {
+    selectedObjectId: null,
+    selectedRegionId: null,
+  };
 }
 
 function regionOverlayBounds(region: RegionOverlayModel): Viewport3DBounds {
@@ -981,9 +1055,6 @@ export function useViewport3DSceneModel({
 
     return transforms;
   }, [scene.data]);
-  const meshBackedRegionKeys = useMemo(() => {
-    return resolveViewport3DMeshBackedRegionKeys(sharedDomainManifest.data?.regions);
-  }, [sharedDomainManifest.data?.regions]);
   const regionTargetByPartId = useMemo(() => {
     return resolveViewport3DRegionTargetByPartId(sharedDomainManifest.data?.regions);
   }, [sharedDomainManifest.data?.regions]);
@@ -1024,12 +1095,12 @@ export function useViewport3DSceneModel({
   const meshRegionOverlays = useMemo(
     () =>
       topologyCurrent
-        ? filterViewport3DMeshBackedRegionOverlays(
-            allRegionOverlays,
-            meshBackedRegionKeys,
-          )
+        ? resolveViewport3DMeshBackedRegionOverlays({
+            manifestRegions: sharedDomainManifest.data?.regions,
+            regions: allRegionOverlays,
+          })
         : [],
-    [allRegionOverlays, meshBackedRegionKeys, topologyCurrent],
+    [allRegionOverlays, sharedDomainManifest.data?.regions, topologyCurrent],
   );
   const regionOverlays = allRegionOverlays;
   const currentTopologyRenderModel = topologyRenderable ? topologyRenderModel : null;
@@ -1699,12 +1770,8 @@ export function useViewport3DSceneModel({
     vectorScale,
   ]);
   const selectedLabel = selection.label ?? "No selection";
-  const selectedObjectId =
-    selection.ref?.type === "scene-object"
-      ? selection.ref.objectId
-      : selection.objectId;
-  const selectedRegionId =
-    selection.ref?.type === "scene-object" ? selection.ref.regionId ?? null : null;
+  const { selectedObjectId, selectedRegionId } =
+    resolveViewport3DRegionSelectionScope(selection);
   const status =
     topology.error?.message ??
     (renderingState?.clip?.enabled ? clipCrossSection.error?.message : null) ??

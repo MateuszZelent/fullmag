@@ -22,6 +22,11 @@ const requiredProfiles = ["interactive", "figure"];
 const CANVAS_TOP_OVERLAY_EXCLUSION_PX = 48;
 const useMainPageFdmFixture =
   allowMissingSession && requiredScenes.size === 1 && requiredScenes.has("fdm");
+const FDM_FIXTURE_REGION_OBJECT_ID = "fixture-region-owner";
+const FDM_FIXTURE_REGION_ID = "fixture-region-owner:core";
+const FDM_FIXTURE_OBJECT_NODE_ID = `model:object:${FDM_FIXTURE_REGION_OBJECT_ID}`;
+const FDM_FIXTURE_REGIONS_NODE_ID = `${FDM_FIXTURE_OBJECT_NODE_ID}:regions`;
+const FDM_FIXTURE_REGION_NODE_ID = `model:object:${FDM_FIXTURE_REGION_OBJECT_ID}:regions:${FDM_FIXTURE_REGION_ID}`;
 
 async function loadPlaywright() {
   try {
@@ -292,13 +297,13 @@ function fdmSceneWithRegionFixture() {
   return {
     objects: [
       {
-        id: "fixture-region-owner",
+        id: FDM_FIXTURE_REGION_OBJECT_ID,
         regions: [
           {
             enabled: true,
             frame: "object",
             name: "Fixture core",
-            region_id: "fixture-region-owner:core",
+            region_id: FDM_FIXTURE_REGION_ID,
             shape: {
               center: [0, 0, 0],
               kind: "sphere",
@@ -320,10 +325,10 @@ async function verifyRegionOverlayModeControl(page) {
   await control.waitFor({ state: "visible", timeout: 15_000 });
   const authored = control.getByRole("button", { exact: true, name: "Authored" });
   const realized = control.getByRole("button", { exact: true, name: "Realized" });
-  const both = control.getByRole("button", { exact: true, name: "Both" });
+  const auto = control.getByRole("button", { exact: true, name: "Auto" });
 
-  if ((await both.getAttribute("aria-pressed")) !== "true") {
-    throw new Error("Region overlay mode must default to Both.");
+  if ((await auto.getAttribute("aria-pressed")) !== "true") {
+    throw new Error("Region overlay mode must default to Auto.");
   }
   if (!(await realized.isDisabled())) {
     throw new Error(
@@ -334,9 +339,70 @@ async function verifyRegionOverlayModeControl(page) {
   if ((await authored.getAttribute("aria-pressed")) !== "true") {
     throw new Error("Authored region overlay mode did not become active.");
   }
+  await verifyFdmFixtureRegionOverlaySelection(page);
   console.log(
-    "Viewport 3D region overlay mode control passed (default=both, authored selectable, realized unavailable without mesh).",
+    "Viewport 3D region overlay mode control passed (default=auto, authored selectable, realized unavailable without mesh).",
   );
+}
+
+async function verifyFdmFixtureRegionOverlaySelection(page) {
+  await ensureExplorerNodeExpanded(
+    page.locator('[data-node-id="model:objects"]'),
+  );
+  await ensureExplorerNodeExpanded(
+    page.locator(`[data-node-id="${FDM_FIXTURE_OBJECT_NODE_ID}"]`),
+  );
+  await ensureExplorerNodeExpanded(
+    page.locator(`[data-node-id="${FDM_FIXTURE_REGIONS_NODE_ID}"]`),
+  );
+  const regionNode = page.locator(
+    `[data-node-id="${FDM_FIXTURE_REGION_NODE_ID}"]`,
+  );
+  await regionNode.waitFor({ state: "visible", timeout: 15_000 });
+
+  await clickCanvasUntilExplorerNodeSelected(page, FDM_FIXTURE_REGION_NODE_ID);
+
+  console.log(
+    `Viewport 3D region overlay selection passed (node=${FDM_FIXTURE_REGION_NODE_ID}).`,
+  );
+}
+
+async function clickCanvasUntilExplorerNodeSelected(page, nodeId) {
+  const canvasBox = await readCanvasClipBox(page);
+  const center = {
+    x: canvasBox.x + canvasBox.width / 2,
+    y: canvasBox.y + canvasBox.height / 2,
+  };
+  const step = Math.max(16, Math.min(canvasBox.width, canvasBox.height) * 0.08);
+  const offsets = [
+    [0, 0],
+    [-step, 0],
+    [step, 0],
+    [0, -step],
+    [0, step],
+    [-step, -step],
+    [step, -step],
+    [-step, step],
+    [step, step],
+  ];
+
+  for (const [offsetX, offsetY] of offsets) {
+    await page.mouse.click(center.x + offsetX, center.y + offsetY);
+    const selected = await page
+      .locator(`[data-node-id="${nodeId}"]`)
+      .evaluate((node) => node.getAttribute("aria-selected") === "true");
+    if (selected) return;
+    await page.waitForTimeout(80);
+  }
+
+  throw new Error(`Canvas clicks did not select Explorer node ${nodeId}.`);
+}
+
+async function ensureExplorerNodeExpanded(node) {
+  await node.waitFor({ state: "visible", timeout: 15_000 });
+  if ((await node.getAttribute("aria-expanded")) === "false") {
+    await node.dblclick();
+  }
 }
 
 async function ensureObjectScene(page) {

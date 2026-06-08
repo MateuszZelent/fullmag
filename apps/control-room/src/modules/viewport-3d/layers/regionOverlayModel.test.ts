@@ -372,6 +372,49 @@ describe("regionOverlayModel", () => {
     ]);
   });
 
+  it("uses realized mesh part ids instead of primitive centroid fallback", () => {
+    const topology = {
+      boundaryFaceCount: 0,
+      boundaryFaces: new Uint32Array(),
+      boundaryMarkers: new Uint32Array(),
+      elementCount: 2,
+      elementMarkers: Uint32Array.from([1, 1]),
+      indices: Uint32Array.from([0, 1, 2, 3, 1, 2, 3, 4]),
+      nodeCount: 5,
+      positions: Float64Array.from([
+        0, 0, 0,
+        1, 0, 0,
+        0, 1, 0,
+        0, 0, 1,
+        1, 1, 1,
+      ]),
+    };
+
+    const models = buildRegionMeshOverlayModels(
+      [
+        {
+          enabled: true,
+          mesh_part_ids: ["part:film:core"],
+          name: "Core",
+          owner_object_id: "film",
+          priority: 0,
+          region_id: "film:core",
+          shape: { center: [0.5, 0.5, 0.5], kind: "sphere", radius: 2 },
+        },
+      ],
+      topology,
+      [
+        { element_count: 1, element_start: 0, id: "part:film:core", object_id: "film" },
+        { element_count: 1, element_start: 1, id: "film", object_id: "film" },
+      ],
+    );
+
+    expect(models).toHaveLength(1);
+    expect(Array.from(models[0].edgeIndices ?? [])).toEqual([
+      0, 1, 0, 2, 0, 3, 1, 2, 1, 3, 2, 3,
+    ]);
+  });
+
   it("keeps mesh-backed overlays scoped to the owner object and region settings", () => {
     const topology = {
       boundaryFaceCount: 0,

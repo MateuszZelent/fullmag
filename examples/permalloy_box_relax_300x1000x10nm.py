@@ -30,9 +30,9 @@ body = study.geometry(
 body.Ms = 800e3
 body.Aex = 13e-12
 body.alpha = 0.5
-body.dind=9.0
+# body.dind=9.0
 # body.temp=200
-body.m = fm.texture.uniform(0.0, 1.0, 0.0)
+body.m = fm.texture.uniform(0.1, 1.0, 0.0)
 body.mesh(minimum_element_size=8e-9, maximum_element_size=50e-9, order=1)
 hole_refinement = body.add_region(
     "hole_refinement",
@@ -41,7 +41,7 @@ hole_refinement = body.add_region(
     realization_policy="conformal",
 )
 hole_refinement.mesh(minimum_element_size=0.5e-9, maximum_element_size=1e-9, order=1)
-hole_refinement.material.Ms = 400e3
+hole_refinement.material.Ms = 1e3
 
 study.demag(realization="poisson_robin")
 study.build_domain_mesh()

@@ -580,6 +580,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/data/material-fields": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_material_fields"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/material-fields/{field_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_material_fields_field_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/mesh-region-membership/{region_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_mesh_region_membership_region_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/data/quantities": {
         parameters: {
             query?: never;
@@ -1293,11 +1341,27 @@ export interface paths {
         };
         get: operations["model_get_sessions_current_model_couplings"];
         put?: never;
-        post?: never;
+        post: operations["model_post_sessions_current_model_couplings"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/model/couplings/{coupling_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["model_delete_sessions_current_model_couplings_coupling_id"];
+        options?: never;
+        head?: never;
+        patch: operations["model_patch_sessions_current_model_couplings_coupling_id"];
         trace?: never;
     };
     "/v2/sessions/current/model/geometry/capabilities": {
@@ -2619,9 +2683,20 @@ export interface components {
         };
         /** @enum {string} */
         CompressionProfile: "speed" | "balanced" | "smallest";
+        CouplingCreateRequest: {
+            /** Format: int64 */
+            base_revision?: number | null;
+            coupling: components["schemas"]["SceneCoupling"];
+        };
+        CouplingDeleteRequest: {
+            /** Format: int64 */
+            base_revision?: number | null;
+        };
         CouplingEndpointResolutionResource: {
             /** Format: double */
             area?: number | null;
+            boundary_face_indices?: number[] | null;
+            boundary_marker_ids?: number[] | null;
             object_id: string;
             reason?: string | null;
             region_id?: string | null;
@@ -2636,6 +2711,11 @@ export interface components {
             couplings: components["schemas"]["CouplingResource"][];
             /** Format: int64 */
             scene_revision: number;
+        };
+        CouplingPatchRequest: {
+            /** Format: int64 */
+            base_revision?: number | null;
+            patch: components["schemas"]["SceneCouplingPatch"];
         };
         CouplingResource: {
             blocker_reason?: string | null;
@@ -3458,6 +3538,58 @@ export interface components {
             /** Format: int64 */
             scene_revision: number;
         };
+        MaterialParameterFieldDataListResource: {
+            fields: components["schemas"]["MaterialParameterFieldDataSummaryResource"][];
+            /** Format: int64 */
+            scene_revision: number;
+        };
+        MaterialParameterFieldDataResource: {
+            algorithm?: string | null;
+            asset_id?: string | null;
+            assignment_id: string;
+            /** Format: int32 */
+            component_count?: number | null;
+            field_id: string;
+            frame?: string | null;
+            location?: string | null;
+            /** Format: double */
+            max?: number | null;
+            /** Format: double */
+            mean?: number | null;
+            mesh_generation_id?: string | null;
+            mesh_id?: string | null;
+            /** Format: double */
+            min?: number | null;
+            owner_object_id: string;
+            owner_path?: string | null;
+            parameter: string;
+            /** Format: int64 */
+            priority?: number | null;
+            realization_status: string;
+            /** Format: int64 */
+            sample_count: number;
+            /** Format: int64 */
+            scene_revision: number;
+            source_kind?: string | null;
+            source_region_id?: string | null;
+            /** Format: double */
+            timing_ms?: number | null;
+            unit?: string | null;
+            values: number[];
+        };
+        MaterialParameterFieldDataSummaryResource: {
+            asset_id?: string | null;
+            assignment_id: string;
+            field_id: string;
+            href: string;
+            owner_object_id: string;
+            parameter: string;
+            realization_status: string;
+            /** Format: int64 */
+            sample_count: number;
+            source_region_id?: string | null;
+            unit?: string | null;
+        };
         MaterialParameterFieldListResource: {
             fields: components["schemas"]["MaterialParameterFieldResource"][];
             /** Format: int64 */
@@ -3869,6 +4001,17 @@ export interface components {
             realized_size_fields: components["schemas"]["MeshRealizedSizeFieldsPayload"];
             /** Format: int64 */
             revision: number;
+        };
+        MeshRegionMembershipResource: {
+            boundary_face_indices: number[];
+            element_indices: number[];
+            mesh_id: string;
+            mesh_part_ids: string[];
+            /** Format: int64 */
+            mesh_revision: number;
+            node_indices: number[];
+            region_id: string;
+            source: string;
         };
         MeshRegionResource: {
             bounds_max?: number[] | null;
@@ -7354,6 +7497,93 @@ export interface operations {
             };
         };
     };
+    data_get_sessions_current_data_material_fields: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Material-parameter field data catalog */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaterialParameterFieldDataListResource"];
+                };
+            };
+            /** @description No active workspace or scene document */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_material_fields_field_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Material-parameter assignment id */
+                field_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Material-parameter field data payload */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaterialParameterFieldDataResource"];
+                };
+            };
+            /** @description No material-parameter field with this assignment id */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_mesh_region_membership_region_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Authored or realized region id */
+                region_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Mesh-backed realized-region membership indices */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeshRegionMembershipResource"];
+                };
+            };
+            /** @description No active mesh or mesh-backed membership for the region */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     data_get_sessions_current_data_quantities: {
         parameters: {
             query?: never;
@@ -9112,6 +9342,133 @@ export interface operations {
             };
             /** @description No active workspace or scene document */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_post_sessions_current_model_couplings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CouplingCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created an authored coupling */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthoringTransactionResponse"];
+                };
+            };
+            /** @description Invalid coupling payload */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Revision conflict or duplicate coupling */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_delete_sessions_current_model_couplings_coupling_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Coupling id */
+                coupling_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CouplingDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description Deleted an authored coupling */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthoringTransactionResponse"];
+                };
+            };
+            /** @description Coupling not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Revision conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_patch_sessions_current_model_couplings_coupling_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Coupling id */
+                coupling_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CouplingPatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Patched an authored coupling */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthoringTransactionResponse"];
+                };
+            };
+            /** @description Invalid coupling patch */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Coupling not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Revision conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

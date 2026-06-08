@@ -212,6 +212,26 @@ pub struct SceneCouplingPatch {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CouplingCreateRequest {
+    #[serde(default)]
+    pub base_revision: Option<u64>,
+    pub coupling: fullmag_authoring::SceneCoupling,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CouplingPatchRequest {
+    #[serde(default)]
+    pub base_revision: Option<u64>,
+    pub patch: SceneCouplingPatch,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CouplingDeleteRequest {
+    #[serde(default)]
+    pub base_revision: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ObjectRegionDuplicateRequest {
     #[serde(default)]
     pub base_revision: Option<u64>,
@@ -535,6 +555,73 @@ pub struct MaterialParameterFieldListResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct MaterialParameterFieldDataSummaryResource {
+    pub field_id: String,
+    pub assignment_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset_id: Option<String>,
+    pub owner_object_id: String,
+    pub parameter: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_region_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+    pub realization_status: String,
+    pub sample_count: u64,
+    pub href: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct MaterialParameterFieldDataListResource {
+    pub scene_revision: u64,
+    pub fields: Vec<MaterialParameterFieldDataSummaryResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct MaterialParameterFieldDataResource {
+    pub field_id: String,
+    pub assignment_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset_id: Option<String>,
+    pub scene_revision: u64,
+    pub owner_object_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_path: Option<String>,
+    pub parameter: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_region_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh_generation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component_count: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub algorithm: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timing_ms: Option<f64>,
+    pub realization_status: String,
+    pub sample_count: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mean: Option<f64>,
+    pub values: Vec<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct CouplingEndpointResolutionResource {
     pub status: String,
     pub object_id: String,
@@ -546,6 +633,10 @@ pub struct CouplingEndpointResolutionResource {
     pub tolerance: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_face_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundary_face_indices: Option<Vec<u32>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundary_marker_ids: Option<Vec<u32>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub area: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

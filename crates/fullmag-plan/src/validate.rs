@@ -215,20 +215,28 @@ pub(crate) fn validate_region_owned_planning(
         match coupling.capability_policy {
             CouplingCapabilityPolicyIR::RequireRuntime => {
                 errors.push(format!(
-                    "coupling '{}' ({:?}) requires runtime support, but backend='{}' does not yet materialize explicit couplings; planner must not silently drop authored coupling intent",
+                    "coupling '{}' ({}) requires runtime support, but backend='{}' does not yet materialize explicit couplings; planner must not silently drop authored coupling intent",
                     coupling.coupling_id,
-                    coupling.kind,
+                    coupling_kind_label(coupling.kind),
                     resolved_backend.as_str()
                 ));
             }
             CouplingCapabilityPolicyIR::AuthoredOnly => {
                 errors.push(format!(
-                    "coupling '{}' ({:?}) is authored_only and cannot be used in strict executable planning; use an authoring/export path or a backend with coupling runtime support",
+                    "coupling '{}' ({}) is authored_only and cannot be used in strict executable planning; use an authoring/export path or a backend with coupling runtime support",
                     coupling.coupling_id,
-                    coupling.kind
+                    coupling_kind_label(coupling.kind)
                 ));
             }
         }
+    }
+}
+
+fn coupling_kind_label(kind: CouplingKindIR) -> &'static str {
+    match kind {
+        CouplingKindIR::Exchange => "exchange",
+        CouplingKindIR::Rkky => "rkky",
+        CouplingKindIR::InterlayerExchange => "interlayer_exchange",
     }
 }
 

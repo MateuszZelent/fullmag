@@ -676,6 +676,8 @@ function Viewport3DModelLayerStack({
 }) {
   if (!viewport3DSceneLayersEnabledFromBrowserConfig()) return null;
 
+  const hasMeshBackedRegionOverlays = meshRegionOverlays.length > 0;
+
   return (
     <>
       {viewport3DFdmCuboidLayerEnabledFromBrowserConfig() ? (
@@ -746,7 +748,10 @@ function Viewport3DModelLayerStack({
           vectorStyle={vectorStyle}
         />
       ) : null}
-      {regionOverlayModeShowsRealized(regionOverlayMode) &&
+      {regionOverlayModeShowsRealized(
+        regionOverlayMode,
+        hasMeshBackedRegionOverlays,
+      ) &&
       viewport3DOverlayLayersEnabledFromBrowserConfig() ? (
         <RegionMeshOverlayLayer
           getRegionSettings={getRegionSettings}
@@ -759,7 +764,10 @@ function Viewport3DModelLayerStack({
           tracker={tracker}
         />
       ) : null}
-      {regionOverlayModeShowsAuthored(regionOverlayMode) &&
+      {regionOverlayModeShowsAuthored(
+        regionOverlayMode,
+        hasMeshBackedRegionOverlays,
+      ) &&
       viewport3DOverlayLayersEnabledFromBrowserConfig() ? (
         <RegionOverlayLayer
           getRegionSettings={getRegionSettings}

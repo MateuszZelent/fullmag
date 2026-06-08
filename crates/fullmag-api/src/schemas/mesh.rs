@@ -554,6 +554,18 @@ pub struct MeshHistogramBinElementsResource {
     pub node_indices: Vec<u32>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
+pub struct MeshRegionMembershipResource {
+    pub mesh_id: String,
+    pub mesh_revision: u64,
+    pub region_id: String,
+    pub source: String,
+    pub mesh_part_ids: Vec<String>,
+    pub element_indices: Vec<u32>,
+    pub node_indices: Vec<u32>,
+    pub boundary_face_indices: Vec<u32>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct MeshRegionResource {
     pub region_id: String,

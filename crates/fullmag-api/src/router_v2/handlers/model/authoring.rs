@@ -2,15 +2,16 @@
 
 use std::sync::Arc;
 
-use axum::Json;
 use axum::extract::{Path, State};
+use axum::Json;
 use serde_json::Value;
 
 use crate::error::ApiError;
 use crate::router_v2::handlers::data::field_resolution::flatten_json_field_values;
 use crate::schemas::authoring::{
-    AuthoringTransactionRequest, AuthoringTransactionResponse, CouplingEndpointResolutionResource,
-    CouplingListResource, CouplingResource, GeometryRealizationRequest,
+    AuthoringTransactionRequest, AuthoringTransactionResponse, CouplingCreateRequest,
+    CouplingDeleteRequest, CouplingEndpointResolutionResource, CouplingListResource,
+    CouplingPatchRequest, CouplingResource, GeometryRealizationRequest,
     MagnetizationAssetPatchRequest, MagnetizationAssetResource, MaterialParameterFieldListResource,
     MaterialParameterFieldResource, MaterialPatchRequest, MaterialPropertiesResource,
     MaterialReferenceResource, MaterialResource, NullableF64PatchValue, NullableStringPatchValue,
@@ -26,13 +27,12 @@ use crate::types::{
     AppState, LatestFields, ScriptSourceResponse, ScriptSyncRequest, ScriptSyncResponse,
 };
 use fullmag_authoring::{
-    GeometryBackendTarget, GeometryCapabilitiesResource, GeometryDiagnostic,
-    GeometryDiagnosticsResource, GeometryRealizationSnapshot, GeometryRegionCandidate,
-    GeometryValidationResource, MagnetizationAsset, SceneDocument, SceneGeometry,
-    SceneMaterialAsset, SceneMaterialReference, SceneObject, SceneRegionOverride,
-    ScriptBuilderMagneticInteractionEntry, ScriptBuilderMagneticInteractionKind,
-    ScriptBuilderUniverseState, Transform3D, geometry_capabilities, realize_geometry_scene,
-    validate_geometry_scene,
+    geometry_capabilities, realize_geometry_scene, validate_geometry_scene, GeometryBackendTarget,
+    GeometryCapabilitiesResource, GeometryDiagnostic, GeometryDiagnosticsResource,
+    GeometryRealizationSnapshot, GeometryRegionCandidate, GeometryValidationResource,
+    MagnetizationAsset, SceneDocument, SceneGeometry, SceneMaterialAsset, SceneMaterialReference,
+    SceneObject, SceneRegionOverride, ScriptBuilderMagneticInteractionEntry,
+    ScriptBuilderMagneticInteractionKind, ScriptBuilderUniverseState, Transform3D,
 };
 
 #[utoipa::path(
@@ -578,6 +578,83 @@ pub async fn get_authoring_couplings(
     }))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v2/sessions/current/model/couplings",
+    request_body = CouplingCreateRequest,
+    responses(
+        (status = 200, description = "Created an authored coupling", body = AuthoringTransactionResponse),
+        (status = 400, description = "Invalid coupling payload"),
+        (status = 409, description = "Revision conflict or duplicate coupling"),
+    ),
+    tag = "model"
+)]
+pub async fn create_authoring_coupling(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CouplingCreateRequest>,
+) -> Result<Json<AuthoringTransactionResponse>, ApiError> {
+    let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    apply_create_coupling_transaction(&mut current_scene, req.base_revision, req.coupling)?;
+    let committed = crate::commit_current_live_scene_document(&state, current_scene).await?;
+    authoring_transaction_response("create_coupling", committed)
+}
+
+#[utoipa::path(
+    patch,
+    path = "/v2/sessions/current/model/couplings/{coupling_id}",
+    params(
+        ("coupling_id" = String, Path, description = "Coupling id")
+    ),
+    request_body = CouplingPatchRequest,
+    responses(
+        (status = 200, description = "Patched an authored coupling", body = AuthoringTransactionResponse),
+        (status = 400, description = "Invalid coupling patch"),
+        (status = 404, description = "Coupling not found"),
+        (status = 409, description = "Revision conflict"),
+    ),
+    tag = "model"
+)]
+pub async fn patch_authoring_coupling(
+    State(state): State<Arc<AppState>>,
+    Path(coupling_id): Path<String>,
+    Json(req): Json<CouplingPatchRequest>,
+) -> Result<Json<AuthoringTransactionResponse>, ApiError> {
+    let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    apply_patch_coupling_transaction(
+        &mut current_scene,
+        req.base_revision,
+        &coupling_id,
+        req.patch,
+    )?;
+    let committed = crate::commit_current_live_scene_document(&state, current_scene).await?;
+    authoring_transaction_response("patch_coupling", committed)
+}
+
+#[utoipa::path(
+    delete,
+    path = "/v2/sessions/current/model/couplings/{coupling_id}",
+    params(
+        ("coupling_id" = String, Path, description = "Coupling id")
+    ),
+    request_body = CouplingDeleteRequest,
+    responses(
+        (status = 200, description = "Deleted an authored coupling", body = AuthoringTransactionResponse),
+        (status = 404, description = "Coupling not found"),
+        (status = 409, description = "Revision conflict"),
+    ),
+    tag = "model"
+)]
+pub async fn delete_authoring_coupling(
+    State(state): State<Arc<AppState>>,
+    Path(coupling_id): Path<String>,
+    Json(req): Json<CouplingDeleteRequest>,
+) -> Result<Json<AuthoringTransactionResponse>, ApiError> {
+    let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    apply_delete_coupling_transaction(&mut current_scene, req.base_revision, &coupling_id)?;
+    let committed = crate::commit_current_live_scene_document(&state, current_scene).await?;
+    authoring_transaction_response("delete_coupling", committed)
+}
+
 fn authored_region_resources(scene: &SceneDocument) -> Vec<RegionResource> {
     scene
         .objects
@@ -1059,6 +1136,8 @@ fn coupling_endpoint_resolution(
                 selector: None,
                 tolerance: None,
                 resolved_face_count: None,
+                boundary_face_indices: None,
+                boundary_marker_ids: None,
                 area: None,
                 reason: None,
             }
@@ -1071,6 +1150,8 @@ fn coupling_endpoint_resolution(
                 selector: None,
                 tolerance: None,
                 resolved_face_count: None,
+                boundary_face_indices: None,
+                boundary_marker_ids: None,
                 area: None,
                 reason: None,
             }
@@ -1080,21 +1161,27 @@ fn coupling_endpoint_resolution(
                 Some(fullmag_ir::ExecutionPlanIR {
                     backend_plan: fullmag_ir::BackendPlanIR::Fem(plan),
                     ..
-                }) => Some(fullmag_plan::resolve_fem_surface_selector(
-                    &plan.mesh,
-                    &plan.mesh_parts,
-                    object,
-                    selector,
-                    None,
-                )),
-                _ => fem_mesh.map(|mesh| {
-                    let (mesh, mesh_parts) = coupling_resolution_mesh(mesh);
+                }) => Some((
                     fullmag_plan::resolve_fem_surface_selector(
-                        &mesh,
-                        &mesh_parts,
+                        &plan.mesh,
+                        &plan.mesh_parts,
                         object,
                         selector,
                         None,
+                    ),
+                    plan.mesh.boundary_markers.clone(),
+                )),
+                _ => fem_mesh.map(|mesh| {
+                    let (mesh, mesh_parts) = coupling_resolution_mesh(mesh);
+                    (
+                        fullmag_plan::resolve_fem_surface_selector(
+                            &mesh,
+                            &mesh_parts,
+                            object,
+                            selector,
+                            None,
+                        ),
+                        mesh.boundary_markers,
                     )
                 }),
             };
@@ -1106,6 +1193,8 @@ fn coupling_endpoint_resolution(
                     selector: Some(selector.clone()),
                     tolerance: None,
                     resolved_face_count: None,
+                    boundary_face_indices: None,
+                    boundary_marker_ids: None,
                     area: None,
                     reason: Some(
                         "No current FEM execution plan is available for mesh-backed surface resolution."
@@ -1114,29 +1203,61 @@ fn coupling_endpoint_resolution(
                 };
             };
             match resolved {
-                Ok(resolved) => CouplingEndpointResolutionResource {
-                    status: "resolved".to_string(),
-                    object_id: object.clone(),
-                    region_id: None,
-                    selector: Some(resolved.selector),
-                    tolerance: Some(resolved.tolerance),
-                    resolved_face_count: Some(resolved.surface_faces.len() as u64),
-                    area: Some(resolved.area),
-                    reason: None,
-                },
-                Err(reason) => CouplingEndpointResolutionResource {
+                (Ok(resolved), boundary_markers) => {
+                    let boundary_marker_ids = coupling_boundary_marker_ids(
+                        &boundary_markers,
+                        &resolved.boundary_face_indices,
+                    );
+                    let missing_markers = boundary_marker_ids.is_empty();
+                    CouplingEndpointResolutionResource {
+                        status: if missing_markers {
+                            "missing_boundary_markers".to_string()
+                        } else {
+                            "resolved".to_string()
+                        },
+                        object_id: object.clone(),
+                        region_id: None,
+                        selector: Some(resolved.selector),
+                        tolerance: Some(resolved.tolerance),
+                        resolved_face_count: Some(resolved.surface_faces.len() as u64),
+                        boundary_face_indices: Some(resolved.boundary_face_indices),
+                        boundary_marker_ids: Some(boundary_marker_ids),
+                        area: Some(resolved.area),
+                        reason: missing_markers.then(|| {
+                            "Resolved FEM surface has no boundary marker-backed faces; runtime coupling requires shared boundary markers.".to_string()
+                        }),
+                    }
+                }
+                (Err(reason), _) => CouplingEndpointResolutionResource {
                     status: "unresolved".to_string(),
                     object_id: object.clone(),
                     region_id: None,
                     selector: Some(selector.clone()),
                     tolerance: None,
                     resolved_face_count: Some(0),
+                    boundary_face_indices: Some(Vec::new()),
+                    boundary_marker_ids: Some(Vec::new()),
                     area: None,
                     reason: Some(reason),
                 },
             }
         }
     }
+}
+
+fn coupling_boundary_marker_ids(
+    boundary_markers: &[u32],
+    boundary_face_indices: &[u32],
+) -> Vec<u32> {
+    let mut markers = Vec::new();
+    for index in boundary_face_indices {
+        if let Some(marker) = boundary_markers.get(*index as usize).copied() {
+            if !markers.contains(&marker) {
+                markers.push(marker);
+            }
+        }
+    }
+    markers
 }
 
 fn coupling_resolution_mesh(
@@ -1989,6 +2110,21 @@ pub async fn commit_authoring_transaction(
         }
     };
 
+    let committed_scene = serde_json::to_value(&committed).map_err(|error| {
+        ApiError::internal(format!("failed to serialize scene document: {error}"))
+    })?;
+
+    Ok(Json(AuthoringTransactionResponse {
+        transaction_kind: transaction_kind.to_string(),
+        scene_revision: committed.revision,
+        committed_scene,
+    }))
+}
+
+fn authoring_transaction_response(
+    transaction_kind: &str,
+    committed: SceneDocument,
+) -> Result<Json<AuthoringTransactionResponse>, ApiError> {
     let committed_scene = serde_json::to_value(&committed).map_err(|error| {
         ApiError::internal(format!("failed to serialize scene document: {error}"))
     })?;

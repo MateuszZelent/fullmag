@@ -177,7 +177,13 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         )
         .route(
             "/v2/sessions/current/model/couplings",
-            get(handlers::model::get_authoring_couplings),
+            get(handlers::model::get_authoring_couplings)
+                .post(handlers::model::create_authoring_coupling),
+        )
+        .route(
+            "/v2/sessions/current/model/couplings/:coupling_id",
+            patch(handlers::model::patch_authoring_coupling)
+                .delete(handlers::model::delete_authoring_coupling),
         )
         .route(
             "/v2/sessions/current/model/regions/:region_id",
@@ -371,6 +377,18 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         .route(
             "/v2/sessions/current/data/domain/slice/mesh-overlay",
             get(handlers::data::get_domain_slice_mesh_overlay),
+        )
+        .route(
+            "/v2/sessions/current/data/material-fields",
+            get(handlers::data::get_material_field_data_catalog),
+        )
+        .route(
+            "/v2/sessions/current/data/material-fields/:field_id",
+            get(handlers::data::get_material_field_data),
+        )
+        .route(
+            "/v2/sessions/current/data/mesh-region-membership/:region_id",
+            get(handlers::data::get_mesh_region_membership),
         )
         .route(
             "/v2/sessions/current/data/fields/:quantity_id/meta",

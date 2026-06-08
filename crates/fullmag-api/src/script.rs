@@ -396,7 +396,7 @@ mod tests {
         assert_eq!(region.owner_object, "permalloy_box");
         assert_eq!(
             region.realization_policy,
-            fullmag_authoring::SceneRegionRealizationPolicy::Inherit
+            fullmag_authoring::SceneRegionRealizationPolicy::Conformal
         );
         assert_eq!(
             region
@@ -404,7 +404,7 @@ mod tests {
                 .as_ref()
                 .expect("hole_refinement region should include mesh policy")
                 .maximum_element_size,
-            Some(5.0e-9)
+            Some(1.0e-9)
         );
     }
 }

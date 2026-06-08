@@ -1,6 +1,6 @@
 //! Native OpenAPI v2 spec assembly.
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use utoipa::OpenApi;
 
 #[derive(OpenApi)]
@@ -15,6 +15,9 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::data::domain::get_domain_meta,
         crate::router_v2::handlers::data::domain::get_domain_topology,
         crate::router_v2::handlers::data::domain::get_domain_slice_mesh_overlay,
+        crate::router_v2::handlers::data::material_fields::get_material_field_data_catalog,
+        crate::router_v2::handlers::data::material_fields::get_material_field_data,
+        crate::router_v2::handlers::data::mesh_region_membership::get_mesh_region_membership,
         crate::router_v2::handlers::data::quantities::get_quantities_catalog,
         crate::router_v2::handlers::data::fields::get_field_catalog,
         crate::router_v2::handlers::data::fields::get_field_meta,
@@ -110,6 +113,9 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::model::authoring::get_authoring_region_diagnostics,
         crate::router_v2::handlers::model::authoring::get_authoring_material_fields,
         crate::router_v2::handlers::model::authoring::get_authoring_couplings,
+        crate::router_v2::handlers::model::authoring::create_authoring_coupling,
+        crate::router_v2::handlers::model::authoring::patch_authoring_coupling,
+        crate::router_v2::handlers::model::authoring::delete_authoring_coupling,
         crate::router_v2::handlers::model::authoring::patch_authoring_region,
         crate::router_v2::handlers::model::authoring::commit_authoring_transaction,
         crate::router_v2::handlers::model::authoring::get_authoring_study_runtime,
@@ -288,6 +294,7 @@ use utoipa::OpenApi;
         crate::schemas::mesh::MeshQualityGatesResource,
         crate::schemas::mesh::MeshObjectSegmentResource,
         crate::schemas::mesh::MeshPartResource,
+        crate::schemas::mesh::MeshRegionMembershipResource,
         crate::schemas::mesh::MeshSharedDomainManifestResource,
         crate::schemas::mesh::MeshObjectConfigResource,
         crate::schemas::mesh::MeshObjectConfigReplaceRequest,
@@ -335,6 +342,9 @@ use utoipa::OpenApi;
         crate::schemas::authoring::ObjectRegionPatchRequest,
         crate::schemas::authoring::SceneObjectRegionPatch,
         crate::schemas::authoring::SceneCouplingPatch,
+        crate::schemas::authoring::CouplingCreateRequest,
+        crate::schemas::authoring::CouplingPatchRequest,
+        crate::schemas::authoring::CouplingDeleteRequest,
         crate::schemas::authoring::ObjectRegionDuplicateRequest,
         crate::schemas::authoring::ObjectRegionReorderRequest,
         crate::schemas::authoring::GeometryRealizationRequest,
@@ -358,6 +368,9 @@ use utoipa::OpenApi;
         crate::schemas::authoring::RegionPatchRequest,
         crate::schemas::authoring::MaterialParameterFieldResource,
         crate::schemas::authoring::MaterialParameterFieldListResource,
+        crate::schemas::authoring::MaterialParameterFieldDataSummaryResource,
+        crate::schemas::authoring::MaterialParameterFieldDataListResource,
+        crate::schemas::authoring::MaterialParameterFieldDataResource,
         crate::schemas::authoring::CouplingEndpointResolutionResource,
         crate::schemas::authoring::CouplingResource,
         crate::schemas::authoring::CouplingListResource,

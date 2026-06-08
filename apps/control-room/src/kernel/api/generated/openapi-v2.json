@@ -1840,12 +1840,66 @@
         ],
         "type": "string"
       },
+      "CouplingCreateRequest": {
+        "properties": {
+          "base_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "coupling": {
+            "$ref": "#/components/schemas/SceneCoupling"
+          }
+        },
+        "required": [
+          "coupling"
+        ],
+        "type": "object"
+      },
+      "CouplingDeleteRequest": {
+        "properties": {
+          "base_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "CouplingEndpointResolutionResource": {
         "properties": {
           "area": {
             "format": "double",
             "type": [
               "number",
+              "null"
+            ]
+          },
+          "boundary_face_indices": {
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "boundary_marker_ids": {
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": [
+              "array",
               "null"
             ]
           },
@@ -1912,6 +1966,25 @@
         "required": [
           "scene_revision",
           "couplings"
+        ],
+        "type": "object"
+      },
+      "CouplingPatchRequest": {
+        "properties": {
+          "base_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "patch": {
+            "$ref": "#/components/schemas/SceneCouplingPatch"
+          }
+        },
+        "required": [
+          "patch"
         ],
         "type": "object"
       },
@@ -4918,6 +4991,231 @@
         ],
         "type": "object"
       },
+      "MaterialParameterFieldDataListResource": {
+        "properties": {
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/MaterialParameterFieldDataSummaryResource"
+            },
+            "type": "array"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scene_revision",
+          "fields"
+        ],
+        "type": "object"
+      },
+      "MaterialParameterFieldDataResource": {
+        "properties": {
+          "algorithm": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "asset_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "assignment_id": {
+            "type": "string"
+          },
+          "component_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "field_id": {
+            "type": "string"
+          },
+          "frame": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "location": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "max": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "mean": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "mesh_generation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mesh_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "min": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "owner_object_id": {
+            "type": "string"
+          },
+          "owner_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "parameter": {
+            "type": "string"
+          },
+          "priority": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "realization_status": {
+            "type": "string"
+          },
+          "sample_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source_kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source_region_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "timing_ms": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "values": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "field_id",
+          "assignment_id",
+          "scene_revision",
+          "owner_object_id",
+          "parameter",
+          "realization_status",
+          "sample_count",
+          "values"
+        ],
+        "type": "object"
+      },
+      "MaterialParameterFieldDataSummaryResource": {
+        "properties": {
+          "asset_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "assignment_id": {
+            "type": "string"
+          },
+          "field_id": {
+            "type": "string"
+          },
+          "href": {
+            "type": "string"
+          },
+          "owner_object_id": {
+            "type": "string"
+          },
+          "parameter": {
+            "type": "string"
+          },
+          "realization_status": {
+            "type": "string"
+          },
+          "sample_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source_region_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "field_id",
+          "assignment_id",
+          "owner_object_id",
+          "parameter",
+          "realization_status",
+          "sample_count",
+          "href"
+        ],
+        "type": "object"
+      },
       "MaterialParameterFieldListResource": {
         "properties": {
           "fields": {
@@ -6597,6 +6895,65 @@
         "required": [
           "revision",
           "realized_size_fields"
+        ],
+        "type": "object"
+      },
+      "MeshRegionMembershipResource": {
+        "properties": {
+          "boundary_face_indices": {
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "element_indices": {
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "mesh_id": {
+            "type": "string"
+          },
+          "mesh_part_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "mesh_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "node_indices": {
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "region_id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "mesh_id",
+          "mesh_revision",
+          "region_id",
+          "source",
+          "mesh_part_ids",
+          "element_indices",
+          "node_indices",
+          "boundary_face_indices"
         ],
         "type": "object"
       },
@@ -17209,6 +17566,97 @@
         ]
       }
     },
+    "/v2/sessions/current/data/material-fields": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_material_fields",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterialParameterFieldDataListResource"
+                }
+              }
+            },
+            "description": "Material-parameter field data catalog"
+          },
+          "404": {
+            "description": "No active workspace or scene document"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/material-fields/{field_id}": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_material_fields_field_id",
+        "parameters": [
+          {
+            "description": "Material-parameter assignment id",
+            "in": "path",
+            "name": "field_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterialParameterFieldDataResource"
+                }
+              }
+            },
+            "description": "Material-parameter field data payload"
+          },
+          "404": {
+            "description": "No material-parameter field with this assignment id"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/mesh-region-membership/{region_id}": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_mesh_region_membership_region_id",
+        "parameters": [
+          {
+            "description": "Authored or realized region id",
+            "in": "path",
+            "name": "region_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeshRegionMembershipResource"
+                }
+              }
+            },
+            "description": "Mesh-backed realized-region membership indices"
+          },
+          "404": {
+            "description": "No active mesh or mesh-backed membership for the region"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
     "/v2/sessions/current/data/quantities": {
       "get": {
         "operationId": "data_get_sessions_current_data_quantities",
@@ -19184,6 +19632,135 @@
           },
           "404": {
             "description": "No active workspace or scene document"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      },
+      "post": {
+        "operationId": "model_post_sessions_current_model_couplings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CouplingCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthoringTransactionResponse"
+                }
+              }
+            },
+            "description": "Created an authored coupling"
+          },
+          "400": {
+            "description": "Invalid coupling payload"
+          },
+          "409": {
+            "description": "Revision conflict or duplicate coupling"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/couplings/{coupling_id}": {
+      "delete": {
+        "operationId": "model_delete_sessions_current_model_couplings_coupling_id",
+        "parameters": [
+          {
+            "description": "Coupling id",
+            "in": "path",
+            "name": "coupling_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CouplingDeleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthoringTransactionResponse"
+                }
+              }
+            },
+            "description": "Deleted an authored coupling"
+          },
+          "404": {
+            "description": "Coupling not found"
+          },
+          "409": {
+            "description": "Revision conflict"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      },
+      "patch": {
+        "operationId": "model_patch_sessions_current_model_couplings_coupling_id",
+        "parameters": [
+          {
+            "description": "Coupling id",
+            "in": "path",
+            "name": "coupling_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CouplingPatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthoringTransactionResponse"
+                }
+              }
+            },
+            "description": "Patched an authored coupling"
+          },
+          "400": {
+            "description": "Invalid coupling patch"
+          },
+          "404": {
+            "description": "Coupling not found"
+          },
+          "409": {
+            "description": "Revision conflict"
           }
         },
         "tags": [

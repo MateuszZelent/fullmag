@@ -41,6 +41,7 @@ import {
 import type { Viewport3DColors } from "../viewport3dTypes";
 import { VectorFieldLayer } from "./VectorFieldLayer";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
+import { eventIntersectsRegionOverlay } from "./regionOverlayPicking";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import {
   opacityFromSettings,
@@ -236,6 +237,7 @@ export function FallbackTopologyMeshLayer({
   }
 
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
+    if (eventIntersectsRegionOverlay(event)) return;
     event.stopPropagation();
     const partSelection = resolveFemPartSelectionByBoundaryFace(
       femDomain,

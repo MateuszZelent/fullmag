@@ -47,6 +47,7 @@ import {
   VectorFieldLayer,
   type VectorFieldLayerVectorStyle,
 } from "./VectorFieldLayer";
+import { eventIntersectsRegionOverlay } from "./regionOverlayPicking";
 
 /** Number of floats per vector segment: [sx,sy,sz, ex,ey,ez, relMag] */
 const VECTOR_SEGMENT_STRIDE = 7;
@@ -932,6 +933,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
   }
 
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
+    if (eventIntersectsRegionOverlay(event)) return;
     event.stopPropagation();
     onSelectDomain();
   };

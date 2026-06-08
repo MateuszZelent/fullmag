@@ -135,6 +135,18 @@ export const DATA_DOMAIN_SLICE_MESH_OVERLAY_PATH = openApiV2Path(
   "/v2/sessions/current/data/domain/slice/mesh-overlay",
 );
 
+export const DATA_MATERIAL_FIELDS_PATH = openApiV2Path(
+  "/v2/sessions/current/data/material-fields",
+);
+
+export const DATA_MATERIAL_FIELD_PATH = openApiV2Path(
+  "/v2/sessions/current/data/material-fields/{field_id}",
+);
+
+export const DATA_MESH_REGION_MEMBERSHIP_PATH = openApiV2Path(
+  "/v2/sessions/current/data/mesh-region-membership/{region_id}",
+);
+
 export const DATA_FIELD_META_PATH = openApiV2Path(
   "/v2/sessions/current/data/fields/{quantity_id}/meta",
 );
@@ -413,6 +425,10 @@ export const MODEL_MATERIAL_FIELDS_PATH = openApiV2Path(
 
 export const MODEL_COUPLINGS_PATH = openApiV2Path(
   "/v2/sessions/current/model/couplings",
+);
+
+export const MODEL_COUPLING_PATH = openApiV2Path(
+  "/v2/sessions/current/model/couplings/{coupling_id}",
 );
 
 export const MODEL_REGION_PATH = openApiV2Path(

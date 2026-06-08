@@ -5,6 +5,7 @@ import {
   DATA_FIELDS_PATH,
   MESHING_SUMMARY_PATH,
   MODEL_SCENE_PATH,
+  MODEL_SYNCS_PATH,
   VISUALIZATION_STATE_PATH,
 } from "@/kernel/api/apiPaths";
 
@@ -276,7 +277,7 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain("Region overlay smoke passed:");
     expect(smokeScript).toContain("mesh=preserved");
     expect(smokeScript).toContain("waitForRegionAuthoringScriptSync");
-    expect(smokeScript).toContain("/v2/sessions/current/model/syncs");
+    expect(smokeScript).toContain(JSON.stringify(MODEL_SYNCS_PATH));
     expect(smokeScript).toContain("script=region-authoring-synced");
   });
 
@@ -326,6 +327,14 @@ describe("viewport smoke projection round-trip", () => {
     expect(screenshotScript).toContain("await installFdmFixtureApi(page, missingSessionFixtureRequests)");
     expect(screenshotScript).toContain("allowMissingSessionSmoke");
     expect(screenshotScript).toContain("isAllowedMissingSessionResponse");
+    expect(screenshotScript).toContain("verifyFdmFixtureRegionOverlaySelection");
+    expect(screenshotScript).toContain("FDM_FIXTURE_REGION_NODE_ID");
+    expect(screenshotScript).toContain("ensureExplorerNodeExpanded");
+    expect(screenshotScript).toContain("clickCanvasUntilExplorerNodeSelected");
+    expect(screenshotScript).toContain('name: "Auto"');
+    expect(screenshotScript).toContain("Region overlay mode must default to Auto.");
+    expect(screenshotScript).toContain("aria-selected");
+    expect(screenshotScript).toContain("Viewport 3D region overlay selection passed");
   });
 
   it("keeps the memory churn fixture isolated from live realtime websocket events", () => {

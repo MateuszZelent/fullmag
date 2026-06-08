@@ -1793,6 +1793,41 @@ fn rkky_unsupported_blocks_runtime_plan() {
 }
 
 #[test]
+fn interlayer_exchange_unsupported_blocks_runtime_plan_with_public_kind() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.couplings.push(CouplingIR {
+        coupling_id: "strip_interlayer".to_string(),
+        kind: CouplingKindIR::InterlayerExchange,
+        source: CouplingEndpointIR::Surface {
+            object: "strip".to_string(),
+            selector: "top".to_string(),
+        },
+        target: CouplingEndpointIR::Surface {
+            object: "strip".to_string(),
+            selector: "bottom".to_string(),
+        },
+        enabled: true,
+        parameters: CouplingParametersIR::InterlayerExchange {
+            j1: -0.3e-3,
+            j2: Some(0.0),
+        },
+        capability_policy: CouplingCapabilityPolicyIR::RequireRuntime,
+    });
+
+    let err = plan(&ir).expect_err("unsupported interlayer exchange must block runtime planning");
+    assert!(
+        err.reasons.iter().any(|reason| {
+            reason.contains("strip_interlayer")
+                && reason.contains("interlayer_exchange")
+                && reason.contains("requires runtime support")
+                && reason.contains("must not silently drop authored coupling intent")
+        }),
+        "unexpected planner errors: {:?}",
+        err.reasons
+    );
+}
+
+#[test]
 fn fdm_magnetoelastic_term_is_rejected_until_fdm_lane_exists() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.energy_terms = vec![fullmag_ir::EnergyTermIR::Magnetoelastic {
@@ -6775,6 +6810,52 @@ fn fem_default_region_ms_transition_does_not_require_conformal_boundary() {
     assert!(
         ms_plan.requires_mesh_revision,
         "mesh_relative smooth region Ms override must depend on the mesh revision"
+    );
+}
+
+#[test]
+fn fem_equal_priority_overlapping_ms_overrides_block_planning() {
+    let mut ir = fem_minimal_test_ir();
+    for (region_id, value) in [
+        ("strip:defect_a", serde_json::json!(700e3)),
+        ("strip:defect_b", serde_json::json!(750e3)),
+    ] {
+        ir.object_regions.push(fullmag_ir::ObjectRegionIR {
+            region_id: region_id.to_string(),
+            owner_object: "strip".to_string(),
+            name: region_id.rsplit(':').next().unwrap().to_string(),
+            shape: fullmag_ir::RegionShapeIR::Sphere {
+                radius: 2.0,
+                center: [0.0, 0.0, 0.0],
+            },
+            frame: fullmag_ir::RegionFrameIR::Object,
+            enabled: true,
+            priority: 20,
+            mesh_policy: None,
+            material_overrides: vec![fullmag_ir::RegionMaterialOverrideIR {
+                parameter: fullmag_ir::MaterialParameterNameIR::Ms,
+                value: fullmag_ir::MaterialParameterFieldIR::Constant {
+                    value,
+                    unit: Some("A/m".to_string()),
+                },
+                priority: 20,
+                conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+            }],
+            texture_override: None,
+            material_transition: None,
+            realization_policy: fullmag_ir::RegionRealizationPolicyIR::Inherit,
+        });
+    }
+
+    let err = plan(&ir).expect_err("equal-priority overlapping Ms overrides must block planning");
+    assert!(
+        err.reasons.iter().any(|reason| {
+            reason.contains("region-owned material parameter conflict")
+                && reason.contains("overlapping regions assign different values for Ms")
+                && reason.contains("priority 20")
+        }),
+        "unexpected planner errors: {:?}",
+        err.reasons
     );
 }
 

@@ -34,6 +34,7 @@ import {
   shouldRenderPrimitiveTransformGizmo,
   trackPrimitiveObjectGeometry,
 } from "./PrimitiveObjectLayerModel";
+import { eventIntersectsRegionOverlay } from "./regionOverlayPicking";
 
 export function PrimitiveObjectLayer({
   colors,
@@ -115,6 +116,7 @@ function PrimitiveObject({
 
 
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
+    if (eventIntersectsRegionOverlay(event)) return;
     event.stopPropagation();
     onSelectObject(object);
   };

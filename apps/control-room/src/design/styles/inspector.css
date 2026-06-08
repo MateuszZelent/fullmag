@@ -369,7 +369,7 @@
 .fm-inspector-vector3 {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--fm-space-1.5);
+  gap: var(--fm-space-2);
   width: 100%;
 }
 

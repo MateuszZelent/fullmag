@@ -71,6 +71,29 @@ describe("ObjectRegionsPanel physical scalar inputs", () => {
     expect(overrideRows).toContain('label="Local override"');
   });
 
+  it("renders region material override selectors through select FormFields", () => {
+    const materialPanel = readFileSync(
+      new URL(
+        "./region/ObjectRegionMagneticParametersPanel.tsx",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    const overrideSelectorStart = materialPanel.indexOf(
+      "label={`Override ${index + 1}`}",
+    );
+    const inheritedParentStart = materialPanel.indexOf(
+      'label="Inherited parent"',
+      overrideSelectorStart,
+    );
+
+    expect(overrideSelectorStart).toBeGreaterThanOrEqual(0);
+    expect(inheritedParentStart).toBeGreaterThan(overrideSelectorStart);
+    expect(
+      materialPanel.slice(overrideSelectorStart, inheritedParentStart),
+    ).toContain('type="select"');
+  });
+
   it("renders material field realization metadata from the resource", () => {
     const materialPanel = readFileSync(
       new URL(

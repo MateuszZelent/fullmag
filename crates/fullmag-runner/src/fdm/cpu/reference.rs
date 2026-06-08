@@ -2057,17 +2057,16 @@ mod tests {
         let plan = FdmPlanIR {
             material: FdmMaterialIR {
                 ms_field: Some(vec![
-                    8.0e5, 7.0e5, 6.0e5, 5.0e5, 4.0e5, 3.0e5, 2.0e5, 1.0e5, 8.1e5, 7.1e5,
-                    6.1e5, 5.1e5, 4.1e5, 3.1e5, 2.1e5, 1.1e5,
+                    8.0e5, 7.0e5, 6.0e5, 5.0e5, 4.0e5, 3.0e5, 2.0e5, 1.0e5, 8.1e5, 7.1e5, 6.1e5,
+                    5.1e5, 4.1e5, 3.1e5, 2.1e5, 1.1e5,
                 ]),
                 a_field: Some(vec![
-                    1.0e-11, 1.1e-11, 1.2e-11, 1.3e-11, 1.4e-11, 1.5e-11, 1.6e-11,
-                    1.7e-11, 1.8e-11, 1.9e-11, 2.0e-11, 2.1e-11, 2.2e-11, 2.3e-11,
-                    2.4e-11, 2.5e-11,
+                    1.0e-11, 1.1e-11, 1.2e-11, 1.3e-11, 1.4e-11, 1.5e-11, 1.6e-11, 1.7e-11,
+                    1.8e-11, 1.9e-11, 2.0e-11, 2.1e-11, 2.2e-11, 2.3e-11, 2.4e-11, 2.5e-11,
                 ]),
                 alpha_field: Some(vec![
-                    0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10, 0.11,
-                    0.12, 0.13, 0.14, 0.15, 0.16,
+                    0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10, 0.11, 0.12, 0.13,
+                    0.14, 0.15, 0.16,
                 ]),
                 ..make_test_plan().material
             },
@@ -2101,7 +2100,11 @@ mod tests {
         );
         assert_eq!(
             fields[2].vector_field_values,
-            plan.material.alpha_field.as_ref().expect("alpha field").clone()
+            plan.material
+                .alpha_field
+                .as_ref()
+                .expect("alpha field")
+                .clone()
         );
         assert_eq!(
             observe_state_call_count(),

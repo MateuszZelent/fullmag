@@ -12,9 +12,11 @@ import {
   resolveViewport3DPrimaryFieldQuery,
   filterViewport3DMeshBackedRegionOverlays,
   resolveViewport3DMeshBackedRegionKeys,
+  resolveViewport3DMeshBackedRegionOverlays,
   resolveViewport3DPartVisualizationSettings,
   resolveViewport3DRegionOverlays,
   resolveViewport3DRegionSelectionBounds,
+  resolveViewport3DRegionSelectionScope,
   resolveViewport3DRegionTargetByPartId,
   resolveViewport3DResourceFrameState,
   resolveViewport3DSceneCameraView,
@@ -37,6 +39,22 @@ const visualizationStateResourceSourceUrl = new URL(
 );
 
 describe("useViewport3DSceneModel", () => {
+  it("does not use domain selections to filter object region overlays", () => {
+    expect(
+      resolveViewport3DRegionSelectionScope({
+        kind: "domain",
+        label: "fdm-fixture-domain",
+        moduleSource: "viewport-3d",
+        nodeId: "domain",
+        objectId: "fdm-fixture-domain",
+        ref: null,
+      }),
+    ).toEqual({
+      selectedObjectId: null,
+      selectedRegionId: null,
+    });
+  });
+
   it("requests scalar field components when the primary field is only used for scalar surface colors", () => {
     expect(
       resolveViewport3DPrimaryFieldQuery({
@@ -315,6 +333,43 @@ describe("useViewport3DSceneModel", () => {
         new Set(["film\u0000film:core"]),
       ),
     ).toEqual([regions[0]]);
+  });
+
+  it("carries realized mesh part ids into the mesh-backed overlay input", () => {
+    const authored = [
+      {
+        enabled: true,
+        name: "Core",
+        owner_object_id: "film",
+        region_id: "film:core",
+        shape: { center: [0, 0, 0], kind: "sphere", radius: 1 },
+      },
+    ] as never;
+
+    const overlays =
+      resolveViewport3DMeshBackedRegionOverlays({
+        manifestRegions: [
+          {
+            mesh_part_ids: ["part:film:core"],
+            name: "Core",
+            source_object_ids: ["film"],
+            source_region_candidate_id: "film:core",
+          },
+        ] as never,
+        regions: authored,
+      });
+
+    expect(overlays).toHaveLength(1);
+    expect(overlays[0]).toMatchObject(
+      {
+        enabled: true,
+        mesh_part_ids: ["part:film:core"],
+        name: "Core",
+        owner_object_id: "film",
+        region_id: "film:core",
+        shape: { center: [0, 0, 0], kind: "sphere", radius: 1 },
+      },
+    );
   });
 
   it("keeps parent visualization active for mesh-backed region parts", () => {

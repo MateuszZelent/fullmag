@@ -46,6 +46,7 @@ import { BoundsBox } from "./BoundsLayers";
 import { VectorFieldLayer } from "./VectorFieldLayer";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
+import { eventIntersectsRegionOverlay } from "./regionOverlayPicking";
 import {
   opacityFromSettings,
   pointColorFromSettings,
@@ -272,6 +273,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     hasScalarColors,
   );
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
+    if (eventIntersectsRegionOverlay(event)) return;
     event.stopPropagation();
     onSelectPart(selectionForMeshPart(part));
   };

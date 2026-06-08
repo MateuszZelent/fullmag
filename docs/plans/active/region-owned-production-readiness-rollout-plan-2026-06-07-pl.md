@@ -375,12 +375,12 @@ diagnostics.
 
 | Zadanie | Szczegoly |
 |---|---|
-| Field realization plan | Dla kazdego `MaterialParameterAssignmentIR` planner tworzy plan samplingu na grid/mesh. Nie zaimplementowane. |
-| Conflict resolution | Per-parameter priority; equal priority overlap jest bledem. Nie zaimplementowane w runtime. |
-| Field assets | Runtime zapisuje realized `Ms`, `Aex`, `alpha`, anisotropy/DMI fields z provenance. Nie zaimplementowane. |
-| Data-plane resource | Dodac zasoby material fields/membership tam, gdzie payload jest duzy. Nie zaimplementowane. |
+| Field realization plan | Gotowe dla wspieranych `Ms/Aex/alpha` assignments/overrides w FDM/FEM plannerze. `build_material_field_plans()` tworzy `MaterialFieldPlan` z `realization_location`, `requires_sampling`, `requires_mesh_revision`, warningami i statystykami projekcji tam, gdzie dotyczy. |
+| Conflict resolution | Gotowe dla planner-resolved material payloadow. `resolve_spatial_parameter()` stosuje priority per parametr i blokuje equal-priority overlap z roznymi wartosciami albo roznymi transition weights; test `fem_equal_priority_overlapping_ms_overrides_block_planning` pokrywa FEM runtime payload gate. |
+| Field assets | Czesciowo gotowe. Data-plane material-field detail konsumuje typed `MaterialFieldAssetIR` z runtime metadata (`asset_id`, mesh identity, location, component count, source kind, algorithm, timing, values/statystyki) i test `material_field_data_resource_uses_realized_material_field_asset_metadata` pokrywa sciezke. Trwale file-backed assets z pelnym artifact/provenance zapisem nadal nie sa zaimplementowane. |
+| Data-plane resource | Czesciowo gotowe. `GET /v2/sessions/current/data/material-fields` kataloguje authored material-field payloady, a `GET /v2/sessions/current/data/material-fields/{field_id}` zwraca per-assignment realized samples/statystyki oraz typed asset metadata z current runtime fields/assets; `GET /v2/sessions/current/data/mesh-region-membership/{region_id}` zwraca mesh-backed membership indices. Projection/non-segmented membership i trwale runtime field assets pozostaja otwarte. |
 | UI realized preview | Gotowe. Material-fields inspector renderuje realization status, sample count, min/max/mean i warnings z `MaterialParameterFieldResource` przez `materialFieldRealizationRows()`. |
-| Backend payload | FDM i FEM dostaja jawne arrays albo coefficient descriptors, bez zgadywania z UI. Nie zaimplementowane. |
+| Backend payload | Czesciowo gotowe. FDM i FEM planner przekazuja jawne `ms_field`/`a_field`/`alpha_field` arrays dla wspieranych resolved spatial parameters; pozostaje kwalifikacja pozostalych parametrow, sampled field payloadow i pelna backend parity/provenance. |
 
 ### Priorytet parametrow
 
@@ -601,6 +601,20 @@ prowadic do cichego uruchomienia z pomieta fizyka.
   zostawial dangling coupling endpointow.
 - To nie implementuje runtime contact discovery ani operatorow couplingow.
 
+### Postep 2026-06-08: coupling CRUD routes
+
+- Dodano direct resource-first routes:
+  `POST /v2/sessions/current/model/couplings`,
+  `PATCH /v2/sessions/current/model/couplings/{coupling_id}` i
+  `DELETE /v2/sessions/current/model/couplings/{coupling_id}`.
+- Route'y uzywaja tych samych helperow commit/validation co
+  `model/transactions`, zachowuja `base_revision` precondition i zwracaja
+  `AuthoringTransactionResponse`.
+- Test `authoring_coupling_resource_routes_mutate_couplings` pokrywa create,
+  patch i delete couplingu przez direct resource routes.
+- OpenAPI v2 i control-room generated API artifacts zawieraja
+  `CouplingCreateRequest`, `CouplingPatchRequest` i `CouplingDeleteRequest`.
+
 ## 13. Etap 8: realized regions, membership i viewport produkcyjny
 
 ### Cel
@@ -624,10 +638,10 @@ uzytkownik zadeklarowal, i co mesher/runtime faktycznie zrealizowal.
 |---|---|
 | Authored overlay | Gotowe. Wireframe/fill shape w object frame, niezalezny od glownego mesh shader. Authored overlay respektuje per-region target visualization (`visible`, `shaderVisible`, `wireframeVisible`, opacity i kolory). |
 | Mesh-backed region visualization | Czesciowo gotowe. `MeshSharedDomainManifestResource.regions[]` raportuje authored object regions, gdy aktualny FEM mesh ma part/segment z `geometry_id=region_id`; viewport ukrywa wtedy authored primitive overlay i renderuje odpowiadajace mesh parts przez target `region:*`, wiec wireframe po rebuildzie pochodzi z prawdziwej topologii. |
-| Realized membership resource | `model/realized-regions` istnieje jako lista zrealizowanych region resources, ale nie niesie pelnego node/element membership payloadu do kolorowania czesciowego membership na wspolnym mesh parcie. Potrzebny osobny data-plane membership resource albo rozszerzenie mesh-region resource dla projection/non-segmented cases. |
-| Realized overlay | Mesh-backed conformal region parts renderuja sie przez prawdziwy mesh. Membership-color overlay dla regionow, ktore nie sa osobnym mesh partem, pozostaje niezaimplementowany. |
+| Realized membership resource | Czesciowo gotowe. `GET /v2/sessions/current/data/mesh-region-membership/{region_id}` zwraca `mesh_id`, `mesh_revision`, `mesh_part_ids`, `element_indices`, `node_indices` i `boundary_face_indices` dla regionow zrealizowanych jako mesh-backed FEM parts. Projection/non-segmented membership nadal wymaga osobnego payloadu/rozszerzenia. |
+| Realized overlay | Mesh-backed conformal region parts renderuja sie przez prawdziwy mesh i maja data-plane membership indices. Membership-color overlay dla regionow, ktore nie sa osobnym mesh partem, pozostaje niezaimplementowany. |
 | Mode switch | Gotowe dla dostepnych reprezentacji. Lokalny segmented control viewportu przelacza `authored` / `realized` / `both`; realized jest niedostepny bez current mesh-backed regionu. Tryb nie mutuje fizyki ani `visualization/state`. |
-| Selection sync | Explorer <-> Inspector dziala. Viewport -> Explorer selection do weryfikacji. |
+| Selection sync | Gotowe dla obecnego mesh/authored kontraktu. Explorer <-> Inspector dziala. Viewport object/region picks przechodza przez typed mapper `viewport3dSelection.ts` do canonical `object.root` / `object.region` selection refs z tymi samymi node ids i region-scoped visualization targetami, ktore konsumuje Explorer/Inspector. Screenshot harness ma fixture-backed canvas click assertion dla regionu, a live browser proof 2026-06-08 przeszedl na production-style `next build --webpack` + `next start` + `screenshot:viewport-3d`. |
 | Safety view discipline | Safety wireframe tylko przy rzeczywiscie brakujacej/niezgodnej topologii, nie przy zwyklym authoringu. `regionAuthoringInvalidation` wyklucza mesh resources, unit tests pokrywaja region authoring bez `mesh:dirty`; end-to-end viewport behavior pozostaje release gate. |
 
 ### Akceptacja
@@ -646,18 +660,33 @@ uzytkownik zadeklarowal, i co mesher/runtime faktycznie zrealizowal.
   dostaje tylko regiony potwierdzone przez current shared-domain manifest jako
   mesh-backed.
 - Segmented control w HUD jest interaktywny mimo `pointer-events: none` na
-  pasywnym HUD i domyslnie wybiera `both`.
+  pasywnym HUD i domyslnie wybiera `auto`.
 - Bez aktualnego mesh-backed regionu opcja `realized` jest jawnie disabled.
 - Playwright screenshot fixture zawiera authored region i sprawdza widocznosc
-  kontrolki, stan domyslny, przejscie do `authored` oraz nieblank canvas.
+  kontrolki, stan domyslny `auto`, przejscie do `authored`, fixture-backed
+  canvas click selection przez Explorer node `object.region` oraz nieblank
+  canvas. Live browser proof 2026-06-08 przeszedl na production-style
+  `next build --webpack` + `next start` i `screenshot:viewport-3d`.
+- Base viewport layers (`FdmCuboidLayer`, mesh part, fallback topology,
+  primitive object) oddaja pointer selection, gdy R3F intersection list zawiera
+  region overlay; domain miss nie filtruje juz authored object-region overlays.
 - Fallback `scene.objects[].regions[].shape` w viewport adapterze przechodzi
   przez typed normalizer zgodny z generated OpenAPI `SceneRegionShape`; invalid
   payload i `csg` nie tworza authored overlay inputu.
 - Unit coverage potwierdza, ze region authoring bez `mesh:dirty` nie przelacza
   topologii w `unknown`, a `stale` topologia pozostaje renderowalna normalna
   sciezka zamiast edge-only safety view.
-- Nadal brakuje osobnego membership data-plane dla projection/non-segmented
-  regions; ten krok nie deklaruje takiego przypadku jako realized.
+- Viewport object/region picki sa mapowane przez `viewport3dSelection.ts` do
+  canonical kernel selection refs (`object.root`, `object.region`), bez importu
+  Explorer internals; test `viewport3dSelection.test.ts` pilnuje region-scoped
+  `visualizationTargetId`.
+- Dodano mesh-backed membership data-plane:
+  `GET /v2/sessions/current/data/mesh-region-membership/{region_id}`. Test
+  `mesh_region_membership_returns_indices_for_mesh_backed_region` potwierdza
+  `element_indices`, `node_indices` i `boundary_face_indices` dla regionu
+  `body:core` zrealizowanego jako mesh part.
+- Nadal brakuje membership data-plane dla projection/non-segmented regions;
+  ten krok nie deklaruje takiego przypadku jako realized.
 
 ### Komendy weryfikacyjne
 
@@ -693,7 +722,7 @@ zrealizowana przez wybrany backend, a ktora jest zablokowana albo deferred.
 | Diagnostics inline w inspectorze | Gotowe dla istniejacych region capability diagnostics. Mesh Policy, Material Overrides i Region Identity renderuja warning/error przy odpowiednich polach; pelny panel Diagnostics zachowuje wszystkie szczegoly. |
 | Build dialog | Gotowe dla region mesh-policy diagnostics. Mesh build dialog pokazuje regionowy powod przebudowy `region mesh policy changed` z istniejacego `model/region-diagnostics` resource. |
 | Run blocker | Gotowe dla region-owned warning/error diagnostics. `study.run` i pokrewne runtime commands zwracaja user-facing disabled reason z konkretnego region diagnostic message przed startem solvera. |
-| Provenance | Czesciowo gotowe. `ArtifactEntry.region_owned_provenance` niesie control-plane summary dla field-state/API-created artifact entries: `scene_revision`, liczbe authored regions, material parameter fields, couplings oraz blocked/deferred diagnostic counts. Pozostaje zapis pelnego artifact payload/provenance dla realized backend reality i run-stage outputs. |
+| Provenance | Czesciowo gotowe. `ArtifactEntry.region_owned_provenance` niesie control-plane summary dla field-state/API-created artifact entries oraz artifactow run-stage przeladowanych z katalogu zakonczonego runu: `scene_revision`, liczbe authored regions, material parameter fields, couplings oraz blocked/deferred diagnostic counts. Pozostaje zapis pelnego artifact payload/provenance dla realized backend reality. |
 
 ### Akceptacja
 
@@ -715,6 +744,16 @@ zrealizowana przez wybrany backend, a ktora jest zablokowana albo deferred.
 - `regions.conformal_or_projected_boundary` jest widoczne inline przy wyborze
   Realization w Region Identity.
 
+### Postep 2026-06-08: planner coupling capability vocabulary
+
+- Planner coupling capability blockers renderuja publiczne snake_case kind
+  tokens dla unsupported `rkky` i `interlayer_exchange`, zamiast Rust enum
+  debug names.
+- Dodano test `interlayer_exchange_unsupported_blocks_runtime_plan_with_public_kind`,
+  ktory wymaga jawnego blocker diagnostic dla unsupported interlayer exchange.
+- Ten krok nie promuje `interlayer_exchange` do executable runtime support;
+  nadal blokuje run bez backend operatora.
+
 ### Postep 2026-06-08: artifact provenance metadata
 
 - `GET /v2/sessions/current/data/artifacts` expose opcjonalne
@@ -722,6 +761,9 @@ zrealizowana przez wybrany backend, a ktora jest zablokowana albo deferred.
 - Field-state export/import artifact entries zapisuje summary z aktywnego
   `SceneDocument`: scene revision, authored region count, material parameter
   field count, coupling count oraz liczbe blocked/deferred region diagnostics.
+- Zakonczony run, ktory przeladowuje artifact index z katalogu na dysku przez
+  `apply_current_live_snapshot()`, zachowuje to samo
+  `region_owned_provenance` na wpisach `data/artifacts`.
 - To jest metadata indeksu artifactow. Nie zastepuje pelnego artifact payload
   ani provenance realized backend reality dla run-stage outputs.
 - Komponenty nadal korzystaja z centralnego `model/region-diagnostics` resource

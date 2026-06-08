@@ -10,15 +10,15 @@
 //! - unknown-route fallback.
 
 use axum::body::Body;
-use axum::http::{Method, Request, StatusCode, header};
+use axum::http::{header, Method, Request, StatusCode};
 use tower::ServiceExt; // for `oneshot`
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
-use tokio::sync::{Mutex, RwLock, watch};
+use std::sync::Arc;
+use tokio::sync::{watch, Mutex, RwLock};
 
 use crate::feature_flags::FeatureFlags;
 use crate::schemas::realtime::{
@@ -4697,8 +4697,8 @@ async fn mesh_active_build_returns_projection_from_mesh_workspace() {
     assert_eq!(json["effective_per_object_targets"]["body"]["hmax"], "2e-9");
     assert_eq!(json["last_build_summary"]["elements"], 42);
     assert_eq!(
-        json["last_build_summary"]["shared_domain_build_report"]["effective_per_object_targets"]["body"]
-            ["edge_hmax"],
+        json["last_build_summary"]["shared_domain_build_report"]["effective_per_object_targets"]
+            ["body"]["edge_hmax"],
         1.8e-9
     );
     assert_eq!(
@@ -4710,7 +4710,8 @@ async fn mesh_active_build_returns_projection_from_mesh_workspace() {
         "component_aware"
     );
     assert_eq!(
-        json["shared_domain_build_report"]["effective_per_object_targets"]["body"]["edge_maximum_element_size"],
+        json["shared_domain_build_report"]["effective_per_object_targets"]["body"]
+            ["edge_maximum_element_size"],
         1.8e-9
     );
     assert_eq!(
@@ -6436,6 +6437,88 @@ async fn mesh_shared_domain_manifest_returns_tree_metadata() {
 }
 
 #[tokio::test]
+async fn mesh_region_membership_returns_indices_for_mesh_backed_region() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_fem_mesh_payload_with_manifest();
+        mesh.object_segments.push(FemMeshObjectSegment {
+            object_id: "body".to_string(),
+            geometry_id: Some("body_core".to_string()),
+            node_start: 0,
+            node_count: 4,
+            element_start: 0,
+            element_count: 1,
+            boundary_face_start: 0,
+            boundary_face_count: 1,
+        });
+        mesh.mesh_parts.push(FemMeshPartPayload {
+            id: "part:body:core".to_string(),
+            label: "Core".to_string(),
+            role: "magnetic_object".to_string(),
+            object_id: Some("body".to_string()),
+            geometry_id: Some("body_core".to_string()),
+            material_id: Some("mat-body".to_string()),
+            element_start: 0,
+            element_count: 1,
+            boundary_face_start: 0,
+            boundary_face_count: 1,
+            boundary_face_indices: vec![0],
+            node_start: 0,
+            node_count: 4,
+            node_indices: vec![0, 1, 2, 3],
+            surface_faces: vec![[0, 1, 2]],
+            bounds_min: Some([0.25, 0.25, 0.25]),
+            bounds_max: Some([0.75, 0.75, 0.75]),
+        });
+        let mut scene = sample_scene_document();
+        scene.objects[0]
+            .regions
+            .push(fullmag_authoring::SceneObjectRegion {
+                region_id: "body:core".to_string(),
+                owner_object: "body".to_string(),
+                name: "Core".to_string(),
+                shape: fullmag_authoring::SceneRegionShape::Sphere {
+                    center: [0.5, 0.5, 0.5],
+                    radius: 0.25,
+                },
+                frame: fullmag_authoring::SceneRegionFrame::Object,
+                enabled: true,
+                priority: 10,
+                mesh_policy: None,
+                material_overrides: Vec::new(),
+                texture_override: None,
+                material_transition: None,
+                realization_policy: fullmag_authoring::SceneRegionRealizationPolicy::Conformal,
+            });
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.mesh_revision = 41;
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/mesh-region-membership/body%3Acore")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["mesh_id"], "test-mesh:1");
+    assert_eq!(json["mesh_revision"], 41);
+    assert_eq!(json["region_id"], "body:core");
+    assert_eq!(json["source"], "mesh_parts");
+    assert_eq!(json["mesh_part_ids"][0], "part:body:core");
+    assert_eq!(json["element_indices"], serde_json::json!([0]));
+    assert_eq!(json["node_indices"], serde_json::json!([0, 1, 2, 3]));
+    assert_eq!(json["boundary_face_indices"], serde_json::json!([0]));
+}
+
+#[tokio::test]
 async fn mesh_shared_domain_manifest_reports_clean_scene_provenance_without_build_summary() {
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document();
@@ -6466,8 +6549,8 @@ async fn mesh_shared_domain_manifest_reports_clean_scene_provenance_without_buil
 }
 
 #[tokio::test]
-async fn mesh_shared_domain_manifest_keeps_provenance_unknown_for_dirty_scene_without_build_summary()
- {
+async fn mesh_shared_domain_manifest_keeps_provenance_unknown_for_dirty_scene_without_build_summary(
+) {
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document();
     scene.revision = 94;
@@ -7021,12 +7104,10 @@ async fn authoring_script_source_returns_current_python_source() {
     let json = body_json(response).await;
     assert_eq!(json["script_path"], script_path.display().to_string());
     assert_eq!(json["bytes"], 22);
-    assert!(
-        json["source"]
-            .as_str()
-            .expect("source string")
-            .contains("from fullmag import *")
-    );
+    assert!(json["source"]
+        .as_str()
+        .expect("source string")
+        .contains("from fullmag import *"));
 }
 
 #[tokio::test]
@@ -7283,27 +7364,21 @@ async fn authoring_geometry_capabilities_returns_backend_matrix() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
-    assert!(
-        json["primitive_capabilities"]
-            .as_array()
-            .expect("primitive capabilities")
-            .iter()
-            .any(|entry| entry["id"] == "box" && entry["fem"] == true)
-    );
-    assert!(
-        json["primitive_capabilities"]
-            .as_array()
-            .expect("primitive capabilities")
-            .iter()
-            .any(|entry| entry["id"] == "arch_waveguide" && entry["status"] == "production")
-    );
-    assert!(
-        json["csg_capabilities"]
-            .as_array()
-            .expect("csg capabilities")
-            .iter()
-            .any(|entry| entry["op"] == "subtract" && entry["status"] == "production")
-    );
+    assert!(json["primitive_capabilities"]
+        .as_array()
+        .expect("primitive capabilities")
+        .iter()
+        .any(|entry| entry["id"] == "box" && entry["fem"] == true));
+    assert!(json["primitive_capabilities"]
+        .as_array()
+        .expect("primitive capabilities")
+        .iter()
+        .any(|entry| entry["id"] == "arch_waveguide" && entry["status"] == "production"));
+    assert!(json["csg_capabilities"]
+        .as_array()
+        .expect("csg capabilities")
+        .iter()
+        .any(|entry| entry["op"] == "subtract" && entry["status"] == "production"));
 }
 
 #[tokio::test]
@@ -7419,11 +7494,9 @@ async fn authoring_transactions_create_transform_and_delete_objects() {
         .find(|object| object["id"] == "box_001")
         .expect("created object present");
     assert_eq!(created_object["geometry"]["geometry_kind"], "Box");
-    assert!(
-        created_object["tags"]
-            .as_array()
-            .is_some_and(|tags| tags.iter().any(|tag| tag == "mesh:dirty"))
-    );
+    assert!(created_object["tags"]
+        .as_array()
+        .is_some_and(|tags| tags.iter().any(|tag| tag == "mesh:dirty")));
     assert_eq!(
         create_json["committed_scene"]["universe"]["size"][0],
         300e-9
@@ -7487,13 +7560,11 @@ async fn authoring_transactions_create_transform_and_delete_objects() {
     assert_eq!(delete_response.status(), StatusCode::OK);
     let delete_json = body_json(delete_response).await;
     assert_eq!(delete_json["transaction_kind"], "delete_object");
-    assert!(
-        !delete_json["committed_scene"]["objects"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|object| object["id"] == "box_001")
-    );
+    assert!(!delete_json["committed_scene"]["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|object| object["id"] == "box_001"));
 }
 
 #[tokio::test]
@@ -7553,11 +7624,9 @@ async fn authoring_transactions_mutate_object_regions_and_couplings() {
     let core_region_id = format!("{object_id}:r1");
     assert_eq!(created_object["regions"][0]["region_id"], core_region_id);
     assert_eq!(created_object["allocated_region_ids"][0], core_region_id);
-    assert!(
-        !created_object["tags"]
-            .as_array()
-            .is_some_and(|tags| tags.iter().any(|tag| tag == "mesh:dirty"))
-    );
+    assert!(!created_object["tags"]
+        .as_array()
+        .is_some_and(|tags| tags.iter().any(|tag| tag == "mesh:dirty")));
 
     let patch_region_response = app
         .clone()
@@ -7681,6 +7750,116 @@ async fn authoring_transactions_mutate_object_regions_and_couplings() {
 }
 
 #[tokio::test]
+async fn authoring_coupling_resource_routes_mutate_couplings() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 70;
+    let object_id = scene.objects[0].id.clone();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let create_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/couplings")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "base_revision": 70,
+                        "coupling": {
+                            "coupling_id": "body_self_exchange",
+                            "kind": "exchange",
+                            "enabled": true,
+                            "source": { "kind": "object", "object": object_id },
+                            "target": { "kind": "object", "object": object_id },
+                            "parameters": { "kind": "exchange", "mode": "harmonic_mean", "scale": 1.0 }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let create_status = create_response.status();
+    let create_json = body_json(create_response).await;
+    assert_eq!(create_status, StatusCode::OK, "{create_json:#}");
+    assert_eq!(create_json["transaction_kind"], "create_coupling");
+    assert_eq!(
+        create_json["committed_scene"]["couplings"][0]["coupling_id"],
+        "body_self_exchange"
+    );
+    let create_revision = create_json["scene_revision"]
+        .as_u64()
+        .expect("create revision");
+
+    let patch_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/model/couplings/body_self_exchange")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "base_revision": create_revision,
+                        "patch": {
+                            "enabled": false,
+                            "parameters": { "kind": "exchange", "mode": "disabled", "scale": 0.0 }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let patch_status = patch_response.status();
+    let patch_json = body_json(patch_response).await;
+    assert_eq!(patch_status, StatusCode::OK, "{patch_json:#}");
+    assert_eq!(patch_json["transaction_kind"], "patch_coupling");
+    assert_eq!(
+        patch_json["committed_scene"]["couplings"][0]["enabled"],
+        false
+    );
+    assert_eq!(
+        patch_json["committed_scene"]["couplings"][0]["parameters"]["mode"],
+        "disabled"
+    );
+    let patch_revision = patch_json["scene_revision"]
+        .as_u64()
+        .expect("patch revision");
+
+    let delete_response = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/v2/sessions/current/model/couplings/body_self_exchange")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "base_revision": patch_revision
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let delete_status = delete_response.status();
+    let delete_json = body_json(delete_response).await;
+    assert_eq!(delete_status, StatusCode::OK, "{delete_json:#}");
+    assert_eq!(delete_json["transaction_kind"], "delete_coupling");
+    assert!(delete_json["committed_scene"]["couplings"]
+        .as_array()
+        .is_none_or(|couplings| couplings.is_empty()));
+}
+
+#[tokio::test]
 async fn authoring_delete_object_removes_object_and_surface_couplings() {
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document();
@@ -7736,16 +7915,12 @@ async fn authoring_delete_object_removes_object_and_surface_couplings() {
     let json = body_json(response).await;
 
     assert_eq!(status, StatusCode::OK, "{json:#}");
-    assert!(
-        json["committed_scene"]["objects"]
-            .as_array()
-            .is_none_or(|objects| objects.iter().all(|object| object["id"] != object_id))
-    );
-    assert!(
-        json["committed_scene"]["couplings"]
-            .as_array()
-            .is_none_or(|couplings| couplings.is_empty())
-    );
+    assert!(json["committed_scene"]["objects"]
+        .as_array()
+        .is_none_or(|objects| objects.iter().all(|object| object["id"] != object_id)));
+    assert!(json["committed_scene"]["couplings"]
+        .as_array()
+        .is_none_or(|couplings| couplings.is_empty()));
 }
 
 #[tokio::test]
@@ -7890,11 +8065,9 @@ async fn authoring_coupling_transactions_reject_active_disabled_region_endpoint(
 #[tokio::test]
 async fn authoring_object_region_resource_crud_allocates_stable_region_id() {
     fn assert_object_region_authoring_keeps_mesh_current(object: &serde_json::Value) {
-        assert!(
-            !object["tags"]
-                .as_array()
-                .is_some_and(|tags| tags.iter().any(|tag| tag == "mesh:dirty"))
-        );
+        assert!(!object["tags"]
+            .as_array()
+            .is_some_and(|tags| tags.iter().any(|tag| tag == "mesh:dirty")));
     }
 
     let state = test_app_state_with_live_session().await;
@@ -8353,13 +8526,11 @@ async fn authoring_geometry_realization_reports_blocked_csg() {
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
     assert_eq!(json["status"], "blocked");
-    assert!(
-        json["diagnostics"]
-            .as_array()
-            .expect("diagnostics")
-            .iter()
-            .any(|entry| entry["code"] == "GEOMETRY_CSG_OP_UNSUPPORTED")
-    );
+    assert!(json["diagnostics"]
+        .as_array()
+        .expect("diagnostics")
+        .iter()
+        .any(|entry| entry["code"] == "GEOMETRY_CSG_OP_UNSUPPORTED"));
 }
 
 #[tokio::test]
@@ -8454,12 +8625,10 @@ async fn authoring_geometry_realization_returns_object_derived_region_candidates
     assert_eq!(json["realization_revision"], 21);
     assert_eq!(json["region_candidates"][0]["object_id"], "body");
     assert_eq!(json["region_candidates"][0]["material_ref"], "mat:body");
-    assert!(
-        json["region_candidates"][0]["source_body_ids"][0]
-            .as_str()
-            .unwrap()
-            .starts_with("body:body:")
-    );
+    assert!(json["region_candidates"][0]["source_body_ids"][0]
+        .as_str()
+        .unwrap()
+        .starts_with("body:body:"));
 }
 
 #[tokio::test]
@@ -8545,13 +8714,11 @@ async fn authoring_region_owned_resources_expose_authored_payloads() {
     let regions = body_json(regions_response).await;
     assert_eq!(status, StatusCode::OK, "{regions:#}");
     assert_eq!(regions["regions"].as_array().unwrap().len(), 1);
-    assert!(
-        regions["regions"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|region| region["source"] == "authored_object_region")
-    );
+    assert!(regions["regions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|region| region["source"] == "authored_object_region"));
     let authored_region = regions["regions"]
         .as_array()
         .unwrap()
@@ -8606,12 +8773,10 @@ async fn authoring_region_owned_resources_expose_authored_payloads() {
     assert_eq!(realized_region["owner_object_id"], "body");
     assert_eq!(realized_region["region_id"], "region:body");
     assert_eq!(realized_region["source_object_ids"][0], "body");
-    assert!(
-        realized_region["source_body_ids"][0]
-            .as_str()
-            .unwrap()
-            .starts_with("body:body:")
-    );
+    assert!(realized_region["source_body_ids"][0]
+        .as_str()
+        .unwrap()
+        .starts_with("body:body:"));
     assert_eq!(realized_region["material_ref"], "mat:body");
     assert_eq!(realized_region["realization_status"], "realized");
     assert!(realized_region["shape"].is_null());
@@ -8641,14 +8806,12 @@ async fn authoring_region_owned_resources_expose_authored_payloads() {
     assert!(diagnostic_codes.contains("region_mesh_policy_requires_rebuild"));
     assert!(diagnostic_codes.contains("region_material_realization_pending"));
     assert!(diagnostic_codes.contains("region_realization_policy_capability_gated"));
-    assert!(
-        diagnostics["diagnostics"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|diagnostic| diagnostic["region_id"] == "body:core"
-                && diagnostic["owner_object_id"] == "body")
-    );
+    assert!(diagnostics["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|diagnostic| diagnostic["region_id"] == "body:core"
+            && diagnostic["owner_object_id"] == "body"));
 
     let fields_response = app
         .clone()
@@ -8714,11 +8877,9 @@ async fn authoring_region_owned_resources_expose_authored_payloads() {
         couplings["couplings"][0]["target_resolution"]["status"],
         "pending_mesh_resolution"
     );
-    assert!(
-        couplings["couplings"][0]["blocker_reason"]
-            .as_str()
-            .is_some_and(|reason| reason.contains("RKKY runtime operator"))
-    );
+    assert!(couplings["couplings"][0]["blocker_reason"]
+        .as_str()
+        .is_some_and(|reason| reason.contains("RKKY runtime operator")));
 
     // REDO ETAP 4 Test: Add execution plan metadata and apply it to verify realized field status/statistics
     let plan_json = serde_json::json!({
@@ -8793,6 +8954,205 @@ async fn authoring_region_owned_resources_expose_authored_payloads() {
 }
 
 #[tokio::test]
+async fn material_field_data_resource_returns_realized_samples() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 31;
+    let field: fullmag_authoring::SceneMaterialParameterAssignment =
+        serde_json::from_value(serde_json::json!({
+            "assignment_id": "body_core_ms_gradient",
+            "owner_object": "body",
+            "parameter": "Ms",
+            "region_id": "body:core",
+            "priority": 3,
+            "conflict_policy": "error",
+            "value": {
+                "kind": "linear",
+                "base": 760000.0,
+                "gradient": [0.0, 1.0e11, 0.0],
+                "unit": "A/m",
+                "frame": "object"
+            }
+        }))
+        .unwrap();
+    scene.objects[0].material_parameter_fields.push(field);
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        crate::session::apply_current_live_metadata(
+            snapshot,
+            serde_json::json!({
+                "execution_plan": {
+                    "common": {
+                        "ir_version": "1.0.0",
+                        "requested_backend": "fdm",
+                        "resolved_backend": "fdm",
+                        "execution_mode": "relaxation",
+                        "material_field_plans": []
+                    },
+                    "backend_plan": {
+                        "kind": "fdm",
+                        "grid": { "cells": [4, 1, 1] },
+                        "cell_size": [1e-9, 1e-9, 1e-9],
+                        "region_mask": [0, 0, 0, 0],
+                        "initial_magnetization": [],
+                        "material": {
+                            "name": "body",
+                            "saturation_magnetisation": 800000.0,
+                            "exchange_stiffness": 1.3e-11,
+                            "damping": 0.5,
+                            "ms_field": [760000.0, 770000.0, 780000.0, 790000.0]
+                        },
+                        "enable_exchange": true,
+                        "enable_demag": true,
+                        "gyromagnetic_ratio": 2.21e5,
+                        "precision": "double",
+                        "exchange_bc": "free",
+                        "integrator": "heun"
+                    },
+                    "output_plan": { "quantities": [] },
+                    "provenance": { "git_commit": "unknown" }
+                }
+            }),
+        );
+    }
+    let app = build_v2_router().with_state(state);
+
+    let list_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/data/material-fields")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let list_status = list_response.status();
+    assert_eq!(list_status, StatusCode::OK);
+    let list = body_json(list_response).await;
+    assert_eq!(list["scene_revision"], 31);
+    assert_eq!(list["fields"][0]["field_id"], "body_core_ms_gradient");
+    assert_eq!(
+        list["fields"][0]["href"],
+        "/v2/sessions/current/data/material-fields/body_core_ms_gradient"
+    );
+    assert_eq!(list["fields"][0]["sample_count"], 4);
+
+    let detail_response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/data/material-fields/body_core_ms_gradient")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let detail_status = detail_response.status();
+    assert_eq!(detail_status, StatusCode::OK);
+    let detail = body_json(detail_response).await;
+    assert_eq!(detail["field_id"], "body_core_ms_gradient");
+    assert_eq!(detail["assignment_id"], "body_core_ms_gradient");
+    assert_eq!(detail["owner_object_id"], "body");
+    assert_eq!(detail["source_region_id"], "body:core");
+    assert_eq!(detail["parameter"], "ms");
+    assert_eq!(detail["unit"], "A/m");
+    assert_eq!(detail["frame"], "object");
+    assert_eq!(detail["realization_status"], "realized");
+    assert_eq!(detail["sample_count"], 4);
+    assert_eq!(detail["min"], 760000.0);
+    assert_eq!(detail["max"], 790000.0);
+    assert_eq!(detail["mean"], 775000.0);
+    assert_eq!(
+        detail["values"],
+        serde_json::json!([760000.0, 770000.0, 780000.0, 790000.0])
+    );
+}
+
+#[tokio::test]
+async fn material_field_data_resource_uses_realized_material_field_asset_metadata() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 32;
+    let field: fullmag_authoring::SceneMaterialParameterAssignment =
+        serde_json::from_value(serde_json::json!({
+            "assignment_id": "body_core_ms_asset",
+            "owner_object": "body",
+            "parameter": "Ms",
+            "region_id": "body:core",
+            "priority": 3,
+            "conflict_policy": "error",
+            "value": {
+                "kind": "sampled",
+                "asset_id": "material-field:body_core_ms_asset",
+                "component_count": 1,
+                "location": "node",
+                "unit": "A/m"
+            }
+        }))
+        .unwrap();
+    scene.objects[0].material_parameter_fields.push(field);
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        crate::session::apply_current_live_metadata(
+            snapshot,
+            serde_json::json!({
+                "material_field_assets": [{
+                    "asset_id": "material-field:body_core_ms_asset",
+                    "parameter": "ms",
+                    "owner_object_id": "body",
+                    "source_region_id": "body:core",
+                    "mesh_id": "mesh:shared-domain",
+                    "mesh_generation_id": "mesh-gen-7",
+                    "location": "node",
+                    "component_count": 1,
+                    "unit": "A/m",
+                    "values": [760000.0, 770000.0, 780000.0, 790000.0],
+                    "min": 760000.0,
+                    "max": 790000.0,
+                    "mean": 775000.0,
+                    "provenance": {
+                        "source_kind": "gradient",
+                        "algorithm": "planner_material_field_sampling_v1",
+                        "timing_ms": 1.25
+                    }
+                }]
+            }),
+        );
+    }
+    let app = build_v2_router().with_state(state);
+
+    let detail_response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/data/material-fields/body_core_ms_asset")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let detail_status = detail_response.status();
+    assert_eq!(detail_status, StatusCode::OK);
+    let detail = body_json(detail_response).await;
+    assert_eq!(detail["field_id"], "body_core_ms_asset");
+    assert_eq!(detail["asset_id"], "material-field:body_core_ms_asset");
+    assert_eq!(detail["mesh_id"], "mesh:shared-domain");
+    assert_eq!(detail["mesh_generation_id"], "mesh-gen-7");
+    assert_eq!(detail["location"], "node");
+    assert_eq!(detail["component_count"], 1);
+    assert_eq!(detail["source_kind"], "gradient");
+    assert_eq!(detail["algorithm"], "planner_material_field_sampling_v1");
+    assert_eq!(detail["timing_ms"], 1.25);
+    assert_eq!(detail["realization_status"], "realized");
+    assert_eq!(
+        detail["values"],
+        serde_json::json!([760000.0, 770000.0, 780000.0, 790000.0])
+    );
+}
+
+#[tokio::test]
 async fn authoring_coupling_resource_resolves_bbox_surface_from_current_fem_mesh() {
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document();
@@ -8849,12 +9209,18 @@ async fn authoring_coupling_resource_resolves_bbox_surface_from_current_fem_mesh
         json["couplings"][0]["source_resolution"]["resolved_face_count"],
         1
     );
-    assert_eq!(json["couplings"][0]["source_resolution"]["area"], 0.5);
-    assert!(
-        json["couplings"][0]["source_resolution"]["tolerance"]
-            .as_f64()
-            .is_some_and(|value| value > 0.0)
+    assert_eq!(
+        json["couplings"][0]["source_resolution"]["boundary_face_indices"],
+        serde_json::json!([0])
     );
+    assert_eq!(
+        json["couplings"][0]["source_resolution"]["boundary_marker_ids"],
+        serde_json::json!([3])
+    );
+    assert_eq!(json["couplings"][0]["source_resolution"]["area"], 0.5);
+    assert!(json["couplings"][0]["source_resolution"]["tolerance"]
+        .as_f64()
+        .is_some_and(|value| value > 0.0));
     assert_eq!(
         json["couplings"][0]["target_resolution"]["status"],
         "resolved"
@@ -8863,6 +9229,80 @@ async fn authoring_coupling_resource_resolves_bbox_surface_from_current_fem_mesh
         json["couplings"][0]["realization_status"],
         "requires_runtime_capability"
     );
+}
+
+#[tokio::test]
+async fn authoring_coupling_resource_blocks_surface_without_boundary_markers() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.couplings.push(
+        serde_json::from_value(serde_json::json!({
+            "coupling_id": "body_top_rkky",
+            "kind": "rkky",
+            "source": { "kind": "surface", "object": "body", "selector": "top" },
+            "target": { "kind": "surface", "object": "body", "selector": "top" },
+            "enabled": true,
+            "parameters": { "kind": "rkky", "J1": -0.0003 },
+            "capability_policy": "require_runtime"
+        }))
+        .expect("surface coupling should deserialize"),
+    );
+    let mut mesh = sample_fem_mesh_payload_with_manifest();
+    mesh.nodes[0] = [0.0, 0.0, 1.0];
+    mesh.nodes[1] = [1.0, 0.0, 1.0];
+    mesh.nodes[2] = [0.0, 1.0, 1.0];
+    mesh.boundary_faces.clear();
+    mesh.boundary_markers.clear();
+    if let Some(body_part) = mesh
+        .mesh_parts
+        .iter_mut()
+        .find(|part| part.object_id.as_deref() == Some("body"))
+    {
+        body_part.boundary_face_start = 0;
+        body_part.boundary_face_count = 0;
+        body_part.boundary_face_indices.clear();
+        body_part.surface_faces = vec![[0, 1, 2]];
+    }
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+        snapshot.fem_mesh = Some(mesh);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/model/couplings")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let json = body_json(response).await;
+
+    assert_eq!(status, StatusCode::OK, "{json:#}");
+    assert_eq!(
+        json["couplings"][0]["source_resolution"]["status"],
+        "missing_boundary_markers"
+    );
+    assert_eq!(
+        json["couplings"][0]["source_resolution"]["resolved_face_count"],
+        1
+    );
+    assert_eq!(
+        json["couplings"][0]["source_resolution"]["boundary_face_indices"],
+        serde_json::json!([])
+    );
+    assert_eq!(
+        json["couplings"][0]["source_resolution"]["boundary_marker_ids"],
+        serde_json::json!([])
+    );
+    assert!(json["couplings"][0]["source_resolution"]["reason"]
+        .as_str()
+        .is_some_and(|reason| reason.contains("boundary marker")));
 }
 
 #[tokio::test]
@@ -8952,12 +9392,10 @@ async fn authoring_scene_commit_rejects_invalid_region_owned_payloads() {
     let status = response.status();
     let json = body_json(response).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{json:#}");
-    assert!(
-        json["error"]
-            .as_str()
-            .unwrap_or("")
-            .contains("Ms must be > 0")
-    );
+    assert!(json["error"]
+        .as_str()
+        .unwrap_or("")
+        .contains("Ms must be > 0"));
 }
 
 #[tokio::test]
@@ -9072,11 +9510,9 @@ async fn authoring_region_patch_commits_name_without_mesh_dirty() {
     let object = &json["objects"][0];
     assert_eq!(object["region_name"], "renamed_region");
     assert_eq!(object["visible"], false);
-    assert!(
-        !object["tags"]
-            .as_array()
-            .is_some_and(|tags| tags.iter().any(|tag| tag == "mesh:dirty"))
-    );
+    assert!(!object["tags"]
+        .as_array()
+        .is_some_and(|tags| tags.iter().any(|tag| tag == "mesh:dirty")));
 }
 
 #[tokio::test]
@@ -9342,13 +9778,11 @@ async fn authoring_object_resource_crud_commits_scene() {
     assert_eq!(create_response.status(), StatusCode::OK);
     let create_json = body_json(create_response).await;
     let create_revision = create_json["revision"].as_u64().unwrap();
-    assert!(
-        create_json["objects"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|object| object["id"] == "object_crud")
-    );
+    assert!(create_json["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|object| object["id"] == "object_crud"));
 
     let patch_response = app
         .clone()
@@ -9379,13 +9813,11 @@ async fn authoring_object_resource_crud_commits_scene() {
         .expect("patched object present");
     assert_eq!(patched_object["name"], "Object CRUD Renamed");
     assert_eq!(patched_object["region_name"], "crud_region");
-    assert!(
-        patched_object["tags"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|tag| tag == "mesh:dirty")
-    );
+    assert!(patched_object["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|tag| tag == "mesh:dirty"));
 
     let delete_response = app
         .oneshot(
@@ -9399,13 +9831,11 @@ async fn authoring_object_resource_crud_commits_scene() {
         .unwrap();
     assert_eq!(delete_response.status(), StatusCode::OK);
     let delete_json = body_json(delete_response).await;
-    assert!(
-        !delete_json["objects"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|object| object["id"] == "object_crud")
-    );
+    assert!(!delete_json["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|object| object["id"] == "object_crud"));
 }
 
 #[tokio::test]
@@ -11045,13 +11475,11 @@ async fn solver_status_endpoint_returns_detailed_read_model() {
     assert_eq!(json["max_torque_Apm"], 13.0);
     assert_eq!(json["max_torque"], 14.0);
     assert_eq!(json["last_error"], "latest runtime error");
-    assert!(
-        json["warnings"]
-            .as_array()
-            .is_some_and(|warnings| warnings.iter().any(|warning| {
-                warning == "sharp Aex in region 'film:core' uses projected approximation"
-            }))
-    );
+    assert!(json["warnings"]
+        .as_array()
+        .is_some_and(|warnings| warnings.iter().any(|warning| {
+            warning == "sharp Aex in region 'film:core' uses projected approximation"
+        })));
 }
 
 #[tokio::test]
@@ -11407,11 +11835,9 @@ async fn session_export_returns_fms_payload_with_session() {
     let json = body_json(response).await;
     assert_eq!(json["session_id"], "test-session");
     assert_eq!(json["profile"], "compact");
-    assert!(
-        json["fms_base64"]
-            .as_str()
-            .is_some_and(|value| !value.is_empty())
-    );
+    assert!(json["fms_base64"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
     assert!(json["size_bytes"].as_u64().unwrap_or(0) > 0);
 
     let _ = fs::remove_dir_all(&repo_root);
@@ -11563,11 +11989,9 @@ async fn session_checkpoint_create_captures_live_magnetization() {
         .as_str()
         .expect("checkpoint artifact_ref should be present")
         .to_string();
-    assert!(
-        json["checkpoint"]["checksum"]
-            .as_str()
-            .is_some_and(|value| !value.is_empty())
-    );
+    assert!(json["checkpoint"]["checksum"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
 
     let stage_after_create_response = app
         .clone()
@@ -11590,13 +12014,11 @@ async fn session_checkpoint_create_captures_live_magnetization() {
         stage_after_create["stages"][1]["state_transition"],
         "preserved"
     );
-    assert!(
-        stage_after_create["stages"][1]["artifact_refs"]
-            .as_array()
-            .expect("stage artifact_refs should be an array")
-            .iter()
-            .any(|value| value.as_str() == Some(checkpoint_artifact_ref.as_str()))
-    );
+    assert!(stage_after_create["stages"][1]["artifact_refs"]
+        .as_array()
+        .expect("stage artifact_refs should be an array")
+        .iter()
+        .any(|value| value.as_str() == Some(checkpoint_artifact_ref.as_str())));
 
     let detail_response = app
         .clone()
@@ -11734,11 +12156,9 @@ async fn field_state_export_inspect_and_apply_round_trips_live_magnetization() {
     assert_eq!(exported["target"]["id"], "body");
     assert_eq!(exported["format"], "h5");
     assert_eq!(exported["point_count"], 2);
-    assert!(
-        exported["artifact_ref"]
-            .as_str()
-            .is_some_and(|value| value.ends_with("body-final.h5"))
-    );
+    assert!(exported["artifact_ref"]
+        .as_str()
+        .is_some_and(|value| value.ends_with("body-final.h5")));
     let artifact_ref = exported["artifact_ref"]
         .as_str()
         .expect("field-state export should include artifact_ref")
@@ -12634,13 +13054,13 @@ async fn asyncapi_document_matches_realtime_rust_schema_names() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let json = body_json(response).await;
-    let async_revision_properties =
-        json["components"]["schemas"]["RealtimeResourceRevisionMap"]["properties"]
-            .as_object()
-            .expect("revision map properties should be an object")
-            .keys()
-            .cloned()
-            .collect::<BTreeSet<_>>();
+    let async_revision_properties = json["components"]["schemas"]["RealtimeResourceRevisionMap"]
+        ["properties"]
+        .as_object()
+        .expect("revision map properties should be an object")
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
     let rust_revision_properties = serde_json::to_value(RealtimeResourceRevisionMap {
         topology_revision: 1,
         field_catalog_revision: 1,
@@ -12672,18 +13092,18 @@ async fn asyncapi_document_matches_realtime_rust_schema_names() {
     .collect::<BTreeSet<_>>();
     assert_eq!(async_revision_properties, rust_revision_properties);
 
-    let async_resource_names =
-        json["components"]["schemas"]["RealtimeResourceChange"]["properties"]["resource"]["enum"]
-            .as_array()
-            .expect("resource enum should be an array")
-            .iter()
-            .map(|value| {
-                value
-                    .as_str()
-                    .expect("resource enum values should be strings")
-                    .to_string()
-            })
-            .collect::<BTreeSet<_>>();
+    let async_resource_names = json["components"]["schemas"]["RealtimeResourceChange"]
+        ["properties"]["resource"]["enum"]
+        .as_array()
+        .expect("resource enum should be an array")
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .expect("resource enum values should be strings")
+                .to_string()
+        })
+        .collect::<BTreeSet<_>>();
     let rust_resource_names = [
         RealtimeResourceName::Display,
         RealtimeResourceName::Workspace,
@@ -14976,11 +15396,9 @@ async fn field_slice_matrix_json_uses_exact_fem_tetra_path() {
         .filter_map(|value| value.as_f64())
         .collect();
     assert!(!finite_values.is_empty());
-    assert!(
-        finite_values
-            .iter()
-            .all(|value| (*value - 2.0).abs() < 1.0e-12)
-    );
+    assert!(finite_values
+        .iter()
+        .all(|value| (*value - 2.0).abs() < 1.0e-12));
     assert!(json["matrix_hash"].as_str().unwrap_or("").starts_with('"'));
 }
 
@@ -15011,11 +15429,9 @@ async fn field_slice_matrix_json_supports_fem_slab_mean() {
         .filter_map(|value| value.as_f64())
         .collect();
     assert!(!finite_values.is_empty());
-    assert!(
-        finite_values
-            .iter()
-            .all(|value| (*value - 2.0).abs() < 1.0e-12)
-    );
+    assert!(finite_values
+        .iter()
+        .all(|value| (*value - 2.0).abs() < 1.0e-12));
 }
 
 #[tokio::test]

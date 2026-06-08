@@ -1126,7 +1126,15 @@ fn finalize_current_live_apply(
         .unwrap_or(false);
     if finished || (current.artifacts.is_empty() && flags.has_run) {
         let artifact_dir = current_artifact_dir(current);
-        current.artifacts = read_artifacts_from_dir(artifact_dir.as_deref())?;
+        let mut artifacts = read_artifacts_from_dir(artifact_dir.as_deref())?;
+        if let Some(provenance) = region_owned_artifact_provenance(current) {
+            for artifact in &mut artifacts {
+                if artifact.region_owned_provenance.is_none() {
+                    artifact.region_owned_provenance = Some(provenance.clone());
+                }
+            }
+        }
+        current.artifacts = artifacts;
     }
 
     Ok(())
@@ -2365,6 +2373,154 @@ mod tests {
             solver_profile: None,
             fem_mesh: None,
         })
+    }
+
+    fn region_owned_scene_document(revision: u64) -> fullmag_authoring::SceneDocument {
+        let mut scene: fullmag_authoring::SceneDocument = serde_json::from_value(json!({
+            "version": "1",
+            "revision": revision,
+            "scene": {
+                "id": "scene-region-owned",
+                "name": "Region-owned artifact test"
+            },
+            "objects": [{
+                "id": "body",
+                "name": "Body",
+                "geometry": {
+                    "geometry_kind": "box",
+                    "geometry_params": { "size": [1.0e-7, 1.0e-7, 1.0e-8] }
+                },
+                "material_ref": "mat:body",
+                "magnetization_ref": "mag:body",
+                "transform": {
+                    "translation": [0.0, 0.0, 0.0],
+                    "rotation_quat": [0.0, 0.0, 0.0, 1.0],
+                    "scale": [1.0, 1.0, 1.0]
+                },
+                "tags": []
+            }],
+            "materials": [],
+            "magnetization_assets": [],
+            "couplings": [],
+            "current_modules": {},
+            "study": {},
+            "outputs": {},
+            "editor": {}
+        }))
+        .expect("region-owned scene should deserialize");
+        let region: fullmag_authoring::SceneObjectRegion = serde_json::from_value(json!({
+            "region_id": "body:core",
+            "owner_object": "body",
+            "name": "Core",
+            "enabled": true,
+            "shape": {
+                "kind": "box",
+                "size": [5.0e-8, 5.0e-8, 1.0e-8],
+                "center": [0.0, 0.0, 0.0]
+            },
+            "frame": "object",
+            "priority": 4,
+            "mesh_policy": null,
+            "material_overrides": [],
+            "texture_override": null,
+            "realization_policy": "inherit"
+        }))
+        .expect("region should deserialize");
+        scene.objects[0].regions.push(region);
+        scene
+    }
+
+    #[test]
+    fn disk_reloaded_finished_artifacts_keep_region_owned_provenance() {
+        let artifact_dir = std::env::temp_dir().join(format!(
+            "fullmag-region-owned-artifacts-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&artifact_dir);
+        std::fs::create_dir_all(artifact_dir.join("results"))
+            .expect("artifact result directory should be created");
+        std::fs::write(artifact_dir.join("results/final.json"), "{}")
+            .expect("artifact file should be written");
+
+        let mut current = test_current_snapshot();
+        current.scene_document = Some(region_owned_scene_document(57));
+
+        apply_current_live_snapshot(
+            &mut current,
+            CurrentLiveSnapshotRequest {
+                session_id: "test-session".to_string(),
+                session: None,
+                session_status: None,
+                metadata: None,
+                mesh_workspace: None,
+                stage_execution: None,
+                run: Some(RunManifest {
+                    run_id: "run-region-owned".to_string(),
+                    session_id: "test-session".to_string(),
+                    status: "completed".to_string(),
+                    total_steps: 1,
+                    final_time: Some(1.0e-12),
+                    final_e_ex: None,
+                    final_e_demag: None,
+                    final_e_ext: None,
+                    final_e_ani: None,
+                    final_e_dmi: None,
+                    final_e_total: None,
+                    artifact_dir: artifact_dir.display().to_string(),
+                }),
+                live_state: Some(LiveState {
+                    status: "completed".to_string(),
+                    updated_at_unix_ms: 1_700_000_000_001,
+                    latest_step: StepUpdateView {
+                        step: 1,
+                        time: 1.0e-12,
+                        dt: 1.0e-12,
+                        e_ex: 0.0,
+                        e_demag: 0.0,
+                        e_ext: 0.0,
+                        e_ani: 0.0,
+                        e_dmi: 0.0,
+                        e_total: 0.0,
+                        max_dm_dt: 0.0,
+                        max_h_eff: 0.0,
+                        max_h_demag: 0.0,
+                        max_torque_Apm: 0.0,
+                        max_torque_T: 0.0,
+                        wall_time_ns: 0,
+                        grid: [1, 1, 1],
+                        fem_mesh: None,
+                        magnetization: Some(vec![0.0, 0.0, 1.0]),
+                        per_object_scalars: Default::default(),
+                        preview_field: None,
+                        finished: true,
+                    },
+                }),
+                latest_scalar_row: None,
+                latest_fields: None,
+                preview_fields: None,
+                clear_preview_cache: false,
+                engine_log: None,
+                solver_profile: None,
+                fem_mesh: None,
+            },
+        )
+        .expect("finished snapshot should reload artifacts");
+
+        let artifact = current
+            .artifacts
+            .iter()
+            .find(|entry| entry.path == "results/final.json")
+            .expect("finished run artifact should be listed");
+        let provenance = artifact
+            .region_owned_provenance
+            .as_ref()
+            .expect("disk artifact should carry region-owned provenance");
+        assert_eq!(provenance.scene_revision, 57);
+        assert_eq!(provenance.authored_region_count, 1);
+        assert_eq!(provenance.material_parameter_field_count, 0);
+        assert_eq!(provenance.coupling_count, 0);
+
+        std::fs::remove_dir_all(artifact_dir).expect("temp artifact directory should be removed");
     }
 
     fn domain_fem_mesh(generation_id: &str) -> fullmag_runner::FemMeshPayload {

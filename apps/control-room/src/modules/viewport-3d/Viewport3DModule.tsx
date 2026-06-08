@@ -27,7 +27,6 @@ import {
   useSelectionActions,
   useSelectionSelector,
 } from "@/kernel/selection/useSelection";
-import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
 import type { ModuleProps } from "@/kernel/types";
 import {
@@ -81,6 +80,10 @@ import {
   type Viewport3DPrimitiveObject,
 } from "./viewport3dPrimitiveModel";
 import { toCameraTuple } from "./viewport3dCameraModel";
+import {
+  viewportSelectionForObject,
+  viewportSelectionForRegion,
+} from "./viewport3dSelection";
 import {
   EMPTY_VIEWPORT_3D_REFRESH_SAMPLE,
   resolveViewport3DRefreshCountdownDisplay,
@@ -257,7 +260,7 @@ export default function Viewport3DModule({
   const commandState = useViewport3DCommandState();
   const meshSizeHighlight = useMeshSizeHistogramHighlight(kernel.bus);
   const [regionOverlayMode, setRegionOverlayMode] =
-    useState<RegionOverlayMode>("both");
+    useState<RegionOverlayMode>("auto");
   const meshHistogramBinElements = useMeshHistogramBinElementsResource(
     meshSizeHighlight?.resource ?? null,
   );
@@ -405,42 +408,13 @@ function useViewport3DSelectionHandlers({
   );
   const onSelectObject = useCallback(
     (object: Viewport3DPrimitiveObject) => {
-      select({
-        kind: "object.root",
-        label: object.label,
-        nodeId: `model:object:${object.objectId}`,
-        objectId: object.objectId,
-        ref: {
-          kind: "object.root",
-          nodeId: `model:object:${object.objectId}`,
-          objectId: object.objectId,
-          type: "scene-object",
-          visualizationTargetId: `object:${object.objectId}`,
-        },
-      });
+      select(viewportSelectionForObject(object));
     },
     [select],
   );
   const onSelectRegion = useCallback(
     (region: RegionOverlaySelection) => {
-      const nodeId = `model:object:${region.objectId}:regions:${region.regionId}`;
-      select({
-        kind: "object.region",
-        label: region.regionId,
-        nodeId,
-        objectId: region.objectId,
-        ref: {
-          kind: "object.region",
-          nodeId,
-          objectId: region.objectId,
-          regionId: region.regionId,
-          type: "scene-object",
-          visualizationTargetId: visualizationTargetIdForSceneObject(
-            region.objectId,
-            region.regionId,
-          ),
-        },
-      });
+      select(viewportSelectionForRegion(region));
     },
     [select],
   );
@@ -669,6 +643,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           >
             {(
               [
+                ["auto", "Auto"],
                 ["authored", "Authored"],
                 ["realized", "Realized"],
                 ["both", "Both"],

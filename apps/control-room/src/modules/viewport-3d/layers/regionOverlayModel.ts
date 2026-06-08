@@ -18,6 +18,7 @@ interface JsonRecord {
 export interface RegionOverlayInput {
   enabled?: boolean | null;
   frame?: string | null;
+  mesh_part_ids?: readonly string[] | null;
   name?: string | null;
   owner_object_id?: string | null;
   owner_transform?: unknown;
@@ -54,6 +55,7 @@ interface RegionOverlayBaseModel {
   color: string;
   enabled: boolean;
   label: string;
+  meshPartIds: readonly string[] | null;
   objectId: string;
   priority: number | null;
   regionId: string;
@@ -88,9 +90,14 @@ export type RegionOverlayModel =
   | RegionOverlayCylinderModel
   | RegionOverlaySphereModel;
 
+type RegionMeshOverlaySelectionModel =
+  | RegionOverlayModel
+  | (RegionOverlayBaseModel & { meshPartIds: readonly string[] });
+
 export interface RegionMeshOverlayOwnerPart {
   element_count?: number | null;
   element_start?: number | null;
+  id?: string | null;
   node_count?: number | null;
   node_indices?: readonly number[] | null;
   node_start?: number | null;
@@ -195,7 +202,7 @@ export function buildRegionMeshOverlayModels(
     return [];
   }
 
-  return buildRegionOverlayModels(regions, options).flatMap((region) => {
+  return buildRegionMeshOverlaySelectionModels(regions, options).flatMap((region) => {
     const selectedElements = regionMeshElementIndices(region, topology, ownerParts);
     if (selectedElements.length === 0) return [];
 
@@ -221,6 +228,7 @@ export function buildRegionMeshOverlayModels(
         edgeIndices: edgeIndices.length > 0 ? edgeIndices : null,
         enabled: region.enabled,
         label: region.label,
+        meshPartIds: region.meshPartIds,
         objectId: region.objectId,
         positions: Float32Array.from(topology.positions),
         priority: region.priority,
@@ -234,6 +242,49 @@ export function buildRegionMeshOverlayModels(
       },
     ];
   });
+}
+
+function buildRegionMeshOverlaySelectionModels(
+  regions: readonly RegionOverlayInput[],
+  options: RegionOverlayOptions,
+): RegionMeshOverlaySelectionModel[] {
+  return [...regions]
+    .filter((region) => {
+      const selectedObjectId = nonEmptyString(options.selectedObjectId);
+      if (!selectedObjectId) return true;
+      return nonEmptyString(region.owner_object_id) === selectedObjectId;
+    })
+    .sort(compareRegionOverlayInputs)
+    .flatMap<RegionMeshOverlaySelectionModel>((region, index) => {
+      const partIds = meshPartIds(region.mesh_part_ids);
+      if (!partIds) return normalizeRegionOverlayModel(region, index, options);
+
+      const regionId = nonEmptyString(region.region_id);
+      const objectId = nonEmptyString(region.owner_object_id);
+      if (!regionId || !objectId) return [];
+
+      const enabled = region.enabled !== false;
+      const selected = options.selectedRegionId === regionId;
+      const settings = options.resolveSettings?.(region) ?? null;
+      const style = resolveRegionOverlayStyle({ enabled, selected, settings });
+      if (!style.fillVisible && !style.wireframeVisible) return [];
+
+      return [
+        {
+          color: resolveRegionOverlayColor(index, options.theme ?? "mocha"),
+          enabled,
+          label: nonEmptyString(region.name) ?? regionId,
+          meshPartIds: partIds,
+          objectId,
+          priority: finiteNumber(region.priority),
+          regionId,
+          selected,
+          slot: index,
+          style,
+          transform: defaultRegionTransform(),
+        },
+      ];
+    });
 }
 
 function compareRegionOverlayInputs(
@@ -269,6 +320,7 @@ function normalizeRegionOverlayModel(
     color: resolveRegionOverlayColor(slot, options.theme ?? "mocha"),
     enabled,
     label: nonEmptyString(region.name) ?? regionId,
+    meshPartIds: meshPartIds(region.mesh_part_ids),
     objectId,
     priority: finiteNumber(region.priority),
     regionId,
@@ -349,15 +401,28 @@ function nonZeroVector3(value: NumericVector3): boolean {
   return value.some((entry) => Math.abs(entry) > 0);
 }
 
+function meshPartIds(value: unknown): readonly string[] | null {
+  if (!Array.isArray(value)) return null;
+  const ids = value.filter(
+    (entry): entry is string => typeof entry === "string" && entry.length > 0,
+  );
+  return ids.length > 0 ? ids : null;
+}
+
 function priorityValue(value: unknown): number {
   return finiteNumber(value) ?? Number.POSITIVE_INFINITY;
 }
 
 function regionMeshElementIndices(
-  region: RegionOverlayModel,
+  region: RegionMeshOverlaySelectionModel,
   topology: DecodedTopology,
   ownerParts: readonly RegionMeshOverlayOwnerPart[],
 ): number[] {
+  if (region.meshPartIds?.length) {
+    return meshPartElementIndices(region.meshPartIds, topology, ownerParts);
+  }
+  if (!("kind" in region)) return [];
+
   const ownerElementCandidates = ownerElementIndicesForRegion(
     region,
     topology,
@@ -371,43 +436,74 @@ function regionMeshElementIndices(
   });
 }
 
+function meshPartElementIndices(
+  meshPartIdsValue: readonly string[],
+  topology: DecodedTopology,
+  ownerParts: readonly RegionMeshOverlayOwnerPart[],
+): number[] {
+  const selectedPartIds = new Set(meshPartIdsValue);
+  const candidates = new Set<number>();
+
+  for (const part of ownerParts) {
+    if (!part.id || !selectedPartIds.has(part.id)) continue;
+    for (const element of elementIndicesForPart(part, topology)) {
+      candidates.add(element);
+    }
+  }
+
+  return [...candidates].sort((left, right) => left - right);
+}
+
 function ownerElementIndicesForRegion(
   region: RegionOverlayModel,
   topology: DecodedTopology,
   ownerParts: readonly RegionMeshOverlayOwnerPart[],
 ): number[] {
-  const topologyElementCount = Math.floor(topology.indices.length / 4);
   const candidates = new Set<number>();
 
   for (const part of ownerParts) {
     if (!part.object_id || !objectIdsMatch(part.object_id, region.objectId)) {
       continue;
     }
-    const elementStart = Math.max(0, Math.floor(part.element_start ?? 0));
-    const elementCount = Math.max(0, Math.floor(part.element_count ?? 0));
-    if (elementCount > 0 && elementStart < topologyElementCount) {
-      const end = Math.min(topologyElementCount, elementStart + elementCount);
-      for (let element = elementStart; element < end; element += 1) {
-        candidates.add(element);
-      }
-      continue;
-    }
-
-    const nodeSet = nodeSetForOwnerPart(part, topology.nodeCount);
-    if (!nodeSet) continue;
-    for (let element = 0; element < topologyElementCount; element += 1) {
-      const source = element * 4;
-      const a = topology.indices[source] ?? 0;
-      const b = topology.indices[source + 1] ?? 0;
-      const c = topology.indices[source + 2] ?? 0;
-      const d = topology.indices[source + 3] ?? 0;
-      if (nodeSet.has(a) && nodeSet.has(b) && nodeSet.has(c) && nodeSet.has(d)) {
-        candidates.add(element);
-      }
+    for (const element of elementIndicesForPart(part, topology)) {
+      candidates.add(element);
     }
   }
 
   return [...candidates].sort((left, right) => left - right);
+}
+
+function elementIndicesForPart(
+  part: RegionMeshOverlayOwnerPart,
+  topology: DecodedTopology,
+): number[] {
+  const topologyElementCount = Math.floor(topology.indices.length / 4);
+  const elementStart = Math.max(0, Math.floor(part.element_start ?? 0));
+  const elementCount = Math.max(0, Math.floor(part.element_count ?? 0));
+  if (elementCount > 0 && elementStart < topologyElementCount) {
+    const end = Math.min(topologyElementCount, elementStart + elementCount);
+    const elements: number[] = [];
+    for (let element = elementStart; element < end; element += 1) {
+      elements.push(element);
+    }
+    return elements;
+  }
+
+  const nodeSet = nodeSetForOwnerPart(part, topology.nodeCount);
+  if (!nodeSet) return [];
+
+  const elements: number[] = [];
+  for (let element = 0; element < topologyElementCount; element += 1) {
+    const source = element * 4;
+    const a = topology.indices[source] ?? 0;
+    const b = topology.indices[source + 1] ?? 0;
+    const c = topology.indices[source + 2] ?? 0;
+    const d = topology.indices[source + 3] ?? 0;
+    if (nodeSet.has(a) && nodeSet.has(b) && nodeSet.has(c) && nodeSet.has(d)) {
+      elements.push(element);
+    }
+  }
+  return elements;
 }
 
 function nodeSetForOwnerPart(

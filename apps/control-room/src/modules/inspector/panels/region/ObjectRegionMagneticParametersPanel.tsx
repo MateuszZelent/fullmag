@@ -310,20 +310,20 @@ export function ObjectRegionMagneticParametersPanel({
           );
           return (
             <div className="fm-region-override" key={`${override.parameter}:${index}`} style={{ borderTop: "1px solid var(--fm-border, #ccc)", paddingTop: "12px", marginTop: "12px" }}>
-              <FormField label={`Override ${index + 1}`}>
-                <select
-                  value={override.parameter}
-                  onChange={(e) =>
-                    updateMaterialOverride(index, {
-                      parameter: e.target.value as RegionMaterialParameter,
-                    })
-                  }
-                >
-                  <option value="ms">Ms</option>
-                  <option value="aex">Aex</option>
-                  <option value="alpha">alpha</option>
-                  <option value="ku1">Ku1</option>
-                </select>
+              <FormField
+                label={`Override ${index + 1}`}
+                type="select"
+                value={override.parameter}
+                onChange={(event: ChangeEvent<HTMLSelectElement>) =>
+                  updateMaterialOverride(index, {
+                    parameter: event.target.value as RegionMaterialParameter,
+                  })
+                }
+              >
+                <option value="ms">Ms</option>
+                <option value="aex">Aex</option>
+                <option value="alpha">alpha</option>
+                <option value="ku1">Ku1</option>
               </FormField>
               <FieldRow
                 label="Inherited parent"
