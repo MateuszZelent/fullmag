@@ -30,7 +30,7 @@ from fullmag.model.spin_torque import (
 )
 from fullmag.model.domain_frame import build_domain_frame, geometry_bounds as shared_geometry_bounds
 from fullmag.model.dynamics import DEFAULT_GAMMA, LLG
-from fullmag.model.energy import BulkDMI, CubicAnisotropy, Demag, Exchange, InterfacialDMI, Magnetoelastic, OerstedField, OerstedCylinder, Pulse, Sinusoidal, ThermalNoise, UniaxialAnisotropy, Zeeman
+from fullmag.model.energy import BulkDMI, CubicAnisotropy, Demag, Exchange, InterfacialDMI, Magnetoelastic, OerstedField, OerstedCylinder, Pulse, SincPulse, Sinusoidal, ThermalNoise, UniaxialAnisotropy, Zeeman
 from fullmag.model.geometry import (
     ArchWaveguide,
     Box,
@@ -121,8 +121,18 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         "table_autosave": _export_table_autosave(base_problem),
         "initial_state": _export_initial_state(base_problem),
         "geometries": [
-            _export_geometry_entry(magnet, base_problem, source_root=source_root)
-            for magnet in base_problem.magnets
+            *[
+                _export_geometry_entry(magnet, base_problem, source_root=source_root)
+                for magnet in base_problem.magnets
+            ],
+            *[
+                _export_auxiliary_geometry_entry(
+                    geometry,
+                    base_problem,
+                    source_root=source_root,
+                )
+                for geometry in base_problem.auxiliary_geometries
+            ],
         ],
         "couplings": [coupling.to_ir() for coupling in base_problem.couplings],
         "current_modules": [
@@ -803,6 +813,11 @@ def _render_geometry_and_materials(
         if bulk_dmi is not None:
             lines.append(f"{var_name}.Dbulk = {_py_number(bulk_dmi)}")
         lines.append("")
+    for geometry in problem.auxiliary_geometries:
+        lines.append(
+            f"{_safe_identifier(geometry.geometry_name)} = {_surface_call(surface, 'antenna_object')}({_render_geometry_expr(geometry, magnet_name=geometry.geometry_name, source_root=source_root)}, name={_py_repr(geometry.geometry_name)})"
+        )
+        lines.append("")
     if lines[-1] == "":
         lines.pop()
     return lines
@@ -1288,6 +1303,7 @@ def _render_geometries_from_override(
         g = _normalize_mapping(geo_obj)
         name = str(g.get("name", ""))
         var_name = magnet_vars.get(name, "body")
+        role = str(g.get("role") or "magnet")
 
         kind = str(g.get("geometry_kind", "Box"))
         params = _normalize_mapping(g.get("geometry_params"))
@@ -1297,6 +1313,13 @@ def _render_geometries_from_override(
             name=name,
             source_root=source_root,
         )
+
+        if role != "magnet":
+            lines.append(
+                f"{var_name} = {_surface_call(surface, 'antenna_object')}({expr}, name={_py_repr(name)})"
+            )
+            lines.append("")
+            continue
 
         lines.append(f"{var_name} = {_surface_call(surface, 'geometry')}({expr}, name={_py_repr(name)})")
         region_name = g.get("region_name")
@@ -1538,6 +1561,22 @@ def _render_current_modules(
     lines = ["# Current modules"]
     for module in modules:
         if isinstance(module, AntennaFieldSource):
+            if module.model == "prescribed_zeeman_mask":
+                kwargs = [
+                    f"name={_py_repr(module.name)}",
+                    'model="prescribed_zeeman_mask"',
+                    f"object={_py_repr(str(module.object))}",
+                    f"B={_py_number(float(module.B if module.B is not None else 0.0))}",
+                    f"direction={_py_tuple3(module.direction)}",
+                ]
+                if module.waveform is not None:
+                    kwargs.append(
+                        f"waveform={_render_time_dependence_expr(module.waveform)}"
+                    )
+                lines.append(
+                    f"{_surface_call(surface, 'antenna_field_source')}({', '.join(kwargs)})"
+                )
+                continue
             kwargs = [
                 f"name={_py_repr(module.name)}",
                 f"antenna={_render_antenna_expr(module.antenna)}",
@@ -2861,6 +2900,13 @@ def _render_time_dependence_expr(waveform: object) -> str:
             f"fm.Pulse(t_on={_py_number(waveform.t_on)}, "
             f"t_off={_py_number(waveform.t_off)})"
         )
+    if isinstance(waveform, SincPulse):
+        kwargs = [f"cutoff_hz={_py_number(waveform.cutoff_hz)}"]
+        if abs(waveform.t0) > 1e-15:
+            kwargs.append(f"t0={_py_number(waveform.t0)}")
+        if abs(waveform.amplitude - 1.0) > 1e-15:
+            kwargs.append(f"amplitude={_py_number(waveform.amplitude)}")
+        return f"fm.SincPulse({', '.join(kwargs)})"
     return f"fm.{type(waveform).__name__}()"
 
 
@@ -2909,6 +2955,22 @@ def _render_current_module_override(module: dict[str, object], *, surface: str) 
         if conductivity_s_per_m is not None:
             kwargs.append(f"conductivity_s_per_m={_py_number(conductivity_s_per_m)}")
         return f"{_surface_call(surface, 'current_transport')}({', '.join(kwargs)})"
+
+    model = str(module.get("model") or "mqs_2p5d_az")
+    if model == "prescribed_zeeman_mask":
+        kwargs = [
+            f"name={_py_repr(str(module.get('name') or 'antenna'))}",
+            'model="prescribed_zeeman_mask"',
+            f"object={_py_repr(str(module.get('object') or 'antenna_object'))}",
+            f"B={_py_number(float(module.get('B', 0.0)))}",  # type: ignore[arg-type]
+        ]
+        direction = _optional_vec3(module.get("direction"))
+        if direction is not None:
+            kwargs.append(f"direction={_py_tuple3(direction)}")
+        waveform = module.get("waveform")
+        if isinstance(waveform, dict):
+            kwargs.append(f"waveform={_render_waveform_override(waveform)}")
+        return f"{_surface_call(surface, 'antenna_field_source')}({', '.join(kwargs)})"
 
     antenna_kind = str(module.get("antenna_kind") or "")
     antenna_params = _normalize_mapping(module.get("antenna_params"))
@@ -2981,6 +3043,13 @@ def _render_waveform_override(waveform: dict[str, object]) -> str:
             f"fm.Pulse(t_on={_py_number(float(waveform.get('t_on', 0.0)))}, "
             f"t_off={_py_number(float(waveform.get('t_off', 0.0)))})"
         )
+    if kind == "sinc_pulse":
+        kwargs = [f"cutoff_hz={_py_number(float(waveform.get('cutoff_hz', 0.0)))}"]  # type: ignore[arg-type]
+        if abs(float(waveform.get("t0", 0.0))) > 1e-15:
+            kwargs.append(f"t0={_py_number(float(waveform.get('t0', 0.0)))}")
+        if abs(float(waveform.get("amplitude", 1.0)) - 1.0) > 1e-15:
+            kwargs.append(f"amplitude={_py_number(float(waveform.get('amplitude', 1.0)))}")
+        return f"fm.SincPulse({', '.join(kwargs)})"
     raise ValueError(f"unsupported waveform override kind: {kind}")
 
 
@@ -3730,6 +3799,31 @@ def _export_geometry_entry(
     }
 
 
+def _export_auxiliary_geometry_entry(
+    geometry: object,
+    problem: Problem,
+    *,
+    source_root: Path,
+) -> dict[str, object]:
+    geometry_kind, geometry_params = _export_geometry_kind_params(geometry)
+    bounds_min, bounds_max = _geometry_bounds(geometry, source_root=source_root)
+    name = str(getattr(geometry, "geometry_name", getattr(geometry, "name", "object")))
+    visualization_hint = _normalize_mapping(
+        _normalize_mapping(problem.runtime_metadata).get("visualization_hint")
+    )
+    geometry_hints = _normalize_mapping(visualization_hint.get("geometry_hints"))
+    hint = _normalize_mapping(geometry_hints.get(name))
+    return {
+        "name": name,
+        "role": str(hint.get("role") or "auxiliary"),
+        "geometry_kind": geometry_kind,
+        "geometry_params": geometry_params,
+        "bounds_min": list(bounds_min) if bounds_min is not None else None,
+        "bounds_max": list(bounds_max) if bounds_max is not None else None,
+        "visualization_hint": hint,
+    }
+
+
 def _export_current_module_entry(module: object) -> dict[str, object]:
     if isinstance(module, CurrentTransport):
         entry = {
@@ -3746,6 +3840,19 @@ def _export_current_module_entry(module: object) -> dict[str, object]:
         return entry
     if not isinstance(module, AntennaFieldSource):
         raise ValueError(f"unsupported current module kind: {type(module).__name__}")
+    if module.model == "prescribed_zeeman_mask":
+        entry: dict[str, object] = {
+            "kind": "antenna_field_source",
+            "name": module.name,
+            "model": module.model,
+            "object": str(module.object),
+            "B": float(module.B if module.B is not None else 0.0),
+            "direction": list(module.direction),
+            "spatial_profile": module.spatial_profile or {"kind": "uniform"},
+        }
+        if module.waveform is not None:
+            entry["waveform"] = module.waveform.to_ir()
+        return entry
     antenna = module.antenna
     antenna_kind = type(antenna).__name__
     if isinstance(antenna, MicrostripAntenna):
@@ -4582,7 +4689,10 @@ def _stage_signature(problem: Problem) -> dict[str, object]:
     return {
         "name": problem.name,
         "runtime": problem.runtime.to_runtime_metadata(),
-        "geometries": [_geometry_signature(magnet.geometry) for magnet in problem.magnets],
+        "geometries": [
+            *[_geometry_signature(magnet.geometry) for magnet in problem.magnets],
+            *[_geometry_signature(geometry) for geometry in problem.auxiliary_geometries],
+        ],
         "materials": [_material_signature(magnet) for magnet in problem.magnets],
         "magnets": [
             {

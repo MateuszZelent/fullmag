@@ -576,6 +576,7 @@ pub(crate) fn write_artifacts(
     );
     let fem_gpu_relaxation_qualification =
         fem_gpu_relaxation_qualification_metadata(plan, &execution_provenance, executed);
+    let material_field_assets = write_material_field_artifacts(output_dir, plan)?;
 
     let metadata = serde_json::json!({
         "problem_name": problem.problem_meta.name,
@@ -593,6 +594,7 @@ pub(crate) fn write_artifacts(
         "status": executed.result.status,
         "scalar_rows": executed.result.steps.len(),
         "field_snapshots": executed.field_snapshot_count,
+        "material_field_assets": material_field_assets,
     });
     let metadata_path = output_dir.join("metadata.json");
     let mut metadata_file = fs::File::create(&metadata_path)?;
@@ -671,6 +673,189 @@ pub(crate) fn write_artifacts(
     )?;
 
     Ok(())
+}
+
+fn write_material_field_artifacts(
+    output_dir: &Path,
+    plan: &fullmag_ir::ExecutionPlanIR,
+) -> std::io::Result<Vec<fullmag_ir::MaterialFieldAssetIR>> {
+    let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
+        return Ok(Vec::new());
+    };
+
+    let mut metadata_assets = Vec::new();
+    for field_plan in &plan.common.material_field_plans {
+        let Some((values, location)) = fem_material_field_values(fem, field_plan) else {
+            continue;
+        };
+        if values.is_empty() {
+            continue;
+        }
+
+        let stats = material_field_statistics(values);
+        let asset_id = material_field_asset_id(
+            &field_plan.object_id,
+            field_plan.parameter,
+            field_plan.realization_location,
+        );
+        let artifact_path = format!("material-fields/{asset_id}.json");
+        let asset = fullmag_ir::MaterialFieldAssetIR {
+            asset_id: asset_id.clone(),
+            artifact_path: Some(artifact_path.clone()),
+            parameter: field_plan.parameter,
+            owner_object_id: field_plan.object_id.clone(),
+            source_region_id: None,
+            mesh_id: fem.mesh_name.clone(),
+            mesh_generation_id: solver_mesh_signature(&fem.mesh),
+            location,
+            component_count: 1,
+            unit: material_field_unit(field_plan.parameter).to_string(),
+            values: values.to_vec(),
+            min: stats.min,
+            max: stats.max,
+            mean: stats.mean,
+            provenance: fullmag_ir::MaterialFieldProvenanceIR {
+                source_kind: field_plan.source_kind,
+                algorithm: field_plan
+                    .realization_method
+                    .clone()
+                    .unwrap_or_else(|| "runtime_material_field_artifact".to_string()),
+                timing_ms: 0.0,
+            },
+        };
+
+        let full_path = output_dir.join(&artifact_path);
+        if let Some(parent) = full_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&full_path, serde_json::to_string_pretty(&asset).unwrap())?;
+
+        let mut metadata_asset = asset;
+        metadata_asset.values.clear();
+        metadata_assets.push(metadata_asset);
+    }
+
+    Ok(metadata_assets)
+}
+
+fn fem_material_field_values<'a>(
+    fem: &'a fullmag_ir::FemPlanIR,
+    field_plan: &fullmag_ir::MaterialFieldPlan,
+) -> Option<(&'a [f64], fullmag_ir::MaterialFieldLocationIR)> {
+    use fullmag_ir::MaterialFieldLocationIR::{Element, Node};
+    use fullmag_ir::MaterialParameterNameIR::{Aex, Alpha, Ms};
+
+    match (field_plan.parameter, field_plan.realization_location) {
+        (Ms, Node) => fem
+            .material
+            .ms_field
+            .as_deref()
+            .map(|values| (values, Node)),
+        (Aex, Node) => fem.material.a_field.as_deref().map(|values| (values, Node)),
+        (Alpha, Node) => fem
+            .material
+            .alpha_field
+            .as_deref()
+            .map(|values| (values, Node)),
+        (Ms, Element) => fem
+            .ms_element_field
+            .as_deref()
+            .map(|values| (values, Element)),
+        (Aex, Element) => fem
+            .a_element_field
+            .as_deref()
+            .map(|values| (values, Element)),
+        _ => None,
+    }
+}
+
+fn material_field_statistics(values: &[f64]) -> fullmag_ir::MaterialFieldStatisticsIR {
+    let mut min = f64::INFINITY;
+    let mut max = f64::NEG_INFINITY;
+    let mut sum = 0.0;
+    for value in values {
+        min = min.min(*value);
+        max = max.max(*value);
+        sum += *value;
+    }
+    fullmag_ir::MaterialFieldStatisticsIR {
+        sample_count: values.len(),
+        min,
+        max,
+        mean: sum / values.len() as f64,
+    }
+}
+
+fn material_field_asset_id(
+    object_id: &str,
+    parameter: fullmag_ir::MaterialParameterNameIR,
+    location: fullmag_ir::MaterialFieldLocationIR,
+) -> String {
+    format!(
+        "{}_{}_{}",
+        sanitize_material_field_asset_component(object_id),
+        material_field_parameter_id(parameter),
+        material_field_location_id(location),
+    )
+}
+
+fn sanitize_material_field_asset_component(value: &str) -> String {
+    let mut sanitized = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    while sanitized.contains("__") {
+        sanitized = sanitized.replace("__", "_");
+    }
+    sanitized.trim_matches('_').to_string()
+}
+
+fn material_field_parameter_id(parameter: fullmag_ir::MaterialParameterNameIR) -> &'static str {
+    match parameter {
+        fullmag_ir::MaterialParameterNameIR::Ms => "ms",
+        fullmag_ir::MaterialParameterNameIR::Aex => "aex",
+        fullmag_ir::MaterialParameterNameIR::Alpha => "alpha",
+        fullmag_ir::MaterialParameterNameIR::Ku1 => "ku1",
+        fullmag_ir::MaterialParameterNameIR::Ku2 => "ku2",
+        fullmag_ir::MaterialParameterNameIR::AnisotropyAxis => "anisotropy_axis",
+        fullmag_ir::MaterialParameterNameIR::Kc1 => "kc1",
+        fullmag_ir::MaterialParameterNameIR::Kc2 => "kc2",
+        fullmag_ir::MaterialParameterNameIR::Kc3 => "kc3",
+        fullmag_ir::MaterialParameterNameIR::Dind => "dind",
+        fullmag_ir::MaterialParameterNameIR::Dbulk => "dbulk",
+    }
+}
+
+fn material_field_location_id(location: fullmag_ir::MaterialFieldLocationIR) -> &'static str {
+    match location {
+        fullmag_ir::MaterialFieldLocationIR::Cell => "cell",
+        fullmag_ir::MaterialFieldLocationIR::Node => "node",
+        fullmag_ir::MaterialFieldLocationIR::Element => "element",
+        fullmag_ir::MaterialFieldLocationIR::Quadrature => "quadrature",
+    }
+}
+
+fn material_field_unit(parameter: fullmag_ir::MaterialParameterNameIR) -> &'static str {
+    match parameter {
+        fullmag_ir::MaterialParameterNameIR::Ms => "A/m",
+        fullmag_ir::MaterialParameterNameIR::Aex => "J/m",
+        fullmag_ir::MaterialParameterNameIR::Alpha => "1",
+        fullmag_ir::MaterialParameterNameIR::Ku1
+        | fullmag_ir::MaterialParameterNameIR::Ku2
+        | fullmag_ir::MaterialParameterNameIR::Kc1
+        | fullmag_ir::MaterialParameterNameIR::Kc2
+        | fullmag_ir::MaterialParameterNameIR::Kc3 => "J/m^3",
+        fullmag_ir::MaterialParameterNameIR::AnisotropyAxis => "1",
+        fullmag_ir::MaterialParameterNameIR::Dind | fullmag_ir::MaterialParameterNameIR::Dbulk => {
+            "J/m^2"
+        }
+    }
 }
 
 fn write_periodic_pairs_artifact(
@@ -1520,7 +1705,9 @@ mod tests {
         ExecutionPrecision, FdmLayerPlanIR, FdmMaterialIR, FdmMultilayerPlanIR,
         FdmMultilayerSummaryIR, FdmPlanIR, FemDomainMeshModeIR, FemMeshPartIR, FemMeshPartRole,
         FemMeshPartSelector, FemObjectSegmentIR, FemPlanIR, GridDimensions, IntegratorChoice,
-        MaterialIR, MeshIR, OutputPlanIR, ProvenancePlanIR,
+        MaterialFieldLocationIR, MaterialFieldPlan, MaterialFieldSourceKind,
+        MaterialFieldStatisticsIR, MaterialIR, MaterialParameterNameIR, MeshIR, OutputPlanIR,
+        ProvenancePlanIR,
     };
     use std::collections::HashMap;
     use std::fs;
@@ -1756,6 +1943,7 @@ mod tests {
                 enable_exchange: true,
                 enable_demag: false,
                 external_field: None,
+                antenna_zeeman_masks: Vec::new(),
                 current_modules: Vec::new(),
                 gyromagnetic_ratio: 2.211e5,
                 precision: ExecutionPrecision::Double,
@@ -1860,6 +2048,90 @@ mod tests {
         assert_eq!(fallback["original_engine"], "fem_native_gpu");
         assert_eq!(fallback["fallback_engine"], "fem_cpu_native");
         assert_eq!(fallback["reason"], "native_fem_gpu_unavailable");
+
+        fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
+    }
+
+    #[test]
+    fn write_artifacts_persists_fem_material_field_asset_files() {
+        let problem = fullmag_ir::ProblemIR::bootstrap_example();
+        let mut plan = test_fem_execution_plan();
+        plan.common.material_field_plans = vec![MaterialFieldPlan {
+            object_id: "free".to_string(),
+            parameter: MaterialParameterNameIR::Ms,
+            source_kind: MaterialFieldSourceKind::Override,
+            realization_location: MaterialFieldLocationIR::Node,
+            requires_sampling: false,
+            requires_mesh_revision: true,
+            warnings: Vec::new(),
+            realization_method: Some("fem_nodal_material_field".to_string()),
+            statistics: Some(MaterialFieldStatisticsIR {
+                sample_count: 4,
+                min: 700e3,
+                max: 730e3,
+                mean: 715e3,
+            }),
+        }];
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+            panic!("test plan should be FEM");
+        };
+        fem.material.ms_field = Some(vec![700e3, 710e3, 720e3, 730e3]);
+
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-artifacts-material-fields-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+        let executed = ExecutedRun {
+            result: RunResult {
+                status: RunStatus::Completed,
+                steps: Vec::new(),
+                final_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+                completion: None,
+            },
+            initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+            field_snapshots: Vec::new(),
+            field_snapshot_count: 0,
+            auxiliary_artifacts: Vec::new(),
+            provenance: ExecutionProvenance {
+                execution_engine: "fem_cpu_native".to_string(),
+                precision: "double".to_string(),
+                ..Default::default()
+            },
+        };
+
+        write_artifacts(&output_dir, &problem, &plan, &executed, None)
+            .expect("material-field artifacts should be written");
+
+        let metadata: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("metadata.json")).expect("metadata should exist"),
+        )
+        .expect("metadata should parse");
+        let assets = metadata["material_field_assets"]
+            .as_array()
+            .expect("metadata should carry material_field_assets");
+        assert_eq!(assets.len(), 1);
+        assert_eq!(assets[0]["asset_id"], "free_ms_node");
+        assert_eq!(
+            assets[0]["artifact_path"],
+            "material-fields/free_ms_node.json"
+        );
+        assert_eq!(assets[0]["values"].as_array().map(Vec::len), Some(0));
+
+        let artifact: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("material-fields/free_ms_node.json"))
+                .expect("material-field asset artifact should exist"),
+        )
+        .expect("material-field artifact should parse");
+        assert_eq!(artifact["asset_id"], "free_ms_node");
+        assert_eq!(artifact["values"].as_array().map(Vec::len), Some(4));
+        assert_eq!(artifact["min"], 700e3);
+        assert_eq!(artifact["max"], 730e3);
+        assert_eq!(artifact["mean"], 715e3);
 
         fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
     }

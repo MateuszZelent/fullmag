@@ -495,6 +495,20 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
+  it("defaults scalar surface quantities to colormap instead of vector orientation coloring", () => {
+    expect(
+      resolveGlobalObjectVisualizationSettings({
+        quantity: { active_quantity_id: "mat_ms" },
+        vector_style: { color_mode: "orientation" },
+      } as never),
+    ).toMatchObject({
+      activeQuantityId: "mat_ms",
+      shaderColorMode: "magnitude",
+      surfaceColorSource: "colormap",
+      vectorColorMode: "orientation",
+    });
+  });
+
   it("applies backend-owned visibility overrides before local target overrides", () => {
     const controller = new ObjectVisualizationController();
     const target = { id: "free-layer", kind: "object" as const };

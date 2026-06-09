@@ -115,6 +115,7 @@ pub fn scene_document_to_script_builder(
     let geometries = scene
         .objects
         .iter()
+        .filter(|object| object.role == "magnet")
         .map(|object| {
             let material = materials
                 .get(&object.material_ref)
@@ -784,6 +785,7 @@ fn scene_object_from_geometry(geometry: &ScriptBuilderGeometryEntry) -> SceneObj
     SceneObject {
         id: geometry.name.clone(),
         name: geometry.name.clone(),
+        role: "magnet".to_string(),
         geometry: SceneGeometry {
             geometry_kind: geometry.geometry_kind.clone(),
             geometry_params,
@@ -2448,6 +2450,12 @@ mod tests {
     fn scene_document_validation_accepts_legacy_scene_v1() {
         let mut scene = scene_document_from_script_builder(&sample_builder());
         scene.version = "scene.v1".to_string();
+        scene.couplings.clear();
+        for object in &mut scene.objects {
+            object.regions.clear();
+            object.allocated_region_ids.clear();
+            object.material_parameter_fields.clear();
+        }
 
         scene_document_to_script_builder(&scene).expect("legacy scene.v1 should validate");
     }

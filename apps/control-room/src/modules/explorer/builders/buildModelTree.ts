@@ -5,21 +5,17 @@ import type {
   ModelTreeObjectSnapshot,
   ModelTreePhysicsInteractionSnapshot,
   ModelTreeCouplingSnapshot,
-  ModelTreeStudyStageSnapshot,
   ModelTreeSnapshot,
 } from "../explorerTypes";
 
 import { buildCrossSectionNodes } from "./crossSectionExplorerNodes";
+import { buildStudyNodes } from "./study/studyExplorerNodes";
 
 import { meshPipelineStatusIsActive } from "@/shared/domain/mesh/buildPipeline";
 import {
   resolveMeshBuildFreshness,
   type MeshFreshnessState,
 } from "@/shared/domain/mesh/meshBuildFreshness";
-import {
-  formatTorqueT,
-  teslaFromApm,
-} from "@/shared/domain/physics/torqueUnits";
 
 function formatLength(value: number): string {
   const abs = Math.abs(value);
@@ -37,6 +33,60 @@ function objectNodes(object: ModelTreeObjectSnapshot): ExplorerNode {
   const objectId = object.id;
   const parentId = `model:object:${objectId}`;
   const meshStatus = object.meshStatus ?? "primitive-only";
+  if (object.objectRole === "antenna") {
+    return {
+      id: parentId,
+      kind: "object.root",
+      label: object.label,
+      parentId: "model:objects",
+      badge: object.geometryKind ?? "antenna",
+      icon: "wave",
+      objectId,
+      status: "ready",
+      contextCommands: [
+        "geometry.focus-primitive",
+        "geometry.delete-object",
+        "workspace.focus-selection",
+        "explorer.expand-all",
+        "explorer.collapse-all",
+      ],
+      children: [
+        {
+          id: `${parentId}:geometry`,
+          kind: "object.geometry",
+          label: "Geometry",
+          parentId,
+          badge: object.geometryKind ?? "unresolved",
+          icon: "braces",
+          objectId,
+          status: "ready",
+          contextCommands: ["workspace.focus-selection"],
+        },
+        {
+          id: `${parentId}:antenna`,
+          kind: "object.antenna",
+          label: "Antenna",
+          parentId,
+          badge: "Zeeman mask",
+          icon: "wave",
+          objectId,
+          status: "ready",
+          contextCommands: ["workspace.focus-selection"],
+        },
+        {
+          id: `${parentId}:visualization`,
+          kind: "object.visualization",
+          label: "Visualization",
+          parentId,
+          badge: "display",
+          icon: "sparkles",
+          objectId,
+          status: "ready",
+          contextCommands: ["workspace.focus-selection"],
+        },
+      ],
+    };
+  }
 
   return {
     id: parentId,
@@ -652,144 +702,6 @@ function meshPolicyNodes(mesh: ModelTreeSnapshot["mesh"]): ExplorerNode {
   };
 }
 
-function formatStudyStageKind(kind: string): string {
-  const parts: string[] = [];
-  for (const part of kind.split("_")) {
-    if (part) {
-      parts.push(part[0]?.toUpperCase() + part.slice(1));
-    }
-  }
-  return parts.join(" ");
-}
-
-function studyStageKind(kind: string): ExplorerNode["kind"] {
-  const normalized = kind.toLowerCase();
-  if (normalized === "relax") return "study.stage.relax";
-  if (normalized === "run") return "study.stage.run";
-  if (normalized === "eigenmodes") return "study.stage.eigenmodes";
-  if (normalized === "frequency_response") {
-    return "study.stage.frequency_response";
-  }
-  if (normalized === "hysteresis") return "study.stage.hysteresis";
-  if (normalized === "save_state") return "study.stage.save_state";
-  return "study.stage.action";
-}
-
-function studyStageBadge(stage: ModelTreeStudyStageSnapshot): string {
-  if (stage.kind === "relax") {
-    const torqueToleranceApm = finiteNumberFromScalar(stage.torqueTolerance);
-    if (torqueToleranceApm !== null) {
-      return `tau ${formatTorqueT(teslaFromApm(torqueToleranceApm))}`;
-    }
-    if (stage.maxSteps != null) return `${stage.maxSteps} steps`;
-    return "relax";
-  }
-  if (stage.kind === "run") {
-    if (stage.untilSeconds != null) return `${stage.untilSeconds} s`;
-    if (stage.maxSteps != null) return `${stage.maxSteps} steps`;
-    return "time domain";
-  }
-  return stage.artifactName ?? stage.kind;
-}
-
-function studyStageTransitionBadge(stage: ModelTreeStudyStageSnapshot): string {
-  return (
-    stage.stateTransition ??
-    stage.stateTransitionKind ??
-    stage.stateTransitionReason ??
-    "transition"
-  );
-}
-
-function studyStageTransitionStatus(
-  stage: ModelTreeStudyStageSnapshot,
-): ExplorerNodeStatus {
-  if (stage.stateTransitionUiPresentation === "error_boundary") {
-    return "failed";
-  }
-  if (stage.stateTransitionUiPresentation === "boundary_bar") {
-    return "warning";
-  }
-  return "ready";
-}
-
-function finiteNumberFromScalar(value: string | number | null | undefined): number | null {
-  if (value == null) return null;
-  const parsed = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function studyStageNode(stage: ModelTreeStudyStageSnapshot): ExplorerNode {
-  const displayKind = formatStudyStageKind(stage.kind);
-  const nodeStageId = stage.stageId ?? `${stage.index}`;
-  const nodeId = `model:study:stage:${nodeStageId}`;
-  const children: ExplorerNode[] = [];
-  if (
-    stage.stateTransition ||
-    stage.stateTransitionKind ||
-    stage.stateTransitionReason
-  ) {
-    children.push({
-      id: `${nodeId}:state-transition`,
-      kind: "study.stage.action",
-      label: "State Transition",
-      parentId: nodeId,
-      badge: studyStageTransitionBadge(stage),
-      icon:
-        stage.stateTransitionUiPresentation === "smooth_arrow"
-          ? "activity"
-          : "shield",
-      stageId: nodeStageId,
-      stageIndex: stage.index,
-      status: studyStageTransitionStatus(stage),
-      contextCommands: ["workspace.focus-selection"],
-    });
-  }
-  return {
-    id: nodeId,
-    kind: studyStageKind(stage.kind),
-    label: `${displayKind} ${stage.index + 1}`,
-    parentId: "model:study",
-    badge: studyStageBadge(stage),
-    icon: stage.kind === "relax" || stage.kind === "run" ? "play" : "activity",
-    stageId: nodeStageId,
-    stageIndex: stage.index,
-    status: stage.status ?? "ready",
-    contextCommands: ["study.skip", "workspace.focus-selection"],
-    children,
-  };
-}
-
-function studyNodes(study: ModelTreeSnapshot["study"]): ExplorerNode {
-  const stages = study?.stages ?? [];
-  return {
-    id: "model:study",
-    kind: "study.root",
-    label: "Study",
-    parentId: "model:session",
-    badge: `${stages.length} ${stages.length === 1 ? "stage" : "stages"}`,
-    icon: "play",
-    status: "ready",
-    contextCommands: [
-      "study.add-relax-stage",
-      "study.add-run-stage",
-      "study.run",
-      "study.pause",
-      "study.resume",
-      "study.stop",
-      "study.skip",
-      "study.compute-fields",
-      "study.compute-energies",
-      "study.save-checkpoint",
-      "study.restore-checkpoint",
-      "study.import-state",
-      "study.export-state",
-      "study.discard-paused-state",
-    ],
-    children: stages.map(studyStageNode),
-  };
-}
-
 function couplingNodes(couplings: readonly ModelTreeCouplingSnapshot[]): ExplorerNode | null {
   if (couplings.length === 0) return null;
   return {
@@ -896,7 +808,7 @@ export function buildModelTree(snapshot: ModelTreeSnapshot | null = null): Explo
 
   sessionChildren.push(
     meshPolicyNodes(snapshot?.mesh ?? null),
-    studyNodes(snapshot?.study ?? null),
+    buildStudyNodes(snapshot?.study ?? null),
   );
 
   return [

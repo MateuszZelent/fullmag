@@ -14,6 +14,44 @@ pub struct RfDriveIR {
     pub waveform: Option<TimeDependenceIR>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AntennaFieldSourceModelIR {
+    Mqs2p5dAz,
+    PrescribedZeemanMask,
+}
+
+fn default_antenna_field_source_model() -> AntennaFieldSourceModelIR {
+    AntennaFieldSourceModelIR::Mqs2p5dAz
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AntennaFieldIR {
+    #[serde(rename = "amplitude_B_T")]
+    pub amplitude_b_t: f64,
+    pub direction: [f64; 3],
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AntennaSpatialProfileIR {
+    Uniform,
+    Sinc {
+        axis: [f64; 3],
+        period_m: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        width_m: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        center_m: Option<f64>,
+        #[serde(default = "default_spatial_profile_window")]
+        window: String,
+    },
+}
+
+fn default_spatial_profile_window() -> String {
+    "rectangular".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AntennaIR {
@@ -50,11 +88,24 @@ pub enum AntennaIR {
 pub enum CurrentModuleIR {
     AntennaFieldSource {
         name: String,
-        solver: String,
-        antenna: AntennaIR,
-        drive: RfDriveIR,
-        #[serde(default = "default_antenna_air_box_factor")]
-        air_box_factor: f64,
+        #[serde(default = "default_antenna_field_source_model")]
+        model: AntennaFieldSourceModelIR,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        solver: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        antenna: Option<AntennaIR>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        drive: Option<RfDriveIR>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        air_box_factor: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        object: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        field: Option<AntennaFieldIR>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        spatial_profile: Option<AntennaSpatialProfileIR>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        waveform: Option<TimeDependenceIR>,
     },
     CurrentTransport {
         name: String,
@@ -729,8 +780,4 @@ fn default_table_autosave_kind() -> String {
 
 fn default_table_id() -> String {
     "default".to_string()
-}
-
-fn default_antenna_air_box_factor() -> f64 {
-    12.0
 }

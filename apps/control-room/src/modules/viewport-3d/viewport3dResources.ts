@@ -127,6 +127,11 @@ export async function loadCachedBinaryResource<TData>(
     if (!cached) {
       throw new Error(`Binary resource ${key} returned 304 without cache entry`);
     }
+    if (!cache.peek(key)) {
+      cache.set(key, cached);
+    } else {
+      cache.get(key);
+    }
     return cached.data;
   }
 

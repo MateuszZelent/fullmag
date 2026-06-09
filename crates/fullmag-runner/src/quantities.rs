@@ -106,6 +106,7 @@ fn fdm_quantity_is_active(engine: FdmEngine, plan: &FdmPlanIR, id: QuantityId) -
                 | QuantityId::HEx
                 | QuantityId::HDemag
                 | QuantityId::HExt
+                | QuantityId::HAnt
                 | QuantityId::Torque
                 | QuantityId::HAni
                 | QuantityId::HDmi
@@ -159,8 +160,8 @@ fn fdm_plan_enables_quantity(plan: &FdmPlanIR, id: QuantityId) -> bool {
         QuantityId::EdenDmi => plan.interfacial_dmi.is_some() || plan.bulk_dmi.is_some(),
         QuantityId::EdenTotal => true,
         QuantityId::MatMs | QuantityId::MatAex | QuantityId::MatAlpha => true,
-        QuantityId::HAnt
-        | QuantityId::U
+        QuantityId::HAnt => !plan.antenna_zeeman_masks.is_empty(),
+        QuantityId::U
         | QuantityId::Eps
         | QuantityId::Sigma
         | QuantityId::EEx
@@ -368,6 +369,7 @@ mod tests {
             a_element_field: None,
             region_materials: Vec::new(),
             external_field: None,
+            antenna_zeeman_masks: Vec::new(),
             current_modules: Vec::new(),
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,

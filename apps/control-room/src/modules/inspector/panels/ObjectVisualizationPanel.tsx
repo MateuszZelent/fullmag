@@ -70,6 +70,7 @@ import {
   shouldLoadObjectVisualizationFieldCatalog,
   SURFACE_COLOR_SOURCE_ITEMS,
   geometryScopeDisplayPatch,
+  quantitySourcePatch,
   surfaceDisplayPassPatch,
   surfaceSolidColorPatch,
   VISUALIZATION_COLOR_MODE_ITEMS,
@@ -490,10 +491,12 @@ function VisualizationSurfaceColoringSection({
 }
 
 function VisualizationQuantitySection({
+  onFieldCatalogRequest,
   patch,
   pending,
   settings,
 }: {
+  onFieldCatalogRequest: () => void;
   patch: PatchVisualizationTarget;
   pending: boolean;
   settings: VisualizationTargetSettings;
@@ -505,9 +508,15 @@ function VisualizationQuantitySection({
         label="Quantity source"
         type="select"
         value={settings.activeQuantityId}
-        onChange={(event) =>
-          void patch({ activeQuantityId: event.target.value })
-        }
+        onChange={(event) => {
+          const patchValue = quantitySourcePatch(settings, event.target.value);
+          const nextSurfaceColorSource =
+            patchValue.surfaceColorSource ?? settings.surfaceColorSource;
+          if (nextSurfaceColorSource !== "solid") {
+            onFieldCatalogRequest();
+          }
+          void patch(patchValue);
+        }}
       >
         {visualizationQuantityItems(settings.activeQuantityId).map((quantity) => (
           <option key={quantity.value} value={quantity.value}>
@@ -1191,6 +1200,7 @@ function ObjectVisualizationPanelView({
         patch={patch}
       />
       <VisualizationQuantitySection
+        onFieldCatalogRequest={onFieldCatalogRequest}
         patch={patch}
         pending={pending}
         settings={settings}

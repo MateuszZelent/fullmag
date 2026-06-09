@@ -7,7 +7,8 @@ from tempfile import TemporaryDirectory
 
 import fullmag as fm
 from fullmag.runtime.loader import load_problem_from_script
-from fullmag.runtime.script_builder import rewrite_loaded_problem_script
+from fullmag.runtime.scene_document import build_scene_document_from_builder
+from fullmag.runtime.script_builder import export_builder_draft, rewrite_loaded_problem_script
 
 
 def _base_problem(**kwargs) -> fm.Problem:
@@ -103,6 +104,127 @@ class CurrentTransportTests(unittest.TestCase):
                 ],
                 excitation_analysis=fm.SpinWaveExcitationAnalysis(source="drive"),
             )
+
+    def test_prescribed_zeeman_mask_antenna_serializes_to_ir(self) -> None:
+        source = fm.AntennaFieldSource(
+            name="center_drive",
+            model="prescribed_zeeman_mask",
+            object="center_microstrip",
+            B=1e-3,
+            direction=(0.0, 0.0, 1.0),
+            waveform=fm.SincPulse(cutoff_hz=20e9, t0=50e-12),
+        )
+        ir = source.to_ir()
+        self.assertEqual(ir["kind"], "antenna_field_source")
+        self.assertEqual(ir["model"], "prescribed_zeeman_mask")
+        self.assertEqual(ir["object"], "center_microstrip")
+        self.assertEqual(ir["field"]["amplitude_B_T"], 1e-3)  # type: ignore[index]
+        self.assertEqual(ir["field"]["direction"], [0.0, 0.0, 1.0])  # type: ignore[index]
+        self.assertEqual(ir["spatial_profile"], {"kind": "uniform"})
+        self.assertEqual(ir["waveform"]["kind"], "sinc_pulse")  # type: ignore[index]
+
+    def test_prescribed_zeeman_mask_script_rewrite(self) -> None:
+        source = fm.AntennaFieldSource(
+            name="center_drive",
+            model="prescribed_zeeman_mask",
+            object="center_microstrip",
+            B=1e-3,
+            direction=(0.0, 0.0, 1.0),
+            waveform=fm.SincPulse(cutoff_hz=20e9, t0=50e-12),
+        )
+        problem = _base_problem(current_modules=[source])
+        from fullmag.runtime.script_builder import _render_current_modules
+
+        rendered = "\n".join(
+            _render_current_modules(problem, surface="flat", overrides={})
+        )
+        self.assertIn('model="prescribed_zeeman_mask"', rendered)
+        self.assertIn('object="center_microstrip"', rendered)
+        self.assertIn("B=0.001", rendered)
+        self.assertIn("SincPulse", rendered)
+
+    def test_flat_antenna_object_prescribed_zeeman_mask_round_trip(self) -> None:
+        script = textwrap.dedent(
+            """
+            import fullmag as fm
+
+            fm.name("antenna_mask_flat")
+            fm.cell(5e-9, 5e-9, 5e-9)
+
+            layer = fm.geometry(fm.Box(100e-9, 100e-9, 5e-9), name="layer")
+            layer.Ms = 800e3
+            layer.Aex = 13e-12
+            layer.alpha = 0.01
+            layer.m = fm.texture.uniform(1, 0, 0)
+
+            fm.antenna_object(fm.Box(50e-9, 100e-9, 5e-9), name="center_microstrip")
+            fm.antenna_field_source(
+                name="center_drive",
+                model="prescribed_zeeman_mask",
+                object="center_microstrip",
+                B=1e-3,
+                direction=(0, 1, 0),
+                waveform=fm.SincPulse(cutoff_hz=20e9, t0=50e-12),
+            )
+            fm.save("H_ant", every=1e-12)
+            fm.run(2e-12)
+            """
+        )
+        with TemporaryDirectory() as tmpdir:
+            script_path = Path(tmpdir) / "antenna_mask_flat.py"
+            script_path.write_text(script, encoding="utf-8")
+            loaded = load_problem_from_script(script_path)
+            ir = loaded.problem.to_ir(script_source=script, source_root=script_path.parent)
+            geometry_names = [entry["name"] for entry in ir["geometry"]["entries"]]  # type: ignore[index]
+            self.assertIn("center_microstrip", geometry_names)
+            self.assertEqual(ir["current_modules"][0]["object"], "center_microstrip")  # type: ignore[index]
+
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            self.assertIn("fm.antenna_object", rendered)
+            self.assertIn('object="center_microstrip"', rendered)
+
+    def test_flat_antenna_object_exports_scene_document_object(self) -> None:
+        script = textwrap.dedent(
+            """
+            import fullmag as fm
+
+            fm.name("antenna_scene_flat")
+            fm.cell(5e-9, 5e-9, 5e-9)
+
+            layer = fm.geometry(fm.Box(100e-9, 100e-9, 5e-9), name="layer")
+            layer.Ms = 800e3
+            layer.Aex = 13e-12
+            layer.alpha = 0.01
+
+            fm.antenna_object(fm.Box(50e-9, 100e-9, 5e-9), name="center_microstrip")
+            fm.antenna_field_source(
+                name="center_drive",
+                model="prescribed_zeeman_mask",
+                object="center_microstrip",
+                B=1e-3,
+                direction=(0, 1, 0),
+                waveform=fm.SincPulse(cutoff_hz=20e9, t0=50e-12),
+            )
+            fm.run(2e-12)
+            """
+        )
+        with TemporaryDirectory() as tmpdir:
+            script_path = Path(tmpdir) / "antenna_scene_flat.py"
+            script_path.write_text(script, encoding="utf-8")
+            loaded = load_problem_from_script(script_path)
+            scene = build_scene_document_from_builder(export_builder_draft(loaded))
+
+        antenna = next(
+            obj for obj in scene["objects"] if obj["id"] == "center_microstrip"
+        )
+        self.assertEqual(antenna["role"], "antenna")
+        self.assertEqual(antenna["material_ref"], "")
+        self.assertIsNone(antenna["magnetization_ref"])
+        self.assertEqual(antenna["visualization_hint"]["role"], "antenna")
+        self.assertEqual(
+            scene["current_modules"]["modules"][0]["object"],
+            "center_microstrip",
+        )
 
     def test_flat_script_round_trip_renders_current_transport(self) -> None:
         script = textwrap.dedent(

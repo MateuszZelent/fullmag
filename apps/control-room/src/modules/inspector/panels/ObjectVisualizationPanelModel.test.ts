@@ -20,6 +20,7 @@ import {
   buildVisualizationPanelSections,
   colorPickerInputValue,
   geometryScopeDisplayPatch,
+  quantitySourcePatch,
   resolveObjectVisualizationPanelTopologyFreshness,
   resolveVisualizationVectorBudgetRange,
   shouldLoadObjectVisualizationFieldCatalog,
@@ -70,10 +71,61 @@ describe("ObjectVisualizationPanelModel", () => {
       "eden_ext",
       "eden_ani",
       "eden_dmi",
+      "mat_ms",
+      "mat_aex",
+      "mat_alpha",
+      "mat_dind",
+      "mat_dbulk",
     ]);
     expect(visualizationQuantityItems("exchange_field")[0]).toEqual({
       label: "exchange_field",
       value: "exchange_field",
+    });
+  });
+
+  it("switches scalar material quantities to colormap surface coloring", () => {
+    expect(
+      quantitySourcePatch(
+        {
+          ...DEFAULT_OBJECT_VISUALIZATION,
+          surfaceColorSource: "orientation",
+        },
+        "material_ms",
+      ),
+    ).toEqual({
+      activeQuantityId: "mat_ms",
+      surfaceColorSource: "colormap",
+    });
+  });
+
+  it("clears stale scalar colormap mode when switching back to vector quantities", () => {
+    expect(
+      quantitySourcePatch(
+        {
+          ...DEFAULT_OBJECT_VISUALIZATION,
+          surfaceColorSource: "colormap",
+          vectorColorMode: "orientation",
+        },
+        "H_eff",
+      ),
+    ).toEqual({
+      activeQuantityId: "H_eff",
+      surfaceColorSource: "orientation",
+    });
+  });
+
+  it("preserves explicit vector component coloring when switching vector quantities", () => {
+    expect(
+      quantitySourcePatch(
+        {
+          ...DEFAULT_OBJECT_VISUALIZATION,
+          surfaceColorSource: "component_z",
+          vectorColorMode: "orientation",
+        },
+        "H_demag",
+      ),
+    ).toEqual({
+      activeQuantityId: "H_demag",
     });
   });
 

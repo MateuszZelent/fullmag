@@ -166,6 +166,8 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
         name = str(geometry.get("name", "object"))
         geometry_params = dict(geometry.get("geometry_params") or {})
         translation = geometry_params.pop("translation", geometry_params.pop("translate", [0, 0, 0]))
+        role = str(geometry.get("role") or "magnet")
+        is_auxiliary = role != "magnet"
         magnetization = dict(geometry.get("magnetization") or {})
         mag_kind = str(magnetization.get("kind", "uniform"))
         if mag_kind == "file" and (
@@ -191,6 +193,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             {
                 "id": name,
                 "name": name,
+                "role": role,
                 "geometry": {
                     "geometry_kind": str(geometry.get("geometry_kind", "")),
                     "geometry_params": geometry_params,
@@ -203,20 +206,23 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
                     "scale": _one_vec3(),
                     "pivot": _zero_vec3(),
                 },
-                "material_ref": _material_id(name),
+                "material_ref": "" if is_auxiliary else _material_id(name),
                 "region_name": geometry.get("region_name"),
-                "magnetization_ref": _magnetization_id(name),
-                "physics_stack": physics_stack,
+                "magnetization_ref": None if is_auxiliary else _magnetization_id(name),
+                "physics_stack": [] if is_auxiliary else physics_stack,
                 "object_mesh": geometry.get("mesh"),
                 "mesh_override": geometry.get("mesh"),
                 "regions": object_regions,
                 "allocated_region_ids": allocated_region_ids,
                 "material_parameter_fields": geometry.get("material_parameter_fields") or [],
+                "visualization_hint": geometry.get("visualization_hint") or {},
                 "visible": True,
                 "locked": False,
-                "tags": [],
+                "tags": [f"role:{role}"] if is_auxiliary else [],
             }
         )
+        if is_auxiliary:
+            continue
         materials.append(
             {
                 "id": _material_id(name),
@@ -313,13 +319,17 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
     geometries: list[dict[str, Any]] = []
 
     for obj in scene.get("objects") or []:
+        role = str(obj.get("role") or "magnet")
+        is_auxiliary = role != "magnet"
         material_ref = str(obj.get("material_ref") or "")
-        if not material_ref or material_ref not in materials:
+        if not is_auxiliary and (not material_ref or material_ref not in materials):
             raise ValueError(
                 f"object '{obj.get('id') or obj.get('name') or ''}' references missing material '{material_ref}'"
             )
         magnetization_ref = str(obj.get("magnetization_ref") or "")
-        if not magnetization_ref or magnetization_ref not in magnetization_assets:
+        if not is_auxiliary and (
+            not magnetization_ref or magnetization_ref not in magnetization_assets
+        ):
             raise ValueError(
                 f"object '{obj.get('id') or obj.get('name') or ''}' references missing magnetization asset '{magnetization_ref}'"
             )
@@ -331,7 +341,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
             if any(abs(float(value)) > 0 for value in translation):
                 geometry_params["translation"] = [float(value) for value in translation]
 
-        magnetization_asset = magnetization_assets[magnetization_ref]
+        magnetization_asset = magnetization_assets.get(magnetization_ref, {})
         magnetization = {
             "kind": str(magnetization_asset.get("kind", "uniform")),
             "value": magnetization_asset.get("value"),
@@ -349,30 +359,32 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
             "preset_version": magnetization_asset.get("preset_version"),
             "ui_label": magnetization_asset.get("ui_label"),
         }
-        material_properties = materials[material_ref]
+        material_properties = materials.get(material_ref, {})
         physics_stack = _ensure_physics_stack(
             obj.get("physics_stack"),
             material_dind=material_properties.get("Dind"),
             material_dbulk=material_properties.get("Dbulk"),
         )
 
-        geometries.append(
-            {
-                "name": str(obj.get("name") or obj.get("id") or ""),
-                "region_name": obj.get("region_name"),
-                "geometry_kind": str(geometry.get("geometry_kind", "")),
-                "geometry_params": geometry_params,
-                "bounds_min": geometry.get("bounds_min"),
-                "bounds_max": geometry.get("bounds_max"),
-                "material": material_properties,
-                "magnetization": magnetization,
-                "physics_stack": physics_stack,
-                "mesh": obj.get("object_mesh", obj.get("mesh_override")),
-                "object_regions": obj.get("regions") or [],
-                "allocated_region_ids": obj.get("allocated_region_ids") or [],
-                "material_parameter_fields": obj.get("material_parameter_fields") or [],
-            }
-        )
+        entry: dict[str, Any] = {
+            "name": str(obj.get("name") or obj.get("id") or ""),
+            "role": role,
+            "region_name": obj.get("region_name"),
+            "geometry_kind": str(geometry.get("geometry_kind", "")),
+            "geometry_params": geometry_params,
+            "bounds_min": geometry.get("bounds_min"),
+            "bounds_max": geometry.get("bounds_max"),
+            "mesh": obj.get("object_mesh", obj.get("mesh_override")),
+            "object_regions": obj.get("regions") or [],
+            "allocated_region_ids": obj.get("allocated_region_ids") or [],
+            "material_parameter_fields": obj.get("material_parameter_fields") or [],
+            "visualization_hint": obj.get("visualization_hint") or {},
+        }
+        if not is_auxiliary:
+            entry["material"] = material_properties
+            entry["magnetization"] = magnetization
+            entry["physics_stack"] = physics_stack
+        geometries.append(entry)
 
     study = dict(scene.get("study") or {})
     current_modules = dict(scene.get("current_modules") or {})

@@ -12,6 +12,9 @@ describe("ObjectRegionsPanel physical scalar inputs", () => {
     expect(source).toContain("function PhysicalScalarField");
     expect(source).toContain("const [text, setText] = useState(formatted);");
     expect(source).toContain("parseRegionPhysicalScalar(nextText)");
+    expect(source).toContain("const parsed = parseRegionPhysicalScalar(displayValue);");
+    expect(source).toContain("aria-invalid={invalid || undefined}");
+    expect(source).toContain("hint={invalid ? \"Enter a valid SI value\" : undefined}");
     expect(source).toContain('type="text"');
     expect(source).toContain('inputMode="decimal"');
     expect(source).not.toContain("function parsePhysicalInput");

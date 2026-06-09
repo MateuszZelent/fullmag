@@ -6,6 +6,7 @@ import {
   applyScalarShaderColorBuffer,
   canApplyScalarShaderColorBuffer,
   createScalarSurfaceShaderMaterial,
+  updateScalarSurfaceShaderMaterial,
   VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE,
   VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE,
 } from "./viewport3dScalarSurfaceShader";
@@ -100,6 +101,49 @@ describe("viewport3dScalarSurfaceShader", () => {
 
     expect(material.uniforms.fmColorModeId.value).toBe(1);
     expect(material.vertexShader).toContain(VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE);
+    material.dispose();
+  });
+
+  it("switches shader programs when updating between scalar and orientation modes", () => {
+    const material = createScalarSurfaceShaderMaterial(scalarBuffer([2, 4]), {
+      depthTest: true,
+      depthWrite: true,
+      opacity: 0.7,
+      polygonOffset: false,
+      polygonOffsetFactor: 0,
+      polygonOffsetUnits: 0,
+      side: 0,
+      transparent: true,
+    });
+
+    const scalarVertexShader = material.vertexShader;
+    const scalarFragmentShader = material.fragmentShader;
+    const initialVersion = material.version;
+
+    updateScalarSurfaceShaderMaterial(
+      material,
+      orientationBuffer([1, 0, 0, 0, 0, 1]),
+      0.4,
+    );
+
+    expect(material.uniforms.fmColorModeId.value).toBe(1);
+    expect(material.uniforms.fmOpacity.value).toBe(0.4);
+    expect(material.vertexShader).toContain(VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE);
+    expect(material.vertexShader).not.toBe(scalarVertexShader);
+    expect(material.fragmentShader).not.toBe(scalarFragmentShader);
+    expect(material.version).toBeGreaterThan(initialVersion);
+
+    const orientationVersion = material.version;
+
+    updateScalarSurfaceShaderMaterial(material, scalarBuffer([5, 9]), 0.6);
+
+    expect(material.uniforms.fmColorModeId.value).toBe(0);
+    expect(material.uniforms.fmOpacity.value).toBe(0.6);
+    expect(material.vertexShader).toContain(VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE);
+    expect(material.vertexShader).toBe(scalarVertexShader);
+    expect(material.fragmentShader).toBe(scalarFragmentShader);
+    expect(material.version).toBeGreaterThan(orientationVersion);
+
     material.dispose();
   });
 });

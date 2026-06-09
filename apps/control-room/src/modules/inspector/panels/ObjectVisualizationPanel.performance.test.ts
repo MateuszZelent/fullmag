@@ -47,6 +47,7 @@ describe("ObjectVisualizationPanel performance contracts", () => {
   it("renders target quantity selection inside the visualization inspector", () => {
     expect(panelSource).toContain("VisualizationQuantitySection");
     expect(panelSource).toContain('label="Quantity source"');
-    expect(panelSource).toContain("activeQuantityId: event.target.value");
+    expect(panelSource).toContain("quantitySourcePatch(settings, event.target.value)");
+    expect(panelSource).toContain("onFieldCatalogRequest()");
   });
 });

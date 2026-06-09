@@ -10,6 +10,7 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
     node.objectId &&
     (node.kind === "object.root" ||
       node.kind === "object.geometry" ||
+      node.kind === "object.antenna" ||
       node.kind === "object.material" ||
       node.kind === "object.physics" ||
       node.kind === "object.regions" ||
@@ -82,6 +83,19 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       plotId: node.crossSectionPlotId,
       type: "cross-section-plot",
       visualizationTargetId: `cross-section:plot:${node.crossSectionPlotId}`,
+    };
+  }
+
+  if (
+    node.kind === "study.root" ||
+    node.kind === "study.stages" ||
+    node.kind === "study.execution" ||
+    node.kind === "study.recovery"
+  ) {
+    return {
+      kind: node.kind,
+      nodeId: node.id,
+      type: "study",
     };
   }
 

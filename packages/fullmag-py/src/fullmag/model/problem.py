@@ -1039,6 +1039,7 @@ class Problem:
     description: str | None = None
     runtime: RuntimeSelection = field(default_factory=RuntimeSelection)
     runtime_metadata: dict[str, object] = field(default_factory=dict)
+    auxiliary_geometries: Sequence[object] = ()
     current_modules: Sequence[CurrentModule] = ()
     couplings: Sequence[Coupling] = ()
     excitation_analysis: SpinWaveExcitationAnalysis | None = None
@@ -1352,12 +1353,24 @@ class Problem:
             if name not in seen:
                 geometries.append(magnet.geometry)
                 seen.add(name)
+        for geometry in self.auxiliary_geometries:
+            name = geometry.geometry_name
+            if name not in seen:
+                geometries.append(geometry)
+                seen.add(name)
         return geometries
 
     def _validate_geometry_consistency(self) -> None:
         seen: dict[str, dict[str, object]] = {}
         for magnet in self.magnets:
             geometry = magnet.geometry
+            geometry_ir = geometry.to_ir()
+            if geometry.geometry_name in seen and seen[geometry.geometry_name] != geometry_ir:
+                raise ValueError(
+                    f"geometry '{geometry.geometry_name}' is defined multiple times with different values"
+                )
+            seen[geometry.geometry_name] = geometry_ir
+        for geometry in self.auxiliary_geometries:
             geometry_ir = geometry.to_ir()
             if geometry.geometry_name in seen and seen[geometry.geometry_name] != geometry_ir:
                 raise ValueError(

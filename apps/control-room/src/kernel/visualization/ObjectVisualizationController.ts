@@ -3,6 +3,7 @@ import type {
   VisualizationStateResource,
 } from "../api/apiTypes";
 import {
+  isScalarSpatialQuantityId,
   normalizeQuantityIdOrDefault,
   resolveCanonicalQuantityId,
 } from "../api/quantityIds";
@@ -801,6 +802,10 @@ export function resolveGlobalObjectVisualizationSettings(
     state.quantity?.active_quantity_id ?? state.active_quantity_id,
     DEFAULT_OBJECT_VISUALIZATION.activeQuantityId,
   );
+  const surfaceColorSource = defaultSurfaceColorSourceForQuantity(
+    activeQuantityId,
+    vectorColorMode,
+  );
 
   return {
     ...DEFAULT_OBJECT_VISUALIZATION,
@@ -817,12 +822,11 @@ export function resolveGlobalObjectVisualizationSettings(
       shaderVisible: surfaceVisible,
       wireframeVisible,
     }),
-    shaderColorMode: vectorColorMode,
+    shaderColorMode:
+      surfaceColorSourceToColorMode(surfaceColorSource) ?? "monochrome",
     shaderMonoColor: vectorMonoColor,
     shaderVisible: surfaceVisible,
-    surfaceColorSource:
-      surfaceColorSourceFromColorMode(vectorColorMode) ??
-      DEFAULT_OBJECT_VISUALIZATION.surfaceColorSource,
+    surfaceColorSource,
     vectorAlphaPercent: layerOpacityToPercent(state?.vector_style?.alpha ?? 1),
     vectorColorMode,
     vectorMonoColor,
@@ -1289,6 +1293,19 @@ function surfaceColorSourceFromColorMode(
   if (value === "z") return "component_z";
   if (value === "orientation" || value === "magnitude") return value;
   return undefined;
+}
+
+function defaultSurfaceColorSourceForQuantity(
+  activeQuantityId: string,
+  vectorColorMode: VisualizationColorMode,
+): SurfaceColorSource {
+  if (isScalarSpatialQuantityId(activeQuantityId)) {
+    return "colormap";
+  }
+  return (
+    surfaceColorSourceFromColorMode(vectorColorMode) ??
+    DEFAULT_OBJECT_VISUALIZATION.surfaceColorSource
+  );
 }
 
 export function surfaceColorSourceToColorMode(

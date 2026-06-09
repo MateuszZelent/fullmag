@@ -48,6 +48,7 @@ import {
   Sparkles,
   Square,
   Target,
+  Trash2,
   Triangle,
   Upload,
   Zap,
@@ -352,12 +353,18 @@ const QUANTITY_ITEMS = [
   { value: "H_demag",       label: "Demag field / H_demag" },
   { value: "H_ex",          label: "Exchange field / H_ex" },
   { value: "H_ani",         label: "Anisotropy field / H_ani" },
+  { value: "H_ant",         label: "Antenna field / H_ant" },
   { value: "eden_total",    label: "Total energy density / ε_total" },
   { value: "eden_ex",       label: "Exchange energy density / ε_ex" },
   { value: "eden_demag",    label: "Demag energy density / ε_demag" },
   { value: "eden_ext",      label: "Zeeman energy density / ε_ext" },
   { value: "eden_ani",      label: "Anisotropy energy density / ε_ani" },
   { value: "eden_dmi",      label: "DMI energy density / ε_dmi" },
+  { value: "mat_ms",        label: "Saturation magnetization / M_sat" },
+  { value: "mat_aex",       label: "Exchange stiffness / A_ex" },
+  { value: "mat_alpha",     label: "Gilbert damping / α" },
+  { value: "mat_dind",      label: "Interfacial DMI / D_ind" },
+  { value: "mat_dbulk",     label: "Bulk DMI / D_bulk" },
 ];
 
 const VECTOR_COLOR_ITEMS: Array<{
@@ -1101,6 +1108,7 @@ const geometryTab: RibbonTabContent = {
         { id: "geometry.add-box",          icon: icon(Box),      label: "Box",            iconColor: "text-emerald-400", splitButton: true, menu: menu("geometry-box", "Box primitive", ["Block", "Thin film", "Cuboid from bounds"]) },
         { id: "geometry.add-cylinder",     icon: icon(Cylinder), label: "Cylinder",       iconColor: "text-cyan-400" },
         { id: "geometry.add-sphere",       icon: icon(Circle),   label: "Sphere",         iconColor: "text-violet-400" },
+        { id: "geometry.add-microstrip-antenna", icon: icon(RadioTower), label: "Microstrip", iconColor: "text-rose-300" },
         { id: "builder-add-ellipsoid",     icon: icon(Circle),   label: "Ellipsoid",      iconColor: "text-purple-300" },
         { id: "builder-add-disk",          icon: icon(Disc),     label: "Disk",           iconColor: "text-sky-400" },
         { id: "builder-add-thin_film",     icon: icon(Box),      label: "Thin Film",      iconColor: "text-lime-300" },
@@ -1371,7 +1379,10 @@ const studyTab: RibbonTabContent = {
       actions: [
         { id: "study.add-relax-stage", icon: icon(Play), label: "Relax", iconColor: "text-emerald-400", menu: menu("study-relax",  "Relax stage",      ["Overdamped relax", "LLG relax", "Minimizer", "Stop criteria"]) },
         { id: "study.add-run-stage",   icon: icon(Zap),  label: "Run",   iconColor: "text-yellow-400",  menu: menu("study-run-stage", "Run stage",  ["Time integration", "Pulse response", "RF drive", "Thermal noise"]) },
-        { id: "add-eigensolve", icon: icon(Sigma),    label: "Eigensolve", iconColor: "text-violet-400",  disabled: true },
+        { id: "study.add-hysteresis-stage", icon: icon(BarChart3), label: "Hysteresis", iconColor: "text-pink-400" },
+        { id: "study.add-eigenmodes-stage", icon: icon(Sigma), label: "Eigenmodes", iconColor: "text-violet-400" },
+        { id: "study.add-frequency-response-stage", icon: icon(Activity), label: "Frequency", iconColor: "text-sky-400" },
+        { id: "study.add-save-state-stage", icon: icon(Save), label: "Save State", iconColor: "text-lime-300" },
       ],
     },
     {
@@ -1380,7 +1391,6 @@ const studyTab: RibbonTabContent = {
       subtitle: "multi-stage",
       tone: "compose",
       actions: [
-        { id: "study-hysteresis",     icon: icon(BarChart3), label: "Hysteresis",    iconColor: "text-pink-400" },
         { id: "study-sweep-relax",    icon: icon(BarChart3), label: "Sweep+Relax",   iconColor: "text-violet-400" },
         { id: "study-sweep-snap",     icon: icon(Camera),    label: "Sweep+Snap",    iconColor: "text-sky-400" },
         { id: "study-relax-run",      icon: icon(Play),      label: "Relax→Run",     iconColor: "text-emerald-400" },
@@ -1396,6 +1406,7 @@ const studyTab: RibbonTabContent = {
       tone: "selection",
       actions: [
         { id: "study-duplicate", icon: icon(Columns2), label: "Duplicate",      iconColor: "text-sky-400",     disabled: true },
+        { id: "study.remove-selected-stage", icon: icon(Trash2), label: "Remove", iconColor: "text-red-400" },
         { id: "study-toggle",    icon: icon(Eye),      label: "Enable/Disable", iconColor: "text-amber-400",   disabled: true },
       ],
     },
@@ -1440,7 +1451,7 @@ const resultsTab: RibbonTabContent = {
       subtitle: "resources",
       tone: "neutral",
       actions: [
-        { id: "res-m",          icon: icon(Magnet),    label: "M",         active: true, iconColor: "text-pink-400",    menu: radioMenu("results-quantity", "Result quantity", "m", [["m", "Magnetization / m"], ["H_eff", "H_eff"], ["H_demag", "H_demag"], ["H_ex", "H_ex"], ["H_ani", "H_ani"], ["eden_total", "ε_total"], ["eden_ex", "ε_ex"], ["eden_demag", "ε_demag"], ["eden_ext", "ε_ext"], ["eden_ani", "ε_ani"], ["eden_dmi", "ε_dmi"]]) },
+        { id: "res-m",          icon: icon(Magnet),    label: "M",         active: true, iconColor: "text-pink-400",    menu: radioMenu("results-quantity", "Result quantity", "m", [["m", "Magnetization / m"], ["H_eff", "H_eff"], ["H_demag", "H_demag"], ["H_ex", "H_ex"], ["H_ani", "H_ani"], ["H_ant", "H_ant"], ["eden_total", "ε_total"], ["eden_ex", "ε_ex"], ["eden_demag", "ε_demag"], ["eden_ext", "ε_ext"], ["eden_ani", "ε_ani"], ["eden_dmi", "ε_dmi"], ["mat_ms", "M_sat"], ["mat_aex", "A_ex"], ["mat_alpha", "α"], ["mat_dind", "D_ind"], ["mat_dbulk", "D_bulk"]]) },
         { id: "res-heff",       icon: icon(Zap),       label: "H_eff",                   iconColor: "text-yellow-400" },
         { id: "res-demag",      icon: icon(Sigma),     label: "H_demag",                 iconColor: "text-violet-300" },
         { id: "res-exchange",   icon: icon(Zap),       label: "H_ex",                    iconColor: "text-amber-400" },

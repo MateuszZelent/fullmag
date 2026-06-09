@@ -9,7 +9,7 @@ import { magnitudeColorRgb } from "./viewport3dVectorColoring";
 export type MeshQualityColorMetric = "gamma" | "sicn" | "volume";
 
 type MeshQualityColorCacheEntry = Partial<
-  Record<MeshQualityColorMetric, ScalarColorBuffer | null>
+  Record<string, ScalarColorBuffer | null>
 >;
 
 const meshQualityVertexColorCache = new WeakMap<
@@ -21,30 +21,32 @@ export function buildMeshQualityVertexColors(
   topology: DecodedTopology | null | undefined,
   quality: DecodedMeshQualityData | null | undefined,
   metric: MeshQualityColorMetric,
+  palette = "viridis",
 ): ScalarColorBuffer | null {
   if (!topology || !quality) return null;
 
-  const cached = cachedMeshQualityVertexColors(topology, quality, metric);
+  const cacheKey = `${metric}:${palette}`;
+  const cached = cachedMeshQualityVertexColors(topology, quality, cacheKey);
   if (cached !== undefined) return cached;
 
   if (quality.elementCount !== topology.elementCount) {
-    cacheMeshQualityVertexColors(topology, quality, metric, null);
+    cacheMeshQualityVertexColors(topology, quality, cacheKey, null);
     return null;
   }
 
   const values = quality[metric];
   if (!values || values.length !== topology.elementCount) {
-    cacheMeshQualityVertexColors(topology, quality, metric, null);
+    cacheMeshQualityVertexColors(topology, quality, cacheKey, null);
     return null;
   }
   if (topology.indices.length !== topology.elementCount * 4) {
-    cacheMeshQualityVertexColors(topology, quality, metric, null);
+    cacheMeshQualityVertexColors(topology, quality, cacheKey, null);
     return null;
   }
 
   const range = rangeFor(values);
   if (!range) {
-    cacheMeshQualityVertexColors(topology, quality, metric, null);
+    cacheMeshQualityVertexColors(topology, quality, cacheKey, null);
     return null;
   }
 
@@ -64,7 +66,7 @@ export function buildMeshQualityVertexColors(
   const colors = new Float32Array(topology.nodeCount * 3);
   for (let node = 0; node < topology.nodeCount; node += 1) {
     const value = counts[node] > 0 ? sums[node] / counts[node] : range.min;
-    const [red, green, blue] = magnitudeColorRgb(normalize(value, range));
+    const [red, green, blue] = magnitudeColorRgb(normalize(value, range), palette);
     const target = node * 3;
     colors[target] = red;
     colors[target + 1] = green;
@@ -72,28 +74,28 @@ export function buildMeshQualityVertexColors(
   }
 
   const result = { colors, range };
-  cacheMeshQualityVertexColors(topology, quality, metric, result);
+  cacheMeshQualityVertexColors(topology, quality, cacheKey, result);
   return result;
 }
 
 function cachedMeshQualityVertexColors(
   topology: DecodedTopology,
   quality: DecodedMeshQualityData,
-  metric: MeshQualityColorMetric,
+  cacheKey: string,
 ): ScalarColorBuffer | null | undefined {
   const byQuality = meshQualityVertexColorCache.get(topology);
   if (!byQuality) return undefined;
   const entry = byQuality.get(quality);
-  if (!entry || !Object.prototype.hasOwnProperty.call(entry, metric)) {
+  if (!entry || !Object.prototype.hasOwnProperty.call(entry, cacheKey)) {
     return undefined;
   }
-  return entry[metric] ?? null;
+  return entry[cacheKey] ?? null;
 }
 
 function cacheMeshQualityVertexColors(
   topology: DecodedTopology,
   quality: DecodedMeshQualityData,
-  metric: MeshQualityColorMetric,
+  cacheKey: string,
   result: ScalarColorBuffer | null,
 ): void {
   let byQuality = meshQualityVertexColorCache.get(topology);
@@ -102,7 +104,7 @@ function cacheMeshQualityVertexColors(
     meshQualityVertexColorCache.set(topology, byQuality);
   }
   const entry = byQuality.get(quality) ?? {};
-  entry[metric] = result;
+  entry[cacheKey] = result;
   byQuality.set(quality, entry);
 }
 

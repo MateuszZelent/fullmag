@@ -5019,6 +5019,12 @@
               "null"
             ]
           },
+          "artifact_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "asset_id": {
             "type": [
               "string",
@@ -6935,6 +6941,18 @@
               "format": "int32",
               "minimum": 0,
               "type": "integer"
+            },
+            "type": "array"
+          },
+          "realization_method": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "realization_warnings": {
+            "items": {
+              "type": "string"
             },
             "type": "array"
           },
@@ -10448,6 +10466,12 @@
               "$ref": "#/components/schemas/SceneObjectRegion"
             },
             "type": "array"
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "tags": {
             "items": {
@@ -17646,10 +17670,10 @@
                 }
               }
             },
-            "description": "Mesh-backed realized-region membership indices"
+            "description": "Realized-region membership indices from FEM mesh parts, object segments, or geometry projection"
           },
           "404": {
-            "description": "No active mesh or mesh-backed membership for the region"
+            "description": "No active mesh or membership for the region"
           }
         },
         "tags": [

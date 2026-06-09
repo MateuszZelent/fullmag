@@ -2001,6 +2001,62 @@ fn excitation_analysis_source_must_reference_antenna_module() {
 }
 
 #[test]
+fn prescribed_zeeman_mask_antenna_source_validates() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.current_modules
+        .push(CurrentModuleIR::AntennaFieldSource {
+            name: "center_drive".to_string(),
+            model: AntennaFieldSourceModelIR::PrescribedZeemanMask,
+            solver: None,
+            antenna: None,
+            drive: None,
+            air_box_factor: None,
+            object: Some("center_microstrip".to_string()),
+            field: Some(AntennaFieldIR {
+                amplitude_b_t: 1e-3,
+                direction: [0.0, 0.0, 1.0],
+            }),
+            spatial_profile: Some(AntennaSpatialProfileIR::Uniform),
+            waveform: Some(TimeDependenceIR::SincPulse {
+                cutoff_hz: 20e9,
+                t0: 50e-12,
+                amplitude: 1.0,
+            }),
+        });
+
+    ir.validate()
+        .expect("prescribed zeeman mask antenna source should validate");
+}
+
+#[test]
+fn prescribed_zeeman_mask_requires_field_and_object() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.current_modules
+        .push(CurrentModuleIR::AntennaFieldSource {
+            name: "center_drive".to_string(),
+            model: AntennaFieldSourceModelIR::PrescribedZeemanMask,
+            solver: None,
+            antenna: None,
+            drive: None,
+            air_box_factor: None,
+            object: None,
+            field: None,
+            spatial_profile: Some(AntennaSpatialProfileIR::Uniform),
+            waveform: None,
+        });
+
+    let errors = ir
+        .validate()
+        .expect_err("prescribed zeeman mask without object and field must fail");
+    assert!(errors
+        .iter()
+        .any(|error| { error.contains("prescribed_zeeman_mask requires object") }));
+    assert!(errors
+        .iter()
+        .any(|error| { error.contains("prescribed_zeeman_mask requires field") }));
+}
+
+#[test]
 fn oersted_field_source_must_reference_current_transport() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.energy_terms.push(EnergyTermIR::OerstedField {

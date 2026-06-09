@@ -560,6 +560,10 @@ pub struct MeshRegionMembershipResource {
     pub mesh_revision: u64,
     pub region_id: String,
     pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub realization_method: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub realization_warnings: Vec<String>,
     pub mesh_part_ids: Vec<String>,
     pub element_indices: Vec<u32>,
     pub node_indices: Vec<u32>,

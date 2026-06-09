@@ -5,6 +5,7 @@ from typing import Sequence
 
 from fullmag._validation import (
     as_vector3,
+    require_finite,
     require_non_empty,
     require_non_negative,
     require_positive,
@@ -14,6 +15,7 @@ from fullmag.model.energy import Sinusoidal, TimeDependence
 # FEM-034 / FEM-035: extensible allow-lists for solver and current_distribution.
 # Add new entries here when additional backends or distributions are implemented.
 ANTENNA_SOLVERS = {"mqs_2p5d_az"}
+ANTENNA_FIELD_SOURCE_MODELS = {"mqs_2p5d_az", "prescribed_zeeman_mask"}
 CURRENT_DISTRIBUTIONS = {"uniform"}
 
 
@@ -148,28 +150,89 @@ Antenna = MicrostripAntenna | CPWAntenna
 @dataclass(frozen=True, slots=True)
 class AntennaFieldSource:
     name: str
-    antenna: Antenna
-    drive: RfDrive
-    solver: str = "mqs_2p5d_az"
-    air_box_factor: float = 12.0
+    antenna: Antenna | None = None
+    drive: RfDrive | None = None
+    solver: str | None = None
+    air_box_factor: float | None = None
+    model: str = "mqs_2p5d_az"
+    object: str | None = None
+    B: float | None = None
+    direction: tuple[float, float, float] = (0.0, 0.0, 1.0)
+    spatial_profile: dict[str, object] | None = None
+    waveform: TimeDependence | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "name", require_non_empty(self.name, "name"))
-        object.__setattr__(self, "solver", require_non_empty(self.solver, "solver").lower())
-        require_positive(self.air_box_factor, "air_box_factor")
-        if self.solver not in ANTENNA_SOLVERS:
+        model = require_non_empty(self.model, "model").lower()
+        object.__setattr__(self, "model", model)
+        if model not in ANTENNA_FIELD_SOURCE_MODELS:
             raise ValueError(
-                f"solver must be one of {sorted(ANTENNA_SOLVERS)}, got {self.solver!r}"
+                f"model must be one of {sorted(ANTENNA_FIELD_SOURCE_MODELS)}, got {model!r}"
             )
+        object.__setattr__(self, "direction", as_vector3(self.direction, "direction"))
+        if self.waveform is not None and not hasattr(self.waveform, "to_ir"):
+            raise TypeError("waveform must be a Fullmag time-dependence object")
+
+        if model == "mqs_2p5d_az":
+            if self.antenna is None:
+                raise ValueError("antenna is required for model='mqs_2p5d_az'")
+            if self.drive is None:
+                raise ValueError("drive is required for model='mqs_2p5d_az'")
+            solver = require_non_empty(self.solver or "mqs_2p5d_az", "solver").lower()
+            object.__setattr__(self, "solver", solver)
+            air_box_factor = 12.0 if self.air_box_factor is None else self.air_box_factor
+            require_positive(air_box_factor, "air_box_factor")
+            object.__setattr__(self, "air_box_factor", air_box_factor)
+            if solver not in ANTENNA_SOLVERS:
+                raise ValueError(
+                    f"solver must be one of {sorted(ANTENNA_SOLVERS)}, got {solver!r}"
+                )
+            return
+
+        if self.object is None or not str(self.object).strip():
+            raise ValueError("object is required for model='prescribed_zeeman_mask'")
+        if self.B is None:
+            raise ValueError("B is required for model='prescribed_zeeman_mask'")
+        require_finite(self.B, "B")
+        direction = self.direction
+        norm_sq = sum(component * component for component in direction)
+        if norm_sq <= 1e-30:
+            raise ValueError("direction must be non-zero")
+        if self.antenna is not None or self.drive is not None or self.solver is not None:
+            raise ValueError(
+                "prescribed_zeeman_mask must not define antenna, drive, or solver"
+            )
+        if self.air_box_factor is not None:
+            raise ValueError("prescribed_zeeman_mask must not define air_box_factor")
 
     def to_ir(self) -> dict[str, object]:
+        if self.model == "prescribed_zeeman_mask":
+            waveform = self.waveform.to_ir() if self.waveform is not None else None
+            ir = {
+                "kind": "antenna_field_source",
+                "name": self.name,
+                "model": self.model,
+                "object": str(self.object),
+                "field": {
+                    "amplitude_B_T": float(self.B if self.B is not None else 0.0),
+                    "direction": list(self.direction),
+                },
+                "spatial_profile": self.spatial_profile or {"kind": "uniform"},
+            }
+            if waveform is not None:
+                ir["waveform"] = waveform
+            return ir
+
+        assert self.antenna is not None
+        assert self.drive is not None
         return {
             "kind": "antenna_field_source",
             "name": self.name,
-            "solver": self.solver,
+            "model": self.model,
+            "solver": self.solver or "mqs_2p5d_az",
             "antenna": self.antenna.to_ir(),
             "drive": self.drive.to_ir(),
-            "air_box_factor": self.air_box_factor,
+            "air_box_factor": self.air_box_factor if self.air_box_factor is not None else 12.0,
         }
 
 

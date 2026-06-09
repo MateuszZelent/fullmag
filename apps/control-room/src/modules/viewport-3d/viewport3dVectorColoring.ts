@@ -126,6 +126,18 @@ const PALETTE_STOPS: Record<
   viridis: MAGNITUDE_STOPS,
 };
 
+export function viewport3DColorPaletteGradientCss(
+  palette: string | null | undefined = "viridis",
+): string {
+  const stops = PALETTE_STOPS[normalizeViewport3DColorPalette(palette)];
+  return `linear-gradient(90deg, ${stops
+    .map(
+      ([red, green, blue]) =>
+        `rgb(${Math.round(red * 255)}, ${Math.round(green * 255)}, ${Math.round(blue * 255)})`,
+    )
+    .join(", ")})`;
+}
+
 /**
  * Maps a relative magnitude [0..1] to an RGB colour using the selected palette.
  */
@@ -171,18 +183,16 @@ export function resolveViewport3DVectorColorRgb(
   return scalarColorRgb(
     resolveViewport3DVectorColorScalar(mode, x, y, z),
     range,
+    palette,
   );
 }
 
 function scalarColorRgb(
   value: number,
   range: Viewport3DScalarColorRange,
+  palette: string | null | undefined = "viridis",
 ): [number, number, number] {
   const span = Math.max(range.max - range.min, 1e-12);
   const normalized = Math.min(Math.max((value - range.min) / span, 0), 1);
-  return [
-    normalized,
-    0.38 + 0.42 * (1 - Math.abs(normalized - 0.5) * 2),
-    1 - normalized,
-  ];
+  return magnitudeColorRgb(normalized, palette);
 }

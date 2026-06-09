@@ -249,6 +249,41 @@ fn build_oersted(plan: &FdmPlanIR) -> Option<OerstedCylinderConfig> {
     })
 }
 
+fn resolved_per_node_external_field(plan: &FdmPlanIR, time_seconds: f64) -> Option<Vec<Vector3>> {
+    let antenna = if plan.antenna_zeeman_masks.is_empty() {
+        None
+    } else {
+        Some(
+            crate::antenna_fields::combined_antenna_zeeman_mask_field_at_time(
+                &plan.antenna_zeeman_masks,
+                plan.initial_magnetization.len(),
+                time_seconds,
+            ),
+        )
+    };
+    match (plan.oersted_field_xyz.as_ref(), antenna) {
+        (None, None) => None,
+        (Some(field), None) => Some(field.clone()),
+        (None, Some(field)) => Some(field),
+        (Some(oersted), Some(mut field)) => {
+            for (index, value) in oersted.iter().enumerate().take(field.len()) {
+                field[index][0] += value[0];
+                field[index][1] += value[1];
+                field[index][2] += value[2];
+            }
+            Some(field)
+        }
+    }
+}
+
+fn resolved_antenna_zeeman_field(plan: &FdmPlanIR, time_seconds: f64) -> Vec<Vector3> {
+    crate::antenna_fields::combined_antenna_zeeman_mask_field_at_time(
+        &plan.antenna_zeeman_masks,
+        plan.initial_magnetization.len(),
+        time_seconds,
+    )
+}
+
 pub(crate) fn snapshot_preview(
     plan: &FdmPlanIR,
     request: &LivePreviewRequest,
@@ -465,7 +500,7 @@ pub(crate) fn build_snapshot_problem_and_state(
             exchange: plan.enable_exchange,
             demag: plan.enable_demag,
             external_field: plan.external_field,
-            per_node_field: plan.oersted_field_xyz.clone(),
+            per_node_field: resolved_per_node_external_field(plan, 0.0),
             magnetoelastic: build_mel(plan),
             uniaxial_anisotropy: plan.material.uniaxial_anisotropy_ku1.map(|ku1| {
                 UniaxialAnisotropyConfig {
@@ -628,7 +663,7 @@ pub(crate) fn execute_reference_fdm(
             exchange: plan.enable_exchange,
             demag: plan.enable_demag,
             external_field: plan.external_field,
-            per_node_field: plan.oersted_field_xyz.clone(),
+            per_node_field: resolved_per_node_external_field(plan, 0.0),
             magnetoelastic: build_mel(plan),
             uniaxial_anisotropy: plan.material.uniaxial_anisotropy_ku1.map(|ku1| {
                 UniaxialAnisotropyConfig {
@@ -736,6 +771,7 @@ pub(crate) fn execute_reference_fdm(
         record_due_outputs(
             &problem,
             &state,
+            Some(resolved_antenna_zeeman_field(plan, state.time_seconds)),
             0,
             0.0,
             0,
@@ -790,7 +826,11 @@ pub(crate) fn execute_reference_fdm(
         step_count = result.steps_taken;
 
         // Record final observables
-        let observables = observe_state(&problem, &state)?;
+        let observables = observe_state_with_antenna_field(
+            &problem,
+            &state,
+            Some(resolved_antenna_zeeman_field(plan, state.time_seconds)),
+        )?;
         steps.push(make_step_stats(
             step_count,
             state.time_seconds,
@@ -804,7 +844,11 @@ pub(crate) fn execute_reference_fdm(
             .as_ref()
             .is_some_and(|consumer| consumer.initial_snapshot);
         let mut current_observables = if needs_initial_live_snapshot {
-            Some(observe_state(&problem, &state)?)
+            Some(observe_state_with_antenna_field(
+                &problem,
+                &state,
+                Some(resolved_antenna_zeeman_field(plan, state.time_seconds)),
+            )?)
         } else {
             None
         };
@@ -847,7 +891,11 @@ pub(crate) fn execute_reference_fdm(
                             Some(field)
                         } else {
                             if current_observables_stale || current_observables.is_none() {
-                                current_observables = Some(observe_state(&problem, &state)?);
+                                current_observables = Some(observe_state_with_antenna_field(
+                                    &problem,
+                                    &state,
+                                    Some(resolved_antenna_zeeman_field(plan, state.time_seconds)),
+                                )?);
                                 current_observables_stale = false;
                             }
                             let current_observables = current_observables
@@ -896,6 +944,12 @@ pub(crate) fn execute_reference_fdm(
             }
 
             let dt_step = dt.min(until_seconds - state.time_seconds);
+            if crate::antenna_fields::has_time_varying_antenna_zeeman_masks(
+                &plan.antenna_zeeman_masks,
+            ) {
+                problem.terms.per_node_field =
+                    resolved_per_node_external_field(plan, state.time_seconds);
+            }
             let wall_start = Instant::now();
             let report = step_reference_fdm_problem(
                 &problem,
@@ -938,6 +992,7 @@ pub(crate) fn execute_reference_fdm(
                 record_due_outputs(
                     &problem,
                     &state,
+                    Some(resolved_antenna_zeeman_field(plan, state.time_seconds)),
                     step_count,
                     report.dt_used,
                     wall_elapsed,
@@ -980,7 +1035,11 @@ pub(crate) fn execute_reference_fdm(
                 let needs_observables =
                     preview_due && !preview_targets_global_scalar && !direct_preview_satisfied;
                 let observables = if needs_observables {
-                    let observables = observe_state(&problem, &state)?;
+                    let observables = observe_state_with_antenna_field(
+                        &problem,
+                        &state,
+                        Some(resolved_antenna_zeeman_field(plan, state.time_seconds)),
+                    )?;
                     current_observables = Some(observables.clone());
                     current_observables_stale = false;
                     Some(observables)
@@ -1075,6 +1134,7 @@ pub(crate) fn execute_reference_fdm(
     record_final_outputs(
         &problem,
         &state,
+        Some(resolved_antenna_zeeman_field(plan, state.time_seconds)),
         step_count,
         last_solver_dt,
         default_scalar_trace,
@@ -1146,6 +1206,7 @@ fn step_reference_fdm_problem(
 fn record_due_outputs(
     problem: &ExchangeLlgProblem,
     state: &ExchangeLlgState,
+    antenna_field: Option<Vec<Vector3>>,
     step: u64,
     solver_dt: f64,
     wall_time_ns: u64,
@@ -1198,7 +1259,7 @@ fn record_due_outputs(
         return Ok(());
     }
 
-    let observables = observe_state(problem, state)?;
+    let observables = observe_state_with_antenna_field(problem, state, antenna_field)?;
 
     if scalar_due {
         let stats = make_step_stats(
@@ -1254,6 +1315,7 @@ fn record_scalar_snapshot(
 fn record_final_outputs(
     problem: &ExchangeLlgProblem,
     state: &ExchangeLlgState,
+    antenna_field: Option<Vec<Vector3>>,
     step: u64,
     solver_dt: f64,
     default_scalar_trace: bool,
@@ -1343,7 +1405,7 @@ fn record_final_outputs(
         return Ok(());
     }
 
-    let observables = observe_state(problem, state)?;
+    let observables = observe_state_with_antenna_field(problem, state, antenna_field)?;
 
     if need_scalar {
         let stats = make_step_stats(step, state.time_seconds, solver_dt, 0, &observables);
@@ -1367,6 +1429,14 @@ fn record_final_outputs(
 pub(crate) fn observe_state(
     problem: &ExchangeLlgProblem,
     state: &ExchangeLlgState,
+) -> Result<StateObservables, RunError> {
+    observe_state_with_antenna_field(problem, state, None)
+}
+
+fn observe_state_with_antenna_field(
+    problem: &ExchangeLlgProblem,
+    state: &ExchangeLlgState,
+    antenna_field_override: Option<Vec<Vector3>>,
 ) -> Result<StateObservables, RunError> {
     #[cfg(test)]
     increment_observe_state_calls();
@@ -1399,6 +1469,8 @@ pub(crate) fn observe_state(
         .per_node_field
         .clone()
         .unwrap_or_else(|| vec![[0.0, 0.0, 0.0]; state.magnetization().len()]);
+    let antenna_field = antenna_field_override
+        .unwrap_or_else(|| vec![[0.0, 0.0, 0.0]; state.magnetization().len()]);
     let anisotropy_field = problem.anisotropy_field(state.magnetization());
 
     let torque_field = compute_torque_field(
@@ -1418,7 +1490,7 @@ pub(crate) fn observe_state(
         exchange_field: observables.exchange_field,
         demag_field: observables.demag_field,
         external_field: uniform_external,
-        antenna_field: vec![[0.0, 0.0, 0.0]; state.magnetization().len()],
+        antenna_field,
         effective_field: observables.effective_field,
         anisotropy_field,
         dmi_field: observables.dmi_field,
@@ -2309,6 +2381,7 @@ mod tests {
         record_due_outputs(
             &problem,
             &state,
+            None,
             4,
             report.dt_used,
             23,
@@ -2680,6 +2753,7 @@ mod tests {
         record_due_outputs(
             &problem,
             &state,
+            None,
             5,
             report.dt_used,
             37,
@@ -2762,6 +2836,7 @@ mod tests {
         record_due_outputs(
             &problem,
             &state,
+            None,
             6,
             1e-14,
             41,
@@ -2839,6 +2914,7 @@ mod tests {
         record_due_outputs(
             &problem,
             &state,
+            None,
             7,
             1e-14,
             43,
@@ -2918,6 +2994,7 @@ mod tests {
         record_due_outputs(
             &problem,
             &state,
+            None,
             8,
             1e-14,
             47,
@@ -2997,6 +3074,7 @@ mod tests {
         record_due_outputs(
             &problem,
             &state,
+            None,
             9,
             1e-14,
             53,
@@ -3092,6 +3170,7 @@ mod tests {
         record_due_outputs(
             &problem,
             &state,
+            None,
             10,
             1e-14,
             59,
@@ -3176,6 +3255,7 @@ mod tests {
         record_due_outputs(
             &problem,
             &state,
+            None,
             11,
             1e-14,
             61,
@@ -3276,6 +3356,7 @@ mod tests {
         record_due_outputs(
             &problem,
             &state,
+            None,
             10,
             1e-14,
             59,
@@ -3374,6 +3455,7 @@ mod tests {
         record_due_outputs(
             &problem,
             &state,
+            None,
             11,
             1e-14,
             61,
@@ -3485,6 +3567,7 @@ mod tests {
         record_due_outputs(
             &problem,
             &state,
+            None,
             12,
             1e-14,
             67,
@@ -3573,6 +3656,7 @@ mod tests {
         record_final_outputs(
             &problem,
             &state,
+            None,
             7,
             1e-14,
             false,
@@ -3635,6 +3719,7 @@ mod tests {
         record_final_outputs(
             &problem,
             &state,
+            None,
             9,
             1e-14,
             true,

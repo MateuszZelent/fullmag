@@ -1136,6 +1136,7 @@ export function useViewport3DSceneModel({
                 topology.data,
                 meshQualityData.data,
                 meshQualityMetric,
+                scalarColorPalette,
               ),
           )
         : null,
@@ -1143,6 +1144,7 @@ export function useViewport3DSceneModel({
       meshQualityData.data,
       meshQualityMetric,
       meshQualityOverlayVisible,
+      scalarColorPalette,
       topology.data,
       topologyCurrent,
     ],
@@ -1943,6 +1945,7 @@ export function useViewport3DSceneModel({
     selectedObjectId,
     selectedRegionId,
     selectionBounds,
+    scalarColorPalette,
     status,
     renderedMeshRevision: currentTopologyRenderModel?.meshRevision ?? null,
     topology: topology.data,

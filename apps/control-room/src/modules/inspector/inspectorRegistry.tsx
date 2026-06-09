@@ -1,6 +1,7 @@
 import type { Selection } from "@/kernel/selection/selectionTypes";
 
 import { AirboxMeshPolicyPanel } from "./panels/AirboxMeshPolicyPanel";
+import { AntennaObjectPanel } from "./panels/AntennaObjectPanel";
 import { ChartInspectorPanel } from "./panels/ChartInspectorPanel";
 import { CouplingInspectorPanel } from "./panels/CouplingInspectorPanel";
 import { CrossSectionInspectorPanel } from "./panels/CrossSectionInspectorPanel";
@@ -46,6 +47,12 @@ const PANELS: InspectorPanelContribution[] = [
     title: "Geometry",
     selectionKinds: ["object.geometry", "builder.primitive"],
     component: GeometryObjectPanel,
+  },
+  {
+    id: "antenna-object",
+    title: "Antenna",
+    selectionKinds: ["object.antenna"],
+    component: AntennaObjectPanel,
   },
   {
     id: "object-visualization",
@@ -189,7 +196,7 @@ const PANELS: InspectorPanelContribution[] = [
   {
     id: "study-root",
     title: "Study",
-    selectionKinds: ["study.root"],
+    selectionKinds: ["study.root", "study.stages", "study.execution", "study.recovery"],
     component: StudyInspectorPanel,
   },
   {

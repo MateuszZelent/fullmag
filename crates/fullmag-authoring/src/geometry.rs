@@ -1420,6 +1420,7 @@ mod tests {
             objects: vec![SceneObject {
                 id: "free".to_string(),
                 name: "free".to_string(),
+                role: "magnet".to_string(),
                 geometry,
                 transform: Default::default(),
                 material_ref: "mat:free".to_string(),

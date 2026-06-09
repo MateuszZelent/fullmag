@@ -72,6 +72,8 @@ export function PhysicalScalarField({
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(formatted);
   const displayValue = editing ? text : formatted;
+  const parsed = parseRegionPhysicalScalar(displayValue);
+  const invalid = editing && parsed === null;
 
   return (
     <FormField
@@ -80,7 +82,9 @@ export function PhysicalScalarField({
       type="text"
       unit={unit}
       value={displayValue}
+      aria-invalid={invalid || undefined}
       disabled={disabled}
+      hint={invalid ? "Enter a valid SI value" : undefined}
       onBlur={() => {
         setEditing(false);
         setText(formatRegionPhysicalScalar(value));

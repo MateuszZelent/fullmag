@@ -1,14 +1,14 @@
 #[allow(unused_imports)]
 use crate::{
-    AdaptiveTimeStepIR, BackendTarget, CurrentModuleIR, DomainFrameIR, EigenDampingPolicyIR,
-    EigenNormalizationIR, EigenOperatorConfigIR, EigenTargetIR, EquilibriumSourceIR,
-    ExchangeBoundaryCondition, ExecutionMode, ExecutionPrecision, FdmDemagPeriodicityIR,
-    FdmMultilayerPlanIR, FdmPeriodicityIR, FemDomainMeshAssetIR, FemLinearSolverPolicy,
-    FemSharedDomainBuildReportIR, FieldRefreshPolicyIR, IntegratorChoice, KSamplingIR,
-    MagnetostrictionLawIR, MaterialFieldLocationIR, MaterialIR, MaterialParameterNameIR,
-    MechanicalBoundaryConditionIR, MechanicalLoadIR, MeshIR, ModeTrackingIR, OerstedRealization,
-    OutputIR, RelaxStopIR, RelaxationAlgorithmIR, SeedPolicy, SpinWaveBoundaryConditionIR,
-    ThermalSeedConfig,
+    AdaptiveTimeStepIR, AntennaSpatialProfileIR, BackendTarget, CurrentModuleIR, DomainFrameIR,
+    EigenDampingPolicyIR, EigenNormalizationIR, EigenOperatorConfigIR, EigenTargetIR,
+    EquilibriumSourceIR, ExchangeBoundaryCondition, ExecutionMode, ExecutionPrecision,
+    FdmDemagPeriodicityIR, FdmMultilayerPlanIR, FdmPeriodicityIR, FemDomainMeshAssetIR,
+    FemLinearSolverPolicy, FemSharedDomainBuildReportIR, FieldRefreshPolicyIR, IntegratorChoice,
+    KSamplingIR, MagnetostrictionLawIR, MaterialFieldLocationIR, MaterialIR,
+    MaterialParameterNameIR, MechanicalBoundaryConditionIR, MechanicalLoadIR, MeshIR,
+    ModeTrackingIR, OerstedRealization, OutputIR, RelaxStopIR, RelaxationAlgorithmIR, SeedPolicy,
+    SpinWaveBoundaryConditionIR, ThermalSeedConfig, TimeDependenceIR,
 };
 use serde::{Deserialize, Serialize};
 
@@ -52,6 +52,21 @@ pub struct GridDimensions {
     pub cells: [u32; 3],
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResolvedAntennaZeemanMaskIR {
+    pub source: String,
+    pub object: String,
+    pub amplitude_b_t: f64,
+    pub direction: [f64; 3],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spatial_profile: Option<AntennaSpatialProfileIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waveform: Option<TimeDependenceIR>,
+    /// Resolved antenna Zeeman field in A/m at backend sample locations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub field_xyz: Vec<[f64; 3]>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct FdmPlanIR {
     pub grid: GridDimensions,
@@ -65,6 +80,8 @@ pub struct FdmPlanIR {
     pub enable_demag: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_field: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub antenna_zeeman_masks: Vec<ResolvedAntennaZeemanMaskIR>,
     /// Explicit inter-region exchange coupling overrides.
     /// Each entry `(region_i, region_j, A_ij)` sets the exchange stiffness [J/m]
     /// between regions i and j (symmetric: A_ij = A_ji). When a region mask is
@@ -516,6 +533,8 @@ pub struct FemPlanIR {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_field: Option<[f64; 3]>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub antenna_zeeman_masks: Vec<ResolvedAntennaZeemanMaskIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub current_modules: Vec<CurrentModuleIR>,
     pub gyromagnetic_ratio: f64,
     pub precision: ExecutionPrecision,
@@ -865,6 +884,8 @@ pub enum MaterialFieldSourceKind {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MaterialFieldAssetIR {
     pub asset_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_path: Option<String>,
     pub parameter: MaterialParameterNameIR,
     pub owner_object_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

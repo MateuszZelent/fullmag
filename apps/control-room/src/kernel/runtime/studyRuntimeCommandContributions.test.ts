@@ -9,6 +9,8 @@ import {
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
+  MODEL_SCENE_PATH,
+  MODEL_STUDY_PATH,
   MODEL_REGION_DIAGNOSTICS_PATH,
   PERSISTENCE_CHECKPOINTS_PATH,
   PERSISTENCE_EXPORTS_PATH,
@@ -76,6 +78,25 @@ function airboxSelection() {
         kind: "airbox.root",
         nodeId: "airbox",
         type: "airbox",
+      },
+    }),
+  };
+}
+
+function studyStageSelection(stageIndex = 1, stageId = "run-2") {
+  return {
+    get: () => ({
+      kind: "study.stage.run",
+      label: "Run 2",
+      moduleSource: "explorer",
+      nodeId: `model:study:stages:stage:${stageId}`,
+      objectId: null,
+      ref: {
+        kind: "study.stage.run",
+        nodeId: `model:study:stages:stage:${stageId}`,
+        stageId,
+        stageIndex,
+        type: "study-stage",
       },
     }),
   };
@@ -242,6 +263,95 @@ describe("study runtime command contributions", () => {
       DEFAULT_RELAX_TORQUE_T / MU0_T_PER_APM,
       12,
     );
+  });
+
+  it("adds each authored study stage kind through command registry merge patches", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const scene = vi.fn(async () => ({
+      scene_revision: 3,
+      study: { stages: [{ kind: "relax", stage_id: "relax-1" }] },
+    }));
+    const commitTransaction = vi.fn(async () => ({ scene_revision: 5 }));
+
+    const commands = [
+      ["study.add-run-stage", "run"],
+      ["study.add-hysteresis-stage", "hysteresis"],
+      ["study.add-eigenmodes-stage", "eigenmodes"],
+      ["study.add-frequency-response-stage", "frequency_response"],
+      ["study.add-save-state-stage", "save_state"],
+    ] as const;
+
+    for (const [commandId] of commands) {
+      await registry.execute(commandId, {
+        api: {
+          model: { scene, commitTransaction },
+        } as never,
+        resources,
+        source: "test",
+      });
+    }
+
+    const calls = commitTransaction.mock.calls as unknown as Array<
+      [{ merge_patch: { study: { stages: Array<Record<string, unknown>> } } }]
+    >;
+    for (const [index, [request]] of calls.entries()) {
+      const expectedKind = commands[index]?.[1];
+      const stage = request.merge_patch.study.stages[1];
+      expect(stage).toMatchObject({
+        kind: expectedKind,
+        stage_id: `${expectedKind.replace(/_/g, "-")}-2`,
+      });
+    }
+    expect(resources.getRevision(MODEL_SCENE_PATH)).toBe(5);
+    expect(resources.getRevision(MODEL_STUDY_PATH)).toBe(5);
+    expect(resources.getRevision(SIMULATION_STAGES_EXECUTION_PATH)).toBe(5);
+  });
+
+  it("removes the selected study stage from the authored pipeline", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const scene = vi.fn(async () => ({
+      scene_revision: 3,
+      study: {
+        stages: [
+          { kind: "relax", stage_id: "relax-1" },
+          { kind: "run", stage_id: "run-2" },
+          { kind: "hysteresis", stage_id: "hysteresis-3" },
+        ],
+      },
+    }));
+    const commitTransaction = vi.fn(async () => ({ scene_revision: 6 }));
+
+    const result = await registry.execute("study.remove-selected-stage", {
+      api: {
+        model: { scene, commitTransaction },
+      } as never,
+      resources,
+      selection: studyStageSelection(1) as never,
+      source: "test",
+    });
+
+    expect(result).toEqual({
+      message: "Study stage removed.",
+      status: "completed",
+    });
+    expect(commitTransaction).toHaveBeenCalledWith({
+      kind: "merge_patch",
+      merge_patch: {
+        study: {
+          stages: [
+            { kind: "relax", stage_id: "relax-1" },
+            { kind: "hysteresis", stage_id: "hysteresis-3" },
+          ],
+        },
+      },
+    });
+    expect(resources.getRevision(MODEL_SCENE_PATH)).toBe(6);
+    expect(resources.getRevision(MODEL_STUDY_PATH)).toBe(6);
+    expect(resources.getRevision(SIMULATION_STAGES_EXECUTION_PATH)).toBe(6);
   });
 
   it("enables solver profiling through the runtime command queue and diagnostics resources", async () => {

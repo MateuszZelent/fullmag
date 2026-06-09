@@ -46,7 +46,7 @@ from fullmag.model.antenna import (
 )
 from fullmag.model.couplings import CouplingEndpoint, CouplingRegistry
 from fullmag.model.current_transport import CurrentTransport
-from fullmag.model.energy import BulkDMI, Demag, Exchange, InterfacialDMI, Zeeman
+from fullmag.model.energy import BulkDMI, Demag, Exchange, InterfacialDMI, TimeDependence, Zeeman
 from fullmag.model.dynamics import (
     ADAPTIVE_INTEGRATORS,
     INTEGRATOR_ALIASES,
@@ -1790,6 +1790,7 @@ class _WorldState:
 
     # Magnets (ordered)
     _magnets: list[MagnetHandle] = field(default_factory=list)
+    _auxiliary_geometries: list[object] = field(default_factory=list)
     _couplings: CouplingRegistry = field(default_factory=CouplingRegistry)
     _loaded_field_states: dict[tuple[str, str, str], object] = field(default_factory=dict)
 
@@ -3569,6 +3570,9 @@ class StudyBuilder:
     def geometry(self, shape: object, name: str = "body") -> MagnetHandle:
         return geometry(shape, name=name)
 
+    def antenna_object(self, shape: object, name: str = "antenna") -> object:
+        return antenna_object(shape, name=name)
+
     def solver(
         self,
         *,
@@ -3639,10 +3643,16 @@ class StudyBuilder:
         self,
         *,
         name: str,
-        antenna: Antenna,
-        drive: RfDrive,
-        solver: str = "mqs_2p5d_az",
-        air_box_factor: float = 12.0,
+        antenna: Antenna | None = None,
+        drive: RfDrive | None = None,
+        solver: str | None = None,
+        air_box_factor: float | None = None,
+        model: str = "mqs_2p5d_az",
+        object: str | None = None,
+        B: float | None = None,
+        direction: Sequence[float] = (0.0, 0.0, 1.0),
+        spatial_profile: dict[str, object] | None = None,
+        waveform: TimeDependence | None = None,
     ) -> AntennaFieldSource:
         return antenna_field_source(
             name=name,
@@ -3650,6 +3660,12 @@ class StudyBuilder:
             drive=drive,
             solver=solver,
             air_box_factor=air_box_factor,
+            model=model,
+            object=object,
+            B=B,
+            direction=direction,
+            spatial_profile=spatial_profile,
+            waveform=waveform,
         )
 
     def current_transport(
@@ -5138,6 +5154,22 @@ def geometry(shape: object, name: str = "body") -> MagnetHandle:
     return handle
 
 
+def antenna_object(shape: object, name: str = "antenna") -> object:
+    """Register a non-magnetic geometry object for prescribed antenna masks."""
+    resolved = shape
+    if hasattr(resolved, "name"):
+        import copy
+
+        resolved = copy.copy(resolved)
+        object.__setattr__(resolved, "name", require_non_empty(name, "name"))
+    _state._auxiliary_geometries.append(resolved)
+    _state._register_geometry_visualization_hint(
+        resolved.geometry_name,
+        {"role": "antenna", "display": "shaded_frame"},
+    )
+    return resolved
+
+
 # ---------------------------------------------------------------------------
 # Solver
 # ---------------------------------------------------------------------------
@@ -5276,10 +5308,16 @@ def b_ext(
 def antenna_field_source(
     *,
     name: str,
-    antenna: Antenna,
-    drive: RfDrive,
-    solver: str = "mqs_2p5d_az",
-    air_box_factor: float = 12.0,
+    antenna: Antenna | None = None,
+    drive: RfDrive | None = None,
+    solver: str | None = None,
+    air_box_factor: float | None = None,
+    model: str = "mqs_2p5d_az",
+    object: str | None = None,
+    B: float | None = None,
+    direction: Sequence[float] = (0.0, 0.0, 1.0),
+    spatial_profile: dict[str, object] | None = None,
+    waveform: TimeDependence | None = None,
 ) -> AntennaFieldSource:
     source = AntennaFieldSource(
         name=name,
@@ -5287,6 +5325,12 @@ def antenna_field_source(
         drive=drive,
         solver=solver,
         air_box_factor=air_box_factor,
+        model=model,
+        object=object,
+        B=B,
+        direction=direction,
+        spatial_profile=spatial_profile,
+        waveform=waveform,
     )
     _state._current_modules.append(source)
     return source
@@ -5792,6 +5836,7 @@ def _build_problem(
         discretization=DiscretizationHints(**disc_kwargs) if disc_kwargs else None,
         runtime=rt,
         runtime_metadata=runtime_metadata,
+        auxiliary_geometries=tuple(s._auxiliary_geometries),
         current_modules=tuple(s._current_modules),
         couplings=s._couplings.items(),
         excitation_analysis=s._excitation_analysis,

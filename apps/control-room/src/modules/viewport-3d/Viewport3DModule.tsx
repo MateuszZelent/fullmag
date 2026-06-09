@@ -1,6 +1,6 @@
 "use client";
 
-import { Canvas } from "@react-three/fiber";
+import { Canvas, useThree } from "@react-three/fiber";
 import {
   useCallback,
   useEffect,
@@ -29,6 +29,7 @@ import {
 } from "@/kernel/selection/useSelection";
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
 import type { ModuleProps } from "@/kernel/types";
+import { surfaceColorSourceToColorMode } from "@/kernel/visualization/ObjectVisualizationController";
 import {
   useVisualizationClientAck,
   useVisualizationClientAckSender,
@@ -97,11 +98,13 @@ import {
 } from "./viewport3dStore";
 import type { MeshQualityColorMetric } from "./viewport3dQualityMapping";
 import { VIEWPORT_3D_FRAMELOOP } from "./viewport3dTypes";
+import { viewport3DColorPaletteGradientCss } from "./viewport3dVectorColoring";
 import {
   configureViewport3DRenderer,
   getViewport3DVisualProfile,
   resolveViewport3DCanvasDpr,
   resolveViewport3DCanvasGlOptions,
+  type Viewport3DVisualProfile,
 } from "./viewport3dVisualProfile";
 
 type Viewport3DSceneProps = ComponentProps<typeof Viewport3DScene>;
@@ -113,6 +116,7 @@ interface MeshQualityRange {
 
 interface Viewport3DColorbarLegendInput {
   colorMode: string;
+  colorPalette?: string | null;
   quantityId: string;
   range: MeshQualityRange | null;
   unit?: string | null;
@@ -122,6 +126,7 @@ interface Viewport3DColorbarLegend {
   label: string;
   maxLabel: string;
   minLabel: string;
+  paletteGradient: string;
 }
 
 interface Viewport3DInspectHover {
@@ -162,6 +167,7 @@ export function resolveViewport3DMeshQualityLegend(
 
 export function resolveViewport3DColorbarLegend({
   colorMode,
+  colorPalette,
   quantityId,
   range,
   unit,
@@ -188,7 +194,29 @@ export function resolveViewport3DColorbarLegend({
     label: `${quantityId}${component}${unitLabel}`,
     maxLabel: formatLegendValue(range.max),
     minLabel: formatLegendValue(range.min),
+    paletteGradient: viewport3DColorPaletteGradientCss(colorPalette),
   };
+}
+
+function completePendingViewport3DCapture(
+  canvasRef: { current: HTMLCanvasElement | null },
+  pendingCaptureRevisionRef: { current: number | null },
+  captureRevision: number,
+): void {
+  if (
+    captureRevision <= 0 ||
+    pendingCaptureRevisionRef.current !== captureRevision
+  ) {
+    return;
+  }
+  const canvas = canvasRef.current;
+  if (!canvas) return;
+  const link = document.createElement("a");
+  link.download = "fullmag-viewport-3d.png";
+  link.href = canvas.toDataURL("image/png");
+  link.click();
+  pendingCaptureRevisionRef.current = null;
+  viewport3dStore.completeCapture();
 }
 
 function useMeshSizeHistogramHighlight(
@@ -237,6 +265,7 @@ interface Viewport3DFrameProps
   onRegionOverlayModeChange: (mode: RegionOverlayMode) => void;
   quantityId: string;
   renderedMeshRevision: number | string | null;
+  scalarColorPalette: string;
   selectedLabel: string;
   slotId: ModuleProps["slotId"];
   status: string;
@@ -449,6 +478,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   ...sceneProps
 }: Viewport3DFrameProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const pendingCaptureRevisionRef = useRef<number | null>(null);
   const primitiveObjectIds =
     sceneProps.primitiveModel?.objects
       .map((object) => object.objectId)
@@ -462,6 +492,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     profile: visualProfile,
   });
   const canvasGlOptions = resolveViewport3DCanvasGlOptions(visualProfile);
+  const canvasContextKey = `viewport-3d-canvas-aa:${canvasGlOptions.antialias ? "1" : "0"}-preserve:${canvasGlOptions.preserveDrawingBuffer ? "1" : "0"}`;
   const orbitDebugEnabled = viewport3DOrbitDebugEnabledFromBrowserConfig();
   const [orbitDebugAngles, setOrbitDebugAngles] =
     useState<Viewport3DOrbitDebugAngles>(() =>
@@ -486,13 +517,23 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     meshQualityMetric,
     meshQualityRange,
   );
+  const activeSurfaceColorMode =
+    sceneProps.fdmDomain !== null
+      ? surfaceColorSourceToColorMode(sceneProps.fdmSettings.surfaceColorSource)
+      : surfaceColorSourceToColorMode(
+          sceneProps.fallbackSettings.surfaceColorSource,
+        );
   const activeScalarColors =
     sceneProps.fdmSurfaceColors ??
+    (activeSurfaceColorMode
+      ? sceneProps.fieldModel?.scalarColorsByMode.get(activeSurfaceColorMode)
+      : null) ??
     sceneProps.fieldModel?.scalarColorsByMode.get(sceneProps.vectorColorMode) ??
     sceneProps.fieldModel?.scalarColors ??
     null;
   const colorbarLegend = resolveViewport3DColorbarLegend({
-    colorMode: sceneProps.vectorColorMode,
+    colorMode: activeSurfaceColorMode ?? sceneProps.vectorColorMode,
+    colorPalette: sceneProps.scalarColorPalette,
     quantityId,
     range: activeScalarColors?.range ?? null,
     unit: quantityUnitForColorbar(quantityId),
@@ -511,7 +552,13 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       meshRevision: sceneProps.renderedMeshRevision,
       rendererId: slotId,
     });
+    completePendingViewport3DCapture(
+      canvasRef,
+      pendingCaptureRevisionRef,
+      captureRevision,
+    );
   }, [
+    captureRevision,
     clientReady,
     kernel.bus,
     sceneProps.renderedMeshRevision,
@@ -543,23 +590,8 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     [fieldDataIssue?.key, setDismissedResourceIssueKey],
   );
   useEffect(() => {
-    if (captureRevision <= 0 || typeof window === "undefined") return;
-    let disposed = false;
-    const captureFrame = () => {
-      if (disposed) return;
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const link = document.createElement("a");
-      link.download = "fullmag-viewport-3d.png";
-      link.href = canvas.toDataURL("image/png");
-      link.click();
-      viewport3dStore.completeCapture();
-    };
-    const captureTimer = window.setTimeout(captureFrame, 80);
-    return () => {
-      disposed = true;
-      window.clearTimeout(captureTimer);
-    };
+    if (captureRevision <= 0) return;
+    pendingCaptureRevisionRef.current = captureRevision;
   }, [captureRevision]);
   const syncOrbitDebugAngles = useCallback(
     (angles: Viewport3DOrbitDebugAngles) => {
@@ -687,7 +719,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           events={createViewport3DEventManager}
           frameloop={VIEWPORT_3D_FRAMELOOP}
           gl={canvasGlOptions}
-          key={`viewport-3d-canvas-${visualProfile.id}`}
+          key={canvasContextKey}
           onCreated={({ gl }) => {
             canvasRef.current = gl.domElement;
             configureViewport3DRenderer(gl, visualProfile);
@@ -697,6 +729,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
             onClearSelection();
           }}
         >
+          <Viewport3DRendererProfile visualProfile={visualProfile} />
           <Viewport3DScene
             {...sceneProps}
             colors={colors}
@@ -756,6 +789,18 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
 
 const INSPECT_TOOLTIP_OFFSET_PX = 14;
 
+function Viewport3DRendererProfile({
+  visualProfile,
+}: {
+  visualProfile: Viewport3DVisualProfile;
+}) {
+  const gl = useThree((state) => state.gl);
+  useEffect(() => {
+    configureViewport3DRenderer(gl, visualProfile);
+  }, [gl, visualProfile]);
+  return null;
+}
+
 const Viewport3DColorbar = memo(function Viewport3DColorbar({
   legend,
 }: {
@@ -771,7 +816,11 @@ const Viewport3DColorbar = memo(function Viewport3DColorbar({
         <span className="fm-viewport-3d__colorbar-limit">
           {legend.minLabel}
         </span>
-        <span aria-hidden="true" className="fm-viewport-3d__colorbar-ramp" />
+        <span
+          aria-hidden="true"
+          className="fm-viewport-3d__colorbar-ramp"
+          style={{ background: legend.paletteGradient }}
+        />
         <span className="fm-viewport-3d__colorbar-limit">
           {legend.maxLabel}
         </span>

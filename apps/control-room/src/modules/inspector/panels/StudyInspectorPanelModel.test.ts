@@ -66,7 +66,7 @@ describe("StudyInspectorPanelModel", () => {
           total: i === 49 ? 1.00000001e-7 : 1e-7,
         })),
       } as never,
-      selectedNodeId: "model:study:stage:runtime-run",
+      selectedNodeId: "model:study:stages:stage:runtime-run",
       snapshot,
       solverStatus: {
         can_accept_commands: true,
@@ -234,7 +234,7 @@ describe("StudyInspectorPanelModel", () => {
       commandQueue: null,
       currentRun: null,
       selectedStageRef: {
-        nodeId: "model:study:stage:stage-relax",
+        nodeId: "model:study:stages:stage:stage-relax",
         stageId: "stage-relax",
         stageIndex: 0,
       },

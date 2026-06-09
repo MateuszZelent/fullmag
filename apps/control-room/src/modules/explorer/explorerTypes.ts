@@ -17,6 +17,7 @@ type ExplorerNodeKind =
   | "objects.root"
   | "object.root"
   | "object.geometry"
+  | "object.antenna"
   | "object.material"
   | "object.physics"
   | "object.regions"
@@ -54,6 +55,9 @@ type ExplorerNodeKind =
   | "physics.couplings"
   | "physics.coupling"
   | "study.root"
+  | "study.execution"
+  | "study.recovery"
+  | "study.stages"
   | "study.stage.action"
   | "study.stage.eigenmodes"
   | "study.stage.frequency_response"
@@ -146,6 +150,7 @@ export interface ModelTreeObjectSnapshot {
   regionId?: string | null;
   regions?: readonly ModelTreeObjectRegionSnapshot[];
   materialFields?: readonly ModelTreeMaterialFieldSnapshot[];
+  objectRole?: "antenna" | "magnet" | "auxiliary";
   regionMagnetization?: string | null;
   regionMagnetizationKind?: string | null;
   regionMagnetizationLabel?: string | null;

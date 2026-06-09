@@ -129,10 +129,37 @@ describe("viewport3dFieldMapping", () => {
     );
 
     expect(result?.range).toEqual({ max: 1, min: -1 });
-    expect(Array.from(result?.colors ?? [])).toEqual([
-      0, expect.closeTo(0.38), 1,
-      1, expect.closeTo(0.38), 0,
-    ]);
+    expect(Array.from(result?.colors ?? [])).toEqual(
+      Array.from(
+        Float32Array.from([
+          ...magnitudeColorRgb(0),
+          ...magnitudeColorRgb(1),
+        ]),
+      ),
+    );
+  });
+
+  it("maps component color modes through the selected palette", () => {
+    const result = buildVertexScalarColors(
+      vectorField([
+        -1, 0, 0,
+        1, 0, 0,
+      ]),
+      2,
+      undefined,
+      "x",
+      "inferno",
+    );
+
+    expect(result?.range).toEqual({ max: 1, min: -1 });
+    expect(Array.from(result?.colors ?? [])).toEqual(
+      Array.from(
+        Float32Array.from([
+          ...magnitudeColorRgb(0, "inferno"),
+          ...magnitudeColorRgb(1, "inferno"),
+        ]),
+      ),
+    );
   });
 
   it("maps sampled point indices to compact scalar colors", () => {
@@ -147,10 +174,14 @@ describe("viewport3dFieldMapping", () => {
     );
 
     expect(result?.range).toEqual({ max: 1, min: -1 });
-    expect(Array.from(result?.colors ?? [])).toEqual([
-      0, expect.closeTo(0.38), 1,
-      1, expect.closeTo(0.38), 0,
-    ]);
+    expect(Array.from(result?.colors ?? [])).toEqual(
+      Array.from(
+        Float32Array.from([
+          ...magnitudeColorRgb(0),
+          ...magnitudeColorRgb(1),
+        ]),
+      ),
+    );
   });
 
   it("handles sampled indices outside field coverage by falling back to neutral color", () => {

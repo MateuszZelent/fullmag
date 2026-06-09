@@ -290,10 +290,10 @@ describe("flattenVisibleExplorerRows", () => {
     const rows = flattenVisibleExplorerRows(
       [
         {
-          id: "model:study:stage:stage-000",
+          id: "model:study:stages:stage:stage-000",
           kind: "study.stage.relax",
           label: "Relax 1",
-          parentId: "model:study",
+          parentId: "model:study:stages",
           status: "completed",
         },
       ],
@@ -301,7 +301,7 @@ describe("flattenVisibleExplorerRows", () => {
     );
 
     expect(rows[0]?.node).toMatchObject({
-      id: "model:study:stage:stage-000",
+      id: "model:study:stages:stage:stage-000",
       status: "completed",
     });
   });

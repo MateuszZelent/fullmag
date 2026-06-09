@@ -601,4 +601,16 @@ pub enum TimeDependenceIR {
     Pulse { t_on: f64, t_off: f64 },
     /// Piecewise linear: pairs of (time, value), linearly interpolated
     PiecewiseLinear { points: Vec<[f64; 2]> },
+    /// Normalized sinc pulse: f(t) = amplitude * sinc(2 * cutoff_hz * (t - t0))
+    SincPulse {
+        cutoff_hz: f64,
+        #[serde(default)]
+        t0: f64,
+        #[serde(default = "default_unit_amplitude")]
+        amplitude: f64,
+    },
+}
+
+fn default_unit_amplitude() -> f64 {
+    1.0
 }

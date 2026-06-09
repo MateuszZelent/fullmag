@@ -66,26 +66,48 @@ function render(children: ReactNode): string {
 describe("Study stage inspectors", () => {
   it("renders a dedicated inspector for every supported study stage kind", () => {
     expect(render(<RelaxStageInspector {...props("relax")} />)).toContain(
-      "Relax Results",
+      "Stop Criteria",
+    );
+    expect(render(<RelaxStageInspector {...props("relax")} />)).toContain(
+      "Numerics",
     );
     expect(render(<RunStageInspector {...props("run")} />)).toContain(
-      "Run Results",
+      "Time Integration",
+    );
+    expect(render(<RunStageInspector {...props("run")} />)).toContain(
+      "Drive &amp; Dynamics",
     );
     expect(
       render(<HysteresisStageInspector {...props("hysteresis")} />),
-    ).toContain("Hysteresis Results");
+    ).toContain("Field Sweep");
+    expect(
+      render(<HysteresisStageInspector {...props("hysteresis")} />),
+    ).toContain("Per-Point Relaxation");
     expect(
       render(<EigenmodesStageInspector {...props("eigenmodes")} />),
-    ).toContain("Eigenmode Results");
+    ).toContain("Eigenproblem");
+    expect(
+      render(<EigenmodesStageInspector {...props("eigenmodes")} />),
+    ).toContain("Linearization State");
     expect(
       render(
         <FrequencyResponseStageInspector
           {...props("frequency_response")}
         />,
       ),
-    ).toContain("Frequency Results");
+    ).toContain("Frequency Sweep");
+    expect(
+      render(
+        <FrequencyResponseStageInspector
+          {...props("frequency_response")}
+        />,
+      ),
+    ).toContain("Spin-Wave Sampling");
     expect(render(<SaveStateStageInspector {...props("save_state")} />)).toContain(
-      "Output Settings",
+      "Output Target",
+    );
+    expect(render(<SaveStateStageInspector {...props("save_state")} />)).toContain(
+      "Captured State",
     );
   });
 });

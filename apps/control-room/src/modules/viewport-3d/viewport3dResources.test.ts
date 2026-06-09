@@ -270,6 +270,35 @@ describe("viewport3dResources", () => {
     expect(request).toHaveBeenCalledWith('"topology-1"');
   });
 
+  it("restores a cached binary entry when it was evicted during a 304 request", async () => {
+    const cache = new ResourceCache<string>({ maxBytes: 8 });
+    cache.set("topology", {
+      byteLength: 4,
+      data: "cached",
+      etag: '"topology-1"',
+    });
+    const request = vi.fn(async (etag?: string | null) => {
+      cache.set("field:m", {
+        byteLength: 8,
+        data: "other",
+        etag: '"field-1"',
+      });
+      return {
+        etag: etag ?? null,
+        status: "not-modified" as const,
+      };
+    });
+
+    await expect(
+      loadCachedBinaryResource(cache, "topology", request),
+    ).resolves.toBe("cached");
+
+    expect(cache.peek("topology")).toMatchObject({
+      data: "cached",
+      etag: '"topology-1"',
+    });
+  });
+
   it("can reuse cached binary data without a conditional request", async () => {
     const cache = new ResourceCache<string>({ maxBytes: 32 });
     cache.set("field:m", {

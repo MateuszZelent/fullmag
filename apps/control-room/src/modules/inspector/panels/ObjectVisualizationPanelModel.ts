@@ -5,6 +5,7 @@ import type {
 } from "@/kernel/api/apiTypes";
 import {
   isMagneticOnlyQuantityId,
+  isScalarSpatialQuantityId,
   resolveCanonicalQuantityId,
 } from "@/kernel/api/quantityIds";
 import {
@@ -83,6 +84,11 @@ export const VISUALIZATION_QUANTITY_ITEMS: Array<{
   { value: "eden_ext", label: "Zeeman energy density / eden_ext" },
   { value: "eden_ani", label: "Anisotropy energy density / eden_ani" },
   { value: "eden_dmi", label: "DMI energy density / eden_dmi" },
+  { value: "mat_ms", label: "Saturation magnetization / mat_ms" },
+  { value: "mat_aex", label: "Exchange stiffness / mat_aex" },
+  { value: "mat_alpha", label: "Gilbert damping / mat_alpha" },
+  { value: "mat_dind", label: "Interfacial DMI / mat_dind" },
+  { value: "mat_dbulk", label: "Bulk DMI / mat_dbulk" },
 ];
 
 const FALLBACK_VECTOR_BUDGET_MAX = 4096;
@@ -173,6 +179,29 @@ export function visualizationQuantityItems(
   ];
 }
 
+export function quantitySourcePatch(
+  settings: VisualizationTargetSettings,
+  quantityId: string,
+): VisualizationTargetPatch {
+  const activeQuantityId = resolveCanonicalQuantityId(quantityId);
+  const patch: VisualizationTargetPatch = { activeQuantityId };
+
+  if (isScalarSpatialQuantityId(activeQuantityId)) {
+    if (settings.surfaceColorSource !== "colormap") {
+      patch.surfaceColorSource = "colormap";
+    }
+    return patch;
+  }
+
+  if (settings.surfaceColorSource === "colormap") {
+    patch.surfaceColorSource = surfaceColorSourceForVectorMode(
+      settings.vectorColorMode,
+    );
+  }
+
+  return patch;
+}
+
 export function shouldLoadObjectVisualizationFieldCatalog({
   requested,
   surfaceColorSource,
@@ -189,6 +218,17 @@ export function shouldLoadObjectVisualizationFieldCatalog({
       surfaceColorSource !== null &&
       surfaceColorSource !== "solid",
   );
+}
+
+function surfaceColorSourceForVectorMode(
+  colorMode: VisualizationColorMode,
+): SurfaceColorSource {
+  if (colorMode === "x") return "component_x";
+  if (colorMode === "y") return "component_y";
+  if (colorMode === "z") return "component_z";
+  if (colorMode === "magnitude") return "magnitude";
+  if (colorMode === "monochrome") return "solid";
+  return "orientation";
 }
 
 export function colorPickerInputValue(value: string): string {

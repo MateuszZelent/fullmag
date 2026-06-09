@@ -262,6 +262,60 @@ describe("buildModelTree", () => {
     );
   });
 
+  it("projects antenna scene objects without magnetic object children", () => {
+    const snapshot = modelTreeSnapshotFromScene({
+      current_modules: {
+        modules: [
+          {
+            kind: "antenna_field_source",
+            model: "prescribed_zeeman_mask",
+            name: "center_drive",
+            object: "center_microstrip",
+          },
+        ],
+      },
+      objects: [
+        {
+          geometry: {
+            geometry_kind: "Box",
+            geometry_params: { size: [50e-9, 1e-6, 10e-9] },
+          },
+          id: "center_microstrip",
+          name: "Center microstrip",
+          role: "antenna",
+          tags: ["role:antenna"],
+          visualization_hint: { role: "antenna" },
+        },
+      ],
+    });
+
+    const flattened = flattenExplorerNodes(buildModelTree(snapshot));
+
+    expect(
+      flattened.find((node) => node.id === "model:object:center_microstrip"),
+    ).toMatchObject({
+      badge: "Box",
+      icon: "wave",
+      status: "ready",
+    });
+    expect(flattened.map((node) => node.id)).toEqual(
+      expect.arrayContaining([
+        "model:object:center_microstrip:geometry",
+        "model:object:center_microstrip:antenna",
+        "model:object:center_microstrip:visualization",
+      ]),
+    );
+    expect(flattened.map((node) => node.id)).not.toContain(
+      "model:object:center_microstrip:magnetic-parameters",
+    );
+    expect(flattened.map((node) => node.id)).not.toContain(
+      "model:object:center_microstrip:magnetic-texture",
+    );
+    expect(flattened.map((node) => node.id)).not.toContain(
+      "model:object:center_microstrip:mesh",
+    );
+  });
+
   it("shows authored object regions, material fields, and couplings from model resources", () => {
     const snapshot = modelTreeSnapshotFromScene(
       {
@@ -549,44 +603,72 @@ describe("buildModelTree", () => {
     expect(flattened.find((node) => node.id === "model:study")?.badge).toBe(
       "5 stages",
     );
+    expect(flattened.find((node) => node.id === "model:study")).toMatchObject({
+      children: expect.arrayContaining([
+        expect.objectContaining({ id: "model:study:stages" }),
+        expect.objectContaining({ id: "model:study:execution" }),
+        expect.objectContaining({ id: "model:study:recovery" }),
+      ]),
+    });
+    expect(
+      flattened.find((node) => node.id === "model:study:stages")
+        ?.contextCommands,
+    ).toEqual(
+      expect.arrayContaining([
+        "study.add-relax-stage",
+        "study.add-run-stage",
+        "study.add-hysteresis-stage",
+        "study.add-eigenmodes-stage",
+        "study.add-frequency-response-stage",
+        "study.add-save-state-stage",
+      ]),
+    );
     expect(flattened.map((node) => node.id)).toEqual(
       expect.arrayContaining([
-        "model:study:stage:stage-relax",
-        "model:study:stage:1",
-        "model:study:stage:2",
-        "model:study:stage:hysteresis-1",
-        "model:study:stage:freq-1",
+        "model:study:stages:stage:stage-relax",
+        "model:study:stages:stage:1",
+        "model:study:stages:stage:2",
+        "model:study:stages:stage:hysteresis-1",
+        "model:study:stages:stage:freq-1",
       ]),
     );
     expect(
-      flattened.find((node) => node.id === "model:study:stage:stage-relax"),
+      flattened.find(
+        (node) => node.id === "model:study:stages:stage:stage-relax",
+      ),
     ).toMatchObject({
       badge: "tau 1.000000e-4 T",
+      contextCommands: expect.arrayContaining(["study.remove-selected-stage"]),
       kind: "study.stage.relax",
       label: "Relax 1",
+      parentId: "model:study:stages",
     });
     expect(
-      flattened.find((node) => node.id === "model:study:stage:1"),
+      flattened.find((node) => node.id === "model:study:stages:stage:1"),
     ).toMatchObject({
       badge: "5e-9 s",
       kind: "study.stage.run",
       label: "Run 2",
     });
     expect(
-      flattened.find((node) => node.id === "model:study:stage:2"),
+      flattened.find((node) => node.id === "model:study:stages:stage:2"),
     ).toMatchObject({
       badge: "m-relaxed",
       kind: "study.stage.save_state",
       label: "Save State 3",
     });
     expect(
-      flattened.find((node) => node.id === "model:study:stage:hysteresis-1"),
+      flattened.find(
+        (node) => node.id === "model:study:stages:stage:hysteresis-1",
+      ),
     ).toMatchObject({
       kind: "study.stage.hysteresis",
       label: "Hysteresis 4",
     });
     expect(
-      flattened.find((node) => node.id === "model:study:stage:freq-1"),
+      flattened.find(
+        (node) => node.id === "model:study:stages:stage:freq-1",
+      ),
     ).toMatchObject({
       kind: "study.stage.frequency_response",
       label: "Frequency Response 5",
@@ -624,14 +706,18 @@ describe("buildModelTree", () => {
     const flattened = flattenExplorerNodes(buildModelTree(snapshot));
 
     expect(
-      flattened.find((node) => node.id === "model:study:stage:runtime-relax"),
+      flattened.find(
+        (node) => node.id === "model:study:stages:stage:runtime-relax",
+      ),
     ).toMatchObject({
       stageId: "runtime-relax",
       stageIndex: 0,
       status: "completed",
     });
     expect(
-      flattened.find((node) => node.id === "model:study:stage:runtime-run"),
+      flattened.find(
+        (node) => node.id === "model:study:stages:stage:runtime-run",
+      ),
     ).toMatchObject({
       label: "Run 2",
       status: "running",
@@ -673,12 +759,13 @@ describe("buildModelTree", () => {
     expect(
       flattened.find(
         (node) =>
-          node.id === "model:study:stage:runtime-run:state-transition",
+          node.id ===
+          "model:study:stages:stage:runtime-run:state-transition",
       ),
     ).toMatchObject({
       label: "State Transition",
       badge: "continues",
-      parentId: "model:study:stage:runtime-run",
+      parentId: "model:study:stages:stage:runtime-run",
       status: "ready",
     });
   });
@@ -696,7 +783,8 @@ describe("buildModelTree", () => {
     );
 
     expect(
-      flattened.find((node) => node.id === "model:study")?.contextCommands,
+      flattened.find((node) => node.id === "model:study:execution")
+        ?.contextCommands,
     ).toEqual(
       expect.arrayContaining([
         "study.run",
@@ -706,6 +794,13 @@ describe("buildModelTree", () => {
         "study.skip",
         "study.compute-fields",
         "study.compute-energies",
+      ]),
+    );
+    expect(
+      flattened.find((node) => node.id === "model:study:recovery")
+        ?.contextCommands,
+    ).toEqual(
+      expect.arrayContaining([
         "study.save-checkpoint",
         "study.restore-checkpoint",
         "study.import-state",
@@ -714,7 +809,7 @@ describe("buildModelTree", () => {
       ]),
     );
     expect(
-      flattened.find((node) => node.id === "model:study:stage:0")
+      flattened.find((node) => node.id === "model:study:stages:stage:0")
         ?.contextCommands,
     ).toEqual(expect.arrayContaining(["study.skip"]));
   });
@@ -836,10 +931,14 @@ describe("buildModelTree", () => {
     const flattened = flattenExplorerNodes(buildModelTree(snapshot));
 
     expect(
-      flattened.find((node) => node.id === "model:study:stage:relax-main"),
+      flattened.find(
+        (node) => node.id === "model:study:stages:stage:relax-main",
+      ),
     ).toMatchObject({ label: "Relax 1", status: "running" });
     expect(
-      flattened.find((node) => node.id === "model:study:stage:run-main"),
+      flattened.find(
+        (node) => node.id === "model:study:stages:stage:run-main",
+      ),
     ).toMatchObject({ label: "Run 2", status: "completed" });
   });
 });

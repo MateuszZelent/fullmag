@@ -4,6 +4,7 @@ import type { CrossSectionQualityMetric } from "../api/apiTypes";
 type ObjectSelectionKind =
   | "object.root"
   | "object.geometry"
+  | "object.antenna"
   | "object.material"
   | "object.physics"
   | "object.regions"
@@ -106,6 +107,11 @@ export type SelectionRef =
       type: "analysis-chart-point";
       x: number;
       y: number;
+    }
+  | {
+      kind: "study.execution" | "study.recovery" | "study.root" | "study.stages";
+      nodeId: string;
+      type: "study";
     }
   | {
       kind:
@@ -248,6 +254,12 @@ export function selectionRefEquals(
         left.rowIndex === right.rowIndex &&
         left.x === right.x &&
         left.y === right.y
+      );
+    case "study":
+      return (
+        right.type === "study" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId
       );
     case "study-stage":
       return (

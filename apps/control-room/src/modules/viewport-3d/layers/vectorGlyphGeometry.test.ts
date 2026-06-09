@@ -74,8 +74,8 @@ describe("vectorGlyphGeometry", () => {
     );
 
     expectFloatArrayClose(glyphs.colors ?? new Float32Array(), [
-      0, 0.38, 1,
-      1, 0.38, 0,
+      ...magnitudeColorRgb(0),
+      ...magnitudeColorRgb(1),
     ]);
   });
 

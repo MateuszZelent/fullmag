@@ -20,6 +20,7 @@ import type {
 
 interface SceneLike {
   [key: string]: unknown;
+  current_modules?: unknown;
   magnetization_assets?: unknown;
   materials?: unknown;
   objects?: SceneResource["objects"] | unknown;
@@ -297,6 +298,7 @@ function sceneObjectSnapshot(
     materialLabel: material?.label ?? materialRef,
     materialPropertyKeys: material?.propertyKeys,
     meshStatus: meshStatusFromTags(object.tags),
+    objectRole: sceneObjectRole(object),
     physicsInteractions: sceneObjectPhysicsInteractions(
       object.physics_stack,
       materialHasDind(material),
@@ -312,6 +314,19 @@ function sceneObjectSnapshot(
     textureTransformAvailable:
       magnetization?.textureTransformAvailable ?? false,
   };
+}
+
+function sceneObjectRole(
+  object: Record<string, unknown>,
+): ModelTreeObjectSnapshot["objectRole"] {
+  const role = stringValue(object.role);
+  if (role === "antenna") return "antenna";
+  if (role && role !== "magnet") return "auxiliary";
+  const hint = recordValue(object.visualization_hint);
+  if (stringValue(hint?.role) === "antenna") return "antenna";
+  const tags = Array.isArray(object.tags) ? object.tags : [];
+  if (tags.includes("role:antenna")) return "antenna";
+  return "magnet";
 }
 
 function authoredRegionsByOwner(

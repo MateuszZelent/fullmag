@@ -247,7 +247,29 @@ class PiecewiseLinear:
         }
 
 
-TimeDependence = Constant | Sinusoidal | Pulse | PiecewiseLinear
+@dataclass(frozen=True, slots=True)
+class SincPulse:
+    """Normalized sinc pulse: f(t) = amplitude * sinc(2 * cutoff_hz * (t - t0))."""
+
+    cutoff_hz: float
+    t0: float = 0.0
+    amplitude: float = 1.0
+
+    def __post_init__(self) -> None:
+        require_positive(self.cutoff_hz, "cutoff_hz")
+        require_finite(self.t0, "t0")
+        require_finite(self.amplitude, "amplitude")
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "kind": "sinc_pulse",
+            "cutoff_hz": self.cutoff_hz,
+            "t0": self.t0,
+            "amplitude": self.amplitude,
+        }
+
+
+TimeDependence = Constant | Sinusoidal | Pulse | PiecewiseLinear | SincPulse
 
 OERSTED_FIELD_MODELS = frozenset({"from_current_solution"})
 

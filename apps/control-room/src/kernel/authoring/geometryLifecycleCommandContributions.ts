@@ -62,6 +62,14 @@ function selectedObjectDisabledReason(
     : "Select a scene object to use this command.";
 }
 
+function isApiAvailable(context: CommandContext): boolean {
+  return Boolean(context.api);
+}
+
+function disabledWithoutApi(context: CommandContext): string | null {
+  return context.api ? null : "Control Room API is not available.";
+}
+
 function primitiveCapabilityDisabled(
   context: CommandContext,
   primitiveKind: "box" | "cylinder" | "sphere",
@@ -395,6 +403,24 @@ function primitiveKindFromDraftSelection(
   return "box";
 }
 
+function sceneObjects(scene: unknown): JsonObject[] {
+  const objects = asRecord(scene)?.objects;
+  return Array.isArray(objects)
+    ? objects.filter((object): object is JsonObject =>
+        Boolean(object && typeof object === "object" && !Array.isArray(object)),
+      )
+    : [];
+}
+
+function sceneCurrentModules(scene: unknown): JsonObject[] {
+  const modules = asRecord(asRecord(scene)?.current_modules)?.modules;
+  return Array.isArray(modules)
+    ? modules.filter((module): module is JsonObject =>
+        Boolean(module && typeof module === "object" && !Array.isArray(module)),
+      )
+    : [];
+}
+
 function defaultPrimitiveGeometry(
   primitiveKind: "box" | "cylinder" | "sphere",
 ): JsonObject {
@@ -421,6 +447,43 @@ function defaultPrimitiveGeometry(
 
 function draftObjectId(primitiveKind: string): string {
   return `${primitiveKind}-${Date.now().toString(36)}`;
+}
+
+function defaultMicrostripAntennaObject(objectId: string): JsonObject {
+  return {
+    geometry: {
+      geometry_kind: "Box",
+      geometry_params: { size: [50e-9, 1e-6, 10e-9] },
+    },
+    id: objectId,
+    locked: false,
+    magnetization_ref: null,
+    material_ref: "",
+    name: "Microstrip antenna",
+    physics_stack: [],
+    role: "antenna",
+    tags: ["role:antenna"],
+    transform: {
+      rotation: [0, 0, 0],
+      scale: [1, 1, 1],
+      translation: [0, 0, 0],
+    },
+    visible: true,
+  };
+}
+
+function defaultMicrostripAntennaModule(objectId: string): JsonObject {
+  return {
+    B: 0.001,
+    direction: [0, 1, 0],
+    id: `${objectId}:H_ant`,
+    kind: "antenna_field_source",
+    model: "prescribed_zeeman_mask",
+    name: "Microstrip antenna field",
+    object: objectId,
+    spatial_profile: { kind: "uniform" },
+    waveform: { cutoff_hz: 20e9, kind: "sinc_pulse", t0: 5e-11 },
+  };
 }
 
 function selectCommittedObject(
@@ -525,6 +588,41 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
   primitiveDraftCommand("geometry.add-box", "Add Box", "box"),
   primitiveDraftCommand("geometry.add-cylinder", "Add Cylinder", "cylinder"),
   primitiveDraftCommand("geometry.add-sphere", "Add Sphere", "sphere"),
+  {
+    id: "geometry.add-microstrip-antenna",
+    title: "Add Microstrip Antenna",
+    category: "Geometry",
+    group: "geometry",
+    scope: "workspace",
+    isEnabled: isApiAvailable,
+    disabledReason: disabledWithoutApi,
+    run: async (context) => {
+      if (!context.api) {
+        return { message: "Control-room API is unavailable.", status: "failed" };
+      }
+
+      const scene = await context.api.model.scene();
+      const objectId = draftObjectId("antenna");
+      const response = await context.api.model.commitTransaction({
+        kind: "merge_patch",
+        merge_patch: {
+          current_modules: {
+            modules: [
+              ...sceneCurrentModules(scene),
+              defaultMicrostripAntennaModule(objectId),
+            ],
+          },
+          objects: [
+            ...sceneObjects(scene),
+            defaultMicrostripAntennaObject(objectId),
+          ],
+        },
+      });
+      invalidateSceneAuthoringResources(context, response.scene_revision);
+      selectCommittedObject(context, objectId, "Microstrip antenna");
+      return { message: "Microstrip antenna added.", status: "completed" };
+    },
+  },
   {
     id: "geometry.commit-object-draft",
     title: "Commit Object Draft",

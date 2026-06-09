@@ -338,10 +338,10 @@ describe("selectExplorerNode", () => {
   it("selects concrete study stage nodes with stage id and index refs", () => {
     const kernel = makeKernel();
     const node: ExplorerNode = {
-      id: "model:study:stage:hysteresis-1",
+      id: "model:study:stages:stage:hysteresis-1",
       kind: "study.stage.hysteresis",
       label: "Hysteresis 4",
-      parentId: "model:study",
+      parentId: "model:study:stages",
       stageId: "hysteresis-1",
       stageIndex: 3,
     };
@@ -351,11 +351,11 @@ describe("selectExplorerNode", () => {
     expect(kernel.selection.get()).toMatchObject({
       kind: "study.stage.hysteresis",
       label: "Hysteresis 4",
-      nodeId: "model:study:stage:hysteresis-1",
+      nodeId: "model:study:stages:stage:hysteresis-1",
       objectId: null,
       ref: {
         kind: "study.stage.hysteresis",
-        nodeId: "model:study:stage:hysteresis-1",
+        nodeId: "model:study:stages:stage:hysteresis-1",
         stageId: "hysteresis-1",
         stageIndex: 3,
         type: "study-stage",

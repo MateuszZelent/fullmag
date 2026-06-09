@@ -45,6 +45,7 @@ const MAGNETIC_ONLY_QUANTITY_IDS = new Set([
   "H_dmi",
   "H_mel",
   "H_ani_cubic",
+  "H_ant",
   "H_dmi_bulk",
   "H_therm",
   "E_ex",
@@ -69,6 +70,20 @@ const MAGNETIC_ONLY_QUANTITY_IDS = new Set([
   "dm_dt",
   "torque_stt",
   "torque_sot",
+]);
+
+const SCALAR_SPATIAL_QUANTITY_IDS = new Set([
+  "eden_ani",
+  "eden_demag",
+  "eden_dmi",
+  "eden_ex",
+  "eden_ext",
+  "eden_total",
+  "mat_ms",
+  "mat_aex",
+  "mat_alpha",
+  "mat_dind",
+  "mat_dbulk",
 ]);
 
 const QUANTITY_UNITS: Record<string, string> = {
@@ -128,6 +143,10 @@ export function sameQuantityId(
 
 export function isMagneticOnlyQuantityId(quantityId: string): boolean {
   return MAGNETIC_ONLY_QUANTITY_IDS.has(resolveCanonicalQuantityId(quantityId));
+}
+
+export function isScalarSpatialQuantityId(quantityId: string): boolean {
+  return SCALAR_SPATIAL_QUANTITY_IDS.has(resolveCanonicalQuantityId(quantityId));
 }
 
 export function quantityUnitForColorbar(quantityId: string): string {

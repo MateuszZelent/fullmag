@@ -11,6 +11,7 @@ use fullmag_ir::{BackendTarget, ExecutionMode, ExecutionPlanIR, ProblemIR, Study
 #[cfg(test)]
 use fullmag_ir::*;
 
+mod antenna_zeeman;
 mod current_transport;
 mod error;
 mod fdm;

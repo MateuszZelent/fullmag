@@ -3545,6 +3545,7 @@ export interface components {
         };
         MaterialParameterFieldDataResource: {
             algorithm?: string | null;
+            artifact_path?: string | null;
             asset_id?: string | null;
             assignment_id: string;
             /** Format: int32 */
@@ -4010,6 +4011,8 @@ export interface components {
             /** Format: int64 */
             mesh_revision: number;
             node_indices: number[];
+            realization_method?: string | null;
+            realization_warnings?: string[];
             region_id: string;
             source: string;
         };
@@ -4867,6 +4870,7 @@ export interface components {
                 [key: string]: unknown;
             };
             regions?: components["schemas"]["SceneObjectRegion"][];
+            role?: string | null;
             tags?: string[];
             transform?: {
                 [key: string]: unknown;
@@ -7566,7 +7570,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Mesh-backed realized-region membership indices */
+            /** @description Realized-region membership indices from FEM mesh parts, object segments, or geometry projection */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -7575,7 +7579,7 @@ export interface operations {
                     "application/json": components["schemas"]["MeshRegionMembershipResource"];
                 };
             };
-            /** @description No active mesh or mesh-backed membership for the region */
+            /** @description No active mesh or membership for the region */
             404: {
                 headers: {
                     [name: string]: unknown;

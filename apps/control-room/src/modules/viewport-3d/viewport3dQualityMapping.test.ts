@@ -68,6 +68,29 @@ describe("buildMeshQualityVertexColors", () => {
     expect(first).not.toBe(differentQuality);
   });
 
+  it("keeps palette-specific mesh quality buffers separate", () => {
+    const topology = topologyFixture();
+    const quality = qualityFixture();
+
+    const viridis = buildMeshQualityVertexColors(
+      topology,
+      quality,
+      "gamma",
+      "viridis",
+    );
+    const inferno = buildMeshQualityVertexColors(
+      topology,
+      quality,
+      "gamma",
+      "inferno",
+    );
+
+    expect(viridis).not.toBe(inferno);
+    expect(Array.from(inferno?.colors.slice(0, 3) ?? [])).toEqual(
+      Array.from(Float32Array.from(magnitudeColorRgb(0, "inferno"))),
+    );
+  });
+
   it("rejects missing metric arrays and element-count drift", () => {
     expect(
       buildMeshQualityVertexColors(topologyFixture(), qualityFixture(), "volume"),

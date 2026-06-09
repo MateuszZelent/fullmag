@@ -137,9 +137,7 @@ class ColorTransformWorkerClient {
       const signal = options.signal ?? null;
       const abortListener = signal
         ? () => {
-            this.pending.delete(id);
-            reject(createAbortError());
-            this.dispose(createAbortError());
+            this.abortPending(id);
           }
         : null;
       if (signal && abortListener) {
@@ -222,6 +220,13 @@ class ColorTransformWorkerClient {
       pending.signal.removeEventListener("abort", pending.abortListener);
     }
     return pending;
+  }
+
+  private abortPending(id: number): void {
+    const pending = this.clearPending(id);
+    if (!pending) return;
+    pending.reject(createAbortError());
+    this.scheduleIdleDispose();
   }
 
   private scheduleIdleDispose(): void {

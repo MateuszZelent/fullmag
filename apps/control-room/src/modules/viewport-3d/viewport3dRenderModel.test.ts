@@ -23,6 +23,7 @@ import {
   resolveViewport3DVectorSegmentScale,
   viewport3DFieldRenderOptionsNeedFieldData,
 } from "./viewport3dRenderModel";
+import { magnitudeColorRgb } from "./viewport3dVectorColoring";
 
 const viewport3dRenderModelSource = readFileSync(
   join(process.cwd(), "src/modules/viewport-3d/viewport3dRenderModel.ts"),
@@ -1155,13 +1156,13 @@ describe("viewport3dRenderModel", () => {
       model?.scalarColorsByPartAndMode.get("part-a")?.get("x")?.colors;
     expect(colors).toBeDefined();
     expect(Array.from(colors!.slice(0, 6))).toEqual([0, 0, 0, 0, 0, 0]);
-    expect(colors![6]).toBe(0);
-    expect(colors![7]).toBeCloseTo(0.38);
-    expect(colors![8]).toBe(1);
+    expect(Array.from(colors!.slice(6, 9))).toEqual(
+      Array.from(Float32Array.from(magnitudeColorRgb(0))),
+    );
     expect(Array.from(colors!.slice(9, 12))).toEqual([0, 0, 0]);
-    expect(colors![12]).toBe(1);
-    expect(colors![13]).toBeCloseTo(0.38);
-    expect(colors![14]).toBe(0);
+    expect(Array.from(colors!.slice(12, 15))).toEqual(
+      Array.from(Float32Array.from(magnitudeColorRgb(1))),
+    );
   });
 
   it("reuses unchanged part vector buffers when another part changes", () => {

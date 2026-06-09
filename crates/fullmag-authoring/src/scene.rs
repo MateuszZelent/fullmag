@@ -63,6 +63,8 @@ impl Default for SceneMetadata {
 pub struct SceneObject {
     pub id: String,
     pub name: String,
+    #[serde(default = "default_scene_object_role")]
+    pub role: String,
     pub geometry: SceneGeometry,
     #[serde(default)]
     pub transform: Transform3D,
@@ -93,6 +95,10 @@ pub struct SceneObject {
     pub locked: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+}
+
+fn default_scene_object_role() -> String {
+    "magnet".to_string()
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]

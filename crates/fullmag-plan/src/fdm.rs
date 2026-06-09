@@ -8,6 +8,7 @@ use fullmag_ir::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::antenna_zeeman::{has_prescribed_zeeman_mask_source, resolve_prescribed_zeeman_masks};
 use crate::current_transport::{resolve_current_transports, CurrentTransportExecutableLane};
 use crate::error::PlanError;
 use crate::geometry::{
@@ -362,13 +363,40 @@ pub(crate) fn plan_fdm(
         );
     }
 
-    if problem.geometry.entries.len() != 1 {
+    if problem.magnets.len() != 1 {
         errors.push(format!(
-            "Phase 1 supports exactly one geometry entry, found {}",
-            problem.geometry.entries.len()
+            "Phase 1 supports exactly one magnet, found {}",
+            problem.magnets.len()
         ));
     }
-    let geometry = &problem.geometry.entries[0];
+    let region_to_geometry: BTreeMap<&str, &str> = problem
+        .regions
+        .iter()
+        .map(|region| (region.name.as_str(), region.geometry.as_str()))
+        .collect();
+    let geometry_by_name: BTreeMap<&str, &GeometryEntryIR> = problem
+        .geometry
+        .entries
+        .iter()
+        .map(|entry| (entry.name(), entry))
+        .collect();
+    let Some(magnet) = problem.magnets.first() else {
+        return Err(PlanError { reasons: errors });
+    };
+    let Some(geometry_name) = region_to_geometry.get(magnet.region.as_str()).copied() else {
+        errors.push(format!(
+            "magnet '{}' references region '{}' with no geometry binding",
+            magnet.name, magnet.region
+        ));
+        return Err(PlanError { reasons: errors });
+    };
+    let Some(geometry) = geometry_by_name.get(geometry_name).copied() else {
+        errors.push(format!(
+            "magnet '{}' references geometry '{}' which is missing from geometry.entries",
+            magnet.name, geometry_name
+        ));
+        return Err(PlanError { reasons: errors });
+    };
     let shape = match ir_to_shape(geometry) {
         Ok(shape) => shape,
         Err(e) => {
@@ -388,13 +416,6 @@ pub(crate) fn plan_fdm(
         }
     };
 
-    if problem.magnets.len() != 1 {
-        errors.push(format!(
-            "Phase 1 supports exactly one magnet, found {}",
-            problem.magnets.len()
-        ));
-    }
-
     validate_executable_outputs(
         &problem.study.sampling().outputs,
         enable_exchange,
@@ -410,7 +431,7 @@ pub(crate) fn plan_fdm(
         false,
         false,
         false,
-        false,
+        has_prescribed_zeeman_mask_source(problem),
         &mut errors,
     );
     if problem.backend_policy.execution_precision != ExecutionPrecision::Double
@@ -614,6 +635,8 @@ pub(crate) fn plan_fdm(
     let sample_points =
         grid_sample_points(grid_cells, cell_size, native_origin, active_mask.as_ref());
     let point_coords: Vec<[f64; 3]> = sample_points.iter().map(|p| p.position_world).collect();
+    let antenna_zeeman_masks =
+        resolve_prescribed_zeeman_masks(problem, &point_coords, active_mask.as_deref())?;
 
     // Resolve Ms field
     let ms_field_resolved = crate::material::resolve_spatial_parameter(
@@ -768,6 +791,7 @@ pub(crate) fn plan_fdm(
         enable_exchange,
         enable_demag,
         external_field,
+        antenna_zeeman_masks,
         inter_region_exchange,
         gyromagnetic_ratio,
         precision: problem.backend_policy.execution_precision,
@@ -873,11 +897,11 @@ pub(crate) fn plan_fdm(
                                 fdm_plan.oersted_time_dep_t_on = *t_on;
                                 fdm_plan.oersted_time_dep_t_off = *t_off;
                             }
-                            TimeDependenceIR::PiecewiseLinear { .. } => {
+                            TimeDependenceIR::PiecewiseLinear { .. }
+                            | TimeDependenceIR::SincPulse { .. } => {
                                 return Err(PlanError {
                                     reasons: vec![
-                                        "Oersted time dependence 'PiecewiseLinear' is not yet supported \
-                                         by the FDM backend; use 'Constant', 'Sinusoidal', or 'Pulse' instead"
+                                        "Oersted time dependence supports only 'Constant', 'Sinusoidal', or 'Pulse' on the FDM backend; use prescribed_zeeman_mask antenna sources for sinc-pulse spin-wave drives"
                                             .to_string(),
                                     ],
                                 });

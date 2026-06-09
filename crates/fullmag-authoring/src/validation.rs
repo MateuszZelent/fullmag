@@ -93,6 +93,9 @@ pub fn validate_scene_document(scene: &SceneDocument) -> Result<(), SceneDocumen
                 object.id
             )));
         }
+        if object.role != "magnet" {
+            continue;
+        }
         if !material_ids.contains(&object.material_ref) {
             return Err(SceneDocumentValidationError::new(format!(
                 "object '{}' references missing material '{}'",

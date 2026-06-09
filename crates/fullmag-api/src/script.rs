@@ -378,9 +378,36 @@ mod tests {
     #[test]
     fn load_scene_document_state_preserves_script_object_regions() {
         let root = repo_root();
-        let script_path = root.join("examples/permalloy_box_relax_300x1000x10nm.py");
+        let script_path =
+            std::env::temp_dir().join(format!("fullmag-region-export-{}.py", uuid_v4_hex()));
+        std::fs::write(
+            &script_path,
+            r#"
+import fullmag as fm
+
+study = fm.study("region_export")
+study.engine("fem")
+body = study.geometry(
+    fm.Box(300e-9, 1000e-9, 30e-9) - fm.Cylinder(radius=40e-9, height=30e-9),
+    name="permalloy_box",
+)
+body.Ms = 800e3
+body.Aex = 13e-12
+body.alpha = 0.5
+body.mesh(minimum_element_size=8e-9, maximum_element_size=50e-9, order=1)
+hole_refinement = body.add_region(
+    "hole_refinement",
+    fm.Cylinder(radius=70e-9, height=30e-9),
+    priority=10,
+    realization_policy="conformal",
+)
+hole_refinement.mesh(minimum_element_size=0.5e-9, maximum_element_size=1e-9, order=1)
+"#,
+        )
+        .expect("failed to write region export fixture");
         let scene = load_scene_document_state(&root, &root, &script_path)
             .expect("permalloy script should export a scene document");
+        let _ = std::fs::remove_file(&script_path);
         let object = scene
             .objects
             .iter()

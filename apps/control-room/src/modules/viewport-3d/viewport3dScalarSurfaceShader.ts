@@ -128,7 +128,25 @@ export function updateScalarSurfaceShaderMaterial(
   buffer: ScalarColorBuffer,
   opacity: number,
 ): void {
-  material.uniforms.fmColorModeId.value = shaderColorModeId(buffer.colorMode);
+  const nextColorModeId = shaderColorModeId(buffer.colorMode);
+  const orientationMode = nextColorModeId === 1;
+  const nextVertexShader = orientationMode
+    ? ORIENTATION_SURFACE_VERTEX_SHADER
+    : SCALAR_SURFACE_VERTEX_SHADER;
+  const nextFragmentShader = orientationMode
+    ? ORIENTATION_SURFACE_FRAGMENT_SHADER
+    : SCALAR_SURFACE_FRAGMENT_SHADER;
+
+  if (
+    material.vertexShader !== nextVertexShader ||
+    material.fragmentShader !== nextFragmentShader
+  ) {
+    material.vertexShader = nextVertexShader;
+    material.fragmentShader = nextFragmentShader;
+    material.needsUpdate = true;
+  }
+
+  material.uniforms.fmColorModeId.value = nextColorModeId;
   material.uniforms.fmOpacity.value = opacity;
   material.uniforms.fmPaletteId.value = scalarPaletteId(buffer.colorPalette);
   material.uniforms.fmScalarMax.value = buffer.range.max;

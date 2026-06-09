@@ -1020,9 +1020,9 @@ fn material_field_resource(
 
     if let Some(fields) = latest_fields {
         let lookup_keys = match parameter.as_str() {
-            "ms" | "Ms" => &["Ms", "ms"][..],
-            "aex" | "Aex" => &["Aex", "aex"][..],
-            "alpha" => &["alpha"][..],
+            "ms" | "Ms" => &["mat_ms", "Ms", "ms"][..],
+            "aex" | "Aex" => &["mat_aex", "Aex", "aex"][..],
+            "alpha" => &["mat_alpha", "alpha"][..],
             other => &[other][..],
         };
         let mut raw_val = None;
@@ -2462,6 +2462,7 @@ fn apply_create_object_transaction(
     let mut object = SceneObject {
         id: object_id,
         name: name.trim().to_string(),
+        role: "magnet".to_string(),
         geometry,
         transform,
         material_ref,

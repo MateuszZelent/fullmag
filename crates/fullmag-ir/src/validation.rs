@@ -1,11 +1,112 @@
 use crate::{
-    CurrentModuleIR, CurrentTransportModelIR, DynamicsIR, EnergyTermIR, MechanicalLoadIR,
-    MechanicsIR, ProblemIR, SpinTorqueModuleIR,
+    AntennaFieldSourceModelIR, AntennaSpatialProfileIR, CurrentModuleIR, CurrentTransportModelIR,
+    DynamicsIR, EnergyTermIR, MechanicalLoadIR, MechanicsIR, ProblemIR, SpinTorqueModuleIR,
+    TimeDependenceIR,
 };
 use std::collections::BTreeSet;
 
 pub(crate) fn vector3_is_finite(vector: &[f64; 3]) -> bool {
     vector.iter().all(|value| value.is_finite())
+}
+
+fn vector3_norm_sq(vector: &[f64; 3]) -> f64 {
+    vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2]
+}
+
+fn validate_time_dependence(label: &str, value: &TimeDependenceIR, errors: &mut Vec<String>) {
+    match value {
+        TimeDependenceIR::Constant => {}
+        TimeDependenceIR::Sinusoidal {
+            frequency_hz,
+            phase_rad,
+            offset,
+        } => {
+            if *frequency_hz <= 0.0 {
+                errors.push(format!("{label} frequency_hz must be > 0"));
+            }
+            if !phase_rad.is_finite() || !offset.is_finite() {
+                errors.push(format!("{label} phase_rad and offset must be finite"));
+            }
+        }
+        TimeDependenceIR::Pulse { t_on, t_off } => {
+            if !t_on.is_finite() || !t_off.is_finite() || t_off <= t_on {
+                errors.push(format!("{label} pulse requires finite t_off > t_on"));
+            }
+        }
+        TimeDependenceIR::PiecewiseLinear { points } => {
+            if points.len() < 2 {
+                errors.push(format!(
+                    "{label} piecewise_linear requires at least 2 points"
+                ));
+            }
+            for point in points {
+                if !point[0].is_finite() || !point[1].is_finite() {
+                    errors.push(format!("{label} piecewise_linear points must be finite"));
+                }
+            }
+            for window in points.windows(2) {
+                if window[1][0] <= window[0][0] {
+                    errors.push(format!(
+                        "{label} piecewise_linear times must be strictly increasing"
+                    ));
+                }
+            }
+        }
+        TimeDependenceIR::SincPulse {
+            cutoff_hz,
+            t0,
+            amplitude,
+        } => {
+            if *cutoff_hz <= 0.0 {
+                errors.push(format!("{label} sinc_pulse cutoff_hz must be > 0"));
+            }
+            if !t0.is_finite() || !amplitude.is_finite() {
+                errors.push(format!(
+                    "{label} sinc_pulse t0 and amplitude must be finite"
+                ));
+            }
+        }
+    }
+}
+
+fn validate_antenna_spatial_profile(
+    index: usize,
+    profile: &AntennaSpatialProfileIR,
+    errors: &mut Vec<String>,
+) {
+    match profile {
+        AntennaSpatialProfileIR::Uniform => {}
+        AntennaSpatialProfileIR::Sinc {
+            axis,
+            period_m,
+            width_m,
+            center_m,
+            ..
+        } => {
+            if !vector3_is_finite(axis) || vector3_norm_sq(axis) <= 1e-30 {
+                errors.push(format!(
+                    "current_modules[{index}] antenna_field_source sinc spatial_profile axis must be finite and non-zero"
+                ));
+            }
+            if *period_m <= 0.0 {
+                errors.push(format!(
+                    "current_modules[{index}] antenna_field_source sinc spatial_profile period_m must be > 0"
+                ));
+            }
+            if let Some(width_m) = width_m {
+                if *width_m <= 0.0 {
+                    errors.push(format!(
+                        "current_modules[{index}] antenna_field_source sinc spatial_profile width_m must be > 0"
+                    ));
+                }
+            }
+            if center_m.is_some_and(|value| !value.is_finite()) {
+                errors.push(format!(
+                    "current_modules[{index}] antenna_field_source sinc spatial_profile center_m must be finite"
+                ));
+            }
+        }
+    }
 }
 
 pub(crate) fn current_module_name(module: &CurrentModuleIR) -> &str {
@@ -172,21 +273,95 @@ pub(crate) fn validate_current_modules(problem: &ProblemIR, errors: &mut Vec<Str
     for (index, module) in problem.current_modules.iter().enumerate() {
         match module {
             CurrentModuleIR::AntennaFieldSource {
+                model,
                 solver,
+                antenna,
+                drive,
                 air_box_factor,
+                object,
+                field,
+                spatial_profile,
+                waveform,
                 ..
-            } => {
-                if solver.trim().is_empty() {
-                    errors.push(format!(
-                        "current_modules[{index}] antenna_field_source solver must not be empty"
-                    ));
+            } => match model {
+                AntennaFieldSourceModelIR::Mqs2p5dAz => {
+                    if solver.as_ref().is_some_and(|value| value.trim().is_empty()) {
+                        errors.push(format!(
+                            "current_modules[{index}] antenna_field_source solver must not be empty"
+                        ));
+                    }
+                    if antenna.is_none() {
+                        errors.push(format!(
+                            "current_modules[{index}] antenna_field_source mqs_2p5d_az requires antenna"
+                        ));
+                    }
+                    if drive.is_none() {
+                        errors.push(format!(
+                            "current_modules[{index}] antenna_field_source mqs_2p5d_az requires drive"
+                        ));
+                    }
+                    if let Some(air_box_factor) = air_box_factor {
+                        if *air_box_factor <= 0.0 {
+                            errors.push(format!(
+                                "current_modules[{index}] antenna_field_source air_box_factor must be > 0"
+                            ));
+                        }
+                    }
                 }
-                if *air_box_factor <= 0.0 {
-                    errors.push(format!(
-                        "current_modules[{index}] antenna_field_source air_box_factor must be > 0"
-                    ));
+                AntennaFieldSourceModelIR::PrescribedZeemanMask => {
+                    if object
+                        .as_ref()
+                        .map_or(true, |value| value.trim().is_empty())
+                    {
+                        errors.push(format!(
+                            "current_modules[{index}] antenna_field_source prescribed_zeeman_mask requires object"
+                        ));
+                    }
+                    match field {
+                        Some(field) => {
+                            if !field.amplitude_b_t.is_finite() {
+                                errors.push(format!(
+                                    "current_modules[{index}] antenna_field_source prescribed_zeeman_mask amplitude_B_T must be finite"
+                                ));
+                            }
+                            if !vector3_is_finite(&field.direction) {
+                                errors.push(format!(
+                                    "current_modules[{index}] antenna_field_source prescribed_zeeman_mask direction must contain finite values"
+                                ));
+                            } else if vector3_norm_sq(&field.direction) <= 1e-30 {
+                                errors.push(format!(
+                                    "current_modules[{index}] antenna_field_source prescribed_zeeman_mask direction must be non-zero"
+                                ));
+                            }
+                        }
+                        None => errors.push(format!(
+                            "current_modules[{index}] antenna_field_source prescribed_zeeman_mask requires field"
+                        )),
+                    }
+                    if antenna.is_some()
+                        || drive.is_some()
+                        || solver.is_some()
+                        || air_box_factor.is_some()
+                    {
+                        errors.push(format!(
+                            "current_modules[{index}] antenna_field_source prescribed_zeeman_mask must not define solver, antenna, drive, or air_box_factor"
+                        ));
+                    }
+                    if let Some(profile) = spatial_profile {
+                        validate_antenna_spatial_profile(index, profile, errors);
+                    }
+                    if let Some(waveform) = waveform {
+                        validate_time_dependence(
+                            format!(
+                                "current_modules[{index}] antenna_field_source prescribed_zeeman_mask waveform"
+                            )
+                            .as_str(),
+                            waveform,
+                            errors,
+                        );
+                    }
                 }
-            }
+            },
             CurrentModuleIR::CurrentTransport {
                 model,
                 current_density,

@@ -442,6 +442,92 @@ describe("geometry lifecycle command contributions", () => {
     now.mockRestore();
   });
 
+  it("adds microstrip antennas as auxiliary scene objects with field modules", async () => {
+    const registry = registryWithLifecycleCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const selection = new SelectionController(bus);
+    const resources = new ResourceInvalidationController(bus);
+    const now = vi.spyOn(Date, "now").mockReturnValue(12345);
+    const scene = vi.fn(async () => ({
+      current_modules: {
+        modules: [{ id: "existing-source", kind: "antenna_field_source" }],
+      },
+      objects: [{ id: "waveguide", name: "Waveguide", role: "magnet" }],
+      revision: 20,
+    }));
+    const commitTransaction = vi.fn(async () => ({
+      committed_scene: { revision: 22 },
+      scene_revision: 22,
+      transaction_kind: "merge_patch",
+    }));
+
+    const result = await registry.execute("geometry.add-microstrip-antenna", {
+      api: {
+        model: { commitTransaction, scene },
+      } as never,
+      resources,
+      selection,
+      source: "test",
+    });
+
+    expect(result).toEqual({
+      message: "Microstrip antenna added.",
+      status: "completed",
+    });
+    expect(commitTransaction).toHaveBeenCalledWith({
+      kind: "merge_patch",
+      merge_patch: {
+        current_modules: {
+          modules: [
+            { id: "existing-source", kind: "antenna_field_source" },
+            {
+              B: 0.001,
+              direction: [0, 1, 0],
+              id: "antenna-9ix:H_ant",
+              kind: "antenna_field_source",
+              model: "prescribed_zeeman_mask",
+              name: "Microstrip antenna field",
+              object: "antenna-9ix",
+              spatial_profile: { kind: "uniform" },
+              waveform: { cutoff_hz: 20e9, kind: "sinc_pulse", t0: 5e-11 },
+            },
+          ],
+        },
+        objects: [
+          { id: "waveguide", name: "Waveguide", role: "magnet" },
+          {
+            geometry: {
+              geometry_kind: "Box",
+              geometry_params: { size: [50e-9, 1e-6, 10e-9] },
+            },
+            id: "antenna-9ix",
+            locked: false,
+            magnetization_ref: null,
+            material_ref: "",
+            name: "Microstrip antenna",
+            physics_stack: [],
+            role: "antenna",
+            tags: ["role:antenna"],
+            transform: {
+              rotation: [0, 0, 0],
+              scale: [1, 1, 1],
+              translation: [0, 0, 0],
+            },
+            visible: true,
+          },
+        ],
+      },
+    });
+    expect(selection.get()).toMatchObject({
+      kind: "object.root",
+      label: "Microstrip antenna",
+      nodeId: "model:object:antenna-9ix",
+      objectId: "antenna-9ix",
+    });
+    expect(resources.getRevision(MODEL_SCENE_PATH)).toBe(22);
+    now.mockRestore();
+  });
+
   it("keeps the primitive draft selected when create-object commit fails", async () => {
     const registry = registryWithLifecycleCommands();
     const selection = new SelectionController(new EventBus<KernelEventMap>());

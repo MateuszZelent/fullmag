@@ -2820,6 +2820,39 @@ describe("ribbon structure", () => {
       ]),
     );
   });
+
+  it("exposes microstrip antenna creation from the Geometry create group", () => {
+    const createGroup = ALL_TAB_CONTENT.geometry.groups.find(
+      (group) => group.id === "builder-create",
+    );
+
+    expect(createGroup?.actions.map((action) => action.id)).toEqual(
+      expect.arrayContaining(["geometry.add-microstrip-antenna"]),
+    );
+  });
+
+  it("exposes concrete study stage authoring commands in the Study ribbon", () => {
+    const addStageGroup = ALL_TAB_CONTENT.study.groups.find(
+      (group) => group.id === "add-stage",
+    );
+    const selectionGroup = ALL_TAB_CONTENT.study.groups.find(
+      (group) => group.id === "study-selection",
+    );
+
+    expect(addStageGroup?.actions.map((action) => action.id)).toEqual(
+      expect.arrayContaining([
+        "study.add-relax-stage",
+        "study.add-run-stage",
+        "study.add-hysteresis-stage",
+        "study.add-eigenmodes-stage",
+        "study.add-frequency-response-stage",
+        "study.add-save-state-stage",
+      ]),
+    );
+    expect(selectionGroup?.actions.map((action) => action.id)).toEqual(
+      expect.arrayContaining(["study.remove-selected-stage"]),
+    );
+  });
 });
 
 function createVisualizationRibbonContext(

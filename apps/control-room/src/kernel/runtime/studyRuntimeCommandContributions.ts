@@ -110,6 +110,64 @@ const DEFAULT_RUN_STAGE: JsonObject = {
   until_seconds: "1e-9",
 };
 
+const DEFAULT_EIGENMODES_STAGE: JsonObject = {
+  bc: "free",
+  count: 10,
+  damping_policy: "ignore",
+  eigen_count: 10,
+  eigen_damping_policy: "ignore",
+  eigen_equilibrium_source: "relax",
+  eigen_include_demag: true,
+  eigen_normalization: "unit_l2",
+  eigen_spin_wave_bc: "free",
+  eigen_target: "lowest",
+  entrypoint_kind: "flat_eigenmodes",
+  equilibrium_source: "relax",
+  include_demag: true,
+  kind: "eigenmodes",
+  normalization: "unit_l2",
+  target: "lowest",
+};
+
+const DEFAULT_FREQUENCY_RESPONSE_STAGE: JsonObject = {
+  bc: "free",
+  damping_policy: "ignore",
+  entrypoint_kind: "flat_frequency_response",
+  equilibrium_source: "provided",
+  excitation_field_au_per_m: [0, 0, 1],
+  frequencies_hz: [1e9],
+  frequency_damping_policy: "ignore",
+  frequency_equilibrium_source: "provided",
+  frequency_excitation_field_au_per_m: [0, 0, 1],
+  frequency_include_demag: true,
+  frequency_normalization: "unit_l2",
+  frequency_observable: "susceptibility_tensor",
+  frequency_spin_wave_bc: "free",
+  frequency_values_hz: [1e9],
+  include_demag: true,
+  kind: "frequency_response",
+  normalization: "unit_l2",
+  observable: "susceptibility_tensor",
+};
+
+const DEFAULT_HYSTERESIS_STAGE: JsonObject = {
+  entrypoint_kind: "flat_hysteresis",
+  field_steps: 21,
+  hysteresis_start_field: [0, 0, -0.1],
+  hysteresis_stop_field: [0, 0, 0.1],
+  hysteresis_torque_tolerance: DEFAULT_RELAX_TORQUE_APM,
+  kind: "hysteresis",
+  start_field: [0, 0, -0.1],
+  stop_field: [0, 0, 0.1],
+  torque_tolerance: DEFAULT_RELAX_TORQUE_APM,
+};
+
+const DEFAULT_SAVE_STATE_STAGE: JsonObject = {
+  artifact_name: "state_snapshot",
+  entrypoint_kind: "flat_save_state",
+  kind: "save_state",
+};
+
 const ACTIVE_RUNTIME_COMMAND_STATUSES = new Set([
   "accepted",
   "dispatched",
@@ -1145,11 +1203,50 @@ function studyStages(scene: unknown): JsonObject[] {
     : [];
 }
 
+function stageKind(stage: JsonObject): string {
+  const kind = stage.kind ?? stage.entrypoint_kind ?? "stage";
+  return typeof kind === "string" && kind.trim() ? kind : "stage";
+}
+
+function stageIdForKind(kind: string, index: number): string {
+  return `${kind.replace(/_/g, "-")}-${index + 1}`;
+}
+
+function stageWithDefaultId(stage: JsonObject, index: number): JsonObject {
+  if (typeof stage.stage_id === "string" && stage.stage_id.trim()) {
+    return stage;
+  }
+  return {
+    ...stage,
+    stage_id: stageIdForKind(stageKind(stage), index),
+  };
+}
+
+function selectedStageIndex(context: CommandContext): number | null {
+  const selection = context.selection?.get();
+  const index = selection?.ref?.type === "study-stage"
+    ? selection.ref.stageIndex
+    : null;
+  return typeof index === "number" && Number.isInteger(index) && index >= 0
+    ? index
+    : null;
+}
+
 function sceneRevision(value: unknown): string | number {
   const revision = record(value).scene_revision ?? record(record(value).committed_scene).revision;
   return typeof revision === "number" || typeof revision === "string"
     ? revision
     : Date.now();
+}
+
+function invalidateStudyAuthoringResources(
+  context: CommandContext,
+  revision: string | number,
+): void {
+  context.resources?.invalidate(MODEL_SCENE_PATH, revision);
+  context.resources?.invalidate(MODEL_STUDY_PATH, revision);
+  context.resources?.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);
+  context.resources?.invalidate(SIMULATION_STAGES_EXECUTION_PATH, revision);
 }
 
 function addStageCommand(
@@ -1172,7 +1269,11 @@ function addStageCommand(
       }
 
       const scene = await context.api.model.scene();
-      const nextStages = [...studyStages(scene), stage];
+      const currentStages = studyStages(scene);
+      const nextStages = [
+        ...currentStages,
+        stageWithDefaultId(stage, currentStages.length),
+      ];
       const response = await context.api.model.commitTransaction({
         kind: "merge_patch",
         merge_patch: {
@@ -1182,11 +1283,54 @@ function addStageCommand(
         },
       });
       const revision = sceneRevision(response);
-      context.resources?.invalidate(MODEL_SCENE_PATH, revision);
-      context.resources?.invalidate(MODEL_STUDY_PATH, revision);
-      context.resources?.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);
+      invalidateStudyAuthoringResources(context, revision);
 
       return { message: successMessage, status: "completed" };
+    },
+  };
+}
+
+function removeSelectedStageCommand(): CommandContribution {
+  return {
+    id: "study.remove-selected-stage",
+    title: "Remove Selected Stage",
+    category: "Study",
+    group: "study-authoring",
+    scope: "selection",
+    isEnabled: (context) =>
+      Boolean(context.api) && selectedStageIndex(context) !== null,
+    disabledReason: (context) => {
+      if (!context.api) return "Control Room API is not available.";
+      return selectedStageIndex(context) === null
+        ? "Select a study stage to remove it."
+        : null;
+    },
+    run: async (context) => {
+      if (!context.api) {
+        return { message: "Control-room API is unavailable.", status: "failed" };
+      }
+      const index = selectedStageIndex(context);
+      if (index === null) {
+        return { message: "Select a study stage to remove it.", status: "failed" };
+      }
+
+      const scene = await context.api.model.scene();
+      const stages = studyStages(scene);
+      if (!stages[index]) {
+        return { message: "Selected study stage is no longer present.", status: "failed" };
+      }
+      const nextStages = stages.filter((_, stageIndex) => stageIndex !== index);
+      const response = await context.api.model.commitTransaction({
+        kind: "merge_patch",
+        merge_patch: {
+          study: {
+            stages: nextStages,
+          },
+        },
+      });
+      const revision = sceneRevision(response);
+      invalidateStudyAuthoringResources(context, revision);
+      return { message: "Study stage removed.", status: "completed" };
     },
   };
 }
@@ -1229,6 +1373,31 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
     DEFAULT_RUN_STAGE,
     "Run stage added.",
   ),
+  addStageCommand(
+    "study.add-hysteresis-stage",
+    "Add Hysteresis Stage",
+    DEFAULT_HYSTERESIS_STAGE,
+    "Hysteresis stage added.",
+  ),
+  addStageCommand(
+    "study.add-eigenmodes-stage",
+    "Add Eigenmodes Stage",
+    DEFAULT_EIGENMODES_STAGE,
+    "Eigenmodes stage added.",
+  ),
+  addStageCommand(
+    "study.add-frequency-response-stage",
+    "Add Frequency Response Stage",
+    DEFAULT_FREQUENCY_RESPONSE_STAGE,
+    "Frequency response stage added.",
+  ),
+  addStageCommand(
+    "study.add-save-state-stage",
+    "Add Save State Stage",
+    DEFAULT_SAVE_STATE_STAGE,
+    "Save-state stage added.",
+  ),
+  removeSelectedStageCommand(),
   {
     id: "diagnostics.toggle-solver-profiler",
     title: "Solver Profiler",

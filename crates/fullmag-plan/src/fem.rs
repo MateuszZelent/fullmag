@@ -7,8 +7,9 @@ use fullmag_ir::{
 };
 use std::collections::BTreeMap;
 
+use crate::antenna_zeeman::{has_prescribed_zeeman_mask_source, resolve_prescribed_zeeman_masks};
 use crate::current_transport::{
-    has_antenna_field_source, resolve_current_transports, CurrentTransportExecutableLane,
+    has_mqs_antenna_field_source, resolve_current_transports, CurrentTransportExecutableLane,
 };
 use crate::error::PlanError;
 use crate::mesh::{
@@ -1353,7 +1354,7 @@ pub(crate) fn plan_fem(
         bulk_dmi.is_some() || has_material_bulk_dmi,
         true,
         has_magnetoelastic,
-        has_antenna_field_source(problem),
+        has_mqs_antenna_field_source(problem) || has_prescribed_zeeman_mask_source(problem),
         &mut errors,
     );
     if problem.backend_policy.execution_precision != ExecutionPrecision::Double {
@@ -1639,6 +1640,7 @@ pub(crate) fn plan_fem(
 
     let dind_field = material.dind_field.clone();
     let dbulk_field = material.dbulk_field.clone();
+    let antenna_zeeman_masks = resolve_prescribed_zeeman_masks(problem, &mesh.nodes, None)?;
 
     let mut fem_plan = FemPlanIR {
         mesh_name: mesh_name.clone(),
@@ -1658,6 +1660,7 @@ pub(crate) fn plan_fem(
         enable_exchange,
         enable_demag,
         external_field,
+        antenna_zeeman_masks,
         current_modules: problem.current_modules.clone(),
         gyromagnetic_ratio,
         precision: problem.backend_policy.execution_precision,
@@ -1754,11 +1757,11 @@ pub(crate) fn plan_fem(
                                 fem_plan.oersted_time_dep_t_on = *t_on;
                                 fem_plan.oersted_time_dep_t_off = *t_off;
                             }
-                            TimeDependenceIR::PiecewiseLinear { .. } => {
+                            TimeDependenceIR::PiecewiseLinear { .. }
+                            | TimeDependenceIR::SincPulse { .. } => {
                                 return Err(PlanError {
                                     reasons: vec![
-                                        "Oersted time dependence 'PiecewiseLinear' is not yet supported \
-                                         by the FEM backend; use 'Constant', 'Sinusoidal', or 'Pulse' instead"
+                                        "Oersted time dependence supports only 'Constant', 'Sinusoidal', or 'Pulse' on the FEM backend; use prescribed_zeeman_mask antenna sources for sinc-pulse spin-wave drives"
                                             .to_string(),
                                     ],
                                 });

@@ -1387,8 +1387,9 @@ function checkMeshQualityVertexColorCache() {
   const source = readFileSync(qualityMappingPath, "utf8");
   requireTokens(source, "viewport3dQualityMapping color cache", [
     "const meshQualityVertexColorCache = new WeakMap",
-    "cachedMeshQualityVertexColors(topology, quality, metric)",
-    "cacheMeshQualityVertexColors(topology, quality, metric",
+    "const cacheKey = `${metric}:${palette}`;",
+    "cachedMeshQualityVertexColors(topology, quality, cacheKey)",
+    "cacheMeshQualityVertexColors(topology, quality, cacheKey",
     "WeakMap<DecodedMeshQualityData",
   ]);
 }

@@ -38,6 +38,8 @@ describe("resolveViewport3DColorbarLegend", () => {
       label: "m x [1]",
       maxLabel: "0.75",
       minLabel: "-0.25",
+      paletteGradient:
+        "linear-gradient(90deg, rgb(68, 1, 84), rgb(49, 104, 142), rgb(53, 183, 121), rgb(253, 231, 37))",
     });
   });
 
@@ -45,12 +47,15 @@ describe("resolveViewport3DColorbarLegend", () => {
     expect(
       resolveViewport3DColorbarLegend({
         colorMode: "magnitude",
+        colorPalette: "inferno",
         quantityId: "mat_ms",
         range: { max: 800e3, min: 400e3 },
         unit: "A/m",
       }),
     ).toEqual({
       label: "mat_ms [A/m]",
+      paletteGradient:
+        "linear-gradient(90deg, rgb(0, 0, 4), rgb(66, 10, 104), rgb(147, 43, 93), rgb(221, 81, 58), rgb(252, 255, 164))",
       maxLabel: "800000",
       minLabel: "400000",
     });
@@ -177,14 +182,27 @@ describe("Viewport3DModule scene wiring", () => {
     expect(source).toContain("scaleUnitMode={commandState.widgets.scaleUnitMode}");
   });
 
-  it("does not remount the native canvas when postprocessing antialiasing changes", () => {
+  it("does not remount the native canvas for visual-profile-only changes", () => {
     const source = readFileSync(
       new URL("./Viewport3DModule.tsx", import.meta.url),
       "utf8",
     );
 
-    expect(source).toContain("key={`viewport-3d-canvas-${visualProfile.id}`}");
+    expect(source).toContain("canvasContextKey");
+    expect(source).toContain("Viewport3DRendererProfile");
+    expect(source).not.toContain("key={`viewport-3d-canvas-${visualProfile.id}`}");
     expect(source).not.toContain("${effectAntialias ? \"aa\" : \"no-aa\"}");
+  });
+
+  it("captures screenshots after a committed viewport frame instead of a fixed timeout", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DModule.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("pendingCaptureRevisionRef");
+    expect(source).toContain("completePendingViewport3DCapture");
+    expect(source).not.toContain("window.setTimeout(captureFrame, 80)");
   });
 
   it("keeps canvas DPR fixed during camera gestures to avoid zoom flicker", () => {

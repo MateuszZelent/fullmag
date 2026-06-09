@@ -32,6 +32,7 @@ use crate::types::{
     SessionStateResponse, StageExecutionRecord, StageExecutionState, StageLifecycleState,
     StepUpdateView, TrackedCommandRecord,
 };
+use crate::uuid_v4_hex;
 use fullmag_runner::LivePreviewField;
 use fullmag_runner::{FemMeshObjectSegment, FemMeshPartPayload, FemMeshPayload, RuntimeStatus};
 
@@ -6519,6 +6520,195 @@ async fn mesh_region_membership_returns_indices_for_mesh_backed_region() {
 }
 
 #[tokio::test]
+async fn mesh_region_membership_falls_back_to_object_segments_for_non_part_region() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_fem_mesh_payload_with_manifest();
+        mesh.mesh_parts.clear();
+        mesh.object_segments.push(FemMeshObjectSegment {
+            object_id: "body".to_string(),
+            geometry_id: Some("body_core".to_string()),
+            node_start: 1,
+            node_count: 3,
+            element_start: 0,
+            element_count: 1,
+            boundary_face_start: 0,
+            boundary_face_count: 1,
+        });
+        let mut scene = sample_scene_document();
+        scene.objects[0]
+            .regions
+            .push(fullmag_authoring::SceneObjectRegion {
+                region_id: "body:core".to_string(),
+                owner_object: "body".to_string(),
+                name: "Core".to_string(),
+                shape: fullmag_authoring::SceneRegionShape::Sphere {
+                    center: [0.5, 0.5, 0.5],
+                    radius: 0.25,
+                },
+                frame: fullmag_authoring::SceneRegionFrame::Object,
+                enabled: true,
+                priority: 10,
+                mesh_policy: None,
+                material_overrides: Vec::new(),
+                texture_override: None,
+                material_transition: None,
+                realization_policy: fullmag_authoring::SceneRegionRealizationPolicy::Conformal,
+            });
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.mesh_revision = 42;
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/mesh-region-membership/body%3Acore")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["mesh_id"], "test-mesh:1");
+    assert_eq!(json["mesh_revision"], 42);
+    assert_eq!(json["region_id"], "body:core");
+    assert_eq!(json["source"], "object_segments");
+    assert_eq!(json["mesh_part_ids"], serde_json::json!([]));
+    assert_eq!(json["element_indices"], serde_json::json!([0]));
+    assert_eq!(json["node_indices"], serde_json::json!([1, 2, 3]));
+    assert_eq!(json["boundary_face_indices"], serde_json::json!([0]));
+}
+
+#[tokio::test]
+async fn mesh_region_membership_projects_authored_region_shape_without_mesh_part() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_fem_mesh_payload();
+        mesh.mesh_parts.clear();
+        let mut scene = sample_scene_document();
+        scene.objects[0]
+            .regions
+            .push(fullmag_authoring::SceneObjectRegion {
+                region_id: "body:projected-core".to_string(),
+                owner_object: "body".to_string(),
+                name: "Projected Core".to_string(),
+                shape: fullmag_authoring::SceneRegionShape::Box {
+                    center: [0.25, 0.25, 0.25],
+                    size: [0.6, 0.6, 0.6],
+                },
+                frame: fullmag_authoring::SceneRegionFrame::Object,
+                enabled: true,
+                priority: 10,
+                mesh_policy: None,
+                material_overrides: Vec::new(),
+                texture_override: None,
+                material_transition: None,
+                realization_policy: fullmag_authoring::SceneRegionRealizationPolicy::Project,
+            });
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.mesh_revision = 43;
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/mesh-region-membership/body%3Aprojected-core")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["mesh_id"], "test-mesh:1");
+    assert_eq!(json["mesh_revision"], 43);
+    assert_eq!(json["region_id"], "body:projected-core");
+    assert_eq!(json["source"], "geometry_projection");
+    assert_eq!(json["mesh_part_ids"], serde_json::json!([]));
+    assert_eq!(json["element_indices"], serde_json::json!([0]));
+    assert_eq!(json["node_indices"], serde_json::json!([0]));
+    assert_eq!(json["boundary_face_indices"], serde_json::json!([0]));
+    assert_eq!(
+        json["realization_method"],
+        "shape_centroid_geometry_projection_v1"
+    );
+    assert_eq!(
+        json["realization_warnings"],
+        serde_json::json!([
+            "geometry_projection uses node and centroid membership; it is not a conformal mesh part"
+        ])
+    );
+}
+
+#[tokio::test]
+async fn mesh_region_membership_projects_object_frame_region_with_owner_translation() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_fem_mesh_payload();
+        mesh.nodes = vec![
+            [10.0, 0.0, 0.0],
+            [11.0, 0.0, 0.0],
+            [10.0, 1.0, 0.0],
+            [10.0, 0.0, 1.0],
+        ];
+        mesh.mesh_parts.clear();
+        let mut scene = sample_scene_document();
+        scene.objects[0].transform.translation = [10.0, 0.0, 0.0];
+        scene.objects[0]
+            .regions
+            .push(fullmag_authoring::SceneObjectRegion {
+                region_id: "body:translated-core".to_string(),
+                owner_object: "body".to_string(),
+                name: "Translated Core".to_string(),
+                shape: fullmag_authoring::SceneRegionShape::Box {
+                    center: [0.25, 0.25, 0.25],
+                    size: [0.8, 0.8, 0.8],
+                },
+                frame: fullmag_authoring::SceneRegionFrame::Object,
+                enabled: true,
+                priority: 10,
+                mesh_policy: None,
+                material_overrides: Vec::new(),
+                texture_override: None,
+                material_transition: None,
+                realization_policy: fullmag_authoring::SceneRegionRealizationPolicy::Project,
+            });
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.mesh_revision = 44;
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/mesh-region-membership/body%3Atranslated-core")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["mesh_id"], "test-mesh:1");
+    assert_eq!(json["mesh_revision"], 44);
+    assert_eq!(json["region_id"], "body:translated-core");
+    assert_eq!(json["source"], "geometry_projection");
+    assert_eq!(json["mesh_part_ids"], serde_json::json!([]));
+    assert_eq!(json["element_indices"], serde_json::json!([0]));
+    assert_eq!(json["node_indices"], serde_json::json!([0]));
+    assert_eq!(json["boundary_face_indices"], serde_json::json!([0]));
+}
+
+#[tokio::test]
 async fn mesh_shared_domain_manifest_reports_clean_scene_provenance_without_build_summary() {
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document();
@@ -9150,6 +9340,122 @@ async fn material_field_data_resource_uses_realized_material_field_asset_metadat
         detail["values"],
         serde_json::json!([760000.0, 770000.0, 780000.0, 790000.0])
     );
+}
+
+#[tokio::test]
+async fn material_field_data_resource_reads_file_backed_realized_asset() {
+    let state = test_app_state_with_live_session().await;
+    let artifact_dir =
+        std::env::temp_dir().join(format!("fullmag-material-field-assets-{}", uuid_v4_hex()));
+    let material_field_dir = artifact_dir.join("material-fields");
+    fs::create_dir_all(&material_field_dir).expect("material field artifact dir should exist");
+    fs::write(
+        material_field_dir.join("body_core_ms_asset.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "asset_id": "material-field:body_core_ms_asset",
+            "artifact_path": "material-fields/body_core_ms_asset.json",
+            "parameter": "ms",
+            "owner_object_id": "body",
+            "source_region_id": "body:core",
+            "mesh_id": "mesh:shared-domain",
+            "mesh_generation_id": "mesh-gen-8",
+            "location": "node",
+            "component_count": 1,
+            "unit": "A/m",
+            "values": [700000.0, 710000.0, 720000.0],
+            "min": 700000.0,
+            "max": 720000.0,
+            "mean": 710000.0,
+            "provenance": {
+                "source_kind": "override",
+                "algorithm": "file_backed_material_field_asset_v1",
+                "timing_ms": 2.5
+            }
+        }))
+        .unwrap(),
+    )
+    .expect("material field artifact should be written");
+
+    let mut scene = sample_scene_document();
+    scene.revision = 33;
+    let field: fullmag_authoring::SceneMaterialParameterAssignment =
+        serde_json::from_value(serde_json::json!({
+            "assignment_id": "body_core_ms_asset",
+            "owner_object": "body",
+            "parameter": "Ms",
+            "region_id": "body:core",
+            "priority": 3,
+            "conflict_policy": "error",
+            "value": {
+                "kind": "sampled",
+                "asset_id": "material-field:body_core_ms_asset",
+                "component_count": 1,
+                "location": "node",
+                "unit": "A/m"
+            }
+        }))
+        .unwrap();
+    scene.objects[0].material_parameter_fields.push(field);
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.artifact_dir = artifact_dir.display().to_string();
+        snapshot.scene_document = Some(scene);
+        crate::session::apply_current_live_metadata(
+            snapshot,
+            serde_json::json!({
+                "material_field_assets": [{
+                    "asset_id": "material-field:body_core_ms_asset",
+                    "artifact_path": "material-fields/body_core_ms_asset.json",
+                    "parameter": "ms",
+                    "owner_object_id": "body",
+                    "source_region_id": "body:core",
+                    "mesh_id": "mesh:shared-domain",
+                    "mesh_generation_id": "mesh-gen-8",
+                    "location": "node",
+                    "component_count": 1,
+                    "unit": "A/m",
+                    "values": [],
+                    "min": 0.0,
+                    "max": 0.0,
+                    "mean": 0.0,
+                    "provenance": {
+                        "source_kind": "override",
+                        "algorithm": "file_backed_material_field_asset_v1",
+                        "timing_ms": 2.5
+                    }
+                }]
+            }),
+        );
+    }
+    let app = build_v2_router().with_state(state);
+
+    let detail_response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/data/material-fields/body_core_ms_asset")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let detail_status = detail_response.status();
+    assert_eq!(detail_status, StatusCode::OK);
+    let detail = body_json(detail_response).await;
+    assert_eq!(detail["asset_id"], "material-field:body_core_ms_asset");
+    assert_eq!(
+        detail["artifact_path"],
+        "material-fields/body_core_ms_asset.json"
+    );
+    assert_eq!(detail["sample_count"], 3);
+    assert_eq!(detail["min"], 700000.0);
+    assert_eq!(detail["max"], 720000.0);
+    assert_eq!(detail["mean"], 710000.0);
+    assert_eq!(
+        detail["values"],
+        serde_json::json!([700000.0, 710000.0, 720000.0])
+    );
+
+    let _ = fs::remove_dir_all(&artifact_dir);
 }
 
 #[tokio::test]

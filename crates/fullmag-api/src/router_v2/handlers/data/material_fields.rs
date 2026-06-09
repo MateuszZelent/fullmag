@@ -6,13 +6,16 @@ use axum::extract::{Path, State};
 use axum::Json;
 use fullmag_authoring::{SceneDocument, SceneMaterialParameterAssignment, SceneObject};
 use serde_json::Value;
+use std::path::Path as FsPath;
 
 use super::field_resolution::flatten_json_field_values;
+use crate::artifacts::read_json_artifact_value;
 use crate::error::ApiError;
 use crate::schemas::authoring::{
     MaterialParameterFieldDataListResource, MaterialParameterFieldDataResource,
     MaterialParameterFieldDataSummaryResource,
 };
+use crate::session::current_artifact_dir;
 use crate::types::{AppState, LatestFields};
 
 #[utoipa::path(
@@ -35,7 +38,8 @@ pub async fn get_material_field_data_catalog(
         .scene_document
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active scene document"))?;
-    let assets = material_field_assets(snapshot.metadata.as_ref());
+    let artifact_dir = current_artifact_dir(snapshot);
+    let assets = material_field_assets(snapshot.metadata.as_ref(), artifact_dir.as_deref());
 
     Ok(Json(MaterialParameterFieldDataListResource {
         scene_revision: scene.revision,
@@ -84,7 +88,8 @@ pub async fn get_material_field_data(
         .scene_document
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active scene document"))?;
-    let assets = material_field_assets(snapshot.metadata.as_ref());
+    let artifact_dir = current_artifact_dir(snapshot);
+    let assets = material_field_assets(snapshot.metadata.as_ref(), artifact_dir.as_deref());
 
     material_field_data_resources(scene, &snapshot.latest_fields, &assets)
         .into_iter()
@@ -137,6 +142,7 @@ fn material_field_data_resource(
         field_id: field.assignment_id.clone(),
         assignment_id: field.assignment_id.clone(),
         asset_id: asset.map(|asset| asset.asset_id.clone()),
+        artifact_path: asset.and_then(|asset| asset.artifact_path.clone()),
         scene_revision,
         owner_object_id: field.owner_object.clone(),
         owner_path: Some(field.owner_object.clone()),
@@ -167,13 +173,49 @@ fn material_field_data_resource(
     }
 }
 
-fn material_field_assets(metadata: Option<&Value>) -> Vec<fullmag_ir::MaterialFieldAssetIR> {
+fn material_field_assets(
+    metadata: Option<&Value>,
+    artifact_dir: Option<&FsPath>,
+) -> Vec<fullmag_ir::MaterialFieldAssetIR> {
     metadata
         .and_then(|metadata| metadata.get("material_field_assets"))
         .and_then(|assets| {
             serde_json::from_value::<Vec<fullmag_ir::MaterialFieldAssetIR>>(assets.clone()).ok()
         })
+        .map(|assets| {
+            assets
+                .into_iter()
+                .map(|asset| material_field_asset_with_file_values(asset, artifact_dir))
+                .collect()
+        })
         .unwrap_or_default()
+}
+
+fn material_field_asset_with_file_values(
+    asset: fullmag_ir::MaterialFieldAssetIR,
+    artifact_dir: Option<&FsPath>,
+) -> fullmag_ir::MaterialFieldAssetIR {
+    if !asset.values.is_empty() {
+        return asset;
+    }
+    let Some(artifact_dir) = artifact_dir else {
+        return asset;
+    };
+    let Some(artifact_path) = asset.artifact_path.as_deref() else {
+        return asset;
+    };
+
+    read_json_artifact_value(artifact_dir, artifact_path)
+        .ok()
+        .and_then(|value| serde_json::from_value::<fullmag_ir::MaterialFieldAssetIR>(value).ok())
+        .filter(|file_asset| file_asset.asset_id == asset.asset_id)
+        .map(|mut file_asset| {
+            if file_asset.artifact_path.is_none() {
+                file_asset.artifact_path = Some(artifact_path.to_string());
+            }
+            file_asset
+        })
+        .unwrap_or(asset)
 }
 
 fn matching_material_field_asset<'a>(
@@ -242,9 +284,9 @@ fn material_field_metadata(
 
 fn latest_material_field_values(latest_fields: &LatestFields, parameter: &str) -> Vec<f64> {
     let lookup_keys = match parameter {
-        "ms" | "Ms" => &["Ms", "ms"][..],
-        "aex" | "Aex" => &["Aex", "aex"][..],
-        "alpha" => &["alpha"][..],
+        "ms" | "Ms" => &["mat_ms", "Ms", "ms"][..],
+        "aex" | "Aex" => &["mat_aex", "Aex", "aex"][..],
+        "alpha" => &["mat_alpha", "alpha"][..],
         other => &[other][..],
     };
 

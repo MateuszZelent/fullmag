@@ -1,4 +1,4 @@
-use fullmag_ir::{CurrentModuleIR, CurrentTransportModelIR, ProblemIR};
+use fullmag_ir::{AntennaFieldSourceModelIR, CurrentModuleIR, CurrentTransportModelIR, ProblemIR};
 
 use crate::error::PlanError;
 
@@ -15,11 +15,16 @@ pub(crate) enum CurrentTransportExecutableLane {
     Fem,
 }
 
-pub(crate) fn has_antenna_field_source(problem: &ProblemIR) -> bool {
-    problem
-        .current_modules
-        .iter()
-        .any(|module| matches!(module, CurrentModuleIR::AntennaFieldSource { .. }))
+pub(crate) fn has_mqs_antenna_field_source(problem: &ProblemIR) -> bool {
+    problem.current_modules.iter().any(|module| {
+        matches!(
+            module,
+            CurrentModuleIR::AntennaFieldSource {
+                model: AntennaFieldSourceModelIR::Mqs2p5dAz,
+                ..
+            }
+        )
+    })
 }
 
 pub(crate) fn resolve_current_transports(
@@ -31,8 +36,10 @@ pub(crate) fn resolve_current_transports(
 
     for (index, module) in problem.current_modules.iter().enumerate() {
         match module {
-            CurrentModuleIR::AntennaFieldSource { .. } => {
-                if lane == CurrentTransportExecutableLane::Fdm {
+            CurrentModuleIR::AntennaFieldSource { model, .. } => {
+                if lane == CurrentTransportExecutableLane::Fdm
+                    && *model == AntennaFieldSourceModelIR::Mqs2p5dAz
+                {
                     reasons.push(format!(
                         "current_modules[{index}] antenna_field_source is not executable on the current FDM time-domain path"
                     ));

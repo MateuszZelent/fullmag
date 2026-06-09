@@ -59,6 +59,8 @@ pub struct SceneObjectResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(additional_properties, nullable)]
     pub geometry: Option<BTreeMap<String, Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -583,6 +585,8 @@ pub struct MaterialParameterFieldDataResource {
     pub assignment_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asset_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_path: Option<String>,
     pub scene_revision: u64,
     pub owner_object_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

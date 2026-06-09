@@ -6503,6 +6503,66 @@ fn fdm_cuda_general_oersted_field_plans() {
     }
 }
 
+#[test]
+fn fdm_prescribed_zeeman_mask_antenna_plans_with_extra_geometry() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.geometry.entries.push(GeometryEntryIR::Translate {
+        name: "antenna_box".to_string(),
+        base: Box::new(GeometryEntryIR::Box {
+            name: "antenna_box_base".to_string(),
+            size: [50e-9, 1.0e-6, 10e-9],
+        }),
+        by: [0.0, 0.0, 0.0],
+    });
+    ir.current_modules
+        .push(CurrentModuleIR::AntennaFieldSource {
+            name: "center_microstrip".to_string(),
+            model: AntennaFieldSourceModelIR::PrescribedZeemanMask,
+            solver: None,
+            antenna: None,
+            drive: None,
+            air_box_factor: None,
+            object: Some("antenna_box".to_string()),
+            field: Some(AntennaFieldIR {
+                amplitude_b_t: 1.0e-3,
+                direction: [0.0, 1.0, 0.0],
+            }),
+            spatial_profile: Some(AntennaSpatialProfileIR::Uniform),
+            waveform: Some(TimeDependenceIR::SincPulse {
+                cutoff_hz: 20.0e9,
+                t0: 0.0,
+                amplitude: 1.0,
+            }),
+        });
+    let output = OutputIR::Field {
+        name: "H_ant".to_string(),
+        every_seconds: 1.0e-12,
+    };
+    match &mut ir.study {
+        StudyIR::TimeEvolution { sampling, .. }
+        | StudyIR::Relaxation { sampling, .. }
+        | StudyIR::Eigenmodes { sampling, .. }
+        | StudyIR::FrequencyResponse { sampling, .. } => sampling.outputs.push(output),
+    }
+
+    let plan = plan(&ir).expect("prescribed Zeeman antenna mask should plan");
+    match &plan.backend_plan {
+        BackendPlanIR::Fdm(fdm) => {
+            assert_eq!(fdm.antenna_zeeman_masks.len(), 1);
+            let mask = &fdm.antenna_zeeman_masks[0];
+            assert_eq!(mask.source, "center_microstrip");
+            assert_eq!(mask.object, "antenna_box");
+            assert_eq!(mask.field_xyz.len(), fdm.initial_magnetization.len());
+            assert!(mask.field_xyz.iter().any(|value| *value != [0.0, 0.0, 0.0]));
+            assert!(matches!(
+                mask.waveform,
+                Some(TimeDependenceIR::SincPulse { .. })
+            ));
+        }
+        _ => panic!("expected FDM plan"),
+    }
+}
+
 fn fem_minimal_test_ir() -> ProblemIR {
     let mut ir = ProblemIR::bootstrap_example();
     ir.backend_policy.requested_backend = BackendTarget::Fem;

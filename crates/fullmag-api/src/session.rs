@@ -961,6 +961,8 @@ pub(crate) fn apply_current_live_metadata(current: &mut SessionStateResponse, me
             let mut ms_field = None;
             let mut a_field = None;
             let mut alpha_field = None;
+            let mut dind_field = None;
+            let mut dbulk_field = None;
             let mut fdm_grid = None;
 
             if let Some(backend_plan) = plan_val.get("backend_plan") {
@@ -988,6 +990,18 @@ pub(crate) fn apply_current_live_metadata(current: &mut SessionStateResponse, me
                         {
                             alpha_field = Some(val);
                         }
+                    }
+                    if let Some(val) = backend_plan
+                        .get("dind_field")
+                        .and_then(|v| serde_json::from_value::<Vec<f64>>(v.clone()).ok())
+                    {
+                        dind_field = Some(val);
+                    }
+                    if let Some(val) = backend_plan
+                        .get("dbulk_field")
+                        .and_then(|v| serde_json::from_value::<Vec<f64>>(v.clone()).ok())
+                    {
+                        dbulk_field = Some(val);
                     }
                     if let Some(grid) = backend_plan
                         .get("grid")
@@ -1017,6 +1031,18 @@ pub(crate) fn apply_current_live_metadata(current: &mut SessionStateResponse, me
                             alpha_field = Some(val);
                         }
                     }
+                    if let Some(val) = backend_plan
+                        .get("dind_field")
+                        .and_then(|v| serde_json::from_value::<Vec<f64>>(v.clone()).ok())
+                    {
+                        dind_field = Some(val);
+                    }
+                    if let Some(val) = backend_plan
+                        .get("dbulk_field")
+                        .and_then(|v| serde_json::from_value::<Vec<f64>>(v.clone()).ok())
+                    {
+                        dbulk_field = Some(val);
+                    }
                 }
             }
 
@@ -1031,7 +1057,7 @@ pub(crate) fn apply_current_live_metadata(current: &mut SessionStateResponse, me
                         "values": vals
                     })
                 };
-                current.latest_fields.insert("Ms".to_string(), val);
+                current.latest_fields.insert("mat_ms".to_string(), val);
             }
             if let Some(vals) = a_field {
                 let val = if let Some(grid) = fdm_grid {
@@ -1044,7 +1070,7 @@ pub(crate) fn apply_current_live_metadata(current: &mut SessionStateResponse, me
                         "values": vals
                     })
                 };
-                current.latest_fields.insert("Aex".to_string(), val);
+                current.latest_fields.insert("mat_aex".to_string(), val);
             }
             if let Some(vals) = alpha_field {
                 let val = if let Some(grid) = fdm_grid {
@@ -1057,7 +1083,33 @@ pub(crate) fn apply_current_live_metadata(current: &mut SessionStateResponse, me
                         "values": vals
                     })
                 };
-                current.latest_fields.insert("alpha".to_string(), val);
+                current.latest_fields.insert("mat_alpha".to_string(), val);
+            }
+            if let Some(vals) = dind_field {
+                let val = if let Some(grid) = fdm_grid {
+                    json!({
+                        "layout": { "grid_cells": grid },
+                        "values": vals
+                    })
+                } else {
+                    json!({
+                        "values": vals
+                    })
+                };
+                current.latest_fields.insert("mat_dind".to_string(), val);
+            }
+            if let Some(vals) = dbulk_field {
+                let val = if let Some(grid) = fdm_grid {
+                    json!({
+                        "layout": { "grid_cells": grid },
+                        "values": vals
+                    })
+                } else {
+                    json!({
+                        "values": vals
+                    })
+                };
+                current.latest_fields.insert("mat_dbulk".to_string(), val);
             }
         }
     }
@@ -1545,6 +1597,54 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].step, 1);
         assert_eq!(rows[1].step, 3);
+    }
+
+    #[test]
+    fn metadata_material_fields_use_canonical_preview_quantity_ids() {
+        let mut current = default_current_live_state(&CurrentLiveSnapshotRequest {
+            session_id: "test-session".to_string(),
+            session: None,
+            session_status: None,
+            metadata: None,
+            mesh_workspace: None,
+            stage_execution: None,
+            run: None,
+            live_state: None,
+            latest_scalar_row: None,
+            latest_fields: None,
+            preview_fields: None,
+            clear_preview_cache: false,
+            engine_log: None,
+            solver_profile: None,
+            fem_mesh: None,
+        });
+
+        apply_current_live_metadata(
+            &mut current,
+            json!({
+                "execution_plan": {
+                    "backend_plan": {
+                        "kind": "fdm",
+                        "grid": { "cells": [2, 1, 1] },
+                        "material": {
+                            "ms_field": [800000.0, 400000.0],
+                            "a_field": [1.3e-11, 1.1e-11],
+                            "alpha_field": [0.01, 0.02]
+                        },
+                        "dind_field": [0.0, 0.001],
+                        "dbulk_field": [0.0, 1000.0]
+                    }
+                }
+            }),
+        );
+
+        assert!(current.latest_fields.get("mat_ms").is_some());
+        assert!(current.latest_fields.get("mat_aex").is_some());
+        assert!(current.latest_fields.get("mat_alpha").is_some());
+        assert!(current.latest_fields.get("mat_dind").is_some());
+        assert!(current.latest_fields.get("mat_dbulk").is_some());
+        assert!(current.latest_fields.get("Ms").is_none());
+        assert!(current.latest_fields.get("Aex").is_none());
     }
 
     #[test]

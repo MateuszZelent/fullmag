@@ -254,11 +254,23 @@ fn native_fem_gpu_ready_log_message(
     )
 }
 
-fn has_antenna_field_source(problem: &ProblemIR) -> bool {
+fn has_any_antenna_field_source(problem: &ProblemIR) -> bool {
     problem.current_modules.iter().any(|module| {
         matches!(
             module,
             fullmag_ir::CurrentModuleIR::AntennaFieldSource { .. }
+        )
+    })
+}
+
+fn has_prescribed_zeeman_mask_antenna(problem: &ProblemIR) -> bool {
+    problem.current_modules.iter().any(|module| {
+        matches!(
+            module,
+            fullmag_ir::CurrentModuleIR::AntennaFieldSource {
+                model: fullmag_ir::AntennaFieldSourceModelIR::PrescribedZeemanMask,
+                ..
+            }
         )
     })
 }
@@ -658,7 +670,7 @@ pub(crate) fn resolve_fdm_engine_with_trail(
         Err(_) => (ir_policy.to_string(), false),
     };
 
-    let resolution = match policy.as_str() {
+    let mut resolution = match policy.as_str() {
         "cpu" => Ok(EngineResolution {
             engine: FdmEngine::CpuReference,
             fallback: None,
@@ -712,6 +724,23 @@ pub(crate) fn resolve_fdm_engine_with_trail(
         }
     }?;
 
+    if resolution.engine == FdmEngine::CudaFdm && has_prescribed_zeeman_mask_antenna(problem) {
+        if env_override || matches!(policy.as_str(), "cuda") {
+            return Err(RunError {
+                message: "FDM CUDA execution was requested, but CUDA FDM currently does not support prescribed_zeeman_mask antenna sources (fallback_reason=antenna_zeeman_mask_force_cpu)".to_string(),
+            });
+        }
+        let message = "FDM engine falling back to CPU reference — CUDA FDM currently does not support prescribed_zeeman_mask antenna sources (fallback_reason=antenna_zeeman_mask_force_cpu)".to_string();
+        runtime_warn_once(&message);
+        resolution.engine = FdmEngine::CpuReference;
+        resolution.fallback = Some(runtime_fallback(
+            fdm_engine_id(FdmEngine::CudaFdm),
+            fdm_engine_id(FdmEngine::CpuReference),
+            "antenna_zeeman_mask_force_cpu",
+            message,
+        ));
+    }
+
     Ok(resolution)
 }
 
@@ -722,7 +751,7 @@ pub(crate) fn resolve_fdm_engine(problem: &ProblemIR) -> Result<FdmEngine, RunEr
 fn resolve_fdm_engine_with_registry(
     problem: &ProblemIR,
     registry: &RuntimeRegistry,
-    _explicit_selection: bool,
+    explicit_selection: bool,
 ) -> Result<DispatchEngineResolution, RunError> {
     apply_runtime_gpu_index(problem, "fdm");
     let requested_device = requested_registry_device_for_fdm(problem);
@@ -740,19 +769,49 @@ fn resolve_fdm_engine_with_registry(
         ),
     })?;
 
-    let engine = match resolved.device.as_str() {
+    let mut engine = match resolved.device.as_str() {
         "gpu" => FdmEngine::CudaFdm,
         _ => FdmEngine::CpuReference,
     };
-    let fallback = resolved.fallback;
+    let mut fallback = resolved.fallback;
+    let mut runtime_family = resolved.runtime_family;
+    let mut worker = resolved.worker;
+    let mut resolved_device = resolved.device;
+
+    if engine == FdmEngine::CudaFdm && has_prescribed_zeeman_mask_antenna(problem) {
+        if explicit_selection {
+            return Err(RunError {
+                message: "FDM CUDA execution was requested, but CUDA FDM currently does not support prescribed_zeeman_mask antenna sources (fallback_reason=antenna_zeeman_mask_force_cpu)".to_string(),
+            });
+        }
+        let cpu_resolved =
+            resolve_registry_runtime_for_backend(registry, "fdm", "cpu", &requested_precision)
+                .ok_or_else(|| RunError {
+                    message:
+                        "FDM CUDA runtime cannot fall back because no CPU FDM runtime is advertised"
+                            .to_string(),
+                })?;
+        let message = "FDM engine falling back to CPU reference — CUDA FDM currently does not support prescribed_zeeman_mask antenna sources (fallback_reason=antenna_zeeman_mask_force_cpu)".to_string();
+        runtime_warn_once(&message);
+        fallback = Some(runtime_fallback(
+            fdm_engine_id(FdmEngine::CudaFdm),
+            fdm_engine_id(FdmEngine::CpuReference),
+            "antenna_zeeman_mask_force_cpu",
+            message,
+        ));
+        engine = FdmEngine::CpuReference;
+        runtime_family = cpu_resolved.runtime_family;
+        worker = cpu_resolved.worker;
+        resolved_device = cpu_resolved.device;
+    }
 
     Ok(DispatchEngineResolution {
         engine: DispatchEngine::Fdm(engine),
         fallback,
-        runtime_family: Some(resolved.runtime_family),
-        worker: Some(resolved.worker),
+        runtime_family: Some(runtime_family),
+        worker: Some(worker),
         resolved_backend: "fdm".to_string(),
-        resolved_device: resolved.device,
+        resolved_device,
         resolved_precision: requested_precision,
     })
 }
@@ -876,7 +935,7 @@ fn resolve_fem_engine_with_availability(
     fe_order: u32,
     availability: &native_fem::GpuAvailability,
 ) -> Result<EngineResolution<FemEngine>, RunError> {
-    if has_antenna_field_source(problem) {
+    if has_any_antenna_field_source(problem) {
         if fem_policy_requires_gpu(&policy) {
             return Err(RunError {
                 message:
@@ -1085,7 +1144,7 @@ fn resolve_fem_engine_with_registry(
     let mut fallback = resolved.fallback;
 
     if engine == FemEngine::NativeGpu {
-        if has_antenna_field_source(problem) {
+        if has_any_antenna_field_source(problem) {
             if explicit_selection {
                 return Err(RunError {
                     message:
@@ -3782,6 +3841,7 @@ mod tests {
             enable_exchange: true,
             enable_demag: false,
             external_field: None,
+            antenna_zeeman_masks: Vec::new(),
             current_modules: Vec::new(),
             gyromagnetic_ratio: 2.211e5,
             precision: fullmag_ir::ExecutionPrecision::Double,
@@ -4797,8 +4857,9 @@ mod tests {
             .current_modules
             .push(CurrentModuleIR::AntennaFieldSource {
                 name: "src".to_string(),
-                solver: "fdtd".to_string(),
-                antenna: AntennaIR::Microstrip {
+                model: fullmag_ir::AntennaFieldSourceModelIR::Mqs2p5dAz,
+                solver: Some("fdtd".to_string()),
+                antenna: Some(AntennaIR::Microstrip {
                     width: 1.0,
                     thickness: 1.0,
                     height_above_magnet: 1.0,
@@ -4806,12 +4867,16 @@ mod tests {
                     center_x: 0.0,
                     center_y: 0.0,
                     current_distribution: "uniform".to_string(),
-                },
-                drive: RfDriveIR {
+                }),
+                drive: Some(RfDriveIR {
                     current_a: 1.0,
                     waveform: None,
-                },
-                air_box_factor: 2.0,
+                }),
+                air_box_factor: Some(2.0),
+                object: None,
+                field: None,
+                spatial_profile: None,
+                waveform: None,
             });
         let result = resolve_fem_engine_with_availability(
             &problem,
