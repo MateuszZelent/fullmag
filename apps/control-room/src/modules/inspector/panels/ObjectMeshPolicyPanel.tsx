@@ -38,18 +38,20 @@ import type { MeshSizeDistributionHoverBin } from "./MeshQualityChart";
 import { MeshQualityStatisticsView } from "./MeshQualityStatisticsView";
 import { emitMeshSizeHistogramHover } from "./meshSizeHistogramHover";
 import {
+  initialInspectorDraftState,
+  resolveInspectorDraftState,
+  updateInspectorDraftState,
+  type InspectorDraftState,
+} from "./inspectorDraftState";
+import {
   buildObjectMeshPolicyReplaceRequest,
   defaultObjectMeshPolicyResource,
   draftFromObjectMeshPolicyResource,
+  draftIdentityKeyForObjectMeshPolicyResource,
   draftKeyForObjectMeshPolicyResource,
   objectMeshPolicyDraftDirty,
   type ObjectMeshPolicyDraft,
 } from "./ObjectMeshPolicyPanelModel";
-
-interface DraftState {
-  draft: ObjectMeshPolicyDraft;
-  key: string;
-}
 
 type Feedback =
   | {
@@ -666,14 +668,25 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
   const draftKey = draftKeyForObjectMeshPolicyResource(objectId, resource, {
     effectiveTarget,
   });
-  const [draftState, setDraftState] = useState<DraftState>({
-    draft: baseDraft,
-    key: draftKey,
-  });
+  const draftIdentityKey = draftIdentityKeyForObjectMeshPolicyResource(objectId);
+  const [draftState, setDraftState] = useState<
+    InspectorDraftState<ObjectMeshPolicyDraft>
+  >(() =>
+    initialInspectorDraftState({
+      baseDraft,
+      baseKey: draftKey,
+      identityKey: draftIdentityKey,
+    }),
+  );
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [pending, setPending] = useState(false);
-  const draft = draftState.key === draftKey ? draftState.draft : baseDraft;
-  const isDirty = objectMeshPolicyDraftDirty(draft, baseDraft);
+  const { dirty: isDirty, draft } = resolveInspectorDraftState({
+    baseDraft,
+    baseKey: draftKey,
+    identityKey: draftIdentityKey,
+    isDirty: objectMeshPolicyDraftDirty,
+    state: draftState,
+  });
   const sizeFieldRecord = asRecord(sizeField.data?.size_field);
   const sizeFields = Array.isArray(recordField(sizeFieldRecord, "size_fields"))
     ? (recordField(sizeFieldRecord, "size_fields") as unknown[])
@@ -706,13 +719,16 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
   );
 
   function updateDraft(patch: Partial<ObjectMeshPolicyDraft>): void {
-    setDraftState((current) => ({
-      draft: {
-        ...(current.key === draftKey ? current.draft : baseDraft),
-        ...patch,
-      },
-      key: draftKey,
-    }));
+    setDraftState(
+      updateInspectorDraftState({
+        baseDraft,
+        baseKey: draftKey,
+        currentDraft: draft,
+        identityKey: draftIdentityKey,
+        isDirty: objectMeshPolicyDraftDirty,
+        patch,
+      }),
+    );
   }
 
   async function applyPolicy({
@@ -834,7 +850,13 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
         onApply={() => void applyPolicy()}
         onBuild={() => void buildMesh()}
         onRevert={() => {
-          setDraftState({ draft: baseDraft, key: draftKey });
+          setDraftState(
+            initialInspectorDraftState({
+              baseDraft,
+              baseKey: draftKey,
+              identityKey: draftIdentityKey,
+            }),
+          );
           setFeedback(null);
         }}
         pending={pending}

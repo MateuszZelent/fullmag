@@ -26,11 +26,14 @@ interface BaseFieldProps {
   unit?: string;
   /** Muted hint text below the control. */
   hint?: string;
+  /** Error text below the control. Takes precedence over hint. */
+  error?: string;
   /** Opens an inspector help dialog for domain-specific parameter semantics. */
   help?: FormFieldHelp | string;
   /** When true, renders label left + control right (default: stacked). */
   inline?: boolean;
   disabled?: boolean;
+  invalid?: boolean;
 }
 
 type TextFieldProps = BaseFieldProps & {
@@ -132,11 +135,15 @@ function FormFieldHelpButton({
  * All input/textarea/select/checkbox controls use fm-inspector-* CSS classes.
  */
 export function FormField(props: FormFieldProps) {
-  const { label, unit, hint, help, inline = true, disabled } = props;
+  const { label, unit, hint, error, help, inline = true, disabled, invalid } = props;
   const fieldId = useId();
   const wrapClass = inline
     ? "fm-inspector-form-field fm-inspector-form-field--inline"
     : "fm-inspector-form-field";
+  const hintText = error ?? hint;
+  const hintClass = error
+    ? "fm-inspector-form-field__hint fm-inspector-form-field__hint--error"
+    : "fm-inspector-form-field__hint";
 
   if (props.type === "checkbox") {
     const { checked, onChange } = props;
@@ -148,6 +155,7 @@ export function FormField(props: FormFieldProps) {
             <input
               id={fieldId}
               aria-label={label}
+              aria-invalid={invalid || undefined}
               checked={checked}
               className="fm-inspector-checkbox"
               disabled={disabled}
@@ -173,6 +181,7 @@ export function FormField(props: FormFieldProps) {
             {...(rest as object)}
             id={fieldId}
             aria-label={label}
+            aria-invalid={invalid || undefined}
             className="fm-inspector-select"
             disabled={disabled}
             value={value}
@@ -181,7 +190,7 @@ export function FormField(props: FormFieldProps) {
             {children}
           </select>
         </div>
-        {hint && <span className="fm-inspector-form-field__hint">{hint}</span>}
+        {hintText && <span className={hintClass}>{hintText}</span>}
       </div>
     );
   }
@@ -201,6 +210,7 @@ export function FormField(props: FormFieldProps) {
             {...(rest as object)}
             id={fieldId}
             aria-label={label}
+            aria-invalid={invalid || undefined}
             className="fm-inspector-textarea"
             disabled={disabled}
             readOnly={readOnly}
@@ -209,7 +219,7 @@ export function FormField(props: FormFieldProps) {
             onChange={onChange}
           />
         </div>
-        {hint && <span className="fm-inspector-form-field__hint">{hint}</span>}
+        {hintText && <span className={hintClass}>{hintText}</span>}
       </div>
     );
   }
@@ -237,6 +247,7 @@ export function FormField(props: FormFieldProps) {
           {...(rest as object)}
           id={fieldId}
           aria-label={label}
+          aria-invalid={invalid || undefined}
           className={inputClass}
           disabled={disabled}
           inputMode={resolvedInputMode}
@@ -246,7 +257,7 @@ export function FormField(props: FormFieldProps) {
         />
         {unit && <span className="fm-inspector-form-field__unit">{unit}</span>}
       </div>
-      {hint && <span className="fm-inspector-form-field__hint">{hint}</span>}
+      {hintText && <span className={hintClass}>{hintText}</span>}
     </div>
   );
 }

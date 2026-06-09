@@ -13,6 +13,7 @@ import type {
   FieldVectorQuery,
   LiveStatusResource,
   MeshHistogramBinElementsResource,
+  MeshRegionMembershipResource,
   MeshSharedDomainManifestResource,
   RegionListResource,
   ResourceRevision,
@@ -26,7 +27,10 @@ import {
   sameQuantityId,
 } from "@/kernel/api/quantityIds";
 import { useCrossSectionResource } from "@/kernel/resources/crossSectionResources";
-import { useModelRegionsResource } from "@/kernel/resources/geometryLifecycleResources";
+import {
+  useMeshRegionMembershipsResource,
+  useModelRegionsResource,
+} from "@/kernel/resources/geometryLifecycleResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import type {
   ResourceResult,
@@ -84,6 +88,7 @@ import {
   buildRegionOverlayModels,
   type RegionOverlayInput,
   type RegionOverlayModel,
+  type RegionMeshOverlayOwnerPart,
 } from "../layers/regionOverlayModel";
 import {
   adaptFdmDomainMeta,
@@ -320,6 +325,26 @@ export function filterViewport3DMeshBackedRegionOverlays(
   });
 }
 
+export function resolveViewport3DRegionMembershipIds({
+  meshBackedRegionKeys,
+  regions,
+}: {
+  meshBackedRegionKeys: ReadonlySet<string>;
+  regions: readonly RegionOverlayInput[];
+}): string[] {
+  const regionIds: string[] = [];
+  const seen = new Set<string>();
+  for (const region of regions) {
+    const objectId = asNonEmptyString(region.owner_object_id);
+    const regionId = asNonEmptyString(region.region_id);
+    if (!objectId || !regionId || seen.has(regionId)) continue;
+    if (meshBackedRegionKeys.has(regionOverlayKey(objectId, regionId))) continue;
+    seen.add(regionId);
+    regionIds.push(regionId);
+  }
+  return regionIds;
+}
+
 export function resolveViewport3DMeshBackedRegionOverlays({
   manifestRegions,
   regions,
@@ -368,6 +393,59 @@ export function resolveViewport3DMeshBackedRegionOverlays({
   }
 
   return overlays;
+}
+
+export function resolveViewport3DMembershipRegionOverlays({
+  memberships,
+  regions,
+}: {
+  memberships: readonly MeshRegionMembershipResource[];
+  regions: readonly RegionOverlayInput[];
+}): {
+  ownerParts: RegionMeshOverlayOwnerPart[];
+  regions: RegionOverlayInput[];
+} {
+  const authoredByRegionId = new Map<string, RegionOverlayInput>();
+  for (const region of regions) {
+    const regionId = asNonEmptyString(region.region_id);
+    if (regionId) {
+      authoredByRegionId.set(regionId, region);
+    }
+  }
+
+  const overlayRegions: RegionOverlayInput[] = [];
+  const ownerParts: RegionMeshOverlayOwnerPart[] = [];
+  const seen = new Set<string>();
+  for (const membership of memberships) {
+    const regionId = asNonEmptyString(membership.region_id);
+    if ((membership.mesh_part_ids ?? []).some((partId) => asNonEmptyString(partId))) {
+      continue;
+    }
+    const authored = regionId ? authoredByRegionId.get(regionId) : null;
+    const objectId = asNonEmptyString(authored?.owner_object_id);
+    if (!regionId || !authored || !objectId || seen.has(regionId)) {
+      continue;
+    }
+
+    const syntheticPartId = `membership:${encodeURIComponent(regionId)}`;
+    seen.add(regionId);
+    overlayRegions.push({
+      ...authored,
+      mesh_part_ids: [syntheticPartId],
+    });
+    ownerParts.push({
+      boundary_face_indices: membership.boundary_face_indices,
+      element_indices: membership.element_indices,
+      id: syntheticPartId,
+      node_indices: membership.node_indices,
+      object_id: objectId,
+    });
+  }
+
+  return {
+    ownerParts,
+    regions: overlayRegions,
+  };
 }
 
 export function resolveViewport3DRegionTargetByPartId(
@@ -956,6 +1034,11 @@ export function useViewport3DSceneModel({
   const visualProfile = getViewport3DVisualProfile(commandState.visualProfileId);
   const computeRunning = useSessionStatusSelector(selectViewport3DComputeRunning);
   const renderingState = visualizationState.data;
+  const regionSelectionScope = useMemo(
+    () => resolveViewport3DRegionSelectionScope(selection),
+    [selection],
+  );
+  const { selectedObjectId, selectedRegionId } = regionSelectionScope;
   const cameraView = resolveViewport3DSceneCameraView({
     cameraRegistryCamera,
     commandState,
@@ -1058,6 +1141,10 @@ export function useViewport3DSceneModel({
   const regionTargetByPartId = useMemo(() => {
     return resolveViewport3DRegionTargetByPartId(sharedDomainManifest.data?.regions);
   }, [sharedDomainManifest.data?.regions]);
+  const meshBackedRegionKeys = useMemo(
+    () => resolveViewport3DMeshBackedRegionKeys(sharedDomainManifest.data?.regions),
+    [sharedDomainManifest.data?.regions],
+  );
   const allRegionOverlays = useMemo<RegionOverlayInput[]>(
     () =>
       resolveViewport3DRegionOverlays({
@@ -1092,15 +1179,50 @@ export function useViewport3DSceneModel({
   }, [scene.data, sharedDomainManifest]);
   const topologyCurrent = isViewport3DTopologyCurrent(topologyFreshness);
   const topologyRenderable = isViewport3DTopologyRenderable(topologyFreshness);
-  const meshRegionOverlays = useMemo(
+  const regionMembershipIds = useMemo(
     () =>
       topologyCurrent
-        ? resolveViewport3DMeshBackedRegionOverlays({
-            manifestRegions: sharedDomainManifest.data?.regions,
+        ? resolveViewport3DRegionMembershipIds({
+            meshBackedRegionKeys,
             regions: allRegionOverlays,
           })
         : [],
-    [allRegionOverlays, sharedDomainManifest.data?.regions, topologyCurrent],
+    [allRegionOverlays, meshBackedRegionKeys, topologyCurrent],
+  );
+  const regionMemberships = useMeshRegionMembershipsResource(regionMembershipIds, {
+    enabled: Boolean(topologyCurrent && regionMembershipIds.length > 0),
+  });
+  const membershipRegionOverlays = useMemo(
+    () =>
+      topologyCurrent && regionMemberships.data
+        ? resolveViewport3DMembershipRegionOverlays({
+            memberships: regionMemberships.data,
+            regions: allRegionOverlays,
+          })
+        : { ownerParts: [], regions: [] },
+    [allRegionOverlays, regionMemberships.data, topologyCurrent],
+  );
+  const meshRegionOverlays = useMemo(
+    () => {
+      if (!topologyCurrent) return [];
+      return [
+        ...resolveViewport3DMeshBackedRegionOverlays({
+          manifestRegions: sharedDomainManifest.data?.regions,
+          regions: allRegionOverlays,
+        }),
+        ...membershipRegionOverlays.regions,
+      ];
+    },
+    [
+      allRegionOverlays,
+      membershipRegionOverlays.regions,
+      sharedDomainManifest.data?.regions,
+      topologyCurrent,
+    ],
+  );
+  const meshRegionOverlayParts = useMemo(
+    () => [...femDomain.magneticParts, ...membershipRegionOverlays.ownerParts],
+    [femDomain.magneticParts, membershipRegionOverlays.ownerParts],
   );
   const regionOverlays = allRegionOverlays;
   const currentTopologyRenderModel = topologyRenderable ? topologyRenderModel : null;
@@ -1772,8 +1894,6 @@ export function useViewport3DSceneModel({
     vectorScale,
   ]);
   const selectedLabel = selection.label ?? "No selection";
-  const { selectedObjectId, selectedRegionId } =
-    resolveViewport3DRegionSelectionScope(selection);
   const status =
     topology.error?.message ??
     (renderingState?.clip?.enabled ? clipCrossSection.error?.message : null) ??
@@ -1868,6 +1988,12 @@ export function useViewport3DSceneModel({
       status: modelRegions.status,
     },
     {
+      error: regionMemberships.error?.message,
+      id: "region-memberships",
+      revision: regionMemberships.revision,
+      status: regionMemberships.status,
+    },
+    {
       error: scene.error?.message,
       id: "scene",
       revision: scene.revision,
@@ -1934,6 +2060,7 @@ export function useViewport3DSceneModel({
     meshQualityColors,
     meshQualityMetric,
     meshQualityOverlayVisible,
+    meshRegionOverlayParts,
     meshSizeHighlightModel,
     meshQualityRange: meshQualityColors?.range ?? null,
     meshRegionOverlays,

@@ -39,6 +39,7 @@ export const openApiV2PathLiterals = [
   "/v2/sessions/current/data/material-fields",
   "/v2/sessions/current/data/material-fields/{field_id}",
   "/v2/sessions/current/data/mesh-region-membership/{region_id}",
+  "/v2/sessions/current/data/mesh-region-memberships",
   "/v2/sessions/current/data/quantities",
   "/v2/sessions/current/data/scalars",
   "/v2/sessions/current/data/tables",

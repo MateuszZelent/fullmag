@@ -6709,6 +6709,231 @@ async fn mesh_region_membership_projects_object_frame_region_with_owner_translat
 }
 
 #[tokio::test]
+async fn mesh_region_membership_rejects_projected_object_frame_rotation() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_fem_mesh_payload();
+        mesh.mesh_parts.clear();
+        let mut scene = sample_scene_document();
+        scene.objects[0].transform.rotation_quat = [0.0, 0.0, 0.70710678, 0.70710678];
+        scene.objects[0]
+            .regions
+            .push(fullmag_authoring::SceneObjectRegion {
+                region_id: "body:rotated-core".to_string(),
+                owner_object: "body".to_string(),
+                name: "Rotated Core".to_string(),
+                shape: fullmag_authoring::SceneRegionShape::Box {
+                    center: [0.25, 0.25, 0.25],
+                    size: [0.8, 0.8, 0.8],
+                },
+                frame: fullmag_authoring::SceneRegionFrame::Object,
+                enabled: true,
+                priority: 10,
+                mesh_policy: None,
+                material_overrides: Vec::new(),
+                texture_override: None,
+                material_transition: None,
+                realization_policy: fullmag_authoring::SceneRegionRealizationPolicy::Project,
+            });
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.mesh_revision = 45;
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/mesh-region-membership/body%3Arotated-core")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn mesh_region_membership_rejects_projected_object_frame_scale() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_fem_mesh_payload();
+        mesh.mesh_parts.clear();
+        let mut scene = sample_scene_document();
+        scene.objects[0].transform.scale = [2.0, 1.0, 1.0];
+        scene.objects[0]
+            .regions
+            .push(fullmag_authoring::SceneObjectRegion {
+                region_id: "body:scaled-core".to_string(),
+                owner_object: "body".to_string(),
+                name: "Scaled Core".to_string(),
+                shape: fullmag_authoring::SceneRegionShape::Box {
+                    center: [0.25, 0.25, 0.25],
+                    size: [0.8, 0.8, 0.8],
+                },
+                frame: fullmag_authoring::SceneRegionFrame::Object,
+                enabled: true,
+                priority: 10,
+                mesh_policy: None,
+                material_overrides: Vec::new(),
+                texture_override: None,
+                material_transition: None,
+                realization_policy: fullmag_authoring::SceneRegionRealizationPolicy::Project,
+            });
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.mesh_revision = 46;
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/mesh-region-membership/body%3Ascaled-core")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn mesh_region_memberships_lists_available_authored_region_memberships() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_fem_mesh_payload_with_manifest();
+        mesh.object_segments.push(FemMeshObjectSegment {
+            object_id: "body".to_string(),
+            geometry_id: Some("body_core".to_string()),
+            node_start: 0,
+            node_count: 4,
+            element_start: 0,
+            element_count: 1,
+            boundary_face_start: 0,
+            boundary_face_count: 1,
+        });
+        mesh.mesh_parts.push(FemMeshPartPayload {
+            id: "part:body:core".to_string(),
+            label: "Core".to_string(),
+            role: "magnetic_object".to_string(),
+            object_id: Some("body".to_string()),
+            geometry_id: Some("body_core".to_string()),
+            material_id: Some("mat-body".to_string()),
+            element_start: 0,
+            element_count: 1,
+            boundary_face_start: 0,
+            boundary_face_count: 1,
+            boundary_face_indices: vec![0],
+            node_start: 0,
+            node_count: 4,
+            node_indices: vec![0, 1, 2, 3],
+            surface_faces: vec![[0, 1, 2]],
+            bounds_min: Some([0.25, 0.25, 0.25]),
+            bounds_max: Some([0.75, 0.75, 0.75]),
+        });
+        let mut scene = sample_scene_document();
+        scene.objects[0]
+            .regions
+            .push(fullmag_authoring::SceneObjectRegion {
+                region_id: "body:core".to_string(),
+                owner_object: "body".to_string(),
+                name: "Core".to_string(),
+                shape: fullmag_authoring::SceneRegionShape::Sphere {
+                    center: [0.5, 0.5, 0.5],
+                    radius: 0.25,
+                },
+                frame: fullmag_authoring::SceneRegionFrame::Object,
+                enabled: true,
+                priority: 10,
+                mesh_policy: None,
+                material_overrides: Vec::new(),
+                texture_override: None,
+                material_transition: None,
+                realization_policy: fullmag_authoring::SceneRegionRealizationPolicy::Conformal,
+            });
+        scene.objects[0]
+            .regions
+            .push(fullmag_authoring::SceneObjectRegion {
+                region_id: "body:projected-core".to_string(),
+                owner_object: "body".to_string(),
+                name: "Projected Core".to_string(),
+                shape: fullmag_authoring::SceneRegionShape::Box {
+                    center: [0.25, 0.25, 0.25],
+                    size: [0.6, 0.6, 0.6],
+                },
+                frame: fullmag_authoring::SceneRegionFrame::Object,
+                enabled: true,
+                priority: 20,
+                mesh_policy: None,
+                material_overrides: Vec::new(),
+                texture_override: None,
+                material_transition: None,
+                realization_policy: fullmag_authoring::SceneRegionRealizationPolicy::Project,
+            });
+        scene.objects[0]
+            .regions
+            .push(fullmag_authoring::SceneObjectRegion {
+                region_id: "body:unsupported".to_string(),
+                owner_object: "body".to_string(),
+                name: "Unsupported".to_string(),
+                shape: fullmag_authoring::SceneRegionShape::Csg {
+                    expression: Box::new(fullmag_ir::GeometryEntryIR::Box {
+                        name: "unsupported-csg".to_string(),
+                        size: [0.5, 0.5, 0.5],
+                    }),
+                },
+                frame: fullmag_authoring::SceneRegionFrame::Object,
+                enabled: true,
+                priority: 30,
+                mesh_policy: None,
+                material_overrides: Vec::new(),
+                texture_override: None,
+                material_transition: None,
+                realization_policy: fullmag_authoring::SceneRegionRealizationPolicy::Project,
+            });
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.mesh_revision = 47;
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/mesh-region-memberships")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["mesh_id"], "test-mesh:1");
+    assert_eq!(json["mesh_revision"], 47);
+    assert_eq!(json["memberships"][0]["region_id"], "body:core");
+    assert_eq!(json["memberships"][0]["source"], "mesh_parts");
+    assert_eq!(json["memberships"][0]["mesh_part_ids"][0], "part:body:core");
+    assert_eq!(json["memberships"][1]["region_id"], "body:projected-core");
+    assert_eq!(json["memberships"][1]["source"], "geometry_projection");
+    assert_eq!(
+        json["memberships"][1]["mesh_part_ids"],
+        serde_json::json!([])
+    );
+    assert_eq!(
+        json["memberships"][1]["element_indices"],
+        serde_json::json!([0])
+    );
+    assert_eq!(
+        json["unresolved_region_ids"],
+        serde_json::json!(["body:unsupported"])
+    );
+}
+
+#[tokio::test]
 async fn mesh_shared_domain_manifest_reports_clean_scene_provenance_without_build_summary() {
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document();
@@ -9889,6 +10114,86 @@ async fn authoring_region_patch_commits_magnetization_override_without_mesh_dirt
     assert_eq!(regions["regions"][0]["region_id"], "region:body");
     assert_eq!(regions["regions"][0]["source"], "authored_object_region");
     assert_eq!(regions["regions"][0]["magnetization_ref"], "mag-region");
+}
+
+#[tokio::test]
+async fn authoring_material_field_transaction_commits_without_mesh_dirty() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 24;
+    scene.objects[0].tags.clear();
+    scene.objects[0]
+        .regions
+        .push(fullmag_authoring::SceneObjectRegion {
+            region_id: "body:hol_refinement".to_string(),
+            owner_object: "body".to_string(),
+            name: "hol_refinement".to_string(),
+            shape: fullmag_authoring::SceneRegionShape::Box {
+                center: [0.0, 0.0, 0.0],
+                size: [1.0, 1.0, 1.0],
+            },
+            frame: fullmag_authoring::SceneRegionFrame::Object,
+            enabled: true,
+            priority: 10,
+            mesh_policy: None,
+            material_overrides: Vec::new(),
+            texture_override: None,
+            material_transition: None,
+            realization_policy: fullmag_authoring::SceneRegionRealizationPolicy::Project,
+        });
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/transactions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "patch_object_material_fields",
+                        "base_revision": 24,
+                        "object_id": "body",
+                        "fields": [
+                            {
+                                "assignment_id": "body_hol_refinement_ms",
+                                "owner_object": "body",
+                                "parameter": "Ms",
+                                "region_id": "body:hol_refinement",
+                                "priority": 10,
+                                "conflict_policy": "higher_priority_wins",
+                                "value": {
+                                    "kind": "constant",
+                                    "value": 760000.0,
+                                    "unit": "A/m"
+                                }
+                            }
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["transaction_kind"], "patch_object_material_fields");
+    let object = &json["committed_scene"]["objects"][0];
+    assert_eq!(
+        object["material_parameter_fields"][0]["region_id"],
+        "body:hol_refinement"
+    );
+    let mesh_dirty = object["tags"]
+        .as_array()
+        .map(|tags| tags.iter().any(|tag| tag == "mesh:dirty"))
+        .unwrap_or(false);
+    assert!(!mesh_dirty, "{json:#}");
 }
 
 #[tokio::test]
@@ -13711,6 +14016,149 @@ async fn test_router_with_fem_nodal_field() -> axum::Router {
     build_v2_router().with_state(state)
 }
 
+async fn test_router_with_material_scalar_field() -> axum::Router {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 18;
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "mat_ms": {
+                "values": [800000.0, 800000.0, 400000.0, 400000.0],
+                "layout": {
+                    "grid_cells": [2, 2, 1]
+                }
+            }
+        }))
+        .expect("mock material latest_fields should deserialize");
+    }
+    build_v2_router().with_state(state)
+}
+
+fn export_problem_ir_from_python_script(script_name: &str, source: &str) -> serde_json::Value {
+    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("workspace root should resolve");
+    let script_dir = std::env::temp_dir().join(format!(
+        "fullmag-api-python-region-ms-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos(),
+    ));
+    fs::create_dir_all(&script_dir).expect("failed to create Python script test dir");
+    let script_path = script_dir.join(script_name);
+    fs::write(&script_path, source).expect("failed to write Python script test fixture");
+    let python_path = workspace_root.join("packages/fullmag-py/src");
+    let python_exe = crate::script::python_executable(&workspace_root);
+    let python = std::process::Command::new(&python_exe)
+        .arg("-c")
+        .arg(
+            r#"
+import json
+import sys
+from pathlib import Path
+
+import fullmag as fm
+
+loaded = fm.load_problem_from_script(Path(sys.argv[1]))
+problem_ir = loaded.to_ir(
+    requested_backend=fm.BackendTarget.FDM,
+    execution_mode=fm.ExecutionMode.STRICT,
+    execution_precision=fm.ExecutionPrecision.DOUBLE,
+)
+print(json.dumps(problem_ir))
+"#,
+        )
+        .arg(&script_path)
+        .env("PYTHONPATH", python_path)
+        .current_dir(&workspace_root)
+        .output()
+        .expect("failed to run Python ProblemIR exporter");
+    let _ = fs::remove_dir_all(&script_dir);
+    assert!(
+        python.status.success(),
+        "Python ProblemIR exporter failed: {}",
+        String::from_utf8_lossy(&python.stderr)
+    );
+    serde_json::from_slice(&python.stdout).expect("Python ProblemIR exporter should emit JSON")
+}
+
+async fn mat_ms_meta_from_planned_problem_ir(problem_ir: serde_json::Value) -> serde_json::Value {
+    let problem: fullmag_ir::ProblemIR =
+        serde_json::from_value(problem_ir).expect("Python script should export ProblemIR");
+    let plan = fullmag_plan::plan(&problem).expect("ProblemIR should plan successfully");
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        crate::session::apply_current_live_metadata(
+            snapshot,
+            serde_json::json!({
+                "execution_plan": plan
+            }),
+        );
+    }
+    let response = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/mat_ms/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let meta = body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{meta:#}");
+    meta
+}
+
+fn waveguide_box_region_ms_script(include_low_ms_region: bool) -> String {
+    let region_block = if include_low_ms_region {
+        r#"
+low_ms_region = waveguide.add_region(
+    "low_ms_center",
+    fm.Box(size=(100e-9, 50e-9, 10e-9)),
+    priority=10,
+)
+low_ms_region.set_material(
+    "Ms",
+    fm.fields.constant(80e3, unit="A/m"),
+    priority=10,
+)
+low_ms_region.material_transition(kind="sharp")
+"#
+    } else {
+        ""
+    };
+    format!(
+        r#"
+import fullmag as fm
+
+study = fm.study("waveguide_box_region_ms_backend_check")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.cell(25e-9, 25e-9, 10e-9)
+study.universe(
+    mode="manual",
+    size=(200e-9, 50e-9, 10e-9),
+    center=(0.0, 0.0, 0.0),
+)
+
+waveguide = study.geometry(
+    fm.Box(size=(200e-9, 50e-9, 10e-9), name="waveguide_box"),
+    name="waveguide",
+)
+waveguide.Ms = 800e3
+waveguide.Aex = 13e-12
+waveguide.alpha = 0.1
+waveguide.m = fm.texture.uniform(1.0, 0.0, 0.0)
+{region_block}
+study.exchange()
+"#
+    )
+}
+
 async fn test_router_with_live_magnetization() -> axum::Router {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -13858,6 +14306,42 @@ async fn field_vector_cached_projection_reports_point_and_value_counts_separatel
             Some("1")
         );
     }
+}
+
+#[tokio::test]
+async fn field_meta_component_query_reports_projected_stats() {
+    let app = test_router_with_mock_field().await;
+
+    let x_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/meta?component=x")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(x_response.status(), StatusCode::OK);
+    let x_meta = body_json(x_response).await;
+    assert_eq!(x_meta["stats"]["min"], serde_json::json!(0.0));
+    assert_eq!(x_meta["stats"]["max"], serde_json::json!(1.0));
+    assert_eq!(x_meta["stats"]["mean"], serde_json::json!(0.5));
+
+    let magnitude_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/meta?component=magnitude")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(magnitude_response.status(), StatusCode::OK);
+    let magnitude_meta = body_json(magnitude_response).await;
+    assert_eq!(magnitude_meta["stats"]["min"], serde_json::json!(1.0));
+    assert_eq!(magnitude_meta["stats"]["max"], serde_json::json!(3.0));
+    assert_eq!(magnitude_meta["stats"]["mean"], serde_json::json!(1.5));
 }
 
 #[tokio::test]
@@ -14346,6 +14830,103 @@ async fn v2_field_vector_prefers_live_magnetization_over_stale_latest_field() {
         .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
         .collect();
     assert_eq!(values, vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+}
+
+#[tokio::test]
+async fn v2_material_scalar_quantity_is_available_as_field_vector() {
+    let app = test_router_with_material_scalar_field().await;
+
+    let catalog_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(catalog_response.status(), StatusCode::OK);
+    let catalog = body_json(catalog_response).await;
+    let mat_ms = catalog["quantities"]
+        .as_array()
+        .and_then(|quantities| {
+            quantities
+                .iter()
+                .find(|quantity| quantity["quantity_id"] == "mat_ms")
+        })
+        .expect("material scalar should be listed in field catalog");
+    assert_eq!(mat_ms["components"], 1);
+    assert_eq!(mat_ms["kind"], "spatial_scalar");
+    assert_eq!(mat_ms["unit"], "A/m");
+
+    let meta_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/mat_ms/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(meta_response.status(), StatusCode::OK);
+    let meta = body_json(meta_response).await;
+    assert_eq!(meta["stats"]["min"], 400000.0);
+    assert_eq!(meta["stats"]["max"], 800000.0);
+    assert_eq!(meta["stats"]["mean"], 600000.0);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/mat_ms/samples/vector?component=magnitude&format=bin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-n-comp")
+            .and_then(|value| value.to_str().ok()),
+        Some("1")
+    );
+    let bytes = body_bytes(response).await;
+    assert_eq!(&bytes[..4], b"FMVP");
+    let values: Vec<f64> = bytes[48..]
+        .chunks_exact(8)
+        .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
+        .collect();
+    assert_eq!(values, vec![800000.0, 800000.0, 400000.0, 400000.0]);
+}
+
+#[tokio::test]
+async fn python_waveguide_box_region_ms_override_changes_backend_mat_ms_mean() {
+    let base_ir = export_problem_ir_from_python_script(
+        "waveguide_box_base.py",
+        &waveguide_box_region_ms_script(false),
+    );
+    let region_ir = export_problem_ir_from_python_script(
+        "waveguide_box_low_ms_region.py",
+        &waveguide_box_region_ms_script(true),
+    );
+
+    let base_meta = mat_ms_meta_from_planned_problem_ir(base_ir).await;
+    let region_meta = mat_ms_meta_from_planned_problem_ir(region_ir).await;
+
+    assert_eq!(base_meta["stats"]["min"], 800000.0);
+    assert_eq!(base_meta["stats"]["max"], 800000.0);
+    assert_eq!(base_meta["stats"]["mean"], 800000.0);
+
+    assert_eq!(region_meta["stats"]["min"], 80000.0);
+    assert_eq!(region_meta["stats"]["max"], 800000.0);
+    assert!(
+        region_meta["stats"]["mean"].as_f64().unwrap() < 800000.0,
+        "region script must lower average mat_ms: {region_meta:#}"
+    );
 }
 
 #[tokio::test]

@@ -5,6 +5,8 @@ import {
   buildMagnetizationAssignmentPatch,
   normalizeMagnetizationRef,
   objectMagneticTextureDraftFromModel,
+  objectMagneticTextureDraftDirty,
+  objectMagneticTextureDraftIdentityKey,
   objectMagneticTextureDraftKey,
   objectMagneticTexturePresetChangePatch,
   resolveObjectMagneticTexturePanelModel,
@@ -60,7 +62,8 @@ describe("ObjectMagneticTexturePanelModel", () => {
     });
     expect(model.mapping).toContain("coordinate_frame");
     expect(model.textureTransform).toContain("scale");
-    expect(objectMagneticTextureDraftFromModel(model)).toMatchObject({
+    const draft = objectMagneticTextureDraftFromModel(model);
+    expect(draft).toMatchObject({
       magnetizationRef: "mag-1",
       presetKind: "vortex",
       scaleX: "1",
@@ -68,6 +71,18 @@ describe("ObjectMagneticTexturePanelModel", () => {
       scaleZ: "1",
     });
     expect(objectMagneticTextureDraftKey(model)).toContain("preset_texture");
+    expect(objectMagneticTextureDraftIdentityKey(model)).toBe(
+      "object:free-layer:object",
+    );
+    expect(
+      objectMagneticTextureDraftDirty(
+        { ...draft, rotationXDeg: "0.0", scaleX: "1.0" },
+        draft,
+      ),
+    ).toBe(false);
+    expect(
+      objectMagneticTextureDraftDirty({ ...draft, assetLabel: "Changed" }, draft),
+    ).toBe(true);
   });
 
   it("resolves region magnetic texture override from region resources", () => {

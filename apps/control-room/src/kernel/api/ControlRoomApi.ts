@@ -5,7 +5,10 @@ import {
   DATA_ARTIFACT_PATH,
   DATA_DOMAIN_META_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
+  DATA_FIELD_META_PATH,
   DATA_FIELD_VECTOR_PATH,
+  DATA_MESH_REGION_MEMBERSHIP_PATH,
+  DATA_MESH_REGION_MEMBERSHIPS_PATH,
   EXPECTED_API_CONTRACT_VERSION,
   DATA_SCALARS_PATH,
   DATA_TABLE_COLUMNS_PATH,
@@ -119,6 +122,8 @@ import type {
   DomainMetaResource,
   EngineLogResource,
   FieldCatalogResource,
+  FieldMetaResource,
+  FieldMetaQuery,
   FieldStateExportRequest,
   FieldStateExportResponse,
   FieldStateImportRequest,
@@ -155,6 +160,8 @@ import type {
   MeshObjectSizeFieldResource,
   MeshQualityGatesResource,
   MeshRealizedSizeFieldsResource,
+  MeshRegionMembershipListResource,
+  MeshRegionMembershipResource,
   MeshSemanticsResource,
   MeshSharedDomainConfigReplaceRequest,
   MeshSharedDomainConfigResource,
@@ -382,6 +389,19 @@ export class ControlRoomApi {
     fields: {
       catalog: (options?: RequestOptions) =>
         this.requestJson<FieldCatalogResource>(DATA_FIELDS_PATH, options),
+      meta: (
+        quantityId: string,
+        query: FieldMetaQuery = {},
+        options?: RequestOptions,
+      ) =>
+        this.requestJson<FieldMetaResource>(
+          DATA_FIELD_META_PATH,
+          options,
+          {
+            path: { quantity_id: resolveCanonicalQuantityId(quantityId) },
+            query: fieldMetaQueryParams(query),
+          },
+        ),
       vector: (
         quantityId: string,
         query: FieldVectorQuery = {},
@@ -394,6 +414,17 @@ export class ControlRoomApi {
           options,
         ),
     },
+    meshRegionMembership: (regionId: string, options?: RequestOptions) =>
+      this.requestJson<MeshRegionMembershipResource>(
+        DATA_MESH_REGION_MEMBERSHIP_PATH,
+        options,
+        { path: { region_id: regionId } },
+      ),
+    meshRegionMemberships: (options?: RequestOptions) =>
+      this.requestJson<MeshRegionMembershipListResource>(
+        DATA_MESH_REGION_MEMBERSHIPS_PATH,
+        options,
+      ),
     scalars: {
       window: (
         query: ScalarWindowQuery = {},
@@ -1964,6 +1995,12 @@ function scalarWindowQueryParams(query: ScalarWindowQuery): QueryParams {
         : undefined,
     limit: query.limit,
     since_revision: query.sinceRevision,
+  };
+}
+
+function fieldMetaQueryParams(query: FieldMetaQuery): QueryParams {
+  return {
+    component: query.component ?? undefined,
   };
 }
 

@@ -49,19 +49,21 @@ import type { MeshSizeDistributionHoverBin } from "./MeshQualityChart";
 import { MeshQualityStatisticsView } from "./MeshQualityStatisticsView";
 import { emitMeshSizeHistogramHover } from "./meshSizeHistogramHover";
 import {
+  initialInspectorDraftState,
+  resolveInspectorDraftState,
+  updateInspectorDraftState,
+  type InspectorDraftState,
+} from "./inspectorDraftState";
+import {
   AIRBOX_GRADING_MODES,
   airboxMeshPolicyDraftDirty,
   buildAirboxMeshPolicyReplaceRequest,
   defaultUniverseMeshPolicyResource,
   draftFromUniverseMeshPolicyResource,
+  draftIdentityKeyForUniverseMeshPolicyResource,
   draftKeyForUniverseMeshPolicyResource,
   type AirboxMeshPolicyDraft,
 } from "./AirboxMeshPolicyPanelModel";
-
-interface DraftState {
-  draft: AirboxMeshPolicyDraft;
-  key: string;
-}
 
 type Feedback =
   | {
@@ -199,14 +201,25 @@ export function AirboxMeshPolicyPanel({ selection }: InspectorPanelProps) {
   const draftKey = draftKeyForUniverseMeshPolicyResource(resource, {
     effectiveTarget: effectiveAirbox,
   });
-  const [draftState, setDraftState] = useState<DraftState>({
-    draft: baseDraft,
-    key: draftKey,
-  });
+  const draftIdentityKey = draftIdentityKeyForUniverseMeshPolicyResource();
+  const [draftState, setDraftState] = useState<
+    InspectorDraftState<AirboxMeshPolicyDraft>
+  >(() =>
+    initialInspectorDraftState({
+      baseDraft,
+      baseKey: draftKey,
+      identityKey: draftIdentityKey,
+    }),
+  );
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [pending, setPending] = useState(false);
-  const draft = draftState.key === draftKey ? draftState.draft : baseDraft;
-  const isDirty = airboxMeshPolicyDraftDirty(draft, baseDraft);
+  const { dirty: isDirty, draft } = resolveInspectorDraftState({
+    baseDraft,
+    baseKey: draftKey,
+    identityKey: draftIdentityKey,
+    isDirty: airboxMeshPolicyDraftDirty,
+    state: draftState,
+  });
   const commandContext = useMemo(
     () =>
       createCommandContext("inspector", kernel, {
@@ -231,13 +244,16 @@ export function AirboxMeshPolicyPanel({ selection }: InspectorPanelProps) {
         : "not available";
 
   function updateDraft(patch: AirboxMeshPolicyPatch): void {
-    setDraftState((current) => ({
-      draft: {
-        ...(current.key === draftKey ? current.draft : baseDraft),
-        ...patch,
-      },
-      key: draftKey,
-    }));
+    setDraftState(
+      updateInspectorDraftState({
+        baseDraft,
+        baseKey: draftKey,
+        currentDraft: draft,
+        identityKey: draftIdentityKey,
+        isDirty: airboxMeshPolicyDraftDirty,
+        patch,
+      }),
+    );
   }
 
   async function applyPolicy({
@@ -292,7 +308,13 @@ export function AirboxMeshPolicyPanel({ selection }: InspectorPanelProps) {
   }
 
   function revertPolicyDraft(): void {
-    setDraftState({ draft: baseDraft, key: draftKey });
+    setDraftState(
+      initialInspectorDraftState({
+        baseDraft,
+        baseKey: draftKey,
+        identityKey: draftIdentityKey,
+      }),
+    );
     setFeedback(null);
   }
 

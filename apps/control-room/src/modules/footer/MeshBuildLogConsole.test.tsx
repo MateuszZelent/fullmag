@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
@@ -99,5 +101,17 @@ describe("MeshBuildLogConsole", () => {
     expect(html).toContain("12 visible");
     expect(html).toContain("auto-scroll paused");
     expect(html).toContain("Gmsh step 12");
+  });
+
+  it("includes the visible row index in React keys for repeated log messages", () => {
+    const source = readFileSync(
+      new URL("./MeshBuildLogConsole.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("rows.map((entry, index)");
+    expect(source).toContain(
+      'key={`${entry.time}:${entry.level}:${entry.message}:${index}`}',
+    );
   });
 });

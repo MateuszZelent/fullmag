@@ -7,12 +7,12 @@ import { BufferAttribute, BufferGeometry } from "three";
 import type { DecodedTopology } from "@/kernel/api/codecs";
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 
-import type { Viewport3DMeshPart } from "../viewport3dDomainAdapter";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
 import {
   buildRegionMeshOverlayModels,
   type RegionMeshOverlayModel,
+  type RegionMeshOverlayOwnerPart,
   type RegionOverlayInput,
   type RegionOverlayTheme,
 } from "./regionOverlayModel";
@@ -21,7 +21,7 @@ import type { RegionOverlaySelection } from "./RegionOverlayLayer";
 
 export interface RegionMeshOverlayLayerProps {
   getRegionSettings?: (region: RegionOverlayInput) => VisualizationTargetSettings;
-  magneticParts: readonly Viewport3DMeshPart[];
+  magneticParts: readonly RegionMeshOverlayOwnerPart[];
   onSelectRegion?: (selection: RegionOverlaySelection) => void;
   regions: readonly RegionOverlayInput[];
   selectedObjectId?: string | null;

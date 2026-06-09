@@ -11,9 +11,11 @@ import {
   resolveViewport3DPrimaryFieldRenderOptions,
   resolveViewport3DPrimaryFieldQuery,
   filterViewport3DMeshBackedRegionOverlays,
+  resolveViewport3DMembershipRegionOverlays,
   resolveViewport3DMeshBackedRegionKeys,
   resolveViewport3DMeshBackedRegionOverlays,
   resolveViewport3DPartVisualizationSettings,
+  resolveViewport3DRegionMembershipIds,
   resolveViewport3DRegionOverlays,
   resolveViewport3DRegionSelectionBounds,
   resolveViewport3DRegionSelectionScope,
@@ -370,6 +372,88 @@ describe("useViewport3DSceneModel", () => {
         shape: { center: [0, 0, 0], kind: "sphere", radius: 1 },
       },
     );
+  });
+
+  it("maps projected membership indices into realized mesh overlay inputs", () => {
+    const authored = [
+      {
+        enabled: true,
+        name: "Core",
+        owner_object_id: "film",
+        region_id: "film:core",
+        shape: { center: [0, 0, 0], kind: "sphere", radius: 1 },
+      },
+    ] as never;
+
+    const overlays = resolveViewport3DMembershipRegionOverlays({
+      memberships: [
+        {
+          boundary_face_indices: [0],
+          element_indices: [0, 2],
+          mesh_id: "mesh:shared-domain",
+          mesh_part_ids: [],
+          mesh_revision: 41,
+          node_indices: [0, 1, 2, 3],
+          realization_method: "shape_centroid_geometry_projection_v1",
+          realization_warnings: [
+            "geometry_projection uses node and centroid membership; it is not a conformal mesh part",
+          ],
+          region_id: "film:core",
+          source: "geometry_projection",
+        },
+      ] as never,
+      regions: authored,
+    });
+
+    expect(overlays.regions).toEqual([
+      {
+        enabled: true,
+        mesh_part_ids: ["membership:film%3Acore"],
+        name: "Core",
+        owner_object_id: "film",
+        region_id: "film:core",
+        shape: { center: [0, 0, 0], kind: "sphere", radius: 1 },
+      },
+    ]);
+    expect(overlays.ownerParts).toEqual([
+      {
+        boundary_face_indices: [0],
+        element_indices: [0, 2],
+        id: "membership:film%3Acore",
+        node_indices: [0, 1, 2, 3],
+        object_id: "film",
+      },
+    ]);
+  });
+
+  it("requests memberships for all non-mesh-backed authored region overlays", () => {
+    expect(
+      resolveViewport3DRegionMembershipIds({
+        meshBackedRegionKeys: new Set(["film\u0000film:mesh-backed"]),
+        regions: [
+          {
+            owner_object_id: "film",
+            region_id: "film:core",
+          },
+          {
+            owner_object_id: "film",
+            region_id: "film:edge",
+          },
+          {
+            owner_object_id: "film",
+            region_id: "film:core",
+          },
+          {
+            owner_object_id: "film",
+            region_id: "film:mesh-backed",
+          },
+          {
+            owner_object_id: null,
+            region_id: "film:missing-owner",
+          },
+        ] as never,
+      }),
+    ).toEqual(["film:core", "film:edge"]);
   });
 
   it("keeps parent visualization active for mesh-backed region parts", () => {

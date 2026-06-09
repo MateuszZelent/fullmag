@@ -4,6 +4,7 @@ import { useCallback, useMemo } from "react";
 
 import {
   ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH,
+  DATA_FIELD_META_PATH,
   DATA_FIELDS_PATH,
   DATA_SCALARS_PATH,
   DATA_TABLE_COLUMNS_PATH,
@@ -41,6 +42,7 @@ import type {
   CurrentRunResource,
   EngineLogResource,
   FieldCatalogResource,
+  FieldMetaResource,
   CpuTelemetryResource,
   GpuTelemetryResource,
   LiveStatusResource,
@@ -59,6 +61,7 @@ import type {
   TableRowsQuery,
   TableRowsResource,
 } from "../api/apiTypes";
+import { normalizeQuantityIdOrDefault } from "../api/quantityIds";
 import type { DecodedTableRows } from "../api/codecs";
 import { useKernel } from "../KernelContext";
 import { tableRowsMinRefetchIntervalMs } from "../realtime/communicationPolicy";
@@ -512,6 +515,51 @@ export function useFieldCatalogResource({
     load,
     resolveRevision: (data) => data.revision,
     resourceKey: DATA_FIELDS_PATH,
+  });
+}
+
+export function resolveFieldMetaResourceKey(quantityId: string): string {
+  return resolveFieldMetaResourceKeyWithComponent(quantityId, null);
+}
+
+export function resolveFieldMetaResourceKeyWithComponent(
+  quantityId: string,
+  component: string | null | undefined,
+): string {
+  const path = DATA_FIELD_META_PATH.replace(
+    "{quantity_id}",
+    encodeURIComponent(normalizeQuantityIdOrDefault(quantityId)),
+  );
+  return component ? `${path}?component=${encodeURIComponent(component)}` : path;
+}
+
+export function useFieldMetaResource({
+  enabled = true,
+  component = null,
+  quantityId,
+}: RuntimeResourceOptions & { component?: string | null; quantityId: string }) {
+  const { api } = useKernel();
+  const resolvedQuantityId = useMemo(
+    () => normalizeQuantityIdOrDefault(quantityId),
+    [quantityId],
+  );
+  const resourceKey = useMemo(
+    () => resolveFieldMetaResourceKeyWithComponent(resolvedQuantityId, component),
+    [component, resolvedQuantityId],
+  );
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.data.fields
+        .meta(resolvedQuantityId, { component }, { signal })
+        .catch(ignoreMissingResource<FieldMetaResource>),
+    [api, component, resolvedQuantityId],
+  );
+
+  return useResource<FieldMetaResource | null>({
+    enabled,
+    load,
+    resolveRevision: (data) => data?.field_revision ?? null,
+    resourceKey,
   });
 }
 

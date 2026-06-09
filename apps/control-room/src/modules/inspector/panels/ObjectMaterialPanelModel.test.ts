@@ -4,6 +4,7 @@ import {
   buildMaterialAssignmentPatch,
   buildMaterialParametersPatch,
   magneticParametersDraftFromResource,
+  magneticParametersDraftDirty,
   materialAssignmentDraftFromRef,
   materialParametersDraftKey,
   normalizeMaterialRef,
@@ -53,7 +54,8 @@ describe("ObjectMaterialPanelModel", () => {
       },
     };
 
-    expect(magneticParametersDraftFromResource("mat-1", resource)).toEqual({
+    const draft = magneticParametersDraftFromResource("mat-1", resource);
+    expect(draft).toEqual({
       aex: "1e-11",
       alpha: "0.02",
       dind: "",
@@ -64,6 +66,9 @@ describe("ObjectMaterialPanelModel", () => {
     });
     expect(materialParametersDraftKey("mat-1", resource)).toContain(
       "Material 1",
+    );
+    expect(magneticParametersDraftDirty({ ...draft, ms: "8e5" }, draft)).toBe(
+      false,
     );
   });
 

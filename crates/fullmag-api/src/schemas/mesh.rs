@@ -570,6 +570,15 @@ pub struct MeshRegionMembershipResource {
     pub boundary_face_indices: Vec<u32>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
+pub struct MeshRegionMembershipListResource {
+    pub mesh_id: String,
+    pub mesh_revision: u64,
+    pub memberships: Vec<MeshRegionMembershipResource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unresolved_region_ids: Vec<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct MeshRegionResource {
     pub region_id: String,

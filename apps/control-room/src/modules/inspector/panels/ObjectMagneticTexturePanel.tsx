@@ -32,8 +32,16 @@ import { FormField } from "../primitives/FormField";
 import { InspectorSection } from "../primitives/InspectorSection";
 import { Vector3Field } from "../primitives/Vector3Field";
 import {
+  initialInspectorDraftState,
+  resolveInspectorDraftState,
+  updateInspectorDraftState,
+  type InspectorDraftState,
+} from "./inspectorDraftState";
+import {
   buildObjectMagneticTextureAssetDraft,
   objectMagneticTextureDraftFromModel,
+  objectMagneticTextureDraftDirty,
+  objectMagneticTextureDraftIdentityKey,
   objectMagneticTextureDraftKey,
   objectMagneticTexturePresetChangePatch,
   resolveObjectMagneticTexturePanelModel,
@@ -44,11 +52,6 @@ import {
   syncAuthoringScriptBestEffort,
   type MagneticTexturePanelModel,
 } from "./ObjectMagneticTexturePanelViewModel";
-
-interface DraftState {
-  draft: ObjectMagneticTextureDraft;
-  key: string;
-}
 
 export type MagneticTextureFeedback =
   | {
@@ -701,24 +704,38 @@ export function ObjectMagneticTexturePanel({
     [model],
   );
   const draftKey = objectMagneticTextureDraftKey(model);
-  const [draftState, setDraftState] = useState<DraftState>({
-    draft: baseDraft,
-    key: draftKey,
-  });
+  const draftIdentityKey = objectMagneticTextureDraftIdentityKey(model);
+  const [draftState, setDraftState] = useState<
+    InspectorDraftState<ObjectMagneticTextureDraft>
+  >(() =>
+    initialInspectorDraftState({
+      baseDraft,
+      baseKey: draftKey,
+      identityKey: draftIdentityKey,
+    }),
+  );
   const [feedback, setFeedback] = useState<MagneticTextureFeedback>(null);
   const [pending, setPending] = useState(false);
-  const draft = draftState.key === draftKey ? draftState.draft : baseDraft;
-  const dirty = JSON.stringify(draft) !== JSON.stringify(baseDraft);
+  const { dirty, draft } = resolveInspectorDraftState({
+    baseDraft,
+    baseKey: draftKey,
+    identityKey: draftIdentityKey,
+    isDirty: objectMagneticTextureDraftDirty,
+    state: draftState,
+  });
   const inspectorView = magneticTextureInspectorView(selection.kind);
 
   function updateDraft(patch: Partial<ObjectMagneticTextureDraft>): void {
-    setDraftState((current) => ({
-      draft: {
-        ...(current.key === draftKey ? current.draft : baseDraft),
-        ...patch,
-      },
-      key: draftKey,
-    }));
+    setDraftState(
+      updateInspectorDraftState({
+        baseDraft,
+        baseKey: draftKey,
+        currentDraft: draft,
+        identityKey: draftIdentityKey,
+        isDirty: objectMagneticTextureDraftDirty,
+        patch,
+      }),
+    );
   }
 
   function invalidateTextureResources(revision: number): void {
@@ -766,8 +783,10 @@ export function ObjectMagneticTexturePanel({
       invalidateTextureResources(revision);
       const syncWarning = await syncAuthoringScriptBestEffort(api);
       setDraftState({
+        baseKey: draftKey,
+        dirty: false,
         draft: { ...draft, magnetizationRef: asset.id },
-        key: draftKey,
+        identityKey: draftIdentityKey,
       });
       setFeedback({
         kind: "success",
@@ -810,8 +829,10 @@ export function ObjectMagneticTexturePanel({
       invalidateTextureResources(revision);
       const syncWarning = await syncAuthoringScriptBestEffort(api);
       setDraftState({
+        baseKey: draftKey,
+        dirty: false,
         draft: { ...baseDraft, magnetizationRef: "" },
-        key: draftKey,
+        identityKey: draftIdentityKey,
       });
       setFeedback({
         kind: "success",
@@ -919,7 +940,13 @@ export function ObjectMagneticTexturePanel({
           onClear={() => void clearTexture()}
           onActivateLoad={() => void activateLoadTextureNode()}
           onRevert={() => {
-            setDraftState({ draft: baseDraft, key: draftKey });
+            setDraftState(
+              initialInspectorDraftState({
+                baseDraft,
+                baseKey: draftKey,
+                identityKey: draftIdentityKey,
+              }),
+            );
             setFeedback(null);
           }}
           onSave={() => void saveTexture()}

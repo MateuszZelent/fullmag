@@ -329,6 +329,10 @@
   padding-inline: var(--fm-space-1);
 }
 
+.fm-inspector-form-field__hint--error {
+  color: var(--fm-danger);
+}
+
 /* ── Input ── */
 .fm-inspector-input {
   flex: 1;
@@ -356,6 +360,13 @@
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--fm-accent) 30%, transparent);
 }
 
+.fm-inspector-input[aria-invalid="true"],
+.fm-inspector-select[aria-invalid="true"],
+.fm-inspector-textarea[aria-invalid="true"] {
+  border-color: var(--fm-danger);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--fm-danger) 30%, transparent);
+}
+
 .fm-inspector-input:disabled {
   opacity: 0.45;
   cursor: not-allowed;
@@ -363,6 +374,32 @@
 
 .fm-inspector-input--text {
   font-family: var(--fm-font-ui);
+}
+
+.fm-inspector-colorbar-control {
+  display: grid;
+  gap: var(--fm-space-2);
+}
+
+.fm-inspector-colorbar {
+  display: grid;
+  grid-template-columns: max-content minmax(96px, 1fr) max-content;
+  align-items: center;
+  gap: var(--fm-space-2);
+  padding-inline: var(--fm-space-1);
+}
+
+.fm-inspector-colorbar__limit {
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+  line-height: 1;
+}
+
+.fm-inspector-colorbar__ramp {
+  height: 10px;
+  min-width: 96px;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-xs);
 }
 
 /* ── Vector3 Group ── */

@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
 import {
+  DATA_MESH_REGION_MEMBERSHIP_PATH,
+  DATA_MESH_REGION_MEMBERSHIPS_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
   MESHING_HISTOGRAM_BIN_ELEMENTS_PATH,
@@ -30,12 +32,16 @@ import {
   MESH_BUILD_CURRENT_RESOURCE_KEY,
   MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY,
   MESH_UNIVERSE_POLICY_RESOURCE_KEY,
+  MESH_REGION_MEMBERSHIPS_RESOURCE_KEY,
   MODEL_REGION_DIAGNOSTICS_RESOURCE_KEY,
   MODEL_REALIZED_REGIONS_RESOURCE_KEY,
   SCENE_RESOURCE_KEY,
   VISUALIZATION_STATE_RESOURCE_KEY,
   resolveJsonResourceRevision,
   resolveMeshHistogramBinElementsResourceKey,
+  resolveMeshRegionMembershipsRevision,
+  resolveMeshRegionMembershipsResourceKey,
+  resolveMeshRegionMembershipListRevision,
   resolveMeshSharedDomainManifestRevision,
   resolveObjectMeshQualityResourceKey,
   resolveObjectMeshPolicyResourceKey,
@@ -71,6 +77,9 @@ describe("geometry lifecycle resources", () => {
     );
     expect(MESH_UNIVERSE_POLICY_RESOURCE_KEY).toBe(
       MESHING_UNIVERSE_POLICY_PATH,
+    );
+    expect(MESH_REGION_MEMBERSHIPS_RESOURCE_KEY).toBe(
+      DATA_MESH_REGION_MEMBERSHIPS_PATH,
     );
     expect(VISUALIZATION_STATE_RESOURCE_KEY).toBe(VISUALIZATION_STATE_PATH);
     expect(resolveObjectTopologyResourceKey("box 1")).toBe(
@@ -130,6 +139,53 @@ describe("geometry lifecycle resources", () => {
         geometry_realization_revision: null,
       } as never),
     ).toBe("4:unknown:unknown");
+  });
+
+  it("uses a deterministic batch resource key and revision for mesh region memberships", () => {
+    expect(
+      resolveMeshRegionMembershipsResourceKey(["film:edge", "film:core", "film:core"]),
+    ).toBe(
+      `${DATA_MESH_REGION_MEMBERSHIP_PATH}:batch:film%3Acore|film%3Aedge`,
+    );
+    expect(resolveMeshRegionMembershipsResourceKey([])).toBe(
+      `${DATA_MESH_REGION_MEMBERSHIP_PATH}:batch:none`,
+    );
+
+    expect(
+      resolveMeshRegionMembershipsRevision([
+        {
+          mesh_id: "mesh:shared-domain",
+          mesh_revision: 42,
+          region_id: "film:edge",
+          source: "geometry_projection",
+        },
+        {
+          mesh_id: "mesh:shared-domain",
+          mesh_revision: 41,
+          region_id: "film:core",
+          source: "geometry_projection",
+        },
+      ] as never),
+    ).toBe(
+      "mesh:shared-domain:41:film:core:geometry_projection|mesh:shared-domain:42:film:edge:geometry_projection",
+    );
+    expect(
+      resolveMeshRegionMembershipListRevision({
+        memberships: [
+          {
+            mesh_id: "mesh:shared-domain",
+            mesh_revision: 41,
+            region_id: "film:core",
+            source: "geometry_projection",
+          },
+        ],
+        mesh_id: "mesh:shared-domain",
+        mesh_revision: 41,
+        unresolved_region_ids: ["film:csg"],
+      } as never),
+    ).toBe(
+      "mesh:shared-domain:41:mesh:shared-domain:41:film:core:geometry_projection:film:csg",
+    );
   });
 
   it("seeds committed SceneDocument data even when the scene revision is unchanged", () => {

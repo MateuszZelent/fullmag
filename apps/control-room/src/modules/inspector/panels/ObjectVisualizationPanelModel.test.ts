@@ -21,10 +21,15 @@ import {
   colorPickerInputValue,
   geometryScopeDisplayPatch,
   quantitySourcePatch,
+  resolveSurfaceColorSourceItems,
   resolveObjectVisualizationPanelTopologyFreshness,
+  scalarColorPalettePatch,
   resolveVisualizationVectorBudgetRange,
+  shouldShowPrimitiveDisplayToggle,
   shouldLoadObjectVisualizationFieldCatalog,
+  shouldShowSurfaceFieldColorbar,
   SURFACE_COLOR_SOURCE_ITEMS,
+  surfaceColorSourceFieldMetaComponent,
   surfaceDisplayPassPatch,
   surfaceSolidColorPatch,
   VISUALIZATION_COLOR_MODE_ITEMS,
@@ -95,6 +100,43 @@ describe("ObjectVisualizationPanelModel", () => {
     ).toEqual({
       activeQuantityId: "mat_ms",
       surfaceColorSource: "colormap",
+    });
+  });
+
+  it("limits surface color source options to scalar colormap for scalar quantities", () => {
+    expect(resolveSurfaceColorSourceItems("mat_ms").map((item) => item.value)).toEqual([
+      "colormap",
+    ]);
+    expect(resolveSurfaceColorSourceItems("m").map((item) => item.value)).toEqual(
+      SURFACE_COLOR_SOURCE_ITEMS.map((item) => item.value),
+    );
+  });
+
+  it("maps data-driven surface color modes to field metadata components", () => {
+    expect(surfaceColorSourceFieldMetaComponent("component_x", "m")).toBe("x");
+    expect(surfaceColorSourceFieldMetaComponent("component_y", "m")).toBe("y");
+    expect(surfaceColorSourceFieldMetaComponent("component_z", "m")).toBe("z");
+    expect(surfaceColorSourceFieldMetaComponent("magnitude", "m")).toBe("magnitude");
+    expect(surfaceColorSourceFieldMetaComponent("colormap", "m")).toBe("magnitude");
+    expect(surfaceColorSourceFieldMetaComponent("colormap", "mat_ms")).toBeNull();
+    expect(surfaceColorSourceFieldMetaComponent("orientation", "m")).toBeUndefined();
+    expect(surfaceColorSourceFieldMetaComponent("solid", "m")).toBeUndefined();
+  });
+
+  it("shows inspector colorbars only for numeric surface color modes", () => {
+    expect(shouldShowSurfaceFieldColorbar("component_x", "m")).toBe(true);
+    expect(shouldShowSurfaceFieldColorbar("magnitude", "m")).toBe(true);
+    expect(shouldShowSurfaceFieldColorbar("colormap", "mat_ms")).toBe(true);
+    expect(shouldShowSurfaceFieldColorbar("orientation", "m")).toBe(false);
+    expect(shouldShowSurfaceFieldColorbar("solid", "m")).toBe(false);
+  });
+
+  it("builds scalar palette patches for the visualization quantity colormap", () => {
+    expect(scalarColorPalettePatch("inferno")).toEqual({
+      scalarColorPalette: "inferno",
+    });
+    expect(scalarColorPalettePatch("unknown")).toEqual({
+      scalarColorPalette: "viridis",
     });
   });
 
@@ -330,6 +372,15 @@ describe("ObjectVisualizationPanelModel", () => {
     expect(sections.find((section) => section.id === "vectors")).toMatchObject({
       disabled: false,
     });
+  });
+
+  it("shows primitive display toggle only when primitive fallback can render", () => {
+    expect(shouldShowPrimitiveDisplayToggle("object", null)).toBe(true);
+    expect(shouldShowPrimitiveDisplayToggle("object", "unknown")).toBe(true);
+    expect(shouldShowPrimitiveDisplayToggle("object", "stale")).toBe(true);
+    expect(shouldShowPrimitiveDisplayToggle("object", "current")).toBe(false);
+    expect(shouldShowPrimitiveDisplayToggle("part", "stale")).toBe(false);
+    expect(shouldShowPrimitiveDisplayToggle("airbox", null)).toBe(false);
   });
 
   it("keeps surface vector and wireframe fields addressable by target setting keys", () => {

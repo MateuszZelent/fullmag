@@ -38,6 +38,7 @@ function settings(
     wireframeOpacityPercent: 100,
     wireframeVisible: false,
     ...patch,
+    scalarColorPalette: patch.scalarColorPalette ?? "viridis",
   };
 }
 

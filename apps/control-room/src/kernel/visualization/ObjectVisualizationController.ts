@@ -47,6 +47,7 @@ export interface VisualizationTargetSettings {
   pointsVisible: boolean;
   primitiveVisible?: boolean;
   renderMode: VisualizationRenderMode;
+  scalarColorPalette: string;
   shaderColorMode: VisualizationColorMode;
   shaderMonoColor: string;
   shaderVisible: boolean;
@@ -89,11 +90,13 @@ export interface ResolvedTargetVisualization {
 
 type AirboxVisualizationStateLike = {
   active_quantity_id?: string | null;
+  colormap?: string | null;
   layers?: {
     airbox?: VisualizationStateResource["layers"]["airbox"] | null;
   } | null;
   quantity?: {
     active_quantity_id?: string | null;
+    colormap?: string | null;
   } | null;
   targets?: VisualizationStateResource["targets"] | null;
 };
@@ -117,8 +120,9 @@ export const DEFAULT_OBJECT_VISUALIZATION: VisualizationTargetSettings = {
   opacityPercent: 100,
   pointColor: "var(--fm-border-strong)",
   pointsVisible: false,
-  primitiveVisible: true,
+  primitiveVisible: false,
   renderMode: "surface+edges",
+  scalarColorPalette: "viridis",
   shaderColorMode: "orientation",
   shaderMonoColor: "var(--fm-surface-magnetic)",
   shaderVisible: true,
@@ -148,6 +152,7 @@ export const DEFAULT_AIRBOX_VISUALIZATION: VisualizationTargetSettings = {
   pointsVisible: false,
   primitiveVisible: false,
   renderMode: "surface",
+  scalarColorPalette: "viridis",
   shaderColorMode: "monochrome",
   shaderMonoColor: "var(--fm-airbox-fill)",
   shaderVisible: true,
@@ -822,6 +827,10 @@ export function resolveGlobalObjectVisualizationSettings(
       shaderVisible: surfaceVisible,
       wireframeVisible,
     }),
+    scalarColorPalette:
+      state.quantity?.colormap ??
+      state.colormap ??
+      DEFAULT_OBJECT_VISUALIZATION.scalarColorPalette,
     shaderColorMode:
       surfaceColorSourceToColorMode(surfaceColorSource) ?? "monochrome",
     shaderMonoColor: vectorMonoColor,
@@ -876,6 +885,10 @@ export function resolveAirboxVisualizationSettingsFromState(
       shaderVisible,
       wireframeVisible,
     }),
+    scalarColorPalette:
+      state?.quantity?.colormap ??
+      state?.colormap ??
+      baseSettings.scalarColorPalette,
     shaderVisible,
     vectorBudget:
       state?.targets?.airbox?.settings?.vector_budget !== undefined &&
@@ -1059,6 +1072,9 @@ export function airboxLocalVisualizationPatchFromTargetPatch(
     ...(patch.shaderColorMode === undefined
       ? {}
       : { shaderColorMode: patch.shaderColorMode }),
+    ...(patch.scalarColorPalette === undefined
+      ? {}
+      : { scalarColorPalette: patch.scalarColorPalette }),
     ...(patch.pointColor === undefined
       ? {}
       : { pointColor: patch.pointColor }),
@@ -1166,6 +1182,11 @@ function normalizePatch(
   if (normalized.vectorBudget !== undefined) {
     normalized.vectorBudget = Math.max(0, Math.floor(normalized.vectorBudget));
   }
+  if (normalized.scalarColorPalette !== undefined) {
+    normalized.scalarColorPalette = normalizeScalarColorPalette(
+      normalized.scalarColorPalette,
+    );
+  }
   if (normalized.vectorLengthScale !== undefined) {
     normalized.vectorLengthScale = Math.max(0.1, Math.min(5, normalized.vectorLengthScale));
   }
@@ -1230,6 +1251,7 @@ function normalizeVisualizationSettings(
   return {
     ...settings,
     activeQuantityId: normalizeQuantityIdOrDefault(settings.activeQuantityId),
+    scalarColorPalette: normalizeScalarColorPalette(settings.scalarColorPalette),
     primitiveVisible: settings.primitiveVisible ?? false,
     pointsVisible,
     renderMode: resolveRenderMode({
@@ -1282,6 +1304,20 @@ function normalizeSurfaceColorSource(
     value === "colormap"
     ? value
     : undefined;
+}
+
+function normalizeScalarColorPalette(value: unknown): string {
+  const normalized =
+    typeof value === "string"
+      ? value.trim().toLowerCase().replace(/[\s-]+/g, "_")
+      : "";
+  return normalized === "coolwarm" ||
+    normalized === "inferno" ||
+    normalized === "jet" ||
+    normalized === "magma" ||
+    normalized === "viridis"
+    ? normalized
+    : "viridis";
 }
 
 function surfaceColorSourceFromColorMode(

@@ -768,6 +768,12 @@ export function objectRegionDraftKey(model: ObjectRegionPanelModel): string {
   ].join(":");
 }
 
+export function objectRegionDraftIdentityKey(
+  model: ObjectRegionPanelModel,
+): string {
+  return [model.mode, model.objectId, model.regionId ?? "unassigned"].join(":");
+}
+
 export function validateObjectRegionDraft(draft: ObjectRegionDraft): string[] {
   const errors: string[] = [];
   if (draft.name.trim().length === 0) {

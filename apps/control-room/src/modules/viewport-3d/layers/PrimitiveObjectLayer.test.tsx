@@ -168,6 +168,12 @@ describe("PrimitiveObjectLayer geometry resources", () => {
     expect(
       shouldRenderPrimitiveObject(
         { ...primitiveObject("box"), meshState: "primitive-only" },
+        DEFAULT_OBJECT_VISUALIZATION,
+      ),
+    ).toBe(false);
+    expect(
+      shouldRenderPrimitiveObject(
+        { ...primitiveObject("box"), meshState: "primitive-only" },
         { ...DEFAULT_OBJECT_VISUALIZATION, primitiveVisible: true },
       ),
     ).toBe(true);

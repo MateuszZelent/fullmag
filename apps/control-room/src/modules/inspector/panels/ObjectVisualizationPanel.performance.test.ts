@@ -50,4 +50,21 @@ describe("ObjectVisualizationPanel performance contracts", () => {
     expect(panelSource).toContain("quantitySourcePatch(settings, event.target.value)");
     expect(panelSource).toContain("onFieldCatalogRequest()");
   });
+
+  it("renders scalar colormap controls in the visualization inspector", () => {
+    expect(panelSource).toContain("resolveSurfaceColorSourceItems(settings.activeQuantityId)");
+    expect(panelSource).toContain("ScalarColorbarControl");
+    expect(panelSource).toContain("useFieldMetaResource");
+    expect(panelSource).toContain("shouldShowSurfaceFieldColorbar");
+    expect(panelSource).toContain("surfaceColorSourceFieldMetaComponent");
+    expect(panelSource).toContain("component: colorbarComponent ?? null");
+    expect(panelSource).toContain("SCALAR_COLOR_PALETTE_ITEMS.map");
+    expect(panelSource).toContain("scalarColorPalettePatch(event.target.value)");
+    expect(panelSource).toContain("formatScalarColorbarValue");
+    expect(panelSource).toContain("fieldMeta.data?.stats");
+    expect(panelSource).not.toContain(">min<");
+    expect(panelSource).not.toContain(">max<");
+    expect(panelSource).toContain("quantity: {");
+    expect(panelSource).toContain("colormap: scalarColorPalette");
+  });
 });

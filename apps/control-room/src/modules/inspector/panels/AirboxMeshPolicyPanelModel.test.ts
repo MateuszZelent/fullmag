@@ -6,6 +6,7 @@ import {
   airboxMeshPolicyDraftDirty,
   defaultUniverseMeshPolicyResource,
   draftFromUniverseMeshPolicyResource,
+  draftIdentityKeyForUniverseMeshPolicyResource,
   draftKeyForUniverseMeshPolicyResource,
   formatUniverseMeshPolicyConfig,
 } from "./AirboxMeshPolicyPanelModel";
@@ -40,6 +41,7 @@ describe("AirboxMeshPolicyPanelModel", () => {
       airboxHmin: "2e-9",
     });
     expect(draftKeyForUniverseMeshPolicyResource(resource)).toContain("12");
+    expect(draftIdentityKeyForUniverseMeshPolicyResource()).toBe("universe");
   });
 
   it("detects airbox policy draft changes without JSON or numeric formatting false positives", () => {

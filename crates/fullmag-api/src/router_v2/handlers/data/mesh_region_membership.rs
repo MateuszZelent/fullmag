@@ -11,7 +11,7 @@ use fullmag_authoring::{
 use fullmag_runner::{FemMeshObjectSegment, FemMeshPartPayload, FemMeshPayload};
 
 use crate::error::ApiError;
-use crate::schemas::mesh::MeshRegionMembershipResource;
+use crate::schemas::mesh::{MeshRegionMembershipListResource, MeshRegionMembershipResource};
 use crate::types::AppState;
 
 #[utoipa::path(
@@ -43,21 +43,77 @@ pub async fn get_mesh_region_membership(
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active scene document"))?;
 
-    let parts = mesh_region_membership_parts(scene, mesh, &region_id);
+    build_mesh_region_membership(scene, mesh, snapshot.mesh_revision, &region_id)
+        .map(Json)
+        .ok_or_else(|| {
+            ApiError::not_found(format!("mesh region membership '{region_id}' not found"))
+        })
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/data/mesh-region-memberships",
+    responses(
+        (status = 200, description = "Available realized-region memberships for enabled authored object regions in the current FEM mesh", body = MeshRegionMembershipListResource),
+        (status = 404, description = "No active mesh or scene document"),
+    ),
+    tag = "data"
+)]
+pub async fn get_mesh_region_memberships(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<MeshRegionMembershipListResource>, ApiError> {
+    let guard = state.current_live_state.read().await;
+    let snapshot = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    let mesh = snapshot
+        .fem_mesh
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active FEM mesh"))?;
+    let scene = snapshot
+        .scene_document
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active scene document"))?;
+
+    let mut memberships = Vec::new();
+    let mut unresolved_region_ids = Vec::new();
+    for region_id in enabled_authored_region_ids(scene) {
+        if let Some(membership) =
+            build_mesh_region_membership(scene, mesh, snapshot.mesh_revision, &region_id)
+        {
+            memberships.push(membership);
+        } else {
+            unresolved_region_ids.push(region_id);
+        }
+    }
+
+    Ok(Json(MeshRegionMembershipListResource {
+        mesh_id: mesh.mesh_id.clone(),
+        mesh_revision: snapshot.mesh_revision,
+        memberships,
+        unresolved_region_ids,
+    }))
+}
+
+fn build_mesh_region_membership(
+    scene: &SceneDocument,
+    mesh: &FemMeshPayload,
+    mesh_revision: u64,
+    region_id: &str,
+) -> Option<MeshRegionMembershipResource> {
+    let parts = mesh_region_membership_parts(scene, mesh, region_id);
     let segments = if parts.is_empty() {
-        mesh_region_membership_segments(scene, mesh, &region_id)
+        mesh_region_membership_segments(scene, mesh, region_id)
     } else {
         Vec::new()
     };
     let projection = if parts.is_empty() && segments.is_empty() {
-        mesh_region_membership_geometry_projection(scene, mesh, &region_id)
+        mesh_region_membership_geometry_projection(scene, mesh, region_id)
     } else {
         None
     };
     if parts.is_empty() && segments.is_empty() && projection.is_none() {
-        return Err(ApiError::not_found(format!(
-            "mesh region membership '{region_id}' not found"
-        )));
+        return None;
     }
 
     let mut mesh_part_ids = Vec::new();
@@ -105,10 +161,10 @@ pub async fn get_mesh_region_membership(
         );
     }
 
-    Ok(Json(MeshRegionMembershipResource {
+    Some(MeshRegionMembershipResource {
         mesh_id: mesh.mesh_id.clone(),
-        mesh_revision: snapshot.mesh_revision,
-        region_id,
+        mesh_revision,
+        region_id: region_id.to_string(),
         source: if projection.is_some() {
             "geometry_projection"
         } else if parts.is_empty() {
@@ -132,7 +188,7 @@ pub async fn get_mesh_region_membership(
         element_indices,
         node_indices,
         boundary_face_indices,
-    }))
+    })
 }
 
 struct GeometryProjectionMembership {
@@ -236,6 +292,12 @@ fn mesh_region_membership_geometry_projection(
     if matches!(region.shape, SceneRegionShape::Csg { .. }) {
         return None;
     }
+    if matches!(region.frame, SceneRegionFrame::Object)
+        && (!is_identity_quat(object.transform.rotation_quat)
+            || !is_unit_scale(object.transform.scale))
+    {
+        return None;
+    }
 
     let mut membership = GeometryProjectionMembership {
         element_indices: Vec::new(),
@@ -287,6 +349,18 @@ fn find_enabled_object_region<'a>(
     })
 }
 
+fn enabled_authored_region_ids(scene: &SceneDocument) -> Vec<String> {
+    let mut ids = Vec::new();
+    for object in &scene.objects {
+        for region in &object.regions {
+            if region.enabled && !region.region_id.is_empty() && !ids.contains(&region.region_id) {
+                ids.push(region.region_id.clone());
+            }
+        }
+    }
+    ids
+}
+
 fn region_sample_point(
     world_point: [f64; 3],
     object: &SceneObject,
@@ -300,6 +374,19 @@ fn region_sample_point(
         ],
         SceneRegionFrame::World => world_point,
     }
+}
+
+fn is_identity_quat(value: [f64; 4]) -> bool {
+    value[0].abs() <= 1e-12
+        && value[1].abs() <= 1e-12
+        && value[2].abs() <= 1e-12
+        && (value[3] - 1.0).abs() <= 1e-12
+}
+
+fn is_unit_scale(value: [f64; 3]) -> bool {
+    value
+        .iter()
+        .all(|component| (*component - 1.0).abs() <= 1e-12)
 }
 
 fn point_in_region_shape(point: [f64; 3], shape: &SceneRegionShape) -> bool {

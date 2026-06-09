@@ -34,6 +34,10 @@ export type CurrentRunResource = components["schemas"]["CurrentRunResource"];
 export type DomainMetaResource = components["schemas"]["DomainMeta"];
 export type EngineLogResource = components["schemas"]["EngineLogResource"];
 export type FieldCatalogResource = components["schemas"]["FieldCatalog"];
+export type FieldMetaResource = components["schemas"]["FieldMeta"];
+export interface FieldMetaQuery {
+  component?: string | null;
+}
 export type FieldStateExportRequest =
   components["schemas"]["FieldStateExportRequest"];
 export type FieldStateExportResponse =
@@ -147,6 +151,10 @@ export type MeshQualityGatesResource =
   components["schemas"]["MeshQualityGatesResource"];
 export type MeshRealizedSizeFieldsResource =
   components["schemas"]["MeshRealizedSizeFieldsResource"];
+export type MeshRegionMembershipListResource =
+  components["schemas"]["MeshRegionMembershipListResource"];
+export type MeshRegionMembershipResource =
+  components["schemas"]["MeshRegionMembershipResource"];
 export type MeshSemanticsResource =
   components["schemas"]["MeshSemanticsResource"];
 export type MeshSharedDomainConfigResource =

@@ -6904,6 +6904,36 @@
         ],
         "type": "object"
       },
+      "MeshRegionMembershipListResource": {
+        "properties": {
+          "memberships": {
+            "items": {
+              "$ref": "#/components/schemas/MeshRegionMembershipResource"
+            },
+            "type": "array"
+          },
+          "mesh_id": {
+            "type": "string"
+          },
+          "mesh_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unresolved_region_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "mesh_id",
+          "mesh_revision",
+          "memberships"
+        ],
+        "type": "object"
+      },
       "MeshRegionMembershipResource": {
         "properties": {
           "boundary_face_indices": {
@@ -15573,6 +15603,18 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "Optional component projection used for statistics (`x`, `y`, `z`, `magnitude`, `full`).",
+            "in": "query",
+            "name": "component",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
           }
         ],
         "responses": {
@@ -17674,6 +17716,29 @@
           },
           "404": {
             "description": "No active mesh or membership for the region"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/mesh-region-memberships": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_mesh_region_memberships",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeshRegionMembershipListResource"
+                }
+              }
+            },
+            "description": "Available realized-region memberships for enabled authored object regions in the current FEM mesh"
+          },
+          "404": {
+            "description": "No active mesh or scene document"
           }
         },
         "tags": [

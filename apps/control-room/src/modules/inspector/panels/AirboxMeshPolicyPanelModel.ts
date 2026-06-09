@@ -115,6 +115,10 @@ export function draftKeyForUniverseMeshPolicyResource(
   ].join(":");
 }
 
+export function draftIdentityKeyForUniverseMeshPolicyResource(): string {
+  return "universe";
+}
+
 export function airboxMeshPolicyDraftDirty(
   draft: AirboxMeshPolicyDraft,
   baseDraft: AirboxMeshPolicyDraft,

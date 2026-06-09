@@ -30,6 +30,7 @@ import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import {
   shouldLoadRuntimeMeshManifest,
   useFieldCatalogResource,
+  useFieldMetaResource,
 } from "@/kernel/resources/studyRuntimeResources";
 import {
   useObjectVisualizationController,
@@ -64,11 +65,18 @@ import {
   buildVisualizationVectorBudgetDiagnostic,
   buildVisualizationPanelSections,
   colorPickerInputValue,
+  formatScalarColorbarValue,
   resolveVisualizationVectorBudgetRange,
   resolveObjectVisualizationPanelTopologyFreshness,
   resolveVisualizationRenderResolution,
+  resolveSurfaceColorSourceItems,
+  scalarColorPaletteGradientCss,
+  scalarColorPalettePatch,
+  SCALAR_COLOR_PALETTE_ITEMS,
+  shouldShowPrimitiveDisplayToggle,
   shouldLoadObjectVisualizationFieldCatalog,
-  SURFACE_COLOR_SOURCE_ITEMS,
+  shouldShowSurfaceFieldColorbar,
+  surfaceColorSourceFieldMetaComponent,
   geometryScopeDisplayPatch,
   quantitySourcePatch,
   surfaceDisplayPassPatch,
@@ -241,6 +249,7 @@ function remoteVisualizationTargetPatch(
   delete remotePatch.vectorSurfaceOffsetEnabled;
   delete remotePatch.vectorSurfaceOffsetScale;
   delete remotePatch.primitiveVisible;
+  delete remotePatch.scalarColorPalette;
   return remotePatch;
 }
 
@@ -255,6 +264,7 @@ function VisualizationDisplayPassesSection({
   renderWarning,
   settings,
   targetKind,
+  primitiveDisplayToggleVisible,
   vectorDomain,
 }: {
   airboxPartIds: readonly string[];
@@ -267,6 +277,7 @@ function VisualizationDisplayPassesSection({
   renderWarning: string | null;
   settings: VisualizationTargetSettings;
   targetKind: VisualizationTargetKind;
+  primitiveDisplayToggleVisible: boolean;
   vectorDomain: string;
 }) {
   const [airboxDiagnosticOpen, setAirboxDiagnosticOpen] = useState(false);
@@ -336,7 +347,7 @@ function VisualizationDisplayPassesSection({
         <ToggleButton active={displaySettings.boundsVisible} disabled={passControlsDisabled} label="Frame" onClick={() => void patch({ boundsVisible: !settings.boundsVisible })} />
         <ToggleButton active={displaySettings.pointsVisible} disabled={passControlsDisabled} label="Points" onClick={() => void patch({ pointsVisible: !settings.pointsVisible })} />
         <ToggleButton active={displaySettings.vectorsVisible} disabled={passControlsDisabled} label="Vectors" onClick={() => void patch({ vectorsVisible: !settings.vectorsVisible })} />
-        {targetKind === "object" ? (
+        {primitiveDisplayToggleVisible ? (
           <ToggleButton
             active={Boolean(displaySettings.primitiveVisible)}
             disabled={passControlsDisabled}
@@ -451,6 +462,19 @@ function VisualizationSurfaceColoringSection({
   onFieldCatalogRequest: () => void;
   settings: VisualizationTargetSettings;
 }) {
+  const colorbarComponent = surfaceColorSourceFieldMetaComponent(
+    settings.surfaceColorSource,
+    settings.activeQuantityId,
+  );
+  const showColorbar = shouldShowSurfaceFieldColorbar(
+    settings.surfaceColorSource,
+    settings.activeQuantityId,
+  );
+  const fieldMeta = useFieldMetaResource({
+    component: colorbarComponent ?? null,
+    enabled: showColorbar,
+    quantityId: settings.activeQuantityId,
+  });
   return (
     <InspectorSection title="Surface Coloring" collapsible>
       <FormField
@@ -466,18 +490,28 @@ function VisualizationSurfaceColoringSection({
           void patch({ surfaceColorSource });
         }}
       >
-        {SURFACE_COLOR_SOURCE_ITEMS.map((source) => (
+        {resolveSurfaceColorSourceItems(settings.activeQuantityId).map((source) => (
           <option key={source.value} value={source.value}>
             {source.label}
           </option>
         ))}
       </FormField>
-      <ColorField
-        disabled={pending || sectionDisabled("surface-coloring")}
-        label="Solid color"
-        value={settings.shaderMonoColor}
-        onChange={(value) => patchColor("shaderMonoColor", value)}
-      />
+      {showColorbar ? (
+        <ScalarColorbarControl
+          disabled={pending || sectionDisabled("surface-coloring")}
+          fieldMeta={fieldMeta}
+          palette={settings.scalarColorPalette}
+          patch={patch}
+        />
+      ) : null}
+      {settings.surfaceColorSource === "solid" ? (
+        <ColorField
+          disabled={pending || sectionDisabled("surface-coloring")}
+          label="Solid color"
+          value={settings.shaderMonoColor}
+          onChange={(value) => patchColor("shaderMonoColor", value)}
+        />
+      ) : null}
       <FieldRow
         label="Field status"
         value={surfaceFieldStatus(
@@ -487,6 +521,70 @@ function VisualizationSurfaceColoringSection({
         )}
       />
     </InspectorSection>
+  );
+}
+
+function ScalarColorbarControl({
+  disabled,
+  fieldMeta,
+  palette,
+  patch,
+}: {
+  disabled: boolean;
+  fieldMeta: ReturnType<typeof useFieldMetaResource>;
+  palette: string;
+  patch: PatchVisualizationTarget;
+}) {
+  const stats = fieldMeta.data?.stats;
+  const minLabel =
+    typeof stats?.min === "number" ? formatScalarColorbarValue(stats.min) : null;
+  const maxLabel =
+    typeof stats?.max === "number" ? formatScalarColorbarValue(stats.max) : null;
+  const dataRange =
+    minLabel && maxLabel
+      ? `${minLabel} to ${maxLabel}`
+      : fieldMeta.status === "ready"
+        ? "range unavailable"
+        : "loading field range";
+  return (
+    <div className="fm-inspector-colorbar-control">
+      <FormField
+        disabled={disabled}
+        label="Color map"
+        type="select"
+        value={palette}
+        onChange={(event) => void patch(scalarColorPalettePatch(event.target.value))}
+      >
+        {SCALAR_COLOR_PALETTE_ITEMS.map((item) => (
+          <option key={item.value} value={item.value}>
+            {item.label}
+          </option>
+        ))}
+      </FormField>
+      <div
+        className="fm-inspector-colorbar"
+        aria-label={
+          minLabel && maxLabel
+            ? `Scalar color range: ${fieldMeta.data?.quantity_id ?? "field"}, ${minLabel} to ${maxLabel}`
+            : "Scalar color map preview waiting for field range"
+        }
+      >
+        <span className="fm-inspector-colorbar__limit">
+          {minLabel ?? ""}
+        </span>
+        <span
+          aria-hidden="true"
+          className="fm-inspector-colorbar__ramp"
+          style={{
+            background: scalarColorPaletteGradientCss(palette),
+          }}
+        />
+        <span className="fm-inspector-colorbar__limit">
+          {maxLabel ?? ""}
+        </span>
+      </div>
+      <FieldRow label="Data range" value={dataRange} />
+    </div>
   );
 }
 
@@ -893,10 +991,21 @@ function useObjectVisualizationPanelState(
       })
     : [];
   const passControlsDisabled = pending || !settings?.visible;
+  const primitiveDisplayToggleVisible = target
+    ? shouldShowPrimitiveDisplayToggle(target.kind, topologyFreshness)
+    : false;
   const revision = targetVisualization?.revision ?? snapshot.version;
 
   async function patch(patchValue: VisualizationTargetPatch): Promise<void> {
     if (!target) return;
+    const scalarColorPalette = patchValue.scalarColorPalette;
+    if (scalarColorPalette !== undefined && visualizationState.data) {
+      visualizationSync.queuePatch({
+        quantity: {
+          colormap: scalarColorPalette,
+        },
+      });
+    }
     if (target.kind === "airbox") {
       const localPatch =
         airboxLocalVisualizationPatchFromTargetPatch(patchValue);
@@ -1096,6 +1205,7 @@ function useObjectVisualizationPanelState(
     sectionDisabled,
     settings,
     target,
+    primitiveDisplayToggleVisible,
     vectorDomain,
     vectorBudgetRange,
     vectorMeshParts,
@@ -1159,6 +1269,7 @@ function ObjectVisualizationPanelView({
     sectionDisabled,
     settings,
     target,
+    primitiveDisplayToggleVisible,
     vectorDomain,
     vectorBudgetRange,
     vectorMeshParts,
@@ -1191,6 +1302,7 @@ function ObjectVisualizationPanelView({
         renderWarning={renderWarning}
         settings={settings}
         targetKind={target.kind}
+        primitiveDisplayToggleVisible={primitiveDisplayToggleVisible}
         vectorDomain={vectorDomain}
       />
 

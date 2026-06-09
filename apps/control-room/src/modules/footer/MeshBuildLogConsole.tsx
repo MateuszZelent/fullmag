@@ -193,11 +193,11 @@ export function MeshBuildLogConsoleView({
           role="table"
           onScroll={(event) => onLogScroll?.(event.currentTarget)}
         >
-          {rows.map((entry) => (
+          {rows.map((entry, index) => (
             <div
               className="fm-footer-diagnostics__log-row"
               role="row"
-              key={`${entry.time}:${entry.level}:${entry.message}`}
+              key={`${entry.time}:${entry.level}:${entry.message}:${index}`}
             >
               <time role="cell">{entry.time}</time>
               <span role="cell" data-level={entry.level}>

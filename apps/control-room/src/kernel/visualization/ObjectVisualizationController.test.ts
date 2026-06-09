@@ -25,7 +25,7 @@ describe("ObjectVisualizationController", () => {
       geometryScope: "surface",
       opacityPercent: 100,
       pointColor: "var(--fm-border-strong)",
-      primitiveVisible: true,
+      primitiveVisible: false,
       renderMode: "surface+edges",
       shaderColorMode: "orientation",
       shaderMonoColor: "var(--fm-surface-magnetic)",

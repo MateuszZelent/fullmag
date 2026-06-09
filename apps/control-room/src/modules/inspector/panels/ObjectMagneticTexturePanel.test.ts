@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -40,5 +42,21 @@ describe("ObjectMagneticTexturePanel", () => {
     expect(magneticTextureInspectorView("object.region-magnetic-texture")).toBe(
       "region",
     );
+  });
+
+  it("uses semantic dirty checks instead of JSON stringification", () => {
+    const objectPanel = readFileSync(
+      new URL("./ObjectMagneticTexturePanel.tsx", import.meta.url),
+      "utf8",
+    );
+    const regionPanel = readFileSync(
+      new URL("./region/ObjectRegionTexturePanel.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(objectPanel).toContain("objectMagneticTextureDraftDirty");
+    expect(regionPanel).toContain("objectMagneticTextureDraftDirty");
+    expect(objectPanel).not.toContain("JSON.stringify(draft)");
+    expect(regionPanel).not.toContain("JSON.stringify(draft)");
   });
 });

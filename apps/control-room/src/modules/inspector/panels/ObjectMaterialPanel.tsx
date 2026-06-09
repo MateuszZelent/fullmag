@@ -26,20 +26,22 @@ import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
 import { InspectorSection } from "../primitives/InspectorSection";
 import { Vector3Field } from "../primitives/Vector3Field";
+import {
+  initialInspectorDraftState,
+  resolveInspectorDraftState,
+  updateInspectorDraftState,
+  type InspectorDraftState,
+} from "./inspectorDraftState";
 import { resolveGeometryObjectDraft } from "./geometryObjectPanelModel";
 import {
   buildMaterialAssignmentPatch,
   buildMaterialParametersPatch,
   magneticParametersDraftFromResource,
+  magneticParametersDraftDirty,
   materialParametersDraftKey,
   normalizeMaterialRef,
   type MagneticParametersDraft,
 } from "./ObjectMaterialPanelModel";
-
-interface DraftState {
-  draft: MagneticParametersDraft;
-  key: string;
-}
 
 interface AnisotropyDraft {
   present: boolean;
@@ -143,13 +145,25 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
     object.material,
     material.data ?? null,
   )}`;
-  const [draftState, setDraftState] = useState<DraftState>({
-    draft: baseDraft,
-    key: draftKey,
-  });
+  const draftIdentityKey = [object.mode, object.objectId].join(":");
+  const [draftState, setDraftState] = useState<
+    InspectorDraftState<MagneticParametersDraft>
+  >(() =>
+    initialInspectorDraftState({
+      baseDraft,
+      baseKey: draftKey,
+      identityKey: draftIdentityKey,
+    }),
+  );
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [pending, setPending] = useState(false);
-  const draft = draftState.key === draftKey ? draftState.draft : baseDraft;
+  const { draft } = resolveInspectorDraftState({
+    baseDraft,
+    baseKey: draftKey,
+    identityKey: draftIdentityKey,
+    isDirty: magneticParametersDraftDirty,
+    state: draftState,
+  });
   const draftMaterialId = normalizeMaterialRef(draft.materialRef);
   const parametersTargetChanged = draftMaterialId !== materialId;
 
@@ -201,13 +215,16 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
   }
 
   function updateDraft(patch: Partial<MagneticParametersDraft>): void {
-    setDraftState((current) => ({
-      draft: {
-        ...(current.key === draftKey ? current.draft : baseDraft),
-        ...patch,
-      },
-      key: draftKey,
-    }));
+    setDraftState(
+      updateInspectorDraftState({
+        baseDraft,
+        baseKey: draftKey,
+        currentDraft: draft,
+        identityKey: draftIdentityKey,
+        isDirty: magneticParametersDraftDirty,
+        patch,
+      }),
+    );
   }
 
   async function applyMaterial(): Promise<void> {
@@ -293,6 +310,7 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
     baseAnisotropyDraft,
     baseDraft,
     draft,
+    draftIdentityKey,
     draftKey,
     feedback,
     material,
@@ -348,6 +366,7 @@ function ObjectMaterialPanelView({
     baseAnisotropyDraft,
     baseDraft,
     draft,
+    draftIdentityKey,
     draftKey,
     feedback,
     material,
@@ -537,7 +556,13 @@ function ObjectMaterialPanelView({
               type="button"
               variant="ghost"
               onClick={() => {
-                setDraftState({ draft: baseDraft, key: draftKey });
+                setDraftState(
+                  initialInspectorDraftState({
+                    baseDraft,
+                    baseKey: draftKey,
+                    identityKey: draftIdentityKey,
+                  }),
+                );
                 setAnisotropyDraftState({ draft: baseAnisotropyDraft, key: "" });
                 setFeedback(null);
               }}

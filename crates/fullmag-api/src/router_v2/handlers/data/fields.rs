@@ -236,6 +236,7 @@ pub async fn get_field_catalog(
     path = "/v2/sessions/current/data/fields/{quantity_id}/meta",
     params(
         ("quantity_id" = String, Path, description = "Quantity identifier"),
+        FieldMetaQuery,
     ),
     responses(
         (status = 200, description = "Field metadata", body = FieldMeta),
@@ -246,6 +247,7 @@ pub async fn get_field_catalog(
 pub async fn get_field_meta(
     State(state): State<Arc<AppState>>,
     AxumPath(quantity_id): AxumPath<String>,
+    Query(query): Query<FieldMetaQuery>,
 ) -> Result<Json<FieldMeta>, ApiError> {
     let quantity_id = canonical_quantity_id(&quantity_id);
     let quantity_id = quantity_id.as_ref();
@@ -264,15 +266,16 @@ pub async fn get_field_meta(
         .unwrap_or_else(|| "vector_field".into());
     let unit = quantity_unit(quantity_id).to_string();
     let location = quantity_spatial_domain(quantity_id).to_string();
+    let component = parse_component(query.component.as_deref(), n_comp as usize)?;
 
     let gen_id = domain_generation_id(snapshot);
 
-    if snapshot
+    if let Some(values) = snapshot
         .latest_fields
         .get(quantity_id)
         .map(|raw| flatten_json_field_values(raw))
-        .is_some_and(|values| {
-            field_values_match_current_domain(snapshot, quantity_id, n_comp as usize, &values)
+        .filter(|values| {
+            field_values_match_current_domain(snapshot, quantity_id, n_comp as usize, values)
         })
     {
         return Ok(Json(FieldMeta {
@@ -284,23 +287,22 @@ pub async fn get_field_meta(
             unit,
             field_revision: field_quantity_revision(snapshot, quantity_id),
             domain_generation_id: gen_id,
-            stats: None,
+            stats: projected_field_stats(&values, n_comp as usize, &component)?,
         }));
     }
 
-    if snapshot
-        .preview_cache
-        .get(quantity_id)
-        .is_some_and(|field| {
-            field_values_match_current_domain(
-                snapshot,
-                quantity_id,
-                n_comp as usize,
-                &field.vector_field_values,
-            )
-        })
-        || (quantity_id == "m" && live_magnetization_available(snapshot))
-    {
+    if let Some(values) = snapshot.preview_cache.get(quantity_id).and_then(|field| {
+        if field_values_match_current_domain(
+            snapshot,
+            quantity_id,
+            n_comp as usize,
+            &field.vector_field_values,
+        ) {
+            Some(field.vector_field_values.as_slice())
+        } else {
+            None
+        }
+    }) {
         return Ok(Json(FieldMeta {
             quantity_id: quantity_id.to_string(),
             label,
@@ -310,7 +312,30 @@ pub async fn get_field_meta(
             unit,
             field_revision: field_quantity_revision(snapshot, quantity_id),
             domain_generation_id: gen_id,
-            stats: None,
+            stats: projected_field_stats(values, n_comp as usize, &component)?,
+        }));
+    }
+
+    if quantity_id == "m" && live_magnetization_available(snapshot) {
+        let values = live_magnetization_values(snapshot)
+            .map(|(values, _)| values)
+            .filter(|values| {
+                field_values_match_current_domain(snapshot, quantity_id, n_comp as usize, values)
+            });
+        return Ok(Json(FieldMeta {
+            quantity_id: quantity_id.to_string(),
+            label,
+            kind,
+            components: n_comp,
+            location,
+            unit,
+            field_revision: field_quantity_revision(snapshot, quantity_id),
+            domain_generation_id: gen_id,
+            stats: values
+                .as_deref()
+                .map(|values| projected_field_stats(values, n_comp as usize, &component))
+                .transpose()?
+                .flatten(),
         }));
     }
 
@@ -318,6 +343,42 @@ pub async fn get_field_meta(
         "field '{}' not available in memory",
         quantity_id
     )))
+}
+
+#[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]
+pub struct FieldMetaQuery {
+    /// Optional component projection used for statistics (`x`, `y`, `z`, `magnitude`, `full`).
+    pub component: Option<String>,
+}
+
+fn projected_field_stats(
+    values: &[f64],
+    n_comp: usize,
+    component: &ComponentSelection,
+) -> Result<Option<FieldStats>, ApiError> {
+    let (_, projected) = project_values(values, n_comp, component)?;
+    Ok(field_stats(&projected))
+}
+
+fn field_stats(values: &[f64]) -> Option<FieldStats> {
+    let mut min = f64::INFINITY;
+    let mut max = f64::NEG_INFINITY;
+    let mut sum = 0.0;
+    let mut count = 0usize;
+    for value in values.iter().copied().filter(|value| value.is_finite()) {
+        min = min.min(value);
+        max = max.max(value);
+        sum += value;
+        count += 1;
+    }
+    if count == 0 {
+        return None;
+    }
+    Some(FieldStats {
+        min,
+        max,
+        mean: sum / count as f64,
+    })
 }
 
 fn push_field_descriptor(

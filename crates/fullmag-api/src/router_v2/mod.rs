@@ -391,6 +391,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::data::get_mesh_region_membership),
         )
         .route(
+            "/v2/sessions/current/data/mesh-region-memberships",
+            get(handlers::data::get_mesh_region_memberships),
+        )
+        .route(
             "/v2/sessions/current/data/fields/:quantity_id/meta",
             get(handlers::data::get_field_meta),
         )

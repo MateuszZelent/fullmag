@@ -696,7 +696,10 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
       if (!target) {
         return { message: "No scene object selected.", status: "failed" };
       }
-      context.visualization?.patchTarget(target, renderModePatch("surface+edges"));
+      context.visualization?.patchTarget(target, {
+        ...renderModePatch("surface+edges"),
+        primitiveVisible: true,
+      });
       return { status: "completed" };
     },
   },

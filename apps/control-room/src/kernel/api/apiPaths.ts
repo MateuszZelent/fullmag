@@ -147,6 +147,10 @@ export const DATA_MESH_REGION_MEMBERSHIP_PATH = openApiV2Path(
   "/v2/sessions/current/data/mesh-region-membership/{region_id}",
 );
 
+export const DATA_MESH_REGION_MEMBERSHIPS_PATH = openApiV2Path(
+  "/v2/sessions/current/data/mesh-region-memberships",
+);
+
 export const DATA_FIELD_META_PATH = openApiV2Path(
   "/v2/sessions/current/data/fields/{quantity_id}/meta",
 );

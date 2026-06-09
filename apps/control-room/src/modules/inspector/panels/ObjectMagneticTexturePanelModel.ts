@@ -443,6 +443,91 @@ export function objectMagneticTextureDraftKey(
   ].join(":");
 }
 
+export function objectMagneticTextureDraftIdentityKey(
+  model: ObjectMagneticTexturePanelModel,
+): string {
+  return [
+    model.targetKind,
+    model.objectId,
+    model.regionId ?? "object",
+  ].join(":");
+}
+
+const NUMERIC_TEXTURE_DRAFT_FIELDS = new Set<keyof ObjectMagneticTextureDraft>([
+  "center_offset",
+  "cone_angle_rad",
+  "cone_axisX",
+  "cone_axisY",
+  "cone_axisZ",
+  "core_radius",
+  "directionX",
+  "directionY",
+  "directionZ",
+  "e1X",
+  "e1Y",
+  "e1Z",
+  "e2X",
+  "e2Y",
+  "e2Z",
+  "leftX",
+  "leftY",
+  "leftZ",
+  "phase_rad",
+  "pivotX",
+  "pivotY",
+  "pivotZ",
+  "radius",
+  "rightX",
+  "rightY",
+  "rightZ",
+  "rotationXDeg",
+  "rotationYDeg",
+  "rotationZDeg",
+  "scaleX",
+  "scaleY",
+  "scaleZ",
+  "seed",
+  "translationX",
+  "translationY",
+  "translationZ",
+  "wallX",
+  "wallY",
+  "wallZ",
+  "wall_width",
+  "wavevectorX",
+  "wavevectorY",
+  "wavevectorZ",
+]);
+
+export function objectMagneticTextureDraftDirty(
+  draft: ObjectMagneticTextureDraft,
+  baseDraft: ObjectMagneticTextureDraft,
+): boolean {
+  const keys = Object.keys(baseDraft) as Array<keyof ObjectMagneticTextureDraft>;
+  for (const key of keys) {
+    if (textureDraftValueDirty(key, draft[key], baseDraft[key])) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function textureDraftValueDirty(
+  key: keyof ObjectMagneticTextureDraft,
+  value: string,
+  baseValue: string,
+): boolean {
+  if (!NUMERIC_TEXTURE_DRAFT_FIELDS.has(key)) {
+    return value !== baseValue;
+  }
+  const parsed = Number(value);
+  const baseParsed = Number(baseValue);
+  if (Number.isFinite(parsed) && Number.isFinite(baseParsed)) {
+    return parsed !== baseParsed;
+  }
+  return value.trim() !== baseValue.trim();
+}
+
 export function buildMagnetizationAssignmentPatch(
   draft: ObjectMagneticTextureDraft,
   baseRevision: number | null,

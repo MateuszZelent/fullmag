@@ -2252,6 +2252,89 @@ describe("ControlRoomApi", () => {
     ]);
   });
 
+  it("loads mesh region membership through the v2 data facade", async () => {
+    const requests: Array<{ body: unknown; method: string | undefined; url: string }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push({
+          body: init?.body ? parseRequestBody(init.body) : null,
+          method: init?.method,
+          url: String(url),
+        });
+        return jsonResponse({
+          boundary_face_indices: [0],
+          element_indices: [0, 2],
+          mesh_id: "mesh:shared-domain",
+          mesh_part_ids: [],
+          mesh_revision: 41,
+          node_indices: [0, 1, 2, 3],
+          realization_method: "shape_centroid_geometry_projection_v1",
+          realization_warnings: [
+            "geometry_projection uses node and centroid membership; it is not a conformal mesh part",
+          ],
+          region_id: "film:core",
+          source: "geometry_projection",
+        });
+      },
+    });
+
+    const membership = await api.data.meshRegionMembership("film:core");
+
+    expect(membership.source).toBe("geometry_projection");
+    expect(membership.element_indices).toEqual([0, 2]);
+    expect(requests).toEqual([
+      {
+        body: null,
+        method: "GET",
+        url: "http://127.0.0.1:8765/v2/sessions/current/data/mesh-region-membership/film%3Acore",
+      },
+    ]);
+  });
+
+  it("loads mesh region membership list through the v2 data facade", async () => {
+    const requests: Array<{ body: unknown; method: string | undefined; url: string }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push({
+          body: init?.body ? parseRequestBody(init.body) : null,
+          method: init?.method,
+          url: String(url),
+        });
+        return jsonResponse({
+          memberships: [
+            {
+              boundary_face_indices: [0],
+              element_indices: [0, 2],
+              mesh_id: "mesh:shared-domain",
+              mesh_part_ids: [],
+              mesh_revision: 41,
+              node_indices: [0, 1, 2, 3],
+              region_id: "film:core",
+              source: "geometry_projection",
+            },
+          ],
+          mesh_id: "mesh:shared-domain",
+          mesh_revision: 41,
+          unresolved_region_ids: ["film:csg"],
+        });
+      },
+    });
+
+    const list = await api.data.meshRegionMemberships();
+
+    expect(list.memberships[0].region_id).toBe("film:core");
+    expect(list.unresolved_region_ids).toEqual(["film:csg"]);
+    expect(requests).toEqual([
+      {
+        body: null,
+        method: "GET",
+        url: "http://127.0.0.1:8765/v2/sessions/current/data/mesh-region-memberships",
+      },
+    ]);
+  });
+
   it("commits object region and coupling writes through model transactions", async () => {
     const requests: Array<{ body: unknown; method: string | undefined; url: string }> = [];
     const api = new ControlRoomApi({

@@ -15,11 +15,18 @@ import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectio
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { FormField } from "../primitives/FormField";
 import {
+  initialInspectorDraftState,
+  resolveInspectorDraftState,
+  updateInspectorDraftState,
+  type InspectorDraftState,
+} from "./inspectorDraftState";
+import {
   buildObjectRegionPatch,
   clampObjectRegionDraftShapeToOwnerBounds,
   defaultMaterialOverrideDraft,
   formatRegionPhysicalScalar,
   objectRegionDraftFromModel,
+  objectRegionDraftIdentityKey,
   objectRegionDraftKey,
   parseRegionPhysicalScalar,
   resolveRegionCouplingDependencies,
@@ -42,11 +49,6 @@ import { ObjectRegionOverviewPanel as ObjectRegionOverviewPanelImpl } from "./re
 import { ObjectRegionTexturePanel as ObjectRegionTexturePanelImpl } from "./region/ObjectRegionTexturePanel";
 import { ObjectRegionVisualizationPanel as ObjectRegionVisualizationPanelImpl } from "./region/ObjectRegionVisualizationPanel";
 import type { RegionSubPanelProps } from "./region/shared";
-
-interface DraftState {
-  draft: ObjectRegionDraft;
-  key: string;
-}
 
 type Feedback =
   | {
@@ -82,9 +84,9 @@ export function PhysicalScalarField({
       type="text"
       unit={unit}
       value={displayValue}
-      aria-invalid={invalid || undefined}
       disabled={disabled}
-      hint={invalid ? "Enter a valid SI value" : undefined}
+      error={invalid ? "Enter a valid SI value" : undefined}
+      invalid={invalid}
       onBlur={() => {
         setEditing(false);
         setText(formatRegionPhysicalScalar(value));
@@ -141,13 +143,25 @@ export function ObjectRegionsPanel({ selection }: InspectorPanelProps) {
 
   const baseDraft = useMemo(() => objectRegionDraftFromModel(model), [model]);
   const draftKey = objectRegionDraftKey(model);
-  const [draftState, setDraftState] = useState<DraftState>({
-    draft: baseDraft,
-    key: draftKey,
-  });
+  const draftIdentityKey = objectRegionDraftIdentityKey(model);
+  const [draftState, setDraftState] = useState<
+    InspectorDraftState<ObjectRegionDraft>
+  >(() =>
+    initialInspectorDraftState({
+      baseDraft,
+      baseKey: draftKey,
+      identityKey: draftIdentityKey,
+    }),
+  );
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [pending, setPending] = useState(false);
-  const draft = draftState.key === draftKey ? draftState.draft : baseDraft;
+  const { draft } = resolveInspectorDraftState({
+    baseDraft,
+    baseKey: draftKey,
+    identityKey: draftIdentityKey,
+    isDirty: () => true,
+    state: draftState,
+  });
 
   const canWriteRegion =
     model.mode === "committed" && model.source === "authored_object_region";
@@ -162,13 +176,16 @@ export function ObjectRegionsPanel({ selection }: InspectorPanelProps) {
   );
 
   function updateDraft(patch: Partial<ObjectRegionDraft>): void {
-    setDraftState((current) => ({
-      draft: {
-        ...(current.key === draftKey ? current.draft : baseDraft),
-        ...patch,
-      },
-      key: draftKey,
-    }));
+    setDraftState(
+      updateInspectorDraftState({
+        baseDraft,
+        baseKey: draftKey,
+        currentDraft: draft,
+        identityKey: draftIdentityKey,
+        isDirty: () => true,
+        patch,
+      }),
+    );
   }
 
   function updateShape(patch: Partial<RegionShapeDraft>): void {
@@ -396,7 +413,13 @@ export function ObjectRegionsPanel({ selection }: InspectorPanelProps) {
     duplicateRegion,
     deleteRegion,
     revert: () => {
-      setDraftState({ draft: baseDraft, key: draftKey });
+      setDraftState(
+        initialInspectorDraftState({
+          baseDraft,
+          baseKey: draftKey,
+          identityKey: draftIdentityKey,
+        }),
+      );
       setFeedback(null);
     },
     feedback,

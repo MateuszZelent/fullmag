@@ -628,6 +628,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/data/mesh-region-memberships": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_mesh_region_memberships"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/data/quantities": {
         parameters: {
             query?: never;
@@ -4003,6 +4019,13 @@ export interface components {
             /** Format: int64 */
             revision: number;
         };
+        MeshRegionMembershipListResource: {
+            memberships: components["schemas"]["MeshRegionMembershipResource"][];
+            mesh_id: string;
+            /** Format: int64 */
+            mesh_revision: number;
+            unresolved_region_ids?: string[];
+        };
         MeshRegionMembershipResource: {
             boundary_face_indices: number[];
             element_indices: number[];
@@ -6624,7 +6647,10 @@ export interface operations {
     };
     data_get_sessions_current_data_fields_quantity_id_meta: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Optional component projection used for statistics (`x`, `y`, `z`, `magnitude`, `full`). */
+                component?: string | null;
+            };
             header?: never;
             path: {
                 /** @description Quantity identifier */
@@ -7580,6 +7606,33 @@ export interface operations {
                 };
             };
             /** @description No active mesh or membership for the region */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_mesh_region_memberships: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Available realized-region memberships for enabled authored object regions in the current FEM mesh */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeshRegionMembershipListResource"];
+                };
+            };
+            /** @description No active mesh or scene document */
             404: {
                 headers: {
                     [name: string]: unknown;

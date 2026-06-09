@@ -6,6 +6,7 @@ import {
   buildObjectMeshPolicyReplaceRequest,
   defaultObjectMeshPolicyResource,
   draftFromObjectMeshPolicyResource,
+  draftIdentityKeyForObjectMeshPolicyResource,
   draftKeyForObjectMeshPolicyResource,
   formatObjectMeshPolicyConfig,
   objectMeshPolicyDraftDirty,
@@ -104,6 +105,9 @@ describe("ObjectMeshPolicyPanelModel", () => {
     });
     expect(draftKeyForObjectMeshPolicyResource("free-layer", present)).toContain(
       "free-layer:7:",
+    );
+    expect(draftIdentityKeyForObjectMeshPolicyResource("free-layer")).toBe(
+      "free-layer",
     );
   });
 

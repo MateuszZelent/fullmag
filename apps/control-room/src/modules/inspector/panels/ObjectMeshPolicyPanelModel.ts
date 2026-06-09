@@ -209,6 +209,12 @@ export function draftKeyForObjectMeshPolicyResource(
   ].join(":");
 }
 
+export function draftIdentityKeyForObjectMeshPolicyResource(
+  objectId: string | null | undefined,
+): string {
+  return objectId ?? "";
+}
+
 export function objectMeshPolicyDraftDirty(
   draft: ObjectMeshPolicyDraft,
   baseDraft: ObjectMeshPolicyDraft,

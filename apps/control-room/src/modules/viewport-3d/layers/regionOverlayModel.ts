@@ -95,7 +95,9 @@ type RegionMeshOverlaySelectionModel =
   | (RegionOverlayBaseModel & { meshPartIds: readonly string[] });
 
 export interface RegionMeshOverlayOwnerPart {
+  boundary_face_indices?: readonly number[] | null;
   element_count?: number | null;
+  element_indices?: readonly number[] | null;
   element_start?: number | null;
   id?: string | null;
   node_count?: number | null;
@@ -478,6 +480,16 @@ function elementIndicesForPart(
   topology: DecodedTopology,
 ): number[] {
   const topologyElementCount = Math.floor(topology.indices.length / 4);
+  if (part.element_indices?.length) {
+    const elements = new Set<number>();
+    for (const index of part.element_indices) {
+      if (Number.isInteger(index) && index >= 0 && index < topologyElementCount) {
+        elements.add(index);
+      }
+    }
+    return [...elements].sort((left, right) => left - right);
+  }
+
   const elementStart = Math.max(0, Math.floor(part.element_start ?? 0));
   const elementCount = Math.max(0, Math.floor(part.element_count ?? 0));
   if (elementCount > 0 && elementStart < topologyElementCount) {

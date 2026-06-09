@@ -72,6 +72,30 @@ export function materialParametersDraftKey(
   ].join(":");
 }
 
+export function magneticParametersDraftDirty(
+  draft: MagneticParametersDraft,
+  baseDraft: MagneticParametersDraft,
+): boolean {
+  return (
+    draft.materialRef !== baseDraft.materialRef ||
+    draft.materialName !== baseDraft.materialName ||
+    numericTextDirty(draft.ms, baseDraft.ms) ||
+    numericTextDirty(draft.aex, baseDraft.aex) ||
+    numericTextDirty(draft.alpha, baseDraft.alpha) ||
+    numericTextDirty(draft.dind, baseDraft.dind) ||
+    numericTextDirty(draft.dbulk, baseDraft.dbulk)
+  );
+}
+
+function numericTextDirty(value: string, baseValue: string): boolean {
+  const parsed = Number(value);
+  const baseParsed = Number(baseValue);
+  if (Number.isFinite(parsed) && Number.isFinite(baseParsed)) {
+    return parsed !== baseParsed;
+  }
+  return value.trim() !== baseValue.trim();
+}
+
 export function buildMaterialParametersPatch(
   draft: MagneticParametersDraft,
 ): { error: string } | { patch: MaterialPatchRequest } {

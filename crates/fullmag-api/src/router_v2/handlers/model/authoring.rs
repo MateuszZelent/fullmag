@@ -2867,7 +2867,6 @@ fn apply_patch_object_material_fields_transaction(
         }
     }
     object.material_parameter_fields = fields;
-    mark_object_mesh_dirty(object);
     Ok(())
 }
 

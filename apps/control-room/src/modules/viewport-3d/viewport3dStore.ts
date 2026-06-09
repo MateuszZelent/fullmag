@@ -17,6 +17,7 @@ export interface Viewport3DCameraState {
 }
 
 export interface Viewport3DCommandState {
+  activeScalarColorbarLegend: Viewport3DScalarColorbarLegend | null;
   camera: Viewport3DCameraState;
   captureReturnProfileId: Viewport3DVisualProfileId | null;
   captureRevision: number;
@@ -34,6 +35,13 @@ export type Viewport3DDimensionFrameMode = "off" | "floor" | "cage";
 export type Viewport3DFdmTopographyComponent = "magnitude" | "x" | "y" | "z";
 export type Viewport3DRotationMode = "camera" | "object";
 export type Viewport3DScaleUnitMode = "auto" | "nm" | "um" | "mm" | "m";
+
+export interface Viewport3DScalarColorbarLegend {
+  label: string;
+  maxLabel: string;
+  minLabel: string;
+  paletteGradient: string;
+}
 
 interface Viewport3DWidgetState {
   cameraDialogOpen: boolean;
@@ -64,6 +72,7 @@ export const DEFAULT_VIEWPORT_3D_CAMERA_STATE: Viewport3DCameraState = {
 };
 
 const DEFAULT_VIEWPORT_3D_STATE: Viewport3DCommandState = {
+  activeScalarColorbarLegend: null,
   camera: {
     ...DEFAULT_VIEWPORT_3D_CAMERA_STATE,
   },
@@ -146,6 +155,23 @@ class Viewport3DStore {
 
   resetForTest(): void {
     this.snapshot = DEFAULT_VIEWPORT_3D_STATE;
+    this.notify();
+  }
+
+  getActiveScalarColorbarLegend(): Viewport3DScalarColorbarLegend | null {
+    return this.snapshot.activeScalarColorbarLegend;
+  }
+
+  setActiveScalarColorbarLegend(
+    legend: Viewport3DScalarColorbarLegend | null,
+  ): void {
+    if (sameViewport3DScalarColorbarLegend(this.snapshot.activeScalarColorbarLegend, legend)) {
+      return;
+    }
+    this.snapshot = {
+      ...this.snapshot,
+      activeScalarColorbarLegend: legend,
+    };
     this.notify();
   }
 
@@ -445,6 +471,28 @@ export function useViewport3DCommandState(): Viewport3DCommandState {
     (onStoreChange) => viewport3dStore.subscribe(onStoreChange),
     () => viewport3dStore.getSnapshot(),
     () => viewport3dStore.getSnapshot(),
+  );
+}
+
+export function useViewport3DActiveScalarColorbarLegend(): Viewport3DScalarColorbarLegend | null {
+  return useSyncExternalStore(
+    (onStoreChange) => viewport3dStore.subscribe(onStoreChange),
+    () => viewport3dStore.getActiveScalarColorbarLegend(),
+    () => viewport3dStore.getActiveScalarColorbarLegend(),
+  );
+}
+
+function sameViewport3DScalarColorbarLegend(
+  left: Viewport3DScalarColorbarLegend | null,
+  right: Viewport3DScalarColorbarLegend | null,
+): boolean {
+  if (left === right) return true;
+  if (!left || !right) return left === right;
+  return (
+    left.label === right.label &&
+    left.maxLabel === right.maxLabel &&
+    left.minLabel === right.minLabel &&
+    left.paletteGradient === right.paletteGradient
   );
 }
 

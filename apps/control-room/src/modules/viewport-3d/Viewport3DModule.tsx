@@ -538,6 +538,13 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     range: activeScalarColors?.range ?? null,
     unit: quantityUnitForColorbar(quantityId),
   });
+  useEffect(() => {
+    viewport3dStore.setActiveScalarColorbarLegend(colorbarLegend);
+  }, [colorbarLegend]);
+  useEffect(
+    () => () => viewport3dStore.setActiveScalarColorbarLegend(null),
+    [],
+  );
   const onVisualizationFrameCommitted = useCallback((revision: number) => {
     sendVisualizationAck({
       effectiveRenderMode: visualizationEffectiveRenderMode,

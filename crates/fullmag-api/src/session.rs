@@ -964,6 +964,7 @@ pub(crate) fn apply_current_live_metadata(current: &mut SessionStateResponse, me
             let mut dind_field = None;
             let mut dbulk_field = None;
             let mut fdm_grid = None;
+            let mut sample_count = None;
 
             if let Some(backend_plan) = plan_val.get("backend_plan") {
                 let kind = backend_plan
@@ -977,18 +978,28 @@ pub(crate) fn apply_current_live_metadata(current: &mut SessionStateResponse, me
                             .and_then(|v| serde_json::from_value::<Vec<f64>>(v.clone()).ok())
                         {
                             ms_field = Some(val);
+                        } else if let Some(value) =
+                            finite_material_scalar(material, "saturation_magnetisation")
+                        {
+                            ms_field = Some(vec![value; 1]);
                         }
                         if let Some(val) = material
                             .get("a_field")
                             .and_then(|v| serde_json::from_value::<Vec<f64>>(v.clone()).ok())
                         {
                             a_field = Some(val);
+                        } else if let Some(value) =
+                            finite_material_scalar(material, "exchange_stiffness")
+                        {
+                            a_field = Some(vec![value; 1]);
                         }
                         if let Some(val) = material
                             .get("alpha_field")
                             .and_then(|v| serde_json::from_value::<Vec<f64>>(v.clone()).ok())
                         {
                             alpha_field = Some(val);
+                        } else if let Some(value) = finite_material_scalar(material, "damping") {
+                            alpha_field = Some(vec![value; 1]);
                         }
                     }
                     if let Some(val) = backend_plan
@@ -996,12 +1007,18 @@ pub(crate) fn apply_current_live_metadata(current: &mut SessionStateResponse, me
                         .and_then(|v| serde_json::from_value::<Vec<f64>>(v.clone()).ok())
                     {
                         dind_field = Some(val);
+                    } else if let Some(value) =
+                        finite_material_scalar(backend_plan, "interfacial_dmi")
+                    {
+                        dind_field = Some(vec![value; 1]);
                     }
                     if let Some(val) = backend_plan
                         .get("dbulk_field")
                         .and_then(|v| serde_json::from_value::<Vec<f64>>(v.clone()).ok())
                     {
                         dbulk_field = Some(val);
+                    } else if let Some(value) = finite_material_scalar(backend_plan, "bulk_dmi") {
+                        dbulk_field = Some(vec![value; 1]);
                     }
                     if let Some(grid) = backend_plan
                         .get("grid")
@@ -1009,6 +1026,7 @@ pub(crate) fn apply_current_live_metadata(current: &mut SessionStateResponse, me
                         .and_then(|c| serde_json::from_value::<[u32; 3]>(c.clone()).ok())
                     {
                         fdm_grid = Some(grid);
+                        sample_count = material_field_grid_sample_count(grid);
                     }
                 } else if kind == "fem" {
                     if let Some(material) = backend_plan.get("material") {
@@ -1017,18 +1035,28 @@ pub(crate) fn apply_current_live_metadata(current: &mut SessionStateResponse, me
                             .and_then(|v| serde_json::from_value::<Vec<f64>>(v.clone()).ok())
                         {
                             ms_field = Some(val);
+                        } else if let Some(value) =
+                            finite_material_scalar(material, "saturation_magnetisation")
+                        {
+                            ms_field = Some(vec![value; 1]);
                         }
                         if let Some(val) = material
                             .get("a_field")
                             .and_then(|v| serde_json::from_value::<Vec<f64>>(v.clone()).ok())
                         {
                             a_field = Some(val);
+                        } else if let Some(value) =
+                            finite_material_scalar(material, "exchange_stiffness")
+                        {
+                            a_field = Some(vec![value; 1]);
                         }
                         if let Some(val) = material
                             .get("alpha_field")
                             .and_then(|v| serde_json::from_value::<Vec<f64>>(v.clone()).ok())
                         {
                             alpha_field = Some(val);
+                        } else if let Some(value) = finite_material_scalar(material, "damping") {
+                            alpha_field = Some(vec![value; 1]);
                         }
                     }
                     if let Some(val) = backend_plan
@@ -1036,15 +1064,28 @@ pub(crate) fn apply_current_live_metadata(current: &mut SessionStateResponse, me
                         .and_then(|v| serde_json::from_value::<Vec<f64>>(v.clone()).ok())
                     {
                         dind_field = Some(val);
+                    } else if let Some(value) =
+                        finite_material_scalar(backend_plan, "interfacial_dmi")
+                    {
+                        dind_field = Some(vec![value; 1]);
                     }
                     if let Some(val) = backend_plan
                         .get("dbulk_field")
                         .and_then(|v| serde_json::from_value::<Vec<f64>>(v.clone()).ok())
                     {
                         dbulk_field = Some(val);
+                    } else if let Some(value) = finite_material_scalar(backend_plan, "bulk_dmi") {
+                        dbulk_field = Some(vec![value; 1]);
                     }
+                    sample_count = current.fem_mesh.as_ref().map(|mesh| mesh.nodes.len());
                 }
             }
+
+            expand_uniform_material_field(&mut ms_field, sample_count);
+            expand_uniform_material_field(&mut a_field, sample_count);
+            expand_uniform_material_field(&mut alpha_field, sample_count);
+            expand_uniform_material_field(&mut dind_field, sample_count);
+            expand_uniform_material_field(&mut dbulk_field, sample_count);
 
             if let Some(vals) = ms_field {
                 let val = if let Some(grid) = fdm_grid {
@@ -1115,6 +1156,54 @@ pub(crate) fn apply_current_live_metadata(current: &mut SessionStateResponse, me
     }
 }
 
+fn finite_material_scalar(value: &Value, key: &str) -> Option<f64> {
+    value
+        .get(key)
+        .and_then(Value::as_f64)
+        .filter(|value| value.is_finite())
+}
+
+fn material_field_grid_sample_count(grid: [u32; 3]) -> Option<usize> {
+    grid.into_iter().try_fold(1usize, |count, axis| {
+        let axis = usize::try_from(axis).ok()?;
+        count.checked_mul(axis)
+    })
+}
+
+fn expand_uniform_material_field(field: &mut Option<Vec<f64>>, sample_count: Option<usize>) {
+    let Some(sample_count) = sample_count.filter(|count| *count > 1) else {
+        return;
+    };
+    let Some(values) = field.as_mut() else {
+        return;
+    };
+    if values.len() != 1 {
+        return;
+    }
+    values.resize(sample_count, values[0]);
+}
+
+fn expand_uniform_material_latest_fields(latest_fields: &mut LatestFields, sample_count: usize) {
+    if sample_count <= 1 {
+        return;
+    }
+    for quantity in ["mat_ms", "mat_aex", "mat_alpha", "mat_dind", "mat_dbulk"] {
+        let Some(value) = latest_fields.get(quantity) else {
+            continue;
+        };
+        let values = flatten_json_field_values(value);
+        if values.len() != 1 {
+            continue;
+        }
+        latest_fields.insert(
+            quantity.to_string(),
+            json!({
+                "values": vec![values[0]; sample_count]
+            }),
+        );
+    }
+}
+
 fn finalize_current_live_apply(
     current: &mut SessionStateResponse,
     flags: CurrentLiveApplyFlags,
@@ -1137,6 +1226,9 @@ fn finalize_current_live_apply(
                     .as_ref()
                     .and_then(extract_fem_mesh_from_metadata)
             });
+    }
+    if let Some(node_count) = current.fem_mesh.as_ref().map(|mesh| mesh.nodes.len()) {
+        expand_uniform_material_latest_fields(&mut current.latest_fields, node_count);
     }
 
     if matches!(
@@ -1645,6 +1737,63 @@ mod tests {
         assert!(current.latest_fields.get("mat_dbulk").is_some());
         assert!(current.latest_fields.get("Ms").is_none());
         assert!(current.latest_fields.get("Aex").is_none());
+    }
+
+    #[test]
+    fn metadata_uniform_material_constants_publish_material_quantities() {
+        let mut current = default_current_live_state(&CurrentLiveSnapshotRequest {
+            session_id: "test-session".to_string(),
+            session: None,
+            session_status: None,
+            metadata: None,
+            mesh_workspace: None,
+            stage_execution: None,
+            run: None,
+            live_state: None,
+            latest_scalar_row: None,
+            latest_fields: None,
+            preview_fields: None,
+            clear_preview_cache: false,
+            engine_log: None,
+            solver_profile: None,
+            fem_mesh: None,
+        });
+
+        apply_current_live_metadata(
+            &mut current,
+            json!({
+                "execution_plan": {
+                    "backend_plan": {
+                        "kind": "fdm",
+                        "grid": { "cells": [2, 2, 1] },
+                        "material": {
+                            "saturation_magnetisation": 800000.0,
+                            "exchange_stiffness": 1.3e-11,
+                            "damping": 0.02
+                        }
+                    }
+                }
+            }),
+        );
+
+        let ms_values = current
+            .latest_fields
+            .get("mat_ms")
+            .map(flatten_json_field_values)
+            .expect("uniform Ms should be published as material quantity");
+        assert_eq!(ms_values, vec![800000.0; 4]);
+        let aex_values = current
+            .latest_fields
+            .get("mat_aex")
+            .map(flatten_json_field_values)
+            .expect("uniform Aex should be published as material quantity");
+        assert_eq!(aex_values, vec![1.3e-11; 4]);
+        let alpha_values = current
+            .latest_fields
+            .get("mat_alpha")
+            .map(flatten_json_field_values)
+            .expect("uniform alpha should be published as material quantity");
+        assert_eq!(alpha_values, vec![0.02; 4]);
     }
 
     #[test]

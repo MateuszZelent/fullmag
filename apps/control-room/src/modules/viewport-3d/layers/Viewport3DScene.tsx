@@ -102,7 +102,10 @@ import { FdmCuboidLayer, type FdmCuboidInstanceModel } from "./FdmCuboidLayer";
 import { Viewport3DLightingRig } from "./Viewport3DLightingRig";
 import { ClipPlaneFramePreviewLayer, ClipPlaneLayer } from "./ClipPlaneLayer";
 import type { ClipPlaneIntersectionMarkerBuffers } from "./clipPlaneModel";
-import type { RegionOverlayInput } from "./regionOverlayModel";
+import type {
+  RegionMeshOverlayOwnerPart,
+  RegionOverlayInput,
+} from "./regionOverlayModel";
 import {
   regionOverlayModeShowsAuthored,
   regionOverlayModeShowsRealized,
@@ -149,6 +152,7 @@ interface Viewport3DSceneProps {
   maxVectorGlyphs: number;
   meshQualityColors: ScalarColorBuffer | null;
   meshQualityOverlayVisible: boolean;
+  meshRegionOverlayParts: readonly RegionMeshOverlayOwnerPart[];
   meshRegionOverlays: readonly RegionOverlayInput[];
   meshSizeHighlightModel: Viewport3DMeshSizeHighlightModel | null;
   onCameraChange: (camera: Viewport3DCameraChange) => Promise<void> | void;
@@ -608,6 +612,7 @@ function Viewport3DModelLayerStack({
   maxVectorGlyphs,
   meshQualityColors,
   meshQualityOverlayVisible,
+  meshRegionOverlayParts,
   meshRegionOverlays,
   meshSizeHighlightModel,
   onInspectClear,
@@ -648,6 +653,7 @@ function Viewport3DModelLayerStack({
   | "maxVectorGlyphs"
   | "meshQualityColors"
   | "meshQualityOverlayVisible"
+  | "meshRegionOverlayParts"
   | "meshRegionOverlays"
   | "meshSizeHighlightModel"
   | "inspectEnabled"
@@ -755,7 +761,7 @@ function Viewport3DModelLayerStack({
       viewport3DOverlayLayersEnabledFromBrowserConfig() ? (
         <RegionMeshOverlayLayer
           getRegionSettings={getRegionSettings}
-          magneticParts={femDomain.magneticParts}
+          magneticParts={meshRegionOverlayParts}
           onSelectRegion={onSelectRegion}
           regions={meshRegionOverlays}
           selectedObjectId={selectedObjectId}
@@ -888,6 +894,7 @@ export function Viewport3DScene({
   maxVectorGlyphs,
   meshQualityColors,
   meshQualityOverlayVisible,
+  meshRegionOverlayParts,
   meshRegionOverlays,
   meshSizeHighlightModel,
   onCameraChange,
@@ -1052,6 +1059,7 @@ export function Viewport3DScene({
         maxVectorGlyphs={maxVectorGlyphs}
         meshQualityColors={meshQualityColors}
         meshQualityOverlayVisible={meshQualityOverlayVisible}
+        meshRegionOverlayParts={meshRegionOverlayParts}
         meshRegionOverlays={meshRegionOverlays}
         meshSizeHighlightModel={meshSizeHighlightModel}
         onInspectClear={onInspectClear}

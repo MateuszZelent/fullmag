@@ -188,6 +188,33 @@ describe("geometry lifecycle command contributions", () => {
     ).toBe(false);
   });
 
+  it("focuses primitive display explicitly for the selected object", async () => {
+    const registry = registryWithLifecycleCommands();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    const visualization = {
+      patchTarget: vi.fn(),
+    };
+    selectBox(selection);
+
+    const result = await registry.execute("geometry.focus-primitive", {
+      selection,
+      source: "test",
+      visualization: visualization as never,
+    });
+
+    expect(result).toEqual({ status: "completed" });
+    expect(visualization.patchTarget).toHaveBeenCalledWith(
+      { id: "box", kind: "object", label: "Box" },
+      {
+        pointsVisible: false,
+        primitiveVisible: true,
+        renderMode: "surface+edges",
+        shaderVisible: true,
+        wireframeVisible: true,
+      },
+    );
+  });
+
   it("submits quality-threshold refinement as a shared-domain mesh build", async () => {
     const registry = registryWithLifecycleCommands();
     const bus = new EventBus<KernelEventMap>();

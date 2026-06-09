@@ -40,6 +40,126 @@ export const SURFACE_COLOR_SOURCE_ITEMS: Array<{
   { value: "colormap", label: "Colormap" },
 ];
 
+export const SCALAR_COLOR_PALETTE_ITEMS: Array<{
+  label: string;
+  value: string;
+}> = [
+  { value: "viridis", label: "Viridis" },
+  { value: "inferno", label: "Inferno" },
+  { value: "magma", label: "Magma" },
+  { value: "coolwarm", label: "Coolwarm" },
+  { value: "jet", label: "Jet" },
+];
+
+export function resolveSurfaceColorSourceItems(
+  activeQuantityId: string,
+): Array<{ label: string; value: SurfaceColorSource }> {
+  return isScalarSpatialQuantityId(resolveCanonicalQuantityId(activeQuantityId))
+    ? SURFACE_COLOR_SOURCE_ITEMS.filter((item) => item.value === "colormap")
+    : SURFACE_COLOR_SOURCE_ITEMS;
+}
+
+export function normalizeScalarColorPalette(
+  value: string | null | undefined,
+): string {
+  const candidate = typeof value === "string" ? value : "";
+  return SCALAR_COLOR_PALETTE_ITEMS.some((item) => item.value === candidate)
+    ? candidate
+    : "viridis";
+}
+
+export function scalarColorPalettePatch(
+  value: string,
+): VisualizationTargetPatch {
+  return {
+    scalarColorPalette: normalizeScalarColorPalette(value),
+  };
+}
+
+export function scalarColorPaletteGradientCss(
+  value: string | null | undefined,
+): string {
+  const stops = SCALAR_COLOR_PALETTE_STOPS[normalizeScalarColorPalette(value)];
+  return `linear-gradient(90deg, ${stops
+    .map(
+      ([red, green, blue]) =>
+        `rgb(${Math.round(red * 255)}, ${Math.round(green * 255)}, ${Math.round(blue * 255)})`,
+    )
+    .join(", ")})`;
+}
+
+export function formatScalarColorbarValue(value: number): string {
+  return Number.isFinite(value) ? Number(value.toPrecision(4)).toString() : "unknown";
+}
+
+export function surfaceColorSourceFieldMetaComponent(
+  surfaceColorSource: SurfaceColorSource,
+  activeQuantityId: string,
+): string | null | undefined {
+  switch (surfaceColorSource) {
+    case "component_x":
+      return "x";
+    case "component_y":
+      return "y";
+    case "component_z":
+      return "z";
+    case "magnitude":
+      return "magnitude";
+    case "colormap":
+      return isScalarSpatialQuantityId(resolveCanonicalQuantityId(activeQuantityId))
+        ? null
+        : "magnitude";
+    case "orientation":
+    case "solid":
+      return undefined;
+  }
+}
+
+export function shouldShowSurfaceFieldColorbar(
+  surfaceColorSource: SurfaceColorSource,
+  activeQuantityId: string,
+): boolean {
+  return (
+    surfaceColorSourceFieldMetaComponent(surfaceColorSource, activeQuantityId) !==
+    undefined
+  );
+}
+
+const SCALAR_COLOR_PALETTE_STOPS: Record<string, [number, number, number][]> = {
+  coolwarm: [
+    [0x3b / 255, 0x4c / 255, 0xc0 / 255],
+    [0xdd / 255, 0xdd / 255, 0xdd / 255],
+    [0xb4 / 255, 0x04 / 255, 0x26 / 255],
+  ],
+  inferno: [
+    [0x00 / 255, 0x00 / 255, 0x04 / 255],
+    [0x42 / 255, 0x0a / 255, 0x68 / 255],
+    [0x93 / 255, 0x2b / 255, 0x5d / 255],
+    [0xdd / 255, 0x51 / 255, 0x3a / 255],
+    [0xfc / 255, 0xff / 255, 0xa4 / 255],
+  ],
+  jet: [
+    [0x00 / 255, 0x00 / 255, 0x7f / 255],
+    [0x00 / 255, 0x7f / 255, 0xff / 255],
+    [0x7f / 255, 0xff / 255, 0x7f / 255],
+    [0xff / 255, 0x7f / 255, 0x00 / 255],
+    [0x7f / 255, 0x00 / 255, 0x00 / 255],
+  ],
+  magma: [
+    [0x00 / 255, 0x00 / 255, 0x04 / 255],
+    [0x3b / 255, 0x0f / 255, 0x70 / 255],
+    [0x8c / 255, 0x29 / 255, 0x80 / 255],
+    [0xde / 255, 0x49 / 255, 0x68 / 255],
+    [0xfc / 255, 0xfd / 255, 0xbf / 255],
+  ],
+  viridis: [
+    [0x44 / 255, 0x01 / 255, 0x54 / 255],
+    [0x31 / 255, 0x68 / 255, 0x8e / 255],
+    [0x35 / 255, 0xb7 / 255, 0x79 / 255],
+    [0xfd / 255, 0xe7 / 255, 0x25 / 255],
+  ],
+};
+
 export function resolveObjectVisualizationPanelTopologyFreshness({
   manifest,
   scene,
@@ -55,6 +175,13 @@ export function resolveObjectVisualizationPanelTopologyFreshness({
   return scene && manifest
     ? resolveVisualizationTopologyFreshness(scene, manifest)
     : null;
+}
+
+export function shouldShowPrimitiveDisplayToggle(
+  targetKind: VisualizationTargetKind,
+  topologyFreshness: VisualizationTopologyFreshness | null,
+): boolean {
+  return targetKind === "object" && topologyFreshness !== "current";
 }
 
 export const VISUALIZATION_COLOR_MODE_ITEMS: Array<{

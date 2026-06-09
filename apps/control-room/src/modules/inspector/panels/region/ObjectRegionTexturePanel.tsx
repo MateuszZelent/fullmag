@@ -26,10 +26,18 @@ import {
 import {
   buildObjectMagneticTextureAssetDraft,
   objectMagneticTextureDraftFromModel,
+  objectMagneticTextureDraftDirty,
+  objectMagneticTextureDraftIdentityKey,
   objectMagneticTextureDraftKey,
   resolveObjectMagneticTexturePanelModel,
   type ObjectMagneticTextureDraft,
 } from "../ObjectMagneticTexturePanelModel";
+import {
+  initialInspectorDraftState,
+  resolveInspectorDraftState,
+  updateInspectorDraftState,
+  type InspectorDraftState,
+} from "../inspectorDraftState";
 import {
   MagneticTextureAssignmentSection,
   MagneticTexturePresetParametersSection,
@@ -79,23 +87,37 @@ export function ObjectRegionTexturePanel({
     [model],
   );
   const draftKey = objectMagneticTextureDraftKey(model);
-  const [draftState, setDraftState] = useState({
-    draft: baseDraft,
-    key: draftKey,
-  });
+  const draftIdentityKey = objectMagneticTextureDraftIdentityKey(model);
+  const [draftState, setDraftState] = useState<
+    InspectorDraftState<ObjectMagneticTextureDraft>
+  >(() =>
+    initialInspectorDraftState({
+      baseDraft,
+      baseKey: draftKey,
+      identityKey: draftIdentityKey,
+    }),
+  );
   const [feedback, setFeedback] = useState<MagneticTextureFeedback>(null);
   const [pending, setPending] = useState(false);
-  const draft = draftState.key === draftKey ? draftState.draft : baseDraft;
-  const dirty = JSON.stringify(draft) !== JSON.stringify(baseDraft);
+  const { dirty, draft } = resolveInspectorDraftState({
+    baseDraft,
+    baseKey: draftKey,
+    identityKey: draftIdentityKey,
+    isDirty: objectMagneticTextureDraftDirty,
+    state: draftState,
+  });
 
   function updateDraft(patch: Partial<ObjectMagneticTextureDraft>): void {
-    setDraftState((current) => ({
-      draft: {
-        ...(current.key === draftKey ? current.draft : baseDraft),
-        ...patch,
-      },
-      key: draftKey,
-    }));
+    setDraftState(
+      updateInspectorDraftState({
+        baseDraft,
+        baseKey: draftKey,
+        currentDraft: draft,
+        identityKey: draftIdentityKey,
+        isDirty: objectMagneticTextureDraftDirty,
+        patch,
+      }),
+    );
   }
 
   function invalidateTextureResources(revision: number): void {
@@ -132,8 +154,10 @@ export function ObjectRegionTexturePanel({
       invalidateTextureResources(revision);
       const syncWarning = await syncAuthoringScriptBestEffort(api);
       setDraftState({
+        baseKey: draftKey,
+        dirty: false,
         draft: { ...draft, magnetizationRef: asset.id },
-        key: draftKey,
+        identityKey: draftIdentityKey,
       });
       setFeedback({
         kind: "success",
@@ -169,8 +193,10 @@ export function ObjectRegionTexturePanel({
       invalidateTextureResources(revision);
       const syncWarning = await syncAuthoringScriptBestEffort(api);
       setDraftState({
+        baseKey: draftKey,
+        dirty: false,
         draft: { ...baseDraft, magnetizationRef: "" },
-        key: draftKey,
+        identityKey: draftIdentityKey,
       });
       setFeedback({
         kind: "success",
@@ -232,7 +258,13 @@ export function ObjectRegionTexturePanel({
         onClear={() => void clearTexture()}
         onActivateLoad={() => void activateLoadTextureNode()}
         onRevert={() => {
-          setDraftState({ draft: baseDraft, key: draftKey });
+          setDraftState(
+            initialInspectorDraftState({
+              baseDraft,
+              baseKey: draftKey,
+              identityKey: draftIdentityKey,
+            }),
+          );
           setFeedback(null);
         }}
         onSave={() => void saveTexture()}

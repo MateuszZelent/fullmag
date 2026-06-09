@@ -1,8 +1,10 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 
 import {
+  DATA_MESH_REGION_MEMBERSHIP_PATH,
+  DATA_MESH_REGION_MEMBERSHIPS_PATH,
   MESHING_CAPABILITIES_PATH,
   MESHING_BUILDS_PATH,
   MESHING_BUILDS_CURRENT_PATH,
@@ -58,6 +60,8 @@ import type {
   MeshObjectSizeFieldResource,
   MeshQualityGatesResource,
   MeshRealizedSizeFieldsResource,
+  MeshRegionMembershipListResource,
+  MeshRegionMembershipResource,
   MeshSemanticsResource,
   MeshSharedDomainConfigResource,
   MeshSharedDomainManifestResource,
@@ -128,6 +132,20 @@ export const MESH_SHARED_DOMAIN_QUALITY_GATES_RESOURCE_KEY =
   MESHING_SHARED_DOMAIN_QUALITY_GATES_PATH;
 export const MESH_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_RESOURCE_KEY =
   MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH;
+export const meshRegionMembershipResourceKey = (regionId: string) =>
+  `${DATA_MESH_REGION_MEMBERSHIP_PATH}:${encodeURIComponent(regionId)}`;
+export const resolveMeshRegionMembershipsResourceKey = (
+  regionIds: readonly string[],
+) => {
+  const encodedIds = normalizeMeshRegionMembershipIds(regionIds).map((regionId) =>
+    encodeURIComponent(regionId),
+  );
+  return `${DATA_MESH_REGION_MEMBERSHIP_PATH}:batch:${
+    encodedIds.length > 0 ? encodedIds.join("|") : "none"
+  }`;
+};
+export const MESH_REGION_MEMBERSHIPS_RESOURCE_KEY =
+  DATA_MESH_REGION_MEMBERSHIPS_PATH;
 export const MODEL_REGIONS_RESOURCE_KEY = MODEL_REGIONS_PATH;
 export const MODEL_REALIZED_REGIONS_RESOURCE_KEY =
   MODEL_REALIZED_REGIONS_PATH;
@@ -226,6 +244,44 @@ export function resolveMeshSharedDomainManifestRevision(
     revision,
     manifest?.source_scene_revision ?? "unknown",
     manifest?.geometry_realization_revision ?? "unknown",
+  ].join(":");
+}
+
+export function resolveMeshRegionMembershipRevision(
+  membership: MeshRegionMembershipResource | null | undefined,
+): ResourceRevision | null {
+  if (!membership) return null;
+  return [
+    membership.mesh_id,
+    membership.mesh_revision,
+    membership.region_id,
+    membership.source,
+  ].join(":");
+}
+
+export function resolveMeshRegionMembershipsRevision(
+  memberships: readonly MeshRegionMembershipResource[] | null | undefined,
+): ResourceRevision | null {
+  if (!memberships || memberships.length === 0) return null;
+  return memberships
+    .map(resolveMeshRegionMembershipRevision)
+    .filter((revision): revision is ResourceRevision => revision !== null)
+    .sort()
+    .join("|");
+}
+
+export function resolveMeshRegionMembershipListRevision(
+  resource: MeshRegionMembershipListResource | null | undefined,
+): ResourceRevision | null {
+  if (!resource) return null;
+  const membershipsRevision = resolveMeshRegionMembershipsRevision(
+    resource.memberships,
+  );
+  return [
+    resource.mesh_id,
+    resource.mesh_revision,
+    membershipsRevision ?? "empty",
+    [...(resource.unresolved_region_ids ?? [])].sort().join(","),
   ].join(":");
 }
 
@@ -663,6 +719,66 @@ export function useMeshSharedDomainRealizedSizeFieldsResource(
     resolveRevision: resolveJsonResourceRevision,
     resourceKey: MESH_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_RESOURCE_KEY,
   });
+}
+
+export function useMeshRegionMembershipResource(
+  regionId: string | null | undefined,
+  options: ResourceHookOptions = {},
+) {
+  const { api } = useKernel();
+  const enabled = options.enabled !== false && Boolean(regionId);
+  const resourceKey = regionId
+    ? meshRegionMembershipResourceKey(regionId)
+    : `${DATA_MESH_REGION_MEMBERSHIP_PATH}:none`;
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      regionId
+        ? api.data.meshRegionMembership(regionId, { signal })
+        : Promise.resolve(null),
+    [api, regionId],
+  );
+
+  return useResource<MeshRegionMembershipResource | null>({
+    enabled,
+    load,
+    resolveRevision: resolveMeshRegionMembershipRevision,
+    resourceKey,
+  });
+}
+
+export function useMeshRegionMembershipsResource(
+  regionIds: readonly string[],
+  options: ResourceHookOptions = {},
+) {
+  const { api } = useKernel();
+  const normalizedRegionIds = useMemo(
+    () => normalizeMeshRegionMembershipIds(regionIds),
+    [regionIds],
+  );
+  const enabled = options.enabled !== false && normalizedRegionIds.length > 0;
+  const resourceKey = resolveMeshRegionMembershipsResourceKey(normalizedRegionIds);
+  const load = useCallback(
+    async ({ signal }: { signal: AbortSignal }) => {
+      if (normalizedRegionIds.length === 0) return [];
+      const regionIdSet = new Set(normalizedRegionIds);
+      const memberships = await api.data.meshRegionMemberships({ signal });
+      return memberships.memberships.filter((membership) =>
+        regionIdSet.has(membership.region_id),
+      );
+    },
+    [api, normalizedRegionIds],
+  );
+
+  return useResource<readonly MeshRegionMembershipResource[]>({
+    enabled,
+    load,
+    resolveRevision: resolveMeshRegionMembershipsRevision,
+    resourceKey,
+  });
+}
+
+function normalizeMeshRegionMembershipIds(regionIds: readonly string[]): string[] {
+  return [...new Set(regionIds.filter((regionId) => regionId.length > 0))].sort();
 }
 
 export function useMeshUniverseReportResource(
