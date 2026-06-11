@@ -26,10 +26,13 @@ import {
 
 import {
   buildTransportMessagePreview,
+  buildTransportTrafficSummary,
   formatTransportByteSize,
   formatTransportDuration,
+  formatTransportRate,
   formatTransportTimestamp,
   formatTransportTimestampSignature,
+  formatTransportWindow,
   type FooterLogSort,
   type FooterLogSortKey,
   serializeTransportEntry,
@@ -53,6 +56,10 @@ export function TransportLogTable({
     () => sortTransportEntries(entries, sort),
     [entries, sort],
   );
+  const trafficSummary = useMemo(
+    () => buildTransportTrafficSummary(entries),
+    [entries],
+  );
 
   if (entries.length === 0) {
     return (
@@ -64,6 +71,51 @@ export function TransportLogTable({
 
   return (
     <>
+      <div className="fm-footer-traffic" aria-label="Transport traffic summary">
+        <div className="fm-footer-traffic__metric">
+          <span>Window</span>
+          <strong>{formatTransportWindow(trafficSummary.windowMs)}</strong>
+        </div>
+        <div className="fm-footer-traffic__metric">
+          <span>Events</span>
+          <strong>{trafficSummary.totalCount}</strong>
+        </div>
+        <div className="fm-footer-traffic__metric">
+          <span>Rate</span>
+          <strong>
+            {formatTransportRate(trafficSummary.estimatedEventsPerMinute)}
+          </strong>
+        </div>
+        <div className="fm-footer-traffic__metric">
+          <span>TX / RX</span>
+          <strong>
+            {trafficSummary.txCount} / {trafficSummary.rxCount}
+          </strong>
+        </div>
+        <div className="fm-footer-traffic__metric">
+          <span>HTTP / WS / Perf</span>
+          <strong>
+            {trafficSummary.httpCount} / {trafficSummary.websocketCount} /{" "}
+            {trafficSummary.performanceCount}
+          </strong>
+        </div>
+        <div className="fm-footer-traffic__metric">
+          <span>Payload</span>
+          <strong>{formatTransportByteSize(trafficSummary.byteLength)}</strong>
+        </div>
+        {trafficSummary.topEndpoints.length > 0 ? (
+          <ol className="fm-footer-traffic__top" aria-label="Top transport targets">
+            {trafficSummary.topEndpoints.map((endpoint) => (
+              <li key={endpoint.label}>
+                <span title={endpoint.label}>{endpoint.label}</span>
+                <strong>
+                  {endpoint.count}x · {formatTransportByteSize(endpoint.byteLength)}
+                </strong>
+              </li>
+            ))}
+          </ol>
+        ) : null}
+      </div>
       <div className="fm-footer-log" role="table" aria-label="Transport logs">
         <div
           className="fm-footer-log__row fm-footer-log__row--header"
@@ -212,57 +264,75 @@ function TransportLogDetailsDialog({
   entry: RequestDiagnosticEntry | null;
   onOpenChange: (open: boolean) => void;
 }) {
-  const correlation = entry ? resolveTransportCorrelation(entry) : null;
-  const commandDetail = useCommandDetailResource(correlation?.commandId);
-
   return (
     <Dialog open={entry !== null} onOpenChange={onOpenChange}>
-      {entry && correlation ? (
-        <DialogContent className="fm-footer-log-dialog" aria-describedby="fm-transport-log-dialog-description">
-          <DialogHeader>
-            <DialogTitle>{buildTransportMessagePreview(entry)}</DialogTitle>
-            <DialogDescription id="fm-transport-log-dialog-description">
-              {formatTransportTimestampSignature(entry.timestampMs)}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="fm-dialog__body">
-            <dl className="fm-dialog__details">
-              <DetailRow label="Request ID" value={entry.requestId} />
-              <DetailRow label="Resource" value={correlation.resourceKey} />
-              <DetailRow label="Command ID" value={correlation.commandId ?? "—"} />
-              <DetailRow label="Stage ID" value={correlation.stageId ?? "—"} />
-              <DetailRow label="Channel" value={entry.channel.toUpperCase()} />
-              <DetailRow label="Direction" value={entry.direction.toUpperCase()} />
-              <DetailRow label="Method" value={entry.method} />
-              <DetailRow label="Target" value={summarizeTransportPath(entry)} />
-              <DetailRow label="Status" value={formatStatus(entry)} />
-              <DetailRow
-                label="Payload"
-                value={formatTransportByteSize(entry.byteLength)}
-              />
-              <DetailRow
-                label="Latency"
-                value={formatTransportDuration(entry.durationMs)}
-              />
-              <DetailRow label="Content Type" value={entry.contentType ?? "—"} />
-              <DetailRow label="Detail" value={entry.detail ?? "—"} />
-            </dl>
-            <pre className="fm-footer-log-dialog__raw">
-              {serializeTransportEntry(entry)}
-            </pre>
-            <CommandCorrelationPanel
-              commandId={correlation.commandId}
-              detail={commandDetail}
-            />
-          </div>
-          <DialogFooter>
-            <Button type="button" variant="secondary" onClick={() => onOpenChange(false)}>
-              Close
-            </Button>
-          </DialogFooter>
-        </DialogContent>
+      {entry ? (
+        <TransportLogDetailsDialogContent
+          entry={entry}
+          onClose={() => onOpenChange(false)}
+        />
       ) : null}
     </Dialog>
+  );
+}
+
+function TransportLogDetailsDialogContent({
+  entry,
+  onClose,
+}: {
+  entry: RequestDiagnosticEntry;
+  onClose: () => void;
+}) {
+  const correlation = resolveTransportCorrelation(entry);
+  const commandDetail = useCommandDetailResource(correlation.commandId);
+
+  return (
+    <DialogContent
+      className="fm-footer-log-dialog"
+      aria-describedby="fm-transport-log-dialog-description"
+    >
+      <DialogHeader>
+        <DialogTitle>{buildTransportMessagePreview(entry)}</DialogTitle>
+        <DialogDescription id="fm-transport-log-dialog-description">
+          {formatTransportTimestampSignature(entry.timestampMs)}
+        </DialogDescription>
+      </DialogHeader>
+      <div className="fm-dialog__body">
+        <dl className="fm-dialog__details">
+          <DetailRow label="Request ID" value={entry.requestId} />
+          <DetailRow label="Resource" value={correlation.resourceKey} />
+          <DetailRow label="Command ID" value={correlation.commandId ?? "—"} />
+          <DetailRow label="Stage ID" value={correlation.stageId ?? "—"} />
+          <DetailRow label="Channel" value={entry.channel.toUpperCase()} />
+          <DetailRow label="Direction" value={entry.direction.toUpperCase()} />
+          <DetailRow label="Method" value={entry.method} />
+          <DetailRow label="Target" value={summarizeTransportPath(entry)} />
+          <DetailRow label="Status" value={formatStatus(entry)} />
+          <DetailRow
+            label="Payload"
+            value={formatTransportByteSize(entry.byteLength)}
+          />
+          <DetailRow
+            label="Latency"
+            value={formatTransportDuration(entry.durationMs)}
+          />
+          <DetailRow label="Content Type" value={entry.contentType ?? "—"} />
+          <DetailRow label="Detail" value={entry.detail ?? "—"} />
+        </dl>
+        <pre className="fm-footer-log-dialog__raw">
+          {serializeTransportEntry(entry)}
+        </pre>
+        <CommandCorrelationPanel
+          commandId={correlation.commandId}
+          detail={commandDetail}
+        />
+      </div>
+      <DialogFooter>
+        <Button type="button" variant="secondary" onClick={onClose}>
+          Close
+        </Button>
+      </DialogFooter>
+    </DialogContent>
   );
 }
 

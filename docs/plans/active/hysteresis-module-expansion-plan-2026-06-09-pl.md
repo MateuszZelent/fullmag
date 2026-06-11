@@ -221,6 +221,12 @@ Notatka musi zdefiniowac:
    - ostrzezenia dla petli nienasyconej albo bez przeciecia zera.
 17. Adaptacyjne zagęszczanie pola:
    - podstawowy krok pola moze byc staly,
+   - jawne zageszczanie przez uzytkownika jest modelowane przez
+     `piecewise_segments`: kazdy przedzial ma `start`, `stop`, `step`,
+     `label`, `endpoint_policy` i opcjonalny `reason`, np. `coarse_start`,
+     `dense_after_remanence`, `dense_expected_coercivity`;
+   - `piecewise_segments` musza pozostac czescia requested intent i nie moga
+     byc przepisywane przez runtime na anonimowa liste punktow bez provenance,
    - opcjonalny refine pass dodaje punkty w okolicach duzych `dm/dH`,
      przeciec `m_parallel = 0`, reversal fields i eventow niezbieznosci,
    - refine pass musi zapisac, ktore punkty byly planowane od poczatku, a
@@ -341,7 +347,7 @@ study.stages.add_hysteresis_sweep(
 Wariant z jawnym zageszczeniem krokow pola:
 
 ```python
-study.stages.add_hysteresis_sweep(
+study.stages.add_h ysteresis_sweep(
     orientation=fm.FieldOrientation.preset("oop_positive"),
     initial_protocol="positive_saturation",
     branch_mode="major_loop",
@@ -1310,8 +1316,9 @@ Wynik:
 Weryfikacja:
 
 ```bash
-cargo test -p fullmag-runner hysteresis_saturation hysteresis_minor
-cargo test -p fullmag-api hysteresis_saturation hysteresis_minor
+CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-runner saturation_probe_classification_uses_thresholds_and_limit_status
+CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-runner configured_minor_loop_executes_branch_from_parent_reversal_state
+CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-api hysteresis_analysis_endpoints_read_typed_artifacts
 ```
 
 ### Milestone E: field snapshots
@@ -1326,8 +1333,11 @@ Wynik:
 Weryfikacja:
 
 ```bash
-cargo test -p fullmag-runner field_snapshot hysteresis
-cargo test -p fullmag-api hysteresis field_snapshot
+CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-runner storage_policy_controls_hysteresis_snapshot_capture
+CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-runner stored_hysteresis_snapshot_contains_vector_magnetization_payload
+CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-api field_vector_snapshot_id_loads_persisted_hysteresis_magnetization
+CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-api field_meta_snapshot_id_reports_persisted_hysteresis_magnetization_stats
+CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-api hysteresis_snapshot_can_be_applied_as_field_state_initial_magnetization
 ```
 
 ### Milestone F: Control Room authoring i inspector
@@ -1386,6 +1396,103 @@ pnpm --dir apps/control-room test
 CONTROL_ROOM_URL=http://localhost:3101/workspace CONTROL_ROOM_SCREENSHOT_SCENES=fdm pnpm --dir apps/control-room screenshot:viewport-3d
 CONTROL_ROOM_URL=http://localhost:3101/workspace CONTROL_ROOM_SMOKE_ALLOW_MISSING_SESSION=1 pnpm --dir apps/control-room smoke:viewport-3d
 ```
+
+### Audyt implementacji 2026-06-11
+
+Status ponizszy jest audytem aktualnego worktree, a nie zmiana zakresu planu.
+Nie odhaczac kamienia milowego szerzej niz pozwalaja dowody z tej sekcji.
+
+Potwierdzone aktualnymi testami:
+
+- Milestone B, DSL/IR/planner contract dla histerezy:
+  - `PYTHONPATH=packages/fullmag-py/src python3 -m pytest packages/fullmag-py/tests/test_api.py -q -k hysteresis`
+    zwrocilo `11 passed`;
+  - `CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-cli hysteresis --no-fail-fast`
+    zwrocilo `5 passed`;
+  - `CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-ir hysteresis --no-fail-fast`
+    zwrocilo `9 passed` w testach unit/integration dla walidacji histerezy.
+- Reczne zagęszczanie planu pola (`field_schedule` i
+  `schedule_refinements`/`dense_windows`) jest zaimplementowane jako jawny
+  authoring contract:
+  - Python DSL round-trip dla `hysteresis_piecewise_field_schedule` i
+    `hysteresis_dense_windows` zwrocil `2 passed`;
+  - runner materializuje dense windows i piecewise schedule:
+    `cargo test -p fullmag-runner dense_window` oraz
+    `cargo test -p fullmag-runner piecewise_schedule` zwrocily lacznie
+    `3 passed`.
+- Milestone C/D runtime dla aktualnego zakresu:
+  - `CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-runner hysteresis --no-fail-fast`
+    zwrocilo `32 passed`, w tym test wstrzykniecia pola i zmiany
+    magnetyzacji w FDM.
+- Milestone E/API dla snapshotow:
+  - `cargo test -p fullmag-api hysteresis_analysis`,
+    `field_vector_snapshot_id_loads_persisted_hysteresis_magnetization`,
+    `field_meta_snapshot_id_reports_persisted_hysteresis_magnetization_stats`,
+    `hysteresis_snapshot_can_be_applied_as_field_state_initial_magnetization`
+    przeszly.
+  - regresja live API z `{"error":"stage 0 is not a hysteresis stage"}` zostala
+    zamknieta dla endpointow indeksowych:
+    `GET /v2/sessions/current/analysis/hysteresis/0/points` oraz
+    `GET /v2/sessions/current/simulation/stages/0/hysteresis/progress`;
+    `CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-api hysteresis_analysis --no-fail-fast`
+    zwrocilo `5 passed`;
+  - live `curl` po restarcie managed runtime potwierdzil, ze progress po
+    indeksie `0` zwraca `stage_id="stage-000"`, biezace `current_field_mT`,
+    `current_m_avg` i `current_m_parallel`. Jezeli runtime jest jeszcze w polu
+    przygotowawczym poza planowanymi punktami petli, `active_point_index` moze
+    byc nieobecny. `points=[]` przed ukonczeniem pierwszego settle jest
+    oczekiwane; historia narasta dopiero po zapisie ukonczonego punktu do
+    `hysteresis_points.json`.
+- Milestone F/G dla aktualnego UI:
+  - `pnpm --dir apps/control-room test src/modules/inspector/panels/stages/StageInspectors.test.tsx src/modules/explorer/explorerSelection.test.ts src/modules/explorer/builders/buildModelTree.test.ts`
+    zwrocilo `43 passed`;
+  - `pnpm --dir apps/control-room test src/modules/analysis-plots/AnalysisPlotsModule.test.tsx src/modules/inspector/panels/stages/StageInspectors.test.tsx`
+    zwrocilo `40 passed`;
+  - `pnpm --dir apps/control-room test src/modules/analysis-plots/AnalysisPlotsModule.test.tsx src/modules/explorer/builders/buildModelTree.test.ts src/modules/explorer/explorerSelection.test.ts`
+    zwrocilo `59 passed`; ten zestaw pokrywa wybor stage histerezy przez
+    Explorer/Analysis oraz budowe wykresu z live progress i historii punktow;
+  - `pnpm --dir apps/control-room typecheck`, `lint` i
+    `check:api-hygiene` przeszly.
+- Milestone H/replay 3D snapshotow histerezy:
+  - frontendowa sciezka `hysteresis.load-point-in-3d` publikuje selekcje
+    `analysis.chart-point`, przełącza center surface na `viewport-3d`, a
+    viewport rozpoznaje `snapshot_id` i pobiera pole przez
+    `data/fields/{quantity}/samples/vector?snapshot_id=...`;
+  - `pnpm --dir apps/control-room test src/kernel/runtime/studyRuntimeCommandContributions.test.ts src/modules/viewport-3d/hooks/useViewport3DSceneModel.test.ts src/modules/viewport-3d/Viewport3DModule.test.ts src/modules/viewport-3d/viewport3dResources.test.ts src/modules/viewport-3d/model/viewport3DTargets.test.ts`
+    zwrocilo `129 passed`;
+  - backendowe snapshot gates przeszly:
+    `CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-runner hysteresis_snapshot --no-fail-fast`
+    zwrocilo `2 passed`, a trzy testy API
+    `hysteresis_snapshot_can_be_applied_as_field_state_initial_magnetization`,
+    `field_vector_snapshot_id_loads_persisted_hysteresis_magnetization` i
+    `field_meta_snapshot_id_reports_persisted_hysteresis_magnetization_stats`
+    zwrocily po `1 passed`;
+  - zamknieto luke UI `use-point-as-initial-state`: inspector przekazuje teraz
+    `snapshot_resource_ref`, a komenda preferuje ten zasob nad skladana
+    sciezka `hysteresis_snapshots/{snapshot_id}/m.json`. Test
+    `uses the hysteresis point snapshot resource ref when applying an initial state`
+    najpierw odtworzyl blad, a po poprawce
+    `pnpm --dir apps/control-room test src/kernel/runtime/studyRuntimeCommandContributions.test.ts src/modules/inspector/panels/stages/StageInspectors.test.tsx src/modules/analysis-plots/AnalysisPlotsModule.test.tsx src/modules/viewport-3d/hooks/useViewport3DSceneModel.test.ts src/modules/viewport-3d/viewport3dResources.test.ts`
+    zwrocilo `144 passed`;
+  - w tej kontynuacji `localhost:8081` nie odpowiadal, wiec nie ma nowego live
+    browser/runtime smoke dla replay 3D. Poprzedni live proof endpointow API
+    pozostaje zapisany wyzej, ale pelne odhaczenie wizualnego replay wymaga
+    ponownego uruchomienia managed runtime i browser smoke/screenshot.
+
+Niezamkniete braki produkcyjne:
+
+- `Angular family` nie ma aktualnie kontraktu danych ani zasobu API. W UI
+  `HysteresisChart` obsluguje `Full`, `Virgin`, `Forward`, `Return`,
+  `Minor loops`, `OOP/IP overlay` i `RGB Components`, ale nie porownanie wielu
+  petli dla wielu katow. Produkcyjna implementacja wymaga osobnego kontraktu
+  multi-angle: albo stage family z wieloma orientacjami, albo zasobu
+  `analysis/hysteresis-family/*` grupujacego serie po orientacji.
+- Automatyczny `adaptive_refinement` pozostaje niezaimplementowanym second-pass
+  schedulerem. Nie mylic go z juz dzialajacymi, jawnie zadanymi przez
+  uzytkownika `schedule_refinements`/`dense_windows`.
+- Pelna publikacyjna walidacja naukowa dla OOP, in-plane i custom-angle
+  benchmark cases pozostaje niezamknieta. Aktualne testy potwierdzaja kontrakt
+  i sanity runtime, ale nie sa jeszcze kompletnym benchmarkiem publikacyjnym.
 
 ## Faza 14: szczegolowy plan wykonawczy
 
@@ -1458,8 +1565,8 @@ Instrukcja:
 Weryfikacja:
 
 ```bash
-rg -n "H_sat|minor_loop|virgin_curve|mu0|m_parallel|OOP|in_plane|theta|phi" docs/physics/08*-hysteresis*.md
-rg -n "TODO|TBD|FIXME" docs/physics/08*-hysteresis*.md
+rg -n "H_sat|minor_loop|virgin_curve|mu0|m_parallel|OOP|in_plane|theta|phi" docs/physics/*hysteresis*.md
+rg -n "TODO|TBD|FIXME" docs/physics/*hysteresis*.md
 ```
 
 Brama produkcyjna:
@@ -1992,6 +2099,11 @@ Brama produkcyjna:
 
 Cel: dodac realne protokoly badawcze, nie tylko prosta liste pol.
 
+Uwaga wykonawcza: `piecewise_segments` i `dense_windows` sa requested schedule
+uzytkownika i musza byc wdrozone w Etapie B/G. `adaptive_refinement` w tym
+etapie jest dodatkowym automatycznym mechanizmem dodawania punktow po analizie
+wynikow. Nie mieszac tych dwoch warstw w provenance ani UI.
+
 #### D.1. Auto-saturation probe
 
 Instrukcja:
@@ -2206,8 +2318,11 @@ Instrukcja:
 Weryfikacja:
 
 ```bash
-cargo test -p fullmag-api field_snapshot --no-fail-fast
-cargo test -p fullmag-runner field_snapshot hysteresis --no-fail-fast
+CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-runner storage_policy_controls_hysteresis_snapshot_capture
+CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-runner stored_hysteresis_snapshot_contains_vector_magnetization_payload
+CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-api field_vector_snapshot_id_loads_persisted_hysteresis_magnetization
+CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-api field_meta_snapshot_id_reports_persisted_hysteresis_magnetization_stats
+CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-api hysteresis_snapshot_can_be_applied_as_field_state_initial_magnetization
 ```
 
 Brama produkcyjna:
@@ -2375,6 +2490,9 @@ Instrukcja:
    - `phiDeg`,
    - `customDirection`,
    - `measurementAxis`,
+   - `fieldScheduleMode`,
+   - `fieldSegments`,
+   - `denseWindows`,
    - `saturationMode`,
    - `maxProbeField`,
    - `saturationThresholds`,
@@ -2383,6 +2501,20 @@ Instrukcja:
    - `settleBranches`,
    - `minorLoops`,
    - `storagePolicy`.
+   `fieldSegments` nie jest pojedynczym `min/max/step`, tylko edytowalna
+   tabela przedzialow. Kazdy wiersz musi miec:
+   - `segmentId`,
+   - `label`,
+   - `startField`,
+   - `stopField`,
+   - `step`,
+   - `unit`,
+   - `endpointPolicy`,
+   - `reason`.
+   Minimalny scenariusz UI musi pozwalac ustawic np.:
+   - `+1.0 T -> +0.2 T, step 50 mT, reason=coarse_start`,
+   - `+0.2 T -> -0.05 T, step 5 mT, reason=dense_after_remanence`,
+   - `-0.05 T -> -1.0 T, step 25 mT, reason=negative_branch`.
 3. `createStudyStageDraft(...)` musi czytac:
    - nowy canonical payload,
    - stary legacy payload `start_field/stop_field/field_steps`.
@@ -2391,6 +2523,10 @@ Instrukcja:
    - brak kata/ramy,
    - zero vector,
    - sprzeczny zakres/krok,
+   - segment pola z zerowym krokiem,
+   - segment pola ze zlym znakiem kroku,
+   - duplikaty graniczne bez endpoint policy,
+   - dense windows bez priority przy nakladaniu,
    - positive saturation bez manual/auto policy,
    - pusty settle pipeline,
    - brak wymaganych parametrow algorytmu,
@@ -2405,6 +2541,10 @@ Testy:
 - canonical draft round-trip,
 - legacy payload migration,
 - OOP/IP/custom angle validation,
+- piecewise field schedule editor serialization,
+- piecewise schedule with coarse start and dense after-remanence interval,
+- dense windows editor serialization,
+- schedule preview point count and boundary deduplication,
 - settle pipeline sequence/tree serialization,
 - relax/minimize parameter validation,
 - applies-to/fallback validation,
@@ -2433,6 +2573,7 @@ Instrukcja:
 2. Jezeli komponent rosnie powyzej czytelnosci, podziel na lokalne komponenty:
    - `HysteresisProtocolSection`,
    - `HysteresisOrientationSection`,
+   - `HysteresisFieldScheduleSection`,
    - `HysteresisSaturationSection`,
    - `HysteresisSettlePipelineSection`,
    - `HysteresisSettleTraceSection`,
@@ -2451,8 +2592,19 @@ Instrukcja:
    - shared shadcn-style controls, jezeli sa w repo.
 4. Dodaj preview schedule jako lekki model SVG/canvas tylko dla planu. Nie
    pobierac runtime points z lokalnego stanu.
-5. Sekcje live/metrics/points czytaja resource hooks, nie scene draft.
-6. `HysteresisSettlePipelineSection` musi obslugiwac:
+5. `HysteresisFieldScheduleSection` musi obslugiwac:
+   - prosty min/max/step,
+   - explicit values,
+   - piecewise segments,
+   - dense windows,
+   - endpoint policy,
+   - priority/order dla nakladajacych sie okien,
+   - preview liczby punktow per segment i globalnie,
+   - wizualne oznaczenie segmentow geste/srednie/rzadkie bez zmiany danych
+     fizycznych,
+   - ostrzezenia o duplikatach, dziurach i odwroconym znaku kroku.
+6. Sekcje live/metrics/points czytaja resource hooks, nie scene draft.
+7. `HysteresisSettlePipelineSection` musi obslugiwac:
    - dodanie kroku `Relax`,
    - dodanie kroku `Minimize`,
    - dodanie kroku `Dynamics settle` jezeli capability pozwala,
@@ -2462,9 +2614,9 @@ Instrukcja:
    - edycje `applies_to`,
    - edycje fallback policy,
    - pokaz resolved defaults z planu.
-7. `HysteresisSettleTraceSection` pokazuje trace dla wybranego punktu z
+8. `HysteresisSettleTraceSection` pokazuje trace dla wybranego punktu z
    resource `steps/{point_id}/settle-trace`.
-8. Akcje:
+9. Akcje:
    - `Estimate saturation`,
    - `Accept saturation`,
    - `Override saturation`,
@@ -2477,6 +2629,8 @@ Testy:
 
 - renders protocol/orientation controls,
 - shows validation errors,
+- edits piecewise schedule and dense windows,
+- preview shows per-segment point counts,
 - shows saturation result states,
 - edits settle pipeline and validates method params,
 - shows settle trace for selected point,
@@ -3034,6 +3188,9 @@ Modul jest gotowy dopiero gdy:
 - stage ma jawny protocol, orientation, initial_state_policy i measurement_axis,
 - stage ma jawny `settle_pipeline` z algorytmami, parametrami, stop criteria,
   applies-to, fallbackami i resolved defaults,
+- stage obsluguje `piecewise_segments` i `dense_windows`, czyli jawne
+  przedzialy pola z roznymi krokami, z segment ids, labels, endpoint policy i
+  preview liczby punktow,
 - OOP, in-plane i custom angle sa obslugiwane przez ten sam kontrakt,
 - start od zera/virgin, start od saturacji i start z checkpointu sa jawne i
   widoczne w provenance,

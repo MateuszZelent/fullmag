@@ -236,6 +236,28 @@ Mesh rebuild uses the existing command path:
 
 This request is submitted to `POST /v2/sessions/current/simulation/commands`. Do not document or implement `/v2/sessions/current/meshing/builds/commands` unless the backend adds that route.
 
+### Hysteresis Workflow Resources
+
+Hysteresis workflows expose endpoints for planning, execution progress, points data, and loop metrics:
+
+| Route | Method | Meaning |
+|---|---|---|
+| `/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/plan` | `GET` | Read planned schedule of field values, segments, and targets |
+| `/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/protocol` | `GET` | Read initial protocol (saturation, zero-field) and sweep mode |
+| `/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/orientation` | `GET` | Read field orientation vector, angle, and coordinate frame |
+| `/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/saturation` | `GET` | Read auto-saturation probe results, thresholds, and override decisions |
+| `/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/settle-pipeline` | `GET` | Read planned settle pipeline step sequence and conditional branches |
+| `/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/progress` | `GET` | Read overall point progress and status counters |
+| `/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/execution-tree` | `GET` | Read live window of completed, active, and queued points in the explorer |
+| `/v2/sessions/current/analysis/hysteresis/{stage_id}/points` | `GET` | Read resolved point averages, field projections, and convergence status |
+| `/v2/sessions/current/analysis/hysteresis/{stage_id}/metrics` | `GET` | Read loop metrics (remanence, coercivity, bias, energy loss area) |
+| `/v2/sessions/current/analysis/hysteresis/{stage_id}/saturation` | `GET` | Read executed auto-saturation probe points, thresholds, status, and decision reason |
+| `/v2/sessions/current/analysis/hysteresis/{stage_id}/branches` | `GET` | Read branch metadata indexing (forward, return, recoil, minor branch relations) |
+| `/v2/sessions/current/analysis/hysteresis/{stage_id}/minor-loops` | `GET` | Read minor loop specifications, closure status, and recoil metrics |
+| `/v2/sessions/current/analysis/hysteresis/{stage_id}/reversal-fields` | `GET` | Read reversal fields and recoil start indices |
+| `/v2/sessions/current/analysis/hysteresis/{stage_id}/steps/{point_id}` | `GET` | Read detailed result summary for a single point and its snapshot ref |
+| `/v2/sessions/current/analysis/hysteresis/{stage_id}/steps/{point_id}/settle-trace` | `GET` | Read step-by-step trace of solver algorithms run for relaxation of this point |
+
 ## 4. Scoped data access
 
 Mesh and field resources must support scoped fetching so the frontend does not need to download the

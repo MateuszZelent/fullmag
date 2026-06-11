@@ -2386,8 +2386,15 @@ def _capture_stage(stage_spec: object) -> CapturedStage:
                 "dataset": stage_spec.dataset,
             },
         )
+    from fullmag.model.study import Hysteresis
+    if isinstance(stage_spec, Hysteresis):
+        return CapturedStage(
+            problem=_build_problem(study_kind="hysteresis", hysteresis_spec=stage_spec),
+            entrypoint_kind="flat_hysteresis",
+            default_until_seconds=None,
+        )
     raise TypeError(
-        "study.stages.add_stage(...) expects fm.relax_stage(...), fm.run_stage(...), fm.eigenmodes_stage(...), fm.frequency_response_stage(...), or fm.save_state_stage(...)"
+        "study.stages.add_stage(...) expects fm.relax_stage(...), fm.run_stage(...), fm.eigenmodes_stage(...), fm.frequency_response_stage(...), fm.save_state_stage(...), or fm.Hysteresis(...)"
     )
 
 
@@ -2925,6 +2932,52 @@ class StudyStagesBuilder:
                 dataset=dataset,
             )
         )
+
+    def add_hysteresis_sweep(
+        self,
+        *,
+        field_min_mT: float | None = None,
+        field_max_mT: float | None = None,
+        field_step_mT: float | None = None,
+        field_values_mT: Sequence[float] | None = None,
+        direction: tuple[float, float, float] | None = None,
+        orientation: FieldOrientation | None = None,
+        measurement_axis: str = "field_axis",
+        initial_protocol: str = "positive_saturation",
+        saturation: SaturationProbe | None = None,
+        branch_mode: str = "major_loop",
+        settle_pipeline: SettlePipeline | SettleTree | None = None,
+        storage: HysteresisStorage | None = None,
+        field_schedule: PiecewiseFieldSchedule | None = None,
+        schedule_refinements: Sequence[FieldWindow] | None = None,
+        minor_loops: Sequence[MinorLoop] | None = None,
+    ) -> "StudyStagesBuilder":
+        """Add a canonical hysteresis sweep stage."""
+        from fullmag.model.study import Hysteresis, SaveField, SaveScalar
+        s = _state
+        outputs = s._outputs if s._outputs else [
+            SaveField(field="m", every=1e-12),
+            SaveScalar(scalar="E_total", every=1e-12),
+        ]
+        stage = Hysteresis(
+            outputs=outputs,
+            field_min_mT=field_min_mT,
+            field_max_mT=field_max_mT,
+            field_step_mT=field_step_mT,
+            field_values_mT=field_values_mT,
+            direction=direction,
+            orientation=orientation,
+            measurement_axis=measurement_axis,
+            initial_protocol=initial_protocol,
+            saturation=saturation,
+            branch_mode=branch_mode,
+            settle_pipeline=settle_pipeline,
+            storage=storage,
+            field_schedule=field_schedule,
+            schedule_refinements=schedule_refinements,
+            minor_loops=minor_loops,
+        )
+        return self.add_stage(stage)
 
     def add_hysteresis_branch(
         self,
@@ -5650,6 +5703,7 @@ def _build_problem(
     frequency_k_vector: tuple[float, float, float] | None = None,
     frequency_k_sampling: object | None = None,
     frequency_spin_wave_bc: str | dict[str, object] = "free",
+    hysteresis_spec: Any = None,
 ) -> Problem:
     """Construct a Problem from the current world state."""
     s = _state
@@ -5821,6 +5875,8 @@ def _build_problem(
             k_vector=frequency_k_vector,
             dynamics=dynamics,
         )
+    elif study_kind == "hysteresis":
+        study = hysteresis_spec
     else:
         study = TimeEvolution(
             dynamics=dynamics,

@@ -890,6 +890,178 @@ impl ProblemIR {
                     }
                 }
             }
+            StudyIR::Hysteresis {
+                direction,
+                orientation,
+                measurement_axis,
+                initial_protocol,
+                saturation,
+                branch_mode,
+                storage,
+                field_min_mT,
+                field_max_mT,
+                field_step_mT,
+                field_values_mT,
+                settle_pipeline,
+                field_schedule,
+                schedule_refinements,
+                minor_loops,
+                ..
+            } => {
+                if field_min_mT.is_some_and(|value| !value.is_finite()) {
+                    errors
+                        .push("study.stages[].hysteresis.field_min_mT must be finite".to_string());
+                }
+                if field_max_mT.is_some_and(|value| !value.is_finite()) {
+                    errors
+                        .push("study.stages[].hysteresis.field_max_mT must be finite".to_string());
+                }
+                if let Some(d) = direction {
+                    if !vector_is_finite(d) {
+                        errors.push(
+                            "study.stages[].hysteresis.direction must contain finite values"
+                                .to_string(),
+                        );
+                    } else if vector_norm_sq(d) <= 1e-30 {
+                        errors.push(
+                            "study.stages[].hysteresis.direction must not be the zero vector"
+                                .to_string(),
+                        );
+                    }
+                }
+                validate_hysteresis_orientation(orientation.as_ref(), &mut errors);
+                if !matches!(
+                    measurement_axis.as_str(),
+                    "field_axis" | "sample_normal" | "easy_axis" | "custom"
+                ) {
+                    errors.push(
+                        "study.stages[].hysteresis.measurement_axis is unsupported".to_string(),
+                    );
+                }
+                if !matches!(
+                    initial_protocol.as_str(),
+                    "as_authored"
+                        | "zero_field_relaxed"
+                        | "positive_saturation"
+                        | "negative_saturation"
+                ) {
+                    errors.push(
+                        "study.stages[].hysteresis.initial_protocol is unsupported".to_string(),
+                    );
+                }
+                if !matches!(
+                    branch_mode.as_str(),
+                    "major_loop"
+                        | "major_with_minor_loops"
+                        | "virgin_curve"
+                        | "virgin_then_major_loop"
+                ) {
+                    errors.push("study.stages[].hysteresis.branch_mode is unsupported".to_string());
+                }
+                if let Some(probe) = saturation {
+                    validate_hysteresis_saturation_probe(probe, &mut errors);
+                }
+                if let Some(policy) = storage {
+                    validate_hysteresis_storage(policy, &mut errors);
+                }
+                if field_values_mT.as_ref().is_some_and(Vec::is_empty) {
+                    errors.push(
+                        "study.stages[].hysteresis.field_values_mT must not be empty".to_string(),
+                    );
+                }
+                if let Some(values) = field_values_mT {
+                    for (idx, value) in values.iter().enumerate() {
+                        if !value.is_finite() {
+                            errors.push(format!(
+                                "study.stages[].hysteresis.field_values_mT[{}] must be finite",
+                                idx
+                            ));
+                        }
+                    }
+                }
+                if let Some(step) = field_step_mT {
+                    if !step.is_finite() {
+                        errors.push(
+                            "study.stages[].hysteresis.field_step_mT must be finite".to_string(),
+                        );
+                    } else if *step == 0.0 {
+                        errors.push(
+                            "study.stages[].hysteresis.field_step_mT must not be zero".to_string(),
+                        );
+                    }
+                }
+                if let Some(sched) = field_schedule {
+                    if sched.segments.is_empty() {
+                        errors.push(
+                            "study.stages[].hysteresis.field_schedule.segments must not be empty"
+                                .to_string(),
+                        );
+                    }
+                    for (idx, seg) in sched.segments.iter().enumerate() {
+                        if seg.segment_id.trim().is_empty() {
+                            errors.push(format!("study.stages[].hysteresis.field_schedule.segments[{}].segment_id must not be empty", idx));
+                        }
+                        if seg.step <= 0.0 {
+                            errors.push(format!("study.stages[].hysteresis.field_schedule.segments[{}].step must be positive", idx));
+                        }
+                        if !seg.start.is_finite() || !seg.stop.is_finite() || !seg.step.is_finite()
+                        {
+                            errors.push(format!("study.stages[].hysteresis.field_schedule.segments[{}] start, stop, and step must be finite", idx));
+                        }
+                        if seg.start == seg.stop {
+                            errors.push(format!("study.stages[].hysteresis.field_schedule.segments[{}].start and stop must differ", idx));
+                        }
+                        if !matches!(
+                            seg.endpoint_policy.as_str(),
+                            "include_stop" | "skip_start" | "include_both"
+                        ) {
+                            errors.push(format!("study.stages[].hysteresis.field_schedule.segments[{}].endpoint_policy is unsupported", idx));
+                        }
+                    }
+                }
+                if let Some(windows) = schedule_refinements {
+                    validate_hysteresis_field_windows(windows, &mut errors);
+                }
+                if let Some(loops) = minor_loops {
+                    validate_hysteresis_minor_loops(loops, &mut errors);
+                }
+                if let Some(pipeline) = settle_pipeline {
+                    match pipeline {
+                        SettlePipelineIR::Sequence { steps } => {
+                            if steps.is_empty() {
+                                errors.push(
+                                    "study.stages[].hysteresis.settle_pipeline must not be empty"
+                                        .to_string(),
+                                );
+                            }
+                            for (idx, step) in steps.iter().enumerate() {
+                                validate_settle_step(step, idx, &mut errors);
+                                if settle_non_convergence(step) == "run_next_algorithm"
+                                    && idx + 1 == steps.len()
+                                {
+                                    errors.push(format!("study.stages[].hysteresis.settle_pipeline.steps[{}].on_non_convergence run_next_algorithm requires a following step", idx));
+                                }
+                            }
+                        }
+                        SettlePipelineIR::Tree { default, branches } => {
+                            validate_settle_step(default, 0, &mut errors);
+                            if settle_non_convergence(default) == "run_next_algorithm"
+                                && !branches.iter().any(|branch| {
+                                    matches!(
+                                        branch.when.as_str(),
+                                        "non_converged" | "fallback" | "run_next_algorithm"
+                                    )
+                                })
+                            {
+                                errors.push("study.stages[].hysteresis.settle_pipeline.default.on_non_convergence run_next_algorithm requires a non_converged fallback branch".to_string());
+                            }
+                            for (idx, branch) in branches.iter().enumerate() {
+                                validate_settle_step(&branch.run, idx + 1, &mut errors);
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         for magnet in &self.magnets {
@@ -1914,4 +2086,395 @@ fn vector_is_finite(vector: &[f64; 3]) -> bool {
 
 fn vector_norm_sq(vector: &[f64; 3]) -> f64 {
     vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2]
+}
+
+fn validate_settle_step(step: &SettleStepIR, idx: usize, errors: &mut Vec<String>) {
+    match step {
+        SettleStepIR::Relax {
+            method,
+            alpha,
+            torque_tolerance,
+            max_steps,
+            timestep_s,
+            max_pseudotime_s,
+            max_physical_time_s,
+            on_non_convergence,
+            retry_timestep_scale,
+            retry_max_attempts,
+            ..
+        } => {
+            if method.trim().is_empty() {
+                errors.push(format!(
+                    "study.stages[].hysteresis.settle_pipeline.steps[{}].method must not be empty",
+                    idx
+                ));
+            }
+            if *alpha <= 0.0 {
+                errors.push(format!(
+                    "study.stages[].hysteresis.settle_pipeline.steps[{}].alpha must be positive",
+                    idx
+                ));
+            }
+            if *torque_tolerance <= 0.0 {
+                errors.push(format!("study.stages[].hysteresis.settle_pipeline.steps[{}].torque_tolerance must be positive", idx));
+            }
+            if *max_steps == 0 {
+                errors.push(format!(
+                    "study.stages[].hysteresis.settle_pipeline.steps[{}].max_steps must be > 0",
+                    idx
+                ));
+            }
+            validate_settle_time_controls(
+                *timestep_s,
+                *max_pseudotime_s,
+                *max_physical_time_s,
+                idx,
+                errors,
+            );
+            validate_settle_non_convergence_policy(on_non_convergence, idx, errors);
+            validate_settle_retry_policy(
+                on_non_convergence,
+                *retry_timestep_scale,
+                *retry_max_attempts,
+                idx,
+                errors,
+            );
+        }
+        SettleStepIR::Minimize {
+            method,
+            torque_tolerance,
+            energy_tolerance,
+            max_steps,
+            timestep_s,
+            max_pseudotime_s,
+            max_physical_time_s,
+            on_non_convergence,
+            retry_timestep_scale,
+            retry_max_attempts,
+            ..
+        } => {
+            if method.trim().is_empty() {
+                errors.push(format!(
+                    "study.stages[].hysteresis.settle_pipeline.steps[{}].method must not be empty",
+                    idx
+                ));
+            }
+            if *torque_tolerance <= 0.0 {
+                errors.push(format!("study.stages[].hysteresis.settle_pipeline.steps[{}].torque_tolerance must be positive", idx));
+            }
+            if *energy_tolerance <= 0.0 {
+                errors.push(format!("study.stages[].hysteresis.settle_pipeline.steps[{}].energy_tolerance must be positive", idx));
+            }
+            if *max_steps == 0 {
+                errors.push(format!(
+                    "study.stages[].hysteresis.settle_pipeline.steps[{}].max_steps must be > 0",
+                    idx
+                ));
+            }
+            validate_settle_time_controls(
+                *timestep_s,
+                *max_pseudotime_s,
+                *max_physical_time_s,
+                idx,
+                errors,
+            );
+            validate_settle_non_convergence_policy(on_non_convergence, idx, errors);
+            validate_settle_retry_policy(
+                on_non_convergence,
+                *retry_timestep_scale,
+                *retry_max_attempts,
+                idx,
+                errors,
+            );
+        }
+        SettleStepIR::DynamicsSettle {
+            method,
+            damping,
+            max_steps,
+            timestep_s,
+            max_pseudotime_s,
+            max_physical_time_s,
+            on_non_convergence,
+            retry_timestep_scale,
+            retry_max_attempts,
+            ..
+        } => {
+            if method.trim().is_empty() {
+                errors.push(format!(
+                    "study.stages[].hysteresis.settle_pipeline.steps[{}].method must not be empty",
+                    idx
+                ));
+            }
+            if *damping <= 0.0 {
+                errors.push(format!(
+                    "study.stages[].hysteresis.settle_pipeline.steps[{}].damping must be positive",
+                    idx
+                ));
+            }
+            if *max_steps == 0 {
+                errors.push(format!(
+                    "study.stages[].hysteresis.settle_pipeline.steps[{}].max_steps must be > 0",
+                    idx
+                ));
+            }
+            validate_settle_time_controls(
+                *timestep_s,
+                *max_pseudotime_s,
+                *max_physical_time_s,
+                idx,
+                errors,
+            );
+            validate_settle_non_convergence_policy(on_non_convergence, idx, errors);
+            validate_settle_retry_policy(
+                on_non_convergence,
+                *retry_timestep_scale,
+                *retry_max_attempts,
+                idx,
+                errors,
+            );
+        }
+    }
+}
+
+fn validate_settle_time_controls(
+    timestep_s: Option<f64>,
+    max_pseudotime_s: Option<f64>,
+    max_physical_time_s: Option<f64>,
+    idx: usize,
+    errors: &mut Vec<String>,
+) {
+    if let Some(value) = timestep_s {
+        if !value.is_finite() || value <= 0.0 {
+            errors.push(format!(
+                "study.stages[].hysteresis.settle_pipeline.steps[{}].timestep_s must be finite and positive",
+                idx
+            ));
+        }
+    }
+    if let Some(value) = max_pseudotime_s {
+        if !value.is_finite() || value <= 0.0 {
+            errors.push(format!(
+                "study.stages[].hysteresis.settle_pipeline.steps[{}].max_pseudotime_s must be finite and positive",
+                idx
+            ));
+        }
+    }
+    if let Some(value) = max_physical_time_s {
+        if !value.is_finite() || value <= 0.0 {
+            errors.push(format!(
+                "study.stages[].hysteresis.settle_pipeline.steps[{}].max_physical_time_s must be finite and positive",
+                idx
+            ));
+        }
+    }
+}
+
+fn validate_hysteresis_orientation(
+    orientation: Option<&FieldOrientationIR>,
+    errors: &mut Vec<String>,
+) {
+    let Some(orientation) = orientation else {
+        return;
+    };
+    match orientation {
+        FieldOrientationIR::Preset { preset_name } => {
+            if !matches!(
+                preset_name.as_str(),
+                "oop_positive" | "oop_negative" | "in_plane_x" | "in_plane_y"
+            ) {
+                errors.push(
+                    "study.stages[].hysteresis.orientation.preset_name is unsupported".to_string(),
+                );
+            }
+        }
+        FieldOrientationIR::Sample { theta, phi } => {
+            if !theta.is_finite() || !phi.is_finite() {
+                errors.push(
+                    "study.stages[].hysteresis.orientation sample theta and phi must be finite"
+                        .to_string(),
+                );
+            }
+        }
+        FieldOrientationIR::Global { vector } => {
+            if !vector_is_finite(vector) {
+                errors.push(
+                    "study.stages[].hysteresis.orientation global vector must contain finite values"
+                        .to_string(),
+                );
+            } else if vector_norm_sq(vector) <= 1e-30 {
+                errors.push(
+                    "study.stages[].hysteresis.orientation global vector must not be zero"
+                        .to_string(),
+                );
+            }
+        }
+    }
+}
+
+fn validate_hysteresis_saturation_probe(probe: &SaturationProbeIR, errors: &mut Vec<String>) {
+    if probe.mode.trim().is_empty() {
+        errors.push("study.stages[].hysteresis.saturation.mode must not be empty".to_string());
+    }
+    if !probe.max_field_mT.is_finite() || probe.max_field_mT <= 0.0 {
+        errors.push(
+            "study.stages[].hysteresis.saturation.max_field_mT must be finite and positive"
+                .to_string(),
+        );
+    }
+    if !probe.susceptibility_threshold.is_finite() || probe.susceptibility_threshold <= 0.0 {
+        errors.push(
+            "study.stages[].hysteresis.saturation.susceptibility_threshold must be finite and positive"
+                .to_string(),
+        );
+    }
+    if !probe.transverse_threshold.is_finite() || probe.transverse_threshold <= 0.0 {
+        errors.push(
+            "study.stages[].hysteresis.saturation.transverse_threshold must be finite and positive"
+                .to_string(),
+        );
+    }
+}
+
+fn validate_hysteresis_storage(policy: &HysteresisStorageIR, errors: &mut Vec<String>) {
+    if !matches!(
+        policy.magnetization.as_str(),
+        "none" | "selected" | "every_n" | "every_step" | "key_events"
+    ) {
+        errors.push("study.stages[].hysteresis.storage.magnetization is unsupported".to_string());
+    }
+    if matches!(policy.magnetization.as_str(), "selected" | "every_n") && policy.every_n == 0 {
+        errors.push(
+            "study.stages[].hysteresis.storage.every_n must be positive for selected/every_n magnetization storage"
+                .to_string(),
+        );
+    }
+    if !policy.key_event_threshold_dm.is_finite() || policy.key_event_threshold_dm <= 0.0 {
+        errors.push(
+            "study.stages[].hysteresis.storage.key_event_threshold_dm must be finite and positive"
+                .to_string(),
+        );
+    }
+}
+
+fn validate_hysteresis_minor_loops(loops: &[MinorLoopIR], errors: &mut Vec<String>) {
+    for (idx, minor_loop) in loops.iter().enumerate() {
+        if !minor_loop.reversal_mT.is_finite() || !minor_loop.return_mT.is_finite() {
+            errors.push(format!(
+                "study.stages[].hysteresis.minor_loops[{}] reversal_mT and return_mT must be finite",
+                idx
+            ));
+        } else if minor_loop.reversal_mT == minor_loop.return_mT {
+            errors.push(format!(
+                "study.stages[].hysteresis.minor_loops[{}] reversal_mT and return_mT must differ",
+                idx
+            ));
+        }
+    }
+}
+
+fn validate_settle_non_convergence_policy(policy: &str, idx: usize, errors: &mut Vec<String>) {
+    if !matches!(
+        policy,
+        "continue_with_warning" | "stop_stage" | "run_next_algorithm" | "retry_with_smaller_dt"
+    ) {
+        errors.push(format!(
+            "study.stages[].hysteresis.settle_pipeline.steps[{}].on_non_convergence is unsupported",
+            idx
+        ));
+    }
+}
+
+fn validate_settle_retry_policy(
+    policy: &str,
+    retry_timestep_scale: Option<f64>,
+    retry_max_attempts: Option<u32>,
+    idx: usize,
+    errors: &mut Vec<String>,
+) {
+    if let Some(scale) = retry_timestep_scale {
+        if !scale.is_finite() || scale <= 0.0 || scale >= 1.0 {
+            errors.push(format!("study.stages[].hysteresis.settle_pipeline.steps[{}].retry_timestep_scale must be finite, positive, and smaller than 1", idx));
+        }
+    }
+    if retry_max_attempts == Some(0) {
+        errors.push(format!(
+            "study.stages[].hysteresis.settle_pipeline.steps[{}].retry_max_attempts must be > 0",
+            idx
+        ));
+    }
+    if policy == "retry_with_smaller_dt" && retry_timestep_scale.is_none() {
+        errors.push(format!("study.stages[].hysteresis.settle_pipeline.steps[{}].on_non_convergence retry_with_smaller_dt requires retry_timestep_scale", idx));
+    }
+}
+
+fn settle_non_convergence(step: &SettleStepIR) -> &str {
+    match step {
+        SettleStepIR::Relax {
+            on_non_convergence, ..
+        }
+        | SettleStepIR::Minimize {
+            on_non_convergence, ..
+        }
+        | SettleStepIR::DynamicsSettle {
+            on_non_convergence, ..
+        } => on_non_convergence,
+    }
+}
+
+fn validate_hysteresis_field_windows(windows: &[FieldWindowIR], errors: &mut Vec<String>) {
+    for (idx, window) in windows.iter().enumerate() {
+        if !window.center_mT.is_finite()
+            || !window.half_width_mT.is_finite()
+            || !window.step_mT.is_finite()
+        {
+            errors.push(format!(
+                "study.stages[].hysteresis.schedule_refinements[{}] center_mT, half_width_mT, and step_mT must be finite",
+                idx
+            ));
+        }
+        if window.half_width_mT <= 0.0 {
+            errors.push(format!(
+                "study.stages[].hysteresis.schedule_refinements[{}].half_width_mT must be positive",
+                idx
+            ));
+        }
+        if window.step_mT <= 0.0 {
+            errors.push(format!(
+                "study.stages[].hysteresis.schedule_refinements[{}].step_mT must be positive",
+                idx
+            ));
+        }
+    }
+
+    let mut ranges: Vec<(f64, f64, Option<u32>, usize)> = windows
+        .iter()
+        .enumerate()
+        .map(|(idx, window)| {
+            (
+                window.center_mT - window.half_width_mT,
+                window.center_mT + window.half_width_mT,
+                window.priority,
+                idx,
+            )
+        })
+        .collect();
+    ranges.sort_by(|left, right| left.0.total_cmp(&right.0).then(left.1.total_cmp(&right.1)));
+
+    let mut previous: Option<(f64, Option<u32>, usize)> = None;
+    for (start, end, priority, idx) in ranges {
+        if let Some((previous_end, previous_priority, previous_idx)) = previous {
+            if start < previous_end {
+                match (previous_priority, priority) {
+                    (Some(left), Some(right)) if left != right => {}
+                    _ => errors.push(format!(
+                        "study.stages[].hysteresis.schedule_refinements[{}] overlaps schedule_refinements[{}] without distinct priorities",
+                        idx, previous_idx
+                    )),
+                }
+            }
+            previous = Some((previous_end.max(end), priority, idx));
+        } else {
+            previous = Some((end, priority, idx));
+        }
+    }
 }

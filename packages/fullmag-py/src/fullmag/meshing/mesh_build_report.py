@@ -72,6 +72,7 @@ def _build_shared_domain_build_report(
         "conformal_occ_delaunay_degenerate_retry_hxt",
         "conformal_occ_hxt_degenerate_retry_delaunay",
         "conformal_occ_hxt_degenerate_retry_frontal",
+        "shared_domain_degenerate_tetra_cleanup",
     }
     degraded = (
         any(fallback not in non_degrading_fallbacks for fallback in fallbacks_triggered)

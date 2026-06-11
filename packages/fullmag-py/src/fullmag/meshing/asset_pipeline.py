@@ -38,6 +38,7 @@ from .gmsh_bridge import (
     generate_mesh_from_file,
     generate_shared_domain_mesh_from_components,
 )
+from ._gmsh_types import FEM_TOPOLOGY_VOLUME_EPS, _tetra_signed_volumes
 from .surface_assets import _geometry_to_trimesh, _import_trimesh, build_surface_preview_payload
 from .voxelization import VoxelMaskData, voxelize_geometry
 
@@ -77,6 +78,47 @@ from ._size_field_plan import (
 _DEFAULT_AIRBOX_GROWTH_RATE = 1.3
 _DEFAULT_AIRBOX_GRADING = "geometric"
 _SIZE_DISTRIBUTION_HISTOGRAM_BINS = 30
+
+
+def _drop_degenerate_tetrahedra(
+    mesh: MeshData,
+    *,
+    context: str,
+    fallbacks_triggered: list[str],
+) -> MeshData:
+    if mesh.n_elements == 0:
+        return mesh
+    volumes = _tetra_signed_volumes(mesh)
+    bbox = np.ptp(mesh.nodes, axis=0) if mesh.nodes.size else np.zeros(3, dtype=np.float64)
+    scale = float(np.max(bbox))
+    eps = max(
+        np.finfo(np.float64).tiny,
+        FEM_TOPOLOGY_VOLUME_EPS,
+        (scale if scale > 0.0 else 1.0) ** 3 * 1e-18,
+    )
+    keep = np.abs(volumes) > eps
+    removed = int(np.count_nonzero(~keep))
+    if removed == 0:
+        return mesh
+    if removed == mesh.n_elements:
+        raise ValueError(f"{context} produced only degenerate tetrahedra")
+    marker = "shared_domain_degenerate_tetra_cleanup"
+    if marker not in fallbacks_triggered:
+        fallbacks_triggered.append(marker)
+    emit_progress(
+        f"{context}: removed {removed} degenerate tetrahedra below strict volume threshold"
+    )
+    return MeshData(
+        nodes=mesh.nodes,
+        elements=mesh.elements[keep],
+        element_markers=mesh.element_markers[keep],
+        boundary_faces=mesh.boundary_faces,
+        boundary_markers=mesh.boundary_markers,
+        periodic_boundary_pairs=mesh.periodic_boundary_pairs,
+        periodic_node_pairs=mesh.periodic_node_pairs,
+        quality=mesh.quality,
+        per_domain_quality=None,
+    )
 
 
 def _conformal_occ_degenerate_retry(
@@ -554,9 +596,12 @@ def _contains_points_in_geometry(
     if isinstance(geometry, Cylinder):
         radius = geometry.radius
         height = geometry.height
+        axis = np.asarray(geometry.axis, dtype=np.float64)
+        axial = points @ axis
+        radial = points - axial.reshape(-1, 1) * axis.reshape(1, 3)
         return (
-            points[:, 0] ** 2 + points[:, 1] ** 2 <= radius * radius
-        ) & (np.abs(points[:, 2]) <= height / 2.0)
+            np.einsum("ij,ij->i", radial, radial) <= radius * radius
+        ) & (np.abs(axial) <= height / 2.0)
     if isinstance(geometry, Ellipsoid):
         rx, ry, rz = geometry.rx, geometry.ry, geometry.rz
         return (
@@ -1510,6 +1555,12 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 }
             )
             raise
+
+    mesh = _drop_degenerate_tetrahedra(
+        mesh,
+        context=f"{build_mode} shared-domain mesh",
+        fallbacks_triggered=fallbacks_triggered,
+    )
 
     # Classify elements back to geometries
     source_markers = np.asarray(mesh.element_markers, dtype=np.int32)

@@ -1009,6 +1009,7 @@ mod tests {
             clear_preview_cache: false,
             engine_log: Vec::new(),
             solver_profile: fullmag_runner::SolverProfileState::default(),
+            published_fem_mesh_generation_id: None,
         }
     }
 

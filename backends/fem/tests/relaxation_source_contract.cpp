@@ -966,13 +966,25 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
             pgbb_source.find("reset_consecutive") <
                 pgbb_source.find("GPU projected-gradient BB failed Armijo line search"),
         "native FEM GPU projected-gradient BB must attempt bounded Armijo recovery with reset step-size policy, fresh restart step, and noise-tolerant monotone fallback before failing the device step");
+    const auto pgbb_first_armijo =
+        pgbb_source.find("const bool armijo =", pgbb_source.find("while (true)"));
+    check(
+        pgbb_source.find("gpu_relax_accept_monotone_line_search_step(") !=
+                std::string::npos &&
+            pgbb_first_armijo != std::string::npos &&
+            pgbb_source.find(
+                "gpu_relax_accept_monotone_line_search_step(",
+                pgbb_first_armijo) <
+                pgbb_source.find("if (backtracks >= kMaxBacktracks)", pgbb_first_armijo),
+        "native FEM GPU projected-gradient BB must accept noise-level monotone line-search trials before exhausting Armijo backtracks");
     check(
         pgbb_source.find("current_energy_j=") != std::string::npos &&
             pgbb_source.find("last_trial_energy_j=") != std::string::npos &&
             pgbb_source.find("armijo_rhs_j=") != std::string::npos &&
             pgbb_source.find("last_trial_step=") != std::string::npos &&
-            pgbb_source.find("gradient_norm_sq=") != std::string::npos,
-        "native FEM GPU projected-gradient BB exhausted Armijo failures must include actionable line-search diagnostics");
+            pgbb_source.find("gradient_norm_sq=") != std::string::npos &&
+            pgbb_source.find("format_gpu_relax_pgbb_scalar(") != std::string::npos,
+        "native FEM GPU projected-gradient BB exhausted Armijo failures must include actionable scientific line-search diagnostics");
     check(
         pgbb_source.find("gpu_relax_restore_previous_magnetization_after_failure(") !=
                 std::string::npos &&

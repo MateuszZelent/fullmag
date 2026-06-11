@@ -1,12 +1,58 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+import { SESSION_STATUS_PATH } from "@/kernel/api/apiPaths";
 import type { CommandDetailResource } from "@/kernel/api/apiTypes";
+import type { RequestDiagnosticEntry } from "@/kernel/api/RequestDiagnosticsController";
 import type { ResourceResult } from "@/kernel/resources/resourceTypes";
 
-import { CommandCorrelationPanel } from "./TransportLogTable";
+import { CommandCorrelationPanel, TransportLogTable } from "./TransportLogTable";
 
 describe("TransportLogTable", () => {
+  it("renders a compact traffic summary above transport rows", () => {
+    const entries: RequestDiagnosticEntry[] = [
+      {
+        byteLength: 128,
+        channel: "http",
+        contentType: "application/json",
+        detail: null,
+        direction: "tx",
+        durationMs: 8,
+        id: "status-tx-1",
+        messageType: null,
+        method: "GET",
+        outcome: "ok",
+        path: SESSION_STATUS_PATH,
+        requestId: "req-1",
+        status: 200,
+        timestampMs: 0,
+      },
+      {
+        byteLength: 256,
+        channel: "http",
+        contentType: "application/json",
+        detail: null,
+        direction: "tx",
+        durationMs: 9,
+        id: "status-tx-2",
+        messageType: null,
+        method: "GET",
+        outcome: "ok",
+        path: SESSION_STATUS_PATH,
+        requestId: "req-2",
+        status: 200,
+        timestampMs: 10_000,
+      },
+    ];
+
+    const html = renderToStaticMarkup(<TransportLogTable entries={entries} />);
+
+    expect(html).toContain("Transport traffic summary");
+    expect(html).toContain("2x");
+    expect(html).toContain(SESSION_STATUS_PATH);
+    expect(html).toContain("384 B");
+  });
+
   it("renders correlated command detail in the transport log dialog", () => {
     const command: CommandDetailResource = {
       accepted_at_unix_ms: 1_778_780_000_000,

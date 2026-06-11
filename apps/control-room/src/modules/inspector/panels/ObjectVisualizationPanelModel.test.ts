@@ -88,6 +88,15 @@ describe("ObjectVisualizationPanelModel", () => {
     });
   });
 
+  it("filters out magnetization and material quantities for the airbox target kind", () => {
+    const airboxItems = visualizationQuantityItems("H_demag", "airbox");
+    expect(airboxItems.map((item) => item.value)).toEqual([
+      "H_eff",
+      "H_demag",
+    ]);
+  });
+
+
   it("switches scalar material quantities to colormap surface coloring", () => {
     expect(
       quantitySourcePatch(
@@ -375,12 +384,14 @@ describe("ObjectVisualizationPanelModel", () => {
   });
 
   it("shows primitive display toggle only when primitive fallback can render", () => {
-    expect(shouldShowPrimitiveDisplayToggle("object", null)).toBe(true);
-    expect(shouldShowPrimitiveDisplayToggle("object", "unknown")).toBe(true);
-    expect(shouldShowPrimitiveDisplayToggle("object", "stale")).toBe(true);
-    expect(shouldShowPrimitiveDisplayToggle("object", "current")).toBe(false);
-    expect(shouldShowPrimitiveDisplayToggle("part", "stale")).toBe(false);
-    expect(shouldShowPrimitiveDisplayToggle("airbox", null)).toBe(false);
+    expect(shouldShowPrimitiveDisplayToggle("geometry", "object", null)).toBe(true);
+    expect(shouldShowPrimitiveDisplayToggle("geometry", "object", "unknown")).toBe(true);
+    expect(shouldShowPrimitiveDisplayToggle("geometry", "object", "stale")).toBe(true);
+    expect(shouldShowPrimitiveDisplayToggle("geometry", "object", "current")).toBe(false);
+    expect(shouldShowPrimitiveDisplayToggle("study", "object", "stale")).toBe(false);
+    expect(shouldShowPrimitiveDisplayToggle("results", "object", "unknown")).toBe(false);
+    expect(shouldShowPrimitiveDisplayToggle("geometry", "part", "stale")).toBe(false);
+    expect(shouldShowPrimitiveDisplayToggle("geometry", "airbox", null)).toBe(false);
   });
 
   it("keeps surface vector and wireframe fields addressable by target setting keys", () => {

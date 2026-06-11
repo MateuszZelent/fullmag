@@ -6,7 +6,7 @@
  * resource change).  Without batching, each call schedules a separate frame,
  * which can produce visible intermediate states.
  *
- * This utility coalesces all invalidation requests into one short timer tick
+ * This utility coalesces all invalidation requests into one microtask
  * so that the viewport re-renders once per commit batch instead of N times.
  */
 
@@ -16,10 +16,10 @@ import { useCallback, useEffect, useRef } from "react";
 import { useThree } from "@react-three/fiber";
 
 const pendingInvalidates = new Set<() => void>();
-let pendingTimer: number | null = null;
+let pendingMicrotask = false;
 
 function flushPendingInvalidates() {
-  pendingTimer = null;
+  pendingMicrotask = false;
   const callbacks = Array.from(pendingInvalidates);
   pendingInvalidates.clear();
   for (const invalidate of callbacks) {
@@ -33,23 +33,15 @@ function scheduleBatchedViewportInvalidate(invalidate: () => void): void {
     return;
   }
   pendingInvalidates.add(invalidate);
-  if (pendingTimer !== null) {
+  if (pendingMicrotask) {
     return;
   }
-  pendingTimer = window.setTimeout(flushPendingInvalidates, 0);
+  pendingMicrotask = true;
+  queueMicrotask(flushPendingInvalidates);
 }
 
 function cancelBatchedViewportInvalidate(invalidate: () => void): void {
   pendingInvalidates.delete(invalidate);
-  if (
-    pendingInvalidates.size > 0 ||
-    pendingTimer === null ||
-    typeof window === "undefined"
-  ) {
-    return;
-  }
-  window.clearTimeout(pendingTimer);
-  pendingTimer = null;
 }
 
 /**

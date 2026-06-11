@@ -28,7 +28,9 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <iomanip>
 #include <limits>
+#include <sstream>
 #include <string>
 #endif
 
@@ -101,7 +103,7 @@ double line_search_energy_tolerance(
             std::max(std::abs(current_energy), std::abs(trial_energy)));
 }
 
-bool gpu_relax_accept_monotone_recovery_step(
+bool gpu_relax_accept_monotone_line_search_step(
     double current_energy,
     double trial_energy)
 {
@@ -110,6 +112,22 @@ bool gpu_relax_accept_monotone_recovery_step(
         trial_energy <=
             current_energy +
                 line_search_energy_tolerance(current_energy, trial_energy);
+}
+
+bool gpu_relax_accept_monotone_recovery_step(
+    double current_energy,
+    double trial_energy)
+{
+    return gpu_relax_accept_monotone_line_search_step(
+        current_energy,
+        trial_energy);
+}
+
+std::string format_gpu_relax_pgbb_scalar(double value)
+{
+    std::ostringstream out;
+    out << std::scientific << std::setprecision(17) << value;
+    return out.str();
 }
 
 bool cuda_ok(cudaError_t rc, const char *operation, std::string &reason)
@@ -726,6 +744,12 @@ int gpu_relax_projected_gradient_bb_step(
             line_search_accepted = true;
             break;
         }
+        if (gpu_relax_accept_monotone_line_search_step(
+                current_energy,
+                trial_energy)) {
+            line_search_accepted = true;
+            break;
+        }
         if (backtracks >= kMaxBacktracks) {
             break;
         }
@@ -763,12 +787,13 @@ int gpu_relax_projected_gradient_bb_step(
             "GPU projected-gradient BB failed Armijo line search after " +
             std::to_string(backtracks) +
             " backtracks; current_energy_j=" +
-            std::to_string(current_energy) +
+            format_gpu_relax_pgbb_scalar(current_energy) +
             " last_trial_energy_j=" +
-            std::to_string(trial_energy) +
-            " armijo_rhs_j=" + std::to_string(armijo_rhs) +
-            " last_trial_step=" + std::to_string(trial_step) +
-            " gradient_norm_sq=" + std::to_string(gradient_norm_sq);
+            format_gpu_relax_pgbb_scalar(trial_energy) +
+            " armijo_rhs_j=" + format_gpu_relax_pgbb_scalar(armijo_rhs) +
+            " last_trial_step=" + format_gpu_relax_pgbb_scalar(trial_step) +
+            " gradient_norm_sq=" +
+            format_gpu_relax_pgbb_scalar(gradient_norm_sq);
         return gpu_relax_restore_previous_magnetization_after_failure(
             ctx,
             stream,

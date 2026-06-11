@@ -343,6 +343,11 @@ pub fn scene_document_to_script_builder_overrides(
             .iter()
             .map(geometry_override_value)
             .collect::<Vec<_>>(),
+        "couplings": scene
+            .couplings
+            .iter()
+            .map(|coupling| serde_json::to_value(coupling).unwrap_or(Value::Null))
+            .collect::<Vec<_>>(),
         "current_modules": builder.current_modules.iter().map(|module| serde_json::json!({
             "kind": module.kind,
             "name": module.name,
@@ -1849,6 +1854,7 @@ mod tests {
                 eigen_k_vector: String::new(),
                 eigen_spin_wave_bc: String::new(),
                 eigen_spin_wave_bc_config: None,
+                extra: BTreeMap::new(),
             }],
             study_pipeline: Some(StudyPipelineDocument {
                 version: "study_pipeline.v1".to_string(),
@@ -2384,6 +2390,43 @@ mod tests {
                 .and_then(Value::as_str),
             Some("flower:r1")
         );
+    }
+
+    #[test]
+    fn scene_problem_projection_preserves_scene_couplings_for_script_rewrite() {
+        let mut scene = scene_document_from_script_builder(&sample_builder());
+        scene.couplings.push(crate::SceneCoupling {
+            coupling_id: "exchange:flower-core".to_string(),
+            kind: crate::SceneCouplingKind::Exchange,
+            source: crate::SceneCouplingEndpoint::Region {
+                object: "flower".to_string(),
+                region_id: "flower:r1".to_string(),
+            },
+            target: crate::SceneCouplingEndpoint::Object {
+                object: "flower".to_string(),
+            },
+            enabled: true,
+            parameters: crate::SceneCouplingParameters::Exchange {
+                mode: crate::SceneExchangeCouplingMode::HarmonicMean,
+                scale: Some(0.75),
+                inter_exchange: None,
+            },
+            capability_policy: crate::SceneCouplingCapabilityPolicy::AuthoredOnly,
+        });
+
+        let projection =
+            scene_document_problem_projection(&scene).expect("problem projection should build");
+        let couplings = projection
+            .rewrite_overrides
+            .get("couplings")
+            .and_then(Value::as_array)
+            .expect("rewrite overrides should include scene couplings");
+
+        assert_eq!(couplings.len(), 1);
+        assert_eq!(couplings[0]["coupling_id"], "exchange:flower-core");
+        assert_eq!(couplings[0]["source"]["region_id"], "flower:r1");
+        assert_eq!(couplings[0]["parameters"]["scale"], 0.75);
+        assert_eq!(couplings[0]["capability_policy"], "authored_only");
     }
 
     #[test]

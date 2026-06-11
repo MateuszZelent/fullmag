@@ -62,6 +62,7 @@ fn study_mechanics(problem: &ProblemIR) -> Option<&fullmag_ir::MechanicsIR> {
         | fullmag_ir::StudyIR::FrequencyResponse { dynamics, .. } => match dynamics {
             fullmag_ir::DynamicsIR::Llg { mechanics, .. } => mechanics.as_ref(),
         },
+        fullmag_ir::StudyIR::Hysteresis { .. } => None,
     }
 }
 
@@ -513,9 +514,34 @@ fn heterogeneous_fem_material_shape_supported(
     reference: &fullmag_ir::MaterialIR,
     candidate: &fullmag_ir::MaterialIR,
 ) -> bool {
-    reference.anisotropy_axis == candidate.anisotropy_axis
-        && reference.cubic_anisotropy_axis1 == candidate.cubic_anisotropy_axis1
-        && reference.cubic_anisotropy_axis2 == candidate.cubic_anisotropy_axis2
+    compatible_axis_for_region_material_field(
+        reference.anisotropy_axis,
+        candidate.anisotropy_axis,
+        has_active_uniaxial_anisotropy(reference),
+        has_active_uniaxial_anisotropy(candidate),
+    ) && compatible_axis_for_region_material_field(
+        reference.cubic_anisotropy_axis1,
+        candidate.cubic_anisotropy_axis1,
+        has_active_cubic_anisotropy(reference),
+        has_active_cubic_anisotropy(candidate),
+    ) && compatible_axis_for_region_material_field(
+        reference.cubic_anisotropy_axis2,
+        candidate.cubic_anisotropy_axis2,
+        has_active_cubic_anisotropy(reference),
+        has_active_cubic_anisotropy(candidate),
+    )
+}
+
+fn compatible_axis_for_region_material_field(
+    reference_axis: Option<[f64; 3]>,
+    candidate_axis: Option<[f64; 3]>,
+    reference_active: bool,
+    candidate_active: bool,
+) -> bool {
+    match (reference_active, candidate_active) {
+        (true, true) => reference_axis == candidate_axis,
+        _ => true,
+    }
 }
 
 fn segment_element_marker(
@@ -564,6 +590,43 @@ fn has_cubic_anisotropy(material: &fullmag_ir::MaterialIR) -> bool {
         || material.kc1_field.is_some()
         || material.kc2_field.is_some()
         || material.kc3_field.is_some()
+}
+
+fn has_active_uniaxial_anisotropy(material: &fullmag_ir::MaterialIR) -> bool {
+    has_nonzero_optional(material.uniaxial_anisotropy)
+        || has_nonzero_optional(material.uniaxial_anisotropy_k2)
+        || has_nonzero_field(&material.ku_field)
+        || has_nonzero_field(&material.ku2_field)
+}
+
+fn has_active_cubic_anisotropy(material: &fullmag_ir::MaterialIR) -> bool {
+    has_nonzero_optional(material.cubic_anisotropy_kc1)
+        || has_nonzero_optional(material.cubic_anisotropy_kc2)
+        || has_nonzero_optional(material.cubic_anisotropy_kc3)
+        || has_nonzero_field(&material.kc1_field)
+        || has_nonzero_field(&material.kc2_field)
+        || has_nonzero_field(&material.kc3_field)
+}
+
+fn has_active_anisotropy(material: &fullmag_ir::MaterialIR) -> bool {
+    has_active_uniaxial_anisotropy(material) || has_active_cubic_anisotropy(material)
+}
+
+fn should_promote_fem_material_template(
+    reference: &fullmag_ir::MaterialIR,
+    candidate: &fullmag_ir::MaterialIR,
+) -> bool {
+    !has_active_anisotropy(reference) && has_active_anisotropy(candidate)
+}
+
+fn has_nonzero_optional(value: Option<f64>) -> bool {
+    value.is_some_and(|value| value.abs() > 1e-30)
+}
+
+fn has_nonzero_field(values: &Option<Vec<f64>>) -> bool {
+    values
+        .as_ref()
+        .is_some_and(|values| values.iter().any(|value| value.abs() > 1e-30))
 }
 
 fn validate_cubic_anisotropy_axes(material: &fullmag_ir::MaterialIR) -> Option<String> {
@@ -1172,6 +1235,9 @@ pub(crate) fn plan_fem(
                     ));
                 } else {
                     has_heterogeneous_materials = true;
+                    if should_promote_fem_material_template(reference_material, &material) {
+                        selected_material = Some(material.clone());
+                    }
                 }
             }
         } else {

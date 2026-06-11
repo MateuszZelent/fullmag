@@ -74,6 +74,7 @@ import {
 } from "./useViewport3DFieldRenderOptions";
 import {
   FULL_FIELD_QUERY,
+  resolveHysteresisStepViewportTarget,
   resolveViewport3DSelectionBounds,
   targetForFdmDomain,
   targetForMeshPart,
@@ -138,6 +139,7 @@ import {
   useViewport3DSharedDomainManifest,
   useViewport3DUniverse,
 } from "../viewport3dResources";
+import { useViewport3DFieldUpdateHoldActive } from "../viewport3dFieldUpdateHold";
 import type { Viewport3DFieldRefreshState } from "../viewport3dRefreshCountdown";
 import {
   isViewport3DTopologyCurrent,
@@ -613,6 +615,65 @@ export function resolveViewport3DVisualizationQuantityId(
   );
 }
 
+export function resolveViewport3DSelectedSnapshotId(
+  selection: Selection,
+): string | null {
+  const hysteresisTarget = resolveHysteresisStepViewportTarget(selection);
+  if (hysteresisTarget) return hysteresisTarget.snapshotId;
+  if (selection.ref?.type !== "analysis-chart-point") return null;
+  return selection.ref.snapshotId ?? null;
+}
+
+export function resolveViewport3DActiveQuantityId({
+  selectedSnapshotId,
+  selection,
+  visualizationState,
+}: {
+  selectedSnapshotId: string | null;
+  selection: Selection;
+  visualizationState: VisualizationStateResource | null | undefined;
+}): string {
+  if (
+    selectedSnapshotId &&
+    selection.ref?.type === "analysis-chart-point" &&
+    selection.ref.quantity
+  ) {
+    const hysteresisTarget = resolveHysteresisStepViewportTarget(selection);
+    return resolveCanonicalQuantityId(hysteresisTarget?.quantityId ?? selection.ref.quantity);
+  }
+  return resolveViewport3DVisualizationQuantityId(visualizationState);
+}
+
+export function resolveViewport3DPrimaryFieldVectorEnabled({
+  fdmInstanceModelNeedsFieldVector,
+  fdmSurfaceColorMode,
+  fdmVectorsVisible,
+  fieldRenderOptions,
+  selectedSnapshotId,
+}: {
+  fdmInstanceModelNeedsFieldVector: boolean;
+  fdmSurfaceColorMode: string | null;
+  fdmVectorsVisible: boolean;
+  fieldRenderOptions: Viewport3DFieldRenderOptions;
+  selectedSnapshotId: string | null;
+}): boolean {
+  return (
+    Boolean(selectedSnapshotId) ||
+    viewport3DFieldRenderOptionsNeedFieldData(fieldRenderOptions) ||
+    Boolean(fdmSurfaceColorMode) ||
+    fdmVectorsVisible ||
+    fdmInstanceModelNeedsFieldVector
+  );
+}
+
+export function resolveViewport3DDisplayedLiveValue<TValue>(
+  incoming: TValue,
+  previousDisplayed: TValue,
+  holdActive: boolean,
+): TValue {
+  return holdActive ? previousDisplayed : incoming;
+}
+
 export function sameViewport3DQuantityId(left: string, right: string): boolean {
   return sameQuantityId(left, right);
 }
@@ -623,14 +684,15 @@ export function resolveViewport3DPrimaryFieldQuery({
   fdmTopographyEnabled,
   fdmVectorsVisible,
   fieldRenderOptions,
-}: Viewport3DPrimaryFieldQueryOptions): FieldVectorQuery {
+  snapshotId,
+}: Viewport3DPrimaryFieldQueryOptions & { snapshotId?: string | null }): FieldVectorQuery {
   if (
     fdmVectorsVisible ||
     fdmTopographyEnabled ||
     viewport3DFieldRenderOptionsNeedFullVectorData(fieldRenderOptions) ||
     (fdmSurfaceColorMode && !fieldColorModeScalarComponent(fdmSurfaceColorMode))
   ) {
-    return FULL_FIELD_QUERY;
+    return snapshotId ? { ...FULL_FIELD_QUERY, snapshot_id: snapshotId } : FULL_FIELD_QUERY;
   }
 
   const component =
@@ -644,8 +706,9 @@ export function resolveViewport3DPrimaryFieldQuery({
     ? {
         component,
         scope_kind: "full",
+        ...(snapshotId ? { snapshot_id: snapshotId } : {}),
       }
-    : FULL_FIELD_QUERY;
+    : (snapshotId ? { ...FULL_FIELD_QUERY, snapshot_id: snapshotId } : FULL_FIELD_QUERY);
 }
 
 export function resolveViewport3DResourceFrameState({
@@ -1050,31 +1113,46 @@ export function useViewport3DSceneModel({
   const visualizationEffectiveRenderMode = resolveVisualizationEffectiveRenderMode({
     layers: renderingState?.layers,
   });
-  const quantityId = resolveViewport3DVisualizationQuantityId(renderingState);
+  const selectedSnapshotId = useMemo(
+    () => resolveViewport3DSelectedSnapshotId(selection),
+    [selection],
+  );
+  const hysteresisReplayTarget = useMemo(
+    () => resolveHysteresisStepViewportTarget(selection),
+    [selection],
+  );
+  const quantityId = resolveViewport3DActiveQuantityId({
+    selectedSnapshotId,
+    selection,
+    visualizationState: renderingState,
+  });
   const scalarColorPalette =
     renderingState?.quantity?.colormap ?? renderingState?.colormap ?? "viridis";
+  const vectorStyleState = renderingState?.vector_style;
   const vectorColorMode =
-    renderingState?.vector_style.color_mode ?? "orientation";
-  const vectorLengthScale = renderingState?.vector_style.length_scale ?? 1;
+    vectorStyleState?.color_mode ?? "orientation";
+  const vectorLengthScale = vectorStyleState?.length_scale ?? 1;
   const vectorDomain = renderingState?.layers?.vectors?.domain ?? "auto";
   const vectorStyle = useMemo(
     () => ({
-      alpha: renderingState?.vector_style.alpha ?? 1,
+      alpha: vectorStyleState?.alpha ?? 1,
       monoColor:
-        renderingState?.vector_style.mono_color ??
+        vectorStyleState?.mono_color ??
         String(colors?.field ?? "white"),
-      thickness: renderingState?.vector_style.thickness ?? 1,
+      thickness: vectorStyleState?.thickness ?? 1,
     }),
     [
       colors?.field,
-      renderingState?.vector_style.alpha,
-      renderingState?.vector_style.mono_color,
-      renderingState?.vector_style.thickness,
+      vectorStyleState?.alpha,
+      vectorStyleState?.mono_color,
+      vectorStyleState?.thickness,
     ],
   );
   const domainMeta = useViewport3DDomainMeta();
   const scene = useViewport3DScene();
-  const modelRegions = useModelRegionsResource();
+  const modelRegions = useModelRegionsResource({
+    enabled: Boolean(scene.data),
+  });
   const universe = useViewport3DUniverse();
   const sharedDomainManifest = useViewport3DSharedDomainManifest();
   const unknownTopologyProvenanceRefreshRef = useRef<string | null>(null);
@@ -1348,10 +1426,10 @@ export function useViewport3DSceneModel({
       globalLayers?.wireframe?.visible,
       globalLayers?.points?.visible,
       globalLayers?.vectors?.visible,
-      renderingState?.vector_style.alpha,
-      renderingState?.vector_style.color_mode,
-      renderingState?.vector_style.mono_color,
-      renderingState?.vector_style.thickness,
+      vectorStyleState?.alpha,
+      vectorStyleState?.color_mode,
+      vectorStyleState?.mono_color,
+      vectorStyleState?.thickness,
       renderingState?.vector_glyphs,
       renderingState?.quantity?.active_quantity_id,
       renderingState?.active_quantity_id,
@@ -1622,19 +1700,23 @@ export function useViewport3DSceneModel({
     magneticPartScopedVectorIds,
     quantityId,
   ]);
+  const fieldUpdateHoldActive = useViewport3DFieldUpdateHoldActive();
   const magneticPartFieldVectors = useViewport3DPartFieldVectors(
     magneticPartFieldQueries,
     magneticPartFieldQueries.size > 0,
+    { pauseLoad: fieldUpdateHoldActive },
   );
   const targetQuantityFieldVectors = useViewport3DQuantityFieldVectors(
     targetQuantityFieldQueries,
     targetQuantityFieldQueries.size > 0,
+    { pauseLoad: fieldUpdateHoldActive },
   );
   const airboxFieldVectors = useViewport3DAirboxFieldVectors(
     airboxSettings.activeQuantityId,
     airboxFieldVectorParts,
     airboxFieldVectorEnabled && airboxFieldVectorParts.length > 0,
     airboxFieldQuery,
+    { pauseLoad: fieldUpdateHoldActive },
   );
   const fieldRenderOptions = useViewport3DFieldRenderOptions({
     airboxSettings,
@@ -1749,11 +1831,13 @@ export function useViewport3DSceneModel({
   );
   const fdmInstanceModelNeedsFieldVector =
     fdmVoxelMagnitudeThreshold > 0 || fdmTopographyEnabled;
-  const fieldVectorEnabled =
-    viewport3DFieldRenderOptionsNeedFieldData(primaryFieldRenderOptions) ||
-    Boolean(fdmSurfaceColorMode) ||
-    fdmVectorsVisible ||
-    fdmInstanceModelNeedsFieldVector;
+  const fieldVectorEnabled = resolveViewport3DPrimaryFieldVectorEnabled({
+    fdmInstanceModelNeedsFieldVector,
+    fdmSurfaceColorMode,
+    fdmVectorsVisible,
+    fieldRenderOptions: primaryFieldRenderOptions,
+    selectedSnapshotId,
+  });
   const primaryFieldQuery = useMemo(
     () =>
       resolveViewport3DPrimaryFieldQuery({
@@ -1762,6 +1846,7 @@ export function useViewport3DSceneModel({
         fdmTopographyEnabled,
         fdmVectorsVisible,
         fieldRenderOptions: primaryFieldRenderOptions,
+        snapshotId: selectedSnapshotId,
       }),
     [
       fdmInstanceModelNeedsFieldVector,
@@ -1769,12 +1854,14 @@ export function useViewport3DSceneModel({
       fdmTopographyEnabled,
       fdmVectorsVisible,
       primaryFieldRenderOptions,
+      selectedSnapshotId,
     ],
   );
   const fieldVector = useViewport3DFieldVector(
     quantityId,
     primaryFieldQuery,
     fieldVectorEnabled,
+    { pauseLoad: fieldUpdateHoldActive },
   );
   const fieldVectorResourceKey = useMemo(
     () => resolveViewport3DFieldVectorResourceKey(quantityId, primaryFieldQuery),
@@ -2055,6 +2142,7 @@ export function useViewport3DSceneModel({
     getPartSettings,
     getRegionSettings,
     hslReferenceVisible,
+    hysteresisReplayTarget,
     magnetizationTexturePreviews,
     maxVectorGlyphs: fdmSettings.vectorBudget,
     meshQualityColors,

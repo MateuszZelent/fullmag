@@ -402,21 +402,204 @@ function HysteresisStageDraftFields({
   return (
     <>
       <FormField
-        label="Start field"
-        unit="T"
-        value={draft.startField}
-        onChange={(event) => onUpdate({ startField: event.target.value })}
+        label="Protocol"
+        type="select"
+        value={draft.protocolKind}
+        onChange={(event) => onUpdate({ protocolKind: event.target.value })}
+      >
+        <option value="major_loop">Major loop</option>
+        <option value="virgin_curve">Virgin curve</option>
+        <option value="virgin_then_major_loop">Virgin then major loop</option>
+      </FormField>
+      <FormField
+        label="Initial state"
+        type="select"
+        value={draft.initialStatePolicy}
+        onChange={(event) =>
+          onUpdate({ initialStatePolicy: event.target.value })
+        }
+      >
+        <option value="as_authored">As authored</option>
+        <option value="zero_field_relaxed">Zero-field relaxed</option>
+        <option value="positive_saturation">Positive saturation</option>
+        <option value="negative_saturation">Negative saturation</option>
+      </FormField>
+      <FormField
+        label="Orientation mode"
+        type="select"
+        value={draft.orientationMode}
+        onChange={(event) => onUpdate({ orientationMode: event.target.value })}
+      >
+        <option value="preset">Preset</option>
+        <option value="sample">Sample angles</option>
+        <option value="global">Global vector</option>
+      </FormField>
+      {draft.orientationMode === "sample" ? (
+        <>
+          <FormField
+            label="Theta"
+            unit="deg"
+            value={draft.thetaDeg}
+            onChange={(event) => onUpdate({ thetaDeg: event.target.value })}
+          />
+          <FormField
+            label="Phi"
+            unit="deg"
+            value={draft.phiDeg}
+            onChange={(event) => onUpdate({ phiDeg: event.target.value })}
+          />
+        </>
+      ) : draft.orientationMode === "global" ? (
+        <FormField
+          label="Field vector"
+          value={draft.customDirection}
+          onChange={(event) =>
+            onUpdate({ customDirection: event.target.value })
+          }
+        />
+      ) : (
+        <FormField
+          label="Field preset"
+          type="select"
+          value={draft.customDirection}
+          onChange={(event) =>
+            onUpdate({ customDirection: event.target.value })
+          }
+        >
+          <option value="oop_positive">OOP +z</option>
+          <option value="oop_negative">OOP -z</option>
+          <option value="in_plane_x">In-plane x</option>
+          <option value="in_plane_y">In-plane y</option>
+        </FormField>
+      )}
+      <FormField
+        label="Measurement axis"
+        type="select"
+        value={draft.measurementAxis}
+        onChange={(event) => onUpdate({ measurementAxis: event.target.value })}
+      >
+        <option value="field_axis">Field axis</option>
+        <option value="sample_normal">Sample normal</option>
+        <option value="easy_axis">Easy axis</option>
+        <option value="custom">Custom</option>
+      </FormField>
+      <FormField
+        label="Schedule mode"
+        type="select"
+        value={draft.fieldScheduleMode}
+        onChange={(event) =>
+          onUpdate({ fieldScheduleMode: event.target.value })
+        }
+      >
+        <option value="simple">Simple</option>
+        <option value="piecewise">Piecewise</option>
+      </FormField>
+      <FormField
+        label="Minimum field"
+        unit="mT"
+        value={draft.fieldMinMt}
+        onChange={(event) => onUpdate({ fieldMinMt: event.target.value })}
       />
       <FormField
-        label="Stop field"
-        unit="T"
-        value={draft.stopField}
-        onChange={(event) => onUpdate({ stopField: event.target.value })}
+        label="Maximum field"
+        unit="mT"
+        value={draft.fieldMaxMt}
+        onChange={(event) => onUpdate({ fieldMaxMt: event.target.value })}
       />
       <FormField
-        label="Field steps"
-        value={draft.fieldSteps}
-        onChange={(event) => onUpdate({ fieldSteps: event.target.value })}
+        label="Field step"
+        unit="mT"
+        value={draft.fieldStepMt}
+        onChange={(event) => onUpdate({ fieldStepMt: event.target.value })}
+      />
+      {draft.fieldScheduleMode === "piecewise" ? (
+        <FormField
+          label="Field segments"
+          rows={5}
+          type="textarea"
+          value={draft.fieldSegments}
+          onChange={(event) =>
+            onUpdate({ fieldSegments: event.target.value })
+          }
+        />
+      ) : null}
+      <FormField
+        label="Dense windows"
+        rows={4}
+        type="textarea"
+        value={draft.denseWindows}
+        onChange={(event) => onUpdate({ denseWindows: event.target.value })}
+      />
+      <FormField
+        label="Saturation mode"
+        type="select"
+        value={draft.saturationMode}
+        onChange={(event) => onUpdate({ saturationMode: event.target.value })}
+      >
+        <option value="none">None</option>
+        <option value="auto">Auto detect</option>
+      </FormField>
+      {draft.saturationMode === "auto" ? (
+        <>
+          <FormField
+            label="Max probe field"
+            unit="mT"
+            value={draft.maxProbeField}
+            onChange={(event) =>
+              onUpdate({ maxProbeField: event.target.value })
+            }
+          />
+          <FormField
+            label="Saturation thresholds"
+            value={draft.saturationThresholds}
+            onChange={(event) =>
+              onUpdate({ saturationThresholds: event.target.value })
+            }
+          />
+        </>
+      ) : null}
+      <FormField
+        label="Settle pipeline"
+        type="select"
+        value={draft.settlePipelineMode}
+        onChange={(event) =>
+          onUpdate({ settlePipelineMode: event.target.value })
+        }
+      >
+        <option value="sequence">Sequence</option>
+        <option value="tree">Tree</option>
+      </FormField>
+      <FormField
+        label="Settle steps"
+        rows={5}
+        type="textarea"
+        value={draft.settleSteps}
+        onChange={(event) => onUpdate({ settleSteps: event.target.value })}
+      />
+      {draft.settlePipelineMode === "tree" ? (
+        <FormField
+          label="Settle branches"
+          rows={5}
+          type="textarea"
+          value={draft.settleBranches}
+          onChange={(event) =>
+            onUpdate({ settleBranches: event.target.value })
+          }
+        />
+      ) : null}
+      <FormField
+        label="Minor loops"
+        rows={4}
+        type="textarea"
+        value={draft.minorLoops}
+        onChange={(event) => onUpdate({ minorLoops: event.target.value })}
+      />
+      <FormField
+        label="Storage policy"
+        rows={5}
+        type="textarea"
+        value={draft.storagePolicy}
+        onChange={(event) => onUpdate({ storagePolicy: event.target.value })}
       />
       <FormField
         label="Torque tol"

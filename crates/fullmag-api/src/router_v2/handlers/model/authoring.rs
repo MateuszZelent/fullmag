@@ -853,9 +853,9 @@ fn authored_region_diagnostics(scene: &SceneDocument) -> Vec<RegionDiagnosticRes
         if !region.material_overrides.is_empty() || !region.material_parameter_fields.is_empty() {
             diagnostics.push(RegionDiagnosticResource {
                 diagnostic_id: format!("region:{}:material-pending", region.region_id),
-                severity: "warning".to_string(),
-                code: "region_material_realization_pending".to_string(),
-                message: "Region material override or material field is authored; planner/runtime must materialize it or block execution rather than silently dropping it.".to_string(),
+                severity: "info".to_string(),
+                code: "region_material_realization_required".to_string(),
+                message: "Region material override or material field is authored; execution planning must materialize it or block unsupported runtime paths.".to_string(),
                 region_id: region.region_id.clone(),
                 owner_object_id: owner.clone(),
                 realization_status: region.realization_status.clone(),
@@ -1097,26 +1097,26 @@ fn authored_coupling_resources(
                 .as_str()
                 .unwrap()
                 .to_string();
+            let source_resolution =
+                coupling_endpoint_resolution(&coupling.source, execution_plan, fem_mesh);
+            let target_resolution =
+                coupling_endpoint_resolution(&coupling.target, execution_plan, fem_mesh);
             CouplingResource {
                 coupling_id: coupling.coupling_id.clone(),
                 coupling_kind: kind.to_string(),
                 enabled: coupling.enabled,
                 source: coupling.source.clone(),
                 target: coupling.target.clone(),
-                source_resolution: coupling_endpoint_resolution(
-                    &coupling.source,
-                    execution_plan,
-                    fem_mesh,
-                ),
-                target_resolution: coupling_endpoint_resolution(
-                    &coupling.target,
-                    execution_plan,
-                    fem_mesh,
-                ),
+                source_resolution: source_resolution.clone(),
+                target_resolution: target_resolution.clone(),
                 params: coupling.parameters.clone(),
                 capability_policy: Some(capability_policy),
                 realization_status: Some(coupling_realization_status(kind).to_string()),
-                blocker_reason: coupling_blocker_reason(coupling),
+                blocker_reason: coupling_blocker_reason(
+                    coupling,
+                    &source_resolution,
+                    &target_resolution,
+                ),
             }
         })
         .collect()
@@ -1316,9 +1316,19 @@ fn coupling_resolution_mesh(
     (mesh_ir, mesh_parts)
 }
 
-fn coupling_blocker_reason(coupling: &fullmag_authoring::SceneCoupling) -> Option<String> {
+fn coupling_blocker_reason(
+    coupling: &fullmag_authoring::SceneCoupling,
+    source_resolution: &CouplingEndpointResolutionResource,
+    target_resolution: &CouplingEndpointResolutionResource,
+) -> Option<String> {
     if !coupling.enabled {
         return None;
+    }
+    if let Some(reason) = coupling_endpoint_hard_blocker_reason(source_resolution) {
+        return Some(format!("Source {reason}"));
+    }
+    if let Some(reason) = coupling_endpoint_hard_blocker_reason(target_resolution) {
+        return Some(format!("Target {reason}"));
     }
     match coupling.kind {
         fullmag_authoring::SceneCouplingKind::Rkky => Some(
@@ -1344,6 +1354,50 @@ fn coupling_blocker_reason(coupling: &fullmag_authoring::SceneCoupling) -> Optio
             )
         }
         fullmag_authoring::SceneCouplingKind::Exchange => None,
+    }
+    .or_else(|| {
+        coupling_endpoint_blocker_reason(source_resolution).map(|reason| format!("Source {reason}"))
+    })
+    .or_else(|| {
+        coupling_endpoint_blocker_reason(target_resolution).map(|reason| format!("Target {reason}"))
+    })
+}
+
+fn coupling_endpoint_hard_blocker_reason(
+    resolution: &CouplingEndpointResolutionResource,
+) -> Option<String> {
+    match resolution.status.as_str() {
+        "unresolved" | "missing_boundary_markers" => coupling_endpoint_blocker_reason(resolution),
+        _ => None,
+    }
+}
+
+fn coupling_endpoint_blocker_reason(
+    resolution: &CouplingEndpointResolutionResource,
+) -> Option<String> {
+    match resolution.status.as_str() {
+        "unresolved" => Some(format!(
+            "unresolved surface endpoint blocks solver start: {}",
+            resolution
+                .reason
+                .as_deref()
+                .unwrap_or("surface selector could not be resolved")
+        )),
+        "missing_boundary_markers" => Some(format!(
+            "surface endpoint lacks boundary marker-backed faces; runtime coupling remains blocked: {}",
+            resolution
+                .reason
+                .as_deref()
+                .unwrap_or("missing boundary markers")
+        )),
+        "pending_mesh_resolution" => Some(format!(
+            "surface endpoint is pending mesh resolution; solver start remains blocked: {}",
+            resolution
+                .reason
+                .as_deref()
+                .unwrap_or("no current mesh-backed resolution is available")
+        )),
+        _ => None,
     }
 }
 

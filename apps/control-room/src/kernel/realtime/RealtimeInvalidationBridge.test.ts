@@ -7,6 +7,13 @@ import {
   DATA_FIELDS_PATH,
   DATA_FIELD_VECTOR_PATH,
   DATA_TABLE_ROWS_PATH,
+  ANALYSIS_HYSTERESIS_BRANCHES_PATH,
+  ANALYSIS_HYSTERESIS_METRICS_PATH,
+  ANALYSIS_HYSTERESIS_MINOR_LOOPS_PATH,
+  ANALYSIS_HYSTERESIS_POINT_PATH,
+  ANALYSIS_HYSTERESIS_POINTS_PATH,
+  ANALYSIS_HYSTERESIS_REVERSAL_FIELDS_PATH,
+  ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
   MESHING_OBJECT_QUALITY_PATH,
@@ -25,6 +32,13 @@ import {
   SIMULATION_COMMANDS_PATH,
   SIMULATION_RUN_CURRENT_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
+  SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH,
+  SIMULATION_STAGE_HYSTERESIS_ORIENTATION_PATH,
+  SIMULATION_STAGE_HYSTERESIS_PLAN_PATH,
+  SIMULATION_STAGE_HYSTERESIS_PROGRESS_PATH,
+  SIMULATION_STAGE_HYSTERESIS_PROTOCOL_PATH,
+  SIMULATION_STAGE_HYSTERESIS_SATURATION_PATH,
+  SIMULATION_STAGE_HYSTERESIS_SETTLE_PIPELINE_PATH,
   SIMULATION_STAGES_EXECUTION_PATH,
   VISUALIZATION_CLIENT_ACKS_PATH,
   VISUALIZATION_STATE_PATH,
@@ -137,6 +151,53 @@ describe("RealtimeInvalidationBridge", () => {
       resources.getRevision(MESHING_BUILDS_LATEST_SUCCESSFUL_PATH),
     ).toBeNull();
     expect(resources.getRevision(DATA_DOMAIN_TOPOLOGY_PATH)).toBeNull();
+  });
+
+  it("refreshes scene-derived hysteresis stage resources when scene document changes", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const stageId = "hysteresis-1";
+    const stageKeys = [
+      SIMULATION_STAGE_HYSTERESIS_PLAN_PATH,
+      SIMULATION_STAGE_HYSTERESIS_PROTOCOL_PATH,
+      SIMULATION_STAGE_HYSTERESIS_SATURATION_PATH,
+      SIMULATION_STAGE_HYSTERESIS_ORIENTATION_PATH,
+      SIMULATION_STAGE_HYSTERESIS_SETTLE_PIPELINE_PATH,
+      SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH,
+    ].map((path) => path.replace("{stage_id}", stageId));
+
+    for (const key of stageKeys) {
+      resources.subscribe(key, () => {});
+    }
+
+    const handled = bridge.handleEvent({
+      payload: {
+        changes: [
+          {
+            recommended_fetch: MODEL_SCENE_PATH,
+            resource: "scene_document",
+            revision: 13,
+          },
+        ],
+      },
+      type: "resource.batch_changed",
+    });
+
+    expect(handled).toBe(true);
+    for (const key of stageKeys) {
+      expect(resources.getRevision(key)).toBe(
+        dependentRevision(MODEL_SCENE_PATH, 13),
+      );
+    }
+    expect(
+      resources.getRevision(
+        SIMULATION_STAGE_HYSTERESIS_PROGRESS_PATH.replace(
+          "{stage_id}",
+          stageId,
+        ),
+      ),
+    ).toBeNull();
   });
 
   it("uses dependency revisions that cannot be dropped by older numeric resource namespaces", () => {
@@ -760,6 +821,35 @@ describe("RealtimeInvalidationBridge", () => {
     const bus = new EventBus<KernelEventMap>();
     const resources = new ResourceInvalidationController(bus);
     const bridge = new RealtimeInvalidationBridge(resources);
+    const hysteresisProgressKey =
+      SIMULATION_STAGE_HYSTERESIS_PROGRESS_PATH.replace("{stage_id}", "stage-000");
+    const hysteresisTreeKey = `${SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH.replace(
+      "{stage_id}",
+      "stage-000",
+    )}:window=active:before=2:after=3`;
+    const hysteresisPointsKey = ANALYSIS_HYSTERESIS_POINTS_PATH.replace(
+      "{stage_id}",
+      "stage-000",
+    );
+    const hysteresisMetricsKey = ANALYSIS_HYSTERESIS_METRICS_PATH.replace(
+      "{stage_id}",
+      "stage-000",
+    );
+    const hysteresisPointKey = ANALYSIS_HYSTERESIS_POINT_PATH.replace(
+      "{stage_id}",
+      "stage-000",
+    ).replace("{point_id}", "12");
+    const hysteresisSettleTraceKey = ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH.replace(
+      "{stage_id}",
+      "stage-000",
+    ).replace("{point_id}", "12");
+
+    resources.subscribe(hysteresisProgressKey, () => {});
+    resources.subscribe(hysteresisTreeKey, () => {});
+    resources.subscribe(hysteresisPointsKey, () => {});
+    resources.subscribe(hysteresisMetricsKey, () => {});
+    resources.subscribe(hysteresisPointKey, () => {});
+    resources.subscribe(hysteresisSettleTraceKey, () => {});
 
     const handled = bridge.handleEvent({
       payload: {
@@ -785,5 +875,109 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBe(
       dependentRevision(SIMULATION_STAGES_EXECUTION_PATH, 44),
     );
+    expect(resources.getRevision(hysteresisProgressKey)).toBe(
+      dependentRevision(SIMULATION_STAGES_EXECUTION_PATH, 44),
+    );
+    expect(resources.getRevision(hysteresisTreeKey)).toBe(
+      dependentRevision(SIMULATION_STAGES_EXECUTION_PATH, 44),
+    );
+    expect(resources.getRevision(hysteresisPointsKey)).toBe(
+      dependentRevision(SIMULATION_STAGES_EXECUTION_PATH, 44),
+    );
+    expect(resources.getRevision(hysteresisMetricsKey)).toBe(
+      dependentRevision(SIMULATION_STAGES_EXECUTION_PATH, 44),
+    );
+    expect(resources.getRevision(hysteresisPointKey)).toBe(
+      dependentRevision(SIMULATION_STAGES_EXECUTION_PATH, 44),
+    );
+    expect(resources.getRevision(hysteresisSettleTraceKey)).toBe(
+      dependentRevision(SIMULATION_STAGES_EXECUTION_PATH, 44),
+    );
+  });
+
+  it("refreshes stage hysteresis analysis dependents when points update", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const pointsKey = ANALYSIS_HYSTERESIS_POINTS_PATH.replace(
+      "{stage_id}",
+      "stage-000",
+    );
+    const branchesKey = ANALYSIS_HYSTERESIS_BRANCHES_PATH.replace(
+      "{stage_id}",
+      "stage-000",
+    );
+    const metricsKey = ANALYSIS_HYSTERESIS_METRICS_PATH.replace(
+      "{stage_id}",
+      "stage-000",
+    );
+    const minorLoopsKey = ANALYSIS_HYSTERESIS_MINOR_LOOPS_PATH.replace(
+      "{stage_id}",
+      "stage-000",
+    );
+    const reversalFieldsKey = ANALYSIS_HYSTERESIS_REVERSAL_FIELDS_PATH.replace(
+      "{stage_id}",
+      "stage-000",
+    );
+    const pointKey = ANALYSIS_HYSTERESIS_POINT_PATH.replace(
+      "{stage_id}",
+      "stage-000",
+    ).replace("{point_id}", "12");
+    const settleTraceKey = ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH.replace(
+      "{stage_id}",
+      "stage-000",
+    ).replace("{point_id}", "12");
+    const otherStagePointKey = ANALYSIS_HYSTERESIS_POINT_PATH.replace(
+      "{stage_id}",
+      "stage-999",
+    ).replace("{point_id}", "12");
+
+    for (const resourceKey of [
+      pointsKey,
+      branchesKey,
+      metricsKey,
+      minorLoopsKey,
+      reversalFieldsKey,
+      pointKey,
+      settleTraceKey,
+      otherStagePointKey,
+    ]) {
+      resources.subscribe(resourceKey, () => {});
+    }
+
+    const handled = bridge.handleEvent({
+      payload: {
+        changes: [
+          {
+            recommended_fetch: pointsKey,
+            resource: "analysis.hysteresis.points",
+            revision: 51,
+          },
+        ],
+      },
+      type: "resource.batch_changed",
+    });
+
+    expect(handled).toBe(true);
+    expect(resources.getRevision(pointsKey)).toBe(51);
+    expect(resources.getRevision(branchesKey)).toBe(
+      dependentRevision(pointsKey, 51),
+    );
+    expect(resources.getRevision(metricsKey)).toBe(
+      dependentRevision(pointsKey, 51),
+    );
+    expect(resources.getRevision(minorLoopsKey)).toBe(
+      dependentRevision(pointsKey, 51),
+    );
+    expect(resources.getRevision(reversalFieldsKey)).toBe(
+      dependentRevision(pointsKey, 51),
+    );
+    expect(resources.getRevision(pointKey)).toBe(
+      dependentRevision(pointsKey, 51),
+    );
+    expect(resources.getRevision(settleTraceKey)).toBe(
+      dependentRevision(pointsKey, 51),
+    );
+    expect(resources.getRevision(otherStagePointKey)).toBeNull();
   });
 });

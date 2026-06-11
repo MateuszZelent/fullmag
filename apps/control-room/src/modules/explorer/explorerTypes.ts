@@ -268,6 +268,18 @@ export interface ModelTreeStudyStageSnapshot {
   kind: string;
   maxSteps?: string | number | null;
   stageId?: string | null;
+  hysteresisCurrentFieldMt?: string | number | null;
+  hysteresisCurrentPointIndex?: number | null;
+  hysteresisCurrentSettleStepIndex?: number | null;
+  hysteresisCurrentSettleStepKind?: string | null;
+  hysteresisCurrentSettleStepMethod?: string | null;
+  hysteresisBranchMode?: string | null;
+  hysteresisFieldMaxMt?: string | number | null;
+  hysteresisFieldMinMt?: string | number | null;
+  hysteresisFieldStepMt?: string | number | null;
+  hysteresisInitialProtocol?: string | null;
+  hysteresisSaturationMode?: string | null;
+  hysteresisSettleSteps?: readonly ModelTreeHysteresisSettleStepSnapshot[];
   stateTransition?: string | null;
   stateTransitionKind?: string | null;
   stateTransitionReason?: string | null;
@@ -276,6 +288,17 @@ export interface ModelTreeStudyStageSnapshot {
   status?: ExplorerNodeStatus | null;
   torqueTolerance?: string | number | null;
   untilSeconds?: string | number | null;
+}
+
+export interface ModelTreeHysteresisSettleStepSnapshot {
+  alpha?: string | number | null;
+  energyTolerance?: string | number | null;
+  index: number;
+  kind: string;
+  maxSteps?: string | number | null;
+  method?: string | null;
+  nonConvergencePolicy?: string | null;
+  torqueTolerance?: string | number | null;
 }
 
 export interface ModelTreeMeshSnapshot {

@@ -27,6 +27,7 @@ export interface ResourceRuntimeSnapshot<TData> extends ResourceState<TData> {
 }
 
 type ResourceRuntimeListener = () => void;
+type ResourceRuntimePausePredicate = (resourceKey: ResourceKey) => boolean;
 
 interface ResourceRuntimeEntry<TData> {
   controller: AbortController | null;
@@ -96,6 +97,7 @@ function settledForExternalRevision<TData>(
 
 export class ResourceRuntimeStore<TData = unknown> {
   private readonly entries = new Map<ResourceKey, StoredResourceRuntimeEntry>();
+  private readonly pausePredicates = new Set<ResourceRuntimePausePredicate>();
 
   stats(): ResourceRuntimeStoreStats {
     let inflightCount = 0;
@@ -158,6 +160,42 @@ export class ResourceRuntimeStore<TData = unknown> {
     this.notify(entry);
   }
 
+  pauseLoad(resourceKey: ResourceKey): void {
+    const entry = this.entries.get(resourceKey) as
+      | ResourceRuntimeEntry<TData>
+      | undefined;
+    if (!entry) return;
+    entry.sequence += 1;
+    entry.controller?.abort();
+    if (entry.pendingTimer) {
+      clearTimeout(entry.pendingTimer);
+    }
+    entry.controller = null;
+    entry.inflight = null;
+    entry.inflightExternalRevision = null;
+    entry.pendingRequest = null;
+    entry.pendingTimer = null;
+  }
+
+  pauseMatching(predicate: (resourceKey: ResourceKey) => boolean): void {
+    for (const resourceKey of this.entries.keys()) {
+      if (predicate(resourceKey)) {
+        this.pauseLoad(resourceKey);
+      }
+    }
+  }
+
+  beginPauseMatching(predicate: ResourceRuntimePausePredicate): () => void {
+    this.pausePredicates.add(predicate);
+    this.pauseMatching(predicate);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.pausePredicates.delete(predicate);
+    };
+  }
+
   subscribe(
     resourceKey: ResourceKey,
     listener: ResourceRuntimeListener,
@@ -184,6 +222,10 @@ export class ResourceRuntimeStore<TData = unknown> {
     ResourceRuntimeSnapshot<TLoadData>
   > {
     const entry = this.getOrCreateEntry<TLoadData>(resourceKey);
+    if (this.loadPaused(resourceKey)) {
+      this.pauseLoad(resourceKey);
+      return Promise.resolve(entry.snapshot);
+    }
 
     if (
       !force &&
@@ -340,6 +382,15 @@ export class ResourceRuntimeStore<TData = unknown> {
     for (const listener of entry.listeners) {
       listener();
     }
+  }
+
+  private loadPaused(resourceKey: ResourceKey): boolean {
+    for (const predicate of this.pausePredicates) {
+      if (predicate(resourceKey)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private releaseUnobservedEntry<TEntryData>(

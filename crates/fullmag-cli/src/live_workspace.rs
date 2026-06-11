@@ -42,6 +42,7 @@ pub(crate) struct LocalLiveWorkspaceState {
     pub clear_preview_cache: bool,
     pub engine_log: Vec<EngineLogEntry>,
     pub solver_profile: fullmag_runner::SolverProfileState,
+    pub(crate) published_fem_mesh_generation_id: Option<String>,
 }
 
 impl LocalLiveWorkspaceState {
@@ -92,8 +93,23 @@ impl LocalLiveWorkspaceState {
         let preview_fields = (!self.pending_preview_fields.is_empty())
             .then_some(self.pending_preview_fields.take_vec());
         let clear_preview_cache = std::mem::take(&mut self.clear_preview_cache);
-        self.build_publish_payload(preview_fields, clear_preview_cache)
+        let mut payload = self.build_publish_payload(preview_fields, clear_preview_cache);
+        let next_mesh_generation_id = payload.fem_mesh.as_ref().map(fem_mesh_generation_key);
+        if next_mesh_generation_id.is_some()
+            && next_mesh_generation_id == self.published_fem_mesh_generation_id
+        {
+            payload.fem_mesh = None;
+        } else if let Some(generation_id) = next_mesh_generation_id {
+            self.published_fem_mesh_generation_id = Some(generation_id);
+        }
+        payload
     }
+}
+
+fn fem_mesh_generation_key(mesh: &fullmag_runner::FemMeshPayload) -> String {
+    mesh.generation_id
+        .clone()
+        .unwrap_or_else(|| mesh.mesh_id.clone())
 }
 
 #[derive(Clone)]
@@ -727,6 +743,7 @@ mod tests {
                 clear_preview_cache: false,
                 engine_log: Vec::new(),
                 solver_profile: fullmag_runner::SolverProfileState::default(),
+                published_fem_mesh_generation_id: None,
             },
             no_op_publisher(),
         )
@@ -837,6 +854,35 @@ mod tests {
             slot.preview_fields.as_ref().map(|fields| fields.len()),
             Some(1)
         );
+    }
+
+    #[test]
+    fn publish_delta_promotes_domain_mesh_once() {
+        let mut state = workspace_with_domain_mesh().snapshot();
+
+        let first = state.publish_delta();
+        assert_eq!(
+            first
+                .fem_mesh
+                .as_ref()
+                .and_then(|mesh| mesh.generation_id.as_deref()),
+            Some("mesh-gen-1")
+        );
+        assert!(
+            first
+                .live_state
+                .as_ref()
+                .and_then(|live_state| live_state.latest_step.fem_mesh.as_ref())
+                .is_none(),
+            "runtime state must not duplicate the promoted FEM mesh"
+        );
+        assert!(
+            state.live_state.latest_step.fem_mesh.is_some(),
+            "local workspace must retain the FEM mesh for preview and inspector state"
+        );
+
+        let second = state.publish_delta();
+        assert!(second.fem_mesh.is_none());
     }
 
     #[test]

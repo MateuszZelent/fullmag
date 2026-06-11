@@ -70,6 +70,9 @@ pub struct FieldVectorQuery {
     /// Scoped FEM queries are sampled by scope node index. Unscoped queries
     /// return a contiguous center window for lightweight diagnostics.
     pub max_samples: Option<u32>,
+    /// Optional persisted analysis snapshot id, for example a saved
+    /// hysteresis-point magnetization state.
+    pub snapshot_id: Option<String>,
 }
 
 // ── P2: 2D slice JSON types ───────────────────────────────────────────────────

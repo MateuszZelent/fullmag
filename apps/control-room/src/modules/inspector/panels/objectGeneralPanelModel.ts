@@ -118,12 +118,20 @@ export function resolveObjectGeneralPanelModel(
   };
 }
 
-function formatScientific(value: number, unit: string): string {
-  return `${value.toExponential(6)} ${unit}`;
+function formatScientific(value: unknown, unit: string): string {
+  const numberValue = asNumber(value);
+  return numberValue === null ? "unavailable" : `${numberValue.toExponential(6)} ${unit}`;
 }
 
-function formatMagnetization(value: ObjectMetricsResource["magnetization_average"]): string {
-  return `(${value.mx.toFixed(6)}, ${value.my.toFixed(6)}, ${value.mz.toFixed(6)})`;
+function formatMagnetization(
+  value: ObjectMetricsResource["magnetization_average"] | null | undefined,
+): string {
+  const mx = asNumber(value?.mx);
+  const my = asNumber(value?.my);
+  const mz = asNumber(value?.mz);
+  return mx === null || my === null || mz === null
+    ? "unavailable"
+    : `(${mx.toFixed(6)}, ${my.toFixed(6)}, ${mz.toFixed(6)})`;
 }
 
 export function resolveObjectMetricsPanelModel(
@@ -144,17 +152,23 @@ export function resolveObjectMetricsPanelModel(
     };
   }
 
+  const sampleStep = asNumber(metrics.step);
+  const sampleTime = asNumber(metrics.time_seconds);
+
   return {
-    anisotropy: formatScientific(metrics.energies.anisotropy, "J"),
-    demag: formatScientific(metrics.energies.demag, "J"),
-    dmi: formatScientific(metrics.energies.dmi, "J"),
-    exchange: formatScientific(metrics.energies.exchange, "J"),
+    anisotropy: formatScientific(metrics.energies?.anisotropy, "J"),
+    demag: formatScientific(metrics.energies?.demag, "J"),
+    dmi: formatScientific(metrics.energies?.dmi, "J"),
+    exchange: formatScientific(metrics.energies?.exchange, "J"),
     magnetization: formatMagnetization(metrics.magnetization_average),
-    sample: `step ${metrics.step} @ ${metrics.time_seconds.toExponential(6)} s`,
-    source: metrics.source,
+    sample:
+      sampleStep === null || sampleTime === null
+        ? "unavailable"
+        : `step ${sampleStep} @ ${sampleTime.toExponential(6)} s`,
+    source: asString(metrics.source) ?? "unavailable",
     status: metrics.has_solver_sample ? "computed" : "initial",
-    total: formatScientific(metrics.energies.total, "J"),
-    zeeman: formatScientific(metrics.energies.zeeman, "J"),
+    total: formatScientific(metrics.energies?.total, "J"),
+    zeeman: formatScientific(metrics.energies?.zeeman, "J"),
   };
 }
 

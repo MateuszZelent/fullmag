@@ -276,6 +276,134 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/analysis/hysteresis/{stage_id}/branches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_hysteresis_stage_id_branches"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/hysteresis/{stage_id}/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_hysteresis_stage_id_metrics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/hysteresis/{stage_id}/minor-loops": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_hysteresis_stage_id_minor_loops"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/hysteresis/{stage_id}/points": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_hysteresis_stage_id_points"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/hysteresis/{stage_id}/reversal-fields": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_hysteresis_stage_id_reversal_fields"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/hysteresis/{stage_id}/saturation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_hysteresis_stage_id_saturation"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/hysteresis/{stage_id}/steps/{point_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_hysteresis_stage_id_steps_point_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/hysteresis/{stage_id}/steps/{point_id}/settle-trace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_hysteresis_stage_id_steps_point_id_settle_trace"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/data/artifacts": {
         parameters: {
             query?: never;
@@ -2148,6 +2276,118 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/execution-tree": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["simulation_get_sessions_current_simulation_stages_stage_id_hysteresis_execution_tree"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/orientation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["simulation_get_sessions_current_simulation_stages_stage_id_hysteresis_orientation"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["simulation_get_sessions_current_simulation_stages_stage_id_hysteresis_plan"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/progress": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["simulation_get_sessions_current_simulation_stages_stage_id_hysteresis_progress"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/protocol": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["simulation_get_sessions_current_simulation_stages_stage_id_hysteresis_protocol"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/saturation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["simulation_get_sessions_current_simulation_stages_stage_id_hysteresis_saturation"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/settle-pipeline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["simulation_get_sessions_current_simulation_stages_stage_id_hysteresis_settle_pipeline"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/status": {
         parameters: {
             query?: never;
@@ -3391,6 +3631,11 @@ export interface components {
              *     current workspace selection.
              */
             scope_kind?: string | null;
+            /**
+             * @description Optional persisted analysis snapshot id, for example a saved
+             *     hysteresis-point magnetization state.
+             */
+            snapshot_id?: string | null;
         };
         /** @enum {string} */
         GeometryBackendTarget: "fem" | "fdm";
@@ -3502,6 +3747,264 @@ export interface components {
             status: string;
             status_reason?: string | null;
             worker: string;
+        };
+        HysteresisBranchSchema: {
+            branch_id: string;
+            /** Format: int32 */
+            branch_index: number;
+            branch_role: string;
+            /** Format: int32 */
+            direction: number;
+            /** Format: double */
+            end_field_mT: number;
+            end_point_id: number;
+            minor_loop_id?: string | null;
+            parent_branch_id?: string | null;
+            /** Format: int32 */
+            point_count: number;
+            points: components["schemas"]["HysteresisPointSchema"][];
+            /** Format: double */
+            start_field_mT: number;
+            start_point_id: number;
+        };
+        HysteresisExecutionTreeNode: {
+            children?: components["schemas"]["HysteresisExecutionTreeNode"][];
+            kind: string;
+            label: string;
+            node_id: string;
+            /** Format: int32 */
+            point_id?: number | null;
+            resource_ref?: string | null;
+            selection_ref?: string | null;
+            settle_step_id?: string | null;
+            stage_id: string;
+            status: string;
+            /** Format: int64 */
+            updated_revision: number;
+        };
+        HysteresisExecutionTreeResource: {
+            /** Format: int32 */
+            active_point_index?: number | null;
+            /** Format: int32 */
+            after: number;
+            /** Format: int32 */
+            before: number;
+            include_bookmarks: boolean;
+            include_snapshots: boolean;
+            include_warnings: boolean;
+            nodes: components["schemas"]["HysteresisExecutionTreeNode"][];
+            /** Format: int64 */
+            revision: number;
+            stage_id: string;
+            /** Format: int32 */
+            stage_index: number;
+            /** Format: int32 */
+            total_points: number;
+            window: string;
+        };
+        HysteresisMetricsSchema: {
+            /** Format: double */
+            H_c?: number | null;
+            /** Format: double */
+            H_c_minus?: number | null;
+            /** Format: double */
+            H_c_plus?: number | null;
+            /** Format: double */
+            H_eb?: number | null;
+            /** Format: double */
+            M_r_minus?: number | null;
+            /** Format: double */
+            M_r_plus?: number | null;
+            /** Format: double */
+            loop_area: number;
+            magnetization_average_weighting?: string;
+            /** Format: double */
+            saturation_preparation_field_mT?: number | null;
+            saturation_status: string;
+        };
+        HysteresisMinorLoopSchema: {
+            /** Format: double */
+            closure_error_m_parallel?: number | null;
+            closure_status?: string | null;
+            loop_id: string;
+            /** Format: double */
+            minor_loop_area?: number | null;
+            parent_branch_id?: string | null;
+            points: components["schemas"]["HysteresisPointSchema"][];
+            policy?: string | null;
+            /** Format: double */
+            recoil_susceptibility?: number | null;
+            /** Format: double */
+            return_field_mT: number;
+            return_point_id?: number | null;
+            /** Format: double */
+            reversal_field_mT: number;
+            reversal_point_id?: number | null;
+            settle_trace?: components["schemas"]["HysteresisSettleTraceEntrySchema"][];
+        };
+        HysteresisOrientationSchema: {
+            direction?: number[] | null;
+            measurement_axis?: string | null;
+            orientation?: unknown;
+            /** Format: int64 */
+            revision: number;
+            stage_id: string;
+            /** Format: int32 */
+            stage_index: number;
+        };
+        HysteresisPointSchema: {
+            branch_id?: string | null;
+            branch_ids?: string[] | null;
+            /** Format: int32 */
+            branch_index?: number | null;
+            /** Format: double */
+            field_value_mT: number;
+            has_non_converged_steps?: boolean | null;
+            is_reversal_field?: boolean | null;
+            m_avg: number[];
+            /** Format: double */
+            m_ip: number;
+            /** Format: double */
+            m_oop: number;
+            /** Format: double */
+            m_parallel: number;
+            minor_loop_id?: string | null;
+            parent_branch_id?: string | null;
+            point_id: number;
+            protocol_role?: string | null;
+            recoil_start_point_id?: number | null;
+            /** Format: int32 */
+            reversal_index?: number | null;
+            run_status?: string | null;
+            settle_status?: string | null;
+            snapshot_id?: string | null;
+            snapshot_resource_ref?: string | null;
+            status: string;
+            terminal_settle_reason?: string | null;
+            /** Format: int32 */
+            warning_count?: number | null;
+        };
+        HysteresisProgressSchema: {
+            active: boolean;
+            /** Format: int32 */
+            active_point_index?: number | null;
+            /** Format: int32 */
+            completed_points?: number | null;
+            /** Format: double */
+            current_field_mT?: number | null;
+            current_m_avg?: number[] | null;
+            /** Format: double */
+            current_m_parallel?: number | null;
+            /** Format: int32 */
+            current_point_index?: number | null;
+            /** Format: int32 */
+            current_settle_step_index?: number | null;
+            current_settle_step_kind?: string | null;
+            current_settle_step_method?: string | null;
+            /** Format: int32 */
+            queued_points?: number | null;
+            /** Format: int64 */
+            revision: number;
+            stage_id: string;
+            /** Format: int32 */
+            stage_index: number;
+            stage_kind?: string | null;
+            status: string;
+            /** Format: int32 */
+            total_points?: number | null;
+        };
+        HysteresisProtocolSchema: {
+            branch_mode?: string | null;
+            initial_protocol?: string | null;
+            /** Format: int64 */
+            revision: number;
+            saturation?: unknown;
+            stage_id: string;
+            /** Format: int32 */
+            stage_index: number;
+            storage?: unknown;
+        };
+        HysteresisSaturationProbePointSchema: {
+            /** Format: double */
+            field_value_mT: number;
+            /** Format: double */
+            m_parallel: number;
+            /** Format: double */
+            m_transverse: number;
+            probe_index: number;
+            status: string;
+            /** Format: double */
+            torque?: number | null;
+        };
+        HysteresisSaturationResultSchema: {
+            /** Format: int32 */
+            direction: number;
+            /** Format: double */
+            max_probe_field_mT: number;
+            points: components["schemas"]["HysteresisSaturationProbePointSchema"][];
+            /** Format: double */
+            preparation_field_mT?: number | null;
+            reason: string;
+            status: string;
+            /** Format: double */
+            susceptibility_threshold: number;
+            /** Format: double */
+            transverse_threshold: number;
+        };
+        HysteresisSettlePipelineSchema: {
+            /** Format: int64 */
+            revision: number;
+            settle_pipeline?: unknown;
+            stage_id: string;
+            /** Format: int32 */
+            stage_index: number;
+        };
+        HysteresisSettleTraceEntrySchema: {
+            algorithm_id: string;
+            /** Format: double */
+            energy?: number | null;
+            fallback_reason?: string | null;
+            /** Format: double */
+            field_value_mT: number;
+            method: string;
+            point_id: number;
+            /** Format: double */
+            resolved_timestep_s?: number | null;
+            /** Format: int32 */
+            retry_attempt: number;
+            status: string;
+            step_index: number;
+            /** Format: double */
+            torque?: number | null;
+        };
+        HysteresisStagePlanSchema: {
+            branch_mode?: string | null;
+            /** Format: double */
+            field_max_mT?: number | null;
+            /** Format: double */
+            field_min_mT?: number | null;
+            field_schedule?: unknown;
+            /** Format: double */
+            field_step_mT?: number | null;
+            field_values_mT?: number[] | null;
+            minor_loops?: unknown;
+            /** Format: int64 */
+            revision: number;
+            schedule_refinements?: unknown;
+            stage_id: string;
+            /** Format: int32 */
+            stage_index: number;
+        };
+        HysteresisStageSaturationSchema: {
+            analysis_resource_ref: string;
+            requested?: unknown;
+            result?: null | components["schemas"]["HysteresisSaturationResultSchema"];
+            result_status: string;
+            /** Format: int64 */
+            revision: number;
+            stage_id: string;
+            /** Format: int32 */
+            stage_index: number;
         };
         ImportSessionAssetRequest: {
             content_base64: string;
@@ -5333,6 +5836,14 @@ export interface components {
             command_id?: string | null;
             /** Format: int64 */
             completed_at_unix_ms?: number | null;
+            /** Format: double */
+            current_field_mT?: number | null;
+            /** Format: int32 */
+            current_point_index?: number | null;
+            /** Format: int32 */
+            current_settle_step_index?: number | null;
+            current_settle_step_kind?: string | null;
+            current_settle_step_method?: string | null;
             /** Format: int32 */
             index: number;
             kind?: string | null;
@@ -6415,6 +6926,229 @@ export interface operations {
             };
         };
     };
+    analysis_get_sessions_current_analysis_hysteresis_stage_id_branches: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Hysteresis stage index or stage identifier */
+                stage_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Hysteresis loop branches grouped by sweep direction */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HysteresisBranchSchema"][];
+                };
+            };
+            /** @description Hysteresis points not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_hysteresis_stage_id_metrics: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Hysteresis stage index or stage identifier */
+                stage_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Hysteresis loop metrics */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HysteresisMetricsSchema"];
+                };
+            };
+            /** @description Hysteresis metrics not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_hysteresis_stage_id_minor_loops: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Hysteresis stage index or stage identifier */
+                stage_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Minor loops */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HysteresisMinorLoopSchema"][];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_hysteresis_stage_id_points: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Hysteresis stage index or stage identifier */
+                stage_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Hysteresis sweep points */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HysteresisPointSchema"][];
+                };
+            };
+            /** @description Hysteresis points not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_hysteresis_stage_id_reversal_fields: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Hysteresis stage index or stage identifier */
+                stage_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Reversal fields */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HysteresisPointSchema"][];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_hysteresis_stage_id_saturation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Hysteresis stage index or stage identifier */
+                stage_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Hysteresis saturation probe result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HysteresisSaturationResultSchema"];
+                };
+            };
+            /** @description Hysteresis saturation probe result not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_hysteresis_stage_id_steps_point_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Hysteresis stage index or stage identifier */
+                stage_id: string;
+                /** @description Hysteresis point index */
+                point_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Hysteresis point details */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HysteresisPointSchema"];
+                };
+            };
+            /** @description Hysteresis point not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_hysteresis_stage_id_steps_point_id_settle_trace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Hysteresis stage index or stage identifier */
+                stage_id: string;
+                /** @description Hysteresis point index */
+                point_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Settle trace for a point */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HysteresisSettleTraceEntrySchema"][];
+                };
+            };
+        };
+    };
     data_get_sessions_current_data_artifacts: {
         parameters: {
             query?: never;
@@ -6650,6 +7384,11 @@ export interface operations {
             query?: {
                 /** @description Optional component projection used for statistics (`x`, `y`, `z`, `magnitude`, `full`). */
                 component?: string | null;
+                /**
+                 * @description Optional persisted analysis snapshot id, for example a saved
+                 *     hysteresis-point magnetization state.
+                 */
+                snapshot_id?: string | null;
             };
             header?: never;
             path: {
@@ -7475,6 +8214,11 @@ export interface operations {
                  *     return a contiguous center window for lightweight diagnostics.
                  */
                 max_samples?: number | null;
+                /**
+                 * @description Optional persisted analysis snapshot id, for example a saved
+                 *     hysteresis-point magnetization state.
+                 */
+                snapshot_id?: string | null;
             };
             header?: {
                 /** @description Strong ETag from a previous field-vector response */
@@ -11491,6 +12235,223 @@ export interface operations {
                 content?: never;
             };
             /** @description No active workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    simulation_get_sessions_current_simulation_stages_stage_id_hysteresis_execution_tree: {
+        parameters: {
+            query?: {
+                window?: string | null;
+                before?: number | null;
+                after?: number | null;
+                include_bookmarks?: boolean | null;
+                include_warnings?: boolean | null;
+                include_snapshots?: boolean | null;
+            };
+            header?: never;
+            path: {
+                /** @description Hysteresis stage index or stage identifier */
+                stage_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Windowed hysteresis execution tree for Explorer */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HysteresisExecutionTreeResource"];
+                };
+            };
+            /** @description No matching hysteresis stage execution tree */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    simulation_get_sessions_current_simulation_stages_stage_id_hysteresis_orientation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Hysteresis stage index or stage identifier */
+                stage_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Requested hysteresis orientation for a stage */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HysteresisOrientationSchema"];
+                };
+            };
+            /** @description No matching hysteresis stage orientation */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    simulation_get_sessions_current_simulation_stages_stage_id_hysteresis_plan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Hysteresis stage index or stage identifier */
+                stage_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Requested hysteresis field plan for a stage */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HysteresisStagePlanSchema"];
+                };
+            };
+            /** @description No matching hysteresis stage plan */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    simulation_get_sessions_current_simulation_stages_stage_id_hysteresis_progress: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Hysteresis stage index or stage identifier */
+                stage_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Live hysteresis progress for a stage */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HysteresisProgressSchema"];
+                };
+            };
+            /** @description No matching hysteresis stage progress */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    simulation_get_sessions_current_simulation_stages_stage_id_hysteresis_protocol: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Hysteresis stage index or stage identifier */
+                stage_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Requested hysteresis protocol for a stage */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HysteresisProtocolSchema"];
+                };
+            };
+            /** @description No matching hysteresis stage protocol */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    simulation_get_sessions_current_simulation_stages_stage_id_hysteresis_saturation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Hysteresis stage index or stage identifier */
+                stage_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Requested saturation policy and optional executed probe summary for a hysteresis stage */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HysteresisStageSaturationSchema"];
+                };
+            };
+            /** @description No matching hysteresis stage saturation resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    simulation_get_sessions_current_simulation_stages_stage_id_hysteresis_settle_pipeline: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Hysteresis stage index or stage identifier */
+                stage_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Requested hysteresis settle pipeline for a stage */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HysteresisSettlePipelineSchema"];
+                };
+            };
+            /** @description No matching hysteresis stage settle pipeline */
             404: {
                 headers: {
                     [name: string]: unknown;

@@ -17,6 +17,7 @@ export type CommandCategory = string;
 export interface CommandContext {
   source:
     | "explorer"
+    | "analysis-plots"
     | "inspector"
     | "menu"
     | "palette"

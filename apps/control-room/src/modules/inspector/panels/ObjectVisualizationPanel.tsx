@@ -53,6 +53,7 @@ import {
   useMeshSharedDomainManifestResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
+import { useLayoutSelector } from "@/kernel/layout/useLayout";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
@@ -593,11 +594,13 @@ function VisualizationQuantitySection({
   patch,
   pending,
   settings,
+  targetKind,
 }: {
   onFieldCatalogRequest: () => void;
   patch: PatchVisualizationTarget;
   pending: boolean;
   settings: VisualizationTargetSettings;
+  targetKind?: VisualizationTargetKind;
 }) {
   return (
     <InspectorSection title="Quantity Source">
@@ -616,7 +619,7 @@ function VisualizationQuantitySection({
           void patch(patchValue);
         }}
       >
-        {visualizationQuantityItems(settings.activeQuantityId).map((quantity) => (
+        {visualizationQuantityItems(settings.activeQuantityId, targetKind).map((quantity) => (
           <option key={quantity.value} value={quantity.value}>
             {quantity.label}
           </option>
@@ -885,6 +888,7 @@ function useObjectVisualizationPanelState(
   const target = resolveVisualizationTargetFromSelection(selection);
   const { visualizationSync } = useKernel();
   const visualization = useObjectVisualizationController();
+  const activeModuleTab = useLayoutSelector((layout) => layout.activeModuleTab);
   const visualizationState = useVisualizationStateResource();
   const manifestStatus = useSessionStatusSelector(
     selectObjectVisualizationManifestStatus,
@@ -992,7 +996,7 @@ function useObjectVisualizationPanelState(
     : [];
   const passControlsDisabled = pending || !settings?.visible;
   const primitiveDisplayToggleVisible = target
-    ? shouldShowPrimitiveDisplayToggle(target.kind, topologyFreshness)
+    ? shouldShowPrimitiveDisplayToggle(activeModuleTab, target.kind, topologyFreshness)
     : false;
   const revision = targetVisualization?.revision ?? snapshot.version;
 
@@ -1316,6 +1320,7 @@ function ObjectVisualizationPanelView({
         patch={patch}
         pending={pending}
         settings={settings}
+        targetKind={target.kind}
       />
       <VisualizationSurfaceColoringSection
         patch={patch}

@@ -11,6 +11,7 @@ import type {
   ExplorerNodeStatus,
   ModelTreeCouplingSnapshot,
   ModelTreeMaterialSnapshot,
+  ModelTreeHysteresisSettleStepSnapshot,
   ModelTreeMaterialFieldSnapshot,
   ModelTreeObjectSnapshot,
   ModelTreeObjectRegionSnapshot,
@@ -135,6 +136,24 @@ export function modelTreeSnapshotWithStageExecution(
           stateTransitionUiPresentation:
             runtimeStage?.state_transition_ui_presentation ??
             stage.stateTransitionUiPresentation ??
+            null,
+          hysteresisCurrentFieldMt:
+            runtimeStage?.current_field_mT ?? stage.hysteresisCurrentFieldMt ?? null,
+          hysteresisCurrentPointIndex:
+            runtimeStage?.current_point_index ??
+            stage.hysteresisCurrentPointIndex ??
+            null,
+          hysteresisCurrentSettleStepIndex:
+            runtimeStage?.current_settle_step_index ??
+            stage.hysteresisCurrentSettleStepIndex ??
+            null,
+          hysteresisCurrentSettleStepKind:
+            runtimeStage?.current_settle_step_kind ??
+            stage.hysteresisCurrentSettleStepKind ??
+            null,
+          hysteresisCurrentSettleStepMethod:
+            runtimeStage?.current_settle_step_method ??
+            stage.hysteresisCurrentSettleStepMethod ??
             null,
         };
       }),
@@ -663,6 +682,16 @@ function sceneStudyStageSnapshot(
   return {
     artifactName: stringValue(stage.artifact_name),
     energyTolerance: scalarText(stage.energy_tolerance),
+    hysteresisBranchMode: stringValue(stage.branch_mode) ?? stringValue(stage.branchMode),
+    hysteresisFieldMaxMt: scalarText(stage.field_max_mT),
+    hysteresisFieldMinMt: scalarText(stage.field_min_mT),
+    hysteresisFieldStepMt: scalarText(stage.field_step_mT),
+    hysteresisInitialProtocol:
+      stringValue(stage.initial_protocol) ?? stringValue(stage.initialProtocol),
+    hysteresisSaturationMode:
+      hysteresisSaturationMode(stage.saturation) ??
+      hysteresisSaturationMode(stage.saturationPolicy),
+    hysteresisSettleSteps: hysteresisSettleSteps(stage.settle_pipeline),
     index,
     kind,
     maxSteps: scalarText(stage.max_steps),
@@ -670,6 +699,51 @@ function sceneStudyStageSnapshot(
     torqueTolerance: stageTorqueToleranceApm(stage),
     untilSeconds: scalarText(stage.until_seconds),
   };
+}
+
+function hysteresisSaturationMode(value: unknown): string | null {
+  const saturation = recordValue(value);
+  if (!saturation) return null;
+  return stringValue(saturation.mode) ?? "configured";
+}
+
+function hysteresisSettleSteps(
+  value: unknown,
+): ModelTreeHysteresisSettleStepSnapshot[] {
+  const pipeline = recordValue(value);
+  if (!pipeline) return [];
+
+  const rawSteps =
+    Array.isArray(pipeline.steps)
+      ? pipeline.steps
+      : pipeline.default
+        ? [
+            pipeline.default,
+            ...(Array.isArray(pipeline.branches)
+              ? pipeline.branches
+                  .map((branch) => recordValue(branch)?.run)
+                  .filter((step): step is unknown => step != null)
+              : []),
+          ]
+        : [];
+
+  const steps: ModelTreeHysteresisSettleStepSnapshot[] = [];
+  rawSteps.forEach((step, index) => {
+    const record = recordValue(step);
+    if (record) {
+      steps.push({
+        alpha: scalarText(record.alpha),
+        energyTolerance: scalarText(record.energy_tolerance),
+        index,
+        kind: stringValue(record.kind) ?? "algorithm",
+        maxSteps: scalarText(record.max_steps),
+        method: stringValue(record.method),
+        nonConvergencePolicy: stringValue(record.on_non_convergence),
+        torqueTolerance: scalarText(record.torque_tolerance),
+      });
+    }
+  });
+  return steps;
 }
 
 function stageTorqueToleranceApm(

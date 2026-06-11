@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
+import {
+  DATA_FIELD_VECTOR_PATH,
+  VISUALIZATION_STATE_PATH,
+} from "@/kernel/api/apiPaths";
+
 import { ResourceRuntimeStore } from "./ResourceRuntimeStore";
 
 function deferred<TData>(): {
@@ -17,6 +22,11 @@ function deferred<TData>(): {
 }
 
 describe("ResourceRuntimeStore", () => {
+  const magnetizationVectorResourceKey = DATA_FIELD_VECTOR_PATH.replace(
+    "{quantity_id}",
+    "m",
+  );
+
   it("returns a stable initial snapshot for missing resource keys", () => {
     const store = new ResourceRuntimeStore<string>();
 
@@ -169,6 +179,98 @@ describe("ResourceRuntimeStore", () => {
       revision: 3,
       status: "ready",
     });
+  });
+
+  it("aborts an active load when a resource is paused", async () => {
+    const store = new ResourceRuntimeStore<string>();
+    const first = deferred<string>();
+    const signals: AbortSignal[] = [];
+    const load = vi.fn(({ signal }: { signal: AbortSignal }) => {
+      signals.push(signal);
+      return first.promise;
+    });
+
+    void store.ensureLoad({
+      externalRevision: 1,
+      load,
+      resourceKey: "data/fields/m/samples/vector",
+      resolveRevision: () => 1,
+    });
+
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(signals[0]?.aborted).toBe(false);
+
+    store.pauseLoad("data/fields/m/samples/vector");
+
+    expect(signals[0]?.aborted).toBe(true);
+    expect(store.getSnapshot("data/fields/m/samples/vector").status).toBe(
+      "loading",
+    );
+  });
+
+  it("aborts matching active loads without touching unrelated resources", async () => {
+    const store = new ResourceRuntimeStore<string>();
+    const field = deferred<string>();
+    const visualization = deferred<string>();
+    const fieldSignals: AbortSignal[] = [];
+    const visualizationSignals: AbortSignal[] = [];
+
+    void store.ensureLoad({
+      externalRevision: 1,
+      load: ({ signal }) => {
+        fieldSignals.push(signal);
+        return field.promise;
+      },
+      resourceKey: magnetizationVectorResourceKey,
+      resolveRevision: () => 1,
+    });
+    void store.ensureLoad({
+      externalRevision: 1,
+      load: ({ signal }) => {
+        visualizationSignals.push(signal);
+        return visualization.promise;
+      },
+      resourceKey: VISUALIZATION_STATE_PATH,
+      resolveRevision: () => 1,
+    });
+
+    expect(fieldSignals[0]?.aborted).toBe(false);
+    expect(visualizationSignals[0]?.aborted).toBe(false);
+
+    store.pauseMatching((resourceKey) =>
+      resourceKey.includes("/data/fields/") &&
+      resourceKey.includes("/samples/vector"),
+    );
+
+    expect(fieldSignals[0]?.aborted).toBe(true);
+    expect(visualizationSignals[0]?.aborted).toBe(false);
+  });
+
+  it("pauses new matching loads until the matching pause is released", async () => {
+    const store = new ResourceRuntimeStore<string>();
+    const load = vi.fn(async () => "field");
+    const release = store.beginPauseMatching((resourceKey) =>
+      resourceKey.includes("/data/fields/"),
+    );
+
+    await store.ensureLoad({
+      externalRevision: 1,
+      load,
+      resourceKey: magnetizationVectorResourceKey,
+      resolveRevision: () => 1,
+    });
+
+    expect(load).not.toHaveBeenCalled();
+
+    release();
+    await store.ensureLoad({
+      externalRevision: 1,
+      load,
+      resourceKey: magnetizationVectorResourceKey,
+      resolveRevision: () => 1,
+    });
+
+    expect(load).toHaveBeenCalledTimes(1);
   });
 
   it("delays heavy refetches until the minimum interval elapses", async () => {

@@ -17,6 +17,7 @@ import type {
 
 interface ChunkedScalarColorState {
   colorPalette: string;
+  fieldVector: object;
   modesKey: string;
   token: object;
   topology: object;
@@ -103,6 +104,25 @@ export function chunkedScalarColorStateIsCompatible(
   );
 }
 
+export function shouldStartChunkedScalarColorBuild({
+  builtFieldVector,
+  currentFieldVector,
+  eligibleForChunkedBuild,
+  pending,
+}: {
+  builtFieldVector: object | null;
+  currentFieldVector: object | null;
+  eligibleForChunkedBuild: boolean;
+  pending: boolean;
+}): boolean {
+  return Boolean(
+    eligibleForChunkedBuild &&
+      !pending &&
+      currentFieldVector &&
+      builtFieldVector !== currentFieldVector,
+  );
+}
+
 export function mergeViewport3DFieldScalarColors(
   base: Viewport3DFieldRenderModel | null,
   chunkedColors: ReadonlyMap<string, ScalarColorBuffer>,
@@ -151,6 +171,8 @@ export function useViewport3DChunkedScalarColors({
     chunkedScalarColorReducer,
     CHUNKED_SCALAR_COLOR_INITIAL_STATE,
   );
+  const activeBuildIdRef = useRef(0);
+  const activeControllerRef = useRef<AbortController | null>(null);
   const activeTokenRef = useRef<object | null>(null);
   const needsChunking = Boolean(
     fieldVector && fieldTransformNeedsChunking(fieldVector.pointCount),
@@ -183,6 +205,9 @@ export function useViewport3DChunkedScalarColors({
 
   useEffect(() => {
     return () => {
+      activeBuildIdRef.current += 1;
+      activeControllerRef.current?.abort();
+      activeControllerRef.current = null;
       releaseChunkedScalarColorToken(activeTokenRef.current);
       activeTokenRef.current = null;
     };
@@ -199,18 +224,32 @@ export function useViewport3DChunkedScalarColors({
     }
     releaseChunkedScalarColorToken(activeTokenRef.current);
     activeTokenRef.current = null;
+    activeBuildIdRef.current += 1;
+    activeControllerRef.current?.abort();
+    activeControllerRef.current = null;
     dispatchChunkedColorState({ type: "reset" });
   }, [chunkedColorState.chunkedState, compatibilityRequest]);
 
   useEffect(() => {
-    if (!eligibleForChunkedBuild || !topology || !fieldVector) {
+    if (
+      !shouldStartChunkedScalarColorBuild({
+        builtFieldVector: chunkedColorState.chunkedState?.fieldVector ?? null,
+        currentFieldVector: fieldVector ?? null,
+        eligibleForChunkedBuild,
+        pending: chunkedColorState.pending,
+      }) ||
+      !topology ||
+      !fieldVector
+    ) {
       return undefined;
     }
 
     const controller = new AbortController();
-    let cancelled = false;
+    const buildId = activeBuildIdRef.current + 1;
+    activeBuildIdRef.current = buildId;
+    activeControllerRef.current = controller;
     void Promise.resolve().then(() => {
-      if (!cancelled) {
+      if (activeBuildIdRef.current === buildId) {
         dispatchChunkedColorState({ type: "start" });
       }
     });
@@ -229,7 +268,7 @@ export function useViewport3DChunkedScalarColors({
         ] as const),
       );
 
-      if (!cancelled) {
+      if (activeBuildIdRef.current === buildId) {
         const token = {};
         chunkedScalarColorBuffers.set(token, new Map(entries));
         releaseChunkedScalarColorToken(activeTokenRef.current);
@@ -237,6 +276,7 @@ export function useViewport3DChunkedScalarColors({
         dispatchChunkedColorState({
           chunkedState: {
             colorPalette,
+            fieldVector,
             modesKey,
             token,
             topology,
@@ -245,17 +285,27 @@ export function useViewport3DChunkedScalarColors({
         });
       }
     })().catch(() => {
-      if (!cancelled) {
+      if (activeBuildIdRef.current === buildId) {
         dispatchChunkedColorState({ type: "finish" });
       }
       return undefined;
+    }).finally(() => {
+      if (activeBuildIdRef.current === buildId) {
+        activeControllerRef.current = null;
+      }
     });
 
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [colorPalette, eligibleForChunkedBuild, fieldVector, modes, modesKey, topology]);
+    return undefined;
+  }, [
+    chunkedColorState.chunkedState?.fieldVector,
+    chunkedColorState.pending,
+    colorPalette,
+    eligibleForChunkedBuild,
+    fieldVector,
+    modes,
+    modesKey,
+    topology,
+  ]);
 
   const compatible = chunkedScalarColorStateIsCompatible(
     chunkedColorState.chunkedState,

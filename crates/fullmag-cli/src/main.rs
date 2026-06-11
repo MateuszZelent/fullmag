@@ -976,6 +976,7 @@ mod tests {
             enable_exchange: true,
             enable_demag: true,
             external_field: None,
+            antenna_zeeman_masks: Vec::new(),
             current_modules: vec![],
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,

@@ -320,6 +320,7 @@ pub(crate) fn planned_study_controls(
             fullmag_ir::StudyIR::Relaxation { algorithm, .. } => algorithm.default_integrator(),
             fullmag_ir::StudyIR::Eigenmodes { .. } => IntegratorChoice::Heun,
             fullmag_ir::StudyIR::FrequencyResponse { .. } => IntegratorChoice::Heun,
+            fullmag_ir::StudyIR::Hysteresis { .. } => IntegratorChoice::Heun,
         },
     };
 

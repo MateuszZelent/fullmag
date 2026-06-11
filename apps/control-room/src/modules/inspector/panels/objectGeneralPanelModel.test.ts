@@ -108,4 +108,30 @@ describe("resolveObjectGeneralPanelModel", () => {
       zeeman: "3.000000e+0 J",
     });
   });
+
+  it("keeps partial object metrics from crashing the inspector", () => {
+    expect(
+      resolveObjectMetricsPanelModel({
+        energies: {},
+        has_solver_sample: false,
+        magnetization_average: { mx: 1, my: 0, mz: 0 },
+        object_id: "box",
+        revision: 22,
+        source: "fixture",
+        step: 0,
+        time_seconds: 0,
+      } as unknown as Parameters<typeof resolveObjectMetricsPanelModel>[0]),
+    ).toEqual({
+      anisotropy: "unavailable",
+      demag: "unavailable",
+      dmi: "unavailable",
+      exchange: "unavailable",
+      magnetization: "(1.000000, 0.000000, 0.000000)",
+      sample: "step 0 @ 0.000000e+0 s",
+      source: "fixture",
+      status: "initial",
+      total: "unavailable",
+      zeeman: "unavailable",
+    });
+  });
 });

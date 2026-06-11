@@ -79,6 +79,46 @@ describe("CameraControls", () => {
     expect(orbitControlsBlock).toContain("enableZoom={options.enableZoom}");
   });
 
+  it("does not re-register the wheel listener only because the camera object changed", () => {
+    const source = readFileSync(
+      new URL("./CameraControls.tsx", import.meta.url),
+      "utf8",
+    );
+    const wheelHookStart = source.indexOf("function useSmoothViewport3DWheelZoom");
+    const wheelHookBlock = source.slice(
+      wheelHookStart,
+      source.indexOf("useFrame((_, deltaSeconds)", wheelHookStart),
+    );
+    const wheelDeps = wheelHookBlock.slice(
+      wheelHookBlock.lastIndexOf("}, ["),
+      wheelHookBlock.lastIndexOf("]);") + 3,
+    );
+
+    expect(wheelHookBlock).toContain("const frameCamera = cameraRef.current;");
+    expect(wheelDeps).not.toContain("camera,");
+  });
+
+  it("registers the camera controls diagnostic global only outside production", () => {
+    const source = readFileSync(
+      new URL("./CameraControls.tsx", import.meta.url),
+      "utf8",
+    );
+    const diagnosticStart = source.indexOf(
+      'if (process.env.NODE_ENV === "production")',
+    );
+    const diagnosticBlock = source.slice(
+      diagnosticStart,
+      source.indexOf("useEffect(() => {", diagnosticStart + 1),
+    );
+
+    expect(diagnosticBlock).toContain(
+      'if (process.env.NODE_ENV === "production")',
+    );
+    expect(diagnosticBlock).toContain(
+      "window.__FULLMAG_READ_VIEWPORT_3D_CAMERA_CONTROLS__ = readDiagnostics;",
+    );
+  });
+
   it("resolves wheel zoom targets and smooth intermediate steps", () => {
     const zoomInScale = resolveViewport3DWheelZoomScale({
       deltaY: -240,

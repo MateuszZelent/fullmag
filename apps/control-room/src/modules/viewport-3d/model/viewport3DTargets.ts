@@ -16,6 +16,18 @@ export const FULL_FIELD_QUERY: FieldVectorQuery = {
   scope_kind: "full",
 };
 
+export interface HysteresisStepViewportTarget {
+  targetId: string;
+  stageId: string;
+  pointId: number;
+  snapshotId: string;
+  quantityId: string;
+  meshIdentity: string | null;
+  fieldOrientation: string | null;
+  measurementAxis: string | null;
+  fieldRevision: string | number | null;
+}
+
 export function targetForFdmDomain(
   domainId: string | null | undefined,
 ): VisualizationTargetRef | null {
@@ -42,6 +54,34 @@ export function targetForMeshPart(
     id: part.id,
     kind: "part",
     label: part.label,
+  };
+}
+
+export function resolveHysteresisStepViewportTarget(
+  selection: Selection,
+): HysteresisStepViewportTarget | null {
+  const ref = selection.ref;
+  if (
+    ref?.type !== "analysis-chart-point" ||
+    ref.targetKind !== "hysteresis-step" ||
+    !ref.targetId ||
+    !ref.stageId ||
+    ref.pointId == null ||
+    !ref.snapshotId
+  ) {
+    return null;
+  }
+
+  return {
+    targetId: ref.targetId,
+    stageId: ref.stageId,
+    pointId: ref.pointId,
+    snapshotId: ref.snapshotId,
+    quantityId: ref.quantityId ?? ref.quantity,
+    meshIdentity: ref.meshIdentity ?? null,
+    fieldOrientation: ref.fieldOrientation ?? null,
+    measurementAxis: ref.measurementAxis ?? null,
+    fieldRevision: ref.fieldRevision ?? null,
   };
 }
 

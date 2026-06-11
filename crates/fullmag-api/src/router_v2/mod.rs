@@ -343,6 +343,34 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::simulation::get_stage_execution),
         )
         .route(
+            "/v2/sessions/current/simulation/stages/:stage_id/hysteresis/plan",
+            get(handlers::simulation::get_hysteresis_plan),
+        )
+        .route(
+            "/v2/sessions/current/simulation/stages/:stage_id/hysteresis/protocol",
+            get(handlers::simulation::get_hysteresis_protocol),
+        )
+        .route(
+            "/v2/sessions/current/simulation/stages/:stage_id/hysteresis/saturation",
+            get(handlers::simulation::get_hysteresis_stage_saturation),
+        )
+        .route(
+            "/v2/sessions/current/simulation/stages/:stage_id/hysteresis/orientation",
+            get(handlers::simulation::get_hysteresis_orientation),
+        )
+        .route(
+            "/v2/sessions/current/simulation/stages/:stage_id/hysteresis/settle-pipeline",
+            get(handlers::simulation::get_hysteresis_settle_pipeline),
+        )
+        .route(
+            "/v2/sessions/current/simulation/stages/:stage_id/hysteresis/execution-tree",
+            get(handlers::simulation::get_hysteresis_execution_tree),
+        )
+        .route(
+            "/v2/sessions/current/simulation/stages/:stage_id/hysteresis/progress",
+            get(handlers::simulation::get_hysteresis_progress),
+        )
+        .route(
             "/v2/sessions/current/simulation/solver/status",
             get(handlers::simulation::get_solver_status),
         )
@@ -541,7 +569,7 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         )
         .route(
             "/v2/sessions/current/analysis/eigenmodes/branches",
-            get(handlers::analysis::get_branches),
+            get(handlers::analysis::eigen::get_branches),
         )
         .route(
             "/v2/sessions/current/analysis/eigen/branches.v2",
@@ -550,6 +578,38 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         .route(
             "/v2/sessions/current/analysis/frequency-response/magnetic-sweep.v1",
             get(handlers::analysis::get_magnetic_response_sweep_v1),
+        )
+        .route(
+            "/v2/sessions/current/analysis/hysteresis/:stage_id/points",
+            get(handlers::analysis::get_points),
+        )
+        .route(
+            "/v2/sessions/current/analysis/hysteresis/:stage_id/metrics",
+            get(handlers::analysis::get_metrics),
+        )
+        .route(
+            "/v2/sessions/current/analysis/hysteresis/:stage_id/saturation",
+            get(handlers::analysis::get_saturation),
+        )
+        .route(
+            "/v2/sessions/current/analysis/hysteresis/:stage_id/branches",
+            get(handlers::analysis::hysteresis::get_branches),
+        )
+        .route(
+            "/v2/sessions/current/analysis/hysteresis/:stage_id/minor-loops",
+            get(handlers::analysis::get_minor_loops),
+        )
+        .route(
+            "/v2/sessions/current/analysis/hysteresis/:stage_id/reversal-fields",
+            get(handlers::analysis::get_reversal_fields),
+        )
+        .route(
+            "/v2/sessions/current/analysis/hysteresis/:stage_id/steps/:point_id",
+            get(handlers::analysis::get_point_by_id),
+        )
+        .route(
+            "/v2/sessions/current/analysis/hysteresis/:stage_id/steps/:point_id/settle-trace",
+            get(handlers::analysis::get_settle_trace),
         )
         .route(
             "/v2/sessions/current/persistence/checkpoints",

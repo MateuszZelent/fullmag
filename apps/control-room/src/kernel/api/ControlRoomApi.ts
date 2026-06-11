@@ -1,5 +1,13 @@
 import {
   ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH,
+  ANALYSIS_HYSTERESIS_POINTS_PATH,
+  ANALYSIS_HYSTERESIS_METRICS_PATH,
+  ANALYSIS_HYSTERESIS_SATURATION_PATH,
+  ANALYSIS_HYSTERESIS_BRANCHES_PATH,
+  ANALYSIS_HYSTERESIS_MINOR_LOOPS_PATH,
+  ANALYSIS_HYSTERESIS_REVERSAL_FIELDS_PATH,
+  ANALYSIS_HYSTERESIS_POINT_PATH,
+  ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH,
   API_CONTRACT_VERSION_HEADER,
   DATA_FIELDS_PATH,
   DATA_ARTIFACT_PATH,
@@ -94,6 +102,13 @@ import {
   SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
   SIMULATION_SOLVER_ENERGIES_HISTORY_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
+  SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH,
+  SIMULATION_STAGE_HYSTERESIS_ORIENTATION_PATH,
+  SIMULATION_STAGE_HYSTERESIS_PLAN_PATH,
+  SIMULATION_STAGE_HYSTERESIS_PROGRESS_PATH,
+  SIMULATION_STAGE_HYSTERESIS_PROTOCOL_PATH,
+  SIMULATION_STAGE_HYSTERESIS_SATURATION_PATH,
+  SIMULATION_STAGE_HYSTERESIS_SETTLE_PIPELINE_PATH,
   SIMULATION_STAGES_EXECUTION_PATH,
   VISUALIZATION_CLIENT_ACKS_PATH,
   VISUALIZATION_STATE_PATH,
@@ -142,6 +157,19 @@ import type {
   MagnetizationAssetPatchRequest,
   MagnetizationAssetResource,
   MagneticResponseSweepResource,
+  HysteresisBranchSchema,
+  HysteresisExecutionTreeResource,
+  HysteresisMinorLoopSchema,
+  HysteresisPointSchema,
+  HysteresisMetricsSchema,
+  HysteresisOrientationSchema,
+  HysteresisProgressSchema,
+  HysteresisProtocolSchema,
+  HysteresisSaturationResultSchema,
+  HysteresisSettlePipelineSchema,
+  HysteresisSettleTraceEntrySchema,
+  HysteresisStagePlanSchema,
+  HysteresisStageSaturationSchema,
   MaterialParameterFieldListResource,
   MaterialPatchRequest,
   MaterialPropertiesResource,
@@ -277,6 +305,15 @@ export interface MeshHistogramBinElementsParams {
   partId: string;
 }
 
+export interface HysteresisExecutionTreeQuery {
+  window?: "active" | string;
+  before?: number;
+  after?: number;
+  include_bookmarks?: boolean;
+  include_warnings?: boolean;
+  include_snapshots?: boolean;
+}
+
 const CHUNKED_TOPOLOGY_THRESHOLD_BYTES = 16 * 1024 * 1024;
 const TOPOLOGY_RANGE_CHUNK_BYTES = 8 * 1024 * 1024;
 
@@ -363,6 +400,56 @@ export class ControlRoomApi {
         this.requestJson<MagneticResponseSweepResource>(
           ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH,
           options,
+        ),
+    },
+    hysteresis: {
+      points: (stageId: string, options?: RequestOptions) =>
+        this.requestJson<HysteresisPointSchema[]>(
+          ANALYSIS_HYSTERESIS_POINTS_PATH,
+          options,
+          { path: { stage_id: stageId } },
+        ),
+      metrics: (stageId: string, options?: RequestOptions) =>
+        this.requestJson<HysteresisMetricsSchema>(
+          ANALYSIS_HYSTERESIS_METRICS_PATH,
+          options,
+          { path: { stage_id: stageId } },
+        ),
+      saturation: (stageId: string, options?: RequestOptions) =>
+        this.requestJson<HysteresisSaturationResultSchema>(
+          ANALYSIS_HYSTERESIS_SATURATION_PATH,
+          options,
+          { path: { stage_id: stageId } },
+        ),
+      branches: (stageId: string, options?: RequestOptions) =>
+        this.requestJson<HysteresisBranchSchema[]>(
+          ANALYSIS_HYSTERESIS_BRANCHES_PATH,
+          options,
+          { path: { stage_id: stageId } },
+        ),
+      minorLoops: (stageId: string, options?: RequestOptions) =>
+        this.requestJson<HysteresisMinorLoopSchema[]>(
+          ANALYSIS_HYSTERESIS_MINOR_LOOPS_PATH,
+          options,
+          { path: { stage_id: stageId } },
+        ),
+      reversalFields: (stageId: string, options?: RequestOptions) =>
+        this.requestJson<HysteresisPointSchema[]>(
+          ANALYSIS_HYSTERESIS_REVERSAL_FIELDS_PATH,
+          options,
+          { path: { stage_id: stageId } },
+        ),
+      point: (stageId: string, pointId: number, options?: RequestOptions) =>
+        this.requestJson<HysteresisPointSchema>(
+          ANALYSIS_HYSTERESIS_POINT_PATH,
+          options,
+          { path: { stage_id: stageId, point_id: pointId } },
+        ),
+      settleTrace: (stageId: string, pointId: number, options?: RequestOptions) =>
+        this.requestJson<HysteresisSettleTraceEntrySchema[]>(
+          ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH,
+          options,
+          { path: { stage_id: stageId, point_id: pointId } },
         ),
     },
   };
@@ -1210,6 +1297,54 @@ export class ControlRoomApi {
           SIMULATION_STAGES_EXECUTION_PATH,
           options,
         ),
+      hysteresis: {
+        plan: (stageId: string, options?: RequestOptions) =>
+          this.requestJson<HysteresisStagePlanSchema>(
+            SIMULATION_STAGE_HYSTERESIS_PLAN_PATH,
+            options,
+            { path: { stage_id: stageId } },
+          ),
+        protocol: (stageId: string, options?: RequestOptions) =>
+          this.requestJson<HysteresisProtocolSchema>(
+            SIMULATION_STAGE_HYSTERESIS_PROTOCOL_PATH,
+            options,
+            { path: { stage_id: stageId } },
+          ),
+        saturation: (stageId: string, options?: RequestOptions) =>
+          this.requestJson<HysteresisStageSaturationSchema>(
+            SIMULATION_STAGE_HYSTERESIS_SATURATION_PATH,
+            options,
+            { path: { stage_id: stageId } },
+          ),
+        orientation: (stageId: string, options?: RequestOptions) =>
+          this.requestJson<HysteresisOrientationSchema>(
+            SIMULATION_STAGE_HYSTERESIS_ORIENTATION_PATH,
+            options,
+            { path: { stage_id: stageId } },
+          ),
+        settlePipeline: (stageId: string, options?: RequestOptions) =>
+          this.requestJson<HysteresisSettlePipelineSchema>(
+            SIMULATION_STAGE_HYSTERESIS_SETTLE_PIPELINE_PATH,
+            options,
+            { path: { stage_id: stageId } },
+          ),
+        executionTree: (
+          stageId: string,
+          query?: HysteresisExecutionTreeQuery,
+          options?: RequestOptions,
+        ) =>
+          this.requestJson<HysteresisExecutionTreeResource>(
+            SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH,
+            options,
+            { path: { stage_id: stageId }, query },
+          ),
+        progress: (stageId: string, options?: RequestOptions) =>
+          this.requestJson<HysteresisProgressSchema>(
+            SIMULATION_STAGE_HYSTERESIS_PROGRESS_PATH,
+            options,
+            { path: { stage_id: stageId } },
+          ),
+      },
     },
     solver: {
       energies: {

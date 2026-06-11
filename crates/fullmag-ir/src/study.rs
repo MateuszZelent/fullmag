@@ -1,3 +1,4 @@
+#![allow(non_snake_case)]
 #[allow(unused_imports)]
 use crate::{
     BackendTarget, DiscretizationHintsIR, ExecutionPrecision, FrequencyExcitationIR,
@@ -518,6 +519,43 @@ mod tests {
         assert_eq!(table.sample_period_s, 2e-12);
         assert_eq!(table.quantities, ["step", "t", "mx", "e_total"]);
     }
+
+    #[test]
+    fn hysteresis_field_segment_preserves_piecewise_schedule_metadata() {
+        let schedule: FieldScheduleIR = serde_json::from_value(serde_json::json!({
+            "segments": [{
+                "segmentId": "coarse_start",
+                "start": 1000.0,
+                "stop": 200.0,
+                "step": 50.0,
+                "label": "coarse_start",
+                "endpoint_policy": "include_stop",
+                "reason": "far_from_remanence"
+            }]
+        }))
+        .expect("field schedule should deserialize");
+
+        let segment = &schedule.segments[0];
+        assert_eq!(segment.segment_id, "coarse_start");
+        assert_eq!(segment.label, "coarse_start");
+        assert_eq!(segment.endpoint_policy, "include_stop");
+        assert_eq!(segment.reason, "far_from_remanence");
+    }
+
+    #[test]
+    fn hysteresis_field_window_preserves_dense_window_priority() {
+        let window: FieldWindowIR = serde_json::from_value(serde_json::json!({
+            "center_mT": 0.0,
+            "half_width_mT": 25.0,
+            "step_mT": 1.0,
+            "reason": "remanence",
+            "priority": 10
+        }))
+        .expect("field window should deserialize");
+
+        assert_eq!(window.reason, "remanence");
+        assert_eq!(window.priority, Some(10));
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -665,6 +703,52 @@ pub enum StudyIR {
         frequencies_hz: FrequencySweepIR,
         sampling: SamplingIR,
     },
+    Hysteresis {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        field_min_mT: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        field_max_mT: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        field_step_mT: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        field_values_mT: Option<Vec<f64>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        direction: Option<[f64; 3]>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        orientation: Option<FieldOrientationIR>,
+        #[serde(default = "default_measurement_axis")]
+        measurement_axis: String,
+        #[serde(default = "default_initial_protocol")]
+        initial_protocol: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        saturation: Option<SaturationProbeIR>,
+        #[serde(default = "default_branch_mode")]
+        branch_mode: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        settle_pipeline: Option<SettlePipelineIR>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        storage: Option<HysteresisStorageIR>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        field_schedule: Option<FieldScheduleIR>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        schedule_refinements: Option<Vec<FieldWindowIR>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        minor_loops: Option<Vec<MinorLoopIR>>,
+        sampling: SamplingIR,
+    },
+}
+
+static DEFAULT_DYNAMICS: std::sync::OnceLock<DynamicsIR> = std::sync::OnceLock::new();
+
+fn get_default_dynamics() -> &'static DynamicsIR {
+    DEFAULT_DYNAMICS.get_or_init(|| DynamicsIR::Llg {
+        gyromagnetic_ratio: 2.211e5,
+        integrator: "auto".to_string(),
+        fixed_timestep: None,
+        adaptive_timestep: None,
+        field_refresh: None,
+        mechanics: None,
+    })
 }
 
 impl StudyIR {
@@ -674,6 +758,7 @@ impl StudyIR {
             | StudyIR::Relaxation { dynamics, .. }
             | StudyIR::Eigenmodes { dynamics, .. }
             | StudyIR::FrequencyResponse { dynamics, .. } => dynamics,
+            StudyIR::Hysteresis { .. } => get_default_dynamics(),
         }
     }
 
@@ -682,7 +767,8 @@ impl StudyIR {
             StudyIR::TimeEvolution { sampling, .. }
             | StudyIR::Relaxation { sampling, .. }
             | StudyIR::Eigenmodes { sampling, .. }
-            | StudyIR::FrequencyResponse { sampling, .. } => sampling,
+            | StudyIR::FrequencyResponse { sampling, .. }
+            | StudyIR::Hysteresis { sampling, .. } => sampling,
         }
     }
 
@@ -690,7 +776,8 @@ impl StudyIR {
         match self {
             StudyIR::TimeEvolution { .. }
             | StudyIR::Eigenmodes { .. }
-            | StudyIR::FrequencyResponse { .. } => None,
+            | StudyIR::FrequencyResponse { .. }
+            | StudyIR::Hysteresis { .. } => None,
             StudyIR::Relaxation {
                 algorithm, stop, ..
             } => Some(RelaxationControlIR {
@@ -766,6 +853,141 @@ pub struct BackendPolicyIR {
     pub discretization_hints: Option<DiscretizationHintsIR>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FieldOrientationIR {
+    Preset { preset_name: String },
+    Sample { theta: f64, phi: f64 },
+    Global { vector: [f64; 3] },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SaturationProbeIR {
+    pub mode: String,
+    pub max_field_mT: f64,
+    pub susceptibility_threshold: f64,
+    pub transverse_threshold: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HysteresisStorageIR {
+    pub scalar_history: bool,
+    pub magnetization: String,
+    pub every_n: u32,
+    pub key_events: bool,
+    pub key_event_threshold_dm: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MinorLoopIR {
+    pub reversal_mT: f64,
+    pub return_mT: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FieldSegmentIR {
+    #[serde(default, alias = "segmentId")]
+    pub segment_id: String,
+    pub start: f64,
+    pub stop: f64,
+    pub step: f64,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default = "default_field_segment_endpoint_policy")]
+    pub endpoint_policy: String,
+    #[serde(default)]
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FieldScheduleIR {
+    pub segments: Vec<FieldSegmentIR>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FieldWindowIR {
+    pub center_mT: f64,
+    pub half_width_mT: f64,
+    pub step_mT: f64,
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SettleStepIR {
+    Relax {
+        method: String,
+        alpha: f64,
+        torque_tolerance: f64,
+        max_steps: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timestep_s: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_pseudotime_s: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_physical_time_s: Option<f64>,
+        on_non_convergence: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry_timestep_scale: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry_max_attempts: Option<u32>,
+    },
+    Minimize {
+        method: String,
+        torque_tolerance: f64,
+        energy_tolerance: f64,
+        max_steps: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timestep_s: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_pseudotime_s: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_physical_time_s: Option<f64>,
+        on_non_convergence: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry_timestep_scale: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry_max_attempts: Option<u32>,
+    },
+    DynamicsSettle {
+        method: String,
+        damping: f64,
+        max_steps: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timestep_s: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_pseudotime_s: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_physical_time_s: Option<f64>,
+        on_non_convergence: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry_timestep_scale: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry_max_attempts: Option<u32>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SettleBranchIR {
+    pub when: String,
+    pub run: SettleStepIR,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SettlePipelineIR {
+    Sequence {
+        steps: Vec<SettleStepIR>,
+    },
+    Tree {
+        default: SettleStepIR,
+        branches: Vec<SettleBranchIR>,
+    },
+}
+
 fn default_axis_z() -> [f64; 3] {
     [0.0, 0.0, 1.0]
 }
@@ -780,4 +1002,20 @@ fn default_table_autosave_kind() -> String {
 
 fn default_table_id() -> String {
     "default".to_string()
+}
+
+fn default_measurement_axis() -> String {
+    "field_axis".to_string()
+}
+
+fn default_initial_protocol() -> String {
+    "positive_saturation".to_string()
+}
+
+fn default_branch_mode() -> String {
+    "major_loop".to_string()
+}
+
+fn default_field_segment_endpoint_policy() -> String {
+    "include_stop".to_string()
 }

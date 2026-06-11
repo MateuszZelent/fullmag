@@ -3645,6 +3645,128 @@ fn fem_plan_heterogeneous_materials_populates_region_materials_for_cuda() {
 }
 
 #[test]
+fn fem_plan_promotes_active_anisotropy_axis_material_for_heterogeneous_regions() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fem;
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cuda", "device_index": 0}),
+    );
+    ir.materials[0].uniaxial_anisotropy = Some(0.0);
+    ir.materials[0].anisotropy_axis = Some([0.0, 1.0, 0.0]);
+    ir.materials.push(fullmag_ir::MaterialIR {
+        name: "CoFeB".to_string(),
+        saturation_magnetisation: 1.1e6,
+        exchange_stiffness: 15e-12,
+        damping: 0.1,
+        uniaxial_anisotropy: Some(1.0e6),
+        anisotropy_axis: Some([0.0, 0.0, 1.0]),
+        uniaxial_anisotropy_k2: None,
+        cubic_anisotropy_kc1: None,
+        cubic_anisotropy_kc2: None,
+        cubic_anisotropy_kc3: None,
+        cubic_anisotropy_axis1: None,
+        cubic_anisotropy_axis2: None,
+        ms_field: None,
+        a_field: None,
+        alpha_field: None,
+        ku_field: None,
+        ku2_field: None,
+        kc1_field: None,
+        kc2_field: None,
+        kc3_field: None,
+        interfacial_dmi: None,
+        bulk_dmi: None,
+        dind_field: None,
+        dbulk_field: None,
+    });
+    ir.geometry.entries.push(GeometryEntryIR::Box {
+        name: "cofeb_top_ring".to_string(),
+        size: [1.0, 1.0, 1.0],
+    });
+    ir.regions.push(fullmag_ir::RegionIR {
+        name: "cofeb_top_ring".to_string(),
+        geometry: "cofeb_top_ring".to_string(),
+    });
+    ir.magnets.push(fullmag_ir::MagnetIR {
+        name: "cofeb_top_ring".to_string(),
+        region: "cofeb_top_ring".to_string(),
+        material: "CoFeB".to_string(),
+        initial_magnetization: Some(InitialMagnetizationIR::Uniform {
+            value: [0.0, 1.0, 0.0],
+        }),
+    });
+    ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+        fdm_grid_assets: vec![],
+        fem_mesh_assets: vec![
+            fullmag_ir::FemMeshAssetIR {
+                geometry_name: "strip".to_string(),
+                mesh_source: None,
+                mesh: Some(fullmag_ir::MeshIR {
+                    mesh_name: "strip".to_string(),
+                    nodes: vec![
+                        [0.0, 0.0, 0.0],
+                        [1.0, 0.0, 0.0],
+                        [0.0, 1.0, 0.0],
+                        [0.0, 0.0, 1.0],
+                    ],
+                    elements: vec![[0, 1, 2, 3]],
+                    element_markers: vec![1],
+                    boundary_faces: vec![[0, 1, 2]],
+                    boundary_markers: vec![1],
+                    periodic_boundary_pairs: Vec::new(),
+                    periodic_node_pairs: Vec::new(),
+                    per_domain_quality: std::collections::HashMap::new(),
+                }),
+            },
+            fullmag_ir::FemMeshAssetIR {
+                geometry_name: "cofeb_top_ring".to_string(),
+                mesh_source: None,
+                mesh: Some(fullmag_ir::MeshIR {
+                    mesh_name: "cofeb_top_ring".to_string(),
+                    nodes: vec![
+                        [0.0, 0.0, 2.0],
+                        [1.0, 0.0, 2.0],
+                        [0.0, 1.0, 2.0],
+                        [0.0, 0.0, 3.0],
+                    ],
+                    elements: vec![[0, 1, 2, 3]],
+                    element_markers: vec![1],
+                    boundary_faces: vec![[0, 1, 2]],
+                    boundary_markers: vec![1],
+                    periodic_boundary_pairs: Vec::new(),
+                    periodic_node_pairs: Vec::new(),
+                    per_domain_quality: std::collections::HashMap::new(),
+                }),
+            },
+        ],
+        fem_domain_mesh_asset: None,
+    });
+
+    let planned = plan(&ir).expect(
+        "active anisotropy in a later region must not be blocked by an inactive first material",
+    );
+    let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+        panic!("expected FEM plan");
+    };
+
+    assert_eq!(fem.region_materials.len(), 2);
+    assert_eq!(fem.region_materials[0].object_id, "strip");
+    assert_eq!(fem.region_materials[1].object_id, "cofeb_top_ring");
+    assert!(fem.material.ms_field.is_some());
+    assert!(fem.material.a_field.is_some());
+    assert!(fem.material.alpha_field.is_some());
+    assert_eq!(fem.material.anisotropy_axis, Some([0.0, 0.0, 1.0]));
+    assert_eq!(
+        fem.material
+            .ku_field
+            .as_ref()
+            .map(|values| values.as_slice()),
+        Some([0.0, 0.0, 0.0, 0.0, 1.0e6, 1.0e6, 1.0e6, 1.0e6].as_slice())
+    );
+}
+
+#[test]
 fn fem_plan_conformal_shared_domain_duplicates_interface_nodes_for_cuda() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.backend_policy.requested_backend = BackendTarget::Fem;
@@ -6542,7 +6664,8 @@ fn fdm_prescribed_zeeman_mask_antenna_plans_with_extra_geometry() {
         StudyIR::TimeEvolution { sampling, .. }
         | StudyIR::Relaxation { sampling, .. }
         | StudyIR::Eigenmodes { sampling, .. }
-        | StudyIR::FrequencyResponse { sampling, .. } => sampling.outputs.push(output),
+        | StudyIR::FrequencyResponse { sampling, .. }
+        | StudyIR::Hysteresis { sampling, .. } => sampling.outputs.push(output),
     }
 
     let plan = plan(&ir).expect("prescribed Zeeman antenna mask should plan");
@@ -7319,5 +7442,117 @@ fn fem_sharp_aex_project_policy_with_real_marker_still_uses_projection_warning()
         }),
         "explicit-project warning must be preserved in execution provenance: {:?}",
         planned.provenance.notes
+    );
+}
+
+fn minimal_hysteresis_study() -> StudyIR {
+    StudyIR::Hysteresis {
+        field_min_mT: Some(-10.0),
+        field_max_mT: Some(10.0),
+        field_step_mT: Some(10.0),
+        field_values_mT: None,
+        direction: Some([0.0, 0.0, 1.0]),
+        orientation: Some(fullmag_ir::FieldOrientationIR::Preset {
+            preset_name: "oop_positive".to_string(),
+        }),
+        measurement_axis: "field_axis".to_string(),
+        initial_protocol: "as_authored".to_string(),
+        saturation: None,
+        branch_mode: "major_loop".to_string(),
+        settle_pipeline: Some(fullmag_ir::SettlePipelineIR::Sequence {
+            steps: vec![fullmag_ir::SettleStepIR::Relax {
+                method: "llg_overdamped".to_string(),
+                alpha: 1.0,
+                torque_tolerance: 1.0e-5,
+                max_steps: 25,
+                timestep_s: None,
+                max_pseudotime_s: None,
+                max_physical_time_s: None,
+                on_non_convergence: "continue_with_warning".to_string(),
+                retry_timestep_scale: None,
+                retry_max_attempts: None,
+            }],
+        }),
+        storage: Some(fullmag_ir::HysteresisStorageIR {
+            scalar_history: true,
+            magnetization: "none".to_string(),
+            every_n: 1,
+            key_events: false,
+            key_event_threshold_dm: 0.02,
+        }),
+        field_schedule: None,
+        schedule_refinements: None,
+        minor_loops: None,
+        sampling: SamplingIR {
+            table_autosave: None,
+            outputs: vec![OutputIR::Scalar {
+                name: "mx".to_string(),
+                every_seconds: 1.0e-12,
+            }],
+        },
+    }
+}
+
+#[test]
+fn hysteresis_fdm_study_plans_as_canonical_hysteresis_workflow() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study = minimal_hysteresis_study();
+
+    let planned = plan(&ir).expect("canonical FDM hysteresis stage should plan");
+
+    match planned.backend_plan {
+        BackendPlanIR::Fdm(fdm) => {
+            assert!(
+                fdm.relaxation.is_none(),
+                "hysteresis settle pipeline must remain owned by the hysteresis workflow, not lowered as a global relaxation control"
+            );
+            assert!(
+                fdm.external_field.is_none(),
+                "per-point hysteresis fields must be injected by the hysteresis runtime, not frozen in the base FDM plan"
+            );
+        }
+        other => panic!("expected FDM plan for bootstrap hysteresis study, got {other:?}"),
+    }
+}
+
+#[test]
+fn hysteresis_fem_study_plans_as_canonical_hysteresis_workflow() {
+    let mut ir = fem_minimal_test_ir();
+    ir.study = minimal_hysteresis_study();
+
+    let planned = plan(&ir).expect("canonical FEM hysteresis stage should plan");
+
+    match planned.backend_plan {
+        BackendPlanIR::Fem(fem) => {
+            assert!(
+                fem.relaxation.is_none(),
+                "hysteresis settle pipeline must remain owned by the hysteresis workflow, not lowered as a global FEM relaxation control"
+            );
+            assert!(
+                fem.external_field.is_none(),
+                "per-point hysteresis fields must be injected by the hysteresis runtime, not frozen in the base FEM plan"
+            );
+        }
+        other => panic!("expected FEM plan for FEM hysteresis study, got {other:?}"),
+    }
+}
+
+#[test]
+fn hysteresis_planner_reports_ir_validation_errors() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study = minimal_hysteresis_study();
+    if let StudyIR::Hysteresis { field_step_mT, .. } = &mut ir.study {
+        *field_step_mT = Some(0.0);
+    }
+
+    let error = plan(&ir).expect_err("zero hysteresis field step must fail planning");
+
+    assert!(
+        error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("field_step_mT must not be zero")),
+        "planner must surface hysteresis IR validation errors, got {:?}",
+        error.reasons
     );
 }

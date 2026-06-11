@@ -100,6 +100,11 @@ pub(crate) fn execute_direct_minimizer(
                     magnetization: Some(flatten_vectors(&state.magnetization)),
                     preview_field,
                     cached_preview_fields: None,
+                    hysteresis_field_m_t: None,
+                    hysteresis_point_index: None,
+                    hysteresis_settle_step_index: None,
+                    hysteresis_settle_step_kind: None,
+                    hysteresis_settle_step_method: None,
                     scalar_row_due: preview_due && preview_targets_global_scalar,
                     finished: false,
                 });

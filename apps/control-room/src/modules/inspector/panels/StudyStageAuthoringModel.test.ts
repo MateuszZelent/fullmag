@@ -135,6 +135,9 @@ describe("StudyStageAuthoringModel", () => {
         4,
       ),
     ).toMatchObject({
+      fieldMaxMt: "100",
+      fieldMinMt: "-100",
+      fieldStepMt: "12.5",
       fieldSteps: "17",
       kind: "hysteresis",
       stageId: "h-loop",
@@ -146,24 +149,91 @@ describe("StudyStageAuthoringModel", () => {
     expect(
       studyStageDraftToSceneStage({
         ...createDefaultStudyStageDraft("hysteresis", 0),
-        fieldSteps: "21",
+        fieldMaxMt: "200",
+        fieldMinMt: "-200",
+        fieldStepMt: "20",
         stageId: "h-loop",
-        startField: "0, 0, -0.2",
-        stopField: "0, 0, 0.2",
         torqueTolerance: "5e-7",
       }),
     ).toEqual({
+      branch_mode: "major_loop",
       entrypoint_kind: "flat_hysteresis",
-      field_steps: 21,
-      hysteresis_start_field: [0, 0, -0.2],
-      hysteresis_stop_field: [0, 0, 0.2],
+      field_max_mT: 200,
+      field_min_mT: -200,
+      field_step_mT: 20,
       hysteresis_torque_tolerance: 5e-7,
+      initial_protocol: "positive_saturation",
       kind: "hysteresis",
+      measurement_axis: "field_axis",
+      orientation: {
+        kind: "preset",
+        preset_name: "oop_positive",
+      },
+      settle_pipeline: {
+        kind: "sequence",
+        steps: [
+          {
+            alpha: 1,
+            kind: "relax",
+            max_steps: 10000,
+            method: "llg_overdamped",
+            on_non_convergence: "continue_with_warning",
+            torque_tolerance: expect.any(Number),
+          },
+        ],
+      },
       stage_id: "h-loop",
-      start_field: [0, 0, -0.2],
-      stop_field: [0, 0, 0.2],
+      storage: {
+        every_n: 5,
+        key_event_threshold_dm: 0.02,
+        key_events: true,
+        magnetization: "selected",
+        scalar_history: true,
+      },
       torque_tolerance: 5e-7,
     });
+  });
+
+  it("keeps default hysteresis authoring aligned with the Study ribbon preset", () => {
+    const stage = studyStageDraftToSceneStage(
+      createDefaultStudyStageDraft("hysteresis", 0),
+    );
+
+    expect(stage).toMatchObject({
+      branch_mode: "major_loop",
+      entrypoint_kind: "flat_hysteresis",
+      field_max_mT: 100,
+      field_min_mT: -100,
+      field_step_mT: 10,
+      initial_protocol: "positive_saturation",
+      kind: "hysteresis",
+      measurement_axis: "field_axis",
+      orientation: {
+        kind: "preset",
+        preset_name: "oop_positive",
+      },
+      settle_pipeline: {
+        kind: "sequence",
+        steps: [
+          {
+            kind: "relax",
+            method: "llg_overdamped",
+          },
+        ],
+      },
+      stage_id: "hysteresis-1",
+    });
+  });
+
+  it("accepts zero-valued sample orientation angles for OOP/IP hysteresis authoring", () => {
+    expect(
+      validateStudyStageDraft({
+        ...createDefaultStudyStageDraft("hysteresis", 0),
+        orientationMode: "sample",
+        thetaDeg: "0",
+        phiDeg: "0",
+      }),
+    ).toEqual([]);
   });
 
   it("serializes relax and run drafts into a study stages merge patch", () => {
@@ -361,16 +431,133 @@ describe("StudyStageAuthoringModel", () => {
     expect(
       validateStudyStageDraft({
         ...createDefaultStudyStageDraft("hysteresis", 0),
-        fieldSteps: "0",
-        startField: "0, 1",
-        stopField: "",
+        fieldMaxMt: "nan",
+        fieldMinMt: "",
+        fieldStepMt: "0",
         torqueTolerance: "-1",
       }).map((issue) => issue.message),
     ).toEqual([
       "Torque tolerance must be a positive finite number.",
-      "Start field must contain three finite numbers.",
-      "Stop field must contain three finite numbers.",
-      "Field steps must be a positive integer.",
+      "Minimum field is required.",
+      "Maximum field must be a finite number.",
+      "Field step must be a positive finite number.",
     ]);
+  });
+
+  it("rejects malformed hysteresis JSON authoring fields", () => {
+    expect(
+      validateStudyStageDraft({
+        ...createDefaultStudyStageDraft("hysteresis", 0),
+        denseWindows: "{}",
+        fieldSegments: "{}",
+        minorLoops: "{}",
+        settleBranches: "{}",
+        settleSteps: "{}",
+        storagePolicy: "[]",
+      }).map((issue) => issue.message),
+    ).toEqual([
+      "Settle steps must be a valid JSON array.",
+      "Settle branches must be a valid JSON array.",
+      "Field segments must be a valid JSON array.",
+      "Dense windows must be a valid JSON array.",
+      "Minor loops must be a valid JSON array.",
+      "Storage policy must be a valid JSON object.",
+    ]);
+  });
+
+  it("validates hysteresis piecewise field segment shape", () => {
+    expect(
+      validateStudyStageDraft({
+        ...createDefaultStudyStageDraft("hysteresis", 0),
+        fieldScheduleMode: "piecewise",
+        fieldSegments: JSON.stringify([
+          {
+            label: "bad segment",
+            startField: 25,
+            stopField: 25,
+            step: 0,
+          },
+        ]),
+      }).map((issue) => issue.message),
+    ).toEqual([
+      "Field segment 1 requires segmentId.",
+      "Field segment 1 requires endpointPolicy.",
+      "Field segment 1 step must be a positive finite number.",
+      "Field segment 1 startField and stopField must differ.",
+    ]);
+  });
+
+  it("serializes UI-authored hysteresis piecewise segments to canonical keys", () => {
+    expect(
+      studyStageDraftToSceneStage({
+        ...createDefaultStudyStageDraft("hysteresis", 0),
+        fieldScheduleMode: "piecewise",
+        fieldSegments: JSON.stringify([
+          {
+            endpointPolicy: "include_stop",
+            label: "coarse start",
+            reason: "far_from_remanence",
+            segmentId: "coarse_start",
+            startField: 100,
+            step: 20,
+            stopField: -20,
+          },
+        ]),
+      }),
+    ).toMatchObject({
+      field_schedule: {
+        segments: [
+          {
+            endpoint_policy: "include_stop",
+            label: "coarse start",
+            reason: "far_from_remanence",
+            segment_id: "coarse_start",
+            start: 100,
+            step: 20,
+            stop: -20,
+          },
+        ],
+      },
+    });
+  });
+
+  it("serializes UI-authored hysteresis dense windows and minor loops to canonical keys", () => {
+    expect(
+      studyStageDraftToSceneStage({
+        ...createDefaultStudyStageDraft("hysteresis", 0),
+        denseWindows: JSON.stringify([
+          {
+            centerMt: 0,
+            halfWidthMt: 25,
+            priority: 10,
+            reason: "remanence",
+            stepMt: 1,
+          },
+        ]),
+        minorLoops: JSON.stringify([
+          {
+            returnMt: -25,
+            reversalMt: 25,
+          },
+        ]),
+        protocolKind: "major_with_minor_loops",
+      }),
+    ).toMatchObject({
+      minor_loops: [
+        {
+          return_mT: -25,
+          reversal_mT: 25,
+        },
+      ],
+      schedule_refinements: [
+        {
+          center_mT: 0,
+          half_width_mT: 25,
+          priority: 10,
+          reason: "remanence",
+          step_mT: 1,
+        },
+      ],
+    });
   });
 });

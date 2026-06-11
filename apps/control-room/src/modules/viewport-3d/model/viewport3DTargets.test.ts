@@ -8,6 +8,7 @@ import {
   resolveGlobalObjectVisualizationSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import {
+  resolveHysteresisStepViewportTarget,
   resolveViewport3DSelectionBounds,
   targetForFdmDomain,
 } from "./viewport3DTargets";
@@ -23,6 +24,45 @@ describe("viewport3DTargets", () => {
 
   it("does not create an FDM visualization target without a domain id", () => {
     expect(targetForFdmDomain(null)).toBeNull();
+  });
+
+  it("resolves hysteresis point selections to read-only snapshot targets", () => {
+    const selection: Selection = {
+      kind: "analysis.chart-point",
+      label: "Point 4 (25 mT)",
+      moduleSource: "analysis-plots",
+      nodeId: "analysis:hysteresis:hysteresis-1:point:4",
+      objectId: null,
+      ref: {
+        chartId: "hysteresis:hysteresis-1",
+        kind: "analysis.chart-point",
+        nodeId: "analysis:hysteresis:hysteresis-1:point:4",
+        pointId: 4,
+        quantity: "m",
+        rowIndex: 4,
+        seriesId: "hysteresis:hysteresis-1:m",
+        snapshotId: "hysteresis_point_005",
+        stageId: "hysteresis-1",
+        tableId: "hysteresis:hysteresis-1",
+        targetId: "hysteresis-step:hysteresis-1:4",
+        targetKind: "hysteresis-step",
+        type: "analysis-chart-point",
+        x: 25,
+      y: 0.8,
+      },
+    };
+
+    expect(resolveHysteresisStepViewportTarget(selection)).toEqual({
+      fieldRevision: null,
+      fieldOrientation: null,
+      measurementAxis: null,
+      meshIdentity: null,
+      pointId: 4,
+      quantityId: "m",
+      snapshotId: "hysteresis_point_005",
+      stageId: "hysteresis-1",
+      targetId: "hysteresis-step:hysteresis-1:4",
+    });
   });
 
   it("maps canonical global mesh/vector layers into object render defaults", () => {

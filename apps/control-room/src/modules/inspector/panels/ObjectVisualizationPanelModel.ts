@@ -178,10 +178,15 @@ export function resolveObjectVisualizationPanelTopologyFreshness({
 }
 
 export function shouldShowPrimitiveDisplayToggle(
+  activeModuleTab: string | null | undefined,
   targetKind: VisualizationTargetKind,
   topologyFreshness: VisualizationTopologyFreshness | null,
 ): boolean {
-  return targetKind === "object" && topologyFreshness !== "current";
+  return (
+    activeModuleTab === "geometry" &&
+    targetKind === "object" &&
+    topologyFreshness !== "current"
+  );
 }
 
 export const VISUALIZATION_COLOR_MODE_ITEMS: Array<{
@@ -292,17 +297,25 @@ export function buildVisualizationVectorBudgetDiagnostic({
 
 export function visualizationQuantityItems(
   activeQuantityId: string,
+  targetKind?: VisualizationTargetKind,
 ): Array<{ label: string; value: string }> {
+  let baseItems = VISUALIZATION_QUANTITY_ITEMS;
+  if (targetKind === "airbox") {
+    baseItems = VISUALIZATION_QUANTITY_ITEMS.filter(
+      (item) => !isMagneticOnlyQuantityId(item.value),
+    );
+  }
+
   if (
     !activeQuantityId ||
-    VISUALIZATION_QUANTITY_ITEMS.some((item) => item.value === activeQuantityId)
+    baseItems.some((item) => item.value === activeQuantityId)
   ) {
-    return VISUALIZATION_QUANTITY_ITEMS;
+    return baseItems;
   }
 
   return [
     { value: activeQuantityId, label: activeQuantityId },
-    ...VISUALIZATION_QUANTITY_ITEMS,
+    ...baseItems,
   ];
 }
 

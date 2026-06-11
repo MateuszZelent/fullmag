@@ -16,11 +16,11 @@ const diagnostics: RegionDiagnosticPresentationInput[] = [
   },
   {
     capabilityGate: "regions.material_override",
-    code: "region_material_realization_pending",
+    code: "region_material_realization_required",
     diagnosticId: "material",
-    message: "Material realization is pending.",
+    message: "Material realization is required during execution planning.",
     realizationStatus: "blocked",
-    severity: "error",
+    severity: "info",
   },
   {
     capabilityGate: "regions.realized_materialization",
@@ -47,20 +47,12 @@ describe("regionDiagnosticPresentation", () => {
     ]);
   });
 
-  it("renders backend errors as error feedback", () => {
+  it("does not render informational capability notes as inline warnings", () => {
     expect(
       resolveRegionInlineDiagnostics(diagnostics, [
         "regions.material_override",
       ]),
-    ).toEqual([
-      {
-        capabilityLabel: "Regional material realization",
-        diagnosticId: "material",
-        kind: "error",
-        message:
-          "Regional material realization: Material realization is pending.",
-      },
-    ]);
+    ).toEqual([]);
   });
 
   it("labels realized materialization blockers for region identity", () => {

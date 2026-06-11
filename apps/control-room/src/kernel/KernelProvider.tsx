@@ -12,6 +12,7 @@ import { normalizeQuantityIdOrDefault } from "./api/quantityIds";
 import { RequestDiagnosticsController } from "./api/RequestDiagnosticsController";
 import { GEOMETRY_LIFECYCLE_COMMANDS } from "./authoring/geometryLifecycleCommandContributions";
 import { MAGNETIZATION_TEXTURE_COMMANDS } from "./authoring/magnetization-texture/commands";
+import { REGION_COMMANDS } from "./authoring/regionCommandContributions";
 import { createCommandContext } from "./commands/commandContext";
 import { CommandRegistry } from "./commands/CommandRegistry";
 import {
@@ -89,6 +90,9 @@ function createKernel(): KernelApi {
     commands.register(cmd);
   }
   for (const cmd of MAGNETIZATION_TEXTURE_COMMANDS) {
+    commands.register(cmd);
+  }
+  for (const cmd of REGION_COMMANDS) {
     commands.register(cmd);
   }
   for (const cmd of VISUALIZATION_TARGET_COMMANDS) {

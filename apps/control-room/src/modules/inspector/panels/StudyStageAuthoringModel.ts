@@ -1,4 +1,15 @@
-import type { AuthoringTransactionRequest, JsonObject } from "@/kernel/api/apiTypes";
+import type { AuthoringTransactionRequest, JsonObject, JsonValue } from "@/kernel/api/apiTypes";
+import {
+  DEFAULT_HYSTERESIS_BRANCH_MODE,
+  DEFAULT_HYSTERESIS_FIELD_MAX_MT,
+  DEFAULT_HYSTERESIS_FIELD_MIN_MT,
+  DEFAULT_HYSTERESIS_FIELD_STEP_MT,
+  DEFAULT_HYSTERESIS_INITIAL_PROTOCOL,
+  DEFAULT_HYSTERESIS_MEASUREMENT_AXIS,
+  DEFAULT_HYSTERESIS_ORIENTATION_PRESET,
+  DEFAULT_HYSTERESIS_SETTLE_STEP,
+  DEFAULT_HYSTERESIS_STORAGE,
+} from "@/shared/domain/study/hysteresisDefaults";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -24,6 +35,9 @@ export interface StudyStageDraft {
   equilibriumSource: string;
   excitationField: string;
   fieldEvery: string;
+  fieldMaxMt: string;
+  fieldMinMt: string;
+  fieldStepMt: string;
   fieldSteps: string;
   format: string;
   frequenciesHz: string;
@@ -46,6 +60,25 @@ export interface StudyStageDraft {
   targetFrequency: string;
   torqueTolerance: string;
   untilSeconds: string;
+  // Hysteresis expansion fields
+  protocolKind: string;
+  initialStatePolicy: string;
+  orientationMode: string;
+  thetaDeg: string;
+  phiDeg: string;
+  customDirection: string;
+  measurementAxis: string;
+  fieldScheduleMode: string;
+  fieldSegments: string;
+  denseWindows: string;
+  saturationMode: string;
+  maxProbeField: string;
+  saturationThresholds: string;
+  settlePipelineMode: string;
+  settleSteps: string;
+  settleBranches: string;
+  minorLoops: string;
+  storagePolicy: string;
 }
 
 export interface StudyStageDraftValidation {
@@ -67,6 +100,9 @@ const DEFAULT_RELAX_STAGE_DRAFT: StudyStageDraft = {
   equilibriumSource: "relax",
   excitationField: "0, 0, 1",
   fieldEvery: "",
+  fieldMaxMt: "",
+  fieldMinMt: "",
+  fieldStepMt: "",
   fieldSteps: "",
   format: "",
   frequenciesHz: "1e9",
@@ -89,6 +125,24 @@ const DEFAULT_RELAX_STAGE_DRAFT: StudyStageDraft = {
   targetFrequency: "",
   torqueTolerance: "1e-6",
   untilSeconds: "",
+  protocolKind: "",
+  initialStatePolicy: "",
+  orientationMode: "",
+  thetaDeg: "",
+  phiDeg: "",
+  customDirection: "",
+  measurementAxis: "",
+  fieldScheduleMode: "",
+  fieldSegments: "",
+  denseWindows: "",
+  saturationMode: "",
+  maxProbeField: "",
+  saturationThresholds: "",
+  settlePipelineMode: "",
+  settleSteps: "",
+  settleBranches: "",
+  minorLoops: "",
+  storagePolicy: "",
 };
 
 const DEFAULT_RUN_STAGE_DRAFT: StudyStageDraft = {
@@ -105,6 +159,9 @@ const DEFAULT_RUN_STAGE_DRAFT: StudyStageDraft = {
   equilibriumSource: "relax",
   excitationField: "0, 0, 1",
   fieldEvery: "",
+  fieldMaxMt: "",
+  fieldMinMt: "",
+  fieldStepMt: "",
   fieldSteps: "",
   format: "",
   frequenciesHz: "1e9",
@@ -127,6 +184,24 @@ const DEFAULT_RUN_STAGE_DRAFT: StudyStageDraft = {
   targetFrequency: "",
   torqueTolerance: "",
   untilSeconds: "1e-9",
+  protocolKind: "",
+  initialStatePolicy: "",
+  orientationMode: "",
+  thetaDeg: "",
+  phiDeg: "",
+  customDirection: "",
+  measurementAxis: "",
+  fieldScheduleMode: "",
+  fieldSegments: "",
+  denseWindows: "",
+  saturationMode: "",
+  maxProbeField: "",
+  saturationThresholds: "",
+  settlePipelineMode: "",
+  settleSteps: "",
+  settleBranches: "",
+  minorLoops: "",
+  storagePolicy: "",
 };
 
 const DEFAULT_EIGENMODES_STAGE_DRAFT: StudyStageDraft = {
@@ -156,6 +231,9 @@ const DEFAULT_HYSTERESIS_STAGE_DRAFT: StudyStageDraft = {
   ...DEFAULT_RELAX_STAGE_DRAFT,
   algorithm: "",
   dt: "",
+  fieldMaxMt: String(DEFAULT_HYSTERESIS_FIELD_MAX_MT),
+  fieldMinMt: String(DEFAULT_HYSTERESIS_FIELD_MIN_MT),
+  fieldStepMt: String(DEFAULT_HYSTERESIS_FIELD_STEP_MT),
   fieldSteps: "21",
   kind: "hysteresis",
   maxSteps: "",
@@ -163,6 +241,24 @@ const DEFAULT_HYSTERESIS_STAGE_DRAFT: StudyStageDraft = {
   solver: "",
   startField: "0, 0, -0.1",
   stopField: "0, 0, 0.1",
+  protocolKind: DEFAULT_HYSTERESIS_BRANCH_MODE,
+  initialStatePolicy: DEFAULT_HYSTERESIS_INITIAL_PROTOCOL,
+  orientationMode: "preset",
+  thetaDeg: "0",
+  phiDeg: "0",
+  customDirection: DEFAULT_HYSTERESIS_ORIENTATION_PRESET,
+  measurementAxis: DEFAULT_HYSTERESIS_MEASUREMENT_AXIS,
+  fieldScheduleMode: "simple",
+  fieldSegments: "[]",
+  denseWindows: "[]",
+  saturationMode: "none",
+  maxProbeField: "300.0",
+  saturationThresholds: "1e-3, 1e-2",
+  settlePipelineMode: "sequence",
+  settleSteps: JSON.stringify([DEFAULT_HYSTERESIS_SETTLE_STEP]),
+  settleBranches: "[]",
+  minorLoops: "[]",
+  storagePolicy: JSON.stringify(DEFAULT_HYSTERESIS_STORAGE),
 };
 
 export function createStudyStageDraft(
@@ -207,19 +303,95 @@ export function createStudyStageDraft(
     };
   }
   if (kind === "hysteresis") {
+    const orientation = asRecord(record?.orientation);
+    let orientationMode = "global";
+    let thetaDeg = "0";
+    let phiDeg = "0";
+    let customDirection = "0, 0, 1";
+    if (orientation) {
+      if (orientation.kind === "preset") {
+        orientationMode = "preset";
+        customDirection = scalarText(orientation.preset_name, "");
+      } else if (orientation.kind === "sample") {
+        orientationMode = "sample";
+        thetaDeg = scalarText(orientation.theta, "0");
+        phiDeg = scalarText(orientation.phi, "0");
+      } else if (orientation.kind === "global") {
+        orientationMode = "global";
+        customDirection = Array.isArray(orientation.vector) ? orientation.vector.join(", ") : "";
+      }
+    } else if (record?.direction) {
+      customDirection = Array.isArray(record.direction) ? record.direction.join(", ") : String(record.direction);
+    }
+
+    const saturation = asRecord(record?.saturation);
+    let saturationMode = "none";
+    let maxProbeField = "300.0";
+    let saturationThresholds = "1e-3, 1e-2";
+    if (saturation) {
+      saturationMode = scalarText(saturation.mode, "auto");
+      maxProbeField = String(saturation.max_field_mT ?? 300.0);
+      saturationThresholds = `${saturation.susceptibility_threshold ?? 1e-3}, ${saturation.transverse_threshold ?? 1e-2}`;
+    }
+
+    const settlePipeline = asRecord(record?.settle_pipeline);
+    let settlePipelineMode = "sequence";
+    let settleSteps = "[]";
+    let settleBranches = "[]";
+    if (settlePipeline) {
+      settlePipelineMode = scalarText(settlePipeline.kind, "sequence");
+      if (settlePipeline.steps) {
+        settleSteps = JSON.stringify(settlePipeline.steps);
+      } else if (settlePipeline.default) {
+        settleSteps = JSON.stringify([settlePipeline.default]);
+      }
+      if (settlePipeline.branches) {
+        settleBranches = JSON.stringify(settlePipeline.branches);
+      }
+    }
+
+    const fieldSchedule = asRecord(record?.field_schedule);
+    let fieldScheduleMode = "simple";
+    let fieldSegments = "[]";
+    if (fieldSchedule && Array.isArray(fieldSchedule.segments)) {
+      fieldScheduleMode = "piecewise";
+      fieldSegments = JSON.stringify(fieldSchedule.segments);
+    }
+
+    const legacyStartField = record?.start_field ?? record?.hysteresis_start_field;
+    const legacyStopField = record?.stop_field ?? record?.hysteresis_stop_field;
+    const legacyFieldSteps = record?.field_steps ?? record?.steps ?? record?.hysteresis_steps;
+    const legacyFieldRange = legacyVectorSweepToMilliteslaRange(
+      legacyStartField,
+      legacyStopField,
+      legacyFieldSteps,
+    );
+
     return {
       ...DEFAULT_HYSTERESIS_STAGE_DRAFT,
+      fieldMaxMt: scalarText(
+        record?.field_max_mT,
+        legacyFieldRange.max ?? DEFAULT_HYSTERESIS_STAGE_DRAFT.fieldMaxMt,
+      ),
+      fieldMinMt: scalarText(
+        record?.field_min_mT,
+        legacyFieldRange.min ?? DEFAULT_HYSTERESIS_STAGE_DRAFT.fieldMinMt,
+      ),
+      fieldStepMt: scalarText(
+        record?.field_step_mT,
+        legacyFieldRange.step ?? DEFAULT_HYSTERESIS_STAGE_DRAFT.fieldStepMt,
+      ),
       fieldSteps: scalarText(
-        record?.field_steps ?? record?.steps ?? record?.hysteresis_steps,
+        legacyFieldSteps,
         DEFAULT_HYSTERESIS_STAGE_DRAFT.fieldSteps,
       ),
       stageId: stringValue(record?.stage_id ?? record?.id, `stage-${index + 1}`),
       startField: vectorText(
-        record?.start_field ?? record?.hysteresis_start_field,
+        legacyStartField,
         DEFAULT_HYSTERESIS_STAGE_DRAFT.startField,
       ),
       stopField: vectorText(
-        record?.stop_field ?? record?.hysteresis_stop_field,
+        legacyStopField,
         DEFAULT_HYSTERESIS_STAGE_DRAFT.stopField,
       ),
       torqueTolerance: scalarText(
@@ -228,6 +400,24 @@ export function createStudyStageDraft(
           record?.torque_tolerance_apm,
         DEFAULT_HYSTERESIS_STAGE_DRAFT.torqueTolerance,
       ),
+      protocolKind: scalarText(record?.branch_mode ?? record?.protocol_kind, "major_loop"),
+      initialStatePolicy: scalarText(record?.initial_protocol ?? record?.initial_state_policy, "positive_saturation"),
+      orientationMode,
+      thetaDeg,
+      phiDeg,
+      customDirection,
+      measurementAxis: scalarText(record?.measurement_axis, "field_axis"),
+      fieldScheduleMode,
+      fieldSegments,
+      denseWindows: objectText(record?.schedule_refinements ?? record?.dense_windows),
+      saturationMode,
+      maxProbeField,
+      saturationThresholds,
+      settlePipelineMode,
+      settleSteps,
+      settleBranches,
+      minorLoops: objectText(record?.minor_loops),
+      storagePolicy: record?.storage ? JSON.stringify(record.storage) : DEFAULT_HYSTERESIS_STAGE_DRAFT.storagePolicy,
     };
   }
 
@@ -338,24 +528,120 @@ export function studyStageDraftToSceneStage(
     return stage;
   }
   if (draft.kind === "hysteresis") {
-    const startField = requiredVector3(draft.startField, "start_field");
-    const stopField = requiredVector3(draft.stopField, "stop_field");
     const torqueTolerance = requiredNumber(
       draft.torqueTolerance,
       "torque_tolerance",
     );
-    return {
+
+    // Build orientation object
+    let orientation: JsonObject | null = null;
+    if (draft.orientationMode === "preset") {
+      orientation = {
+        kind: "preset",
+        preset_name: draft.customDirection.trim() || "oop_positive",
+      };
+    } else if (draft.orientationMode === "sample") {
+      orientation = {
+        kind: "sample",
+        theta: Number(draft.thetaDeg.trim() || 0),
+        phi: Number(draft.phiDeg.trim() || 0),
+      };
+    } else if (draft.orientationMode === "global") {
+      orientation = {
+        kind: "global",
+        vector: requiredVector3(draft.customDirection, "custom_direction"),
+      };
+    }
+
+    // Build saturation object
+    let saturation: JsonObject | null = null;
+    if (draft.saturationMode && draft.saturationMode !== "none") {
+      const thresholds = finiteNumberList(draft.saturationThresholds);
+      saturation = {
+        mode: draft.saturationMode,
+        max_field_mT: requiredNumber(draft.maxProbeField, "max_probe_field"),
+        susceptibility_threshold: thresholds[0] ?? 1e-3,
+        transverse_threshold: thresholds[1] ?? 1e-2,
+      };
+    }
+
+    // Build settle pipeline
+    let settle_pipeline: JsonObject | null = null;
+    if (draft.settleSteps.trim() && draft.settleSteps.trim() !== "[]") {
+      const steps = parseJsonArrayValue(draft.settleSteps.trim());
+      if (draft.settlePipelineMode === "sequence") {
+        settle_pipeline = {
+          kind: "sequence",
+          steps,
+        };
+      } else if (draft.settlePipelineMode === "tree") {
+        const branches = draft.settleBranches.trim() && draft.settleBranches.trim() !== "[]"
+          ? parseJsonArrayValue(draft.settleBranches.trim())
+          : [];
+        settle_pipeline = {
+          kind: "tree",
+          default: steps[0] || {
+            kind: "relax",
+            method: "llg_overdamped",
+            alpha: 1.0,
+            torque_tolerance: 1e-5,
+            max_steps: 10000,
+            on_non_convergence: "continue_with_warning",
+          },
+          branches,
+        };
+      }
+    }
+
+    // Build field schedule or default simple min/max
+    let field_schedule: JsonObject | null = null;
+    if (draft.fieldScheduleMode === "piecewise" && draft.fieldSegments.trim() && draft.fieldSegments.trim() !== "[]") {
+      field_schedule = {
+        segments: parseJsonArrayValue(draft.fieldSegments.trim()).map(
+          normalizeHysteresisFieldSegment,
+        ),
+      };
+    }
+
+    // Parse other JSON fields
+    const schedule_refinements = draft.denseWindows.trim() && draft.denseWindows.trim() !== "[]"
+      ? parseJsonArrayValue(draft.denseWindows.trim()).map(
+        normalizeHysteresisDenseWindow,
+      )
+      : null;
+    const minor_loops = draft.minorLoops.trim() && draft.minorLoops.trim() !== "[]"
+      ? parseJsonArrayValue(draft.minorLoops.trim()).map(
+        normalizeHysteresisMinorLoop,
+      )
+      : null;
+    const storage = draft.storagePolicy.trim()
+      ? parseJsonObjectValue(draft.storagePolicy.trim())
+      : null;
+
+    const result: JsonObject = {
       entrypoint_kind: "flat_hysteresis",
-      field_steps: requiredInteger(draft.fieldSteps, "field_steps"),
-      hysteresis_start_field: startField,
-      hysteresis_stop_field: stopField,
-      hysteresis_torque_tolerance: torqueTolerance,
+      field_max_mT: requiredNumber(draft.fieldMaxMt, "field_max_mT"),
+      field_min_mT: requiredSignedNumber(draft.fieldMinMt, "field_min_mT"),
+      field_step_mT: requiredNumber(draft.fieldStepMt, "field_step_mT"),
       kind: "hysteresis",
       stage_id: requiredText(draft.stageId, "hysteresis"),
-      start_field: startField,
-      stop_field: stopField,
-      torque_tolerance: torqueTolerance,
+      measurement_axis: draft.measurementAxis || "field_axis",
+      branch_mode: draft.protocolKind || "major_loop",
+      initial_protocol: draft.initialStatePolicy || "positive_saturation",
     };
+
+    if (orientation) result.orientation = orientation;
+    if (saturation) result.saturation = saturation;
+    if (settle_pipeline) result.settle_pipeline = settle_pipeline;
+    if (field_schedule) result.field_schedule = field_schedule;
+    if (schedule_refinements) result.schedule_refinements = schedule_refinements;
+    if (minor_loops) result.minor_loops = minor_loops;
+    if (storage) result.storage = storage;
+
+    result.hysteresis_torque_tolerance = torqueTolerance;
+    result.torque_tolerance = torqueTolerance;
+
+    return result;
   }
 
   const stage: JsonObject = {
@@ -426,9 +712,39 @@ export function validateStudyStageDraft(
   }
   if (draft.kind === "hysteresis") {
     validatePositiveNumber(issues, draft.torqueTolerance, "Torque tolerance", true);
-    validateRequiredVector3(issues, draft.startField, "Start field");
-    validateRequiredVector3(issues, draft.stopField, "Stop field");
-    validatePositiveInteger(issues, draft.fieldSteps, "Field steps", true);
+    validateSignedNumber(issues, draft.fieldMinMt, "Minimum field", true);
+    validateSignedNumber(issues, draft.fieldMaxMt, "Maximum field", true);
+    validatePositiveNumber(issues, draft.fieldStepMt, "Field step", true);
+
+    if (draft.orientationMode === "global") {
+      validateRequiredVector3(issues, draft.customDirection, "Orientation vector");
+    }
+    if (draft.orientationMode === "sample") {
+      validateFiniteNumber(issues, draft.thetaDeg, "Theta", false);
+      validateFiniteNumber(issues, draft.phiDeg, "Phi", false);
+    }
+    if (draft.saturationMode && draft.saturationMode !== "none") {
+      validatePositiveNumber(issues, draft.maxProbeField, "Max probe field", true);
+    }
+    if (draft.settleSteps.trim() && draft.settleSteps.trim() !== "[]") {
+      validateJsonArray(issues, draft.settleSteps, "Settle steps");
+    }
+    if (draft.settleBranches.trim() && draft.settleBranches.trim() !== "[]") {
+      validateJsonArray(issues, draft.settleBranches, "Settle branches");
+    }
+    if (draft.fieldSegments.trim() && draft.fieldSegments.trim() !== "[]") {
+      validateJsonArray(issues, draft.fieldSegments, "Field segments", validateFieldSegment);
+    }
+    if (draft.denseWindows.trim() && draft.denseWindows.trim() !== "[]") {
+      validateJsonArray(issues, draft.denseWindows, "Dense windows");
+    }
+    if (draft.minorLoops.trim() && draft.minorLoops.trim() !== "[]") {
+      validateJsonArray(issues, draft.minorLoops, "Minor loops");
+    }
+    if (draft.storagePolicy.trim()) {
+      validateJsonObject(issues, draft.storagePolicy, "Storage policy");
+    }
+
     return issues;
   }
 
@@ -493,6 +809,128 @@ function validatePositiveNumber(
       message: `${label} must be a positive finite number.`,
       severity: "error",
     });
+  }
+}
+
+function validateSignedNumber(
+  issues: StudyStageDraftValidation[],
+  value: string,
+  label: string,
+  required: boolean,
+): void {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    if (required) {
+      issues.push({ message: `${label} is required.`, severity: "error" });
+    }
+    return;
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) {
+    issues.push({
+      message: `${label} must be a finite number.`,
+      severity: "error",
+    });
+  }
+}
+
+function validateFiniteNumber(
+  issues: StudyStageDraftValidation[],
+  value: string,
+  label: string,
+  required: boolean,
+): void {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    if (required) {
+      issues.push({ message: `${label} is required.`, severity: "error" });
+    }
+    return;
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) {
+    issues.push({
+      message: `${label} must be a finite number.`,
+      severity: "error",
+    });
+  }
+}
+
+function validateJsonArray(
+  issues: StudyStageDraftValidation[],
+  value: string,
+  label: string,
+  validateItem?: (
+    issues: StudyStageDraftValidation[],
+    item: unknown,
+    index: number,
+  ) => void,
+): void {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) {
+      issues.push({ message: `${label} must be a valid JSON array.`, severity: "error" });
+      return;
+    }
+    parsed.forEach((item, index) => validateItem?.(issues, item, index));
+  } catch {
+    issues.push({ message: `${label} must be a valid JSON array.`, severity: "error" });
+  }
+}
+
+function validateJsonObject(
+  issues: StudyStageDraftValidation[],
+  value: string,
+  label: string,
+): void {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      issues.push({ message: `${label} must be a valid JSON object.`, severity: "error" });
+    }
+  } catch {
+    issues.push({ message: `${label} must be a valid JSON object.`, severity: "error" });
+  }
+}
+
+function validateFieldSegment(
+  issues: StudyStageDraftValidation[],
+  item: unknown,
+  index: number,
+): void {
+  const segment = asRecord(item);
+  const label = `Field segment ${index + 1}`;
+  if (!segment) {
+    issues.push({ message: `${label} must be a JSON object.`, severity: "error" });
+    return;
+  }
+
+  const segmentId = stringValue(segment.segmentId ?? segment.segment_id, "").trim();
+  const endpointPolicy = stringValue(segment.endpointPolicy ?? segment.endpoint_policy, "").trim();
+  const start = segment.startField ?? segment.start_field ?? segment.start;
+  const stop = segment.stopField ?? segment.stop_field ?? segment.stop;
+  const step = segment.step ?? segment.step_mT ?? segment.field_step_mT;
+  const startValue = typeof start === "number" ? start : Number(String(start ?? "").trim());
+  const stopValue = typeof stop === "number" ? stop : Number(String(stop ?? "").trim());
+  const stepValue = typeof step === "number" ? step : Number(String(step ?? "").trim());
+
+  if (!segmentId) {
+    issues.push({ message: `${label} requires segmentId.`, severity: "error" });
+  }
+  if (!endpointPolicy) {
+    issues.push({ message: `${label} requires endpointPolicy.`, severity: "error" });
+  }
+  if (!Number.isFinite(startValue)) {
+    issues.push({ message: `${label} startField must be a finite number.`, severity: "error" });
+  }
+  if (!Number.isFinite(stopValue)) {
+    issues.push({ message: `${label} stopField must be a finite number.`, severity: "error" });
+  }
+  if (!Number.isFinite(stepValue) || stepValue <= 0) {
+    issues.push({ message: `${label} step must be a positive finite number.`, severity: "error" });
+  }
+  if (Number.isFinite(startValue) && Number.isFinite(stopValue) && startValue === stopValue) {
+    issues.push({ message: `${label} startField and stopField must differ.`, severity: "error" });
   }
 }
 
@@ -618,8 +1056,95 @@ function vectorText(value: unknown, fallback: string): string {
     : scalarText(value, fallback);
 }
 
+function legacyVectorSweepToMilliteslaRange(
+  startField: unknown,
+  stopField: unknown,
+  fieldSteps: unknown,
+): { max: string | null; min: string | null; step: string | null } {
+  const start = Array.isArray(startField) && typeof startField[2] === "number"
+    ? startField[2] * 1000
+    : null;
+  const stop = Array.isArray(stopField) && typeof stopField[2] === "number"
+    ? stopField[2] * 1000
+    : null;
+  if (start === null || stop === null) {
+    return { max: null, min: null, step: null };
+  }
+  const min = Math.min(start, stop);
+  const max = Math.max(start, stop);
+  const steps = typeof fieldSteps === "number"
+    ? fieldSteps
+    : typeof fieldSteps === "string"
+      ? Number(fieldSteps)
+      : null;
+  const step = steps && Number.isFinite(steps) && steps > 1
+    ? Math.abs(max - min) / (steps - 1)
+    : null;
+  return {
+    max: String(max),
+    min: String(min),
+    step: step === null ? null : String(step),
+  };
+}
+
 function objectText(value: unknown): string {
   return value === null || value === undefined ? "" : JSON.stringify(value);
+}
+
+function normalizeHysteresisFieldSegment(value: unknown): JsonObject {
+  const segment = asRecord(value);
+  if (!segment) {
+    return {};
+  }
+  const normalized: JsonObject = {};
+  const start = segment.start ?? segment.startField ?? segment.start_field;
+  const stop = segment.stop ?? segment.stopField ?? segment.stop_field;
+  const step = segment.step ?? segment.step_mT ?? segment.field_step_mT;
+  const segmentId = segment.segment_id ?? segment.segmentId;
+  const endpointPolicy = segment.endpoint_policy ?? segment.endpointPolicy;
+
+  if (typeof start === "number") normalized.start = start;
+  if (typeof stop === "number") normalized.stop = stop;
+  if (typeof step === "number") normalized.step = step;
+  if (typeof segmentId === "string") normalized.segment_id = segmentId;
+  if (typeof segment.label === "string") normalized.label = segment.label;
+  if (typeof endpointPolicy === "string") {
+    normalized.endpoint_policy = endpointPolicy;
+  }
+  if (typeof segment.reason === "string") normalized.reason = segment.reason;
+  return normalized;
+}
+
+function normalizeHysteresisDenseWindow(value: unknown): JsonObject {
+  const window = asRecord(value);
+  if (!window) {
+    return {};
+  }
+  const normalized: JsonObject = {};
+  const center = window.center_mT ?? window.centerMt;
+  const halfWidth = window.half_width_mT ?? window.halfWidthMt;
+  const step = window.step_mT ?? window.stepMt;
+
+  if (typeof center === "number") normalized.center_mT = center;
+  if (typeof halfWidth === "number") normalized.half_width_mT = halfWidth;
+  if (typeof step === "number") normalized.step_mT = step;
+  if (typeof window.reason === "string") normalized.reason = window.reason;
+  if (typeof window.priority === "number") normalized.priority = window.priority;
+  return normalized;
+}
+
+function normalizeHysteresisMinorLoop(value: unknown): JsonObject {
+  const loop = asRecord(value);
+  if (!loop) {
+    return {};
+  }
+  const normalized: JsonObject = {};
+  const reversal = loop.reversal_mT ?? loop.reversalMt;
+  const returnField = loop.return_mT ?? loop.returnMt;
+
+  if (typeof reversal === "number") normalized.reversal_mT = reversal;
+  if (typeof returnField === "number") normalized.return_mT = returnField;
+  return normalized;
 }
 
 function scalarOrObjectText(value: unknown, fallback: string): string {
@@ -648,6 +1173,14 @@ function requiredNumber(value: string, field: string): number {
   const parsed = Number(value.trim());
   if (!Number.isFinite(parsed) || parsed <= 0) {
     throw new Error(`${field} must be a positive finite number.`);
+  }
+  return parsed;
+}
+
+function requiredSignedNumber(value: string, field: string): number {
+  const parsed = Number(value.trim());
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`${field} must be a finite number.`);
   }
   return parsed;
 }
@@ -714,14 +1247,26 @@ function parseJsonOrString(value: string, fallback: string): JsonObject | string
     : fallback;
 }
 
-function optionalJsonObject(value: string): JsonObject | null {
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  const parsed = JSON.parse(trimmed) as unknown;
+function parseJsonArrayValue(value: string): JsonValue[] {
+  const parsed = JSON.parse(value) as unknown;
+  if (!Array.isArray(parsed)) {
+    throw new Error("JSON value must be an array.");
+  }
+  return parsed as JsonValue[];
+}
+
+function parseJsonObjectValue(value: string): JsonObject {
+  const parsed = JSON.parse(value) as unknown;
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("JSON value must be an object.");
   }
   return parsed as JsonObject;
+}
+
+function optionalJsonObject(value: string): JsonObject | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return parseJsonObjectValue(trimmed);
 }
 
 function optionalInteger(value: string): number | null {

@@ -12,6 +12,8 @@ export default function AnalysisPlotsModule({ kernel }: ModuleProps) {
 
   return (
     <AnalysisPlotsView
+      kernel={kernel}
+      selectedStageId={controller.selectedStageId}
       onClearRange={controller.clearRange}
       onPointSelect={controller.selectPoint}
       onRangeChange={controller.setRange}

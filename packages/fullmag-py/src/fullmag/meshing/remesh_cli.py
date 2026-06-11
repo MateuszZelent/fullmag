@@ -70,7 +70,12 @@ def _geometry_from_ir(entry: dict[str, Any]) -> Any:
         size = entry["size"]
         return Box(size[0], size[1], size[2], name=entry.get("name", "box"))
     if kind == "cylinder":
-        return Cylinder(entry["radius"], entry["height"], name=entry.get("name", "cylinder"))
+        return Cylinder(
+            entry["radius"],
+            entry["height"],
+            name=entry.get("name", "cylinder"),
+            axis=tuple(entry.get("axis", (0.0, 0.0, 1.0))),
+        )
     if kind == "sin_waveguide":
         return SinWaveguide(
             entry["length"],

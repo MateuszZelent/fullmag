@@ -34,6 +34,7 @@ from fullmag.meshing.asset_pipeline import (
     _build_interface_fields,
     _build_object_bulk_fields,
     _build_transition_fields,
+    _drop_degenerate_tetrahedra,
     _element_metric_summary_for_mask,
     _mesh_options_from_runtime_metadata,
     _resolve_effective_shared_domain_targets,
@@ -88,7 +89,7 @@ from fullmag.meshing._airbox_grading import (
     _add_airbox_grading_field,
     _airbox_boundary_distance_from_bbox,
 )
-from fullmag.meshing._gmsh_occ import _airbox_interface_dist_max
+from fullmag.meshing._gmsh_occ import _airbox_interface_dist_max, is_occ_compatible
 from fullmag.meshing._gmsh_waveguides import add_arch_waveguide_to_occ
 from fullmag.meshing.remesh_cli import (
     _geometry_from_ir,
@@ -127,6 +128,16 @@ from fullmag.meshing.voxelization import VoxelMaskData, voxelize_geometry
 
 
 class MeshScaffoldTests(unittest.TestCase):
+    def test_multi_body_annular_csg_is_not_routed_to_native_conformal_occ(self) -> None:
+        layer = fm.Box(size=(300e-9, 1000e-9, 10e-9), name="layer")
+        ring = fm.Difference(
+            base=fm.Cylinder(radius=150e-9, height=50e-9, name="ring_outer"),
+            tool=fm.Cylinder(radius=50e-9, height=50e-9, name="ring_inner"),
+            name="ring",
+        ).translate((0.0, 0.0, 165e-9))
+
+        self.assertFalse(is_occ_compatible([layer, ring]))
+
     def test_meshio_cell_markers_preserve_physical_air_marker(self) -> None:
         mesh = SimpleNamespace(
             cells=[
@@ -211,6 +222,42 @@ class MeshScaffoldTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "degenerate tetra volume"):
             mesh.validate_strict()
+
+    def test_drop_degenerate_tetrahedra_removes_only_invalid_elements(self) -> None:
+        mesh = MeshData(
+            nodes=np.asarray(
+                [
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [0.25, 0.25, 0.0],
+                ],
+                dtype=np.float64,
+            ),
+            elements=np.asarray(
+                [
+                    [0, 1, 2, 3],
+                    [0, 1, 2, 4],
+                ],
+                dtype=np.int32,
+            ),
+            element_markers=np.asarray([7, 8], dtype=np.int32),
+            boundary_faces=np.zeros((0, 3), dtype=np.int32),
+            boundary_markers=np.zeros((0,), dtype=np.int32),
+        )
+        fallbacks: list[str] = []
+
+        cleaned = _drop_degenerate_tetrahedra(
+            mesh,
+            context="test mesh",
+            fallbacks_triggered=fallbacks,
+        )
+
+        cleaned.validate_strict()
+        self.assertEqual(cleaned.elements.tolist(), [[0, 1, 2, 3]])
+        self.assertEqual(cleaned.element_markers.tolist(), [7])
+        self.assertEqual(fallbacks, ["shared_domain_degenerate_tetra_cleanup"])
 
     def test_meshdata_validate_strict_rejects_fem_topology_floor_tets(self) -> None:
         mesh = MeshData(

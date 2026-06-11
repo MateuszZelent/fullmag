@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 from fullmag.model.geometry import (
@@ -80,7 +81,12 @@ def geometry_bounds(
     if isinstance(geometry, Cylinder):
         radius = geometry.radius
         half_height = 0.5 * geometry.height
-        return (-radius, -radius, -half_height), (radius, radius, half_height)
+        extents = tuple(
+            radius * math.sqrt(max(0.0, 1.0 - component * component))
+            + half_height * abs(component)
+            for component in geometry.axis
+        )
+        return tuple(-value for value in extents), extents
     if isinstance(geometry, SinWaveguide):
         half_length = 0.5 * geometry.length
         half_width = 0.5 * geometry.width

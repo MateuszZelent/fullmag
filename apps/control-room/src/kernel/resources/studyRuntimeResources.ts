@@ -4,6 +4,14 @@ import { useCallback, useMemo } from "react";
 
 import {
   ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH,
+  ANALYSIS_HYSTERESIS_POINTS_PATH,
+  ANALYSIS_HYSTERESIS_METRICS_PATH,
+  ANALYSIS_HYSTERESIS_SATURATION_PATH,
+  ANALYSIS_HYSTERESIS_BRANCHES_PATH,
+  ANALYSIS_HYSTERESIS_MINOR_LOOPS_PATH,
+  ANALYSIS_HYSTERESIS_POINT_PATH,
+  ANALYSIS_HYSTERESIS_REVERSAL_FIELDS_PATH,
+  ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH,
   DATA_FIELD_META_PATH,
   DATA_FIELDS_PATH,
   DATA_SCALARS_PATH,
@@ -27,6 +35,13 @@ import {
   SIMULATION_COMMANDS_PATH,
   SIMULATION_OBJECT_METRICS_PATH,
   SIMULATION_RUN_CURRENT_PATH,
+  SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH,
+  SIMULATION_STAGE_HYSTERESIS_ORIENTATION_PATH,
+  SIMULATION_STAGE_HYSTERESIS_PLAN_PATH,
+  SIMULATION_STAGE_HYSTERESIS_PROGRESS_PATH,
+  SIMULATION_STAGE_HYSTERESIS_PROTOCOL_PATH,
+  SIMULATION_STAGE_HYSTERESIS_SATURATION_PATH,
+  SIMULATION_STAGE_HYSTERESIS_SETTLE_PIPELINE_PATH,
   SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
   SIMULATION_SOLVER_ENERGIES_HISTORY_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
@@ -60,6 +75,19 @@ import type {
   TableResource,
   TableRowsQuery,
   TableRowsResource,
+  HysteresisBranchSchema,
+  HysteresisMinorLoopSchema,
+  HysteresisPointSchema,
+  HysteresisMetricsSchema,
+  HysteresisExecutionTreeResource,
+  HysteresisOrientationSchema,
+  HysteresisProgressSchema,
+  HysteresisProtocolSchema,
+  HysteresisSaturationResultSchema,
+  HysteresisSettlePipelineSchema,
+  HysteresisSettleTraceEntrySchema,
+  HysteresisStagePlanSchema,
+  HysteresisStageSaturationSchema,
 } from "../api/apiTypes";
 import { normalizeQuantityIdOrDefault } from "../api/quantityIds";
 import type { DecodedTableRows } from "../api/codecs";
@@ -419,6 +447,211 @@ export function useStageExecutionResource({
   });
 }
 
+export function useHysteresisStagePlanResource(
+  stageId: string | null | undefined,
+  { enabled = true }: RuntimeResourceOptions = {},
+) {
+  const { api } = useKernel();
+  const resourceKey = stageId
+    ? SIMULATION_STAGE_HYSTERESIS_PLAN_PATH.replace("{stage_id}", stageId)
+    : `${SIMULATION_STAGE_HYSTERESIS_PLAN_PATH}:none`;
+
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      stageId
+        ? api.simulation.stages.hysteresis
+            .plan(stageId, { signal })
+            .catch(ignoreMissingResource<HysteresisStagePlanSchema>)
+        : Promise.resolve(null),
+    [api, stageId],
+  );
+
+  return useResource<HysteresisStagePlanSchema | null>({
+    enabled: enabled && Boolean(stageId),
+    load,
+    resolveRevision: (data) => data?.revision ?? null,
+    resourceKey,
+  });
+}
+
+export function useHysteresisProtocolResource(
+  stageId: string | null | undefined,
+  { enabled = true }: RuntimeResourceOptions = {},
+) {
+  const { api } = useKernel();
+  const resourceKey = stageId
+    ? SIMULATION_STAGE_HYSTERESIS_PROTOCOL_PATH.replace("{stage_id}", stageId)
+    : `${SIMULATION_STAGE_HYSTERESIS_PROTOCOL_PATH}:none`;
+
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      stageId
+        ? api.simulation.stages.hysteresis
+            .protocol(stageId, { signal })
+            .catch(ignoreMissingResource<HysteresisProtocolSchema>)
+        : Promise.resolve(null),
+    [api, stageId],
+  );
+
+  return useResource<HysteresisProtocolSchema | null>({
+    enabled: enabled && Boolean(stageId),
+    load,
+    resolveRevision: (data) => data?.revision ?? null,
+    resourceKey,
+  });
+}
+
+export function useHysteresisStageSaturationResource(
+  stageId: string | null | undefined,
+  { enabled = true }: RuntimeResourceOptions = {},
+) {
+  const { api } = useKernel();
+  const resourceKey = stageId
+    ? SIMULATION_STAGE_HYSTERESIS_SATURATION_PATH.replace(
+        "{stage_id}",
+        stageId,
+      )
+    : `${SIMULATION_STAGE_HYSTERESIS_SATURATION_PATH}:none`;
+
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      stageId
+        ? api.simulation.stages.hysteresis
+            .saturation(stageId, { signal })
+            .catch(ignoreMissingResource<HysteresisStageSaturationSchema>)
+        : Promise.resolve(null),
+    [api, stageId],
+  );
+
+  return useResource<HysteresisStageSaturationSchema | null>({
+    enabled: enabled && Boolean(stageId),
+    load,
+    resolveRevision: (data) => data?.revision ?? null,
+    resourceKey,
+  });
+}
+
+export function useHysteresisOrientationResource(
+  stageId: string | null | undefined,
+  { enabled = true }: RuntimeResourceOptions = {},
+) {
+  const { api } = useKernel();
+  const resourceKey = stageId
+    ? SIMULATION_STAGE_HYSTERESIS_ORIENTATION_PATH.replace("{stage_id}", stageId)
+    : `${SIMULATION_STAGE_HYSTERESIS_ORIENTATION_PATH}:none`;
+
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      stageId
+        ? api.simulation.stages.hysteresis
+            .orientation(stageId, { signal })
+            .catch(ignoreMissingResource<HysteresisOrientationSchema>)
+        : Promise.resolve(null),
+    [api, stageId],
+  );
+
+  return useResource<HysteresisOrientationSchema | null>({
+    enabled: enabled && Boolean(stageId),
+    load,
+    resolveRevision: (data) => data?.revision ?? null,
+    resourceKey,
+  });
+}
+
+export function useHysteresisSettlePipelineResource(
+  stageId: string | null | undefined,
+  { enabled = true }: RuntimeResourceOptions = {},
+) {
+  const { api } = useKernel();
+  const resourceKey = stageId
+    ? SIMULATION_STAGE_HYSTERESIS_SETTLE_PIPELINE_PATH.replace(
+        "{stage_id}",
+        stageId,
+      )
+    : `${SIMULATION_STAGE_HYSTERESIS_SETTLE_PIPELINE_PATH}:none`;
+
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      stageId
+        ? api.simulation.stages.hysteresis
+            .settlePipeline(stageId, { signal })
+            .catch(ignoreMissingResource<HysteresisSettlePipelineSchema>)
+        : Promise.resolve(null),
+    [api, stageId],
+  );
+
+  return useResource<HysteresisSettlePipelineSchema | null>({
+    enabled: enabled && Boolean(stageId),
+    load,
+    resolveRevision: (data) => data?.revision ?? null,
+    resourceKey,
+  });
+}
+
+export function useHysteresisExecutionTreeResource(
+  stageId: string | null | undefined,
+  {
+    after = 3,
+    before = 2,
+    enabled = true,
+    window = "active",
+  }: RuntimeResourceOptions & {
+    after?: number;
+    before?: number;
+    window?: string;
+  } = {},
+) {
+  const { api } = useKernel();
+  const queryKey = `window=${window}:before=${before}:after=${after}`;
+  const resourceKey = stageId
+    ? `${SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH.replace("{stage_id}", stageId)}:${queryKey}`
+    : `${SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH}:none`;
+
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      stageId
+        ? api.simulation.stages.hysteresis
+            .executionTree(stageId, { after, before, window }, { signal })
+            .catch(ignoreMissingResource<HysteresisExecutionTreeResource>)
+        : Promise.resolve(null),
+    [after, api, before, stageId, window],
+  );
+
+  return useResource<HysteresisExecutionTreeResource | null>({
+    enabled: enabled && Boolean(stageId),
+    load,
+    resolveRevision: (data) => data?.revision ?? null,
+    resourceKey,
+  });
+}
+
+export function useHysteresisProgressResource(
+  stageId: string | null | undefined,
+  { enabled = true }: RuntimeResourceOptions = {},
+) {
+  const { api } = useKernel();
+  const resourceKey = stageId
+    ? SIMULATION_STAGE_HYSTERESIS_PROGRESS_PATH.replace("{stage_id}", stageId)
+    : `${SIMULATION_STAGE_HYSTERESIS_PROGRESS_PATH}:none`;
+
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      stageId
+        ? api.simulation.stages.hysteresis
+            .progress(stageId, { signal })
+            .catch(ignoreMissingResource<HysteresisProgressSchema>)
+        : Promise.resolve(null),
+    [api, stageId],
+  );
+
+  return useResource<HysteresisProgressSchema | null>({
+    enabled: enabled && Boolean(stageId),
+    load,
+    resolveRevision: (data) => data?.revision ?? null,
+    resourceKey,
+  });
+}
+
 export function useSolverStatusResource({
   enabled = true,
 }: RuntimeResourceOptions = {}) {
@@ -497,6 +730,231 @@ export function useMagneticResponseSweepResource({
     enabled,
     load,
     resourceKey: ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH,
+  });
+}
+
+export function useHysteresisPointsResource(
+  stageId: string | null | undefined,
+  { enabled = true }: RuntimeResourceOptions = {},
+) {
+  const { api } = useKernel();
+  const resourceKey = stageId
+    ? ANALYSIS_HYSTERESIS_POINTS_PATH.replace("{stage_id}", stageId)
+    : `${ANALYSIS_HYSTERESIS_POINTS_PATH}:none`;
+
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      stageId
+        ? api.analysis.hysteresis
+            .points(stageId, { signal })
+            .catch(ignoreMissingResource<HysteresisPointSchema[]>)
+        : Promise.resolve(null),
+    [api, stageId],
+  );
+
+  return useResource<HysteresisPointSchema[] | null>({
+    enabled: enabled && Boolean(stageId),
+    load,
+    resolveRevision: (data) => data?.length ?? null,
+    resourceKey,
+  });
+}
+
+export function useHysteresisMetricsResource(
+  stageId: string | null | undefined,
+  { enabled = true }: RuntimeResourceOptions = {},
+) {
+  const { api } = useKernel();
+  const resourceKey = stageId
+    ? ANALYSIS_HYSTERESIS_METRICS_PATH.replace("{stage_id}", stageId)
+    : `${ANALYSIS_HYSTERESIS_METRICS_PATH}:none`;
+
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      stageId
+        ? api.analysis.hysteresis
+            .metrics(stageId, { signal })
+            .catch(ignoreMissingResource<HysteresisMetricsSchema>)
+        : Promise.resolve(null),
+    [api, stageId],
+  );
+
+  return useResource<HysteresisMetricsSchema | null>({
+    enabled: enabled && Boolean(stageId),
+    load,
+    resourceKey,
+  });
+}
+
+export function useHysteresisSaturationResource(
+  stageId: string | null | undefined,
+  { enabled = true }: RuntimeResourceOptions = {},
+) {
+  const { api } = useKernel();
+  const resourceKey = stageId
+    ? ANALYSIS_HYSTERESIS_SATURATION_PATH.replace("{stage_id}", stageId)
+    : `${ANALYSIS_HYSTERESIS_SATURATION_PATH}:none`;
+
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      stageId
+        ? api.analysis.hysteresis
+            .saturation(stageId, { signal })
+            .catch(ignoreMissingResource<HysteresisSaturationResultSchema>)
+        : Promise.resolve(null),
+    [api, stageId],
+  );
+
+  return useResource<HysteresisSaturationResultSchema | null>({
+    enabled: enabled && Boolean(stageId),
+    load,
+    resourceKey,
+  });
+}
+
+export type HysteresisBranch = HysteresisBranchSchema;
+export type HysteresisMinorLoop = HysteresisMinorLoopSchema;
+export type HysteresisSettleTraceEntry = HysteresisSettleTraceEntrySchema;
+
+export function useHysteresisBranchesResource(
+  stageId: string | null | undefined,
+  { enabled = true }: RuntimeResourceOptions = {},
+) {
+  const { api } = useKernel();
+  const resourceKey = stageId
+    ? ANALYSIS_HYSTERESIS_BRANCHES_PATH.replace("{stage_id}", stageId)
+    : `${ANALYSIS_HYSTERESIS_BRANCHES_PATH}:none`;
+
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      stageId
+        ? api.analysis.hysteresis
+            .branches(stageId, { signal })
+            .catch(ignoreMissingResource<HysteresisBranch[]>)
+        : Promise.resolve(null),
+    [api, stageId],
+  );
+
+  return useResource<HysteresisBranch[] | null>({
+    enabled: enabled && Boolean(stageId),
+    load,
+    resolveRevision: (data) => data?.length ?? null,
+    resourceKey,
+  });
+}
+
+export function useHysteresisMinorLoopsResource(
+  stageId: string | null | undefined,
+  { enabled = true }: RuntimeResourceOptions = {},
+) {
+  const { api } = useKernel();
+  const resourceKey = stageId
+    ? ANALYSIS_HYSTERESIS_MINOR_LOOPS_PATH.replace("{stage_id}", stageId)
+    : `${ANALYSIS_HYSTERESIS_MINOR_LOOPS_PATH}:none`;
+
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      stageId
+        ? api.analysis.hysteresis
+            .minorLoops(stageId, { signal })
+            .catch(ignoreMissingResource<HysteresisMinorLoop[]>)
+        : Promise.resolve(null),
+    [api, stageId],
+  );
+
+  return useResource<HysteresisMinorLoop[] | null>({
+    enabled: enabled && Boolean(stageId),
+    load,
+    resolveRevision: (data) => data?.length ?? null,
+    resourceKey,
+  });
+}
+
+export function useHysteresisPointResource(
+  stageId: string | null | undefined,
+  pointId: number | null | undefined,
+  { enabled = true }: RuntimeResourceOptions = {},
+) {
+  const { api } = useKernel();
+  const resourceKey =
+    stageId && pointId != null
+      ? ANALYSIS_HYSTERESIS_POINT_PATH
+          .replace("{stage_id}", stageId)
+          .replace("{point_id}", String(pointId))
+      : `${ANALYSIS_HYSTERESIS_POINT_PATH}:none`;
+
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      stageId && pointId != null
+        ? api.analysis.hysteresis
+            .point(stageId, pointId, { signal })
+            .catch(ignoreMissingResource<HysteresisPointSchema>)
+        : Promise.resolve(null),
+    [api, pointId, stageId],
+  );
+
+  return useResource<HysteresisPointSchema | null>({
+    enabled: enabled && Boolean(stageId) && pointId != null,
+    load,
+    resourceKey,
+  });
+}
+
+export function useHysteresisSettleTraceResource(
+  stageId: string | null | undefined,
+  pointId: number | null | undefined,
+  { enabled = true }: RuntimeResourceOptions = {},
+) {
+  const { api } = useKernel();
+  const resourceKey =
+    stageId && pointId != null
+      ? ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH
+          .replace("{stage_id}", stageId)
+          .replace("{point_id}", String(pointId))
+      : `${ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH}:none`;
+
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      stageId && pointId != null
+        ? api.analysis.hysteresis
+            .settleTrace(stageId, pointId, { signal })
+            .catch(ignoreMissingResource<HysteresisSettleTraceEntry[]>)
+        : Promise.resolve(null),
+    [api, pointId, stageId],
+  );
+
+  return useResource<HysteresisSettleTraceEntry[] | null>({
+    enabled: enabled && Boolean(stageId) && pointId != null,
+    load,
+    resolveRevision: (data) => data?.length ?? null,
+    resourceKey,
+  });
+}
+
+export function useHysteresisReversalFieldsResource(
+  stageId: string | null | undefined,
+  { enabled = true }: RuntimeResourceOptions = {},
+) {
+  const { api } = useKernel();
+  const resourceKey = stageId
+    ? ANALYSIS_HYSTERESIS_REVERSAL_FIELDS_PATH.replace("{stage_id}", stageId)
+    : `${ANALYSIS_HYSTERESIS_REVERSAL_FIELDS_PATH}:none`;
+
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      stageId
+        ? api.analysis.hysteresis
+            .reversalFields(stageId, { signal })
+            .catch(ignoreMissingResource<HysteresisPointSchema[]>)
+        : Promise.resolve(null),
+    [api, stageId],
+  );
+
+  return useResource<HysteresisPointSchema[] | null>({
+    enabled: enabled && Boolean(stageId),
+    load,
+    resolveRevision: (data) => data?.length ?? null,
+    resourceKey,
   });
 }
 

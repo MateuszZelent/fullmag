@@ -32,7 +32,9 @@ import {
   type RefObject,
 } from "react";
 import {
+  Raycaster,
   Vector3,
+  Vector2,
   type OrthographicCamera as ThreeOrthographicCamera,
   type PerspectiveCamera as ThreePerspectiveCamera,
 } from "three";
@@ -101,10 +103,14 @@ import { PrimitiveObjectLayer } from "./PrimitiveObjectLayer";
 import { FdmCuboidLayer, type FdmCuboidInstanceModel } from "./FdmCuboidLayer";
 import { Viewport3DLightingRig } from "./Viewport3DLightingRig";
 import { ClipPlaneFramePreviewLayer, ClipPlaneLayer } from "./ClipPlaneLayer";
+import { pickRegionOverlayFromRay } from "./regionOverlayPicking";
 import type { ClipPlaneIntersectionMarkerBuffers } from "./clipPlaneModel";
+import {
+  buildRegionOverlayModels,
+  type RegionMeshOverlayOwnerPart,
+  type RegionOverlayInput,
+} from "./regionOverlayModel";
 import type {
-  RegionMeshOverlayOwnerPart,
-  RegionOverlayInput,
 } from "./regionOverlayModel";
 import {
   regionOverlayModeShowsAuthored,
@@ -683,9 +689,20 @@ function Viewport3DModelLayerStack({
   if (!viewport3DSceneLayersEnabledFromBrowserConfig()) return null;
 
   const hasMeshBackedRegionOverlays = meshRegionOverlays.length > 0;
+  const authoredRegionOverlaysVisible =
+    regionOverlayModeShowsAuthored(regionOverlayMode, hasMeshBackedRegionOverlays) &&
+    viewport3DOverlayLayersEnabledFromBrowserConfig();
 
   return (
     <>
+      {authoredRegionOverlaysVisible ? (
+        <RegionOverlayNativePickingLayer
+          onSelectRegion={onSelectRegion}
+          regions={regionOverlays}
+          selectedObjectId={selectedObjectId}
+          selectedRegionId={selectedRegionId}
+        />
+      ) : null}
       {viewport3DFdmCuboidLayerEnabledFromBrowserConfig() ? (
         <FdmCuboidLayer
           colors={colors}
@@ -699,6 +716,10 @@ function Viewport3DModelLayerStack({
           onInspectClear={onInspectClear}
           onInspectSample={onInspectSample}
           onSelectDomain={onSelectDomain}
+          onSelectRegion={onSelectRegion}
+          regionOverlays={authoredRegionOverlaysVisible ? regionOverlays : []}
+          selectedObjectId={selectedObjectId}
+          selectedRegionId={selectedRegionId}
           settings={fdmSettings}
           surfaceColors={fdmSurfaceColors}
           tracker={tracker}
@@ -770,11 +791,7 @@ function Viewport3DModelLayerStack({
           tracker={tracker}
         />
       ) : null}
-      {regionOverlayModeShowsAuthored(
-        regionOverlayMode,
-        hasMeshBackedRegionOverlays,
-      ) &&
-      viewport3DOverlayLayersEnabledFromBrowserConfig() ? (
+      {authoredRegionOverlaysVisible ? (
         <RegionOverlayLayer
           getRegionSettings={getRegionSettings}
           onSelectRegion={onSelectRegion}
@@ -792,6 +809,64 @@ function Viewport3DModelLayerStack({
       ) : null}
     </>
   );
+}
+
+function RegionOverlayNativePickingLayer({
+  onSelectRegion,
+  regions,
+  selectedObjectId,
+  selectedRegionId,
+}: {
+  onSelectRegion: (selection: RegionOverlaySelection) => void;
+  regions: readonly RegionOverlayInput[];
+  selectedObjectId: string | null;
+  selectedRegionId: string | null;
+}) {
+  const { camera, gl } = useThree();
+  const regionPickModels = useMemo(
+    () =>
+      buildRegionOverlayModels(regions, {
+        selectedObjectId,
+        selectedRegionId,
+      }),
+    [regions, selectedObjectId, selectedRegionId],
+  );
+
+  useEffect(() => {
+    if (regionPickModels.length === 0) return undefined;
+
+    const canvas = gl.domElement;
+    const pointer = new Vector2();
+    const raycaster = new Raycaster();
+    const handlePointerDown = (event: PointerEvent) => {
+      if (event.button !== 0) return;
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      pointer.set(
+        ((event.clientX - rect.left) / rect.width) * 2 - 1,
+        -((event.clientY - rect.top) / rect.height) * 2 + 1,
+      );
+      raycaster.setFromCamera(pointer, camera);
+      const pickedRegion = pickRegionOverlayFromRay(
+        raycaster.ray,
+        regionPickModels,
+      );
+      if (!pickedRegion) return;
+
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      onSelectRegion(pickedRegion);
+    };
+
+    canvas.addEventListener("pointerdown", handlePointerDown, { capture: true });
+    return () => {
+      canvas.removeEventListener("pointerdown", handlePointerDown, {
+        capture: true,
+      });
+    };
+  }, [camera, gl, onSelectRegion, regionPickModels]);
+
+  return null;
 }
 
 function Viewport3DInteractionAndHudStack({

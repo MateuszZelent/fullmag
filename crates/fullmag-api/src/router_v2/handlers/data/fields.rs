@@ -46,6 +46,7 @@ use crate::router_v2::handlers::sessions::status::{
     field_quantity_revision,
 };
 use crate::schemas::fields::*;
+use crate::session::current_artifact_dir;
 use crate::types::AppState;
 use crate::types::SessionStateResponse;
 use fullmag_quantities::{normalize_quantity_id, quantity_spec};
@@ -62,11 +63,62 @@ static HDR_POINT_COUNT: &str = "x-fullmag-point-count";
 static HDR_VALUE_COUNT: &str = "x-fullmag-value-count";
 static HDR_SCOPE_KIND: &str = "x-fullmag-scope-kind";
 static HDR_SCOPE_ID: &str = "x-fullmag-scope-id";
+static HDR_SNAPSHOT_ID: &str = "x-fullmag-snapshot-id";
 
 fn canonical_quantity_id(requested: &str) -> Cow<'_, str> {
     normalize_quantity_id(requested)
         .map(|id| Cow::Borrowed(id.as_str()))
         .unwrap_or_else(|_| Cow::Borrowed(requested))
+}
+
+fn persisted_hysteresis_magnetization_values(
+    snapshot: &SessionStateResponse,
+    snapshot_id: &str,
+) -> Result<(Vec<f64>, [u32; 3]), ApiError> {
+    let snapshot_id = snapshot_id.trim();
+    if snapshot_id.is_empty() {
+        return Err(ApiError::bad_request("snapshot_id must not be empty"));
+    }
+    if snapshot_id.contains('/')
+        || snapshot_id.contains('\\')
+        || snapshot_id == "."
+        || snapshot_id == ".."
+    {
+        return Err(ApiError::bad_request(
+            "snapshot_id must be a single path segment",
+        ));
+    }
+    let artifact_dir = current_artifact_dir(snapshot)
+        .ok_or_else(|| ApiError::not_found("no artifact directory for persisted field snapshot"))?;
+    let path = artifact_dir
+        .join("hysteresis_snapshots")
+        .join(snapshot_id)
+        .join("m.json");
+    let content = std::fs::read_to_string(&path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            ApiError::not_found(format!("hysteresis snapshot '{snapshot_id}' was not found"))
+        } else {
+            ApiError::internal(format!(
+                "failed to read hysteresis snapshot '{}': {}",
+                snapshot_id, error
+            ))
+        }
+    })?;
+    let raw: serde_json::Value = serde_json::from_str(&content).map_err(|error| {
+        ApiError::internal(format!(
+            "failed to parse hysteresis snapshot '{}': {}",
+            snapshot_id, error
+        ))
+    })?;
+    let values = flatten_json_field_values(&raw);
+    if !field_values_match_current_domain(snapshot, "m", 3, &values) {
+        return Err(ApiError::not_found(format!(
+            "hysteresis snapshot '{snapshot_id}' does not match the current magnetic domain"
+        )));
+    }
+    let element_count = values.len() / 3;
+    let grid = json_field_grid(&raw).unwrap_or([element_count as u32, 1, 1]);
+    Ok((values, grid))
 }
 
 fn insert_field_headers(
@@ -150,6 +202,16 @@ fn insert_scope_headers(resp: &mut axum::response::Response, scope: Option<&Reso
         if let Ok(value) = HeaderValue::from_str(id) {
             h.insert(axum::http::HeaderName::from_static(HDR_SCOPE_ID), value);
         }
+    }
+}
+
+fn insert_snapshot_header(resp: &mut axum::response::Response, snapshot_id: Option<&str>) {
+    let Some(snapshot_id) = snapshot_id else {
+        return;
+    };
+    if let Ok(value) = HeaderValue::from_str(snapshot_id) {
+        resp.headers_mut()
+            .insert(HeaderName::from_static(HDR_SNAPSHOT_ID), value);
     }
 }
 
@@ -269,6 +331,31 @@ pub async fn get_field_meta(
     let component = parse_component(query.component.as_deref(), n_comp as usize)?;
 
     let gen_id = domain_generation_id(snapshot);
+    let requested_snapshot_id = query
+        .snapshot_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty());
+
+    if let Some(snapshot_id) = requested_snapshot_id {
+        if quantity_id != "m" {
+            return Err(ApiError::not_found(format!(
+                "persisted hysteresis snapshot '{snapshot_id}' is only available for magnetization"
+            )));
+        }
+        let (values, _) = persisted_hysteresis_magnetization_values(snapshot, snapshot_id)?;
+        return Ok(Json(FieldMeta {
+            quantity_id: quantity_id.to_string(),
+            label,
+            kind,
+            components: n_comp,
+            location,
+            unit,
+            field_revision: field_quantity_revision(snapshot, quantity_id),
+            domain_generation_id: gen_id,
+            stats: projected_field_stats(&values, n_comp as usize, &component)?,
+        }));
+    }
 
     if let Some(values) = snapshot
         .latest_fields
@@ -349,6 +436,9 @@ pub async fn get_field_meta(
 pub struct FieldMetaQuery {
     /// Optional component projection used for statistics (`x`, `y`, `z`, `magnitude`, `full`).
     pub component: Option<String>,
+    /// Optional persisted analysis snapshot id, for example a saved
+    /// hysteresis-point magnetization state.
+    pub snapshot_id: Option<String>,
 }
 
 fn projected_field_stats(
@@ -815,6 +905,11 @@ pub async fn get_field_vector(
 
     let field_revision = field_quantity_revision(snapshot, quantity_id);
     let gen_id = domain_generation_id(snapshot);
+    let requested_snapshot_id = query
+        .snapshot_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty());
 
     // Collect raw values under the lock, then drop the lock before any heavy work
     let latest_field_values = || {
@@ -849,13 +944,24 @@ pub async fn get_field_vector(
             None
         }
     };
-    let raw_values_opt: Option<(Vec<f64>, [u32; 3])> = if quantity_id == "m" {
-        live_magnetization_values(snapshot)
-            .or_else(preview_field_values)
-            .or_else(latest_field_values)
-    } else {
-        latest_field_values().or_else(preview_field_values)
-    };
+    let raw_values_opt: Option<(Vec<f64>, [u32; 3])> =
+        if let Some(snapshot_id) = requested_snapshot_id {
+            if quantity_id != "m" {
+                return Err(ApiError::not_found(format!(
+                "persisted hysteresis snapshot '{snapshot_id}' is only available for magnetization"
+            )));
+            }
+            Some(persisted_hysteresis_magnetization_values(
+                snapshot,
+                snapshot_id,
+            )?)
+        } else if quantity_id == "m" {
+            live_magnetization_values(snapshot)
+                .or_else(preview_field_values)
+                .or_else(latest_field_values)
+        } else {
+            latest_field_values().or_else(preview_field_values)
+        };
     let has_field_source = snapshot.latest_fields.get(quantity_id).is_some()
         || snapshot.preview_cache.get(quantity_id).is_some()
         || (quantity_id == "m"
@@ -899,8 +1005,11 @@ pub async fn get_field_vector(
         .map(ResolvedFieldScope::cache_token)
         .unwrap_or_else(|| "full-domain".to_string());
     let sample_token = field_vector_sample_cache_token(sample_limit);
+    let snapshot_token = requested_snapshot_id
+        .map(|snapshot_id| format!(":snapshot={snapshot_id}"))
+        .unwrap_or_default();
     let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
-        "{}:{scope_token}{sample_token}",
+        "{}:{scope_token}{sample_token}{snapshot_token}",
         component_etag_token(quantity_id, field_revision, gen_id, &component)
     ));
     let scoped_grid = resolved_scope
@@ -928,7 +1037,7 @@ pub async fn get_field_vector(
         quantity_id,
         field_revision,
         gen_id,
-        &format!("{comp_key}:{scope_token}{sample_token}"),
+        &format!("{comp_key}:{scope_token}{sample_token}{snapshot_token}"),
     );
     {
         let mut proj_cache = state.quantity_data_plane.projection_cache.lock().await;
@@ -960,6 +1069,7 @@ pub async fn get_field_vector(
                 total_value_count,
             );
             insert_scope_headers(&mut resp, resolved_scope.as_ref());
+            insert_snapshot_header(&mut resp, requested_snapshot_id);
             return Ok(resp);
         }
     }
@@ -1003,6 +1113,7 @@ pub async fn get_field_vector(
         value_count,
     );
     insert_scope_headers(&mut resp, resolved_scope.as_ref());
+    insert_snapshot_header(&mut resp, requested_snapshot_id);
 
     Ok(resp)
 }

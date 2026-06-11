@@ -362,4 +362,32 @@ describe("selectExplorerNode", () => {
       },
     });
   });
+
+  it("selects hysteresis child action nodes as study-stage refs", () => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      id: "model:study:stages:stage:hysteresis-1:live-run",
+      kind: "study.stage.action",
+      label: "Live Run",
+      parentId: "model:study:stages:stage:hysteresis-1",
+      stageId: "hysteresis-1",
+      stageIndex: 3,
+    };
+
+    selectExplorerNode(kernel, node, "explorer");
+
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "study.stage.action",
+      label: "Live Run",
+      nodeId: "model:study:stages:stage:hysteresis-1:live-run",
+      objectId: null,
+      ref: {
+        kind: "study.stage.action",
+        nodeId: "model:study:stages:stage:hysteresis-1:live-run",
+        stageId: "hysteresis-1",
+        stageIndex: 3,
+        type: "study-stage",
+      },
+    });
+  });
 });

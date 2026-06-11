@@ -1,0 +1,702 @@
+//! Hysteresis endpoints — points, metrics, branches, and minor loops.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path as FsPath, PathBuf};
+use std::sync::Arc;
+
+use crate::schemas::hysteresis::{
+    HysteresisBranchSchema, HysteresisMetricsSchema, HysteresisMinorLoopSchema,
+    HysteresisPointSchema, HysteresisSaturationResultSchema, HysteresisSettleTraceEntrySchema,
+};
+use axum::extract::{Path, State};
+use axum::Json;
+
+use crate::artifacts::require_current_live_artifact_dir;
+use crate::error::ApiError;
+use crate::types::AppState;
+
+async fn resolve_stage_artifact_path(
+    state: &Arc<AppState>,
+    stage_id: &str,
+    filename: &str,
+) -> Result<PathBuf, ApiError> {
+    let artifact_dir = require_current_live_artifact_dir(state).await?;
+    let guard = state.current_live_state.read().await;
+    if let Some(snapshot) = guard.as_ref() {
+        if let Some(ref stage_exec) = snapshot.stage_execution {
+            for (idx, record) in stage_exec.stages.iter().enumerate() {
+                if stage_identifier_matches(record, idx, stage_id) {
+                    let active_stage_kind = stage_kind_for_index(stage_exec, idx);
+                    if !is_hysteresis_stage_kind(record.kind.as_deref())
+                        && !is_hysteresis_stage_kind(active_stage_kind.as_deref())
+                    {
+                        return Err(ApiError::not_found(format!(
+                            "stage {} is not a hysteresis stage",
+                            stage_id
+                        )));
+                    }
+                    for ref_path in &record.artifact_refs {
+                        if let Some(path) =
+                            resolve_hysteresis_artifact_ref(&artifact_dir, ref_path, filename)?
+                        {
+                            return Ok(path);
+                        }
+                    }
+                    if let Some(path) = resolve_flat_hysteresis_artifact(&artifact_dir, filename) {
+                        return Ok(path);
+                    }
+                    return Err(ApiError::not_found(format!(
+                        "stage artifact '{}' not found for stage {}",
+                        filename, stage_id
+                    )));
+                }
+            }
+            return Err(ApiError::not_found(format!(
+                "hysteresis stage {} not found",
+                stage_id
+            )));
+        }
+    }
+    // Legacy single-stage runs wrote analysis artifacts directly into the run
+    // artifact directory before per-stage artifact refs existed.
+    if !is_legacy_default_stage_id(stage_id) {
+        return Err(ApiError::not_found(format!(
+            "hysteresis stage {} not found",
+            stage_id
+        )));
+    }
+    let direct = artifact_dir.join(filename);
+    if direct.exists() {
+        Ok(direct)
+    } else {
+        Err(ApiError::not_found(format!(
+            "stage artifact '{}' not found for stage {}",
+            filename, stage_id
+        )))
+    }
+}
+
+fn resolve_flat_hysteresis_artifact(artifact_dir: &FsPath, filename: &str) -> Option<PathBuf> {
+    let direct = artifact_dir.join(filename);
+    direct.is_file().then_some(direct)
+}
+
+fn is_legacy_default_stage_id(stage_id: &str) -> bool {
+    matches!(stage_id, "0" | "stage_0")
+}
+
+fn is_hysteresis_stage_kind(kind: Option<&str>) -> bool {
+    matches!(kind, Some("hysteresis" | "flat_hysteresis"))
+}
+
+fn stage_kind_for_index(stage: &crate::types::StageExecutionState, index: usize) -> Option<String> {
+    if stage.active_stage_index == Some(index) {
+        return stage.active_stage_kind.clone();
+    }
+    None
+}
+
+fn resolve_hysteresis_artifact_ref(
+    artifact_dir: &FsPath,
+    ref_path: &str,
+    filename: &str,
+) -> Result<Option<PathBuf>, ApiError> {
+    let candidate = FsPath::new(ref_path);
+    let full_path = if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        let relative = crate::artifacts::sanitize_artifact_relative_path(ref_path)?;
+        artifact_dir.join(relative)
+    };
+
+    let expected_root = artifact_dir
+        .parent()
+        .map(FsPath::to_path_buf)
+        .unwrap_or_else(|| artifact_dir.to_path_buf());
+    if full_path.is_absolute() && !full_path.starts_with(&expected_root) {
+        return Err(ApiError::bad_request(
+            "stage artifact path must stay under the active workspace",
+        ));
+    }
+
+    if full_path.is_file()
+        && full_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name == filename)
+    {
+        return Ok(Some(full_path));
+    }
+    if full_path.is_dir() {
+        let nested = full_path.join(filename);
+        if nested.exists() {
+            return Ok(Some(nested));
+        }
+    }
+    Ok(None)
+}
+
+async fn read_typed_stage_artifact<T: serde::de::DeserializeOwned>(
+    state: &Arc<AppState>,
+    stage_id: &str,
+    filename: &str,
+) -> Result<T, ApiError> {
+    let path = resolve_stage_artifact_path(state, stage_id, filename).await?;
+    let content = std::fs::read_to_string(&path)
+        .map_err(|error| ApiError::internal(format!("failed to read stage artifact: {}", error)))?;
+    serde_json::from_str(&content).map_err(|error| {
+        ApiError::internal(format!(
+            "failed to parse stage artifact '{}': {}",
+            filename, error
+        ))
+    })
+}
+
+pub(crate) async fn read_hysteresis_saturation_result(
+    state: &Arc<AppState>,
+    stage_id: &str,
+) -> Result<HysteresisSaturationResultSchema, ApiError> {
+    read_typed_stage_artifact(state, stage_id, "hysteresis_saturation.json").await
+}
+
+async fn read_hysteresis_points(
+    state: &Arc<AppState>,
+    stage_id: &str,
+) -> Result<Vec<HysteresisPointSchema>, ApiError> {
+    let points: Vec<HysteresisPointSchema> = match read_typed_stage_artifact(
+        state,
+        stage_id,
+        "hysteresis_points.json",
+    )
+    .await
+    {
+        Ok(points) => points,
+        Err(error) if is_missing_stage_artifact(&error, "hysteresis_points.json") => {
+            if stage_reports_completed_hysteresis_points(state, stage_id).await {
+                return Err(ApiError::conflict(format!(
+                        "stage {} reports completed hysteresis points but hysteresis_points.json is missing",
+                        stage_id
+                    )));
+            }
+            Vec::new()
+        }
+        Err(error) => return Err(error),
+    };
+    Ok(annotate_hysteresis_points(points))
+}
+
+async fn stage_reports_completed_hysteresis_points(state: &Arc<AppState>, stage_id: &str) -> bool {
+    let guard = state.current_live_state.read().await;
+    let Some(snapshot) = guard.as_ref() else {
+        return false;
+    };
+    let Some(stage_exec) = snapshot.stage_execution.as_ref() else {
+        return false;
+    };
+    stage_exec
+        .stages
+        .iter()
+        .enumerate()
+        .find(|(idx, record)| stage_identifier_matches(record, *idx, stage_id))
+        .is_some_and(|(_, record)| {
+            matches!(
+                record.status,
+                crate::types::StageLifecycleState::Completed
+                    | crate::types::StageLifecycleState::Skipped
+            ) || record
+                .current_point_index
+                .is_some_and(|point_index| point_index > 0)
+        })
+}
+
+fn stage_identifier_matches(
+    record: &crate::types::StageExecutionRecord,
+    idx: usize,
+    stage_id: &str,
+) -> bool {
+    let record_stage_id = record.stage_id.as_deref().unwrap_or("");
+    record_stage_id == stage_id
+        || format!("stage_{}", idx) == stage_id
+        || format!("stage-{idx:03}") == stage_id
+        || idx.to_string() == stage_id
+}
+
+fn is_missing_stage_artifact(error: &ApiError, filename: &str) -> bool {
+    error.status == axum::http::StatusCode::NOT_FOUND
+        && error.message.starts_with(&format!(
+            "stage artifact '{}' not found for stage ",
+            filename
+        ))
+}
+
+fn annotate_hysteresis_points(
+    mut points: Vec<HysteresisPointSchema>,
+) -> Vec<HysteresisPointSchema> {
+    let branch_segments = infer_hysteresis_branch_segments(&points);
+    let mut branch_ids_by_point: BTreeMap<usize, BTreeSet<String>> = BTreeMap::new();
+    let mut primary_branch_by_point: BTreeMap<usize, (String, String, u32)> = BTreeMap::new();
+
+    for (branch_index, direction, branch_points) in branch_segments {
+        let branch_id = branch_id_for_direction(direction).to_string();
+        let branch_role = branch_role_for_direction(direction).to_string();
+        for point in branch_points {
+            branch_ids_by_point
+                .entry(point.point_id)
+                .or_default()
+                .insert(branch_id.clone());
+            primary_branch_by_point.entry(point.point_id).or_insert((
+                branch_id.clone(),
+                branch_role.clone(),
+                branch_index,
+            ));
+        }
+    }
+
+    for point in &mut points {
+        if point.is_reversal_field.is_none() {
+            point.is_reversal_field = Some(false);
+        }
+        if point.branch_ids.is_none() {
+            if let Some(branch_ids) = branch_ids_by_point.get(&point.point_id) {
+                point.branch_ids = Some(branch_ids.iter().cloned().collect());
+            }
+        }
+        if let Some((branch_id, branch_role, branch_index)) =
+            primary_branch_by_point.get(&point.point_id)
+        {
+            if point.branch_id.is_none() {
+                point.branch_id = Some(branch_id.clone());
+            }
+            if point.protocol_role.is_none() {
+                point.protocol_role = Some(branch_role.clone());
+            }
+            if point.branch_index.is_none() {
+                point.branch_index = Some(*branch_index);
+            }
+        }
+        if point.snapshot_resource_ref.is_none() {
+            if let Some(snapshot_id) = point.snapshot_id.as_deref() {
+                point.snapshot_resource_ref = Some(format!(
+                    "/v2/sessions/current/data/fields/m/samples/vector?snapshot_id={snapshot_id}"
+                ));
+            }
+        }
+    }
+    points
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/analysis/hysteresis/{stage_id}/points",
+    params(
+        ("stage_id" = String, Path, description = "Hysteresis stage index or stage identifier"),
+    ),
+    responses(
+        (status = 200, description = "Hysteresis sweep points", body = Vec<HysteresisPointSchema>),
+        (status = 404, description = "Hysteresis points not found"),
+    ),
+    tag = "analysis"
+)]
+pub async fn get_points(
+    State(state): State<Arc<AppState>>,
+    Path(stage_id): Path<String>,
+) -> Result<Json<Vec<HysteresisPointSchema>>, ApiError> {
+    let points = read_hysteresis_points(&state, &stage_id).await?;
+    Ok(Json(points))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/analysis/hysteresis/{stage_id}/metrics",
+    params(
+        ("stage_id" = String, Path, description = "Hysteresis stage index or stage identifier"),
+    ),
+    responses(
+        (status = 200, description = "Hysteresis loop metrics", body = HysteresisMetricsSchema),
+        (status = 404, description = "Hysteresis metrics not found"),
+    ),
+    tag = "analysis"
+)]
+pub async fn get_metrics(
+    State(state): State<Arc<AppState>>,
+    Path(stage_id): Path<String>,
+) -> Result<Json<HysteresisMetricsSchema>, ApiError> {
+    let metrics = read_typed_stage_artifact(&state, &stage_id, "hysteresis_metrics.json").await?;
+    Ok(Json(metrics))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/analysis/hysteresis/{stage_id}/saturation",
+    params(
+        ("stage_id" = String, Path, description = "Hysteresis stage index or stage identifier"),
+    ),
+    responses(
+        (status = 200, description = "Hysteresis saturation probe result", body = HysteresisSaturationResultSchema),
+        (status = 404, description = "Hysteresis saturation probe result not found"),
+    ),
+    tag = "analysis"
+)]
+pub async fn get_saturation(
+    State(state): State<Arc<AppState>>,
+    Path(stage_id): Path<String>,
+) -> Result<Json<HysteresisSaturationResultSchema>, ApiError> {
+    let saturation = read_hysteresis_saturation_result(&state, &stage_id).await?;
+    Ok(Json(saturation))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/analysis/hysteresis/{stage_id}/branches",
+    params(
+        ("stage_id" = String, Path, description = "Hysteresis stage index or stage identifier"),
+    ),
+    responses(
+        (status = 200, description = "Hysteresis loop branches grouped by sweep direction", body = Vec<HysteresisBranchSchema>),
+        (status = 404, description = "Hysteresis points not found"),
+    ),
+    tag = "analysis"
+)]
+pub async fn get_branches(
+    State(state): State<Arc<AppState>>,
+    Path(stage_id): Path<String>,
+) -> Result<Json<Vec<HysteresisBranchSchema>>, ApiError> {
+    let points = read_hysteresis_points(&state, &stage_id).await?;
+    if points.is_empty() {
+        return Ok(Json(Vec::new()));
+    }
+
+    let mut branches = Vec::new();
+    for (branch_index, direction, branch_points) in infer_hysteresis_branch_segments(&points) {
+        branches.push(build_branch_schema(branch_index, direction, branch_points));
+    }
+    Ok(Json(branches))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/analysis/hysteresis/{stage_id}/minor-loops",
+    params(
+        ("stage_id" = String, Path, description = "Hysteresis stage index or stage identifier"),
+    ),
+    responses(
+        (status = 200, description = "Minor loops", body = Vec<HysteresisMinorLoopSchema>),
+    ),
+    tag = "analysis"
+)]
+pub async fn get_minor_loops(
+    State(state): State<Arc<AppState>>,
+    Path(stage_id): Path<String>,
+) -> Result<Json<Vec<HysteresisMinorLoopSchema>>, ApiError> {
+    match read_typed_stage_artifact(&state, &stage_id, "hysteresis_minor_loops.json").await {
+        Ok(minor_loops) => {
+            let stage_points = read_hysteresis_points(&state, &stage_id).await?;
+            Ok(Json(annotate_minor_loops(minor_loops, &stage_points)))
+        }
+        Err(error) if error.status == axum::http::StatusCode::NOT_FOUND => Ok(Json(Vec::new())),
+        Err(error) => Err(error),
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/analysis/hysteresis/{stage_id}/reversal-fields",
+    params(
+        ("stage_id" = String, Path, description = "Hysteresis stage index or stage identifier"),
+    ),
+    responses(
+        (status = 200, description = "Reversal fields", body = Vec<HysteresisPointSchema>),
+    ),
+    tag = "analysis"
+)]
+pub async fn get_reversal_fields(
+    State(state): State<Arc<AppState>>,
+    Path(stage_id): Path<String>,
+) -> Result<Json<Vec<HysteresisPointSchema>>, ApiError> {
+    let points = read_hysteresis_points(&state, &stage_id).await?;
+    let mut reversal_fields = Vec::new();
+    if points.len() < 3 {
+        return Ok(Json(Vec::new()));
+    }
+    for i in 1..(points.len() - 1) {
+        let prev = points[i - 1].field_value_m_t;
+        let curr = points[i].field_value_m_t;
+        let next = points[i + 1].field_value_m_t;
+        if (curr - prev) * (next - curr) < 0.0 {
+            let mut point = points[i].clone();
+            point.is_reversal_field = Some(true);
+            point.reversal_index = Some(reversal_fields.len() as u32);
+            point.recoil_start_point_id = Some(point.point_id);
+            reversal_fields.push(point);
+        }
+    }
+    Ok(Json(reversal_fields))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/analysis/hysteresis/{stage_id}/steps/{point_id}",
+    params(
+        ("stage_id" = String, Path, description = "Hysteresis stage index or stage identifier"),
+        ("point_id" = usize, Path, description = "Hysteresis point index"),
+    ),
+    responses(
+        (status = 200, description = "Hysteresis point details", body = HysteresisPointSchema),
+        (status = 404, description = "Hysteresis point not found"),
+    ),
+    tag = "analysis"
+)]
+pub async fn get_point_by_id(
+    State(state): State<Arc<AppState>>,
+    Path((stage_id, point_id)): Path<(String, usize)>,
+) -> Result<Json<HysteresisPointSchema>, ApiError> {
+    let points = read_hysteresis_points(&state, &stage_id).await?;
+    for point in points {
+        if point.point_id == point_id {
+            return Ok(Json(point));
+        }
+    }
+    Err(ApiError::not_found(format!(
+        "point {} not found in stage {}",
+        point_id, stage_id
+    )))
+}
+
+fn branch_id_for_direction(direction: i32) -> &'static str {
+    if direction == 1 {
+        "ascending"
+    } else if direction == -1 {
+        "descending"
+    } else {
+        "unknown"
+    }
+}
+
+fn infer_hysteresis_branch_segments(
+    points: &[HysteresisPointSchema],
+) -> Vec<(u32, i32, Vec<HysteresisPointSchema>)> {
+    if points.is_empty() {
+        return Vec::new();
+    }
+
+    let mut branches = Vec::new();
+    let mut current_points = Vec::new();
+    let mut current_direction = 0; // 1 = ascending, -1 = descending, 0 = unknown
+
+    for (idx, point) in points.iter().enumerate() {
+        let field_val = point.field_value_m_t;
+        if idx == 0 {
+            current_points.push(point.clone());
+        } else {
+            let prev_field_val = points[idx - 1].field_value_m_t;
+            let dir = if field_val > prev_field_val {
+                1
+            } else if field_val < prev_field_val {
+                -1
+            } else {
+                0
+            };
+            if dir != 0 {
+                if current_direction == 0 {
+                    current_direction = dir;
+                } else if dir != current_direction {
+                    branches.push((branches.len() as u32, current_direction, current_points));
+                    current_points = points
+                        .get(idx.saturating_sub(1))
+                        .cloned()
+                        .into_iter()
+                        .collect();
+                    current_direction = dir;
+                }
+            }
+            current_points.push(point.clone());
+        }
+    }
+    if !current_points.is_empty() {
+        branches.push((branches.len() as u32, current_direction, current_points));
+    }
+    branches
+}
+
+fn build_branch_schema(
+    branch_index: u32,
+    direction: i32,
+    mut points: Vec<HysteresisPointSchema>,
+) -> HysteresisBranchSchema {
+    let branch_id = branch_id_for_direction(direction).to_string();
+    let branch_role = branch_role_for_direction(direction).to_string();
+    for point in &mut points {
+        point.branch_id = Some(branch_id.clone());
+        point.protocol_role = Some(branch_role.clone());
+        point.branch_index = Some(branch_index);
+        if point.branch_ids.is_none() {
+            point.branch_ids = Some(vec![branch_id.clone()]);
+        }
+        if point.snapshot_resource_ref.is_none() {
+            if let Some(snapshot_id) = point.snapshot_id.as_deref() {
+                point.snapshot_resource_ref = Some(format!(
+                    "/v2/sessions/current/data/fields/m/samples/vector?snapshot_id={snapshot_id}"
+                ));
+            }
+        }
+    }
+    let first = points.first();
+    let last = points.last();
+    HysteresisBranchSchema {
+        branch_id,
+        branch_index,
+        branch_role,
+        direction,
+        point_count: points.len() as u32,
+        start_point_id: first.map(|point| point.point_id).unwrap_or_default(),
+        end_point_id: last.map(|point| point.point_id).unwrap_or_default(),
+        start_field_m_t: first.map(|point| point.field_value_m_t).unwrap_or_default(),
+        end_field_m_t: last.map(|point| point.field_value_m_t).unwrap_or_default(),
+        parent_branch_id: None,
+        minor_loop_id: None,
+        points,
+    }
+}
+
+fn branch_role_for_direction(direction: i32) -> &'static str {
+    if direction == 1 {
+        "forward"
+    } else if direction == -1 {
+        "return"
+    } else {
+        "unknown"
+    }
+}
+
+fn annotate_minor_loops(
+    minor_loops: Vec<HysteresisMinorLoopSchema>,
+    stage_points: &[HysteresisPointSchema],
+) -> Vec<HysteresisMinorLoopSchema> {
+    minor_loops
+        .into_iter()
+        .map(|mut loop_result| {
+            let loop_id = loop_result.loop_id.clone();
+            let mut points = annotate_hysteresis_points(loop_result.points);
+            for point in &mut points {
+                point.minor_loop_id = Some(loop_id.clone());
+                point.protocol_role = Some("minor".to_string());
+            }
+
+            let reversal_point_id = loop_result
+                .reversal_point_id
+                .or_else(|| points.first().map(|point| point.point_id));
+            let return_point_id = loop_result
+                .return_point_id
+                .or_else(|| points.last().map(|point| point.point_id));
+            let closure_status = loop_result.closure_status.or_else(|| {
+                points.last().map(|last| {
+                    if same_m_t(last.field_value_m_t, loop_result.return_field_m_t) {
+                        "returned".to_string()
+                    } else {
+                        "open".to_string()
+                    }
+                })
+            });
+            let closure_error_m_parallel = loop_result
+                .closure_error_m_parallel
+                .or_else(|| minor_loop_closure_error_m_parallel(&points));
+            let recoil_susceptibility = loop_result
+                .recoil_susceptibility
+                .or_else(|| minor_loop_recoil_susceptibility(&points));
+            let minor_loop_area = loop_result
+                .minor_loop_area
+                .or_else(|| minor_loop_area_m_parallel(&points));
+
+            loop_result.parent_branch_id = loop_result.parent_branch_id.or_else(|| {
+                reversal_point_id
+                    .and_then(|point_id| {
+                        stage_points
+                            .iter()
+                            .find(|point| point.point_id == point_id)
+                            .and_then(|point| point.branch_id.clone())
+                    })
+                    .or_else(|| points.first().and_then(|point| point.branch_id.clone()))
+            });
+            loop_result.reversal_point_id = reversal_point_id;
+            loop_result.return_point_id = return_point_id;
+            loop_result.policy = loop_result
+                .policy
+                .or_else(|| Some("branch_only".to_string()));
+            loop_result.closure_status = closure_status;
+            loop_result.closure_error_m_parallel = closure_error_m_parallel;
+            loop_result.recoil_susceptibility = recoil_susceptibility;
+            loop_result.minor_loop_area = minor_loop_area;
+            loop_result.points = points;
+            loop_result
+        })
+        .collect()
+}
+
+fn minor_loop_closure_error_m_parallel(points: &[HysteresisPointSchema]) -> Option<f64> {
+    let first = points.first()?;
+    let last = points.last()?;
+    Some((last.m_parallel - first.m_parallel).abs())
+}
+
+fn minor_loop_recoil_susceptibility(points: &[HysteresisPointSchema]) -> Option<f64> {
+    let first = points.first()?;
+    let second = points.get(1)?;
+    let delta_h = second.field_value_m_t - first.field_value_m_t;
+    if delta_h.abs() <= 1e-12 {
+        None
+    } else {
+        Some((second.m_parallel - first.m_parallel) / delta_h)
+    }
+}
+
+fn minor_loop_area_m_parallel(points: &[HysteresisPointSchema]) -> Option<f64> {
+    if points.len() < 2 {
+        return None;
+    }
+    let area = points
+        .windows(2)
+        .map(|window| {
+            let left = &window[0];
+            let right = &window[1];
+            0.5 * (left.m_parallel + right.m_parallel)
+                * (right.field_value_m_t - left.field_value_m_t)
+        })
+        .sum::<f64>()
+        .abs();
+    Some(area)
+}
+
+fn same_m_t(left: f64, right: f64) -> bool {
+    (left - right).abs() <= 1e-9
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/analysis/hysteresis/{stage_id}/steps/{point_id}/settle-trace",
+    params(
+        ("stage_id" = String, Path, description = "Hysteresis stage index or stage identifier"),
+        ("point_id" = usize, Path, description = "Hysteresis point index"),
+    ),
+    responses(
+        (status = 200, description = "Settle trace for a point", body = Vec<HysteresisSettleTraceEntrySchema>),
+    ),
+    tag = "analysis"
+)]
+pub async fn get_settle_trace(
+    State(state): State<Arc<AppState>>,
+    Path((stage_id, point_id)): Path<(String, usize)>,
+) -> Result<Json<Vec<HysteresisSettleTraceEntrySchema>>, ApiError> {
+    let trace: Vec<HysteresisSettleTraceEntrySchema> =
+        read_typed_stage_artifact(&state, &stage_id, "hysteresis_settle_trace.json").await?;
+    let point_trace = trace
+        .into_iter()
+        .filter(|entry| entry.point_id == point_id)
+        .collect::<Vec<_>>();
+    if point_trace.is_empty() {
+        return Err(ApiError::not_found(format!(
+            "settle trace for point {} not found in stage {}",
+            point_id, stage_id
+        )));
+    }
+    Ok(Json(point_trace))
+}

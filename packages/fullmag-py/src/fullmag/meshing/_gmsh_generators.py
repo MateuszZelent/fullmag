@@ -270,7 +270,7 @@ def generate_mesh(
 
     if isinstance(geometry, Box):
         return generate_box_mesh(geometry.size, hmax=resolved_hmax, order=order, airbox=resolved_airbox, options=opts)
-    if isinstance(geometry, Cylinder):
+    if isinstance(geometry, Cylinder) and geometry.axis == (0.0, 0.0, 1.0):
         return generate_cylinder_mesh(
             geometry.radius,
             geometry.height,
@@ -279,7 +279,7 @@ def generate_mesh(
             airbox=resolved_airbox,
             options=opts,
         )
-    if isinstance(geometry, (Difference, Union, Intersection, Translate, Ellipsoid, Ellipse, ArchWaveguide)):
+    if isinstance(geometry, (Cylinder, Difference, Union, Intersection, Translate, Ellipsoid, Ellipse, ArchWaveguide)):
         # A chain of Translate wrapping an ImportedGeometry cannot go through
         # the OCC CSG pipeline (OCC cannot ingest STL/NPZ sources). Detect this
         # pattern, mesh the imported file directly, and apply the accumulated
@@ -603,9 +603,12 @@ def _add_geometry_to_occ(
     if isinstance(geometry, Cylinder):
         r = geometry.radius * scale
         h = geometry.height * scale
+        axis = geometry.axis
+        base = tuple(-0.5 * h * component for component in axis)
+        direction = tuple(h * component for component in axis)
         tag = gmsh.model.occ.addCylinder(
-            0.0, 0.0, -h / 2.0,
-            0.0, 0.0, h,
+            base[0], base[1], base[2],
+            direction[0], direction[1], direction[2],
             r,
         )
         return [(3, tag)]
@@ -983,6 +986,127 @@ def _build_stl_volume_model_for_component(
     return volume_tags, surface_tags
 
 
+def _surface_group_bounds(
+    gmsh: Any,
+    surface_tags: list[int],
+) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+    bounds = [gmsh.model.getBoundingBox(2, tag) for tag in surface_tags]
+    return (
+        (
+            min(bound[0] for bound in bounds),
+            min(bound[1] for bound in bounds),
+            min(bound[2] for bound in bounds),
+        ),
+        (
+            max(bound[3] for bound in bounds),
+            max(bound[4] for bound in bounds),
+            max(bound[5] for bound in bounds),
+        ),
+    )
+
+
+def _bbox_overlap_volume(
+    a_min: tuple[float, float, float],
+    a_max: tuple[float, float, float],
+    b_min: tuple[float, float, float],
+    b_max: tuple[float, float, float],
+) -> float:
+    overlap = [
+        max(0.0, min(float(a_max[axis]), float(b_max[axis])) - max(float(a_min[axis]), float(b_min[axis])))
+        for axis in range(3)
+    ]
+    return float(overlap[0] * overlap[1] * overlap[2])
+
+
+def _build_stl_volume_models_for_components(
+    gmsh: Any,
+    components: list[ComponentDescriptor],
+) -> tuple[dict[str, list[int]], dict[str, list[int]]]:
+    """Import all component STLs and classify the combined GEO model once."""
+    from collections import defaultdict
+
+    existing_surfs = {tag for _, tag in gmsh.model.getEntities(2)}
+    for component in components:
+        gmsh.merge(str(component.stl_path))
+
+    angle = 40.0 * math.pi / 180.0
+    gmsh.model.mesh.classifySurfaces(
+        angle,
+        boundary=True,
+        forReparametrization=False,
+        curveAngle=math.pi,
+    )
+    gmsh.model.mesh.createGeometry()
+    surface_tags = [tag for _, tag in gmsh.model.getEntities(2) if tag not in existing_surfs]
+    if not surface_tags:
+        raise ValueError("failed to recover closed surfaces from component STLs")
+
+    edge_to_surfs: dict[int, set[int]] = defaultdict(set)
+    for stag in surface_tags:
+        edges = gmsh.model.getBoundary([(2, stag)], oriented=False)
+        for _, etag in edges:
+            edge_to_surfs[abs(etag)].add(stag)
+
+    parent: dict[int, int] = {tag: tag for tag in surface_tags}
+
+    def _find(tag: int) -> int:
+        while parent[tag] != tag:
+            parent[tag] = parent[parent[tag]]
+            tag = parent[tag]
+        return tag
+
+    def _union(a: int, b: int) -> None:
+        ra, rb = _find(a), _find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    for stags in edge_to_surfs.values():
+        tags = list(stags)
+        for index in range(1, len(tags)):
+            _union(tags[0], tags[index])
+
+    groups: dict[int, list[int]] = defaultdict(list)
+    for tag in surface_tags:
+        groups[_find(tag)].append(tag)
+
+    assigned = set()
+    component_volume_tags: dict[str, list[int]] = {component.geometry_name: [] for component in components}
+    component_surface_tags: dict[str, list[int]] = {component.geometry_name: [] for component in components}
+    pending: list[tuple[list[int], tuple[tuple[float, float, float], tuple[float, float, float]]]] = []
+    for group_surfs in groups.values():
+        pending.append((group_surfs, _surface_group_bounds(gmsh, group_surfs)))
+
+    for group_surfs, (group_min, group_max) in pending:
+        best_index: int | None = None
+        best_overlap = -1.0
+        for index, component in enumerate(components):
+            overlap = _bbox_overlap_volume(
+                group_min,
+                group_max,
+                component.bounds_min,
+                component.bounds_max,
+            )
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_index = index
+        if best_index is None or best_overlap <= 0.0:
+            raise ValueError("could not map imported STL surface group to a component")
+        component = components[best_index]
+        assigned.add(best_index)
+        sl = gmsh.model.geo.addSurfaceLoop(group_surfs)
+        volume = gmsh.model.geo.addVolume([sl])
+        component_surface_tags[component.geometry_name].extend(group_surfs)
+        component_volume_tags[component.geometry_name].append(volume)
+
+    missing_indexes = set(range(len(components))) - assigned
+    if missing_indexes:
+        missing = ", ".join(components[index].geometry_name for index in sorted(missing_indexes))
+        raise ValueError(f"could not recover STL surface groups for component(s): {missing}")
+
+    gmsh.model.geo.synchronize()
+    return component_volume_tags, component_surface_tags
+
+
 def generate_shared_domain_mesh_from_components(
     components: list[ComponentDescriptor],
     *,
@@ -1019,22 +1143,14 @@ def generate_shared_domain_mesh_from_components(
         component_volume_tags: dict[str, list[int]] = {}
         component_surface_tags: dict[str, list[int]] = {}
 
+        component_volume_tags, component_surface_tags = _build_stl_volume_models_for_components(
+            gmsh,
+            components,
+        )
         for component_index, comp in enumerate(components, start=1):
-            # Record existing entities before merge so we can detect new ones
-            existing_surfs = {tag for _, tag in gmsh.model.getEntities(2)}
-            existing_vols = {tag for _, tag in gmsh.model.getEntities(3)}
-
-            comp_vols, comp_surfs = _build_stl_volume_model_for_component(
-                gmsh, comp.stl_path,
-            )
-
-            # Isolate tags actually created for this component
-            new_surfs = [t for t in comp_surfs if t not in existing_surfs]
-            new_vols = [t for t in comp_vols if t not in existing_vols]
-
+            new_vols = component_volume_tags[comp.geometry_name]
+            new_surfs = component_surface_tags[comp.geometry_name]
             component_marker_tags[comp.geometry_name] = component_index
-            component_volume_tags[comp.geometry_name] = new_vols
-            component_surface_tags[comp.geometry_name] = new_surfs
             all_body_vols.extend(new_vols)
             all_body_surfs.extend(new_surfs)
 

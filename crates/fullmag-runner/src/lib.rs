@@ -25,6 +25,7 @@ pub(crate) mod fem;
 #[path = "fem_reference.rs"]
 mod fem_baseline;
 mod fem_eigen;
+pub mod hysteresis;
 pub mod interactive;
 mod interactive_runtime;
 mod native_fem;
@@ -294,6 +295,9 @@ pub fn run_planned_problem(
     until_seconds: f64,
     output_dir: &Path,
 ) -> Result<RunResult, RunError> {
+    if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
+        return hysteresis::run_planned_hysteresis(problem, plan, until_seconds, output_dir);
+    }
     let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start(
         output_dir.to_path_buf(),
         artifacts::build_field_context(problem, plan),
@@ -426,6 +430,16 @@ pub fn run_planned_problem_with_callback(
     field_every_n: u64,
     mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
+    if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
+        return hysteresis::run_planned_hysteresis_with_callback(
+            problem,
+            plan,
+            until_seconds,
+            output_dir,
+            field_every_n,
+            &mut on_step,
+        );
+    }
     let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start(
         output_dir.to_path_buf(),
         artifacts::build_field_context(problem, plan),
@@ -576,6 +590,11 @@ pub fn run_planned_problem_with_callback(
         magnetization: Some(final_m),
         preview_field: None,
         cached_preview_fields: None,
+        hysteresis_field_m_t: None,
+        hysteresis_point_index: None,
+        hysteresis_settle_step_index: None,
+        hysteresis_settle_step_kind: None,
+        hysteresis_settle_step_method: None,
         scalar_row_due: true,
         finished: true,
     });
@@ -664,6 +683,19 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
     initial_snapshot: bool,
     mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
+    if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
+        return hysteresis::run_planned_hysteresis_with_live_preview(
+            problem,
+            plan,
+            until_seconds,
+            output_dir,
+            field_every_n,
+            display_selection,
+            interrupt_requested,
+            initial_snapshot,
+            &mut on_step,
+        );
+    }
     let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start(
         output_dir.to_path_buf(),
         artifacts::build_field_context(problem, plan),
@@ -812,6 +844,11 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         magnetization: None,
         preview_field: None,
         cached_preview_fields: None,
+        hysteresis_field_m_t: None,
+        hysteresis_point_index: None,
+        hysteresis_settle_step_index: None,
+        hysteresis_settle_step_kind: None,
+        hysteresis_settle_step_method: None,
         scalar_row_due: true,
         finished: true,
     });
@@ -936,6 +973,11 @@ pub fn run_problem_with_interactive_fdm_runtime_live_preview_interruptible(
         magnetization: Some(final_m),
         preview_field: None,
         cached_preview_fields: None,
+        hysteresis_field_m_t: None,
+        hysteresis_point_index: None,
+        hysteresis_settle_step_index: None,
+        hysteresis_settle_step_kind: None,
+        hysteresis_settle_step_method: None,
         scalar_row_due: true,
         finished: true,
     });
@@ -1059,6 +1101,11 @@ pub fn run_problem_with_interactive_fem_runtime_live_preview_interruptible(
         ),
         preview_field: None,
         cached_preview_fields: None,
+        hysteresis_field_m_t: None,
+        hysteresis_point_index: None,
+        hysteresis_settle_step_index: None,
+        hysteresis_settle_step_kind: None,
+        hysteresis_settle_step_method: None,
         scalar_row_due: true,
         finished: true,
     });
@@ -1661,6 +1708,20 @@ mod tests {
         assert!(
             route_count >= 3,
             "run entrypoints should route FEM relaxation through fem::relax::execute_fem_relax, found {route_count}"
+        );
+    }
+
+    #[test]
+    fn interactive_runtime_hysteresis_entrypoint_routes_through_hysteresis_runner() {
+        let source = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/interactive/runtime.rs"
+        ))
+        .expect("read interactive runtime");
+        assert!(
+            source.contains("StudyIR::Hysteresis")
+                && source.contains("run_planned_hysteresis_with_live_preview"),
+            "unified InteractiveRuntime must route hysteresis through the hysteresis runner so per-point fields and settle algorithms are injected"
         );
     }
 

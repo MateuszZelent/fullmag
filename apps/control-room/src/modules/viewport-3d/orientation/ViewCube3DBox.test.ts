@@ -16,10 +16,44 @@ describe("ViewCube3DBox", () => {
   it("tracks orbit ring drags on window so leaving the canvas does not drop motion", () => {
     const source = readFileSync(sourceUrl, "utf8");
 
-    expect(source).toContain('window.addEventListener("pointermove", handleMove');
-    expect(source).toContain('window.addEventListener("pointerup", handleUp');
-    expect(source).toContain('window.addEventListener("pointercancel", handleUp');
+    expect(source).toContain("const attachWindowDragListeners = useCallback");
+    expect(source).toContain("const detachWindowDragListeners = useCallback");
+    expect(source).toContain(
+      'window.addEventListener("pointermove", dragMoveListener',
+    );
+    expect(source).toContain('window.addEventListener("pointerup", dragEndListener');
+    expect(source).toContain(
+      'window.addEventListener("pointercancel", dragEndListener',
+    );
+    expect(source).toContain("attachWindowDragListeners();");
     expect(source).not.toContain('canvas.addEventListener("pointermove", handleMove');
+  });
+
+  it("does not keep orbit ring pointermove attached while idle", () => {
+    const source = readFileSync(sourceUrl, "utf8");
+    const orbitRingBlock = source.slice(
+      source.indexOf("function OrbitRing3D"),
+      source.indexOf("function useLatestRef"),
+    );
+    const effectBlock = orbitRingBlock.slice(
+      orbitRingBlock.indexOf("useEffect(() => {"),
+      orbitRingBlock.indexOf("return ("),
+    );
+
+    expect(effectBlock).not.toContain(
+      'window.addEventListener("pointermove", handleMove',
+    );
+    expect(effectBlock).toContain("detachWindowDragListeners();");
+  });
+
+  it("uses the native view cube hit path without a duplicate fallback mesh pointerdown", () => {
+    const source = readFileSync(sourceUrl, "utf8");
+    const fallbackBoxBlock = source.slice(
+      source.indexOf("userData={{ viewCubeFallbackBox: true }}") - 220,
+      source.indexOf("userData={{ viewCubeFallbackBox: true }}") + 80,
+    );
+
+    expect(fallbackBoxBlock).not.toContain("onPointerDown=");
   });
 
   it("uses double-sided hit panels so hidden-side wall, edge, and corner snaps remain clickable", () => {
@@ -38,6 +72,8 @@ describe("ViewCube3DBox", () => {
 
     expect(source).toContain('addEventListener("pointerdown", handlePointerDown');
     expect(source).toContain("capture: true");
+    expect(source).toContain("let cachedRect = element.getBoundingClientRect();");
+    expect(source).toContain("new ResizeObserver");
     expect(source).toContain("raycaster.intersectObject(group, true)");
     expect(source).toContain("viewCubeTargetDirection");
     expect(source).toContain("viewCubeFallbackBox");

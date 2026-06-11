@@ -582,7 +582,7 @@ fn default_visualization_layers(
             density: vector_density,
             domain: VectorLayerDomain::Auto,
         },
-        primitives: basic_layer(true, 1.0),
+        primitives: basic_layer(false, 1.0),
         airbox: AirboxLayerState {
             visible: false,
             bounds: basic_layer(false, 1.0),

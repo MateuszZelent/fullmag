@@ -34,6 +34,115 @@ def _import_trimesh() -> Any:
     return trimesh
 
 
+def _rotation_from_z_axis(axis: tuple[float, float, float]) -> np.ndarray:
+    target = np.asarray(axis, dtype=np.float64)
+    norm = float(np.linalg.norm(target))
+    if not math.isfinite(norm) or norm <= 0.0:
+        raise ValueError("axis must be a non-zero finite vector")
+    target = target / norm
+    source = np.asarray((0.0, 0.0, 1.0), dtype=np.float64)
+    dot = float(np.clip(np.dot(source, target), -1.0, 1.0))
+    if dot > 1.0 - 1e-12:
+        return np.eye(4, dtype=np.float64)
+    if dot < -1.0 + 1e-12:
+        transform = np.eye(4, dtype=np.float64)
+        transform[:3, :3] = np.diag((1.0, -1.0, -1.0))
+        return transform
+
+    v = np.cross(source, target)
+    vx = np.asarray(
+        (
+            (0.0, -v[2], v[1]),
+            (v[2], 0.0, -v[0]),
+            (-v[1], v[0], 0.0),
+        ),
+        dtype=np.float64,
+    )
+    rotation = np.eye(3, dtype=np.float64) + vx + vx @ vx * (1.0 / (1.0 + dot))
+    transform = np.eye(4, dtype=np.float64)
+    transform[:3, :3] = rotation
+    return transform
+
+
+def _apply_axis_orientation(mesh: Any, axis: tuple[float, float, float]) -> Any:
+    if axis == (0.0, 0.0, 1.0):
+        return mesh
+    mesh = mesh.copy()
+    mesh.apply_transform(_rotation_from_z_axis(axis))
+    return mesh
+
+
+def _coaxial_cylinder_difference(geometry: Difference) -> tuple[Cylinder, Cylinder] | None:
+    if not isinstance(geometry.base, Cylinder) or not isinstance(geometry.tool, Cylinder):
+        return None
+    outer = geometry.base
+    inner = geometry.tool
+    if outer.axis != inner.axis:
+        return None
+    if not math.isclose(outer.height, inner.height, rel_tol=1e-12, abs_tol=0.0):
+        return None
+    if not outer.radius > inner.radius > 0.0:
+        return None
+    return outer, inner
+
+
+def _annular_cylinder_to_trimesh(
+    trimesh: Any,
+    outer: Cylinder,
+    inner: Cylinder,
+    *,
+    sections: int,
+) -> Any:
+    n = max(3, int(sections))
+    angles = np.linspace(0.0, 2.0 * math.pi, n, endpoint=False, dtype=np.float64)
+    z_bottom = -0.5
+    z_top = 0.5
+    inner_radius = inner.radius / outer.radius
+
+    vertices: list[tuple[float, float, float]] = []
+    for z in (z_bottom, z_top):
+        for radius in (1.0, inner_radius):
+            vertices.extend(
+                (float(radius * math.cos(angle)), float(radius * math.sin(angle)), float(z))
+                for angle in angles
+            )
+
+    outer_bottom = 0
+    inner_bottom = n
+    outer_top = 2 * n
+    inner_top = 3 * n
+    faces: list[tuple[int, int, int]] = []
+    for i in range(n):
+        j = (i + 1) % n
+        ob_i, ob_j = outer_bottom + i, outer_bottom + j
+        ib_i, ib_j = inner_bottom + i, inner_bottom + j
+        ot_i, ot_j = outer_top + i, outer_top + j
+        it_i, it_j = inner_top + i, inner_top + j
+
+        faces.extend(
+            [
+                (ob_i, ob_j, ot_j),
+                (ob_i, ot_j, ot_i),
+                (ib_i, it_j, ib_j),
+                (ib_i, it_i, it_j),
+                (ot_i, ot_j, it_j),
+                (ot_i, it_j, it_i),
+                (ob_i, ib_j, ob_j),
+                (ob_i, ib_i, ib_j),
+            ]
+        )
+
+    mesh = trimesh.Trimesh(
+        vertices=np.asarray(vertices, dtype=np.float64),
+        faces=np.asarray(faces, dtype=np.int64),
+        process=True,
+    )
+    mesh.vertices[:, 0] *= outer.radius
+    mesh.vertices[:, 1] *= outer.radius
+    mesh.vertices[:, 2] *= outer.height
+    return _apply_axis_orientation(mesh, outer.axis)
+
+
 @dataclass(frozen=True, slots=True)
 class SurfaceAsset:
     path: Path
@@ -191,7 +300,18 @@ def export_geometry_to_stl(
             height=geometry.height,
             sections=cylinder_sections,
         )
+        mesh = _apply_axis_orientation(mesh, geometry.axis)
     elif isinstance(geometry, Difference):
+        coaxial = _coaxial_cylinder_difference(geometry)
+        if coaxial is not None:
+            mesh = _annular_cylinder_to_trimesh(
+                trimesh,
+                coaxial[0],
+                coaxial[1],
+                sections=cylinder_sections,
+            )
+            mesh.export(target)
+            return target
         base_mesh = _geometry_to_trimesh(geometry.base, trimesh, cylinder_sections)
         tool_mesh = _geometry_to_trimesh(geometry.tool, trimesh, cylinder_sections)
         try:
@@ -237,7 +357,7 @@ def _geometry_to_trimesh(
         mesh.vertices[:, 0] *= geometry.radius
         mesh.vertices[:, 1] *= geometry.radius
         mesh.vertices[:, 2] *= geometry.height
-        return mesh
+        return _apply_axis_orientation(mesh, geometry.axis)
     if isinstance(geometry, Ellipsoid):
         mesh = trimesh.creation.icosphere(subdivisions=3, radius=1.0)
         mesh.vertices[:, 0] *= geometry.rx
@@ -262,6 +382,14 @@ def _geometry_to_trimesh(
             through_thickness_symmetric=through_thickness_symmetric,
         )
     if isinstance(geometry, Difference):
+        coaxial = _coaxial_cylinder_difference(geometry)
+        if coaxial is not None:
+            return _annular_cylinder_to_trimesh(
+                trimesh,
+                coaxial[0],
+                coaxial[1],
+                sections=cylinder_sections,
+            )
         base = _geometry_to_trimesh(
             geometry.base,
             trimesh,
@@ -304,7 +432,10 @@ def _geometry_to_trimesh(
             through_thickness_element_ratio=through_thickness_element_ratio,
             through_thickness_symmetric=through_thickness_symmetric,
         )
-        return a.union(b)
+        try:
+            return a.union(b)
+        except ImportError:
+            return trimesh.util.concatenate([a, b])
     if isinstance(geometry, Intersection):
         a = _geometry_to_trimesh(
             geometry.a,

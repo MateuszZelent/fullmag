@@ -2,6 +2,14 @@ import type { ResourceRevision } from "../api/apiTypes";
 import type { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
 import {
+  ANALYSIS_HYSTERESIS_BRANCHES_PATH,
+  ANALYSIS_HYSTERESIS_METRICS_PATH,
+  ANALYSIS_HYSTERESIS_MINOR_LOOPS_PATH,
+  ANALYSIS_HYSTERESIS_POINT_PATH,
+  ANALYSIS_HYSTERESIS_POINTS_PATH,
+  ANALYSIS_HYSTERESIS_REVERSAL_FIELDS_PATH,
+  ANALYSIS_HYSTERESIS_SATURATION_PATH,
+  ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH,
   DATA_DOMAIN_META_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
   DATA_FIELDS_PATH,
@@ -24,6 +32,13 @@ import {
   SESSION_CURRENT_PATH,
   SIMULATION_COMMANDS_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
+  SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH,
+  SIMULATION_STAGE_HYSTERESIS_ORIENTATION_PATH,
+  SIMULATION_STAGE_HYSTERESIS_PLAN_PATH,
+  SIMULATION_STAGE_HYSTERESIS_PROGRESS_PATH,
+  SIMULATION_STAGE_HYSTERESIS_PROTOCOL_PATH,
+  SIMULATION_STAGE_HYSTERESIS_SATURATION_PATH,
+  SIMULATION_STAGE_HYSTERESIS_SETTLE_PIPELINE_PATH,
   SIMULATION_STAGES_EXECUTION_PATH,
   VISUALIZATION_STATE_PATH,
 } from "../api/apiPaths";
@@ -183,6 +198,49 @@ function realtimeBatchChange(change: unknown): RealtimeBatchChange | null {
 
 function resourceFamilyPrefix(pathWithObjectId: string): string {
   return pathWithObjectId.slice(0, pathWithObjectId.indexOf("{object_id}"));
+}
+
+function matchesStageScopedResource(resourceKey: string, pathWithStageId: string): boolean {
+  const pattern = new RegExp(
+    `^${escapeResourcePathTemplate(pathWithStageId)}(?:[:?]|$)`,
+  );
+  return pattern.test(resourceKey);
+}
+
+function concreteStageIdFromResourceKey(
+  resourceKey: string,
+  pathWithStageId: string,
+): string | null {
+  const [prefix, suffix] = pathWithStageId.split("{stage_id}");
+  if (prefix === undefined || suffix === undefined) return null;
+  if (!resourceKey.startsWith(prefix)) return null;
+  const rest = resourceKey.slice(prefix.length);
+  const suffixIndex = rest.indexOf(suffix);
+  if (suffixIndex < 0) return null;
+  return rest.slice(0, suffixIndex);
+}
+
+function matchesConcreteStageScopedResource(
+  resourceKey: string,
+  pathWithStageId: string,
+  stageId: string,
+): boolean {
+  const stagePathTemplate = pathWithStageId.replace("{stage_id}", stageId);
+  const pattern = new RegExp(
+    `^${escapeResourcePathTemplate(stagePathTemplate)}(?:[:?]|$)`,
+  );
+  return pattern.test(resourceKey);
+}
+
+function escapeResourcePathTemplate(pathTemplate: string): string {
+  return pathTemplate
+    .split(/(\{[^}]+\})/g)
+    .map((part) =>
+      part.startsWith("{") && part.endsWith("}")
+        ? "[^/:?]+"
+        : part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+    )
+    .join("");
 }
 
 const SESSION_STATUS_RECOMMENDED_FETCHES = new Set<string>([
@@ -464,6 +522,7 @@ export class RealtimeInvalidationBridge {
       this.resources.invalidatePrefix(resourceKey, revision);
       this.invalidateSceneDocumentDependents(resourceKey, revision);
       this.invalidateMeshBuildCompletionDependents(resourceKey, revision);
+      this.invalidateHysteresisAnalysisDependents(resourceKey, revision);
       const dependentStatusRevision =
         this.invalidateRuntimeLifecycleDependents(resourceKey, revision);
       if (dependentStatusRevision !== null && statusRevision === null) {
@@ -539,6 +598,34 @@ export class RealtimeInvalidationBridge {
     this.resources.invalidate(MODEL_REALIZED_REGIONS_PATH, dependentRevision);
     this.resources.invalidate(MODEL_REGION_DIAGNOSTICS_PATH, dependentRevision);
     this.resources.invalidate(MODEL_MATERIAL_FIELDS_PATH, dependentRevision);
+    this.resources.invalidateMatching(
+      (resourceKey) =>
+        matchesStageScopedResource(
+          resourceKey,
+          SIMULATION_STAGE_HYSTERESIS_PLAN_PATH,
+        ) ||
+        matchesStageScopedResource(
+          resourceKey,
+          SIMULATION_STAGE_HYSTERESIS_PROTOCOL_PATH,
+        ) ||
+        matchesStageScopedResource(
+          resourceKey,
+          SIMULATION_STAGE_HYSTERESIS_SATURATION_PATH,
+        ) ||
+        matchesStageScopedResource(
+          resourceKey,
+          SIMULATION_STAGE_HYSTERESIS_ORIENTATION_PATH,
+        ) ||
+        matchesStageScopedResource(
+          resourceKey,
+          SIMULATION_STAGE_HYSTERESIS_SETTLE_PIPELINE_PATH,
+        ) ||
+        matchesStageScopedResource(
+          resourceKey,
+          SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH,
+        ),
+      dependentRevision,
+    );
   }
 
   private invalidateRuntimeLifecycleDependents(
@@ -558,6 +645,50 @@ export class RealtimeInvalidationBridge {
     if (recommendedFetch === SIMULATION_STAGES_EXECUTION_PATH) {
       this.resources.invalidate(SIMULATION_SOLVER_STATUS_PATH, dependentRevision);
       this.resources.invalidate(SIMULATION_COMMANDS_PATH, dependentRevision);
+      this.resources.invalidateMatching(
+        (resourceKey) =>
+          matchesStageScopedResource(
+            resourceKey,
+            SIMULATION_STAGE_HYSTERESIS_PROGRESS_PATH,
+          ) ||
+          matchesStageScopedResource(
+            resourceKey,
+            SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH,
+          ) ||
+          matchesStageScopedResource(
+            resourceKey,
+            ANALYSIS_HYSTERESIS_POINTS_PATH,
+          ) ||
+          matchesStageScopedResource(
+            resourceKey,
+            ANALYSIS_HYSTERESIS_POINT_PATH,
+          ) ||
+          matchesStageScopedResource(
+            resourceKey,
+            ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH,
+          ) ||
+          matchesStageScopedResource(
+            resourceKey,
+            ANALYSIS_HYSTERESIS_METRICS_PATH,
+          ) ||
+          matchesStageScopedResource(
+            resourceKey,
+            ANALYSIS_HYSTERESIS_SATURATION_PATH,
+          ) ||
+          matchesStageScopedResource(
+            resourceKey,
+            ANALYSIS_HYSTERESIS_BRANCHES_PATH,
+          ) ||
+          matchesStageScopedResource(
+            resourceKey,
+            ANALYSIS_HYSTERESIS_MINOR_LOOPS_PATH,
+          ) ||
+          matchesStageScopedResource(
+            resourceKey,
+            ANALYSIS_HYSTERESIS_REVERSAL_FIELDS_PATH,
+          ),
+        dependentRevision,
+      );
       return null;
     }
 
@@ -567,5 +698,54 @@ export class RealtimeInvalidationBridge {
     }
 
     return null;
+  }
+
+  private invalidateHysteresisAnalysisDependents(
+    recommendedFetch: string,
+    revision: ResourceRevision,
+  ): void {
+    const stageId = concreteStageIdFromResourceKey(
+      recommendedFetch,
+      ANALYSIS_HYSTERESIS_POINTS_PATH,
+    );
+    if (!stageId) return;
+    const dependentRevision = dependentResourceRevision(
+      recommendedFetch,
+      revision,
+    );
+    this.resources.invalidateMatching(
+      (resourceKey) =>
+        matchesConcreteStageScopedResource(
+          resourceKey,
+          ANALYSIS_HYSTERESIS_METRICS_PATH,
+          stageId,
+        ) ||
+        matchesConcreteStageScopedResource(
+          resourceKey,
+          ANALYSIS_HYSTERESIS_BRANCHES_PATH,
+          stageId,
+        ) ||
+        matchesConcreteStageScopedResource(
+          resourceKey,
+          ANALYSIS_HYSTERESIS_MINOR_LOOPS_PATH,
+          stageId,
+        ) ||
+        matchesConcreteStageScopedResource(
+          resourceKey,
+          ANALYSIS_HYSTERESIS_REVERSAL_FIELDS_PATH,
+          stageId,
+        ) ||
+        matchesConcreteStageScopedResource(
+          resourceKey,
+          ANALYSIS_HYSTERESIS_POINT_PATH,
+          stageId,
+        ) ||
+        matchesConcreteStageScopedResource(
+          resourceKey,
+          ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH,
+          stageId,
+        ),
+      dependentRevision,
+    );
   }
 }

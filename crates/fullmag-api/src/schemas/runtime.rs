@@ -135,6 +135,16 @@ pub struct StageExecutionRecordResource {
     pub metric_value: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub threshold: Option<f64>,
+    #[serde(rename = "current_field_mT", skip_serializing_if = "Option::is_none")]
+    pub current_field_m_t: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_point_index: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_settle_step_index: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_settle_step_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_settle_step_method: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

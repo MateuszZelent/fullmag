@@ -209,4 +209,75 @@ describe("RequestDiagnosticsController", () => {
     });
   });
 
+  it("aggregates repeated interleaved HTTP exchanges inside the summary window", () => {
+    const diagnostics = new RequestDiagnosticsController();
+
+    diagnostics.record({
+      byteLength: 0,
+      channel: "http",
+      detail: "attempt 1",
+      direction: "tx",
+      method: "GET",
+      outcome: "sent",
+      path: "/v2/sessions/current/status",
+      requestId: "req-1",
+      timestampMs: 1_000,
+    });
+    diagnostics.record({
+      byteLength: 512,
+      channel: "http",
+      detail: "attempt 1 accepted",
+      direction: "rx",
+      durationMs: 10,
+      method: "GET",
+      outcome: "ok",
+      path: "/v2/sessions/current/status",
+      requestId: "req-1",
+      status: 200,
+      timestampMs: 1_010,
+    });
+    diagnostics.record({
+      byteLength: 0,
+      channel: "http",
+      detail: "attempt 1",
+      direction: "tx",
+      method: "GET",
+      outcome: "sent",
+      path: "/v2/sessions/current/status",
+      requestId: "req-2",
+      timestampMs: 1_500,
+    });
+    diagnostics.record({
+      byteLength: 520,
+      channel: "http",
+      detail: "attempt 1 accepted",
+      direction: "rx",
+      durationMs: 14,
+      method: "GET",
+      outcome: "ok",
+      path: "/v2/sessions/current/status",
+      requestId: "req-2",
+      status: 200,
+      timestampMs: 1_520,
+    });
+
+    expect(diagnostics.list()).toHaveLength(2);
+    expect(diagnostics.list().map((entry) => entry.direction)).toEqual([
+      "tx",
+      "rx",
+    ]);
+    expect(diagnostics.list()[0]).toMatchObject({
+      detail: "attempt 1 (x2 over 500ms)",
+      direction: "tx",
+      timestampMs: 1_500,
+    });
+    expect(diagnostics.list()[1]).toMatchObject({
+      byteLength: 1032,
+      detail: "attempt 1 accepted (x2 over 510ms)",
+      direction: "rx",
+      durationMs: 24,
+      timestampMs: 1_520,
+    });
+  });
+
 });

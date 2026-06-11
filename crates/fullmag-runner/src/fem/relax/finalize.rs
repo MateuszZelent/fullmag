@@ -70,6 +70,11 @@ pub(crate) fn finalize_native_fem_relaxation(
                     magnetization: None,
                     preview_field: None,
                     cached_preview_fields: Some(cached),
+                    hysteresis_field_m_t: None,
+                    hysteresis_point_index: None,
+                    hysteresis_settle_step_index: None,
+                    hysteresis_settle_step_kind: None,
+                    hysteresis_settle_step_method: None,
                     scalar_row_due: false,
                     finished: false,
                 });

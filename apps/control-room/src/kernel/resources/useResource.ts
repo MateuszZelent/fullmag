@@ -28,6 +28,7 @@ interface UseResourceOptions<TData> {
   enabled?: boolean;
   load: (context: LoadContext) => Promise<TData>;
   minRefetchIntervalMs?: number;
+  pauseLoad?: boolean;
   resolveRevision?: (data: TData) => ResourceRevision | null;
   resourceKey: ResourceKey;
 }
@@ -44,6 +45,7 @@ export function useResource<TData>({
   enabled = true,
   load,
   minRefetchIntervalMs,
+  pauseLoad = false,
   resolveRevision,
   resourceKey,
 }: UseResourceOptions<TData>): ResourceResult<TData> {
@@ -97,6 +99,7 @@ export function useResource<TData>({
     externalRevision,
     load,
     minRefetchIntervalMs,
+    pauseLoad,
     refreshToken,
     resolveRevision,
     resourceKey,
@@ -134,6 +137,7 @@ export function useResourceSelector<TData, TSelected>({
   isEqual = Object.is,
   load,
   minRefetchIntervalMs,
+  pauseLoad = false,
   resolveRevision,
   resourceKey,
   selector,
@@ -213,6 +217,7 @@ export function useResourceSelector<TData, TSelected>({
     externalRevision,
     load,
     minRefetchIntervalMs,
+    pauseLoad,
     refreshToken,
     resolveRevision,
     resourceKey,
@@ -228,6 +233,7 @@ function useResourceLoader<TData>({
   externalRevision,
   load,
   minRefetchIntervalMs = 0,
+  pauseLoad = false,
   refreshToken,
   resolveRevision,
   resourceKey,
@@ -238,6 +244,7 @@ function useResourceLoader<TData>({
   externalRevision: ResourceRevision | null;
   load: (context: LoadContext) => Promise<TData>;
   minRefetchIntervalMs?: number;
+  pauseLoad?: boolean;
   refreshToken: number;
   resolveRevision?: (data: TData) => ResourceRevision | null;
   resourceKey: ResourceKey;
@@ -245,6 +252,10 @@ function useResourceLoader<TData>({
 }): void {
   useEffect(() => {
     if (!enabled) return;
+    if (pauseLoad) {
+      runtimeStore.pauseLoad(resourceKey);
+      return;
+    }
     let cancelled = false;
 
     // If the last attempt failed, wait before retrying to avoid
@@ -277,6 +288,7 @@ function useResourceLoader<TData>({
     externalRevision,
     load,
     minRefetchIntervalMs,
+    pauseLoad,
     refreshToken,
     resolveRevision,
     resourceKey,

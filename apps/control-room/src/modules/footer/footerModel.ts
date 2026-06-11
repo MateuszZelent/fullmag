@@ -15,6 +15,28 @@ export type FooterLogSortKey =
   | "status"
   | "time";
 
+export interface TransportTrafficSummary {
+  byteLength: number;
+  estimatedEventsPerMinute: number | null;
+  httpCount: number;
+  performanceCount: number;
+  rxCount: number;
+  topEndpoints: TransportEndpointSummary[];
+  totalCount: number;
+  txCount: number;
+  websocketCount: number;
+  windowMs: number;
+}
+
+export interface TransportEndpointSummary {
+  byteLength: number;
+  count: number;
+  label: string;
+  latestTimestampMs: number;
+  rxCount: number;
+  txCount: number;
+}
+
 export interface FooterLogFilters {
   channel: FooterChannelFilter;
   direction: FooterDirectionFilter;
@@ -88,6 +110,110 @@ export function formatTransportByteSize(byteLength: number | null): string {
   }
 
   return `${value >= 10 ? value.toFixed(1) : value.toFixed(2)} ${units[unitIndex]}`;
+}
+
+export function buildTransportTrafficSummary(
+  entries: readonly RequestDiagnosticEntry[],
+): TransportTrafficSummary {
+  if (entries.length === 0) {
+    return {
+      byteLength: 0,
+      estimatedEventsPerMinute: null,
+      httpCount: 0,
+      performanceCount: 0,
+      rxCount: 0,
+      topEndpoints: [],
+      totalCount: 0,
+      txCount: 0,
+      websocketCount: 0,
+      windowMs: 0,
+    };
+  }
+
+  let byteLength = 0;
+  let httpCount = 0;
+  let performanceCount = 0;
+  let rxCount = 0;
+  let txCount = 0;
+  let websocketCount = 0;
+  let oldestTimestampMs = Number.POSITIVE_INFINITY;
+  let newestTimestampMs = Number.NEGATIVE_INFINITY;
+  const endpoints = new Map<string, TransportEndpointSummary>();
+
+  for (const entry of entries) {
+    byteLength += entry.byteLength ?? 0;
+    oldestTimestampMs = Math.min(oldestTimestampMs, entry.timestampMs);
+    newestTimestampMs = Math.max(newestTimestampMs, entry.timestampMs);
+
+    if (entry.channel === "http") httpCount += 1;
+    if (entry.channel === "performance") performanceCount += 1;
+    if (entry.channel === "websocket") websocketCount += 1;
+    if (entry.direction === "rx") rxCount += 1;
+    if (entry.direction === "tx") txCount += 1;
+
+    const label = summarizeTransportPath(entry);
+    const endpoint = endpoints.get(label) ?? {
+      byteLength: 0,
+      count: 0,
+      label,
+      latestTimestampMs: 0,
+      rxCount: 0,
+      txCount: 0,
+    };
+    endpoint.byteLength += entry.byteLength ?? 0;
+    endpoint.count += 1;
+    endpoint.latestTimestampMs = Math.max(
+      endpoint.latestTimestampMs,
+      entry.timestampMs,
+    );
+    if (entry.direction === "rx") endpoint.rxCount += 1;
+    if (entry.direction === "tx") endpoint.txCount += 1;
+    endpoints.set(label, endpoint);
+  }
+
+  const windowMs = Math.max(0, newestTimestampMs - oldestTimestampMs);
+
+  return {
+    byteLength,
+    estimatedEventsPerMinute:
+      windowMs >= 1000 ? (entries.length * 60_000) / windowMs : null,
+    httpCount,
+    performanceCount,
+    rxCount,
+    topEndpoints: [...endpoints.values()]
+      .sort(
+        (left, right) =>
+          right.count - left.count ||
+          right.byteLength - left.byteLength ||
+          right.latestTimestampMs - left.latestTimestampMs ||
+          left.label.localeCompare(right.label),
+      )
+      .slice(0, 4),
+    totalCount: entries.length,
+    txCount,
+    websocketCount,
+    windowMs,
+  };
+}
+
+export function formatTransportRate(eventsPerMinute: number | null): string {
+  if (eventsPerMinute === null) {
+    return "—";
+  }
+
+  return `${Math.round(eventsPerMinute)}/min`;
+}
+
+export function formatTransportWindow(windowMs: number): string {
+  if (windowMs < 1000) {
+    return "<1 s";
+  }
+
+  if (windowMs < 60_000) {
+    return `${Math.round(windowMs / 1000)} s`;
+  }
+
+  return `${Math.round(windowMs / 60_000)} min`;
 }
 
 function compareTransportEntries(

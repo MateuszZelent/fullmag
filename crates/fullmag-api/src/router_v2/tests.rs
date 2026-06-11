@@ -144,6 +144,12 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
     fullmag_authoring::scene_document_from_script_builder(&builder)
 }
 
+fn sample_scene_document_with_stage(stage: serde_json::Value) -> fullmag_authoring::SceneDocument {
+    let mut scene = serde_json::to_value(sample_scene_document()).expect("sample scene serializes");
+    scene["study"]["stages"] = serde_json::json!([stage]);
+    serde_json::from_value(scene).expect("sample scene with stage deserializes")
+}
+
 fn sample_fem_mesh_payload() -> FemMeshPayload {
     FemMeshPayload {
         mesh_name: "test-mesh".to_string(),
@@ -626,6 +632,11 @@ async fn set_running_stage_execution(state: &Arc<AppState>, state_version: u64) 
                     metric_name: None,
                     metric_value: None,
                     threshold: None,
+                    current_field_m_t: None,
+                    current_point_index: None,
+                    current_settle_step_index: None,
+                    current_settle_step_kind: None,
+                    current_settle_step_method: None,
                 },
                 StageExecutionRecord {
                     stage_id: None,
@@ -647,6 +658,11 @@ async fn set_running_stage_execution(state: &Arc<AppState>, state_version: u64) 
                     metric_name: None,
                     metric_value: None,
                     threshold: None,
+                    current_field_m_t: None,
+                    current_point_index: None,
+                    current_settle_step_index: None,
+                    current_settle_step_kind: None,
+                    current_settle_step_method: None,
                 },
             ],
             stage_statuses: vec![
@@ -849,6 +865,11 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                     metric_name: None,
                     metric_value: None,
                     threshold: None,
+                    current_field_m_t: None,
+                    current_point_index: None,
+                    current_settle_step_index: None,
+                    current_settle_step_kind: None,
+                    current_settle_step_method: None,
                 },
                 StageExecutionRecord {
                     stage_id: None,
@@ -870,6 +891,11 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                     metric_name: Some("max_torque_T".into()),
                     metric_value: Some(14.0),
                     threshold: Some(1.0e-4),
+                    current_field_m_t: Some(25.0),
+                    current_point_index: Some(4),
+                    current_settle_step_index: Some(1),
+                    current_settle_step_kind: Some("minimize".into()),
+                    current_settle_step_method: Some("projected_gradient_bb".into()),
                 },
             ],
             stage_statuses: vec![
@@ -1042,6 +1068,12 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
 }
 
 async fn test_router_with_session_and_artifact_dir() -> (axum::Router, PathBuf) {
+    let (router, _state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    (router, artifact_dir)
+}
+
+async fn test_router_with_session_state_and_artifact_dir() -> (axum::Router, Arc<AppState>, PathBuf)
+{
     let state = test_app_state();
     let artifact_dir = std::env::temp_dir().join(format!(
         "fullmag-api-router-v1-assets-{}-{}",
@@ -1124,7 +1156,11 @@ async fn test_router_with_session_and_artifact_dir() -> (axum::Router, PathBuf) 
 
     *state.current_live_state.write().await = Some(snapshot);
 
-    (build_v2_router().with_state(state), artifact_dir)
+    (
+        build_v2_router().with_state(state.clone()),
+        state,
+        artifact_dir,
+    )
 }
 
 async fn test_router_with_session_store() -> (axum::Router, PathBuf) {
@@ -1284,6 +1320,23 @@ async fn body_bytes(response: axum::response::Response) -> Vec<u8> {
         .to_vec()
 }
 
+fn decode_fmvp_payload_f64(bytes: &[u8]) -> Vec<f64> {
+    assert!(
+        bytes.len() >= 48,
+        "FMVP payload must include a 48 byte header"
+    );
+    bytes[48..]
+        .chunks_exact(8)
+        .map(|chunk| {
+            f64::from_le_bytes(
+                chunk
+                    .try_into()
+                    .expect("FMVP f64 payload chunks should be 8 bytes"),
+            )
+        })
+        .collect()
+}
+
 /// Read and parse the response body as JSON.
 async fn body_json(response: axum::response::Response) -> serde_json::Value {
     let bytes = body_bytes(response).await;
@@ -1307,6 +1360,7 @@ fn is_iso_calendar_date(value: &str) -> bool {
 async fn health_endpoint_returns_200() {
     let app = test_router();
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/v2/platform/health")
@@ -1366,6 +1420,7 @@ async fn health_reports_active_session_when_present() {
 async fn capabilities_endpoint_returns_200() {
     let app = test_router();
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/v2/platform/capabilities")
@@ -1388,6 +1443,7 @@ async fn capabilities_endpoint_returns_200() {
 async fn request_id_middleware_adds_header() {
     let app = test_router();
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/v2/platform/health")
@@ -1414,6 +1470,7 @@ async fn request_id_middleware_adds_header() {
 async fn request_id_middleware_preserves_client_id() {
     let app = test_router();
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/v2/platform/health")
@@ -7608,6 +7665,17 @@ study.run(1e-12)
             "conflict_policy": "higher_priority_wins"
         }
     ]);
+    scene_value["couplings"] = serde_json::json!([
+        {
+            "coupling_id": "exchange:body-ui-core",
+            "kind": "exchange",
+            "source": { "kind": "region", "object": "body", "region_id": "body:ui-core" },
+            "target": { "kind": "object", "object": "body" },
+            "enabled": true,
+            "parameters": { "kind": "exchange", "mode": "harmonic_mean", "scale": 0.75 },
+            "capability_policy": "authored_only"
+        }
+    ]);
     let scene: fullmag_authoring::SceneDocument =
         serde_json::from_value(scene_value).expect("scene value should deserialize");
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -7640,6 +7708,9 @@ study.run(1e-12)
     ));
     assert!(rewritten.contains(
         "body.set_material_field(\"alpha\", fm.fields.constant(0.05, unit=\"dimensionless\"), assignment_id=\"field:ui-core-alpha\", region=body_ui_core_region"
+    ));
+    assert!(rewritten.contains(
+        "study.couplings.exchange(body_ui_core_region, body, mode=\"harmonic_mean\", scale=0.75, coupling_id=\"exchange:body-ui-core\", capability_policy=\"authored_only\")"
     ));
 
     let _ = fs::remove_dir_all(&script_dir);
@@ -7760,6 +7831,103 @@ async fn authoring_transactions_merge_patch_commits_document() {
     assert_eq!(
         json["committed_scene"]["scene"]["name"],
         "Transaction Patch Scene"
+    );
+}
+
+#[tokio::test]
+async fn authoring_transactions_merge_patch_preserves_hysteresis_stage_payload() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+    }
+    let app = build_v2_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/transactions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "merge_patch",
+                        "merge_patch": {
+                            "study": {
+                                "stages": [
+                                    {
+                                        "branch_mode": "major_loop",
+                                        "entrypoint_kind": "flat_hysteresis",
+                                        "field_max_mT": 100,
+                                        "field_min_mT": -100,
+                                        "field_step_mT": 10,
+                                        "kind": "hysteresis",
+                                        "initial_protocol": "positive_saturation",
+                                        "measurement_axis": "field_axis",
+                                        "orientation": {
+                                            "kind": "preset",
+                                            "preset_name": "oop_positive"
+                                        },
+                                        "settle_pipeline": {
+                                            "kind": "sequence",
+                                            "steps": [
+                                                {
+                                                    "kind": "relax",
+                                                    "method": "llg_overdamped",
+                                                    "alpha": 1,
+                                                    "torque_tolerance": 1000,
+                                                    "max_steps": 10000,
+                                                    "on_non_convergence": "continue_with_warning"
+                                                }
+                                            ]
+                                        },
+                                        "stage_id": "hysteresis-1",
+                                        "storage": {
+                                            "scalar_history": true,
+                                            "magnetization": "selected",
+                                            "every_n": 5,
+                                            "key_events": true,
+                                            "key_event_threshold_dm": 0.02
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    let stage = &json["committed_scene"]["study"]["stages"][0];
+    assert_eq!(stage["kind"], "hysteresis");
+    assert_eq!(stage["stage_id"], "hysteresis-1");
+    assert_eq!(stage["field_min_mT"], -100);
+    assert_eq!(stage["field_max_mT"], 100);
+    assert_eq!(stage["field_step_mT"], 10);
+    assert_eq!(stage["orientation"]["preset_name"], "oop_positive");
+    assert_eq!(
+        stage["settle_pipeline"]["steps"][0]["method"],
+        "llg_overdamped"
+    );
+    assert_eq!(stage["storage"]["magnetization"], "selected");
+
+    let guard = state.current_live_state.read().await;
+    let committed = guard
+        .as_ref()
+        .and_then(|snapshot| snapshot.scene_document.as_ref())
+        .expect("scene document committed");
+    let committed_value = serde_json::to_value(committed).expect("committed scene serializes");
+    assert_eq!(
+        committed_value["study"]["stages"][0]["stage_id"],
+        "hysteresis-1"
+    );
+    assert_eq!(
+        committed_value["study"]["stages"][0]["settle_pipeline"]["steps"][0]["max_steps"],
+        10000
     );
 }
 
@@ -9219,7 +9387,8 @@ async fn authoring_region_owned_resources_expose_authored_payloads() {
         .collect::<BTreeSet<_>>();
     assert!(diagnostic_codes.contains("authored_region_pending_realization"));
     assert!(diagnostic_codes.contains("region_mesh_policy_requires_rebuild"));
-    assert!(diagnostic_codes.contains("region_material_realization_pending"));
+    assert!(!diagnostic_codes.contains("region_material_realization_pending"));
+    assert!(diagnostic_codes.contains("region_material_realization_required"));
     assert!(diagnostic_codes.contains("region_realization_policy_capability_gated"));
     assert!(diagnostics["diagnostics"]
         .as_array()
@@ -9883,6 +10052,9 @@ async fn authoring_coupling_resource_does_not_treat_unknown_mesh_part_as_magneti
         json["couplings"][0]["source_resolution"]["status"],
         "unresolved"
     );
+    assert!(json["couplings"][0]["blocker_reason"]
+        .as_str()
+        .is_some_and(|reason| reason.contains("unresolved surface endpoint")));
 }
 
 #[tokio::test]
@@ -11268,6 +11440,11 @@ async fn commands_endpoint_validates_runtime_precondition_against_effective_stat
                 metric_name: None,
                 metric_value: None,
                 threshold: None,
+                current_field_m_t: None,
+                current_point_index: None,
+                current_settle_step_index: None,
+                current_settle_step_kind: None,
+                current_settle_step_method: None,
             }],
             stage_statuses: vec![StageLifecycleState::Cancelled],
             active_stage_index: None,
@@ -11744,6 +11921,11 @@ async fn command_detail_endpoint_exposes_stage_state_linkage() {
                 metric_name: None,
                 metric_value: None,
                 threshold: None,
+                current_field_m_t: None,
+                current_point_index: None,
+                current_settle_step_index: None,
+                current_settle_step_kind: None,
+                current_settle_step_method: None,
             }],
             stage_statuses: vec![StageLifecycleState::Completed],
             active_stage_index: None,
@@ -11988,6 +12170,551 @@ async fn stage_execution_endpoint_returns_current_stage_tree() {
         json["stages"][1]["state_transition_ui_presentation"],
         "boundary_bar"
     );
+    assert_eq!(json["stages"][1]["current_field_mT"], 25.0);
+    assert_eq!(json["stages"][1]["current_point_index"], 4);
+    assert_eq!(json["stages"][1]["current_settle_step_index"], 1);
+    assert_eq!(json["stages"][1]["current_settle_step_kind"], "minimize");
+    assert_eq!(
+        json["stages"][1]["current_settle_step_method"],
+        "projected_gradient_bb"
+    );
+}
+
+#[tokio::test]
+async fn hysteresis_stage_requested_resources_return_authoring_payload() {
+    let (app, state, _repo_root) = test_router_with_session_store_state().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 12;
+        snapshot.scene_document = Some(sample_scene_document_with_stage(serde_json::json!({
+            "branch_mode": "major_loop",
+            "entrypoint_kind": "flat_hysteresis",
+            "field_max_mT": 100.0,
+            "field_min_mT": -100.0,
+            "field_step_mT": 10.0,
+            "field_schedule": {
+                "segments": [{
+                    "endpoint_policy": "include_stop",
+                    "label": "descending",
+                    "reason": "major",
+                    "segment_id": "descending",
+                    "start": 100.0,
+                    "step": 10.0,
+                    "stop": -100.0
+                }]
+            },
+            "kind": "hysteresis",
+            "initial_protocol": "positive_saturation",
+            "measurement_axis": "field_axis",
+            "orientation": {
+                "kind": "preset",
+                "preset_name": "oop_positive"
+            },
+            "saturation": {
+                "auto_detect": true,
+                "max_probe_field_mT": 300.0,
+                "mode": "auto",
+                "susceptibility_threshold": 0.001,
+                "transverse_threshold": 0.01
+            },
+            "settle_pipeline": {
+                "kind": "sequence",
+                "steps": [{
+                    "alpha": 1.0,
+                    "kind": "relax",
+                    "max_steps": 10000,
+                    "method": "llg_overdamped",
+                    "on_non_convergence": "continue_with_warning",
+                    "torque_tolerance": 1000.0
+                }]
+            },
+            "stage_id": "hysteresis-1",
+            "storage": {
+                "every_n": 5,
+                "key_event_threshold_dm": 0.02,
+                "key_events": true,
+                "magnetization": "selected",
+                "scalar_history": true
+            }
+        })));
+    }
+
+    let plan = body_json(
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/v2/sessions/current/simulation/stages/hysteresis-1/hysteresis/plan")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(plan["revision"], 12);
+    assert_eq!(plan["stage_id"], "hysteresis-1");
+    assert_eq!(plan["field_min_mT"], -100.0);
+    assert_eq!(plan["field_max_mT"], 100.0);
+    assert_eq!(plan["field_step_mT"], 10.0);
+    assert_eq!(
+        plan["field_schedule"]["segments"][0]["segment_id"],
+        "descending"
+    );
+
+    let protocol = body_json(
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/v2/sessions/current/simulation/stages/stage_0/hysteresis/protocol")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(protocol["initial_protocol"], "positive_saturation");
+    assert_eq!(protocol["branch_mode"], "major_loop");
+    assert_eq!(protocol["storage"]["magnetization"], "selected");
+
+    let saturation = body_json(
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(
+                        "/v2/sessions/current/simulation/stages/hysteresis-1/hysteresis/saturation",
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(saturation["revision"], 12);
+    assert_eq!(saturation["stage_id"], "hysteresis-1");
+    assert_eq!(saturation["requested"]["mode"], "auto");
+    assert_eq!(saturation["requested"]["max_probe_field_mT"], 300.0);
+    assert_eq!(saturation["result_status"], "not_available");
+    assert!(saturation.get("result").is_none());
+    assert_eq!(
+        saturation["analysis_resource_ref"],
+        "/v2/sessions/current/analysis/hysteresis/hysteresis-1/saturation"
+    );
+
+    let orientation = body_json(
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/v2/sessions/current/simulation/stages/hysteresis-1/hysteresis/orientation")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(orientation["measurement_axis"], "field_axis");
+    assert_eq!(orientation["orientation"]["preset_name"], "oop_positive");
+
+    let settle_pipeline = body_json(
+        app.oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/stages/hysteresis-1/hysteresis/settle-pipeline")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap(),
+    )
+    .await;
+    assert_eq!(
+        settle_pipeline["settle_pipeline"]["steps"][0]["method"],
+        "llg_overdamped"
+    );
+}
+
+#[tokio::test]
+async fn hysteresis_stage_requested_resources_reject_non_hysteresis_stage() {
+    let (app, state, _repo_root) = test_router_with_session_store_state().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document_with_stage(serde_json::json!({
+            "entrypoint_kind": "flat_relax",
+            "kind": "relax",
+            "stage_id": "relax-1"
+        })));
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/stages/relax-1/hysteresis/plan")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let json = body_json(response).await;
+    assert_eq!(json["error"], "stage 'relax-1' is not a hysteresis stage");
+}
+
+#[tokio::test]
+async fn hysteresis_progress_endpoint_returns_current_stage_progress() {
+    let (app, state, _repo_root) = test_router_with_session_store_state().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 11;
+        snapshot.scene_document = Some(sample_scene_document_with_stage(serde_json::json!({
+            "entrypoint_kind": "flat_hysteresis",
+            "field_values_mT": [100.0, 75.0, 50.0, 25.0, 0.0, -25.0, -50.0],
+            "kind": "hysteresis",
+            "orientation": {
+                "kind": "preset",
+                "preset_name": "in_plane_y"
+            },
+            "stage_id": "stage-hyst"
+        })));
+        if let Some(live_state) = snapshot.live_state.as_mut() {
+            live_state.latest_step.magnetization = Some(vec![0.1, 0.7, 0.2]);
+        }
+        snapshot.stage_execution = Some(StageExecutionState {
+            total_stages: 1,
+            completed_stage_indexes: Vec::new(),
+            stages: vec![StageExecutionRecord {
+                stage_id: Some("stage-hyst".into()),
+                kind: Some("flat_hysteresis".into()),
+                status: StageLifecycleState::Running,
+                command_id: Some("cmd-hyst".into()),
+                started_at_unix_ms: Some(1_700_000_002_000),
+                completed_at_unix_ms: None,
+                reason: None,
+                artifact_refs: Vec::new(),
+                checkpoint_ref: None,
+                loaded_state_ref: None,
+                resume_from_checkpoint_ref: None,
+                state_transition: None,
+                state_transition_kind: None,
+                state_transition_reason: None,
+                state_transfer_operator_kind: None,
+                state_transition_ui_presentation: None,
+                metric_name: None,
+                metric_value: None,
+                threshold: None,
+                current_field_m_t: Some(25.0),
+                current_point_index: Some(4),
+                current_settle_step_index: Some(1),
+                current_settle_step_kind: Some("minimize".into()),
+                current_settle_step_method: Some("projected_gradient_bb".into()),
+            }],
+            stage_statuses: vec![StageLifecycleState::Running],
+            active_stage_index: Some(0),
+            active_stage_kind: Some("hysteresis".into()),
+            runtime_state: RuntimeLifecycleState::Running,
+        });
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/stages/stage_0/hysteresis/progress")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["revision"], 11);
+    assert_eq!(json["stage_id"], "stage-hyst");
+    assert_eq!(json["stage_index"], 0);
+    assert_eq!(json["stage_kind"], "hysteresis");
+    assert_eq!(json["status"], "running");
+    assert_eq!(json["active"], true);
+    assert_eq!(json["total_points"], 7);
+    assert_eq!(json["completed_points"], 4);
+    assert_eq!(json["active_point_index"], 4);
+    assert_eq!(json["queued_points"], 2);
+    assert_eq!(json["current_field_mT"], 25.0);
+    assert_eq!(json["current_point_index"], 4);
+    assert_eq!(json["current_settle_step_index"], 1);
+    assert_eq!(json["current_settle_step_kind"], "minimize");
+    assert_eq!(json["current_settle_step_method"], "projected_gradient_bb");
+    assert_eq!(json["current_m_avg"], serde_json::json!([0.1, 0.7, 0.2]));
+    assert_eq!(json["current_m_parallel"], 0.7);
+}
+
+#[tokio::test]
+async fn hysteresis_progress_endpoint_reports_active_first_point_before_completion() {
+    let (app, state, _repo_root) = test_router_with_session_store_state().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 14;
+        snapshot.scene_document = Some(sample_scene_document_with_stage(serde_json::json!({
+            "entrypoint_kind": "flat_hysteresis",
+            "field_values_mT": [200.0, 195.0, 190.0],
+            "kind": "hysteresis",
+            "orientation": {
+                "kind": "preset",
+                "preset_name": "in_plane_x"
+            },
+            "stage_id": "stage-000"
+        })));
+        snapshot
+            .scalar_rows
+            .push(sample_scalar_row(99, 99e-12, -1.0));
+        if let Some(live_state) = snapshot.live_state.as_mut() {
+            live_state.latest_step.magnetization = Some(vec![0.25, 0.0, 0.0, 0.75, 0.0, 0.0]);
+        }
+        snapshot.stage_execution = Some(StageExecutionState {
+            total_stages: 1,
+            completed_stage_indexes: Vec::new(),
+            stages: vec![StageExecutionRecord {
+                stage_id: Some("stage-000".into()),
+                kind: Some("flat_hysteresis".into()),
+                status: StageLifecycleState::Running,
+                command_id: Some("cmd-hyst".into()),
+                started_at_unix_ms: Some(1_700_000_002_000),
+                completed_at_unix_ms: None,
+                reason: None,
+                artifact_refs: Vec::new(),
+                checkpoint_ref: None,
+                loaded_state_ref: None,
+                resume_from_checkpoint_ref: None,
+                state_transition: None,
+                state_transition_kind: None,
+                state_transition_reason: None,
+                state_transfer_operator_kind: None,
+                state_transition_ui_presentation: None,
+                metric_name: None,
+                metric_value: None,
+                threshold: None,
+                current_field_m_t: Some(200.0),
+                current_point_index: Some(0),
+                current_settle_step_index: Some(0),
+                current_settle_step_kind: Some("minimize".into()),
+                current_settle_step_method: Some("projected_gradient_bb".into()),
+            }],
+            stage_statuses: vec![StageLifecycleState::Running],
+            active_stage_index: Some(0),
+            active_stage_kind: Some("flat_hysteresis".into()),
+            runtime_state: RuntimeLifecycleState::Running,
+        });
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/stages/stage-000/hysteresis/progress")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["total_points"], 3);
+    assert_eq!(json["completed_points"], 0);
+    assert_eq!(json["active_point_index"], 0);
+    assert_eq!(json["queued_points"], 2);
+    assert_eq!(json["current_field_mT"], 200.0);
+    assert_eq!(json["current_point_index"], 0);
+    assert_eq!(json["current_settle_step_index"], 0);
+    assert_eq!(json["current_m_avg"], serde_json::json!([0.5, 0.0, 0.0]));
+    assert_eq!(json["current_m_parallel"], 0.5);
+}
+
+#[tokio::test]
+async fn hysteresis_progress_endpoint_projects_live_magnetization_for_sample_angle() {
+    let (app, state, _repo_root) = test_router_with_session_store_state().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 15;
+        snapshot.scene_document = Some(sample_scene_document_with_stage(serde_json::json!({
+            "entrypoint_kind": "flat_hysteresis",
+            "field_values_mT": [100.0, 50.0, 0.0],
+            "kind": "hysteresis",
+            "orientation": {
+                "kind": "sample",
+                "theta": 90.0,
+                "phi": 90.0
+            },
+            "stage_id": "stage-angle"
+        })));
+        if let Some(live_state) = snapshot.live_state.as_mut() {
+            live_state.latest_step.magnetization = Some(vec![0.0, 0.8, 0.0]);
+        }
+        snapshot.stage_execution = Some(StageExecutionState {
+            total_stages: 1,
+            completed_stage_indexes: Vec::new(),
+            stages: vec![StageExecutionRecord {
+                stage_id: Some("stage-angle".into()),
+                kind: Some("flat_hysteresis".into()),
+                status: StageLifecycleState::Running,
+                command_id: Some("cmd-hyst".into()),
+                started_at_unix_ms: Some(1_700_000_002_000),
+                completed_at_unix_ms: None,
+                reason: None,
+                artifact_refs: Vec::new(),
+                checkpoint_ref: None,
+                loaded_state_ref: None,
+                resume_from_checkpoint_ref: None,
+                state_transition: None,
+                state_transition_kind: None,
+                state_transition_reason: None,
+                state_transfer_operator_kind: None,
+                state_transition_ui_presentation: None,
+                metric_name: None,
+                metric_value: None,
+                threshold: None,
+                current_field_m_t: Some(50.0),
+                current_point_index: Some(1),
+                current_settle_step_index: Some(0),
+                current_settle_step_kind: Some("minimize".into()),
+                current_settle_step_method: Some("projected_gradient_bb".into()),
+            }],
+            stage_statuses: vec![StageLifecycleState::Running],
+            active_stage_index: Some(0),
+            active_stage_kind: Some("flat_hysteresis".into()),
+            runtime_state: RuntimeLifecycleState::Running,
+        });
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/stages/stage-angle/hysteresis/progress")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["current_m_avg"], serde_json::json!([0.0, 0.8, 0.0]));
+    assert!((json["current_m_parallel"].as_f64().unwrap() - 0.8).abs() < 1e-12);
+}
+
+#[tokio::test]
+async fn hysteresis_execution_tree_returns_windowed_active_points() {
+    let (app, state, _repo_root) = test_router_with_session_store_state().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 13;
+        snapshot.scene_document = Some(sample_scene_document_with_stage(serde_json::json!({
+            "branch_mode": "major_loop",
+            "entrypoint_kind": "flat_hysteresis",
+            "field_values_mT": [100.0, 80.0, 60.0, 40.0, 20.0, 0.0, -20.0],
+            "kind": "hysteresis",
+            "initial_protocol": "positive_saturation",
+            "measurement_axis": "field_axis",
+            "orientation": {
+                "kind": "preset",
+                "preset_name": "oop_positive"
+            },
+            "settle_pipeline": {
+                "kind": "sequence",
+                "steps": [
+                    {
+                        "alpha": 1.0,
+                        "kind": "relax",
+                        "max_steps": 10000,
+                        "method": "llg_overdamped",
+                        "on_non_convergence": "continue_with_warning",
+                        "torque_tolerance": 1000.0
+                    },
+                    {
+                        "energy_tolerance": 1e-20,
+                        "kind": "minimize",
+                        "max_steps": 2000,
+                        "method": "projected_gradient_bb",
+                        "on_non_convergence": "continue_with_warning",
+                        "torque_tolerance": 1000.0
+                    }
+                ]
+            },
+            "stage_id": "hysteresis-1"
+        })));
+        snapshot.stage_execution = Some(StageExecutionState {
+            total_stages: 1,
+            completed_stage_indexes: Vec::new(),
+            stages: vec![StageExecutionRecord {
+                stage_id: Some("hysteresis-1".into()),
+                kind: Some("hysteresis".into()),
+                status: StageLifecycleState::Running,
+                command_id: Some("cmd-hyst".into()),
+                started_at_unix_ms: Some(1_700_000_002_000),
+                completed_at_unix_ms: None,
+                reason: None,
+                artifact_refs: Vec::new(),
+                checkpoint_ref: None,
+                loaded_state_ref: None,
+                resume_from_checkpoint_ref: None,
+                state_transition: None,
+                state_transition_kind: None,
+                state_transition_reason: None,
+                state_transfer_operator_kind: None,
+                state_transition_ui_presentation: None,
+                metric_name: None,
+                metric_value: None,
+                threshold: None,
+                current_field_m_t: Some(20.0),
+                current_point_index: Some(4),
+                current_settle_step_index: Some(1),
+                current_settle_step_kind: Some("minimize".into()),
+                current_settle_step_method: Some("projected_gradient_bb".into()),
+            }],
+            stage_statuses: vec![StageLifecycleState::Running],
+            active_stage_index: Some(0),
+            active_stage_kind: Some("hysteresis".into()),
+            runtime_state: RuntimeLifecycleState::Running,
+        });
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/stages/hysteresis-1/hysteresis/execution-tree?window=active&before=1&after=1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["revision"], 13);
+    assert_eq!(json["stage_id"], "hysteresis-1");
+    assert_eq!(json["total_points"], 7);
+    assert_eq!(json["active_point_index"], 4);
+    assert_eq!(json["before"], 1);
+    assert_eq!(json["after"], 1);
+    assert_eq!(json["nodes"].as_array().map(Vec::len), Some(5));
+    assert_eq!(json["nodes"][0]["kind"], "transition");
+    assert_eq!(json["nodes"][0]["status"], "done");
+    assert_eq!(json["nodes"][1]["point_id"], 3);
+    assert_eq!(json["nodes"][1]["status"], "done");
+    assert_eq!(json["nodes"][2]["point_id"], 4);
+    assert_eq!(json["nodes"][2]["status"], "active");
+    assert_eq!(json["nodes"][2]["children"][0]["status"], "done");
+    assert_eq!(json["nodes"][2]["children"][1]["status"], "active");
+    assert_eq!(
+        json["nodes"][2]["children"][1]["settle_step_id"],
+        "settle_step_001_minimize"
+    );
+    assert_eq!(json["nodes"][3]["point_id"], 5);
+    assert_eq!(json["nodes"][3]["status"], "queued");
+    assert_eq!(json["nodes"][4]["kind"], "transition");
+    assert_eq!(json["nodes"][4]["status"], "queued");
 }
 
 #[tokio::test]
@@ -12018,6 +12745,11 @@ async fn stage_execution_endpoint_exposes_completed_relaxation_stop_metric() {
                 metric_name: Some("max_torque_apm".into()),
                 metric_value: Some(75.0f64),
                 threshold: Some(80.0f64),
+                current_field_m_t: None,
+                current_point_index: None,
+                current_settle_step_index: None,
+                current_settle_step_kind: None,
+                current_settle_step_method: None,
             }],
             stage_statuses: vec![StageLifecycleState::Completed],
             active_stage_index: None,
@@ -12853,6 +13585,81 @@ async fn field_state_export_inspect_and_apply_round_trips_live_magnetization() {
     assert_eq!(status_response.status(), StatusCode::OK);
     let status = body_json(status_response).await;
     assert_eq!(status["resources"]["field_revision"], 2);
+
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
+async fn hysteresis_snapshot_can_be_applied_as_field_state_initial_magnetization() {
+    let (app, _state, repo_root) = test_router_with_session_store_state().await;
+    let snapshot_dir = repo_root
+        .join("artifacts")
+        .join("hysteresis_snapshots")
+        .join("hysteresis_point_005");
+    fs::create_dir_all(&snapshot_dir).expect("snapshot dir should be writable");
+    fs::write(
+        snapshot_dir.join("m.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "quantity_id": "m",
+            "snapshot_id": "hysteresis_point_005",
+            "point_id": 5,
+            "field_value_mT": -25.0,
+            "layout": {
+                "grid_cells": [2, 1, 1]
+            },
+            "values": [
+                [0.0, 0.0, -1.0],
+                [0.0, -1.0, 0.0]
+            ]
+        }))
+        .expect("snapshot json should serialize"),
+    )
+    .expect("snapshot json should be writable");
+
+    let import_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/field-states/imports")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "artifact_ref": "hysteresis_snapshots/hysteresis_point_005/m.json",
+                        "target": {
+                            "kind": "object",
+                            "id": "body"
+                        },
+                        "quantity_id": "m",
+                        "mode": "apply"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(import_response.status(), StatusCode::OK);
+    let imported = body_json(import_response).await;
+    assert_eq!(imported["quantity_id"], "m");
+    assert_eq!(imported["target"]["kind"], "object");
+    assert_eq!(imported["target"]["id"], "body");
+    assert_eq!(imported["mode"], "apply");
+    assert_eq!(imported["applied_point_count"], 2);
+
+    let field_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(field_response.status(), StatusCode::OK);
+    let values = decode_fmvp_payload_f64(&body_bytes(field_response).await);
+    assert_eq!(values, vec![0.0, 0.0, -1.0, 0.0, -1.0, 0.0]);
 
     let _ = fs::remove_dir_all(&repo_root);
 }
@@ -14266,6 +15073,1025 @@ async fn field_vector_full_returns_ncomp_3() {
     assert_eq!(&bytes[..4], b"FMVP", "missing FMVP magic");
     assert_eq!(bytes[4], 2, "expected FMVP version 2");
     assert_eq!(bytes[6], 3, "nComp header byte should be 3");
+}
+
+#[tokio::test]
+async fn hysteresis_analysis_endpoints_read_typed_artifacts() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    fs::write(
+        artifact_dir.join("hysteresis_points.json"),
+        serde_json::to_vec(&serde_json::json!([
+            {
+                "point_id": 0,
+                "field_value_mT": 100.0,
+                "m_parallel": 0.9,
+                "m_oop": 0.9,
+                "m_ip": 0.1,
+                "m_avg": [0.1, 0.0, 0.9],
+                "status": "Completed",
+                "snapshot_id": "hysteresis_point_001"
+            },
+            {
+                "point_id": 1,
+                "field_value_mT": 0.0,
+                "m_parallel": 0.2,
+                "m_oop": 0.2,
+                "m_ip": 0.1,
+                "m_avg": [0.1, 0.0, 0.2],
+                "status": "Completed",
+                "snapshot_id": "hysteresis_point_002"
+            },
+            {
+                "point_id": 2,
+                "field_value_mT": -50.0,
+                "m_parallel": -0.1,
+                "m_oop": -0.1,
+                "m_ip": 0.1,
+                "m_avg": [0.1, 0.0, -0.1],
+                "status": "Completed",
+                "snapshot_id": "hysteresis_point_003"
+            },
+            {
+                "point_id": 3,
+                "field_value_mT": 0.0,
+                "m_parallel": 0.1,
+                "m_oop": 0.1,
+                "m_ip": 0.1,
+                "m_avg": [0.1, 0.0, 0.1],
+                "status": "Completed",
+                "snapshot_id": "hysteresis_point_004"
+            }
+        ]))
+        .expect("hysteresis points should serialize"),
+    )
+    .expect("hysteresis points should be writable");
+    fs::write(
+        artifact_dir.join("hysteresis_metrics.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "H_c_plus": 12.0,
+            "H_c_minus": -11.0,
+            "H_c": 11.5,
+            "H_eb": 0.5,
+            "M_r_plus": 0.2,
+            "M_r_minus": -0.2,
+            "loop_area": 42.0,
+            "magnetization_average_weighting": "uniform_sample_average",
+            "saturation_status": "saturated"
+        }))
+        .expect("hysteresis metrics should serialize"),
+    )
+    .expect("hysteresis metrics should be writable");
+    fs::write(
+        artifact_dir.join("hysteresis_saturation.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "status": "probably_saturated",
+            "reason": "susceptibility and transverse magnetization are below thresholds, but distance-to-saturation remains above threshold",
+            "direction": 1,
+            "max_probe_field_mT": 300.0,
+            "preparation_field_mT": 300.0,
+            "susceptibility_threshold": 0.001,
+            "transverse_threshold": 0.01,
+            "points": [
+                {
+                    "probe_index": 0,
+                    "field_value_mT": 100.0,
+                    "m_parallel": 0.8,
+                    "m_transverse": 0.02,
+                    "torque": 3.0,
+                    "status": "converged"
+                },
+                {
+                    "probe_index": 1,
+                    "field_value_mT": 300.0,
+                    "m_parallel": 0.97,
+                    "m_transverse": 0.005,
+                    "torque": 1.0,
+                    "status": "converged"
+                }
+            ]
+        }))
+        .expect("hysteresis saturation should serialize"),
+    )
+    .expect("hysteresis saturation should be writable");
+    fs::write(
+        artifact_dir.join("hysteresis_settle_trace.json"),
+        serde_json::to_vec(&serde_json::json!([
+            {
+                "point_id": 2,
+                "field_value_mT": -50.0,
+                "step_index": 0,
+                "algorithm_id": "settle_step_000_minimize",
+                "method": "projected_gradient_bb",
+                "status": "non_converged",
+                "fallback_reason": null,
+                "retry_attempt": 0,
+                "resolved_timestep_s": 1e-13,
+                "torque": 7.0,
+                "energy": -3.5
+            },
+            {
+                "point_id": 2,
+                "field_value_mT": -50.0,
+                "step_index": 1,
+                "algorithm_id": "settle_step_001_relax",
+                "method": "llg_overdamped",
+                "status": "converged",
+                "fallback_reason": "previous_step_non_converged",
+                "retry_attempt": 0,
+                "resolved_timestep_s": 1e-13,
+                "torque": 1.0,
+                "energy": -4.0
+            },
+            {
+                "point_id": 3,
+                "field_value_mT": 0.0,
+                "step_index": 0,
+                "algorithm_id": "settle_step_000_minimize",
+                "method": "projected_gradient_bb",
+                "status": "converged",
+                "fallback_reason": null,
+                "retry_attempt": 0,
+                "resolved_timestep_s": 1e-13,
+                "torque": 0.5,
+                "energy": -2.0
+            }
+        ]))
+        .expect("hysteresis settle trace should serialize"),
+    )
+    .expect("hysteresis settle trace should be writable");
+    fs::write(
+        artifact_dir.join("hysteresis_minor_loops.json"),
+        serde_json::to_vec(&serde_json::json!([
+            {
+                "loop_id": "minor_loop_001",
+                "reversal_field_mT": -50.0,
+                "return_field_mT": 0.0,
+                "policy": "derived_from_major_loop_window",
+                "settle_trace": [
+                    {
+                        "point_id": 3,
+                        "field_value_mT": 0.0,
+                        "step_index": 0,
+                        "algorithm_id": "settle_step_000_minimize",
+                        "method": "projected_gradient_bb",
+                        "status": "converged",
+                        "fallback_reason": null,
+                        "retry_attempt": 0,
+                        "resolved_timestep_s": 1e-13,
+                        "torque": 0.4,
+                        "energy": -4.2
+                    }
+                ],
+                "points": [
+                    {
+                        "point_id": 2,
+                        "field_value_mT": -50.0,
+                        "m_parallel": -0.1,
+                        "m_oop": -0.1,
+                        "m_ip": 0.1,
+                        "m_avg": [0.1, 0.0, -0.1],
+                        "status": "Completed",
+                        "snapshot_id": "hysteresis_point_003"
+                    },
+                    {
+                        "point_id": 3,
+                        "field_value_mT": 0.0,
+                        "m_parallel": 0.1,
+                        "m_oop": 0.1,
+                        "m_ip": 0.1,
+                        "m_avg": [0.1, 0.0, 0.1],
+                        "status": "Completed",
+                        "snapshot_id": "hysteresis_point_004"
+                    }
+                ]
+            }
+        ]))
+        .expect("hysteresis minor loops should serialize"),
+    )
+    .expect("hysteresis minor loops should be writable");
+
+    let points = body_json(
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v2/sessions/current/analysis/hysteresis/stage_0/points")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(points.as_array().map(Vec::len), Some(4));
+    assert_eq!(points[0]["branch_id"], "descending");
+    assert_eq!(points[0]["branch_ids"][0], "descending");
+    assert_eq!(points[0]["branch_index"], 0);
+    assert_eq!(points[0]["protocol_role"], "return");
+    assert_eq!(
+        points[0]["snapshot_resource_ref"],
+        "/v2/sessions/current/data/fields/m/samples/vector?snapshot_id=hysteresis_point_001"
+    );
+    assert_eq!(points[2]["branch_id"], "descending");
+    assert_eq!(points[2]["branch_ids"].as_array().map(Vec::len), Some(2));
+    assert!(points[2]["branch_ids"]
+        .as_array()
+        .is_some_and(|values| values.contains(&serde_json::Value::String("ascending".into()))));
+    assert!(points[2]["branch_ids"]
+        .as_array()
+        .is_some_and(|values| values.contains(&serde_json::Value::String("descending".into()))));
+
+    let metrics = body_json(
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v2/sessions/current/analysis/hysteresis/stage_0/metrics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(metrics["H_c"], 11.5);
+
+    let saturation = body_json(
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v2/sessions/current/analysis/hysteresis/stage_0/saturation")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(saturation["status"], "probably_saturated");
+    assert_eq!(saturation["preparation_field_mT"], 300.0);
+    assert_eq!(saturation["points"].as_array().map(Vec::len), Some(2));
+
+    let branches = body_json(
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v2/sessions/current/analysis/hysteresis/stage_0/branches")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(branches.as_array().map(Vec::len), Some(2));
+    assert_eq!(branches[0]["branch_id"], "descending");
+    assert_eq!(branches[0]["branch_index"], 0);
+    assert_eq!(branches[0]["branch_role"], "return");
+    assert_eq!(branches[0]["point_count"], 3);
+    assert_eq!(branches[0]["start_point_id"], 0);
+    assert_eq!(branches[0]["end_point_id"], 2);
+    assert_eq!(branches[0]["start_field_mT"], 100.0);
+    assert_eq!(branches[0]["end_field_mT"], -50.0);
+    assert_eq!(branches[0]["parent_branch_id"], serde_json::Value::Null);
+    assert_eq!(branches[0]["minor_loop_id"], serde_json::Value::Null);
+    assert_eq!(branches[1]["branch_id"], "ascending");
+    assert_eq!(branches[1]["branch_index"], 1);
+    assert_eq!(branches[1]["branch_role"], "forward");
+    assert_eq!(branches[1]["point_count"], 2);
+    assert_eq!(branches[1]["start_point_id"], 2);
+    assert_eq!(branches[1]["end_point_id"], 3);
+    assert_eq!(branches[1]["start_field_mT"], -50.0);
+    assert_eq!(branches[1]["end_field_mT"], 0.0);
+    assert_eq!(branches[1]["points"][0]["point_id"], 2);
+    assert_eq!(branches[1]["points"][0]["branch_id"], "ascending");
+    assert_eq!(branches[1]["points"][0]["branch_index"], 1);
+    assert_eq!(branches[1]["points"][0]["protocol_role"], "forward");
+
+    let reversal_fields = body_json(
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v2/sessions/current/analysis/hysteresis/stage_0/reversal-fields")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(reversal_fields.as_array().map(Vec::len), Some(1));
+    assert_eq!(reversal_fields[0]["point_id"], 2);
+    assert_eq!(reversal_fields[0]["is_reversal_field"], true);
+    assert_eq!(reversal_fields[0]["reversal_index"], 0);
+    assert_eq!(reversal_fields[0]["recoil_start_point_id"], 2);
+
+    let point = body_json(
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v2/sessions/current/analysis/hysteresis/stage_0/steps/2")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(point["snapshot_id"], "hysteresis_point_003");
+    assert_eq!(point["branch_id"], "descending");
+    assert_eq!(point["branch_ids"].as_array().map(Vec::len), Some(2));
+    assert_eq!(
+        point["snapshot_resource_ref"],
+        "/v2/sessions/current/data/fields/m/samples/vector?snapshot_id=hysteresis_point_003"
+    );
+
+    let minor_loops_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/analysis/hysteresis/stage_0/minor-loops")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(minor_loops_response.status(), StatusCode::OK);
+    let minor_loops = body_json(minor_loops_response).await;
+    assert_eq!(minor_loops.as_array().map(Vec::len), Some(1));
+    assert_eq!(minor_loops[0]["loop_id"], "minor_loop_001");
+    assert_eq!(minor_loops[0]["parent_branch_id"], "descending");
+    assert_eq!(minor_loops[0]["reversal_point_id"], 2);
+    assert_eq!(minor_loops[0]["return_point_id"], 3);
+    assert_eq!(minor_loops[0]["policy"], "derived_from_major_loop_window");
+    assert_eq!(minor_loops[0]["closure_status"], "returned");
+    assert_eq!(minor_loops[0]["closure_error_m_parallel"], 0.2);
+    assert_eq!(minor_loops[0]["recoil_susceptibility"], 0.004);
+    assert_eq!(minor_loops[0]["minor_loop_area"], 0.0);
+    assert_eq!(
+        minor_loops[0]["settle_trace"].as_array().map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(
+        minor_loops[0]["settle_trace"][0]["algorithm_id"],
+        "settle_step_000_minimize"
+    );
+    assert_eq!(minor_loops[0]["points"].as_array().map(Vec::len), Some(2));
+    assert_eq!(
+        minor_loops[0]["points"][0]["minor_loop_id"],
+        "minor_loop_001"
+    );
+    assert_eq!(minor_loops[0]["points"][0]["protocol_role"], "minor");
+
+    let settle_trace = body_json(
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v2/sessions/current/analysis/hysteresis/stage_0/steps/2/settle-trace")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(settle_trace.as_array().map(Vec::len), Some(2));
+    assert_eq!(settle_trace[0]["point_id"], 2);
+    assert_eq!(settle_trace[0]["algorithm_id"], "settle_step_000_minimize");
+    assert_eq!(
+        settle_trace[1]["fallback_reason"],
+        "previous_step_non_converged"
+    );
+    assert_eq!(settle_trace[1]["retry_attempt"], 0);
+    assert_eq!(settle_trace[1]["resolved_timestep_s"], 1e-13);
+
+    let missing_settle_trace = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/analysis/hysteresis/stage_0/steps/99/settle-trace")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_settle_trace.status(), StatusCode::NOT_FOUND);
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn hysteresis_analysis_resolves_stage_directory_artifact_refs() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let stage_dir = artifact_dir
+        .parent()
+        .expect("artifact dir should have a parent")
+        .join("stages")
+        .join("stage_00_hysteresis_empty");
+    let _ = fs::remove_dir_all(&stage_dir);
+    fs::create_dir_all(&stage_dir).expect("stage artifact dir should be writable");
+    fs::write(
+        stage_dir.join("hysteresis_points.json"),
+        serde_json::to_vec(&serde_json::json!([
+            {
+                "point_id": 0,
+                "field_value_mT": 15.0,
+                "m_parallel": 0.7,
+                "m_oop": 0.7,
+                "m_ip": 0.0,
+                "m_avg": [0.0, 0.0, 0.7],
+                "status": "Completed"
+            }
+        ]))
+        .expect("hysteresis points should serialize"),
+    )
+    .expect("hysteresis points should be writable");
+    fs::write(
+        artifact_dir.join("hysteresis_metrics.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "H_c_plus": 12.0,
+            "H_c_minus": -11.0,
+            "H_c": 11.5,
+            "H_eb": 0.5,
+            "M_r_plus": 0.2,
+            "M_r_minus": -0.2,
+            "loop_area": 42.0,
+            "magnetization_average_weighting": "uniform_sample_average",
+            "saturation_status": "preparation_applied_unverified",
+            "saturation_preparation_field_mT": 300.0
+        }))
+        .expect("hysteresis metrics should serialize"),
+    )
+    .expect("hysteresis metrics should be writable");
+
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("test session should be active");
+        snapshot.stage_execution = Some(StageExecutionState {
+            active_stage_index: None,
+            active_stage_kind: None,
+            completed_stage_indexes: vec![0],
+            runtime_state: RuntimeLifecycleState::Completed,
+            stage_statuses: vec![StageLifecycleState::Completed],
+            stages: vec![StageExecutionRecord {
+                stage_id: Some("stage-000".into()),
+                kind: Some("flat_hysteresis".into()),
+                status: StageLifecycleState::Completed,
+                command_id: None,
+                started_at_unix_ms: Some(1_700_000_000_000),
+                completed_at_unix_ms: Some(1_700_000_001_000),
+                reason: None,
+                artifact_refs: vec![stage_dir.display().to_string()],
+                checkpoint_ref: None,
+                loaded_state_ref: None,
+                resume_from_checkpoint_ref: None,
+                state_transition: None,
+                state_transition_kind: None,
+                state_transition_reason: None,
+                state_transfer_operator_kind: None,
+                state_transition_ui_presentation: None,
+                metric_name: None,
+                metric_value: None,
+                threshold: None,
+                current_field_m_t: None,
+                current_point_index: None,
+                current_settle_step_index: None,
+                current_settle_step_kind: None,
+                current_settle_step_method: None,
+            }],
+            total_stages: 1,
+        });
+    }
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/analysis/hysteresis/stage-000/points")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let points = body_json(response).await;
+    assert_eq!(points.as_array().map(Vec::len), Some(1));
+    assert_eq!(points[0]["field_value_mT"], 15.0);
+
+    let alias_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/analysis/hysteresis/stage_0/points")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(alias_response.status(), StatusCode::OK);
+
+    let index_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/analysis/hysteresis/0/points")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(index_response.status(), StatusCode::OK);
+    let index_points = body_json(index_response).await;
+    assert_eq!(index_points.as_array().map(Vec::len), Some(1));
+    assert_eq!(index_points[0]["field_value_mT"], 15.0);
+
+    let _ = fs::remove_dir_all(stage_dir);
+    let _ = fs::remove_dir_all(artifact_dir);
+}
+
+#[tokio::test]
+async fn hysteresis_analysis_accepts_active_hysteresis_kind_when_record_kind_is_algorithm() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let stage_dir = artifact_dir
+        .parent()
+        .expect("artifact dir should have a parent")
+        .join("stages")
+        .join("stage_00_hysteresis_active");
+    let _ = fs::remove_dir_all(&stage_dir);
+    fs::create_dir_all(&stage_dir).expect("stage artifact dir should be writable");
+    fs::write(
+        stage_dir.join("hysteresis_points.json"),
+        serde_json::to_vec(&serde_json::json!([
+            {
+                "point_id": 8,
+                "field_value_mT": 200.0,
+                "m_parallel": 0.5,
+                "m_oop": 0.5,
+                "m_ip": 0.0,
+                "m_avg": [0.0, 0.0, 0.5],
+                "status": "Completed"
+            }
+        ]))
+        .expect("hysteresis points should serialize"),
+    )
+    .expect("hysteresis points should be writable");
+
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("test session should be active");
+        snapshot.stage_execution = Some(StageExecutionState {
+            active_stage_index: Some(0),
+            active_stage_kind: Some("flat_hysteresis".into()),
+            completed_stage_indexes: vec![],
+            runtime_state: RuntimeLifecycleState::Running,
+            stage_statuses: vec![StageLifecycleState::Running],
+            stages: vec![StageExecutionRecord {
+                stage_id: Some("stage-000".into()),
+                kind: Some("relax".into()),
+                status: StageLifecycleState::Running,
+                command_id: None,
+                started_at_unix_ms: Some(1_700_000_000_000),
+                completed_at_unix_ms: None,
+                reason: None,
+                artifact_refs: vec![stage_dir.display().to_string()],
+                checkpoint_ref: None,
+                loaded_state_ref: None,
+                resume_from_checkpoint_ref: None,
+                state_transition: None,
+                state_transition_kind: None,
+                state_transition_reason: None,
+                state_transfer_operator_kind: None,
+                state_transition_ui_presentation: None,
+                metric_name: None,
+                metric_value: None,
+                threshold: None,
+                current_field_m_t: Some(200.0),
+                current_point_index: Some(8),
+                current_settle_step_index: Some(0),
+                current_settle_step_kind: Some("relax".into()),
+                current_settle_step_method: Some("llg_overdamped".into()),
+            }],
+            total_stages: 1,
+        });
+    }
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/analysis/hysteresis/0/points")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let points = body_json(response).await;
+    assert_eq!(points.as_array().map(Vec::len), Some(1));
+    assert_eq!(points[0]["point_id"], 8);
+    assert_eq!(points[0]["field_value_mT"], 200.0);
+
+    let progress_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/simulation/stages/0/hysteresis/progress")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(progress_response.status(), StatusCode::OK);
+    let progress = body_json(progress_response).await;
+    assert_eq!(progress["stage_id"], "stage-000");
+    assert_eq!(progress["stage_index"], 0);
+    assert_eq!(progress["current_field_mT"], 200.0);
+
+    let _ = fs::remove_dir_all(stage_dir);
+    let _ = fs::remove_dir_all(artifact_dir);
+}
+
+#[tokio::test]
+async fn hysteresis_analysis_reads_flat_live_artifact_with_active_stage_execution() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    fs::write(
+        artifact_dir.join("hysteresis_points.json"),
+        serde_json::to_vec(&serde_json::json!([
+            {
+                "point_id": 0,
+                "field_value_mT": 95.0,
+                "m_parallel": 0.386,
+                "m_oop": 0.386,
+                "m_ip": 0.0,
+                "m_avg": [0.0, 0.0, 0.386],
+                "status": "Completed"
+            }
+        ]))
+        .expect("hysteresis points should serialize"),
+    )
+    .expect("hysteresis points should be writable");
+    fs::write(
+        artifact_dir.join("hysteresis_metrics.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "H_c_plus": 12.0,
+            "H_c_minus": -11.0,
+            "H_c": 11.5,
+            "H_eb": 0.5,
+            "M_r_plus": 0.2,
+            "M_r_minus": -0.2,
+            "loop_area": 42.0,
+            "magnetization_average_weighting": "uniform_sample_average",
+            "saturation_status": "preparation_applied_unverified",
+            "saturation_preparation_field_mT": 300.0
+        }))
+        .expect("hysteresis metrics should serialize"),
+    )
+    .expect("hysteresis metrics should be writable");
+
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("test session should be active");
+        snapshot.stage_execution = Some(StageExecutionState {
+            active_stage_index: Some(0),
+            active_stage_kind: Some("flat_hysteresis".into()),
+            completed_stage_indexes: Vec::new(),
+            runtime_state: RuntimeLifecycleState::Running,
+            stage_statuses: vec![StageLifecycleState::Running],
+            stages: vec![StageExecutionRecord {
+                stage_id: Some("stage-000".into()),
+                kind: Some("flat_hysteresis".into()),
+                status: StageLifecycleState::Running,
+                command_id: Some("cmd-hyst".into()),
+                started_at_unix_ms: Some(1_700_000_000_000),
+                completed_at_unix_ms: None,
+                reason: None,
+                artifact_refs: Vec::new(),
+                checkpoint_ref: None,
+                loaded_state_ref: None,
+                resume_from_checkpoint_ref: None,
+                state_transition: None,
+                state_transition_kind: None,
+                state_transition_reason: None,
+                state_transfer_operator_kind: None,
+                state_transition_ui_presentation: None,
+                metric_name: None,
+                metric_value: None,
+                threshold: None,
+                current_field_m_t: Some(95.0),
+                current_point_index: Some(1),
+                current_settle_step_index: Some(0),
+                current_settle_step_kind: Some("minimize".into()),
+                current_settle_step_method: Some("projected_gradient_bb".into()),
+            }],
+            total_stages: 1,
+        });
+    }
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/analysis/hysteresis/stage-000/points")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let points = body_json(response).await;
+    assert_eq!(points.as_array().map(Vec::len), Some(1));
+    assert_eq!(points[0]["field_value_mT"], 95.0);
+    assert_eq!(points[0]["m_parallel"], 0.386);
+
+    let metrics_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/analysis/hysteresis/stage-000/metrics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(metrics_response.status(), StatusCode::OK);
+    let metrics = body_json(metrics_response).await;
+    assert_eq!(metrics["H_c"], 11.5);
+    assert_eq!(
+        metrics["saturation_status"],
+        "preparation_applied_unverified"
+    );
+
+    let _ = fs::remove_dir_all(artifact_dir);
+}
+
+#[tokio::test]
+async fn hysteresis_analysis_points_conflicts_when_progress_reports_completed_points_without_artifact(
+) {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("test session should be active");
+        snapshot.stage_execution = Some(StageExecutionState {
+            active_stage_index: Some(0),
+            active_stage_kind: Some("flat_hysteresis".into()),
+            completed_stage_indexes: Vec::new(),
+            runtime_state: RuntimeLifecycleState::Running,
+            stage_statuses: vec![StageLifecycleState::Running],
+            stages: vec![StageExecutionRecord {
+                stage_id: Some("stage-000".into()),
+                kind: Some("flat_hysteresis".into()),
+                status: StageLifecycleState::Running,
+                command_id: Some("cmd-hyst".into()),
+                started_at_unix_ms: Some(1_700_000_000_000),
+                completed_at_unix_ms: None,
+                reason: None,
+                artifact_refs: Vec::new(),
+                checkpoint_ref: None,
+                loaded_state_ref: None,
+                resume_from_checkpoint_ref: None,
+                state_transition: None,
+                state_transition_kind: None,
+                state_transition_reason: None,
+                state_transfer_operator_kind: None,
+                state_transition_ui_presentation: None,
+                metric_name: None,
+                metric_value: None,
+                threshold: None,
+                current_field_m_t: Some(95.0),
+                current_point_index: Some(1),
+                current_settle_step_index: Some(0),
+                current_settle_step_kind: Some("minimize".into()),
+                current_settle_step_method: Some("projected_gradient_bb".into()),
+            }],
+            total_stages: 1,
+        });
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/analysis/hysteresis/stage-000/points")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let error = body_json(response).await;
+    assert!(error["error"]
+        .as_str()
+        .is_some_and(|message| message.contains("completed hysteresis points")));
+
+    let _ = fs::remove_dir_all(artifact_dir);
+}
+
+#[tokio::test]
+async fn hysteresis_analysis_points_returns_empty_for_running_stage_before_first_point_artifact() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let stage_dir = artifact_dir
+        .parent()
+        .expect("artifact dir should have a parent")
+        .join("stages")
+        .join("stage_00_hysteresis");
+    fs::create_dir_all(&stage_dir).expect("stage artifact dir should be writable");
+
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("test session should be active");
+        snapshot.stage_execution = Some(StageExecutionState {
+            active_stage_index: Some(0),
+            active_stage_kind: Some("flat_hysteresis".into()),
+            completed_stage_indexes: Vec::new(),
+            runtime_state: RuntimeLifecycleState::Running,
+            stage_statuses: vec![StageLifecycleState::Running],
+            stages: vec![StageExecutionRecord {
+                stage_id: Some("stage-000".into()),
+                kind: Some("flat_hysteresis".into()),
+                status: StageLifecycleState::Running,
+                command_id: Some("cmd-hyst".into()),
+                started_at_unix_ms: Some(1_700_000_000_000),
+                completed_at_unix_ms: None,
+                reason: None,
+                artifact_refs: vec![stage_dir.display().to_string()],
+                checkpoint_ref: None,
+                loaded_state_ref: None,
+                resume_from_checkpoint_ref: None,
+                state_transition: None,
+                state_transition_kind: None,
+                state_transition_reason: None,
+                state_transfer_operator_kind: None,
+                state_transition_ui_presentation: None,
+                metric_name: None,
+                metric_value: None,
+                threshold: None,
+                current_field_m_t: Some(200.0),
+                current_point_index: Some(0),
+                current_settle_step_index: Some(0),
+                current_settle_step_kind: Some("minimize".into()),
+                current_settle_step_method: Some("projected_gradient_bb".into()),
+            }],
+            total_stages: 1,
+        });
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/analysis/hysteresis/stage-000/points")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let points = body_json(response).await;
+    assert_eq!(points.as_array().map(Vec::len), Some(0));
+
+    let _ = fs::remove_dir_all(stage_dir);
+    let _ = fs::remove_dir_all(artifact_dir);
+}
+
+#[tokio::test]
+async fn hysteresis_analysis_unknown_stage_id_does_not_use_direct_artifact_fallback() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    fs::write(
+        artifact_dir.join("hysteresis_points.json"),
+        serde_json::to_vec(&serde_json::json!([
+            {
+                "point_id": 0,
+                "field_value_mT": 15.0,
+                "m_parallel": 0.7,
+                "m_oop": 0.7,
+                "m_ip": 0.0,
+                "m_avg": [0.0, 0.0, 0.7],
+                "status": "Completed"
+            }
+        ]))
+        .expect("hysteresis points should serialize"),
+    )
+    .expect("hysteresis points should be writable");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/analysis/hysteresis/unknown-stage/points")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let _ = fs::remove_dir_all(artifact_dir);
+}
+
+#[tokio::test]
+async fn field_vector_snapshot_id_loads_persisted_hysteresis_magnetization() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let snapshot_dir = artifact_dir
+        .join("hysteresis_snapshots")
+        .join("hysteresis_point_002");
+    fs::create_dir_all(&snapshot_dir).expect("snapshot dir should be writable");
+    fs::write(
+        snapshot_dir.join("m.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "quantity_id": "m",
+            "snapshot_id": "hysteresis_point_002",
+            "point_id": 1,
+            "field_value_mT": 25.0,
+            "layout": {
+                "grid_cells": [2, 1, 1]
+            },
+            "values": [
+                [9.0, 0.0, 0.0],
+                [8.0, 0.0, 0.0]
+            ]
+        }))
+        .expect("snapshot json should serialize"),
+    )
+    .expect("snapshot json should be writable");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?snapshot_id=hysteresis_point_002")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-snapshot-id")
+            .and_then(|value| value.to_str().ok()),
+        Some("hysteresis_point_002")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-point-count")
+            .and_then(|value| value.to_str().ok()),
+        Some("2")
+    );
+
+    let values = decode_fmvp_payload_f64(&body_bytes(response).await);
+    assert_eq!(values, vec![9.0, 0.0, 0.0, 8.0, 0.0, 0.0]);
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn field_meta_snapshot_id_reports_persisted_hysteresis_magnetization_stats() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let snapshot_dir = artifact_dir
+        .join("hysteresis_snapshots")
+        .join("hysteresis_point_002");
+    fs::create_dir_all(&snapshot_dir).expect("snapshot dir should be writable");
+    fs::write(
+        snapshot_dir.join("m.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "quantity_id": "m",
+            "snapshot_id": "hysteresis_point_002",
+            "point_id": 1,
+            "field_value_mT": 25.0,
+            "layout": {
+                "grid_cells": [2, 1, 1]
+            },
+            "values": [
+                [9.0, 0.0, 0.0],
+                [8.0, 0.0, 0.0]
+            ]
+        }))
+        .expect("snapshot json should serialize"),
+    )
+    .expect("snapshot json should be writable");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/meta?component=x&snapshot_id=hysteresis_point_002")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["quantity_id"], "m");
+    assert_eq!(json["components"], 3);
+    assert_eq!(json["stats"]["min"], 8.0);
+    assert_eq!(json["stats"]["max"], 9.0);
+    assert_eq!(json["stats"]["mean"], 8.5);
+
+    let _ = fs::remove_dir_all(&artifact_dir);
 }
 
 #[tokio::test]

@@ -51,6 +51,38 @@ export const ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH = openApiV2Path(
   "/v2/sessions/current/analysis/frequency-response/magnetic-sweep.v1",
 );
 
+export const ANALYSIS_HYSTERESIS_POINTS_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/hysteresis/{stage_id}/points",
+);
+
+export const ANALYSIS_HYSTERESIS_METRICS_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/hysteresis/{stage_id}/metrics",
+);
+
+export const ANALYSIS_HYSTERESIS_SATURATION_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/hysteresis/{stage_id}/saturation",
+);
+
+export const ANALYSIS_HYSTERESIS_BRANCHES_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/hysteresis/{stage_id}/branches",
+);
+
+export const ANALYSIS_HYSTERESIS_MINOR_LOOPS_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/hysteresis/{stage_id}/minor-loops",
+);
+
+export const ANALYSIS_HYSTERESIS_REVERSAL_FIELDS_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/hysteresis/{stage_id}/reversal-fields",
+);
+
+export const ANALYSIS_HYSTERESIS_POINT_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/hysteresis/{stage_id}/steps/{point_id}",
+);
+
+export const ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/hysteresis/{stage_id}/steps/{point_id}/settle-trace",
+);
+
 export const ANALYSIS_EIGEN_BRANCHES_V2_PATH = openApiV2Path(
   "/v2/sessions/current/analysis/eigen/branches.v2",
 );
@@ -513,6 +545,34 @@ export const SIMULATION_RUN_PATH = openApiV2Path(
 
 export const SIMULATION_STAGES_EXECUTION_PATH = openApiV2Path(
   "/v2/sessions/current/simulation/stages/execution",
+);
+
+export const SIMULATION_STAGE_HYSTERESIS_PLAN_PATH = openApiV2Path(
+  "/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/plan",
+);
+
+export const SIMULATION_STAGE_HYSTERESIS_PROTOCOL_PATH = openApiV2Path(
+  "/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/protocol",
+);
+
+export const SIMULATION_STAGE_HYSTERESIS_SATURATION_PATH = openApiV2Path(
+  "/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/saturation",
+);
+
+export const SIMULATION_STAGE_HYSTERESIS_ORIENTATION_PATH = openApiV2Path(
+  "/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/orientation",
+);
+
+export const SIMULATION_STAGE_HYSTERESIS_SETTLE_PIPELINE_PATH = openApiV2Path(
+  "/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/settle-pipeline",
+);
+
+export const SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH = openApiV2Path(
+  "/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/execution-tree",
+);
+
+export const SIMULATION_STAGE_HYSTERESIS_PROGRESS_PATH = openApiV2Path(
+  "/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/progress",
 );
 
 export const SIMULATION_SOLVER_STATUS_PATH = openApiV2Path(

@@ -238,9 +238,9 @@ try {
   }
   await waitForTransactionCount(2);
   await page
-    .locator('[data-node-id="model:study:stage:run-2"]')
+    .locator('[data-node-id="model:study:stages:stage:run-2"]')
     .waitFor({ state: "visible", timeout: timeoutMs });
-  await page.locator('[data-node-id="model:study:stage:run-2"]').click();
+  await page.locator('[data-node-id="model:study:stages:stage:run-2"]').click();
   await inspector.getByText("Run Results").waitFor({
     state: "visible",
     timeout: timeoutMs,
@@ -255,6 +255,7 @@ try {
 
   assertGlobalTransaction(transactions[0]);
   assertStageTransaction(transactions[2]);
+  await addHysteresisFromRibbon();
   await createObjectRegionAndAssertScriptSync();
 
   if (errors.length > 0) {
@@ -397,6 +398,87 @@ async function createObjectRegionAndAssertScriptSync() {
   const createdScene = await (await createRegionResponse).json();
   assertCreatedRegion(createdScene, regionName);
   await waitForRegionScriptSyncCount(previousSyncCount + 1);
+}
+
+async function addHysteresisFromRibbon() {
+  const studyTab = page.locator(".fm-ribbon__tab").filter({ hasText: /^Study$/i });
+  await studyTab.click();
+  const hysteresisButton = page.locator(
+    '.fm-ribbon [data-action-id="study.add-hysteresis-stage"]',
+  );
+  await hysteresisButton.waitFor({ state: "visible", timeout: timeoutMs });
+  await hysteresisButton.click();
+  await waitForTransactionCount(4);
+  assertHysteresisRibbonTransaction(transactions[3]);
+  await page
+    .locator('[data-node-id="model:study:stages:stage:hysteresis-3"]')
+    .waitFor({ state: "visible", timeout: timeoutMs });
+  await assertHysteresisChildInspectors("hysteresis-3");
+}
+
+async function assertHysteresisChildInspectors(stageId) {
+  const inspector = page.locator(".fm-inspector");
+  const stageNode = page.locator(
+    `[data-node-id="model:study:stages:stage:${stageId}"]`,
+  );
+  await stageNode.waitFor({ state: "visible", timeout: timeoutMs });
+  if ((await stageNode.getAttribute("aria-expanded")) === "false") {
+    await stageNode.dblclick();
+  }
+  const liveRunNode = page.locator(
+    `[data-node-id="model:study:stages:stage:${stageId}:live-run"]`,
+  );
+  await liveRunNode.waitFor({ state: "visible", timeout: timeoutMs });
+  await clickExplorerRow(liveRunNode);
+  await inspector.getByText("Live Progress").waitFor({
+    state: "visible",
+    timeout: timeoutMs,
+  });
+  await inspector.getByText("Measurement Plan").waitFor({
+    state: "hidden",
+    timeout: timeoutMs,
+  });
+
+  const pointsNode = page.locator(
+    `[data-node-id="model:study:stages:stage:${stageId}:points"]`,
+  );
+  await pointsNode.waitFor({ state: "visible", timeout: timeoutMs });
+  await clickExplorerRow(pointsNode);
+  await inspector.getByText("Hysteresis Points").waitFor({
+    state: "visible",
+    timeout: timeoutMs,
+  });
+  await inspector.getByText("No calculated points available.").waitFor({
+    state: "visible",
+    timeout: timeoutMs,
+  });
+  await inspector.getByText("Live Progress").waitFor({
+    state: "hidden",
+    timeout: timeoutMs,
+  });
+}
+
+function assertHysteresisRibbonTransaction(transaction) {
+  const stages = transaction?.merge_patch?.study?.stages;
+  if (!Array.isArray(stages) || stages.length !== 3) {
+    throw new Error(
+      `Ribbon Hysteresis did not commit a third study stage: ${JSON.stringify(stages)}`,
+    );
+  }
+  const hysteresis = stages[2];
+  if (
+    hysteresis.kind !== "hysteresis" ||
+    hysteresis.entrypoint_kind !== "flat_hysteresis" ||
+    hysteresis.stage_id !== "hysteresis-3" ||
+    hysteresis.field_max_mT !== 100 ||
+    hysteresis.field_min_mT !== -100 ||
+    hysteresis.field_step_mT !== 10 ||
+    hysteresis.orientation?.preset_name !== "oop_positive"
+  ) {
+    throw new Error(
+      `Ribbon Hysteresis serialized an invalid default stage: ${JSON.stringify(hysteresis)}`,
+    );
+  }
 }
 
 async function clickExplorerRow(row) {

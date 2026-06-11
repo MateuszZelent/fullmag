@@ -17,9 +17,14 @@ export function resolveRegionInlineDiagnostics(
   const allowed = new Set(capabilityGates);
   return diagnostics
     .filter(
-      (diagnostic) =>
-        diagnostic.capabilityGate !== null &&
-        allowed.has(diagnostic.capabilityGate),
+      (diagnostic) => {
+        const severity = diagnostic.severity.toLowerCase();
+        return (
+          diagnostic.capabilityGate !== null &&
+          allowed.has(diagnostic.capabilityGate) &&
+          (severity === "warning" || severity === "error")
+        );
+      },
     )
     .map((diagnostic) => {
       const capabilityLabel = regionCapabilityLabel(diagnostic.capabilityGate);

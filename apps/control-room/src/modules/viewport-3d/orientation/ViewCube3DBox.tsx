@@ -2,7 +2,14 @@
 
 import { Line, Text } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
-import { useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MutableRefObject,
+} from "react";
 import {
   CanvasTexture,
   Color,
@@ -152,12 +159,16 @@ export function ViewCube3DBox({
 
   useEffect(() => {
     const element = gl.domElement;
+    let cachedRect = element.getBoundingClientRect();
+    const resizeObserver = new ResizeObserver(() => {
+      cachedRect = element.getBoundingClientRect();
+    });
 
     const handlePointerDown = (event: PointerEvent) => {
       const group = cubeGroupRef.current;
       if (!group) return;
 
-      const rect = element.getBoundingClientRect();
+      const rect = cachedRect;
       if (rect.width <= 0 || rect.height <= 0) return;
 
       const x = event.clientX - rect.left;
@@ -181,6 +192,7 @@ export function ViewCube3DBox({
       onSnapRef.current(direction);
     };
 
+    resizeObserver.observe(element);
     element.addEventListener("pointerdown", handlePointerDown, {
       capture: true,
     });
@@ -188,6 +200,7 @@ export function ViewCube3DBox({
       element.removeEventListener("pointerdown", handlePointerDown, {
         capture: true,
       });
+      resizeObserver.disconnect();
     };
   }, [camera, gl, onSnapRef, raycastState]);
 
@@ -195,19 +208,6 @@ export function ViewCube3DBox({
     <group>
       <group ref={cubeGroupRef}>
         <mesh
-          onPointerDown={(event) => {
-            event.stopPropagation();
-            event.nativeEvent.preventDefault();
-            event.nativeEvent.stopImmediatePropagation();
-            const point = event.object.worldToLocal(event.point.clone());
-            onSnap(
-              resolveViewCubeBoxHitDirection(
-                point.toArray() as Direction3,
-                VIEW_CUBE_FACE_SIZE,
-                VIEW_CUBE_EDGE_SIZE,
-              ),
-            );
-          }}
           renderOrder={WIDGET_RENDER_ORDER}
           userData={{ viewCubeFallbackBox: true }}
         >
@@ -309,49 +309,98 @@ function OrbitRing3D({
   const onOrbitRef = useLatestRef(onOrbit);
   const onOrbitEndRef = useLatestRef(onOrbitEnd);
   const previousControlsEnabledRef = useRef<boolean | null>(null);
+  const dragListenersAttachedRef = useRef(false);
+  const dragMoveListenerRef = useRef<((event: PointerEvent) => void) | null>(
+    null,
+  );
+  const dragEndListenerRef = useRef<((event: PointerEvent) => void) | null>(
+    null,
+  );
 
   useEffect(() => {
     controlsRef.current = controls;
   }, [controls]);
 
-  useEffect(() => {
-    const restoreOrbitControls = () => {
-      const orbitControls = controlsRef.current;
-      if (
-        orbitControls &&
-        previousControlsEnabledRef.current !== null &&
-        typeof orbitControls.enabled === "boolean"
-      ) {
-        orbitControls.enabled = previousControlsEnabledRef.current;
-      }
-      previousControlsEnabledRef.current = null;
-    };
-    const handleMove = (e: PointerEvent) => {
+  const restoreOrbitControls = useCallback(() => {
+    const orbitControls = controlsRef.current;
+    if (
+      orbitControls &&
+      previousControlsEnabledRef.current !== null &&
+      typeof orbitControls.enabled === "boolean"
+    ) {
+      orbitControls.enabled = previousControlsEnabledRef.current;
+    }
+    previousControlsEnabledRef.current = null;
+  }, []);
+
+  const handleMove = useCallback(
+    (e: PointerEvent) => {
       if (!isDragging.current) return;
       e.preventDefault();
       e.stopPropagation();
       const dx = e.clientX - lastPointer.current.x;
       lastPointer.current = { x: e.clientX, y: e.clientY };
       onOrbitRef.current(dx);
-    };
-    const handleUp = () => {
-      const wasDragging = isDragging.current;
-      isDragging.current = false;
-      restoreOrbitControls();
-      if (wasDragging) {
-        onOrbitEndRef.current();
-      }
-    };
-    window.addEventListener("pointermove", handleMove, { capture: true });
-    window.addEventListener("pointerup", handleUp, { capture: true });
-    window.addEventListener("pointercancel", handleUp, { capture: true });
+    },
+    [onOrbitRef],
+  );
+
+  const detachWindowDragListeners = useCallback(() => {
+    if (!dragListenersAttachedRef.current) return;
+    dragListenersAttachedRef.current = false;
+    const dragMoveListener = dragMoveListenerRef.current;
+    const dragEndListener = dragEndListenerRef.current;
+    if (dragMoveListener) {
+      window.removeEventListener("pointermove", dragMoveListener, {
+        capture: true,
+      });
+    }
+    if (dragEndListener) {
+      window.removeEventListener("pointerup", dragEndListener, {
+        capture: true,
+      });
+      window.removeEventListener("pointercancel", dragEndListener, {
+        capture: true,
+      });
+    }
+    dragMoveListenerRef.current = null;
+    dragEndListenerRef.current = null;
+  }, []);
+
+  const handleUp = useCallback(() => {
+    const wasDragging = isDragging.current;
+    isDragging.current = false;
+    detachWindowDragListeners();
+    restoreOrbitControls();
+    if (wasDragging) {
+      onOrbitEndRef.current();
+    }
+  }, [detachWindowDragListeners, onOrbitEndRef, restoreOrbitControls]);
+
+  const attachWindowDragListeners = useCallback(() => {
+    if (dragListenersAttachedRef.current) return;
+    dragListenersAttachedRef.current = true;
+    const dragMoveListener = (event: PointerEvent) => handleMove(event);
+    const dragEndListener = () => handleUp();
+    dragMoveListenerRef.current = dragMoveListener;
+    dragEndListenerRef.current = dragEndListener;
+    window.addEventListener("pointermove", dragMoveListener, { capture: true });
+    window.addEventListener("pointerup", dragEndListener, {
+      capture: true,
+      once: true,
+    });
+    window.addEventListener("pointercancel", dragEndListener, {
+      capture: true,
+      once: true,
+    });
+  }, [handleMove, handleUp]);
+
+  useEffect(() => {
     return () => {
-      window.removeEventListener("pointermove", handleMove, { capture: true });
-      window.removeEventListener("pointerup", handleUp, { capture: true });
-      window.removeEventListener("pointercancel", handleUp, { capture: true });
+      detachWindowDragListeners();
       restoreOrbitControls();
     };
-  }, [onOrbitEndRef, onOrbitRef]);
+  }, [detachWindowDragListeners, restoreOrbitControls]);
 
   return (
     <group renderOrder={WIDGET_RENDER_ORDER + 1}>
@@ -379,6 +428,7 @@ function OrbitRing3D({
             x: e.nativeEvent.clientX,
             y: e.nativeEvent.clientY,
           };
+          attachWindowDragListeners();
         }}
       >
         <torusGeometry args={[ORBIT_RING_RADIUS, ORBIT_RING_TUBE, 20, 80]} />

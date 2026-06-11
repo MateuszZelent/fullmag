@@ -393,6 +393,133 @@ describe("ControlRoomApi", () => {
     );
   });
 
+  it("loads hysteresis analysis resources through the analysis facade", async () => {
+    const observedUrls: string[] = [];
+    const observedMethods: Array<string | undefined> = [];
+    const fetchImpl = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      observedUrls.push(String(url));
+      observedMethods.push(init?.method);
+      const target = String(url);
+      if (target.endsWith("/metrics")) {
+        return jsonResponse({
+          H_c: null,
+          H_c_minus: null,
+          H_c_plus: null,
+          H_eb: null,
+          M_r_minus: null,
+          M_r_plus: null,
+          loop_area: 0,
+          magnetization_average_weighting: "uniform_sample_average",
+          saturation_preparation_field_mT: null,
+          saturation_status: "not_available",
+        });
+      }
+      if (target.endsWith("/saturation")) {
+        return jsonResponse({
+          direction: 1,
+          max_probe_field_mT: 300,
+          points: [],
+          preparation_field_mT: null,
+          reason: "not run",
+          status: "not_available",
+          susceptibility_threshold: 0.001,
+          transverse_threshold: 0.01,
+        });
+      }
+      if (target.endsWith("/steps/7")) {
+        return jsonResponse({
+          field_value_mT: 10,
+          m_avg: [1, 0, 0],
+          m_ip: 1,
+          m_oop: 0,
+          m_parallel: 1,
+          point_id: 7,
+          snapshot_id: "hysteresis_point_007",
+          status: "completed",
+        });
+      }
+      return jsonResponse([]);
+    });
+
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl,
+      requestIdFactory: () => "req-hyst",
+    });
+
+    await api.analysis.hysteresis.points("stage 1");
+    await api.analysis.hysteresis.metrics("stage 1");
+    await api.analysis.hysteresis.saturation("stage 1");
+    await api.analysis.hysteresis.branches("stage 1");
+    await api.analysis.hysteresis.minorLoops("stage 1");
+    await api.analysis.hysteresis.reversalFields("stage 1");
+    await api.analysis.hysteresis.point("stage 1", 7);
+    await api.analysis.hysteresis.settleTrace("stage 1", 7);
+
+    expect(observedMethods).toEqual(Array(8).fill("GET"));
+    expect(observedUrls).toEqual([
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis/stage%201/points",
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis/stage%201/metrics",
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis/stage%201/saturation",
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis/stage%201/branches",
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis/stage%201/minor-loops",
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis/stage%201/reversal-fields",
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis/stage%201/steps/7",
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis/stage%201/steps/7/settle-trace",
+    ]);
+  });
+
+  it("loads hysteresis stage resources through the simulation stage facade", async () => {
+    const observedMethods: string[] = [];
+    const observedUrls: string[] = [];
+    const fetchImpl = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      observedMethods.push(init?.method ?? "GET");
+      observedUrls.push(String(url));
+      return jsonResponse({
+        active: true,
+        current_field_mT: 25,
+        current_point_index: 4,
+        current_settle_step_index: 1,
+        current_settle_step_kind: "minimize",
+        current_settle_step_method: "projected_gradient_bb",
+        revision: 11,
+        stage_id: "stage 1",
+        stage_index: 1,
+        stage_kind: "hysteresis",
+        status: "running",
+      });
+    });
+
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl,
+      requestIdFactory: () => "req-hyst-progress",
+    });
+
+    await api.simulation.stages.hysteresis.plan("stage 1");
+    await api.simulation.stages.hysteresis.protocol("stage 1");
+    await api.simulation.stages.hysteresis.saturation("stage 1");
+    await api.simulation.stages.hysteresis.orientation("stage 1");
+    await api.simulation.stages.hysteresis.settlePipeline("stage 1");
+    await api.simulation.stages.hysteresis.executionTree("stage 1", {
+      after: 3,
+      before: 2,
+      window: "active",
+    });
+    await api.simulation.stages.hysteresis.progress("stage 1");
+
+    expect(observedMethods).toEqual(Array(7).fill("GET"));
+    expect(observedUrls).toEqual([
+      "http://127.0.0.1:8765/v2/sessions/current/simulation/stages/stage%201/hysteresis/plan",
+      "http://127.0.0.1:8765/v2/sessions/current/simulation/stages/stage%201/hysteresis/protocol",
+      "http://127.0.0.1:8765/v2/sessions/current/simulation/stages/stage%201/hysteresis/saturation",
+      "http://127.0.0.1:8765/v2/sessions/current/simulation/stages/stage%201/hysteresis/orientation",
+      "http://127.0.0.1:8765/v2/sessions/current/simulation/stages/stage%201/hysteresis/settle-pipeline",
+      "http://127.0.0.1:8765/v2/sessions/current/simulation/stages/stage%201/hysteresis/execution-tree?after=3&before=2&window=active",
+      "http://127.0.0.1:8765/v2/sessions/current/simulation/stages/stage%201/hysteresis/progress",
+    ]);
+  });
+
   it("loads the field catalog through the v2 data facade", async () => {
     let observedInit: RequestInit | undefined;
     let observedUrl = "";
@@ -1734,6 +1861,30 @@ describe("ControlRoomApi", () => {
     expect(Array.from(result.data.values)).toEqual([1, 0, -1]);
     expect(observedUrl).toBe(
       "http://127.0.0.1:8765/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_id=part-1&scope_kind=part",
+    );
+  });
+
+  it("queries hysteresis snapshot field vectors through the data-plane facade", async () => {
+    let observedUrl = "";
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url) => {
+        observedUrl = String(url);
+        return binaryResponse(makeFieldVectorBuffer(), {
+          headers: { etag: '"field-1"', ...contractHeaders },
+        });
+      },
+    });
+
+    const result = await api.data.fields.vector("m", {
+      component: "full",
+      scope_kind: "full",
+      snapshot_id: "hysteresis-stage-1-point-4",
+    });
+
+    expect(result.status).toBe("ready");
+    expect(observedUrl).toBe(
+      "http://127.0.0.1:8765/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full&snapshot_id=hysteresis-stage-1-point-4",
     );
   });
 

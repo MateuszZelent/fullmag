@@ -90,6 +90,370 @@ fn bootstrap_example_validates() {
 }
 
 #[test]
+fn hysteresis_validation_rejects_invalid_piecewise_schedule() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study = StudyIR::Hysteresis {
+        field_min_mT: None,
+        field_max_mT: None,
+        field_step_mT: None,
+        field_values_mT: None,
+        direction: None,
+        orientation: Some(FieldOrientationIR::Preset {
+            preset_name: "oop_positive".to_string(),
+        }),
+        measurement_axis: "field_axis".to_string(),
+        initial_protocol: "positive_saturation".to_string(),
+        saturation: None,
+        branch_mode: "major_loop".to_string(),
+        settle_pipeline: None,
+        storage: None,
+        field_schedule: Some(FieldScheduleIR {
+            segments: vec![FieldSegmentIR {
+                segment_id: "negative_step".to_string(),
+                start: 100.0,
+                stop: 0.0,
+                step: -5.0,
+                label: "negative_step".to_string(),
+                endpoint_policy: "include_stop".to_string(),
+                reason: "test".to_string(),
+            }],
+        }),
+        schedule_refinements: None,
+        minor_loops: None,
+        sampling: SamplingIR {
+            outputs: vec![],
+            table_autosave: None,
+        },
+    };
+
+    let errors = ir
+        .validate()
+        .expect_err("bad piecewise schedule must fail validation");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("field_schedule.segments[0].step must be positive")));
+}
+
+#[test]
+fn hysteresis_validation_rejects_overlapping_dense_windows_without_priority() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study = StudyIR::Hysteresis {
+        field_min_mT: Some(-100.0),
+        field_max_mT: Some(100.0),
+        field_step_mT: Some(10.0),
+        field_values_mT: None,
+        direction: None,
+        orientation: Some(FieldOrientationIR::Preset {
+            preset_name: "oop_positive".to_string(),
+        }),
+        measurement_axis: "field_axis".to_string(),
+        initial_protocol: "positive_saturation".to_string(),
+        saturation: None,
+        branch_mode: "major_loop".to_string(),
+        settle_pipeline: None,
+        storage: None,
+        field_schedule: None,
+        schedule_refinements: Some(vec![
+            FieldWindowIR {
+                center_mT: 0.0,
+                half_width_mT: 10.0,
+                step_mT: 1.0,
+                reason: "remanence".to_string(),
+                priority: None,
+            },
+            FieldWindowIR {
+                center_mT: 5.0,
+                half_width_mT: 10.0,
+                step_mT: 0.5,
+                reason: "coercivity".to_string(),
+                priority: None,
+            },
+        ]),
+        minor_loops: None,
+        sampling: SamplingIR {
+            outputs: vec![],
+            table_autosave: None,
+        },
+    };
+
+    let errors = ir
+        .validate()
+        .expect_err("overlapping dense windows without priority must fail validation");
+    assert!(errors.iter().any(|error| {
+        error.contains("schedule_refinements[1] overlaps schedule_refinements[0]")
+    }));
+}
+
+#[test]
+fn hysteresis_validation_accepts_major_with_minor_loops_branch_mode() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study = StudyIR::Hysteresis {
+        field_min_mT: Some(-100.0),
+        field_max_mT: Some(100.0),
+        field_step_mT: Some(10.0),
+        field_values_mT: None,
+        direction: None,
+        orientation: Some(FieldOrientationIR::Preset {
+            preset_name: "oop_positive".to_string(),
+        }),
+        measurement_axis: "field_axis".to_string(),
+        initial_protocol: "positive_saturation".to_string(),
+        saturation: None,
+        branch_mode: "major_with_minor_loops".to_string(),
+        settle_pipeline: None,
+        storage: None,
+        field_schedule: None,
+        schedule_refinements: None,
+        minor_loops: Some(vec![MinorLoopIR {
+            reversal_mT: 25.0,
+            return_mT: -25.0,
+        }]),
+        sampling: SamplingIR {
+            outputs: vec![OutputIR::Field {
+                name: "m".to_string(),
+                every_seconds: 1e-12,
+            }],
+            table_autosave: None,
+        },
+    };
+
+    if let Err(errors) = ir.validate() {
+        panic!("major_with_minor_loops should validate, got errors: {errors:?}");
+    }
+}
+
+#[test]
+fn hysteresis_validation_rejects_run_next_algorithm_without_next_step() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study = StudyIR::Hysteresis {
+        field_min_mT: Some(-100.0),
+        field_max_mT: Some(100.0),
+        field_step_mT: Some(10.0),
+        field_values_mT: None,
+        direction: None,
+        orientation: Some(FieldOrientationIR::Preset {
+            preset_name: "oop_positive".to_string(),
+        }),
+        measurement_axis: "field_axis".to_string(),
+        initial_protocol: "positive_saturation".to_string(),
+        saturation: None,
+        branch_mode: "major_loop".to_string(),
+        settle_pipeline: Some(SettlePipelineIR::Sequence {
+            steps: vec![SettleStepIR::Minimize {
+                method: "projected_gradient_bb".to_string(),
+                torque_tolerance: 5e-5,
+                energy_tolerance: 1e-20,
+                max_steps: 2000,
+                timestep_s: None,
+                max_pseudotime_s: None,
+                max_physical_time_s: None,
+                on_non_convergence: "run_next_algorithm".to_string(),
+                retry_timestep_scale: None,
+                retry_max_attempts: None,
+            }],
+        }),
+        storage: None,
+        field_schedule: None,
+        schedule_refinements: None,
+        minor_loops: None,
+        sampling: SamplingIR {
+            outputs: vec![],
+            table_autosave: None,
+        },
+    };
+
+    let errors = ir
+        .validate()
+        .expect_err("run_next_algorithm without a following step must fail validation");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("run_next_algorithm requires a following step")));
+}
+
+#[test]
+fn hysteresis_validation_rejects_run_next_algorithm_tree_without_fallback_branch() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study = StudyIR::Hysteresis {
+        field_min_mT: Some(-100.0),
+        field_max_mT: Some(100.0),
+        field_step_mT: Some(10.0),
+        field_values_mT: None,
+        direction: None,
+        orientation: Some(FieldOrientationIR::Preset {
+            preset_name: "oop_positive".to_string(),
+        }),
+        measurement_axis: "field_axis".to_string(),
+        initial_protocol: "positive_saturation".to_string(),
+        saturation: None,
+        branch_mode: "major_loop".to_string(),
+        settle_pipeline: Some(SettlePipelineIR::Tree {
+            default: SettleStepIR::Minimize {
+                method: "projected_gradient_bb".to_string(),
+                torque_tolerance: 5e-5,
+                energy_tolerance: 1e-20,
+                max_steps: 2000,
+                timestep_s: None,
+                max_pseudotime_s: None,
+                max_physical_time_s: None,
+                on_non_convergence: "run_next_algorithm".to_string(),
+                retry_timestep_scale: None,
+                retry_max_attempts: None,
+            },
+            branches: vec![],
+        }),
+        storage: None,
+        field_schedule: None,
+        schedule_refinements: None,
+        minor_loops: None,
+        sampling: SamplingIR {
+            outputs: vec![],
+            table_autosave: None,
+        },
+    };
+
+    let errors = ir
+        .validate()
+        .expect_err("run_next_algorithm tree without fallback branch must fail validation");
+    assert!(
+        errors
+            .iter()
+            .any(|error| error
+                .contains("run_next_algorithm requires a non_converged fallback branch"))
+    );
+}
+
+#[test]
+fn hysteresis_validation_rejects_retry_with_smaller_dt_without_scale() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study = StudyIR::Hysteresis {
+        field_min_mT: Some(-100.0),
+        field_max_mT: Some(100.0),
+        field_step_mT: Some(10.0),
+        field_values_mT: None,
+        direction: None,
+        orientation: Some(FieldOrientationIR::Preset {
+            preset_name: "oop_positive".to_string(),
+        }),
+        measurement_axis: "field_axis".to_string(),
+        initial_protocol: "positive_saturation".to_string(),
+        saturation: None,
+        branch_mode: "major_loop".to_string(),
+        settle_pipeline: Some(SettlePipelineIR::Sequence {
+            steps: vec![SettleStepIR::Relax {
+                method: "llg_overdamped".to_string(),
+                alpha: 1.0,
+                torque_tolerance: 1e-5,
+                max_steps: 100,
+                timestep_s: None,
+                max_pseudotime_s: None,
+                max_physical_time_s: None,
+                on_non_convergence: "retry_with_smaller_dt".to_string(),
+                retry_timestep_scale: None,
+                retry_max_attempts: Some(1),
+            }],
+        }),
+        storage: None,
+        field_schedule: None,
+        schedule_refinements: None,
+        minor_loops: None,
+        sampling: SamplingIR {
+            outputs: vec![],
+            table_autosave: None,
+        },
+    };
+
+    let errors = ir
+        .validate()
+        .expect_err("retry_with_smaller_dt without scale must fail validation");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("retry_with_smaller_dt requires retry_timestep_scale")));
+}
+
+#[test]
+fn hysteresis_validation_rejects_invalid_public_contract_values() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study = StudyIR::Hysteresis {
+        field_min_mT: Some(f64::NAN),
+        field_max_mT: Some(100.0),
+        field_step_mT: Some(10.0),
+        field_values_mT: Some(vec![0.0, f64::INFINITY]),
+        direction: Some([0.0, f64::NAN, 1.0]),
+        orientation: Some(FieldOrientationIR::Global {
+            vector: [0.0, 0.0, 0.0],
+        }),
+        measurement_axis: "sideways".to_string(),
+        initial_protocol: "mystery".to_string(),
+        saturation: Some(SaturationProbeIR {
+            mode: "".to_string(),
+            max_field_mT: f64::NAN,
+            susceptibility_threshold: -1.0,
+            transverse_threshold: 0.0,
+        }),
+        branch_mode: "minor_loop".to_string(),
+        settle_pipeline: Some(SettlePipelineIR::Sequence {
+            steps: vec![SettleStepIR::Relax {
+                method: "".to_string(),
+                alpha: 1.0,
+                torque_tolerance: 1e-5,
+                max_steps: 1,
+                timestep_s: Some(0.0),
+                max_pseudotime_s: Some(f64::NAN),
+                max_physical_time_s: Some(-1.0),
+                on_non_convergence: "continue_with_warning".to_string(),
+                retry_timestep_scale: None,
+                retry_max_attempts: None,
+            }],
+        }),
+        storage: Some(HysteresisStorageIR {
+            scalar_history: true,
+            magnetization: "selected".to_string(),
+            every_n: 0,
+            key_events: true,
+            key_event_threshold_dm: f64::NAN,
+        }),
+        field_schedule: None,
+        schedule_refinements: None,
+        minor_loops: Some(vec![MinorLoopIR {
+            reversal_mT: 10.0,
+            return_mT: 10.0,
+        }]),
+        sampling: SamplingIR {
+            outputs: vec![],
+            table_autosave: None,
+        },
+    };
+
+    let errors = ir
+        .validate()
+        .expect_err("invalid hysteresis contract values must fail validation");
+
+    for expected in [
+        "field_min_mT must be finite",
+        "field_values_mT[1] must be finite",
+        "direction must contain finite values",
+        "orientation global vector must not be zero",
+        "measurement_axis is unsupported",
+        "initial_protocol is unsupported",
+        "saturation.mode must not be empty",
+        "saturation.max_field_mT must be finite and positive",
+        "branch_mode is unsupported",
+        "settle_pipeline.steps[0].method must not be empty",
+        "settle_pipeline.steps[0].timestep_s must be finite and positive",
+        "settle_pipeline.steps[0].max_pseudotime_s must be finite and positive",
+        "settle_pipeline.steps[0].max_physical_time_s must be finite and positive",
+        "storage.every_n must be positive",
+        "storage.key_event_threshold_dm must be finite and positive",
+        "minor_loops[0] reversal_mT and return_mT must differ",
+    ] {
+        assert!(
+            errors.iter().any(|error| error.contains(expected)),
+            "missing validation error containing {expected:?}; errors: {errors:?}"
+        );
+    }
+}
+
+#[test]
 fn region_owned_ir_defaults_are_empty_for_legacy_payloads() {
     let ir = ProblemIR::bootstrap_example();
     let json = serde_json::to_string(&ir).expect("bootstrap should serialize");

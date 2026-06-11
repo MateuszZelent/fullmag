@@ -4,7 +4,9 @@ import { useMemo } from "react";
 
 import type { TableRowsResource } from "@/kernel/api/apiTypes";
 import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
+import type { KernelApi } from "@/kernel/types";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
+import { HysteresisChart } from "@/shared/domain/study/HysteresisChart";
 
 import {
   buildScalarChartSeries,
@@ -15,6 +17,8 @@ import {
 import { EChartsSurface } from "./components/EChartsSurface";
 
 export function AnalysisPlotsView({
+  kernel,
+  selectedStageId,
   onClearRange,
   onPointSelect,
   onRangeChange,
@@ -28,6 +32,8 @@ export function AnalysisPlotsView({
   xAxisId,
   yAxisIds,
 }: {
+  kernel: KernelApi;
+  selectedStageId?: string | null;
   onClearRange: () => void;
   onPointSelect: (point: AnalysisChartCursorPoint) => void;
   onRangeChange: (range: ChartValueRange) => void;
@@ -72,87 +78,99 @@ export function AnalysisPlotsView({
     <div className="fm-analysis-plots">
       <section className="fm-analysis-plots__panel fm-analysis-plots__panel--primary">
         <header className="fm-analysis-plots__header">
-          <h3>Table charts</h3>
-          <span>{formatTableSummary(visibleTable, tableRowsStatus)}</span>
-        </header>
-        <div className="fm-analysis-plots__status" aria-label="Chart status">
-          <StatusPill label="X" value={xAxisId} />
-          <StatusPill
-            label="Y"
-            value={formatSeriesCount(activeYSeriesCount)}
-          />
-          <StatusPill
-            label="Visible"
-            value={visibleTable ? String(visibleTable.rows.length) : "0"}
-          />
-          <StatusPill
-            label="Total"
-            value={visibleTable ? String(visibleTable.total_rows) : "-"}
-          />
-          <StatusPill
-            label="Zoom"
-            value={range ? formatRange(range) : "off"}
-          />
-          <StatusPill
-            label="Cursor"
-            value={selectedPoint ? formatCursorPoint(selectedPoint) : "-"}
-          />
-        </div>
-        {seriesLegend.length > 0 ? (
-          <div className="fm-analysis-plots__legend" aria-label="Series legend">
-            {seriesLegend.map((series, index) => (
-              <button
-                aria-label={`Series ${series.label} unit ${series.unit} latest ${series.latest}`}
-                className="fm-analysis-plots__legend-item"
-                key={series.columnId}
-                onClick={() => onSeriesSelect(series.series)}
-                title={`${series.label} [${series.unit}] latest ${series.latest} from ${series.source}`}
-                type="button"
-              >
-                <span
-                  aria-hidden="true"
-                  className={`fm-analysis-plots__legend-swatch fm-analysis-plots__legend-swatch--${index % 5}`}
-                />
-                <span className="fm-analysis-plots__legend-label">
-                  {series.label}
-                </span>
-                <span className="fm-analysis-plots__legend-unit">
-                  {series.unit}
-                </span>
-                <span className="fm-analysis-plots__legend-latest">
-                  {series.latest}
-                </span>
-              </button>
-            ))}
-          </div>
-        ) : null}
-        <EChartsSurface
-          dataStatus={tableRowsStatus}
-          onPointSelect={onPointSelect}
-          onRangeChange={onRangeChange}
-          series={chartSeries}
-          xAxisLabel={xAxisLabel}
-        />
-        <footer className="fm-analysis-plots__range">
+          <h3>{selectedStageId ? "Hysteresis Plot" : "Table charts"}</h3>
           <span>
-            {range
-              ? `zoom ${formatRangeValue(range.fromValue)}-${formatRangeValue(range.toValue)}`
-              : visibleTable
-                ? `cursor ${visibleTable.cursor_end}`
-                : "cursor -"}
+            {selectedStageId
+              ? "Hysteresis loop points & branches"
+              : formatTableSummary(visibleTable, tableRowsStatus)}
           </span>
-          <span>{visibleTable ? `${visibleTable.rows.length} visible` : "0 visible"}</span>
-          {range ? (
-            <button
-              className="fm-analysis-plots__range-clear"
-              type="button"
-              onClick={onClearRange}
-            >
-              Clear zoom
-            </button>
-          ) : null}
-        </footer>
-        {solverEnergySeries.length > 0 ? (
+        </header>
+        {!selectedStageId && (
+          <div className="fm-analysis-plots__status" aria-label="Chart status">
+            <StatusPill label="X" value={xAxisId} />
+            <StatusPill
+              label="Y"
+              value={formatSeriesCount(activeYSeriesCount)}
+            />
+            <StatusPill
+              label="Visible"
+              value={visibleTable ? String(visibleTable.rows.length) : "0"}
+            />
+            <StatusPill
+              label="Total"
+              value={visibleTable ? String(visibleTable.total_rows) : "-"}
+            />
+            <StatusPill
+              label="Zoom"
+              value={range ? formatRange(range) : "off"}
+            />
+            <StatusPill
+              label="Cursor"
+              value={selectedPoint ? formatCursorPoint(selectedPoint) : "-"}
+            />
+          </div>
+        )}
+        {selectedStageId ? (
+          <HysteresisChart kernel={kernel} stageId={selectedStageId} />
+        ) : (
+          <>
+            {seriesLegend.length > 0 ? (
+              <div className="fm-analysis-plots__legend" aria-label="Series legend">
+                {seriesLegend.map((series, index) => (
+                  <button
+                    aria-label={`Series ${series.label} unit ${series.unit} latest ${series.latest}`}
+                    className="fm-analysis-plots__legend-item"
+                    key={series.columnId}
+                    onClick={() => onSeriesSelect(series.series)}
+                    title={`${series.label} [${series.unit}] latest ${series.latest} from ${series.source}`}
+                    type="button"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className={`fm-analysis-plots__legend-swatch fm-analysis-plots__legend-swatch--${index % 5}`}
+                    />
+                    <span className="fm-analysis-plots__legend-label">
+                      {series.label}
+                    </span>
+                    <span className="fm-analysis-plots__legend-unit">
+                      {series.unit}
+                    </span>
+                    <span className="fm-analysis-plots__legend-latest">
+                      {series.latest}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            <EChartsSurface
+              dataStatus={tableRowsStatus}
+              onPointSelect={onPointSelect}
+              onRangeChange={onRangeChange}
+              series={chartSeries}
+              xAxisLabel={xAxisLabel}
+            />
+            <footer className="fm-analysis-plots__range">
+              <span>
+                {range
+                  ? `zoom ${formatRangeValue(range.fromValue)}-${formatRangeValue(range.toValue)}`
+                  : visibleTable
+                    ? `cursor ${visibleTable.cursor_end}`
+                    : "cursor -"}
+              </span>
+              <span>{visibleTable ? `${visibleTable.rows.length} visible` : "0 visible"}</span>
+              {range ? (
+                <button
+                  className="fm-analysis-plots__range-clear"
+                  type="button"
+                  onClick={onClearRange}
+                >
+                  Clear zoom
+                </button>
+              ) : null}
+            </footer>
+          </>
+        )}
+        {!selectedStageId && solverEnergySeries.length > 0 ? (
           <div className="fm-analysis-plots__subchart fm-analysis-plots__subchart--energy">
             <header className="fm-analysis-plots__subchart-header">
               <h4>Energy history</h4>

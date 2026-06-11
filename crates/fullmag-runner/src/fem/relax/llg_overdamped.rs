@@ -229,6 +229,11 @@ pub(crate) fn execute_llg_overdamped(
                         magnetization: Some(flatten_vectors(&backend.copy_m(node_count)?)),
                         preview_field,
                         cached_preview_fields,
+                        hysteresis_field_m_t: None,
+                        hysteresis_point_index: None,
+                        hysteresis_settle_step_index: None,
+                        hysteresis_settle_step_kind: None,
+                        hysteresis_settle_step_method: None,
                         scalar_row_due: preview_due && preview_targets_global_scalar,
                         finished: false,
                     });
@@ -258,7 +263,16 @@ pub(crate) fn execute_llg_overdamped(
             .as_ref()
             .and_then(|consumer| consumer.interrupt_requested);
         let Some(mut stats) = backend.step_interruptible(dt_step, interrupt_requested)? else {
-            continue;
+            if interrupt_requested
+                .is_some_and(|signal| signal.load(std::sync::atomic::Ordering::Relaxed))
+            {
+                cancelled = true;
+                break;
+            }
+            return Err(RunError {
+                message: "native FEM LLG step was interrupted without an active interrupt signal"
+                    .to_string(),
+            });
         };
         ensure_fem_object_scalars(&mut stats, plan);
         current_time = stats.time;
@@ -329,6 +343,11 @@ pub(crate) fn execute_llg_overdamped(
                 magnetization,
                 preview_field,
                 cached_preview_fields,
+                hysteresis_field_m_t: None,
+                hysteresis_point_index: None,
+                hysteresis_settle_step_index: None,
+                hysteresis_settle_step_kind: None,
+                hysteresis_settle_step_method: None,
                 scalar_row_due: preview_due && preview_targets_global_scalar,
                 finished: false,
             });
@@ -433,4 +452,18 @@ pub(crate) fn execute_llg_overdamped(
         cancelled,
         paused,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn llg_overdamped_does_not_spin_forever_on_interrupted_step() {
+        let source = include_str!("llg_overdamped.rs");
+        assert!(
+            source.contains("native FEM LLG step was interrupted without an active interrupt signal")
+                && source.contains("cancelled = true;\n                break;")
+                && !source.contains("backend.step_interruptible(dt_step, interrupt_requested)? else {\n            continue;"),
+            "FEM LLG must not continue without advancing time when the native step reports interruption"
+        );
+    }
 }

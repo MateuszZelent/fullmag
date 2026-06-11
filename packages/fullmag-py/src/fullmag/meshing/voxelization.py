@@ -459,8 +459,14 @@ def _contains(
 
     if isinstance(geometry, Cylinder):
         r = geometry.radius
-        h = geometry.height
-        return (xx * xx + yy * yy <= r * r) & (np.abs(zz) <= h / 2.0)
+        half_height = geometry.height / 2.0
+        ax, ay, az = geometry.axis
+        axial = xx * ax + yy * ay + zz * az
+        radial_sq = (
+            (xx * xx + yy * yy + zz * zz)
+            - axial * axial
+        )
+        return (radial_sq <= r * r) & (np.abs(axial) <= half_height)
 
     if isinstance(geometry, SinWaveguide):
         half_length = geometry.length / 2.0

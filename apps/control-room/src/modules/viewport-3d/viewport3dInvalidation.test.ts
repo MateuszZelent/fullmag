@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import { buildViewport3DResourceFrameKey } from "./viewport3dInvalidation";
@@ -20,5 +22,16 @@ describe("buildViewport3DResourceFrameKey", () => {
     expect(ready).not.toBe(loading);
     expect(failed).not.toBe(loading);
     expect(failed).toContain("404 /model/scene");
+  });
+
+  it("batches R3F invalidation on a microtask instead of a timer", () => {
+    const source = readFileSync(
+      new URL("./viewport3dBatchedInvalidate.ts", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("queueMicrotask(flushPendingInvalidates)");
+    expect(source).not.toContain("setTimeout(flushPendingInvalidates");
+    expect(source).not.toContain("clearTimeout(pendingTimer)");
   });
 });

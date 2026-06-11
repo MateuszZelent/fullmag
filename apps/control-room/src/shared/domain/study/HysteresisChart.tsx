@@ -1,0 +1,1049 @@
+"use client";
+
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type KeyboardEvent,
+} from "react";
+import type { ECharts, EChartsOption } from "echarts";
+
+import type {
+  HysteresisOrientationSchema,
+  HysteresisPointSchema,
+  HysteresisProgressSchema,
+} from "@/kernel/api/apiTypes";
+import { createCommandContext } from "@/kernel/commands/commandContext";
+import type { CommandContext } from "@/kernel/commands/commandTypes";
+import type { Selection } from "@/kernel/selection/selectionTypes";
+import type { ModuleId } from "@/kernel/types";
+import {
+  useHysteresisBranchesResource,
+  useHysteresisMetricsResource,
+  useHysteresisMinorLoopsResource,
+  useHysteresisOrientationResource,
+  useHysteresisPointsResource,
+  useHysteresisProgressResource,
+  useHysteresisProtocolResource,
+  type HysteresisBranch,
+  type HysteresisMinorLoop,
+} from "@/kernel/resources/studyRuntimeResources";
+import type { KernelApi } from "@/kernel/types";
+import { Button } from "@/shared/ui/Button";
+import { ChevronLeft, ChevronRight, Pause, Play } from "lucide-react";
+
+interface HysteresisChartProps {
+  commandSource?: CommandContext["source"];
+  kernel: KernelApi;
+  stageId: string;
+}
+
+export interface HysteresisTargetMetadata {
+  fieldOrientation?: string | null;
+  fieldRevision?: string | number | null;
+  measurementAxis?: string | null;
+  meshIdentity?: string | null;
+}
+
+export type YAxisKey =
+  | "m_parallel"
+  | "m_oop"
+  | "m_ip"
+  | "m_avg_x"
+  | "m_avg_y"
+  | "m_avg_z";
+type XAxisUnit = "mT" | "kA/m";
+type ViewMode = "full" | "virgin" | "forward" | "return" | "minor" | "oop-ip-overlay" | "rgb-overlay";
+type ChartDataPoint = [number, number, number];
+interface HysteresisChartLineSeriesModel {
+  branchId: string | null;
+  data: ChartDataPoint[];
+  name: string;
+}
+
+const EMPTY_HYSTERESIS_POINTS: HysteresisPointSchema[] = [];
+const EMPTY_HYSTERESIS_BRANCHES: HysteresisBranch[] = [];
+const EMPTY_HYSTERESIS_MINOR_LOOPS: HysteresisMinorLoop[] = [];
+export const HYSTERESIS_CHART_VALUE_AXIS_SCALE = true;
+
+function progressPointIndex(
+  progress: HysteresisProgressSchema | null | undefined,
+): number | null {
+  const index = progress?.active_point_index ?? progress?.current_point_index;
+  return typeof index === "number" ? index : null;
+}
+
+function progressSettleLabel(
+  progress: HysteresisProgressSchema | null | undefined,
+): string | null {
+  const kind = progress?.current_settle_step_kind;
+  const method = progress?.current_settle_step_method;
+  if (kind && method) return `${kind} ${method}`;
+  return kind ?? method ?? null;
+}
+
+export function selectedHysteresisPointId(
+  selection: Selection,
+  stageId: string,
+): number | null {
+  const ref = selection.ref;
+  if (
+    ref?.type !== "analysis-chart-point" ||
+    ref.stageId !== stageId ||
+    typeof ref.pointId !== "number"
+  ) {
+    return null;
+  }
+  return ref.pointId;
+}
+
+export function clearHysteresisPointSelectionForLive(
+  kernel: Pick<KernelApi, "selection">,
+  stageId: string,
+  source: ModuleId,
+): boolean {
+  const ref = kernel.selection.get().ref;
+  if (ref?.type !== "analysis-chart-point" || ref.stageId !== stageId) {
+    return false;
+  }
+  kernel.selection.clear(source);
+  return true;
+}
+
+export function resolveHysteresisNavigationIndex(
+  activeIndex: number,
+  progressIndex: number | null,
+  pointCount: number,
+): number {
+  if (pointCount <= 0) return -1;
+  if (activeIndex >= 0 && activeIndex < pointCount) return activeIndex;
+  if (progressIndex != null && progressIndex >= 0 && progressIndex < pointCount) {
+    return progressIndex;
+  }
+  return -1;
+}
+
+export function adjacentHysteresisPointIndex(
+  activeIndex: number,
+  progressIndex: number | null,
+  pointCount: number,
+  delta: -1 | 1,
+): number {
+  if (pointCount <= 0) return -1;
+  const base = resolveHysteresisNavigationIndex(activeIndex, progressIndex, pointCount);
+  if (base < 0) return 0;
+  return Math.min(Math.max(base + delta, 0), pointCount - 1);
+}
+
+export function nextHysteresisPlaybackIndex(
+  activeIndex: number,
+  progressIndex: number | null,
+  pointCount: number,
+): number {
+  if (pointCount <= 0) return -1;
+  const base = resolveHysteresisNavigationIndex(activeIndex, progressIndex, pointCount);
+  return base < 0 ? 0 : (base + 1) % pointCount;
+}
+
+interface ChartClickParams {
+  componentType?: unknown;
+  data?: unknown;
+}
+
+interface TooltipParam {
+  data?: unknown;
+}
+
+interface HysteresisChartColors {
+  active: string;
+  axis: string;
+  border: string;
+  branchDescending: string;
+  branchAscending: string;
+  metric: string;
+  remanence: string;
+  surface: string;
+  text: string;
+  textMuted: string;
+}
+
+function isChartDataPoint(value: unknown): value is ChartDataPoint {
+  return (
+    Array.isArray(value) &&
+    value.length >= 3 &&
+    typeof value[0] === "number" &&
+    typeof value[1] === "number" &&
+    typeof value[2] === "number"
+  );
+}
+
+function isViewMode(value: string): value is ViewMode {
+  return value === "full" || value === "virgin" || value === "forward" || value === "return" || value === "minor" || value === "oop-ip-overlay" || value === "rgb-overlay";
+}
+
+function getPointYValue(p: HysteresisPointSchema, key: YAxisKey): number {
+  switch (key) {
+    case "m_parallel":
+      return p.m_parallel;
+    case "m_oop":
+      return p.m_oop;
+    case "m_ip":
+      return p.m_ip;
+    case "m_avg_x":
+      return p.m_avg[0] ?? 0;
+    case "m_avg_y":
+      return p.m_avg[1] ?? 0;
+    case "m_avg_z":
+      return p.m_avg[2] ?? 0;
+  }
+}
+
+function leadingMonotonicHysteresisPoints(
+  points: HysteresisPointSchema[],
+): HysteresisPointSchema[] {
+  if (points.length <= 2) return points;
+  const selected = [points[0]];
+  let direction = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1];
+    const current = points[index];
+    const delta = current.field_value_mT - previous.field_value_mT;
+    const currentDirection = delta > 0 ? 1 : delta < 0 ? -1 : 0;
+    if (currentDirection !== 0) {
+      if (direction === 0) {
+        direction = currentDirection;
+      } else if (currentDirection !== direction) {
+        break;
+      }
+    }
+    selected.push(current);
+  }
+  return selected;
+}
+
+export function buildHysteresisChartLineSeriesModel(
+  points: HysteresisPointSchema[],
+  branches: HysteresisBranch[],
+  minorLoops: HysteresisMinorLoop[],
+  viewMode: ViewMode,
+  yAxisKey: YAxisKey,
+  formatXValue: (fieldValmT: number) => number = (fieldValmT) => fieldValmT,
+  branchMode?: string | null,
+): HysteresisChartLineSeriesModel[] {
+  if (viewMode === "virgin") {
+    const sourcePoints = points.length > 0
+      ? points
+      : branches.flatMap((branch) => branch.points);
+    const virginPoints = branchMode === "virgin_curve"
+      ? sourcePoints
+      : leadingMonotonicHysteresisPoints(sourcePoints);
+    return virginPoints.length > 0
+      ? [{
+          branchId: "virgin",
+          data: virginPoints.map((p) => [
+            formatXValue(p.field_value_mT),
+            getPointYValue(p, yAxisKey),
+            p.point_id,
+          ]),
+          name: "Virgin",
+        }]
+      : [];
+  }
+
+  if (viewMode === "oop-ip-overlay") {
+    const sourcePoints = points.length > 0
+      ? points
+      : branches.flatMap((branch) => branch.points);
+    const overlaySeries: HysteresisChartLineSeriesModel[] = [
+      {
+        branchId: "oop-overlay",
+        data: sourcePoints.map((p) => [
+          formatXValue(p.field_value_mT),
+          getPointYValue(p, "m_oop"),
+          p.point_id,
+        ]),
+        name: "M_oop",
+      },
+      {
+        branchId: "ip-overlay",
+        data: sourcePoints.map((p) => [
+          formatXValue(p.field_value_mT),
+          getPointYValue(p, "m_ip"),
+          p.point_id,
+        ]),
+        name: "M_ip",
+      },
+    ];
+    return overlaySeries.filter((series) => series.data.length > 0);
+  }
+
+  if (viewMode === "rgb-overlay") {
+    const sourcePoints = points.length > 0
+      ? points
+      : branches.flatMap((branch) => branch.points);
+    const overlaySeries: HysteresisChartLineSeriesModel[] = [
+      {
+        branchId: "mx-overlay",
+        data: sourcePoints.map((p) => [
+          formatXValue(p.field_value_mT),
+          getPointYValue(p, "m_avg_x"),
+          p.point_id,
+        ]),
+        name: "M_x",
+      },
+      {
+        branchId: "my-overlay",
+        data: sourcePoints.map((p) => [
+          formatXValue(p.field_value_mT),
+          getPointYValue(p, "m_avg_y"),
+          p.point_id,
+        ]),
+        name: "M_y",
+      },
+      {
+        branchId: "mz-overlay",
+        data: sourcePoints.map((p) => [
+          formatXValue(p.field_value_mT),
+          getPointYValue(p, "m_avg_z"),
+          p.point_id,
+        ]),
+        name: "M_z",
+      },
+    ];
+    return overlaySeries.filter((series) => series.data.length > 0);
+  }
+
+  if (viewMode === "minor") {
+    return minorLoops.map((loop) => ({
+      branchId: loop.loop_id,
+      data: loop.points.map((p) => [
+        formatXValue(p.field_value_mT),
+        getPointYValue(p, yAxisKey),
+        p.point_id,
+      ]),
+      name: loop.loop_id,
+    }));
+  }
+
+  const filteredBranches = branches.filter((b) => {
+    if (viewMode === "forward") return b.branch_id === "ascending";
+    if (viewMode === "return") return b.branch_id === "descending";
+    return true;
+  });
+
+  if (filteredBranches.length === 0 && points.length > 0) {
+    return [{
+      branchId: null,
+      data: points.map((p) => [
+        formatXValue(p.field_value_mT),
+        getPointYValue(p, yAxisKey),
+        p.point_id,
+      ]),
+      name: "All points",
+    }];
+  }
+
+  return filteredBranches.map((branch) => ({
+    branchId: branch.branch_id,
+    data: branch.points.map((p) => [
+      formatXValue(p.field_value_mT),
+      getPointYValue(p, yAxisKey),
+      p.point_id,
+    ]),
+    name: branch.branch_id === "ascending"
+      ? "Ascending (Forward)"
+      : "Descending (Return)",
+  }));
+}
+
+export function getProgressYValue(
+  progress: HysteresisProgressSchema | null | undefined,
+  key: YAxisKey,
+): number | null {
+  const mAvg = progress?.current_m_avg;
+  if (!Array.isArray(mAvg) || mAvg.length < 3) {
+    return key === "m_parallel" && typeof progress?.current_m_parallel === "number"
+      ? progress.current_m_parallel
+      : null;
+  }
+  switch (key) {
+    case "m_parallel":
+      return typeof progress?.current_m_parallel === "number"
+        ? progress.current_m_parallel
+        : null;
+    case "m_oop":
+      return mAvg[2] ?? null;
+    case "m_ip": {
+      const mx = mAvg[0] ?? 0;
+      const my = mAvg[1] ?? 0;
+      return Math.sqrt(mx * mx + my * my);
+    }
+    case "m_avg_x":
+      return mAvg[0] ?? null;
+    case "m_avg_y":
+      return mAvg[1] ?? null;
+    case "m_avg_z":
+      return mAvg[2] ?? null;
+  }
+}
+
+export function buildHysteresisChartPointSelection({
+  includeSnapshot = true,
+  point,
+  stageId,
+  targetMetadata = {},
+  yAxisKey,
+}: {
+  includeSnapshot?: boolean;
+  point: HysteresisPointSchema;
+  stageId: string;
+  targetMetadata?: HysteresisTargetMetadata;
+  yAxisKey: YAxisKey;
+}): Partial<Omit<Selection, "moduleSource">> {
+  const chartId = `hysteresis:${stageId}`;
+  const nodeId = `analysis:hysteresis:${stageId}:point:${point.point_id}`;
+  const y = getPointYValue(point, yAxisKey);
+  return {
+    kind: "analysis.chart-point",
+    label: `Hysteresis point ${point.point_id} (${point.field_value_mT} mT)`,
+    nodeId,
+    objectId: null,
+    ref: {
+      chartId,
+      kind: "analysis.chart-point",
+      nodeId,
+      pointId: point.point_id,
+      quantity: yAxisKey,
+      rowIndex: point.point_id,
+      seriesId: `${chartId}:${yAxisKey}`,
+      ...(includeSnapshot
+        ? {
+            snapshotId: point.snapshot_id ?? null,
+            targetId: `hysteresis-step:${stageId}:${point.point_id}`,
+            targetKind: "hysteresis-step",
+            quantityId: "m",
+            meshIdentity: targetMetadata.meshIdentity ?? null,
+            fieldOrientation: targetMetadata.fieldOrientation ?? null,
+            measurementAxis: targetMetadata.measurementAxis ?? null,
+            fieldRevision: targetMetadata.fieldRevision ?? null,
+          }
+        : {}),
+      stageId,
+      tableId: chartId,
+      type: "analysis-chart-point",
+      x: point.field_value_mT,
+      y,
+    },
+  };
+}
+
+export function hysteresisTargetMetadataFromOrientation(
+  orientation: HysteresisOrientationSchema | null | undefined,
+): HysteresisTargetMetadata {
+  if (!orientation) {
+    return {
+      fieldOrientation: null,
+      fieldRevision: null,
+      measurementAxis: null,
+    };
+  }
+  return {
+    fieldOrientation:
+      stringifyHysteresisOrientation(orientation.orientation) ??
+      stringifyHysteresisDirection(orientation.direction),
+    fieldRevision: orientation.revision,
+    measurementAxis: orientation.measurement_axis ?? null,
+  };
+}
+
+function stringifyHysteresisOrientation(value: unknown): string | null {
+  if (value == null) return null;
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function stringifyHysteresisDirection(value: unknown): string | null {
+  if (!Array.isArray(value) || value.length !== 3) return null;
+  if (!value.every((component) => typeof component === "number")) return null;
+  return `global(${value.map((component) => component.toPrecision(6)).join(",")})`;
+}
+
+function cssVar(
+  styles: CSSStyleDeclaration,
+  name: string,
+  fallback: string,
+): string {
+  const value = styles.getPropertyValue(name).trim();
+  return value || fallback;
+}
+
+function readHysteresisChartColors(element: HTMLElement): HysteresisChartColors {
+  const styles = getComputedStyle(element);
+  const text = cssVar(styles, "--fm-text-primary", styles.color);
+  const textMuted = cssVar(styles, "--fm-text-muted", text);
+  const accent = cssVar(styles, "--fm-accent", text);
+
+  return {
+    active: cssVar(styles, "--fm-hysteresis-active", accent),
+    axis: cssVar(styles, "--fm-hysteresis-axis", textMuted),
+    border: cssVar(styles, "--fm-border-subtle", textMuted),
+    branchDescending: cssVar(styles, "--fm-hysteresis-branch-descending", accent),
+    branchAscending: cssVar(styles, "--fm-hysteresis-branch-ascending", accent),
+    metric: cssVar(styles, "--fm-hysteresis-metric", accent),
+    remanence: cssVar(styles, "--fm-hysteresis-remanence", accent),
+    surface: cssVar(styles, "--fm-bg-surface", "transparent"),
+    text,
+    textMuted,
+  };
+}
+
+export function HysteresisChart({
+  commandSource = "analysis-plots",
+  kernel,
+  stageId,
+}: HysteresisChartProps) {
+  const pointsRes = useHysteresisPointsResource(stageId);
+  const branchesRes = useHysteresisBranchesResource(stageId);
+  const minorLoopsRes = useHysteresisMinorLoopsResource(stageId);
+  const metricsRes = useHysteresisMetricsResource(stageId);
+  const orientationRes = useHysteresisOrientationResource(stageId);
+  const progressRes = useHysteresisProgressResource(stageId);
+  const protocolRes = useHysteresisProtocolResource(stageId);
+
+  const points = Array.isArray(pointsRes.data)
+    ? pointsRes.data
+    : EMPTY_HYSTERESIS_POINTS;
+  const branches = Array.isArray(branchesRes.data)
+    ? branchesRes.data
+    : EMPTY_HYSTERESIS_BRANCHES;
+  const minorLoops = Array.isArray(minorLoopsRes.data)
+    ? minorLoopsRes.data
+    : EMPTY_HYSTERESIS_MINOR_LOOPS;
+  const metrics = metricsRes.data;
+  const progress = progressRes.data;
+  const branchMode = protocolRes.data?.branch_mode ?? null;
+
+  const [yAxisKey, setYAxisKey] = useState<YAxisKey>("m_parallel");
+  const [xAxisUnit, setXAxisUnit] = useState<XAxisUnit>("mT");
+  const [viewMode, setViewMode] = useState<ViewMode>("full");
+  const [isPlaying, setIsPlaying] = useState(false);
+
+  const elementRef = useRef<HTMLDivElement | null>(null);
+  const chartRef = useRef<ECharts | null>(null);
+  const subscribeToSelection = useCallback(
+    (onStoreChange: () => void) => kernel.selection.subscribe(onStoreChange),
+    [kernel.selection],
+  );
+  const selectedPointId = useSyncExternalStore(
+    subscribeToSelection,
+    useCallback(
+      () => selectedHysteresisPointId(kernel.selection.get(), stageId),
+      [kernel.selection, stageId],
+    ),
+    useCallback(
+      () => selectedHysteresisPointId(kernel.selection.get(), stageId),
+      [kernel.selection, stageId],
+    ),
+  );
+
+  const formatXValue = useCallback((fieldValmT: number) => {
+    if (xAxisUnit === "kA/m") return fieldValmT / (4 * Math.PI * 0.1);
+    return fieldValmT;
+  }, [xAxisUnit]);
+
+  const progressIndex = progressPointIndex(progress);
+  const selectedIndex = selectedPointId == null
+    ? -1
+    : points.findIndex((point) => point.point_id === selectedPointId);
+  const navigationIndex = resolveHysteresisNavigationIndex(
+    selectedIndex,
+    progressIndex,
+    points.length,
+  );
+  const resolvedActiveIndex = navigationIndex;
+  const activePoint = points[resolvedActiveIndex] ?? null;
+  const liveFieldValue = activePoint?.field_value_mT ?? progress?.current_field_mT ?? null;
+  const liveYValue = activePoint ? getPointYValue(activePoint, yAxisKey) : getProgressYValue(progress, yAxisKey);
+  const liveSettleLabel = progressSettleLabel(progress);
+  const activePointSnapshotId = activePoint?.snapshot_id ?? null;
+  const targetMetadata = useMemo(
+    () => hysteresisTargetMetadataFromOrientation(orientationRes.data),
+    [orientationRes.data],
+  );
+  const commandContext = useMemo(
+    () => createCommandContext(commandSource, kernel),
+    [commandSource, kernel],
+  );
+
+  const selectPoint = useCallback((idx: number) => {
+    const pt = points[idx];
+    if (!pt) return;
+    kernel.selection.set(
+      buildHysteresisChartPointSelection({
+        includeSnapshot: true,
+        point: pt,
+        stageId,
+        targetMetadata,
+        yAxisKey,
+      }),
+        commandSource === "inspector" ? "inspector" : "analysis-plots",
+    );
+  }, [commandSource, kernel.selection, points, stageId, targetMetadata, yAxisKey]);
+
+  const returnToLive = useCallback(() => {
+    setIsPlaying(false);
+    clearHysteresisPointSelectionForLive(kernel, stageId, commandSource);
+    kernel.commands.execute("hysteresis.return-to-live", commandContext, {
+      stageId,
+    });
+  }, [commandContext, commandSource, kernel, stageId]);
+
+  const loadSelectedPointIn3D = useCallback(() => {
+    if (!activePoint) return;
+    kernel.commands.execute("hysteresis.load-point-in-3d", commandContext, {
+      stageId,
+      pointId: activePoint.point_id,
+      fieldVal: activePoint.field_value_mT,
+      mVal: getPointYValue(activePoint, yAxisKey),
+      snapshotId: activePoint.snapshot_id ?? null,
+      meshIdentity: targetMetadata.meshIdentity ?? null,
+      fieldOrientation: targetMetadata.fieldOrientation ?? null,
+      measurementAxis: targetMetadata.measurementAxis ?? null,
+      fieldRevision: targetMetadata.fieldRevision ?? null,
+    });
+  }, [activePoint, commandContext, kernel.commands, stageId, targetMetadata, yAxisKey]);
+
+  const handleKeyDown = useCallback(
+    (e: KeyboardEvent<HTMLDivElement>) => {
+      if (points.length === 0) return;
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        const next = adjacentHysteresisPointIndex(
+          selectedIndex,
+          progressIndex,
+          points.length,
+          1,
+        );
+        selectPoint(next);
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        const prev = adjacentHysteresisPointIndex(
+          selectedIndex,
+          progressIndex,
+          points.length,
+          -1,
+        );
+        selectPoint(prev);
+      }
+    },
+    [selectedIndex, progressIndex, selectPoint, points],
+  );
+
+  useEffect(() => {
+    if (!isPlaying || points.length === 0) return;
+    const interval = setInterval(() => {
+      const next = nextHysteresisPlaybackIndex(
+        selectedIndex,
+        progressIndex,
+        points.length,
+      );
+      selectPoint(next);
+    }, 800);
+    return () => clearInterval(interval);
+  }, [isPlaying, progressIndex, selectPoint, selectedIndex, points]);
+
+  useEffect(() => {
+    const element = elementRef.current;
+    if (!element) return;
+
+    let chart: ECharts;
+    let disposed = false;
+
+    import("echarts").then((echarts) => {
+      if (disposed) return;
+      chart = echarts.init(element, undefined, { renderer: "canvas" });
+      chartRef.current = chart;
+      const colors = readHysteresisChartColors(element);
+
+      chart.on("click", (params: unknown) => {
+        const event = params as ChartClickParams;
+        if (event.componentType === "series" && isChartDataPoint(event.data)) {
+          const ptId = event.data[2];
+          const idx = points.findIndex((p) => p.point_id === ptId);
+          if (idx !== -1) {
+            selectPoint(idx);
+          }
+        }
+      });
+
+      const seriesList: Array<Record<string, unknown>> = [];
+      const lineSeries = buildHysteresisChartLineSeriesModel(
+        points,
+        branches,
+        minorLoops,
+        viewMode,
+        yAxisKey,
+        formatXValue,
+        branchMode,
+      );
+      for (const series of lineSeries) {
+        if (series.branchId == null) {
+          seriesList.push({
+            name: series.name,
+            type: "line",
+            data: series.data,
+            smooth: true,
+            showSymbol: true,
+            symbolSize: 6,
+            lineStyle: { width: 3, color: colors.branchDescending },
+            itemStyle: { color: colors.branchDescending },
+          });
+          continue;
+        }
+        const color = series.branchId === "oop-overlay"
+          ? colors.remanence
+          : series.branchId === "mx-overlay"
+            ? colors.metric
+            : series.branchId === "my-overlay"
+              ? colors.branchAscending
+              : series.branchId === "mz-overlay"
+                ? colors.branchDescending
+                : series.branchId === "ip-overlay" || series.branchId === "ascending"
+                  ? colors.branchAscending
+                  : colors.branchDescending;
+        seriesList.push({
+          name: series.name,
+          type: "line",
+          data: series.data,
+          smooth: true,
+          showSymbol: true,
+          symbolSize: 6,
+          lineStyle: { width: 3, color },
+          itemStyle: { color },
+        });
+      }
+
+      const markPoints: Array<Record<string, unknown>> = [];
+      const markLines: Array<Record<string, unknown>> = [];
+
+      if (metrics) {
+        if (metrics.H_c_plus != null) {
+          markPoints.push({
+            name: "Hc+",
+            value: `Hc+: ${metrics.H_c_plus.toFixed(1)} mT`,
+            coord: [formatXValue(metrics.H_c_plus), 0],
+            itemStyle: { color: colors.metric },
+          });
+        }
+        if (metrics.H_c_minus != null) {
+          markPoints.push({
+            name: "Hc-",
+            value: `Hc-: ${metrics.H_c_minus.toFixed(1)} mT`,
+            coord: [formatXValue(metrics.H_c_minus), 0],
+            itemStyle: { color: colors.metric },
+          });
+        }
+        if (metrics.M_r_plus != null) {
+          markPoints.push({
+            name: "Mr+",
+            value: `Mr+: ${metrics.M_r_plus.toFixed(3)}`,
+            coord: [0, metrics.M_r_plus],
+            itemStyle: { color: colors.remanence },
+          });
+        }
+        if (metrics.M_r_minus != null) {
+          markPoints.push({
+            name: "Mr-",
+            value: `Mr-: ${metrics.M_r_minus.toFixed(3)}`,
+            coord: [0, metrics.M_r_minus],
+            itemStyle: { color: colors.remanence },
+          });
+        }
+      }
+
+      if (liveFieldValue != null) {
+        markLines.push({
+          xAxis: formatXValue(liveFieldValue),
+          lineStyle: { type: "dashed", color: colors.textMuted, width: 1 },
+          label: { show: false },
+        });
+      }
+      if (activePoint) {
+        markLines.push({
+          yAxis: getPointYValue(activePoint, yAxisKey),
+          lineStyle: { type: "dashed", color: colors.textMuted, width: 1 },
+          label: { show: false },
+        });
+      }
+
+      const option: EChartsOption = {
+        backgroundColor: "transparent",
+        tooltip: {
+          trigger: "axis",
+          backgroundColor: colors.surface,
+          borderColor: colors.border,
+          textStyle: { color: colors.text },
+          formatter: (params: unknown) => {
+            let res = "";
+            const entries = Array.isArray(params) ? (params as TooltipParam[]) : [params as TooltipParam];
+            entries.forEach((p) => {
+              if (isChartDataPoint(p.data)) {
+                const ptId = p.data[2];
+                const matchedPt = points.find((pt) => pt.point_id === ptId);
+                res += `<div style="font-weight: bold; margin-bottom: 4px;">Point ID: ${ptId}</div>`;
+                res += `<div>H: ${p.data[0].toFixed(2)} ${xAxisUnit}</div>`;
+                res += `<div>M: ${p.data[1].toFixed(5)}</div>`;
+                if (matchedPt?.snapshot_id) {
+                  res += `<div>Snapshot available</div>`;
+                }
+              }
+            });
+            return res;
+          },
+        },
+        grid: {
+          left: "5%",
+          right: "5%",
+          bottom: "12%",
+          top: "10%",
+          containLabel: true,
+        },
+        xAxis: {
+          type: "value",
+          scale: HYSTERESIS_CHART_VALUE_AXIS_SCALE,
+          name: `Applied Field H [${xAxisUnit}]`,
+          nameLocation: "middle",
+          nameGap: 30,
+          splitLine: { show: true, lineStyle: { color: colors.border } },
+          axisLabel: { color: colors.axis },
+        },
+        yAxis: {
+          type: "value",
+          scale: HYSTERESIS_CHART_VALUE_AXIS_SCALE,
+          name: viewMode === "oop-ip-overlay"
+            ? "Magnetization M/Ms (oop / ip)"
+            : viewMode === "rgb-overlay"
+              ? "Magnetization M/Ms (x / y / z)"
+            : `Magnetization M/Ms (${yAxisKey.replace("m_", "")})`,
+          splitLine: { show: true, lineStyle: { color: colors.border } },
+          axisLabel: { color: colors.axis },
+        },
+        series: [
+          ...seriesList.map((s) => ({
+            ...s,
+            markPoint: markPoints.length > 0 ? {
+              symbol: "pin",
+              symbolSize: 30,
+              label: { show: false },
+              data: markPoints,
+            } : undefined,
+            markLine: markLines.length > 0 ? {
+              symbol: ["none", "none"],
+              data: markLines,
+            } : undefined,
+          })),
+          ...(activePoint ? [{
+            name: "Active Point",
+            type: "effectScatter",
+            coordinateSystem: "cartesian2d",
+            data: [[formatXValue(activePoint.field_value_mT), getPointYValue(activePoint, yAxisKey)]],
+            symbolSize: 12,
+            showEffectOn: "render",
+            rippleEffect: { brushType: "stroke", scale: 3 },
+            itemStyle: { color: colors.active },
+            z: 10,
+          }] : liveFieldValue != null && liveYValue != null ? [{
+            name: "Live Field",
+            type: "effectScatter",
+            coordinateSystem: "cartesian2d",
+            data: [[formatXValue(liveFieldValue), liveYValue]],
+            symbolSize: 10,
+            showEffectOn: "render",
+            rippleEffect: { brushType: "stroke", scale: 2 },
+            itemStyle: { color: colors.active },
+            z: 10,
+          }] : []),
+        ] as EChartsOption["series"],
+      };
+
+      chart.setOption(option);
+    });
+
+    const resizeObserver = new ResizeObserver(() => {
+      chartRef.current?.resize();
+    });
+    resizeObserver.observe(element);
+
+    return () => {
+      disposed = true;
+      resizeObserver.disconnect();
+      chartRef.current?.dispose();
+    };
+  }, [activePoint, branchMode, branches, formatXValue, liveFieldValue, liveYValue, metrics, minorLoops, points, progress, selectPoint, viewMode, xAxisUnit, yAxisKey]);
+
+  return (
+    <div
+      className="fm-hysteresis-container"
+      tabIndex={0}
+      onKeyDown={handleKeyDown}
+    >
+      <div className="fm-hysteresis-controls">
+        <div className="fm-hysteresis-control-group">
+          <select
+            className="fm-analysis-plots__select"
+            value={yAxisKey}
+            onChange={(e) => setYAxisKey(e.target.value as YAxisKey)}
+          >
+            <option value="m_parallel">M_parallel</option>
+            <option value="m_oop">M_oop</option>
+            <option value="m_ip">M_ip</option>
+            <option value="m_avg_x">M_x</option>
+            <option value="m_avg_y">M_y</option>
+            <option value="m_avg_z">M_z</option>
+          </select>
+
+          <select
+            className="fm-analysis-plots__select"
+            value={xAxisUnit}
+            onChange={(e) => setXAxisUnit(e.target.value as XAxisUnit)}
+          >
+            <option value="mT">mT (B_ext)</option>
+            <option value="kA/m">kA/m (H_ext)</option>
+          </select>
+
+          <select
+            className="fm-analysis-plots__select"
+            value={viewMode}
+            onChange={(e) => {
+              if (isViewMode(e.target.value)) {
+                setViewMode(e.target.value);
+              }
+            }}
+          >
+            <option value="full">Full Loop</option>
+            <option value="virgin">Virgin</option>
+            <option value="forward">Forward Branch</option>
+            <option value="return">Return Branch</option>
+            <option value="minor">Minor Loops</option>
+            <option value="oop-ip-overlay">OOP/IP Overlay</option>
+            <option value="rgb-overlay">RGB Components</option>
+          </select>
+        </div>
+
+        <div className="fm-hysteresis-player-controls">
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() =>
+              selectPoint(
+                adjacentHysteresisPointIndex(
+                  selectedIndex,
+                  progressIndex,
+                  points.length,
+                  -1,
+                ),
+              )
+            }
+            disabled={navigationIndex <= 0}
+          >
+            <ChevronLeft size={16} />
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => setIsPlaying(!isPlaying)}
+            className="fm-hysteresis-play-button"
+          >
+            {isPlaying ? <Pause size={14} /> : <Play size={14} />}
+            {isPlaying ? "Pause" : "Play Loop"}
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() =>
+              selectPoint(
+                adjacentHysteresisPointIndex(
+                  selectedIndex,
+                  progressIndex,
+                  points.length,
+                  1,
+                ),
+              )
+            }
+            disabled={points.length === 0 || navigationIndex >= points.length - 1}
+          >
+            <ChevronRight size={16} />
+          </Button>
+          <Button
+            size="sm"
+            variant="primary"
+            onClick={loadSelectedPointIn3D}
+            disabled={!activePointSnapshotId}
+            title={
+              activePointSnapshotId
+                ? "Load point magnetization in 3D viewport"
+                : "Snapshot not saved for this point"
+            }
+          >
+            Load in 3D
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={returnToLive}
+            title="Return the 3D viewport to the live magnetization field"
+          >
+            Live
+          </Button>
+        </div>
+      </div>
+
+      <div
+        ref={elementRef}
+        className="fm-hysteresis-chart-canvas"
+      />
+
+      {(points.length > 0 || liveFieldValue != null) && (
+        <div className="fm-hysteresis-scrubber-panel">
+          <div className="fm-hysteresis-scrubber-readout">
+            <span>
+              Point {resolvedActiveIndex >= 0 ? resolvedActiveIndex + 1 : 0}
+              {progress?.total_points
+                ? ` of ${progress.total_points}`
+                : points.length > 0
+                  ? ` of ${points.length}`
+                  : ""}
+            </span>
+            {activePoint && (
+              <span className="fm-hysteresis-scrubber-active">
+                H = {activePoint.field_value_mT.toFixed(2)} mT | M = {getPointYValue(activePoint, yAxisKey).toFixed(5)}
+              </span>
+            )}
+            {!activePoint && liveFieldValue != null && (
+              <span className="fm-hysteresis-scrubber-active">
+                H = {liveFieldValue.toFixed(2)} mT{liveSettleLabel ? ` | ${liveSettleLabel}` : ""}
+              </span>
+            )}
+          </div>
+          {points.length > 0 && (
+            <input
+              type="range"
+              min="0"
+              max={points.length - 1}
+              value={resolvedActiveIndex >= 0 ? resolvedActiveIndex : 0}
+              onChange={(e) => selectPoint(Number(e.target.value))}
+              className="fm-hysteresis-scrubber"
+            />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}

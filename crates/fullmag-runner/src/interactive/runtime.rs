@@ -6,7 +6,7 @@ use crate::artifacts;
 use crate::types::{
     LivePreviewField, LivePreviewRequest, RunError, RunResult, StepAction, StepStats, StepUpdate,
 };
-use fullmag_ir::{ExecutionPlanIR, ProblemIR};
+use fullmag_ir::{ExecutionPlanIR, ProblemIR, StudyIR};
 
 use super::backend::{BackendGeometry, InteractiveBackend};
 use super::cache::DisplayCache;
@@ -210,6 +210,22 @@ impl InteractiveRuntime {
         interrupt_requested: Option<&AtomicBool>,
         mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
     ) -> Result<RunResult, RunError> {
+        if matches!(problem.study, StudyIR::Hysteresis { .. }) {
+            let result = crate::hysteresis::run_planned_hysteresis_with_live_preview(
+                problem,
+                plan,
+                until_seconds,
+                output_dir,
+                field_every_n,
+                display_selection,
+                interrupt_requested,
+                true,
+                &mut on_step,
+            )?;
+            self.upload_magnetization(&result.final_magnetization)?;
+            return Ok(result);
+        }
+
         let mut artifact_pipeline = ArtifactPipeline::start(
             output_dir.to_path_buf(),
             artifacts::build_field_context(problem, plan),
@@ -278,6 +294,11 @@ impl InteractiveRuntime {
             magnetization: Some(final_m),
             preview_field: None,
             cached_preview_fields: None,
+            hysteresis_field_m_t: None,
+            hysteresis_point_index: None,
+            hysteresis_settle_step_index: None,
+            hysteresis_settle_step_kind: None,
+            hysteresis_settle_step_method: None,
             scalar_row_due: true,
             finished: true,
         });

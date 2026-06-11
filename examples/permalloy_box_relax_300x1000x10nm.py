@@ -46,17 +46,55 @@ hole_refinement.mesh(minimum_element_size=0.5e-9, maximum_element_size=1e-9, ord
 study.demag(realization="poisson_robin")
 study.build_domain_mesh()
 
-study.minimize(
-    method="bb",
-    max_steps=1000,
-    tol=1e-30,
-)
+# study.stages.add_minimize(
+#     method="bb",
+#     max_steps=1000,
+#     tol=1e-30,
+# )
 study.tableautosave(1e-13, quantities=["time", "step", "mx", "my", "mz", "E_total"])
-study.relax(
-    algorithm="llg_overdamped",
-    solver="rk23",
-    max_error=1e-6,
-    dt_min=1e-17,
-    max_steps=350,
-    tol=1e-4,
+# study.stages.add_relax(
+#     algorithm="llg_overdamped",
+#     solver="rk23",
+#     max_error=1e-6,
+#     dt_min=1e-17,
+#     max_steps=350,
+#     tol=1e-4,
+# )
+study.stages.add_hysteresis_sweep(
+    field_min_mT=-100.0,
+    field_max_mT=100.0,
+    field_step_mT=5.0,
+    orientation=fm.FieldOrientation.preset("in_plane_y"),
+    measurement_axis="field_axis",
+    initial_protocol="positive_saturation",
+    saturation=fm.SaturationProbe(
+        mode="auto",
+        max_field_mT=300.0,
+        susceptibility_threshold=1e-3,
+        transverse_threshold=1e-2,
+    ),
+    branch_mode="major_loop",
+    settle_pipeline=fm.SettlePipeline([
+        fm.MinimizeStep(
+            method="projected_gradient_bb",
+            torque_tolerance=5e-5,
+            energy_tolerance=1e-20,
+            max_steps=1000,
+            on_non_convergence="run_next_algorithm",
+        ),
+        fm.RelaxStep(
+            method="llg_overdamped",
+            alpha=1.0,
+            torque_tolerance=1e-5,
+            max_steps=100,
+            on_non_convergence="continue_with_warning",
+        ),
+    ]),
+    storage=fm.HysteresisStorage(
+        scalar_history=True,
+        magnetization="selected",
+        every_n=5,
+        key_events=True,
+        key_event_threshold_dm=0.02,
+    ),
 )

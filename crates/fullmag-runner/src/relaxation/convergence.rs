@@ -133,6 +133,22 @@ pub(crate) fn llg_overdamped_uses_pure_damping(control: Option<&RelaxationContro
     control.is_some_and(|control| control.algorithm == RelaxationAlgorithmIR::LlgOverdamped)
 }
 
+fn stage_completion(
+    status: String,
+    reason: Option<StageStopReason>,
+    metric_name: Option<String>,
+    metric_value: Option<f64>,
+    threshold: Option<f64>,
+) -> StageCompletionIR {
+    StageCompletionIR {
+        status,
+        reason,
+        metric_name,
+        metric_value,
+        threshold,
+    }
+}
+
 pub(crate) fn infer_stage_completion(
     status: RunStatus,
     relaxation: Option<&RelaxationControlIR>,
@@ -150,32 +166,20 @@ pub(crate) fn infer_stage_completion(
     .to_string();
 
     if matches!(status, RunStatus::Cancelled) {
-        return StageCompletionIR {
-            status: status_label,
-            reason: Some(StageStopReason::UserCancelled),
-            metric_name: None,
-            metric_value: None,
-            threshold: None,
-        };
+        return stage_completion(
+            status_label,
+            Some(StageStopReason::UserCancelled),
+            None,
+            None,
+            None,
+        );
     }
 
     let Some(control) = relaxation else {
-        return StageCompletionIR {
-            status: status_label,
-            reason: None,
-            metric_name: None,
-            metric_value: None,
-            threshold: None,
-        };
+        return stage_completion(status_label, None, None, None, None);
     };
     let Some(last) = steps.last() else {
-        return StageCompletionIR {
-            status: status_label,
-            reason: None,
-            metric_name: None,
-            metric_value: None,
-            threshold: None,
-        };
+        return stage_completion(status_label, None, None, None, None);
     };
 
     let max_torque = effective_max_torque_apm(last, gyromagnetic_ratio, damping, pure_damping_rhs);
@@ -201,71 +205,65 @@ pub(crate) fn infer_stage_completion(
             .torque_tolerance_apm
             .is_none_or(|torque_threshold| max_torque <= torque_threshold);
         if torque_ok && metric_value.value <= threshold {
-            return StageCompletionIR {
-                status: status_label,
-                reason: Some(StageStopReason::Energy),
-                metric_name: Some("total_energy_plateau_range_J".to_string()),
-                metric_value: Some(metric_value.value),
-                threshold: Some(threshold),
-            };
+            return stage_completion(
+                status_label,
+                Some(StageStopReason::Energy),
+                Some("total_energy_plateau_range_J".to_string()),
+                Some(metric_value.value),
+                Some(threshold),
+            );
         }
     }
 
     if let Some(threshold) = control.stop.torque_tolerance_apm {
         if max_torque <= threshold {
-            return StageCompletionIR {
-                status: status_label,
-                reason: Some(StageStopReason::Torque),
-                metric_name: Some("max_torque_apm".to_string()),
-                metric_value: Some(max_torque),
-                threshold: Some(threshold),
-            };
+            return stage_completion(
+                status_label,
+                Some(StageStopReason::Torque),
+                Some("max_torque_apm".to_string()),
+                Some(max_torque),
+                Some(threshold),
+            );
         }
     }
 
     if let Some(threshold) = control.stop.max_physical_time_s {
         if last.time >= threshold {
-            return StageCompletionIR {
-                status: status_label,
-                reason: Some(StageStopReason::MaxPhysicalTime),
-                metric_name: Some("physical_time_s".to_string()),
-                metric_value: Some(last.time),
-                threshold: Some(threshold),
-            };
+            return stage_completion(
+                status_label,
+                Some(StageStopReason::MaxPhysicalTime),
+                Some("physical_time_s".to_string()),
+                Some(last.time),
+                Some(threshold),
+            );
         }
     }
 
     if let Some(threshold) = control.stop.max_pseudotime_s {
         if pseudo_time_s >= threshold {
-            return StageCompletionIR {
-                status: status_label,
-                reason: Some(StageStopReason::MaxPseudotime),
-                metric_name: Some("pseudo_time_s".to_string()),
-                metric_value: Some(pseudo_time_s),
-                threshold: Some(threshold),
-            };
+            return stage_completion(
+                status_label,
+                Some(StageStopReason::MaxPseudotime),
+                Some("pseudo_time_s".to_string()),
+                Some(pseudo_time_s),
+                Some(threshold),
+            );
         }
     }
 
     if let Some(threshold) = control.stop.max_steps {
         if last.step >= threshold {
-            return StageCompletionIR {
-                status: status_label,
-                reason: Some(StageStopReason::MaxSteps),
-                metric_name: Some("steps".to_string()),
-                metric_value: Some(last.step as f64),
-                threshold: Some(threshold as f64),
-            };
+            return stage_completion(
+                status_label,
+                Some(StageStopReason::MaxSteps),
+                Some("steps".to_string()),
+                Some(last.step as f64),
+                Some(threshold as f64),
+            );
         }
     }
 
-    StageCompletionIR {
-        status: status_label,
-        reason: None,
-        metric_name: None,
-        metric_value: None,
-        threshold: None,
-    }
+    stage_completion(status_label, None, None, None, None)
 }
 
 #[cfg(test)]

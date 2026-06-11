@@ -32,6 +32,8 @@ import { fieldVectorMinRefetchIntervalMs } from "@/kernel/realtime/communication
 import { ResourceCache } from "@/kernel/resources/ResourceCache";
 import { useResource } from "@/kernel/resources/useResource";
 
+import { viewport3DFieldUpdateHoldActive } from "./viewport3dFieldUpdateHold";
+
 const topologyCache = new ResourceCache<DecodedTopology>({
   maxBytes: 96 * 1024 * 1024,
 });
@@ -114,11 +116,14 @@ export async function loadCachedBinaryResource<TData>(
   cache: ResourceCache<TData>,
   key: string,
   request: (etag?: string | null) => Promise<BinaryResourceResult<TData>>,
-  options: { preferCached?: boolean } = {},
+  options: { pauseRequest?: () => boolean; preferCached?: boolean } = {},
 ): Promise<TData | null> {
   const cached = cache.get(key);
   if (cached && options.preferCached) {
     return cached.data;
+  }
+  if (options.pauseRequest?.()) {
+    return cached?.data ?? null;
   }
 
   const result = await request(cached?.etag);
@@ -174,6 +179,7 @@ export function resolveViewport3DFieldVectorResourceKey(
   }
   if (query.scope_id) params.set("scope_id", query.scope_id);
   if (query.scope_kind) params.set("scope_kind", query.scope_kind);
+  if (query.snapshot_id) params.set("snapshot_id", query.snapshot_id);
   const suffix = params.toString();
   return suffix ? `${path}?${suffix}` : path;
 }
@@ -338,20 +344,23 @@ export function useViewport3DFieldVector(
   quantityId: string,
   fieldQuery: FieldVectorQuery = {},
   enabled = true,
+  options: { pauseLoad?: boolean } = {},
 ) {
   const { api, resources } = useKernel();
   const component = fieldQuery.component ?? "full";
   const maxSamples = fieldQuery.max_samples ?? null;
   const scopeId = fieldQuery.scope_id ?? null;
   const scopeKind = fieldQuery.scope_kind ?? null;
+  const snapshotId = fieldQuery.snapshot_id ?? null;
   const query = useMemo<FieldVectorQuery>(
     () => ({
       component,
       max_samples: maxSamples,
       scope_id: scopeId,
       scope_kind: scopeKind,
+      snapshot_id: snapshotId,
     }),
-    [component, maxSamples, scopeId, scopeKind],
+    [component, maxSamples, scopeId, scopeKind, snapshotId],
   );
   const requestKey = useMemo(
     () => resolveViewport3DFieldVectorResourceKey(quantityId, query),
@@ -364,6 +373,7 @@ export function useViewport3DFieldVector(
         requestKey,
         (etag) => api.data.fields.vector(quantityId, query, { etag, signal }),
         {
+          pauseRequest: viewport3DFieldUpdateHoldActive,
           preferCached: cachedBinaryResourceMatchesRevision(
             fieldVectorCache,
             requestKey,
@@ -382,6 +392,7 @@ export function useViewport3DFieldVector(
     enabled,
     load,
     minRefetchIntervalMs: fieldVectorMinRefetchIntervalMs(),
+    pauseLoad: options.pauseLoad,
     resolveRevision,
     resourceKey: requestKey,
   });
@@ -396,6 +407,7 @@ export function useViewport3DAirboxFieldVectors(
   airboxParts: readonly { id: string }[],
   enabled = true,
   fieldQuery: FieldVectorQuery = FULL_FIELD_VECTOR_QUERY,
+  options: { pauseLoad?: boolean } = {},
 ) {
   const { api, resources } = useKernel();
   const requestKeys = useMemo(
@@ -426,6 +438,7 @@ export function useViewport3DAirboxFieldVectors(
               (etag) =>
                 api.data.fields.vector(quantityId, query, { etag, signal }),
               {
+                pauseRequest: viewport3DFieldUpdateHoldActive,
                 preferCached: cachedBinaryResourceMatchesRevision(
                   fieldVectorCache,
                   key,
@@ -467,6 +480,7 @@ export function useViewport3DAirboxFieldVectors(
     enabled: enabled && requestKeys.size > 0,
     load,
     minRefetchIntervalMs: fieldVectorMinRefetchIntervalMs(),
+    pauseLoad: options.pauseLoad,
     resolveRevision,
     resourceKey,
   });
@@ -479,6 +493,7 @@ export function useViewport3DAirboxFieldVectors(
 export function useViewport3DQuantityFieldVectors(
   quantitySource: readonly string[] | ReadonlyMap<string, FieldVectorQuery>,
   enabled = true,
+  options: { pauseLoad?: boolean } = {},
 ) {
   const { api, resources } = useKernel();
   const requestKeys = useMemo(() => {
@@ -520,6 +535,7 @@ export function useViewport3DQuantityFieldVectors(
                 { etag, signal },
               ),
             {
+              pauseRequest: viewport3DFieldUpdateHoldActive,
               preferCached: cachedBinaryResourceMatchesRevision(
                 fieldVectorCache,
                 request.key,
@@ -551,6 +567,7 @@ export function useViewport3DQuantityFieldVectors(
     enabled: enabled && requestKeys.size > 0,
     load,
     minRefetchIntervalMs: fieldVectorMinRefetchIntervalMs(),
+    pauseLoad: options.pauseLoad,
     resolveRevision,
     resourceKey,
   });
@@ -566,6 +583,7 @@ export function useViewport3DPartFieldVectors(
     { quantityId: string; query: FieldVectorQuery }
   >,
   enabled = true,
+  options: { pauseLoad?: boolean } = {},
 ) {
   const { api, resources } = useKernel();
   const requestKeys = useMemo(
@@ -592,6 +610,7 @@ export function useViewport3DPartFieldVectors(
                 { etag, signal },
               ),
             {
+              pauseRequest: viewport3DFieldUpdateHoldActive,
               preferCached: cachedBinaryResourceMatchesRevision(
                 fieldVectorCache,
                 request.key,
@@ -623,6 +642,7 @@ export function useViewport3DPartFieldVectors(
     enabled: enabled && requestKeys.size > 0,
     load,
     minRefetchIntervalMs: fieldVectorMinRefetchIntervalMs(),
+    pauseLoad: options.pauseLoad,
     resolveRevision,
     resourceKey,
   });

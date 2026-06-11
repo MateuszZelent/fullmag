@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  formatHysteresisReplayLabel,
   notifyMeshTopologyRendered,
   resolveViewport3DColorbarLegend,
   resolveViewport3DMeshQualityLegend,
@@ -78,6 +79,25 @@ describe("resolveViewport3DColorbarLegend", () => {
         unit: "1",
       }),
     ).toBeNull();
+  });
+});
+
+describe("formatHysteresisReplayLabel", () => {
+  it("labels the loaded hysteresis point snapshot in the 3D HUD", () => {
+    expect(
+      formatHysteresisReplayLabel({
+        fieldOrientation: "in_plane_y",
+        fieldRevision: 41,
+        measurementAxis: "field_axis",
+        meshIdentity: "study_domain",
+        pointId: 4,
+        quantityId: "m",
+        snapshotId: "hysteresis_point_005",
+        stageId: "hysteresis-1",
+        targetId: "hysteresis-step:hysteresis-1:4",
+      }),
+    ).toBe("Replay Hysteresis point 4 · hysteresis_point_005");
+    expect(formatHysteresisReplayLabel(null)).toBeNull();
   });
 });
 
@@ -219,6 +239,31 @@ describe("Viewport3DModule scene wiring", () => {
     expect(source).not.toContain("interactionActive: sceneProps.interactionActive");
   });
 
+  it("suppresses the native context menu because right button pans the camera", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DModule.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("onContextMenu={(event) => {");
+    expect(source).toContain("event.preventDefault();");
+  });
+
+  it("holds live field updates from pointer down until pointer release", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DModule.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("beginViewport3DFieldUpdateHold();");
+    expect(source).toContain("endViewport3DFieldUpdateHold();");
+    expect(source).toContain("scheduleFieldUpdatePointerHoldRelease");
+    expect(source).toContain("}, 150);");
+    expect(source).toContain("onPointerDownCapture={holdFieldUpdatesForPointerGesture}");
+    expect(source).toContain("onPointerUpCapture={scheduleFieldUpdatePointerHoldRelease}");
+    expect(source).toContain("onPointerCancelCapture={releaseFieldUpdatePointerHold}");
+  });
+
   it("exposes camera diagnostics for browser smoke checks", () => {
     const source = readFileSync(
       new URL("./Viewport3DModule.tsx", import.meta.url),
@@ -234,6 +279,12 @@ describe("Viewport3DModule scene wiring", () => {
     );
     expect(source).toContain(
       'data-camera-up={sceneProps.cameraState.up.join(" ")}',
+    );
+    expect(source).toContain(
+      'data-hysteresis-replay-snapshot-id={hysteresisReplayTarget?.snapshotId ?? ""}',
+    );
+    expect(source).toContain(
+      'data-hysteresis-replay-stage-id={hysteresisReplayTarget?.stageId ?? ""}',
     );
   });
 

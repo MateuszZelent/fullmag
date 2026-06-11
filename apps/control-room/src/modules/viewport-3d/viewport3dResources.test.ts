@@ -22,6 +22,12 @@ const viewport3dResourcesSourceUrl = new URL(
 );
 
 describe("viewport3dResources", () => {
+  it("threads pauseLoad through field-vector resource hooks", () => {
+    const source = readFileSync(viewport3dResourcesSourceUrl, "utf8");
+
+    expect(source.match(/pauseLoad: options\.pauseLoad/g)?.length).toBe(4);
+  });
+
   it("builds stable resource keys for scoped field vectors", () => {
     expect(
       resolveViewport3DFieldVectorResourceKey("m", {
@@ -32,6 +38,18 @@ describe("viewport3dResources", () => {
       }),
     ).toBe(
       `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?component=full&max_samples=512&scope_id=part-1&scope_kind=part`,
+    );
+  });
+
+  it("includes hysteresis snapshot ids in field vector resource keys", () => {
+    expect(
+      resolveViewport3DFieldVectorResourceKey("m", {
+        component: "full",
+        scope_kind: "full",
+        snapshot_id: "hysteresis-stage-1-point-4",
+      }),
+    ).toBe(
+      `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?component=full&scope_kind=full&snapshot_id=hysteresis-stage-1-point-4`,
     );
   });
 
@@ -318,6 +336,23 @@ describe("viewport3dResources", () => {
         preferCached: true,
       }),
     ).resolves.toBe("cached-field");
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("skips binary requests while a caller-level request pause is active", async () => {
+    const cache = new ResourceCache<string>({ maxBytes: 32 });
+    const request = vi.fn(async () => ({
+      byteLength: 5,
+      data: "fresh",
+      etag: '"field-2"',
+      status: "ready" as const,
+    }));
+
+    await expect(
+      loadCachedBinaryResource(cache, "field:m", request, {
+        pauseRequest: () => true,
+      }),
+    ).resolves.toBeNull();
     expect(request).not.toHaveBeenCalled();
   });
 

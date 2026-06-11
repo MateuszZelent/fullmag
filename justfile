@@ -346,6 +346,20 @@ run-fdm-cpu-smoke:
     FULLMAG_DISABLE_CHARTS=1 FULLMAG_DISABLE_PREVIEW_3D=1 \
     fullmag examples/fdm_cpu_relax_smoke.py --backend fdm --headless --json
 
+run-fdm-hysteresis-smoke:
+    just ensure-python
+    just build fullmag
+    PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" \
+    FULLMAG_DISABLE_CHARTS=1 FULLMAG_DISABLE_PREVIEW_3D=1 \
+    fullmag examples/fdm_hysteresis_smoke.py --backend fdm --headless --json
+
+run-fdm-hysteresis-snapshot-smoke:
+    just ensure-python
+    just build fullmag
+    PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" \
+    FULLMAG_DISABLE_CHARTS=1 FULLMAG_DISABLE_PREVIEW_3D=1 \
+    fullmag examples/fdm_hysteresis_snapshot_smoke.py --backend fdm --headless --json
+
 run-permalloy-box-relax-fdm web_port="3100":
     just run-permalloy-box-relax-fdm-interactive "{{web_port}}"
 
@@ -483,7 +497,7 @@ ensure-managed-fem-runtime:
         echo "Managed FEM runtime bundle is missing or incomplete; rebuilding it now." >&2; \
         just rebuild-fem-runtime; \
     fi
-    stale_source="$(find crates/fullmag-api crates/fullmag-authoring crates/fullmag-cli crates/fullmag-runner crates/fullmag-quantities crates/fullmag-plan crates/fullmag-ir crates/fullmag-engine crates/fullmag-session crates/fullmag-fdm-demag crates/fullmag-fdm-sys crates/fullmag-fem-sys native/CMakeLists.txt native/include backends/fem backends/fdm docker/fem-gpu/Dockerfile compose.yaml scripts/export_fem_gpu_runtime.sh Cargo.toml Cargo.lock rust-toolchain.toml -type f ! -path '*/.fullmag/*' ! -path '*/__pycache__/*' ! -name '*.pyc' -newer '{{gpu_runtime_manifest}}' 2>/dev/null | { IFS= read -r line; echo "$line"; } )"; \
+    stale_source="$(find crates/fullmag-api crates/fullmag-authoring crates/fullmag-cli crates/fullmag-runner crates/fullmag-quantities crates/fullmag-plan crates/fullmag-ir crates/fullmag-engine crates/fullmag-session crates/fullmag-fdm-demag crates/fullmag-fdm-sys crates/fullmag-fem-sys native/CMakeLists.txt native/include backends/fem backends/fdm docker/fem-gpu/Dockerfile compose.yaml scripts/export_fem_gpu_runtime.sh Cargo.toml Cargo.lock rust-toolchain.toml -type f ! -path '*/.fullmag/*' ! -path '*/__pycache__/*' ! -name '*.pyc' -newer '{{gpu_runtime_manifest}}' -print -quit 2>/dev/null)"; \
     if [ -n "$stale_source" ]; then \
         echo "Managed FEM runtime bundle is stale; newer runtime source detected: $stale_source" >&2; \
         echo "Rebuilding managed FEM runtime bundle now." >&2; \
@@ -574,6 +588,33 @@ run-permalloy-box-relax-headless fem_execution="gpu" cpu_threads="auto":
     FULLMAG_FEM_EXECUTION="$mode" \
     FULLMAG_CPU_THREADS="$cpu_threads_env" \
     '{{gpu_runtime_bin}}' examples/permalloy_box_relax_300x1000x10nm.py --backend fem --headless --json
+
+run-cofeb-rings-relax fem_execution="gpu":
+    just run-cofeb-rings-relax-interactive "{{fem_execution}}"
+
+run-cofeb-rings-relax-interactive fem_execution="gpu" cpu_threads="auto":
+    just ensure-python
+    just ensure-managed-fem-runtime
+    mode="{{fem_execution}}"; \
+    case "$mode" in 0|cpu|CPU) mode="cpu" ;; gpu|GPU) mode="gpu" ;; *) echo "unsupported FEM execution mode: $mode (expected cpu or gpu)" >&2; exit 2 ;; esac; \
+    if [ "{{cpu_threads}}" = "auto" ]; then cpu_threads_env=auto; else cpu_threads_env="{{cpu_threads}}"; fi; \
+    FULLMAG_PYTHON="{{repo_python}}" \
+    FULLMAG_FDM_EXECUTION=cpu \
+    FULLMAG_FEM_EXECUTION="$mode" \
+    FULLMAG_CPU_THREADS="$cpu_threads_env" \
+    '{{gpu_runtime_bin}}' --dev -i examples/permalloy_layer_cofeb_rings_relax_300nm.py
+
+run-cofeb-rings-relax-headless fem_execution="gpu" cpu_threads="auto":
+    just ensure-python
+    just ensure-managed-fem-runtime
+    mode="{{fem_execution}}"; \
+    case "$mode" in 0|cpu|CPU) mode="cpu" ;; gpu|GPU) mode="gpu" ;; *) echo "unsupported FEM execution mode: $mode (expected cpu or gpu)" >&2; exit 2 ;; esac; \
+    if [ "{{cpu_threads}}" = "auto" ]; then cpu_threads_env=auto; else cpu_threads_env="{{cpu_threads}}"; fi; \
+    FULLMAG_PYTHON="{{repo_python}}" \
+    FULLMAG_FDM_EXECUTION=cpu \
+    FULLMAG_FEM_EXECUTION="$mode" \
+    FULLMAG_CPU_THREADS="$cpu_threads_env" \
+    '{{gpu_runtime_bin}}' examples/permalloy_layer_cofeb_rings_relax_300nm.py --backend fem --headless --json
 
 run-permalloy-skyrmion-relax fem_execution="gpu":
     just run-permalloy-skyrmion-relax-interactive "{{fem_execution}}"

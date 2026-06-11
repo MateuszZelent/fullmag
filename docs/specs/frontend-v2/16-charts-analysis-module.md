@@ -36,6 +36,7 @@ charts/
     ConvergenceChart.tsx
     SpectrumChart.tsx
     MeshQualityChart.tsx
+    HysteresisChart.tsx
   hooks/
     useScalarSeries.ts
     useAnalysisSeries.ts
@@ -43,6 +44,7 @@ charts/
   model/
     chartSeriesModel.ts
     chartUnits.ts
+    hysteresisChartModel.ts
 ```
 
 ## 4. Store Ownership
@@ -74,6 +76,20 @@ export interface ChartSeries {
 ```
 
 Series ids include resource identity and quantity. This allows cache reuse and prevents collisions between runs or stages.
+
+## 5.1 Hysteresis Chart
+
+`HysteresisChart` visualizes magnetization projections (such as $m_{\parallel}$, $m_{\text{oop}}$, $m_{\text{ip}}$ or components $m_x, m_y, m_z$) against the external magnetic field $H_{\text{ext}}$.
+
+### Key Requirements:
+- **Branch-Aware Series Separation:** Renders distinct paths for ascending, descending, recoil, and minor loops using different line styles/colors. It does not merge points from separate branches.
+- **Interactive Scrubber:** Supports dragging a slider or using arrow keys to "scrub" through point indices. Selection highlights the point on the chart and triggers the command `hysteresis.load-point-in-3d`.
+- **Scientific Overlays & Markers:**
+  - Zero-field intersections (remanence $M_{r\pm}$)
+  - Zero-magnetization intersections (coercivity $H_{c\pm}$)
+  - Auto-saturation probe fields ($H_{\text{sat}\pm}$)
+  - Reversal and return fields for minor loops
+- **Axis Units Toggle:** Allows switching the X-axis units between magnetic field $H$ in `A/m` and equivalent induction $\mu_0 H$ in `mT` or `T`.
 
 ## 6. Performance
 

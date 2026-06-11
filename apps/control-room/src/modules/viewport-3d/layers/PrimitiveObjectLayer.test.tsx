@@ -178,4 +178,18 @@ describe("PrimitiveObjectLayer geometry resources", () => {
       ),
     ).toBe(true);
   });
+
+  it("requires an explicit primitive visibility opt-in", () => {
+    const settingsWithoutPrimitiveFlag = {
+      ...DEFAULT_OBJECT_VISUALIZATION,
+    };
+    delete settingsWithoutPrimitiveFlag.primitiveVisible;
+
+    expect(
+      shouldRenderPrimitiveObject(
+        { ...primitiveObject("box"), meshState: "primitive-only" },
+        settingsWithoutPrimitiveFlag,
+      ),
+    ).toBe(false);
+  });
 });

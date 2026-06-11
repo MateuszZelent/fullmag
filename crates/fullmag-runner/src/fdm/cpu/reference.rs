@@ -919,6 +919,11 @@ pub(crate) fn execute_reference_fdm(
                         magnetization: Some(flatten_vectors(state.magnetization())),
                         preview_field,
                         cached_preview_fields: None,
+                        hysteresis_field_m_t: None,
+                        hysteresis_point_index: None,
+                        hysteresis_settle_step_index: None,
+                        hysteresis_settle_step_kind: None,
+                        hysteresis_settle_step_method: None,
                         finished: false,
                     });
                     if preview_due {
@@ -1085,6 +1090,11 @@ pub(crate) fn execute_reference_fdm(
                     magnetization,
                     preview_field,
                     cached_preview_fields: None,
+                    hysteresis_field_m_t: None,
+                    hysteresis_point_index: None,
+                    hysteresis_settle_step_index: None,
+                    hysteresis_settle_step_kind: None,
+                    hysteresis_settle_step_method: None,
                     finished: false,
                 });
                 if preview_due {

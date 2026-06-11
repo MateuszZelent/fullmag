@@ -103,10 +103,20 @@ export type SelectionRef =
       quantity: string;
       rowIndex: number;
       seriesId: string;
+      stageId?: string | null;
+      pointId?: number | null;
       tableId: string;
       type: "analysis-chart-point";
       x: number;
       y: number;
+      snapshotId?: string | null;
+      targetId?: string | null;
+      targetKind?: "hysteresis-step" | null;
+      quantityId?: string | null;
+      meshIdentity?: string | null;
+      fieldOrientation?: string | null;
+      measurementAxis?: string | null;
+      fieldRevision?: string | number | null;
     }
   | {
       kind: "study.execution" | "study.recovery" | "study.root" | "study.stages";
@@ -250,10 +260,20 @@ export function selectionRefEquals(
         left.chartId === right.chartId &&
         left.tableId === right.tableId &&
         left.seriesId === right.seriesId &&
+        nullableStringEquals(left.stageId, right.stageId) &&
+        (left.pointId ?? null) === (right.pointId ?? null) &&
         left.quantity === right.quantity &&
         left.rowIndex === right.rowIndex &&
         left.x === right.x &&
-        left.y === right.y
+        left.y === right.y &&
+        left.snapshotId === right.snapshotId &&
+        nullableStringEquals(left.targetId, right.targetId) &&
+        nullableStringEquals(left.targetKind, right.targetKind) &&
+        nullableStringEquals(left.quantityId, right.quantityId) &&
+        nullableStringEquals(left.meshIdentity, right.meshIdentity) &&
+        nullableStringEquals(left.fieldOrientation, right.fieldOrientation) &&
+        nullableStringEquals(left.measurementAxis, right.measurementAxis) &&
+        (left.fieldRevision ?? null) === (right.fieldRevision ?? null)
       );
     case "study":
       return (

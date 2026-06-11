@@ -5,6 +5,7 @@ pub mod diagnostics;
 pub mod display;
 pub mod domain;
 pub mod fields;
+pub mod hysteresis;
 pub mod logs;
 pub mod mesh;
 pub mod quantities;

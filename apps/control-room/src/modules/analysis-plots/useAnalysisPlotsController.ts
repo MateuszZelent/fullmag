@@ -14,6 +14,7 @@ import {
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { yAxisIdsAfterXAxisSelection } from "@/shared/domain/analysis/axisSelection";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
+import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import { nextYAxisIdsForToggle } from "@/shared/domain/analysis/TableColumnList";
 
 import type { ChartValueRange } from "./chartTableModel";
@@ -252,6 +253,13 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     return clearChartDispatchSeriesRequest;
   }, [bus]);
 
+  const selectedStageId = useSelectionSelector((state) => {
+    if (state.kind === "study.stage.hysteresis" && state.ref?.type === "study-stage") {
+      return state.ref.stageId;
+    }
+    return null;
+  });
+
   return {
     clearRange,
     range,
@@ -267,6 +275,7 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     visibleTable,
     xAxisId,
     yAxisIds,
+    selectedStageId,
   };
 }
 

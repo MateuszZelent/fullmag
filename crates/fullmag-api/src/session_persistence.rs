@@ -340,6 +340,12 @@ struct FieldStateJsonArtifact {
     source_time_s: Option<f64>,
 }
 
+#[derive(Debug, Deserialize)]
+struct HysteresisMagnetizationSnapshotArtifact {
+    quantity_id: String,
+    values: Vec<[f64; 3]>,
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────
 
 fn session_store_root(state: &AppState) -> std::path::PathBuf {
@@ -900,7 +906,8 @@ pub(crate) async fn inspect_field_state(
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active workspace"))?;
-    let artifact = read_field_state_artifact(&state.repo_root, snapshot, &req.artifact_ref)?;
+    let artifact =
+        read_field_state_artifact(&state.repo_root, snapshot, &req.artifact_ref, &req.target)?;
     let mut warnings = Vec::new();
     let mut compatible = true;
     if artifact.quantity_id != req.quantity_id {
@@ -955,7 +962,8 @@ pub(crate) async fn import_field_state(
         let snapshot = guard
             .as_mut()
             .ok_or_else(|| ApiError::not_found("no active workspace"))?;
-        let artifact = read_field_state_artifact(&state.repo_root, snapshot, &req.artifact_ref)?;
+        let artifact =
+            read_field_state_artifact(&state.repo_root, snapshot, &req.artifact_ref, &req.target)?;
         validate_field_state_request_match(&artifact, &req.target, &req.quantity_id)?;
         if !snapshot
             .artifacts
@@ -1006,7 +1014,8 @@ pub(crate) async fn import_field_state(
     let snapshot = guard
         .as_mut()
         .ok_or_else(|| ApiError::not_found("no active workspace"))?;
-    let artifact = read_field_state_artifact(&state.repo_root, snapshot, &req.artifact_ref)?;
+    let artifact =
+        read_field_state_artifact(&state.repo_root, snapshot, &req.artifact_ref, &req.target)?;
     validate_field_state_request_match(&artifact, &req.target, &req.quantity_id)?;
     validate_checkpoint_restore_shape(snapshot, artifact.values.len())?;
     let live_state = snapshot
@@ -1594,6 +1603,7 @@ fn read_field_state_artifact(
     repo_root: &std::path::Path,
     snapshot: &SessionStateResponse,
     artifact_ref: &str,
+    target: &FieldStateTargetRef,
 ) -> Result<FieldStateJsonArtifact, ApiError> {
     let artifact_path = resolve_session_artifact_ref(snapshot, artifact_ref)?;
     let raw = std::fs::read(&artifact_path)
@@ -1605,10 +1615,12 @@ fn read_field_state_artifact(
                 ApiError::bad_request(format!("{error}; JSON parse error was: {json_error}"))
             })?
         }
-        Err(error) => {
-            return Err(ApiError::bad_request(format!(
-                "invalid field-state artifact: {error}"
-            )));
+        Err(json_error) => {
+            return read_hysteresis_snapshot_as_field_state(&raw, target).map_err(|snapshot_error| {
+                ApiError::bad_request(format!(
+                    "invalid field-state artifact: {json_error}; hysteresis snapshot parse error was: {snapshot_error}"
+                ))
+            });
         }
     };
     if artifact.fullmag_kind != "field_state" || artifact.schema_version != 1 {
@@ -1617,6 +1629,23 @@ fn read_field_state_artifact(
         ));
     }
     Ok(artifact)
+}
+
+fn read_hysteresis_snapshot_as_field_state(
+    raw: &[u8],
+    target: &FieldStateTargetRef,
+) -> Result<FieldStateJsonArtifact, serde_json::Error> {
+    let snapshot: HysteresisMagnetizationSnapshotArtifact = serde_json::from_slice(raw)?;
+    Ok(FieldStateJsonArtifact {
+        fullmag_kind: "field_state".to_string(),
+        schema_version: 1,
+        quantity_id: snapshot.quantity_id,
+        target: target.clone(),
+        component_count: 3,
+        values: snapshot.values,
+        source_step: None,
+        source_time_s: None,
+    })
 }
 
 fn field_state_path_needs_python_loader(path: &std::path::Path) -> bool {

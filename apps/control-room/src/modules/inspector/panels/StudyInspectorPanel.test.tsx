@@ -23,7 +23,10 @@ import {
   StudyCommandButton,
   StudySelectedStageSection,
 } from "./StudyInspectorPanel";
-import { StudyPipelineSection } from "./StudyPipelineSection";
+import {
+  StudyPipelineSection,
+  StudyStageDraftEditor,
+} from "./StudyPipelineSection";
 import { createDefaultStudyStageDraft } from "./StudyStageAuthoringModel";
 
 function testBoundary(overrides: Record<string, string> = {}) {
@@ -406,6 +409,42 @@ describe("StudyInspectorPanel", () => {
     expect(html).toContain("RK45");
     expect(html).toContain("Nonlinear CG");
     expect(html).toContain("Tangent-plane implicit");
+  });
+
+  it("renders expanded hysteresis authoring controls", () => {
+    const draft = createDefaultStudyStageDraft("hysteresis", 0);
+    const html = renderToStaticMarkup(
+      <StudyStageDraftEditor
+        draft={{
+          ...draft,
+          fieldScheduleMode: "piecewise",
+          saturationMode: "auto",
+          settlePipelineMode: "tree",
+        }}
+        index={0}
+        validation={[]}
+        onUpdate={() => undefined}
+      />,
+    );
+
+    expect(html).toContain("Protocol");
+    expect(html).toContain("Virgin then major loop");
+    expect(html).toContain("Initial state");
+    expect(html).toContain("Positive saturation");
+    expect(html).toContain("Orientation mode");
+    expect(html).toContain("OOP +z");
+    expect(html).toContain("Measurement axis");
+    expect(html).toContain("Schedule mode");
+    expect(html).toContain("Field segments");
+    expect(html).toContain("Dense windows");
+    expect(html).toContain("Saturation mode");
+    expect(html).toContain("Max probe field");
+    expect(html).toContain("Saturation thresholds");
+    expect(html).toContain("Settle pipeline");
+    expect(html).toContain("Settle steps");
+    expect(html).toContain("Settle branches");
+    expect(html).toContain("Minor loops");
+    expect(html).toContain("Storage policy");
   });
 
   it("keeps root pipeline validation visible when stage editor is hidden", () => {

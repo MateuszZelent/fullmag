@@ -9,6 +9,7 @@ import { useStudyInspectorPanelController } from "./StudyInspectorPanel";
 import { EigenmodesStageInspector } from "./stages/EigenmodesStageInspector";
 import { FrequencyResponseStageInspector } from "./stages/FrequencyResponseStageInspector";
 import { HysteresisStageInspector } from "./stages/HysteresisStageInspector";
+import { resolveHysteresisInspectorView } from "./stages/hysteresis/HysteresisInspectorUtils";
 import { RelaxStageInspector } from "./stages/RelaxStageInspector";
 import { RunStageInspector } from "./stages/RunStageInspector";
 import { SaveStateStageInspector } from "./stages/SaveStateStageInspector";
@@ -28,6 +29,12 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
   const selectedIndex = model.selectedStage?.index ?? state.selectedDraftIndex;
   const draft = state.stageDrafts[selectedIndex] ?? null;
   const validation = draft ? validateStudyStageDraft(draft) : [];
+  const selectedStageKind = model.selectedStage?.kind ?? draft?.kind ?? null;
+  const inspectorKind = resolveStudyStageInspectorKind(selection.kind, selectedStageKind);
+  const hysteresisView =
+    inspectorKind === "hysteresis"
+      ? resolveHysteresisInspectorView(selection.nodeId)
+      : "overview";
   const commonProps = {
     authoringBusy: state.authoringBusy,
     authoringFeedback:
@@ -61,33 +68,45 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
         "eigenmodes-results",
         "frequency-response-results",
         "save-state-results",
+        "hysteresis-plan",
+        "hysteresis-protocol",
+        "hysteresis-saturation",
+        "hysteresis-settle",
+        "hysteresis-settle-trace",
+        "hysteresis-live-progress",
+        "hysteresis-branches",
+        "hysteresis-metrics",
+        "hysteresis-points",
+        "hysteresis-snapshots",
+        "hysteresis-current-field",
       ]}
     >
-      {selection.kind === "study.stage.run" ? (
+      {inspectorKind === "run" ? (
         <RunStageInspector
           {...commonProps}
           expectedKind="run"
           kindLabel="Run"
         />
-      ) : selection.kind === "study.stage.hysteresis" ? (
+      ) : inspectorKind === "hysteresis" ? (
         <HysteresisStageInspector
           {...commonProps}
           expectedKind="hysteresis"
           kindLabel="Hysteresis"
+          view={hysteresisView}
         />
-      ) : selection.kind === "study.stage.eigenmodes" ? (
+      ) : inspectorKind === "eigenmodes" ? (
         <EigenmodesStageInspector
           {...commonProps}
           expectedKind="eigenmodes"
           kindLabel="Eigenmodes"
         />
-      ) : selection.kind === "study.stage.frequency_response" ? (
+      ) : inspectorKind === "frequency_response" ? (
         <FrequencyResponseStageInspector
           {...commonProps}
           expectedKind="frequency_response"
           kindLabel="Frequency Response"
         />
-      ) : selection.kind === "study.stage.save_state" ? (
+      ) : inspectorKind === "save_state" ? (
         <SaveStateStageInspector
           {...commonProps}
           expectedKind="save_state"
@@ -102,4 +121,19 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
       )}
     </Accordion>
   );
+}
+
+export function resolveStudyStageInspectorKind(
+  selectionKind: InspectorPanelProps["selection"]["kind"],
+  selectedStageKind: string | null | undefined,
+) {
+  if (selectionKind === "study.stage.action" && selectedStageKind) {
+    return selectedStageKind;
+  }
+  if (selectionKind === "study.stage.run") return "run";
+  if (selectionKind === "study.stage.hysteresis") return "hysteresis";
+  if (selectionKind === "study.stage.eigenmodes") return "eigenmodes";
+  if (selectionKind === "study.stage.frequency_response") return "frequency_response";
+  if (selectionKind === "study.stage.save_state") return "save_state";
+  return "relax";
 }

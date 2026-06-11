@@ -277,6 +277,7 @@ fn torque_display_mode(problem: &ProblemIR) -> Option<TorqueDisplayMode> {
         ),
         StudyIR::Eigenmodes { .. } => return None,
         StudyIR::FrequencyResponse { .. } => return None,
+        StudyIR::Hysteresis { .. } => return None,
     };
     let damping = problem.materials.first()?.damping;
     Some(TorqueDisplayMode::FromDmdt {
@@ -477,9 +478,38 @@ fn apply_live_step_update_to_workspace_state(
         state.live_state.latest_step.fem_mesh = previous_step.fem_mesh;
     }
     merge_cached_preview_fields_from_update(state, update);
+    apply_hysteresis_progress_to_stage_execution(state, update);
     if include_scalar_row {
         set_latest_scalar_row_if_due(state, update);
     }
+}
+
+fn apply_hysteresis_progress_to_stage_execution(
+    state: &mut LocalLiveWorkspaceState,
+    update: &fullmag_runner::StepUpdate,
+) {
+    if update.hysteresis_field_m_t.is_none()
+        && update.hysteresis_point_index.is_none()
+        && update.hysteresis_settle_step_index.is_none()
+        && update.hysteresis_settle_step_kind.is_none()
+        && update.hysteresis_settle_step_method.is_none()
+    {
+        return;
+    }
+    let Some(stage_execution) = state.stage_execution.as_mut() else {
+        return;
+    };
+    let Some(active_index) = stage_execution.active_stage_index else {
+        return;
+    };
+    let Some(stage) = stage_execution.stages.get_mut(active_index) else {
+        return;
+    };
+    stage.current_field_m_t = update.hysteresis_field_m_t;
+    stage.current_point_index = update.hysteresis_point_index;
+    stage.current_settle_step_index = update.hysteresis_settle_step_index;
+    stage.current_settle_step_kind = update.hysteresis_settle_step_kind.clone();
+    stage.current_settle_step_method = update.hysteresis_settle_step_method.clone();
 }
 
 fn step_update_has_magnetization_preview(update: &fullmag_runner::StepUpdate) -> bool {
@@ -536,6 +566,7 @@ fn format_stage_progress_line(
     stats: &fullmag_runner::StepStats,
     torque_mode: Option<TorqueDisplayMode>,
     heartbeat_age: Option<Duration>,
+    hysteresis_field_m_t: Option<f64>,
 ) -> String {
     let wall_ms = stats.wall_time_ns as f64 / 1e6;
     let torque_t = if stats.max_torque_T > 0.0 {
@@ -543,9 +574,12 @@ fn format_stage_progress_line(
     } else {
         estimate_max_torque_from_step(stats.max_dm_dt, torque_mode).unwrap_or(0.0)
     };
+    let hysteresis_field = hysteresis_field_m_t
+        .map(|value| format!("  H={value:.3}mT"))
+        .unwrap_or_default();
     if let Some(age) = heartbeat_age {
         let mut line = format!(
-            "{prefix}  heartbeat  step {:>6}  t={:.4e}  dt={:.3e}  max_torque[T]={:.4e}  E_total={:.4e}  |H_eff|={:.4e}  idle={:.1}s  [{:.0}ms]",
+            "{prefix}  heartbeat  step {:>6}  t={:.4e}  dt={:.3e}  max_torque[T]={:.4e}  E_total={:.4e}  |H_eff|={:.4e}{hysteresis_field}  idle={:.1}s  [{:.0}ms]",
             stats.step,
             stats.time,
             stats.dt,
@@ -559,7 +593,7 @@ fn format_stage_progress_line(
         line
     } else {
         let mut line = format!(
-            "{prefix}  step {:>6}  t={:.4e}  dt={:.3e}  max_torque[T]={:.4e}  E_total={:.4e}  |H_eff|={:.4e}  [{:.0}ms]",
+            "{prefix}  step {:>6}  t={:.4e}  dt={:.3e}  max_torque[T]={:.4e}  E_total={:.4e}  |H_eff|={:.4e}{hysteresis_field}  [{:.0}ms]",
             stats.step, stats.time, stats.dt, torque_t, stats.e_total, stats.max_h_eff, wall_ms,
         );
         append_detailed_fem_step_profile(&mut line, stats);
@@ -662,6 +696,7 @@ impl StageProgressHeartbeat {
                         &heartbeat_update.stats,
                         torque_mode,
                         Some(idle_for),
+                        heartbeat_update.hysteresis_field_m_t,
                     );
                     eprintln!("{terminal_line}");
                     let heartbeat_message = format!(
@@ -1565,6 +1600,11 @@ fn scripted_stage_execution_state(
             metric_name: None,
             metric_value: None,
             threshold: None,
+            current_field_m_t: None,
+            current_point_index: None,
+            current_settle_step_index: None,
+            current_settle_step_kind: None,
+            current_settle_step_method: None,
         };
         total_stages
     ];
@@ -1574,6 +1614,7 @@ fn scripted_stage_execution_state(
     }
 
     if let Some(stage) = stages.get_mut(active_index) {
+        stage.kind = Some(active_stage_kind.to_string());
         stage.status = runtime_state.to_string();
         stage.command_id = command_id.map(str::to_string);
         stage.started_at_unix_ms = started_at_unix_ms.map(millis_to_u64);
@@ -1650,6 +1691,11 @@ fn stage_record(index: usize, kind: Option<&str>) -> CurrentLiveStageExecutionRe
         metric_name: None,
         metric_value: None,
         threshold: None,
+        current_field_m_t: None,
+        current_point_index: None,
+        current_settle_step_index: None,
+        current_settle_step_kind: None,
+        current_settle_step_method: None,
     }
 }
 
@@ -1753,6 +1799,13 @@ impl ActiveSequenceState {
         self.current_stage_1based.saturating_sub(1)
     }
 
+    fn mark_current_materialized_kind(&mut self, kind: &str) {
+        let current_index = self.current_stage_index();
+        if let Some(stage) = self.stages.get_mut(current_index) {
+            stage.kind = Some(kind.to_string());
+        }
+    }
+
     fn mark_current(
         &mut self,
         status: &str,
@@ -1789,6 +1842,11 @@ impl ActiveSequenceState {
                 metric_name: completion.and_then(|value| value.metric_name.clone()),
                 metric_value: completion.and_then(|value| value.metric_value),
                 threshold: completion.and_then(|value| value.threshold),
+                current_field_m_t: previous.current_field_m_t,
+                current_point_index: previous.current_point_index,
+                current_settle_step_index: previous.current_settle_step_index,
+                current_settle_step_kind: previous.current_settle_step_kind,
+                current_settle_step_method: previous.current_settle_step_method,
             };
         }
     }
@@ -3995,6 +4053,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             clear_preview_cache: false,
             engine_log: Vec::new(),
             solver_profile: fullmag_runner::SolverProfileState::default(),
+            published_fem_mesh_generation_id: None,
         },
         current_live_publisher.clone(),
     );
@@ -4226,6 +4285,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 clear_preview_cache: false,
                 engine_log: previous_engine_log,
                 solver_profile: fullmag_runner::SolverProfileState::default(),
+                published_fem_mesh_generation_id: None,
             });
             live_workspace.push_log("error", format!("Script materialization failed: {}", error));
             return Err(error);
@@ -4365,6 +4425,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         clear_preview_cache: false,
         engine_log: previous_engine_log,
         solver_profile: fullmag_runner::SolverProfileState::default(),
+        published_fem_mesh_generation_id: None,
     });
     live_workspace.push_log(
         "system",
@@ -5596,6 +5657,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                     s,
                                     torque_mode,
                                     None,
+                                    adjusted.hysteresis_field_m_t,
                                 )
                             );
                         }
@@ -5645,6 +5707,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                     s,
                                     torque_mode,
                                     None,
+                                    adjusted.hysteresis_field_m_t,
                                 )
                             );
                         }
@@ -5793,6 +5856,11 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     },
                     preview_field: None,
                     cached_preview_fields: None,
+                    hysteresis_field_m_t: None,
+                    hysteresis_point_index: None,
+                    hysteresis_settle_step_index: None,
+                    hysteresis_settle_step_kind: None,
+                    hysteresis_settle_step_method: None,
                     scalar_row_due: true,
                     finished: is_final_step && is_session_final_stage,
                 };
@@ -6617,6 +6685,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 format!("Executing interactive command: {}", command_kind_label),
             );
             interactive_runtime_host.mark_running();
+            if let Some(sequence) = active_sequence.as_mut() {
+                sequence.mark_current_materialized_kind(&stage.entrypoint_kind);
+            }
             live_workspace.update(|state| {
                 state.session = ctx.build_session(
                     "running",
@@ -6691,6 +6762,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                     s,
                                     torque_mode,
                                     None,
+                                    adjusted.hysteresis_field_m_t,
                                 )
                             );
                         }
@@ -6712,10 +6784,13 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         fullmag_runner::StepAction::Continue
                     };
 
-                    if matches!(
-                        &execution_plan.backend_plan,
-                        BackendPlanIR::Fdm(_) | BackendPlanIR::Fem(_)
-                    ) {
+                    let hysteresis_study = matches!(&stage.ir.study, StudyIR::Hysteresis { .. });
+                    if !hysteresis_study
+                        && matches!(
+                            &execution_plan.backend_plan,
+                            BackendPlanIR::Fdm(_) | BackendPlanIR::Fem(_)
+                        )
+                    {
                         if let Err(error) = interactive_runtime_host.ensure_runtime_for_problem(
                             &stage.ir,
                             &execution_plan,
@@ -6733,7 +6808,19 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         }
                     }
 
-                    if let Some(runtime) = interactive_runtime_host.runtime_mut() {
+                    if hysteresis_study {
+                        fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot(
+                            &stage.ir,
+                            &execution_plan,
+                            stage.until_seconds,
+                            &current_stage_artifact_dir,
+                            field_every_n,
+                            &display_selection,
+                            Some(interrupt_signal.as_ref()),
+                            true,
+                            &mut on_step,
+                        )
+                    } else if let Some(runtime) = interactive_runtime_host.runtime_mut() {
                         fullmag_runner::run_planned_problem_with_interactive_runtime_live_preview_interruptible(
                             runtime,
                             &stage.ir,
@@ -6783,6 +6870,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                         s,
                                         torque_mode,
                                         None,
+                                        adjusted.hysteresis_field_m_t,
                                     )
                                 );
                             }
@@ -7231,6 +7319,11 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         magnetization: None,
                         preview_field: None,
                         cached_preview_fields: None,
+                        hysteresis_field_m_t: None,
+                        hysteresis_point_index: None,
+                        hysteresis_settle_step_index: None,
+                        hysteresis_settle_step_kind: None,
+                        hysteresis_settle_step_method: None,
                         scalar_row_due: true,
                         finished: false,
                     };
@@ -7608,6 +7701,7 @@ pub(crate) fn prepare_live_workspace_for_ui(
             clear_preview_cache: false,
             engine_log: Vec::new(),
             solver_profile: fullmag_runner::SolverProfileState::default(),
+            published_fem_mesh_generation_id: None,
         },
         current_live_publisher,
     );
@@ -7649,9 +7743,10 @@ mod tests {
     };
     use crate::live_workspace::bootstrap_live_state;
     use crate::types::{
-        CurrentLiveLatestFields, CurrentLivePreviewFieldCache, ResolvedScriptStage,
-        ResolvedScriptStageAction, RunManifest, SessionManifest, StageTransitionKind,
-        StageTransitionMetadata, StageTransitionReason, StageTransitionUiPresentation,
+        CurrentLiveLatestFields, CurrentLivePreviewFieldCache, CurrentLiveStageExecutionRecord,
+        CurrentLiveStageExecutionState, ResolvedScriptStage, ResolvedScriptStageAction,
+        RunManifest, SessionManifest, StageTransitionKind, StageTransitionMetadata,
+        StageTransitionReason, StageTransitionUiPresentation,
     };
     use fullmag_ir::{
         BackendPlanIR, BackendPolicyIR, BackendTarget, DiscretizationHintsIR, DynamicsIR,
@@ -7678,6 +7773,11 @@ mod tests {
             magnetization: None,
             preview_field: None,
             cached_preview_fields: None,
+            hysteresis_field_m_t: None,
+            hysteresis_point_index: None,
+            hysteresis_settle_step_index: None,
+            hysteresis_settle_step_kind: None,
+            hysteresis_settle_step_method: None,
             scalar_row_due: false,
             finished: false,
         }
@@ -7760,7 +7860,80 @@ mod tests {
             clear_preview_cache: false,
             engine_log: Vec::new(),
             solver_profile: fullmag_runner::SolverProfileState::default(),
+            published_fem_mesh_generation_id: None,
         }
+    }
+
+    #[test]
+    fn live_step_update_applies_hysteresis_progress_to_active_stage() {
+        let mut state = test_workspace_state();
+        state.stage_execution = Some(CurrentLiveStageExecutionState {
+            total_stages: 2,
+            completed_stage_indexes: vec![0],
+            stages: vec![
+                CurrentLiveStageExecutionRecord {
+                    status: "completed".to_string(),
+                    ..CurrentLiveStageExecutionRecord::default()
+                },
+                CurrentLiveStageExecutionRecord {
+                    status: "running".to_string(),
+                    ..CurrentLiveStageExecutionRecord::default()
+                },
+            ],
+            stage_statuses: vec!["completed".to_string(), "running".to_string()],
+            active_stage_index: Some(1),
+            active_stage_kind: Some("hysteresis".to_string()),
+            runtime_state: "running".to_string(),
+        });
+        let mut update = test_step_update(0);
+        update.hysteresis_field_m_t = Some(25.0);
+        update.hysteresis_point_index = Some(4);
+        update.hysteresis_settle_step_index = Some(1);
+        update.hysteresis_settle_step_kind = Some("minimize".to_string());
+        update.hysteresis_settle_step_method = Some("projected_gradient_bb".to_string());
+
+        apply_live_step_update_to_workspace_state(
+            &mut state,
+            "run-test",
+            "session-test",
+            PathBuf::from("/tmp/artifacts").as_path(),
+            &update,
+            false,
+        );
+
+        let stages = &state.stage_execution.as_ref().unwrap().stages;
+        assert_eq!(stages[0].current_field_m_t, None);
+        assert_eq!(stages[1].current_field_m_t, Some(25.0));
+        assert_eq!(stages[1].current_point_index, Some(4));
+        assert_eq!(stages[1].current_settle_step_index, Some(1));
+        assert_eq!(
+            stages[1].current_settle_step_kind.as_deref(),
+            Some("minimize")
+        );
+        assert_eq!(
+            stages[1].current_settle_step_method.as_deref(),
+            Some("projected_gradient_bb")
+        );
+    }
+
+    #[test]
+    fn hysteresis_study_uses_canonical_live_runner_not_persistent_runtime() {
+        let source = include_str!("orchestrator.rs");
+
+        assert!(
+            source.contains(
+                "let hysteresis_study = matches!(&stage.ir.study, StudyIR::Hysteresis { .. });"
+            ),
+            "interactive execution must identify hysteresis studies before runtime selection"
+        );
+        assert!(
+            source.contains("if hysteresis_study {\n                        fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot"),
+            "hysteresis studies must use the canonical hysteresis runner with live preview"
+        );
+        assert!(
+            source.contains("} else if let Some(runtime) = interactive_runtime_host.runtime_mut()"),
+            "persistent interactive runtime must remain a non-hysteresis execution path"
+        );
     }
 
     #[test]
@@ -8159,6 +8332,7 @@ mod tests {
             enable_exchange: true,
             enable_demag: true,
             external_field: None,
+            antenna_zeeman_masks: Vec::new(),
             current_modules: vec![],
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
@@ -8291,6 +8465,7 @@ mod tests {
             enable_exchange: true,
             enable_demag: true,
             external_field: None,
+            antenna_zeeman_masks: Vec::new(),
             current_modules: vec![],
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
@@ -8522,6 +8697,46 @@ mod tests {
             Some(fullmag_ir::StageStopReason::UserCancelled)
         );
         assert_eq!(execution.stages[1].status, "awaiting_command");
+    }
+
+    #[test]
+    fn active_sequence_preserves_materialized_stage_kind_after_completion() {
+        let mut sequence = ActiveSequenceState::new(vec![SequenceStage::Run {
+            until_seconds: 1e-9,
+            max_steps: Some(100),
+        }]);
+
+        sequence.mark_current_materialized_kind("flat_hysteresis");
+        sequence.mark_current_started("cmd-stage-0", 1_700_000_000_000, None);
+        sequence.mark_current("completed", None, Some(1_700_000_001_000), None);
+
+        let execution = sequence.completed_stage_execution("awaiting_command");
+        assert_eq!(execution.stages[0].kind.as_deref(), Some("flat_hysteresis"));
+        assert_eq!(execution.stages[0].status, "completed");
+    }
+
+    #[test]
+    fn scripted_stage_execution_preserves_stage_kind_after_completion() {
+        let execution = scripted_stage_execution_state(
+            1,
+            0,
+            "flat_hysteresis",
+            "completed",
+            Some("cmd-stage-0"),
+            Some(1_700_000_000_000),
+            Some(1_700_000_001_000),
+            Some("artifacts/stage-000".to_string()),
+            None,
+            None,
+        );
+
+        assert_eq!(execution.active_stage_index, None);
+        assert_eq!(
+            execution.active_stage_kind.as_deref(),
+            Some("flat_hysteresis")
+        );
+        assert_eq!(execution.stages[0].kind.as_deref(), Some("flat_hysteresis"));
+        assert_eq!(execution.stages[0].status, "completed");
     }
 
     #[test]

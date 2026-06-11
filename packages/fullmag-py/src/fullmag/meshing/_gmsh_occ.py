@@ -110,10 +110,16 @@ def _entity_bounds(
 
 def is_occ_compatible(geometries: list[Geometry]) -> bool:
     """Check if all geometries are standard shapes compatible with native OCC pipeline."""
+    if len(geometries) > 1 and any(_contains_boolean_csg(geometry) for geometry in geometries):
+        return False
     for geometry in geometries:
         if isinstance(geometry, ImportedGeometry):
             return False
-        if isinstance(geometry, (Box, Cylinder, Ellipsoid, Ellipse, ArchWaveguide)):
+        if isinstance(geometry, Cylinder):
+            if geometry.axis != (0.0, 0.0, 1.0):
+                return False
+            continue
+        if isinstance(geometry, (Box, Ellipsoid, Ellipse, ArchWaveguide)):
             continue
         if isinstance(geometry, Translate):
             if not is_occ_compatible([geometry.geometry]):
@@ -123,12 +129,22 @@ def is_occ_compatible(geometries: list[Geometry]) -> bool:
             if not is_occ_compatible([geometry.base, geometry.tool]):
                 return False
             continue
-        if isinstance(geometry, (Union, Intersection)):
+        if isinstance(geometry, Union):
+            return False
+        if isinstance(geometry, Intersection):
             if not is_occ_compatible([geometry.a, geometry.b]):
                 return False
             continue
         return False
     return True
+
+
+def _contains_boolean_csg(geometry: Geometry) -> bool:
+    if isinstance(geometry, Translate):
+        return _contains_boolean_csg(geometry.geometry)
+    if isinstance(geometry, (Difference, Intersection, Union)):
+        return True
+    return False
 
 
 def _geometry_translation(geometry: Geometry) -> tuple[float, float, float]:

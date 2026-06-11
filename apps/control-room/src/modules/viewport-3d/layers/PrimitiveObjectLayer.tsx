@@ -93,6 +93,35 @@ function PrimitiveObject({
   settings: VisualizationTargetSettings;
   tracker: Viewport3DResourceTracker;
 }) {
+  if (!shouldRenderPrimitiveObject(object, settings)) return null;
+
+  return (
+    <RenderablePrimitiveObject
+      colors={colors}
+      materialProfile={materialProfile}
+      object={object}
+      onSelectObject={onSelectObject}
+      settings={settings}
+      tracker={tracker}
+    />
+  );
+}
+
+function RenderablePrimitiveObject({
+  colors,
+  object,
+  materialProfile,
+  onSelectObject,
+  settings,
+  tracker,
+}: {
+  colors: Viewport3DColors;
+  materialProfile: Viewport3DMaterialProfile;
+  object: Viewport3DPrimitiveObject;
+  onSelectObject: (object: Viewport3DPrimitiveObject) => void;
+  settings: VisualizationTargetSettings;
+  tracker: Viewport3DResourceTracker;
+}) {
   const geometry = useMemo(
     () => trackPrimitiveObjectGeometry(tracker, object),
     [object, tracker],
@@ -111,9 +140,6 @@ function PrimitiveObject({
     () => () => tracker.release("geometry", edgeGeometry),
     [edgeGeometry, tracker],
   );
-
-  if (!shouldRenderPrimitiveObject(object, settings)) return null;
-
 
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
     if (eventIntersectsRegionOverlay(event)) return;

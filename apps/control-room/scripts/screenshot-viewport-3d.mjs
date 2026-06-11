@@ -395,7 +395,18 @@ async function clickCanvasUntilExplorerNodeSelected(page, nodeId) {
     await page.waitForTimeout(80);
   }
 
-  throw new Error(`Canvas clicks did not select Explorer node ${nodeId}.`);
+  const selectedNodes = await page
+    .locator('[data-node-id][aria-selected="true"]')
+    .evaluateAll((nodes) =>
+      nodes
+        .map((node) => node.getAttribute("data-node-id"))
+        .filter(Boolean),
+    );
+  throw new Error(
+    `Canvas clicks did not select Explorer node ${nodeId}. Selected nodes: ${
+      selectedNodes.join(", ") || "none"
+    }.`,
+  );
 }
 
 async function ensureExplorerNodeExpanded(node) {

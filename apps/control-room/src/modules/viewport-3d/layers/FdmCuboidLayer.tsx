@@ -47,7 +47,15 @@ import {
   VectorFieldLayer,
   type VectorFieldLayerVectorStyle,
 } from "./VectorFieldLayer";
-import { eventIntersectsRegionOverlay } from "./regionOverlayPicking";
+import {
+  eventIntersectsRegionOverlay,
+  pickRegionOverlayFromRay,
+} from "./regionOverlayPicking";
+import {
+  buildRegionOverlayModels,
+  type RegionOverlayInput,
+} from "./regionOverlayModel";
+import type { RegionOverlaySelection } from "./RegionOverlayLayer";
 
 /** Number of floats per vector segment: [sx,sy,sz, ex,ey,ez, relMag] */
 const VECTOR_SEGMENT_STRIDE = 7;
@@ -664,7 +672,11 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
   domain,
   materialProfile,
   onSelectDomain,
+  onSelectRegion,
+  regionOverlays,
   settings,
+  selectedObjectId,
+  selectedRegionId,
   surfaceColors,
   tracker,
   vectorColorMode,
@@ -695,6 +707,10 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
     screenPosition: Viewport3DInspectScreenPosition,
   ) => void;
   onSelectDomain: () => void;
+  onSelectRegion?: (selection: RegionOverlaySelection) => void;
+  regionOverlays?: readonly RegionOverlayInput[];
+  selectedObjectId?: string | null;
+  selectedRegionId?: string | null;
   settings: VisualizationTargetSettings;
   surfaceColors: ScalarColorBuffer | null;
   tracker: Viewport3DResourceTracker;
@@ -717,7 +733,17 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
     }),
     [],
   );
+  const inspectFrameRef = useRef(0);
+  const r3fInspectHitFrameRef = useRef(0);
   const renderSettings = settings;
+  const regionPickModels = useMemo(
+    () =>
+      buildRegionOverlayModels(regionOverlays ?? [], {
+        selectedObjectId,
+        selectedRegionId,
+      }),
+    [regionOverlays, selectedObjectId, selectedRegionId],
+  );
   const model = useMemo(
     () =>
       instanceModel !== undefined
@@ -843,10 +869,16 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
     if (!inspectEnabled || !model) return undefined;
 
     const canvas = gl.domElement;
-    const handleInspectPointerMove = (event: PointerEvent) => {
-      if (event.buttons !== 0) return;
+    let cachedRect = canvas.getBoundingClientRect();
+    let pendingEvent: PointerEvent | null = null;
+    let pendingFrame = 0;
+    let rafId: number | null = null;
+    const resizeObserver = new ResizeObserver(() => {
+      cachedRect = canvas.getBoundingClientRect();
+    });
 
-      const rect = canvas.getBoundingClientRect();
+    const processInspectPointerMove = (event: PointerEvent) => {
+      const rect = cachedRect;
       if (rect.width <= 0 || rect.height <= 0) return;
 
       inspectRaycastState.pointer.set(
@@ -902,15 +934,43 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
         },
       );
     };
+    const handleInspectPointerMove = (event: PointerEvent) => {
+      if (event.buttons !== 0) return;
+
+      pendingEvent = event;
+      inspectFrameRef.current += 1;
+      pendingFrame = inspectFrameRef.current;
+      if (rafId !== null) return;
+
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        const eventToProcess = pendingEvent;
+        const eventFrame = pendingFrame;
+        pendingEvent = null;
+        if (!eventToProcess) return;
+        if (r3fInspectHitFrameRef.current === eventFrame) return;
+        processInspectPointerMove(eventToProcess);
+      });
+    };
     const handleInspectPointerLeave = () => {
+      pendingEvent = null;
       onInspectClear?.();
     };
 
-    canvas.addEventListener("pointermove", handleInspectPointerMove);
-    canvas.addEventListener("pointerleave", handleInspectPointerLeave);
+    resizeObserver.observe(canvas);
+    canvas.addEventListener("pointermove", handleInspectPointerMove, {
+      passive: true,
+    });
+    canvas.addEventListener("pointerleave", handleInspectPointerLeave, {
+      passive: true,
+    });
     return () => {
       canvas.removeEventListener("pointermove", handleInspectPointerMove);
       canvas.removeEventListener("pointerleave", handleInspectPointerLeave);
+      resizeObserver.disconnect();
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+      }
     };
   }, [
     camera,
@@ -934,12 +994,18 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
 
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
     if (eventIntersectsRegionOverlay(event)) return;
-    event.stopPropagation();
+    const pickedRegion = pickRegionOverlayFromRay(event.ray, regionPickModels);
+    if (pickedRegion) {
+      event.stopPropagation();
+      onSelectRegion?.(pickedRegion);
+      return;
+    }
     onSelectDomain();
   };
   const handlePointerMove = (event: ThreeEvent<PointerEvent>) => {
     if (!inspectEnabled) return;
     event.stopPropagation();
+    r3fInspectHitFrameRef.current = inspectFrameRef.current;
     onInspectSample?.(
       buildViewport3DFdmInspectSample({
         fieldVector,

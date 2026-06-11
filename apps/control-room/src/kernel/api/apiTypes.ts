@@ -206,6 +206,22 @@ export type SolverEnergyHistoryResource =
 export type SolverStatusResource = components["schemas"]["SolverStatusResource"];
 export type StageExecutionResource =
   components["schemas"]["StageExecutionResource"];
+export type HysteresisStagePlanSchema =
+  components["schemas"]["HysteresisStagePlanSchema"];
+export type HysteresisStageSaturationSchema =
+  components["schemas"]["HysteresisStageSaturationSchema"];
+export type HysteresisProtocolSchema =
+  components["schemas"]["HysteresisProtocolSchema"];
+export type HysteresisOrientationSchema =
+  components["schemas"]["HysteresisOrientationSchema"];
+export type HysteresisSettlePipelineSchema =
+  components["schemas"]["HysteresisSettlePipelineSchema"];
+export type HysteresisExecutionTreeResource =
+  components["schemas"]["HysteresisExecutionTreeResource"];
+export type HysteresisExecutionTreeNode =
+  components["schemas"]["HysteresisExecutionTreeNode"];
+export type HysteresisProgressSchema =
+  components["schemas"]["HysteresisProgressSchema"];
 export type StudyRuntimePatchRequest =
   components["schemas"]["StudyRuntimePatchRequest"];
 export type StudyRuntimeResource =
@@ -434,6 +450,16 @@ export type VisualizationClientAckRequest =
   components["schemas"]["VisualizationClientAckRequest"];
 export type VisualizationClientAckResource =
   components["schemas"]["VisualizationClientAckResource"];
+
+export type HysteresisPointSchema = components["schemas"]["HysteresisPointSchema"];
+export type HysteresisBranchSchema = components["schemas"]["HysteresisBranchSchema"];
+export type HysteresisMinorLoopSchema =
+  components["schemas"]["HysteresisMinorLoopSchema"];
+export type HysteresisMetricsSchema = components["schemas"]["HysteresisMetricsSchema"];
+export type HysteresisSaturationResultSchema =
+  components["schemas"]["HysteresisSaturationResultSchema"];
+export type HysteresisSettleTraceEntrySchema =
+  components["schemas"]["HysteresisSettleTraceEntrySchema"];
 
 export type BinaryResourceResult<TData> =
   | {

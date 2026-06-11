@@ -72,6 +72,8 @@ use script::*;
 use session::*;
 use types::*;
 
+const LOCAL_BRIDGE_BODY_LIMIT_BYTES: usize = 128 * 1024 * 1024;
+
 #[derive(Debug, Clone)]
 pub(crate) struct CurrentLiveRealtimeState {
     pub session_id: String,
@@ -1440,7 +1442,7 @@ async fn main() {
             utoipa_swagger_ui::SwaggerUi::new("/v2/platform/docs/swagger")
                 .external_url_unchecked("/v2/platform/openapi.json", openapi_v2::openapi_json()),
         )
-        .layer(DefaultBodyLimit::max(64 * 1024 * 1024))
+        .layer(DefaultBodyLimit::max(LOCAL_BRIDGE_BODY_LIMIT_BYTES))
         .layer(cors)
         .with_state(state);
 

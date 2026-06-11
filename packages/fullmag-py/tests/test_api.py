@@ -424,6 +424,24 @@ class ProblemApiTests(unittest.TestCase):
             },
         )
 
+    def test_cylinder_axis_and_in_plane_anisotropy_survive_problem_ir(self) -> None:
+        fm.reset()
+        study = fm.study("axis_cylinder")
+        ring = study.geometry(
+            fm.Cylinder(radius=150e-9, height=1e-9, axis=(1.0, 0.0, 0.0)),
+            name="cofeb_ring",
+        )
+        ring.Ms = 1.1e6
+        ring.Aex = 15e-12
+        ring.Ku1 = 1.0e6
+        ring.anisU = (1.0, 0.0, 0.0)
+
+        ir = flat_world._build_problem().to_ir(include_geometry_assets=False)
+
+        self.assertEqual(ir["geometry"]["entries"][0]["axis"], [1.0, 0.0, 0.0])
+        self.assertEqual(ir["materials"][0]["anisotropy_axis"], [1.0, 0.0, 0.0])
+        self.assertEqual(ir["materials"][0]["uniaxial_anisotropy"], 1.0e6)
+
     def test_region_shape_translation_adds_to_existing_center(self) -> None:
         fm.reset()
         study = fm.study("region_shape_translate_center")
@@ -3890,6 +3908,446 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(zeeman_fields[0], [-20e-3, 0.0, 0.0])
         self.assertEqual(zeeman_fields[1], [0.0, 0.0, 0.0])
         self.assertEqual(zeeman_fields[2], [20e-3, 0.0, 0.0])
+
+    def test_study_stage_builder_add_hysteresis_sweep(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("stage_hysteresis_sweep")
+        study.engine("fem")
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.texture.uniform(1, 0, 0)
+        study.stages.add_hysteresis_sweep(
+            field_min_mT=-100.0,
+            field_max_mT=100.0,
+            field_step_mT=5.0,
+            orientation=fm.FieldOrientation.preset("oop_positive"),
+            initial_protocol="positive_saturation",
+            saturation=fm.SaturationProbe(mode="auto", max_field_mT=300.0),
+            branch_mode="major_loop",
+            settle_pipeline=fm.SettlePipeline([
+                fm.MinimizeStep(max_steps=2000),
+                fm.RelaxStep(max_steps=10000)
+            ]),
+            storage=fm.HysteresisStorage(magnetization="selected", every_n=5)
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_builder_stage_hysteresis_sweep.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+
+        self.assertEqual(len(loaded.stages), 1)
+        stage = loaded.stages[0]
+        self.assertEqual(stage.entrypoint_kind, "flat_hysteresis")
+        ir = stage.problem.study.to_ir()
+        self.assertEqual(ir["kind"], "hysteresis")
+        self.assertEqual(ir["field_min_mT"], -100.0)
+        self.assertEqual(ir["field_max_mT"], 100.0)
+        self.assertEqual(ir["field_step_mT"], 5.0)
+        self.assertEqual(ir["orientation"], {"kind": "preset", "preset_name": "oop_positive"})
+        self.assertEqual(ir["initial_protocol"], "positive_saturation")
+        self.assertEqual(ir["branch_mode"], "major_loop")
+        self.assertEqual(ir["saturation"]["max_field_mT"], 300.0)
+        self.assertEqual(ir["settle_pipeline"]["kind"], "sequence")
+        self.assertEqual(len(ir["settle_pipeline"]["steps"]), 2)
+        self.assertEqual(ir["settle_pipeline"]["steps"][0]["max_steps"], 2000)
+        self.assertEqual(ir["settle_pipeline"]["steps"][1]["max_steps"], 10000)
+        self.assertEqual(ir["storage"]["magnetization"], "selected")
+        self.assertEqual(ir["storage"]["every_n"], 5)
+        pipeline = loaded.study_pipeline_document()
+        self.assertIsNotNone(pipeline)
+        node = pipeline["nodes"][0]
+        self.assertEqual(node["stage_kind"], "hysteresis")
+        self.assertEqual(node["payload"]["kind"], "hysteresis")
+        self.assertEqual(node["payload"]["field_step_mT"], 5.0)
+        self.assertEqual(node["payload"]["settle_pipeline"]["kind"], "sequence")
+        builder_draft = export_builder_draft(loaded)
+        self.assertEqual(builder_draft["stages"][0]["kind"], "hysteresis")
+        self.assertEqual(builder_draft["study_pipeline"]["nodes"][0]["stage_kind"], "hysteresis")
+
+        rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+        self.assertIn("study.stages.add_hysteresis_sweep(", rewritten)
+        self.assertIn('orientation=fm.FieldOrientation.preset("oop_positive")', rewritten)
+        self.assertIn("saturation=fm.SaturationProbe(", rewritten)
+        self.assertIn('mode="auto"', rewritten)
+        self.assertIn("max_field_mT=300", rewritten)
+        self.assertIn("susceptibility_threshold=0.001", rewritten)
+        self.assertIn("transverse_threshold=0.01", rewritten)
+        self.assertIn("settle_pipeline=fm.SettlePipeline([", rewritten)
+        self.assertIn("fm.MinimizeStep(", rewritten)
+        self.assertIn("fm.RelaxStep(", rewritten)
+        self.assertIn("max_steps=2000", rewritten)
+        self.assertIn("max_steps=10000", rewritten)
+        self.assertIn("storage=fm.HysteresisStorage(", rewritten)
+        self.assertIn('magnetization="selected"', rewritten)
+        self.assertIn("every_n=5", rewritten)
+
+        with TemporaryDirectory() as tmp_dir:
+            rewritten_path = Path(tmp_dir) / "rewritten_hysteresis_sweep.py"
+            rewritten_path.write_text(rewritten, encoding="utf-8")
+            reloaded = fm.load_problem_from_script(rewritten_path, lightweight_assets=True)
+
+        self.assertEqual(reloaded.stages[0].problem.study.to_ir()["kind"], "hysteresis")
+        self.assertEqual(
+            reloaded.stages[0].problem.study.to_ir()["settle_pipeline"]["steps"][0]["max_steps"],
+            2000,
+        )
+
+    def test_fdm_hysteresis_smoke_example_loads_canonical_stage(self) -> None:
+        example_path = Path(__file__).resolve().parents[3] / "examples" / "fdm_hysteresis_smoke.py"
+
+        loaded = fm.load_problem_from_script(example_path, lightweight_assets=True)
+
+        self.assertEqual(len(loaded.stages), 1)
+        stage = loaded.stages[0]
+        self.assertEqual(stage.entrypoint_kind, "flat_hysteresis")
+        study = stage.problem.study.to_ir()
+        self.assertEqual(study["kind"], "hysteresis")
+        self.assertEqual(study["field_values_mT"], [50.0, 0.0, -50.0])
+        self.assertEqual(study["orientation"], {"kind": "preset", "preset_name": "in_plane_y"})
+        self.assertEqual(study["measurement_axis"], "field_axis")
+        self.assertEqual(study["initial_protocol"], "as_authored")
+        self.assertEqual(study["storage"]["magnetization"], "none")
+
+    def test_fdm_hysteresis_snapshot_smoke_example_loads_snapshot_storage(self) -> None:
+        example_path = (
+            Path(__file__).resolve().parents[3] / "examples" / "fdm_hysteresis_snapshot_smoke.py"
+        )
+
+        loaded = fm.load_problem_from_script(example_path, lightweight_assets=True)
+
+        self.assertEqual(len(loaded.stages), 1)
+        stage = loaded.stages[0]
+        self.assertEqual(stage.entrypoint_kind, "flat_hysteresis")
+        study = stage.problem.study.to_ir()
+        self.assertEqual(study["kind"], "hysteresis")
+        self.assertEqual(study["field_values_mT"], [50.0, 0.0, -50.0])
+        self.assertEqual(study["storage"]["magnetization"], "every_n")
+        self.assertEqual(study["storage"]["every_n"], 1)
+
+    def test_study_stage_builder_hysteresis_piecewise_field_schedule(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("stage_hysteresis_piecewise_schedule")
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.m = fm.texture.uniform(1, 0, 0)
+        study.stages.add_hysteresis_sweep(
+            orientation=fm.FieldOrientation.preset("oop_positive"),
+            field_schedule=fm.PiecewiseFieldSchedule.mT([
+                fm.FieldSegment(
+                    start=1000.0,
+                    stop=200.0,
+                    step=50.0,
+                    segment_id="coarse_start",
+                    label="coarse_start",
+                    endpoint_policy="include_stop",
+                    reason="far_from_remanence",
+                ),
+                fm.FieldSegment(
+                    start=200.0,
+                    stop=-50.0,
+                    step=5.0,
+                    segment_id="dense_after_remanence",
+                    label="dense_after_remanence",
+                    endpoint_policy="skip_start",
+                    reason="remanence_and_coercivity",
+                ),
+                fm.FieldSegment(
+                    start=-50.0,
+                    stop=-1000.0,
+                    step=25.0,
+                    segment_id="negative_branch",
+                    label="negative_branch",
+                    endpoint_policy="skip_start",
+                    reason="negative_saturation",
+                ),
+            ]),
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_builder_stage_hysteresis_piecewise.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+
+        ir = loaded.stages[0].problem.study.to_ir()
+        self.assertEqual(ir["kind"], "hysteresis")
+        segments = ir["field_schedule"]["segments"]
+        self.assertEqual(len(segments), 3)
+        self.assertEqual(segments[0]["segment_id"], "coarse_start")
+        self.assertEqual(segments[0]["label"], "coarse_start")
+        self.assertEqual(segments[0]["endpoint_policy"], "include_stop")
+        self.assertEqual(segments[1]["step"], 5.0)
+        self.assertEqual(segments[1]["segment_id"], "dense_after_remanence")
+        self.assertEqual(segments[1]["reason"], "remanence_and_coercivity")
+
+    def test_study_stage_builder_hysteresis_settle_step_time_controls_round_trip(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("stage_hysteresis_settle_time_controls")
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.m = fm.texture.uniform(1, 0, 0)
+        study.stages.add_hysteresis_sweep(
+            field_min_mT=-10.0,
+            field_max_mT=10.0,
+            field_step_mT=10.0,
+            settle_pipeline=fm.SettlePipeline([
+                fm.MinimizeStep(
+                    timestep_s=2e-13,
+                    max_pseudotime_s=4e-10,
+                    max_physical_time_s=8e-10,
+                    max_steps=200,
+                ),
+                fm.RelaxStep(
+                    timestep_s=1e-13,
+                    max_pseudotime_s=2e-10,
+                    max_physical_time_s=6e-10,
+                    max_steps=500,
+                ),
+            ]),
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_builder_hysteresis_settle_time_controls.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+
+        steps = loaded.stages[0].problem.study.to_ir()["settle_pipeline"]["steps"]
+        self.assertEqual(steps[0]["timestep_s"], 2e-13)
+        self.assertEqual(steps[0]["max_pseudotime_s"], 4e-10)
+        self.assertEqual(steps[0]["max_physical_time_s"], 8e-10)
+        self.assertEqual(steps[1]["timestep_s"], 1e-13)
+        self.assertEqual(steps[1]["max_pseudotime_s"], 2e-10)
+        self.assertEqual(steps[1]["max_physical_time_s"], 6e-10)
+
+        rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+        self.assertIn("timestep_s=2e-13", rewritten)
+        self.assertIn("max_pseudotime_s=4e-10", rewritten)
+        self.assertIn("max_physical_time_s=8e-10", rewritten)
+        self.assertIn("timestep_s=1e-13", rewritten)
+        self.assertIn("max_pseudotime_s=2e-10", rewritten)
+        self.assertIn("max_physical_time_s=6e-10", rewritten)
+
+        with TemporaryDirectory() as tmp_dir:
+            rewritten_path = Path(tmp_dir) / "rewritten_hysteresis_settle_time_controls.py"
+            rewritten_path.write_text(rewritten, encoding="utf-8")
+            reloaded = fm.load_problem_from_script(rewritten_path, lightweight_assets=True)
+
+        self.assertEqual(
+            reloaded.stages[0].problem.study.to_ir()["settle_pipeline"]["steps"],
+            steps,
+        )
+
+    def test_study_stage_builder_hysteresis_normalizes_legacy_signed_segment_step(self) -> None:
+        segment = fm.FieldSegment(
+            start=1000.0,
+            stop=200.0,
+            step=-50.0,
+            label="legacy_signed_step",
+        )
+
+        self.assertEqual(segment.to_ir()["step"], 50.0)
+        self.assertEqual(segment.to_ir()["segment_id"], "legacy_signed_step")
+
+    def test_study_stage_builder_hysteresis_dense_windows(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("stage_hysteresis_dense_windows")
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.m = fm.texture.uniform(1, 0, 0)
+        study.stages.add_hysteresis_sweep(
+            field_min_mT=-150.0,
+            field_max_mT=150.0,
+            field_step_mT=10.0,
+            schedule_refinements=[
+                fm.FieldWindow(
+                    center_mT=0.0,
+                    half_width_mT=25.0,
+                    step_mT=1.0,
+                    reason="remanence",
+                    priority=10,
+                ),
+                fm.FieldWindow(
+                    center_mT=-45.0,
+                    half_width_mT=10.0,
+                    step_mT=0.5,
+                    reason="expected_coercivity",
+                    priority=20,
+                ),
+            ],
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_builder_stage_hysteresis_windows.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+
+        ir = loaded.stages[0].problem.study.to_ir()
+        windows = ir["schedule_refinements"]
+        self.assertEqual(windows[0]["priority"], 10)
+        self.assertEqual(windows[0]["reason"], "remanence")
+        self.assertEqual(windows[1]["step_mT"], 0.5)
+
+    def test_study_stage_builder_hysteresis_minor_loops_contract(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("stage_hysteresis_minor_loops")
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.m = fm.texture.uniform(1, 0, 0)
+        study.stages.add_hysteresis_sweep(
+            field_min_mT=-100.0,
+            field_max_mT=100.0,
+            field_step_mT=10.0,
+            branch_mode="major_with_minor_loops",
+            minor_loops=[
+                fm.MinorLoop(reversal_mT=25.0, return_mT=-25.0),
+                fm.MinorLoop(reversal_mT=-50.0, return_mT=50.0),
+            ],
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_builder_stage_hysteresis_minor_loops.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+
+        ir = loaded.stages[0].problem.study.to_ir()
+        self.assertEqual(ir["branch_mode"], "major_with_minor_loops")
+        self.assertEqual(len(ir["minor_loops"]), 2)
+        self.assertEqual(ir["minor_loops"][0]["reversal_mT"], 25.0)
+        self.assertEqual(ir["minor_loops"][0]["return_mT"], -25.0)
+
+        rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+        self.assertIn('branch_mode="major_with_minor_loops"', rewritten)
+        self.assertIn("minor_loops=[", rewritten)
+        self.assertIn("fm.MinorLoop(", rewritten)
+
+        with TemporaryDirectory() as tmp_dir:
+            rewritten_path = Path(tmp_dir) / "rewritten_hysteresis_minor_loops.py"
+            rewritten_path.write_text(rewritten, encoding="utf-8")
+            reloaded = fm.load_problem_from_script(rewritten_path, lightweight_assets=True)
+
+        reloaded_ir = reloaded.stages[0].problem.study.to_ir()
+        self.assertEqual(reloaded_ir["branch_mode"], "major_with_minor_loops")
+        self.assertEqual(reloaded_ir["minor_loops"], ir["minor_loops"])
+
+    def test_study_stage_builder_hysteresis_rejects_invalid_schedule(self) -> None:
+        with self.assertRaisesRegex(ValueError, "FieldSegment.step must not be zero"):
+            fm.FieldSegment(start=100.0, stop=0.0, step=0.0)
+
+        descending = fm.FieldSegment(
+            start=100.0,
+            stop=0.0,
+            step=5.0,
+            segment_id="descending",
+        )
+        self.assertEqual(descending.to_ir()["step"], 5.0)
+
+        with self.assertRaisesRegex(ValueError, "FieldSegment.segment_id is required"):
+            fm.FieldSegment(start=100.0, stop=0.0, step=5.0)
+
+        with self.assertRaisesRegex(ValueError, "FieldWindow.step_mT must be positive"):
+            fm.FieldWindow(center_mT=0.0, half_width_mT=25.0, step_mT=0.0)
+
+        with self.assertRaisesRegex(ValueError, "overlapping FieldWindow"):
+            fm.PiecewiseFieldSchedule.dense_windows([
+                fm.FieldWindow(center_mT=0.0, half_width_mT=10.0, step_mT=1.0),
+                fm.FieldWindow(center_mT=5.0, half_width_mT=10.0, step_mT=0.5),
+            ])
+
+    def test_study_stage_builder_hysteresis_rejects_invalid_settle_pipeline(self) -> None:
+        with self.assertRaisesRegex(ValueError, "SettlePipeline requires at least one step"):
+            fm.SettlePipeline([])
+
+        with self.assertRaisesRegex(ValueError, "run_next_algorithm requires a following step"):
+            fm.SettlePipeline([
+                fm.MinimizeStep(on_non_convergence="run_next_algorithm"),
+            ])
+
+        with self.assertRaisesRegex(ValueError, "run_next_algorithm requires a non_converged fallback branch"):
+            fm.SettleTree(
+                default=fm.MinimizeStep(on_non_convergence="run_next_algorithm"),
+                branches=[],
+            )
+
+        with self.assertRaisesRegex(ValueError, "retry_with_smaller_dt requires retry_timestep_scale"):
+            fm.RelaxStep(on_non_convergence="retry_with_smaller_dt")
+
+        with self.assertRaisesRegex(ValueError, "retry_timestep_scale must be smaller than 1.0"):
+            fm.RelaxStep(
+                on_non_convergence="retry_with_smaller_dt",
+                retry_timestep_scale=1.0,
+            )
+
+        with self.assertRaisesRegex(ValueError, "timestep_s must be positive"):
+            fm.RelaxStep(timestep_s=0.0)
+
+        with self.assertRaisesRegex(ValueError, "max_pseudotime_s must be positive"):
+            fm.MinimizeStep(max_pseudotime_s=-1.0)
+
+        with self.assertRaisesRegex(ValueError, "max_physical_time_s must be positive"):
+            fm.DynamicsSettleStep(max_physical_time_s=0.0)
+
+        with self.assertRaisesRegex(ValueError, "max_steps must be positive"):
+            fm.RelaxStep(max_steps=0)
+
+        retry_step = fm.RelaxStep(
+            on_non_convergence="retry_with_smaller_dt",
+            retry_timestep_scale=0.5,
+            retry_max_attempts=2,
+        )
+        self.assertEqual(retry_step.to_ir()["retry_timestep_scale"], 0.5)
+        self.assertEqual(retry_step.to_ir()["retry_max_attempts"], 2)
+
+    def test_study_stage_builder_hysteresis_rejects_invalid_public_contract_values(self) -> None:
+        with self.assertRaisesRegex(ValueError, "FieldOrientation preset must be one of"):
+            fm.FieldOrientation.preset("unsupported_axis")
+
+        with self.assertRaisesRegex(ValueError, "FieldOrientation.sample theta_deg and phi_deg"):
+            fm.FieldOrientation.sample(float("nan"), 0.0)
+
+        with self.assertRaisesRegex(ValueError, "FieldOrientation.vector must not be the zero vector"):
+            fm.FieldOrientation.global_vector((0.0, 0.0, 0.0))
+
+        with self.assertRaisesRegex(ValueError, "SaturationProbe.max_field_mT"):
+            fm.SaturationProbe(max_field_mT=float("nan"))
+
+        with self.assertRaisesRegex(ValueError, "HysteresisStorage.magnetization"):
+            fm.HysteresisStorage(magnetization="sometimes")
+
+        with self.assertRaisesRegex(ValueError, "HysteresisStorage.every_n must be positive"):
+            fm.HysteresisStorage(magnetization="selected", every_n=0)
+
+        with self.assertRaisesRegex(ValueError, "HysteresisStorage.every_n must be positive"):
+            fm.HysteresisStorage(magnetization="every_n", every_n=0)
+
+        with self.assertRaisesRegex(ValueError, "field_min_mT must be finite"):
+            fm.Hysteresis(outputs=[], field_min_mT=float("nan"))
+
+        with self.assertRaisesRegex(ValueError, "measurement_axis must be one of"):
+            fm.Hysteresis(outputs=[], measurement_axis="sideways")
+
+        with self.assertRaisesRegex(ValueError, "branch_mode must be one of"):
+            fm.Hysteresis(outputs=[], branch_mode="minor_loop")
 
     def test_study_stage_builder_hysteresis_branch_save_state_emits_synthetic_actions(self) -> None:
         script = """

@@ -113,17 +113,19 @@ page.on("pageerror", (error) => {
   errors.push(error.message);
 });
 page.on("request", (request) => {
-  const path = pathnameFromUrl(request.url());
+  const url = request.url();
+  const path = pathnameFromUrl(url);
   if (!path.startsWith("/v2/sessions/current/")) return;
   const method = request.method();
   if (isCameraGestureForbiddenRequestPath(path)) {
-    activeInitialForbiddenResourceRequests.set(request, { method, path });
+    activeInitialForbiddenResourceRequests.set(request, { method, path, url });
     lastInitialForbiddenResourceRequestAt = Date.now();
   }
   if (!recordCameraGestureRequests) return;
   cameraGestureRequests.push({
     method,
     path,
+    url,
   });
 });
 page.on("requestfinished", markInitialForbiddenResourceRequestSettled);
@@ -353,7 +355,7 @@ async function verifyCameraGesturesStayLocal({ page }) {
     throw new Error(
       "Camera rotate/wheel/pan gestures emitted background resource work: " +
         unexpectedGestureRequests
-          .map((request) => `${request.method} ${request.path}`)
+          .map((request) => `${request.method} ${request.url ?? request.path}`)
           .join(", "),
     );
   }
@@ -386,7 +388,7 @@ async function assertCameraGestureDoesNotFetch(page, gestureName, gesture) {
     throw new Error(
       `${gestureName} triggered unexpected resource work: ` +
         unexpectedGestureRequests
-          .map((request) => `${request.method} ${request.path}`)
+          .map((request) => `${request.method} ${request.url ?? request.path}`)
           .join(", "),
     );
   }
@@ -419,13 +421,13 @@ function assertResponsiveCameraRightPanPhase(phase) {
   const longAnimationFrameCount = phase.longAnimationFrameCount ?? 0;
   if (longAnimationFrameCount > 0) {
     throw new Error(
-      `Camera right-button pan produced long animation frames: longAnimationFrameCount=${longAnimationFrameCount}, maxLongAnimationFrameMs=${phase.maxLongAnimationFrameMs ?? 0}, topInvokers=${JSON.stringify(phase.longAnimationFrameTopInvokers ?? [])}.`,
+      `Camera right-button pan produced long animation frames: longAnimationFrameCount=${longAnimationFrameCount}, maxLongAnimationFrameMs=${phase.maxLongAnimationFrameMs ?? 0}, longAnimationFrameBlockingMs=${phase.longAnimationFrameBlockingMs ?? 0}, topInvokers=${JSON.stringify(phase.longAnimationFrameTopInvokers ?? [])}.`,
     );
   }
   const viewportMeasureCount = phase.viewportMeasureCount ?? 0;
   if (viewportMeasureCount > 0) {
     throw new Error(
-      `Camera right-button pan rebuilt viewport data during interaction: viewportMeasureCount=${viewportMeasureCount}.`,
+      `Camera right-button pan rebuilt viewport data during interaction: viewportMeasureCount=${viewportMeasureCount}, viewportMeasureTotals=${JSON.stringify(phase.viewportMeasureTotals ?? {})}.`,
     );
   }
 }
@@ -464,7 +466,7 @@ async function waitForInitialViewport3DResourceQuiet(page) {
   }
 
   const active = [...activeInitialForbiddenResourceRequests.values()]
-    .map((request) => `${request.method} ${request.path}`)
+    .map((request) => `${request.method} ${request.url ?? request.path}`)
     .join(", ");
   throw new Error(
     `Timed out waiting for initial viewport 3D resource requests to settle: ${active || "none active"}.`,

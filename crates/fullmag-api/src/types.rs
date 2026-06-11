@@ -976,6 +976,16 @@ pub(crate) struct StageExecutionRecord {
     pub metric_value: Option<f64>,
     #[serde(default)]
     pub threshold: Option<f64>,
+    #[serde(default)]
+    pub current_field_m_t: Option<f64>,
+    #[serde(default)]
+    pub current_point_index: Option<u32>,
+    #[serde(default)]
+    pub current_settle_step_index: Option<u32>,
+    #[serde(default)]
+    pub current_settle_step_kind: Option<String>,
+    #[serde(default)]
+    pub current_settle_step_method: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ToSchema)]

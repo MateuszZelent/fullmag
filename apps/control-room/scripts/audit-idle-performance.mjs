@@ -47,6 +47,18 @@ if (failures.length > 0) {
 console.log("Idle performance audit passed.");
 
 function allowsViewport3DDemandFrameOneShots(relativePath, content) {
+  if (relativePath === path.join("layers", "FdmCuboidLayer.tsx")) {
+    const requestCount = countOccurrences(content, "requestAnimationFrame(");
+    const cancelCount = countOccurrences(content, "cancelAnimationFrame(");
+    return (
+      requestCount === 1 &&
+      cancelCount === 1 &&
+      content.includes("const handleInspectPointerMove = (event: PointerEvent)") &&
+      content.includes("processInspectPointerMove(eventToProcess)") &&
+      content.includes("passive: true")
+    );
+  }
+
   if (relativePath !== path.join("layers", "Viewport3DScene.tsx")) {
     return false;
   }

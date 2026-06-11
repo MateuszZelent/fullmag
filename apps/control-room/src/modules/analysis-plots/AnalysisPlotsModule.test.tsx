@@ -17,10 +17,39 @@ import { buildScalarChartSeries } from "./chartTableModel";
 import { buildSolverEnergyHistoryChartSeries } from "./energyHistoryAdapter";
 import { AnalysisPlotsView } from "./AnalysisPlotsModule";
 import { analysisPlotsManifest } from "./manifest";
+import { EventBus } from "@/kernel/events/EventBus";
+import type { KernelEventMap } from "@/kernel/events/eventTypes";
+import { SelectionController } from "@/kernel/selection/SelectionController";
+import type { KernelApi } from "@/kernel/types";
+import {
+  adjacentHysteresisPointIndex,
+  buildHysteresisChartLineSeriesModel,
+  buildHysteresisChartPointSelection,
+  clearHysteresisPointSelectionForLive,
+  getProgressYValue,
+  HYSTERESIS_CHART_VALUE_AXIS_SCALE,
+  hysteresisTargetMetadataFromOrientation,
+  nextHysteresisPlaybackIndex,
+  resolveHysteresisNavigationIndex,
+  selectedHysteresisPointId,
+} from "@/shared/domain/study/HysteresisChart";
 
 function tableRowsResourceKey(tableId: string): string {
   return DATA_TABLE_ROWS_PATH.replace("{table_id}", encodeURIComponent(tableId));
 }
+
+const mockKernel = {
+  commands: {
+    execute: () => Promise.resolve(),
+    register: () => () => {},
+  },
+  bus: {
+    emit: () => {},
+    on: () => () => {},
+  },
+  api: {},
+  resources: {},
+} as unknown as KernelApi;
 
 const table = {
   columns: [
@@ -60,9 +89,393 @@ const table = {
 };
 
 describe("AnalysisPlotsView", () => {
+  it("fits hysteresis chart axes to collected points during live sweeps", () => {
+    expect(HYSTERESIS_CHART_VALUE_AXIS_SCALE).toBe(true);
+  });
+
+  it("builds a non-empty hysteresis chart series from completed points before branch resources arrive", () => {
+    const points = Array.from({ length: 8 }, (_, index) => ({
+      field_value_mT: 100 - index * 5,
+      m_avg: [0, 0.99 - index * 0.001, 0],
+      m_ip: 0.99 - index * 0.001,
+      m_oop: 0,
+      m_parallel: 0.99 - index * 0.001,
+      point_id: index,
+      snapshot_id: index === 0 ? "hysteresis_point_001" : null,
+      status: "Completed",
+    }));
+
+    const series = buildHysteresisChartLineSeriesModel(
+      points,
+      [],
+      [],
+      "full",
+      "m_parallel",
+    );
+
+    expect(series).toHaveLength(1);
+    expect(series[0].name).toBe("All points");
+    expect(series[0].data).toHaveLength(8);
+    expect(series[0].data[0]).toEqual([100, 0.99, 0]);
+    expect(series[0].data[7]).toEqual([65, 0.983, 7]);
+  });
+
+  it("builds dedicated hysteresis chart series for minor loops", () => {
+    const minorLoops = [{
+      closure_error_m_parallel: 0.2,
+      closure_status: "returned",
+      loop_id: "minor_loop_001",
+      minor_loop_area: 0,
+      parent_branch_id: "descending",
+      points: [
+        {
+          field_value_mT: -50,
+          m_avg: [0, -0.4, 0],
+          m_ip: 0.4,
+          m_oop: 0,
+          m_parallel: -0.4,
+          minor_loop_id: "minor_loop_001",
+          point_id: 2,
+          snapshot_id: "hysteresis_point_003",
+          status: "Completed",
+        },
+        {
+          field_value_mT: 0,
+          m_avg: [0, -0.2, 0],
+          m_ip: 0.2,
+          m_oop: 0,
+          m_parallel: -0.2,
+          minor_loop_id: "minor_loop_001",
+          point_id: 3,
+          snapshot_id: "hysteresis_point_004",
+          status: "Completed",
+        },
+      ],
+      policy: "branch_only",
+      recoil_susceptibility: 0.004,
+      return_field_mT: 0,
+      return_point_id: 3,
+      reversal_field_mT: -50,
+      reversal_point_id: 2,
+      settle_trace: [],
+    }];
+
+    const series = buildHysteresisChartLineSeriesModel(
+      [],
+      [],
+      minorLoops,
+      "minor",
+      "m_parallel",
+    );
+
+    expect(series).toHaveLength(1);
+    expect(series[0].branchId).toBe("minor_loop_001");
+    expect(series[0].data).toEqual([
+      [-50, -0.4, 2],
+      [0, -0.2, 3],
+    ]);
+  });
+
+  it("builds OOP and in-plane overlay series from the same hysteresis points", () => {
+    const points = [
+      {
+        field_value_mT: 10,
+        m_avg: [0.3, 0.4, 0.5],
+        m_ip: 0.5,
+        m_oop: 0.5,
+        m_parallel: 0.7,
+        point_id: 0,
+        snapshot_id: null,
+        status: "Completed",
+      },
+      {
+        field_value_mT: -10,
+        m_avg: [0.6, 0.8, -0.2],
+        m_ip: 1.0,
+        m_oop: -0.2,
+        m_parallel: -0.1,
+        point_id: 1,
+        snapshot_id: null,
+        status: "Completed",
+      },
+    ];
+
+    const series = buildHysteresisChartLineSeriesModel(
+      points,
+      [],
+      [],
+      "oop-ip-overlay",
+      "m_parallel",
+    );
+
+    expect(series.map((entry) => entry.name)).toEqual(["M_oop", "M_ip"]);
+    expect(series[0].data).toEqual([
+      [10, 0.5, 0],
+      [-10, -0.2, 1],
+    ]);
+    expect(series[1].data).toEqual([
+      [10, 0.5, 0],
+      [-10, 1.0, 1],
+    ]);
+  });
+
+  it("builds RGB component overlay series from averaged magnetization vectors", () => {
+    const points = [
+      {
+        field_value_mT: 20,
+        m_avg: [0.1, 0.2, 0.3],
+        m_ip: 0.224,
+        m_oop: 0.3,
+        m_parallel: 0.2,
+        point_id: 0,
+        snapshot_id: null,
+        status: "Completed",
+      },
+      {
+        field_value_mT: -20,
+        m_avg: [-0.4, 0.5, -0.6],
+        m_ip: 0.64,
+        m_oop: -0.6,
+        m_parallel: 0.5,
+        point_id: 1,
+        snapshot_id: null,
+        status: "Completed",
+      },
+    ];
+
+    const series = buildHysteresisChartLineSeriesModel(
+      points,
+      [],
+      [],
+      "rgb-overlay",
+      "m_parallel",
+    );
+
+    expect(series.map((entry) => entry.name)).toEqual(["M_x", "M_y", "M_z"]);
+    expect(series[0].data).toEqual([
+      [20, 0.1, 0],
+      [-20, -0.4, 1],
+    ]);
+    expect(series[1].data).toEqual([
+      [20, 0.2, 0],
+      [-20, 0.5, 1],
+    ]);
+    expect(series[2].data).toEqual([
+      [20, 0.3, 0],
+      [-20, -0.6, 1],
+    ]);
+  });
+
+  it("builds the virgin segment from a virgin-then-major hysteresis schedule", () => {
+    const points = [
+      {
+        field_value_mT: 0,
+        m_avg: [0, 0, 0.1],
+        m_ip: 0,
+        m_oop: 0.1,
+        m_parallel: 0.1,
+        point_id: 0,
+        snapshot_id: null,
+        status: "Completed",
+      },
+      {
+        field_value_mT: 50,
+        m_avg: [0, 0, 0.6],
+        m_ip: 0,
+        m_oop: 0.6,
+        m_parallel: 0.6,
+        point_id: 1,
+        snapshot_id: null,
+        status: "Completed",
+      },
+      {
+        field_value_mT: 100,
+        m_avg: [0, 0, 0.9],
+        m_ip: 0,
+        m_oop: 0.9,
+        m_parallel: 0.9,
+        point_id: 2,
+        snapshot_id: null,
+        status: "Completed",
+      },
+      {
+        field_value_mT: 50,
+        m_avg: [0, 0, 0.8],
+        m_ip: 0,
+        m_oop: 0.8,
+        m_parallel: 0.8,
+        point_id: 3,
+        snapshot_id: null,
+        status: "Completed",
+      },
+    ];
+
+    const series = buildHysteresisChartLineSeriesModel(
+      points,
+      [],
+      [],
+      "virgin",
+      "m_parallel",
+      undefined,
+      "virgin_then_major_loop",
+    );
+
+    expect(series).toHaveLength(1);
+    expect(series[0].name).toBe("Virgin");
+    expect(series[0].data).toEqual([
+      [0, 0.1, 0],
+      [50, 0.6, 1],
+      [100, 0.9, 2],
+    ]);
+  });
+
+  it("builds hysteresis point selection with a snapshot target for 3D replay", () => {
+    const selection = buildHysteresisChartPointSelection({
+      point: {
+        field_value_mT: 25,
+        m_avg: [0.1, 0.2, 0.3],
+        m_ip: 0.224,
+        m_oop: 0.3,
+        m_parallel: 0.8,
+        point_id: 4,
+        snapshot_id: "hysteresis_point_005",
+        status: "Completed",
+      },
+      stageId: "hysteresis-1",
+      targetMetadata: hysteresisTargetMetadataFromOrientation({
+        direction: null,
+        measurement_axis: "field_axis",
+        orientation: { kind: "preset", preset_name: "in_plane_y" },
+        revision: 12,
+        stage_id: "hysteresis-1",
+        stage_index: 0,
+      }),
+      yAxisKey: "m_parallel",
+    });
+
+    expect(selection).toMatchObject({
+      kind: "analysis.chart-point",
+      label: "Hysteresis point 4 (25 mT)",
+      nodeId: "analysis:hysteresis:hysteresis-1:point:4",
+      objectId: null,
+      ref: {
+        chartId: "hysteresis:hysteresis-1",
+        pointId: 4,
+        quantity: "m_parallel",
+        quantityId: "m",
+        snapshotId: "hysteresis_point_005",
+        stageId: "hysteresis-1",
+        tableId: "hysteresis:hysteresis-1",
+        targetId: "hysteresis-step:hysteresis-1:4",
+        targetKind: "hysteresis-step",
+        type: "analysis-chart-point",
+        fieldOrientation: "{\"kind\":\"preset\",\"preset_name\":\"in_plane_y\"}",
+        fieldRevision: 12,
+        measurementAxis: "field_axis",
+        x: 25,
+        y: 0.8,
+      },
+    });
+  });
+
+  it("navigates hysteresis history from the live runtime point before a point is selected", () => {
+    expect(resolveHysteresisNavigationIndex(-1, 4, 10)).toBe(4);
+    expect(adjacentHysteresisPointIndex(-1, 4, 10, 1)).toBe(5);
+    expect(adjacentHysteresisPointIndex(-1, 4, 10, -1)).toBe(3);
+    expect(nextHysteresisPlaybackIndex(-1, 4, 10)).toBe(5);
+    expect(nextHysteresisPlaybackIndex(9, 4, 10)).toBe(0);
+  });
+
+  it("uses live hysteresis progress magnetization for the active in-flight point", () => {
+    const progress = {
+      active: true,
+      current_field_mT: 200,
+      current_m_avg: [0.1, 0.7, 0.2],
+      current_m_parallel: 0.7,
+      revision: 4,
+      stage_id: "stage-000",
+      stage_index: 0,
+      status: "running",
+    };
+
+    expect(getProgressYValue(progress, "m_parallel")).toBe(0.7);
+    expect(getProgressYValue(progress, "m_avg_y")).toBe(0.7);
+    expect(getProgressYValue(progress, "m_oop")).toBe(0.2);
+    expect(getProgressYValue(progress, "m_ip")).toBeCloseTo(Math.sqrt(0.5), 12);
+  });
+
+  it("treats clearing hysteresis chart-point selection as return to live", () => {
+    const selection = buildHysteresisChartPointSelection({
+      point: {
+        field_value_mT: 25,
+        m_avg: [0.1, 0.2, 0.3],
+        m_ip: 0.224,
+        m_oop: 0.3,
+        m_parallel: 0.8,
+        point_id: 4,
+        snapshot_id: "hysteresis_point_005",
+        status: "Completed",
+      },
+      stageId: "hysteresis-1",
+      yAxisKey: "m_parallel",
+    });
+
+    expect(selectedHysteresisPointId({
+      kind: selection.kind ?? null,
+      label: selection.label ?? null,
+      moduleSource: "analysis-plots",
+      nodeId: selection.nodeId ?? null,
+      objectId: selection.objectId ?? null,
+      ref: selection.ref ?? null,
+    }, "hysteresis-1")).toBe(4);
+    expect(selectedHysteresisPointId({
+      kind: null,
+      label: null,
+      moduleSource: "analysis-plots",
+      nodeId: null,
+      objectId: null,
+      ref: null,
+    }, "hysteresis-1")).toBeNull();
+  });
+
+  it("clears only the selected hysteresis point for the active stage when returning to live", () => {
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    const kernel = { selection } as Pick<KernelApi, "selection">;
+    const chartSelection = buildHysteresisChartPointSelection({
+      point: {
+        field_value_mT: 25,
+        m_avg: [0.1, 0.2, 0.3],
+        m_ip: 0.224,
+        m_oop: 0.3,
+        m_parallel: 0.8,
+        point_id: 4,
+        snapshot_id: "hysteresis_point_005",
+        status: "Completed",
+      },
+      stageId: "hysteresis-1",
+      yAxisKey: "m_parallel",
+    });
+
+    selection.set(chartSelection, "analysis-plots");
+    expect(clearHysteresisPointSelectionForLive(
+      kernel,
+      "hysteresis-2",
+      "analysis-plots",
+    )).toBe(false);
+    expect(selectedHysteresisPointId(selection.get(), "hysteresis-1")).toBe(4);
+
+    expect(clearHysteresisPointSelectionForLive(
+      kernel,
+      "hysteresis-1",
+      "analysis-plots",
+    )).toBe(true);
+    expect(selectedHysteresisPointId(selection.get(), "hysteresis-1")).toBeNull();
+  });
+
   it("renders chart and axis column controls in the analysis surface", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        kernel={mockKernel}
         onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
@@ -88,6 +501,7 @@ describe("AnalysisPlotsView", () => {
   it("renders active zoom range with a clear action", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        kernel={mockKernel}
         onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
@@ -110,6 +524,7 @@ describe("AnalysisPlotsView", () => {
   it("renders compact chart status for axes, sample counts, and zoom state", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        kernel={mockKernel}
         onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
@@ -136,6 +551,7 @@ describe("AnalysisPlotsView", () => {
   it("renders selected chart cursor point in compact status", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        kernel={mockKernel}
         onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
@@ -169,6 +585,7 @@ describe("AnalysisPlotsView", () => {
   it("renders table loading diagnostics in the chart frame before samples exist", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        kernel={mockKernel}
         onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
@@ -191,6 +608,7 @@ describe("AnalysisPlotsView", () => {
   it("renders a series legend with units and latest values from visible rows", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        kernel={mockKernel}
         onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
@@ -245,6 +663,7 @@ describe("AnalysisPlotsView", () => {
 
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        kernel={mockKernel}
         onClearRange={() => undefined}
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}

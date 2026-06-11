@@ -58,6 +58,7 @@ from fullmag.model.study import (
     DEFAULT_TABLE_AUTOSAVE_QUANTITIES,
     Eigenmodes,
     FrequencyResponse,
+    Hysteresis,
     RelaxStop,
     Relaxation,
     TableAutosave,
@@ -77,6 +78,7 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
     base_problem = _builder_base_problem(loaded)
     relax_stage = _first_relax_stage(loaded)
     source_root = loaded.source_path.parent
+    base_dynamics = getattr(base_problem.study, "dynamics", None)
 
     return {
         "revision": 1,
@@ -88,14 +90,11 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         "demag_realization": _export_demag_realization(base_problem),
         "external_field": _problem_external_field(base_problem),
         "solver": {
-            "integrator": base_problem.study.dynamics.integrator if base_problem.study is not None else None,
-            "fixed_timestep": _text_number(base_problem.study.dynamics.fixed_timestep) if base_problem.study is not None else None,
+            "integrator": base_dynamics.integrator if base_dynamics is not None else None,
+            "fixed_timestep": _text_number(base_dynamics.fixed_timestep) if base_dynamics is not None else None,
             "demag_interval_s": _text_number(
-                base_problem.study.dynamics.field_refresh.demag_interval_s
-                if (
-                    base_problem.study is not None
-                    and base_problem.study.dynamics.field_refresh is not None
-                )
+                base_dynamics.field_refresh.demag_interval_s
+                if base_dynamics is not None and base_dynamics.field_refresh is not None
                 else None
             ),
             "relax_algorithm": relax_stage.algorithm if relax_stage is not None else "llg_overdamped",
@@ -190,7 +189,7 @@ def render_loaded_problem_as_script(
     )
 
     base_problem = _builder_base_problem(loaded)
-    surface = _script_api_surface(base_problem)
+    surface = _script_api_surface(base_problem, overrides=overrides)
     magnet_vars = _magnet_variable_names(base_problem, overrides=overrides)
     lines: list[str] = []
     source_root = loaded.source_path.parent
@@ -262,6 +261,7 @@ def render_loaded_problem_as_script(
         base_problem,
         magnet_vars,
         region_vars=region_vars,
+        overrides=overrides,
         surface=surface,
     )
     if coupling_lines:
@@ -388,6 +388,8 @@ def _infer_pipeline_stage_kind(stage_draft: dict[str, object]) -> str:
         return "frequency_response"
     if entrypoint == "eigenmodes" or "eigen" in kind:
         return "eigenmodes"
+    if entrypoint == "flat_hysteresis" or "hysteresis" in kind:
+        return "hysteresis"
     if entrypoint == "run" or "run" in kind:
         return "run"
     return "run"
@@ -440,6 +442,11 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
     study = stage.problem.study
     if study is None:
         return {"kind": "unknown", "entrypoint_kind": stage.entrypoint_kind}
+    if isinstance(study, Hysteresis):
+        return {
+            **study.to_ir(),
+            "entrypoint_kind": stage.entrypoint_kind,
+        }
     dynamics = study.dynamics
     if isinstance(study, Relaxation):
         return {
@@ -1196,28 +1203,39 @@ def _render_couplings(
     magnet_vars: dict[str, str],
     *,
     region_vars: dict[str, str] | None = None,
+    overrides: dict[str, object],
     surface: str,
 ) -> list[str]:
-    if not problem.couplings:
+    couplings_override = overrides.get("couplings")
+    if isinstance(couplings_override, list):
+        coupling_payloads = [
+            _normalize_mapping(coupling)
+            for coupling in couplings_override
+            if isinstance(coupling, dict)
+        ]
+    else:
+        coupling_payloads = [coupling.to_ir() for coupling in problem.couplings]
+    if not coupling_payloads:
         return []
     root = "study.couplings" if surface == "study" else "fm.couplings.registry()"
     lines = ["# Couplings"]
     if surface != "study":
         lines.append("couplings = fm.couplings.registry()")
         root = "couplings"
-    for coupling in problem.couplings:
+    for coupling in coupling_payloads:
         source_expr = _render_coupling_endpoint_expr(
-            coupling.source,
+            coupling.get("source"),
             magnet_vars,
             region_vars=region_vars,
         )
         target_expr = _render_coupling_endpoint_expr(
-            coupling.target,
+            coupling.get("target"),
             magnet_vars,
             region_vars=region_vars,
         )
-        params = coupling.parameters
-        if coupling.kind == "exchange":
+        params = _normalize_mapping(coupling.get("parameters"))
+        kind = str(coupling.get("kind") or params.get("kind") or "")
+        if kind == "exchange":
             kwargs = [
                 source_expr,
                 target_expr,
@@ -1229,7 +1247,7 @@ def _render_couplings(
                 kwargs.append(f"inter_exchange={_py_literal(params.get('inter_exchange'))}")
             kwargs.extend(_render_common_coupling_kwargs(coupling))
             lines.append(f"{root}.exchange({', '.join(kwargs)})")
-        elif coupling.kind == "rkky":
+        elif kind == "rkky":
             kwargs = [
                 source_expr,
                 target_expr,
@@ -1237,7 +1255,7 @@ def _render_couplings(
                 *_render_common_coupling_kwargs(coupling),
             ]
             lines.append(f"{root}.rkky({', '.join(kwargs)})")
-        elif coupling.kind == "interlayer_exchange":
+        elif kind == "interlayer_exchange":
             kwargs = [
                 source_expr,
                 target_expr,
@@ -1248,16 +1266,18 @@ def _render_couplings(
             kwargs.extend(_render_common_coupling_kwargs(coupling))
             lines.append(f"{root}.interlayer_exchange({', '.join(kwargs)})")
         else:
-            raise ValueError(f"unsupported coupling kind {coupling.kind!r}")
+            raise ValueError(f"unsupported coupling kind {kind!r}")
     return lines
 
 
 def _render_common_coupling_kwargs(coupling: object) -> list[str]:
-    kwargs = [f"coupling_id={_py_repr(coupling.coupling_id)}"]
-    if not coupling.enabled:
+    payload = _normalize_mapping(coupling)
+    kwargs = [f"coupling_id={_py_repr(str(payload.get('coupling_id') or ''))}"]
+    if payload.get("enabled") is False:
         kwargs.append("enabled=False")
-    if coupling.capability_policy != "require_runtime":
-        kwargs.append(f"capability_policy={_py_repr(coupling.capability_policy)}")
+    capability_policy = payload.get("capability_policy")
+    if isinstance(capability_policy, str) and capability_policy != "require_runtime":
+        kwargs.append(f"capability_policy={_py_repr(capability_policy)}")
     return kwargs
 
 
@@ -2590,6 +2610,15 @@ def _render_stages(
                     lines.append(f"study.stages.add_save_state({', '.join(call_parts)})")
                 continue
             continue
+        study = stage.problem.study
+        stage_override = _stage_override_for(stage_overrides, index=index, stage=stage)
+        if isinstance(study, Hysteresis):
+            if not is_study_surface:
+                raise ValueError("canonical hysteresis rewrite requires the study API surface")
+            lines.append(
+                f"study.stages.add_hysteresis_sweep({', '.join(_render_hysteresis_stage_args(study))})"
+            )
+            continue
         dynamics_signature = stage.problem.study.dynamics.to_ir()
         if previous_dynamics_signature is not None and dynamics_signature != previous_dynamics_signature:
             lines.append(
@@ -2601,8 +2630,6 @@ def _render_stages(
             )
         previous_dynamics_signature = dynamics_signature
 
-        study = stage.problem.study
-        stage_override = _stage_override_for(stage_overrides, index=index, stage=stage)
         if isinstance(study, Eigenmodes):
             count_raw = _override_string(stage_override, "eigen_count", None)
             count = study.count
@@ -2802,6 +2829,203 @@ def _render_stages(
         else:
             lines.append(f"{_surface_call(surface, 'run')}({_py_number(until_seconds)})")
     return lines
+
+
+def _render_hysteresis_stage_args(study: Hysteresis) -> list[str]:
+    payload = study.to_ir()
+    args: list[str] = []
+    for key in ("field_min_mT", "field_max_mT", "field_step_mT"):
+        if key in payload:
+            args.append(f"{key}={_py_number(float(payload[key]))}")
+    if "field_values_mT" in payload:
+        args.append(f"field_values_mT={_py_literal(payload['field_values_mT'])}")
+    if "direction" in payload:
+        args.append(f"direction={_py_literal(payload['direction'])}")
+    if "orientation" in payload:
+        args.append(f"orientation={_render_hysteresis_orientation(payload['orientation'])}")
+    args.append(f"measurement_axis={_py_repr(str(payload['measurement_axis']))}")
+    args.append(f"initial_protocol={_py_repr(str(payload['initial_protocol']))}")
+    if "saturation" in payload:
+        args.append(f"saturation={_render_hysteresis_saturation(payload['saturation'])}")
+    args.append(f"branch_mode={_py_repr(str(payload['branch_mode']))}")
+    if "settle_pipeline" in payload:
+        args.append(f"settle_pipeline={_render_hysteresis_settle_pipeline(payload['settle_pipeline'])}")
+    if "storage" in payload:
+        args.append(f"storage={_render_hysteresis_storage(payload['storage'])}")
+    if "field_schedule" in payload:
+        args.append(f"field_schedule={_render_hysteresis_field_schedule(payload['field_schedule'])}")
+    if "schedule_refinements" in payload:
+        args.append(
+            f"schedule_refinements={_render_hysteresis_field_windows(payload['schedule_refinements'])}"
+        )
+    if "minor_loops" in payload:
+        args.append(f"minor_loops={_render_hysteresis_minor_loops(payload['minor_loops'])}")
+    return args
+
+
+def _render_hysteresis_orientation(value: object) -> str:
+    payload = _normalize_mapping(value)
+    kind = str(payload.get("kind") or "")
+    if kind == "preset":
+        return f"fm.FieldOrientation.preset({_py_repr(str(payload.get('preset_name') or ''))})"
+    if kind == "sample":
+        return (
+            "fm.FieldOrientation.sample("
+            f"theta_deg={_py_number(float(payload.get('theta', 0.0)))}, "
+            f"phi_deg={_py_number(float(payload.get('phi', 0.0)))})"
+        )
+    if kind == "global":
+        return f"fm.FieldOrientation.global_vector({_py_literal(payload.get('vector'))})"
+    raise ValueError(f"unsupported hysteresis field orientation kind {kind!r}")
+
+
+def _render_hysteresis_saturation(value: object) -> str:
+    payload = _normalize_mapping(value)
+    args = [
+        f"mode={_py_repr(str(payload.get('mode') or 'auto'))}",
+        f"max_field_mT={_py_number(float(payload.get('max_field_mT', 300.0)))}",
+        f"susceptibility_threshold={_py_number(float(payload.get('susceptibility_threshold', 1e-3)))}",
+        f"transverse_threshold={_py_number(float(payload.get('transverse_threshold', 1e-2)))}",
+    ]
+    return f"fm.SaturationProbe({', '.join(args)})"
+
+
+def _render_hysteresis_storage(value: object) -> str:
+    payload = _normalize_mapping(value)
+    args = [
+        f"scalar_history={_py_literal(bool(payload.get('scalar_history', True)))}",
+        f"magnetization={_py_repr(str(payload.get('magnetization') or 'selected'))}",
+        f"every_n={int(payload.get('every_n', 5))}",
+        f"key_events={_py_literal(bool(payload.get('key_events', True)))}",
+        f"key_event_threshold_dm={_py_number(float(payload.get('key_event_threshold_dm', 0.02)))}",
+    ]
+    return f"fm.HysteresisStorage({', '.join(args)})"
+
+
+def _render_hysteresis_settle_pipeline(value: object) -> str:
+    payload = _normalize_mapping(value)
+    kind = str(payload.get("kind") or "")
+    if kind == "sequence":
+        steps = payload.get("steps")
+        if not isinstance(steps, list):
+            raise ValueError("hysteresis settle pipeline sequence requires steps")
+        rendered = ", ".join(_render_hysteresis_settle_step(step) for step in steps)
+        return f"fm.SettlePipeline([{rendered}])"
+    if kind == "tree":
+        default = _render_hysteresis_settle_step(payload.get("default"))
+        branches = payload.get("branches")
+        if not isinstance(branches, list):
+            raise ValueError("hysteresis settle tree requires branches")
+        rendered_branches = ", ".join(_render_hysteresis_settle_branch(branch) for branch in branches)
+        return f"fm.SettleTree(default={default}, branches=[{rendered_branches}])"
+    raise ValueError(f"unsupported hysteresis settle pipeline kind {kind!r}")
+
+
+def _render_hysteresis_settle_branch(value: object) -> str:
+    payload = _normalize_mapping(value)
+    return (
+        "fm.SettleBranch("
+        f"when={_py_repr(str(payload.get('when') or ''))}, "
+        f"run={_render_hysteresis_settle_step(payload.get('run'))})"
+    )
+
+
+def _render_hysteresis_settle_step(value: object) -> str:
+    payload = _normalize_mapping(value)
+    kind = str(payload.get("kind") or "")
+    class_name = {
+        "relax": "RelaxStep",
+        "minimize": "MinimizeStep",
+        "dynamics_settle": "DynamicsSettleStep",
+    }.get(kind)
+    if class_name is None:
+        raise ValueError(f"unsupported hysteresis settle step kind {kind!r}")
+    args: list[str] = []
+    for key in (
+        "method",
+        "alpha",
+        "torque_tolerance",
+        "energy_tolerance",
+        "damping",
+        "max_steps",
+        "timestep_s",
+        "max_pseudotime_s",
+        "max_physical_time_s",
+        "on_non_convergence",
+        "retry_timestep_scale",
+        "retry_max_attempts",
+    ):
+        if key not in payload:
+            continue
+        value = payload[key]
+        if isinstance(value, str):
+            args.append(f"{key}={_py_repr(value)}")
+        elif isinstance(value, bool):
+            args.append(f"{key}={_py_literal(value)}")
+        elif isinstance(value, int):
+            args.append(f"{key}={value}")
+        elif isinstance(value, float):
+            args.append(f"{key}={_py_number(value)}")
+        elif value is not None:
+            args.append(f"{key}={_py_literal(value)}")
+    return f"fm.{class_name}({', '.join(args)})"
+
+
+def _render_hysteresis_field_schedule(value: object) -> str:
+    payload = _normalize_mapping(value)
+    segments = payload.get("segments")
+    if not isinstance(segments, list):
+        raise ValueError("hysteresis field schedule requires segments")
+    rendered = ", ".join(_render_hysteresis_field_segment(segment) for segment in segments)
+    return f"fm.PiecewiseFieldSchedule.mT([{rendered}])"
+
+
+def _render_hysteresis_field_segment(value: object) -> str:
+    payload = _normalize_mapping(value)
+    args = [
+        f"start={_py_number(float(payload.get('start', 0.0)))}",
+        f"stop={_py_number(float(payload.get('stop', 0.0)))}",
+        f"step={_py_number(float(payload.get('step', 0.0)))}",
+        f"segment_id={_py_repr(str(payload.get('segment_id') or ''))}",
+        f"label={_py_repr(str(payload.get('label') or ''))}",
+        f"endpoint_policy={_py_repr(str(payload.get('endpoint_policy') or 'include_stop'))}",
+        f"reason={_py_repr(str(payload.get('reason') or ''))}",
+    ]
+    return f"fm.FieldSegment({', '.join(args)})"
+
+
+def _render_hysteresis_field_windows(value: object) -> str:
+    if not isinstance(value, list):
+        raise ValueError("hysteresis schedule_refinements must be a list")
+    return "[" + ", ".join(_render_hysteresis_field_window(window) for window in value) + "]"
+
+
+def _render_hysteresis_field_window(value: object) -> str:
+    payload = _normalize_mapping(value)
+    args = [
+        f"center_mT={_py_number(float(payload.get('center_mT', 0.0)))}",
+        f"half_width_mT={_py_number(float(payload.get('half_width_mT', 0.0)))}",
+        f"step_mT={_py_number(float(payload.get('step_mT', 0.0)))}",
+        f"reason={_py_repr(str(payload.get('reason') or ''))}",
+    ]
+    if payload.get("priority") is not None:
+        args.append(f"priority={int(payload['priority'])}")
+    return f"fm.FieldWindow({', '.join(args)})"
+
+
+def _render_hysteresis_minor_loops(value: object) -> str:
+    if not isinstance(value, list):
+        raise ValueError("hysteresis minor_loops must be a list")
+    return "[" + ", ".join(_render_hysteresis_minor_loop(loop) for loop in value) + "]"
+
+
+def _render_hysteresis_minor_loop(value: object) -> str:
+    payload = _normalize_mapping(value)
+    return (
+        "fm.MinorLoop("
+        f"reversal_mT={_py_number(float(payload.get('reversal_mT', 0.0)))}, "
+        f"return_mT={_py_number(float(payload.get('return_mT', 0.0)))})"
+    )
 
 
 def _stage_override_for(
@@ -3092,10 +3316,17 @@ def _render_geometry_expr_from_override(
             args = ["1e-9", "1e-9", "1e-9"]
         expr = f"fm.Box({', '.join(args)}, name={_py_repr(name)})"
     elif kind == "Cylinder":
+        axis = params.get("axis")
+        axis_kw = ""
+        if isinstance(axis, list) and len(axis) == 3 and tuple(float(value) for value in axis) != (0.0, 0.0, 1.0):
+            axis_kw = (
+                f", axis=({_py_number(float(axis[0]))}, "
+                f"{_py_number(float(axis[1]))}, {_py_number(float(axis[2]))})"
+            )
         expr = (
             f"fm.Cylinder(radius={_py_number(float(str(params.get('radius', 1e-9))))}, "
             f"height={_py_number(float(str(params.get('height', 1e-9))))}, "
-            f"name={_py_repr(name)})"
+            f"name={_py_repr(name)}{axis_kw})"
         )
     elif kind == "ArchWaveguide":
         expr = (
@@ -3211,6 +3442,8 @@ def _render_geometry_expr(geometry: object, *, magnet_name: str, source_root: Pa
         return f"fm.Box({args}, name={_py_repr(geometry.name)})"
     if isinstance(geometry, Cylinder):
         args = f"radius={_py_number(geometry.radius)}, height={_py_number(geometry.height)}"
+        if geometry.axis != (0.0, 0.0, 1.0):
+            args = f"{args}, axis={_py_tuple3(geometry.axis)}"
         if geometry.name in {"cylinder", f"{magnet_name}_geom"}:
             return f"fm.Cylinder({args})"
         return f"fm.Cylinder({args}, name={_py_repr(geometry.name)})"
@@ -3933,9 +4166,12 @@ def _export_geometry_descriptor(
     if isinstance(geom, Box):
         return {"geometry_kind": "Box", "geometry_params": {"size": list(geom.size)}}
     if isinstance(geom, Cylinder):
+        params: dict[str, object] = {"radius": geom.radius, "height": geom.height}
+        if geom.axis != (0.0, 0.0, 1.0):
+            params["axis"] = list(geom.axis)
         return {
             "geometry_kind": "Cylinder",
-            "geometry_params": {"radius": geom.radius, "height": geom.height},
+            "geometry_params": params,
         }
     if isinstance(geom, Ellipsoid):
         return {
@@ -4143,10 +4379,17 @@ def _safe_identifier(value: str) -> str:
     return candidate
 
 
-def _script_api_surface(problem: Problem) -> str:
+def _script_api_surface(
+    problem: Problem,
+    *,
+    overrides: dict[str, object] | None = None,
+) -> str:
     runtime_metadata = _normalize_mapping(problem.runtime_metadata)
     surface = runtime_metadata.get("script_api_surface")
-    if problem.couplings:
+    couplings_override = (overrides or {}).get("couplings")
+    if problem.couplings or (
+        isinstance(couplings_override, list) and len(couplings_override) > 0
+    ):
         return "study"
     return "study" if surface == "study" else "flat"
 

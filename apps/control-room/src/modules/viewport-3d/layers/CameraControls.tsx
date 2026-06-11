@@ -19,6 +19,7 @@ import {
 import {
   beginViewport3DCameraGesture,
   endViewport3DCameraGesture,
+  VIEWPORT_3D_CAMERA_FIELD_UPDATE_RELEASE_DELAY_MS,
   viewport3DCameraGestureActive,
   type Viewport3DCameraGestureRef,
 } from "./viewport3DCameraGesture";
@@ -791,7 +792,8 @@ function useSmoothViewport3DWheelZoom({
       clearCameraControlsPoseCommit();
       beginViewport3DCameraGesture(cameraGestureRef);
 
-      const orthographicCamera = camera as Camera & {
+      const frameCamera = cameraRef.current;
+      const orthographicCamera = frameCamera as Camera & {
         isOrthographicCamera?: boolean;
         zoom?: number;
       };
@@ -813,7 +815,7 @@ function useSmoothViewport3DWheelZoom({
         const target = controls.target;
         const currentDistance =
           wheelZoomTargetDistanceRef.current ??
-          camera.position.distanceTo(target);
+          frameCamera.position.distanceTo(target);
         if (!Number.isFinite(currentDistance) || currentDistance <= 0) return;
         wheelZoomTargetDistanceRef.current = Math.max(
           currentDistance * scale,
@@ -835,7 +837,6 @@ function useSmoothViewport3DWheelZoom({
       domElement.removeEventListener("wheel", handleWheel, { capture: true });
     };
   }, [
-    camera,
     cameraGestureRef,
     cameraProjection,
     clearCameraControlsPoseCommit,
@@ -999,6 +1000,77 @@ function useOrbitCameraControlsModel({
 
   useEffect(() => {
     const element = gl.domElement;
+    let wheelReleaseTimeout: ReturnType<typeof setTimeout> | null = null;
+    const releaseWheelGesture = () => {
+      if (wheelReleaseTimeout) {
+        clearTimeout(wheelReleaseTimeout);
+        wheelReleaseTimeout = null;
+      }
+      endViewport3DCameraGesture(cameraGestureRef);
+    };
+    const handleWheelCapture = (event: WheelEvent) => {
+      if (!Number.isFinite(event.deltaY) || event.deltaY === 0) return;
+      beginViewport3DCameraGesture(cameraGestureRef);
+      if (wheelReleaseTimeout) {
+        clearTimeout(wheelReleaseTimeout);
+      }
+      wheelReleaseTimeout = setTimeout(
+        releaseWheelGesture,
+        VIEWPORT_3D_CAMERA_FIELD_UPDATE_RELEASE_DELAY_MS,
+      );
+    };
+
+    element.addEventListener("wheel", handleWheelCapture, {
+      capture: true,
+      passive: true,
+    });
+
+    return () => {
+      element.removeEventListener("wheel", handleWheelCapture, {
+        capture: true,
+      });
+      releaseWheelGesture();
+    };
+  }, [cameraGestureRef, gl]);
+
+  useEffect(() => {
+    const element = gl.domElement;
+    const endCanvasPointerGesture = () => {
+      window.removeEventListener("pointerup", endCanvasPointerGesture, {
+        capture: true,
+      });
+      window.removeEventListener("pointercancel", endCanvasPointerGesture, {
+        capture: true,
+      });
+      endViewport3DCameraGesture(cameraGestureRef);
+    };
+    const beginCanvasPointerGesture = (event: PointerEvent) => {
+      if (event.button < 0 || event.button > 2) return;
+      beginViewport3DCameraGesture(cameraGestureRef);
+      window.addEventListener("pointerup", endCanvasPointerGesture, {
+        capture: true,
+        once: true,
+      });
+      window.addEventListener("pointercancel", endCanvasPointerGesture, {
+        capture: true,
+        once: true,
+      });
+    };
+
+    element.addEventListener("pointerdown", beginCanvasPointerGesture, {
+      capture: true,
+    });
+
+    return () => {
+      element.removeEventListener("pointerdown", beginCanvasPointerGesture, {
+        capture: true,
+      });
+      endCanvasPointerGesture();
+    };
+  }, [cameraGestureRef, gl]);
+
+  useEffect(() => {
+    const element = gl.domElement;
 
     const restoreControls = () => {
       window.removeEventListener("pointerup", restoreControls, { capture: true });
@@ -1038,6 +1110,9 @@ function useOrbitCameraControlsModel({
   }, [gl]);
 
   useEffect(() => {
+    if (process.env.NODE_ENV === "production") {
+      return undefined;
+    }
     const readDiagnostics = () =>
       readViewport3DCameraControlsDiagnostics({
         camera,

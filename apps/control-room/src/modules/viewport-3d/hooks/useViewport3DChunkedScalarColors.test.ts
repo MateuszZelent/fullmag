@@ -7,6 +7,7 @@ import type { Viewport3DFieldRenderModel } from "../viewport3dRenderModel";
 import {
   chunkedScalarColorStateIsCompatible,
   mergeViewport3DFieldScalarColors,
+  shouldStartChunkedScalarColorBuild,
 } from "./useViewport3DChunkedScalarColors";
 
 const sourceUrl = new URL("./useViewport3DChunkedScalarColors.ts", import.meta.url);
@@ -53,8 +54,10 @@ describe("useViewport3DChunkedScalarColors", () => {
 
   it("keeps the previous chunked buffers visible during compatible field replacement", () => {
     const topology = { nodeCount: 75_000 };
+    const fieldVector = {};
     const current = {
       colorPalette: "viridis",
+      fieldVector,
       modesKey: "orientation",
       token: {},
       topology,
@@ -74,8 +77,10 @@ describe("useViewport3DChunkedScalarColors", () => {
 
   it("drops previous chunked buffers when topology or mode compatibility changes", () => {
     const topology = { nodeCount: 75_000 };
+    const fieldVector = {};
     const current = {
       colorPalette: "viridis",
+      fieldVector,
       modesKey: "orientation",
       token: {},
       topology,
@@ -109,6 +114,34 @@ describe("useViewport3DChunkedScalarColors", () => {
         modesKey: "orientation",
         needsChunking: false,
         topology,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not start overlapping chunked color builds while a previous build is pending", () => {
+    const currentFieldVector = {};
+    expect(
+      shouldStartChunkedScalarColorBuild({
+        builtFieldVector: null,
+        currentFieldVector,
+        eligibleForChunkedBuild: true,
+        pending: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldStartChunkedScalarColorBuild({
+        builtFieldVector: null,
+        currentFieldVector,
+        eligibleForChunkedBuild: true,
+        pending: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldStartChunkedScalarColorBuild({
+        builtFieldVector: currentFieldVector,
+        currentFieldVector,
+        eligibleForChunkedBuild: true,
+        pending: false,
       }),
     ).toBe(false);
   });

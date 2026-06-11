@@ -64,14 +64,6 @@ describe("buildModelTree", () => {
         "model:object:free-layer",
         "model:object:free-layer:geometry",
         "model:object:free-layer:regions",
-        "model:object:free-layer:regions:primary",
-        "model:object:free-layer:regions:primary:geometry",
-        "model:object:free-layer:regions:primary:magnetic-parameters",
-        "model:object:free-layer:regions:primary:mesh",
-        "model:object:free-layer:regions:primary:texture",
-        "model:object:free-layer:regions:primary:visualization",
-        "model:object:free-layer:regions:primary:regions",
-        "model:object:free-layer:regions:primary:diagnostics",
         "model:object:free-layer:magnetic-parameters",
         "model:object:free-layer:magnetic-parameters:material",
         "model:object:free-layer:magnetic-parameters:uniaxial_anisotropy",
@@ -97,6 +89,17 @@ describe("buildModelTree", () => {
       label: "Airbox Quality",
       parentId: "model:mesh",
     });
+    expect(
+      flattened.find((node) => node.id === "model:object:free-layer:regions"),
+    ).toMatchObject({
+      badge: "0",
+      children: [],
+      kind: "object.regions",
+      label: "Regions",
+    });
+    expect(flattened.map((node) => node.id)).not.toContain(
+      "model:object:free-layer:regions:primary",
+    );
   });
 
   it("labels the shared-domain mesh node from mesh build freshness", () => {
@@ -230,18 +233,6 @@ describe("buildModelTree", () => {
         (node) => node.id === "model:object:box-1:magnetic-texture",
       )?.contextCommands,
     ).toEqual(expect.arrayContaining(["magnetization-texture.activate-load-file"]));
-    expect(
-      flattened.find(
-        (node) =>
-          node.id === "model:object:box-1:regions:primary:texture",
-      ),
-    ).toMatchObject({
-      badge: "Vortex texture",
-      kind: "object.region.texture",
-      label: "Texture",
-      objectId: "box-1",
-      regionId: "region:box-1",
-    });
     expect(flattened.map((node) => node.id)).toContain(
       "model:object:box-1:magnetic-texture:transform",
     );
@@ -393,6 +384,12 @@ describe("buildModelTree", () => {
       flattened.find((node) => node.id === "model:object:film:regions")?.badge,
     ).toBe("1");
     expect(
+      flattened.find((node) => node.id === "model:object:film:regions")
+        ?.contextCommands,
+    ).toEqual(
+      expect.arrayContaining(["workspace.focus-selection", "mesh.open-regions"]),
+    );
+    expect(
       flattened.find((node) => node.id === "model:object:film:regions:reg-core"),
     ).toMatchObject({
       kind: "object.region",
@@ -400,6 +397,19 @@ describe("buildModelTree", () => {
       objectId: "film",
       regionId: "reg-core",
     });
+    expect(
+      flattened.find((node) => node.id === "model:object:film:regions:reg-core")
+        ?.contextCommands,
+    ).toEqual(
+      expect.arrayContaining([
+        "regions.focus",
+        "regions.duplicate",
+        "regions.delete",
+        "regions.priority-up",
+        "regions.priority-down",
+        "mesh.open-region-report",
+      ]),
+    );
     expect(
       flattened.find(
         (node) => node.id === "model:object:film:regions:reg-core:geometry",
@@ -441,6 +451,17 @@ describe("buildModelTree", () => {
       kind: "physics.coupling",
       status: "warning",
     });
+    expect(
+      flattened.find(
+        (node) => node.id === "model:physics:couplings:cpl-exchange",
+      )?.contextCommands,
+    ).toEqual(
+      expect.arrayContaining([
+        "workspace.focus-selection",
+        "couplings.disable",
+        "couplings.delete",
+      ]),
+    );
   });
 
   it("uses typed scene material field owner_object when projecting region field nodes", () => {
@@ -720,6 +741,356 @@ describe("buildModelTree", () => {
       ),
     ).toMatchObject({
       label: "Run 2",
+      status: "running",
+    });
+  });
+
+  it("renders hysteresis as one dynamic field node with settle algorithms", () => {
+    const snapshot = modelTreeSnapshotWithStageExecution(
+      modelTreeSnapshotFromScene({
+        objects: [],
+        study: {
+          stages: [
+            {
+              kind: "hysteresis",
+              stage_id: "hysteresis-1",
+              field_max_mT: 100,
+              field_min_mT: -100,
+              field_step_mT: 10,
+              initial_protocol: "positive_saturation",
+              branch_mode: "major_loop",
+              saturation: { mode: "auto" },
+              settle_pipeline: {
+                kind: "sequence",
+                steps: [
+                  {
+                    kind: "relax",
+                    method: "llg_overdamped",
+                    alpha: 1,
+                    torque_tolerance: 1e-5,
+                    max_steps: 10000,
+                  },
+                  {
+                    kind: "minimize",
+                    method: "projected_gradient_bb",
+                    torque_tolerance: 5e-6,
+                    energy_tolerance: 1e-20,
+                    max_steps: 2000,
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      }),
+      {
+        active_stage_index: 0,
+        active_stage_kind: "hysteresis",
+        completed_stage_indexes: [],
+        revision: 13,
+        runtime_state: "running",
+        stage_statuses: ["running"],
+        stages: [
+          {
+            index: 0,
+            stage_id: "hysteresis-1",
+            status: "running",
+            current_field_mT: 25,
+            current_point_index: 4,
+            current_settle_step_index: 1,
+            current_settle_step_kind: "minimize",
+            current_settle_step_method: "projected_gradient_bb",
+          },
+        ],
+        total_stages: 1,
+      } as never,
+    );
+    const flattened = flattenExplorerNodes(buildModelTree(snapshot));
+
+    expect(
+      flattened.filter(
+        (node) => node.id.includes(":field-point:") && !node.id.includes(":algorithm:"),
+      ),
+    ).toHaveLength(1);
+    expect(
+      flattened.find(
+        (node) =>
+          node.id ===
+          "model:study:stages:stage:hysteresis-1:field-point:4",
+      ),
+    ).toMatchObject({
+      badge: "25 mT / point 5",
+      label: "Current Field",
+      status: "running",
+    });
+    expect(
+      flattened.find(
+        (node) =>
+          node.id ===
+          "model:study:stages:stage:hysteresis-1:field-point:4:algorithm:0",
+      ),
+    ).toMatchObject({
+      badge: "llg_overdamped",
+      label: "Relax 1",
+      status: "completed",
+    });
+    expect(
+      flattened.find(
+        (node) =>
+          node.id ===
+          "model:study:stages:stage:hysteresis-1:field-point:4:algorithm:1",
+      ),
+    ).toMatchObject({
+      badge: "projected_gradient_bb",
+      label: "Minimize 2",
+      status: "running",
+    });
+  });
+
+  it("renders hysteresis experiment structure without expanding every field point", () => {
+    const snapshot = modelTreeSnapshotWithStageExecution(
+      modelTreeSnapshotFromScene({
+        objects: [],
+        study: {
+          stages: [
+            {
+              kind: "hysteresis",
+              stage_id: "hysteresis-1",
+              field_max_mT: 100,
+              field_min_mT: -100,
+              field_step_mT: 10,
+              initial_protocol: "positive_saturation",
+              branch_mode: "major_loop",
+              saturation: { mode: "auto" },
+              settle_pipeline: {
+                kind: "sequence",
+                steps: [
+                  {
+                    kind: "minimize",
+                    method: "projected_gradient_bb",
+                    torque_tolerance: 5e-5,
+                    energy_tolerance: 1e-20,
+                    max_steps: 2000,
+                  },
+                  {
+                    kind: "relax",
+                    method: "llg_overdamped",
+                    torque_tolerance: 1e-5,
+                    max_steps: 10000,
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      }),
+      {
+        active_stage_index: 0,
+        active_stage_kind: "hysteresis",
+        completed_stage_indexes: [],
+        revision: 15,
+        runtime_state: "running",
+        stage_statuses: ["running"],
+        stages: [
+          {
+            index: 0,
+            stage_id: "hysteresis-1",
+            status: "running",
+            current_field_mT: 25,
+            current_point_index: 4,
+            current_settle_step_index: 0,
+            current_settle_step_kind: "minimize",
+            current_settle_step_method: "projected_gradient_bb",
+          },
+        ],
+        total_stages: 1,
+      } as never,
+    );
+    const flattened = flattenExplorerNodes(buildModelTree(snapshot));
+    const stageId = "model:study:stages:stage:hysteresis-1";
+
+    expect(
+      flattened
+        .filter((node) => node.parentId === stageId)
+        .map((node) => node.id),
+    ).toEqual(expect.arrayContaining([
+      `${stageId}:plan`,
+      `${stageId}:protocol`,
+      `${stageId}:saturation`,
+      `${stageId}:live-run`,
+      `${stageId}:branches`,
+      `${stageId}:points`,
+      `${stageId}:metrics`,
+      `${stageId}:snapshots`,
+      `${stageId}:field-point:4`,
+    ]));
+    expect(flattened.find((node) => node.id === `${stageId}:plan`)).toMatchObject({
+      label: "Plan",
+      badge: "-100..100 mT / step 10",
+      status: "ready",
+    });
+    expect(flattened.find((node) => node.id === `${stageId}:live-run`)).toMatchObject({
+      label: "Live Run",
+      badge: "25 mT / point 5",
+      status: "running",
+    });
+    expect(flattened.find((node) => node.id === `${stageId}:protocol`)).toMatchObject({
+      badge: "positive_saturation / major_loop",
+    });
+    expect(flattened.find((node) => node.id === `${stageId}:saturation`)).toMatchObject({
+      badge: "auto",
+      status: "ready",
+    });
+    expect(
+      flattened
+        .filter((node) => node.parentId === `${stageId}:branches`)
+        .map((node) => node.id),
+    ).toEqual(expect.arrayContaining([
+      `${stageId}:branches:forward`,
+      `${stageId}:branches:return`,
+      `${stageId}:branches:minor-loops`,
+    ]));
+    expect(
+      flattened.filter(
+        (node) => node.id.includes(":point:") && !node.id.includes(":field-point:"),
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("renders hysteresis protocol and saturation from the stage contract", () => {
+    const snapshot = modelTreeSnapshotFromScene({
+      objects: [],
+      study: {
+        stages: [
+          {
+            kind: "hysteresis",
+            stage_id: "virgin-hysteresis",
+            field_max_mT: 80,
+            field_min_mT: 0,
+            field_step_mT: 2,
+            initial_protocol: "zero_field_relaxed",
+            branch_mode: "virgin_curve",
+          },
+        ],
+      },
+    });
+    const flattened = flattenExplorerNodes(buildModelTree(snapshot));
+    const stageId = "model:study:stages:stage:virgin-hysteresis";
+
+    expect(flattened.find((node) => node.id === `${stageId}:protocol`)).toMatchObject({
+      label: "Protocol",
+      badge: "zero_field_relaxed / virgin_curve",
+      status: "ready",
+    });
+    expect(flattened.find((node) => node.id === `${stageId}:saturation`)).toMatchObject({
+      label: "Saturation",
+      badge: "not configured",
+      status: "skipped",
+    });
+    expect(flattened.find((node) => node.id === `${stageId}:branches`)).toMatchObject({
+      label: "Branches",
+      badge: "virgin_curve",
+    });
+  });
+
+  it("summarizes dense hysteresis point plans without rendering every point", () => {
+    const snapshot = modelTreeSnapshotWithStageExecution(
+      modelTreeSnapshotFromScene({
+        objects: [],
+        study: {
+          stages: [
+            {
+              kind: "hysteresis",
+              stage_id: "hysteresis-1",
+              field_max_mT: 1000,
+              field_min_mT: -1000,
+              field_step_mT: 10,
+              settle_pipeline: {
+                kind: "sequence",
+                steps: [
+                  {
+                    kind: "relax",
+                    method: "llg_overdamped",
+                    torque_tolerance: 1e-5,
+                    max_steps: 10000,
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      }),
+      {
+        active_stage_index: 0,
+        active_stage_kind: "hysteresis",
+        completed_stage_indexes: [],
+        revision: 14,
+        runtime_state: "running",
+        stage_statuses: ["running"],
+        stages: [
+          {
+            index: 0,
+            stage_id: "hysteresis-1",
+            status: "running",
+            current_field_mT: -250,
+            current_point_index: 125,
+            current_settle_step_index: 0,
+            current_settle_step_kind: "relax",
+            current_settle_step_method: "llg_overdamped",
+          },
+        ],
+        total_stages: 1,
+      } as never,
+    );
+    const flattened = flattenExplorerNodes(buildModelTree(snapshot));
+
+    expect(
+      flattened.filter(
+        (node) =>
+          node.id.includes(":field-point:") &&
+          !node.id.includes(":algorithm:"),
+      ),
+    ).toHaveLength(1);
+    expect(
+      flattened.find(
+        (node) => node.id === "model:study:stages:stage:hysteresis-1:points",
+      ),
+    ).toMatchObject({
+      badge: "126/201",
+      label: "Points",
+      status: "running",
+    });
+    expect(
+      flattened.find(
+        (node) =>
+          node.id ===
+          "model:study:stages:stage:hysteresis-1:points:completed",
+      ),
+    ).toMatchObject({
+      badge: "125 points",
+      label: "Completed Points",
+      status: "completed",
+    });
+    expect(
+      flattened.find(
+        (node) =>
+          node.id ===
+          "model:study:stages:stage:hysteresis-1:points:queued",
+      ),
+    ).toMatchObject({
+      badge: "75 points",
+      label: "Queued Points",
+      status: "queued",
+    });
+    expect(
+      flattened.find(
+        (node) =>
+          node.id ===
+          "model:study:stages:stage:hysteresis-1:field-point:125",
+      ),
+    ).toMatchObject({
+      badge: "-250 mT / point 126",
+      label: "Current Field",
       status: "running",
     });
   });

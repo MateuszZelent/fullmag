@@ -67,6 +67,7 @@ import { Viewport3DSettingsDialog } from "./components/Viewport3DSettingsDialog"
 import {
   type Viewport3DPartSelection,
 } from "./viewport3dDomainAdapter";
+import type { HysteresisStepViewportTarget } from "./model/viewport3DTargets";
 import {
   useViewport3DResourceCounts,
   useViewport3DResourceTracker,
@@ -106,6 +107,10 @@ import {
   resolveViewport3DCanvasGlOptions,
   type Viewport3DVisualProfile,
 } from "./viewport3dVisualProfile";
+import {
+  beginViewport3DFieldUpdateHold,
+  endViewport3DFieldUpdateHold,
+} from "./viewport3dFieldUpdateHold";
 
 type Viewport3DSceneProps = ComponentProps<typeof Viewport3DScene>;
 
@@ -198,6 +203,13 @@ export function resolveViewport3DColorbarLegend({
   };
 }
 
+export function formatHysteresisReplayLabel(
+  target: HysteresisStepViewportTarget | null,
+): string | null {
+  if (!target) return null;
+  return `Replay Hysteresis point ${target.pointId} · ${target.snapshotId}`;
+}
+
 function completePendingViewport3DCapture(
   canvasRef: { current: HTMLCanvasElement | null },
   pendingCaptureRevisionRef: { current: number | null },
@@ -254,6 +266,7 @@ interface Viewport3DFrameProps
   domainSummary: string;
   fieldDataIssue: Viewport3DFieldDataIssue | null;
   fieldRefresh: Viewport3DFieldRefreshState;
+  hysteresisReplayTarget: HysteresisStepViewportTarget | null;
   inspectRevision: number;
   kernel: ModuleProps["kernel"];
   meshQualityMetric: MeshQualityColorMetric;
@@ -462,6 +475,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   domainSummary,
   fieldDataIssue,
   fieldRefresh,
+  hysteresisReplayTarget,
   inspectRevision,
   kernel,
   meshQualityMetric,
@@ -494,6 +508,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   const canvasGlOptions = resolveViewport3DCanvasGlOptions(visualProfile);
   const canvasContextKey = `viewport-3d-canvas-aa:${canvasGlOptions.antialias ? "1" : "0"}-preserve:${canvasGlOptions.preserveDrawingBuffer ? "1" : "0"}`;
   const orbitDebugEnabled = viewport3DOrbitDebugEnabledFromBrowserConfig();
+  const hysteresisReplayLabel = formatHysteresisReplayLabel(hysteresisReplayTarget);
   const [orbitDebugAngles, setOrbitDebugAngles] =
     useState<Viewport3DOrbitDebugAngles>(() =>
       normalizeViewport3DOrbitDebugAngles(null),
@@ -502,6 +517,54 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   const [orbitDebugCommitRevision, setOrbitDebugCommitRevision] = useState(0);
   const [dismissedResourceIssueKey, setDismissedResourceIssueKey] =
     useState<string | null>(null);
+  const fieldUpdatePointerHoldRef = useRef(false);
+  const fieldUpdatePointerHoldReleaseTimeoutRef = useRef<number | null>(null);
+  const releaseFieldUpdatePointerHold = useCallback(() => {
+    if (fieldUpdatePointerHoldReleaseTimeoutRef.current !== null) {
+      window.clearTimeout(fieldUpdatePointerHoldReleaseTimeoutRef.current);
+      fieldUpdatePointerHoldReleaseTimeoutRef.current = null;
+    }
+    if (!fieldUpdatePointerHoldRef.current) return;
+    fieldUpdatePointerHoldRef.current = false;
+    endViewport3DFieldUpdateHold();
+  }, []);
+  const scheduleFieldUpdatePointerHoldRelease = useCallback(() => {
+    if (fieldUpdatePointerHoldReleaseTimeoutRef.current !== null) {
+      window.clearTimeout(fieldUpdatePointerHoldReleaseTimeoutRef.current);
+    }
+    fieldUpdatePointerHoldReleaseTimeoutRef.current = window.setTimeout(() => {
+      fieldUpdatePointerHoldReleaseTimeoutRef.current = null;
+      releaseFieldUpdatePointerHold();
+    }, 150);
+  }, [releaseFieldUpdatePointerHold]);
+  const holdFieldUpdatesForPointerGesture = useCallback(
+    (event: ReactPointerEvent<HTMLElement>) => {
+      if (event.button < 0 || event.button > 2) return;
+      if (fieldUpdatePointerHoldReleaseTimeoutRef.current !== null) {
+        window.clearTimeout(fieldUpdatePointerHoldReleaseTimeoutRef.current);
+        fieldUpdatePointerHoldReleaseTimeoutRef.current = null;
+      }
+      if (!fieldUpdatePointerHoldRef.current) {
+        fieldUpdatePointerHoldRef.current = true;
+        beginViewport3DFieldUpdateHold();
+      }
+      window.addEventListener("pointerup", scheduleFieldUpdatePointerHoldRelease, {
+        capture: true,
+        once: true,
+      });
+      window.addEventListener("pointercancel", releaseFieldUpdatePointerHold, {
+        capture: true,
+        once: true,
+      });
+    },
+    [releaseFieldUpdatePointerHold, scheduleFieldUpdatePointerHoldRelease],
+  );
+  useEffect(
+    () => () => {
+      releaseFieldUpdatePointerHold();
+    },
+    [releaseFieldUpdatePointerHold],
+  );
   const [inspectHover, setInspectHover] =
     useState<Viewport3DInspectHover | null>(null);
   const lastRenderedMeshRevision = useRef<number | string | null>(null);
@@ -652,13 +715,19 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       data-inspect-enabled={sceneProps.inspectEnabled ? "true" : "false"}
       data-primitive-object-count={sceneProps.primitiveModel?.objects.length ?? 0}
       data-primitive-object-ids={primitiveObjectIds}
+      data-hysteresis-replay-snapshot-id={hysteresisReplayTarget?.snapshotId ?? ""}
+      data-hysteresis-replay-stage-id={hysteresisReplayTarget?.stageId ?? ""}
       data-topology-freshness={sceneProps.topologyFreshness}
       data-visual-profile-id={sceneProps.visualProfileId}
+      onPointerCancelCapture={releaseFieldUpdatePointerHold}
       onPointerDown={() => kernel.layout.setFocusedSlot(slotId)}
+      onPointerDownCapture={holdFieldUpdatesForPointerGesture}
+      onPointerUpCapture={scheduleFieldUpdatePointerHoldRelease}
     >
       <div aria-live="polite" className="fm-viewport-3d__hud">
         <span>{quantityId}</span>
         <span>{selectedLabel}</span>
+        {hysteresisReplayLabel ? <span>{hysteresisReplayLabel}</span> : null}
         <span>{domainSummary}</span>
         {meshQualityLegend ? <span>{meshQualityLegend}</span> : null}
         {sceneProps.meshSizeHighlightModel ? (
@@ -730,6 +799,9 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           onCreated={({ gl }) => {
             canvasRef.current = gl.domElement;
             configureViewport3DRenderer(gl, visualProfile);
+          }}
+          onContextMenu={(event) => {
+            event.preventDefault();
           }}
           onPointerMissed={() => {
             clearInspectHover();

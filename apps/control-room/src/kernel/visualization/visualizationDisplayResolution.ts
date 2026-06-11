@@ -36,9 +36,10 @@ export function resolveVisualizationTopologyFreshness(
     if (sceneHasDirtyGeometry(sceneRecord)) {
       return "unknown";
     }
-    return cleanTopologyCoverage || sceneHasKnownObjects(sceneRecord)
-      ? "current"
-      : "unknown";
+    if (!manifestRecord) {
+      return sceneHasKnownObjects(sceneRecord) ? "current" : "unknown";
+    }
+    return cleanTopologyCoverage ? "current" : "unknown";
   }
 
   if (sceneRevision === sourceSceneRevision) {

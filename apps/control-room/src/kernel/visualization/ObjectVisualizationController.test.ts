@@ -495,6 +495,21 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
+  it("keeps primitive fallback disabled by default even when visualization state has a primitive layer", () => {
+    expect(
+      resolveGlobalObjectVisualizationSettings({
+        layers: {
+          primitives: {
+            opacity: 1,
+            visible: true,
+          },
+        },
+      } as never),
+    ).toMatchObject({
+      primitiveVisible: false,
+    });
+  });
+
   it("defaults scalar surface quantities to colormap instead of vector orientation coloring", () => {
     expect(
       resolveGlobalObjectVisualizationSettings({

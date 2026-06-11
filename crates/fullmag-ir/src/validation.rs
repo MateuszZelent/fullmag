@@ -880,6 +880,7 @@ pub(crate) fn validate_magnetoelastic(problem: &ProblemIR, errors: &mut Vec<Stri
         | crate::StudyIR::FrequencyResponse { dynamics, .. } => match dynamics {
             DynamicsIR::Llg { mechanics, .. } => mechanics.as_ref(),
         },
+        crate::StudyIR::Hysteresis { .. } => None,
     };
     if mechanics.is_some() && !has_magnetoelastic {
         errors.push("llg.mechanics requires a Magnetoelastic energy term".to_string());

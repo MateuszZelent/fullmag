@@ -31,6 +31,14 @@ class _GeometryOps:
         return Translate(geometry=self, offset=offset)  # type: ignore[arg-type]
 
 
+def _normalize_unit_vector3(value: tuple[float, float, float], field: str) -> tuple[float, float, float]:
+    vector = as_vector3(value, field)
+    norm = math.sqrt(sum(component * component for component in vector))
+    if not math.isfinite(norm) or norm <= 0.0:
+        raise ValueError(f"{field} must be a non-zero finite vector")
+    return tuple(component / norm for component in vector)
+
+
 def _format_translation_component(value: float) -> str:
     return f"{value:.6g}"
 
@@ -194,15 +202,24 @@ class Box(_GeometryOps):
 
 @dataclass(frozen=True, slots=True)
 class Cylinder(_GeometryOps):
-    """Circular cylinder centered at origin, axis along z."""
+    """Circular cylinder centered at origin."""
 
     radius: float
     height: float
+    axis: tuple[float, float, float]
     name: str = "cylinder"
 
-    def __init__(self, radius: float, height: float, name: str = "cylinder") -> None:
+    def __init__(
+        self,
+        radius: float,
+        height: float,
+        name: str = "cylinder",
+        *,
+        axis: tuple[float, float, float] = (0.0, 0.0, 1.0),
+    ) -> None:
         object.__setattr__(self, "radius", require_positive(radius, "radius"))
         object.__setattr__(self, "height", require_positive(height, "height"))
+        object.__setattr__(self, "axis", _normalize_unit_vector3(axis, "axis"))
         object.__setattr__(self, "name", require_non_empty(name, "name"))
 
     @property
@@ -215,6 +232,7 @@ class Cylinder(_GeometryOps):
             "kind": "cylinder",
             "radius": self.radius,
             "height": self.height,
+            "axis": list(self.axis),
         }
 
 

@@ -31,6 +31,7 @@ import { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
 import { LayoutController } from "../layout/LayoutController";
 import { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
+import { SelectionController } from "../selection/SelectionController";
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
 
 import { STUDY_RUNTIME_COMMANDS } from "./studyRuntimeCommandContributions";
@@ -307,6 +308,299 @@ describe("study runtime command contributions", () => {
     expect(resources.getRevision(MODEL_SCENE_PATH)).toBe(5);
     expect(resources.getRevision(MODEL_STUDY_PATH)).toBe(5);
     expect(resources.getRevision(SIMULATION_STAGES_EXECUTION_PATH)).toBe(5);
+  });
+
+  it("adds hysteresis stage visibly by selecting the new stage and opening Study", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const layout = new LayoutController(bus);
+    const selection = new SelectionController(bus);
+    layout.setActiveTab("home");
+    const scene = vi.fn(async () => ({
+      scene_revision: 3,
+      study: { stages: [{ kind: "relax", stage_id: "relax-1" }] },
+    }));
+    const commitTransaction = vi.fn(async () => ({ scene_revision: 5 }));
+
+    const result = await registry.execute("study.add-hysteresis-stage", {
+      api: {
+        model: { scene, commitTransaction },
+      } as never,
+      layout,
+      resources,
+      selection,
+      source: "test",
+    });
+
+    expect(result).toEqual({
+      message: "Hysteresis stage added.",
+      status: "completed",
+    });
+    const [[request]] = commitTransaction.mock.calls as unknown as [[
+      { merge_patch: { study: { stages: Array<Record<string, unknown>> } } },
+    ]];
+    const stage = request.merge_patch.study.stages[1];
+    expect(stage).toMatchObject({
+      branch_mode: "major_loop",
+      field_max_mT: 100,
+      field_min_mT: -100,
+      field_step_mT: 10,
+      kind: "hysteresis",
+      orientation: { kind: "preset", preset_name: "oop_positive" },
+      settle_pipeline: {
+        kind: "sequence",
+        steps: [
+          {
+            kind: "relax",
+            method: "llg_overdamped",
+          },
+        ],
+      },
+      stage_id: "hysteresis-2",
+    });
+    expect(stage).not.toHaveProperty("start_field");
+    expect(stage).not.toHaveProperty("field_steps");
+    expect(layout.get().activeModuleTab).toBe("study");
+    expect(layout.get().panelVisible.right).toBe(true);
+    expect(selection.get()).toMatchObject({
+      kind: "study.stage.hysteresis",
+      label: "hysteresis stage",
+      nodeId: "model:study:stages:stage:hysteresis-2",
+      ref: {
+        kind: "study.stage.hysteresis",
+        stageId: "hysteresis-2",
+        stageIndex: 1,
+        type: "study-stage",
+      },
+    });
+  });
+
+  it("loads a hysteresis point in 3D by publishing an analysis chart point selection", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const layout = new LayoutController(bus);
+    const selection = new SelectionController(bus);
+    layout.setActiveViewportMainModule("analysis-plots");
+
+    const result = await registry.execute("hysteresis.load-point-in-3d", {
+      layout,
+      selection,
+      source: "test",
+    }, {
+      fieldVal: 25,
+      mVal: 0.8,
+      pointId: 4,
+      snapshotId: "hysteresis_point_005",
+      stageId: "hysteresis-1",
+    });
+
+    expect(result).toEqual({
+      message: "Loaded point in 3D.",
+      status: "completed",
+    });
+    expect(selection.get()).toMatchObject({
+      kind: "analysis.chart-point",
+      label: "Point 4 (25 mT)",
+      moduleSource: "analysis-plots",
+      nodeId: "analysis:hysteresis:hysteresis-1:point:4",
+      objectId: null,
+      ref: {
+        chartId: "hysteresis:hysteresis-1",
+        pointId: 4,
+        quantity: "m",
+        snapshotId: "hysteresis_point_005",
+        stageId: "hysteresis-1",
+        tableId: "hysteresis:hysteresis-1",
+        targetId: "hysteresis-step:hysteresis-1:4",
+        targetKind: "hysteresis-step",
+        type: "analysis-chart-point",
+        x: 25,
+        y: 0.8,
+      },
+    });
+    expect(layout.get().activeViewportMainModuleId).toBe("viewport-3d");
+    expect(layout.get().focusedSlot).toBe("viewport-main");
+  });
+
+  it("returns from a loaded hysteresis point snapshot to the live field", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const selection = new SelectionController(bus);
+
+    await registry.execute("hysteresis.load-point-in-3d", {
+      selection,
+      source: "test",
+    }, {
+      fieldVal: 25,
+      mVal: 0.8,
+      pointId: 4,
+      snapshotId: "hysteresis_point_005",
+      stageId: "hysteresis-1",
+    });
+    expect(selection.get().ref).toMatchObject({
+      snapshotId: "hysteresis_point_005",
+      type: "analysis-chart-point",
+    });
+
+    const result = await registry.execute("hysteresis.return-to-live", {
+      selection,
+      source: "test",
+    });
+
+    expect(result).toEqual({
+      message: "Returned 3D viewport to the live magnetization field.",
+      status: "completed",
+    });
+    expect(selection.get()).toEqual({
+      kind: null,
+      label: null,
+      moduleSource: "analysis-plots",
+      nodeId: null,
+      objectId: null,
+      ref: null,
+    });
+  });
+
+  it("does not clear another hysteresis stage when returning one stage to live", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const selection = new SelectionController(bus);
+
+    await registry.execute("hysteresis.load-point-in-3d", {
+      selection,
+      source: "test",
+    }, {
+      fieldVal: 25,
+      mVal: 0.8,
+      pointId: 4,
+      snapshotId: "hysteresis_point_005",
+      stageId: "hysteresis-2",
+    });
+
+    const result = await registry.execute("hysteresis.return-to-live", {
+      selection,
+      source: "test",
+    }, {
+      stageId: "hysteresis-1",
+    });
+
+    expect(result).toEqual({
+      message: "Returned 3D viewport to the live magnetization field.",
+      status: "completed",
+    });
+    expect(selection.get().ref).toMatchObject({
+      snapshotId: "hysteresis_point_005",
+      stageId: "hysteresis-2",
+      type: "analysis-chart-point",
+    });
+  });
+
+  it("does not claim a hysteresis point is loaded in 3D without a saved snapshot", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const selection = new SelectionController(bus);
+
+    const result = await registry.execute("hysteresis.load-point-in-3d", {
+      selection,
+      source: "test",
+    }, {
+      fieldVal: 25,
+      mVal: 0.8,
+      pointId: 4,
+      snapshotId: null,
+      stageId: "hysteresis-1",
+    });
+
+    expect(result).toEqual({
+      message: "This hysteresis point has no saved magnetization snapshot.",
+      status: "failed",
+    });
+    expect(selection.get()).toEqual({
+      kind: null,
+      label: null,
+      moduleSource: null,
+      nodeId: null,
+      objectId: null,
+      ref: null,
+    });
+  });
+
+  it("uses a hysteresis point snapshot as an object initial state", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const importFieldState = vi.fn(async () => ({
+      applied_point_count: 2,
+      artifact_ref: "hysteresis_snapshots/hysteresis_point_005/m.json",
+      field_revision: 11,
+      mode: "apply",
+      quantity_id: "m",
+      target: { id: "body", kind: "object" },
+      warnings: [],
+    }));
+
+    const result = await registry.execute("hysteresis.use-point-as-initial-state", {
+      api: {
+        persistence: {
+          fieldStates: { import: importFieldState },
+        },
+      } as never,
+      resources,
+      selection: objectSelection("body") as never,
+      source: "test",
+    }, {
+      snapshotId: "hysteresis_point_005",
+      stageId: "hysteresis-1",
+    });
+
+    expect(result).toEqual({
+      message: "Hysteresis point hysteresis_point_005 applied as initial state.",
+      status: "completed",
+    });
+    expect(importFieldState).toHaveBeenCalledWith({
+      artifact_ref: "hysteresis_snapshots/hysteresis_point_005/m.json",
+      mode: "apply",
+      quantity_id: "m",
+      target: { id: "body", kind: "object" },
+    });
+    expect(resources.getRevision(DATA_FIELDS_PATH)).toBe(11);
+    expect(resources.getRevision(PERSISTENCE_FIELD_STATE_IMPORTS_PATH)).toBe(11);
+  });
+
+  it("uses the hysteresis point snapshot resource ref when applying an initial state", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const importFieldState = vi.fn(async () => ({
+      applied_point_count: 2,
+      artifact_ref: "runs/run-1/hysteresis/stage-0/points/005/m.json",
+      field_revision: 12,
+      mode: "apply",
+      quantity_id: "m",
+      target: { id: "body", kind: "object" },
+      warnings: [],
+    }));
+
+    const result = await registry.execute("hysteresis.use-point-as-initial-state", {
+      api: {
+        persistence: {
+          fieldStates: { import: importFieldState },
+        },
+      } as never,
+      selection: objectSelection("body") as never,
+      source: "test",
+    }, {
+      snapshotId: "hysteresis_point_005",
+      snapshotResourceRef: "runs/run-1/hysteresis/stage-0/points/005/m.json",
+      stageId: "hysteresis-1",
+    });
+
+    expect(result).toMatchObject({ status: "completed" });
+    expect(importFieldState).toHaveBeenCalledWith({
+      artifact_ref: "runs/run-1/hysteresis/stage-0/points/005/m.json",
+      mode: "apply",
+      quantity_id: "m",
+      target: { id: "body", kind: "object" },
+    });
   });
 
   it("removes the selected study stage from the authored pipeline", async () => {
@@ -1482,11 +1776,11 @@ describe("study runtime command contributions", () => {
           scene_revision: 3,
           diagnostics: [
             {
-              capability_gate: "regions.material_override",
-              code: "region_material_realization_pending",
-              diagnostic_id: "region:r1:material-pending",
+              capability_gate: "regions.realized_materialization",
+              code: "region_world_frame_materialization_unsupported",
+              diagnostic_id: "region:r1:world-frame-materialization",
               message:
-                "Region material override is authored; planner/runtime must materialize it or block execution rather than silently dropping it.",
+                "World-frame authored regions require explicit materialization before execution.",
               owner_object_id: "obj1",
               realization_status: "authored",
               region_id: "r1",
@@ -1500,8 +1794,37 @@ describe("study runtime command contributions", () => {
 
     expect(registry.isEnabled("study.run", context)).toBe(false);
     expect(registry.get("study.run")?.disabledReason?.(context)).toBe(
-      "Regional material realization blocker: Region material override is authored; planner/runtime must materialize it or block execution rather than silently dropping it.",
+      "Region materialization support blocker: World-frame authored regions require explicit materialization before execution.",
     );
+  });
+
+  it("does not block runtime start commands for informational region material realization notes", () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const context = {
+      api: {} as never,
+      resourceData: runtimeResourceData({
+        regionDiagnostics: {
+          scene_revision: 3,
+          diagnostics: [
+            {
+              capability_gate: "regions.material_override",
+              code: "region_material_realization_required",
+              diagnostic_id: "region:r1:material-required",
+              message:
+                "Region material override or material field is authored; execution planning must materialize it or block unsupported runtime paths.",
+              owner_object_id: "obj1",
+              realization_status: "authored",
+              region_id: "r1",
+              severity: "info",
+            },
+          ],
+        },
+      }),
+      source: "test" as const,
+    };
+
+    expect(registry.isEnabled("study.run", context)).toBe(true);
+    expect(registry.get("study.run")?.disabledReason?.(context)).toBeNull();
   });
 
   it("requires current shared-domain mesh provenance for FEM runtime start commands", () => {

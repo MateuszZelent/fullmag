@@ -266,6 +266,8 @@ pub struct ScriptBuilderStageState {
     pub eigen_spin_wave_bc: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub eigen_spin_wave_bc_config: Option<Value>,
+    #[serde(default, flatten, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -274,6 +276,7 @@ pub enum StudyPrimitiveStageKind {
     Relax,
     Run,
     Eigenmodes,
+    Hysteresis,
     SetField,
     SetCurrent,
     SaveState,
@@ -766,7 +769,7 @@ fn default_solver_max_steps() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::ScriptBuilderSolverState;
+    use super::{ScriptBuilderSolverState, StudyPipelineDocument, StudyPipelineNode};
 
     #[test]
     fn solver_defaults_match_canonical_relax_defaults() {
@@ -774,6 +777,40 @@ mod tests {
         assert_eq!(defaults.relax_algorithm, "llg_overdamped");
         assert_eq!(defaults.torque_tolerance, "1e-4");
         assert_eq!(defaults.max_relax_steps, "5000");
+    }
+
+    #[test]
+    fn study_pipeline_accepts_hysteresis_primitive_stage() {
+        let document: StudyPipelineDocument = serde_json::from_value(serde_json::json!({
+            "version": "study_pipeline.v1",
+            "nodes": [
+                {
+                    "id": "stage_1_hysteresis",
+                    "label": "",
+                    "enabled": true,
+                    "source": "script_imported",
+                    "node_kind": "primitive",
+                    "stage_kind": "hysteresis",
+                    "payload": {
+                        "kind": "hysteresis",
+                        "entrypoint_kind": "flat_hysteresis",
+                        "field_min_mT": -100.0,
+                        "field_max_mT": 100.0,
+                        "field_step_mT": 5.0
+                    }
+                }
+            ]
+        }))
+        .expect("hysteresis primitive stage should deserialize");
+
+        let StudyPipelineNode::Primitive(node) = &document.nodes[0] else {
+            panic!("expected primitive hysteresis stage");
+        };
+        assert_eq!(node.id, "stage_1_hysteresis");
+        assert_eq!(
+            node.payload.get("kind").and_then(|value| value.as_str()),
+            Some("hysteresis")
+        );
     }
 }
 

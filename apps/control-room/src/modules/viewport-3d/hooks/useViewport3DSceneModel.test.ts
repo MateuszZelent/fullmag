@@ -6,10 +6,18 @@ import { DEFAULT_CAMERA_REGISTRY_STATE } from "@/kernel/visualization/CameraRegi
 import {
   ObjectVisualizationController,
 } from "@/kernel/visualization/ObjectVisualizationController";
+import type { Selection } from "@/kernel/selection/selectionTypes";
+import {
+  buildHysteresisChartPointSelection,
+} from "@/shared/domain/study/HysteresisChart";
 
 import {
+  resolveViewport3DActiveQuantityId,
+  resolveViewport3DDisplayedLiveValue,
   resolveViewport3DPrimaryFieldRenderOptions,
+  resolveViewport3DPrimaryFieldVectorEnabled,
   resolveViewport3DPrimaryFieldQuery,
+  resolveViewport3DSelectedSnapshotId,
   filterViewport3DMeshBackedRegionOverlays,
   resolveViewport3DMembershipRegionOverlays,
   resolveViewport3DMeshBackedRegionKeys,
@@ -28,6 +36,9 @@ import {
   resolveViewport3DVisualizationQuantityId,
   sameViewport3DQuantityId,
 } from "./useViewport3DSceneModel";
+import {
+  resolveHysteresisStepViewportTarget,
+} from "../model/viewport3DTargets";
 import { viewport3DFieldRenderOptionsNeedFieldData } from "../viewport3dRenderModel";
 import {
   DEFAULT_VIEWPORT_3D_CAMERA_STATE,
@@ -41,6 +52,32 @@ const visualizationStateResourceSourceUrl = new URL(
 );
 
 describe("useViewport3DSceneModel", () => {
+  it("keeps the previously displayed live field value while camera field updates are held", () => {
+    expect(resolveViewport3DDisplayedLiveValue("next", "previous", true)).toBe(
+      "previous",
+    );
+    expect(resolveViewport3DDisplayedLiveValue("next", "previous", false)).toBe(
+      "next",
+    );
+  });
+
+  it("pauses heavy field vector resource hooks while camera field updates are held", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+
+    expect(source).toContain("const fieldUpdateHoldActive =");
+    expect(source).toContain("{ pauseLoad: fieldUpdateHoldActive }");
+    expect(source).toContain("magneticPartFieldQueries.size > 0");
+    expect(source).toContain("targetQuantityFieldQueries.size > 0");
+    expect(source).toContain("fieldVectorEnabled,");
+  });
+
+  it("does not fetch authored regions before a scene resource exists", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+
+    expect(source).toContain("useModelRegionsResource({");
+    expect(source).toContain("enabled: Boolean(scene.data)");
+  });
+
   it("does not use domain selections to filter object region overlays", () => {
     expect(
       resolveViewport3DRegionSelectionScope({
@@ -74,6 +111,157 @@ describe("useViewport3DSceneModel", () => {
     ).toEqual({
       component: "magnitude",
       scope_kind: "full",
+    });
+  });
+
+  it("loads hysteresis point snapshots through the selected point quantity", () => {
+    const selection = {
+      kind: "analysis.chart-point",
+      label: "Point 4",
+      moduleSource: "analysis-plots",
+      nodeId: "hysteresis-point-4",
+      objectId: null,
+      ref: {
+        chartId: "hysteresis",
+        kind: "analysis.chart-point",
+        nodeId: "hysteresis-point-4",
+        quantity: "m",
+        rowIndex: 4,
+        seriesId: "hysteresis",
+        snapshotId: "hysteresis-stage-1-point-4",
+        tableId: "hysteresis",
+        type: "analysis-chart-point",
+        x: 20,
+        y: 0.82,
+      },
+    } as const;
+    const selectedSnapshotId = resolveViewport3DSelectedSnapshotId(selection);
+
+    expect(selectedSnapshotId).toBe("hysteresis-stage-1-point-4");
+    expect(
+      resolveViewport3DActiveQuantityId({
+        selectedSnapshotId,
+        selection,
+        visualizationState: {
+          active_quantity_id: "H_eff",
+        } as never,
+      }),
+    ).toBe("m");
+    expect(
+      resolveViewport3DPrimaryFieldVectorEnabled({
+        fdmInstanceModelNeedsFieldVector: false,
+        fdmSurfaceColorMode: null,
+        fdmVectorsVisible: false,
+        fieldRenderOptions: {
+          fullVectorBudget: 0,
+          partVectorBudgets: new Map(),
+          scalarColorModes: new Set(),
+          scalarColorsVisible: false,
+        },
+        selectedSnapshotId,
+      }),
+    ).toBe(true);
+    expect(
+      resolveViewport3DPrimaryFieldQuery({
+        fdmInstanceModelNeedsFieldVector: false,
+        fdmSurfaceColorMode: null,
+        fdmTopographyEnabled: false,
+        fdmVectorsVisible: false,
+        fieldRenderOptions: {
+          fullVectorBudget: 0,
+          partVectorBudgets: new Map(),
+          scalarColorModes: new Set(),
+          scalarColorsVisible: false,
+        },
+        snapshotId: selectedSnapshotId,
+      }),
+    ).toEqual({
+      component: "full",
+      scope_kind: "full",
+      snapshot_id: "hysteresis-stage-1-point-4",
+    });
+  });
+
+  it("routes chart-built hysteresis selections to snapshot field queries", () => {
+    const chartSelection = buildHysteresisChartPointSelection({
+      point: {
+        branch_id: "descending",
+        branch_ids: ["descending"],
+        branch_index: 0,
+        field_value_mT: -25,
+        is_reversal_field: false,
+        m_avg: [0.1, 0.2, 0.9],
+        m_ip: 0.22,
+        m_oop: 0.9,
+        m_parallel: 0.82,
+        minor_loop_id: null,
+        parent_branch_id: null,
+        point_id: 7,
+        protocol_role: "major_descending",
+        recoil_start_point_id: null,
+        reversal_index: null,
+        snapshot_id: "hysteresis_point_008",
+        snapshot_resource_ref: null,
+        status: "Completed",
+      },
+      stageId: "hysteresis-1",
+      targetMetadata: {
+        fieldOrientation: "in_plane_y",
+        fieldRevision: 41,
+        measurementAxis: "field_axis",
+        meshIdentity: "study_domain",
+      },
+      yAxisKey: "m_parallel",
+    });
+    const selection: Selection = {
+      kind: chartSelection.kind ?? null,
+      label: chartSelection.label ?? null,
+      moduleSource: "analysis-plots",
+      nodeId: chartSelection.nodeId ?? null,
+      objectId: chartSelection.objectId ?? null,
+      ref: chartSelection.ref ?? null,
+    };
+
+    const target = resolveHysteresisStepViewportTarget(selection);
+    const selectedSnapshotId = resolveViewport3DSelectedSnapshotId(selection);
+
+    expect(target).toEqual({
+      fieldOrientation: "in_plane_y",
+      fieldRevision: 41,
+      measurementAxis: "field_axis",
+      meshIdentity: "study_domain",
+      pointId: 7,
+      quantityId: "m",
+      snapshotId: "hysteresis_point_008",
+      stageId: "hysteresis-1",
+      targetId: "hysteresis-step:hysteresis-1:7",
+    });
+    expect(selectedSnapshotId).toBe("hysteresis_point_008");
+    expect(
+      resolveViewport3DActiveQuantityId({
+        selectedSnapshotId,
+        selection,
+        visualizationState: { active_quantity_id: "H_eff" } as never,
+      }),
+    ).toBe("m");
+    expect(
+      resolveViewport3DPrimaryFieldQuery({
+        fdmInstanceModelNeedsFieldVector: false,
+        fdmSurfaceColorMode: null,
+        fdmTopographyEnabled: false,
+        fdmVectorsVisible: false,
+        fieldRenderOptions: {
+          fullVectorBudget: 0,
+          partVectorBudgets: new Map(),
+          scalarColorModes: new Set(),
+          scalarColorsVisible: false,
+        },
+        snapshotId: selectedSnapshotId,
+      }),
+    ).toEqual({
+      component: "full",
+      scope_kind: "full",
+      snapshot_id: "hysteresis_point_008",
     });
   });
 

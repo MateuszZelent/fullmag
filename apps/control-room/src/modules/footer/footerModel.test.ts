@@ -9,12 +9,15 @@ import {
 import type { RequestDiagnosticEntry } from "@/kernel/api/RequestDiagnosticsController";
 
 import {
+  buildTransportTrafficSummary,
   buildTransportMessagePreview,
   filterTransportEntries,
   formatTransportDuration,
   formatTransportByteSize,
+  formatTransportRate,
   formatTransportTimestamp,
   formatTransportTimestampSignature,
+  formatTransportWindow,
   resolveTransportCorrelation,
   serializeTransportEntry,
   sortTransportEntries,
@@ -62,6 +65,14 @@ describe("footerModel", () => {
   it("formats nullable transport latency", () => {
     expect(formatTransportDuration(null)).toBe("—");
     expect(formatTransportDuration(12.6)).toBe("13 ms");
+  });
+
+  it("formats transport traffic summary values", () => {
+    expect(formatTransportRate(null)).toBe("—");
+    expect(formatTransportRate(24.3)).toBe("24/min");
+    expect(formatTransportWindow(500)).toBe("<1 s");
+    expect(formatTransportWindow(12_200)).toBe("12 s");
+    expect(formatTransportWindow(125_000)).toBe("2 min");
   });
 
   it("builds compact clickable message previews", () => {
@@ -267,5 +278,52 @@ describe("footerModel", () => {
         (item) => item.id,
       ),
     ).toEqual(["a", "b", "c"]);
+  });
+
+  it("summarizes transport traffic and top targets", () => {
+    const summary = buildTransportTrafficSummary([
+      entry({
+        byteLength: 100,
+        direction: "tx",
+        id: "status-tx-1",
+        timestampMs: 0,
+      }),
+      entry({
+        byteLength: 200,
+        direction: "tx",
+        id: "status-tx-2",
+        timestampMs: 10_000,
+      }),
+      entry({
+        byteLength: 50,
+        channel: "websocket",
+        direction: "rx",
+        id: "ws-rx",
+        messageType: "resource.batch_changed",
+        path: SESSION_EVENTS_WS_PATH,
+        timestampMs: 20_000,
+      }),
+    ]);
+
+    expect(summary).toMatchObject({
+      byteLength: 350,
+      httpCount: 2,
+      performanceCount: 0,
+      rxCount: 1,
+      totalCount: 3,
+      txCount: 2,
+      websocketCount: 1,
+      windowMs: 20_000,
+    });
+    expect(Math.round(summary.estimatedEventsPerMinute ?? 0)).toBe(9);
+    expect(summary.topEndpoints.map((item) => item.label)).toEqual([
+      SESSION_STATUS_PATH,
+      "resource.batch_changed",
+    ]);
+    expect(summary.topEndpoints[0]).toMatchObject({
+      byteLength: 300,
+      count: 2,
+      txCount: 2,
+    });
   });
 });

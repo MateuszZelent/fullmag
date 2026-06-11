@@ -51,6 +51,7 @@ import {
 } from "@/shared/domain/mesh/buildPipeline";
 import { DEFAULT_RELAX_TORQUE_APM } from "@/shared/domain/physics/torqueUnits";
 import { regionRuntimeBlockerPrefix } from "@/shared/domain/region/regionCapabilityCatalog";
+import { createDefaultHysteresisStage } from "@/shared/domain/study/hysteresisDefaults";
 import {
   applyControlRoomUiState,
   exportControlRoomUiState,
@@ -150,17 +151,7 @@ const DEFAULT_FREQUENCY_RESPONSE_STAGE: JsonObject = {
   observable: "susceptibility_tensor",
 };
 
-const DEFAULT_HYSTERESIS_STAGE: JsonObject = {
-  entrypoint_kind: "flat_hysteresis",
-  field_steps: 21,
-  hysteresis_start_field: [0, 0, -0.1],
-  hysteresis_stop_field: [0, 0, 0.1],
-  hysteresis_torque_tolerance: DEFAULT_RELAX_TORQUE_APM,
-  kind: "hysteresis",
-  start_field: [0, 0, -0.1],
-  stop_field: [0, 0, 0.1],
-  torque_tolerance: DEFAULT_RELAX_TORQUE_APM,
-};
+const DEFAULT_HYSTERESIS_STAGE: JsonObject = createDefaultHysteresisStage();
 
 const DEFAULT_SAVE_STATE_STAGE: JsonObject = {
   artifact_name: "state_snapshot",
@@ -1028,6 +1019,26 @@ function fieldStateImportMode(target: FieldStateTargetRef): "apply" | "attach" {
   return target.kind === "airbox" ? "attach" : "apply";
 }
 
+async function resolveObjectFieldStateTarget(
+  context: CommandContext,
+): Promise<FieldStateTargetRef | null> {
+  const selectedTarget = resolveFieldStateTarget(context);
+  if (selectedTarget?.kind === "object") return selectedTarget;
+
+  const scene = await context.api?.model.scene();
+  const objects = sceneObjects(scene);
+  if (objects.length !== 1) return null;
+  return { kind: "object", id: objects[0] };
+}
+
+function sceneObjects(scene: unknown): string[] {
+  const objects = record(scene).objects;
+  if (!Array.isArray(objects)) return [];
+  return objects
+    .map((entry) => asString(record(entry).id))
+    .filter((objectId): objectId is string => Boolean(objectId));
+}
+
 function pickFieldStateFileBase64(): Promise<{
   contentBase64: string;
   fileName: string;
@@ -1222,6 +1233,49 @@ function stageWithDefaultId(stage: JsonObject, index: number): JsonObject {
   };
 }
 
+function stageSelectionKind(kind: string):
+  | "study.stage.action"
+  | "study.stage.eigenmodes"
+  | "study.stage.frequency_response"
+  | "study.stage.hysteresis"
+  | "study.stage.relax"
+  | "study.stage.run"
+  | "study.stage.save_state" {
+  if (kind === "eigenmodes") return "study.stage.eigenmodes";
+  if (kind === "frequency_response") return "study.stage.frequency_response";
+  if (kind === "hysteresis") return "study.stage.hysteresis";
+  if (kind === "relax") return "study.stage.relax";
+  if (kind === "run") return "study.stage.run";
+  if (kind === "save_state") return "study.stage.save_state";
+  return "study.stage.action";
+}
+
+function selectAuthoredStage(context: CommandContext, stage: JsonObject, index: number): void {
+  const kind = stageKind(stage);
+  const stageId = typeof stage.stage_id === "string" && stage.stage_id.trim()
+    ? stage.stage_id
+    : stageIdForKind(kind, index);
+  const nodeId = `model:study:stages:stage:${stageId}`;
+  context.layout?.setActiveTab("study");
+  context.layout?.setPanelVisible("right", true);
+  context.selection?.set(
+    {
+      kind: stageSelectionKind(kind),
+      label: `${kind.replace(/_/g, " ")} stage`,
+      nodeId,
+      objectId: null,
+      ref: {
+        kind: stageSelectionKind(kind),
+        nodeId,
+        stageId,
+        stageIndex: index,
+        type: "study-stage",
+      },
+    },
+    "ribbon",
+  );
+}
+
 function selectedStageIndex(context: CommandContext): number | null {
   const selection = context.selection?.get();
   const index = selection?.ref?.type === "study-stage"
@@ -1270,9 +1324,10 @@ function addStageCommand(
 
       const scene = await context.api.model.scene();
       const currentStages = studyStages(scene);
+      const addedStage = stageWithDefaultId(stage, currentStages.length);
       const nextStages = [
         ...currentStages,
-        stageWithDefaultId(stage, currentStages.length),
+        addedStage,
       ];
       const response = await context.api.model.commitTransaction({
         kind: "merge_patch",
@@ -1284,6 +1339,7 @@ function addStageCommand(
       });
       const revision = sceneRevision(response);
       invalidateStudyAuthoringResources(context, revision);
+      selectAuthoredStage(context, addedStage, currentStages.length);
 
       return { message: successMessage, status: "completed" };
     },
@@ -1788,5 +1844,145 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
         buildRuntimeCommandFromContext(context, "compute_energies"),
         "Compute energies command accepted.",
       ),
+  },
+  {
+    id: "hysteresis.load-point-in-3d",
+    title: "Load in 3D",
+    category: "Study",
+    group: "hysteresis",
+    scope: "runtime",
+    isEnabled: () => true,
+    run: async (context) => {
+      const input = context.input as {
+        stageId: string;
+        pointId: number;
+        fieldVal: number;
+        mVal: number;
+        snapshotId: string | null;
+        meshIdentity?: string | null;
+        fieldOrientation?: string | null;
+        measurementAxis?: string | null;
+        fieldRevision?: string | number | null;
+      };
+      if (!input) {
+        return { status: "failed", message: "Missing command input." };
+      }
+      if (!input.snapshotId) {
+        return {
+          status: "failed",
+          message: "This hysteresis point has no saved magnetization snapshot.",
+        };
+      }
+      if (!context.selection) {
+        return { status: "failed", message: "Selection context not available." };
+      }
+      context.selection.set(
+        {
+          kind: "analysis.chart-point",
+          label: `Point ${input.pointId} (${input.fieldVal} mT)`,
+          nodeId: `analysis:hysteresis:${input.stageId}:point:${input.pointId}`,
+          objectId: null,
+          ref: {
+            type: "analysis-chart-point",
+            kind: "analysis.chart-point",
+            nodeId: `analysis:hysteresis:${input.stageId}:point:${input.pointId}`,
+            chartId: `hysteresis:${input.stageId}`,
+            tableId: `hysteresis:${input.stageId}`,
+            seriesId: `hysteresis:${input.stageId}:m`,
+            quantity: "m",
+            rowIndex: input.pointId,
+            stageId: input.stageId,
+            pointId: input.pointId,
+            x: input.fieldVal,
+            y: input.mVal,
+            snapshotId: input.snapshotId,
+            targetId: `hysteresis-step:${input.stageId}:${input.pointId}`,
+            targetKind: "hysteresis-step",
+            quantityId: "m",
+            meshIdentity: input.meshIdentity ?? null,
+            fieldOrientation: input.fieldOrientation ?? null,
+            measurementAxis: input.measurementAxis ?? null,
+            fieldRevision: input.fieldRevision ?? null,
+          },
+        },
+        "analysis-plots",
+      );
+      context.layout?.setActiveViewportMainModule("viewport-3d");
+      context.layout?.setFocusedSlot("viewport-main");
+      return { status: "completed", message: "Loaded point in 3D." };
+    },
+  },
+  {
+    id: "hysteresis.return-to-live",
+    title: "Return to Live Field",
+    category: "Study",
+    group: "hysteresis",
+    scope: "runtime",
+    isEnabled: () => true,
+    run: (context) => {
+      if (!context.selection) {
+        return { status: "failed", message: "Selection context not available." };
+      }
+      const input = context.input as { stageId?: string | null } | null;
+      if (input?.stageId) {
+        const ref = context.selection.get().ref;
+        if (ref?.type === "analysis-chart-point" && ref.stageId === input.stageId) {
+          context.selection.clear("analysis-plots");
+        }
+      } else {
+        context.selection.clear("analysis-plots");
+      }
+      return {
+        status: "completed",
+        message: "Returned 3D viewport to the live magnetization field.",
+      };
+    },
+  },
+  {
+    id: "hysteresis.use-point-as-initial-state",
+    title: "Use as Initial State",
+    category: "Study",
+    group: "hysteresis",
+    scope: "runtime",
+    isEnabled: () => true,
+    run: async (context) => {
+      const input = context.input as {
+        stageId: string;
+        snapshotId: string | null;
+        snapshotResourceRef?: string | null;
+      };
+      if (!input?.snapshotId) {
+        return { status: "failed", message: "No snapshot ID specified." };
+      }
+      if (!context.api) {
+        return { status: "failed", message: "Control-room API is unavailable." };
+      }
+      const target = await resolveObjectFieldStateTarget(context);
+      if (!target) {
+        return {
+          status: "failed",
+          message:
+            "Select a single object before using a hysteresis point as the initial state.",
+        };
+      }
+      const artifactRef =
+        input.snapshotResourceRef?.trim() ||
+        `hysteresis_snapshots/${input.snapshotId}/m.json`;
+      const response = await context.api.persistence.fieldStates.import({
+        artifact_ref: artifactRef,
+        mode: "apply",
+        quantity_id: "m",
+        target,
+      });
+      invalidateRestoredStateResources(context, response.field_revision);
+      context.resources?.invalidate(
+        PERSISTENCE_FIELD_STATE_IMPORTS_PATH,
+        response.field_revision,
+      );
+      return {
+        status: "completed",
+        message: `Hysteresis point ${input.snapshotId} applied as initial state.`,
+      };
+    },
   },
 ];

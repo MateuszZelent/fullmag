@@ -38,8 +38,15 @@ FULLMAG_USE_MFEM_STACK=ON cargo +nightly build -j "$cargo_jobs" -p fullmag-cli -
 echo "[export_fem_gpu_runtime] clearing previous runtime bundle contents"
 clear_runtime_bundle_contents
 echo "[export_fem_gpu_runtime] copying launcher and API binaries"
-cp -f target/release/fullmag .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu-bin
-cp -f target/release/fullmag-api .fullmag/runtimes/fem-gpu-host/bin/fullmag-api
+copy_runtime_binary() {
+  local src="$1"
+  local dest="$2"
+  rm -f "$dest"
+  cp "$src" "$dest"
+  chmod 755 "$dest"
+}
+copy_runtime_binary target/release/fullmag .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu-bin
+copy_runtime_binary target/release/fullmag-api .fullmag/runtimes/fem-gpu-host/bin/fullmag-api
 latest_native_lib_dir() {
   local pattern="$1"
   local selected
@@ -57,14 +64,14 @@ copy_native_library_group() {
   find "$dest_dir" -maxdepth 1 -name "${stem}.so*" -exec rm -f -- {} +
   for src in "$source_dir"/"${stem}".so*; do
     if [ -e "$src" ] && [ ! -L "$src" ]; then
-      rm -f "$dest_dir/$(basename "$src")"
-      cp -a "$src" "$dest_dir"/
+      rm -rf "$dest_dir/$(basename "$src")"
+      cp -aT "$src" "$dest_dir/$(basename "$src")"
     fi
   done
   for src in "$source_dir"/"${stem}".so*; do
     if [ -L "$src" ]; then
-      rm -f "$dest_dir/$(basename "$src")"
-      cp -a "$src" "$dest_dir"/
+      rm -rf "$dest_dir/$(basename "$src")"
+      cp -aT "$src" "$dest_dir/$(basename "$src")"
     fi
   done
 }

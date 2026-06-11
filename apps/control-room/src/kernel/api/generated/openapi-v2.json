@@ -4338,6 +4338,13 @@
               "string",
               "null"
             ]
+          },
+          "snapshot_id": {
+            "description": "Optional persisted analysis snapshot id, for example a saved\nhysteresis-point magnetization state.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "type": "object"
@@ -4801,6 +4808,1000 @@
           "status",
           "public",
           "stability"
+        ],
+        "type": "object"
+      },
+      "HysteresisBranchSchema": {
+        "properties": {
+          "branch_id": {
+            "type": "string"
+          },
+          "branch_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "branch_role": {
+            "type": "string"
+          },
+          "direction": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "end_field_mT": {
+            "format": "double",
+            "type": "number"
+          },
+          "end_point_id": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "minor_loop_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "parent_branch_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "point_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/HysteresisPointSchema"
+            },
+            "type": "array"
+          },
+          "start_field_mT": {
+            "format": "double",
+            "type": "number"
+          },
+          "start_point_id": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "branch_id",
+          "branch_index",
+          "branch_role",
+          "direction",
+          "point_count",
+          "start_point_id",
+          "end_point_id",
+          "start_field_mT",
+          "end_field_mT",
+          "points"
+        ],
+        "type": "object"
+      },
+      "HysteresisExecutionTreeNode": {
+        "properties": {
+          "children": {
+            "items": {
+              "$ref": "#/components/schemas/HysteresisExecutionTreeNode"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "node_id": {
+            "type": "string"
+          },
+          "point_id": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "resource_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "selection_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "settle_step_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stage_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updated_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "node_id",
+          "kind",
+          "stage_id",
+          "status",
+          "label",
+          "updated_revision"
+        ],
+        "type": "object"
+      },
+      "HysteresisExecutionTreeResource": {
+        "properties": {
+          "active_point_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "after": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "before": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "include_bookmarks": {
+            "type": "boolean"
+          },
+          "include_snapshots": {
+            "type": "boolean"
+          },
+          "include_warnings": {
+            "type": "boolean"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/HysteresisExecutionTreeNode"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stage_id": {
+            "type": "string"
+          },
+          "stage_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total_points": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "window": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "revision",
+          "stage_id",
+          "stage_index",
+          "window",
+          "before",
+          "after",
+          "include_bookmarks",
+          "include_warnings",
+          "include_snapshots",
+          "total_points",
+          "nodes"
+        ],
+        "type": "object"
+      },
+      "HysteresisMetricsSchema": {
+        "properties": {
+          "H_c": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "H_c_minus": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "H_c_plus": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "H_eb": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "M_r_minus": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "M_r_plus": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "loop_area": {
+            "format": "double",
+            "type": "number"
+          },
+          "magnetization_average_weighting": {
+            "type": "string"
+          },
+          "saturation_preparation_field_mT": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "saturation_status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "loop_area",
+          "saturation_status"
+        ],
+        "type": "object"
+      },
+      "HysteresisMinorLoopSchema": {
+        "properties": {
+          "closure_error_m_parallel": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "closure_status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "loop_id": {
+            "type": "string"
+          },
+          "minor_loop_area": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "parent_branch_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/HysteresisPointSchema"
+            },
+            "type": "array"
+          },
+          "policy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "recoil_susceptibility": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "return_field_mT": {
+            "format": "double",
+            "type": "number"
+          },
+          "return_point_id": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "reversal_field_mT": {
+            "format": "double",
+            "type": "number"
+          },
+          "reversal_point_id": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "settle_trace": {
+            "items": {
+              "$ref": "#/components/schemas/HysteresisSettleTraceEntrySchema"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "loop_id",
+          "reversal_field_mT",
+          "return_field_mT",
+          "points"
+        ],
+        "type": "object"
+      },
+      "HysteresisOrientationSchema": {
+        "properties": {
+          "direction": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "measurement_axis": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "orientation": {},
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stage_id": {
+            "type": "string"
+          },
+          "stage_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "stage_id",
+          "stage_index"
+        ],
+        "type": "object"
+      },
+      "HysteresisPointSchema": {
+        "properties": {
+          "branch_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "branch_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "branch_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "field_value_mT": {
+            "format": "double",
+            "type": "number"
+          },
+          "has_non_converged_steps": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "is_reversal_field": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "m_avg": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "m_ip": {
+            "format": "double",
+            "type": "number"
+          },
+          "m_oop": {
+            "format": "double",
+            "type": "number"
+          },
+          "m_parallel": {
+            "format": "double",
+            "type": "number"
+          },
+          "minor_loop_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "parent_branch_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "point_id": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "protocol_role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "recoil_start_point_id": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "reversal_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "run_status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "settle_status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "snapshot_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "snapshot_resource_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "terminal_settle_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "warning_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "point_id",
+          "field_value_mT",
+          "m_parallel",
+          "m_oop",
+          "m_ip",
+          "m_avg",
+          "status"
+        ],
+        "type": "object"
+      },
+      "HysteresisProgressSchema": {
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "active_point_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "completed_points": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "current_field_mT": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "current_m_avg": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "current_m_parallel": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "current_point_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "current_settle_step_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "current_settle_step_kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "current_settle_step_method": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "queued_points": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stage_id": {
+            "type": "string"
+          },
+          "stage_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stage_kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "total_points": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "revision",
+          "stage_id",
+          "stage_index",
+          "status",
+          "active"
+        ],
+        "type": "object"
+      },
+      "HysteresisProtocolSchema": {
+        "properties": {
+          "branch_mode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "initial_protocol": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "saturation": {},
+          "stage_id": {
+            "type": "string"
+          },
+          "stage_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "storage": {}
+        },
+        "required": [
+          "revision",
+          "stage_id",
+          "stage_index"
+        ],
+        "type": "object"
+      },
+      "HysteresisSaturationProbePointSchema": {
+        "properties": {
+          "field_value_mT": {
+            "format": "double",
+            "type": "number"
+          },
+          "m_parallel": {
+            "format": "double",
+            "type": "number"
+          },
+          "m_transverse": {
+            "format": "double",
+            "type": "number"
+          },
+          "probe_index": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          },
+          "torque": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "probe_index",
+          "field_value_mT",
+          "m_parallel",
+          "m_transverse",
+          "status"
+        ],
+        "type": "object"
+      },
+      "HysteresisSaturationResultSchema": {
+        "properties": {
+          "direction": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "max_probe_field_mT": {
+            "format": "double",
+            "type": "number"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/HysteresisSaturationProbePointSchema"
+            },
+            "type": "array"
+          },
+          "preparation_field_mT": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "susceptibility_threshold": {
+            "format": "double",
+            "type": "number"
+          },
+          "transverse_threshold": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "status",
+          "reason",
+          "direction",
+          "max_probe_field_mT",
+          "susceptibility_threshold",
+          "transverse_threshold",
+          "points"
+        ],
+        "type": "object"
+      },
+      "HysteresisSettlePipelineSchema": {
+        "properties": {
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "settle_pipeline": {},
+          "stage_id": {
+            "type": "string"
+          },
+          "stage_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "stage_id",
+          "stage_index"
+        ],
+        "type": "object"
+      },
+      "HysteresisSettleTraceEntrySchema": {
+        "properties": {
+          "algorithm_id": {
+            "type": "string"
+          },
+          "energy": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "fallback_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "field_value_mT": {
+            "format": "double",
+            "type": "number"
+          },
+          "method": {
+            "type": "string"
+          },
+          "point_id": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "resolved_timestep_s": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "retry_attempt": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          },
+          "step_index": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "torque": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "point_id",
+          "field_value_mT",
+          "step_index",
+          "algorithm_id",
+          "method",
+          "status",
+          "retry_attempt"
+        ],
+        "type": "object"
+      },
+      "HysteresisStagePlanSchema": {
+        "properties": {
+          "branch_mode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "field_max_mT": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "field_min_mT": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "field_schedule": {},
+          "field_step_mT": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "field_values_mT": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "minor_loops": {},
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schedule_refinements": {},
+          "stage_id": {
+            "type": "string"
+          },
+          "stage_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "stage_id",
+          "stage_index"
+        ],
+        "type": "object"
+      },
+      "HysteresisStageSaturationSchema": {
+        "properties": {
+          "analysis_resource_ref": {
+            "type": "string"
+          },
+          "requested": {},
+          "result": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/HysteresisSaturationResultSchema"
+              }
+            ]
+          },
+          "result_status": {
+            "type": "string"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stage_id": {
+            "type": "string"
+          },
+          "stage_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "stage_id",
+          "stage_index",
+          "result_status",
+          "analysis_resource_ref"
         ],
         "type": "object"
       },
@@ -12195,6 +13196,41 @@
               "null"
             ]
           },
+          "current_field_mT": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "current_point_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "current_settle_step_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "current_settle_step_kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "current_settle_step_method": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "index": {
             "format": "int32",
             "minimum": 0,
@@ -15369,6 +16405,304 @@
         ]
       }
     },
+    "/v2/sessions/current/analysis/hysteresis/{stage_id}/branches": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_hysteresis_stage_id_branches",
+        "parameters": [
+          {
+            "description": "Hysteresis stage index or stage identifier",
+            "in": "path",
+            "name": "stage_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/HysteresisBranchSchema"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Hysteresis loop branches grouped by sweep direction"
+          },
+          "404": {
+            "description": "Hysteresis points not found"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/hysteresis/{stage_id}/metrics": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_hysteresis_stage_id_metrics",
+        "parameters": [
+          {
+            "description": "Hysteresis stage index or stage identifier",
+            "in": "path",
+            "name": "stage_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HysteresisMetricsSchema"
+                }
+              }
+            },
+            "description": "Hysteresis loop metrics"
+          },
+          "404": {
+            "description": "Hysteresis metrics not found"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/hysteresis/{stage_id}/minor-loops": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_hysteresis_stage_id_minor_loops",
+        "parameters": [
+          {
+            "description": "Hysteresis stage index or stage identifier",
+            "in": "path",
+            "name": "stage_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/HysteresisMinorLoopSchema"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Minor loops"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/hysteresis/{stage_id}/points": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_hysteresis_stage_id_points",
+        "parameters": [
+          {
+            "description": "Hysteresis stage index or stage identifier",
+            "in": "path",
+            "name": "stage_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/HysteresisPointSchema"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Hysteresis sweep points"
+          },
+          "404": {
+            "description": "Hysteresis points not found"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/hysteresis/{stage_id}/reversal-fields": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_hysteresis_stage_id_reversal_fields",
+        "parameters": [
+          {
+            "description": "Hysteresis stage index or stage identifier",
+            "in": "path",
+            "name": "stage_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/HysteresisPointSchema"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Reversal fields"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/hysteresis/{stage_id}/saturation": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_hysteresis_stage_id_saturation",
+        "parameters": [
+          {
+            "description": "Hysteresis stage index or stage identifier",
+            "in": "path",
+            "name": "stage_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HysteresisSaturationResultSchema"
+                }
+              }
+            },
+            "description": "Hysteresis saturation probe result"
+          },
+          "404": {
+            "description": "Hysteresis saturation probe result not found"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/hysteresis/{stage_id}/steps/{point_id}": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_hysteresis_stage_id_steps_point_id",
+        "parameters": [
+          {
+            "description": "Hysteresis stage index or stage identifier",
+            "in": "path",
+            "name": "stage_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Hysteresis point index",
+            "in": "path",
+            "name": "point_id",
+            "required": true,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HysteresisPointSchema"
+                }
+              }
+            },
+            "description": "Hysteresis point details"
+          },
+          "404": {
+            "description": "Hysteresis point not found"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/hysteresis/{stage_id}/steps/{point_id}/settle-trace": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_hysteresis_stage_id_steps_point_id_settle_trace",
+        "parameters": [
+          {
+            "description": "Hysteresis stage index or stage identifier",
+            "in": "path",
+            "name": "stage_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Hysteresis point index",
+            "in": "path",
+            "name": "point_id",
+            "required": true,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/HysteresisSettleTraceEntrySchema"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Settle trace for a point"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
     "/v2/sessions/current/data/artifacts": {
       "get": {
         "operationId": "data_get_sessions_current_data_artifacts",
@@ -15608,6 +16942,18 @@
             "description": "Optional component projection used for statistics (`x`, `y`, `z`, `magnitude`, `full`).",
             "in": "query",
             "name": "component",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional persisted analysis snapshot id, for example a saved\nhysteresis-point magnetization state.",
+            "in": "query",
+            "name": "snapshot_id",
             "required": false,
             "schema": {
               "type": [
@@ -17602,6 +18948,18 @@
               "minimum": 0,
               "type": [
                 "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional persisted analysis snapshot id, for example a saved\nhysteresis-point magnetization state.",
+            "in": "query",
+            "name": "snapshot_id",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
                 "null"
               ]
             }
@@ -21841,6 +23199,314 @@
           },
           "404": {
             "description": "No active workspace"
+          }
+        },
+        "tags": [
+          "simulation"
+        ]
+      }
+    },
+    "/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/execution-tree": {
+      "get": {
+        "operationId": "simulation_get_sessions_current_simulation_stages_stage_id_hysteresis_execution_tree",
+        "parameters": [
+          {
+            "description": "Hysteresis stage index or stage identifier",
+            "in": "path",
+            "name": "stage_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_bookmarks",
+            "required": false,
+            "schema": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_warnings",
+            "required": false,
+            "schema": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_snapshots",
+            "required": false,
+            "schema": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HysteresisExecutionTreeResource"
+                }
+              }
+            },
+            "description": "Windowed hysteresis execution tree for Explorer"
+          },
+          "404": {
+            "description": "No matching hysteresis stage execution tree"
+          }
+        },
+        "tags": [
+          "simulation"
+        ]
+      }
+    },
+    "/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/orientation": {
+      "get": {
+        "operationId": "simulation_get_sessions_current_simulation_stages_stage_id_hysteresis_orientation",
+        "parameters": [
+          {
+            "description": "Hysteresis stage index or stage identifier",
+            "in": "path",
+            "name": "stage_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HysteresisOrientationSchema"
+                }
+              }
+            },
+            "description": "Requested hysteresis orientation for a stage"
+          },
+          "404": {
+            "description": "No matching hysteresis stage orientation"
+          }
+        },
+        "tags": [
+          "simulation"
+        ]
+      }
+    },
+    "/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/plan": {
+      "get": {
+        "operationId": "simulation_get_sessions_current_simulation_stages_stage_id_hysteresis_plan",
+        "parameters": [
+          {
+            "description": "Hysteresis stage index or stage identifier",
+            "in": "path",
+            "name": "stage_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HysteresisStagePlanSchema"
+                }
+              }
+            },
+            "description": "Requested hysteresis field plan for a stage"
+          },
+          "404": {
+            "description": "No matching hysteresis stage plan"
+          }
+        },
+        "tags": [
+          "simulation"
+        ]
+      }
+    },
+    "/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/progress": {
+      "get": {
+        "operationId": "simulation_get_sessions_current_simulation_stages_stage_id_hysteresis_progress",
+        "parameters": [
+          {
+            "description": "Hysteresis stage index or stage identifier",
+            "in": "path",
+            "name": "stage_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HysteresisProgressSchema"
+                }
+              }
+            },
+            "description": "Live hysteresis progress for a stage"
+          },
+          "404": {
+            "description": "No matching hysteresis stage progress"
+          }
+        },
+        "tags": [
+          "simulation"
+        ]
+      }
+    },
+    "/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/protocol": {
+      "get": {
+        "operationId": "simulation_get_sessions_current_simulation_stages_stage_id_hysteresis_protocol",
+        "parameters": [
+          {
+            "description": "Hysteresis stage index or stage identifier",
+            "in": "path",
+            "name": "stage_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HysteresisProtocolSchema"
+                }
+              }
+            },
+            "description": "Requested hysteresis protocol for a stage"
+          },
+          "404": {
+            "description": "No matching hysteresis stage protocol"
+          }
+        },
+        "tags": [
+          "simulation"
+        ]
+      }
+    },
+    "/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/saturation": {
+      "get": {
+        "operationId": "simulation_get_sessions_current_simulation_stages_stage_id_hysteresis_saturation",
+        "parameters": [
+          {
+            "description": "Hysteresis stage index or stage identifier",
+            "in": "path",
+            "name": "stage_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HysteresisStageSaturationSchema"
+                }
+              }
+            },
+            "description": "Requested saturation policy and optional executed probe summary for a hysteresis stage"
+          },
+          "404": {
+            "description": "No matching hysteresis stage saturation resource"
+          }
+        },
+        "tags": [
+          "simulation"
+        ]
+      }
+    },
+    "/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/settle-pipeline": {
+      "get": {
+        "operationId": "simulation_get_sessions_current_simulation_stages_stage_id_hysteresis_settle_pipeline",
+        "parameters": [
+          {
+            "description": "Hysteresis stage index or stage identifier",
+            "in": "path",
+            "name": "stage_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HysteresisSettlePipelineSchema"
+                }
+              }
+            },
+            "description": "Requested hysteresis settle pipeline for a stage"
+          },
+          "404": {
+            "description": "No matching hysteresis stage settle pipeline"
           }
         },
         "tags": [

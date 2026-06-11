@@ -36,6 +36,44 @@ SUPPORTED_EQUILIBRIUM_SOURCES = {"provided", "relax", "artifact"}
 SUPPORTED_EIGEN_NORMALIZATIONS = {"unit_l2", "unit_max_amplitude"}
 SUPPORTED_EIGEN_DAMPING_POLICIES = {"ignore", "include"}
 SUPPORTED_SPIN_WAVE_BCS = {"free", "pinned", "periodic", "floquet", "surface_anisotropy"}
+SUPPORTED_FIELD_SEGMENT_ENDPOINT_POLICIES = {"include_stop", "skip_start", "include_both"}
+SUPPORTED_SETTLE_NON_CONVERGENCE_POLICIES = {
+    "continue_with_warning",
+    "stop_stage",
+    "run_next_algorithm",
+    "retry_with_smaller_dt",
+}
+SUPPORTED_FIELD_ORIENTATION_PRESETS = {
+    "oop_positive",
+    "oop_negative",
+    "in_plane_x",
+    "in_plane_y",
+}
+SUPPORTED_HYSTERESIS_MEASUREMENT_AXES = {
+    "field_axis",
+    "sample_normal",
+    "easy_axis",
+    "custom",
+}
+SUPPORTED_HYSTERESIS_INITIAL_PROTOCOLS = {
+    "as_authored",
+    "zero_field_relaxed",
+    "positive_saturation",
+    "negative_saturation",
+}
+SUPPORTED_HYSTERESIS_BRANCH_MODES = {
+    "major_loop",
+    "major_with_minor_loops",
+    "virgin_curve",
+    "virgin_then_major_loop",
+}
+SUPPORTED_HYSTERESIS_STORAGE_MAGNETIZATION = {
+    "none",
+    "selected",
+    "every_n",
+    "every_step",
+    "key_events",
+}
 DEFAULT_TABLE_AUTOSAVE_QUANTITIES = (
     "step",
     "t",
@@ -685,3 +723,630 @@ class FrequencyResponse:
             "frequencies_hz": {"values_hz": list(self.frequencies_hz)},
             "sampling": {"outputs": [output.to_ir() for output in self.outputs]},
         }
+
+
+@dataclass(frozen=True, slots=True)
+class FieldOrientation:
+    kind: str
+    preset_name: str | None = None
+    theta_deg: float | None = None
+    phi_deg: float | None = None
+    vector: tuple[float, float, float] | None = None
+
+    @classmethod
+    def preset(cls, name: str) -> FieldOrientation:
+        return cls(kind="preset", preset_name=name)
+
+    @classmethod
+    def sample(cls, theta_deg: float, phi_deg: float) -> FieldOrientation:
+        return cls(kind="sample", theta_deg=theta_deg, phi_deg=phi_deg)
+
+    @classmethod
+    def global_vector(cls, vector: Sequence[float]) -> FieldOrientation:
+        return cls(kind="global", vector=tuple(vector))
+
+    def __post_init__(self) -> None:
+        if self.kind == "preset":
+            preset_name = require_non_empty(self.preset_name, "FieldOrientation.preset_name")
+            if preset_name not in SUPPORTED_FIELD_ORIENTATION_PRESETS:
+                supported = ", ".join(sorted(SUPPORTED_FIELD_ORIENTATION_PRESETS))
+                raise ValueError(f"FieldOrientation preset must be one of: {supported}")
+            object.__setattr__(self, "preset_name", preset_name)
+            return
+        if self.kind == "sample":
+            if self.theta_deg is None or self.phi_deg is None:
+                raise ValueError("FieldOrientation.sample requires theta_deg and phi_deg")
+            theta = float(self.theta_deg)
+            phi = float(self.phi_deg)
+            if not math.isfinite(theta) or not math.isfinite(phi):
+                raise ValueError("FieldOrientation.sample theta_deg and phi_deg must be finite")
+            object.__setattr__(self, "theta_deg", theta)
+            object.__setattr__(self, "phi_deg", phi)
+            return
+        if self.kind == "global":
+            if self.vector is None:
+                raise ValueError("FieldOrientation.global requires vector")
+            vector = _normalize_finite_vec3(self.vector, "FieldOrientation.vector")
+            if sum(component * component for component in vector) <= 1e-30:
+                raise ValueError("FieldOrientation.vector must not be the zero vector")
+            object.__setattr__(self, "vector", vector)
+            return
+        raise ValueError("FieldOrientation.kind must be preset, sample, or global")
+
+    def to_ir(self) -> dict[str, object]:
+        payload: dict[str, object] = {"kind": self.kind}
+        if self.kind == "preset":
+            payload["preset_name"] = self.preset_name
+        elif self.kind == "sample":
+            payload["theta"] = self.theta_deg
+            payload["phi"] = self.phi_deg
+        elif self.kind == "global":
+            payload["vector"] = list(self.vector)
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
+class SaturationProbe:
+    mode: str = "auto"
+    max_field_mT: float = 300.0
+    susceptibility_threshold: float = 1e-3
+    transverse_threshold: float = 1e-2
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "mode", require_non_empty(self.mode, "SaturationProbe.mode"))
+        max_field = float(self.max_field_mT)
+        susceptibility = float(self.susceptibility_threshold)
+        transverse = float(self.transverse_threshold)
+        if not math.isfinite(max_field) or max_field <= 0.0:
+            raise ValueError("SaturationProbe.max_field_mT must be finite and positive")
+        if not math.isfinite(susceptibility) or susceptibility <= 0.0:
+            raise ValueError("SaturationProbe.susceptibility_threshold must be finite and positive")
+        if not math.isfinite(transverse) or transverse <= 0.0:
+            raise ValueError("SaturationProbe.transverse_threshold must be finite and positive")
+        object.__setattr__(self, "max_field_mT", max_field)
+        object.__setattr__(self, "susceptibility_threshold", susceptibility)
+        object.__setattr__(self, "transverse_threshold", transverse)
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "mode": self.mode,
+            "max_field_mT": self.max_field_mT,
+            "susceptibility_threshold": self.susceptibility_threshold,
+            "transverse_threshold": self.transverse_threshold,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class HysteresisStorage:
+    scalar_history: bool = True
+    magnetization: str = "selected"
+    every_n: int = 5
+    key_events: bool = True
+    key_event_threshold_dm: float = 0.02
+
+    def __post_init__(self) -> None:
+        magnetization = require_non_empty(self.magnetization, "HysteresisStorage.magnetization")
+        if magnetization not in SUPPORTED_HYSTERESIS_STORAGE_MAGNETIZATION:
+            supported = ", ".join(sorted(SUPPORTED_HYSTERESIS_STORAGE_MAGNETIZATION))
+            raise ValueError(f"HysteresisStorage.magnetization must be one of: {supported}")
+        if self.every_n < 0:
+            raise ValueError("HysteresisStorage.every_n must be non-negative")
+        if magnetization in {"selected", "every_n"} and self.every_n <= 0:
+            raise ValueError(
+                "HysteresisStorage.every_n must be positive when magnetization is selected or every_n"
+            )
+        threshold = float(self.key_event_threshold_dm)
+        if not math.isfinite(threshold) or threshold <= 0.0:
+            raise ValueError("HysteresisStorage.key_event_threshold_dm must be finite and positive")
+        object.__setattr__(self, "magnetization", magnetization)
+        object.__setattr__(self, "every_n", int(self.every_n))
+        object.__setattr__(self, "key_event_threshold_dm", threshold)
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "scalar_history": self.scalar_history,
+            "magnetization": self.magnetization,
+            "every_n": self.every_n,
+            "key_events": self.key_events,
+            "key_event_threshold_dm": self.key_event_threshold_dm,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class MinorLoop:
+    reversal_mT: float
+    return_mT: float
+
+    def __post_init__(self) -> None:
+        reversal = float(self.reversal_mT)
+        return_field = float(self.return_mT)
+        if not math.isfinite(reversal) or not math.isfinite(return_field):
+            raise ValueError("MinorLoop reversal_mT and return_mT must be finite")
+        if reversal == return_field:
+            raise ValueError("MinorLoop reversal_mT and return_mT must differ")
+        object.__setattr__(self, "reversal_mT", reversal)
+        object.__setattr__(self, "return_mT", return_field)
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "reversal_mT": self.reversal_mT,
+            "return_mT": self.return_mT,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class FieldSegment:
+    start: float
+    stop: float
+    step: float
+    segment_id: str = ""
+    label: str = ""
+    endpoint_policy: str = "include_stop"
+    reason: str = ""
+
+    def __post_init__(self) -> None:
+        start = float(self.start)
+        stop = float(self.stop)
+        step = float(self.step)
+        if not all(math.isfinite(value) for value in (start, stop, step)):
+            raise ValueError("FieldSegment start, stop, and step must be finite")
+        if step == 0.0:
+            raise ValueError("FieldSegment.step must not be zero")
+        if start == stop:
+            raise ValueError("FieldSegment.start and stop must differ")
+        label = require_non_empty(self.label, "FieldSegment.label") if self.label else ""
+        segment_id = (
+            require_non_empty(self.segment_id, "FieldSegment.segment_id")
+            if self.segment_id
+            else label
+        )
+        if not segment_id:
+            raise ValueError("FieldSegment.segment_id is required")
+        if self.endpoint_policy not in SUPPORTED_FIELD_SEGMENT_ENDPOINT_POLICIES:
+            supported = ", ".join(sorted(SUPPORTED_FIELD_SEGMENT_ENDPOINT_POLICIES))
+            raise ValueError(f"FieldSegment.endpoint_policy must be one of: {supported}")
+        object.__setattr__(self, "start", start)
+        object.__setattr__(self, "stop", stop)
+        object.__setattr__(self, "step", abs(step))
+        object.__setattr__(self, "segment_id", segment_id)
+        object.__setattr__(self, "label", label)
+        object.__setattr__(
+            self,
+            "reason",
+            require_non_empty(self.reason, "FieldSegment.reason") if self.reason else "",
+        )
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "start": self.start,
+            "stop": self.stop,
+            "step": self.step,
+            "segment_id": self.segment_id,
+            "label": self.label,
+            "endpoint_policy": self.endpoint_policy,
+            "reason": self.reason,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class PiecewiseFieldSchedule:
+    segments: Sequence[FieldSegment]
+
+    def __post_init__(self) -> None:
+        segments = tuple(self.segments)
+        if not segments:
+            raise ValueError("PiecewiseFieldSchedule requires at least one segment")
+        object.__setattr__(self, "segments", segments)
+
+    @classmethod
+    def mT(cls, segments: Sequence[FieldSegment]) -> PiecewiseFieldSchedule:
+        return cls(segments=tuple(segments))
+
+    @classmethod
+    def dense_windows(cls, windows: Sequence[FieldWindow]) -> tuple[FieldWindow, ...]:
+        return _normalize_dense_windows(windows)
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "segments": [seg.to_ir() for seg in self.segments],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class FieldWindow:
+    center_mT: float
+    half_width_mT: float
+    step_mT: float
+    reason: str = ""
+    priority: int | None = None
+
+    def __post_init__(self) -> None:
+        center = float(self.center_mT)
+        half_width = float(self.half_width_mT)
+        step = float(self.step_mT)
+        if not all(math.isfinite(value) for value in (center, half_width, step)):
+            raise ValueError("FieldWindow center_mT, half_width_mT, and step_mT must be finite")
+        require_positive(half_width, "FieldWindow.half_width_mT")
+        require_positive(step, "FieldWindow.step_mT")
+        if self.priority is not None and self.priority < 0:
+            raise ValueError("FieldWindow.priority must be non-negative")
+        object.__setattr__(self, "center_mT", center)
+        object.__setattr__(self, "half_width_mT", half_width)
+        object.__setattr__(self, "step_mT", step)
+        object.__setattr__(
+            self,
+            "reason",
+            require_non_empty(self.reason, "FieldWindow.reason") if self.reason else "",
+        )
+
+    def to_ir(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "center_mT": self.center_mT,
+            "half_width_mT": self.half_width_mT,
+            "step_mT": self.step_mT,
+            "reason": self.reason,
+        }
+        if self.priority is not None:
+            payload["priority"] = self.priority
+        return payload
+
+
+def _normalize_dense_windows(windows: Sequence[FieldWindow]) -> tuple[FieldWindow, ...]:
+    normalized = tuple(windows)
+    by_start = sorted(
+        (
+            (window.center_mT - window.half_width_mT, window.center_mT + window.half_width_mT, window)
+            for window in normalized
+        ),
+        key=lambda item: (item[0], item[1]),
+    )
+    previous_end: float | None = None
+    previous_window: FieldWindow | None = None
+    for start, end, window in by_start:
+        if previous_end is not None and start < previous_end and previous_window is not None:
+            if window.priority is None or previous_window.priority is None:
+                raise ValueError("overlapping FieldWindow ranges require explicit priority")
+            if window.priority == previous_window.priority:
+                raise ValueError("overlapping FieldWindow ranges require distinct priority values")
+        previous_end = max(previous_end, end) if previous_end is not None else end
+        previous_window = window
+    return normalized
+
+
+def _require_supported_settle_non_convergence(policy: str) -> str:
+    normalized = require_non_empty(policy, "on_non_convergence")
+    if normalized not in SUPPORTED_SETTLE_NON_CONVERGENCE_POLICIES:
+        supported = ", ".join(sorted(SUPPORTED_SETTLE_NON_CONVERGENCE_POLICIES))
+        raise ValueError(f"on_non_convergence must be one of: {supported}")
+    return normalized
+
+
+def _settle_step_non_convergence(step: SettleStep) -> str:
+    if isinstance(step, (RelaxStep, MinimizeStep, DynamicsSettleStep)):
+        return step.on_non_convergence
+    raise ValueError("settle pipeline steps must be RelaxStep, MinimizeStep, or DynamicsSettleStep")
+
+
+def _validate_settle_retry_policy(
+    on_non_convergence: str,
+    retry_timestep_scale: float | None,
+    retry_max_attempts: int | None,
+) -> None:
+    if retry_timestep_scale is not None:
+        require_positive(retry_timestep_scale, "retry_timestep_scale")
+        if retry_timestep_scale >= 1.0:
+            raise ValueError("retry_timestep_scale must be smaller than 1.0")
+    if retry_max_attempts is not None and retry_max_attempts <= 0:
+        raise ValueError("retry_max_attempts must be positive")
+    if on_non_convergence == "retry_with_smaller_dt" and retry_timestep_scale is None:
+        raise ValueError("retry_with_smaller_dt requires retry_timestep_scale")
+
+
+class SettleStep:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class RelaxStep(SettleStep):
+    method: str = "llg_overdamped"
+    alpha: float = 1.0
+    torque_tolerance: float = 1e-5
+    max_steps: int = 10000
+    timestep_s: float | None = None
+    max_pseudotime_s: float | None = None
+    max_physical_time_s: float | None = None
+    on_non_convergence: str = "continue_with_warning"
+    retry_timestep_scale: float | None = None
+    retry_max_attempts: int | None = None
+
+    def __post_init__(self) -> None:
+        require_positive(self.alpha, "alpha")
+        require_positive(self.torque_tolerance, "torque_tolerance")
+        if self.max_steps <= 0:
+            raise ValueError("max_steps must be positive")
+        if self.timestep_s is not None:
+            require_positive(self.timestep_s, "timestep_s")
+        if self.max_pseudotime_s is not None:
+            require_positive(self.max_pseudotime_s, "max_pseudotime_s")
+        if self.max_physical_time_s is not None:
+            require_positive(self.max_physical_time_s, "max_physical_time_s")
+        policy = _require_supported_settle_non_convergence(self.on_non_convergence)
+        _validate_settle_retry_policy(policy, self.retry_timestep_scale, self.retry_max_attempts)
+
+    def to_ir(self) -> dict[str, object]:
+        payload = {
+            "kind": "relax",
+            "method": self.method,
+            "alpha": self.alpha,
+            "torque_tolerance": self.torque_tolerance,
+            "max_steps": self.max_steps,
+            "on_non_convergence": self.on_non_convergence,
+        }
+        if self.timestep_s is not None:
+            payload["timestep_s"] = self.timestep_s
+        if self.max_pseudotime_s is not None:
+            payload["max_pseudotime_s"] = self.max_pseudotime_s
+        if self.max_physical_time_s is not None:
+            payload["max_physical_time_s"] = self.max_physical_time_s
+        if self.retry_timestep_scale is not None:
+            payload["retry_timestep_scale"] = self.retry_timestep_scale
+        if self.retry_max_attempts is not None:
+            payload["retry_max_attempts"] = self.retry_max_attempts
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
+class MinimizeStep(SettleStep):
+    method: str = "projected_gradient_bb"
+    torque_tolerance: float = 5e-5
+    energy_tolerance: float = 1e-20
+    max_steps: int = 2000
+    timestep_s: float | None = None
+    max_pseudotime_s: float | None = None
+    max_physical_time_s: float | None = None
+    on_non_convergence: str = "run_next_algorithm"
+    retry_timestep_scale: float | None = None
+    retry_max_attempts: int | None = None
+
+    def __post_init__(self) -> None:
+        require_positive(self.torque_tolerance, "torque_tolerance")
+        require_positive(self.energy_tolerance, "energy_tolerance")
+        if self.max_steps <= 0:
+            raise ValueError("max_steps must be positive")
+        if self.timestep_s is not None:
+            require_positive(self.timestep_s, "timestep_s")
+        if self.max_pseudotime_s is not None:
+            require_positive(self.max_pseudotime_s, "max_pseudotime_s")
+        if self.max_physical_time_s is not None:
+            require_positive(self.max_physical_time_s, "max_physical_time_s")
+        policy = _require_supported_settle_non_convergence(self.on_non_convergence)
+        _validate_settle_retry_policy(policy, self.retry_timestep_scale, self.retry_max_attempts)
+
+    def to_ir(self) -> dict[str, object]:
+        payload = {
+            "kind": "minimize",
+            "method": self.method,
+            "torque_tolerance": self.torque_tolerance,
+            "energy_tolerance": self.energy_tolerance,
+            "max_steps": self.max_steps,
+            "on_non_convergence": self.on_non_convergence,
+        }
+        if self.timestep_s is not None:
+            payload["timestep_s"] = self.timestep_s
+        if self.max_pseudotime_s is not None:
+            payload["max_pseudotime_s"] = self.max_pseudotime_s
+        if self.max_physical_time_s is not None:
+            payload["max_physical_time_s"] = self.max_physical_time_s
+        if self.retry_timestep_scale is not None:
+            payload["retry_timestep_scale"] = self.retry_timestep_scale
+        if self.retry_max_attempts is not None:
+            payload["retry_max_attempts"] = self.retry_max_attempts
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
+class DynamicsSettleStep(SettleStep):
+    method: str = "heun_dynamics_settle"
+    damping: float = 1.0
+    max_steps: int = 10000
+    timestep_s: float | None = None
+    max_pseudotime_s: float | None = None
+    max_physical_time_s: float | None = None
+    on_non_convergence: str = "continue_with_warning"
+    retry_timestep_scale: float | None = None
+    retry_max_attempts: int | None = None
+
+    def __post_init__(self) -> None:
+        require_positive(self.damping, "damping")
+        if self.max_steps <= 0:
+            raise ValueError("max_steps must be positive")
+        if self.timestep_s is not None:
+            require_positive(self.timestep_s, "timestep_s")
+        if self.max_pseudotime_s is not None:
+            require_positive(self.max_pseudotime_s, "max_pseudotime_s")
+        if self.max_physical_time_s is not None:
+            require_positive(self.max_physical_time_s, "max_physical_time_s")
+        policy = _require_supported_settle_non_convergence(self.on_non_convergence)
+        _validate_settle_retry_policy(policy, self.retry_timestep_scale, self.retry_max_attempts)
+
+    def to_ir(self) -> dict[str, object]:
+        payload = {
+            "kind": "dynamics_settle",
+            "method": self.method,
+            "damping": self.damping,
+            "max_steps": self.max_steps,
+            "on_non_convergence": self.on_non_convergence,
+        }
+        if self.timestep_s is not None:
+            payload["timestep_s"] = self.timestep_s
+        if self.max_pseudotime_s is not None:
+            payload["max_pseudotime_s"] = self.max_pseudotime_s
+        if self.max_physical_time_s is not None:
+            payload["max_physical_time_s"] = self.max_physical_time_s
+        if self.retry_timestep_scale is not None:
+            payload["retry_timestep_scale"] = self.retry_timestep_scale
+        if self.retry_max_attempts is not None:
+            payload["retry_max_attempts"] = self.retry_max_attempts
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
+class SettleBranch:
+    when: str
+    run: SettleStep
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "when", require_non_empty(self.when, "SettleBranch.when"))
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "when": self.when,
+            "run": self.run.to_ir(),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class SettlePipeline:
+    steps: Sequence[SettleStep]
+
+    def __post_init__(self) -> None:
+        steps = tuple(self.steps)
+        if not steps:
+            raise ValueError("SettlePipeline requires at least one step")
+        for idx, step in enumerate(steps):
+            if _settle_step_non_convergence(step) == "run_next_algorithm" and idx == len(steps) - 1:
+                raise ValueError("run_next_algorithm requires a following step")
+        object.__setattr__(self, "steps", steps)
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "kind": "sequence",
+            "steps": [step.to_ir() for step in self.steps],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class SettleTree:
+    default: SettleStep
+    branches: Sequence[SettleBranch]
+
+    def __post_init__(self) -> None:
+        branches = tuple(self.branches)
+        if _settle_step_non_convergence(self.default) == "run_next_algorithm" and not any(
+            branch.when in {"non_converged", "fallback", "run_next_algorithm"} for branch in branches
+        ):
+            raise ValueError("run_next_algorithm requires a non_converged fallback branch")
+        object.__setattr__(self, "branches", branches)
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "kind": "tree",
+            "default": self.default.to_ir(),
+            "branches": [b.to_ir() for b in self.branches],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class Hysteresis:
+    outputs: Sequence[TimeOutputSpec]
+    field_min_mT: float | None = None
+    field_max_mT: float | None = None
+    field_step_mT: float | None = None
+    field_values_mT: Sequence[float] | None = None
+    direction: tuple[float, float, float] | None = None
+    orientation: FieldOrientation | None = None
+    measurement_axis: str = "field_axis"
+    initial_protocol: str = "positive_saturation"
+    saturation: SaturationProbe | None = None
+    branch_mode: str = "major_loop"
+    settle_pipeline: SettlePipeline | SettleTree | None = None
+    storage: HysteresisStorage | None = None
+    field_schedule: PiecewiseFieldSchedule | None = None
+    schedule_refinements: Sequence[FieldWindow] | None = None
+    minor_loops: Sequence[MinorLoop] | None = None
+    _table_autosave: TableAutosave | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.field_min_mT is not None:
+            field_min = float(self.field_min_mT)
+            if not math.isfinite(field_min):
+                raise ValueError("field_min_mT must be finite")
+            object.__setattr__(self, "field_min_mT", field_min)
+        if self.field_max_mT is not None:
+            field_max = float(self.field_max_mT)
+            if not math.isfinite(field_max):
+                raise ValueError("field_max_mT must be finite")
+            object.__setattr__(self, "field_max_mT", field_max)
+        if self.field_step_mT is not None:
+            field_step = float(self.field_step_mT)
+            if not math.isfinite(field_step):
+                raise ValueError("field_step_mT must be finite")
+            if field_step == 0.0:
+                raise ValueError("field_step_mT must not be zero")
+            object.__setattr__(self, "field_step_mT", field_step)
+        if self.field_values_mT is not None and not self.field_values_mT:
+            raise ValueError("field_values_mT must not be empty")
+        if self.field_values_mT is not None:
+            values = tuple(float(value) for value in self.field_values_mT)
+            if not all(math.isfinite(value) for value in values):
+                raise ValueError("field_values_mT must contain finite values")
+            object.__setattr__(self, "field_values_mT", values)
+        if self.direction is not None:
+            direction = _normalize_finite_vec3(self.direction, "direction")
+            norm_sq = sum(component * component for component in direction)
+            if norm_sq <= 1e-30:
+                raise ValueError("direction must not be the zero vector")
+            object.__setattr__(self, "direction", direction)
+        if self.measurement_axis not in SUPPORTED_HYSTERESIS_MEASUREMENT_AXES:
+            supported = ", ".join(sorted(SUPPORTED_HYSTERESIS_MEASUREMENT_AXES))
+            raise ValueError(f"measurement_axis must be one of: {supported}")
+        if self.initial_protocol not in SUPPORTED_HYSTERESIS_INITIAL_PROTOCOLS:
+            supported = ", ".join(sorted(SUPPORTED_HYSTERESIS_INITIAL_PROTOCOLS))
+            raise ValueError(f"initial_protocol must be one of: {supported}")
+        if self.branch_mode not in SUPPORTED_HYSTERESIS_BRANCH_MODES:
+            supported = ", ".join(sorted(SUPPORTED_HYSTERESIS_BRANCH_MODES))
+            raise ValueError(f"branch_mode must be one of: {supported}")
+        if self.schedule_refinements is not None:
+            object.__setattr__(
+                self,
+                "schedule_refinements",
+                _normalize_dense_windows(self.schedule_refinements),
+            )
+        if self.minor_loops is not None:
+            object.__setattr__(self, "minor_loops", tuple(self.minor_loops))
+
+    def to_ir(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "kind": "hysteresis",
+            "measurement_axis": self.measurement_axis,
+            "initial_protocol": self.initial_protocol,
+            "branch_mode": self.branch_mode,
+            "sampling": {"outputs": [output.to_ir() for output in self.outputs]},
+        }
+        if self.field_min_mT is not None:
+            payload["field_min_mT"] = self.field_min_mT
+        if self.field_max_mT is not None:
+            payload["field_max_mT"] = self.field_max_mT
+        if self.field_step_mT is not None:
+            payload["field_step_mT"] = self.field_step_mT
+        if self.field_values_mT is not None:
+            payload["field_values_mT"] = list(self.field_values_mT)
+        if self.direction is not None:
+            payload["direction"] = list(self.direction)
+        if self.orientation is not None:
+            payload["orientation"] = self.orientation.to_ir()
+        if self.saturation is not None:
+            payload["saturation"] = self.saturation.to_ir()
+        if self.settle_pipeline is not None:
+            payload["settle_pipeline"] = self.settle_pipeline.to_ir()
+        if self.storage is not None:
+            payload["storage"] = self.storage.to_ir()
+        if self.field_schedule is not None:
+            payload["field_schedule"] = self.field_schedule.to_ir()
+        if self.schedule_refinements is not None:
+            payload["schedule_refinements"] = [w.to_ir() for w in self.schedule_refinements]
+        if self.minor_loops is not None:
+            payload["minor_loops"] = [l.to_ir() for l in self.minor_loops]
+        if self._table_autosave is not None:
+            payload["sampling"]["table_autosave"] = self._table_autosave.to_ir()
+        return payload

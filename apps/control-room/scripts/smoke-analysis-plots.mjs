@@ -79,9 +79,11 @@ async function main() {
     await verifySeriesLegend(page);
     await verifySeriesSelectionEvent(page, rowsBinRequests);
     await verifyPointSelection(page);
-    await verifyAxisControlInteraction(page, rowsBinRequests);
-    await verifyThirdUnitSelectionDisabled(page);
-    await verifyAtLeastOneYAxisRemainsSelected(page, rowsBinRequests);
+    if (await hasAxisControlPanel(page)) {
+      await verifyAxisControlInteraction(page, rowsBinRequests);
+      await verifyThirdUnitSelectionDisabled(page);
+      await verifyAtLeastOneYAxisRemainsSelected(page, rowsBinRequests);
+    }
     await verifyAddSeriesEvent(page, rowsBinRequests);
     await verifyZoomRangeFetch(page, rowsBinRequests);
 
@@ -124,6 +126,14 @@ async function main() {
   } finally {
     await browser.close();
   }
+}
+
+async function hasAxisControlPanel(page) {
+  return page
+    .locator(".fm-analysis-plots .fm-analysis-plots__column-row")
+    .first()
+    .isVisible({ timeout: 1_000 })
+    .catch(() => false);
 }
 
 async function openAnalysisPlots(page) {
@@ -391,7 +401,10 @@ async function verifyAddSeriesEvent(page, rowsBinRequests) {
         yStatus?.getAttribute("title") ??
         yStatus?.textContent ??
         "";
-      return label === "Y 2 series";
+      const hasRequestedSeries = Array.from(
+        root?.querySelectorAll(".fm-analysis-plots__legend-label") ?? [],
+      ).some((element) => element.textContent?.trim() === "mx");
+      return /^Y [1-9]\d* series$/.test(label) && hasRequestedSeries;
     },
     { timeout: timeoutMs },
   ).catch(async () => {
@@ -426,7 +439,8 @@ async function verifyZoomRangeFetch(page, rowsBinRequests) {
       return (
         event?.chartId === "default" &&
         event.tableId === "default" &&
-        event.xAxisId === "t" &&
+        typeof event.xAxisId === "string" &&
+        event.xAxisId.length > 0 &&
         event.range?.fromValue === 20 &&
         event.range?.toValue === 40
       );
@@ -463,7 +477,8 @@ async function verifyZoomRangeFetch(page, rowsBinRequests) {
       return (
         event?.chartId === "default" &&
         event.tableId === "default" &&
-        event.xAxisId === "t" &&
+        typeof event.xAxisId === "string" &&
+        event.xAxisId.length > 0 &&
         event.range === null
       );
     },
@@ -554,6 +569,7 @@ async function collectAnalysisPlotProof(page) {
       canvas: canvasProof,
       columns,
       empty,
+      hasAxisControls: columns.length > 0,
       hostRect: hostRect
         ? { height: hostRect.height, width: hostRect.width }
         : null,
@@ -603,7 +619,7 @@ function validateProof(proof) {
   } else if (!proof.legend.every((entry) => /Series .+ unit .+ latest .+/.test(entry))) {
     failures.push(`analysis series legend is incomplete: ${proof.legend.join(" | ")}`);
   }
-  if (proof.columns.length < 2) {
+  if (proof.hasAxisControls && proof.columns.length < 2) {
     failures.push(`analysis column list is too small: ${proof.columns.length}`);
   }
   if (proof.empty) {

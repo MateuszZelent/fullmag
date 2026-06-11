@@ -150,9 +150,9 @@ export class RequestDiagnosticsController {
     const signature = aggregatedTransportSignature(entry);
     if (!signature) return false;
 
-    const previous = this.entries.at(-1);
-    const aggregate = previous ? this.aggregatedEntries.get(previous.id) : null;
-    if (previous && aggregate && aggregate.signature === signature) {
+    const existing = this.findAggregatedEntry(signature);
+    if (existing) {
+      const { aggregate, entry: previous, index } = existing;
       const windowMs = diagnosticsSummaryIntervalMs();
       if (entry.timestampMs - aggregate.firstTimestampMs >= windowMs) {
         this.aggregatedEntries.set(entry.id, {
@@ -171,6 +171,10 @@ export class RequestDiagnosticsController {
       );
       previous.durationMs = addNullableDurations(previous.durationMs, entry.durationMs);
       previous.timestampMs = entry.timestampMs;
+      if (index !== this.entries.length - 1) {
+        this.entries.splice(index, 1);
+        this.entries.push(previous);
+      }
       return true;
     }
 
@@ -180,6 +184,24 @@ export class RequestDiagnosticsController {
       signature,
     });
     return false;
+  }
+
+  private findAggregatedEntry(
+    signature: string,
+  ): {
+    aggregate: AggregatedTransportDiagnostic;
+    entry: RequestDiagnosticEntry;
+    index: number;
+  } | null {
+    for (let index = this.entries.length - 1; index >= 0; index -= 1) {
+      const entry = this.entries[index];
+      const aggregate = this.aggregatedEntries.get(entry.id);
+      if (aggregate?.signature === signature) {
+        return { aggregate, entry, index };
+      }
+    }
+
+    return null;
   }
 }
 
@@ -192,21 +214,19 @@ function normalizeByteLength(byteLength: number | null | undefined): number | nu
 }
 
 function aggregatedTransportSignature(entry: RequestDiagnosticEntry): string | null {
-  if (
-    entry.channel !== "websocket" ||
-    entry.direction !== "rx" ||
-    entry.outcome !== "ok" ||
-    !entry.messageType
-  ) {
+  if (entry.outcome === "aborted") {
     return null;
   }
+
   return [
     entry.channel,
     entry.direction,
     entry.method,
     entry.outcome,
     entry.path,
-    entry.messageType,
+    entry.status ?? "",
+    entry.messageType ?? "",
+    entry.detail ?? "",
   ].join("|");
 }
 

@@ -50,6 +50,21 @@ export const SHELL_COMMANDS: CommandContribution[] = [
       return { status: "completed" };
     },
   },
+  {
+    id: "workspace.focus-selection",
+    title: "Focus Selection",
+    group: "workspace",
+    category: "View",
+    scope: "selection",
+    isEnabled: (ctx) => Boolean(ctx.selection?.get().nodeId),
+    disabledReason: (ctx) =>
+      ctx.selection?.get().nodeId ? null : "No workspace selection is active.",
+    run: (ctx) => {
+      ctx.layout?.setActiveTab("view");
+      ctx.layout?.setFocusedSlot("viewport-main");
+      return { status: "completed" };
+    },
+  },
   // ── Panel visibility toggles ──────────────────────────────────────────────
   {
     id: "panels:explorer:toggle",

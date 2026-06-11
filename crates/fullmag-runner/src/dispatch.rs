@@ -2732,6 +2732,11 @@ fn execute_cuda_fdm(
                         magnetization: None,
                         preview_field,
                         cached_preview_fields: None,
+                        hysteresis_field_m_t: None,
+                        hysteresis_point_index: None,
+                        hysteresis_settle_step_index: None,
+                        hysteresis_settle_step_kind: None,
+                        hysteresis_settle_step_method: None,
                         scalar_row_due: preview_due && preview_targets_global_scalar,
                         finished: false,
                     });
@@ -2813,6 +2818,11 @@ fn execute_cuda_fdm(
                     magnetization,
                     preview_field,
                     cached_preview_fields: None,
+                    hysteresis_field_m_t: None,
+                    hysteresis_point_index: None,
+                    hysteresis_settle_step_index: None,
+                    hysteresis_settle_step_kind: None,
+                    hysteresis_settle_step_method: None,
                     scalar_row_due: due_scalar_row
                         || (preview_due && preview_targets_global_scalar),
                     finished: false,
@@ -5469,5 +5479,25 @@ mod tests {
         plan.initial_magnetization[1] = [1.0, 0.0, 0.0];
         normalized_fem_plan_for_runtime(&plan)
             .expect("zero magnetization on air-only node 4 should be accepted");
+    }
+
+    #[test]
+    fn native_fem_direct_minimizer_publishes_accepted_step_live_updates() {
+        let source = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/fem/relax/direct_minimizer.rs"
+        ))
+        .expect("read direct_minimizer.rs");
+
+        assert!(
+            source.contains("artifacts.record_scalar(&accepted_stats)?;")
+                && source.contains(
+                    "let magnetization = if current_stats.step % heavy_payload_every == 0"
+                )
+                && source.contains("stats: current_stats.clone(),")
+                && source.contains("magnetization,")
+                && source.contains("let action = (live.on_step)(StepUpdate {"),
+            "native FEM direct minimizer must publish live updates after accepted steps"
+        );
     }
 }

@@ -227,11 +227,34 @@ describe("FdmCuboidLayer model", () => {
     const layerSource = readFileSync(fdmCuboidLayerPath, "utf8");
 
     expect(layerSource).toContain('canvas.addEventListener("pointermove"');
+    expect(layerSource).toContain("passive: true");
+    expect(layerSource).toContain("requestAnimationFrame");
+    expect(layerSource).toContain("cancelAnimationFrame(rafId)");
+    expect(layerSource).toContain("cachedRect = canvas.getBoundingClientRect();");
+    expect(layerSource).toContain("new ResizeObserver");
     expect(layerSource).toContain("raycaster.setFromCamera");
     expect(layerSource).toContain("intersectObjects(targets, false)");
     expect(layerSource).toContain("resolveProjectedFdmInspectHit");
     expect(layerSource).toContain("FDM_INSPECT_PROJECTION_FALLBACK_LIMIT");
     expect(layerSource).toContain("buildViewport3DFdmInspectSample");
+  });
+
+  it("prevents native FDM inspect from duplicating R3F hover samples in the same frame", () => {
+    const layerSource = readFileSync(fdmCuboidLayerPath, "utf8");
+
+    expect(layerSource).toContain("const r3fInspectHitFrameRef = useRef(0);");
+    expect(layerSource).toContain("r3fInspectHitFrameRef.current = inspectFrameRef.current;");
+    expect(layerSource).toContain(
+      "if (r3fInspectHitFrameRef.current === eventFrame)",
+    );
+  });
+
+  it("does not block farther overlay picking when the FDM surface handles domain selection", () => {
+    const layerSource = readFileSync(fdmCuboidLayerPath, "utf8");
+
+    expect(layerSource).toContain("if (eventIntersectsRegionOverlay(event)) return;");
+    expect(layerSource).not.toContain("event.stopPropagation();\n    onSelectDomain();");
+    expect(layerSource).toContain("onSelectDomain();");
   });
 
   it("reuses FDM vector segment buffers for the same model, field, and sampling options", () => {

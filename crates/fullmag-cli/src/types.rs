@@ -627,6 +627,16 @@ pub(crate) struct CurrentLiveStageExecutionRecord {
     pub metric_value: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub threshold: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_field_m_t: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_point_index: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_settle_step_index: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_settle_step_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_settle_step_method: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

@@ -725,6 +725,21 @@ pub struct StepUpdate {
     /// quantity switching without waiting for a fresh live preview snapshot.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cached_preview_fields: Option<Vec<LivePreviewField>>,
+    /// Current hysteresis field value in mT for live stage-progress UIs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hysteresis_field_m_t: Option<f64>,
+    /// Zero-based hysteresis point index for live stage-progress UIs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hysteresis_point_index: Option<u32>,
+    /// Zero-based settle-pipeline step index active within the current field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hysteresis_settle_step_index: Option<u32>,
+    /// Settle-pipeline step kind active within the current field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hysteresis_settle_step_kind: Option<String>,
+    /// Settle-pipeline method active within the current field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hysteresis_settle_step_method: Option<String>,
     /// True when this update also represents a due scalar-row sample.
     #[serde(default)]
     pub scalar_row_due: bool,
@@ -1798,6 +1813,11 @@ mod tests {
             magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
             preview_field: None,
             cached_preview_fields: None,
+            hysteresis_field_m_t: None,
+            hysteresis_point_index: None,
+            hysteresis_settle_step_index: None,
+            hysteresis_settle_step_kind: None,
+            hysteresis_settle_step_method: None,
             scalar_row_due: false,
             finished: false,
         };
@@ -1841,6 +1861,11 @@ mod tests {
                 active_mask: None,
             }),
             cached_preview_fields: None,
+            hysteresis_field_m_t: None,
+            hysteresis_point_index: None,
+            hysteresis_settle_step_index: None,
+            hysteresis_settle_step_kind: None,
+            hysteresis_settle_step_method: None,
             scalar_row_due: false,
             finished: false,
         };
