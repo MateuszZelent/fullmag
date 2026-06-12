@@ -71,6 +71,17 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("fieldVectorEnabled,");
   });
 
+  it("uses frequency-domain analysis overlay fields as the primary 3D field source", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+
+    expect(source).toContain("useAnalysisFieldOverlay");
+    expect(source).toContain("startAnalysisFieldOverlayPhaseAnimation");
+    expect(source).toContain("const primaryFieldQuantityId = analysisOverlay?.fieldId ?? quantityId;");
+    expect(source).toContain("if (analysisOverlay) {");
+    expect(source).toContain("return analysisOverlay.query;");
+    expect(source).toContain("Boolean(analysisOverlay) ||");
+  });
+
   it("does not fetch authored regions before a scene resource exists", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
 

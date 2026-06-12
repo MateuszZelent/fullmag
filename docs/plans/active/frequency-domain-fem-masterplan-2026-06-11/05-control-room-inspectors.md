@@ -792,9 +792,15 @@ Controls:
 - Add as second overlay only in future multi-overlay scope.
 - Clear overlay.
 - View component: vector, x, y, z, norm.
-- Complex view: real, imaginary, amplitude, phase, phase-rotated real.
-- Phase slider `0..2pi`.
-- Animate phase.
+- Static complex view: real, imaginary, abs/amplitude, and phase remain explicit
+  display modes for the stored complex mode.
+- Animated view: phase-rotated real is the only required animated modal view.
+- Visualization phase slider `0..2*pi` for the currently displayed mode overlay.
+- Animate the currently displayed mode by cycling the visualization phase
+  through `0..2*pi`.
+- Animation rate control in Hz or cycles/s, clamped to a documented safe UI range.
+- Play, pause, and reset-to-zero controls for the visualization phase.
+- Pause/resume animation without losing the selected `fieldId`, sample, raw mode, branch, component, view, or normalization state.
 - Glyph density.
 - Surface color quantity for amplitude.
 - Normalize glyph length by mode max.
@@ -802,6 +808,34 @@ Controls:
 Charts:
 
 - optional compact component amplitude bar chart.
+
+Animation requirements:
+
+- The animation UI belongs to the inspector of the concrete mode that is
+  currently displayed in the 3D overlay. Spectrum, branch, and dispersion
+  inspectors may offer "plot/animate selected mode" shortcuts, but the canonical
+  play/pause/rate/phase controls live in `results.eigen.mode` after the mode is
+  selected and its overlay identity is known.
+- Animation is allowed only when the selected mode has a ready mode-field resource.
+- The inspector must show the active animated mode identity: `fieldId`, sample index, raw mode index, branch ID where available, and phase convention.
+- Animation is visualization-only and must not enqueue a solver run or mutate artifacts.
+- The animation control updates shared visualization overlay state, not inspector-local state only.
+- Animation reconstructs the visible dynamic mode by applying a UI phase offset
+  to the stored complex eigenvector. The displayed frame is equivalent to
+  `Re(delta_m * exp(i * visualizationPhaseRad))` for the active mode and
+  selected component.
+- `visualizationPhaseRad` is separate from the physical mode phase stored in
+  the complex eigenvector and from the phasor/Floquet phase convention metadata.
+  The inspector must label it as visualization phase, not as physical mode phase.
+- Static real, imaginary, abs/amplitude, and phase views must not be implemented
+  by mutating `visualizationPhaseRad`; they are explicit display modes.
+- While playback is active, viewport updates are dirty-driven by the changing
+  visualization phase only for the selected mode overlay.
+- Stopping animation must stop phase updates, release any timer, and leave the last selected phase visible.
+- Switching to another mode while animation is active must retarget the animation to the new mode only after the new mode-field resource is ready; otherwise animation pauses and reports the missing resource.
+- Tests must prove static view selection, play, pause, reset-to-zero, visualization
+  phase advance, mode switch, clear overlay, viewport dirty invalidation while
+  playing, no idle invalidation while paused, and unmount cleanup.
 
 ### `results.eigen.dispersion`
 
@@ -1010,6 +1044,60 @@ Actions:
 - plot response field in 3D,
 - add series to analysis plot,
 - export sweep.
+
+### `results.frequency_response.progress`
+
+Inspector: `FrequencyResponseProgressInspector`
+
+Purpose:
+
+- Show final or current driven-response sweep progress.
+- Distinguish `ready`, `interrupted`, and missing-progress states.
+
+Data:
+
+- `response/progress.v1.json`.
+- `/v2/sessions/current/analysis/frequency-domain/response/progress.v1`.
+
+Fields:
+
+- total frequency points,
+- completed frequency points,
+- written frequency-point artifacts,
+- current frequency,
+- latest artifact manifest,
+- partial artifact availability,
+- embedded progress JSON.
+
+### `results.frequency_response.cancel_requested`
+
+Inspector: `FrequencyResponseCancelRequestedInspector`
+
+Purpose:
+
+- Show the explicit cancellation request state for a driven-response sweep.
+- Keep `cancel_requested` separate from final `interrupted` progress so the UI can explain that a user/runtime stop request was observed before the sweep wrote its final interrupted bundle.
+
+Data:
+
+- `response/cancel_requested.v1.json`.
+- `/v2/sessions/current/analysis/frequency-domain/response/cancel-requested.v1`.
+
+Fields:
+
+- cancel state,
+- completed frequency points at cancellation,
+- written frequency-point artifacts at cancellation,
+- current frequency,
+- latest artifact manifest,
+- partial artifact availability,
+- embedded progress JSON.
+
+Actions:
+
+- open partial response artifacts,
+- inspect final interrupted progress,
+- inspect cancellation provenance.
 
 ### `results.frequency_response.frequency_points`
 

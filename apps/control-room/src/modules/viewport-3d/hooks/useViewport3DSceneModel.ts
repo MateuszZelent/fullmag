@@ -32,6 +32,7 @@ import {
   useModelRegionsResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+import { useKernel } from "@/kernel/KernelContext";
 import type {
   ResourceResult,
   ResourceStatus,
@@ -60,6 +61,8 @@ import {
 } from "@/kernel/visualization/ObjectVisualizationController";
 import { useObjectVisualizationSelector } from "@/kernel/visualization/useObjectVisualization";
 import { useCameraRegistryCamera } from "@/kernel/visualization/useCameraRegistry";
+import { useAnalysisFieldOverlay } from "@/kernel/visualization/AnalysisFieldOverlayController";
+import { startAnalysisFieldOverlayPhaseAnimation } from "@/kernel/visualization/AnalysisFieldOverlayPhaseAnimation";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 import { resolveVisualizationEffectiveRenderMode } from "@/kernel/visualization/useVisualizationClientAck";
 import { resolveCrossSectionQueryFromVisualizationState } from "@/shared/domain/mesh/crossSectionQuery";
@@ -1084,6 +1087,14 @@ export function useViewport3DSceneModel({
   resourceCounts: Viewport3DResourceCounts;
   selection: Selection;
 }) {
+  const { analysisFieldOverlay } = useKernel();
+  const analysisOverlay = useAnalysisFieldOverlay(analysisFieldOverlay);
+  useEffect(() => {
+    const handle = startAnalysisFieldOverlayPhaseAnimation(analysisFieldOverlay);
+    return () => {
+      handle.stop();
+    };
+  }, [analysisFieldOverlay]);
   const visualizationState = useVisualizationStateResource();
   const crossSectionFramePreview = useCrossSectionWorkspaceSelector(
     activeCrossSectionFramePreview,
@@ -1126,6 +1137,7 @@ export function useViewport3DSceneModel({
     selection,
     visualizationState: renderingState,
   });
+  const primaryFieldQuantityId = analysisOverlay?.fieldId ?? quantityId;
   const scalarColorPalette =
     renderingState?.quantity?.colormap ?? renderingState?.colormap ?? "viridis";
   const vectorStyleState = renderingState?.vector_style;
@@ -1658,7 +1670,7 @@ export function useViewport3DSceneModel({
       }
       const settings = getPartSettings(partModel.part);
       if (
-        !sameViewport3DQuantityId(settings.activeQuantityId, quantityId) &&
+        !sameViewport3DQuantityId(settings.activeQuantityId, primaryFieldQuantityId) &&
         settings.visible &&
         (settings.shaderVisible || settings.vectorsVisible)
       ) {
@@ -1674,7 +1686,7 @@ export function useViewport3DSceneModel({
       }
     }
     if (
-      !sameViewport3DQuantityId(fdmSettings.activeQuantityId, quantityId) &&
+      !sameViewport3DQuantityId(fdmSettings.activeQuantityId, primaryFieldQuantityId) &&
       fdmSettings.visible &&
       (fdmSettings.shaderVisible || fdmSettings.vectorsVisible)
     ) {
@@ -1698,7 +1710,7 @@ export function useViewport3DSceneModel({
     fdmSurfaceColorMode,
     getPartSettings,
     magneticPartScopedVectorIds,
-    quantityId,
+    primaryFieldQuantityId,
   ]);
   const fieldUpdateHoldActive = useViewport3DFieldUpdateHoldActive();
   const magneticPartFieldVectors = useViewport3DPartFieldVectors(
@@ -1734,7 +1746,7 @@ export function useViewport3DSceneModel({
         fieldRenderOptions,
         getPartSettings,
         magneticParts: currentTopologyRenderModel?.magneticParts ?? [],
-        quantityId,
+        quantityId: primaryFieldQuantityId,
         scopedVectorOnlyPartIds: magneticPartScopedVectorIds,
         vectorDomain,
       }),
@@ -1743,7 +1755,7 @@ export function useViewport3DSceneModel({
       fieldRenderOptions,
       getPartSettings,
       magneticPartScopedVectorIds,
-      quantityId,
+      primaryFieldQuantityId,
       vectorDomain,
     ],
   );
@@ -1831,24 +1843,31 @@ export function useViewport3DSceneModel({
   );
   const fdmInstanceModelNeedsFieldVector =
     fdmVoxelMagnitudeThreshold > 0 || fdmTopographyEnabled;
-  const fieldVectorEnabled = resolveViewport3DPrimaryFieldVectorEnabled({
-    fdmInstanceModelNeedsFieldVector,
-    fdmSurfaceColorMode,
-    fdmVectorsVisible,
-    fieldRenderOptions: primaryFieldRenderOptions,
-    selectedSnapshotId,
-  });
+  const fieldVectorEnabled =
+    Boolean(analysisOverlay) ||
+    resolveViewport3DPrimaryFieldVectorEnabled({
+      fdmInstanceModelNeedsFieldVector,
+      fdmSurfaceColorMode,
+      fdmVectorsVisible,
+      fieldRenderOptions: primaryFieldRenderOptions,
+      selectedSnapshotId,
+    });
   const primaryFieldQuery = useMemo(
-    () =>
-      resolveViewport3DPrimaryFieldQuery({
+    () => {
+      if (analysisOverlay) {
+        return analysisOverlay.query;
+      }
+      return resolveViewport3DPrimaryFieldQuery({
         fdmInstanceModelNeedsFieldVector,
         fdmSurfaceColorMode,
         fdmTopographyEnabled,
         fdmVectorsVisible,
         fieldRenderOptions: primaryFieldRenderOptions,
         snapshotId: selectedSnapshotId,
-      }),
+      });
+    },
     [
+      analysisOverlay,
       fdmInstanceModelNeedsFieldVector,
       fdmSurfaceColorMode,
       fdmTopographyEnabled,
@@ -1858,14 +1877,18 @@ export function useViewport3DSceneModel({
     ],
   );
   const fieldVector = useViewport3DFieldVector(
-    quantityId,
+    primaryFieldQuantityId,
     primaryFieldQuery,
     fieldVectorEnabled,
     { pauseLoad: fieldUpdateHoldActive },
   );
   const fieldVectorResourceKey = useMemo(
-    () => resolveViewport3DFieldVectorResourceKey(quantityId, primaryFieldQuery),
-    [primaryFieldQuery, quantityId],
+    () =>
+      resolveViewport3DFieldVectorResourceKey(
+        primaryFieldQuantityId,
+        primaryFieldQuery,
+      ),
+    [primaryFieldQuery, primaryFieldQuantityId],
   );
   const fieldDataIssue = useMemo<Viewport3DFieldDataIssue | null>(() => {
     if (!(fieldVectorEnabled && fieldVector.error)) return null;
@@ -1874,7 +1897,7 @@ export function useViewport3DSceneModel({
     return {
       key: `${fieldVectorResourceKey}:${fieldVector.revision ?? "none"}:${message}`,
       message,
-      quantityId,
+      quantityId: primaryFieldQuantityId,
       resourceKey: fieldVectorResourceKey,
       retry: fieldVector.refetch,
     };
@@ -1884,12 +1907,12 @@ export function useViewport3DSceneModel({
     fieldVector.revision,
     fieldVectorEnabled,
     fieldVectorResourceKey,
-    quantityId,
+    primaryFieldQuantityId,
   ]);
   const fieldRefresh = useMemo<Viewport3DFieldRefreshState>(
     () => ({
       enabled: computeRunning && fieldVectorEnabled,
-      quantityId,
+      quantityId: primaryFieldQuantityId,
       resourceKey: fieldVectorResourceKey,
       revision: fieldVector.revision,
       status: fieldVector.status,
@@ -1900,12 +1923,12 @@ export function useViewport3DSceneModel({
       fieldVector.status,
       fieldVectorEnabled,
       fieldVectorResourceKey,
-      quantityId,
+      primaryFieldQuantityId,
     ],
   );
   const committedFieldVector = fieldVector.data ?? null;
   const fdmFieldVector =
-    sameViewport3DQuantityId(fdmSettings.activeQuantityId, quantityId)
+    sameViewport3DQuantityId(fdmSettings.activeQuantityId, primaryFieldQuantityId)
       ? committedFieldVector
       : targetQuantityFieldVectors.data?.get(
           resolveCanonicalQuantityId(fdmSettings.activeQuantityId),
@@ -2004,7 +2027,7 @@ export function useViewport3DSceneModel({
     cache: getCacheStats(),
     fieldRevision: fieldVector.payloadRevision ?? fieldVector.revision,
     objectCount: femDomain.objectPartIds.size,
-    quantityId,
+    quantityId: primaryFieldQuantityId,
     surfaceColorStatus: chunkedScalarColors.status,
     topologyRevision: topology.revision,
     tracker: resourceCounts,
@@ -2153,7 +2176,7 @@ export function useViewport3DSceneModel({
     meshQualityRange: meshQualityColors?.range ?? null,
     meshRegionOverlays,
     primitiveModel,
-    quantityId,
+    quantityId: primaryFieldQuantityId,
     regionOverlays,
     resourceFrameKey,
     selectedLabel,

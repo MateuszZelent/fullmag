@@ -57,7 +57,25 @@ from fullmag.model.dynamics import (
     LLG,
 )
 from fullmag.model.outputs import SaveField, SaveScalar, SaveSpectrum, SaveMode, SaveDispersion, SaveResponse, Snapshot, parse_snapshot_quantity
-from fullmag.model.study import Eigenmodes, FrequencyResponse, RelaxStop, Relaxation, TableAutosave, TimeEvolution
+from fullmag.model.study import (
+    AdaptiveRefinement,
+    Eigenmodes,
+    FieldOrientation,
+    FieldWindow,
+    HysteresisAngularFamily,
+    FrequencyResponse,
+    HysteresisStorage,
+    MeasurementAxis,
+    MinorLoop,
+    PiecewiseFieldSchedule,
+    RelaxStop,
+    Relaxation,
+    SaturationProbe,
+    SettlePipeline,
+    SettleTree,
+    TableAutosave,
+    TimeEvolution,
+)
 from fullmag.model.structure import (
     Ferromagnet,
     Material,
@@ -2942,7 +2960,8 @@ class StudyStagesBuilder:
         field_values_mT: Sequence[float] | None = None,
         direction: tuple[float, float, float] | None = None,
         orientation: FieldOrientation | None = None,
-        measurement_axis: str = "field_axis",
+        measurement_axis: str | MeasurementAxis = "field_axis",
+        angular_family: HysteresisAngularFamily | None = None,
         initial_protocol: str = "positive_saturation",
         saturation: SaturationProbe | None = None,
         branch_mode: str = "major_loop",
@@ -2950,6 +2969,7 @@ class StudyStagesBuilder:
         storage: HysteresisStorage | None = None,
         field_schedule: PiecewiseFieldSchedule | None = None,
         schedule_refinements: Sequence[FieldWindow] | None = None,
+        adaptive_refinement: AdaptiveRefinement | None = None,
         minor_loops: Sequence[MinorLoop] | None = None,
     ) -> "StudyStagesBuilder":
         """Add a canonical hysteresis sweep stage."""
@@ -2968,6 +2988,7 @@ class StudyStagesBuilder:
             direction=direction,
             orientation=orientation,
             measurement_axis=measurement_axis,
+            angular_family=angular_family,
             initial_protocol=initial_protocol,
             saturation=saturation,
             branch_mode=branch_mode,
@@ -2975,6 +2996,7 @@ class StudyStagesBuilder:
             storage=storage,
             field_schedule=field_schedule,
             schedule_refinements=schedule_refinements,
+            adaptive_refinement=adaptive_refinement,
             minor_loops=minor_loops,
         )
         return self.add_stage(stage)

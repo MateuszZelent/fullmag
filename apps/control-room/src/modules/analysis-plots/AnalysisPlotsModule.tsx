@@ -18,6 +18,12 @@ export default function AnalysisPlotsModule({ kernel }: ModuleProps) {
       onPointSelect={controller.selectPoint}
       onRangeChange={controller.setRange}
       onSeriesSelect={controller.selectSeries}
+      frequencyDomainSeries={controller.frequencyDomainSeries}
+      frequencyDomainStatus={controller.frequencyDomainStatus}
+      frequencyDomainTitle={controller.frequencyDomainTitle}
+      frequencyDomainUnavailableReason={
+        controller.frequencyDomainUnavailableReason
+      }
       range={controller.range}
       selectedPoint={controller.selectedPoint}
       solverEnergySeries={controller.solverEnergySeries}

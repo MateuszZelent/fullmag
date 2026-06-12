@@ -132,8 +132,10 @@ export function resolveStudyStageInspectorKind(
   }
   if (selectionKind === "study.stage.run") return "run";
   if (selectionKind === "study.stage.hysteresis") return "hysteresis";
-  if (selectionKind === "study.stage.eigenmodes") return "eigenmodes";
-  if (selectionKind === "study.stage.frequency_response") return "frequency_response";
+  if (selectionKind?.startsWith("study.stage.eigenmodes")) return "eigenmodes";
+  if (selectionKind?.startsWith("study.stage.frequency_response")) {
+    return "frequency_response";
+  }
   if (selectionKind === "study.stage.save_state") return "save_state";
   return "relax";
 }

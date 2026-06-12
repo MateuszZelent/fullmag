@@ -517,7 +517,7 @@ study.stage.frequency_response.boundary
 study.stage.frequency_response.periodic_pairs
 study.stage.frequency_response.k_grid
 resources.mesh.periodic_pairs
-diagnostics.frequency-domain.periodic-floquet
+diagnostics.frequency_domain.periodic_floquet
 ```
 
 Inspectors:

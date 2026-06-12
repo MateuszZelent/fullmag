@@ -22,8 +22,8 @@ IR:
 Planner:
 
 - `crates/fullmag-plan/src/fem.rs` plans FEM eigenmodes.
-- `crates/fullmag-plan/src/lib.rs` rejects frequency response as semantic-only.
-- Planner tests cover many eigen cases and one semantic-only frequency-response case.
+- `crates/fullmag-plan/src/lib.rs` rejects FDM frequency response explicitly and routes supported FEM response cases into `FemFrequencyResponsePlanIR` for the dense validation lane.
+- Planner tests cover many eigen cases, FEM dense validation frequency response, FDM response rejection, and time-integrator settings ignored by direct harmonic response.
 
 Capability:
 
@@ -92,7 +92,10 @@ Calculation mode lowering rules:
 Current state:
 
 - `Eigenmodes` and `FrequencyResponse` exist and serialize to IR.
-- Some UI draft fields use names such as `near_frequency`, while Python supports `nearest` in `Eigenmodes.to_ir()`.
+- `apps/control-room/src/modules/inspector/panels/StudyStageAuthoringModel.ts`
+  uses UI draft fields such as `targetFrequency`, while tests still preserve
+  compatibility with the legacy target alias `near_frequency`; Python supports
+  canonical `nearest` in `Eigenmodes.to_ir()`.
 
 Target state:
 
@@ -104,15 +107,17 @@ Instructions:
 2. Identify every alias that exists only for compatibility.
 3. Keep the public Python API stable unless a contradiction with physics notes exists.
 4. Normalize UI-only names at the UI authoring boundary, not in backend code.
-5. Add Python tests for:
+5. Treat `near_frequency` as a compatibility alias only; canonical exported
+   Python and ProblemIR must use `nearest` plus `target_frequency`.
+6. Add Python tests for:
    - eigen lowest target,
    - eigen nearest target,
    - k-vector legacy alias,
    - k-path sampling object,
    - frequency response two-point sweep,
    - unsupported output types.
-6. Add script export tests proving UI-authored eigen and frequency-response stages export canonical Python.
-7. Do not add backend-specific knobs to the public constructor unless they are under an explicit backend-hint object.
+7. Add script export tests proving UI-authored eigen and frequency-response stages export canonical Python.
+8. Do not add backend-specific knobs to the public constructor unless they are under an explicit backend-hint object.
 
 Verification:
 
@@ -158,7 +163,9 @@ Verification:
 
 Current state:
 
-- `StudyIR::FrequencyResponse` returns a semantic-only error for all backends.
+- `StudyIR::FrequencyResponse` can plan supported FEM dense validation response cases.
+- FDM frequency response remains explicitly rejected.
+- The production native MFEM/hypre/libCEED response solver remains unavailable.
 
 Target state:
 
@@ -184,7 +191,7 @@ Instructions:
    - response observables,
    - output artifact plan.
 5. Preserve requested intent and resolved execution in plan provenance.
-6. Keep the current semantic-only error for all unsupported target combinations until the native solver exists.
+6. Keep explicit unsupported-target errors for all combinations outside the proven FEM validation lane until the production native solver exists.
 7. Convert the existing test `frequency_response_is_first_class_ir_but_not_executable_yet` into narrower tests:
    - supported FEM response plans once backend flag is enabled,
    - unsupported backend still rejects,
@@ -330,6 +337,10 @@ Current state:
 - `ControlRoomApi.analysis.frequencyResponse.magneticSweepV1()` exists.
 - There is no `ControlRoomApi.analysis.eigen` facade.
 - There is no `ControlRoomApi.analysis.frequencyDomain` family container.
+- During active implementation, if `ControlRoomApi.analysis.frequencyDomain`
+  is added first and contains modal endpoint methods, treat that as an
+  intermediate state unless the namespace decision is explicitly accepted and
+  covered by facade/resource tests.
 
 Target state:
 
@@ -337,6 +348,10 @@ Target state:
 - Existing `api.analysis.frequencyResponse.magneticSweepV1()` remains unchanged for backward-compatible v1 sweep access.
 - New `api.analysis.frequencyDomain` is the umbrella family namespace for manifest and cross-family resources.
 - New `api.analysis.eigen` groups modal products such as spectrum, branches, dispersion, diagnostics, and mode metadata.
+- Namespace compatibility rule: the existing `frequencyResponse` namespace is
+  not removed; `frequencyDomain` is the family container; `eigen` is the modal
+  product namespace unless an explicit ADR/spec amendment chooses the
+  all-under-umbrella shape.
 
 Required facade methods:
 
@@ -350,6 +365,7 @@ api.analysis.eigen.diagnosticsV2()
 api.analysis.frequencyResponse.magneticSweepV1()
 api.analysis.frequencyResponse.magneticSweepV2()
 api.analysis.frequencyResponse.frequencyPoint(frequencyIndex)
+api.analysis.frequencyResponse.fieldMeta(frequencyIndex)
 ```
 
 Instructions:

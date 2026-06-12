@@ -21,6 +21,11 @@ import {
   shouldLoadRuntimeMeshManifest,
   shouldLoadRuntimeMeshSummary,
   shouldLoadRuntimeStageExecution,
+  useFrequencyDomainEigenBranchesResource,
+  useFrequencyDomainEigenDispersionResource,
+  useFrequencyDomainEigenSpectrumResource,
+  useFrequencyDomainManifestResource,
+  useFrequencyDomainResponseSweepResource,
   useStageExecutionResource,
 } from "@/kernel/resources/studyRuntimeResources";
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
@@ -159,6 +164,11 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     return ids;
   }, [crossSections]);
   const modelTabActive = activeTab === "model";
+  const frequencyDomainTabActive =
+    activeTab === "results" ||
+    activeTab === "resources" ||
+    activeTab === "jobs" ||
+    activeTab === "diagnostics";
   const sessionStatusData = useSessionStatusSelector(
     selectExplorerModelRuntimeStatus,
     { enabled: modelTabActive, isEqual: explorerModelRuntimeStatusEquals },
@@ -192,6 +202,21 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
       modelTabActive,
       sessionStatusData,
     ),
+  });
+  const frequencyDomainManifest = useFrequencyDomainManifestResource({
+    enabled: frequencyDomainTabActive,
+  });
+  const frequencyDomainSpectrum = useFrequencyDomainEigenSpectrumResource({
+    enabled: activeTab === "results",
+  });
+  const frequencyDomainBranches = useFrequencyDomainEigenBranchesResource({
+    enabled: activeTab === "results",
+  });
+  const frequencyDomainDispersion = useFrequencyDomainEigenDispersionResource({
+    enabled: activeTab === "results",
+  });
+  const frequencyDomainResponseSweep = useFrequencyDomainResponseSweepResource({
+    enabled: activeTab === "results",
   });
 
   const nodes = useMemo(() => {
@@ -239,7 +264,13 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     const baseNodes =
       activeTab === "model"
         ? buildModelTree({ ...modelSnapshot, crossSections, mesh, objects })
-        : buildExplorerTree(activeTab);
+        : buildExplorerTree(activeTab, {
+            frequencyDomainBranches: frequencyDomainBranches.data,
+            frequencyDomainDispersion: frequencyDomainDispersion.data,
+            frequencyDomainManifest: frequencyDomainManifest.data,
+            frequencyDomainResponseSweep: frequencyDomainResponseSweep.data,
+            frequencyDomainSpectrum: frequencyDomainSpectrum.data,
+          });
     return filterExplorerNodes(baseNodes, filterText);
   }, [
     activeBuild.data,
@@ -257,6 +288,11 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     textureLoadObjectIds,
     qualityGates.data,
     realizedSizeFields.data,
+    frequencyDomainBranches.data,
+    frequencyDomainDispersion.data,
+    frequencyDomainManifest.data,
+    frequencyDomainResponseSweep.data,
+    frequencyDomainSpectrum.data,
   ]);
 
   useEffect(() => {

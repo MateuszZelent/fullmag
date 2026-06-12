@@ -244,6 +244,26 @@ pub(crate) fn execution_plan_log_lines(
             lines.push(format!("hmax: {}", format_length_m(fem.hmax)));
             lines.push(format!("Requested modes: {}", fem.count));
         }
+        BackendPlanIR::FemFrequencyResponse(fem) => {
+            lines.push("Backend plan: fem_frequency_response".to_string());
+            lines.push(format!("Mesh: {}", fem.mesh_name));
+            lines.push(format!(
+                "Mesh size: {} nodes, {} elements, {} boundary faces",
+                fem.mesh.nodes.len(),
+                fem.mesh.elements.len(),
+                fem.mesh.boundary_faces.len()
+            ));
+            if let Some((min, max)) = fem_mesh_bbox(&fem.mesh) {
+                let extent = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
+                lines.push(format!("Mesh extent: {}", format_extent(extent)));
+            }
+            lines.push(format!("FE order: {}", fem.fe_order));
+            lines.push(format!("hmax: {}", format_length_m(fem.hmax)));
+            lines.push(format!(
+                "Frequency points: {}",
+                fem.frequencies_hz.values_hz.len()
+            ));
+        }
     }
     lines
 }
@@ -400,6 +420,51 @@ pub(crate) fn current_artifact_layout(
                 "domain_frame": domain_frame,
                 "domain_mesh_mode": fem.domain_mesh_mode,
                 "mode_count": fem.count,
+            })
+        }
+        BackendPlanIR::FemFrequencyResponse(fem) => {
+            let mesh_bounds = fem_mesh_bbox(&fem.mesh);
+            let (bounds_min, bounds_max, mesh_extent) = mesh_bounds
+                .map(|(min, max)| {
+                    (
+                        Some(min),
+                        Some(max),
+                        Some([max[0] - min[0], max[1] - min[1], max[2] - min[2]]),
+                    )
+                })
+                .unwrap_or((None, None, None));
+            let domain_frame = fem
+                .domain_frame
+                .clone()
+                .or_else(|| fem_domain_frame(problem, mesh_bounds))
+                .and_then(DomainFrameIR::finalized);
+            let world_extent = domain_frame
+                .as_ref()
+                .and_then(|frame| frame.effective_extent);
+            let world_center = domain_frame
+                .as_ref()
+                .and_then(|frame| frame.effective_center);
+            let world_extent_source = domain_frame
+                .as_ref()
+                .and_then(|frame| frame.effective_source.clone());
+            serde_json::json!({
+                "backend": "fem_frequency_response",
+                "mesh_name": fem.mesh.mesh_name,
+                "mesh_source": fem.mesh_source,
+                "fe_order": fem.fe_order,
+                "hmax": fem.hmax,
+                "n_nodes": fem.mesh.nodes.len(),
+                "n_elements": fem.mesh.elements.len(),
+                "boundary_face_count": fem.mesh.boundary_faces.len(),
+                "bounds_min": bounds_min,
+                "bounds_max": bounds_max,
+                "mesh_extent": mesh_extent,
+                "world_extent": world_extent,
+                "world_center": world_center,
+                "world_extent_source": world_extent_source,
+                "domain_frame": domain_frame,
+                "domain_mesh_mode": fem.domain_mesh_mode,
+                "frequency_count": fem.frequencies_hz.values_hz.len(),
             })
         }
     }

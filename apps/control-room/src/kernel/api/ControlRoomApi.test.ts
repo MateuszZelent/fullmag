@@ -393,6 +393,299 @@ describe("ControlRoomApi", () => {
     );
   });
 
+  it("loads frequency-domain solver family manifest through the analysis facade", async () => {
+    let observedInit: RequestInit | undefined;
+    let observedUrl = "";
+    const fetchImpl = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      observedUrl = String(url);
+      observedInit = init;
+      return jsonResponse({
+        eigen_namespace: "eigen",
+        eigenmodes: {
+          diagnostics_json: "{}",
+          driven_response_available: false,
+          dynamic_demag_k_available: false,
+          floquet_modal_available: false,
+          floquet_response_available: false,
+          gpu_available: false,
+          modal_solver_available: false,
+          reason: "native FEM modal dynamic-matrix solver is not implemented",
+          status: "unavailable",
+          study_kind: "eigenmodes",
+        },
+        existing_frequency_response_namespace_preserved: true,
+        family_namespace: "frequencyDomain",
+        floquet_nonzero_k_demag_supported: false,
+        response: {
+          diagnostics_json: "{}",
+          driven_response_available: false,
+          dynamic_demag_k_available: false,
+          floquet_modal_available: false,
+          floquet_response_available: false,
+          gpu_available: false,
+          modal_solver_available: false,
+          reason: "native FEM driven frequency-response solver is not implemented",
+          status: "unavailable",
+          study_kind: "frequency_response",
+        },
+        response_progress: null,
+        schema_version: "frequency_domain_manifest.v1",
+      });
+    });
+
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl,
+      requestIdFactory: () => "req-frequency-domain",
+    });
+
+    const manifest = await api.analysis.frequencyDomain.manifestV1();
+
+    expect(manifest.schema_version).toBe("frequency_domain_manifest.v1");
+    expect(manifest.existing_frequency_response_namespace_preserved).toBe(true);
+    expect(manifest.response.study_kind).toBe("frequency_response");
+    expect(manifest.eigenmodes.study_kind).toBe("eigenmodes");
+    expect(observedUrl).toBe(
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-domain/manifest.v1",
+    );
+    expect(observedInit?.method).toBe("GET");
+    expect(new Headers(observedInit?.headers).get("x-request-id")).toBe(
+      "req-frequency-domain",
+    );
+  });
+
+  it("loads frequency-domain artifact resources through the analysis facade", async () => {
+    const observedUrls: string[] = [];
+    const fetchImpl = vi.fn(async (url: RequestInfo | URL) => {
+      const target = String(url);
+      observedUrls.push(target);
+      if (target.endsWith("/response/progress.v1")) {
+        return jsonResponse({
+          completed_frequency_points: 1,
+          current_frequency_hz: 1e9,
+          latest_artifact_manifest_path: null,
+          missing_reason: null,
+          partial_artifacts_available: true,
+          schema_version: "frequency_domain_sweep_progress.v1",
+          status: "ready",
+          total_frequency_points: 2,
+          written_frequency_point_artifacts: 1,
+        });
+      }
+      if (target.endsWith("/response/cancel-requested.v1")) {
+        return jsonResponse({
+          completed_frequency_points: 1,
+          current_frequency_hz: 1e9,
+          latest_artifact_manifest_path: "response/artifact_manifest.json",
+          missing_reason: null,
+          partial_artifacts_available: true,
+          progress_json:
+            '{"schema_version":"frequency_domain_sweep_progress.v1","state":"cancel_requested"}',
+          schema_version: "frequency_domain_sweep_progress.v1",
+          status: "cancel_requested",
+          total_frequency_points: 2,
+          written_frequency_point_artifacts: 1,
+        });
+      }
+      if (target.endsWith("/response/field/7/meta")) {
+        return jsonResponse({
+          artifact_path: "response/field_payloads/frequency_0007/vector.bin",
+          available_views: [
+            "complex",
+            "real",
+            "imag",
+            "amplitude",
+            "phase",
+            "phase_rotated_real",
+          ],
+          components: ["x", "y", "z"],
+          default_phase_rad: 0,
+          default_view: "phase_rotated_real",
+          field_id: "analysis:frequency-response:frequency-0007",
+          missing_reason: null,
+          quantity: "delta_m",
+          resource_key:
+            "/v2/sessions/current/data/fields/analysis:frequency-response:frequency-0007/samples/vector?view=phase_rotated_real&phase_rad=0",
+          schema_version: "frequency_domain_response_field.v1",
+          source_family: "analysis/frequency-response",
+          status: "ready",
+          value_kind: "complex_vector",
+        });
+      }
+      return jsonResponse({
+        artifact_path: "response/magnetic_response_sweep.v2.json",
+        missing_reason: null,
+        payload: { schema_version: "magnetic_response_sweep.v2" },
+        resource_key:
+          "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep",
+        schema_version: "frequency_domain_response_sweep_resource.v1",
+        status: "ready",
+      });
+    });
+
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl,
+      requestIdFactory: () => "req-frequency-domain-artifact",
+    });
+
+    const sweep = await api.analysis.frequencyDomain.responseMagneticSweep();
+    await api.analysis.frequencyDomain.responseFrequencyPoint(7);
+    const fieldMeta = await api.analysis.frequencyDomain.responseFieldMeta(7);
+    const cancelRequested =
+      await api.analysis.frequencyDomain.responseCancelRequestedV1();
+    const progress = await api.analysis.frequencyDomain.responseProgressV1();
+
+    expect(sweep.status).toBe("ready");
+    expect(fieldMeta.default_view).toBe("phase_rotated_real");
+    expect(fieldMeta.default_phase_rad).toBe(0);
+    expect(fieldMeta.available_views).toContain("complex");
+    expect(cancelRequested.status).toBe("cancel_requested");
+    expect(progress.completed_frequency_points).toBe(1);
+    expect(observedUrls).toEqual([
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep",
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-domain/response/frequency-points/7",
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-domain/response/field/7/meta",
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-domain/response/cancel-requested.v1",
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-domain/response/progress.v1",
+    ]);
+  });
+
+  it("preserves frequency-response namespace aliases for v2 response resources", async () => {
+    const observedUrls: string[] = [];
+    const fetchImpl = vi.fn(async (url: RequestInfo | URL) => {
+      const target = String(url);
+      observedUrls.push(target);
+      if (target.endsWith("/response/field/4/meta")) {
+        return jsonResponse({
+          artifact_path: "response/field_payloads/frequency_0004/vector.bin",
+          available_views: ["real", "imag", "phase_rotated_real"],
+          components: ["x", "y", "z"],
+          default_phase_rad: 0,
+          default_view: "phase_rotated_real",
+          field_id: "analysis:frequency-response:frequency-0004",
+          missing_reason: null,
+          quantity: "delta_m",
+          resource_key:
+            "/v2/sessions/current/data/fields/analysis:frequency-response:frequency-0004/samples/vector?view=phase_rotated_real&phase_rad=0",
+          schema_version: "frequency_domain_response_field.v1",
+          source_family: "analysis/frequency-response",
+          status: "ready",
+          value_kind: "complex_vector",
+        });
+      }
+      return jsonResponse({
+        artifact_path: "response/magnetic_response_sweep.v2.json",
+        missing_reason: null,
+        payload: { schema_version: "magnetic_response_sweep.v2" },
+        resource_key:
+          "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep",
+        schema_version: "frequency_domain_response_sweep_resource.v1",
+        status: "ready",
+      });
+    });
+
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl,
+      requestIdFactory: () => "req-frequency-response-v2",
+    });
+
+    await api.analysis.frequencyResponse.magneticSweepV2();
+    await api.analysis.frequencyResponse.frequencyPoint(4);
+    await api.analysis.frequencyResponse.fieldMeta(4);
+
+    expect(observedUrls).toEqual([
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep",
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-domain/response/frequency-points/4",
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-domain/response/field/4/meta",
+    ]);
+  });
+
+  it("loads modal eigen artifacts through both eigen and family namespaces", async () => {
+    const observedUrls: string[] = [];
+    const fetchImpl = vi.fn(async (url: RequestInfo | URL) => {
+      const target = String(url);
+      observedUrls.push(target);
+      if (target.endsWith("/eigen/dispersion")) {
+        return jsonResponse({
+          artifact_path: "eigen/dispersion.csv",
+          missing_reason: null,
+          payload: "sample_index,path_s_rad_per_m,mode_index,frequency_hz\n",
+          resource_key:
+            "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion",
+          schema_version: "frequency_domain_text_artifact.v1",
+          status: "ready",
+        });
+      }
+      if (target.endsWith("/eigen/mode-field/1/2/meta")) {
+        return jsonResponse({
+          artifact_path: "eigen/mode_fields/sample_0001/mode_0002/vector.bin",
+          available_views: ["real", "imag", "amplitude", "phase_rotated_real"],
+          components: ["x", "y", "z"],
+          default_phase_rad: 0,
+          default_view: "phase_rotated_real",
+          field_id: "analysis:eigen:sample-0001:mode-0002",
+          missing_reason: null,
+          quantity: "delta_m",
+          resource_key:
+            "/v2/sessions/current/data/fields/analysis:eigen:sample-0001:mode-0002/samples/vector?view=phase_rotated_real&phase_rad=0",
+          schema_version: "frequency_domain_eigen_field.v1",
+          source_family: "analysis/eigen",
+          status: "ready",
+          value_kind: "complex_vector",
+        });
+      }
+      if (target.endsWith("/analysis/eigen/modes/1/2")) {
+        return jsonResponse({
+          branch_id: "branch-0",
+          field_id: "analysis:eigen:sample-0001:mode-0002",
+          frequency_hz: 3.2e9,
+          raw_mode_index: 2,
+          sample_index: 1,
+          schema_version: "eigen_mode.v2",
+        });
+      }
+      return jsonResponse({
+        artifact_path: "eigen/spectrum.v2.json",
+        missing_reason: null,
+        payload: { schema_version: "eigen_spectrum.v2" },
+        resource_key:
+          "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2",
+        schema_version: "frequency_domain_eigen_artifact.v1",
+        status: "ready",
+      });
+    });
+
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl,
+      requestIdFactory: () => "req-eigen",
+    });
+
+    await api.analysis.eigen.eigenSpectrumV2();
+    await api.analysis.eigen.eigenBranchesV2();
+    await api.analysis.eigen.eigenDiagnosticsV2();
+    await api.analysis.eigen.eigenDispersion();
+    const mode = await api.analysis.eigen.modeV2(1, 2);
+    await api.analysis.eigen.eigenModeFieldMeta(1, 2);
+    await api.analysis.frequencyDomain.eigenSpectrumV2();
+
+    expect(mode).toMatchObject({
+      field_id: "analysis:eigen:sample-0001:mode-0002",
+      schema_version: "eigen_mode.v2",
+    });
+    expect(observedUrls).toEqual([
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2",
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2",
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2",
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-domain/eigen/dispersion",
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/eigen/modes/1/2",
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/1/2/meta",
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2",
+    ]);
+  });
+
   it("loads hysteresis analysis resources through the analysis facade", async () => {
     const observedUrls: string[] = [];
     const observedMethods: Array<string | undefined> = [];
@@ -451,17 +744,21 @@ describe("ControlRoomApi", () => {
     await api.analysis.hysteresis.metrics("stage 1");
     await api.analysis.hysteresis.saturation("stage 1");
     await api.analysis.hysteresis.branches("stage 1");
+    await api.analysis.hysteresis.family("stage 1");
+    await api.analysis.hysteresis.familyVariantPoints("stage 1", "theta 90");
     await api.analysis.hysteresis.minorLoops("stage 1");
     await api.analysis.hysteresis.reversalFields("stage 1");
     await api.analysis.hysteresis.point("stage 1", 7);
     await api.analysis.hysteresis.settleTrace("stage 1", 7);
 
-    expect(observedMethods).toEqual(Array(8).fill("GET"));
+    expect(observedMethods).toEqual(Array(10).fill("GET"));
     expect(observedUrls).toEqual([
       "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis/stage%201/points",
       "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis/stage%201/metrics",
       "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis/stage%201/saturation",
       "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis/stage%201/branches",
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis-family/stage%201",
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis-family/stage%201/variants/theta%2090/points",
       "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis/stage%201/minor-loops",
       "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis/stage%201/reversal-fields",
       "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis/stage%201/steps/7",
@@ -1888,6 +2185,33 @@ describe("ControlRoomApi", () => {
     );
   });
 
+  it("queries phase-rotated frequency-response field vectors through the data-plane facade", async () => {
+    let observedUrl = "";
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url) => {
+        observedUrl = String(url);
+        return binaryResponse(makeFieldVectorBuffer(), {
+          headers: { etag: '"field-1"', ...contractHeaders },
+        });
+      },
+    });
+
+    const result = await api.data.fields.vector(
+      "analysis:frequency-response:frequency-0003",
+      {
+        component: "full",
+        phase_rad: 1.25,
+        view: "phase_rotated_real",
+      },
+    );
+
+    expect(result.status).toBe("ready");
+    expect(observedUrl).toBe(
+      "http://127.0.0.1:8765/v2/sessions/current/data/fields/analysis%3Afrequency-response%3Afrequency-0003/samples/vector?component=full&phase_rad=1.25&view=phase_rotated_real",
+    );
+  });
+
   it("canonicalizes field vector quantity aliases at the v2 data facade boundary", async () => {
     let observedUrl = "";
     const api = new ControlRoomApi({
@@ -2153,6 +2477,7 @@ describe("ControlRoomApi", () => {
     await api.model.geometry.realization();
     await api.meshing.builds.current();
     await api.meshing.builds.latestSuccessful();
+    await api.meshing.periodicPairs();
     await api.meshing.objectReport("box");
     await api.meshing.objectQuality("box");
 
@@ -2163,6 +2488,7 @@ describe("ControlRoomApi", () => {
       "http://127.0.0.1:8765/v2/sessions/current/model/geometry/realizations/current",
       "http://127.0.0.1:8765/v2/sessions/current/meshing/builds/current",
       "http://127.0.0.1:8765/v2/sessions/current/meshing/builds/latest-successful",
+      "http://127.0.0.1:8765/v2/sessions/current/meshing/mesh/periodic_pairs.v1",
       "http://127.0.0.1:8765/v2/sessions/current/meshing/meshes/objects/box/report",
       "http://127.0.0.1:8765/v2/sessions/current/meshing/meshes/objects/box/quality",
     ]);

@@ -2,6 +2,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import {
+  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+  ANALYSIS_HYSTERESIS_POINTS_PATH,
   DATA_TABLE_ROWS_PATH,
   SIMULATION_SOLVER_ENERGIES_HISTORY_PATH,
 } from "../../kernel/api/apiPaths";
@@ -13,6 +15,7 @@ import {
   resolveAnalysisPlotsYAxisIds,
   shouldFetchAnalysisTableRows,
 } from "./analysisPlotsModel";
+import { frequencyDomainSelectionFromPoint } from "./useAnalysisPlotsController";
 import { buildScalarChartSeries } from "./chartTableModel";
 import { buildSolverEnergyHistoryChartSeries } from "./energyHistoryAdapter";
 import { AnalysisPlotsView } from "./AnalysisPlotsModule";
@@ -23,6 +26,7 @@ import { SelectionController } from "@/kernel/selection/SelectionController";
 import type { KernelApi } from "@/kernel/types";
 import {
   adjacentHysteresisPointIndex,
+  buildHysteresisAngularFamilyLineSeriesModel,
   buildHysteresisChartLineSeriesModel,
   buildHysteresisChartPointSelection,
   clearHysteresisPointSelectionForLive,
@@ -33,6 +37,11 @@ import {
   resolveHysteresisNavigationIndex,
   selectedHysteresisPointId,
 } from "@/shared/domain/study/HysteresisChart";
+import {
+  buildEigenDispersionChartModel,
+  buildEigenSpectrumChartModel,
+  buildFrequencyResponseChartModel,
+} from "@/shared/domain/analysis/frequencyDomainChartModels";
 
 function tableRowsResourceKey(tableId: string): string {
   return DATA_TABLE_ROWS_PATH.replace("{table_id}", encodeURIComponent(tableId));
@@ -266,6 +275,70 @@ describe("AnalysisPlotsView", () => {
     ]);
   });
 
+  it("builds angular-family series only for computed variants", () => {
+    const family = {
+      active_variant_id: "theta_000",
+      family_id: "oop_ip_sweep",
+      revision: 7,
+      series: [
+        {
+          data_status: "computed_active_stage",
+          label: "OOP",
+          orientation: { kind: "spherical", theta_deg: 0, phi_deg: 0 },
+          point_count: 2,
+          points: [
+            {
+              field_value_mT: 50,
+              m_avg: [0.8, 0, 0],
+              m_ip: 0.8,
+              m_oop: 0,
+              m_parallel: 0.8,
+              point_id: 0,
+              snapshot_id: null,
+              status: "Completed",
+            },
+            {
+              field_value_mT: 0,
+              m_avg: [0.2, 0, 0],
+              m_ip: 0.2,
+              m_oop: 0,
+              m_parallel: 0.2,
+              point_id: 1,
+              snapshot_id: null,
+              status: "Completed",
+            },
+          ],
+          points_resource_ref: ANALYSIS_HYSTERESIS_POINTS_PATH.replace("{stage_id}", "stage_0"),
+          variant_id: "theta_000",
+        },
+        {
+          data_status: "pending_run",
+          label: "In-plane",
+          orientation: { kind: "spherical", theta_deg: 90, phi_deg: 0 },
+          point_count: 0,
+          points: [],
+          points_resource_ref: ANALYSIS_HYSTERESIS_POINTS_PATH.replace("{stage_id}", "stage_0"),
+          variant_id: "theta_090",
+        },
+      ],
+      stage_id: "stage_0",
+      stage_index: 0,
+    };
+
+    const series = buildHysteresisAngularFamilyLineSeriesModel(
+      family,
+      "m_parallel",
+    );
+
+    expect(series).toHaveLength(1);
+    expect(series[0].branchId).toBe("angular-family:theta_000");
+    expect(series[0].name).toBe("OOP (theta_000)");
+    expect(series[0].data).toEqual([
+      [50, 0.8, 0],
+      [0, 0.2, 1],
+    ]);
+  });
+
   it("builds the virgin segment from a virgin-then-major hysteresis schedule", () => {
     const points = [
       {
@@ -496,6 +569,162 @@ describe("AnalysisPlotsView", () => {
     expect(html).toContain('class="fm-analysis-plots__echarts"');
     expect(html).toContain('class="fm-analysis-plots__echarts"');
     expect(html).toContain("mx");
+  });
+
+  it("renders frequency-domain series as a dedicated analysis subchart", () => {
+    const html = renderToStaticMarkup(
+      <AnalysisPlotsView
+        kernel={mockKernel}
+        frequencyDomainSeries={[
+          {
+            id: "analysis.frequency-domain:response:amplitude",
+            label: "Amplitude",
+            points: [{ rowIndex: 0, x: 9.5, y: 2 }],
+            quantity: "amplitude",
+            source: {
+              kind: "analysis.frequency_domain",
+              resourceKey: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+              tableId: "frequency-domain:response-sweep",
+            },
+            status: "ready",
+            unit: "a.u.",
+            xUnit: "GHz",
+          },
+        ]}
+        frequencyDomainStatus="ready"
+        frequencyDomainTitle="Frequency-domain response sweep"
+        onClearRange={() => undefined}
+        onPointSelect={() => undefined}
+        onRangeChange={() => undefined}
+        onSeriesSelect={() => undefined}
+        range={null}
+        selectedPoint={null}
+        solverEnergySeries={[]}
+        solverEnergyStatus="idle"
+        tableRowsStatus="idle"
+        visibleTable={null}
+        xAxisId="step"
+        yAxisIds={["mx"]}
+      />,
+    );
+
+    expect(html).toContain("Frequency-domain response sweep");
+    expect(html).toContain("Frequency-domain series legend");
+    expect(html).toContain("Amplitude");
+    expect(html).toContain(ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH);
+  });
+
+  it("renders frequency-domain missing artifact state instead of hiding the analysis subchart", () => {
+    const html = renderToStaticMarkup(
+      <AnalysisPlotsView
+        kernel={mockKernel}
+        frequencyDomainSeries={[]}
+        frequencyDomainStatus="stale"
+        frequencyDomainTitle="Frequency-domain modal spectrum"
+        frequencyDomainUnavailableReason="spectrum artifact is missing"
+        onClearRange={() => undefined}
+        onPointSelect={() => undefined}
+        onRangeChange={() => undefined}
+        onSeriesSelect={() => undefined}
+        range={null}
+        selectedPoint={null}
+        solverEnergySeries={[]}
+        solverEnergyStatus="idle"
+        tableRowsStatus="idle"
+        visibleTable={null}
+        xAxisId="step"
+        yAxisIds={["mx"]}
+      />,
+    );
+
+    expect(html).toContain("Frequency-domain modal spectrum");
+    expect(html).toContain("stale");
+    expect(html).toContain("spectrum artifact is missing");
+    expect(html).not.toContain("Frequency-domain series legend");
+  });
+
+  it("renders frequency-domain loading state while artifact resources resolve", () => {
+    const html = renderToStaticMarkup(
+      <AnalysisPlotsView
+        kernel={mockKernel}
+        frequencyDomainSeries={[]}
+        frequencyDomainStatus="loading"
+        frequencyDomainTitle="Frequency-domain dispersion"
+        onClearRange={() => undefined}
+        onPointSelect={() => undefined}
+        onRangeChange={() => undefined}
+        onSeriesSelect={() => undefined}
+        range={null}
+        selectedPoint={null}
+        solverEnergySeries={[]}
+        solverEnergyStatus="idle"
+        tableRowsStatus="idle"
+        visibleTable={null}
+        xAxisId="step"
+        yAxisIds={["mx"]}
+      />,
+    );
+
+    expect(html).toContain("Frequency-domain dispersion");
+    expect(html).toContain("Loading frequency-domain artifacts");
+  });
+
+  it("maps frequency-domain chart clicks to frequency-domain selections", () => {
+    const responseModel = buildFrequencyResponseChartModel({
+      artifact_path: "response/magnetic_response_sweep.v2.json",
+      payload: {
+        points: [
+          {
+            field_id: "response-field-7",
+            frequency_hz: 12.5e9,
+            frequency_index: 7,
+            max_response_amplitude: 0.75,
+            observable_id: "mx",
+          },
+        ],
+        schema_version: "magnetic_response_sweep.v2",
+      },
+      status: "ready",
+    });
+
+    const selection = frequencyDomainSelectionFromPoint({
+      dispersionModel: buildEigenDispersionChartModel({ status: "idle" }),
+      point: {
+        label: "Amplitude",
+        point: { rowIndex: 0, x: 12.5, y: 0.75 },
+        quantity: "amplitude",
+        seriesId: "analysis.frequency-domain:response:amplitude",
+        source: {
+          kind: "analysis.frequency_domain",
+          resourceKey: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+          tableId: "frequency-domain:response-sweep",
+        },
+        unit: "a.u.",
+        xUnit: "GHz",
+      },
+      responseModel,
+      routeMode: "fmr_response",
+      spectrumModel: buildEigenSpectrumChartModel({ status: "idle" }),
+    });
+
+    expect(selection).toEqual({
+      kind: "results.frequency_response.frequency_point",
+      label: "Amplitude 0.75 a.u.",
+      nodeId:
+        "analysis:charts:frequency-domain:response-sweep:point:analysis.frequency-domain:response:amplitude:0",
+      objectId: null,
+      ref: {
+        calculationMode: "fmr_response",
+        fieldId: "response-field-7",
+        frequencyIndex: 7,
+        kind: "results.frequency_response.frequency_point",
+        nodeId:
+          "analysis:charts:frequency-domain:response-sweep:point:analysis.frequency-domain:response:amplitude:0",
+        observableId: "mx",
+        resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+        type: "frequency-domain",
+      },
+    });
   });
 
   it("renders active zoom range with a clear action", () => {

@@ -3,7 +3,15 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_FIELD_META_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
+  ANALYSIS_EIGEN_MODE_V2_PATH,
   ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH,
+  ANALYSIS_HYSTERESIS_FAMILY_PATH,
   DATA_TABLE_COLUMNS_PATH,
   DATA_TABLE_PATH,
   DIAGNOSTICS_SOLVER_PROFILE_PATH,
@@ -19,10 +27,12 @@ import type { LiveStatusResource } from "../api/apiTypes";
 
 import {
   STUDY_RUNTIME_CONTROL_RESOURCE_KEYS,
+  frequencyDomainManifestRevision,
   runtimeCommandControlSessionStatusEquals,
   selectStudyRuntimeCommandSessionStatus,
   shouldLoadRuntimeCommandQueue,
   shouldLoadRuntimeCurrentRun,
+  shouldLoadFrequencyDomainManifest,
   shouldLoadRuntimeMeshBuild,
   shouldLoadRuntimeMeshManifest,
   shouldLoadRuntimeMeshSummary,
@@ -30,6 +40,91 @@ import {
   shouldLoadRuntimeStageExecution,
   studyRuntimeCommandSessionStatusEquals,
 } from "./studyRuntimeResources";
+
+const capability = (status: string, reason = "test fixture") => ({ status, reason });
+
+const frequencyDomainCapabilityFixture = {
+  boundary: {
+    floquet_modal: capability("semantic_only"),
+    floquet_response: capability("unsupported"),
+    periodic_pair_diagnostics: capability("reference_executable"),
+    static_periodic: capability("semantic_only"),
+  },
+  demag: {
+    floquet_dynamic_k: capability("unsupported"),
+    static_periodic_pbc: capability("semantic_only"),
+  },
+  dispersion: {
+    branch_tracking: capability("reference_executable"),
+    k_path: capability("reference_executable"),
+  },
+  modal: {
+    absorption_from_modes: capability("unsupported"),
+    k_path: capability("reference_executable"),
+    linewidths: capability("reference_executable"),
+    mode_field_payload: capability("reference_executable"),
+    mode_tracking: capability("reference_executable"),
+    production_cpu: capability("unsupported"),
+    production_gpu: capability("unsupported"),
+    reference_cpu: capability("reference_executable"),
+  },
+  response: {
+    frequency_sweep: capability("reference_executable"),
+    magnetic_cpu: capability("reference_executable"),
+    magnetic_gpu: capability("unsupported"),
+    magnetoelastic_elastodynamic: capability("unsupported"),
+    magnetoelastic_quasistatic: capability("unsupported"),
+    mode_projected: capability("unsupported"),
+  },
+  schema_version: "frequency_domain_capabilities.v1",
+  validation: {
+    fmr_k0: capability("source_visible"),
+  },
+  visualization: {
+    modal_dispersion_chart: capability("reference_executable"),
+    modal_spectrum_chart: capability("reference_executable"),
+    mode_3d_overlay: capability("reference_executable"),
+    mode_table: capability("reference_executable"),
+    response_field_3d_overlay: capability("reference_executable"),
+    response_sweep_chart: capability("reference_executable"),
+  },
+} as const;
+
+const FREQUENCY_DOMAIN_MANIFEST = {
+  capabilities: frequencyDomainCapabilityFixture,
+  eigen_namespace: "eigen",
+  eigenmodes: {
+    diagnostics_json: "{}",
+    driven_response_available: false,
+    dynamic_demag_k_available: false,
+    floquet_modal_available: false,
+    floquet_response_available: false,
+    gpu_available: false,
+    modal_solver_available: false,
+    reason: "pending",
+    status: "unavailable",
+    study_kind: "eigenmodes",
+  },
+  existing_frequency_response_namespace_preserved: true,
+  family_namespace: "frequencyDomain",
+  floquet_nonzero_k_demag_supported: false,
+  response: {
+    diagnostics_json: "{}",
+    driven_response_available: false,
+    dynamic_demag_k_available: false,
+    floquet_modal_available: false,
+    floquet_response_available: false,
+    gpu_available: false,
+    modal_solver_available: false,
+    reason: "pending",
+    status: "unavailable",
+    study_kind: "frequency_response",
+  },
+  response_cancel_requested: null,
+  response_progress: null,
+  result_manifest: null,
+  schema_version: "frequency_domain_manifest.v1",
+} as const;
 
 const studyRuntimeResourcesUrl = new URL("./studyRuntimeResources.ts", import.meta.url);
 
@@ -244,6 +339,159 @@ describe("study runtime command resource bundles", () => {
     expect(hookSource).toContain(
       "resourceKey: ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH",
     );
+  });
+
+  it("exposes the frequency-domain family manifest as a revision-gated analysis resource", () => {
+    const source = readFileSync(studyRuntimeResourcesUrl, "utf8");
+    const hookSource = source.slice(
+      source.indexOf("export function useFrequencyDomainManifestResource"),
+      source.indexOf("export function useHysteresisPointsResource"),
+    );
+
+    expect(ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH).toBeTruthy();
+    expect(hookSource).toMatch(/api\.analysis\.frequencyDomain\s*\.manifestV1/);
+    expect(hookSource).toContain(
+      "ignoreMissingResource<FrequencyDomainManifestResource>",
+    );
+    expect(hookSource).toContain(
+      "resourceKey: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH",
+    );
+    expect(shouldLoadFrequencyDomainManifest(true, statusWith())).toBe(false);
+    expect(
+      shouldLoadFrequencyDomainManifest(
+        true,
+        statusWith({ resources: { artifact_revision: 2 } }),
+      ),
+    ).toBe(true);
+    expect(
+      shouldLoadFrequencyDomainManifest(
+        true,
+        statusWith({ resources: { artifacts_revision: 3 } }),
+      ),
+    ).toBe(true);
+    expect(
+      shouldLoadFrequencyDomainManifest(
+        true,
+        statusWith({ resources: { stages_revision: 4 } }),
+      ),
+    ).toBe(true);
+  });
+
+  it("changes the frequency-domain manifest revision when artifact state changes", () => {
+    const baseRevision = frequencyDomainManifestRevision(
+      FREQUENCY_DOMAIN_MANIFEST,
+    );
+    const progressRevision = frequencyDomainManifestRevision({
+      ...FREQUENCY_DOMAIN_MANIFEST,
+      response_progress: {
+        complete: false,
+        completed_frequency_points: 1,
+        current_frequency_hz: 1.0e9,
+        latest_artifact_manifest_path: "response/artifact_manifest.json",
+        missing_reason: null,
+        partial_artifacts_available: true,
+        progress_json:
+          '{"schema_version":"frequency_domain_sweep_progress.v1","state":"running"}',
+        schema_version: "frequency_domain_sweep_progress.v1",
+        status: "ready",
+        total_frequency_points: 4,
+        written_frequency_point_artifacts: 1,
+      },
+    });
+    const cancelRevision = frequencyDomainManifestRevision({
+      ...FREQUENCY_DOMAIN_MANIFEST,
+      response_cancel_requested: {
+        complete: false,
+        completed_frequency_points: 1,
+        current_frequency_hz: 1.0e9,
+        latest_artifact_manifest_path: "response/artifact_manifest.json",
+        missing_reason: null,
+        partial_artifacts_available: true,
+        progress_json:
+          '{"schema_version":"frequency_domain_sweep_progress.v1","state":"cancel_requested"}',
+        schema_version: "frequency_domain_sweep_progress.v1",
+        status: "cancel_requested",
+        total_frequency_points: 4,
+        written_frequency_point_artifacts: 1,
+      },
+    });
+    const resultRevision = frequencyDomainManifestRevision({
+      ...FREQUENCY_DOMAIN_MANIFEST,
+      result_manifest: {
+        artifact_path: "frequency_domain/manifest.v1.json",
+        missing_reason: null,
+        payload: { schema_version: "frequency_domain_manifest.v1" },
+        resource_key: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
+        schema_version: "frequency_domain_manifest.v1",
+        status: "ready",
+      },
+    });
+
+    expect(progressRevision).not.toBe(baseRevision);
+    expect(cancelRevision).not.toBe(baseRevision);
+    expect(resultRevision).not.toBe(baseRevision);
+  });
+
+  it("exposes the hysteresis angular family as a revision-gated analysis resource", () => {
+    const source = readFileSync(studyRuntimeResourcesUrl, "utf8");
+    const hookSource = source.slice(
+      source.indexOf("export function useHysteresisFamilyResource"),
+      source.indexOf("export function useHysteresisMinorLoopsResource"),
+    );
+
+    expect(ANALYSIS_HYSTERESIS_FAMILY_PATH).toBeTruthy();
+    expect(hookSource).toMatch(/api\.analysis\.hysteresis\s*\.family/);
+    expect(hookSource).toContain(
+      "ignoreMissingResource<HysteresisAngularFamilyResource>",
+    );
+    expect(hookSource).toContain(
+      "resourceKey = stageId",
+    );
+    expect(hookSource).toContain(
+      "resolveRevision: (data) => data?.revision ?? null",
+    );
+  });
+
+  it("exposes frequency-domain artifact resources through the family facade", () => {
+    const source = readFileSync(studyRuntimeResourcesUrl, "utf8");
+    const hookSource = source.slice(
+      source.indexOf("export function useFrequencyDomainEigenSpectrumResource"),
+      source.indexOf("export function useHysteresisPointsResource"),
+    );
+
+    expect(ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH).toBeTruthy();
+    expect(ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH).toBeTruthy();
+    expect(
+      ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
+    ).toBeTruthy();
+    expect(ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH).toBeTruthy();
+    expect(ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_FIELD_META_PATH).toBeTruthy();
+    expect(ANALYSIS_EIGEN_MODE_V2_PATH).toBeTruthy();
+    expect(hookSource).toMatch(/analysis\.eigen\.eigenSpectrumV2/);
+    expect(hookSource).toMatch(/analysis\.eigen\s*\.modeV2/);
+    expect(hookSource).toMatch(/frequencyDomain\.responseMagneticSweep/);
+    expect(hookSource).toMatch(/frequencyDomain\s*\.responseCancelRequestedV1/);
+    expect(hookSource).toMatch(/frequencyDomain\.responseProgressV1/);
+    expect(hookSource).toContain(
+      "ignoreMissingResource<FrequencyDomainSweepProgressResource>",
+    );
+    expect(hookSource).toContain("useMagneticResponseSweepV2Resource");
+    expect(hookSource).toContain("useFrequencyResponsePointResource");
+    expect(hookSource).toContain("useFrequencyResponseFieldMetaResource");
+    expect(hookSource).toMatch(/analysis\.eigen\.eigenModeFieldMeta/);
+    expect(hookSource).toContain(
+      "ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH",
+    );
+    expect(hookSource).toContain(
+      "ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH",
+    );
+    expect(hookSource).toContain(
+      "ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH",
+    );
+    expect(hookSource).toContain(
+      "ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_FIELD_META_PATH",
+    );
+    expect(hookSource).toContain("ANALYSIS_EIGEN_MODE_V2_PATH");
   });
 
   it("does not load stage execution for idle command controls", () => {

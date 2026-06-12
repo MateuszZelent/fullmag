@@ -5,15 +5,38 @@ use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 
 use crate::schemas::hysteresis::{
-    HysteresisBranchSchema, HysteresisMetricsSchema, HysteresisMinorLoopSchema,
-    HysteresisPointSchema, HysteresisSaturationResultSchema, HysteresisSettleTraceEntrySchema,
+    HysteresisAngularFamilyResource, HysteresisAngularFamilySeriesSchema, HysteresisBranchSchema,
+    HysteresisMetricsSchema, HysteresisMinorLoopSchema, HysteresisPointSchema,
+    HysteresisSaturationResultSchema, HysteresisSettleTraceEntrySchema,
 };
 use axum::extract::{Path, State};
 use axum::Json;
+use serde_json::Value;
 
 use crate::artifacts::require_current_live_artifact_dir;
 use crate::error::ApiError;
+use crate::router_v2::handlers::simulation::runtime::resolve_hysteresis_scene_stage;
 use crate::types::AppState;
+
+#[derive(Debug, serde::Deserialize)]
+struct HysteresisAngularFamilyArtifact {
+    family_id: String,
+    label: String,
+    active_variant_id: Option<String>,
+    variants: Vec<HysteresisAngularFamilyVariantArtifact>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct HysteresisAngularFamilyVariantArtifact {
+    variant_id: String,
+    label: String,
+    orientation: Value,
+    measurement_axis: Value,
+    data_status: String,
+    point_count: usize,
+    points_path: Option<String>,
+    metrics_path: Option<String>,
+}
 
 async fn resolve_stage_artifact_path(
     state: &Arc<AppState>,
@@ -150,6 +173,134 @@ async fn read_typed_stage_artifact<T: serde::de::DeserializeOwned>(
             filename, error
         ))
     })
+}
+
+async fn read_optional_typed_stage_artifact_with_path<T: serde::de::DeserializeOwned>(
+    state: &Arc<AppState>,
+    stage_id: &str,
+    filename: &str,
+) -> Result<Option<(PathBuf, T)>, ApiError> {
+    let path = match resolve_stage_artifact_path(state, stage_id, filename).await {
+        Ok(path) => path,
+        Err(error) if is_missing_stage_artifact(&error, filename) => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let content = std::fs::read_to_string(&path)
+        .map_err(|error| ApiError::internal(format!("failed to read stage artifact: {}", error)))?;
+    let value = serde_json::from_str(&content).map_err(|error| {
+        ApiError::internal(format!(
+            "failed to parse stage artifact '{}': {}",
+            filename, error
+        ))
+    })?;
+    Ok(Some((path, value)))
+}
+
+fn read_typed_hysteresis_artifact_relative_to<T: serde::de::DeserializeOwned>(
+    base_dir: &FsPath,
+    relative_path: &str,
+) -> Result<T, ApiError> {
+    let relative = crate::artifacts::sanitize_artifact_relative_path(relative_path)?;
+    let path = base_dir.join(relative);
+    let content = std::fs::read_to_string(&path).map_err(|error| {
+        ApiError::internal(format!(
+            "failed to read hysteresis artifact '{}': {}",
+            path.display(),
+            error
+        ))
+    })?;
+    serde_json::from_str(&content).map_err(|error| {
+        ApiError::internal(format!(
+            "failed to parse hysteresis artifact '{}': {}",
+            path.display(),
+            error
+        ))
+    })
+}
+
+async fn read_hysteresis_family_variant_points(
+    state: &Arc<AppState>,
+    stage_id: &str,
+    variant_id: &str,
+) -> Result<Vec<HysteresisPointSchema>, ApiError> {
+    let stage = resolve_hysteresis_scene_stage(state, stage_id).await?;
+    if let Some((manifest_path, artifact)) =
+        read_optional_typed_stage_artifact_with_path::<HysteresisAngularFamilyArtifact>(
+            state,
+            &stage.stage_id,
+            "hysteresis_angular_family.json",
+        )
+        .await?
+    {
+        let manifest_base_dir = manifest_path.parent().unwrap_or_else(|| FsPath::new(""));
+        let active_variant_id = artifact.active_variant_id.as_deref();
+        let Some(variant) = artifact
+            .variants
+            .into_iter()
+            .find(|variant| variant.variant_id == variant_id)
+        else {
+            return Err(ApiError::not_found(format!(
+                "hysteresis angular family variant '{}' not found for stage {}",
+                variant_id, stage.stage_id
+            )));
+        };
+        if let Some(points_path) = variant.points_path.as_deref() {
+            return Ok(annotate_hysteresis_points(
+                read_typed_hysteresis_artifact_relative_to(manifest_base_dir, points_path)?,
+            ));
+        }
+        if active_variant_id.is_some_and(|active| active == variant_id) {
+            return read_hysteresis_points(state, &stage.stage_id).await;
+        }
+        return Ok(Vec::new());
+    }
+
+    let Some(family_value) = stage.value.get("angular_family") else {
+        return Err(ApiError::not_found(format!(
+            "hysteresis stage '{}' has no angular family",
+            stage.stage_id
+        )));
+    };
+    let Some(variants) = family_value.get("variants").and_then(Value::as_array) else {
+        return Err(ApiError::internal(
+            "hysteresis angular_family.variants is not an array",
+        ));
+    };
+    let active_orientation = stage.value.get("orientation");
+    for variant in variants {
+        let Some(variant_obj) = variant.as_object() else {
+            return Err(ApiError::internal(
+                "hysteresis angular_family variant is not an object",
+            ));
+        };
+        let current_variant_id = variant_obj
+            .get("variant_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                ApiError::internal("hysteresis angular_family variant_id is not a string")
+            })?;
+        if current_variant_id != variant_id {
+            continue;
+        }
+        let is_active = variant_obj.get("orientation").is_some_and(|orientation| {
+            active_orientation.is_some_and(|active| active == orientation)
+        });
+        return if is_active {
+            read_hysteresis_points(state, &stage.stage_id).await
+        } else {
+            Ok(Vec::new())
+        };
+    }
+    Err(ApiError::not_found(format!(
+        "hysteresis angular family variant '{}' not found for stage {}",
+        variant_id, stage.stage_id
+    )))
+}
+
+fn hysteresis_family_variant_points_resource_ref(stage_id: &str, variant_id: &str) -> String {
+    format!(
+        "/v2/sessions/current/analysis/hysteresis-family/{stage_id}/variants/{variant_id}/points"
+    )
 }
 
 pub(crate) async fn read_hysteresis_saturation_result(
@@ -371,6 +522,222 @@ pub async fn get_branches(
         branches.push(build_branch_schema(branch_index, direction, branch_points));
     }
     Ok(Json(branches))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/analysis/hysteresis-family/{stage_id}",
+    params(
+        ("stage_id" = String, Path, description = "Hysteresis stage index or stage identifier"),
+    ),
+    responses(
+        (status = 200, description = "Angular hysteresis family series grouped by orientation", body = HysteresisAngularFamilyResource),
+        (status = 404, description = "Angular hysteresis family not found"),
+    ),
+    tag = "analysis"
+)]
+pub async fn get_angular_family(
+    State(state): State<Arc<AppState>>,
+    Path(stage_id): Path<String>,
+) -> Result<Json<HysteresisAngularFamilyResource>, ApiError> {
+    let stage = resolve_hysteresis_scene_stage(&state, &stage_id).await?;
+    let points = read_hysteresis_points(&state, &stage.stage_id).await?;
+    let metrics = match read_typed_stage_artifact::<HysteresisMetricsSchema>(
+        &state,
+        &stage.stage_id,
+        "hysteresis_metrics.json",
+    )
+    .await
+    {
+        Ok(metrics) => Some(metrics),
+        Err(error) if is_missing_stage_artifact(&error, "hysteresis_metrics.json") => None,
+        Err(error) => return Err(error),
+    };
+    if let Some((manifest_path, artifact)) =
+        read_optional_typed_stage_artifact_with_path::<HysteresisAngularFamilyArtifact>(
+            &state,
+            &stage.stage_id,
+            "hysteresis_angular_family.json",
+        )
+        .await?
+    {
+        let manifest_base_dir = manifest_path.parent().unwrap_or_else(|| FsPath::new(""));
+        let active_variant_id = artifact.active_variant_id.clone();
+        let mut series = Vec::new();
+        for variant in artifact.variants.into_iter() {
+            let is_active_variant = active_variant_id
+                .as_deref()
+                .is_some_and(|active| active == variant.variant_id);
+            let variant_points = if let Some(points_path) = variant.points_path.as_deref() {
+                annotate_hysteresis_points(read_typed_hysteresis_artifact_relative_to(
+                    manifest_base_dir,
+                    points_path,
+                )?)
+            } else if is_active_variant {
+                points.clone()
+            } else {
+                Vec::new()
+            };
+            let variant_metrics = if let Some(metrics_path) = variant.metrics_path.as_deref() {
+                Some(read_typed_hysteresis_artifact_relative_to(
+                    manifest_base_dir,
+                    metrics_path,
+                )?)
+            } else if is_active_variant {
+                metrics.clone()
+            } else {
+                None
+            };
+            series.push(HysteresisAngularFamilySeriesSchema {
+                points_resource_ref: hysteresis_family_variant_points_resource_ref(
+                    &stage.stage_id,
+                    &variant.variant_id,
+                ),
+                variant_id: variant.variant_id,
+                label: (!variant.label.is_empty()).then_some(variant.label),
+                orientation: variant.orientation,
+                measurement_axis: Some(variant.measurement_axis),
+                data_status: variant.data_status,
+                point_count: if !variant_points.is_empty() {
+                    variant_points.len() as u32
+                } else {
+                    variant.point_count as u32
+                },
+                metrics: variant_metrics,
+                points: variant_points,
+            });
+        }
+        return Ok(Json(HysteresisAngularFamilyResource {
+            revision: stage.revision,
+            stage_id: stage.stage_id,
+            stage_index: stage.stage_index,
+            family_id: artifact.family_id,
+            label: (!artifact.label.is_empty()).then_some(artifact.label),
+            active_variant_id,
+            series,
+        }));
+    }
+
+    let Some(family_value) = stage.value.get("angular_family") else {
+        return Err(ApiError::not_found(format!(
+            "hysteresis stage '{}' has no angular family",
+            stage.stage_id
+        )));
+    };
+    let Some(family) = family_value.as_object() else {
+        return Err(ApiError::internal(
+            "hysteresis angular_family is not an object",
+        ));
+    };
+    let Some(variants) = family.get("variants").and_then(Value::as_array) else {
+        return Err(ApiError::internal(
+            "hysteresis angular_family.variants is not an array",
+        ));
+    };
+    let active_orientation = stage.value.get("orientation");
+    let active_variant_id = variants.iter().find_map(|variant| {
+        let variant = variant.as_object()?;
+        let orientation = variant.get("orientation")?;
+        if active_orientation.is_some_and(|active| active == orientation) {
+            variant
+                .get("variant_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        } else {
+            None
+        }
+    });
+
+    let mut series = Vec::new();
+    for variant in variants {
+        let Some(variant) = variant.as_object() else {
+            return Err(ApiError::internal(
+                "hysteresis angular_family variant is not an object",
+            ));
+        };
+        let variant_id = variant
+            .get("variant_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                ApiError::internal("hysteresis angular_family variant_id is not a string")
+            })?
+            .to_string();
+        let orientation = variant.get("orientation").cloned().ok_or_else(|| {
+            ApiError::internal("hysteresis angular_family variant orientation is missing")
+        })?;
+        let is_active_variant = active_variant_id
+            .as_deref()
+            .is_some_and(|active| active == variant_id);
+        let variant_points = if is_active_variant {
+            points.clone()
+        } else {
+            Vec::new()
+        };
+        series.push(HysteresisAngularFamilySeriesSchema {
+            points_resource_ref: hysteresis_family_variant_points_resource_ref(
+                &stage.stage_id,
+                &variant_id,
+            ),
+            variant_id,
+            label: variant
+                .get("label")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            orientation,
+            measurement_axis: variant.get("measurement_axis").cloned(),
+            data_status: if is_active_variant {
+                "computed_active_stage".to_string()
+            } else {
+                "pending_run".to_string()
+            },
+            point_count: variant_points.len() as u32,
+            metrics: if is_active_variant {
+                metrics.clone()
+            } else {
+                None
+            },
+            points: variant_points,
+        });
+    }
+
+    Ok(Json(HysteresisAngularFamilyResource {
+        revision: stage.revision,
+        stage_id: stage.stage_id,
+        stage_index: stage.stage_index,
+        family_id: family
+            .get("family_id")
+            .and_then(Value::as_str)
+            .unwrap_or("angular_family")
+            .to_string(),
+        label: family
+            .get("label")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        active_variant_id,
+        series,
+    }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/analysis/hysteresis-family/{stage_id}/variants/{variant_id}/points",
+    params(
+        ("stage_id" = String, Path, description = "Hysteresis stage index or stage identifier"),
+        ("variant_id" = String, Path, description = "Angular family variant identifier"),
+    ),
+    responses(
+        (status = 200, description = "Hysteresis points for one angular-family variant", body = Vec<HysteresisPointSchema>),
+        (status = 404, description = "Angular hysteresis family variant not found"),
+    ),
+    tag = "analysis"
+)]
+pub async fn get_angular_family_variant_points(
+    State(state): State<Arc<AppState>>,
+    Path((stage_id, variant_id)): Path<(String, String)>,
+) -> Result<Json<Vec<HysteresisPointSchema>>, ApiError> {
+    Ok(Json(
+        read_hysteresis_family_variant_points(&state, &stage_id, &variant_id).await?,
+    ))
 }
 
 #[utoipa::path(

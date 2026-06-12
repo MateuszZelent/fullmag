@@ -894,6 +894,7 @@ impl ProblemIR {
                 direction,
                 orientation,
                 measurement_axis,
+                angular_family,
                 initial_protocol,
                 saturation,
                 branch_mode,
@@ -905,6 +906,7 @@ impl ProblemIR {
                 settle_pipeline,
                 field_schedule,
                 schedule_refinements,
+                adaptive_refinement,
                 minor_loops,
                 ..
             } => {
@@ -930,13 +932,9 @@ impl ProblemIR {
                     }
                 }
                 validate_hysteresis_orientation(orientation.as_ref(), &mut errors);
-                if !matches!(
-                    measurement_axis.as_str(),
-                    "field_axis" | "sample_normal" | "easy_axis" | "custom"
-                ) {
-                    errors.push(
-                        "study.stages[].hysteresis.measurement_axis is unsupported".to_string(),
-                    );
+                validate_hysteresis_measurement_axis(measurement_axis, &mut errors);
+                if let Some(family) = angular_family {
+                    validate_hysteresis_angular_family(family, &mut errors);
                 }
                 if !matches!(
                     initial_protocol.as_str(),
@@ -1021,6 +1019,9 @@ impl ProblemIR {
                 }
                 if let Some(windows) = schedule_refinements {
                     validate_hysteresis_field_windows(windows, &mut errors);
+                }
+                if let Some(policy) = adaptive_refinement {
+                    validate_hysteresis_adaptive_refinement(policy, &mut errors);
                 }
                 if let Some(loops) = minor_loops {
                     validate_hysteresis_minor_loops(loops, &mut errors);
@@ -2311,6 +2312,75 @@ fn validate_hysteresis_orientation(
     }
 }
 
+fn validate_hysteresis_measurement_axis(
+    measurement_axis: &MeasurementAxisIR,
+    errors: &mut Vec<String>,
+) {
+    match measurement_axis {
+        MeasurementAxisIR::Named(axis) => {
+            if !matches!(axis.as_str(), "field_axis" | "sample_normal" | "easy_axis") {
+                errors
+                    .push("study.stages[].hysteresis.measurement_axis is unsupported".to_string());
+            }
+        }
+        MeasurementAxisIR::Custom { kind, vector } => {
+            if kind != "custom" {
+                errors
+                    .push("study.stages[].hysteresis.measurement_axis is unsupported".to_string());
+            }
+            if !vector_is_finite(vector) {
+                errors.push(
+                    "study.stages[].hysteresis.measurement_axis custom vector must contain finite values"
+                        .to_string(),
+                );
+            } else if vector_norm_sq(vector) <= 1e-30 {
+                errors.push(
+                    "study.stages[].hysteresis.measurement_axis custom vector must not be zero"
+                        .to_string(),
+                );
+            }
+        }
+    }
+}
+
+fn validate_hysteresis_angular_family(
+    family: &HysteresisAngularFamilyIR,
+    errors: &mut Vec<String>,
+) {
+    if family.kind != "angular_family" {
+        errors.push("study.stages[].hysteresis.angular_family.kind is unsupported".to_string());
+    }
+    if family.family_id.trim().is_empty() {
+        errors.push(
+            "study.stages[].hysteresis.angular_family.family_id must not be empty".to_string(),
+        );
+    }
+    if family.variants.is_empty() {
+        errors.push(
+            "study.stages[].hysteresis.angular_family.variants must not be empty".to_string(),
+        );
+    }
+
+    let mut seen = std::collections::BTreeSet::new();
+    for (idx, variant) in family.variants.iter().enumerate() {
+        if variant.variant_id.trim().is_empty() {
+            errors.push(format!(
+                "study.stages[].hysteresis.angular_family.variants[{}].variant_id must not be empty",
+                idx
+            ));
+        } else if !seen.insert(variant.variant_id.as_str()) {
+            errors.push(format!(
+                "study.stages[].hysteresis.angular_family.variants[{}].variant_id must be unique",
+                idx
+            ));
+        }
+        validate_hysteresis_orientation(Some(&variant.orientation), errors);
+        if let Some(axis) = variant.measurement_axis.as_ref() {
+            validate_hysteresis_measurement_axis(axis, errors);
+        }
+    }
+}
+
 fn validate_hysteresis_saturation_probe(probe: &SaturationProbeIR, errors: &mut Vec<String>) {
     if probe.mode.trim().is_empty() {
         errors.push("study.stages[].hysteresis.saturation.mode must not be empty".to_string());
@@ -2476,5 +2546,50 @@ fn validate_hysteresis_field_windows(windows: &[FieldWindowIR], errors: &mut Vec
         } else {
             previous = Some((end, priority, idx));
         }
+    }
+}
+
+fn validate_hysteresis_adaptive_refinement(
+    policy: &AdaptiveRefinementIR,
+    errors: &mut Vec<String>,
+) {
+    if policy.kind != "adaptive_refinement" {
+        errors
+            .push("study.stages[].hysteresis.adaptive_refinement.kind is unsupported".to_string());
+    }
+    if policy.max_passes == 0 {
+        errors.push(
+            "study.stages[].hysteresis.adaptive_refinement.max_passes must be positive".to_string(),
+        );
+    }
+    if policy.max_insertions_per_pass == 0 {
+        errors.push(
+            "study.stages[].hysteresis.adaptive_refinement.max_insertions_per_pass must be positive"
+                .to_string(),
+        );
+    }
+    if !policy.dm_dh_threshold_per_mT.is_finite() || policy.dm_dh_threshold_per_mT <= 0.0 {
+        errors.push(
+            "study.stages[].hysteresis.adaptive_refinement.dm_dh_threshold_per_mT must be finite and positive"
+                .to_string(),
+        );
+    }
+    if !policy.max_step_mT.is_finite() || policy.max_step_mT <= 0.0 {
+        errors.push(
+            "study.stages[].hysteresis.adaptive_refinement.max_step_mT must be finite and positive"
+                .to_string(),
+        );
+    }
+    if !policy.min_step_mT.is_finite() || policy.min_step_mT <= 0.0 {
+        errors.push(
+            "study.stages[].hysteresis.adaptive_refinement.min_step_mT must be finite and positive"
+                .to_string(),
+        );
+    }
+    if policy.min_step_mT > policy.max_step_mT {
+        errors.push(
+            "study.stages[].hysteresis.adaptive_refinement.min_step_mT must not exceed max_step_mT"
+                .to_string(),
+        );
     }
 }

@@ -11,14 +11,24 @@ use fullmag_fem_sys as ffi;
 
 mod availability;
 mod eigen;
+mod frequency_domain;
 mod plan;
 #[cfg(feature = "fem-gpu")]
 mod runtime_info;
+#[allow(unused_imports)]
 pub(crate) use availability::{
-    is_cpu_available, is_gpu_available, native_availability, GpuAvailability,
+    is_cpu_available, is_gpu_available, native_availability, native_frequency_domain_availability,
+    FrequencyDomainAvailability, FrequencyDomainAvailabilityRequest, FrequencyDomainStudyKind,
+    FrequencyDomainSweepProgress, GpuAvailability,
 };
 #[allow(unused_imports)]
 pub(crate) use eigen::{gpu_eigen_dense_solve, GpuEigenResult};
+#[allow(unused_imports)]
+pub(crate) use frequency_domain::{
+    solve_native_driven_frequency_response, NativeDrivenFrequencyResponseRequest,
+    NativeDrivenFrequencyResponseResult, NativeDrivenFrequencyResponseTinyValidationProblem,
+    NativeFrequencyDomainStatus,
+};
 #[allow(unused_imports)]
 #[cfg(feature = "fem-gpu")]
 pub(crate) use plan::resolved_native_fem_demag_solver_policy;

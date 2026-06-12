@@ -53,7 +53,6 @@ SUPPORTED_HYSTERESIS_MEASUREMENT_AXES = {
     "field_axis",
     "sample_normal",
     "easy_axis",
-    "custom",
 }
 SUPPORTED_HYSTERESIS_INITIAL_PROTOCOLS = {
     "as_authored",
@@ -786,6 +785,165 @@ class FieldOrientation:
 
 
 @dataclass(frozen=True, slots=True)
+class MeasurementAxis:
+    kind: str
+    vector: tuple[float, float, float] | None = None
+
+    @classmethod
+    def field_axis(cls) -> MeasurementAxis:
+        return cls(kind="field_axis")
+
+    @classmethod
+    def sample_normal(cls) -> MeasurementAxis:
+        return cls(kind="sample_normal")
+
+    @classmethod
+    def easy_axis(cls) -> MeasurementAxis:
+        return cls(kind="easy_axis")
+
+    @classmethod
+    def custom(cls, vector: Sequence[float]) -> MeasurementAxis:
+        return cls(kind="custom", vector=tuple(vector))
+
+    def __post_init__(self) -> None:
+        kind = require_non_empty(self.kind, "MeasurementAxis.kind")
+        if kind in SUPPORTED_HYSTERESIS_MEASUREMENT_AXES:
+            if self.vector is not None:
+                raise ValueError(f"MeasurementAxis.{kind} must not define vector")
+            object.__setattr__(self, "kind", kind)
+            return
+        if kind == "custom":
+            if self.vector is None:
+                raise ValueError("MeasurementAxis.custom requires vector")
+            vector = _normalize_finite_vec3(self.vector, "MeasurementAxis.vector")
+            if sum(component * component for component in vector) <= 1e-30:
+                raise ValueError("MeasurementAxis.vector must not be the zero vector")
+            object.__setattr__(self, "vector", vector)
+            return
+        supported = ", ".join(sorted((*SUPPORTED_HYSTERESIS_MEASUREMENT_AXES, "custom")))
+        raise ValueError(f"MeasurementAxis kind must be one of: {supported}")
+
+    def to_ir(self) -> str | dict[str, object]:
+        if self.kind == "custom":
+            return {"kind": "custom", "vector": list(self.vector)}
+        return self.kind
+
+
+@dataclass(frozen=True, slots=True)
+class HysteresisAngularVariant:
+    variant_id: str
+    orientation: FieldOrientation
+    label: str = ""
+    measurement_axis: str | MeasurementAxis | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "variant_id",
+            require_non_empty(self.variant_id, "HysteresisAngularVariant.variant_id"),
+        )
+        if not isinstance(self.orientation, FieldOrientation):
+            raise ValueError("HysteresisAngularVariant.orientation must be a FieldOrientation")
+        if self.label:
+            object.__setattr__(
+                self,
+                "label",
+                require_non_empty(self.label, "HysteresisAngularVariant.label"),
+            )
+        if self.measurement_axis is None:
+            return
+        if isinstance(self.measurement_axis, MeasurementAxis):
+            return
+        measurement_axis = require_non_empty(
+            str(self.measurement_axis),
+            "HysteresisAngularVariant.measurement_axis",
+        )
+        if measurement_axis not in SUPPORTED_HYSTERESIS_MEASUREMENT_AXES:
+            supported = ", ".join(sorted((*SUPPORTED_HYSTERESIS_MEASUREMENT_AXES, "custom")))
+            raise ValueError(
+                "HysteresisAngularVariant.measurement_axis must be one of "
+                f"{supported} or fm.MeasurementAxis.custom(vector)"
+            )
+        object.__setattr__(self, "measurement_axis", measurement_axis)
+
+    def to_ir(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "variant_id": self.variant_id,
+            "orientation": self.orientation.to_ir(),
+        }
+        if self.label:
+            payload["label"] = self.label
+        if self.measurement_axis is not None:
+            payload["measurement_axis"] = (
+                self.measurement_axis.to_ir()
+                if isinstance(self.measurement_axis, MeasurementAxis)
+                else self.measurement_axis
+            )
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
+class HysteresisAngularFamily:
+    variants: Sequence[HysteresisAngularVariant]
+    family_id: str = "angular_family"
+    label: str = ""
+
+    @classmethod
+    def sample_angles(
+        cls,
+        theta_deg: Sequence[float],
+        phi_deg: float = 0.0,
+        *,
+        family_id: str = "angular_family",
+        label: str = "",
+        measurement_axis: str | MeasurementAxis | None = None,
+    ) -> HysteresisAngularFamily:
+        variants = tuple(
+            HysteresisAngularVariant(
+                variant_id=f"theta_{idx:03}",
+                orientation=FieldOrientation.sample(theta_deg=value, phi_deg=phi_deg),
+                label=f"theta={float(value):.6g} deg",
+                measurement_axis=measurement_axis,
+            )
+            for idx, value in enumerate(theta_deg)
+        )
+        return cls(variants=variants, family_id=family_id, label=label)
+
+    def __post_init__(self) -> None:
+        family_id = require_non_empty(self.family_id, "HysteresisAngularFamily.family_id")
+        variants = tuple(self.variants)
+        if not variants:
+            raise ValueError("HysteresisAngularFamily.variants must not be empty")
+        seen: set[str] = set()
+        for variant in variants:
+            if not isinstance(variant, HysteresisAngularVariant):
+                raise ValueError(
+                    "HysteresisAngularFamily.variants must contain HysteresisAngularVariant"
+                )
+            if variant.variant_id in seen:
+                raise ValueError("HysteresisAngularFamily variant_id values must be unique")
+            seen.add(variant.variant_id)
+        object.__setattr__(self, "family_id", family_id)
+        object.__setattr__(self, "variants", variants)
+        if self.label:
+            object.__setattr__(
+                self,
+                "label",
+                require_non_empty(self.label, "HysteresisAngularFamily.label"),
+            )
+
+    def to_ir(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "kind": "angular_family",
+            "family_id": self.family_id,
+            "variants": [variant.to_ir() for variant in self.variants],
+        }
+        if self.label:
+            payload["label"] = self.label
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
 class SaturationProbe:
     mode: str = "auto"
     max_field_mT: float = 300.0
@@ -989,6 +1147,42 @@ class FieldWindow:
         if self.priority is not None:
             payload["priority"] = self.priority
         return payload
+
+
+@dataclass(frozen=True, slots=True)
+class AdaptiveRefinement:
+    enabled: bool = True
+    max_passes: int = 1
+    max_insertions_per_pass: int = 16
+    dm_dh_threshold_per_mT: float = 0.02
+    max_step_mT: float = 5.0
+    min_step_mT: float = 0.1
+    include_zero_crossings: bool = True
+    include_high_susceptibility: bool = True
+
+    def __post_init__(self) -> None:
+        if self.max_passes <= 0:
+            raise ValueError("AdaptiveRefinement.max_passes must be positive")
+        if self.max_insertions_per_pass <= 0:
+            raise ValueError("AdaptiveRefinement.max_insertions_per_pass must be positive")
+        require_positive(self.dm_dh_threshold_per_mT, "AdaptiveRefinement.dm_dh_threshold_per_mT")
+        require_positive(self.max_step_mT, "AdaptiveRefinement.max_step_mT")
+        require_positive(self.min_step_mT, "AdaptiveRefinement.min_step_mT")
+        if self.min_step_mT > self.max_step_mT:
+            raise ValueError("AdaptiveRefinement.min_step_mT must not exceed max_step_mT")
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "kind": "adaptive_refinement",
+            "enabled": bool(self.enabled),
+            "max_passes": int(self.max_passes),
+            "max_insertions_per_pass": int(self.max_insertions_per_pass),
+            "dm_dh_threshold_per_mT": float(self.dm_dh_threshold_per_mT),
+            "max_step_mT": float(self.max_step_mT),
+            "min_step_mT": float(self.min_step_mT),
+            "include_zero_crossings": bool(self.include_zero_crossings),
+            "include_high_susceptibility": bool(self.include_high_susceptibility),
+        }
 
 
 def _normalize_dense_windows(windows: Sequence[FieldWindow]) -> tuple[FieldWindow, ...]:
@@ -1255,7 +1449,8 @@ class Hysteresis:
     field_values_mT: Sequence[float] | None = None
     direction: tuple[float, float, float] | None = None
     orientation: FieldOrientation | None = None
-    measurement_axis: str = "field_axis"
+    measurement_axis: str | MeasurementAxis = "field_axis"
+    angular_family: HysteresisAngularFamily | None = None
     initial_protocol: str = "positive_saturation"
     saturation: SaturationProbe | None = None
     branch_mode: str = "major_loop"
@@ -1263,6 +1458,7 @@ class Hysteresis:
     storage: HysteresisStorage | None = None
     field_schedule: PiecewiseFieldSchedule | None = None
     schedule_refinements: Sequence[FieldWindow] | None = None
+    adaptive_refinement: AdaptiveRefinement | None = None
     minor_loops: Sequence[MinorLoop] | None = None
     _table_autosave: TableAutosave | None = field(default=None, repr=False)
 
@@ -1297,9 +1493,25 @@ class Hysteresis:
             if norm_sq <= 1e-30:
                 raise ValueError("direction must not be the zero vector")
             object.__setattr__(self, "direction", direction)
-        if self.measurement_axis not in SUPPORTED_HYSTERESIS_MEASUREMENT_AXES:
-            supported = ", ".join(sorted(SUPPORTED_HYSTERESIS_MEASUREMENT_AXES))
-            raise ValueError(f"measurement_axis must be one of: {supported}")
+        if isinstance(self.measurement_axis, MeasurementAxis):
+            measurement_axis: str | MeasurementAxis = self.measurement_axis
+        else:
+            measurement_axis_name = require_non_empty(
+                str(self.measurement_axis),
+                "measurement_axis",
+            )
+            if measurement_axis_name not in SUPPORTED_HYSTERESIS_MEASUREMENT_AXES:
+                supported = ", ".join(sorted((*SUPPORTED_HYSTERESIS_MEASUREMENT_AXES, "custom")))
+                raise ValueError(
+                    "measurement_axis must be one of field_axis, sample_normal, easy_axis, "
+                    f"or fm.MeasurementAxis.custom(vector); supported names: {supported}"
+                )
+            measurement_axis = measurement_axis_name
+        object.__setattr__(self, "measurement_axis", measurement_axis)
+        if self.angular_family is not None and not isinstance(
+            self.angular_family, HysteresisAngularFamily
+        ):
+            raise ValueError("angular_family must be a HysteresisAngularFamily")
         if self.initial_protocol not in SUPPORTED_HYSTERESIS_INITIAL_PROTOCOLS:
             supported = ", ".join(sorted(SUPPORTED_HYSTERESIS_INITIAL_PROTOCOLS))
             raise ValueError(f"initial_protocol must be one of: {supported}")
@@ -1318,7 +1530,11 @@ class Hysteresis:
     def to_ir(self) -> dict[str, object]:
         payload: dict[str, object] = {
             "kind": "hysteresis",
-            "measurement_axis": self.measurement_axis,
+            "measurement_axis": (
+                self.measurement_axis.to_ir()
+                if isinstance(self.measurement_axis, MeasurementAxis)
+                else self.measurement_axis
+            ),
             "initial_protocol": self.initial_protocol,
             "branch_mode": self.branch_mode,
             "sampling": {"outputs": [output.to_ir() for output in self.outputs]},
@@ -1335,6 +1551,8 @@ class Hysteresis:
             payload["direction"] = list(self.direction)
         if self.orientation is not None:
             payload["orientation"] = self.orientation.to_ir()
+        if self.angular_family is not None:
+            payload["angular_family"] = self.angular_family.to_ir()
         if self.saturation is not None:
             payload["saturation"] = self.saturation.to_ir()
         if self.settle_pipeline is not None:
@@ -1345,6 +1563,8 @@ class Hysteresis:
             payload["field_schedule"] = self.field_schedule.to_ir()
         if self.schedule_refinements is not None:
             payload["schedule_refinements"] = [w.to_ir() for w in self.schedule_refinements]
+        if self.adaptive_refinement is not None:
+            payload["adaptive_refinement"] = self.adaptive_refinement.to_ir()
         if self.minor_loops is not None:
             payload["minor_loops"] = [l.to_ir() for l in self.minor_loops]
         if self._table_autosave is not None:

@@ -82,6 +82,39 @@ verify-fem-relaxation-source-contract:
     cmake --build native/build --target fem_relaxation_source_contract
     native/build/backends/fem/fem_relaxation_source_contract
 
+verify-fem-frequency-domain-native-contract:
+    just ensure-managed-fem-runtime
+    docker compose --profile fem-gpu run --rm \
+      fem-gpu bash -lc 'cd /workspace && cmake --build native/build --target fem_frequency_domain_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_frequency_domain_contract'
+
+verify-fem-frequency-domain-runtime:
+    just ensure-managed-fem-runtime
+    rm -rf .fullmag/reports/frequency-domain-runtime
+    mkdir -p .fullmag/reports/frequency-domain-runtime
+    docker compose --profile fem-gpu run --rm \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_FDM_EXECUTION=cpu \
+      -e FULLMAG_FEM_EXECUTION=cpu \
+      -e FULLMAG_RELAX_DEVICE=cpu \
+      -e FULLMAG_CPU_THREADS="${FULLMAG_CPU_THREADS:-auto}" \
+      fem-gpu bash -lc 'cd /workspace && \
+        rm -rf .fullmag/reports/frequency-domain-runtime/artifacts && \
+        .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu \
+          examples/fem_frequency_response_smoke.py \
+          --backend fem \
+          --headless \
+          --json \
+          --output-dir .fullmag/reports/frequency-domain-runtime/artifacts && \
+        test -f .fullmag/reports/frequency-domain-runtime/artifacts/response/magnetic_response_sweep.v1.json && \
+        test -f .fullmag/reports/frequency-domain-runtime/artifacts/response/magnetic_response_sweep.v2.json && \
+        test -f .fullmag/reports/frequency-domain-runtime/artifacts/response/progress.v1.json && \
+        test -f .fullmag/reports/frequency-domain-runtime/artifacts/response/diagnostics.v1.json && \
+        test -f .fullmag/reports/frequency-domain-runtime/artifacts/response/frequency_points/frequency_0000.json && \
+        test -f .fullmag/reports/frequency-domain-runtime/artifacts/response/field_payloads/frequency_0000/vector.bin && \
+        test -f .fullmag/reports/frequency-domain-runtime/artifacts/frequency_domain/manifest.v1.json && \
+        python3 scripts/verify_fem_frequency_domain_runtime_artifacts.py .fullmag/reports/frequency-domain-runtime/artifacts'
+
 verify-fem-relaxation-runtime:
     bash scripts/verify_fem_relaxation_runtime.sh
 
@@ -359,6 +392,87 @@ run-fdm-hysteresis-snapshot-smoke:
     PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" \
     FULLMAG_DISABLE_CHARTS=1 FULLMAG_DISABLE_PREVIEW_3D=1 \
     fullmag examples/fdm_hysteresis_snapshot_smoke.py --backend fdm --headless --json
+
+run-hysteresis-waveguide-smoke device="cpu":
+    FULLMAG_DISABLE_CHARTS=1 FULLMAG_DISABLE_PREVIEW_3D=1 \
+    FULLMAG_HYSTERESIS_FIELD_VALUES_MT=50,0,-50 FULLMAG_HYSTERESIS_MAX_STEPS=25 \
+    just fullmag build=False static fem "{{device}}" headless examples/hysteresis_waveguide_300x50x10nm.py
+
+run-hysteresis-waveguide-gpu-smoke:
+    just run-hysteresis-waveguide-smoke gpu
+
+run-hysteresis-waveguide-playback-smoke device="cpu":
+    FULLMAG_DISABLE_CHARTS=1 FULLMAG_DISABLE_PREVIEW_3D=1 \
+    FULLMAG_HYSTERESIS_FIELD_VALUES_MT=50,0,-50 FULLMAG_HYSTERESIS_MAX_STEPS=25 \
+    FULLMAG_HYSTERESIS_MAGNETIZATION_STORAGE=every_step \
+    just fullmag build=False static fem "{{device}}" headless examples/hysteresis_waveguide_300x50x10nm.py
+
+run-hysteresis-waveguide-gpu-playback-smoke:
+    just run-hysteresis-waveguide-playback-smoke gpu
+
+verify-hysteresis-playback-artifacts artifacts_dir:
+    python3 scripts/verify_hysteresis_playback_artifacts.py "{{artifacts_dir}}"
+
+run-hysteresis-waveguide-angular-family-smoke device="cpu":
+    FULLMAG_DISABLE_CHARTS=1 FULLMAG_DISABLE_PREVIEW_3D=1 \
+    FULLMAG_HYSTERESIS_FIELD_VALUES_MT=50,0,-50 FULLMAG_HYSTERESIS_MAX_STEPS=25 \
+    FULLMAG_HYSTERESIS_ANGULAR_FAMILY=1 \
+    just fullmag build=False static fem "{{device}}" headless examples/hysteresis_waveguide_300x50x10nm.py
+
+run-hysteresis-waveguide-gpu-angular-family-smoke:
+    just run-hysteresis-waveguide-angular-family-smoke gpu
+
+verify-hysteresis-angular-family-artifacts artifacts_dir:
+    python3 scripts/verify_hysteresis_angular_family_artifacts.py "{{artifacts_dir}}"
+
+run-hysteresis-waveguide-projection-benchmark-smoke device="cpu":
+    FULLMAG_DISABLE_CHARTS=1 FULLMAG_DISABLE_PREVIEW_3D=1 \
+    FULLMAG_HYSTERESIS_FIELD_VALUES_MT=50 FULLMAG_HYSTERESIS_MAX_STEPS=1 \
+    FULLMAG_HYSTERESIS_ANGULAR_FAMILY=1 \
+    just fullmag build=False static fem "{{device}}" headless examples/hysteresis_waveguide_300x50x10nm.py
+
+verify-hysteresis-projection-benchmark artifacts_dir:
+    python3 scripts/verify_hysteresis_projection_benchmark.py "{{artifacts_dir}}"
+
+run-hysteresis-waveguide-saturation-limit-smoke device="cpu":
+    FULLMAG_DISABLE_CHARTS=1 FULLMAG_DISABLE_PREVIEW_3D=1 \
+    FULLMAG_HYSTERESIS_FIELD_VALUES_MT=0 FULLMAG_HYSTERESIS_MAX_STEPS=1 \
+    FULLMAG_HYSTERESIS_SATURATION_PROBE=1 \
+    FULLMAG_HYSTERESIS_SATURATION_MAX_FIELD_MT=10 \
+    FULLMAG_HYSTERESIS_SATURATION_SUSCEPTIBILITY_THRESHOLD=1e-12 \
+    FULLMAG_HYSTERESIS_SATURATION_TRANSVERSE_THRESHOLD=1e-12 \
+    just fullmag build=False static fem "{{device}}" headless examples/hysteresis_waveguide_300x50x10nm.py
+
+run-hysteresis-waveguide-gpu-saturation-limit-smoke:
+    just run-hysteresis-waveguide-saturation-limit-smoke gpu
+
+verify-hysteresis-saturation-limit artifacts_dir:
+    python3 scripts/verify_hysteresis_saturation_limit_artifacts.py "{{artifacts_dir}}"
+
+run-hysteresis-waveguide-minor-loop-smoke device="cpu":
+    FULLMAG_DISABLE_CHARTS=1 FULLMAG_DISABLE_PREVIEW_3D=1 \
+    FULLMAG_HYSTERESIS_FIELD_VALUES_MT=50,0,-50 FULLMAG_HYSTERESIS_MAX_STEPS=1 \
+    FULLMAG_HYSTERESIS_MINOR_LOOP=1 \
+    FULLMAG_HYSTERESIS_MINOR_REVERSAL_MT=50 \
+    FULLMAG_HYSTERESIS_MINOR_RETURN_MT=-25 \
+    just fullmag build=False static fem "{{device}}" headless examples/hysteresis_waveguide_300x50x10nm.py
+
+run-hysteresis-waveguide-gpu-minor-loop-smoke:
+    just run-hysteresis-waveguide-minor-loop-smoke gpu
+
+verify-hysteresis-minor-loop artifacts_dir:
+    python3 scripts/verify_hysteresis_minor_loop_artifacts.py "{{artifacts_dir}}"
+
+run-hysteresis-fdm-macrospin-sw-smoke:
+    just ensure-python
+    just build fullmag
+    FULLMAG_DISABLE_CHARTS=1 FULLMAG_DISABLE_PREVIEW_3D=1 \
+    PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" \
+    FULLMAG_HYSTERESIS_MAX_STEPS=160 \
+    fullmag examples/hysteresis_fdm_macrospin_stoner_wohlfarth.py --backend fdm --headless --json
+
+verify-hysteresis-fdm-macrospin-sw artifacts_dir:
+    python3 scripts/verify_hysteresis_fdm_macrospin_sw_artifacts.py "{{artifacts_dir}}"
 
 run-permalloy-box-relax-fdm web_port="3100":
     just run-permalloy-box-relax-fdm-interactive "{{web_port}}"

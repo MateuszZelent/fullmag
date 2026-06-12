@@ -139,6 +139,21 @@ We define the following scalar observables:
   hysteresis history by `snapshot_id`; visualization consumers must load the
   corresponding vector magnetization from that snapshot instead of inferring it
   from averaged loop data.
+- Production storage for full hysteresis field playback is a data container,
+  not a large JSON array. The preferred native container for per-point sampled
+  magnetization is Zarr; HDF5 is the portable/export container. Small JSON
+  artifacts may remain as manifests, point tables, metrics, and compatibility
+  metadata, but full `m` playback frames should be referenced from the
+  container by `snapshot_id`, point id, branch id, quantity id, mesh identity,
+  and field revision.
+- Optional auxiliary field snapshots such as `H_demag` and `H_eff` are useful
+  for debugging, diagnostics, and publication figures, but they are not part of
+  the mandatory baseline hysteresis workflow and must not be treated as an MVP
+  or production-readiness gate for magnetization playback. They must be
+  controlled by an explicit auxiliary-field storage policy, disabled by default,
+  because they can require extra backend recomputation or GPU/FEM host
+  synchronization. The baseline "mumax-style playback" requirement is full `m`
+  for every requested field point when `magnetization="every_step"`.
 
 ### 3.6 Minor Loop Execution Status
 - The current runtime artifact policy `derived_from_major_loop_window` means
@@ -210,6 +225,11 @@ The planner expands the piecewise segments and refinements into a sequence of co
 - Projection-axis regression: an in-plane applied field with
   `measurement_axis="sample_normal"` must not report the in-plane component as
   $m_{\parallel}$.
+- Runtime artifact projection benchmark: the small FEM waveguide projection
+  smoke computes `ip_x`, `oop`, and `custom_theta45_phi30` angular-family
+  variants and verifies that each stored point satisfies
+  `m_parallel = <m> . u_meas`, `m_oop = <m>_z`, and
+  `m_ip = sqrt(<m>_x^2 + <m>_y^2)`.
 
 ### 5.2 Cross-Backend Checks
 - Matching coercivity and remanence between FDM and FEM solver references.
@@ -236,6 +256,12 @@ The planner expands the piecewise segments and refinements into a sequence of co
   surfaces
 - [x] Live Charts for current progress/history selection workflow
 - [x] Viewport 3D Replay for stored magnetization snapshots
+- [x] Runtime artifact projection benchmark for OOP, in-plane, and custom-angle
+  angular-family variants
+- [x] Runtime artifact smoke for insufficient auto-saturation field limits with
+  `capped_by_limit` provenance
+- [x] Runtime artifact smoke for `branch_only` minor-loop execution with
+  branch-local points and settle trace
 - [ ] Higher-order FEM and future non-P1 basis-specific hysteresis averaging
 - [ ] Complete minor-loop continuation policy family (`resume_parent`,
   `replace_parent`), interpolated reversal states, and multi-segment minor-loop

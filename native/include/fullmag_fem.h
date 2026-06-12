@@ -356,6 +356,87 @@ typedef struct {
     char reason_gpu[256];
 } fullmag_fem_availability_info;
 
+typedef enum {
+    FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OK = 0,
+    FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_UNAVAILABLE = 1,
+    FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_VALIDATION_ERROR = 2,
+    FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OPERATOR_ERROR = 3,
+    FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_SOLVE_ERROR = 4,
+    FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_ARTIFACT_ERROR = 5,
+    FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_INTERRUPTED = 6,
+} fullmag_fem_frequency_domain_status;
+
+typedef enum {
+    FULLMAG_FEM_FREQUENCY_DOMAIN_STUDY_RESPONSE = 1,
+    FULLMAG_FEM_FREQUENCY_DOMAIN_STUDY_EIGENMODES = 2,
+} fullmag_fem_frequency_domain_study_kind;
+
+typedef struct {
+    fullmag_fem_frequency_domain_study_kind study_kind;
+    int requires_driven_solver;
+    int requires_modal_solver;
+    int requires_floquet_boundary;
+    int requires_nonzero_k_dynamic_demag;
+    int requires_gpu;
+    int strict_device;
+} fullmag_fem_frequency_domain_availability_request;
+
+typedef struct {
+    fullmag_fem_frequency_domain_status status;
+    int driven_response_available;
+    int modal_solver_available;
+    int floquet_modal_available;
+    int floquet_response_available;
+    int dynamic_demag_k_available;
+    int gpu_available;
+    char status_name[64];
+    char study_kind_name[64];
+    char reason[256];
+    char diagnostics_json[512];
+} fullmag_fem_frequency_domain_availability_info;
+
+typedef struct {
+    uint64_t total_frequency_points;
+    uint64_t completed_frequency_points;
+    uint64_t written_frequency_point_artifacts;
+    double current_frequency_hz;
+    int partial_artifacts_available;
+    char latest_artifact_manifest_path[256];
+    char progress_json[512];
+} fullmag_fem_frequency_domain_sweep_progress;
+
+typedef struct {
+    uint64_t node_count;
+    uint64_t tangent_dof_count;
+    double alpha;
+    double gamma0;
+    const double *frequencies_hz;
+    uint64_t frequency_count;
+    const char *output_directory;
+    int write_response_fields;
+    int write_partial_artifacts;
+    int (*cancel_requested)(void *user_data);
+    void *cancel_user_data;
+    int tiny_validation_enabled;
+    uint64_t tiny_validation_tangent_dof_count;
+    const double *tiny_validation_stiffness_matrix_row_major;
+    const double *tiny_validation_mass_matrix_row_major;
+    const double *tiny_validation_stiffness_diagonal;
+    const double *tiny_validation_mass_diagonal;
+    const double *tiny_validation_drive_real;
+} fullmag_fem_frequency_domain_driven_response_request;
+
+typedef struct {
+    fullmag_fem_frequency_domain_status status;
+    uint64_t total_frequency_count;
+    uint64_t completed_frequency_count;
+    uint64_t written_frequency_point_artifacts;
+    char *error_message;
+    char *diagnostics_json;
+    char *result_json;
+    char *artifact_manifest_path;
+} fullmag_fem_frequency_domain_solve_result;
+
 typedef struct {
     uint64_t h2d_bytes;
     uint64_t d2h_bytes;
@@ -419,6 +500,45 @@ typedef struct fullmag_fem_backend fullmag_fem_backend;
 
 int fullmag_fem_is_available(void);
 int fullmag_fem_get_availability_info(fullmag_fem_availability_info *out_info);
+int fullmag_fem_get_frequency_domain_availability_info(
+    const fullmag_fem_frequency_domain_availability_request *request,
+    fullmag_fem_frequency_domain_availability_info *out_info
+);
+int fullmag_fem_frequency_domain_initial_sweep_progress(
+    uint64_t total_frequency_points,
+    fullmag_fem_frequency_domain_sweep_progress *out_progress
+);
+int fullmag_fem_frequency_domain_interrupted_sweep_progress(
+    uint64_t total_frequency_points,
+    uint64_t completed_frequency_points,
+    uint64_t written_frequency_point_artifacts,
+    double current_frequency_hz,
+    const char *latest_artifact_manifest_path,
+    fullmag_fem_frequency_domain_sweep_progress *out_progress
+);
+int fullmag_fem_frequency_domain_cancelling_sweep_progress(
+    uint64_t total_frequency_points,
+    uint64_t completed_frequency_points,
+    uint64_t written_frequency_point_artifacts,
+    double current_frequency_hz,
+    const char *latest_artifact_manifest_path,
+    fullmag_fem_frequency_domain_sweep_progress *out_progress
+);
+int fullmag_fem_frequency_domain_completed_sweep_progress(
+    uint64_t total_frequency_points,
+    uint64_t completed_frequency_points,
+    uint64_t written_frequency_point_artifacts,
+    double current_frequency_hz,
+    const char *latest_artifact_manifest_path,
+    fullmag_fem_frequency_domain_sweep_progress *out_progress
+);
+int fullmag_fem_frequency_domain_solve_driven_response(
+    const fullmag_fem_frequency_domain_driven_response_request *request,
+    fullmag_fem_frequency_domain_solve_result *out_result
+);
+void fullmag_fem_frequency_domain_solve_result_release(
+    fullmag_fem_frequency_domain_solve_result *result
+);
 
 fullmag_fem_backend *fullmag_fem_backend_create(
     const fullmag_fem_plan_desc *plan

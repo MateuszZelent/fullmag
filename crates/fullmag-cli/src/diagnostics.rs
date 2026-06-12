@@ -394,5 +394,21 @@ pub(crate) fn diagnose_initial_backend_plan(
             None,
             magnetization_is_uniform(&plan.equilibrium_magnetization),
         ),
+        BackendPlanIR::FemFrequencyResponse(plan) => diagnose_initial_state(
+            plan.mesh.nodes.len(),
+            Some(plan.mesh.boundary_faces.len()),
+            None,
+            None,
+            plan.enable_exchange,
+            plan.enable_demag,
+            plan.external_field,
+            if plan.material.damping.is_finite() {
+                plan.material.damping
+            } else {
+                0.0
+            },
+            None,
+            magnetization_is_uniform(&plan.equilibrium_magnetization),
+        ),
     }
 }

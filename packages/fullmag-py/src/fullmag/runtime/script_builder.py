@@ -2843,7 +2843,9 @@ def _render_hysteresis_stage_args(study: Hysteresis) -> list[str]:
         args.append(f"direction={_py_literal(payload['direction'])}")
     if "orientation" in payload:
         args.append(f"orientation={_render_hysteresis_orientation(payload['orientation'])}")
-    args.append(f"measurement_axis={_py_repr(str(payload['measurement_axis']))}")
+    args.append(f"measurement_axis={_render_hysteresis_measurement_axis(payload['measurement_axis'])}")
+    if "angular_family" in payload:
+        args.append(f"angular_family={_render_hysteresis_angular_family(payload['angular_family'])}")
     args.append(f"initial_protocol={_py_repr(str(payload['initial_protocol']))}")
     if "saturation" in payload:
         args.append(f"saturation={_render_hysteresis_saturation(payload['saturation'])}")
@@ -2857,6 +2859,10 @@ def _render_hysteresis_stage_args(study: Hysteresis) -> list[str]:
     if "schedule_refinements" in payload:
         args.append(
             f"schedule_refinements={_render_hysteresis_field_windows(payload['schedule_refinements'])}"
+        )
+    if "adaptive_refinement" in payload:
+        args.append(
+            f"adaptive_refinement={_render_hysteresis_adaptive_refinement(payload['adaptive_refinement'])}"
         )
     if "minor_loops" in payload:
         args.append(f"minor_loops={_render_hysteresis_minor_loops(payload['minor_loops'])}")
@@ -2877,6 +2883,61 @@ def _render_hysteresis_orientation(value: object) -> str:
     if kind == "global":
         return f"fm.FieldOrientation.global_vector({_py_literal(payload.get('vector'))})"
     raise ValueError(f"unsupported hysteresis field orientation kind {kind!r}")
+
+
+def _render_hysteresis_adaptive_refinement(value: object) -> str:
+    payload = _normalize_mapping(value)
+    kwargs = [
+        f"enabled={_py_literal(bool(payload.get('enabled', True)))}",
+        f"max_passes={int(payload.get('max_passes', 1))}",
+        f"max_insertions_per_pass={int(payload.get('max_insertions_per_pass', 16))}",
+        f"dm_dh_threshold_per_mT={_py_number(float(payload.get('dm_dh_threshold_per_mT', 0.02)))}",
+        f"max_step_mT={_py_number(float(payload.get('max_step_mT', 5.0)))}",
+        f"min_step_mT={_py_number(float(payload.get('min_step_mT', 0.1)))}",
+        f"include_zero_crossings={_py_literal(bool(payload.get('include_zero_crossings', True)))}",
+        f"include_high_susceptibility={_py_literal(bool(payload.get('include_high_susceptibility', True)))}",
+    ]
+    return "fm.AdaptiveRefinement(" + ", ".join(kwargs) + ")"
+
+
+def _render_hysteresis_angular_family(value: object) -> str:
+    payload = _normalize_mapping(value)
+    variants = payload.get("variants")
+    if not isinstance(variants, list):
+        raise ValueError("hysteresis angular_family variants must be a list")
+    args = [
+        "variants=[" + ", ".join(_render_hysteresis_angular_variant(variant) for variant in variants) + "]",
+        f"family_id={_py_repr(str(payload.get('family_id') or 'angular_family'))}",
+    ]
+    if payload.get("label"):
+        args.append(f"label={_py_repr(str(payload.get('label')))}")
+    return "fm.HysteresisAngularFamily(" + ", ".join(args) + ")"
+
+
+def _render_hysteresis_angular_variant(value: object) -> str:
+    payload = _normalize_mapping(value)
+    args = [
+        f"variant_id={_py_repr(str(payload.get('variant_id') or ''))}",
+        f"orientation={_render_hysteresis_orientation(payload.get('orientation'))}",
+    ]
+    if payload.get("label"):
+        args.append(f"label={_py_repr(str(payload.get('label')))}")
+    if "measurement_axis" in payload:
+        args.append(
+            f"measurement_axis={_render_hysteresis_measurement_axis(payload['measurement_axis'])}"
+        )
+    return "fm.HysteresisAngularVariant(" + ", ".join(args) + ")"
+
+
+def _render_hysteresis_measurement_axis(value: object) -> str:
+    if isinstance(value, str):
+        return _py_repr(value)
+    if isinstance(value, Mapping):
+        payload = dict(value)
+        kind = payload.get("kind")
+        if kind == "custom":
+            return f"fm.MeasurementAxis.custom({_py_literal(payload.get('vector'))})"
+    raise ValueError(f"unsupported hysteresis measurement axis {value!r}")
 
 
 def _render_hysteresis_saturation(value: object) -> str:

@@ -4,7 +4,8 @@ use crate::{
     EigenDampingPolicyIR, EigenNormalizationIR, EigenOperatorConfigIR, EigenTargetIR,
     EquilibriumSourceIR, ExchangeBoundaryCondition, ExecutionMode, ExecutionPrecision,
     FdmDemagPeriodicityIR, FdmMultilayerPlanIR, FdmPeriodicityIR, FemDomainMeshAssetIR,
-    FemLinearSolverPolicy, FemSharedDomainBuildReportIR, FieldRefreshPolicyIR, IntegratorChoice,
+    FemLinearSolverPolicy, FemSharedDomainBuildReportIR, FieldRefreshPolicyIR,
+    FrequencyExcitationIR, FrequencyResponseNormalizationIR, FrequencySweepIR, IntegratorChoice,
     KSamplingIR, MagnetostrictionLawIR, MaterialFieldLocationIR, MaterialIR,
     MaterialParameterNameIR, MechanicalBoundaryConditionIR, MechanicalLoadIR, MeshIR,
     ModeTrackingIR, OerstedRealization, OutputIR, RelaxStopIR, RelaxationAlgorithmIR, SeedPolicy,
@@ -45,6 +46,7 @@ pub enum BackendPlanIR {
     FdmMultilayer(FdmMultilayerPlanIR),
     Fem(FemPlanIR),
     FemEigen(FemEigenPlanIR),
+    FemFrequencyResponse(FemFrequencyResponsePlanIR),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -744,6 +746,51 @@ pub struct FemEigenPlanIR {
     pub demag_realization: Option<ResolvedFemDemagIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode_tracking: Option<ModeTrackingIR>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FemFrequencyResponsePlanIR {
+    pub mesh_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mesh_source: Option<String>,
+    pub mesh: MeshIR,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub object_segments: Vec<FemObjectSegmentIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mesh_parts: Vec<FemMeshPartIR>,
+    #[serde(default)]
+    pub domain_mesh_mode: FemDomainMeshModeIR,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain_frame: Option<DomainFrameIR>,
+    pub fe_order: u32,
+    pub hmax: f64,
+    pub equilibrium_magnetization: Vec<[f64; 3]>,
+    pub material: MaterialIR,
+    pub operator: EigenOperatorConfigIR,
+    pub equilibrium: EquilibriumSourceIR,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub k_sampling: Option<KSamplingIR>,
+    pub normalization: FrequencyResponseNormalizationIR,
+    pub damping_policy: EigenDampingPolicyIR,
+    #[serde(default)]
+    pub spin_wave_bc: SpinWaveBoundaryConditionIR,
+    pub excitation: FrequencyExcitationIR,
+    pub frequencies_hz: FrequencySweepIR,
+    pub enable_exchange: bool,
+    pub enable_demag: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interfacial_dmi: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dmi_interface_normal: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bulk_dmi: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_field: Option<[f64; 3]>,
+    pub gyromagnetic_ratio: f64,
+    pub precision: ExecutionPrecision,
+    pub exchange_bc: ExchangeBoundaryCondition,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demag_realization: Option<ResolvedFemDemagIR>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

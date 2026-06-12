@@ -260,6 +260,198 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_frequency_domain_eigen_branches_v2"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_frequency_domain_eigen_diagnostics_v2"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_frequency_domain_eigen_dispersion"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/{sample_index}/{mode_index}/meta": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_frequency_domain_eigen_mode_field_sample_index_mode_index_meta"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_frequency_domain_eigen_spectrum_v2"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/frequency-domain/manifest.v1": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_frequency_domain_manifest_v1"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/frequency-domain/response/cancel-requested.v1": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_frequency_domain_response_cancel_requested_v1"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/frequency-domain/response/diagnostics.v1": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_frequency_domain_response_diagnostics_v1"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/frequency-domain/response/field/{frequency_index}/meta": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_frequency_domain_response_field_frequency_index_meta"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/frequency-domain/response/frequency-points/{frequency_index}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_frequency_domain_response_frequency_points_frequency_index"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_frequency_domain_response_magnetic_sweep"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/frequency-domain/response/progress.v1": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_frequency_domain_response_progress_v1"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/analysis/frequency-response/magnetic-sweep.v1": {
         parameters: {
             query?: never;
@@ -268,6 +460,38 @@ export interface paths {
             cookie?: never;
         };
         get: operations["analysis_get_sessions_current_analysis_frequency_response_magnetic_sweep_v1"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/hysteresis-family/{stage_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_hysteresis_family_stage_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/hysteresis-family/{stage_id}/variants/{variant_id}/points": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_hysteresis_family_stage_id_variants_variant_id_points"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3620,6 +3844,11 @@ export interface components {
              *     return a contiguous center window for lightweight diagnostics.
              */
             max_samples?: number | null;
+            /**
+             * Format: double
+             * @description Phase angle in radians for `view=phase_rotated_real`.
+             */
+            phase_rad?: number | null;
             /** @description Scope identifier for `object` and `part` scopes. */
             scope_id?: string | null;
             /**
@@ -3636,6 +3865,145 @@ export interface components {
              *     hysteresis-point magnetization state.
              */
             snapshot_id?: string | null;
+            /**
+             * @description Optional complex analysis view for frequency-domain fields.
+             *
+             *     Accepted values for analysis fields: `real`, `imag`, `abs`, `amplitude`,
+             *     `phase`, `phase_rotated_real`.
+             */
+            view?: string | null;
+        };
+        FrequencyDomainAvailabilitySummaryResource: {
+            diagnostics_json: string;
+            driven_response_available: boolean;
+            dynamic_demag_k_available: boolean;
+            floquet_modal_available: boolean;
+            floquet_response_available: boolean;
+            gpu_available: boolean;
+            modal_solver_available: boolean;
+            reason: string;
+            status: string;
+            study_kind: string;
+        };
+        FrequencyDomainBoundaryCapabilitiesResource: {
+            floquet_modal: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+            floquet_response: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+            periodic_pair_diagnostics: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+            static_periodic: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+        };
+        FrequencyDomainCapabilityEntryResource: {
+            reason: string;
+            status: string;
+        };
+        FrequencyDomainCapabilitySnapshotResource: {
+            boundary: components["schemas"]["FrequencyDomainBoundaryCapabilitiesResource"];
+            demag: components["schemas"]["FrequencyDomainDemagCapabilitiesResource"];
+            dispersion: components["schemas"]["FrequencyDomainDispersionCapabilitiesResource"];
+            modal: components["schemas"]["FrequencyDomainModalCapabilitiesResource"];
+            response: components["schemas"]["FrequencyDomainResponseCapabilitiesResource"];
+            schema_version: string;
+            validation: components["schemas"]["FrequencyDomainValidationCapabilitiesResource"];
+            visualization: components["schemas"]["FrequencyDomainVisualizationCapabilitiesResource"];
+        };
+        FrequencyDomainDemagCapabilitiesResource: {
+            floquet_dynamic_k: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+            static_periodic_pbc: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+        };
+        FrequencyDomainDispersionCapabilitiesResource: {
+            branch_tracking: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+            k_path: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+        };
+        FrequencyDomainFieldResource: {
+            artifact_path: string;
+            available_views: string[];
+            components: string[];
+            /** Format: double */
+            default_phase_rad?: number | null;
+            default_view: string;
+            field_id: string;
+            missing_reason?: string | null;
+            quantity: string;
+            resource_key: string;
+            schema_version: string;
+            source_family: string;
+            status: string;
+            value_kind: string;
+        };
+        FrequencyDomainJsonArtifactResource: {
+            artifact_path: string;
+            missing_reason?: string | null;
+            payload?: unknown;
+            resource_key: string;
+            schema_version: string;
+            status: string;
+        };
+        FrequencyDomainManifestResource: {
+            capabilities: components["schemas"]["FrequencyDomainCapabilitySnapshotResource"];
+            eigen_namespace: string;
+            eigenmodes: components["schemas"]["FrequencyDomainAvailabilitySummaryResource"];
+            existing_frequency_response_namespace_preserved: boolean;
+            family_namespace: string;
+            floquet_nonzero_k_demag_supported: boolean;
+            response: components["schemas"]["FrequencyDomainAvailabilitySummaryResource"];
+            response_cancel_requested?: null | components["schemas"]["FrequencyDomainSweepProgressResource"];
+            response_progress?: null | components["schemas"]["FrequencyDomainSweepProgressResource"];
+            result_manifest?: null | components["schemas"]["FrequencyDomainJsonArtifactResource"];
+            schema_version: string;
+        };
+        FrequencyDomainModalCapabilitiesResource: {
+            absorption_from_modes: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+            k_path: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+            linewidths: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+            mode_field_payload: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+            mode_tracking: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+            production_cpu: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+            production_gpu: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+            reference_cpu: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+        };
+        FrequencyDomainResponseCapabilitiesResource: {
+            frequency_sweep: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+            magnetic_cpu: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+            magnetic_gpu: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+            magnetoelastic_elastodynamic: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+            magnetoelastic_quasistatic: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+            mode_projected: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+        };
+        FrequencyDomainSweepProgressResource: {
+            complete: boolean;
+            /** Format: int64 */
+            completed_frequency_points: number;
+            /** Format: double */
+            current_frequency_hz?: number | null;
+            latest_artifact_manifest_path?: string | null;
+            missing_reason?: string | null;
+            partial_artifacts_available: boolean;
+            progress_json?: string | null;
+            schema_version: string;
+            status: string;
+            /** Format: int64 */
+            total_frequency_points: number;
+            /** Format: int64 */
+            written_frequency_point_artifacts: number;
+        };
+        FrequencyDomainTextArtifactResource: {
+            artifact_path: string;
+            content_type: string;
+            missing_reason?: string | null;
+            resource_key: string;
+            schema_version: string;
+            status: string;
+            text?: string | null;
+        };
+        FrequencyDomainValidationCapabilitiesResource: {
+            fmr_k0: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+        };
+        FrequencyDomainVisualizationCapabilitiesResource: {
+            modal_dispersion_chart: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+            modal_spectrum_chart: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+            mode_3d_overlay: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+            mode_table: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+            response_field_3d_overlay: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+            response_sweep_chart: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
         };
         /** @enum {string} */
         GeometryBackendTarget: "fem" | "fdm";
@@ -3748,6 +4116,29 @@ export interface components {
             status_reason?: string | null;
             worker: string;
         };
+        HysteresisAngularFamilyResource: {
+            active_variant_id?: string | null;
+            family_id: string;
+            label?: string | null;
+            /** Format: int64 */
+            revision: number;
+            series: components["schemas"]["HysteresisAngularFamilySeriesSchema"][];
+            stage_id: string;
+            /** Format: int32 */
+            stage_index: number;
+        };
+        HysteresisAngularFamilySeriesSchema: {
+            data_status: string;
+            label?: string | null;
+            measurement_axis?: unknown;
+            metrics?: null | components["schemas"]["HysteresisMetricsSchema"];
+            orientation: unknown;
+            /** Format: int32 */
+            point_count: number;
+            points: components["schemas"]["HysteresisPointSchema"][];
+            points_resource_ref: string;
+            variant_id: string;
+        };
         HysteresisBranchSchema: {
             branch_id: string;
             /** Format: int32 */
@@ -3844,7 +4235,7 @@ export interface components {
         };
         HysteresisOrientationSchema: {
             direction?: number[] | null;
-            measurement_axis?: string | null;
+            measurement_axis?: unknown;
             orientation?: unknown;
             /** Format: int64 */
             revision: number;
@@ -3978,6 +4369,8 @@ export interface components {
             torque?: number | null;
         };
         HysteresisStagePlanSchema: {
+            adaptive_refinement?: unknown;
+            angular_family?: unknown;
             branch_mode?: string | null;
             /** Format: double */
             field_max_mT?: number | null;
@@ -6901,6 +7294,257 @@ export interface operations {
             };
         };
     };
+    analysis_get_sessions_current_analysis_frequency_domain_eigen_branches_v2: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Frequency-domain eigen branches v2 resource */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FrequencyDomainJsonArtifactResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_frequency_domain_eigen_diagnostics_v2: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Frequency-domain eigen diagnostics v2 resource */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FrequencyDomainJsonArtifactResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_frequency_domain_eigen_dispersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Frequency-domain eigen dispersion CSV resource */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FrequencyDomainTextArtifactResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_frequency_domain_eigen_mode_field_sample_index_mode_index_meta: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description K-path sample index */
+                sample_index: number;
+                /** @description Raw mode index */
+                mode_index: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Frequency-domain mode field resource metadata */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FrequencyDomainFieldResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_frequency_domain_eigen_spectrum_v2: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Frequency-domain eigen spectrum v2 resource */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FrequencyDomainJsonArtifactResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_frequency_domain_manifest_v1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Frequency-domain solver family manifest v1 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FrequencyDomainManifestResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_frequency_domain_response_cancel_requested_v1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Frequency-domain driven response sweep cancel-requested progress resource */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FrequencyDomainSweepProgressResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_frequency_domain_response_diagnostics_v1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Frequency-domain response diagnostics resource */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FrequencyDomainJsonArtifactResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_frequency_domain_response_field_frequency_index_meta: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Frequency point index */
+                frequency_index: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Frequency-domain response field resource metadata */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FrequencyDomainFieldResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_frequency_domain_response_frequency_points_frequency_index: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Frequency point index */
+                frequency_index: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Frequency-domain response frequency point resource */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FrequencyDomainJsonArtifactResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_frequency_domain_response_magnetic_sweep: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Frequency-domain driven response sweep resource */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FrequencyDomainJsonArtifactResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_frequency_domain_response_progress_v1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Frequency-domain driven response sweep progress resource */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FrequencyDomainSweepProgressResource"];
+                };
+            };
+        };
+    };
     analysis_get_sessions_current_analysis_frequency_response_magnetic_sweep_v1: {
         parameters: {
             query?: never;
@@ -6918,6 +7562,68 @@ export interface operations {
                 content?: never;
             };
             /** @description No magnetic response sweep artifact */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_hysteresis_family_stage_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Hysteresis stage index or stage identifier */
+                stage_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Angular hysteresis family series grouped by orientation */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HysteresisAngularFamilyResource"];
+                };
+            };
+            /** @description Angular hysteresis family not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_hysteresis_family_stage_id_variants_variant_id_points: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Hysteresis stage index or stage identifier */
+                stage_id: string;
+                /** @description Angular family variant identifier */
+                variant_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Hysteresis points for one angular-family variant */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HysteresisPointSchema"][];
+                };
+            };
+            /** @description Angular hysteresis family variant not found */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -7408,8 +8114,22 @@ export interface operations {
                     "application/json": components["schemas"]["FieldMeta"];
                 };
             };
+            /** @description Invalid snapshot or component parameter */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Field not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Snapshot does not match the current domain */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8219,6 +8939,15 @@ export interface operations {
                  *     hysteresis-point magnetization state.
                  */
                 snapshot_id?: string | null;
+                /**
+                 * @description Optional complex analysis view for frequency-domain fields.
+                 *
+                 *     Accepted values for analysis fields: `real`, `imag`, `abs`, `amplitude`,
+                 *     `phase`, `phase_rotated_real`.
+                 */
+                view?: string | null;
+                /** @description Phase angle in radians for `view=phase_rotated_real`. */
+                phase_rad?: number | null;
             };
             header?: {
                 /** @description Strong ETag from a previous field-vector response */
@@ -8255,7 +8984,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Invalid component parameter */
+            /** @description Invalid component or snapshot parameter */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -8264,6 +8993,13 @@ export interface operations {
             };
             /** @description Field not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Snapshot does not match the current domain */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

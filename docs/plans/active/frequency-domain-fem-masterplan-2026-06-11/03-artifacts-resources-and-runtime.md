@@ -160,6 +160,7 @@ Required `artifacts` fields:
 - `response_sweep_v1_path`
 - `response_sweep_v2_path`
 - `response_diagnostics_v1_path`
+- `response_progress_v1_path`
 - `mode_metadata_paths`
 - `frequency_point_paths`
 
@@ -168,8 +169,10 @@ Required `resources` fields:
 - `spectrum_resource_key`
 - `branches_resource_key`
 - `dispersion_resource_key`
-- `diagnostics_resource_key`
+- `eigen_diagnostics_resource_key`
 - `response_sweep_resource_key`
+- `response_progress_resource_key`
+- `response_diagnostics_resource_key`
 - `mode_field_resources`
 - `response_field_resources`
 
@@ -228,7 +231,7 @@ Resource registration:
   "domain_id": "mesh-or-domain-id",
   "mesh_scope": "magnetic",
   "components": ["x", "y", "z"],
-  "available_views": ["real", "imag", "amplitude", "phase", "phase_rotated_real"],
+  "available_views": ["real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"],
   "resource_key": "/v2/sessions/current/data/fields/analysis:eigen:stage-1:sample-0000:mode-0003/samples/vector"
 }
 ```
@@ -237,6 +240,7 @@ The binary payload must support query parameters:
 
 - `view=real`
 - `view=imag`
+- `view=abs`
 - `view=amplitude`
 - `view=phase`
 - `view=phase_rotated_real`
@@ -249,6 +253,18 @@ The binary payload must support query parameters:
 Rules:
 
 - The API may compute `phase_rotated_real` server-side or send complex components with a documented binary layout.
+- When the backend or resource layer exposes client-side modal animation data,
+  the resource metadata must declare the complex storage layout explicitly:
+  `real_imag` or `amplitude_phase`. `amplitude_phase` means every vector
+  component carries magnitude and phase in radians, sufficient for the
+  inspector/viewport to reconstruct
+  `Re(amplitude * exp(i * (modePhaseRad + visualizationPhaseRad)))` without
+  re-running the solver.
+- The selected mode inspector must treat `amplitude_phase` as a first-class
+  layout for animation, not as a lossy derived scalar view. The user-facing
+  `amplitude` and `phase` views remain static display modes; only
+  `phase_rotated_real` consumes `visualizationPhaseRad`.
+- `abs` and `amplitude` are accepted aliases for complex-vector magnitude. The UI may label the user-facing control as amplitude, but the resource API must accept both values.
 - The viewport must know the layout from resource metadata, not from hardcoded mode assumptions.
 - Resource keys must include enough query state to avoid stale cache collisions.
 - The field resource must carry revision information tied to the manifest revision and mode payload revision.
@@ -334,7 +350,10 @@ analysis.eigen.open-spectrum
 analysis.eigen.open-dispersion
 analysis.eigen.select-mode
 analysis.eigen.plot-mode-3d
+analysis.eigen.set-mode-3d-phase
+analysis.eigen.set-mode-3d-animation
 analysis.eigen.clear-mode-3d
+analysis.frequency-domain.clear-3d-overlay
 analysis.frequency-response.open-sweep
 analysis.frequency-response.select-frequency-point
 analysis.frequency-response.plot-response-field-3d
@@ -346,7 +365,13 @@ Command rules:
 - Stage-run commands submit solver work.
 - Analysis open/select/plot commands are UI commands and must not trigger solver recomputation.
 - Plotting a mode in 3D changes visualization state to use the mode field resource.
-- Clearing a mode overlay releases the visualization target and resource subscription.
+- Setting mode 3D phase updates only the active overlay
+  `visualizationPhaseRad` for the currently displayed mode; it does not mutate
+  the physical mode phase in the complex eigenvector or metadata.
+- Setting mode 3D animation toggles visualization-only phase animation and records `animationRateHz`; it must not mutate artifacts or enqueue solver work.
+- `analysis.eigen.clear-mode-3d` clears only the active eigen-mode overlay.
+- `analysis.frequency-domain.clear-3d-overlay` clears any active frequency-domain overlay, including eigen-mode and driven-response field overlays.
+- Clearing an overlay releases the visualization target and resource subscription.
 - Export commands copy or package existing artifacts only.
 
 ## Provenance Contract
@@ -402,6 +427,7 @@ Frontend resource tests:
 - Spectrum hook refetches on `analysis.eigen.spectrum.updated`.
 - Mode hook uses sample and raw mode index in the resource key.
 - Mode field hook changes key when phase changes.
+- Mode animation hook advances only the active overlay phase and stops on overlay clear, selected mode change, missing mode-field resource, and inspector unmount.
 - Response sweep hook does not refetch when unrelated mesh resources update.
 
 ## Acceptance Gate

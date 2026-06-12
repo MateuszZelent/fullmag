@@ -237,6 +237,8 @@ pub async fn get_hysteresis_plan(
         field_values_m_t: value_f64_array(stage.value.get("field_values_mT")),
         field_schedule: stage.value.get("field_schedule").cloned(),
         schedule_refinements: stage.value.get("schedule_refinements").cloned(),
+        angular_family: stage.value.get("angular_family").cloned(),
+        adaptive_refinement: stage.value.get("adaptive_refinement").cloned(),
         minor_loops: stage.value.get("minor_loops").cloned(),
         branch_mode: value_string(stage.value.get("branch_mode")),
     }))
@@ -336,7 +338,7 @@ pub async fn get_hysteresis_orientation(
         stage_index: stage.stage_index,
         orientation: stage.value.get("orientation").cloned(),
         direction: value_vec3(stage.value.get("direction")),
-        measurement_axis: value_string(stage.value.get("measurement_axis")),
+        measurement_axis: stage.value.get("measurement_axis").cloned(),
     }))
 }
 
@@ -1506,11 +1508,11 @@ fn stage_id_for_index(index: usize) -> String {
     format!("stage-{index:03}")
 }
 
-struct HysteresisSceneStage {
-    revision: u64,
-    stage_id: String,
-    stage_index: u32,
-    value: serde_json::Map<String, Value>,
+pub(crate) struct HysteresisSceneStage {
+    pub(crate) revision: u64,
+    pub(crate) stage_id: String,
+    pub(crate) stage_index: u32,
+    pub(crate) value: serde_json::Map<String, Value>,
 }
 
 fn build_hysteresis_execution_tree(
@@ -1786,7 +1788,7 @@ fn same_m_t(left: f64, right: f64) -> bool {
     (left - right).abs() <= 1e-9
 }
 
-async fn resolve_hysteresis_scene_stage(
+pub(crate) async fn resolve_hysteresis_scene_stage(
     state: &Arc<AppState>,
     requested: &str,
 ) -> Result<HysteresisSceneStage, ApiError> {

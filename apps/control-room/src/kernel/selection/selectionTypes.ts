@@ -127,7 +127,29 @@ export type SelectionRef =
       kind:
         | "study.stage.action"
         | "study.stage.eigenmodes"
+        | "study.stage.eigenmodes.setup"
+        | "study.stage.eigenmodes.calculation_mode"
+        | "study.stage.eigenmodes.equilibrium"
+        | "study.stage.eigenmodes.operator"
+        | "study.stage.eigenmodes.boundary"
+        | "study.stage.eigenmodes.periodic_pairs"
+        | "study.stage.eigenmodes.k_path"
+        | "study.stage.eigenmodes.solver"
+        | "study.stage.eigenmodes.outputs"
+        | "study.stage.eigenmodes.diagnostics"
         | "study.stage.frequency_response"
+        | "study.stage.frequency_response.setup"
+        | "study.stage.frequency_response.calculation_mode"
+        | "study.stage.frequency_response.equilibrium"
+        | "study.stage.frequency_response.operator"
+        | "study.stage.frequency_response.boundary"
+        | "study.stage.frequency_response.periodic_pairs"
+        | "study.stage.frequency_response.k_grid"
+        | "study.stage.frequency_response.excitation"
+        | "study.stage.frequency_response.sweep"
+        | "study.stage.frequency_response.solver"
+        | "study.stage.frequency_response.outputs"
+        | "study.stage.frequency_response.diagnostics"
         | "study.stage.hysteresis"
         | "study.stage.relax"
         | "study.stage.run"
@@ -136,6 +158,22 @@ export type SelectionRef =
       stageId: string;
       stageIndex: number;
       type: "study-stage";
+    }
+  | {
+      analysisRunId?: string;
+      analysisStageId?: string;
+      artifactPath?: string;
+      branchId?: string;
+      calculationMode?: string;
+      fieldId?: string;
+      frequencyIndex?: number;
+      kind: string;
+      modeIndex?: number;
+      nodeId: string;
+      observableId?: string;
+      resourceRef?: string;
+      sampleIndex?: number;
+      type: "frequency-domain";
     };
 
 export interface Selection {
@@ -288,6 +326,23 @@ export function selectionRefEquals(
         left.nodeId === right.nodeId &&
         left.stageId === right.stageId &&
         left.stageIndex === right.stageIndex
+      );
+    case "frequency-domain":
+      return (
+        right.type === "frequency-domain" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        nullableStringEquals(left.analysisRunId, right.analysisRunId) &&
+        nullableStringEquals(left.analysisStageId, right.analysisStageId) &&
+        nullableStringEquals(left.artifactPath, right.artifactPath) &&
+        nullableStringEquals(left.branchId, right.branchId) &&
+        nullableStringEquals(left.calculationMode, right.calculationMode) &&
+        nullableStringEquals(left.fieldId, right.fieldId) &&
+        left.frequencyIndex === right.frequencyIndex &&
+        left.modeIndex === right.modeIndex &&
+        nullableStringEquals(left.observableId, right.observableId) &&
+        nullableStringEquals(left.resourceRef, right.resourceRef) &&
+        left.sampleIndex === right.sampleIndex
       );
   }
 }

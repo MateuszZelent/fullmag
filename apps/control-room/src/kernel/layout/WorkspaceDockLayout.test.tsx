@@ -13,6 +13,7 @@ import { RealtimeInvalidationBridge } from "../realtime/RealtimeInvalidationBrid
 import { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 import { SelectionController } from "../selection/SelectionController";
 import type { KernelApi } from "../types";
+import { AnalysisFieldOverlayController } from "../visualization/AnalysisFieldOverlayController";
 import { CameraRegistryController } from "../visualization/CameraRegistryController";
 import { ObjectVisualizationController } from "../visualization/ObjectVisualizationController";
 import { VisualizationRegistrySyncController } from "../visualization/VisualizationRegistrySyncController";
@@ -30,6 +31,7 @@ function makeKernel(): KernelApi {
   const api = new ControlRoomApi({ fetchImpl: async () => new Response("{}") });
   return {
     api,
+    analysisFieldOverlay: new AnalysisFieldOverlayController(),
     bus,
     cameraRegistry: new CameraRegistryController({ api: api.visualization }),
     commandDiagnostics: new CommandDiagnosticsController(),

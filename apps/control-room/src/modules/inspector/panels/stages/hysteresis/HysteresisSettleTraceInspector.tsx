@@ -6,19 +6,19 @@ import { InspectorSection } from "../../../primitives/InspectorSection";
 import type { HysteresisInspectorCommonProps } from "./HysteresisInspectorTypes";
 
 export function HysteresisSettleTraceInspector({
-  activeSnapshot,
+  activePoint,
   settleTrace,
   settleTraceStatus,
 }: Pick<
   HysteresisInspectorCommonProps,
-  "activeSnapshot" | "settleTrace" | "settleTraceStatus"
+  "activePoint" | "settleTrace" | "settleTraceStatus"
 >) {
   return (
     <InspectorSection
       value="hysteresis-settle-trace"
       title="Settle Trace"
       badge={
-        activeSnapshot?.pointId == null
+        activePoint?.pointId == null
           ? "select point"
           : settleTrace.length > 0
             ? `${settleTrace.length} step(s)`
@@ -27,7 +27,7 @@ export function HysteresisSettleTraceInspector({
               : "no trace"
       }
     >
-      {activeSnapshot?.pointId == null ? (
+      {activePoint?.pointId == null ? (
         <div className="fm-hysteresis-inspector-empty">
           Select a calculated point to inspect the algorithms actually run for that field.
         </div>

@@ -5,7 +5,10 @@ interface AnalysisChartPoint {
 }
 
 export interface AnalysisChartResourceRef {
-  kind: "data.table.rows" | "simulation.solver.energies.history";
+  kind:
+    | "analysis.frequency_domain"
+    | "data.table.rows"
+    | "simulation.solver.energies.history";
   resourceKey: string;
   tableId: string;
 }

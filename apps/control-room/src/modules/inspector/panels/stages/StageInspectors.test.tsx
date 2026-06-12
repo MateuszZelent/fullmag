@@ -212,7 +212,10 @@ describe("Study stage inspectors", () => {
       "points",
     );
     expect(resolveHysteresisInspectorView("study:stage:0:field-point:4")).toBe(
-      "current-field",
+      "settle-trace",
+    );
+    expect(resolveHysteresisInspectorView("study:stage:0:field-point:4:algorithm:0")).toBe(
+      "settle-trace",
     );
   });
 
@@ -518,6 +521,56 @@ describe("Study stage inspectors", () => {
     expect(markup).toContain("retry 1");
 
     selection.clear("analysis-plots");
+  });
+
+  it("renders settle trace for a hysteresis field point selected in explorer", () => {
+    selection.set(
+      {
+        kind: "study.stage.hysteresis",
+        label: "H = 25 mT",
+        nodeId: "model:study:stages:stage:hysteresis-1:field-point:4",
+        objectId: null,
+        ref: {
+          kind: "study.stage.hysteresis",
+          nodeId: "model:study:stages:stage:hysteresis-1:field-point:4",
+          stageId: "hysteresis-1",
+          stageIndex: 0,
+          type: "study-stage",
+        },
+      },
+      "explorer",
+    );
+
+    const settleTraceKey = ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH
+      .replace("{stage_id}", "hysteresis-1")
+      .replace("{point_id}", "4");
+    const settleTrace: HysteresisSettleTraceEntrySchema[] = [
+      {
+        algorithm_id: "minimize",
+        energy: -5.93e-16,
+        fallback_reason: null,
+        field_value_mT: 25,
+        method: "projected_gradient_bb",
+        point_id: 4,
+        resolved_timestep_s: 1e-13,
+        retry_attempt: 0,
+        status: "converged",
+        step_index: 0,
+        torque: 2.6e-2,
+      },
+    ];
+    sharedResourceRuntimeStore.updateData(settleTraceKey, settleTrace, 0);
+
+    const markup = render(
+      <HysteresisStageInspector {...props("hysteresis")} view="settle-trace" />,
+      ["hysteresis-settle-trace"],
+    );
+
+    expect(markup).toContain("Settle Trace");
+    expect(markup).toContain("projected_gradient_bb");
+    expect(markup).not.toContain("Current Field");
+
+    selection.clear("explorer");
   });
 
   it("renders detected hysteresis reversal fields in loop metrics", () => {

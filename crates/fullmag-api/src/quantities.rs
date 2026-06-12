@@ -139,6 +139,21 @@ fn scalar_metric_is_active(plan: Option<&ExecutionPlanIR>, metric_key: &str) -> 
             "e_total" => true,
             _ => false,
         },
+        BackendPlanIR::FemFrequencyResponse(plan) => match metric_key {
+            "e_ex" => plan.enable_exchange,
+            "e_demag" => plan.enable_demag,
+            "e_ext" => plan.external_field.is_some(),
+            "e_ani" => {
+                plan.material.uniaxial_anisotropy.is_some()
+                    || plan.material.uniaxial_anisotropy_k2.is_some()
+                    || plan.material.cubic_anisotropy_kc1.is_some()
+                    || plan.material.cubic_anisotropy_kc2.is_some()
+                    || plan.material.cubic_anisotropy_kc3.is_some()
+            }
+            "e_dmi" => plan.interfacial_dmi.is_some() || plan.bulk_dmi.is_some(),
+            "e_total" => true,
+            _ => false,
+        },
         BackendPlanIR::FdmMultilayer(_) => true,
     }
 }
@@ -164,6 +179,7 @@ pub(crate) fn extract_fem_mesh_from_metadata(metadata: &Value) -> Option<FemMesh
     match execution_plan.backend_plan {
         BackendPlanIR::Fem(fem) => Some(FemMeshPayload::from(&fem)),
         BackendPlanIR::FemEigen(fem) => Some(FemMeshPayload::from(&fem)),
+        BackendPlanIR::FemFrequencyResponse(fem) => Some(FemMeshPayload::from(&fem)),
         BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
     }
 }

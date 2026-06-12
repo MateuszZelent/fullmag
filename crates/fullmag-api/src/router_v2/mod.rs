@@ -580,6 +580,54 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::analysis::get_magnetic_response_sweep_v1),
         )
         .route(
+            "/v2/sessions/current/analysis/frequency-domain/manifest.v1",
+            get(handlers::analysis::get_frequency_domain_manifest_v1),
+        )
+        .route(
+            "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2",
+            get(handlers::analysis::get_frequency_domain_eigen_spectrum_v2),
+        )
+        .route(
+            "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2",
+            get(handlers::analysis::get_frequency_domain_eigen_branches_v2),
+        )
+        .route(
+            "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion",
+            get(handlers::analysis::get_frequency_domain_eigen_dispersion),
+        )
+        .route(
+            "/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2",
+            get(handlers::analysis::get_frequency_domain_eigen_diagnostics_v2),
+        )
+        .route(
+            "/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/:sample_index/:mode_index/meta",
+            get(handlers::analysis::get_frequency_domain_eigen_mode_field_meta),
+        )
+        .route(
+            "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep",
+            get(handlers::analysis::get_frequency_domain_response_magnetic_sweep),
+        )
+        .route(
+            "/v2/sessions/current/analysis/frequency-domain/response/progress.v1",
+            get(handlers::analysis::get_frequency_domain_response_progress_v1),
+        )
+        .route(
+            "/v2/sessions/current/analysis/frequency-domain/response/cancel-requested.v1",
+            get(handlers::analysis::get_frequency_domain_response_cancel_requested_v1),
+        )
+        .route(
+            "/v2/sessions/current/analysis/frequency-domain/response/diagnostics.v1",
+            get(handlers::analysis::get_frequency_domain_response_diagnostics_v1),
+        )
+        .route(
+            "/v2/sessions/current/analysis/frequency-domain/response/frequency-points/:frequency_index",
+            get(handlers::analysis::get_frequency_domain_response_frequency_point),
+        )
+        .route(
+            "/v2/sessions/current/analysis/frequency-domain/response/field/:frequency_index/meta",
+            get(handlers::analysis::get_frequency_domain_response_field_meta),
+        )
+        .route(
             "/v2/sessions/current/analysis/hysteresis/:stage_id/points",
             get(handlers::analysis::get_points),
         )
@@ -594,6 +642,14 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         .route(
             "/v2/sessions/current/analysis/hysteresis/:stage_id/branches",
             get(handlers::analysis::hysteresis::get_branches),
+        )
+        .route(
+            "/v2/sessions/current/analysis/hysteresis-family/:stage_id",
+            get(handlers::analysis::hysteresis::get_angular_family),
+        )
+        .route(
+            "/v2/sessions/current/analysis/hysteresis-family/:stage_id/variants/:variant_id/points",
+            get(handlers::analysis::hysteresis::get_angular_family_variant_points),
         )
         .route(
             "/v2/sessions/current/analysis/hysteresis/:stage_id/minor-loops",

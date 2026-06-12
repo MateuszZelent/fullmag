@@ -6,16 +6,20 @@ use crate::types::{
     StepUpdate,
 };
 use fullmag_ir::{
-    BackendPlanIR, ExecutionPlanIR, FieldOrientationIR, FieldScheduleIR, FieldWindowIR, ProblemIR,
-    RelaxStopIR, RelaxationAlgorithmIR, RelaxationControlIR, SettlePipelineIR, SettleStepIR,
-    StageStopReason, StudyIR,
+    AdaptiveRefinementIR, BackendPlanIR, ExecutionPlanIR, FieldOrientationIR, FieldScheduleIR,
+    FieldWindowIR, HysteresisAngularFamilyIR, MeasurementAxisIR, ProblemIR, RelaxStopIR,
+    RelaxationAlgorithmIR, RelaxationControlIR, SettlePipelineIR, SettleStepIR, StageStopReason,
+    StudyIR,
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
 
 const HYSTERESIS_SETTLE_STEP_DT_SECONDS: f64 = 1.0e-13;
 const MU0_H_PER_M: f64 = 1.256_637_061_435_917_2e-6;
+const HYSTERESIS_ZARR_STORE: &str = "hysteresis.zarr";
+const HYSTERESIS_ZARR_M_FIELD: &str = "fields/m";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HysteresisPoint {
@@ -54,6 +58,14 @@ pub struct HysteresisPoint {
     pub reversal_index: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recoil_start_point_id: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adaptive_inserted: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refinement_reason: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refinement_parent_left_point_id: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refinement_parent_right_point_id: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,6 +75,61 @@ struct HysteresisPointQuality {
     has_non_converged_steps: bool,
     terminal_settle_reason: Option<String>,
     warning_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HysteresisAdaptiveRefinementArtifact {
+    pub kind: String,
+    pub status: String,
+    pub enabled: bool,
+    pub source_point_count: usize,
+    pub max_passes: u32,
+    pub max_insertions_per_pass: u32,
+    pub candidates: Vec<HysteresisAdaptiveRefinementCandidate>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub points: Vec<HysteresisPoint>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub settle_trace: Vec<HysteresisSettleTraceEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HysteresisAdaptiveRefinementCandidate {
+    pub candidate_id: String,
+    pub pass_index: u32,
+    pub field_value_mT: f64,
+    pub parent_left_point_id: usize,
+    pub parent_right_point_id: usize,
+    pub parent_left_field_mT: f64,
+    pub parent_right_field_mT: f64,
+    pub dm_dh_per_mT: f64,
+    pub reasons: Vec<String>,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HysteresisAngularFamilyArtifact {
+    pub kind: String,
+    pub family_id: String,
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_variant_id: Option<String>,
+    pub variants: Vec<HysteresisAngularFamilyVariantArtifact>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HysteresisAngularFamilyVariantArtifact {
+    pub variant_id: String,
+    pub label: String,
+    pub orientation: serde_json::Value,
+    pub measurement_axis: serde_json::Value,
+    pub data_status: String,
+    pub point_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub points_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metrics_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub settle_trace_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -182,6 +249,23 @@ struct HysteresisMinorLoopRun {
     status: RunStatus,
 }
 
+#[derive(Debug)]
+struct HysteresisAngularFamilyVariantRun {
+    point_count: usize,
+    points_path: String,
+    metrics_path: String,
+    settle_trace_path: String,
+    status: RunStatus,
+    steps: Vec<StepStats>,
+}
+
+#[derive(Debug)]
+struct HysteresisAdaptiveRefinementRun {
+    artifact: HysteresisAdaptiveRefinementArtifact,
+    steps: Vec<StepStats>,
+    status: RunStatus,
+}
+
 #[derive(Debug, Clone)]
 struct HysteresisAveragingContext {
     weights: Option<Vec<f64>>,
@@ -277,6 +361,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
         direction,
         orientation,
         measurement_axis,
+        angular_family,
         initial_protocol,
         saturation,
         branch_mode,
@@ -284,6 +369,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
         storage,
         field_schedule,
         schedule_refinements,
+        adaptive_refinement,
         minor_loops,
         _sampling,
     ) = if let StudyIR::Hysteresis {
@@ -294,6 +380,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
         direction,
         orientation,
         measurement_axis,
+        angular_family,
         initial_protocol,
         saturation,
         branch_mode,
@@ -301,6 +388,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
         storage,
         field_schedule,
         schedule_refinements,
+        adaptive_refinement,
         minor_loops,
         sampling,
         ..
@@ -314,6 +402,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
             direction,
             orientation,
             measurement_axis,
+            angular_family,
             initial_protocol,
             saturation,
             branch_mode,
@@ -321,6 +410,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
             storage,
             field_schedule,
             schedule_refinements,
+            adaptive_refinement,
             minor_loops,
             sampling,
         )
@@ -330,42 +420,8 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
         });
     };
 
-    let mut u_H = [0.0, 0.0, 1.0];
-    if let Some(orient) = orientation {
-        match orient {
-            FieldOrientationIR::Preset { preset_name } => {
-                u_H = match preset_name.as_str() {
-                    "oop_positive" => [0.0, 0.0, 1.0],
-                    "oop_negative" => [0.0, 0.0, -1.0],
-                    "in_plane_x" => [1.0, 0.0, 0.0],
-                    "in_plane_y" => [0.0, 1.0, 0.0],
-                    _ => [0.0, 0.0, 1.0],
-                };
-            }
-            FieldOrientationIR::Sample { theta, phi } => {
-                let theta_rad = theta * std::f64::consts::PI / 180.0;
-                let phi_rad = phi * std::f64::consts::PI / 180.0;
-                u_H = [
-                    theta_rad.sin() * phi_rad.cos(),
-                    theta_rad.sin() * phi_rad.sin(),
-                    theta_rad.cos(),
-                ];
-            }
-            FieldOrientationIR::Global { vector } => {
-                let norm =
-                    (vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2]).sqrt();
-                if norm > 1e-15 {
-                    u_H = [vector[0] / norm, vector[1] / norm, vector[2] / norm];
-                }
-            }
-        }
-    } else if let Some(d) = direction {
-        let norm = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-        if norm > 1e-15 {
-            u_H = [d[0] / norm, d[1] / norm, d[2] / norm];
-        }
-    }
-    let u_meas = hysteresis_measurement_axis(measurement_axis, u_H);
+    let u_H = hysteresis_field_axis(orientation.as_ref(), *direction);
+    let u_meas = hysteresis_measurement_axis(measurement_axis, u_H, plan)?;
 
     let sweep_values_mT = materialize_hysteresis_field_values(
         *field_min_mT,
@@ -386,9 +442,14 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
             })
         }
     };
+    let family_initial_m = current_m.clone();
 
     let mut hysteresis_points = Vec::new();
-    let mut major_point_states = minor_loops.as_ref().map(|_| Vec::new());
+    let needs_branch_parent_states = minor_loops.is_some()
+        || adaptive_refinement
+            .as_ref()
+            .is_some_and(|policy| policy.enabled);
+    let mut major_point_states = needs_branch_parent_states.then(Vec::new);
     let mut settle_trace = Vec::new();
     let mut steps_stats = Vec::new();
     let mut global_step_count = 0;
@@ -567,6 +628,10 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
             is_reversal_field: None,
             reversal_index: None,
             recoil_start_point_id: None,
+            adaptive_inserted: None,
+            refinement_reason: None,
+            refinement_parent_left_point_id: None,
+            refinement_parent_right_point_id: None,
         };
         if let Some(states) = major_point_states.as_mut() {
             states.push(HysteresisMajorPointState {
@@ -588,6 +653,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
             &hysteresis_points,
             &partial_metrics,
             &settle_trace,
+            adaptive_refinement.as_ref(),
         )?;
 
         (*on_step)(StepUpdate {
@@ -638,7 +704,80 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
         }
     }
 
-    write_hysteresis_progress_artifacts(output_dir, &hysteresis_points, &metrics, &settle_trace)?;
+    write_hysteresis_progress_artifacts(
+        output_dir,
+        &hysteresis_points,
+        &metrics,
+        &settle_trace,
+        adaptive_refinement.as_ref(),
+    )?;
+
+    let mut angular_family_variant_runs: Vec<(String, HysteresisAngularFamilyVariantRun)> =
+        Vec::new();
+    if let Some(family) = angular_family.as_ref() {
+        let active_variant_id = active_hysteresis_angular_variant_id(family, orientation.as_ref());
+        for variant in &family.variants {
+            if active_variant_id
+                .as_deref()
+                .is_some_and(|active_id| active_id == variant.variant_id)
+            {
+                continue;
+            }
+            let variant_run = run_hysteresis_angular_family_variant(
+                variant,
+                plan,
+                problem,
+                output_dir,
+                &family_initial_m,
+                &sweep_values_mT,
+                measurement_axis,
+                storage.as_ref(),
+                settle_pipeline.as_ref(),
+                until_seconds,
+                field_every_n,
+                display_selection,
+                interrupt_requested,
+                on_step,
+            )?;
+            final_status = combine_run_status(final_status, variant_run.status);
+            append_stage_steps(
+                &mut steps_stats,
+                &mut global_step_count,
+                variant_run.steps.clone(),
+            );
+            angular_family_variant_runs.push((variant.variant_id.clone(), variant_run));
+        }
+    }
+
+    if let (Some(policy), Some(states)) =
+        (adaptive_refinement.as_ref(), major_point_states.as_deref())
+    {
+        let adaptive_run = run_hysteresis_adaptive_refinement(
+            policy,
+            states,
+            plan,
+            problem,
+            output_dir,
+            u_H,
+            u_meas,
+            &averaging,
+            storage.as_ref(),
+            settle_pipeline.as_ref(),
+            until_seconds,
+            field_every_n,
+            display_selection,
+            interrupt_requested,
+            on_step,
+        )?;
+        final_status = combine_run_status(final_status, adaptive_run.status);
+        append_stage_steps(&mut steps_stats, &mut global_step_count, adaptive_run.steps);
+        write_hysteresis_json_artifact(
+            output_dir,
+            "hysteresis_adaptive_refinement.json",
+            &adaptive_run.artifact,
+        )?;
+    }
+
     if let Some(minor_loops) = minor_loops.as_deref() {
         let artifact = if let Some(states) = major_point_states.as_deref() {
             let minor_run = run_hysteresis_minor_loops(
@@ -671,6 +810,16 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
             fs::write(output_dir.join("hysteresis_saturation.json"), json).ok();
         }
     }
+    if let Some(family) = angular_family.as_ref() {
+        let artifact = build_hysteresis_angular_family_artifact(
+            family,
+            orientation.as_ref(),
+            measurement_axis,
+            &hysteresis_points,
+            &angular_family_variant_runs,
+        );
+        write_hysteresis_json_artifact(output_dir, "hysteresis_angular_family.json", &artifact)?;
+    }
 
     Ok(RunResult {
         status: final_status,
@@ -680,11 +829,95 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
     })
 }
 
+fn build_hysteresis_angular_family_artifact(
+    family: &HysteresisAngularFamilyIR,
+    active_orientation: Option<&FieldOrientationIR>,
+    active_measurement_axis: &MeasurementAxisIR,
+    points: &[HysteresisPoint],
+    variant_runs: &[(String, HysteresisAngularFamilyVariantRun)],
+) -> HysteresisAngularFamilyArtifact {
+    let active_variant_id = active_hysteresis_angular_variant_id(family, active_orientation);
+    let variants = family
+        .variants
+        .iter()
+        .map(|variant| {
+            let is_active = active_variant_id
+                .as_deref()
+                .is_some_and(|active_id| active_id == variant.variant_id);
+            let variant_run = variant_runs
+                .iter()
+                .find(|(variant_id, _)| *variant_id == variant.variant_id)
+                .map(|(_, run)| run);
+            let measurement_axis = variant
+                .measurement_axis
+                .as_ref()
+                .unwrap_or(active_measurement_axis);
+            HysteresisAngularFamilyVariantArtifact {
+                variant_id: variant.variant_id.clone(),
+                label: variant.label.clone(),
+                orientation: serde_json::to_value(&variant.orientation)
+                    .unwrap_or(serde_json::Value::Null),
+                measurement_axis: serde_json::to_value(measurement_axis)
+                    .unwrap_or(serde_json::Value::Null),
+                data_status: if is_active {
+                    "computed_active_stage".to_string()
+                } else if variant_run.is_some() {
+                    "computed_variant_run".to_string()
+                } else {
+                    "pending_run".to_string()
+                },
+                point_count: if is_active {
+                    points.len()
+                } else {
+                    variant_run.map(|run| run.point_count).unwrap_or(0)
+                },
+                points_path: if is_active {
+                    Some("hysteresis_points.json".to_string())
+                } else {
+                    variant_run.map(|run| run.points_path.clone())
+                },
+                metrics_path: if is_active {
+                    Some("hysteresis_metrics.json".to_string())
+                } else {
+                    variant_run.map(|run| run.metrics_path.clone())
+                },
+                settle_trace_path: if is_active {
+                    Some("hysteresis_settle_trace.json".to_string())
+                } else {
+                    variant_run.map(|run| run.settle_trace_path.clone())
+                },
+            }
+        })
+        .collect();
+
+    HysteresisAngularFamilyArtifact {
+        kind: family.kind.clone(),
+        family_id: family.family_id.clone(),
+        label: family.label.clone(),
+        active_variant_id,
+        variants,
+    }
+}
+
+fn active_hysteresis_angular_variant_id(
+    family: &HysteresisAngularFamilyIR,
+    active_orientation: Option<&FieldOrientationIR>,
+) -> Option<String> {
+    active_orientation.and_then(|orientation| {
+        family
+            .variants
+            .iter()
+            .find(|variant| variant.orientation == *orientation)
+            .map(|variant| variant.variant_id.clone())
+    })
+}
+
 fn write_hysteresis_progress_artifacts(
     output_dir: &Path,
     points: &[HysteresisPoint],
     metrics: &HysteresisMetrics,
     settle_trace: &[HysteresisSettleTraceEntry],
+    adaptive_refinement: Option<&AdaptiveRefinementIR>,
 ) -> Result<(), RunError> {
     fs::create_dir_all(output_dir).map_err(|error| RunError {
         message: format!(
@@ -699,6 +932,15 @@ fn write_hysteresis_progress_artifacts(
     write_hysteresis_json_artifact(output_dir, "hysteresis_points.json", &annotated_points)?;
     write_hysteresis_json_artifact(output_dir, "hysteresis_metrics.json", metrics)?;
     write_hysteresis_json_artifact(output_dir, "hysteresis_settle_trace.json", settle_trace)?;
+    if let Some(artifact) =
+        build_hysteresis_adaptive_refinement_artifact(adaptive_refinement, &annotated_points)
+    {
+        write_hysteresis_json_artifact(
+            output_dir,
+            "hysteresis_adaptive_refinement.json",
+            &artifact,
+        )?;
+    }
     Ok(())
 }
 
@@ -1017,6 +1259,246 @@ fn write_hysteresis_magnetization_snapshot(
     })?;
     fs::write(snapshot_dir.join("m.json"), json).map_err(|error| RunError {
         message: format!("Failed to write hysteresis snapshot '{snapshot_id}': {error}"),
+    })?;
+    write_hysteresis_magnetization_zarr_snapshot(
+        output_dir,
+        snapshot_id,
+        point_id,
+        field_value_mT,
+        grid_cells,
+        magnetization,
+    )
+}
+
+fn write_hysteresis_magnetization_zarr_snapshot(
+    output_dir: &Path,
+    snapshot_id: &str,
+    point_id: usize,
+    field_value_mT: f64,
+    grid_cells: [u32; 3],
+    magnetization: &[[f64; 3]],
+) -> Result<(), RunError> {
+    let store_dir = output_dir.join(HYSTERESIS_ZARR_STORE);
+    let field_dir = store_dir.join(HYSTERESIS_ZARR_M_FIELD);
+    fs::create_dir_all(&field_dir).map_err(|error| RunError {
+        message: format!(
+            "Failed to create hysteresis Zarr field directory '{}': {}",
+            field_dir.display(),
+            error
+        ),
+    })?;
+
+    write_hysteresis_zarr_metadata(&store_dir, &field_dir, magnetization.len())?;
+    let samples_path = field_dir.join("samples.csv");
+    let sample_index = next_hysteresis_zarr_sample_index(&samples_path)?;
+    let chunk_key = format!("{sample_index}.0.0");
+    let chunk_path = field_dir.join(&chunk_key);
+    let mut chunk = BufWriter::new(fs::File::create(&chunk_path).map_err(|error| RunError {
+        message: format!(
+            "Failed to create hysteresis Zarr chunk '{}': {}",
+            chunk_path.display(),
+            error
+        ),
+    })?);
+    for component in 0..3 {
+        for vector in magnetization {
+            chunk
+                .write_all(&vector[component].to_le_bytes())
+                .map_err(|error| RunError {
+                    message: format!(
+                        "Failed to write hysteresis Zarr chunk '{}': {}",
+                        chunk_path.display(),
+                        error
+                    ),
+                })?;
+        }
+    }
+    chunk.flush().map_err(|error| RunError {
+        message: format!(
+            "Failed to flush hysteresis Zarr chunk '{}': {}",
+            chunk_path.display(),
+            error
+        ),
+    })?;
+
+    append_hysteresis_zarr_sample_row(
+        &samples_path,
+        sample_index,
+        snapshot_id,
+        point_id,
+        field_value_mT,
+        &chunk_key,
+        magnetization.len(),
+        grid_cells,
+    )?;
+    append_hysteresis_zarr_sample_row(
+        &store_dir.join("points.csv"),
+        sample_index,
+        snapshot_id,
+        point_id,
+        field_value_mT,
+        &format!("{HYSTERESIS_ZARR_M_FIELD}/{chunk_key}"),
+        magnetization.len(),
+        grid_cells,
+    )?;
+    write_hysteresis_zarray_metadata(&field_dir, sample_index + 1, magnetization.len())
+}
+
+fn write_hysteresis_zarr_metadata(
+    store_dir: &Path,
+    field_dir: &Path,
+    cell_count: usize,
+) -> Result<(), RunError> {
+    fs::write(
+        store_dir.join(".zgroup"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "zarr_format": 2,
+        }))
+        .map_err(|error| RunError {
+            message: format!("Failed to serialize hysteresis Zarr group metadata: {error}"),
+        })?,
+    )
+    .map_err(|error| RunError {
+        message: format!("Failed to write hysteresis Zarr group metadata: {error}"),
+    })?;
+    fs::write(
+        store_dir.join(".zattrs"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "fullmag_kind": "hysteresis_field_sequence",
+            "schema_version": 1,
+            "preferred_container": "zarr",
+            "quantity_ids": ["m"],
+            "point_index_file": "points.csv",
+        }))
+        .map_err(|error| RunError {
+            message: format!("Failed to serialize hysteresis Zarr attrs: {error}"),
+        })?,
+    )
+    .map_err(|error| RunError {
+        message: format!("Failed to write hysteresis Zarr attrs: {error}"),
+    })?;
+    fs::write(
+        field_dir.join(".zattrs"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "quantity_id": "m",
+            "unit": "1",
+            "axes": ["point", "component", "spatial_sample"],
+            "component_order": ["x", "y", "z"],
+            "storage_layout": "soa_component_major",
+            "sample_index_file": "samples.csv",
+            "cell_count": cell_count,
+        }))
+        .map_err(|error| RunError {
+            message: format!("Failed to serialize hysteresis Zarr field attrs: {error}"),
+        })?,
+    )
+    .map_err(|error| RunError {
+        message: format!("Failed to write hysteresis Zarr field attrs: {error}"),
+    })
+}
+
+fn write_hysteresis_zarray_metadata(
+    field_dir: &Path,
+    sample_count: usize,
+    cell_count: usize,
+) -> Result<(), RunError> {
+    fs::write(
+        field_dir.join(".zarray"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "zarr_format": 2,
+            "shape": [sample_count, 3, cell_count],
+            "chunks": [1, 3, cell_count],
+            "dtype": "<f8",
+            "compressor": serde_json::Value::Null,
+            "fill_value": 0.0,
+            "order": "C",
+            "filters": serde_json::Value::Null,
+            "dimension_separator": ".",
+        }))
+        .map_err(|error| RunError {
+            message: format!("Failed to serialize hysteresis Zarr array metadata: {error}"),
+        })?,
+    )
+    .map_err(|error| RunError {
+        message: format!("Failed to write hysteresis Zarr array metadata: {error}"),
+    })
+}
+
+fn next_hysteresis_zarr_sample_index(samples_path: &Path) -> Result<usize, RunError> {
+    if !samples_path.exists() {
+        return Ok(0);
+    }
+    let file = fs::File::open(samples_path).map_err(|error| RunError {
+        message: format!(
+            "Failed to read hysteresis Zarr sample index '{}': {}",
+            samples_path.display(),
+            error
+        ),
+    })?;
+    let reader = BufReader::new(file);
+    Ok(reader
+        .lines()
+        .skip(1)
+        .filter(|line| line.as_ref().is_ok_and(|row| !row.trim().is_empty()))
+        .count())
+}
+
+fn append_hysteresis_zarr_sample_row(
+    samples_path: &Path,
+    sample_index: usize,
+    snapshot_id: &str,
+    point_id: usize,
+    field_value_mT: f64,
+    chunk_key: &str,
+    cell_count: usize,
+    grid_cells: [u32; 3],
+) -> Result<(), RunError> {
+    let new_file = !samples_path.exists();
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(samples_path)
+        .map_err(|error| RunError {
+            message: format!(
+                "Failed to open hysteresis Zarr sample index '{}': {}",
+                samples_path.display(),
+                error
+            ),
+        })?;
+    let mut writer = BufWriter::new(file);
+    if new_file {
+        writeln!(
+            writer,
+            "sample,snapshot_id,point_id,field_value_mT,quantity_id,chunk_key,dtype,scalar_bytes,cell_count,grid_x,grid_y,grid_z"
+        )
+        .map_err(|error| RunError {
+            message: format!(
+                "Failed to write hysteresis Zarr sample index header '{}': {}",
+                samples_path.display(),
+                error
+            ),
+        })?;
+    }
+    writeln!(
+        writer,
+        "{sample_index},{snapshot_id},{point_id},{field_value_mT:.15e},m,{chunk_key},<f8,8,{cell_count},{},{},{}",
+        grid_cells[0],
+        grid_cells[1],
+        grid_cells[2],
+    )
+    .map_err(|error| RunError {
+        message: format!(
+            "Failed to append hysteresis Zarr sample index '{}': {}",
+            samples_path.display(),
+            error
+        ),
+    })?;
+    writer.flush().map_err(|error| RunError {
+        message: format!(
+            "Failed to flush hysteresis Zarr sample index '{}': {}",
+            samples_path.display(),
+            error
+        ),
     })
 }
 
@@ -1946,10 +2428,75 @@ fn hysteresis_settle_step_method(step: &SettleStepIR) -> &str {
     }
 }
 
-fn hysteresis_measurement_axis(measurement_axis: &str, field_axis: [f64; 3]) -> [f64; 3] {
+fn hysteresis_measurement_axis(
+    measurement_axis: &MeasurementAxisIR,
+    field_axis: [f64; 3],
+    plan: &ExecutionPlanIR,
+) -> Result<[f64; 3], RunError> {
     match measurement_axis {
-        "sample_normal" => [0.0, 0.0, 1.0],
-        _ => field_axis,
+        MeasurementAxisIR::Named(axis) if axis == "field_axis" => Ok(field_axis),
+        MeasurementAxisIR::Named(axis) if axis == "sample_normal" => Ok([0.0, 0.0, 1.0]),
+        MeasurementAxisIR::Named(axis) if axis == "easy_axis" => Ok(hysteresis_easy_axis(plan)),
+        MeasurementAxisIR::Custom { vector, .. } => Ok(normalize_axis(*vector, [0.0, 0.0, 1.0])),
+        MeasurementAxisIR::Named(other) => Err(RunError {
+            message: format!("unsupported hysteresis measurement_axis '{other}'"),
+        }),
+    }
+}
+
+fn hysteresis_easy_axis(plan: &ExecutionPlanIR) -> [f64; 3] {
+    let default_axis = [0.0, 0.0, 1.0];
+    match &plan.backend_plan {
+        BackendPlanIR::Fdm(fdm) => normalize_axis(
+            fdm.material.anisotropy_axis.unwrap_or(default_axis),
+            default_axis,
+        ),
+        BackendPlanIR::Fem(fem) => normalize_axis(
+            fem.material.anisotropy_axis.unwrap_or(default_axis),
+            default_axis,
+        ),
+        _ => default_axis,
+    }
+}
+
+fn hysteresis_field_axis(
+    orientation: Option<&FieldOrientationIR>,
+    direction: Option<[f64; 3]>,
+) -> [f64; 3] {
+    let default_axis = [0.0, 0.0, 1.0];
+    if let Some(orient) = orientation {
+        return match orient {
+            FieldOrientationIR::Preset { preset_name } => match preset_name.as_str() {
+                "oop_positive" => [0.0, 0.0, 1.0],
+                "oop_negative" => [0.0, 0.0, -1.0],
+                "in_plane_x" => [1.0, 0.0, 0.0],
+                "in_plane_y" => [0.0, 1.0, 0.0],
+                _ => default_axis,
+            },
+            FieldOrientationIR::Sample { theta, phi } => {
+                let theta_rad = theta * std::f64::consts::PI / 180.0;
+                let phi_rad = phi * std::f64::consts::PI / 180.0;
+                [
+                    theta_rad.sin() * phi_rad.cos(),
+                    theta_rad.sin() * phi_rad.sin(),
+                    theta_rad.cos(),
+                ]
+            }
+            FieldOrientationIR::Global { vector } => normalize_axis(*vector, default_axis),
+        };
+    }
+
+    direction
+        .map(|axis| normalize_axis(axis, default_axis))
+        .unwrap_or(default_axis)
+}
+
+fn normalize_axis(axis: [f64; 3], default_axis: [f64; 3]) -> [f64; 3] {
+    let norm = vector_norm(axis);
+    if norm > 1e-15 {
+        [axis[0] / norm, axis[1] / norm, axis[2] / norm]
+    } else {
+        default_axis
     }
 }
 
@@ -2146,6 +2693,159 @@ fn same_field_value(left: f64, right: f64) -> bool {
     (left - right).abs() <= 1e-9
 }
 
+fn build_hysteresis_adaptive_refinement_artifact(
+    policy: Option<&AdaptiveRefinementIR>,
+    points: &[HysteresisPoint],
+) -> Option<HysteresisAdaptiveRefinementArtifact> {
+    let policy = policy?;
+    let mut artifact = HysteresisAdaptiveRefinementArtifact {
+        kind: "adaptive_refinement".to_string(),
+        status: if policy.enabled {
+            "waiting_for_points".to_string()
+        } else {
+            "disabled".to_string()
+        },
+        enabled: policy.enabled,
+        source_point_count: points.len(),
+        max_passes: policy.max_passes,
+        max_insertions_per_pass: policy.max_insertions_per_pass,
+        candidates: Vec::new(),
+        points: Vec::new(),
+        settle_trace: Vec::new(),
+    };
+
+    if !policy.enabled || points.len() < 2 {
+        return Some(artifact);
+    }
+
+    let max_candidates = policy.max_insertions_per_pass as usize;
+    for pair in points.windows(2) {
+        if artifact.candidates.len() >= max_candidates {
+            break;
+        }
+        let left = &pair[0];
+        let right = &pair[1];
+        let d_h = right.field_value_mT - left.field_value_mT;
+        let abs_d_h = d_h.abs();
+        if !d_h.is_finite() || abs_d_h <= policy.min_step_mT {
+            continue;
+        }
+
+        let dm_dh = (right.m_parallel - left.m_parallel) / d_h;
+        let branch_event =
+            left.is_reversal_field == Some(true) || right.is_reversal_field == Some(true);
+        let non_converged = left.has_non_converged_steps || right.has_non_converged_steps;
+        if policy.include_zero_crossings
+            && field_interval_contains_zero(left.field_value_mT, right.field_value_mT)
+            && !same_field_value(left.field_value_mT, 0.0)
+            && !same_field_value(right.field_value_mT, 0.0)
+        {
+            push_hysteresis_adaptive_candidate(
+                &mut artifact.candidates,
+                max_candidates,
+                left,
+                right,
+                0.0,
+                dm_dh,
+                vec!["zero_crossing".to_string()],
+            );
+        }
+
+        let high_susceptibility =
+            policy.include_high_susceptibility && dm_dh.abs() >= policy.dm_dh_threshold_per_mT;
+        if high_susceptibility || abs_d_h > policy.max_step_mT || branch_event || non_converged {
+            let insert_count = ((abs_d_h / policy.max_step_mT).ceil() as usize)
+                .saturating_sub(1)
+                .max(if high_susceptibility || branch_event || non_converged {
+                    1
+                } else {
+                    0
+                });
+            for insert_idx in 1..=insert_count {
+                if artifact.candidates.len() >= max_candidates {
+                    break;
+                }
+                let fraction = insert_idx as f64 / (insert_count + 1) as f64;
+                let field_value_mT = left.field_value_mT + d_h * fraction;
+                if (field_value_mT - left.field_value_mT).abs() < policy.min_step_mT
+                    || (field_value_mT - right.field_value_mT).abs() < policy.min_step_mT
+                {
+                    continue;
+                }
+                let mut reasons = Vec::new();
+                if high_susceptibility {
+                    reasons.push("high_susceptibility".to_string());
+                }
+                if abs_d_h > policy.max_step_mT {
+                    reasons.push("max_step".to_string());
+                }
+                if branch_event {
+                    reasons.push("reversal_field".to_string());
+                }
+                if non_converged {
+                    reasons.push("non_convergence".to_string());
+                }
+                push_hysteresis_adaptive_candidate(
+                    &mut artifact.candidates,
+                    max_candidates,
+                    left,
+                    right,
+                    field_value_mT,
+                    dm_dh,
+                    reasons,
+                );
+            }
+        }
+    }
+
+    artifact.status = if artifact.candidates.is_empty() {
+        "no_candidates".to_string()
+    } else {
+        "proposed".to_string()
+    };
+    Some(artifact)
+}
+
+fn field_interval_contains_zero(left: f64, right: f64) -> bool {
+    (left < 0.0 && right > 0.0) || (left > 0.0 && right < 0.0)
+}
+
+fn push_hysteresis_adaptive_candidate(
+    candidates: &mut Vec<HysteresisAdaptiveRefinementCandidate>,
+    max_candidates: usize,
+    left: &HysteresisPoint,
+    right: &HysteresisPoint,
+    field_value_mT: f64,
+    dm_dh_per_mT: f64,
+    reasons: Vec<String>,
+) {
+    if candidates.len() >= max_candidates {
+        return;
+    }
+    if reasons.is_empty() || !field_value_mT.is_finite() || !dm_dh_per_mT.is_finite() {
+        return;
+    }
+    if candidates.iter().any(|candidate| {
+        same_field_value(candidate.field_value_mT, field_value_mT)
+            && candidate.parent_left_point_id == left.point_id
+            && candidate.parent_right_point_id == right.point_id
+    }) {
+        return;
+    }
+    candidates.push(HysteresisAdaptiveRefinementCandidate {
+        candidate_id: format!("adaptive_candidate_{:03}", candidates.len() + 1),
+        pass_index: 1,
+        field_value_mT,
+        parent_left_point_id: left.point_id,
+        parent_right_point_id: right.point_id,
+        parent_left_field_mT: left.field_value_mT,
+        parent_right_field_mT: right.field_value_mT,
+        dm_dh_per_mT,
+        reasons,
+        status: "proposed".to_string(),
+    });
+}
+
 fn field_mT_to_h_apm(field_mT: f64) -> f64 {
     field_mT * 1.0e-3 / MU0_H_PER_M
 }
@@ -2315,6 +3015,199 @@ fn branch_role_for_direction(direction: i32) -> &'static str {
     }
 }
 
+fn combine_run_status(left: RunStatus, right: RunStatus) -> RunStatus {
+    match (left, right) {
+        (RunStatus::Failed, _) | (_, RunStatus::Failed) => RunStatus::Failed,
+        (RunStatus::Cancelled, _) | (_, RunStatus::Cancelled) => RunStatus::Cancelled,
+        (RunStatus::Paused, _) | (_, RunStatus::Paused) => RunStatus::Paused,
+        _ => RunStatus::Completed,
+    }
+}
+
+fn run_hysteresis_angular_family_variant(
+    variant: &fullmag_ir::HysteresisAngularVariantIR,
+    plan: &ExecutionPlanIR,
+    problem: &ProblemIR,
+    output_dir: &Path,
+    initial_m: &[[f64; 3]],
+    sweep_values_mT: &[f64],
+    active_measurement_axis: &MeasurementAxisIR,
+    storage: Option<&fullmag_ir::HysteresisStorageIR>,
+    settle_pipeline: Option<&SettlePipelineIR>,
+    until_seconds: f64,
+    field_every_n: u64,
+    display_selection: &(dyn Fn() -> crate::interactive::DisplaySelectionState + Send + Sync),
+    interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
+    on_step: &mut (dyn FnMut(StepUpdate) -> StepAction + Send),
+) -> Result<HysteresisAngularFamilyVariantRun, RunError> {
+    let variant_dir = output_dir
+        .join("hysteresis_angular_family")
+        .join(sanitize_hysteresis_variant_id(&variant.variant_id));
+    fs::create_dir_all(&variant_dir).map_err(|error| RunError {
+        message: format!(
+            "Failed to create hysteresis angular-family variant directory '{}': {}",
+            variant_dir.display(),
+            error
+        ),
+    })?;
+
+    let u_H = hysteresis_field_axis(Some(&variant.orientation), None);
+    let measurement_axis = variant
+        .measurement_axis
+        .as_ref()
+        .unwrap_or(active_measurement_axis);
+    let u_meas = hysteresis_measurement_axis(measurement_axis, u_H, plan)?;
+    let averaging = hysteresis_averaging_context(&plan.backend_plan);
+    let mut current_m = initial_m.to_vec();
+    let mut points = Vec::new();
+    let mut settle_trace = Vec::new();
+    let mut steps = Vec::new();
+    let mut global_step_count = 0;
+    let mut status = RunStatus::Completed;
+
+    for (point_idx, H_mT) in sweep_values_mT.iter().copied().enumerate() {
+        let H_Apm = field_mT_to_h_apm(H_mT);
+        let point_run = run_settle_at_field(
+            &plan.backend_plan,
+            problem,
+            &current_m,
+            [H_Apm * u_H[0], H_Apm * u_H[1], H_Apm * u_H[2]],
+            Some(HysteresisProgressContext {
+                point_idx: Some(point_idx),
+                field_m_t: H_mT,
+            }),
+            settle_pipeline,
+            until_seconds,
+            field_every_n,
+            display_selection,
+            interrupt_requested,
+            false,
+            on_step,
+        )?;
+        current_m = point_run.executed_run.result.final_magnetization.clone();
+        status = combine_run_status(status, point_run.executed_run.result.status);
+        let point_non_converged = point_run
+            .trace
+            .iter()
+            .any(|entry| entry.status == "non_converged");
+        let point_quality =
+            hysteresis_point_quality(point_run.executed_run.result.status, &point_run.trace);
+        settle_trace.extend(point_run.trace);
+        append_stage_steps(
+            &mut steps,
+            &mut global_step_count,
+            point_run.executed_run.result.steps,
+        );
+
+        let m_avg = average_hysteresis_magnetization(&current_m, &averaging);
+        let m_parallel = hysteresis_project_m_parallel(m_avg, u_meas);
+        let snapshot_context = HysteresisSnapshotDecisionContext {
+            point_idx,
+            field_value_mT: H_mT,
+            previous_field_value_mT: point_idx
+                .checked_sub(1)
+                .and_then(|idx| sweep_values_mT.get(idx).copied()),
+            next_field_value_mT: sweep_values_mT.get(point_idx + 1).copied(),
+            m_parallel,
+            previous_m_parallel: points
+                .last()
+                .map(|point: &HysteresisPoint| point.m_parallel),
+            status,
+            non_converged: point_non_converged,
+        };
+        let snapshot_id = if should_store_hysteresis_snapshot(storage, snapshot_context) {
+            Some(format!(
+                "hysteresis_angular_{}_point_{:03}",
+                sanitize_hysteresis_variant_id(&variant.variant_id),
+                point_idx + 1
+            ))
+        } else {
+            None
+        };
+        if let Some(snapshot_id) = snapshot_id.as_deref() {
+            write_hysteresis_magnetization_snapshot(
+                &variant_dir,
+                snapshot_id,
+                point_idx,
+                H_mT,
+                hysteresis_magnetization_grid(plan, &current_m),
+                &current_m,
+            )?;
+        }
+        points.push(HysteresisPoint {
+            point_id: point_idx,
+            field_value_mT: H_mT,
+            m_parallel,
+            m_oop: m_avg[2],
+            m_ip: (m_avg[0] * m_avg[0] + m_avg[1] * m_avg[1]).sqrt(),
+            m_avg,
+            status: point_quality.run_status.clone(),
+            run_status: point_quality.run_status,
+            settle_status: point_quality.settle_status,
+            has_non_converged_steps: point_quality.has_non_converged_steps,
+            terminal_settle_reason: point_quality.terminal_settle_reason,
+            warning_count: point_quality.warning_count,
+            snapshot_id,
+            protocol_role: None,
+            branch_id: None,
+            branch_ids: None,
+            branch_index: None,
+            parent_branch_id: None,
+            minor_loop_id: None,
+            snapshot_resource_ref: None,
+            is_reversal_field: None,
+            reversal_index: None,
+            recoil_start_point_id: None,
+            adaptive_inserted: None,
+            refinement_reason: None,
+            refinement_parent_left_point_id: None,
+            refinement_parent_right_point_id: None,
+        });
+    }
+
+    let metrics = calculate_metrics_with_weighting(
+        &points,
+        "angular_family_variant",
+        None,
+        None,
+        &averaging.weighting,
+    );
+    annotate_hysteresis_points_for_artifact(&mut points);
+    write_hysteresis_progress_artifacts(&variant_dir, &points, &metrics, &settle_trace, None)?;
+
+    let variant_dir_name = sanitize_hysteresis_variant_id(&variant.variant_id);
+    Ok(HysteresisAngularFamilyVariantRun {
+        point_count: points.len(),
+        points_path: format!("hysteresis_angular_family/{variant_dir_name}/hysteresis_points.json"),
+        metrics_path: format!(
+            "hysteresis_angular_family/{variant_dir_name}/hysteresis_metrics.json"
+        ),
+        settle_trace_path: format!(
+            "hysteresis_angular_family/{variant_dir_name}/hysteresis_settle_trace.json"
+        ),
+        status,
+        steps,
+    })
+}
+
+fn sanitize_hysteresis_variant_id(variant_id: &str) -> String {
+    let sanitized: String = variant_id
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if sanitized.is_empty() {
+        "variant".to_string()
+    } else {
+        sanitized
+    }
+}
+
 fn build_hysteresis_minor_loops(
     configured_loops: &[fullmag_ir::MinorLoopIR],
     points: &[HysteresisPoint],
@@ -2340,6 +3233,158 @@ fn build_hysteresis_minor_loops(
             )
         })
         .collect()
+}
+
+fn run_hysteresis_adaptive_refinement(
+    policy: &AdaptiveRefinementIR,
+    major_states: &[HysteresisMajorPointState],
+    plan: &ExecutionPlanIR,
+    problem: &ProblemIR,
+    output_dir: &Path,
+    u_H: [f64; 3],
+    u_meas: [f64; 3],
+    averaging: &HysteresisAveragingContext,
+    storage: Option<&fullmag_ir::HysteresisStorageIR>,
+    settle_pipeline: Option<&SettlePipelineIR>,
+    until_seconds: f64,
+    field_every_n: u64,
+    display_selection: &(dyn Fn() -> crate::interactive::DisplaySelectionState + Send + Sync),
+    interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
+    on_step: &mut (dyn FnMut(StepUpdate) -> StepAction + Send),
+) -> Result<HysteresisAdaptiveRefinementRun, RunError> {
+    let backend_plan = &plan.backend_plan;
+    let source_points: Vec<HysteresisPoint> = major_states
+        .iter()
+        .map(|state| state.point.clone())
+        .collect();
+    let mut artifact = build_hysteresis_adaptive_refinement_artifact(Some(policy), &source_points)
+        .expect("adaptive refinement policy should produce an artifact");
+    let mut all_steps = Vec::new();
+    let mut status = RunStatus::Completed;
+
+    if !policy.enabled || artifact.candidates.is_empty() {
+        return Ok(HysteresisAdaptiveRefinementRun {
+            artifact,
+            steps: all_steps,
+            status,
+        });
+    }
+
+    let candidates = artifact.candidates.clone();
+    for (computed_index, candidate) in candidates.iter().enumerate() {
+        let Some(parent) = major_states
+            .iter()
+            .find(|state| state.point.point_id == candidate.parent_left_point_id)
+        else {
+            continue;
+        };
+
+        let point_id = major_states.len() + computed_index;
+        let field_Apm = field_mT_to_h_apm(candidate.field_value_mT);
+        let solve_res = run_settle_at_field(
+            backend_plan,
+            problem,
+            &parent.magnetization,
+            [field_Apm * u_H[0], field_Apm * u_H[1], field_Apm * u_H[2]],
+            Some(HysteresisProgressContext {
+                point_idx: Some(point_id),
+                field_m_t: candidate.field_value_mT,
+            }),
+            settle_pipeline,
+            until_seconds,
+            field_every_n,
+            display_selection,
+            interrupt_requested,
+            false,
+            on_step,
+        )?;
+        status = combine_run_status(status, solve_res.executed_run.result.status);
+
+        let magnetization = solve_res.executed_run.result.final_magnetization.clone();
+        let point_quality =
+            hysteresis_point_quality(solve_res.executed_run.result.status, &solve_res.trace);
+        let m_avg = average_hysteresis_magnetization(&magnetization, averaging);
+        let m_parallel = hysteresis_project_m_parallel(m_avg, u_meas);
+        let m_oop = m_avg[2];
+        let m_ip = (m_avg[0] * m_avg[0] + m_avg[1] * m_avg[1]).sqrt();
+        let point_non_converged = solve_res
+            .trace
+            .iter()
+            .any(|entry| entry.status == "non_converged");
+        let snapshot_context = HysteresisSnapshotDecisionContext {
+            point_idx: point_id,
+            field_value_mT: candidate.field_value_mT,
+            previous_field_value_mT: Some(candidate.parent_left_field_mT),
+            next_field_value_mT: Some(candidate.parent_right_field_mT),
+            m_parallel,
+            previous_m_parallel: Some(parent.point.m_parallel),
+            status: solve_res.executed_run.result.status,
+            non_converged: point_non_converged,
+        };
+        let snapshot_id = if should_store_hysteresis_snapshot(storage, snapshot_context) {
+            Some(format!("hysteresis_adaptive_{:03}", computed_index + 1))
+        } else {
+            None
+        };
+        if let Some(snapshot_id) = snapshot_id.as_deref() {
+            write_hysteresis_magnetization_snapshot(
+                output_dir,
+                snapshot_id,
+                point_id,
+                candidate.field_value_mT,
+                hysteresis_magnetization_grid(plan, &magnetization),
+                &magnetization,
+            )?;
+        }
+
+        let point = HysteresisPoint {
+            point_id,
+            field_value_mT: candidate.field_value_mT,
+            m_parallel,
+            m_oop,
+            m_ip,
+            m_avg,
+            status: point_quality.run_status.clone(),
+            run_status: point_quality.run_status,
+            settle_status: point_quality.settle_status,
+            has_non_converged_steps: point_quality.has_non_converged_steps,
+            terminal_settle_reason: point_quality.terminal_settle_reason,
+            warning_count: point_quality.warning_count,
+            snapshot_id,
+            protocol_role: Some("adaptive".to_string()),
+            branch_id: parent.point.branch_id.clone(),
+            branch_ids: parent.point.branch_ids.clone(),
+            branch_index: parent.point.branch_index,
+            parent_branch_id: parent.point.branch_id.clone(),
+            minor_loop_id: None,
+            snapshot_resource_ref: None,
+            is_reversal_field: None,
+            reversal_index: None,
+            recoil_start_point_id: Some(parent.point.point_id),
+            adaptive_inserted: Some(true),
+            refinement_reason: Some(candidate.reasons.clone()),
+            refinement_parent_left_point_id: Some(candidate.parent_left_point_id),
+            refinement_parent_right_point_id: Some(candidate.parent_right_point_id),
+        };
+
+        artifact.points.push(point);
+        artifact.settle_trace.extend(solve_res.trace);
+        all_steps.extend(solve_res.executed_run.result.steps);
+    }
+
+    annotate_hysteresis_points_for_artifact(&mut artifact.points);
+
+    artifact.status = if artifact.points.is_empty() {
+        "no_computed_points".to_string()
+    } else {
+        "computed".to_string()
+    };
+
+    Ok(HysteresisAdaptiveRefinementRun {
+        artifact,
+        steps: all_steps,
+        status,
+    })
 }
 
 fn run_hysteresis_minor_loops(
@@ -2430,6 +3475,10 @@ fn run_hysteresis_minor_loops(
             is_reversal_field: None,
             reversal_index: None,
             recoil_start_point_id: Some(parent.point.point_id),
+            adaptive_inserted: None,
+            refinement_reason: None,
+            refinement_parent_left_point_id: None,
+            refinement_parent_right_point_id: None,
         };
 
         let mut points = vec![reversal_point, return_point.clone()];
@@ -2739,7 +3788,8 @@ mod tests {
             orientation: Some(FieldOrientationIR::Preset {
                 preset_name: "oop_positive".to_string(),
             }),
-            measurement_axis: "field_axis".to_string(),
+            measurement_axis: MeasurementAxisIR::field_axis(),
+            angular_family: None,
             initial_protocol: "as_authored".to_string(),
             saturation: None,
             branch_mode: "major_loop".to_string(),
@@ -2766,6 +3816,7 @@ mod tests {
             }),
             field_schedule: None,
             schedule_refinements: None,
+            adaptive_refinement: None,
             minor_loops: None,
             sampling: fullmag_ir::SamplingIR {
                 table_autosave: None,
@@ -2808,7 +3859,165 @@ mod tests {
             is_reversal_field: None,
             reversal_index: None,
             recoil_start_point_id: None,
+            adaptive_inserted: None,
+            refinement_reason: None,
+            refinement_parent_left_point_id: None,
+            refinement_parent_right_point_id: None,
         }
+    }
+
+    fn assert_axis_close(actual: [f64; 3], expected: [f64; 3]) {
+        for i in 0..3 {
+            assert!(
+                (actual[i] - expected[i]).abs() < 1.0e-12,
+                "axis component {i} mismatch: actual={actual:?} expected={expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn hysteresis_field_axis_resolves_oop_in_plane_and_global_vectors() {
+        assert_axis_close(
+            hysteresis_field_axis(
+                Some(&FieldOrientationIR::Preset {
+                    preset_name: "oop_positive".to_string(),
+                }),
+                None,
+            ),
+            [0.0, 0.0, 1.0],
+        );
+        assert_axis_close(
+            hysteresis_field_axis(
+                Some(&FieldOrientationIR::Preset {
+                    preset_name: "oop_negative".to_string(),
+                }),
+                None,
+            ),
+            [0.0, 0.0, -1.0],
+        );
+        assert_axis_close(
+            hysteresis_field_axis(
+                Some(&FieldOrientationIR::Preset {
+                    preset_name: "in_plane_x".to_string(),
+                }),
+                None,
+            ),
+            [1.0, 0.0, 0.0],
+        );
+        assert_axis_close(
+            hysteresis_field_axis(
+                Some(&FieldOrientationIR::Preset {
+                    preset_name: "in_plane_y".to_string(),
+                }),
+                None,
+            ),
+            [0.0, 1.0, 0.0],
+        );
+        assert_axis_close(
+            hysteresis_field_axis(
+                Some(&FieldOrientationIR::Global {
+                    vector: [0.0, 3.0, 4.0],
+                }),
+                None,
+            ),
+            [0.0, 0.6, 0.8],
+        );
+        assert_axis_close(
+            hysteresis_field_axis(None, Some([2.0, 0.0, 0.0])),
+            [1.0, 0.0, 0.0],
+        );
+    }
+
+    #[test]
+    fn hysteresis_field_axis_resolves_custom_sample_angles_in_degrees() {
+        let axis = hysteresis_field_axis(
+            Some(&FieldOrientationIR::Sample {
+                theta: 90.0,
+                phi: 35.0,
+            }),
+            None,
+        );
+        let phi_rad = 35.0_f64.to_radians();
+
+        assert_axis_close(axis, [phi_rad.cos(), phi_rad.sin(), 0.0]);
+        assert!(
+            (vector_norm(axis) - 1.0).abs() < 1.0e-12,
+            "custom-angle axis must stay normalized, got {axis:?}"
+        );
+    }
+
+    #[test]
+    fn custom_angle_measurement_projection_uses_selected_axis() {
+        let problem = minimal_fdm_hysteresis_problem();
+        let plan = fullmag_plan::plan(&problem).expect("minimal hysteresis plan");
+        let field_axis = hysteresis_field_axis(
+            Some(&FieldOrientationIR::Sample {
+                theta: 90.0,
+                phi: 35.0,
+            }),
+            None,
+        );
+        let sample_normal = hysteresis_measurement_axis(
+            &MeasurementAxisIR::Named("sample_normal".to_string()),
+            field_axis,
+            &plan,
+        )
+        .expect("sample_normal measurement axis should resolve");
+
+        assert!(
+            (hysteresis_project_m_parallel(field_axis, field_axis) - 1.0).abs() < 1.0e-12,
+            "field-axis measurement should project a field-aligned state to one"
+        );
+        assert!(
+            hysteresis_project_m_parallel(field_axis, sample_normal).abs() < 1.0e-12,
+            "sample-normal measurement should remain independent from an in-plane custom field"
+        );
+    }
+
+    #[test]
+    fn easy_axis_measurement_projection_uses_material_anisotropy_axis() {
+        let mut problem = minimal_fdm_hysteresis_problem();
+        let material = problem
+            .materials
+            .iter_mut()
+            .find(|material| material.name == "Py")
+            .expect("minimal problem should contain Py material");
+        material.anisotropy_axis = Some([0.0, 2.0, 0.0]);
+        let plan = fullmag_plan::plan(&problem).expect("minimal hysteresis plan");
+        let field_axis = [1.0, 0.0, 0.0];
+        let easy_axis = hysteresis_measurement_axis(
+            &MeasurementAxisIR::Named("easy_axis".to_string()),
+            field_axis,
+            &plan,
+        )
+        .expect("easy_axis measurement axis should resolve");
+
+        assert_axis_close(easy_axis, [0.0, 1.0, 0.0]);
+        assert!(
+            hysteresis_project_m_parallel(field_axis, easy_axis).abs() < 1.0e-12,
+            "easy-axis measurement should not alias to field_axis"
+        );
+    }
+
+    #[test]
+    fn custom_measurement_axis_uses_explicit_ir_vector() {
+        let problem = minimal_fdm_hysteresis_problem();
+        let plan = fullmag_plan::plan(&problem).expect("minimal hysteresis plan");
+        let custom_axis = hysteresis_measurement_axis(
+            &MeasurementAxisIR::Custom {
+                kind: "custom".to_string(),
+                vector: [0.0, 3.0, 4.0],
+            },
+            [1.0, 0.0, 0.0],
+            &plan,
+        )
+        .expect("custom measurement axis should resolve");
+
+        assert_axis_close(custom_axis, [0.0, 0.6, 0.8]);
+        assert!(
+            hysteresis_project_m_parallel([0.0, 0.6, 0.8], custom_axis) > 0.999_999_999,
+            "custom measurement axis should project against its explicit vector"
+        );
     }
 
     #[test]
@@ -3160,6 +4369,173 @@ mod tests {
     }
 
     #[test]
+    fn hysteresis_runtime_writes_angular_family_manifest_for_active_variant() {
+        let mut problem = minimal_fdm_hysteresis_problem();
+        if let StudyIR::Hysteresis {
+            orientation,
+            angular_family,
+            ..
+        } = &mut problem.study
+        {
+            let active_orientation = FieldOrientationIR::Preset {
+                preset_name: "oop_positive".to_string(),
+            };
+            *orientation = Some(active_orientation.clone());
+            *angular_family = Some(fullmag_ir::HysteresisAngularFamilyIR {
+                kind: "angular_family".to_string(),
+                family_id: "oop_ip_family".to_string(),
+                label: "OOP/IP comparison".to_string(),
+                variants: vec![
+                    fullmag_ir::HysteresisAngularVariantIR {
+                        variant_id: "oop".to_string(),
+                        orientation: active_orientation,
+                        label: "OOP".to_string(),
+                        measurement_axis: None,
+                    },
+                    fullmag_ir::HysteresisAngularVariantIR {
+                        variant_id: "ip_x".to_string(),
+                        orientation: FieldOrientationIR::Preset {
+                            preset_name: "in_plane_x".to_string(),
+                        },
+                        label: "IP x".to_string(),
+                        measurement_axis: None,
+                    },
+                ],
+            });
+        } else {
+            panic!("minimal problem must be hysteresis");
+        }
+
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-hysteresis-angular-family-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&output_dir);
+
+        crate::run_problem_with_callback(&problem, 0.0, &output_dir, 1, |_| StepAction::Continue)
+            .expect("angular-family hysteresis run should complete");
+
+        let artifact: HysteresisAngularFamilyArtifact = serde_json::from_str(
+            &std::fs::read_to_string(output_dir.join("hysteresis_angular_family.json"))
+                .expect("angular-family artifact should be written"),
+        )
+        .expect("angular-family artifact should decode");
+
+        assert_eq!(artifact.family_id, "oop_ip_family");
+        assert_eq!(artifact.active_variant_id.as_deref(), Some("oop"));
+        assert_eq!(artifact.variants.len(), 2);
+        let active = artifact
+            .variants
+            .iter()
+            .find(|variant| variant.variant_id == "oop")
+            .expect("active variant should be present");
+        assert_eq!(active.data_status, "computed_active_stage");
+        assert_eq!(active.point_count, 1);
+        assert_eq!(
+            active.points_path.as_deref(),
+            Some("hysteresis_points.json")
+        );
+        assert_eq!(
+            active.metrics_path.as_deref(),
+            Some("hysteresis_metrics.json")
+        );
+        assert_eq!(
+            active.settle_trace_path.as_deref(),
+            Some("hysteresis_settle_trace.json")
+        );
+
+        let pending = artifact
+            .variants
+            .iter()
+            .find(|variant| variant.variant_id == "ip_x")
+            .expect("additional variant should be present");
+        assert_eq!(pending.data_status, "computed_variant_run");
+        assert_eq!(pending.point_count, 1);
+        assert!(pending.points_path.is_some());
+
+        let _ = std::fs::remove_dir_all(&output_dir);
+    }
+
+    #[test]
+    fn hysteresis_runtime_computes_additional_angular_family_variants() {
+        let mut problem = minimal_fdm_hysteresis_problem();
+        if let StudyIR::Hysteresis {
+            orientation,
+            angular_family,
+            ..
+        } = &mut problem.study
+        {
+            let active_orientation = FieldOrientationIR::Preset {
+                preset_name: "oop_positive".to_string(),
+            };
+            *orientation = Some(active_orientation.clone());
+            *angular_family = Some(fullmag_ir::HysteresisAngularFamilyIR {
+                kind: "angular_family".to_string(),
+                family_id: "oop_ip_family".to_string(),
+                label: "OOP/IP comparison".to_string(),
+                variants: vec![
+                    fullmag_ir::HysteresisAngularVariantIR {
+                        variant_id: "oop".to_string(),
+                        orientation: active_orientation,
+                        label: "OOP".to_string(),
+                        measurement_axis: None,
+                    },
+                    fullmag_ir::HysteresisAngularVariantIR {
+                        variant_id: "ip_x".to_string(),
+                        orientation: FieldOrientationIR::Preset {
+                            preset_name: "in_plane_x".to_string(),
+                        },
+                        label: "IP x".to_string(),
+                        measurement_axis: None,
+                    },
+                ],
+            });
+        } else {
+            panic!("minimal problem must be hysteresis");
+        }
+
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-hysteresis-angular-family-multirun-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&output_dir);
+
+        crate::run_problem_with_callback(&problem, 0.0, &output_dir, 1, |_| StepAction::Continue)
+            .expect("angular-family hysteresis run should complete");
+
+        let artifact: HysteresisAngularFamilyArtifact = serde_json::from_str(
+            &std::fs::read_to_string(output_dir.join("hysteresis_angular_family.json"))
+                .expect("angular-family artifact should be written"),
+        )
+        .expect("angular-family artifact should decode");
+        let ip_x = artifact
+            .variants
+            .iter()
+            .find(|variant| variant.variant_id == "ip_x")
+            .expect("additional variant should be present");
+
+        assert_eq!(ip_x.data_status, "computed_variant_run");
+        assert_eq!(ip_x.point_count, 1);
+        let points_path = ip_x
+            .points_path
+            .as_deref()
+            .expect("additional variant should reference its points artifact");
+        let points: Vec<HysteresisPoint> = serde_json::from_str(
+            &std::fs::read_to_string(output_dir.join(points_path))
+                .expect("additional variant points artifact should be written"),
+        )
+        .expect("additional variant points should decode");
+        assert_eq!(points.len(), 1);
+        assert!(
+            points[0].m_parallel > 0.0,
+            "additional in-plane variant should project magnetization on its own field axis: {:?}",
+            points[0]
+        );
+
+        let _ = std::fs::remove_dir_all(&output_dir);
+    }
+
+    #[test]
     fn sample_normal_measurement_axis_projects_independently_from_field_axis() {
         let mut problem = minimal_fdm_hysteresis_problem();
         if let StudyIR::Hysteresis {
@@ -3171,7 +4547,7 @@ mod tests {
             *orientation = Some(FieldOrientationIR::Preset {
                 preset_name: "in_plane_x".to_string(),
             });
-            *measurement_axis = "sample_normal".to_string();
+            *measurement_axis = MeasurementAxisIR::Named("sample_normal".to_string());
         } else {
             panic!("minimal problem must be hysteresis");
         }
@@ -3198,6 +4574,82 @@ mod tests {
             "sample_normal projection should use z, not the in-plane field axis: {:?}",
             points[0]
         );
+
+        let _ = std::fs::remove_dir_all(&output_dir);
+    }
+
+    #[test]
+    fn hysteresis_points_artifact_preserves_component_averages_for_charts() {
+        let mut problem = minimal_fdm_hysteresis_problem();
+        if let StudyIR::Hysteresis {
+            field_values_mT,
+            orientation,
+            measurement_axis,
+            settle_pipeline,
+            ..
+        } = &mut problem.study
+        {
+            *field_values_mT = Some(vec![25.0, 0.0, -25.0]);
+            *orientation = Some(FieldOrientationIR::Preset {
+                preset_name: "in_plane_x".to_string(),
+            });
+            *measurement_axis = MeasurementAxisIR::field_axis();
+            *settle_pipeline = Some(SettlePipelineIR::Sequence {
+                steps: vec![SettleStepIR::Minimize {
+                    method: "projected_gradient_bb".to_string(),
+                    torque_tolerance: 5e-5,
+                    energy_tolerance: 1e-20,
+                    max_steps: 200,
+                    timestep_s: None,
+                    max_pseudotime_s: None,
+                    max_physical_time_s: None,
+                    on_non_convergence: "continue_with_warning".to_string(),
+                    retry_timestep_scale: None,
+                    retry_max_attempts: None,
+                }],
+            });
+        } else {
+            panic!("minimal problem must be hysteresis");
+        }
+
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-hysteresis-chart-data-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&output_dir);
+
+        crate::run_problem_with_callback(&problem, 0.0, &output_dir, 1, |_update| {
+            StepAction::Continue
+        })
+        .expect("minimal hysteresis chart-data run should complete");
+
+        let points: Vec<HysteresisPoint> = serde_json::from_str(
+            &std::fs::read_to_string(output_dir.join("hysteresis_points.json"))
+                .expect("hysteresis points should be written"),
+        )
+        .expect("hysteresis points should decode");
+
+        assert_eq!(points.len(), 3);
+        for point in &points {
+            assert!(
+                point.m_avg.iter().all(|component| component.is_finite()),
+                "m_avg components must be finite for chart data: {point:?}"
+            );
+            assert!(
+                (point.m_parallel - point.m_avg[0]).abs() < 1.0e-9,
+                "field-axis x projection must match m_avg.x for in-plane-x loop: {point:?}"
+            );
+            assert!(
+                (point.m_oop - point.m_avg[2]).abs() < 1.0e-12,
+                "m_oop must be the z component for chart data: {point:?}"
+            );
+            let expected_m_ip =
+                (point.m_avg[0] * point.m_avg[0] + point.m_avg[1] * point.m_avg[1]).sqrt();
+            assert!(
+                (point.m_ip - expected_m_ip).abs() < 1.0e-12,
+                "m_ip must be sqrt(mx^2+my^2) for chart data: {point:?}"
+            );
+        }
 
         let _ = std::fs::remove_dir_all(&output_dir);
     }
@@ -4101,6 +5553,29 @@ mod tests {
             payload["values"],
             serde_json::json!([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
         );
+        let zarray: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(output_dir.join("hysteresis.zarr/fields/m/.zarray"))
+                .expect("Zarr metadata should exist"),
+        )
+        .expect("Zarr metadata should be valid JSON");
+        assert_eq!(zarray["shape"], serde_json::json!([1, 3, 2]));
+        assert_eq!(zarray["chunks"], serde_json::json!([1, 3, 2]));
+        assert_eq!(zarray["dtype"], "<f8");
+        let samples =
+            std::fs::read_to_string(output_dir.join("hysteresis.zarr/fields/m/samples.csv"))
+                .expect("Zarr sample index should exist");
+        assert!(samples.contains("hysteresis_point_002"));
+        let chunk = std::fs::read(output_dir.join("hysteresis.zarr/fields/m/0.0.0"))
+            .expect("Zarr chunk should exist");
+        let values = chunk
+            .chunks_exact(8)
+            .map(|bytes| {
+                let mut array = [0_u8; 8];
+                array.copy_from_slice(bytes);
+                f64::from_le_bytes(array)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(values, vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
 
         std::fs::remove_dir_all(output_dir)
             .expect("temporary artifact directory should be removed");
@@ -4137,7 +5612,7 @@ mod tests {
             energy: Some(-1e-18),
         }];
 
-        write_hysteresis_progress_artifacts(&output_dir, &points, &metrics, &settle_trace)
+        write_hysteresis_progress_artifacts(&output_dir, &points, &metrics, &settle_trace, None)
             .expect("progress artifacts should be written");
 
         let points_payload: serde_json::Value = serde_json::from_str(
@@ -4154,5 +5629,101 @@ mod tests {
 
         std::fs::remove_dir_all(output_dir)
             .expect("temporary artifact directory should be removed");
+    }
+
+    #[test]
+    fn adaptive_refinement_artifact_proposes_zero_and_high_susceptibility_points() {
+        let points = vec![
+            test_hysteresis_point(0, 10.0, 0.8, None),
+            test_hysteresis_point(1, -10.0, -0.2, None),
+        ];
+        let policy = AdaptiveRefinementIR {
+            kind: "adaptive_refinement".to_string(),
+            enabled: true,
+            max_passes: 2,
+            max_insertions_per_pass: 8,
+            dm_dh_threshold_per_mT: 0.01,
+            max_step_mT: 5.0,
+            min_step_mT: 0.1,
+            include_zero_crossings: true,
+            include_high_susceptibility: true,
+        };
+
+        let artifact = build_hysteresis_adaptive_refinement_artifact(Some(&policy), &points)
+            .expect("adaptive policy should produce an artifact");
+
+        assert_eq!(artifact.status, "proposed");
+        assert!(artifact.candidates.iter().any(|candidate| same_field_value(
+            candidate.field_value_mT,
+            0.0
+        ) && candidate.reasons
+            == ["zero_crossing"]));
+        assert!(artifact.candidates.iter().any(|candidate| candidate
+            .reasons
+            .iter()
+            .any(|reason| reason == "high_susceptibility")));
+    }
+
+    #[test]
+    fn adaptive_refinement_runtime_computes_branch_points_and_snapshots() {
+        let mut problem = minimal_fdm_hysteresis_problem();
+        if let StudyIR::Hysteresis {
+            field_values_mT,
+            adaptive_refinement,
+            storage,
+            ..
+        } = &mut problem.study
+        {
+            *field_values_mT = Some(vec![10.0, -10.0]);
+            *adaptive_refinement = Some(AdaptiveRefinementIR {
+                kind: "adaptive_refinement".to_string(),
+                enabled: true,
+                max_passes: 1,
+                max_insertions_per_pass: 4,
+                dm_dh_threshold_per_mT: 10.0,
+                max_step_mT: 5.0,
+                min_step_mT: 0.1,
+                include_zero_crossings: true,
+                include_high_susceptibility: false,
+            });
+            *storage = Some(fullmag_ir::HysteresisStorageIR {
+                scalar_history: true,
+                magnetization: "every_step".to_string(),
+                every_n: 1,
+                key_events: false,
+                key_event_threshold_dm: 0.02,
+            });
+        } else {
+            panic!("minimal problem must be hysteresis");
+        }
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-hysteresis-adaptive-runtime-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&output_dir);
+
+        crate::run_problem_with_callback(&problem, 0.0, &output_dir, 1, |_| StepAction::Continue)
+            .expect("adaptive refinement hysteresis run should complete");
+
+        let artifact_json =
+            std::fs::read_to_string(output_dir.join("hysteresis_adaptive_refinement.json"))
+                .expect("adaptive artifact should be written");
+        let artifact: HysteresisAdaptiveRefinementArtifact =
+            serde_json::from_str(&artifact_json).expect("adaptive artifact should decode");
+
+        assert_eq!(artifact.status, "computed");
+        assert!(
+            !artifact.points.is_empty(),
+            "adaptive refinement should compute at least one branch point"
+        );
+        assert_eq!(artifact.points[0].adaptive_inserted, Some(true));
+        assert!(artifact.points[0]
+            .refinement_reason
+            .as_ref()
+            .is_some_and(|reasons| reasons.iter().any(|reason| reason == "zero_crossing")));
+        assert!(artifact.points[0].snapshot_id.is_some());
+        assert!(artifact.points[0].snapshot_resource_ref.is_some());
+
+        let _ = std::fs::remove_dir_all(&output_dir);
     }
 }

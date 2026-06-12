@@ -72,6 +72,16 @@ describe("KernelProvider performance contracts", () => {
     );
   });
 
+  it("registers frequency-domain analysis overlay commands in the kernel", () => {
+    expect(kernelProviderSource).toContain("ANALYSIS_FIELD_OVERLAY_COMMANDS");
+    expect(kernelProviderSource).toContain(
+      "const analysisFieldOverlay = new AnalysisFieldOverlayController();",
+    );
+    expect(kernelProviderSource).toContain(
+      "for (const cmd of ANALYSIS_FIELD_OVERLAY_COMMANDS)",
+    );
+  });
+
   it("allows controlled browser audits to disable realtime websocket coupling", () => {
     expect(kernelProviderSource).toContain("disableRealtime");
     expect(kernelProviderSource).toContain(
@@ -80,5 +90,12 @@ describe("KernelProvider performance contracts", () => {
     expect(kernelProviderSource).toContain(
       "if (controlRoomRealtimeDisabledFromBrowser())",
     );
+  });
+
+  it("exposes a controlled browser audit hook for hysteresis replay selection", () => {
+    expect(kernelProviderSource).toContain("loadHysteresisReplaySnapshot");
+    expect(kernelProviderSource).toContain('targetKind: "hysteresis-step"');
+    expect(kernelProviderSource).toContain("kernel.layout.setActiveViewportMainModule(\"viewport-3d\")");
+    expect(kernelProviderSource).toContain("kernel.layout.setFocusedSlot(\"viewport-main\")");
   });
 });

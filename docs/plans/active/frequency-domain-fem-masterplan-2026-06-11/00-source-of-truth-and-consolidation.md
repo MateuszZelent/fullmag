@@ -43,8 +43,8 @@ Use this order when documents disagree.
 | `docs/physics/0800-fem-static-pbc-demag.md` | Static/time-domain FEM demag PBC semantics. | Reuse static/zero-phase periodic demag rules for k = 0 FMR where applicable; do not imply nonzero-k dynamic demag. |
 | `docs/physics/0810-fem-static-pbc-dmi.md` | Static/time-domain DMI PBC seam semantics. | Periodic seam is not a physical free boundary; DMI seam handling must be explicit. |
 | `docs/specs/frequency-domain-artifacts-v2.md` | Canonical v2 artifact family for spectrum, branches, dispersion, modes, response sweep, and periodic pairs. | Reuse `eigen/*.v2`, `response/magnetic_response_sweep.v1.json`, and diagnostic 404 semantics. |
-| `docs/specs/fullmag_magnetoelastic_frequency_patch_specs.md` | Patch-level IR, planner, capability, artifact, UI, API, test, and benchmark contract. | Keep `StudyIR::FrequencyResponse` semantic-only until an executable driven backend passes gates. Keep capability flags separate. |
-| `docs/specs/capability-matrix-v0.md` | Current capability status and deferred booleans. | `StudyIR::FrequencyResponse` is `semantic_only`; `supports_frequency_response=false` for all current public engines. |
+| `docs/specs/fullmag_magnetoelastic_frequency_patch_specs.md` | Patch-level IR, planner, capability, artifact, UI, API, test, and benchmark contract. | Historical baseline: keep production capability flags separate. Current rollout adds a FEM dense validation response lane without promoting production CPU/GPU response. |
+| `docs/specs/capability-matrix-v0.md` | Current capability status and deferred booleans. | `StudyIR::FrequencyResponse` is reference-executable only for the dense FEM validation response path; production CPU/GPU response remains unsupported and `frequency_domain_capabilities.v1` is the precise UI-gating source. |
 | `docs/specs/runtime-engine-naming-v0.md` | Current FEM eigen engine names and production/reference labels. | Keep `fem_eigen_*` engine names scoped to modal eigen paths. Do not promote them as response engines. |
 | `docs/specs/resource-first-control-room-api-v2.md` | Resource-first v2 API rules. | Add frequency-domain resources through the typed API/facade/resource-hook layers only. |
 | `docs/engineering/frequency_domain_solver_engineering.md` | Engineering backlog, solve stack, ABI direction, frontend/CLI, tests, benchmarks, release gates. | Use the staged MR path: semantic contract, scalable modal path, then driven response, then mechanics/coupling. |
@@ -63,15 +63,18 @@ Backend and public contract status:
 - Python exposes `Eigenmodes` and `FrequencyResponse`.
 - IR exposes `StudyIR::Eigenmodes` and `StudyIR::FrequencyResponse`.
 - Planner can produce FEM eigen plans.
-- Planner rejects `StudyIR::FrequencyResponse` as semantic-only.
-- Runtime capabilities expose frequency-domain deferred flags and keep them
-  false for current engines.
+- Planner can produce `FemFrequencyResponsePlanIR` for the dense FEM validation
+  response path and rejects FDM response explicitly.
+- Runtime capabilities expose frequency-domain deferred flags for compatibility
+  and the nested `frequency_domain_capabilities.v1` snapshot for precise
+  reference/production/unsupported UI gating.
 - The current modal runner writes eigen artifacts and v2 dispersion artifacts.
 - The runner contains dense validation primitives for a field-driven response
   sweep and can write an artifact-shaped
   `response/magnetic_response_sweep.v1.json`.
-- The dense response primitive is not runtime integration, not a production
-  driven solver, and not a capability promotion.
+- The dense response primitive and FEM response plan are runtime integration for
+  the validation lane, not the production native MFEM/hypre/libCEED driven
+  solver and not a production capability promotion.
 - The v2 API can serve `response/magnetic_response_sweep.v1.json` when present
   and must return explicit diagnostic 404 when absent.
 
@@ -204,25 +207,25 @@ only under documented assumptions.
 Backend target:
 
 ```text
-backends/fem/frequency_domain/
-  core/
-    equilibrium state
-    tangent frame
-    tangent projection
-    linearized LLG operator contract
-    diagnostics
-    observables
-    artifact metadata
-  cpu/
-    MFEM/hypre/libCEED operator realization
-    driven response solver
-    frequency sweep
-    modal eigensolver integration
-  gpu/
-    CUDA/libCEED realization
-    dense modal reference qualification
-    future response qualification probes
+backends/fem/
+  include/frequency_domain/
+    public native contracts
+  src/frequency_domain/
+    artifact metadata, diagnostics, and FFI-safe orchestration helpers
+  core/frequency_domain/
+    equilibrium state, tangent frame, tangent projection, observables
+  cpu/frequency_domain/
+    MFEM/hypre/libCEED operator realization, driven response, modal integration
+  gpu/frequency_domain/
+    CUDA/libCEED realization and future qualification probes
+  tests/frequency_domain/
+    native contract, operator, response, modal, and artifact tests
 ```
+
+Do not create a parallel `backends/fem/frequency_domain/include` hierarchy. The
+native FEM tree already owns shared `include`, `src`, `core`, `cpu`, `gpu`, and
+`tests` directories; frequency-domain code is added as subdirectories inside
+those existing owners.
 
 Planner target:
 
@@ -309,8 +312,8 @@ Use this sequence before implementing code:
 - The plan uses `eigenmodes` only for the modal eigensystem product.
 - Every historical `apps/web` frontend instruction has a Control Room v2
   translation before implementation.
-- Every current semantic-only capability remains false until executable proof
-  exists.
+- Capability status is promoted only for lanes with executable proof; production
+  CPU/GPU response remains unsupported until the native solver passes its gates.
 - Every new UI node has a named inspector and a named resource source.
 - Every new backend lane has a managed container-backed `just` verification
   path.

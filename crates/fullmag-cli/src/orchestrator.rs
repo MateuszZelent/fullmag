@@ -832,6 +832,7 @@ fn fem_mesh_payload_from_backend_plan(
     match backend_plan {
         BackendPlanIR::Fem(fem) => Some(fullmag_runner::FemMeshPayload::from(fem)),
         BackendPlanIR::FemEigen(fem) => Some(fullmag_runner::FemMeshPayload::from(fem)),
+        BackendPlanIR::FemFrequencyResponse(fem) => Some(fullmag_runner::FemMeshPayload::from(fem)),
         BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
     }
 }
@@ -3376,6 +3377,7 @@ fn backend_plan_family(backend_plan: &BackendPlanIR) -> &'static str {
         BackendPlanIR::FdmMultilayer(_) => "fdm_multilayer",
         BackendPlanIR::Fem(_) => "fem",
         BackendPlanIR::FemEigen(_) => "fem_eigen",
+        BackendPlanIR::FemFrequencyResponse(_) => "fem_frequency_response",
     }
 }
 
@@ -3708,6 +3710,7 @@ fn current_stage_magnetization_vectors(
             .collect(),
         BackendPlanIR::Fem(fem) => fem.initial_magnetization.clone(),
         BackendPlanIR::FemEigen(fem) => fem.equilibrium_magnetization.clone(),
+        BackendPlanIR::FemFrequencyResponse(fem) => fem.equilibrium_magnetization.clone(),
     }
 }
 
@@ -5829,11 +5832,16 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     fdm.common_cells[1],
                     fdm.common_cells[2],
                 ],
-                BackendPlanIR::Fem(_) | BackendPlanIR::FemEigen(_) => [0, 0, 0],
+                BackendPlanIR::Fem(_)
+                | BackendPlanIR::FemEigen(_)
+                | BackendPlanIR::FemFrequencyResponse(_) => [0, 0, 0],
             };
             let fem_mesh = match &execution_plan.backend_plan {
                 BackendPlanIR::Fem(fem) => Some(fullmag_runner::FemMeshPayload::from(fem)),
                 BackendPlanIR::FemEigen(fem) => Some(fullmag_runner::FemMeshPayload::from(fem)),
+                BackendPlanIR::FemFrequencyResponse(fem) => {
+                    Some(fullmag_runner::FemMeshPayload::from(fem))
+                }
                 BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
             };
             let mut live_cadence = LiveProgressCadence::default();
@@ -7296,11 +7304,16 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         fdm.common_cells[1],
                         fdm.common_cells[2],
                     ],
-                    BackendPlanIR::Fem(_) | BackendPlanIR::FemEigen(_) => [0, 0, 0],
+                    BackendPlanIR::Fem(_)
+                    | BackendPlanIR::FemEigen(_)
+                    | BackendPlanIR::FemFrequencyResponse(_) => [0, 0, 0],
                 };
                 let fem_mesh = match &execution_plan.backend_plan {
                     BackendPlanIR::Fem(fem) => Some(fullmag_runner::FemMeshPayload::from(fem)),
                     BackendPlanIR::FemEigen(fem) => Some(fullmag_runner::FemMeshPayload::from(fem)),
+                    BackendPlanIR::FemFrequencyResponse(fem) => {
+                        Some(fullmag_runner::FemMeshPayload::from(fem))
+                    }
                     BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
                 };
                 let mut live_cadence = LiveProgressCadence::default();

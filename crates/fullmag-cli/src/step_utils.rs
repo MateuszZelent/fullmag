@@ -229,6 +229,21 @@ pub(crate) fn initial_step_update(backend_plan: &BackendPlanIR) -> fullmag_runne
             scalar_row_due: false,
             finished: false,
         },
+        BackendPlanIR::FemFrequencyResponse(fem) => fullmag_runner::StepUpdate {
+            stats,
+            grid: [0, 0, 0],
+            fem_mesh: Some(fullmag_runner::FemMeshPayload::from(fem)),
+            magnetization: Some(flatten_magnetization(&fem.equilibrium_magnetization)),
+            preview_field: None,
+            cached_preview_fields: None,
+            hysteresis_field_m_t: None,
+            hysteresis_point_index: None,
+            hysteresis_settle_step_index: None,
+            hysteresis_settle_step_kind: None,
+            hysteresis_settle_step_method: None,
+            scalar_row_due: false,
+            finished: false,
+        },
     }
 }
 
@@ -311,6 +326,21 @@ pub(crate) fn final_stage_step_update(
             scalar_row_due: true,
             finished,
         },
+        BackendPlanIR::FemFrequencyResponse(fem) => fullmag_runner::StepUpdate {
+            stats,
+            grid: [0, 0, 0],
+            fem_mesh: Some(fullmag_runner::FemMeshPayload::from(fem)),
+            magnetization: Some(flatten_magnetization(final_magnetization)),
+            preview_field: None,
+            cached_preview_fields: None,
+            hysteresis_field_m_t: None,
+            hysteresis_point_index: None,
+            hysteresis_settle_step_index: None,
+            hysteresis_settle_step_kind: None,
+            hysteresis_settle_step_method: None,
+            scalar_row_due: true,
+            finished,
+        },
     })
 }
 
@@ -371,6 +401,21 @@ pub(crate) fn snapshot_step_update_from_stats(
             finished,
         },
         BackendPlanIR::FemEigen(fem) => fullmag_runner::StepUpdate {
+            stats,
+            grid: [0, 0, 0],
+            fem_mesh: Some(fullmag_runner::FemMeshPayload::from(fem)),
+            magnetization: Some(flatten_magnetization(magnetization)),
+            preview_field: None,
+            cached_preview_fields: None,
+            hysteresis_field_m_t: None,
+            hysteresis_point_index: None,
+            hysteresis_settle_step_index: None,
+            hysteresis_settle_step_kind: None,
+            hysteresis_settle_step_method: None,
+            scalar_row_due: true,
+            finished,
+        },
+        BackendPlanIR::FemFrequencyResponse(fem) => fullmag_runner::StepUpdate {
             stats,
             grid: [0, 0, 0],
             fem_mesh: Some(fullmag_runner::FemMeshPayload::from(fem)),

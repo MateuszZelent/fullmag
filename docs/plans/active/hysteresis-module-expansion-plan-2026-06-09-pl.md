@@ -27,7 +27,8 @@ skrotem, ktory materializuje serie etapow relaksacji. Uzytkownik powinien moc:
 7. planowac petle major, galezie recoil, petle minorowe i w przyszlosci FORC,
 8. zobaczyc podglad zaplanowanej sciezki pola przed uruchomieniem,
 9. zdecydowac, czy zapisywac tylko srednie magnetyzacje, wybrane snapshoty,
-   co N punktow, czy pelna magnetyzacje dla kazdego punktu,
+   co N punktow, czy pelna magnetyzacje `m` dla kazdego punktu w formacie
+   nadajacym sie do odtwarzania domen magnetycznych,
 10. sledzic na zywo punkty dodawane do wykresu,
 11. widziec metryki takie jak koercja, remanencja, petla nasycenia,
    podatnosc rozniczkowa, pole przelaczenia i pole powierzchni petli,
@@ -90,8 +91,9 @@ Kontrakt musi zachowac:
 
 ## Faza 0: publikacyjna notatka fizyczna
 
-Przed implementacja trzeba dodac note w `docs/physics/`, np.
-`docs/physics/08xx-hysteresis-sweep-semantics.md`.
+Przed implementacja trzeba utrzymywac note w `docs/physics/`. Aktualna
+kanoniczna notatka to
+`docs/physics/0930-hysteresis-sweep-semantics.md`.
 
 Notatka musi zdefiniowac:
 
@@ -234,11 +236,26 @@ Notatka musi zdefiniowac:
 18. FDM/FEM interpretacja: te same wielkosci publiczne, inne realizacje
    siatki i snapshotow.
 19. CPU/GPU interpretacja: snapshot pelnego pola moze wymuszac kosztowny sync,
-   dlatego jest osobna polityka storage.
+   dlatego jest osobna polityka storage. Obowiazkowa sciezka produkcyjna dla
+   playbacku histerezy zapisuje `m`; dodatkowe pola diagnostyczne typu
+   `H_demag` i `H_eff` sa opcjonalne, wylaczone domyslnie, nie sa bramka
+   produkcyjna dla playbacku i musza miec osobny koszt/provenance.
 20. Walidacja: makrospin/Stoner-Wohlfarth dla roznych katow pola,
     prosty uniaxialny element, OOP thin film, in-plane strip, symetria petli
     dla ukladow symetrycznych, testy interpolacji koercji, testy auto-saturacji
     i testy minor-loop closure.
+21. Szybki smoke-test runtime: maly waveguide `300 x 50 x 10 nm` w airboxie
+    `1000 x 200 x 100 nm`, z rzadkim meshem i skroconym harmonogramem pola,
+    jest utrzymywany jako regresyjny test petli histerezy. Skrypt:
+    `examples/hysteresis_waveguide_300x50x10nm.py`, target:
+    `just run-hysteresis-waveguide-smoke cpu`. Test ma potwierdzac, ze runtime
+    zapisuje `hysteresis_points.json`, a punkty zawieraja osobne skladowe
+    `m_avg = [mx, my, mz]` oraz spojne wartosci `m_parallel`, `m_oop` i
+    `m_ip` uzywane przez wykresy. Wariant playback:
+    `just run-hysteresis-waveguide-playback-smoke cpu` wlacza
+    `storage.magnetization="every_step"` i musi zapisac natywny kontener
+    `hysteresis.zarr/fields/m`; wynik sprawdza
+    `just verify-hysteresis-playback-artifacts <artifact-dir>`.
 
 ## Faza 1: publiczny model authoringu
 
@@ -1468,28 +1485,195 @@ Potwierdzone aktualnymi testami:
     `field_meta_snapshot_id_reports_persisted_hysteresis_magnetization_stats`
     zwrocily po `1 passed`;
   - zamknieto luke UI `use-point-as-initial-state`: inspector przekazuje teraz
-    `snapshot_resource_ref`, a komenda preferuje ten zasob nad skladana
-    sciezka `hysteresis_snapshots/{snapshot_id}/m.json`. Test
+    `snapshot_resource_ref`, a komenda preferuje ten zasob nad recznie
+    skladana sciezka artefaktu. Obecny kompatybilny backend moze jeszcze
+    czytac pojedyncze snapshoty JSON, ale docelowy format playbacku
+    `every_step` jest opisany nizej jako Zarr/HDF5 container. Test
     `uses the hysteresis point snapshot resource ref when applying an initial state`
     najpierw odtworzyl blad, a po poprawce
     `pnpm --dir apps/control-room test src/kernel/runtime/studyRuntimeCommandContributions.test.ts src/modules/inspector/panels/stages/StageInspectors.test.tsx src/modules/analysis-plots/AnalysisPlotsModule.test.tsx src/modules/viewport-3d/hooks/useViewport3DSceneModel.test.ts src/modules/viewport-3d/viewport3dResources.test.ts`
     zwrocilo `144 passed`;
-  - w tej kontynuacji `localhost:8081` nie odpowiadal, wiec nie ma nowego live
-    browser/runtime smoke dla replay 3D. Poprzedni live proof endpointow API
-    pozostaje zapisany wyzej, ale pelne odhaczenie wizualnego replay wymaga
-    ponownego uruchomienia managed runtime i browser smoke/screenshot.
+  - browser smoke replay 3D zostal domkniety kontrolowanym trybem
+    `CONTROL_ROOM_SMOKE_HYSTERESIS_REPLAY=1`
+    `CONTROL_ROOM_SMOKE_HYSTERESIS_REPLAY_ONLY=1`
+    `CONTROL_ROOM_SMOKE_ALLOW_MISSING_SESSION=1` na
+    `http://localhost:3101/workspace`. Smoke przez
+    `pnpm --dir apps/control-room smoke:viewport-3d` potwierdzil:
+    `Hysteresis replay smoke passed: snapshot_id=hysteresis_point_smoke
+    stage_id=hysteresis-smoke` oraz `Viewport 3D smoke passed`.
+    W fazie `hysteresis-replay` viewport mial niepusty canvas, HUD/DOM
+    zawieral `data-hysteresis-replay-snapshot-id`, a data-plane request
+    `data/fields/m/samples/vector` zawieral `snapshot_id`, `component=full` i
+    `scope_kind=full`;
+- Milestone E/storage container dla playbacku `m`:
+  - runner zapisuje teraz kazdy przechwycony snapshot histerezy rownolegle do
+    `hysteresis.zarr/fields/m` jako Zarr v2 store z osiami
+    `[point, component, spatial_sample]`, indeksem `samples.csv` i globalnym
+    `points.csv`;
+  - endpoint `data/fields/m/samples/vector?snapshot_id=...` preferuje Zarr i
+    spada do kompatybilnego `hysteresis_snapshots/{snapshot_id}/m.json` tylko
+    gdy kontener nie ma wskazanej klatki;
+  - baseline playback wymaga `m`; `H_demag`, `H_eff` i inne pola wektorowe sa
+    opcjonalnymi kanalmi diagnostycznymi i nie blokuja produkcyjnego playbacku
+    petli histerezy;
+  - testy potwierdzone w tej kontynuacji:
+    `CARGO_TARGET_DIR=/tmp/fullmag-api-zarr-target cargo test -p fullmag-runner stored_hysteresis_snapshot_contains_vector_magnetization_payload --no-fail-fast`
+    zwrocil `1 passed`,
+    `CARGO_TARGET_DIR=/tmp/fullmag-api-zarr-target cargo test -p fullmag-api field_vector_snapshot_id_loads_hysteresis_zarr_container_frame --no-fail-fast`
+    zwrocil `1 passed`,
+    `CARGO_TARGET_DIR=/tmp/fullmag-api-zarr-target cargo test -p fullmag-api field_meta_snapshot_id_reports_hysteresis_zarr_container_stats --no-fail-fast`
+    zwrocil `1 passed`, a kompatybilne testy JSON fallback
+    `field_vector_snapshot_id_loads_persisted_hysteresis_magnetization` i
+    `field_meta_snapshot_id_reports_persisted_hysteresis_magnetization_stats`
+    zwrocily po `1 passed`;
+  - error-path gate dla snapshotow jest pokryty przez
+    `field_vector_snapshot_id_rejects_unknown_malformed_and_wrong_quantity` i
+    `field_meta_snapshot_id_rejects_unknown_malformed_and_wrong_quantity`:
+    unknown `snapshot_id` zwraca `404`, malformed path segment zwraca `400`,
+    a `snapshot_id` dla quantity innej niz `m` zwraca `400`;
+  - mismatch gate dla snapshotow jest pokryty przez
+    `field_vector_snapshot_id_conflicts_when_zarr_frame_mismatches_domain` i
+    `field_meta_snapshot_id_conflicts_when_zarr_frame_mismatches_domain`:
+    Zarr frame z metadanymi grid niepasujacymi do payloadu albo aktualnej
+    domeny zwraca `409 Conflict`;
+  - runtime smoke na malym waveguide zostal uruchomiony przez managed Fullmag:
+    `FULLMAG_DISABLE_CHARTS=1 FULLMAG_DISABLE_PREVIEW_3D=1 FULLMAG_HYSTERESIS_FIELD_VALUES_MT=50,0,-50 FULLMAG_HYSTERESIS_MAX_STEPS=25 FULLMAG_HYSTERESIS_MAGNETIZATION_STORAGE=every_step just fullmag build=True static fem cpu headless examples/hysteresis_waveguide_300x50x10nm.py`.
+    Sesja `session-1781246437482-1629188` zakonczyla sie statusem
+    `completed`, `total_steps=74`;
+  - artefakty runtime zweryfikowano komenda
+    `python3 scripts/verify_hysteresis_playback_artifacts.py .fullmag/local-live/history/session-1781246437482-1629188/artifacts`,
+    ktora zwrocila `validated hysteresis playback: points=3 snapshots=3 cell_count=1137 container=zarr`.
+- Milestone G/Explorer -> inspector trace:
+  - klikniecie wezla `field-point` albo `algorithm` w Explorerze mapuje teraz
+    inspector histerezy na dedykowany widok `settle-trace`, a nie na
+    generyczny `current-field`;
+  - inspector wyciaga `point_id` rowniez z kernel selection `nodeId`, wiec trace
+    dziala dla wyboru z Explorera bez wymagania snapshotu 3D z wykresu;
+  - test
+    `pnpm --dir apps/control-room test src/modules/inspector/panels/stages/StageInspectors.test.tsx`
+    zwrocil `16 passed`, a `pnpm --dir apps/control-room typecheck`
+    przeszedl.
+- Milestone F/OpenAPI v2 + frontend facade/resource hooks:
+  - backendowe zrodlo OpenAPI po dodaniu `409 Conflict` dla snapshot/domain
+    mismatch zostalo zsynchronizowane przez
+    `CARGO_TARGET_DIR=/tmp/fullmag-api-zarr-target pnpm --dir apps/control-room generate:api`;
+  - wygenerowane artefakty `openapi-v2.json`, `openapi-v2-types.ts` i
+    `openapi-v2-paths.ts` zawieraja `409` dla
+    `/v2/sessions/current/data/fields/{quantity_id}/meta` oraz
+    `/v2/sessions/current/data/fields/{quantity_id}/samples/vector`;
+  - `ControlRoomApi` i `studyRuntimeResources` maja juz typed facade/resource
+    hooks dla zasobow `analysis.hysteresis.*` oraz
+    `simulation.stages.hysteresis.*`; komponenty histerezy korzystaja z tych
+    hookow zamiast bezposredniego `fetch()`;
+  - wymagany gate API hygiene przeszedl po usunieciu testowych literalow
+    `/v2/...` z frequency-domain inspector tests:
+    `pnpm --dir apps/control-room check:api-hygiene`;
+  - testy fasady/hookow po synchronizacji kontraktu:
+    `pnpm --dir apps/control-room test src/kernel/api/ControlRoomApi.test.ts src/kernel/resources/studyRuntimeResources.test.ts`
+    zwrocilo `83 passed`, a cleanup testow frequency-domain:
+    `pnpm --dir apps/control-room test src/modules/inspector/panels/FrequencyDomainInspectorPanel.test.tsx src/kernel/resources/studyRuntimeResources.test.ts`
+    zwrocil `23 passed`;
+  - `pnpm --dir apps/control-room typecheck` przeszedl po regeneracji API.
+  - replay 3D ma teraz powtarzalny gate przegladarkowy: dev-only audit hook
+    `__FULLMAG_CONTROL_ROOM_AUDIT__.loadHysteresisReplaySnapshot` ustawia
+    kanoniczny selection ref `targetKind="hysteresis-step"` i przelacza
+    workspace na `viewport-3d`; smoke asercyjnie sprawdza DOM replay target,
+    request field-vector z `snapshot_id` i niepusty canvas;
+  - potwierdzone gate'y po dodaniu replay smoke:
+    `pnpm --dir apps/control-room test src/kernel/KernelProvider.test.ts src/modules/viewport-3d/viewportSmokeProjectionScript.test.ts src/kernel/runtime/studyRuntimeCommandContributions.test.ts src/modules/viewport-3d/hooks/useViewport3DSceneModel.test.ts src/modules/viewport-3d/viewport3dResources.test.ts`
+    zwrocil `135 passed`,
+    `pnpm --dir apps/control-room typecheck` przeszedl,
+    `pnpm --dir apps/control-room check:api-hygiene` przeszedl,
+    `pnpm --dir apps/control-room lint` przeszedl.
 
 Niezamkniete braki produkcyjne:
 
-- `Angular family` nie ma aktualnie kontraktu danych ani zasobu API. W UI
-  `HysteresisChart` obsluguje `Full`, `Virgin`, `Forward`, `Return`,
-  `Minor loops`, `OOP/IP overlay` i `RGB Components`, ale nie porownanie wielu
-  petli dla wielu katow. Produkcyjna implementacja wymaga osobnego kontraktu
-  multi-angle: albo stage family z wieloma orientacjami, albo zasobu
-  `analysis/hysteresis-family/*` grupujacego serie po orientacji.
-- Automatyczny `adaptive_refinement` pozostaje niezaimplementowanym second-pass
-  schedulerem. Nie mylic go z juz dzialajacymi, jawnie zadanymi przez
-  uzytkownika `schedule_refinements`/`dense_windows`.
+- `Angular family` ma juz podstawowy kontrakt authoringu i planu:
+  `fm.HysteresisAngularFamily(...)` / `fm.HysteresisAngularVariant(...)`
+  round-tripuja przez Python DSL, `ProblemIR` waliduje family/variants, a
+  zasob `/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/plan`
+  wystawia `angular_family`. Zasob
+  `/v2/sessions/current/analysis/hysteresis-family/{stage_id}` grupuje serie po
+  orientacji: aktualnie policzony wariant dostaje punkty/metryki z aktywnego
+  stage, a pozostale warianty sa jawnie oznaczone jako `pending_run`, zeby UI
+  nie kopiowalo tej samej petli dla wielu katow. `ControlRoomApi` i
+  `useHysteresisFamilyResource` eksponuja ten zasob przez typed frontend v2
+  facade/resource hook. W UI `HysteresisChart` obsluguje `Full`, `Virgin`,
+  `Forward`, `Return`, `Minor loops`, `OOP/IP overlay`, `RGB Components` i
+  `Angular Family`. Tryb `Angular Family` rysuje tylko warianty z obliczonymi
+  punktami i pokazuje liczbe wariantow `pending_run`, zeby nie sugerowac
+  niepoliczonych petli. Runtime zapisuje teraz lekki manifest
+  `hysteresis_angular_family.json`, ktory oznacza wariant aktywnego stage jako
+  `computed_active_stage` z referencjami do `hysteresis_points.json`,
+  `hysteresis_metrics.json` i `hysteresis_settle_trace.json`, a pozostale
+  warianty jako `pending_run`. Zasob
+  `/v2/sessions/current/analysis/hysteresis-family/{stage_id}` preferuje ten
+  manifest runtime, a gdy go brakuje zachowuje dotychczasowy fallback z planu
+  stage. Runtime wykonuje teraz podstawowy multi-run family: aktywny wariant
+  pozostaje w glownych artefaktach stage, a dodatkowe warianty sa liczone jako
+  osobne przebiegi z wlasna orientacja pola i osia pomiaru, zapisywane pod
+  `hysteresis_angular_family/{variant_id}/hysteresis_points.json`,
+  `hysteresis_metrics.json` i `hysteresis_settle_trace.json`. Zasob
+  `analysis/hysteresis-family` czyta te sciezki z manifestu i zwraca osobne
+  serie punktow/metryk dla policzonych wariantow zamiast kopiowac dane
+  aktywnego stage. Publiczny `points_resource_ref` nie ujawnia sciezek plikow
+  artefaktow: wskazuje zasob
+  `/v2/sessions/current/analysis/hysteresis-family/{stage_id}/variants/{variant_id}/points`,
+  a `ControlRoomApi.analysis.hysteresis.familyVariantPoints(...)` udostepnia
+  ten odczyt przez typed frontend facade. Nadal brakuje publikacyjnego
+  benchmarku porownania wielu pelnych petli dla wielu katow oraz
+  zaawansowanego schedulera family dla wznowien/checkpointow i kosztow
+  GPU/provenance.
+- Szybki walidacyjny smoke dla angular-family jest dostepny na tym samym malym
+  waveguide: `FULLMAG_HYSTERESIS_ANGULAR_FAMILY=1` wlacza rodzine
+  `ip_x`/`oop`/`custom_theta45_phi30` w
+  `examples/hysteresis_waveguide_300x50x10nm.py`, target
+  `just run-hysteresis-waveguide-angular-family-smoke cpu` uruchamia wariant
+  CPU, a `just run-hysteresis-waveguide-gpu-angular-family-smoke` wariant GPU.
+  Artefakty waliduje
+  `just verify-hysteresis-angular-family-artifacts <artifact-dir>`, ktory
+  sprawdza `hysteresis_angular_family.json`, co najmniej dwa policzone
+  warianty, aktywny wariant `computed_active_stage`, dodatkowy wariant
+  `computed_variant_run` oraz osobne pliki punktow/metryk.
+  Aktualny runtime proof po rebuildzie managed FEM runtime:
+  `just ensure-managed-fem-runtime` przebudowal `.fullmag/runtimes/fem-gpu-host`
+  z aktualnym `fullmag-runner`; nastepnie
+  `just run-hysteresis-waveguide-angular-family-smoke cpu` zakonczyl sesje
+  `session-1781256544597-2008930`, a
+  `python3 scripts/verify_hysteresis_angular_family_artifacts.py .fullmag/local-live/history/session-1781256544597-2008930/artifacts`
+  zwrocil
+  `validated hysteresis angular family: family_id=waveguide_ip_oop_family variants=2`.
+  Manifest zawieral `ip_x` jako `computed_active_stage` i `oop` jako
+  `computed_variant_run` z osobnym
+  `hysteresis_angular_family/oop/hysteresis_points.json`.
+  W tym srodowisku `just run-hysteresis-waveguide-gpu-smoke` dochodzi do
+  planowania/runtime, ale nie jest walidacja GPU, bo lokalny sterownik CUDA jest
+  starszy niz runtime CUDA (`cudaGetDeviceCount failed ... CUDA driver version
+  is insufficient for CUDA runtime version`). Dodatkowo sandbox blokuje sockety
+  TCP, wiec smoke FEM/OpenMPI trzeba uruchamiac poza sandboxem albo przez
+  zaakceptowany `just` target.
+- Benchmark projekcji OOP/IP/custom-angle ma osobny szybki target:
+  `just run-hysteresis-waveguide-projection-benchmark-smoke cpu`. Target uzywa
+  jednego pola i jednego kroku minimalizacji, zeby tanio wygenerowac artefakty
+  dla `ip_x`, `oop` i `custom_theta45_phi30`. Walidacja:
+  `just verify-hysteresis-projection-benchmark .fullmag/local-live/history/session-1781257502282-2039282/artifacts`
+  zwrocila
+  `validated hysteresis projection benchmark: variants=3 points=3`. Verifier
+  sprawdza, ze kazdy punkt spelnia kontrakt danych wykresu:
+  `m_parallel = <m> . u_meas`, `m_oop = <m>_z`,
+  `m_ip = sqrt(<m>_x^2 + <m>_y^2)` dla OOP, in-plane i custom-angle.
+- Automatyczny `adaptive_refinement` ma juz publiczny kontrakt Python DSL,
+  lowering do `ProblemIR`, walidacje IR, pole w zasobie API planu etapu oraz
+  runtime artifact `hysteresis_adaptive_refinement.json`. Runtime wykonuje
+  opcjonalny second-pass branch scheduler: kandydaci z zero crossing,
+  `dm/dH`, reversal fields albo non-convergence sa liczeni od stanu lewego
+  rodzica odcinka i zapisywani jako punkty z `adaptive_inserted=true` oraz
+  `refinement_reason`. Przy `storage.magnetization="every_step"` punkty
+  adaptacyjne dostaja tez snapshot `m` do replay 3D. Nadal nie jest to tryb
+  pelnego recompute/merge calej major branch; taki tryb pozostaje rozszerzeniem
+  wymagajacym osobnego provenance i wyboru metryk. Nie mylic go z juz
+  dzialajacymi, jawnie zadanymi przez uzytkownika
+  `schedule_refinements`/`dense_windows`.
 - Pelna publikacyjna walidacja naukowa dla OOP, in-plane i custom-angle
   benchmark cases pozostaje niezamknieta. Aktualne testy potwierdzaja kontrakt
   i sanity runtime, ale nie sa jeszcze kompletnym benchmarkiem publikacyjnym.
@@ -2215,6 +2399,22 @@ Instrukcja:
 5. Nie wlaczac adaptive refinement domyslnie dla pierwszego production path,
    dopoki reproducibility/export sa stabilne.
 
+Stan implementacji:
+
+- `fm.AdaptiveRefinement(...)` jest publicznym kontraktem Python DSL i
+  round-tripuje przez canonical script export,
+- `ProblemIR` waliduje progi i kroki adaptacji,
+- `/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/plan`
+  wystawia `adaptive_refinement`,
+- runner generuje kandydatow oraz wykonuje second-pass branch points od stanu
+  lewego rodzica odcinka,
+- `hysteresis_adaptive_refinement.json` zawiera kandydatow, obliczone punkty,
+  `settle_trace`, `adaptive_inserted=true`, `refinement_reason` i snapshot ref
+  dla polityk zapisujacych `m`,
+- potwierdzony gate:
+  `CARGO_TARGET_DIR=/tmp/fullmag-api-zarr-target cargo test -p fullmag-runner adaptive_refinement --no-fail-fast`
+  zwrocil `2 passed`.
+
 Testy:
 
 - refinement dodaje punkt miedzy dwoma crossing points,
@@ -2270,13 +2470,26 @@ Instrukcja:
    - `precision`,
    - `storage_format`,
    - artifact path optional.
+5. `every_step` jest produkcyjnym odpowiednikiem klasycznego playbacku petli
+   histerezy: kazdy zrelaksowany punkt pola musi miec odtwarzalna klatke
+   magnetyzacji `m`, tak aby UI moglo przewijac ewolucje domen magnetycznych
+   punkt po punkcie.
+6. `H_demag`, `H_eff` i inne pola wektorowe nie sa wymagane dla podstawowej
+   petli, MVP ani dla produkcyjnego playbacku. To sa dodatki diagnostyczne:
+   dodaj je jako jawna liste `auxiliary_field_snapshots`, domyslnie pusta, z
+   walidacja quantity ids, storage estimate i ostrzezeniem o koszcie
+   recompute/sync. Nie mieszac ich z obowiazkowa polityka magnetyzacji `m`.
 
 Testy:
 
 - `averages_only` nie zapisuje zadnego snapshotu,
 - `every_n=3` zapisuje punkty 0,3,6 albo jasno zdefiniowana konwencje,
 - `key_events` zapisuje reversal, H=0 i warning,
-- `every_step` zapisuje wszystkie punkty i ostrzega storage estimate.
+- `every_step` zapisuje wszystkie punkty `m` i ostrzega storage estimate,
+- auxiliary field snapshots sa nieobecne domyslnie, a jawne
+  `["H_demag", "H_eff"]` zapisuje tylko wtedy, gdy backend potrafi dostarczyc
+  te pola bez ukrytego fallbacku; brak tych kanalow nie blokuje produkcyjnego
+  playbacku `m`.
 
 Weryfikacja:
 
@@ -2294,23 +2507,35 @@ Brama produkcyjna:
 
 Instrukcja:
 
-1. Uzyj istniejacego artifact pipeline:
+1. Uzyj istniejacego artifact pipeline i docelowego kontenera danych:
    - `crates/fullmag-runner/src/artifact_pipeline.rs`,
    - `crates/fullmag-runner/src/artifacts.rs`,
    - backend-specific field snapshot helpers.
-2. Nie tworzyc osobnej publicznej rodziny endpointow dla snapshotow pol, jezeli
+2. Pelne klatki `m` dla wielu punktow pola nie moga byc docelowo zapisywane
+   jako wielkie tablice JSON `values`. JSON zostaje dla manifestow,
+   `hysteresis_points.json`, metryk i kompatybilnych pojedynczych field-state
+   importow. Domyslny format produkcyjny dla sekwencji klatek to Zarr; HDF5
+   jest formatem eksportowym/portable. Minimalny layout:
+   - `hysteresis.zarr` albo `hysteresis.h5`,
+   - dataset `/fields/m` o wymiarach `[point, component, spatial_sample]`,
+   - opcjonalne `/fields/H_demag`, `/fields/H_eff` tylko gdy jawnie zazadane,
+   - tabela/index `/points` laczaca `snapshot_id`, `point_id`, `branch_id`,
+     `field_value_mT`, `mesh_identity`, `field_revision` i offset w dataset,
+   - atrybuty/provenance: units, component order, precision, backend,
+     discretization, quantity semantics, storage policy.
+3. Nie tworzyc osobnej publicznej rodziny endpointow dla snapshotow pol, jezeli
    `data/fields/m/samples/vector?snapshot_id=...` wystarcza.
-3. Rozszerz API field resolution:
+4. Rozszerz API field resolution:
    - `crates/fullmag-api/src/router_v2/handlers/data/fields.rs`,
    - `crates/fullmag-api/src/router_v2/handlers/data/field_resolution.rs`,
    aby rozpoznawaly `snapshot_id`.
-4. `analysis/hysteresis/{stage_id}/steps/{point_id}` zwraca `snapshot_ref`,
+5. `analysis/hysteresis/{stage_id}/steps/{point_id}` zwraca `snapshot_ref`,
    a nie field values.
-5. `data/fields/m/meta?snapshot_id=...` zwraca shape, mesh identity, stale
+6. `data/fields/m/meta?snapshot_id=...` zwraca shape, mesh identity, stale
    status i available components.
-6. `data/fields/m/samples/vector?snapshot_id=...&format=bin` zwraca binary
+7. `data/fields/m/samples/vector?snapshot_id=...&format=bin` zwraca binary
    payload kompatybilny z istniejacym `fieldVectorCodec.ts`.
-7. Dodaj testy malformed/unknown snapshot:
+8. Dodaj testy malformed/unknown snapshot:
    - 404 dla nieistniejacego snapshotu,
    - 409 albo diagnostic warning dla mesh mismatch,
    - 400 dla snapshotu quantity innego niz `m`.
@@ -2323,6 +2548,11 @@ CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-runner stored_h
 CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-api field_vector_snapshot_id_loads_persisted_hysteresis_magnetization
 CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-api field_meta_snapshot_id_reports_persisted_hysteresis_magnetization_stats
 CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-api hysteresis_snapshot_can_be_applied_as_field_state_initial_magnetization
+CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-api hysteresis_snapshot_container_index_resolves_point_frame
+CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-api field_vector_snapshot_id_rejects_unknown_malformed_and_wrong_quantity
+CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-api field_meta_snapshot_id_rejects_unknown_malformed_and_wrong_quantity
+CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-api field_vector_snapshot_id_conflicts_when_zarr_frame_mismatches_domain
+CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-api field_meta_snapshot_id_conflicts_when_zarr_frame_mismatches_domain
 ```
 
 Brama produkcyjna:
@@ -3032,6 +3262,26 @@ FEM/container gate, gdy etap dotyka FEM:
 ```bash
 just ensure-managed-fem-runtime
 ```
+
+Status wykonania:
+
+- Zamkniety pierwszy fixture kontraktu projekcji runtime: maly FEM waveguide
+  uruchamia `ip_x`, `oop` i `custom_theta45_phi30`, a
+  `scripts/verify_hysteresis_projection_benchmark.py` sprawdza skladowe
+  `m_parallel`, `m_oop` i `m_ip` bez zaleznosci od UI. To nie zamyka jeszcze
+  makrospin/Stoner-Wohlfarth, OOP thin-film ani IP strip physics fixtures.
+- Zamkniety fixture niewystarczajacego pola saturacji: target
+  `just run-hysteresis-waveguide-saturation-limit-smoke cpu` uruchomil sesje
+  `session-1781258014197-2056303`, a
+  `just verify-hysteresis-saturation-limit .fullmag/local-live/history/session-1781258014197-2056303/artifacts`
+  potwierdzil `status=capped_by_limit`, trzy punkty probe i zgodnosc
+  `hysteresis_saturation.json` z `hysteresis_metrics.json`.
+- Zamkniety prosty fixture minor-loop: target
+  `just run-hysteresis-waveguide-minor-loop-smoke cpu` uruchomil sesje
+  `session-1781258187258-2062365`, a
+  `just verify-hysteresis-minor-loop .fullmag/local-live/history/session-1781258187258-2062365/artifacts`
+  potwierdzil `loop_id=minor_loop_001`, polityke `branch_only`, dwa punkty
+  lokalnej galezi oraz dedykowany `settle_trace`.
 
 Brama produkcyjna:
 

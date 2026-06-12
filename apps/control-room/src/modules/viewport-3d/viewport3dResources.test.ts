@@ -53,6 +53,33 @@ describe("viewport3dResources", () => {
     );
   });
 
+  it("includes complex analysis field view and phase in field vector resource keys", () => {
+    expect(
+      resolveViewport3DFieldVectorResourceKey(
+        "analysis:frequency-response:frequency-0003",
+        {
+          component: "full",
+          phase_rad: 1.25,
+          view: "phase_rotated_real",
+        },
+      ),
+    ).toBe(
+      `${DATA_FIELD_VECTOR_PATH.replace(
+        "{quantity_id}",
+        "analysis%3Afrequency-response%3Afrequency-0003",
+      )}?component=full&view=phase_rotated_real&phase_rad=1.25`,
+    );
+  });
+
+  it("preserves analysis view and phase in the field-vector hook query", () => {
+    const source = readFileSync(viewport3dResourcesSourceUrl, "utf8");
+
+    expect(source).toContain("const phaseRad = fieldQuery.phase_rad ?? null;");
+    expect(source).toContain("const view = fieldQuery.view ?? null;");
+    expect(source).toContain("phase_rad: phaseRad,");
+    expect(source).toContain("view,");
+  });
+
   it("omits unstable airbox mesh part ids from field vector resource keys", () => {
     expect(
       resolveViewport3DAirboxFieldVectorResourceKeys("h_demag", [

@@ -5869,11 +5869,151 @@ fn fem_eigen_surface_anisotropy_requires_positive_ks_and_axis() {
 }
 
 #[test]
-fn frequency_response_is_first_class_ir_but_not_executable_yet() {
+fn fem_frequency_response_with_mesh_asset_plans_successfully() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fem;
+    ir.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
+        fdm: None,
+        fem: Some(fullmag_ir::FemHintsIR {
+            order: 1,
+            hmax: 2e-9,
+            mesh: Some("meshes/unit_tet.msh".to_string()),
+            demag_solver_policy: None,
+        }),
+        hybrid: None,
+    });
+    ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+        fdm_grid_assets: vec![],
+        fem_mesh_assets: vec![fullmag_ir::FemMeshAssetIR {
+            geometry_name: "strip".to_string(),
+            mesh_source: Some("meshes/unit_tet.msh".to_string()),
+            mesh: Some(fullmag_ir::MeshIR {
+                mesh_name: "strip".to_string(),
+                nodes: vec![
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                ],
+                elements: vec![[0, 1, 2, 3]],
+                element_markers: vec![1],
+                boundary_faces: vec![[0, 1, 2]],
+                boundary_markers: vec![1],
+                periodic_boundary_pairs: Vec::new(),
+                periodic_node_pairs: Vec::new(),
+                per_domain_quality: std::collections::HashMap::new(),
+            }),
+        }],
+        fem_domain_mesh_asset: None,
+    });
+    ir.energy_terms = vec![fullmag_ir::EnergyTermIR::Exchange];
     ir.study = fullmag_ir::StudyIR::FrequencyResponse {
         dynamics: ir.study.dynamics().clone(),
+        operator: fullmag_ir::EigenOperatorConfigIR {
+            kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+            include_demag: false,
+        },
+        equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
+        k_sampling: Some(fullmag_ir::KSamplingIR::Single {
+            k_vector: [0.0, 0.0, 0.0],
+        }),
+        normalization: fullmag_ir::FrequencyResponseNormalizationIR::UnitL2,
+        damping_policy: fullmag_ir::EigenDampingPolicyIR::Include,
+        spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+        excitation: fullmag_ir::FrequencyExcitationIR {
+            field_au_per_m: [0.0, 0.0, 1.0],
+        },
+        frequencies_hz: fullmag_ir::FrequencySweepIR {
+            values_hz: vec![1.0e9, 2.0e9],
+        },
+        sampling: fullmag_ir::SamplingIR {
+            table_autosave: None,
+            outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
+                observable: fullmag_ir::FrequencyResponseOutputIR::SusceptibilityTensor,
+            }],
+        },
+    };
+
+    let planned = plan(&ir).expect("FEM frequency response mesh asset should plan");
+    match planned.backend_plan {
+        BackendPlanIR::FemFrequencyResponse(fem) => {
+            assert_eq!(fem.mesh_name, "strip");
+            assert_eq!(fem.frequencies_hz.values_hz, vec![1.0e9, 2.0e9]);
+            assert_eq!(fem.excitation.field_au_per_m, [0.0, 0.0, 1.0]);
+            assert!(fem.enable_exchange);
+            assert!(!fem.enable_demag);
+            assert_eq!(
+                fem.operator.kind,
+                fullmag_ir::EigenOperatorIR::LinearizedLlg
+            );
+        }
+        other => panic!("expected FemFrequencyResponse plan, got {other:?}"),
+    }
+}
+
+#[test]
+fn fdm_frequency_response_remains_explicitly_not_executable() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fdm;
+    ir.study = fullmag_ir::StudyIR::FrequencyResponse {
+        dynamics: ir.study.dynamics().clone(),
+        operator: fullmag_ir::EigenOperatorConfigIR {
+            kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+            include_demag: false,
+        },
+        equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
+        k_sampling: Some(fullmag_ir::KSamplingIR::Single {
+            k_vector: [0.0, 0.0, 0.0],
+        }),
+        normalization: fullmag_ir::FrequencyResponseNormalizationIR::UnitL2,
+        damping_policy: fullmag_ir::EigenDampingPolicyIR::Include,
+        spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+        excitation: fullmag_ir::FrequencyExcitationIR {
+            field_au_per_m: [0.0, 0.0, 1.0],
+        },
+        frequencies_hz: fullmag_ir::FrequencySweepIR {
+            values_hz: vec![1.0e9, 2.0e9],
+        },
+        sampling: fullmag_ir::SamplingIR {
+            table_autosave: None,
+            outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
+                observable: fullmag_ir::FrequencyResponseOutputIR::SusceptibilityTensor,
+            }],
+        },
+    };
+
+    let err = plan(&ir).expect_err("FDM frequency response is not executable");
+    assert!(err.reasons.iter().any(|reason| {
+        reason.contains("StudyIR::FrequencyResponse is not executable on backend='fdm'")
+            && reason.contains("dense validation frequency-response path")
+    }));
+}
+
+#[test]
+fn frequency_response_planner_controls_do_not_validate_time_integrator_settings() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fem;
+    let dynamics = fullmag_ir::DynamicsIR::Llg {
+        gyromagnetic_ratio: 2.211e5,
+        integrator: "heun".to_string(),
+        fixed_timestep: Some(1.0e-13),
+        adaptive_timestep: Some(fullmag_ir::AdaptiveTimeStepIR {
+            atol: 1.0e-6,
+            rtol: 1.0e-6,
+            dt_initial: Some(1.0e-13),
+            dt_min: 1.0e-18,
+            dt_max: Some(1.0e-12),
+            safety: 0.9,
+            growth_limit: 2.0,
+            shrink_limit: 0.2,
+            max_spin_rotation: None,
+            norm_tolerance: None,
+        }),
+        field_refresh: None,
+        mechanics: None,
+    };
+    ir.study = fullmag_ir::StudyIR::FrequencyResponse {
+        dynamics,
         operator: fullmag_ir::EigenOperatorConfigIR {
             kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
             include_demag: true,
@@ -5899,11 +6039,61 @@ fn frequency_response_is_first_class_ir_but_not_executable_yet() {
         },
     };
 
-    let err = plan(&ir).expect_err("frequency response execution is not implemented yet");
-    assert!(err.reasons.iter().any(|reason| {
-        reason.contains("StudyIR::FrequencyResponse is semantic-only")
-            && reason.contains("not implemented yet")
-    }));
+    let mut errors = Vec::new();
+    let _ = validate::planned_study_controls(&ir, BackendTarget::Fem, &mut errors);
+
+    assert!(
+        errors.is_empty(),
+        "frequency response is a direct harmonic solve and must not fail planner controls on time-integrator-only settings: {errors:?}"
+    );
+}
+
+#[test]
+fn frequency_response_planner_controls_ignore_invalid_time_integrator_alias() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fem;
+    let dynamics = fullmag_ir::DynamicsIR::Llg {
+        gyromagnetic_ratio: 2.211e5,
+        integrator: "not-a-time-integrator-for-frequency-response".to_string(),
+        fixed_timestep: None,
+        adaptive_timestep: None,
+        field_refresh: None,
+        mechanics: None,
+    };
+    ir.study = fullmag_ir::StudyIR::FrequencyResponse {
+        dynamics,
+        operator: fullmag_ir::EigenOperatorConfigIR {
+            kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+            include_demag: true,
+        },
+        equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
+        k_sampling: Some(fullmag_ir::KSamplingIR::Single {
+            k_vector: [0.0, 0.0, 0.0],
+        }),
+        normalization: fullmag_ir::FrequencyResponseNormalizationIR::UnitL2,
+        damping_policy: fullmag_ir::EigenDampingPolicyIR::Include,
+        spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+        excitation: fullmag_ir::FrequencyExcitationIR {
+            field_au_per_m: [0.0, 0.0, 1.0],
+        },
+        frequencies_hz: fullmag_ir::FrequencySweepIR {
+            values_hz: vec![1.0e9],
+        },
+        sampling: fullmag_ir::SamplingIR {
+            table_autosave: None,
+            outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
+                observable: fullmag_ir::FrequencyResponseOutputIR::SusceptibilityTensor,
+            }],
+        },
+    };
+
+    let mut errors = Vec::new();
+    let _ = validate::planned_study_controls(&ir, BackendTarget::Fem, &mut errors);
+
+    assert!(
+        errors.is_empty(),
+        "frequency response planner controls must ignore time-integrator-only aliases: {errors:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -7455,7 +7645,8 @@ fn minimal_hysteresis_study() -> StudyIR {
         orientation: Some(fullmag_ir::FieldOrientationIR::Preset {
             preset_name: "oop_positive".to_string(),
         }),
-        measurement_axis: "field_axis".to_string(),
+        measurement_axis: fullmag_ir::MeasurementAxisIR::field_axis(),
+        angular_family: None,
         initial_protocol: "as_authored".to_string(),
         saturation: None,
         branch_mode: "major_loop".to_string(),
@@ -7482,6 +7673,7 @@ fn minimal_hysteresis_study() -> StudyIR {
         }),
         field_schedule: None,
         schedule_refinements: None,
+        adaptive_refinement: None,
         minor_loops: None,
         sampling: SamplingIR {
             table_autosave: None,

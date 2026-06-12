@@ -406,7 +406,7 @@ export function createStudyStageDraft(
       thetaDeg,
       phiDeg,
       customDirection,
-      measurementAxis: scalarText(record?.measurement_axis, "field_axis"),
+      measurementAxis: measurementAxisText(record?.measurement_axis, "field_axis"),
       fieldScheduleMode,
       fieldSegments,
       denseWindows: objectText(record?.schedule_refinements ?? record?.dense_windows),
@@ -625,7 +625,7 @@ export function studyStageDraftToSceneStage(
       field_step_mT: requiredNumber(draft.fieldStepMt, "field_step_mT"),
       kind: "hysteresis",
       stage_id: requiredText(draft.stageId, "hysteresis"),
-      measurement_axis: draft.measurementAxis || "field_axis",
+      measurement_axis: parseMeasurementAxisDraft(draft.measurementAxis),
       branch_mode: draft.protocolKind || "major_loop",
       initial_protocol: draft.initialStatePolicy || "positive_saturation",
     };
@@ -1044,6 +1044,43 @@ function scalarText(value: unknown, fallback: string): string {
     return String(value);
   }
   return fallback;
+}
+
+function measurementAxisText(value: unknown, fallback: string): string {
+  if (typeof value === "number" || typeof value === "string") {
+    return String(value);
+  }
+  return value === null || value === undefined ? fallback : JSON.stringify(value);
+}
+
+function parseMeasurementAxisDraft(value: string): JsonValue {
+  const trimmed = value.trim();
+  if (!trimmed) return "field_axis";
+  if (!trimmed.startsWith("{")) return trimmed;
+  try {
+    const parsed = JSON.parse(trimmed);
+    return isJsonValue(parsed) ? parsed : trimmed;
+  } catch {
+    return trimmed;
+  }
+}
+
+function isJsonValue(value: unknown): value is JsonValue {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return true;
+  }
+  if (Array.isArray(value)) {
+    return value.every(isJsonValue);
+  }
+  if (typeof value === "object") {
+    return Object.values(value as Record<string, unknown>).every(isJsonValue);
+  }
+  return false;
 }
 
 function listText(value: unknown, fallback: string): string {

@@ -134,6 +134,8 @@ results.eigen.provenance
 results.frequency_response.root
 results.frequency_response.study
 results.frequency_response.sweep
+results.frequency_response.progress
+results.frequency_response.cancel_requested
 results.frequency_response.frequency_points
 results.frequency_response.frequency_point
 results.frequency_response.observables
@@ -161,6 +163,8 @@ resources.analysis.eigen.diagnostics
 resources.analysis.eigen.mode_metadata
 resources.analysis.eigen.mode_field
 resources.analysis.frequency_response.sweep
+resources.analysis.frequency_response.progress
+resources.analysis.frequency_response.cancel_requested
 resources.analysis.frequency_response.frequency_point
 resources.analysis.frequency_response.field
 resources.analysis.frequency_response.diagnostics
@@ -173,6 +177,7 @@ jobs.frequency_domain.root
 jobs.frequency_domain.stage_run
 jobs.frequency_domain.eigen_sample
 jobs.frequency_domain.response_frequency
+jobs.frequency_domain.response_progress
 jobs.frequency_domain.artifact_export
 ```
 
@@ -281,6 +286,7 @@ results:root
         results:eigen:{stageId}:provenance
       results:frequency-response:{stageId}
         results:frequency-response:{stageId}:sweep
+        results:frequency-response:{stageId}:progress
         results:frequency-response:{stageId}:frequency-points
           results:frequency-response:{stageId}:frequency:{frequencyIndex}
           results:frequency-response:{stageId}:frequency:{frequencyIndex}
@@ -345,6 +351,7 @@ resources:root
     resources:analysis:eigen:mode-fields
       resources:analysis:eigen:mode-field:{fieldId}
     resources:analysis:frequency-response:sweep
+    resources:analysis:frequency-response:progress
     resources:analysis:frequency-response:frequency-points
       resources:analysis:frequency-response:frequency-point:{frequencyIndex}
     resources:analysis:frequency-response:fields
@@ -369,6 +376,7 @@ jobs:root
     jobs:frequency-domain:stage-run:{commandId}
       jobs:frequency-domain:eigen-sample:{sampleIndex}
       jobs:frequency-domain:response-frequency:{frequencyIndex}
+      jobs:frequency-domain:response-progress
     jobs:frequency-domain:artifact-export:{commandId}
 ```
 
@@ -394,6 +402,7 @@ diagnostics:root
     diagnostics:frequency-domain:artifacts
     diagnostics:frequency-domain:api-resources
     diagnostics:frequency-domain:visualization
+    diagnostics:frequency-domain:periodic-floquet
 ```
 
 Diagnostics construction rules:
@@ -405,6 +414,8 @@ Diagnostics construction rules:
 - Artifacts node reads manifest artifact index and API 404/missing status.
 - API resources node reads resource runtime state.
 - Visualization node reads mode-field registration and viewport readiness.
+- Periodic-Floquet node reads periodic pair diagnostics, phase convention,
+  k-path/k-grid metadata, and nonzero-k demag rejection status.
 
 ## Explorer Builder Implementation Plan
 
@@ -439,6 +450,13 @@ Step-by-step instructions:
 9. Add diagnostics nodes from capability and manifest diagnostics.
 10. Add tests that assert all node kinds are generated for a fixture manifest.
 11. Add tests that assert no frequency-domain node kind resolves to placeholder once inspector registry is updated.
+12. Include explicit coverage for PBC/Floquet nodes:
+    `study.stage.eigenmodes.periodic_pairs`,
+    `study.stage.eigenmodes.k_path`,
+    `study.stage.frequency_response.periodic_pairs`,
+    `study.stage.frequency_response.k_grid`,
+    `resources.mesh.periodic_pairs`, and
+    `diagnostics.frequency_domain.periodic_floquet`.
 
 ## Explorer Acceptance Gate
 

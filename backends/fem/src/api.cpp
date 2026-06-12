@@ -20,6 +20,8 @@
 #include "cpu/mfem/runtime/snapshot.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
 #include "cpu/mfem/runtime/state_io.hpp"
+#include "frequency_domain/driven_response_solver.hpp"
+#include "frequency_domain/frequency_domain_contract.hpp"
 #include "gpu/cuda/integrators/rk/rk.hpp"
 #include "gpu/cuda/runtime/gpu_state_runtime.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
@@ -39,6 +41,98 @@ namespace {
 constexpr const char *kUnavailableMessage =
     "fullmag_fem native backend was built without the MFEM stack; rebuild with FULLMAG_USE_MFEM_STACK=ON and an installed MFEM toolchain";
 
+fullmag_fem_frequency_domain_status to_abi_status(
+    fullmag::fem::frequency_domain::FrequencyDomainStatus status)
+{
+    namespace fd = fullmag::fem::frequency_domain;
+    switch (status) {
+    case fd::FrequencyDomainStatus::ok:
+        return FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OK;
+    case fd::FrequencyDomainStatus::unavailable:
+        return FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_UNAVAILABLE;
+    case fd::FrequencyDomainStatus::validation_error:
+        return FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_VALIDATION_ERROR;
+    case fd::FrequencyDomainStatus::operator_error:
+        return FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OPERATOR_ERROR;
+    case fd::FrequencyDomainStatus::solve_error:
+        return FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_SOLVE_ERROR;
+    case fd::FrequencyDomainStatus::artifact_error:
+        return FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_ARTIFACT_ERROR;
+    case fd::FrequencyDomainStatus::interrupted:
+        return FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_INTERRUPTED;
+    }
+    return FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_VALIDATION_ERROR;
+}
+
+fullmag::fem::frequency_domain::FrequencyDomainStudyKind from_abi_study_kind(
+    fullmag_fem_frequency_domain_study_kind study_kind)
+{
+    namespace fd = fullmag::fem::frequency_domain;
+    switch (study_kind) {
+    case FULLMAG_FEM_FREQUENCY_DOMAIN_STUDY_RESPONSE:
+        return fd::FrequencyDomainStudyKind::driven_frequency_response;
+    case FULLMAG_FEM_FREQUENCY_DOMAIN_STUDY_EIGENMODES:
+        return fd::FrequencyDomainStudyKind::modal_dynamic_matrix;
+    }
+    return fd::FrequencyDomainStudyKind::driven_frequency_response;
+}
+
+void copy_frequency_domain_progress(
+    const fullmag::fem::frequency_domain::FrequencyDomainSweepProgress &native_progress,
+    fullmag_fem_frequency_domain_sweep_progress *out_progress
+)
+{
+    *out_progress = {};
+    out_progress->total_frequency_points = native_progress.total_frequency_points;
+    out_progress->completed_frequency_points = native_progress.completed_frequency_points;
+    out_progress->written_frequency_point_artifacts =
+        native_progress.written_frequency_point_artifacts;
+    out_progress->current_frequency_hz = native_progress.current_frequency_hz;
+    out_progress->partial_artifacts_available =
+        native_progress.partial_artifacts_available ? 1 : 0;
+    std::snprintf(
+        out_progress->latest_artifact_manifest_path,
+        sizeof(out_progress->latest_artifact_manifest_path),
+        "%s",
+        native_progress.latest_artifact_manifest_path != nullptr
+            ? native_progress.latest_artifact_manifest_path
+            : "");
+    std::snprintf(
+        out_progress->progress_json,
+        sizeof(out_progress->progress_json),
+        "%s",
+        native_progress.progress_json != nullptr ? native_progress.progress_json : "");
+}
+
+void copy_frequency_domain_solve_result(
+    fullmag::fem::frequency_domain::DrivenFrequencyResponseSolveResult &native_result,
+    fullmag_fem_frequency_domain_solve_result *out_result
+)
+{
+    *out_result = {};
+    out_result->status = to_abi_status(native_result.status);
+    out_result->total_frequency_count = native_result.total_frequency_count;
+    out_result->completed_frequency_count = native_result.completed_frequency_count;
+    out_result->written_frequency_point_artifacts =
+        native_result.written_frequency_point_artifacts;
+    out_result->error_message = native_result.error_message;
+    out_result->diagnostics_json = native_result.diagnostics_json;
+    out_result->result_json = native_result.result_json;
+    out_result->artifact_manifest_path = native_result.artifact_manifest_path;
+    native_result.error_message = nullptr;
+    native_result.diagnostics_json = nullptr;
+    native_result.result_json = nullptr;
+    native_result.artifact_manifest_path = nullptr;
+}
+
+bool frequency_domain_cancel_requested_from_c_abi(void *user_data) noexcept
+{
+    auto *request = static_cast<const fullmag_fem_frequency_domain_driven_response_request *>(user_data);
+    return request != nullptr &&
+        request->cancel_requested != nullptr &&
+        request->cancel_requested(request->cancel_user_data) != 0;
+}
+
 } // namespace
 
 extern "C" {
@@ -56,6 +150,223 @@ int fullmag_fem_get_availability_info(fullmag_fem_availability_info *out_info) {
     }
     *out_info = fullmag::fem::query_availability();
     return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_get_frequency_domain_availability_info(
+    const fullmag_fem_frequency_domain_availability_request *request,
+    fullmag_fem_frequency_domain_availability_info *out_info
+) {
+    if (request == nullptr || out_info == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_get_frequency_domain_availability_info requires non-null request and out_info");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+
+    namespace fd = fullmag::fem::frequency_domain;
+    fd::FrequencyDomainAvailabilityRequest native_request{};
+    native_request.study_kind = from_abi_study_kind(request->study_kind);
+    native_request.requires_driven_solver = request->requires_driven_solver != 0;
+    native_request.requires_modal_solver = request->requires_modal_solver != 0;
+    native_request.requires_floquet_boundary = request->requires_floquet_boundary != 0;
+    native_request.requires_nonzero_k_dynamic_demag =
+        request->requires_nonzero_k_dynamic_demag != 0;
+    native_request.requires_gpu = request->requires_gpu != 0;
+    native_request.strict_device = request->strict_device != 0;
+
+    const fd::FrequencyDomainAvailabilityResult native_result =
+        fd::frequency_domain_availability(native_request);
+
+    *out_info = {};
+    out_info->status = to_abi_status(native_result.status);
+    out_info->driven_response_available =
+        native_result.driven_response_available ? 1 : 0;
+    out_info->modal_solver_available = native_result.modal_solver_available ? 1 : 0;
+    out_info->floquet_modal_available = native_result.floquet_modal_available ? 1 : 0;
+    out_info->floquet_response_available =
+        native_result.floquet_response_available ? 1 : 0;
+    out_info->dynamic_demag_k_available =
+        native_result.dynamic_demag_k_available ? 1 : 0;
+    out_info->gpu_available = native_result.gpu_available ? 1 : 0;
+    std::snprintf(
+        out_info->status_name,
+        sizeof(out_info->status_name),
+        "%s",
+        fd::status_to_string(native_result.status));
+    std::snprintf(
+        out_info->study_kind_name,
+        sizeof(out_info->study_kind_name),
+        "%s",
+        fd::study_kind_to_string(native_request.study_kind));
+    std::snprintf(
+        out_info->reason,
+        sizeof(out_info->reason),
+        "%s",
+        native_result.error_message != nullptr ? native_result.error_message : "");
+    std::snprintf(
+        out_info->diagnostics_json,
+        sizeof(out_info->diagnostics_json),
+        "%s",
+        native_result.diagnostics_json != nullptr ? native_result.diagnostics_json : "");
+    fullmag_fem_clear_global_error();
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_frequency_domain_initial_sweep_progress(
+    uint64_t total_frequency_points,
+    fullmag_fem_frequency_domain_sweep_progress *out_progress
+) {
+    if (out_progress == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_frequency_domain_initial_sweep_progress requires non-null out_progress");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+
+    const auto native_progress =
+        fullmag::fem::frequency_domain::initial_sweep_progress(total_frequency_points);
+    copy_frequency_domain_progress(native_progress, out_progress);
+    fullmag_fem_clear_global_error();
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_frequency_domain_interrupted_sweep_progress(
+    uint64_t total_frequency_points,
+    uint64_t completed_frequency_points,
+    uint64_t written_frequency_point_artifacts,
+    double current_frequency_hz,
+    const char *latest_artifact_manifest_path,
+    fullmag_fem_frequency_domain_sweep_progress *out_progress
+) {
+    if (out_progress == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_frequency_domain_interrupted_sweep_progress requires non-null out_progress");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+
+    const auto native_progress =
+        fullmag::fem::frequency_domain::interrupted_sweep_progress(
+            total_frequency_points,
+            completed_frequency_points,
+            written_frequency_point_artifacts,
+            current_frequency_hz,
+            latest_artifact_manifest_path);
+    copy_frequency_domain_progress(native_progress, out_progress);
+    fullmag_fem_clear_global_error();
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_frequency_domain_cancelling_sweep_progress(
+    uint64_t total_frequency_points,
+    uint64_t completed_frequency_points,
+    uint64_t written_frequency_point_artifacts,
+    double current_frequency_hz,
+    const char *latest_artifact_manifest_path,
+    fullmag_fem_frequency_domain_sweep_progress *out_progress
+) {
+    if (out_progress == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_frequency_domain_cancelling_sweep_progress requires non-null out_progress");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+
+    const auto native_progress =
+        fullmag::fem::frequency_domain::cancelling_sweep_progress(
+            total_frequency_points,
+            completed_frequency_points,
+            written_frequency_point_artifacts,
+            current_frequency_hz,
+            latest_artifact_manifest_path);
+    copy_frequency_domain_progress(native_progress, out_progress);
+    fullmag_fem_clear_global_error();
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_frequency_domain_completed_sweep_progress(
+    uint64_t total_frequency_points,
+    uint64_t completed_frequency_points,
+    uint64_t written_frequency_point_artifacts,
+    double current_frequency_hz,
+    const char *latest_artifact_manifest_path,
+    fullmag_fem_frequency_domain_sweep_progress *out_progress
+) {
+    if (out_progress == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_frequency_domain_completed_sweep_progress requires non-null out_progress");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+
+    const auto native_progress =
+        fullmag::fem::frequency_domain::completed_sweep_progress(
+            total_frequency_points,
+            completed_frequency_points,
+            written_frequency_point_artifacts,
+            current_frequency_hz,
+            latest_artifact_manifest_path);
+    copy_frequency_domain_progress(native_progress, out_progress);
+    fullmag_fem_clear_global_error();
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_frequency_domain_solve_driven_response(
+    const fullmag_fem_frequency_domain_driven_response_request *request,
+    fullmag_fem_frequency_domain_solve_result *out_result
+) {
+    if (request == nullptr || out_result == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_frequency_domain_solve_driven_response requires non-null request and out_result");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+
+    namespace fd = fullmag::fem::frequency_domain;
+    fd::DrivenFrequencyResponseSolveRequest native_request{};
+    native_request.solve_request.operator_request.node_count = request->node_count;
+    native_request.solve_request.operator_request.tangent_dof_count =
+        request->tangent_dof_count;
+    native_request.solve_request.operator_request.alpha = request->alpha;
+    native_request.solve_request.operator_request.gamma0 = request->gamma0;
+    native_request.solve_request.frequencies_hz = request->frequencies_hz;
+    native_request.solve_request.frequency_count = request->frequency_count;
+    native_request.solve_request.write_response_fields =
+        request->write_response_fields != 0;
+    native_request.output_directory = request->output_directory;
+    native_request.write_partial_artifacts = request->write_partial_artifacts != 0;
+    if (request->cancel_requested != nullptr) {
+        native_request.cancel_requested = frequency_domain_cancel_requested_from_c_abi;
+        native_request.cancel_user_data = const_cast<fullmag_fem_frequency_domain_driven_response_request *>(request);
+    }
+    native_request.tiny_validation_problem.enabled =
+        request->tiny_validation_enabled != 0;
+    native_request.tiny_validation_problem.tangent_dof_count =
+        request->tiny_validation_tangent_dof_count;
+    native_request.tiny_validation_problem.stiffness_matrix_row_major =
+        request->tiny_validation_stiffness_matrix_row_major;
+    native_request.tiny_validation_problem.mass_matrix_row_major =
+        request->tiny_validation_mass_matrix_row_major;
+    native_request.tiny_validation_problem.stiffness_diagonal =
+        request->tiny_validation_stiffness_diagonal;
+    native_request.tiny_validation_problem.mass_diagonal =
+        request->tiny_validation_mass_diagonal;
+    native_request.tiny_validation_problem.drive_real =
+        request->tiny_validation_drive_real;
+
+    fd::DrivenFrequencyResponseSolveResult native_result{};
+    fd::solve_driven_frequency_response(native_request, &native_result);
+    copy_frequency_domain_solve_result(native_result, out_result);
+    fd::release_driven_frequency_response_result(&native_result);
+    fullmag_fem_clear_global_error();
+    return FULLMAG_FEM_OK;
+}
+
+void fullmag_fem_frequency_domain_solve_result_release(
+    fullmag_fem_frequency_domain_solve_result *result
+) {
+    if (result == nullptr) {
+        return;
+    }
+    delete[] result->error_message;
+    delete[] result->diagnostics_json;
+    delete[] result->result_json;
+    delete[] result->artifact_manifest_path;
+    *result = {};
 }
 
 fullmag_fem_backend *fullmag_fem_backend_create(const fullmag_fem_plan_desc *plan) {

@@ -106,6 +106,16 @@ export type LiveStatusResource = components["schemas"]["LiveStatus"];
 export type MagneticResponseSweepResource = JsonObject & {
   schema_version: string;
 };
+export type FrequencyDomainManifestResource =
+  components["schemas"]["FrequencyDomainManifestResource"];
+export type FrequencyDomainJsonArtifactResource =
+  components["schemas"]["FrequencyDomainJsonArtifactResource"];
+export type FrequencyDomainTextArtifactResource =
+  components["schemas"]["FrequencyDomainTextArtifactResource"];
+export type FrequencyDomainFieldResource =
+  components["schemas"]["FrequencyDomainFieldResource"];
+export type FrequencyDomainSweepProgressResource =
+  components["schemas"]["FrequencyDomainSweepProgressResource"];
 export type RealtimeCommunicationPolicy =
   components["schemas"]["RealtimeCommunicationPolicy"];
 export type RealtimeCommunicationPolicyPatch =
@@ -147,6 +157,8 @@ export type MeshObjectReportResource =
   components["schemas"]["MeshObjectReportResource"];
 export type MeshObjectSizeFieldResource =
   components["schemas"]["MeshObjectSizeFieldResource"];
+export type MeshPeriodicPairsResource =
+  components["schemas"]["MeshPeriodicPairsResource"];
 export type MeshQualityGatesResource =
   components["schemas"]["MeshQualityGatesResource"];
 export type MeshRealizedSizeFieldsResource =
@@ -220,6 +232,8 @@ export type HysteresisExecutionTreeResource =
   components["schemas"]["HysteresisExecutionTreeResource"];
 export type HysteresisExecutionTreeNode =
   components["schemas"]["HysteresisExecutionTreeNode"];
+export type HysteresisAngularFamilyResource =
+  components["schemas"]["HysteresisAngularFamilyResource"];
 export type HysteresisProgressSchema =
   components["schemas"]["HysteresisProgressSchema"];
 export type StudyRuntimePatchRequest =

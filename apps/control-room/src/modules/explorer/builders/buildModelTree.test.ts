@@ -1,14 +1,227 @@
 import { describe, expect, it } from "vitest";
 
-import type { SceneResource } from "@/kernel/api/apiTypes";
+import type {
+  FrequencyDomainManifestResource,
+  SceneResource,
+} from "@/kernel/api/apiTypes";
+import {
+  ANALYSIS_EIGEN_MODE_V2_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DIAGNOSTICS_V2_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_FIELD_META_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_DIAGNOSTICS_V1_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
+} from "@/kernel/api/apiPaths";
 
-import { buildModelTree, flattenExplorerNodes } from "./buildModelTree";
+import {
+  buildExplorerTree,
+  buildModelTree,
+  flattenExplorerNodes,
+} from "./buildModelTree";
 import {
   modelTreeSnapshotFromScene,
   modelTreeSnapshotWithStageExecution,
 } from "./sceneModelTreeAdapter";
 
 const TORQUE_TOLERANCE_FOR_1E_4_T = 1e-4 / (4 * Math.PI * 1e-7);
+
+const capability = (status: string, reason = "test fixture") => ({ status, reason });
+
+const frequencyDomainCapabilityFixture = {
+  boundary: {
+    floquet_modal: capability("semantic_only"),
+    floquet_response: capability("unsupported"),
+    periodic_pair_diagnostics: capability("reference_executable"),
+    static_periodic: capability("semantic_only"),
+  },
+  demag: {
+    floquet_dynamic_k: capability("unsupported"),
+    static_periodic_pbc: capability("semantic_only"),
+  },
+  dispersion: {
+    branch_tracking: capability("reference_executable"),
+    k_path: capability("reference_executable"),
+  },
+  modal: {
+    absorption_from_modes: capability("unsupported"),
+    k_path: capability("reference_executable"),
+    linewidths: capability("reference_executable"),
+    mode_field_payload: capability("reference_executable"),
+    mode_tracking: capability("reference_executable"),
+    production_cpu: capability("unsupported"),
+    production_gpu: capability("unsupported"),
+    reference_cpu: capability("reference_executable"),
+  },
+  response: {
+    frequency_sweep: capability("reference_executable"),
+    magnetic_cpu: capability("reference_executable"),
+    magnetic_gpu: capability("unsupported"),
+    magnetoelastic_elastodynamic: capability("unsupported"),
+    magnetoelastic_quasistatic: capability("unsupported"),
+    mode_projected: capability("unsupported"),
+  },
+  schema_version: "frequency_domain_capabilities.v1",
+  validation: {
+    fmr_k0: capability("source_visible"),
+  },
+  visualization: {
+    modal_dispersion_chart: capability("reference_executable"),
+    modal_spectrum_chart: capability("reference_executable"),
+    mode_3d_overlay: capability("reference_executable"),
+    mode_table: capability("reference_executable"),
+    response_field_3d_overlay: capability("reference_executable"),
+    response_sweep_chart: capability("reference_executable"),
+  },
+} satisfies FrequencyDomainManifestResource["capabilities"];
+
+const FREQUENCY_DOMAIN_MANIFEST: FrequencyDomainManifestResource = {
+  capabilities: frequencyDomainCapabilityFixture,
+  eigen_namespace: "eigen",
+  eigenmodes: {
+    diagnostics_json: "{}",
+    driven_response_available: false,
+    dynamic_demag_k_available: false,
+    floquet_modal_available: true,
+    floquet_response_available: false,
+    gpu_available: false,
+    modal_solver_available: false,
+    reason: "production modal solver is not implemented",
+    status: "unavailable",
+    study_kind: "eigenmodes",
+  },
+  existing_frequency_response_namespace_preserved: true,
+  family_namespace: "frequencyDomain",
+  floquet_nonzero_k_demag_supported: false,
+  response: {
+    diagnostics_json: "{}",
+    driven_response_available: false,
+    dynamic_demag_k_available: false,
+    floquet_modal_available: false,
+    floquet_response_available: false,
+    gpu_available: false,
+    modal_solver_available: false,
+    reason: "driven response solver is not implemented",
+    status: "unavailable",
+    study_kind: "frequency_response",
+  },
+  response_cancel_requested: null,
+  response_progress: null,
+  schema_version: "frequency_domain_manifest.v1",
+};
+
+const FREQUENCY_DOMAIN_SPECTRUM = {
+  artifact_path: "eigen/spectrum.v2.json",
+  missing_reason: null,
+  payload: {
+    modes: [
+      {
+        branch_id: "branch-0",
+        frequency_hz: 12.5e9,
+        mode_field_id: "analysis:eigen:sample-0000:mode-0002",
+        raw_mode_index: 2,
+        residual_norm: 1e-8,
+        sample_index: 0,
+      },
+      {
+        frequency_hz: 14.25e9,
+        raw_mode_index: 3,
+        sample_index: 0,
+      },
+    ],
+    schema_version: "eigen_spectrum.v2",
+  },
+  resource_key: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+  schema_version: "frequency_domain_eigen_spectrum.v2",
+  status: "ready",
+} as const;
+
+const FREQUENCY_DOMAIN_BRANCHES = {
+  artifact_path: "eigen/branches.v2.json",
+  missing_reason: null,
+  payload: {
+    branches: [
+      {
+        branch_id: "branch-0",
+        label: "acoustic",
+        points: [
+          {
+            frequency_imag_hz: -1.2e7,
+            frequency_real_hz: 12.5e9,
+            overlap_prev: null,
+            raw_mode_index: 2,
+            sample_index: 0,
+            tracking_confidence: 1,
+          },
+          {
+            frequency_imag_hz: -1.4e7,
+            frequency_real_hz: 13.1e9,
+            overlap_prev: 0.97,
+            raw_mode_index: 1,
+            sample_index: 1,
+            tracking_confidence: 0.98,
+          },
+        ],
+      },
+    ],
+    schema_version: "eigen_branches.v2",
+    solver_model: "linearized_llg_reference",
+  },
+  resource_key: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
+  schema_version: "frequency_domain_eigen_branches.v2",
+  status: "ready",
+} as const;
+
+const FREQUENCY_DOMAIN_DISPERSION = {
+  artifact_path: "eigen/dispersion/branch_table.csv",
+  content_type: "text/csv",
+  missing_reason: null,
+  resource_key: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+  schema_version: "frequency_domain_eigen_dispersion.csv",
+  status: "ready",
+  text: [
+    "sample_index,raw_mode_index,branch_id,path_s,frequency_hz,residual_norm",
+    "0,2,branch-0,0,12.5e9,1e-8",
+    "1,1,branch-0,3.14e7,13.1e9,2e-8",
+  ].join("\n"),
+} as const;
+
+const FREQUENCY_DOMAIN_RESPONSE_SWEEP = {
+  artifact_path: "response/magnetic_response_sweep.v2.json",
+  missing_reason: null,
+  payload: {
+    points: [
+      {
+        absorbed_power_density: 4.5,
+        frequency_hz: 9.5e9,
+        frequency_index: 0,
+        max_response_amplitude: 1.5,
+        observable_id: "mx",
+      },
+      {
+        absorbed_power_density: 2.5,
+        frequency_hz: 10.5e9,
+        frequency_index: 1,
+        max_response_amplitude: 1.1,
+        observable_id: "mx",
+      },
+      {
+        frequency_hz: 9.5e9,
+        frequency_index: 0,
+        max_response_amplitude: 0.5,
+        observable_id: "my",
+      },
+    ],
+    schema_version: "magnetic_response_sweep.v2",
+  },
+  resource_key: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+  schema_version: "frequency_domain_response_sweep_resource.v1",
+  status: "ready",
+} as const;
 
 describe("buildModelTree", () => {
   it("builds a typed model tree from a scene snapshot without storing API data", () => {
@@ -612,6 +825,10 @@ describe("buildModelTree", () => {
             stage_id: "hysteresis-1",
           },
           {
+            kind: "eigenmodes",
+            stage_id: "eigen-1",
+          },
+          {
             kind: "frequency_response",
             stage_id: "freq-1",
           },
@@ -622,7 +839,7 @@ describe("buildModelTree", () => {
     const flattened = flattenExplorerNodes(buildModelTree(snapshot));
 
     expect(flattened.find((node) => node.id === "model:study")?.badge).toBe(
-      "5 stages",
+      "6 stages",
     );
     expect(flattened.find((node) => node.id === "model:study")).toMatchObject({
       children: expect.arrayContaining([
@@ -650,6 +867,7 @@ describe("buildModelTree", () => {
         "model:study:stages:stage:1",
         "model:study:stages:stage:2",
         "model:study:stages:stage:hysteresis-1",
+        "model:study:stages:stage:eigen-1",
         "model:study:stages:stage:freq-1",
       ]),
     );
@@ -688,11 +906,39 @@ describe("buildModelTree", () => {
     });
     expect(
       flattened.find(
+        (node) => node.id === "model:study:stages:stage:eigen-1",
+      ),
+    ).toMatchObject({
+      kind: "study.stage.eigenmodes",
+      label: "Eigenmodes 5",
+    });
+    expect(
+      flattened.find(
+        (node) => node.id === "model:study:stages:stage:eigen-1:k-path",
+      ),
+    ).toMatchObject({
+      kind: "study.stage.eigenmodes.k_path",
+      label: "k-Path",
+      stageId: "eigen-1",
+      stageIndex: 4,
+    });
+    expect(
+      flattened.find(
         (node) => node.id === "model:study:stages:stage:freq-1",
       ),
     ).toMatchObject({
       kind: "study.stage.frequency_response",
-      label: "Frequency Response 5",
+      label: "Frequency Response 6",
+    });
+    expect(
+      flattened.find(
+        (node) => node.id === "model:study:stages:stage:freq-1:excitation",
+      ),
+    ).toMatchObject({
+      kind: "study.stage.frequency_response.excitation",
+      label: "Excitation",
+      stageId: "freq-1",
+      stageIndex: 5,
     });
     expect(flattened.map((node) => node.id)).not.toContain(
       "model:study:relax",
@@ -743,6 +989,396 @@ describe("buildModelTree", () => {
       label: "Run 2",
       status: "running",
     });
+  });
+
+  it("builds frequency-domain result, resource, job, and diagnostic trees from the manifest", () => {
+    const results = flattenExplorerNodes(
+      buildExplorerTree("results", {
+        frequencyDomainBranches: FREQUENCY_DOMAIN_BRANCHES,
+        frequencyDomainDispersion: FREQUENCY_DOMAIN_DISPERSION,
+        frequencyDomainManifest: FREQUENCY_DOMAIN_MANIFEST,
+        frequencyDomainResponseSweep: FREQUENCY_DOMAIN_RESPONSE_SWEEP,
+        frequencyDomainSpectrum: FREQUENCY_DOMAIN_SPECTRUM,
+      }),
+    );
+    expect(results.map((node) => node.id)).toEqual(
+      expect.arrayContaining([
+        "results:frequency-domain",
+        "results:frequency-domain:fmr",
+        "results:frequency-domain:fmr:modal-spectrum",
+        "results:frequency-domain:fmr:response-sweep",
+        "results:frequency-domain:dispersion",
+        "results:eigen:k-path",
+        "results:eigen",
+        "results:eigen:spectrum",
+        "results:eigen:branches",
+        "results:eigen:branches:branch:branch-0",
+        "results:eigen:sample:0:mode:2",
+        "results:eigen:dispersion",
+        "results:frequency-response",
+        "results:frequency-response:sweep",
+        "results:frequency-response:progress",
+        "results:frequency-response:cancel-requested",
+        "results:frequency-response:frequency-points",
+        "results:frequency-response:frequency-points:0",
+        "results:frequency-response:frequency-points:1",
+        "results:frequency-response:observables",
+        "results:frequency-response:observables:mx",
+        "results:frequency-response:observables:my",
+      ]),
+    );
+    expect(
+      results.find((node) => node.id === "results:frequency-domain"),
+    ).toMatchObject({
+      badge: "frequency_domain_manifest.v1",
+      kind: "results.frequency_domain.root",
+      status: "ready",
+    });
+    expect(
+      results.find(
+        (node) => node.id === "results:frequency-domain:dispersion",
+      ),
+    ).toMatchObject({
+      badge: "demag-k blocked",
+      kind: "results.frequency_domain.dispersion",
+      status: "unsupported",
+    });
+    expect(
+      results.find((node) => node.id === "results:eigen:k-path"),
+    ).toMatchObject({
+      badge: "2 k sample(s)",
+      kind: "results.eigen.k_path",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+      status: "ready",
+    });
+    expect(
+      results.find((node) => node.id === "results:eigen:dispersion"),
+    ).toMatchObject({
+      badge: "2 point(s)",
+      kind: "results.eigen.dispersion",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+      status: "ready",
+    });
+    expect(
+      results.find((node) => node.id === "results:eigen:modes"),
+    ).toMatchObject({
+      badge: "2 listed",
+      status: "ready",
+    });
+    expect(
+      results.find((node) => node.id === "results:eigen:sample:0:mode:2"),
+    ).toMatchObject({
+      badge: "12.500 GHz",
+      branchId: "branch-0",
+      contextCommands: ["analysis.eigen.plot-mode-3d"],
+      fieldId: "analysis:eigen:sample-0000:mode-0002",
+      kind: "results.eigen.mode",
+      modeIndex: 2,
+      sampleIndex: 0,
+      status: "ready",
+    });
+    expect(
+      results.find((node) => node.id === "results:eigen:branches"),
+    ).toMatchObject({
+      badge: "1 tracked",
+      kind: "results.eigen.branches",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
+      status: "ready",
+    });
+    expect(
+      results.find((node) => node.id === "results:eigen:branches:branch:branch-0"),
+    ).toMatchObject({
+      badge: "12.500-13.100 GHz",
+      branchId: "branch-0",
+      calculationMode: "dispersion_modal",
+      kind: "results.eigen.branch",
+      label: "acoustic",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
+      status: "ready",
+    });
+    expect(
+      results.find(
+        (node) => node.id === "results:frequency-response:frequency-points",
+      ),
+    ).toMatchObject({
+      badge: "2 listed",
+      kind: "results.frequency_response.frequency_points",
+      status: "ready",
+    });
+    expect(
+      results.find(
+        (node) => node.id === "results:frequency-response:frequency-points:0",
+      ),
+    ).toMatchObject({
+      badge: "9.500 GHz, 2 observable(s)",
+      contextCommands: ["analysis.frequency-response.plot-response-field-3d"],
+      fieldId: "analysis:frequency-response:frequency-0000",
+      frequencyIndex: 0,
+      kind: "results.frequency_response.frequency_point",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+      status: "ready",
+    });
+    expect(
+      results.find(
+        (node) => node.id === "results:frequency-response:observables",
+      ),
+    ).toMatchObject({
+      badge: "2 observable(s)",
+      kind: "results.frequency_response.observables",
+      status: "ready",
+    });
+    expect(
+      results.find(
+        (node) => node.id === "results:frequency-response:observables:mx",
+      ),
+    ).toMatchObject({
+      badge: "2 point(s)",
+      kind: "results.frequency_response.observable",
+      label: "mx",
+      observableId: "mx",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+      status: "ready",
+    });
+
+    const responseResults = flattenExplorerNodes(
+      buildExplorerTree("results", {
+        frequencyDomainManifest: {
+          ...FREQUENCY_DOMAIN_MANIFEST,
+          response_progress: {
+            complete: false,
+            completed_frequency_points: 2,
+            current_frequency_hz: 2.0e9,
+            latest_artifact_manifest_path: "response/artifact_manifest.json",
+            missing_reason: null,
+            partial_artifacts_available: true,
+            schema_version: "frequency_domain_sweep_progress.v1",
+            status: "ready",
+            total_frequency_points: 4,
+            written_frequency_point_artifacts: 2,
+          },
+          response_cancel_requested: {
+            complete: false,
+            completed_frequency_points: 1,
+            current_frequency_hz: 1.0e9,
+            latest_artifact_manifest_path: "response/artifact_manifest.json",
+            missing_reason: null,
+            partial_artifacts_available: true,
+            progress_json:
+              '{"schema_version":"frequency_domain_sweep_progress.v1","state":"cancel_requested"}',
+            schema_version: "frequency_domain_sweep_progress.v1",
+            status: "cancel_requested",
+            total_frequency_points: 4,
+            written_frequency_point_artifacts: 1,
+          },
+        },
+      }),
+    );
+    const cancelRequestedNode = responseResults.find(
+      (node) => node.kind === "results.frequency_response.cancel_requested",
+    );
+    expect(cancelRequestedNode).toMatchObject({
+      artifactPath: "response/cancel_requested.v1.json",
+      badge: "1/4",
+      resourceRef:
+        ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
+      status: "ready",
+    });
+    const responsePointNodes = responseResults.filter(
+      (node) => node.kind === "results.frequency_response.frequency_point",
+    );
+    expect(responsePointNodes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          contextCommands: [
+            "analysis.frequency-response.plot-response-field-3d",
+          ],
+          fieldId: "analysis:frequency-response:frequency-0000",
+          frequencyIndex: 0,
+          id: "results:frequency-response:frequency-points:0",
+        }),
+        expect.objectContaining({
+          fieldId: "analysis:frequency-response:frequency-0001",
+          frequencyIndex: 1,
+          id: "results:frequency-response:frequency-points:1",
+        }),
+      ]),
+    );
+
+    const resources = flattenExplorerNodes(
+      buildExplorerTree("resources", {
+        frequencyDomainManifest: {
+          ...FREQUENCY_DOMAIN_MANIFEST,
+          result_manifest: {
+            artifact_path: "frequency_domain/manifest.v1.json",
+            missing_reason: null,
+            payload: {
+              artifacts: {
+                branches_v2_path: "eigen/branches.v2.json",
+                dispersion_csv_path: "eigen/dispersion/branch_table.csv",
+                eigen_diagnostics_v2_path: "eigen/diagnostics.v2.json",
+                mode_metadata_paths: [
+                  "eigen/modes/sample_0000/mode_0002.json",
+                ],
+                response_diagnostics_v1_path: "response/diagnostics.v1.json",
+                response_cancel_requested_v1_path:
+                  "response/cancel_requested.v1.json",
+                response_progress_v1_path: "response/progress.v1.json",
+                response_sweep_v1_path:
+                  "response/magnetic_response_sweep.v1.json",
+                spectrum_v2_path: "eigen/spectrum.v2.json",
+              },
+              resources: {
+                branches_resource_key:
+                  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
+                dispersion_resource_key:
+                  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+                eigen_diagnostics_resource_key:
+                  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DIAGNOSTICS_V2_PATH,
+                mode_field_resources: [
+                  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_FIELD_META_PATH
+                    .replace("{sample_index}", "0")
+                    .replace("{mode_index}", "2"),
+                ],
+                response_diagnostics_resource_key:
+                  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_DIAGNOSTICS_V1_PATH,
+                response_cancel_requested_resource_key:
+                  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
+                response_progress_resource_key:
+                  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
+                response_sweep_resource_key:
+                  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+                spectrum_resource_key:
+                  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+              },
+            },
+            resource_key: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
+            schema_version: "frequency_domain_manifest.v1",
+            status: "ready",
+          },
+        },
+      }),
+    );
+    expect(resources.map((node) => node.kind)).toEqual(
+      expect.arrayContaining([
+        "resources.analysis.frequency_domain.manifest",
+        "resources.mesh.periodic_pairs",
+        "resources.analysis.eigen.mode_field",
+        "resources.analysis.frequency_response.field",
+        "resources.analysis.frequency_response.progress",
+        "resources.analysis.frequency_response.cancel_requested",
+        "resources.analysis.frequency_response.diagnostics",
+      ]),
+    );
+    expect(
+      resources.find(
+        (node) =>
+          node.kind === "resources.analysis.frequency_response.progress",
+      ),
+    ).toMatchObject({
+      artifactPath: "response/progress.v1.json",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
+    });
+    expect(
+      resources.find(
+        (node) =>
+          node.kind ===
+          "resources.analysis.frequency_response.cancel_requested",
+      ),
+    ).toMatchObject({
+      artifactPath: "response/cancel_requested.v1.json",
+      resourceRef:
+        ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
+    });
+    expect(
+      resources.find(
+        (node) => node.kind === "resources.analysis.frequency_response.sweep",
+      ),
+    ).toMatchObject({
+      artifactPath: "response/magnetic_response_sweep.v1.json",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+    });
+    expect(
+      resources.find(
+        (node) =>
+          node.kind === "resources.analysis.frequency_response.diagnostics",
+      ),
+    ).toMatchObject({
+      artifactPath: "response/diagnostics.v1.json",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_DIAGNOSTICS_V1_PATH,
+    });
+    expect(
+      resources.find((node) => node.kind === "resources.analysis.eigen.spectrum"),
+    ).toMatchObject({
+      artifactPath: "eigen/spectrum.v2.json",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+    });
+    expect(
+      resources.find((node) => node.kind === "resources.analysis.eigen.branches"),
+    ).toMatchObject({
+      artifactPath: "eigen/branches.v2.json",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
+    });
+    expect(
+      resources.find(
+        (node) => node.kind === "resources.analysis.eigen.dispersion",
+      ),
+    ).toMatchObject({
+      artifactPath: "eigen/dispersion/branch_table.csv",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+    });
+    expect(
+      resources.find(
+        (node) => node.kind === "resources.analysis.eigen.diagnostics",
+      ),
+    ).toMatchObject({
+      artifactPath: "eigen/diagnostics.v2.json",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DIAGNOSTICS_V2_PATH,
+    });
+    expect(
+      resources.find(
+        (node) => node.kind === "resources.analysis.eigen.mode_metadata",
+      ),
+    ).toMatchObject({
+      artifactPath: "eigen/modes/sample_0000/mode_0002.json",
+      badge: "1 mode metadata",
+      resourceRef: ANALYSIS_EIGEN_MODE_V2_PATH,
+      status: "ready",
+    });
+    expect(
+      resources.find((node) => node.kind === "resources.analysis.eigen.mode_field"),
+    ).toMatchObject({
+      badge: "1 mode fields",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_FIELD_META_PATH
+        .replace("{sample_index}", "0")
+        .replace("{mode_index}", "2"),
+      status: "ready",
+    });
+
+    const jobs = flattenExplorerNodes(buildExplorerTree("jobs"));
+    expect(jobs.map((node) => node.kind)).toEqual(
+      expect.arrayContaining([
+        "jobs.frequency_domain.root",
+        "jobs.frequency_domain.stage_run",
+        "jobs.frequency_domain.eigen_sample",
+        "jobs.frequency_domain.response_frequency",
+        "jobs.frequency_domain.response_progress",
+        "jobs.frequency_domain.artifact_export",
+      ]),
+    );
+
+    const diagnostics = flattenExplorerNodes(
+      buildExplorerTree("diagnostics", {
+        frequencyDomainManifest: FREQUENCY_DOMAIN_MANIFEST,
+      }),
+    );
+    expect(diagnostics.map((node) => node.kind)).toEqual(
+      expect.arrayContaining([
+        "diagnostics.frequency_domain.capabilities",
+        "diagnostics.frequency_domain.operator",
+        "diagnostics.frequency_domain.api_resources",
+        "diagnostics.frequency_domain.periodic_floquet",
+      ]),
+    );
   });
 
   it("renders hysteresis as one dynamic field node with settle algorithms", () => {

@@ -4014,6 +4014,48 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(study["initial_protocol"], "as_authored")
         self.assertEqual(study["storage"]["magnetization"], "none")
 
+    def test_study_stage_builder_hysteresis_custom_measurement_axis_round_trips(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("stage_hysteresis_custom_measurement_axis")
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.m = fm.texture.uniform(1, 0, 0)
+        study.stages.add_hysteresis_sweep(
+            field_values_mT=[100.0, 0.0, -100.0],
+            orientation=fm.FieldOrientation.sample(theta_deg=90.0, phi_deg=35.0),
+            measurement_axis=fm.MeasurementAxis.custom((0.0, 3.0, 4.0)),
+            initial_protocol="as_authored",
+            storage=fm.HysteresisStorage(magnetization="none"),
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "hysteresis_custom_measurement_axis.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+
+        study = loaded.stages[0].problem.study.to_ir()
+        self.assertEqual(
+            study["measurement_axis"],
+            {"kind": "custom", "vector": [0.0, 3.0, 4.0]},
+        )
+
+        rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+        self.assertIn("measurement_axis=fm.MeasurementAxis.custom([0, 3, 4])", rewritten)
+
+        with TemporaryDirectory() as tmp_dir:
+            rewritten_path = Path(tmp_dir) / "rewritten_hysteresis_custom_measurement_axis.py"
+            rewritten_path.write_text(rewritten, encoding="utf-8")
+            reloaded = fm.load_problem_from_script(rewritten_path, lightweight_assets=True)
+
+        self.assertEqual(
+            reloaded.stages[0].problem.study.to_ir()["measurement_axis"],
+            {"kind": "custom", "vector": [0.0, 3.0, 4.0]},
+        )
+
     def test_fdm_hysteresis_snapshot_smoke_example_loads_snapshot_storage(self) -> None:
         example_path = (
             Path(__file__).resolve().parents[3] / "examples" / "fdm_hysteresis_snapshot_smoke.py"
@@ -4028,6 +4070,61 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(study["kind"], "hysteresis")
         self.assertEqual(study["field_values_mT"], [50.0, 0.0, -50.0])
         self.assertEqual(study["storage"]["magnetization"], "every_n")
+        self.assertEqual(study["storage"]["every_n"], 1)
+
+    def test_hysteresis_waveguide_smoke_example_loads_fast_fem_stage(self) -> None:
+        example_path = (
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "hysteresis_waveguide_300x50x10nm.py"
+        )
+
+        loaded = fm.load_problem_from_script(example_path, lightweight_assets=True)
+
+        self.assertEqual(len(loaded.stages), 1)
+        stage = loaded.stages[0]
+        self.assertEqual(stage.entrypoint_kind, "flat_hysteresis")
+        runtime_metadata = stage.problem.runtime_metadata
+        universe = runtime_metadata["study_universe"]
+        self.assertEqual(universe["mode"], "manual")
+        for actual, expected in zip(universe["size"], [1000e-9, 200e-9, 100e-9]):
+            self.assertAlmostEqual(actual, expected)
+        self.assertAlmostEqual(universe["airbox_hmax"], 100e-9)
+
+        study = stage.problem.study.to_ir()
+        self.assertEqual(study["kind"], "hysteresis")
+        self.assertEqual(
+            study["field_values_mT"],
+            [50.0, 25.0, 0.0, -25.0, -50.0, -25.0, 0.0, 25.0, 50.0],
+        )
+        self.assertEqual(study["orientation"], {"kind": "preset", "preset_name": "in_plane_x"})
+        self.assertEqual(study["measurement_axis"], "field_axis")
+        self.assertEqual(study["settle_pipeline"]["steps"][0]["kind"], "minimize")
+        self.assertEqual(study["settle_pipeline"]["steps"][0]["max_steps"], 200)
+        self.assertEqual(study["storage"]["magnetization"], "none")
+
+    def test_hysteresis_waveguide_example_can_enable_every_step_playback(self) -> None:
+        example_path = (
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "hysteresis_waveguide_300x50x10nm.py"
+        )
+
+        with patch.dict(
+            os.environ,
+            {
+                "FULLMAG_HYSTERESIS_FIELD_VALUES_MT": "50,0,-50",
+                "FULLMAG_HYSTERESIS_MAX_STEPS": "25",
+                "FULLMAG_HYSTERESIS_MAGNETIZATION_STORAGE": "every_step",
+            },
+        ):
+            loaded = fm.load_problem_from_script(example_path, lightweight_assets=True)
+
+        self.assertEqual(len(loaded.stages), 1)
+        study = loaded.stages[0].problem.study.to_ir()
+        self.assertEqual(study["field_values_mT"], [50.0, 0.0, -50.0])
+        self.assertEqual(study["settle_pipeline"]["steps"][0]["max_steps"], 25)
+        self.assertEqual(study["storage"]["magnetization"], "every_step")
         self.assertEqual(study["storage"]["every_n"], 1)
 
     def test_study_stage_builder_hysteresis_piecewise_field_schedule(self) -> None:
@@ -4204,6 +4301,108 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(windows[0]["reason"], "remanence")
         self.assertEqual(windows[1]["step_mT"], 0.5)
 
+    def test_study_stage_builder_hysteresis_adaptive_refinement_round_trip(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("stage_hysteresis_adaptive_refinement")
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.m = fm.texture.uniform(1, 0, 0)
+        study.stages.add_hysteresis_sweep(
+            field_min_mT=-150.0,
+            field_max_mT=150.0,
+            field_step_mT=10.0,
+            adaptive_refinement=fm.AdaptiveRefinement(
+                enabled=True,
+                max_passes=2,
+                max_insertions_per_pass=12,
+                dm_dh_threshold_per_mT=0.015,
+                max_step_mT=2.5,
+                min_step_mT=0.25,
+                include_zero_crossings=True,
+                include_high_susceptibility=True,
+            ),
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_builder_stage_hysteresis_adaptive.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+
+            rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            self.assertIn("adaptive_refinement=fm.AdaptiveRefinement(", rewritten)
+            rewritten_path = Path(tmp_dir) / "rewritten_hysteresis_adaptive.py"
+            rewritten_path.write_text(rewritten, encoding="utf-8")
+            reloaded = fm.load_problem_from_script(rewritten_path, lightweight_assets=True)
+
+        ir = reloaded.stages[0].problem.study.to_ir()
+        policy = ir["adaptive_refinement"]
+        self.assertEqual(policy["kind"], "adaptive_refinement")
+        self.assertEqual(policy["max_passes"], 2)
+        self.assertEqual(policy["max_insertions_per_pass"], 12)
+        self.assertEqual(policy["dm_dh_threshold_per_mT"], 0.015)
+        self.assertEqual(policy["max_step_mT"], 2.5)
+        self.assertEqual(policy["min_step_mT"], 0.25)
+        self.assertTrue(policy["include_zero_crossings"])
+        self.assertTrue(policy["include_high_susceptibility"])
+
+    def test_study_stage_builder_hysteresis_angular_family_round_trip(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("stage_hysteresis_angular_family")
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.m = fm.texture.uniform(1, 0, 0)
+        study.stages.add_hysteresis_sweep(
+            field_values_mT=[50.0, 0.0, -50.0],
+            orientation=fm.FieldOrientation.preset("oop_positive"),
+            angular_family=fm.HysteresisAngularFamily(
+                family_id="oop_ip_family",
+                label="OOP/IP family",
+                variants=[
+                    fm.HysteresisAngularVariant(
+                        variant_id="oop",
+                        label="OOP",
+                        orientation=fm.FieldOrientation.preset("oop_positive"),
+                        measurement_axis="field_axis",
+                    ),
+                    fm.HysteresisAngularVariant(
+                        variant_id="ip35",
+                        orientation=fm.FieldOrientation.sample(theta_deg=90.0, phi_deg=35.0),
+                        measurement_axis=fm.MeasurementAxis.custom((1.0, 1.0, 0.0)),
+                    ),
+                ],
+            ),
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_builder_stage_hysteresis_angular_family.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+
+            rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            self.assertIn("angular_family=fm.HysteresisAngularFamily(", rewritten)
+            self.assertIn("fm.HysteresisAngularVariant(", rewritten)
+            rewritten_path = Path(tmp_dir) / "rewritten_hysteresis_angular_family.py"
+            rewritten_path.write_text(rewritten, encoding="utf-8")
+            reloaded = fm.load_problem_from_script(rewritten_path, lightweight_assets=True)
+
+        family = reloaded.stages[0].problem.study.to_ir()["angular_family"]
+        self.assertEqual(family["kind"], "angular_family")
+        self.assertEqual(family["family_id"], "oop_ip_family")
+        self.assertEqual(len(family["variants"]), 2)
+        self.assertEqual(family["variants"][0]["variant_id"], "oop")
+        self.assertEqual(
+            family["variants"][1]["measurement_axis"],
+            {"kind": "custom", "vector": [1.0, 1.0, 0.0]},
+        )
+
     def test_study_stage_builder_hysteresis_minor_loops_contract(self) -> None:
         script = """
         import fullmag as fm
@@ -4345,6 +4544,29 @@ class ProblemApiTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "measurement_axis must be one of"):
             fm.Hysteresis(outputs=[], measurement_axis="sideways")
+
+        with self.assertRaisesRegex(ValueError, "fm.MeasurementAxis.custom"):
+            fm.Hysteresis(outputs=[], measurement_axis="custom")
+
+        with self.assertRaisesRegex(ValueError, "MeasurementAxis.vector must not be the zero vector"):
+            fm.MeasurementAxis.custom((0.0, 0.0, 0.0))
+
+        with self.assertRaisesRegex(ValueError, "HysteresisAngularFamily.variants must not be empty"):
+            fm.HysteresisAngularFamily(variants=[])
+
+        with self.assertRaisesRegex(ValueError, "variant_id values must be unique"):
+            fm.HysteresisAngularFamily(
+                variants=[
+                    fm.HysteresisAngularVariant(
+                        "dup",
+                        fm.FieldOrientation.preset("oop_positive"),
+                    ),
+                    fm.HysteresisAngularVariant(
+                        "dup",
+                        fm.FieldOrientation.preset("in_plane_x"),
+                    ),
+                ]
+            )
 
         with self.assertRaisesRegex(ValueError, "branch_mode must be one of"):
             fm.Hysteresis(outputs=[], branch_mode="minor_loop")

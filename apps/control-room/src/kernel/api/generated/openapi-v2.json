@@ -4325,6 +4325,14 @@
               "null"
             ]
           },
+          "phase_rad": {
+            "description": "Phase angle in radians for `view=phase_rotated_real`.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
           "scope_id": {
             "description": "Scope identifier for `object` and `part` scopes.",
             "type": [
@@ -4345,8 +4353,555 @@
               "string",
               "null"
             ]
+          },
+          "view": {
+            "description": "Optional complex analysis view for frequency-domain fields.\n\nAccepted values for analysis fields: `real`, `imag`, `abs`, `amplitude`,\n`phase`, `phase_rotated_real`.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
+        "type": "object"
+      },
+      "FrequencyDomainAvailabilitySummaryResource": {
+        "properties": {
+          "diagnostics_json": {
+            "type": "string"
+          },
+          "driven_response_available": {
+            "type": "boolean"
+          },
+          "dynamic_demag_k_available": {
+            "type": "boolean"
+          },
+          "floquet_modal_available": {
+            "type": "boolean"
+          },
+          "floquet_response_available": {
+            "type": "boolean"
+          },
+          "gpu_available": {
+            "type": "boolean"
+          },
+          "modal_solver_available": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "study_kind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "study_kind",
+          "driven_response_available",
+          "modal_solver_available",
+          "floquet_modal_available",
+          "floquet_response_available",
+          "dynamic_demag_k_available",
+          "gpu_available",
+          "reason",
+          "diagnostics_json"
+        ],
+        "type": "object"
+      },
+      "FrequencyDomainBoundaryCapabilitiesResource": {
+        "properties": {
+          "floquet_modal": {
+            "$ref": "#/components/schemas/FrequencyDomainCapabilityEntryResource"
+          },
+          "floquet_response": {
+            "$ref": "#/components/schemas/FrequencyDomainCapabilityEntryResource"
+          },
+          "periodic_pair_diagnostics": {
+            "$ref": "#/components/schemas/FrequencyDomainCapabilityEntryResource"
+          },
+          "static_periodic": {
+            "$ref": "#/components/schemas/FrequencyDomainCapabilityEntryResource"
+          }
+        },
+        "required": [
+          "static_periodic",
+          "floquet_modal",
+          "floquet_response",
+          "periodic_pair_diagnostics"
+        ],
+        "type": "object"
+      },
+      "FrequencyDomainCapabilityEntryResource": {
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "FrequencyDomainCapabilitySnapshotResource": {
+        "properties": {
+          "boundary": {
+            "$ref": "#/components/schemas/FrequencyDomainBoundaryCapabilitiesResource"
+          },
+          "demag": {
+            "$ref": "#/components/schemas/FrequencyDomainDemagCapabilitiesResource"
+          },
+          "dispersion": {
+            "$ref": "#/components/schemas/FrequencyDomainDispersionCapabilitiesResource"
+          },
+          "modal": {
+            "$ref": "#/components/schemas/FrequencyDomainModalCapabilitiesResource"
+          },
+          "response": {
+            "$ref": "#/components/schemas/FrequencyDomainResponseCapabilitiesResource"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "validation": {
+            "$ref": "#/components/schemas/FrequencyDomainValidationCapabilitiesResource"
+          },
+          "visualization": {
+            "$ref": "#/components/schemas/FrequencyDomainVisualizationCapabilitiesResource"
+          }
+        },
+        "required": [
+          "schema_version",
+          "modal",
+          "boundary",
+          "demag",
+          "dispersion",
+          "validation",
+          "response",
+          "visualization"
+        ],
+        "type": "object"
+      },
+      "FrequencyDomainDemagCapabilitiesResource": {
+        "properties": {
+          "floquet_dynamic_k": {
+            "$ref": "#/components/schemas/FrequencyDomainCapabilityEntryResource"
+          },
+          "static_periodic_pbc": {
+            "$ref": "#/components/schemas/FrequencyDomainCapabilityEntryResource"
+          }
+        },
+        "required": [
+          "static_periodic_pbc",
+          "floquet_dynamic_k"
+        ],
+        "type": "object"
+      },
+      "FrequencyDomainDispersionCapabilitiesResource": {
+        "properties": {
+          "branch_tracking": {
+            "$ref": "#/components/schemas/FrequencyDomainCapabilityEntryResource"
+          },
+          "k_path": {
+            "$ref": "#/components/schemas/FrequencyDomainCapabilityEntryResource"
+          }
+        },
+        "required": [
+          "k_path",
+          "branch_tracking"
+        ],
+        "type": "object"
+      },
+      "FrequencyDomainFieldResource": {
+        "properties": {
+          "artifact_path": {
+            "type": "string"
+          },
+          "available_views": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "components": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "default_phase_rad": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "default_view": {
+            "type": "string"
+          },
+          "field_id": {
+            "type": "string"
+          },
+          "missing_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "quantity": {
+            "type": "string"
+          },
+          "resource_key": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "source_family": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "value_kind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "status",
+          "field_id",
+          "artifact_path",
+          "resource_key",
+          "source_family",
+          "quantity",
+          "value_kind",
+          "components",
+          "available_views",
+          "default_view"
+        ],
+        "type": "object"
+      },
+      "FrequencyDomainJsonArtifactResource": {
+        "properties": {
+          "artifact_path": {
+            "type": "string"
+          },
+          "missing_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "payload": {},
+          "resource_key": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "status",
+          "artifact_path",
+          "resource_key"
+        ],
+        "type": "object"
+      },
+      "FrequencyDomainManifestResource": {
+        "properties": {
+          "capabilities": {
+            "$ref": "#/components/schemas/FrequencyDomainCapabilitySnapshotResource"
+          },
+          "eigen_namespace": {
+            "type": "string"
+          },
+          "eigenmodes": {
+            "$ref": "#/components/schemas/FrequencyDomainAvailabilitySummaryResource"
+          },
+          "existing_frequency_response_namespace_preserved": {
+            "type": "boolean"
+          },
+          "family_namespace": {
+            "type": "string"
+          },
+          "floquet_nonzero_k_demag_supported": {
+            "type": "boolean"
+          },
+          "response": {
+            "$ref": "#/components/schemas/FrequencyDomainAvailabilitySummaryResource"
+          },
+          "response_cancel_requested": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FrequencyDomainSweepProgressResource"
+              }
+            ]
+          },
+          "response_progress": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FrequencyDomainSweepProgressResource"
+              }
+            ]
+          },
+          "result_manifest": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FrequencyDomainJsonArtifactResource"
+              }
+            ]
+          },
+          "schema_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "existing_frequency_response_namespace_preserved",
+          "family_namespace",
+          "eigen_namespace",
+          "response",
+          "eigenmodes",
+          "floquet_nonzero_k_demag_supported",
+          "capabilities"
+        ],
+        "type": "object"
+      },
+      "FrequencyDomainModalCapabilitiesResource": {
+        "properties": {
+          "absorption_from_modes": {
+            "$ref": "#/components/schemas/FrequencyDomainCapabilityEntryResource"
+          },
+          "k_path": {
+            "$ref": "#/components/schemas/FrequencyDomainCapabilityEntryResource"
+          },
+          "linewidths": {
+            "$ref": "#/components/schemas/FrequencyDomainCapabilityEntryResource"
+          },
+          "mode_field_payload": {
+            "$ref": "#/components/schemas/FrequencyDomainCapabilityEntryResource"
+          },
+          "mode_tracking": {
+            "$ref": "#/components/schemas/FrequencyDomainCapabilityEntryResource"
+          },
+          "production_cpu": {
+            "$ref": "#/components/schemas/FrequencyDomainCapabilityEntryResource"
+          },
+          "production_gpu": {
+            "$ref": "#/components/schemas/FrequencyDomainCapabilityEntryResource"
+          },
+          "reference_cpu": {
+            "$ref": "#/components/schemas/FrequencyDomainCapabilityEntryResource"
+          }
+        },
+        "required": [
+          "reference_cpu",
+          "production_cpu",
+          "production_gpu",
+          "k_path",
+          "mode_tracking",
+          "mode_field_payload",
+          "linewidths",
+          "absorption_from_modes"
+        ],
+        "type": "object"
+      },
+      "FrequencyDomainResponseCapabilitiesResource": {
+        "properties": {
+          "frequency_sweep": {
+            "$ref": "#/components/schemas/FrequencyDomainCapabilityEntryResource"
+          },
+          "magnetic_cpu": {
+            "$ref": "#/components/schemas/FrequencyDomainCapabilityEntryResource"
+          },
+          "magnetic_gpu": {
+            "$ref": "#/components/schemas/FrequencyDomainCapabilityEntryResource"
+          },
+          "magnetoelastic_elastodynamic": {
+            "$ref": "#/components/schemas/FrequencyDomainCapabilityEntryResource"
+          },
+          "magnetoelastic_quasistatic": {
+            "$ref": "#/components/schemas/FrequencyDomainCapabilityEntryResource"
+          },
+          "mode_projected": {
+            "$ref": "#/components/schemas/FrequencyDomainCapabilityEntryResource"
+          }
+        },
+        "required": [
+          "magnetic_cpu",
+          "magnetic_gpu",
+          "frequency_sweep",
+          "mode_projected",
+          "magnetoelastic_quasistatic",
+          "magnetoelastic_elastodynamic"
+        ],
+        "type": "object"
+      },
+      "FrequencyDomainSweepProgressResource": {
+        "properties": {
+          "complete": {
+            "type": "boolean"
+          },
+          "completed_frequency_points": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "current_frequency_hz": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "latest_artifact_manifest_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "missing_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "partial_artifacts_available": {
+            "type": "boolean"
+          },
+          "progress_json": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "total_frequency_points": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "written_frequency_point_artifacts": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "status",
+          "complete",
+          "total_frequency_points",
+          "completed_frequency_points",
+          "written_frequency_point_artifacts",
+          "partial_artifacts_available"
+        ],
+        "type": "object"
+      },
+      "FrequencyDomainTextArtifactResource": {
+        "properties": {
+          "artifact_path": {
+            "type": "string"
+          },
+          "content_type": {
+            "type": "string"
+          },
+          "missing_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resource_key": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "schema_version",
+          "status",
+          "artifact_path",
+          "resource_key",
+          "content_type"
+        ],
+        "type": "object"
+      },
+      "FrequencyDomainValidationCapabilitiesResource": {
+        "properties": {
+          "fmr_k0": {
+            "$ref": "#/components/schemas/FrequencyDomainCapabilityEntryResource"
+          }
+        },
+        "required": [
+          "fmr_k0"
+        ],
+        "type": "object"
+      },
+      "FrequencyDomainVisualizationCapabilitiesResource": {
+        "properties": {
+          "modal_dispersion_chart": {
+            "$ref": "#/components/schemas/FrequencyDomainCapabilityEntryResource"
+          },
+          "modal_spectrum_chart": {
+            "$ref": "#/components/schemas/FrequencyDomainCapabilityEntryResource"
+          },
+          "mode_3d_overlay": {
+            "$ref": "#/components/schemas/FrequencyDomainCapabilityEntryResource"
+          },
+          "mode_table": {
+            "$ref": "#/components/schemas/FrequencyDomainCapabilityEntryResource"
+          },
+          "response_field_3d_overlay": {
+            "$ref": "#/components/schemas/FrequencyDomainCapabilityEntryResource"
+          },
+          "response_sweep_chart": {
+            "$ref": "#/components/schemas/FrequencyDomainCapabilityEntryResource"
+          }
+        },
+        "required": [
+          "modal_spectrum_chart",
+          "modal_dispersion_chart",
+          "mode_table",
+          "mode_3d_overlay",
+          "response_sweep_chart",
+          "response_field_3d_overlay"
+        ],
         "type": "object"
       },
       "GeometryBackendTarget": {
@@ -4811,6 +5366,103 @@
         ],
         "type": "object"
       },
+      "HysteresisAngularFamilyResource": {
+        "properties": {
+          "active_variant_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "family_id": {
+            "type": "string"
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "series": {
+            "items": {
+              "$ref": "#/components/schemas/HysteresisAngularFamilySeriesSchema"
+            },
+            "type": "array"
+          },
+          "stage_id": {
+            "type": "string"
+          },
+          "stage_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "stage_id",
+          "stage_index",
+          "family_id",
+          "series"
+        ],
+        "type": "object"
+      },
+      "HysteresisAngularFamilySeriesSchema": {
+        "properties": {
+          "data_status": {
+            "type": "string"
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "measurement_axis": {},
+          "metrics": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/HysteresisMetricsSchema"
+              }
+            ]
+          },
+          "orientation": {},
+          "point_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/HysteresisPointSchema"
+            },
+            "type": "array"
+          },
+          "points_resource_ref": {
+            "type": "string"
+          },
+          "variant_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "variant_id",
+          "orientation",
+          "data_status",
+          "point_count",
+          "points",
+          "points_resource_ref"
+        ],
+        "type": "object"
+      },
       "HysteresisBranchSchema": {
         "properties": {
           "branch_id": {
@@ -5186,12 +5838,7 @@
               "null"
             ]
           },
-          "measurement_axis": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
+          "measurement_axis": {},
           "orientation": {},
           "revision": {
             "format": "int64",
@@ -5702,6 +6349,8 @@
       },
       "HysteresisStagePlanSchema": {
         "properties": {
+          "adaptive_refinement": {},
+          "angular_family": {},
           "branch_mode": {
             "type": [
               "string",
@@ -16389,6 +17038,296 @@
         ]
       }
     },
+    "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_frequency_domain_eigen_branches_v2",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FrequencyDomainJsonArtifactResource"
+                }
+              }
+            },
+            "description": "Frequency-domain eigen branches v2 resource"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_frequency_domain_eigen_diagnostics_v2",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FrequencyDomainJsonArtifactResource"
+                }
+              }
+            },
+            "description": "Frequency-domain eigen diagnostics v2 resource"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_frequency_domain_eigen_dispersion",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FrequencyDomainTextArtifactResource"
+                }
+              }
+            },
+            "description": "Frequency-domain eigen dispersion CSV resource"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/{sample_index}/{mode_index}/meta": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_frequency_domain_eigen_mode_field_sample_index_mode_index_meta",
+        "parameters": [
+          {
+            "description": "K-path sample index",
+            "in": "path",
+            "name": "sample_index",
+            "required": true,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Raw mode index",
+            "in": "path",
+            "name": "mode_index",
+            "required": true,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FrequencyDomainFieldResource"
+                }
+              }
+            },
+            "description": "Frequency-domain mode field resource metadata"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_frequency_domain_eigen_spectrum_v2",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FrequencyDomainJsonArtifactResource"
+                }
+              }
+            },
+            "description": "Frequency-domain eigen spectrum v2 resource"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/frequency-domain/manifest.v1": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_frequency_domain_manifest_v1",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FrequencyDomainManifestResource"
+                }
+              }
+            },
+            "description": "Frequency-domain solver family manifest v1"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/frequency-domain/response/cancel-requested.v1": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_frequency_domain_response_cancel_requested_v1",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FrequencyDomainSweepProgressResource"
+                }
+              }
+            },
+            "description": "Frequency-domain driven response sweep cancel-requested progress resource"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/frequency-domain/response/diagnostics.v1": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_frequency_domain_response_diagnostics_v1",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FrequencyDomainJsonArtifactResource"
+                }
+              }
+            },
+            "description": "Frequency-domain response diagnostics resource"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/frequency-domain/response/field/{frequency_index}/meta": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_frequency_domain_response_field_frequency_index_meta",
+        "parameters": [
+          {
+            "description": "Frequency point index",
+            "in": "path",
+            "name": "frequency_index",
+            "required": true,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FrequencyDomainFieldResource"
+                }
+              }
+            },
+            "description": "Frequency-domain response field resource metadata"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/frequency-domain/response/frequency-points/{frequency_index}": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_frequency_domain_response_frequency_points_frequency_index",
+        "parameters": [
+          {
+            "description": "Frequency point index",
+            "in": "path",
+            "name": "frequency_index",
+            "required": true,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FrequencyDomainJsonArtifactResource"
+                }
+              }
+            },
+            "description": "Frequency-domain response frequency point resource"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_frequency_domain_response_magnetic_sweep",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FrequencyDomainJsonArtifactResource"
+                }
+              }
+            },
+            "description": "Frequency-domain driven response sweep resource"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/frequency-domain/response/progress.v1": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_frequency_domain_response_progress_v1",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FrequencyDomainSweepProgressResource"
+                }
+              }
+            },
+            "description": "Frequency-domain driven response sweep progress resource"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
     "/v2/sessions/current/analysis/frequency-response/magnetic-sweep.v1": {
       "get": {
         "operationId": "analysis_get_sessions_current_analysis_frequency_response_magnetic_sweep_v1",
@@ -16398,6 +17337,86 @@
           },
           "404": {
             "description": "No magnetic response sweep artifact"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/hysteresis-family/{stage_id}": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_hysteresis_family_stage_id",
+        "parameters": [
+          {
+            "description": "Hysteresis stage index or stage identifier",
+            "in": "path",
+            "name": "stage_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HysteresisAngularFamilyResource"
+                }
+              }
+            },
+            "description": "Angular hysteresis family series grouped by orientation"
+          },
+          "404": {
+            "description": "Angular hysteresis family not found"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/hysteresis-family/{stage_id}/variants/{variant_id}/points": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_hysteresis_family_stage_id_variants_variant_id_points",
+        "parameters": [
+          {
+            "description": "Hysteresis stage index or stage identifier",
+            "in": "path",
+            "name": "stage_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Angular family variant identifier",
+            "in": "path",
+            "name": "variant_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/HysteresisPointSchema"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Hysteresis points for one angular-family variant"
+          },
+          "404": {
+            "description": "Angular hysteresis family variant not found"
           }
         },
         "tags": [
@@ -16974,8 +17993,14 @@
             },
             "description": "Field metadata"
           },
+          "400": {
+            "description": "Invalid snapshot or component parameter"
+          },
           "404": {
             "description": "Field not found"
+          },
+          "409": {
+            "description": "Snapshot does not match the current domain"
           }
         },
         "tags": [
@@ -18963,6 +19988,31 @@
                 "null"
               ]
             }
+          },
+          {
+            "description": "Optional complex analysis view for frequency-domain fields.\n\nAccepted values for analysis fields: `real`, `imag`, `abs`, `amplitude`,\n`phase`, `phase_rotated_real`.",
+            "in": "query",
+            "name": "view",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Phase angle in radians for `view=phase_rotated_real`.",
+            "in": "query",
+            "name": "phase_rad",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            }
           }
         ],
         "responses": {
@@ -18979,10 +20029,13 @@
             "description": "Not modified — ETag matched"
           },
           "400": {
-            "description": "Invalid component parameter"
+            "description": "Invalid component or snapshot parameter"
           },
           "404": {
             "description": "Field not found"
+          },
+          "409": {
+            "description": "Snapshot does not match the current domain"
           }
         },
         "tags": [

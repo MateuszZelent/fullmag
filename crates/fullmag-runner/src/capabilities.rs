@@ -11,6 +11,7 @@ pub enum RuntimeEngineId {
     FemNativeGpu,
     FemEigenCpuBaseline,
     FemEigenNativeGpu,
+    FemFrequencyResponseDenseValidation,
 }
 
 impl RuntimeEngineId {
@@ -22,6 +23,7 @@ impl RuntimeEngineId {
             Self::FemNativeGpu => "fem_native_gpu",
             Self::FemEigenCpuBaseline => "fem_eigen_cpu_baseline",
             Self::FemEigenNativeGpu => "fem_eigen_native_gpu",
+            Self::FemFrequencyResponseDenseValidation => "fem_frequency_response_dense_validation",
         }
     }
 }
@@ -298,6 +300,14 @@ pub(crate) fn capabilities_for_fem_eigen_engine(engine: FemEngine) -> BackendCap
     capabilities
 }
 
+pub(crate) fn capabilities_for_fem_frequency_response_validation_engine(
+    engine: FemEngine,
+) -> BackendCapabilities {
+    let mut capabilities = capabilities_for_fem_engine(engine);
+    capabilities.engine_id = RuntimeEngineId::FemFrequencyResponseDenseValidation;
+    capabilities
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,15 +316,22 @@ mod tests {
     fn fem_time_domain_and_eigen_capabilities_keep_distinct_engine_ids() {
         let fem_cpu = capabilities_for_fem_engine(FemEngine::CpuNative);
         let fem_eigen_cpu = capabilities_for_fem_eigen_engine(FemEngine::CpuNative);
+        let fem_response_cpu =
+            capabilities_for_fem_frequency_response_validation_engine(FemEngine::CpuNative);
         let fem_gpu = capabilities_for_fem_engine(FemEngine::NativeGpu);
         let fem_eigen_gpu = capabilities_for_fem_eigen_engine(FemEngine::NativeGpu);
 
         assert_eq!(fem_cpu.engine_id.as_str(), "fem_cpu_native");
         assert_eq!(fem_eigen_cpu.engine_id.as_str(), "fem_eigen_cpu_baseline");
+        assert_eq!(
+            fem_response_cpu.engine_id.as_str(),
+            "fem_frequency_response_dense_validation"
+        );
         assert_eq!(fem_gpu.engine_id.as_str(), "fem_native_gpu");
         assert_eq!(fem_eigen_gpu.engine_id.as_str(), "fem_eigen_native_gpu");
 
         assert_eq!(fem_cpu.supported_terms, fem_eigen_cpu.supported_terms);
+        assert_eq!(fem_cpu.supported_terms, fem_response_cpu.supported_terms);
         assert_eq!(
             fem_gpu.supported_demag_realizations,
             fem_eigen_gpu.supported_demag_realizations
@@ -330,6 +347,7 @@ mod tests {
             capabilities_for_fem_engine(FemEngine::NativeGpu),
             capabilities_for_fem_eigen_engine(FemEngine::CpuNative),
             capabilities_for_fem_eigen_engine(FemEngine::NativeGpu),
+            capabilities_for_fem_frequency_response_validation_engine(FemEngine::CpuNative),
         ];
 
         for capability in capabilities {

@@ -86,7 +86,7 @@ from .structure import (
     RegionMaterialOverride,
     RegionTextureOverride,
 )
-from .study import Eigenmodes, FloquetBC, FrequencyResponse, PeriodicBC, RelaxStop, Relaxation, TableAutosave, TimeEvolution, FieldOrientation, SaturationProbe, HysteresisStorage, MinorLoop, FieldSegment, PiecewiseFieldSchedule, FieldWindow, SettleStep, RelaxStep, MinimizeStep, DynamicsSettleStep, SettleBranch, SettlePipeline, SettleTree, Hysteresis
+from .study import Eigenmodes, FloquetBC, FrequencyResponse, PeriodicBC, RelaxStop, Relaxation, TableAutosave, TimeEvolution, FieldOrientation, MeasurementAxis, HysteresisAngularVariant, HysteresisAngularFamily, SaturationProbe, HysteresisStorage, MinorLoop, FieldSegment, PiecewiseFieldSchedule, FieldWindow, AdaptiveRefinement, SettleStep, RelaxStep, MinimizeStep, DynamicsSettleStep, SettleBranch, SettlePipeline, SettleTree, Hysteresis
 from .eigen import KPath, KPoint, ModeTracking
 
 __all__ = [
@@ -196,12 +196,16 @@ __all__ = [
     "SpinTorque",
     "SpinTorqueModule",
     "FieldOrientation",
+    "MeasurementAxis",
+    "HysteresisAngularVariant",
+    "HysteresisAngularFamily",
     "SaturationProbe",
     "HysteresisStorage",
     "MinorLoop",
     "FieldSegment",
     "PiecewiseFieldSchedule",
     "FieldWindow",
+    "AdaptiveRefinement",
     "SettleStep",
     "RelaxStep",
     "MinimizeStep",

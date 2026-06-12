@@ -60,20 +60,116 @@ type ExplorerNodeKind =
   | "study.stages"
   | "study.stage.action"
   | "study.stage.eigenmodes"
+  | "study.stage.eigenmodes.setup"
+  | "study.stage.eigenmodes.calculation_mode"
+  | "study.stage.eigenmodes.equilibrium"
+  | "study.stage.eigenmodes.operator"
+  | "study.stage.eigenmodes.boundary"
+  | "study.stage.eigenmodes.periodic_pairs"
+  | "study.stage.eigenmodes.k_path"
+  | "study.stage.eigenmodes.solver"
+  | "study.stage.eigenmodes.outputs"
+  | "study.stage.eigenmodes.diagnostics"
   | "study.stage.frequency_response"
+  | "study.stage.frequency_response.setup"
+  | "study.stage.frequency_response.calculation_mode"
+  | "study.stage.frequency_response.equilibrium"
+  | "study.stage.frequency_response.operator"
+  | "study.stage.frequency_response.boundary"
+  | "study.stage.frequency_response.periodic_pairs"
+  | "study.stage.frequency_response.k_grid"
+  | "study.stage.frequency_response.excitation"
+  | "study.stage.frequency_response.sweep"
+  | "study.stage.frequency_response.solver"
+  | "study.stage.frequency_response.outputs"
+  | "study.stage.frequency_response.diagnostics"
   | "study.stage.hysteresis"
   | "study.stage.relax"
   | "study.stage.run"
   | "study.stage.save_state"
   | "results.root"
+  | "results.frequency_domain.root"
+  | "results.frequency_domain.run"
+  | "results.frequency_domain.calculation_modes"
+  | "results.frequency_domain.fmr"
+  | "results.frequency_domain.fmr_modal_spectrum"
+  | "results.frequency_domain.fmr_response_sweep"
+  | "results.frequency_domain.fmr_peaks"
+  | "results.frequency_domain.dispersion"
+  | "results.frequency_domain.response_map"
+  | "results.eigen.root"
+  | "results.eigen.study"
+  | "results.eigen.spectrum"
+  | "results.eigen.modes"
+  | "results.eigen.mode"
+  | "results.eigen.dispersion"
+  | "results.eigen.k_path"
+  | "results.eigen.branches"
+  | "results.eigen.branch"
+  | "results.eigen.diagnostics"
+  | "results.eigen.provenance"
+  | "results.frequency_response.root"
+  | "results.frequency_response.study"
+  | "results.frequency_response.sweep"
+  | "results.frequency_response.progress"
+  | "results.frequency_response.cancel_requested"
+  | "results.frequency_response.frequency_points"
+  | "results.frequency_response.frequency_point"
+  | "results.frequency_response.observables"
+  | "results.frequency_response.observable"
+  | "results.frequency_response.diagnostics"
+  | "results.frequency_response.provenance"
+  | "results.frequency_domain.comparison"
+  | "results.frequency_domain.exports"
   | "results.field_quantity"
   | "resources.root"
+  | "resources.analysis.frequency_domain"
+  | "resources.analysis.frequency_domain.manifest"
+  | "resources.analysis.frequency_domain.calculation_modes"
+  | "resources.analysis.frequency_domain.fmr"
+  | "resources.analysis.frequency_domain.dispersion"
+  | "resources.analysis.frequency_domain.response_map"
+  | "resources.mesh.periodic_pairs"
+  | "resources.analysis.eigen.spectrum"
+  | "resources.analysis.eigen.branches"
+  | "resources.analysis.eigen.dispersion"
+  | "resources.analysis.eigen.diagnostics"
+  | "resources.analysis.eigen.mode_metadata"
+  | "resources.analysis.eigen.mode_field"
+  | "resources.analysis.frequency_response.sweep"
+  | "resources.analysis.frequency_response.progress"
+  | "resources.analysis.frequency_response.cancel_requested"
+  | "resources.analysis.frequency_response.frequency_point"
+  | "resources.analysis.frequency_response.field"
+  | "resources.analysis.frequency_response.diagnostics"
   | "resources.field"
   | "resources.mesh"
   | "jobs.root"
+  | "jobs.frequency_domain.root"
+  | "jobs.frequency_domain.stage_run"
+  | "jobs.frequency_domain.eigen_sample"
+  | "jobs.frequency_domain.response_frequency"
+  | "jobs.frequency_domain.response_progress"
+  | "jobs.frequency_domain.artifact_export"
   | "jobs.command"
   | "diagnostics.root"
+  | "diagnostics.frequency_domain.root"
+  | "diagnostics.frequency_domain.capabilities"
+  | "diagnostics.frequency_domain.equilibrium"
+  | "diagnostics.frequency_domain.operator"
+  | "diagnostics.frequency_domain.solver"
+  | "diagnostics.frequency_domain.artifacts"
+  | "diagnostics.frequency_domain.api_resources"
+  | "diagnostics.frequency_domain.visualization"
+  | "diagnostics.frequency_domain.periodic_floquet"
   | "diagnostics.resource";
+
+export type FrequencyDomainCalculationMode =
+  | "fmr_modal"
+  | "fmr_response"
+  | "free_modes"
+  | "dispersion_modal"
+  | "response_map";
 
 export type ExplorerNodeStatus =
   | "ready"
@@ -122,13 +218,23 @@ export interface ExplorerNode {
   badge?: string;
   children?: ExplorerNode[];
   contextCommands?: CommandId[];
+  analysisRunId?: string;
+  analysisStageId?: string;
+  artifactPath?: string;
+  branchId?: string;
+  calculationMode?: FrequencyDomainCalculationMode;
   crossSectionDraftId?: "draft";
   crossSectionPlotId?: string;
+  fieldId?: string;
+  frequencyIndex?: number;
   icon?: ExplorerIconToken;
+  modeIndex?: number;
   objectId?: string;
+  observableId?: string;
   couplingId?: string;
   regionId?: string;
   resourceRef?: string;
+  sampleIndex?: number;
   stageId?: string;
   stageIndex?: number;
   status?: ExplorerNodeStatus;

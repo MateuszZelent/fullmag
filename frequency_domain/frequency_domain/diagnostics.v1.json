@@ -1,0 +1,1 @@
+{"schema_version":"frequency_domain_diagnostics.v1","status":"unavailable","solver_engine":"native_fem_mfem_driven_response","solver_kind":"production_unavailable","error_message":"native FEM driven frequency-response solver is not implemented","requested_frequency_count":1,"completed_frequency_count":0,"written_frequency_point_artifacts":0,"production_solver_available":false}

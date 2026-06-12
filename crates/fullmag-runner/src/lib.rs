@@ -25,6 +25,7 @@ pub(crate) mod fem;
 #[path = "fem_reference.rs"]
 mod fem_baseline;
 mod fem_eigen;
+mod frequency_response;
 pub mod hysteresis;
 pub mod interactive;
 mod interactive_runtime;
@@ -94,10 +95,15 @@ pub use types::{
 
 use crate::capabilities::{
     capabilities_for_fdm_engine, capabilities_for_fem_eigen_engine, capabilities_for_fem_engine,
+    capabilities_for_fem_frequency_response_validation_engine,
 };
 use crate::fdm::cpu::multilayer_reference;
 use crate::fdm::cpu::reference as cpu_reference;
 use crate::fdm::gpu::cuda::native as native_fdm;
+use crate::native_fem::{
+    native_frequency_domain_availability, FrequencyDomainAvailabilityRequest,
+    FrequencyDomainStudyKind,
+};
 use fullmag_ir::{BackendPlanIR, FdmMultilayerPlanIR, FdmPlanIR, OutputIR, ProblemIR};
 use interactive::InteractiveBackend;
 use serde_json::Value;
@@ -116,6 +122,332 @@ pub struct ResolvedSessionRuntime {
     pub resolved_engine_id: Option<String>,
     pub resolved_worker: Option<String>,
     pub resolved_fallback: Option<ResolvedFallback>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FrequencyDomainAvailabilitySummary {
+    pub status: String,
+    pub study_kind: String,
+    pub driven_response_available: bool,
+    pub modal_solver_available: bool,
+    pub floquet_modal_available: bool,
+    pub floquet_response_available: bool,
+    pub dynamic_demag_k_available: bool,
+    pub gpu_available: bool,
+    pub reason: String,
+    pub diagnostics_json: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FrequencyDomainCapabilityEntry {
+    pub status: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FrequencyDomainModalCapabilities {
+    pub reference_cpu: FrequencyDomainCapabilityEntry,
+    pub production_cpu: FrequencyDomainCapabilityEntry,
+    pub production_gpu: FrequencyDomainCapabilityEntry,
+    pub k_path: FrequencyDomainCapabilityEntry,
+    pub mode_tracking: FrequencyDomainCapabilityEntry,
+    pub mode_field_payload: FrequencyDomainCapabilityEntry,
+    pub linewidths: FrequencyDomainCapabilityEntry,
+    pub absorption_from_modes: FrequencyDomainCapabilityEntry,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FrequencyDomainBoundaryCapabilities {
+    pub static_periodic: FrequencyDomainCapabilityEntry,
+    pub floquet_modal: FrequencyDomainCapabilityEntry,
+    pub floquet_response: FrequencyDomainCapabilityEntry,
+    pub periodic_pair_diagnostics: FrequencyDomainCapabilityEntry,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FrequencyDomainDemagCapabilities {
+    pub static_periodic_pbc: FrequencyDomainCapabilityEntry,
+    pub floquet_dynamic_k: FrequencyDomainCapabilityEntry,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FrequencyDomainDispersionCapabilities {
+    pub k_path: FrequencyDomainCapabilityEntry,
+    pub branch_tracking: FrequencyDomainCapabilityEntry,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FrequencyDomainValidationCapabilities {
+    pub fmr_k0: FrequencyDomainCapabilityEntry,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FrequencyDomainResponseCapabilities {
+    pub magnetic_cpu: FrequencyDomainCapabilityEntry,
+    pub magnetic_gpu: FrequencyDomainCapabilityEntry,
+    pub frequency_sweep: FrequencyDomainCapabilityEntry,
+    pub mode_projected: FrequencyDomainCapabilityEntry,
+    pub magnetoelastic_quasistatic: FrequencyDomainCapabilityEntry,
+    pub magnetoelastic_elastodynamic: FrequencyDomainCapabilityEntry,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FrequencyDomainVisualizationCapabilities {
+    pub modal_spectrum_chart: FrequencyDomainCapabilityEntry,
+    pub modal_dispersion_chart: FrequencyDomainCapabilityEntry,
+    pub mode_table: FrequencyDomainCapabilityEntry,
+    pub mode_3d_overlay: FrequencyDomainCapabilityEntry,
+    pub response_sweep_chart: FrequencyDomainCapabilityEntry,
+    pub response_field_3d_overlay: FrequencyDomainCapabilityEntry,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FrequencyDomainCapabilitySnapshot {
+    pub schema_version: String,
+    pub modal: FrequencyDomainModalCapabilities,
+    pub boundary: FrequencyDomainBoundaryCapabilities,
+    pub demag: FrequencyDomainDemagCapabilities,
+    pub dispersion: FrequencyDomainDispersionCapabilities,
+    pub validation: FrequencyDomainValidationCapabilities,
+    pub response: FrequencyDomainResponseCapabilities,
+    pub visualization: FrequencyDomainVisualizationCapabilities,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FrequencyDomainManifest {
+    pub schema_version: String,
+    pub existing_frequency_response_namespace_preserved: bool,
+    pub family_namespace: String,
+    pub eigen_namespace: String,
+    pub response: FrequencyDomainAvailabilitySummary,
+    pub eigenmodes: FrequencyDomainAvailabilitySummary,
+    pub floquet_nonzero_k_demag_supported: bool,
+    pub capabilities: FrequencyDomainCapabilitySnapshot,
+}
+
+pub fn frequency_domain_manifest_v1() -> FrequencyDomainManifest {
+    let response = native_frequency_domain_availability(FrequencyDomainAvailabilityRequest {
+        study_kind: FrequencyDomainStudyKind::FrequencyResponse,
+        requires_driven_solver: true,
+        requires_modal_solver: false,
+        requires_floquet_boundary: false,
+        requires_nonzero_k_dynamic_demag: false,
+        requires_gpu: false,
+        strict_device: false,
+    });
+    let eigenmodes = native_frequency_domain_availability(FrequencyDomainAvailabilityRequest {
+        study_kind: FrequencyDomainStudyKind::Eigenmodes,
+        requires_driven_solver: false,
+        requires_modal_solver: true,
+        requires_floquet_boundary: true,
+        requires_nonzero_k_dynamic_demag: true,
+        requires_gpu: false,
+        strict_device: false,
+    });
+
+    FrequencyDomainManifest {
+        schema_version: "frequency_domain_manifest.v1".to_string(),
+        existing_frequency_response_namespace_preserved: true,
+        family_namespace: "frequencyDomain".to_string(),
+        eigen_namespace: "eigen".to_string(),
+        floquet_nonzero_k_demag_supported: response.dynamic_demag_k_available
+            || eigenmodes.dynamic_demag_k_available,
+        response: response.into(),
+        eigenmodes: eigenmodes.into(),
+        capabilities: frequency_domain_capability_snapshot_v1(),
+    }
+}
+
+fn capability(status: &str, reason: &str) -> FrequencyDomainCapabilityEntry {
+    FrequencyDomainCapabilityEntry {
+        status: status.to_string(),
+        reason: reason.to_string(),
+    }
+}
+
+fn frequency_domain_capability_snapshot_v1() -> FrequencyDomainCapabilitySnapshot {
+    let unsupported = "not implemented in the current production frequency-domain backend";
+    let dynamic_demag_k = "nonzero-k Floquet demag requires a phase-aware dynamic demag-k operator";
+    FrequencyDomainCapabilitySnapshot {
+        schema_version: "frequency_domain_capabilities.v1".to_string(),
+        modal: FrequencyDomainModalCapabilities {
+            reference_cpu: capability("reference_executable", "runner FEM eigen reference path emits modal artifacts"),
+            production_cpu: capability("unsupported", unsupported),
+            production_gpu: capability("unsupported", unsupported),
+            k_path: capability("reference_executable", "runner FEM eigen reference path emits k-path dispersion artifacts"),
+            mode_tracking: capability("reference_executable", "runner FEM eigen reference path emits branch tracking artifacts"),
+            mode_field_payload: capability("reference_executable", "mode metadata and binary mode-field payloads are artifact-backed"),
+            linewidths: capability("reference_executable", "modal artifacts preserve imaginary-frequency linewidth metadata"),
+            absorption_from_modes: capability("unsupported", unsupported),
+        },
+        boundary: FrequencyDomainBoundaryCapabilities {
+            static_periodic: capability("semantic_only", "periodic pair metadata is represented but not production-enforced for frequency-domain solves"),
+            floquet_modal: capability("semantic_only", "Floquet modal semantics exist, but production operator enforcement is not available"),
+            floquet_response: capability("unsupported", "driven nonzero-k Floquet response is gated until operator and drive assembly enforce phase constraints"),
+            periodic_pair_diagnostics: capability("reference_executable", "mesh periodic-pair diagnostics are exposed as session resources"),
+        },
+        demag: FrequencyDomainDemagCapabilities {
+            static_periodic_pbc: capability("semantic_only", "static FEM demag PBC semantics are documented but not promoted for frequency-domain production solves"),
+            floquet_dynamic_k: capability("unsupported", dynamic_demag_k),
+        },
+        dispersion: FrequencyDomainDispersionCapabilities {
+            k_path: capability("reference_executable", "runner FEM eigen reference path emits dispersion.csv"),
+            branch_tracking: capability("reference_executable", "runner FEM eigen reference path emits branches.v2 artifacts"),
+        },
+        validation: FrequencyDomainValidationCapabilities {
+            fmr_k0: capability("source_visible", "validation artifacts and tests are being assembled; no production FMR gate is complete"),
+        },
+        response: FrequencyDomainResponseCapabilities {
+            magnetic_cpu: capability("reference_executable", "dense block-real validation path emits driven response sweep artifacts"),
+            magnetic_gpu: capability("unsupported", unsupported),
+            frequency_sweep: capability("reference_executable", "dense block-real validation path emits per-frequency artifacts and progress"),
+            mode_projected: capability("unsupported", unsupported),
+            magnetoelastic_quasistatic: capability("unsupported", unsupported),
+            magnetoelastic_elastodynamic: capability("unsupported", unsupported),
+        },
+        visualization: FrequencyDomainVisualizationCapabilities {
+            modal_spectrum_chart: capability("reference_executable", "artifact-backed spectrum chart resources are exposed"),
+            modal_dispersion_chart: capability("reference_executable", "artifact-backed dispersion chart resources are exposed"),
+            mode_table: capability("reference_executable", "artifact-backed modal table resources are exposed"),
+            mode_3d_overlay: capability("reference_executable", "artifact-backed mode-field payloads can be projected in 3D"),
+            response_sweep_chart: capability("reference_executable", "artifact-backed response sweep chart resources are exposed"),
+            response_field_3d_overlay: capability("reference_executable", "artifact-backed response field payloads can be projected in 3D"),
+        },
+    }
+}
+
+impl From<crate::native_fem::FrequencyDomainAvailability> for FrequencyDomainAvailabilitySummary {
+    fn from(value: crate::native_fem::FrequencyDomainAvailability) -> Self {
+        Self {
+            status: value.status,
+            study_kind: value.study_kind,
+            driven_response_available: value.driven_response_available,
+            modal_solver_available: value.modal_solver_available,
+            floquet_modal_available: value.floquet_modal_available,
+            floquet_response_available: value.floquet_response_available,
+            dynamic_demag_k_available: value.dynamic_demag_k_available,
+            gpu_available: value.gpu_available,
+            reason: value.reason,
+            diagnostics_json: value.diagnostics_json,
+        }
+    }
+}
+
+#[cfg(test)]
+mod frequency_domain_manifest_tests {
+    use super::{frequency_domain_manifest_v1, native_fem::FrequencyDomainSweepProgress};
+
+    #[test]
+    fn frequency_domain_manifest_preserves_response_and_eigen_namespaces() {
+        let manifest = frequency_domain_manifest_v1();
+
+        assert_eq!(manifest.schema_version, "frequency_domain_manifest.v1");
+        assert!(manifest.existing_frequency_response_namespace_preserved);
+        assert_eq!(manifest.family_namespace, "frequencyDomain");
+        assert_eq!(manifest.eigen_namespace, "eigen");
+        assert_eq!(manifest.response.study_kind, "frequency_response");
+        assert_eq!(manifest.eigenmodes.study_kind, "eigenmodes");
+        assert!(!manifest.response.driven_response_available);
+        assert!(!manifest.eigenmodes.modal_solver_available);
+        assert!(!manifest.floquet_nonzero_k_demag_supported);
+        assert_eq!(
+            manifest.capabilities.response.magnetic_cpu.status,
+            "reference_executable"
+        );
+        assert_eq!(
+            manifest.capabilities.response.magnetic_gpu.status,
+            "unsupported"
+        );
+        assert_eq!(
+            manifest.capabilities.demag.floquet_dynamic_k.status,
+            "unsupported"
+        );
+        assert_eq!(
+            manifest.capabilities.visualization.mode_3d_overlay.status,
+            "reference_executable"
+        );
+    }
+
+    #[test]
+    fn frequency_domain_sweep_progress_tracks_partial_artifact_contract() {
+        let progress = FrequencyDomainSweepProgress::not_started(11);
+
+        assert_eq!(progress.total_frequency_points, 11);
+        assert_eq!(progress.completed_frequency_points, 0);
+        assert_eq!(progress.written_frequency_point_artifacts, 0);
+        assert_eq!(progress.current_frequency_hz, 0.0);
+        assert!(!progress.partial_artifacts_available);
+        assert!(progress.latest_artifact_manifest_path.is_empty());
+        assert!(progress
+            .progress_json
+            .contains("frequency_domain_sweep_progress.v1"));
+    }
+
+    #[test]
+    fn frequency_domain_sweep_progress_tracks_interrupted_partial_contract() {
+        let progress = FrequencyDomainSweepProgress::interrupted(
+            11,
+            3,
+            3,
+            4.2e9,
+            "frequency_domain/manifest.v1.json",
+        );
+
+        assert_eq!(progress.total_frequency_points, 11);
+        assert_eq!(progress.completed_frequency_points, 3);
+        assert_eq!(progress.written_frequency_point_artifacts, 3);
+        assert_eq!(progress.current_frequency_hz, 4.2e9);
+        assert!(progress.partial_artifacts_available);
+        assert_eq!(
+            progress.latest_artifact_manifest_path,
+            "frequency_domain/manifest.v1.json"
+        );
+        assert!(progress.progress_json.contains("interrupted"));
+    }
+
+    #[test]
+    fn frequency_domain_sweep_progress_tracks_cancel_requested_contract() {
+        let progress = FrequencyDomainSweepProgress::cancelling(
+            11,
+            3,
+            3,
+            4.2e9,
+            "frequency_domain/manifest.v1.json",
+        );
+
+        assert_eq!(progress.total_frequency_points, 11);
+        assert_eq!(progress.completed_frequency_points, 3);
+        assert_eq!(progress.written_frequency_point_artifacts, 3);
+        assert_eq!(progress.current_frequency_hz, 4.2e9);
+        assert!(progress.partial_artifacts_available);
+        assert_eq!(
+            progress.latest_artifact_manifest_path,
+            "frequency_domain/manifest.v1.json"
+        );
+        assert!(progress.progress_json.contains("cancel_requested"));
+    }
+
+    #[test]
+    fn frequency_domain_sweep_progress_tracks_completed_artifact_contract() {
+        let progress = FrequencyDomainSweepProgress::completed(
+            11,
+            11,
+            11,
+            5.5e9,
+            "response/artifact_manifest.json",
+        );
+
+        assert_eq!(progress.total_frequency_points, 11);
+        assert_eq!(progress.completed_frequency_points, 11);
+        assert_eq!(progress.written_frequency_point_artifacts, 11);
+        assert_eq!(progress.current_frequency_hz, 5.5e9);
+        assert!(progress.partial_artifacts_available);
+        assert_eq!(
+            progress.latest_artifact_manifest_path,
+            "response/artifact_manifest.json"
+        );
+        assert!(progress.progress_json.contains("completed"));
+    }
 }
 
 fn explicit_selection_from_problem(problem: &ProblemIR) -> bool {
@@ -357,6 +689,11 @@ pub fn run_planned_problem(
             let engine = dispatch::resolve_fem_engine(problem)?;
             dispatch::execute_fem_eigen(engine, fem, &plan.output_plan.outputs)
         }
+        BackendPlanIR::FemFrequencyResponse(response) => {
+            frequency_response::execute_fem_frequency_response_validation(
+                response, output_dir, None,
+            )
+        }
     });
     let pipeline_summary = artifact_pipeline.finish();
     let executed = match executed_result {
@@ -518,6 +855,11 @@ pub fn run_planned_problem_with_callback(
             let engine = dispatch::resolve_fem_engine(problem)?;
             dispatch::execute_fem_eigen(engine, fem, &plan.output_plan.outputs)
         }
+        BackendPlanIR::FemFrequencyResponse(response) => {
+            frequency_response::execute_fem_frequency_response_validation(
+                response, output_dir, None,
+            )
+        }
     });
     let pipeline_summary = artifact_pipeline.finish();
     let executed = match executed_result {
@@ -577,7 +919,9 @@ pub fn run_planned_problem_with_callback(
             fdm.common_cells[1],
             fdm.common_cells[2],
         ],
-        BackendPlanIR::Fem(_) | BackendPlanIR::FemEigen(_) => [0, 0, 0],
+        BackendPlanIR::Fem(_)
+        | BackendPlanIR::FemEigen(_)
+        | BackendPlanIR::FemFrequencyResponse(_) => [0, 0, 0],
     };
     on_step(StepUpdate {
         stats: final_stats,
@@ -585,6 +929,7 @@ pub fn run_planned_problem_with_callback(
         fem_mesh: match &plan.backend_plan {
             BackendPlanIR::Fem(fem) => Some(FemMeshPayload::from(fem)),
             BackendPlanIR::FemEigen(eigen) => Some(FemMeshPayload::from(eigen)),
+            BackendPlanIR::FemFrequencyResponse(response) => Some(FemMeshPayload::from(response)),
             BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
         },
         magnetization: Some(final_m),
@@ -779,6 +1124,13 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
             let engine = dispatch::resolve_fem_engine(problem)?;
             dispatch::execute_fem_eigen(engine, fem, &plan.output_plan.outputs)
         }
+        BackendPlanIR::FemFrequencyResponse(response) => {
+            frequency_response::execute_fem_frequency_response_validation(
+                response,
+                output_dir,
+                interrupt_requested,
+            )
+        }
     });
     let pipeline_summary = artifact_pipeline.finish();
     let executed = match executed_result {
@@ -831,7 +1183,9 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
             fdm.common_cells[1],
             fdm.common_cells[2],
         ],
-        BackendPlanIR::Fem(_) | BackendPlanIR::FemEigen(_) => [0, 0, 0],
+        BackendPlanIR::Fem(_)
+        | BackendPlanIR::FemEigen(_)
+        | BackendPlanIR::FemFrequencyResponse(_) => [0, 0, 0],
     };
     on_step(StepUpdate {
         stats: final_stats,
@@ -839,6 +1193,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         fem_mesh: match &plan.backend_plan {
             BackendPlanIR::Fem(fem) => Some(FemMeshPayload::from(fem)),
             BackendPlanIR::FemEigen(eigen) => Some(FemMeshPayload::from(eigen)),
+            BackendPlanIR::FemFrequencyResponse(response) => Some(FemMeshPayload::from(response)),
             BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
         },
         magnetization: None,
@@ -1247,6 +1602,11 @@ pub fn snapshot_problem_preview(
             message: "interactive preview snapshot is not supported for FEM eigenmode plans"
                 .to_string(),
         }),
+        BackendPlanIR::FemFrequencyResponse(_) => Err(RunError {
+            message:
+                "interactive preview snapshot is not supported for FEM frequency-response plans"
+                    .to_string(),
+        }),
     }
 }
 
@@ -1273,6 +1633,11 @@ pub fn snapshot_problem_vector_fields(
         BackendPlanIR::FemEigen(_) => Err(RunError {
             message: "interactive vector-field snapshots are not supported for FEM eigenmode plans"
                 .to_string(),
+        }),
+        BackendPlanIR::FemFrequencyResponse(_) => Err(RunError {
+            message:
+                "interactive vector-field snapshots are not supported for FEM frequency-response plans"
+                    .to_string(),
         }),
     }
 }
@@ -1337,6 +1702,12 @@ pub fn resolve_planned_runtime_engine(
                 accelerator: accelerator.to_string(),
             })
         }
+        BackendPlanIR::FemFrequencyResponse(_) => Ok(RuntimeEngineInfo {
+            backend_family: "fem_frequency_response".to_string(),
+            engine_id: "fem_frequency_response_dense_validation".to_string(),
+            engine_label: "FEM Frequency Response Dense Validation".to_string(),
+            accelerator: "cpu".to_string(),
+        }),
     }
 }
 
@@ -1403,6 +1774,23 @@ pub fn resolve_runtime_capabilities(problem: &ProblemIR) -> Result<BackendCapabi
     resolve_planned_runtime_capabilities(problem, &plan)
 }
 
+fn fem_frequency_response_session_runtime_defaults(
+    engine: dispatch::FemEngine,
+) -> (&'static str, &'static str, &'static str) {
+    match engine {
+        dispatch::FemEngine::CpuNative => (
+            "fem-frequency-response-validation",
+            "fem_frequency_response_dense_validation",
+            "../../bin/fullmag-bin",
+        ),
+        dispatch::FemEngine::NativeGpu => (
+            "fem-frequency-response-validation",
+            "fem_frequency_response_dense_validation",
+            "../../bin/fullmag-bin",
+        ),
+    }
+}
+
 pub fn resolve_planned_runtime_capabilities(
     problem: &ProblemIR,
     plan: &fullmag_ir::ExecutionPlanIR,
@@ -1420,6 +1808,11 @@ pub fn resolve_planned_runtime_capabilities(
         BackendPlanIR::FemEigen(_) => Ok(capabilities_for_fem_eigen_engine(
             dispatch::resolve_fem_engine_with_trail(problem)?.engine,
         )),
+        BackendPlanIR::FemFrequencyResponse(_) => {
+            Ok(capabilities_for_fem_frequency_response_validation_engine(
+                dispatch::FemEngine::CpuNative,
+            ))
+        }
     }
 }
 
@@ -1538,6 +1931,30 @@ pub fn resolve_session_runtime_with_registry(
         (BackendPlanIR::FemEigen(_), dispatch::DispatchEngine::Fem(engine)) => {
             let (default_family, engine_id, default_worker) =
                 fem_eigen_session_runtime_defaults(engine);
+            Ok(ResolvedSessionRuntime {
+                requested_cpu_threads,
+                resolved_cpu_threads,
+                resolved_backend: dispatch_resolution.resolved_backend,
+                resolved_device: dispatch_resolution.resolved_device,
+                resolved_precision: dispatch_resolution.resolved_precision,
+                resolved_mode: requested_mode,
+                resolved_runtime_family: Some(
+                    dispatch_resolution
+                        .runtime_family
+                        .unwrap_or_else(|| default_family.to_string()),
+                ),
+                resolved_engine_id: Some(engine_id.to_string()),
+                resolved_worker: Some(
+                    dispatch_resolution
+                        .worker
+                        .unwrap_or_else(|| default_worker.to_string()),
+                ),
+                resolved_fallback: dispatch_resolution.fallback,
+            })
+        }
+        (BackendPlanIR::FemFrequencyResponse(_), dispatch::DispatchEngine::Fem(engine)) => {
+            let (default_family, engine_id, default_worker) =
+                fem_frequency_response_session_runtime_defaults(engine);
             Ok(ResolvedSessionRuntime {
                 requested_cpu_threads,
                 resolved_cpu_threads,
@@ -1695,10 +2112,80 @@ mod tests {
     use fullmag_ir::{FdmGridAssetIR, GeometryAssetsIR, GeometryEntryIR};
     use serde_json::json;
     use std::fs;
+    use std::sync::atomic::AtomicBool;
     use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn fem_frequency_response_validation_problem(
+        frequencies_hz: Vec<f64>,
+    ) -> fullmag_ir::ProblemIR {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fem;
+        problem.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
+            fdm: None,
+            fem: Some(fullmag_ir::FemHintsIR {
+                order: 1,
+                hmax: 2e-9,
+                mesh: Some("meshes/unit_tet.msh".to_string()),
+                demag_solver_policy: None,
+            }),
+            hybrid: None,
+        });
+        problem.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+            fdm_grid_assets: Vec::new(),
+            fem_mesh_assets: vec![fullmag_ir::FemMeshAssetIR {
+                geometry_name: "strip".to_string(),
+                mesh_source: Some("meshes/unit_tet.msh".to_string()),
+                mesh: Some(fullmag_ir::MeshIR {
+                    mesh_name: "strip".to_string(),
+                    nodes: vec![
+                        [0.0, 0.0, 0.0],
+                        [1.0, 0.0, 0.0],
+                        [0.0, 1.0, 0.0],
+                        [0.0, 0.0, 1.0],
+                    ],
+                    elements: vec![[0, 1, 2, 3]],
+                    element_markers: vec![1],
+                    boundary_faces: vec![[0, 1, 2]],
+                    boundary_markers: vec![1],
+                    periodic_boundary_pairs: Vec::new(),
+                    periodic_node_pairs: Vec::new(),
+                    per_domain_quality: std::collections::HashMap::new(),
+                }),
+            }],
+            fem_domain_mesh_asset: None,
+        });
+        problem.energy_terms = vec![fullmag_ir::EnergyTermIR::Exchange];
+        problem.study = fullmag_ir::StudyIR::FrequencyResponse {
+            dynamics: problem.study.dynamics().clone(),
+            operator: fullmag_ir::EigenOperatorConfigIR {
+                kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+                include_demag: false,
+            },
+            equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
+            k_sampling: Some(fullmag_ir::KSamplingIR::Single {
+                k_vector: [0.0, 0.0, 0.0],
+            }),
+            normalization: fullmag_ir::FrequencyResponseNormalizationIR::UnitL2,
+            damping_policy: fullmag_ir::EigenDampingPolicyIR::Include,
+            spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+            excitation: fullmag_ir::FrequencyExcitationIR {
+                field_au_per_m: [0.0, 0.0, 1.0],
+            },
+            frequencies_hz: fullmag_ir::FrequencySweepIR {
+                values_hz: frequencies_hz,
+            },
+            sampling: fullmag_ir::SamplingIR {
+                table_autosave: None,
+                outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
+                    observable: fullmag_ir::FrequencyResponseOutputIR::SusceptibilityTensor,
+                }],
+            },
+        };
+        problem
+    }
 
     #[test]
     fn fem_relaxation_entrypoints_route_through_fem_relax_module() {
@@ -3032,6 +3519,229 @@ mod tests {
     }
 
     #[test]
+    fn fem_frequency_response_plan_runs_dense_validation_and_writes_response_bundle() {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fem;
+        problem.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
+            fdm: None,
+            fem: Some(fullmag_ir::FemHintsIR {
+                order: 1,
+                hmax: 2e-9,
+                mesh: Some("meshes/unit_tet.msh".to_string()),
+                demag_solver_policy: None,
+            }),
+            hybrid: None,
+        });
+        problem.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+            fdm_grid_assets: Vec::new(),
+            fem_mesh_assets: vec![fullmag_ir::FemMeshAssetIR {
+                geometry_name: "strip".to_string(),
+                mesh_source: Some("meshes/unit_tet.msh".to_string()),
+                mesh: Some(fullmag_ir::MeshIR {
+                    mesh_name: "strip".to_string(),
+                    nodes: vec![
+                        [0.0, 0.0, 0.0],
+                        [1.0, 0.0, 0.0],
+                        [0.0, 1.0, 0.0],
+                        [0.0, 0.0, 1.0],
+                    ],
+                    elements: vec![[0, 1, 2, 3]],
+                    element_markers: vec![1],
+                    boundary_faces: vec![[0, 1, 2]],
+                    boundary_markers: vec![1],
+                    periodic_boundary_pairs: Vec::new(),
+                    periodic_node_pairs: Vec::new(),
+                    per_domain_quality: std::collections::HashMap::new(),
+                }),
+            }],
+            fem_domain_mesh_asset: None,
+        });
+        problem.energy_terms = vec![fullmag_ir::EnergyTermIR::Exchange];
+        problem.study = fullmag_ir::StudyIR::FrequencyResponse {
+            dynamics: problem.study.dynamics().clone(),
+            operator: fullmag_ir::EigenOperatorConfigIR {
+                kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+                include_demag: false,
+            },
+            equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
+            k_sampling: Some(fullmag_ir::KSamplingIR::Single {
+                k_vector: [0.0, 0.0, 0.0],
+            }),
+            normalization: fullmag_ir::FrequencyResponseNormalizationIR::UnitL2,
+            damping_policy: fullmag_ir::EigenDampingPolicyIR::Include,
+            spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+            excitation: fullmag_ir::FrequencyExcitationIR {
+                field_au_per_m: [0.0, 0.0, 1.0],
+            },
+            frequencies_hz: fullmag_ir::FrequencySweepIR {
+                values_hz: vec![1.0e9, 2.0e9],
+            },
+            sampling: fullmag_ir::SamplingIR {
+                table_autosave: None,
+                outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
+                    observable: fullmag_ir::FrequencyResponseOutputIR::SusceptibilityTensor,
+                }],
+            },
+        };
+        let plan = fullmag_plan::plan(&problem).expect("frequency response should plan");
+        assert!(matches!(
+            plan.backend_plan,
+            fullmag_ir::BackendPlanIR::FemFrequencyResponse(_)
+        ));
+        let runtime = resolve_planned_runtime_engine(&problem, &plan)
+            .expect("frequency response validation runtime should resolve");
+        assert_eq!(runtime.backend_family, "fem_frequency_response");
+        assert_eq!(runtime.engine_id, "fem_frequency_response_dense_validation");
+        let capabilities = resolve_planned_runtime_capabilities(&problem, &plan)
+            .expect("frequency response validation capabilities should resolve");
+        assert_eq!(
+            capabilities.engine_id.as_str(),
+            "fem_frequency_response_dense_validation"
+        );
+        assert!(!capabilities.supports_frequency_response);
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-runner-frequency-response-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+
+        let result = run_planned_problem(&problem, &plan, 0.0, &output_dir)
+            .expect("frequency response validation runner should write artifacts");
+
+        assert_eq!(result.status, RunStatus::Completed);
+        let sweep_path = output_dir.join("response/magnetic_response_sweep.v1.json");
+        let manifest_path = output_dir.join("response/artifact_manifest.json");
+        let diagnostics_path = output_dir.join("response/diagnostics.v1.json");
+        let family_manifest_path = output_dir.join("frequency_domain/manifest.v1.json");
+        assert!(sweep_path.is_file());
+        assert!(manifest_path.is_file());
+        assert!(diagnostics_path.is_file());
+        assert!(family_manifest_path.is_file());
+        assert!(output_dir
+            .join("response/frequency_points/frequency_0001.json")
+            .is_file());
+        assert!(output_dir
+            .join("response/field_payloads/frequency_0001/vector.bin")
+            .is_file());
+        let sweep: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(sweep_path).expect("response sweep should be readable"),
+        )
+        .expect("response sweep should parse");
+        assert_eq!(sweep["schema_version"], "magnetic_response_sweep.v1");
+        assert_eq!(
+            sweep["backend_engine_id"],
+            "runner.dense_block_real_validation"
+        );
+        assert_eq!(sweep["point_count"], 2);
+        assert_eq!(sweep["points"][0]["frequency_hz"], 1.0e9);
+        let diagnostics: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(diagnostics_path).expect("response diagnostics should be readable"),
+        )
+        .expect("response diagnostics should parse");
+        assert_eq!(
+            diagnostics["schema_version"],
+            "frequency_response_diagnostics.v1"
+        );
+        assert_eq!(diagnostics["status"], "completed");
+        assert_eq!(diagnostics["complete"], true);
+        assert_eq!(diagnostics["completed_frequency_point_count"], 2);
+        let family_manifest: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(family_manifest_path)
+                .expect("frequency-domain manifest should be readable"),
+        )
+        .expect("frequency-domain manifest should parse");
+        assert_eq!(
+            family_manifest["schema_version"],
+            "frequency_domain_manifest.v1"
+        );
+        assert_eq!(family_manifest["stage_kind"], "frequency_response");
+        assert_eq!(family_manifest["diagnostics"]["complete"], true);
+        assert_eq!(
+            family_manifest["artifacts"]["response_diagnostics_v1_path"],
+            "response/diagnostics.v1.json"
+        );
+        assert_eq!(
+            family_manifest["resources"]["response_sweep_resource_key"],
+            "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep"
+        );
+
+        fs::remove_dir_all(&output_dir).expect("temporary artifact directory should be removable");
+    }
+
+    #[test]
+    fn fem_frequency_response_interrupt_before_first_point_writes_cancelled_manifest() {
+        let problem = fem_frequency_response_validation_problem(vec![1.0e9, 2.0e9, 3.0e9]);
+        let plan = fullmag_plan::plan(&problem).expect("frequency response should plan");
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-runner-frequency-response-interrupt-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+        let interrupt = AtomicBool::new(true);
+        let display_selection = || DisplaySelectionState::default();
+
+        let result = run_planned_problem_with_live_preview_interruptible_with_initial_snapshot(
+            &problem,
+            &plan,
+            0.0,
+            &output_dir,
+            1,
+            &display_selection,
+            Some(&interrupt),
+            false,
+            |_| StepAction::Continue,
+        )
+        .expect("interrupted frequency response validation should return a cancelled run");
+
+        assert_eq!(result.status, RunStatus::Cancelled);
+        let manifest_path = output_dir.join("response/artifact_manifest.json");
+        let manifest: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(&manifest_path).expect("response manifest should be readable"),
+        )
+        .expect("response manifest should parse");
+        let family_manifest: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("frequency_domain/manifest.v1.json"))
+                .expect("frequency-domain manifest should be readable"),
+        )
+        .expect("frequency-domain manifest should parse");
+        let diagnostics: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("response/diagnostics.v1.json"))
+                .expect("response diagnostics should be readable"),
+        )
+        .expect("response diagnostics should parse");
+        assert_eq!(manifest["status"], "interrupted");
+        assert_eq!(manifest["complete"], false);
+        assert_eq!(manifest["requested_frequency_point_count"], 3);
+        assert_eq!(manifest["completed_frequency_point_count"], 0);
+        assert_eq!(manifest["cancellation_reason"], "interrupt_requested");
+        assert_eq!(family_manifest["diagnostics"]["status"], "interrupted");
+        assert_eq!(family_manifest["diagnostics"]["complete"], false);
+        assert_eq!(
+            family_manifest["diagnostics"]["completed_frequency_point_count"],
+            0
+        );
+        assert_eq!(diagnostics["status"], "interrupted");
+        assert_eq!(diagnostics["complete"], false);
+        assert_eq!(diagnostics["completed_frequency_point_count"], 0);
+        assert!(!output_dir
+            .join("response/frequency_points/frequency_0000.json")
+            .exists());
+        assert!(!output_dir
+            .join("response/field_payloads/frequency_0000/vector.bin")
+            .exists());
+
+        fs::remove_dir_all(&output_dir).expect("temporary artifact directory should be removable");
+    }
+
+    #[test]
     fn run_problem_writes_prescribed_current_transport_artifact() {
         let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
         problem
@@ -3180,6 +3890,14 @@ mod tests {
             (
                 "fem-eigen-cpu-baseline",
                 "fem_eigen_cpu_baseline",
+                "../../bin/fullmag-bin",
+            )
+        );
+        assert_eq!(
+            fem_frequency_response_session_runtime_defaults(dispatch::FemEngine::CpuNative),
+            (
+                "fem-frequency-response-validation",
+                "fem_frequency_response_dense_validation",
                 "../../bin/fullmag-bin",
             )
         );

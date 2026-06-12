@@ -15,7 +15,7 @@ use tower::ServiceExt; // for `oneshot`
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use tokio::sync::{watch, Mutex, RwLock};
@@ -33,6 +33,12 @@ use crate::types::{
     StepUpdateView, TrackedCommandRecord,
 };
 use crate::uuid_v4_hex;
+use fullmag_runner::eigen::{
+    write_response_sweep_bundle, write_response_sweep_bundle_with_progress,
+    BlockRealSweepReuseProvenance, FieldDrivenResponseSweepArtifact,
+    FieldDrivenResponseSweepPointArtifact, ResponseExcitationProvenanceArtifact,
+    TangentLeakageDiagnosticArtifact,
+};
 use fullmag_runner::LivePreviewField;
 use fullmag_runner::{FemMeshObjectSegment, FemMeshPartPayload, FemMeshPayload, RuntimeStatus};
 
@@ -1496,6 +1502,7 @@ async fn request_id_middleware_preserves_client_id() {
 async fn contract_version_header_present() {
     let app = test_router();
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/v2/platform/health")
@@ -1520,6 +1527,7 @@ async fn contract_version_header_present() {
 async fn contract_version_header_is_exposed_to_browser_clients() {
     let app = test_router().layer(super::middleware::cors::cors_layer());
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/v2/platform/health")
@@ -1573,6 +1581,7 @@ async fn contract_version_header_is_exposed_to_browser_clients() {
 async fn browser_clients_can_preflight_authoring_transactions() {
     let app = test_router().layer(super::middleware::cors::cors_layer());
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method(Method::OPTIONS)
@@ -6389,6 +6398,55 @@ async fn response_magnetic_sweep_v1_missing_artifact_returns_404() {
     assert!(body.contains("magnetic_response_sweep.v1.json"));
 
     let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn frequency_domain_manifest_reports_solver_family_availability() {
+    let app = test_router();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/analysis/frequency-domain/manifest.v1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["schema_version"], "frequency_domain_manifest.v1");
+    assert_eq!(json["family_namespace"], "frequencyDomain");
+    assert_eq!(json["eigen_namespace"], "eigen");
+    assert_eq!(
+        json["existing_frequency_response_namespace_preserved"],
+        true
+    );
+    assert_eq!(json["response"]["study_kind"], "frequency_response");
+    assert_eq!(json["eigenmodes"]["study_kind"], "eigenmodes");
+    assert_eq!(json["floquet_nonzero_k_demag_supported"], false);
+    assert_eq!(
+        json["capabilities"]["schema_version"],
+        "frequency_domain_capabilities.v1"
+    );
+    assert_eq!(
+        json["capabilities"]["response"]["magnetic_cpu"]["status"],
+        "reference_executable"
+    );
+    assert_eq!(
+        json["capabilities"]["response"]["magnetic_gpu"]["status"],
+        "unsupported"
+    );
+    assert_eq!(
+        json["capabilities"]["demag"]["floquet_dynamic_k"]["status"],
+        "unsupported"
+    );
+    assert_eq!(
+        json["capabilities"]["visualization"]["mode_3d_overlay"]["status"],
+        "reference_executable"
+    );
+    assert_eq!(json["response_progress"], serde_json::Value::Null);
 }
 
 #[tokio::test]
@@ -15479,6 +15537,320 @@ async fn hysteresis_analysis_endpoints_read_typed_artifacts() {
 }
 
 #[tokio::test]
+async fn hysteresis_family_resource_groups_active_stage_points_by_orientation() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    fs::write(
+        artifact_dir.join("hysteresis_points.json"),
+        serde_json::to_vec(&serde_json::json!([
+            {
+                "point_id": 0,
+                "field_value_mT": 50.0,
+                "m_parallel": 0.8,
+                "m_oop": 0.0,
+                "m_ip": 0.8,
+                "m_avg": [0.8, 0.0, 0.0],
+                "status": "Completed"
+            },
+            {
+                "point_id": 1,
+                "field_value_mT": 0.0,
+                "m_parallel": 0.2,
+                "m_oop": 0.0,
+                "m_ip": 0.2,
+                "m_avg": [0.2, 0.0, 0.0],
+                "status": "Completed"
+            }
+        ]))
+        .expect("hysteresis points should serialize"),
+    )
+    .expect("hysteresis points should be writable");
+    fs::write(
+        artifact_dir.join("hysteresis_metrics.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "H_c_plus": null,
+            "H_c_minus": null,
+            "H_c": null,
+            "H_eb": null,
+            "M_r_plus": 0.2,
+            "M_r_minus": null,
+            "loop_area": 0.0,
+            "magnetization_average_weighting": "uniform_sample_average",
+            "saturation_status": "not_evaluated"
+        }))
+        .expect("hysteresis metrics should serialize"),
+    )
+    .expect("hysteresis metrics should be writable");
+
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("test session should be active");
+        snapshot.state_version = 17;
+        snapshot.scene_document = Some(sample_scene_document_with_stage(serde_json::json!({
+            "entrypoint_kind": "flat_hysteresis",
+            "kind": "hysteresis",
+            "stage_id": "stage_0",
+            "field_values_mT": [50.0, 0.0],
+            "measurement_axis": "field_axis",
+            "orientation": {
+                "kind": "spherical",
+                "theta_deg": 0.0,
+                "phi_deg": 0.0
+            },
+            "angular_family": {
+                "kind": "angular_family",
+                "family_id": "oop_ip_sweep",
+                "label": "OOP/IP comparison",
+                "variants": [
+                    {
+                        "variant_id": "theta_000",
+                        "label": "OOP",
+                        "orientation": {
+                            "kind": "spherical",
+                            "theta_deg": 0.0,
+                            "phi_deg": 0.0
+                        },
+                        "measurement_axis": "field_axis"
+                    },
+                    {
+                        "variant_id": "theta_090",
+                        "label": "In-plane",
+                        "orientation": {
+                            "kind": "spherical",
+                            "theta_deg": 90.0,
+                            "phi_deg": 0.0
+                        },
+                        "measurement_axis": "field_axis"
+                    }
+                ]
+            }
+        })));
+    }
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/analysis/hysteresis-family/stage_0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let family = body_json(response).await;
+    assert_eq!(family["revision"], 17);
+    assert_eq!(family["stage_id"], "stage_0");
+    assert_eq!(family["family_id"], "oop_ip_sweep");
+    assert_eq!(family["label"], "OOP/IP comparison");
+    assert_eq!(family["active_variant_id"], "theta_000");
+    assert_eq!(family["series"].as_array().map(Vec::len), Some(2));
+    assert_eq!(family["series"][0]["variant_id"], "theta_000");
+    assert_eq!(family["series"][0]["data_status"], "computed_active_stage");
+    assert_eq!(family["series"][0]["point_count"], 2);
+    assert_eq!(family["series"][0]["metrics"]["M_r_plus"], 0.2);
+    assert_eq!(
+        family["series"][0]["points_resource_ref"],
+        "/v2/sessions/current/analysis/hysteresis-family/stage_0/variants/theta_000/points"
+    );
+    assert_eq!(
+        family["series"][0]["points"].as_array().map(Vec::len),
+        Some(2)
+    );
+    assert_eq!(family["series"][1]["variant_id"], "theta_090");
+    assert_eq!(family["series"][1]["data_status"], "pending_run");
+    assert_eq!(family["series"][1]["point_count"], 0);
+    assert!(family["series"][1]["metrics"].is_null());
+    assert_eq!(
+        family["series"][1]["points"].as_array().map(Vec::len),
+        Some(0)
+    );
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn hysteresis_family_resource_prefers_runtime_manifest_when_available() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    fs::write(
+        artifact_dir.join("hysteresis_points.json"),
+        serde_json::to_vec(&serde_json::json!([
+            {
+                "point_id": 0,
+                "field_value_mT": 25.0,
+                "m_parallel": 0.6,
+                "m_oop": 0.0,
+                "m_ip": 0.6,
+                "m_avg": [0.6, 0.0, 0.0],
+                "status": "Completed"
+            }
+        ]))
+        .expect("hysteresis points should serialize"),
+    )
+    .expect("hysteresis points should be writable");
+    fs::write(
+        artifact_dir.join("hysteresis_metrics.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "H_c_plus": null,
+            "H_c_minus": null,
+            "H_c": null,
+            "H_eb": null,
+            "M_r_plus": 0.6,
+            "M_r_minus": null,
+            "loop_area": 0.0,
+            "magnetization_average_weighting": "uniform_sample_average",
+            "saturation_status": "not_evaluated"
+        }))
+        .expect("hysteresis metrics should serialize"),
+    )
+    .expect("hysteresis metrics should be writable");
+    fs::write(
+        artifact_dir.join("hysteresis_angular_family.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "kind": "angular_family",
+            "family_id": "runtime_family",
+            "label": "Runtime family",
+            "active_variant_id": "ip_x",
+            "variants": [
+                {
+                    "variant_id": "oop",
+                    "label": "OOP",
+                    "orientation": {
+                        "kind": "spherical",
+                        "theta_deg": 0.0,
+                        "phi_deg": 0.0
+                    },
+                    "measurement_axis": "field_axis",
+                    "data_status": "pending_run",
+                    "point_count": 0
+                },
+                {
+                    "variant_id": "ip_x",
+                    "label": "IP x",
+                    "orientation": {
+                        "kind": "spherical",
+                        "theta_deg": 90.0,
+                        "phi_deg": 0.0
+                    },
+                    "measurement_axis": "field_axis",
+                    "data_status": "computed_active_stage",
+                    "point_count": 1,
+                    "points_path": "hysteresis_angular_family/ip_x/hysteresis_points.json",
+                    "metrics_path": "hysteresis_angular_family/ip_x/hysteresis_metrics.json",
+                    "settle_trace_path": "hysteresis_angular_family/ip_x/hysteresis_settle_trace.json"
+                }
+            ]
+        }))
+        .expect("angular-family manifest should serialize"),
+    )
+    .expect("angular-family manifest should be writable");
+    let variant_dir = artifact_dir.join("hysteresis_angular_family").join("ip_x");
+    fs::create_dir_all(&variant_dir).expect("variant artifact directory should be writable");
+    fs::write(
+        variant_dir.join("hysteresis_points.json"),
+        serde_json::to_vec(&serde_json::json!([
+            {
+                "point_id": 0,
+                "field_value_mT": 90.0,
+                "m_parallel": 0.9,
+                "m_oop": 0.0,
+                "m_ip": 0.9,
+                "m_avg": [0.9, 0.0, 0.0],
+                "status": "Completed"
+            }
+        ]))
+        .expect("variant points should serialize"),
+    )
+    .expect("variant points should be writable");
+    fs::write(
+        variant_dir.join("hysteresis_metrics.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "H_c_plus": null,
+            "H_c_minus": null,
+            "H_c": null,
+            "H_eb": null,
+            "M_r_plus": 0.9,
+            "M_r_minus": null,
+            "loop_area": 0.0,
+            "magnetization_average_weighting": "uniform_sample_average",
+            "saturation_status": "not_evaluated"
+        }))
+        .expect("variant metrics should serialize"),
+    )
+    .expect("variant metrics should be writable");
+
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("test session should be active");
+        snapshot.state_version = 19;
+        snapshot.scene_document = Some(sample_scene_document_with_stage(serde_json::json!({
+            "entrypoint_kind": "flat_hysteresis",
+            "kind": "hysteresis",
+            "stage_id": "stage_0",
+            "field_values_mT": [25.0],
+            "measurement_axis": "field_axis",
+            "orientation": {
+                "kind": "spherical",
+                "theta_deg": 0.0,
+                "phi_deg": 0.0
+            }
+        })));
+    }
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/analysis/hysteresis-family/stage_0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let family = body_json(response).await;
+    assert_eq!(family["revision"], 19);
+    assert_eq!(family["family_id"], "runtime_family");
+    assert_eq!(family["label"], "Runtime family");
+    assert_eq!(family["active_variant_id"], "ip_x");
+    assert_eq!(family["series"].as_array().map(Vec::len), Some(2));
+    assert_eq!(family["series"][0]["variant_id"], "oop");
+    assert_eq!(family["series"][0]["data_status"], "pending_run");
+    assert_eq!(
+        family["series"][0]["points"].as_array().map(Vec::len),
+        Some(0)
+    );
+    assert_eq!(family["series"][1]["variant_id"], "ip_x");
+    assert_eq!(family["series"][1]["data_status"], "computed_active_stage");
+    assert_eq!(family["series"][1]["point_count"], 1);
+    assert_eq!(
+        family["series"][1]["points_resource_ref"],
+        "/v2/sessions/current/analysis/hysteresis-family/stage_0/variants/ip_x/points"
+    );
+    assert_eq!(family["series"][1]["metrics"]["M_r_plus"], 0.9);
+    assert_eq!(
+        family["series"][1]["points"].as_array().map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(family["series"][1]["points"][0]["field_value_mT"], 90.0);
+
+    let variant_points_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/analysis/hysteresis-family/stage_0/variants/ip_x/points")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(variant_points_response.status(), StatusCode::OK);
+    let variant_points = body_json(variant_points_response).await;
+    assert_eq!(variant_points.as_array().map(Vec::len), Some(1));
+    assert_eq!(variant_points[0]["field_value_mT"], 90.0);
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
 async fn hysteresis_analysis_resolves_stage_directory_artifact_refs() {
     let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
     let stage_dir = artifact_dir
@@ -16048,6 +16420,61 @@ async fn field_vector_snapshot_id_loads_persisted_hysteresis_magnetization() {
 }
 
 #[tokio::test]
+async fn field_vector_snapshot_id_loads_hysteresis_zarr_container_frame() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    write_hysteresis_zarr_snapshot_fixture(&artifact_dir, "hysteresis_point_002");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?snapshot_id=hysteresis_point_002")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-snapshot-id")
+            .and_then(|value| value.to_str().ok()),
+        Some("hysteresis_point_002")
+    );
+    let values = decode_fmvp_payload_f64(&body_bytes(response).await);
+    assert_eq!(values, vec![9.0, 0.0, 0.0, 8.0, 0.0, 0.0]);
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn field_meta_snapshot_id_reports_hysteresis_zarr_container_stats() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    write_hysteresis_zarr_snapshot_fixture(&artifact_dir, "hysteresis_point_002");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/meta?component=x&snapshot_id=hysteresis_point_002")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["quantity_id"], "m");
+    assert_eq!(json["components"], 3);
+    assert_eq!(json["stats"]["min"], 8.0);
+    assert_eq!(json["stats"]["max"], 9.0);
+    assert_eq!(json["stats"]["mean"], 8.5);
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
 async fn field_meta_snapshot_id_reports_persisted_hysteresis_magnetization_stats() {
     let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
     let snapshot_dir = artifact_dir
@@ -16092,6 +16519,206 @@ async fn field_meta_snapshot_id_reports_persisted_hysteresis_magnetization_stats
     assert_eq!(json["stats"]["mean"], 8.5);
 
     let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn field_vector_snapshot_id_rejects_unknown_malformed_and_wrong_quantity() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?snapshot_id=hysteresis_point_missing")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?snapshot_id=bad/path")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/E_total/samples/vector?snapshot_id=hysteresis_point_002")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn field_meta_snapshot_id_rejects_unknown_malformed_and_wrong_quantity() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/meta?snapshot_id=hysteresis_point_missing")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/meta?snapshot_id=bad/path")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/E_total/meta?snapshot_id=hysteresis_point_002")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn field_vector_snapshot_id_conflicts_when_zarr_frame_mismatches_domain() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    write_hysteresis_zarr_snapshot_fixture_with_grid(
+        &artifact_dir,
+        "hysteresis_point_002",
+        &[[9.0, 0.0, 0.0]],
+        [2, 1, 1],
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?snapshot_id=hysteresis_point_002")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn field_meta_snapshot_id_conflicts_when_zarr_frame_mismatches_domain() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    write_hysteresis_zarr_snapshot_fixture_with_grid(
+        &artifact_dir,
+        "hysteresis_point_002",
+        &[[9.0, 0.0, 0.0]],
+        [2, 1, 1],
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/meta?component=x&snapshot_id=hysteresis_point_002")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+fn write_hysteresis_zarr_snapshot_fixture(artifact_dir: &Path, snapshot_id: &str) {
+    write_hysteresis_zarr_snapshot_fixture_with_values(
+        artifact_dir,
+        snapshot_id,
+        &[[9.0, 0.0, 0.0], [8.0, 0.0, 0.0]],
+    );
+}
+
+fn write_hysteresis_zarr_snapshot_fixture_with_values(
+    artifact_dir: &Path,
+    snapshot_id: &str,
+    values: &[[f64; 3]],
+) {
+    write_hysteresis_zarr_snapshot_fixture_with_grid(
+        artifact_dir,
+        snapshot_id,
+        values,
+        [values.len() as u32, 1, 1],
+    );
+}
+
+fn write_hysteresis_zarr_snapshot_fixture_with_grid(
+    artifact_dir: &Path,
+    snapshot_id: &str,
+    values: &[[f64; 3]],
+    grid: [u32; 3],
+) {
+    let field_dir = artifact_dir
+        .join("hysteresis.zarr")
+        .join("fields")
+        .join("m");
+    fs::create_dir_all(&field_dir).expect("Zarr field dir should be writable");
+    let cell_count = values.len();
+    fs::write(
+        field_dir.join(".zarray"),
+        serde_json::to_vec(&serde_json::json!({
+            "zarr_format": 2,
+            "shape": [1, 3, cell_count],
+            "chunks": [1, 3, cell_count],
+            "dtype": "<f8",
+            "compressor": null,
+            "fill_value": 0.0,
+            "order": "C",
+            "filters": null,
+            "dimension_separator": "."
+        }))
+        .expect("Zarr metadata should serialize"),
+    )
+    .expect("Zarr metadata should be writable");
+    fs::write(
+        field_dir.join("samples.csv"),
+        format!(
+            "sample,snapshot_id,point_id,field_value_mT,quantity_id,chunk_key,dtype,scalar_bytes,cell_count,grid_x,grid_y,grid_z\n0,{snapshot_id},1,2.500000000000000e1,m,0.0.0,<f8,8,{cell_count},{},{},{}\n",
+            grid[0], grid[1], grid[2]
+        ),
+    )
+    .expect("Zarr sample index should be writable");
+    let mut chunk = Vec::new();
+    for component in 0..3 {
+        for value in values {
+            chunk.extend_from_slice(&value[component].to_le_bytes());
+        }
+    }
+    fs::write(field_dir.join("0.0.0"), chunk).expect("Zarr chunk should be writable");
 }
 
 #[tokio::test]
@@ -17097,7 +17724,7 @@ async fn v2_field_vector_applies_max_samples_to_unscoped_center_window() {
             .headers()
             .get("x-fullmag-point-count")
             .and_then(|value| value.to_str().ok()),
-        Some("3")
+        Some("1")
     );
     let bytes = body_bytes(response).await;
     assert_eq!(&bytes[..4], b"FMVP");
@@ -18645,6 +19272,18 @@ fn openapi_contains_field_slice_contract() {
         components.contains_key("FieldSliceBinaryDescriptor"),
         "OpenAPI missing FieldSliceBinaryDescriptor schema"
     );
+    let field_vector_view_description = components
+        .get("FieldVectorQuery")
+        .and_then(|schema| schema.get("properties"))
+        .and_then(|properties| properties.get("view"))
+        .and_then(|view| view.get("description"))
+        .and_then(|description| description.as_str())
+        .expect("FieldVectorQuery.view should document supported analysis views");
+    assert!(
+        field_vector_view_description.contains("`abs`")
+            && field_vector_view_description.contains("`phase_rotated_real`"),
+        "FieldVectorQuery.view should document abs and phase-rotated frequency-domain views"
+    );
 }
 
 #[test]
@@ -19193,6 +19832,613 @@ fn schema_property_names(
         .collect()
 }
 
+#[tokio::test]
+async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    write_response_sweep_bundle(&artifact_dir, &frequency_domain_response_sweep_fixture(2))
+        .expect("response sweep bundle should be written");
+    let eigen_dir = artifact_dir.join("eigen");
+    fs::create_dir_all(&eigen_dir).expect("eigen artifact directory should be created");
+    fs::write(
+        eigen_dir.join("spectrum.v2.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "eigen_spectrum.v2",
+            "samples": [{
+                "sample_index": 0,
+                "path_s": 0.0,
+                "modes": [{
+                    "raw_mode_index": 3,
+                    "frequency_real_hz": 1.25e9
+                }]
+            }]
+        }))
+        .expect("spectrum fixture should serialize"),
+    )
+    .expect("spectrum fixture should be written");
+    fs::write(
+        eigen_dir.join("branches.v2.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "eigen_branches.v2",
+            "branches": [{
+                "branch_id": 0,
+                "points": [{
+                    "sample_index": 0,
+                    "raw_mode_index": 3,
+                    "frequency_real_hz": 1.25e9
+                }]
+            }]
+        }))
+        .expect("branches fixture should serialize"),
+    )
+    .expect("branches fixture should be written");
+    fs::write(
+        eigen_dir.join("dispersion.csv"),
+        "sample_index,path_s_rad_per_m,raw_mode_index,branch_id,frequency_hz\n0,0,3,0,1250000000\n",
+    )
+    .expect("dispersion fixture should be written");
+    fs::create_dir_all(eigen_dir.join("modes").join("sample_0000"))
+        .expect("mode metadata directory should be created");
+    fs::write(
+        eigen_dir
+            .join("modes")
+            .join("sample_0000")
+            .join("mode_0003.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "eigen_mode.v2",
+            "sample_index": 0,
+            "raw_mode_index": 3
+        }))
+        .expect("mode metadata fixture should serialize"),
+    )
+    .expect("mode metadata fixture should be written");
+    fs::create_dir_all(artifact_dir.join("frequency_domain"))
+        .expect("frequency-domain manifest directory should be created");
+    fs::write(
+        artifact_dir.join("frequency_domain").join("manifest.v1.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "frequency_domain_manifest.v1",
+            "stage_kind": "combined",
+            "artifacts": {
+                "spectrum_v2_path": "eigen/spectrum.v2.json",
+                "branches_v2_path": "eigen/branches.v2.json",
+                "dispersion_csv_path": "eigen/dispersion.csv",
+                "mode_metadata_paths": ["eigen/modes/sample_0000/mode_0003.json"],
+                "response_sweep_v2_path": "response/magnetic_response_sweep.v2.json"
+            },
+            "resources": {
+                "eigen_diagnostics_resource_key": "/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2",
+                "response_diagnostics_resource_key": "/v2/sessions/current/analysis/frequency-domain/response/diagnostics.v1",
+                "mode_field_resources": ["/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/0/3/meta"]
+            }
+        }))
+        .expect("frequency-domain manifest fixture should serialize"),
+    )
+    .expect("frequency-domain manifest fixture should be written");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_bytes(response).await;
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["status"], "ready");
+    assert_eq!(
+        payload["artifact_path"],
+        "response/magnetic_response_sweep.v2.json"
+    );
+    assert_eq!(
+        payload["payload"]["schema_version"],
+        "magnetic_response_sweep.v2"
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/response/progress.v1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_bytes(response).await;
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        payload["schema_version"],
+        "frequency_domain_sweep_progress.v1"
+    );
+    assert_eq!(payload["status"], "ready");
+    assert_eq!(payload["total_frequency_points"], 2);
+    assert_eq!(payload["completed_frequency_points"], 2);
+    assert_eq!(payload["written_frequency_point_artifacts"], 2);
+    assert_eq!(payload["current_frequency_hz"], 2.0e9);
+    assert_eq!(payload["partial_artifacts_available"], true);
+    assert!(payload["progress_json"]
+        .as_str()
+        .expect("progress_json should be present")
+        .contains("\"state\":\"completed\""));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/manifest.v1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_bytes(response).await;
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        payload["response_progress"]["schema_version"],
+        "frequency_domain_sweep_progress.v1"
+    );
+    assert_eq!(
+        payload["response_progress"]["completed_frequency_points"],
+        2
+    );
+    assert!(payload["response_progress"]["progress_json"]
+        .as_str()
+        .expect("manifest response_progress should include progress_json")
+        .contains("\"state\":\"completed\""));
+    assert_eq!(
+        payload["result_manifest"]["payload"]["resources"]["eigen_diagnostics_resource_key"],
+        "/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2"
+    );
+    assert_eq!(
+        payload["result_manifest"]["payload"]["resources"]["response_diagnostics_resource_key"],
+        "/v2/sessions/current/analysis/frequency-domain/response/diagnostics.v1"
+    );
+    assert_eq!(
+        payload["result_manifest"]["payload"]["artifacts"]["spectrum_v2_path"],
+        "eigen/spectrum.v2.json"
+    );
+    assert_eq!(
+        payload["result_manifest"]["payload"]["artifacts"]["branches_v2_path"],
+        "eigen/branches.v2.json"
+    );
+    assert_eq!(
+        payload["result_manifest"]["payload"]["artifacts"]["dispersion_csv_path"],
+        "eigen/dispersion.csv"
+    );
+    assert_eq!(
+        payload["result_manifest"]["payload"]["artifacts"]["mode_metadata_paths"][0],
+        "eigen/modes/sample_0000/mode_0003.json"
+    );
+    assert_eq!(
+        payload["result_manifest"]["payload"]["resources"]["mode_field_resources"][0],
+        "/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/0/3/meta"
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_bytes(response).await;
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["status"], "ready");
+    assert_eq!(payload["artifact_path"], "eigen/spectrum.v2.json");
+    assert_eq!(payload["payload"]["schema_version"], "eigen_spectrum.v2");
+    assert_eq!(
+        payload["payload"]["samples"][0]["modes"][0]["raw_mode_index"],
+        3
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_bytes(response).await;
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["status"], "ready");
+    assert_eq!(payload["artifact_path"], "eigen/branches.v2.json");
+    assert_eq!(payload["payload"]["schema_version"], "eigen_branches.v2");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/eigen/dispersion")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_bytes(response).await;
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["status"], "ready");
+    assert_eq!(payload["artifact_path"], "eigen/dispersion.csv");
+    assert_eq!(payload["content_type"], "text/csv; charset=utf-8");
+    assert!(payload["text"]
+        .as_str()
+        .expect("dispersion text should be present")
+        .contains("frequency_hz"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/response/frequency-points/1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_bytes(response).await;
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["status"], "ready");
+    assert_eq!(
+        payload["artifact_path"],
+        "response/frequency_points/frequency_0001.json"
+    );
+    assert_eq!(payload["payload"]["frequency_hz"], 2.0e9);
+    assert_eq!(
+        payload["payload"]["response_field_payload_path"],
+        "response/field_payloads/frequency_0001/vector.bin"
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/0/3/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_bytes(response).await;
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["status"], "missing");
+    assert_eq!(payload["field_id"], "analysis:eigen:sample-0000:mode-0003");
+    assert_eq!(payload["value_kind"], "complex_vector");
+    assert_eq!(payload["default_view"], "phase_rotated_real");
+    assert_eq!(payload["default_phase_rad"], 0.0);
+    assert_eq!(
+        payload["resource_key"],
+        "/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0003/samples/vector?view=phase_rotated_real&phase_rad=0"
+    );
+    assert!(payload["available_views"]
+        .as_array()
+        .expect("available views should be an array")
+        .iter()
+        .any(|view| view == "complex"));
+    assert!(payload["available_views"]
+        .as_array()
+        .expect("available views should be an array")
+        .iter()
+        .any(|view| view == "abs"));
+
+    let mode_field_dir = artifact_dir
+        .join("eigen")
+        .join("mode_fields")
+        .join("sample_0000")
+        .join("mode_0003");
+    fs::create_dir_all(&mode_field_dir).expect("mode field directory should be created");
+    let mut mode_field_bytes = Vec::new();
+    for value in [1.0f64, 0.0, 0.0, 1.0, 3.0, 4.0] {
+        mode_field_bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    fs::write(mode_field_dir.join("vector.bin"), mode_field_bytes)
+        .expect("mode field payload should be written");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0003/samples/vector?view=phase_rotated_real&phase_rad=0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-quantity-id")
+            .and_then(|value| value.to_str().ok()),
+        Some("analysis:eigen:sample-0000:mode-0003")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-n-comp")
+            .and_then(|value| value.to_str().ok()),
+        Some("3")
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/response/field/1/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_bytes(response).await;
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        payload["field_id"],
+        "analysis:frequency-response:frequency-0001"
+    );
+    assert_eq!(payload["source_family"], "analysis/frequency-response");
+    assert_eq!(payload["default_view"], "phase_rotated_real");
+    assert_eq!(payload["default_phase_rad"], 0.0);
+    assert_eq!(
+        payload["resource_key"],
+        "/v2/sessions/current/data/fields/analysis:frequency-response:frequency-0001/samples/vector?view=phase_rotated_real&phase_rad=0"
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/data/fields/analysis:frequency-response:frequency-0001/samples/vector?view=phase_rotated_real&phase_rad=0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-quantity-id")
+            .and_then(|value| value.to_str().ok()),
+        Some("analysis:frequency-response:frequency-0001")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-n-comp")
+            .and_then(|value| value.to_str().ok()),
+        Some("3")
+    );
+}
+
+#[tokio::test]
+async fn frequency_domain_progress_reports_interrupted_partial_response_bundle() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    write_response_sweep_bundle_with_progress(
+        &artifact_dir,
+        &frequency_domain_response_sweep_fixture(1),
+        3,
+        true,
+    )
+    .expect("interrupted response bundle should write partial artifacts");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/response/progress.v1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_bytes(response).await;
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(payload["status"], "interrupted");
+    assert_eq!(payload["total_frequency_points"], 3);
+    assert_eq!(payload["completed_frequency_points"], 1);
+    assert_eq!(payload["written_frequency_point_artifacts"], 1);
+    assert_eq!(payload["partial_artifacts_available"], true);
+    assert_eq!(
+        payload["latest_artifact_manifest_path"],
+        "response/artifact_manifest.json"
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/response/cancel-requested.v1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_bytes(response).await;
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(payload["status"], "cancel_requested");
+    assert_eq!(payload["total_frequency_points"], 3);
+    assert_eq!(payload["completed_frequency_points"], 1);
+    assert_eq!(payload["written_frequency_point_artifacts"], 1);
+    assert_eq!(payload["partial_artifacts_available"], true);
+    assert!(payload["progress_json"]
+        .as_str()
+        .expect("cancel-requested progress_json should be present")
+        .contains("\"state\":\"cancel_requested\""));
+}
+
+#[tokio::test]
+async fn frequency_domain_progress_reports_pre_first_point_cancel_bundle() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    write_response_sweep_bundle_with_progress(
+        &artifact_dir,
+        &frequency_domain_response_sweep_fixture(0),
+        3,
+        true,
+    )
+    .expect("pre-first-point cancel bundle should write interrupted artifacts");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/response/progress.v1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_bytes(response).await;
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(payload["status"], "interrupted");
+    assert_eq!(payload["total_frequency_points"], 3);
+    assert_eq!(payload["completed_frequency_points"], 0);
+    assert_eq!(payload["written_frequency_point_artifacts"], 0);
+    assert_eq!(payload["partial_artifacts_available"], false);
+    assert!(payload["progress_json"]
+        .as_str()
+        .expect("progress_json should be present")
+        .contains("\"partial_artifacts_available\":false"));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/response/cancel-requested.v1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_bytes(response).await;
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(payload["status"], "cancel_requested");
+    assert_eq!(payload["total_frequency_points"], 3);
+    assert_eq!(payload["completed_frequency_points"], 0);
+    assert_eq!(payload["written_frequency_point_artifacts"], 0);
+    assert_eq!(payload["partial_artifacts_available"], false);
+    assert!(payload["progress_json"]
+        .as_str()
+        .expect("cancel-requested progress_json should be present")
+        .contains("\"partial_artifacts_available\":false"));
+}
+
+#[tokio::test]
+async fn frequency_domain_response_does_not_fallback_when_v2_is_invalid() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    write_response_sweep_bundle(&artifact_dir, &frequency_domain_response_sweep_fixture(1))
+        .expect("response sweep bundle should be written");
+    let response_dir = artifact_dir.join("response");
+    std::fs::write(
+        response_dir.join("magnetic_response_sweep.v2.json"),
+        b"{ invalid response v2",
+    )
+    .expect("invalid response v2 fixture should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+fn frequency_domain_response_sweep_fixture(point_count: usize) -> FieldDrivenResponseSweepArtifact {
+    FieldDrivenResponseSweepArtifact {
+        schema_version: "magnetic_response_sweep.v1",
+        backend_engine_id: "runner.dense_block_real".to_string(),
+        solver_model: "dense_block_real_lu".to_string(),
+        damping_policy: "gilbert_linear".to_string(),
+        lane_classification: "local_validation".to_string(),
+        matrix_layout: "block_real",
+        excitation_kind: "field",
+        si_units: BTreeMap::from([
+            ("frequency_hz", "Hz"),
+            ("angular_frequency_rad_per_s", "rad/s"),
+            ("m_complex", "normalized_magnetization"),
+            ("response_amplitude", "normalized_magnetization"),
+            ("response_phase", "rad"),
+            ("susceptibility_tensor", "dimensionless"),
+            ("absorbed_power_density", "W/m^3"),
+            ("residual_l2_norm", "operator_l2"),
+            ("relative_residual_l2_norm", "dimensionless"),
+            ("tangent_leakage_l2_norm", "dimensionless"),
+        ]),
+        point_count,
+        points: (0..point_count)
+            .map(|index| {
+                let frequency_hz = (index + 1) as f64 * 1.0e9;
+                FieldDrivenResponseSweepPointArtifact {
+                    frequency_hz,
+                    angular_frequency_rad_per_s: frequency_hz * 2.0 * std::f64::consts::PI,
+                    m_complex: vec![[0.0, -1.0], [0.25, 0.0], [0.0, 0.5]],
+                    response_amplitude: vec![1.0, 0.25, 0.5],
+                    response_phase: vec![
+                        -std::f64::consts::FRAC_PI_2,
+                        0.0,
+                        std::f64::consts::FRAC_PI_2,
+                    ],
+                    susceptibility_tensor: vec![vec![[0.0, -1.0]]],
+                    absorbed_power_density: 1.0,
+                    residual_l2_norm: 0.0,
+                    relative_residual_l2_norm: 0.0,
+                    tangent_leakage: TangentLeakageDiagnosticArtifact {
+                        kind: "not_evaluated_dense_validation",
+                        l2_norm: None,
+                    },
+                    excitation_provenance: ResponseExcitationProvenanceArtifact { kind: "field" },
+                    sweep_reuse: BlockRealSweepReuseProvenance {
+                        operator_template_reused: true,
+                        warm_start: None,
+                    },
+                }
+            })
+            .collect(),
+    }
+}
+
 fn set_intersection_without_revision(
     left: &BTreeSet<String>,
     right: &BTreeSet<String>,
@@ -19209,6 +20455,9 @@ fn v2_test_uri(template: &str) -> String {
         .replace("{command_id}", "missing-command")
         .replace("{run_id}", "test-run")
         .replace("{mode_id}", "0")
+        .replace("{sample_index}", "0")
+        .replace("{mode_index}", "0")
+        .replace("{frequency_index}", "0")
         .replace("{artifact_id}", "missing-artifact")
         .replace("{material_id}", "missing-material")
         .replace("{object_id}", "missing-object")

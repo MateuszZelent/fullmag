@@ -9,6 +9,13 @@ import type {
 } from "../explorerTypes";
 
 import { buildCrossSectionNodes } from "./crossSectionExplorerNodes";
+import {
+  buildFrequencyDomainDiagnosticsNode,
+  buildFrequencyDomainJobsNode,
+  buildFrequencyDomainResourceNodes,
+  buildFrequencyDomainResultNode,
+  type ExplorerTreeResources,
+} from "./frequencyDomainExplorerNodes";
 import { buildStudyNodes } from "./study/studyExplorerNodes";
 
 import { meshPipelineStatusIsActive } from "@/shared/domain/mesh/buildPipeline";
@@ -717,13 +724,17 @@ function branch(id: string, label: string, kind: ExplorerNode["kind"], status: E
   };
 }
 
-export function buildExplorerTree(tabId: ExplorerTabId): ExplorerNode[] {
+export function buildExplorerTree(
+  tabId: ExplorerTabId,
+  resources: ExplorerTreeResources = {},
+): ExplorerNode[] {
   if (tabId === "model") return buildModelTree();
   if (tabId === "resources") {
     return [
       {
         ...branch("resources:root", "Session Resources", "resources.root"),
         children: [
+          ...buildFrequencyDomainResourceNodes(resources.frequencyDomainManifest),
           {
             id: "resources:fields",
             kind: "resources.field",
@@ -751,6 +762,13 @@ export function buildExplorerTree(tabId: ExplorerTabId): ExplorerNode[] {
       {
         ...branch("results:root", "Results", "results.root"),
         children: [
+          buildFrequencyDomainResultNode(
+            resources.frequencyDomainManifest,
+            resources.frequencyDomainBranches,
+            resources.frequencyDomainDispersion,
+            resources.frequencyDomainResponseSweep,
+            resources.frequencyDomainSpectrum,
+          ),
           {
             id: "results:field:m",
             kind: "results.field_quantity",
@@ -769,6 +787,7 @@ export function buildExplorerTree(tabId: ExplorerTabId): ExplorerNode[] {
       {
         ...branch("jobs:root", "Jobs", "jobs.root"),
         children: [
+          buildFrequencyDomainJobsNode(),
           {
             id: "jobs:command-queue",
             kind: "jobs.command",
@@ -787,6 +806,7 @@ export function buildExplorerTree(tabId: ExplorerTabId): ExplorerNode[] {
     {
       ...branch("diagnostics:root", "Diagnostics", "diagnostics.root"),
       children: [
+        buildFrequencyDomainDiagnosticsNode(resources.frequencyDomainManifest),
         {
           id: "diagnostics:resources",
           kind: "diagnostics.resource",

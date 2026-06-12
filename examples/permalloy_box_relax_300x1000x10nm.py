@@ -1,100 +1,98 @@
-"""Permalloy 300 nm x 1000 nm x 10 nm box relaxation.
+"""Permalloy 300 nm x 1000 nm x 10 nm strip with a central hole.
 
-The initial magnetization is uniform along the long y axis and no external
-field is applied.
+This is a FEM modal dynamics test case:
+
+1. relax the initial state of a thin Permalloy strip with a central cylindrical
+   through-hole,
+2. assemble the linearized LLG eigenproblem around that relaxed equilibrium,
+3. write the modal spectrum and a small set of mode profiles.
+
+Run with the managed FEM runtime, for example:
+
+    just run-permalloy-box-relax-headless cpu
+
+The eigenmodes path is the modal eigensolver companion product. It is not the
+driven frequency-response solver.
 """
 
 import fullmag as fm
 
 
-study = fm.study("permalloy_box_relax_300x1000x10nm")
+STRIP_SIZE = (300e-9, 1000e-9, 10e-9)
+HOLE_RADIUS = 40e-9
+HOLE_HEIGHT = 16e-9
+N_MODES = 12
+
+
+study = fm.study("permalloy_strip_hole_eigenmodes_300x1000x10nm")
 study.engine("fem")
-study.device("gpu", precision="double")
+study.device("cpu", precision="double")
+
 study.universe(
     mode="auto",
-    size=(1700e-9, 2.4e-6, 260e-9),
+    size=(700e-9, 1400e-9, 180e-9),
     center=(0.0, 0.0, 0.0),
     padding=(0.0, 0.0, 0.0),
 )
-study.universe.mesh(minimum_element_size=10e-9, maximum_element_size=250e-9)
-study.airbox.visualization(show=True, mode="vectors", active_quantity_id="h_eff", wireframe=False)
-
-hole_radius = 40e-9
-hole_height = 30e-9
-hole_refinement_radius = hole_radius + 30e-9
-
-body = study.geometry(
-    fm.Box(300e-9, 1000e-9, 30e-9) - fm.Cylinder(radius=hole_radius, height=hole_height),
-    name="permalloy_box"
+study.universe.mesh(minimum_element_size=5e-9, maximum_element_size=120e-9)
+study.airbox.visualization(
+    show=True,
+    mode="vectors",
+    active_quantity_id="h_eff",
+    wireframe=False,
 )
-body.Ms = 800e3
-body.Aex = 13e-12
-body.alpha = 0.5
-# body.dind=9.0
-# body.temp=200
-body.m = fm.texture.uniform(0.1, 1.0, 0.0)
-body.mesh(minimum_element_size=8e-9, maximum_element_size=50e-9, order=1)
-hole_refinement = body.add_region(
-    "hole_refinement",
-    fm.Cylinder(radius=hole_refinement_radius, height=hole_height),
+
+strip = study.geometry(
+    fm.Box(size=STRIP_SIZE, name="permalloy_strip")
+    - fm.Cylinder(radius=HOLE_RADIUS, height=HOLE_HEIGHT, name="central_hole"),
+    name="permalloy_strip_with_hole",
+)
+strip.Ms = 800e3
+strip.Aex = 13e-12
+strip.alpha = 0.02
+strip.m = fm.texture.uniform(0.02, 1.0, 0.0)
+strip.mesh(minimum_element_size=5e-9, maximum_element_size=20e-9, order=1)
+
+hole_refinement = strip.add_region(
+    "hole_edge_refinement",
+    fm.Cylinder(
+        radius=HOLE_RADIUS + 25e-9,
+        height=HOLE_HEIGHT,
+        name="hole_refinement",
+    ),
     priority=10,
     realization_policy="conformal",
 )
-hole_refinement.mesh(minimum_element_size=0.5e-9, maximum_element_size=1e-9, order=1)
-# hole_refinement.material.Ms = 1e3
+hole_refinement.mesh(
+    minimum_element_size=2.5e-9,
+    maximum_element_size=7.5e-9,
+    order=1,
+)
 
 study.demag(realization="poisson_robin")
-study.build_domain_mesh()
+study.solver(dt=1e-13, g=2.115)
+study.tableautosave(
+    1e-12,
+    quantities=["time", "step", "mx", "my", "mz", "E_total"],
+)
 
-# study.stages.add_minimize(
-#     method="bb",
-#     max_steps=1000,
-#     tol=1e-30,
-# )
-study.tableautosave(1e-13, quantities=["time", "step", "mx", "my", "mz", "E_total"])
-# study.stages.add_relax(
-#     algorithm="llg_overdamped",
-#     solver="rk23",
-#     max_error=1e-6,
-#     dt_min=1e-17,
-#     max_steps=350,
-#     tol=1e-4,
-# )
-study.stages.add_hysteresis_sweep(
-    field_min_mT=-100.0,
-    field_max_mT=100.0,
-    field_step_mT=5.0,
-    orientation=fm.FieldOrientation.preset("in_plane_y"),
-    measurement_axis="field_axis",
-    initial_protocol="positive_saturation",
-    saturation=fm.SaturationProbe(
-        mode="auto",
-        max_field_mT=300.0,
-        susceptibility_threshold=1e-3,
-        transverse_threshold=1e-2,
-    ),
-    branch_mode="major_loop",
-    settle_pipeline=fm.SettlePipeline([
-        fm.MinimizeStep(
-            method="projected_gradient_bb",
-            torque_tolerance=5e-5,
-            energy_tolerance=1e-20,
-            max_steps=1000,
-            on_non_convergence="run_next_algorithm",
-        ),
-        fm.RelaxStep(
-            method="llg_overdamped",
-            alpha=1.0,
-            torque_tolerance=1e-5,
-            max_steps=100,
-            on_non_convergence="continue_with_warning",
-        ),
-    ]),
-    storage=fm.HysteresisStorage(
-        scalar_history=True,
-        magnetization="selected",
-        every_n=5,
-        key_events=True,
-        key_event_threshold_dm=0.02,
-    ),
+study.save("m", every=25e-12)
+study.save("H_eff", every=25e-12)
+study.save("spectrum")
+study.save("mode", indices=(0, 1, 2, 3))
+
+study.stages.add_relax(
+    algorithm="llg_overdamped",
+    solver="rk23",
+    max_steps=500,
+    tol=1e-5,
+)
+study.stages.add_eigenmodes(
+    count=N_MODES,
+    target="lowest",
+    include_demag=True,
+    equilibrium_source="relax",
+    normalization="unit_l2",
+    damping_policy="ignore",
+    bc="free",
 )

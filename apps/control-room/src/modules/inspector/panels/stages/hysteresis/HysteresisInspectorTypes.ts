@@ -16,11 +16,15 @@ import type {
 import type { KernelApi } from "@/kernel/types";
 import type { HysteresisTargetMetadata } from "@/shared/domain/study/HysteresisChart";
 
-import type { ActiveHysteresisSnapshotSelection } from "./HysteresisInspectorUtils";
+import type {
+  ActiveHysteresisPointSelection,
+  ActiveHysteresisSnapshotSelection,
+} from "./HysteresisInspectorUtils";
 import type { StageInspectorFrameProps } from "../StageInspectorFrame";
 
 export interface HysteresisInspectorCommonProps {
   activeSnapshot: ActiveHysteresisSnapshotSelection | null;
+  activePoint: ActiveHysteresisPointSelection | null;
   branches: HysteresisBranchSchema[];
   draft: StageInspectorFrameProps["draft"];
   executionTree: HysteresisExecutionTreeResource | null | undefined;

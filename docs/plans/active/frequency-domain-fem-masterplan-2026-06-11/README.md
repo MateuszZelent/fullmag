@@ -8,26 +8,37 @@ Scope: production-grade FEM frequency-domain driven-response execution and compl
 
 The backend is not empty, but the existing eigenmode path is not the same thing as the frequency-domain solver. Fullmag already has a first-class semantic layer for eigenmodes and frequency response, a FEM eigen planning path, runner tests, and v2 eigen artifacts. The missing core feature is a production-native FEM driven frequency-response solver. Eigenmodes, dispersion, linewidths, absorption-from-modes, and 3D mode profiles are companion modal products that must be supported by the UI without being mislabeled as the driven solver.
 
-Code facts verified in this checkout:
+Baseline code facts verified when this masterplan was created:
 
 - `packages/fullmag-py/src/fullmag/model/study.py` defines public `Eigenmodes` and `FrequencyResponse` classes.
 - `packages/fullmag-py/src/fullmag/world.py` exposes flat and staged authoring helpers for eigenmodes and frequency response.
 - `crates/fullmag-ir/src/study.rs`, `crates/fullmag-ir/src/eigen_contract.rs`, and `crates/fullmag-ir/src/frequency_response_contract.rs` contain first-class IR contracts for eigen and frequency-response studies.
 - `crates/fullmag-plan/src/fem.rs` plans FEM eigenmodes, including demag realization checks, periodic/Floquet constraints, k-path sampling, output validation, and precision restrictions.
-- `crates/fullmag-plan/src/lib.rs` rejects `StudyIR::FrequencyResponse` as semantic-only in this build.
+- `crates/fullmag-plan/src/lib.rs` rejects `StudyIR::FrequencyResponse` on FDM, while the FEM path can produce a `FemFrequencyResponsePlanIR` for the dense validation response lane. This is not yet the production native MFEM/hypre/libCEED driven solver.
 - `crates/fullmag-runner/src/fem_eigen.rs` executes a transitional CPU baseline and a small dense GPU path, writes legacy eigen artifacts, and participates in v2 dispersion artifact generation through dispatch.
 - `crates/fullmag-runner/src/dispatch.rs` writes `eigen/spectrum.v2.json`, `eigen/branches.v2.json`, and `eigen/dispersion.csv` for k-path eigensolves.
 - `crates/fullmag-api/src/router_v2/handlers/analysis/eigen.rs` exposes v2 eigen endpoints, plus legacy compatibility endpoints.
 - `crates/fullmag-api/src/router_v2/handlers/analysis/response.rs` exposes `response/magnetic_response_sweep.v1.json`, but the executable driven solver is not implemented.
 - `apps/control-room/src/kernel/api/apiPaths.ts` contains generated path constants for eigen and frequency-response analysis routes.
-- `apps/control-room/src/kernel/api/ControlRoomApi.ts` exposes only `analysis.frequencyResponse.magneticSweepV1()` for frequency-domain analysis; it does not expose an `analysis.eigen` facade.
-- `apps/control-room/src/kernel/resources/studyRuntimeResources.ts` has `useMagneticResponseSweepResource()` but no eigen spectrum, branch, dispersion, or mode hooks.
-- `apps/control-room/src/modules/explorer/explorerTypes.ts` contains `study.stage.eigenmodes` and `study.stage.frequency_response`, but no result node kinds for eigen spectra, dispersion branches, mode rows, response sweeps, or mode-field payloads.
+- At the original audit point, `apps/control-room/src/kernel/api/ControlRoomApi.ts` exposed only `analysis.frequencyResponse.magneticSweepV1()` for frequency-domain analysis and did not expose an `analysis.eigen` facade. Active rollout work may already have added `analysis.frequencyDomain.*` and `analysis.eigen.*`; files 02-08 remain the target contract.
+- At the original audit point, `apps/control-room/src/kernel/resources/studyRuntimeResources.ts` had `useMagneticResponseSweepResource()` but no eigen spectrum, branch, dispersion, or mode hooks. Active rollout work may already have added some of these hooks; the required hook list in doc 02 remains authoritative.
+- At the original audit point, `apps/control-room/src/modules/explorer/explorerTypes.ts` contained `study.stage.eigenmodes` and `study.stage.frequency_response`, but no result node kinds for eigen spectra, dispersion branches, mode rows, response sweeps, or mode-field payloads. Active rollout work may already have added these node kinds; doc 04 remains the coverage target.
 - `apps/control-room/src/modules/explorer/builders/study/eigenmodesStageNode.ts` and `frequencyResponseStageNode.ts` build shallow stage nodes only.
 - `apps/control-room/src/modules/inspector/inspectorRegistry.tsx` routes spectral stages to `StudyStageInspectorRouter`, but result nodes do not exist.
 - `apps/control-room/src/modules/inspector/panels/StudyPipelineSection.tsx` has basic draft fields for eigenmodes and frequency response, but it does not expose professional result inspection.
 - `apps/control-room/src/modules/analysis-plots` is currently scalar/table/hysteresis-oriented and does not render eigen spectra, dispersion, mode tables, or driven-response charts.
 - `apps/control-room/src/modules/viewport-3d` has a mature resource-driven vector-field rendering path, but no analysis-mode field source or mode-phase visualization path.
+
+Active implementation delta:
+
+- This folder is an active rollout plan, not a frozen audit snapshot. If a later
+  implementation adds `api.analysis.frequencyDomain`, frequency-domain Explorer
+  node kinds, or inspector/chart stubs, the target requirements in files 02-08
+  still decide whether the work is complete.
+- Current Control Room work adds `api.analysis.eigen.*` for modal products while
+  preserving compatible modal methods under `api.analysis.frequencyDomain.*`
+  during rollout. The required product split remains: modal eigen products are
+  not the driven frequency-response solver.
 
 ## Local External Solver Audit
 
@@ -81,7 +92,7 @@ Backend:
 - Production FEM code lives under the canonical `backends/fem` native tree, not in `crates` and not in `mfem_bridge.cpp`.
 - CPU and GPU realizations are separate runtime lanes that share physics semantics but do not share hot-loop state.
 - The current dense/reference eigensolver remains a validation path for modal products until the native scalable modal solver passes the validation ladder.
-- Frequency response moves from semantic-only to executable only when the native driven solver writes validated response artifacts from direct harmonic solves.
+- Frequency response is executable only for explicitly proven lanes: the dense FEM validation lane may emit response artifacts, while the production native driven solver remains incomplete until it writes validated direct-harmonic response artifacts through the managed runtime path.
 - Native FEM build and runtime verification use repo `just` recipes, with a new managed frequency-domain verification recipe added before production rollout.
 
 Frontend:

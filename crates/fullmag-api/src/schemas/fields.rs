@@ -73,6 +73,13 @@ pub struct FieldVectorQuery {
     /// Optional persisted analysis snapshot id, for example a saved
     /// hysteresis-point magnetization state.
     pub snapshot_id: Option<String>,
+    /// Optional complex analysis view for frequency-domain fields.
+    ///
+    /// Accepted values for analysis fields: `real`, `imag`, `abs`, `amplitude`,
+    /// `phase`, `phase_rotated_real`.
+    pub view: Option<String>,
+    /// Phase angle in radians for `view=phase_rotated_real`.
+    pub phase_rad: Option<f64>,
 }
 
 // ── P2: 2D slice JSON types ───────────────────────────────────────────────────

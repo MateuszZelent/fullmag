@@ -14,6 +14,18 @@ const allowMissingSession =
 const requireGeometryFlow =
   !allowMissingSession && process.env.CONTROL_ROOM_SMOKE_GEOMETRY_FLOW !== "0";
 const cameraOnlySmoke = process.env.CONTROL_ROOM_SMOKE_CAMERA_ONLY === "1";
+const hysteresisReplaySmoke =
+  process.env.CONTROL_ROOM_SMOKE_HYSTERESIS_REPLAY === "1";
+const hysteresisReplayOnly =
+  process.env.CONTROL_ROOM_SMOKE_HYSTERESIS_REPLAY_ONLY === "1";
+const hysteresisReplaySnapshotId =
+  process.env.CONTROL_ROOM_SMOKE_HYSTERESIS_SNAPSHOT_ID ??
+  "hysteresis_point_smoke";
+const hysteresisReplayStageId =
+  process.env.CONTROL_ROOM_SMOKE_HYSTERESIS_STAGE_ID ?? "hysteresis-smoke";
+const hysteresisReplayPointId = Number(
+  process.env.CONTROL_ROOM_SMOKE_HYSTERESIS_POINT_ID ?? 1,
+);
 const skipCameraGestureSmoke =
   process.env.CONTROL_ROOM_SMOKE_SKIP_CAMERA_GESTURES === "1";
 const regionOnlyObjectId =
@@ -81,9 +93,13 @@ const browser = await playwright.chromium.launch();
 const page = await browser.newPage({
   viewport: { height: 900, width: 1440 },
 });
+if (allowMissingSession) {
+  await installMissingSessionFastFailRoutes(page);
+}
 await installComputePerformanceProbe(page);
 const errors = [];
 const sceneResponses = [];
+const fieldVectorRequests = [];
 const realtimeMessages = [];
 const cameraGestureRequests = [];
 const activeInitialForbiddenResourceRequests = new Map();
@@ -91,6 +107,21 @@ const viewport3DPerformancePhases = [];
 let sceneResponseSequence = 0;
 let lastInitialForbiddenResourceRequestAt = 0;
 let recordCameraGestureRequests = false;
+
+async function installMissingSessionFastFailRoutes(page) {
+  await page.route("**/v2/sessions/current/**", async (route) => {
+    const request = route.request();
+    if (request.method() === "PATCH" || request.method() === "POST") {
+      await route.fulfill({ body: "", status: 204 });
+      return;
+    }
+    await route.fulfill({
+      body: JSON.stringify({ error: "missing controlled smoke session" }),
+      contentType: "application/json",
+      status: 404,
+    });
+  });
+}
 
 await page.addInitScript(({ allowMissingSessionSmoke, baseUrl }) => {
   window.__FULLMAG_CONFIG__ = {
@@ -117,7 +148,15 @@ page.on("request", (request) => {
   const path = pathnameFromUrl(url);
   if (!path.startsWith("/v2/sessions/current/")) return;
   const method = request.method();
-  if (isCameraGestureForbiddenRequestPath(path)) {
+  if (isFieldVectorSamplesPath(path)) {
+    fieldVectorRequests.push({
+      method,
+      path,
+      search: searchFromUrl(url),
+      url,
+    });
+  }
+  if (!allowMissingSession && isCameraGestureForbiddenRequestPath(path)) {
     activeInitialForbiddenResourceRequests.set(request, { method, path, url });
     lastInitialForbiddenResourceRequestAt = Date.now();
   }
@@ -208,6 +247,12 @@ try {
     await collectViewport3DPerformancePhase(page, "startup-to-canvas"),
   );
   await waitForInitialViewport3DResourceQuiet(page);
+  if (hysteresisReplaySmoke) {
+    await verifyHysteresisReplaySmoke(page);
+    viewport3DPerformancePhases.push(
+      await collectViewport3DPerformancePhase(page, "hysteresis-replay"),
+    );
+  }
   if (!skipCameraGestureSmoke) {
     viewport3DPerformancePhases.push(
       ...(await verifyCameraGesturesStayLocal({ page })),
@@ -217,7 +262,7 @@ try {
     logViewport3DPerformancePhases(viewport3DPerformancePhases);
     console.log(`Viewport 3D camera smoke passed at ${url}.`);
   } else {
-    if (!regionOnlyObjectId) {
+    if (!regionOnlyObjectId && !hysteresisReplayOnly) {
       await verifyProjectionRoundTrip({ canvas, page });
       viewport3DPerformancePhases.push(
         await collectViewport3DPerformancePhase(page, "projection-round-trip"),
@@ -370,6 +415,85 @@ async function verifyCameraGesturesStayLocal({ page }) {
     `Camera gesture smoke passed: visualization_state_patches=0 background_resource_requests=0 session_requests=${gestureRequests.length}`,
   );
   return gesturePerformancePhases;
+}
+
+async function verifyHysteresisReplaySmoke(page) {
+  if (!Number.isFinite(hysteresisReplayPointId)) {
+    throw new Error(
+      `Invalid CONTROL_ROOM_SMOKE_HYSTERESIS_POINT_ID=${process.env.CONTROL_ROOM_SMOKE_HYSTERESIS_POINT_ID}`,
+    );
+  }
+
+  const startIndex = fieldVectorRequests.length;
+  await page.evaluate(
+    ({ pointId, snapshotId, stageId }) => {
+      const audit = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
+      if (!audit?.loadHysteresisReplaySnapshot) {
+        throw new Error("Missing __FULLMAG_CONTROL_ROOM_AUDIT__.loadHysteresisReplaySnapshot.");
+      }
+      audit.loadHysteresisReplaySnapshot({
+        fieldVal: pointId,
+        mVal: 0,
+        pointId,
+        snapshotId,
+        stageId,
+      });
+    },
+    {
+      pointId: hysteresisReplayPointId,
+      snapshotId: hysteresisReplaySnapshotId,
+      stageId: hysteresisReplayStageId,
+    },
+  );
+
+  await waitForCondition("hysteresis replay viewport target", async () => {
+    const attrs = await page.evaluate((selector) => {
+      const node = document.querySelector(selector);
+      return {
+        snapshotId: node?.getAttribute("data-hysteresis-replay-snapshot-id") ?? "",
+        stageId: node?.getAttribute("data-hysteresis-replay-stage-id") ?? "",
+        text: node?.textContent ?? "",
+      };
+    }, VIEWPORT_3D_SELECTOR);
+    if (
+      attrs.snapshotId === hysteresisReplaySnapshotId &&
+      attrs.stageId === hysteresisReplayStageId &&
+      attrs.text.includes(hysteresisReplaySnapshotId)
+    ) {
+      return attrs;
+    }
+    throw new Error(
+      `Hysteresis replay target not visible: snapshot=${attrs.snapshotId || "missing"} stage=${attrs.stageId || "missing"}.`,
+    );
+  });
+
+  await waitForCondition("hysteresis replay field-vector request", () => {
+    const matching = fieldVectorRequests
+      .slice(startIndex)
+      .find((request) => {
+        const params = new URLSearchParams(request.search);
+        return (
+          request.method === "GET" &&
+          params.get("snapshot_id") === hysteresisReplaySnapshotId &&
+          params.get("component") === "full" &&
+          params.get("scope_kind") === "full"
+        );
+      });
+    if (matching) return matching;
+    throw new Error(
+      `No field-vector request for hysteresis snapshot ${hysteresisReplaySnapshotId}.`,
+    );
+  });
+
+  const pixelSample = await sampleCanvasComposite(page);
+  if (!pixelSample.nonBlank) {
+    throw new Error(
+      `3D viewport canvas became blank after hysteresis replay selection: ${pixelSample.variedPixels}/${pixelSample.sampledPixels} sampled pixels differ from background.`,
+    );
+  }
+  console.log(
+    `Hysteresis replay smoke passed: snapshot_id=${hysteresisReplaySnapshotId} stage_id=${hysteresisReplayStageId}`,
+  );
 }
 
 async function assertCameraGestureDoesNotFetch(page, gestureName, gesture) {
@@ -1840,6 +1964,18 @@ function pathnameFromUrl(rawUrl) {
   } catch {
     return "";
   }
+}
+
+function searchFromUrl(rawUrl) {
+  try {
+    return new URL(rawUrl).search;
+  } catch {
+    return "";
+  }
+}
+
+function isFieldVectorSamplesPath(path) {
+  return /^\/v2\/sessions\/current\/data\/fields\/[^/]+\/samples\/vector$/.test(path);
 }
 
 function framePayloadText(payload) {

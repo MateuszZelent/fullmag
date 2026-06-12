@@ -101,7 +101,8 @@ fn hysteresis_validation_rejects_invalid_piecewise_schedule() {
         orientation: Some(FieldOrientationIR::Preset {
             preset_name: "oop_positive".to_string(),
         }),
-        measurement_axis: "field_axis".to_string(),
+        measurement_axis: MeasurementAxisIR::field_axis(),
+        angular_family: None,
         initial_protocol: "positive_saturation".to_string(),
         saturation: None,
         branch_mode: "major_loop".to_string(),
@@ -119,9 +120,13 @@ fn hysteresis_validation_rejects_invalid_piecewise_schedule() {
             }],
         }),
         schedule_refinements: None,
+        adaptive_refinement: None,
         minor_loops: None,
         sampling: SamplingIR {
-            outputs: vec![],
+            outputs: vec![OutputIR::Scalar {
+                name: "mz".to_string(),
+                every_seconds: 1.0e-12,
+            }],
             table_autosave: None,
         },
     };
@@ -146,7 +151,8 @@ fn hysteresis_validation_rejects_overlapping_dense_windows_without_priority() {
         orientation: Some(FieldOrientationIR::Preset {
             preset_name: "oop_positive".to_string(),
         }),
-        measurement_axis: "field_axis".to_string(),
+        measurement_axis: MeasurementAxisIR::field_axis(),
+        angular_family: None,
         initial_protocol: "positive_saturation".to_string(),
         saturation: None,
         branch_mode: "major_loop".to_string(),
@@ -169,9 +175,13 @@ fn hysteresis_validation_rejects_overlapping_dense_windows_without_priority() {
                 priority: None,
             },
         ]),
+        adaptive_refinement: None,
         minor_loops: None,
         sampling: SamplingIR {
-            outputs: vec![],
+            outputs: vec![OutputIR::Scalar {
+                name: "mz".to_string(),
+                every_seconds: 1.0e-12,
+            }],
             table_autosave: None,
         },
     };
@@ -196,7 +206,8 @@ fn hysteresis_validation_accepts_major_with_minor_loops_branch_mode() {
         orientation: Some(FieldOrientationIR::Preset {
             preset_name: "oop_positive".to_string(),
         }),
-        measurement_axis: "field_axis".to_string(),
+        measurement_axis: MeasurementAxisIR::field_axis(),
+        angular_family: None,
         initial_protocol: "positive_saturation".to_string(),
         saturation: None,
         branch_mode: "major_with_minor_loops".to_string(),
@@ -204,6 +215,7 @@ fn hysteresis_validation_accepts_major_with_minor_loops_branch_mode() {
         storage: None,
         field_schedule: None,
         schedule_refinements: None,
+        adaptive_refinement: None,
         minor_loops: Some(vec![MinorLoopIR {
             reversal_mT: 25.0,
             return_mT: -25.0,
@@ -234,7 +246,8 @@ fn hysteresis_validation_rejects_run_next_algorithm_without_next_step() {
         orientation: Some(FieldOrientationIR::Preset {
             preset_name: "oop_positive".to_string(),
         }),
-        measurement_axis: "field_axis".to_string(),
+        measurement_axis: MeasurementAxisIR::field_axis(),
+        angular_family: None,
         initial_protocol: "positive_saturation".to_string(),
         saturation: None,
         branch_mode: "major_loop".to_string(),
@@ -255,9 +268,13 @@ fn hysteresis_validation_rejects_run_next_algorithm_without_next_step() {
         storage: None,
         field_schedule: None,
         schedule_refinements: None,
+        adaptive_refinement: None,
         minor_loops: None,
         sampling: SamplingIR {
-            outputs: vec![],
+            outputs: vec![OutputIR::Scalar {
+                name: "mz".to_string(),
+                every_seconds: 1.0e-12,
+            }],
             table_autosave: None,
         },
     };
@@ -282,7 +299,8 @@ fn hysteresis_validation_rejects_run_next_algorithm_tree_without_fallback_branch
         orientation: Some(FieldOrientationIR::Preset {
             preset_name: "oop_positive".to_string(),
         }),
-        measurement_axis: "field_axis".to_string(),
+        measurement_axis: MeasurementAxisIR::field_axis(),
+        angular_family: None,
         initial_protocol: "positive_saturation".to_string(),
         saturation: None,
         branch_mode: "major_loop".to_string(),
@@ -304,6 +322,7 @@ fn hysteresis_validation_rejects_run_next_algorithm_tree_without_fallback_branch
         storage: None,
         field_schedule: None,
         schedule_refinements: None,
+        adaptive_refinement: None,
         minor_loops: None,
         sampling: SamplingIR {
             outputs: vec![],
@@ -334,7 +353,8 @@ fn hysteresis_validation_rejects_retry_with_smaller_dt_without_scale() {
         orientation: Some(FieldOrientationIR::Preset {
             preset_name: "oop_positive".to_string(),
         }),
-        measurement_axis: "field_axis".to_string(),
+        measurement_axis: MeasurementAxisIR::field_axis(),
+        angular_family: None,
         initial_protocol: "positive_saturation".to_string(),
         saturation: None,
         branch_mode: "major_loop".to_string(),
@@ -355,6 +375,7 @@ fn hysteresis_validation_rejects_retry_with_smaller_dt_without_scale() {
         storage: None,
         field_schedule: None,
         schedule_refinements: None,
+        adaptive_refinement: None,
         minor_loops: None,
         sampling: SamplingIR {
             outputs: vec![],
@@ -382,7 +403,8 @@ fn hysteresis_validation_rejects_invalid_public_contract_values() {
         orientation: Some(FieldOrientationIR::Global {
             vector: [0.0, 0.0, 0.0],
         }),
-        measurement_axis: "sideways".to_string(),
+        measurement_axis: MeasurementAxisIR::Named("sideways".to_string()),
+        angular_family: None,
         initial_protocol: "mystery".to_string(),
         saturation: Some(SaturationProbeIR {
             mode: "".to_string(),
@@ -414,6 +436,7 @@ fn hysteresis_validation_rejects_invalid_public_contract_values() {
         }),
         field_schedule: None,
         schedule_refinements: None,
+        adaptive_refinement: None,
         minor_loops: Some(vec![MinorLoopIR {
             reversal_mT: 10.0,
             return_mT: 10.0,
@@ -451,6 +474,87 @@ fn hysteresis_validation_rejects_invalid_public_contract_values() {
             "missing validation error containing {expected:?}; errors: {errors:?}"
         );
     }
+}
+
+#[test]
+fn hysteresis_validation_accepts_custom_measurement_axis_vector() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study = StudyIR::Hysteresis {
+        field_min_mT: Some(-100.0),
+        field_max_mT: Some(100.0),
+        field_step_mT: Some(10.0),
+        field_values_mT: None,
+        direction: None,
+        orientation: Some(FieldOrientationIR::Sample {
+            theta: 90.0,
+            phi: 35.0,
+        }),
+        measurement_axis: MeasurementAxisIR::Custom {
+            kind: "custom".to_string(),
+            vector: [0.0, 3.0, 4.0],
+        },
+        angular_family: None,
+        initial_protocol: "positive_saturation".to_string(),
+        saturation: None,
+        branch_mode: "major_loop".to_string(),
+        settle_pipeline: None,
+        storage: None,
+        field_schedule: None,
+        schedule_refinements: None,
+        adaptive_refinement: None,
+        minor_loops: None,
+        sampling: SamplingIR {
+            outputs: vec![OutputIR::Scalar {
+                name: "mz".to_string(),
+                every_seconds: 1.0e-12,
+            }],
+            table_autosave: None,
+        },
+    };
+
+    ir.validate()
+        .expect("custom hysteresis measurement axis vector should validate");
+}
+
+#[test]
+fn hysteresis_validation_rejects_zero_custom_measurement_axis_vector() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study = StudyIR::Hysteresis {
+        field_min_mT: Some(-100.0),
+        field_max_mT: Some(100.0),
+        field_step_mT: Some(10.0),
+        field_values_mT: None,
+        direction: None,
+        orientation: Some(FieldOrientationIR::Sample {
+            theta: 90.0,
+            phi: 35.0,
+        }),
+        measurement_axis: MeasurementAxisIR::Custom {
+            kind: "custom".to_string(),
+            vector: [0.0, 0.0, 0.0],
+        },
+        angular_family: None,
+        initial_protocol: "positive_saturation".to_string(),
+        saturation: None,
+        branch_mode: "major_loop".to_string(),
+        settle_pipeline: None,
+        storage: None,
+        field_schedule: None,
+        schedule_refinements: None,
+        adaptive_refinement: None,
+        minor_loops: None,
+        sampling: SamplingIR {
+            outputs: vec![],
+            table_autosave: None,
+        },
+    };
+
+    let errors = ir
+        .validate()
+        .expect_err("zero custom hysteresis measurement axis vector must fail validation");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("measurement_axis custom vector must not be zero")));
 }
 
 #[test]

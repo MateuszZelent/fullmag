@@ -9,6 +9,7 @@ export function createCommandContext(
 ): CommandContext {
   return {
     api: kernel.api,
+    analysisFieldOverlay: kernel.analysisFieldOverlay,
     bus: kernel.bus,
     cameraRegistry: kernel.cameraRegistry,
     input: patch.input,

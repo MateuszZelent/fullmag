@@ -290,24 +290,31 @@ pub(crate) fn planned_study_controls(
     Option<fullmag_ir::AdaptiveTimeStepIR>,
     Option<FieldRefreshPolicyIR>,
 ) {
+    let uses_time_integrator =
+        !matches!(problem.study, fullmag_ir::StudyIR::FrequencyResponse { .. });
+
     // Parse user-specified integrator string → Option<IntegratorChoice>.
     // "auto" resolves to None, which triggers per-study-kind default selection.
-    let user_integrator = match problem.study.dynamics() {
-        fullmag_ir::DynamicsIR::Llg { integrator, .. } => match integrator.as_str() {
-            "heun" => Some(IntegratorChoice::Heun),
-            "rk4" => Some(IntegratorChoice::Rk4),
-            "rk23" => Some(IntegratorChoice::Rk23),
-            "rk45" => Some(IntegratorChoice::Rk45),
-            "abm3" => Some(IntegratorChoice::Abm3),
-            "auto" => None,
-            other => {
-                errors.push(format!(
-                    "integrator '{}' is not supported; use heun/rk4/rk23/rk45/abm3/auto",
-                    other
-                ));
-                None
-            }
-        },
+    let user_integrator = if uses_time_integrator {
+        match problem.study.dynamics() {
+            fullmag_ir::DynamicsIR::Llg { integrator, .. } => match integrator.as_str() {
+                "heun" => Some(IntegratorChoice::Heun),
+                "rk4" => Some(IntegratorChoice::Rk4),
+                "rk23" => Some(IntegratorChoice::Rk23),
+                "rk45" => Some(IntegratorChoice::Rk45),
+                "abm3" => Some(IntegratorChoice::Abm3),
+                "auto" => None,
+                other => {
+                    errors.push(format!(
+                        "integrator '{}' is not supported; use heun/rk4/rk23/rk45/abm3/auto",
+                        other
+                    ));
+                    None
+                }
+            },
+        }
+    } else {
+        None
     };
 
     // Resolve "auto" to the physics-optimal default per study kind.
@@ -319,6 +326,9 @@ pub(crate) fn planned_study_controls(
             fullmag_ir::StudyIR::TimeEvolution { .. } => IntegratorChoice::Rk45,
             fullmag_ir::StudyIR::Relaxation { algorithm, .. } => algorithm.default_integrator(),
             fullmag_ir::StudyIR::Eigenmodes { .. } => IntegratorChoice::Heun,
+            // Frequency response is a direct harmonic solve. The returned value is
+            // only a legacy tuple placeholder until time-integrator fields are
+            // removed from shared plan controls.
             fullmag_ir::StudyIR::FrequencyResponse { .. } => IntegratorChoice::Heun,
             fullmag_ir::StudyIR::Hysteresis { .. } => IntegratorChoice::Heun,
         },
@@ -380,10 +390,11 @@ pub(crate) fn planned_study_controls(
     };
 
     // Validate adaptive/fixed exclusivity and integrator compatibility.
-    if adaptive_timestep.is_some() && fixed_timestep.is_some() {
+    if uses_time_integrator && adaptive_timestep.is_some() && fixed_timestep.is_some() {
         errors.push("adaptive_timestep and fixed_timestep are mutually exclusive".to_string());
     }
-    if adaptive_timestep.is_some()
+    if uses_time_integrator
+        && adaptive_timestep.is_some()
         && !matches!(integrator, IntegratorChoice::Rk23 | IntegratorChoice::Rk45)
     {
         errors.push(format!(
@@ -656,6 +667,35 @@ pub(crate) fn validate_eigen_outputs(outputs: &[OutputIR], errors: &mut Vec<Stri
             | OutputIR::SaveQuantity { .. } => {
                 errors.push(
                     "StudyIR::Eigenmodes supports only eigen_spectrum, eigen_mode, dispersion_curve, and eigen_diagnostics outputs"
+                        .to_string(),
+                );
+            }
+        }
+    }
+}
+
+pub(crate) fn validate_frequency_response_outputs(outputs: &[OutputIR], errors: &mut Vec<String>) {
+    let mut seen = BTreeSet::new();
+    for output in outputs {
+        match output {
+            OutputIR::FrequencyResponseOutput { observable } => {
+                let key = format!("frequency_response:{observable:?}");
+                if !seen.insert(key) {
+                    errors.push(format!(
+                        "frequency response observable '{observable:?}' is declared more than once"
+                    ));
+                }
+            }
+            OutputIR::EigenSpectrum { .. }
+            | OutputIR::EigenMode { .. }
+            | OutputIR::DispersionCurve { .. }
+            | OutputIR::EigenDiagnostics { .. }
+            | OutputIR::Field { .. }
+            | OutputIR::Scalar { .. }
+            | OutputIR::Snapshot { .. }
+            | OutputIR::SaveQuantity { .. } => {
+                errors.push(
+                    "StudyIR::FrequencyResponse supports only frequency_response_output entries"
                         .to_string(),
                 );
             }

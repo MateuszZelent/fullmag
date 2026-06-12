@@ -3,11 +3,25 @@
 import { useCallback, useMemo } from "react";
 
 import {
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DIAGNOSTICS_V2_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_FIELD_META_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_DIAGNOSTICS_V1_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FIELD_META_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FREQUENCY_POINT_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
+  ANALYSIS_EIGEN_MODE_V2_PATH,
   ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH,
   ANALYSIS_HYSTERESIS_POINTS_PATH,
   ANALYSIS_HYSTERESIS_METRICS_PATH,
   ANALYSIS_HYSTERESIS_SATURATION_PATH,
   ANALYSIS_HYSTERESIS_BRANCHES_PATH,
+  ANALYSIS_HYSTERESIS_FAMILY_PATH,
   ANALYSIS_HYSTERESIS_MINOR_LOOPS_PATH,
   ANALYSIS_HYSTERESIS_POINT_PATH,
   ANALYSIS_HYSTERESIS_REVERSAL_FIELDS_PATH,
@@ -23,6 +37,7 @@ import {
   DIAGNOSTICS_ENGINE_LOG_PATH,
   DIAGNOSTICS_GPU_PATH,
   DIAGNOSTICS_SOLVER_PROFILE_PATH,
+  MESHING_PERIODIC_PAIRS_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
@@ -61,7 +76,14 @@ import type {
   CpuTelemetryResource,
   GpuTelemetryResource,
   LiveStatusResource,
+  FrequencyDomainFieldResource,
+  FrequencyDomainJsonArtifactResource,
+  FrequencyDomainManifestResource,
+  FrequencyDomainSweepProgressResource,
+  FrequencyDomainTextArtifactResource,
+  JsonValue,
   MagneticResponseSweepResource,
+  MeshPeriodicPairsResource,
   ObjectMetricsResource,
   SolverEnergyCurrentResource,
   SolverEnergyHistoryResource,
@@ -75,6 +97,7 @@ import type {
   TableResource,
   TableRowsQuery,
   TableRowsResource,
+  HysteresisAngularFamilyResource,
   HysteresisBranchSchema,
   HysteresisMinorLoopSchema,
   HysteresisPointSchema,
@@ -145,9 +168,11 @@ type StudyRuntimeCommandSessionStatus = {
   >;
   domain: Pick<LiveStatusResource["domain"], "discretization">;
   resources: Pick<
-        LiveStatusResource["resources"],
-        | "command_completion_revision"
-        | "commands_revision"
+    LiveStatusResource["resources"],
+    | "artifact_revision"
+    | "artifacts_revision"
+    | "command_completion_revision"
+    | "commands_revision"
         | "mesh_build_revision"
         | "mesh_revision"
         | "scene_revision"
@@ -170,6 +195,8 @@ export function selectStudyRuntimeCommandSessionStatus(status: {
       discretization: status.data.domain.discretization,
     },
     resources: {
+      artifact_revision: status.data.resources.artifact_revision,
+      artifacts_revision: status.data.resources.artifacts_revision,
       command_completion_revision:
         status.data.resources.command_completion_revision,
       commands_revision: status.data.resources.commands_revision,
@@ -196,6 +223,8 @@ export function studyRuntimeCommandSessionStatusEquals(
     previous.capabilities.explicit_topology ===
       next.capabilities.explicit_topology &&
     previous.domain.discretization === next.domain.discretization &&
+    previous.resources.artifact_revision === next.resources.artifact_revision &&
+    previous.resources.artifacts_revision === next.resources.artifacts_revision &&
     previous.resources.command_completion_revision ===
       next.resources.command_completion_revision &&
     previous.resources.commands_revision === next.resources.commands_revision &&
@@ -360,6 +389,49 @@ export function shouldLoadRuntimeScalars(
   return hasPositiveRevision(status?.resources.scalars_revision);
 }
 
+export function shouldLoadFrequencyDomainManifest(
+  enabled: boolean,
+  status:
+    | {
+        resources: Pick<
+          LiveStatusResource["resources"],
+          "artifact_revision" | "artifacts_revision" | "stages_revision"
+        >;
+      }
+    | null
+    | undefined,
+): boolean {
+  if (!enabled) return false;
+  return (
+    hasPositiveRevision(status?.resources.artifact_revision) ||
+    hasPositiveRevision(status?.resources.artifacts_revision) ||
+    hasPositiveRevision(status?.resources.stages_revision)
+  );
+}
+
+export function frequencyDomainManifestRevision(
+  data: FrequencyDomainManifestResource | null,
+): string | null {
+  if (!data) return null;
+  const progress = data.response_progress;
+  const cancelRequested = data.response_cancel_requested;
+  const resultManifest = data.result_manifest;
+  return [
+    data.schema_version,
+    data.response.status,
+    data.eigenmodes.status,
+    progress
+      ? `progress:${progress.status}:${progress.completed_frequency_points}:${progress.total_frequency_points}:${progress.written_frequency_point_artifacts}`
+      : "progress:null",
+    cancelRequested
+      ? `cancel:${cancelRequested.status}:${cancelRequested.completed_frequency_points}:${cancelRequested.total_frequency_points}:${cancelRequested.written_frequency_point_artifacts}`
+      : "cancel:null",
+    resultManifest
+      ? `result:${resultManifest.status}:${resultManifest.artifact_path}:${resultManifest.resource_key}`
+      : "result:null",
+  ].join("|");
+}
+
 function hasPositiveRevision(revision: number | null | undefined): boolean {
   return typeof revision === "number" && revision > 0;
 }
@@ -444,6 +516,26 @@ export function useStageExecutionResource({
     load,
     resolveRevision: (data) => data?.revision ?? null,
     resourceKey: SIMULATION_STAGES_EXECUTION_PATH,
+  });
+}
+
+export function useMeshPeriodicPairsResource({
+  enabled = true,
+}: RuntimeResourceOptions = {}) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.meshing
+        .periodicPairs({ signal })
+        .catch(ignoreMissingResource<MeshPeriodicPairsResource>),
+    [api],
+  );
+
+  return useResource<MeshPeriodicPairsResource | null>({
+    enabled,
+    load,
+    resolveRevision: (data) => data?.revision ?? null,
+    resourceKey: MESHING_PERIODIC_PAIRS_PATH,
   });
 }
 
@@ -733,6 +825,367 @@ export function useMagneticResponseSweepResource({
   });
 }
 
+export function useFrequencyDomainManifestResource({
+  enabled = true,
+}: RuntimeResourceOptions = {}) {
+  const { api } = useKernel();
+  const sessionStatus = useSessionStatusSelector(
+    selectStudyRuntimeCommandSessionStatus,
+    { isEqual: studyRuntimeCommandSessionStatusEquals },
+  );
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.analysis.frequencyDomain
+        .manifestV1({ signal })
+        .catch(ignoreMissingResource<FrequencyDomainManifestResource>),
+    [api],
+  );
+
+  return useResource<FrequencyDomainManifestResource | null>({
+    enabled: shouldLoadFrequencyDomainManifest(enabled, sessionStatus),
+    load,
+    resolveRevision: frequencyDomainManifestRevision,
+    resourceKey: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
+  });
+}
+
+export function useFrequencyDomainEigenSpectrumResource({
+  enabled = true,
+}: RuntimeResourceOptions = {}) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.analysis.eigen.eigenSpectrumV2({ signal }),
+    [api],
+  );
+  return useFrequencyDomainJsonResource(
+    ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+    load,
+    enabled,
+  );
+}
+
+export function useFrequencyDomainEigenBranchesResource({
+  enabled = true,
+}: RuntimeResourceOptions = {}) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.analysis.eigen.eigenBranchesV2({ signal }),
+    [api],
+  );
+  return useFrequencyDomainJsonResource(
+    ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
+    load,
+    enabled,
+  );
+}
+
+export function useFrequencyDomainEigenDiagnosticsResource({
+  enabled = true,
+}: RuntimeResourceOptions = {}) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.analysis.eigen.eigenDiagnosticsV2({ signal }),
+    [api],
+  );
+  return useFrequencyDomainJsonResource(
+    ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DIAGNOSTICS_V2_PATH,
+    load,
+    enabled,
+  );
+}
+
+export function useFrequencyDomainEigenDispersionResource({
+  enabled = true,
+}: RuntimeResourceOptions = {}) {
+  const { api } = useKernel();
+  const sessionStatus = useSessionStatusSelector(
+    selectStudyRuntimeCommandSessionStatus,
+    { isEqual: studyRuntimeCommandSessionStatusEquals },
+  );
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.analysis.eigen.eigenDispersion({ signal }),
+    [api],
+  );
+  return useResource<FrequencyDomainTextArtifactResource | null>({
+    enabled: shouldLoadFrequencyDomainManifest(enabled, sessionStatus),
+    load,
+    resolveRevision: (data) => data ? `${data.status}:${data.artifact_path}` : null,
+    resourceKey: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+  });
+}
+
+export function useFrequencyDomainEigenModeResource(
+  sampleIndex: number | null | undefined,
+  modeIndex: number | null | undefined,
+  { enabled = true }: RuntimeResourceOptions = {},
+) {
+  const { api } = useKernel();
+  const sessionStatus = useSessionStatusSelector(
+    selectStudyRuntimeCommandSessionStatus,
+    { isEqual: studyRuntimeCommandSessionStatusEquals },
+  );
+  const resourceKey =
+    sampleIndex != null && modeIndex != null
+      ? ANALYSIS_EIGEN_MODE_V2_PATH
+          .replace("{sample_index}", String(sampleIndex))
+          .replace("{mode_index}", String(modeIndex))
+      : `${ANALYSIS_EIGEN_MODE_V2_PATH}:none`;
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      sampleIndex != null && modeIndex != null
+        ? api.analysis.eigen
+            .modeV2(sampleIndex, modeIndex, { signal })
+            .catch(ignoreMissingResource<JsonValue>)
+        : Promise.resolve(null),
+    [api, modeIndex, sampleIndex],
+  );
+  return useResource<JsonValue | null>({
+    enabled:
+      sampleIndex != null &&
+      modeIndex != null &&
+      shouldLoadFrequencyDomainManifest(enabled, sessionStatus),
+    load,
+    resolveRevision: (data) =>
+      data && typeof data === "object" && !Array.isArray(data)
+        ? String(data.schema_version ?? data.revision ?? resourceKey)
+        : null,
+    resourceKey,
+  });
+}
+
+export function useFrequencyDomainResponseSweepResource({
+  enabled = true,
+}: RuntimeResourceOptions = {}) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.analysis.frequencyDomain.responseMagneticSweep({ signal }),
+    [api],
+  );
+  return useFrequencyDomainJsonResource(
+    ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+    load,
+    enabled,
+  );
+}
+
+export function useMagneticResponseSweepV2Resource(
+  options: RuntimeResourceOptions = {},
+) {
+  return useFrequencyDomainResponseSweepResource(options);
+}
+
+export function useFrequencyDomainResponseProgressResource({
+  enabled = true,
+}: RuntimeResourceOptions = {}) {
+  const { api } = useKernel();
+  const sessionStatus = useSessionStatusSelector(
+    selectStudyRuntimeCommandSessionStatus,
+    { isEqual: studyRuntimeCommandSessionStatusEquals },
+  );
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.analysis.frequencyDomain.responseProgressV1({ signal }),
+    [api],
+  );
+  return useResource<FrequencyDomainSweepProgressResource | null>({
+    enabled: shouldLoadFrequencyDomainManifest(enabled, sessionStatus),
+    load,
+    resolveRevision: (data) =>
+      data
+        ? `${data.status}:${data.complete}:${data.completed_frequency_points}:${data.total_frequency_points}`
+        : null,
+    resourceKey: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
+  });
+}
+
+export function useFrequencyDomainResponseCancelRequestedResource({
+  enabled = true,
+}: RuntimeResourceOptions = {}) {
+  const { api } = useKernel();
+  const sessionStatus = useSessionStatusSelector(
+    selectStudyRuntimeCommandSessionStatus,
+    { isEqual: studyRuntimeCommandSessionStatusEquals },
+  );
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.analysis.frequencyDomain
+        .responseCancelRequestedV1({ signal })
+        .catch(ignoreMissingResource<FrequencyDomainSweepProgressResource>),
+    [api],
+  );
+  return useResource<FrequencyDomainSweepProgressResource | null>({
+    enabled: shouldLoadFrequencyDomainManifest(enabled, sessionStatus),
+    load,
+    resolveRevision: (data) =>
+      data
+        ? `${data.status}:${data.complete}:${data.completed_frequency_points}:${data.total_frequency_points}`
+        : null,
+    resourceKey: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
+  });
+}
+
+export function useFrequencyDomainResponseDiagnosticsResource({
+  enabled = true,
+}: RuntimeResourceOptions = {}) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.analysis.frequencyDomain.responseDiagnosticsV1({ signal }),
+    [api],
+  );
+  return useFrequencyDomainJsonResource(
+    ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_DIAGNOSTICS_V1_PATH,
+    load,
+    enabled,
+  );
+}
+
+export function useFrequencyDomainEigenModeFieldMetaResource(
+  sampleIndex: number | null | undefined,
+  modeIndex: number | null | undefined,
+  { enabled = true }: RuntimeResourceOptions = {},
+) {
+  const { api } = useKernel();
+  const sessionStatus = useSessionStatusSelector(
+    selectStudyRuntimeCommandSessionStatus,
+    { isEqual: studyRuntimeCommandSessionStatusEquals },
+  );
+  const resourceKey =
+    sampleIndex != null && modeIndex != null
+      ? ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_FIELD_META_PATH
+          .replace("{sample_index}", String(sampleIndex))
+          .replace("{mode_index}", String(modeIndex))
+      : `${ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_FIELD_META_PATH}:none`;
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      sampleIndex != null && modeIndex != null
+        ? api.analysis.eigen.eigenModeFieldMeta(sampleIndex, modeIndex, {
+            signal,
+          })
+        : Promise.resolve(null),
+    [api, modeIndex, sampleIndex],
+  );
+  return useResource<FrequencyDomainFieldResource | null>({
+    enabled:
+      sampleIndex != null &&
+      modeIndex != null &&
+      shouldLoadFrequencyDomainManifest(enabled, sessionStatus),
+    load,
+    resolveRevision: (data) => data ? `${data.status}:${data.artifact_path}` : null,
+    resourceKey,
+  });
+}
+
+export function useFrequencyDomainResponseFrequencyPointResource(
+  frequencyIndex: number | null | undefined,
+  { enabled = true }: RuntimeResourceOptions = {},
+) {
+  const { api } = useKernel();
+  const resourceKey =
+    frequencyIndex != null
+      ? ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FREQUENCY_POINT_PATH.replace(
+          "{frequency_index}",
+          String(frequencyIndex),
+        )
+      : `${ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FREQUENCY_POINT_PATH}:none`;
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      frequencyIndex != null
+        ? api.analysis.frequencyDomain.responseFrequencyPoint(frequencyIndex, {
+            signal,
+          })
+        : Promise.resolve(null),
+    [api, frequencyIndex],
+  );
+  return useFrequencyDomainIndexedJsonResource(resourceKey, load, enabled);
+}
+
+export function useFrequencyResponsePointResource(
+  frequencyIndex: number | null | undefined,
+  options: RuntimeResourceOptions = {},
+) {
+  return useFrequencyDomainResponseFrequencyPointResource(frequencyIndex, options);
+}
+
+export function useFrequencyDomainResponseFieldMetaResource(
+  frequencyIndex: number | null | undefined,
+  { enabled = true }: RuntimeResourceOptions = {},
+) {
+  const { api } = useKernel();
+  const sessionStatus = useSessionStatusSelector(
+    selectStudyRuntimeCommandSessionStatus,
+    { isEqual: studyRuntimeCommandSessionStatusEquals },
+  );
+  const resourceKey =
+    frequencyIndex != null
+      ? ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FIELD_META_PATH.replace(
+          "{frequency_index}",
+          String(frequencyIndex),
+        )
+      : `${ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FIELD_META_PATH}:none`;
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      frequencyIndex != null
+        ? api.analysis.frequencyDomain.responseFieldMeta(frequencyIndex, { signal })
+        : Promise.resolve(null),
+    [api, frequencyIndex],
+  );
+  return useResource<FrequencyDomainFieldResource | null>({
+    enabled:
+      frequencyIndex != null &&
+      shouldLoadFrequencyDomainManifest(enabled, sessionStatus),
+    load,
+    resolveRevision: (data) => data ? `${data.status}:${data.artifact_path}` : null,
+    resourceKey,
+  });
+}
+
+export function useFrequencyResponseFieldMetaResource(
+  frequencyIndex: number | null | undefined,
+  options: RuntimeResourceOptions = {},
+) {
+  return useFrequencyDomainResponseFieldMetaResource(frequencyIndex, options);
+}
+
+function useFrequencyDomainJsonResource(
+  resourceKey: string,
+  load: (context: { signal: AbortSignal }) => Promise<FrequencyDomainJsonArtifactResource>,
+  enabled: boolean,
+) {
+  const sessionStatus = useSessionStatusSelector(
+    selectStudyRuntimeCommandSessionStatus,
+    { isEqual: studyRuntimeCommandSessionStatusEquals },
+  );
+  return useResource<FrequencyDomainJsonArtifactResource | null>({
+    enabled: shouldLoadFrequencyDomainManifest(enabled, sessionStatus),
+    load,
+    resolveRevision: (data) => data ? `${data.status}:${data.artifact_path}` : null,
+    resourceKey,
+  });
+}
+
+function useFrequencyDomainIndexedJsonResource(
+  resourceKey: string,
+  load: (context: { signal: AbortSignal }) => Promise<FrequencyDomainJsonArtifactResource | null>,
+  enabled: boolean,
+) {
+  const sessionStatus = useSessionStatusSelector(
+    selectStudyRuntimeCommandSessionStatus,
+    { isEqual: studyRuntimeCommandSessionStatusEquals },
+  );
+  return useResource<FrequencyDomainJsonArtifactResource | null>({
+    enabled: shouldLoadFrequencyDomainManifest(enabled, sessionStatus),
+    load,
+    resolveRevision: (data) => data ? `${data.status}:${data.artifact_path}` : null,
+    resourceKey,
+  });
+}
+
 export function useHysteresisPointsResource(
   stageId: string | null | undefined,
   { enabled = true }: RuntimeResourceOptions = {},
@@ -839,6 +1292,33 @@ export function useHysteresisBranchesResource(
     enabled: enabled && Boolean(stageId),
     load,
     resolveRevision: (data) => data?.length ?? null,
+    resourceKey,
+  });
+}
+
+export function useHysteresisFamilyResource(
+  stageId: string | null | undefined,
+  { enabled = true }: RuntimeResourceOptions = {},
+) {
+  const { api } = useKernel();
+  const resourceKey = stageId
+    ? ANALYSIS_HYSTERESIS_FAMILY_PATH.replace("{stage_id}", stageId)
+    : `${ANALYSIS_HYSTERESIS_FAMILY_PATH}:none`;
+
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      stageId
+        ? api.analysis.hysteresis
+            .family(stageId, { signal })
+            .catch(ignoreMissingResource<HysteresisAngularFamilyResource>)
+        : Promise.resolve(null),
+    [api, stageId],
+  );
+
+  return useResource<HysteresisAngularFamilyResource | null>({
+    enabled: enabled && Boolean(stageId),
+    load,
+    resolveRevision: (data) => data?.revision ?? null,
     resourceKey,
   });
 }

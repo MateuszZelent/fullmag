@@ -543,6 +543,59 @@ mod tests {
     }
 
     #[test]
+    fn hysteresis_adaptive_refinement_deserializes_defaults_and_overrides() {
+        let policy: AdaptiveRefinementIR = serde_json::from_value(serde_json::json!({
+            "kind": "adaptive_refinement",
+            "enabled": true,
+            "max_passes": 2,
+            "max_insertions_per_pass": 12,
+            "dm_dh_threshold_per_mT": 0.015,
+            "max_step_mT": 2.5,
+            "min_step_mT": 0.25,
+            "include_zero_crossings": true,
+            "include_high_susceptibility": false
+        }))
+        .expect("adaptive refinement policy should deserialize");
+
+        assert_eq!(policy.kind, "adaptive_refinement");
+        assert_eq!(policy.max_passes, 2);
+        assert_eq!(policy.max_insertions_per_pass, 12);
+        assert_eq!(policy.dm_dh_threshold_per_mT, 0.015);
+        assert_eq!(policy.max_step_mT, 2.5);
+        assert_eq!(policy.min_step_mT, 0.25);
+        assert!(policy.include_zero_crossings);
+        assert!(!policy.include_high_susceptibility);
+    }
+
+    #[test]
+    fn hysteresis_angular_family_deserializes_variants() {
+        let family: HysteresisAngularFamilyIR = serde_json::from_value(serde_json::json!({
+            "kind": "angular_family",
+            "family_id": "oop_ip_family",
+            "label": "OOP/IP",
+            "variants": [{
+                "variant_id": "oop",
+                "label": "OOP",
+                "orientation": {"kind": "preset", "preset_name": "oop_positive"},
+                "measurement_axis": "field_axis"
+            }, {
+                "variant_id": "ip35",
+                "orientation": {"kind": "sample", "theta": 90.0, "phi": 35.0}
+            }]
+        }))
+        .expect("angular family should deserialize");
+
+        assert_eq!(family.kind, "angular_family");
+        assert_eq!(family.family_id, "oop_ip_family");
+        assert_eq!(family.variants.len(), 2);
+        assert_eq!(family.variants[0].variant_id, "oop");
+        assert_eq!(
+            family.variants[0].measurement_axis,
+            Some(MeasurementAxisIR::field_axis())
+        );
+    }
+
+    #[test]
     fn hysteresis_field_window_preserves_dense_window_priority() {
         let window: FieldWindowIR = serde_json::from_value(serde_json::json!({
             "center_mT": 0.0,
@@ -717,7 +770,9 @@ pub enum StudyIR {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         orientation: Option<FieldOrientationIR>,
         #[serde(default = "default_measurement_axis")]
-        measurement_axis: String,
+        measurement_axis: MeasurementAxisIR,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        angular_family: Option<HysteresisAngularFamilyIR>,
         #[serde(default = "default_initial_protocol")]
         initial_protocol: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -732,6 +787,8 @@ pub enum StudyIR {
         field_schedule: Option<FieldScheduleIR>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         schedule_refinements: Option<Vec<FieldWindowIR>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        adaptive_refinement: Option<AdaptiveRefinementIR>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         minor_loops: Option<Vec<MinorLoopIR>>,
         sampling: SamplingIR,
@@ -862,6 +919,33 @@ pub enum FieldOrientationIR {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum MeasurementAxisIR {
+    Named(String),
+    Custom { kind: String, vector: [f64; 3] },
+}
+
+impl MeasurementAxisIR {
+    pub fn field_axis() -> Self {
+        Self::Named("field_axis".to_string())
+    }
+
+    pub fn as_kind(&self) -> &str {
+        match self {
+            Self::Named(axis) => axis.as_str(),
+            Self::Custom { kind, .. } => kind.as_str(),
+        }
+    }
+
+    pub fn custom_vector(&self) -> Option<[f64; 3]> {
+        match self {
+            Self::Custom { vector, .. } => Some(*vector),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SaturationProbeIR {
     pub mode: String,
     pub max_field_mT: f64,
@@ -876,6 +960,85 @@ pub struct HysteresisStorageIR {
     pub every_n: u32,
     pub key_events: bool,
     pub key_event_threshold_dm: f64,
+}
+
+fn default_adaptive_refinement_kind() -> String {
+    "adaptive_refinement".to_string()
+}
+
+fn default_adaptive_refinement_enabled() -> bool {
+    true
+}
+
+fn default_adaptive_refinement_max_passes() -> u32 {
+    1
+}
+
+fn default_adaptive_refinement_max_insertions_per_pass() -> u32 {
+    16
+}
+
+fn default_adaptive_refinement_dm_dh_threshold_per_m_t() -> f64 {
+    0.02
+}
+
+fn default_adaptive_refinement_max_step_m_t() -> f64 {
+    5.0
+}
+
+fn default_adaptive_refinement_min_step_m_t() -> f64 {
+    0.1
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AdaptiveRefinementIR {
+    #[serde(default = "default_adaptive_refinement_kind")]
+    pub kind: String,
+    #[serde(default = "default_adaptive_refinement_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_adaptive_refinement_max_passes")]
+    pub max_passes: u32,
+    #[serde(default = "default_adaptive_refinement_max_insertions_per_pass")]
+    pub max_insertions_per_pass: u32,
+    #[serde(default = "default_adaptive_refinement_dm_dh_threshold_per_m_t")]
+    pub dm_dh_threshold_per_mT: f64,
+    #[serde(default = "default_adaptive_refinement_max_step_m_t")]
+    pub max_step_mT: f64,
+    #[serde(default = "default_adaptive_refinement_min_step_m_t")]
+    pub min_step_mT: f64,
+    #[serde(default = "default_adaptive_refinement_enabled")]
+    pub include_zero_crossings: bool,
+    #[serde(default = "default_adaptive_refinement_enabled")]
+    pub include_high_susceptibility: bool,
+}
+
+fn default_hysteresis_angular_family_kind() -> String {
+    "angular_family".to_string()
+}
+
+fn default_hysteresis_angular_family_id() -> String {
+    "angular_family".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HysteresisAngularVariantIR {
+    pub variant_id: String,
+    pub orientation: FieldOrientationIR,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measurement_axis: Option<MeasurementAxisIR>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HysteresisAngularFamilyIR {
+    #[serde(default = "default_hysteresis_angular_family_kind")]
+    pub kind: String,
+    #[serde(default = "default_hysteresis_angular_family_id")]
+    pub family_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
+    pub variants: Vec<HysteresisAngularVariantIR>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1004,8 +1167,8 @@ fn default_table_id() -> String {
     "default".to_string()
 }
 
-fn default_measurement_axis() -> String {
-    "field_axis".to_string()
+fn default_measurement_axis() -> MeasurementAxisIR {
+    MeasurementAxisIR::field_axis()
 }
 
 fn default_initial_protocol() -> String {

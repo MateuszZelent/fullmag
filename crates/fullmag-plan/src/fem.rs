@@ -1,9 +1,9 @@
 use fullmag_ir::{
     BackendPlanIR, BackendTarget, CommonPlanMeta, DiscretizationHintsIR, DomainFrameIR,
     EnergyTermIR, ExchangeBoundaryCondition, ExecutionPlanIR, ExecutionPrecision, FemEigenPlanIR,
-    FemMagnetoelasticPlanIR, FemMechanicalModeIR, FemMechanicalPlanIR, FemPlanIR, GeometryEntryIR,
-    MagnetostrictionLawIR, MechanicalLoadIR, OutputPlanIR, ProblemIR, ProvenancePlanIR,
-    TimeDependenceIR, IR_VERSION,
+    FemFrequencyResponsePlanIR, FemMagnetoelasticPlanIR, FemMechanicalModeIR, FemMechanicalPlanIR,
+    FemPlanIR, GeometryEntryIR, MagnetostrictionLawIR, MechanicalLoadIR, OutputPlanIR, ProblemIR,
+    ProvenancePlanIR, TimeDependenceIR, IR_VERSION,
 };
 use std::collections::BTreeMap;
 
@@ -23,6 +23,7 @@ use crate::spin_torque::{resolve_legacy_spin_torque, SpinTorqueExecutableLane};
 use crate::util::{problem_domain_frame, runtime_requests_cuda, shared_domain_mesh_requested, MU0};
 use crate::validate::{
     planned_study_controls, validate_eigen_outputs, validate_executable_outputs,
+    validate_frequency_response_outputs,
 };
 
 const FEM_AIRBOX_DEMAG_REQUIRED_MESSAGE: &str = "FEM demag requires a conformal shared-domain mesh with air and a Poisson airbox realization (Robin or Dirichlet).";
@@ -2550,6 +2551,132 @@ pub(crate) fn plan_fem_eigen(
         backend_plan: BackendPlanIR::FemEigen(fem_plan),
         output_plan: OutputPlanIR {
             outputs: problem.study.sampling().outputs.clone(),
+        },
+        provenance: ProvenancePlanIR {
+            notes: provenance_notes,
+        },
+    })
+}
+
+pub(crate) fn plan_fem_frequency_response(
+    problem: &ProblemIR,
+    resolved_backend: BackendTarget,
+) -> Result<ExecutionPlanIR, PlanError> {
+    let fullmag_ir::StudyIR::FrequencyResponse {
+        dynamics,
+        operator,
+        equilibrium,
+        k_sampling,
+        normalization,
+        damping_policy,
+        spin_wave_bc,
+        excitation,
+        frequencies_hz,
+        sampling,
+    } = &problem.study
+    else {
+        unreachable!("plan_fem_frequency_response is only called for StudyIR::FrequencyResponse");
+    };
+
+    let mut errors = Vec::new();
+    validate_frequency_response_outputs(&sampling.outputs, &mut errors);
+    if runtime_requests_cuda(problem) {
+        errors.push(
+            "FEM frequency response GPU execution is not implemented yet; request device='cpu' or device='auto' resolved to CPU"
+                .to_string(),
+        );
+    }
+    if problem.backend_policy.execution_precision != ExecutionPrecision::Double {
+        errors.push(fem_single_precision_rejection(
+            runtime_requests_cuda(problem),
+            "FEM frequency response",
+        ));
+    }
+    if !errors.is_empty() {
+        return Err(PlanError { reasons: errors });
+    }
+
+    let mut eigen_proxy = problem.clone();
+    eigen_proxy.study = fullmag_ir::StudyIR::Eigenmodes {
+        dynamics: dynamics.clone(),
+        operator: operator.clone(),
+        count: 1,
+        target: fullmag_ir::EigenTargetIR::Lowest,
+        equilibrium: equilibrium.clone(),
+        k_sampling: k_sampling.clone(),
+        normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
+        damping_policy: *damping_policy,
+        spin_wave_bc: spin_wave_bc.clone(),
+        sampling: fullmag_ir::SamplingIR {
+            table_autosave: None,
+            outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
+                quantity: "eigenfrequency".to_string(),
+            }],
+        },
+        mode_tracking: None,
+    };
+
+    let eigen_plan = plan_fem_eigen(&eigen_proxy, resolved_backend)?;
+    let BackendPlanIR::FemEigen(eigen) = eigen_plan.backend_plan else {
+        unreachable!("FEM eigen proxy must produce BackendPlanIR::FemEigen");
+    };
+
+    let response_plan = FemFrequencyResponsePlanIR {
+        mesh_name: eigen.mesh_name,
+        mesh_source: eigen.mesh_source,
+        mesh: eigen.mesh,
+        object_segments: eigen.object_segments,
+        mesh_parts: eigen.mesh_parts,
+        domain_mesh_mode: eigen.domain_mesh_mode,
+        domain_frame: eigen.domain_frame,
+        fe_order: eigen.fe_order,
+        hmax: eigen.hmax,
+        equilibrium_magnetization: eigen.equilibrium_magnetization,
+        material: eigen.material,
+        operator: operator.clone(),
+        equilibrium: equilibrium.clone(),
+        k_sampling: k_sampling.clone(),
+        normalization: *normalization,
+        damping_policy: *damping_policy,
+        spin_wave_bc: spin_wave_bc.clone(),
+        excitation: excitation.clone(),
+        frequencies_hz: frequencies_hz.clone(),
+        enable_exchange: eigen.enable_exchange,
+        enable_demag: eigen.enable_demag,
+        interfacial_dmi: eigen.interfacial_dmi,
+        dmi_interface_normal: eigen.dmi_interface_normal,
+        bulk_dmi: eigen.bulk_dmi,
+        external_field: eigen.external_field,
+        gyromagnetic_ratio: eigen.gyromagnetic_ratio,
+        precision: eigen.precision,
+        exchange_bc: eigen.exchange_bc,
+        demag_realization: eigen.demag_realization,
+    };
+
+    let mut provenance_notes = eigen_plan.provenance.notes;
+    provenance_notes.push(format!(
+        "study: frequency_response operator={:?} frequencies={} normalization={:?} damping_policy={:?}",
+        response_plan.operator.kind,
+        response_plan.frequencies_hz.values_hz.len(),
+        response_plan.normalization,
+        response_plan.damping_policy
+    ));
+    provenance_notes.push(
+        "FEM frequency response plans to the native frequency-domain family; execution remains gated by native driven-solver availability"
+            .to_string(),
+    );
+
+    Ok(ExecutionPlanIR {
+        common: CommonPlanMeta {
+            ir_version: IR_VERSION.to_string(),
+            requested_backend: problem.backend_policy.requested_backend,
+            resolved_backend,
+            execution_mode: problem.validation_profile.execution_mode,
+            material_field_plans: eigen_plan.common.material_field_plans,
+        },
+        backend_plan: BackendPlanIR::FemFrequencyResponse(response_plan),
+        output_plan: OutputPlanIR {
+            outputs: sampling.outputs.clone(),
         },
         provenance: ProvenancePlanIR {
             notes: provenance_notes,

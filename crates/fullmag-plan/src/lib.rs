@@ -79,12 +79,9 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
     match resolved_backend {
         BackendTarget::Fem => match &problem.study {
             StudyIR::Eigenmodes { .. } => fem::plan_fem_eigen(problem, resolved_backend),
-            StudyIR::FrequencyResponse { .. } => Err(PlanError {
-                reasons: vec![
-                    "StudyIR::FrequencyResponse is semantic-only in this build; driven frequency-domain execution is not implemented yet"
-                        .to_string(),
-                ],
-            }),
+            StudyIR::FrequencyResponse { .. } => {
+                fem::plan_fem_frequency_response(problem, resolved_backend)
+            }
             _ => fem::plan_fem(problem, resolved_backend),
         },
         BackendTarget::Fdm => {
@@ -99,7 +96,7 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
             if matches!(problem.study, StudyIR::FrequencyResponse { .. }) {
                 return Err(PlanError {
                     reasons: vec![
-                        "StudyIR::FrequencyResponse is semantic-only in this build; driven frequency-domain execution is not implemented yet"
+                        "StudyIR::FrequencyResponse is not executable on backend='fdm'; use backend='fem' for the dense validation frequency-response path or wait for a production FDM frequency-domain backend"
                             .to_string(),
                     ],
                 });

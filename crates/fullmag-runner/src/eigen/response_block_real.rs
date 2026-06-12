@@ -101,11 +101,33 @@ pub struct FieldDrivenBlockRealResponsePoint {
     pub sweep_reuse: BlockRealSweepReuseProvenance,
 }
 
+#[derive(Clone, Debug)]
+pub struct FieldDrivenBlockRealSweepOutcome {
+    pub points: Vec<FieldDrivenBlockRealResponsePoint>,
+    pub interrupted: bool,
+    pub requested_point_count: usize,
+}
+
 pub fn solve_field_driven_block_real_sweep(
     template: &BlockRealHarmonicTemplate,
     frequencies_rad_per_s: &[f64],
     field_excitation: &DVector<Complex64>,
 ) -> Result<Vec<FieldDrivenBlockRealResponsePoint>, String> {
+    Ok(solve_field_driven_block_real_sweep_with_interrupt(
+        template,
+        frequencies_rad_per_s,
+        field_excitation,
+        |_| false,
+    )?
+    .points)
+}
+
+pub fn solve_field_driven_block_real_sweep_with_interrupt(
+    template: &BlockRealHarmonicTemplate,
+    frequencies_rad_per_s: &[f64],
+    field_excitation: &DVector<Complex64>,
+    mut should_interrupt_after_completed_points: impl FnMut(usize) -> bool,
+) -> Result<FieldDrivenBlockRealSweepOutcome, String> {
     if frequencies_rad_per_s.is_empty() {
         return Err("frequency sweep must include at least one point".to_string());
     }
@@ -120,6 +142,13 @@ pub fn solve_field_driven_block_real_sweep(
     let mut response_points = Vec::with_capacity(frequencies_rad_per_s.len());
 
     for frequency_rad_per_s in frequencies_rad_per_s {
+        if should_interrupt_after_completed_points(response_points.len()) {
+            return Ok(FieldDrivenBlockRealSweepOutcome {
+                points: response_points,
+                interrupted: true,
+                requested_point_count: frequencies_rad_per_s.len(),
+            });
+        }
         let system = BlockRealHarmonicSystem {
             stiffness: template.stiffness.clone(),
             mass: template.mass.clone(),
@@ -143,7 +172,11 @@ pub fn solve_field_driven_block_real_sweep(
         ));
     }
 
-    Ok(response_points)
+    Ok(FieldDrivenBlockRealSweepOutcome {
+        points: response_points,
+        interrupted: false,
+        requested_point_count: frequencies_rad_per_s.len(),
+    })
 }
 
 pub fn build_field_driven_response_sweep_artifact(
@@ -439,7 +472,8 @@ fn response_residual_norms(
 mod tests {
     use super::{
         build_field_driven_response_sweep_artifact, solve_block_real_harmonic_response,
-        solve_field_driven_block_real_sweep, BlockRealHarmonicSystem, BlockRealHarmonicTemplate,
+        solve_field_driven_block_real_sweep, solve_field_driven_block_real_sweep_with_interrupt,
+        BlockRealHarmonicSystem, BlockRealHarmonicTemplate,
     };
     use nalgebra::{DMatrix, DVector};
     use num_complex::Complex64;
@@ -557,6 +591,51 @@ mod tests {
             .as_ref()
             .expect("third point should expose previous-frequency warm start");
         assert_eq!(third_warm_start.source_frequency_rad_per_s, 1.5);
+    }
+
+    #[test]
+    fn field_driven_sweep_interrupts_between_frequency_points() {
+        let template = BlockRealHarmonicTemplate {
+            stiffness: DMatrix::from_element(1, 1, 4.0),
+            mass: DMatrix::from_element(1, 1, 1.0),
+            damping: Some(DMatrix::from_element(1, 1, 0.5)),
+        };
+        let field_excitation = DVector::from_element(1, Complex64::new(1.0, 0.0));
+
+        let outcome = solve_field_driven_block_real_sweep_with_interrupt(
+            &template,
+            &[1.0, 1.5, 2.0],
+            &field_excitation,
+            |completed_points| completed_points >= 1,
+        )
+        .expect("interruptible field-driven sweep should return partial outcome");
+
+        assert!(outcome.interrupted);
+        assert_eq!(outcome.requested_point_count, 3);
+        assert_eq!(outcome.points.len(), 1);
+        assert_eq!(outcome.points[0].frequency_rad_per_s, 1.0);
+    }
+
+    #[test]
+    fn field_driven_sweep_interrupts_before_first_frequency_point() {
+        let template = BlockRealHarmonicTemplate {
+            stiffness: DMatrix::from_element(1, 1, 4.0),
+            mass: DMatrix::from_element(1, 1, 1.0),
+            damping: Some(DMatrix::from_element(1, 1, 0.5)),
+        };
+        let field_excitation = DVector::from_element(1, Complex64::new(1.0, 0.0));
+
+        let outcome = solve_field_driven_block_real_sweep_with_interrupt(
+            &template,
+            &[1.0, 1.5, 2.0],
+            &field_excitation,
+            |completed_points| completed_points == 0,
+        )
+        .expect("interruptible field-driven sweep should support pre-first-point cancel");
+
+        assert!(outcome.interrupted);
+        assert_eq!(outcome.requested_point_count, 3);
+        assert!(outcome.points.is_empty());
     }
 
     #[test]

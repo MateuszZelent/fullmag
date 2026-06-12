@@ -1237,6 +1237,59 @@ impl From<&fullmag_ir::FemEigenPlanIR> for FemMeshPayload {
     }
 }
 
+impl From<&fullmag_ir::FemFrequencyResponsePlanIR> for FemMeshPayload {
+    fn from(plan: &fullmag_ir::FemFrequencyResponsePlanIR) -> Self {
+        let element_markers = normalized_payload_element_markers(&plan.mesh.element_markers, None);
+        let generation_id = stable_fem_mesh_generation_id(
+            &plan.mesh,
+            &element_markers,
+            &plan.object_segments,
+            &plan.mesh_parts,
+            plan.domain_mesh_mode,
+            &plan.domain_frame,
+        );
+        Self {
+            mesh_name: plan.mesh.mesh_name.clone(),
+            mesh_id: format!("{}:{}", plan.mesh.mesh_name, generation_id),
+            nodes: plan.mesh.nodes.clone(),
+            elements: plan.mesh.elements.clone(),
+            element_markers,
+            boundary_faces: plan.mesh.boundary_faces.clone(),
+            boundary_markers: plan.mesh.boundary_markers.clone(),
+            periodic_boundary_pairs: plan.mesh.periodic_boundary_pairs.clone(),
+            periodic_node_pairs: plan.mesh.periodic_node_pairs.clone(),
+            object_segments: plan
+                .object_segments
+                .iter()
+                .map(|segment| FemMeshObjectSegment {
+                    object_id: segment.object_id.clone(),
+                    geometry_id: segment.geometry_id.clone(),
+                    node_start: segment.node_start,
+                    node_count: segment.node_count,
+                    element_start: segment.element_start,
+                    element_count: segment.element_count,
+                    boundary_face_start: segment.boundary_face_start,
+                    boundary_face_count: segment.boundary_face_count,
+                })
+                .collect(),
+            mesh_parts: plan
+                .mesh_parts
+                .iter()
+                .map(FemMeshPartPayload::from)
+                .collect(),
+            domain_mesh_mode: Some(domain_mesh_mode_name(plan.domain_mesh_mode).to_string()),
+            domain_frame: plan.domain_frame.clone(),
+            generation_id: Some(generation_id),
+            per_domain_quality: plan
+                .mesh
+                .per_domain_quality
+                .iter()
+                .map(|(k, v)| (*k, MeshQualityPayload::from(v)))
+                .collect(),
+        }
+    }
+}
+
 impl From<&fullmag_ir::FemMeshPartIR> for FemMeshPartPayload {
     fn from(part: &fullmag_ir::FemMeshPartIR) -> Self {
         let has_explicit_node_indices = !part.node_indices.is_empty();

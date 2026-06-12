@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveInspectorPanel } from "./inspectorRegistry";
+import {
+  FREQUENCY_DOMAIN_INSPECTOR_SELECTION_KINDS,
+  resolveInspectorPanel,
+} from "./inspectorRegistry";
 import {
   ObjectRegionTexturePanel,
   ObjectRegionVisualizationPanel,
@@ -152,9 +155,28 @@ describe("inspectorRegistry", () => {
     expect(
       resolveInspectorPanel({ kind: "study.stage.frequency_response" })?.id,
     ).toBe("study-stage");
+    expect(
+      resolveInspectorPanel({ kind: "study.stage.eigenmodes.k_path" })?.id,
+    ).toBe("study-stage");
+    expect(
+      resolveInspectorPanel({ kind: "study.stage.eigenmodes.periodic_pairs" })?.id,
+    ).toBe("study-stage");
+    expect(
+      resolveInspectorPanel({ kind: "study.stage.frequency_response.excitation" })
+        ?.id,
+    ).toBe("study-stage");
+    expect(
+      resolveInspectorPanel({ kind: "study.stage.frequency_response.k_grid" })?.id,
+    ).toBe("study-stage");
     expect(resolveInspectorPanel({ kind: "study.stage.save_state" })?.id).toBe(
       "study-stage",
     );
+  });
+
+  it("routes all frequency-domain result, resource, job, and diagnostic nodes away from placeholder", () => {
+    for (const kind of FREQUENCY_DOMAIN_INSPECTOR_SELECTION_KINDS) {
+      expect(resolveInspectorPanel({ kind })?.id, kind).toBe("frequency-domain");
+    }
   });
 
   it("returns null when there is no selection kind", () => {

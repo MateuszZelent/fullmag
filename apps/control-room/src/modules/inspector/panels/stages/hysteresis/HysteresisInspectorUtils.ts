@@ -14,6 +14,7 @@ export type HysteresisInspectorView =
   | "points"
   | "metrics"
   | "snapshots"
+  | "settle-trace"
   | "current-field";
 
 const HYSTERESIS_NODE_VIEW_SUFFIXES: Array<[string, HysteresisInspectorView]> = [
@@ -38,8 +39,8 @@ export function resolveHysteresisInspectorView(
   nodeId: string | null | undefined,
 ): HysteresisInspectorView {
   if (!nodeId) return "overview";
-  if (nodeId.includes(":field-point:")) return "current-field";
-  if (nodeId.includes(":algorithm:")) return "current-field";
+  if (nodeId.includes(":field-point:")) return "settle-trace";
+  if (nodeId.includes(":algorithm:")) return "settle-trace";
   const match = HYSTERESIS_NODE_VIEW_SUFFIXES.find(([suffix]) =>
     nodeId.endsWith(suffix),
   );
@@ -81,6 +82,12 @@ export interface ActiveHysteresisSnapshotSelection {
   snapshotId: string;
 }
 
+export interface ActiveHysteresisPointSelection {
+  fieldValueMt: number | null;
+  pointId: number | null;
+  snapshotId: string | null;
+}
+
 export function activeHysteresisSnapshotSelection(
   selection: Selection,
   stageId: string | null | undefined,
@@ -102,6 +109,43 @@ export function activeHysteresisSnapshotSelection(
   };
 }
 
+export function activeHysteresisPointSelection(
+  selection: Selection,
+  stageId: string | null | undefined,
+): ActiveHysteresisPointSelection | null {
+  if (!stageId) {
+    return null;
+  }
+  const ref = selection.ref;
+  if (ref?.type === "analysis-chart-point" && ref.stageId === stageId) {
+    return {
+      fieldValueMt: ref.x,
+      pointId: ref.pointId ?? null,
+      snapshotId: ref.snapshotId ?? null,
+    };
+  }
+  const pointId = pointIdFromHysteresisExplorerNode(selection.nodeId, stageId);
+  if (pointId == null) {
+    return null;
+  }
+  return {
+    fieldValueMt: null,
+    pointId,
+    snapshotId: null,
+  };
+}
+
+export function activeHysteresisPointSelectionEquals(
+  left: ActiveHysteresisPointSelection | null,
+  right: ActiveHysteresisPointSelection | null,
+): boolean {
+  return (
+    left?.snapshotId === right?.snapshotId &&
+    left?.pointId === right?.pointId &&
+    left?.fieldValueMt === right?.fieldValueMt
+  );
+}
+
 export function activeHysteresisSnapshotSelectionEquals(
   left: ActiveHysteresisSnapshotSelection | null,
   right: ActiveHysteresisSnapshotSelection | null,
@@ -111,6 +155,21 @@ export function activeHysteresisSnapshotSelectionEquals(
     left?.pointId === right?.pointId &&
     left?.fieldValueMt === right?.fieldValueMt
   );
+}
+
+function pointIdFromHysteresisExplorerNode(
+  nodeId: string | null | undefined,
+  stageId: string,
+): number | null {
+  if (!nodeId || !nodeId.includes(`:${stageId}:`)) {
+    return null;
+  }
+  const match = nodeId.match(/:field-point:(\d+)(?::|$)/);
+  if (!match) {
+    return null;
+  }
+  const pointId = Number.parseInt(match[1], 10);
+  return Number.isFinite(pointId) ? pointId : null;
 }
 
 export function hysteresisInitialStateActionPresentation(

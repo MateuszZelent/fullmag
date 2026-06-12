@@ -1,9 +1,24 @@
 import {
+  ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DIAGNOSTICS_V2_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_FIELD_META_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_DIAGNOSTICS_V1_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FIELD_META_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FREQUENCY_POINT_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
+  ANALYSIS_EIGEN_MODE_V2_PATH,
   ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH,
   ANALYSIS_HYSTERESIS_POINTS_PATH,
   ANALYSIS_HYSTERESIS_METRICS_PATH,
   ANALYSIS_HYSTERESIS_SATURATION_PATH,
   ANALYSIS_HYSTERESIS_BRANCHES_PATH,
+  ANALYSIS_HYSTERESIS_FAMILY_PATH,
+  ANALYSIS_HYSTERESIS_FAMILY_VARIANT_POINTS_PATH,
   ANALYSIS_HYSTERESIS_MINOR_LOOPS_PATH,
   ANALYSIS_HYSTERESIS_REVERSAL_FIELDS_PATH,
   ANALYSIS_HYSTERESIS_POINT_PATH,
@@ -33,6 +48,7 @@ import {
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
   MESHING_HISTOGRAM_BIN_ELEMENTS_PATH,
+  MESHING_PERIODIC_PAIRS_PATH,
   MESHING_SHARED_DOMAIN_CROSS_SECTION_IMAGE_PATH,
   MESHING_SHARED_DOMAIN_CROSS_SECTION_PATH,
   MESHING_SHARED_DOMAIN_CROSS_SECTION_QUALITY_PATH,
@@ -157,6 +173,13 @@ import type {
   MagnetizationAssetPatchRequest,
   MagnetizationAssetResource,
   MagneticResponseSweepResource,
+  FrequencyDomainManifestResource,
+  FrequencyDomainJsonArtifactResource,
+  FrequencyDomainTextArtifactResource,
+  FrequencyDomainFieldResource,
+  FrequencyDomainSweepProgressResource,
+  JsonValue,
+  HysteresisAngularFamilyResource,
   HysteresisBranchSchema,
   HysteresisExecutionTreeResource,
   HysteresisMinorLoopSchema,
@@ -186,6 +209,7 @@ import type {
   MeshObjectQualityResource,
   MeshObjectReportResource,
   MeshObjectSizeFieldResource,
+  MeshPeriodicPairsResource,
   MeshQualityGatesResource,
   MeshRealizedSizeFieldsResource,
   MeshRegionMembershipListResource,
@@ -395,12 +419,124 @@ export class ControlRoomApi {
   };
 
   readonly analysis = {
+    eigen: {
+      eigenBranchesV2: (options?: RequestOptions) =>
+        this.requestJson<FrequencyDomainJsonArtifactResource>(
+          ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
+          options,
+        ),
+      eigenDiagnosticsV2: (options?: RequestOptions) =>
+        this.requestJson<FrequencyDomainJsonArtifactResource>(
+          ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DIAGNOSTICS_V2_PATH,
+          options,
+        ),
+      eigenDispersion: (options?: RequestOptions) =>
+        this.requestJson<FrequencyDomainTextArtifactResource>(
+          ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+          options,
+        ),
+      eigenModeFieldMeta: (
+        sampleIndex: number,
+        modeIndex: number,
+        options?: RequestOptions,
+      ) =>
+        this.requestJson<FrequencyDomainFieldResource>(
+          ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_FIELD_META_PATH,
+          options,
+          {
+            path: {
+              sample_index: sampleIndex,
+              mode_index: modeIndex,
+            },
+          },
+        ),
+      modeV2: (
+        sampleIndex: number,
+        modeIndex: number,
+        options?: RequestOptions,
+      ) =>
+        this.requestJson<JsonValue>(ANALYSIS_EIGEN_MODE_V2_PATH, options, {
+          path: {
+            sample_index: sampleIndex,
+            mode_index: modeIndex,
+          },
+        }),
+      eigenSpectrumV2: (options?: RequestOptions) =>
+        this.requestJson<FrequencyDomainJsonArtifactResource>(
+          ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+          options,
+        ),
+    },
+    frequencyDomain: {
+      eigenBranchesV2: (options?: RequestOptions) =>
+        this.analysis.eigen.eigenBranchesV2(options),
+      eigenDiagnosticsV2: (options?: RequestOptions) =>
+        this.analysis.eigen.eigenDiagnosticsV2(options),
+      eigenDispersion: (options?: RequestOptions) =>
+        this.analysis.eigen.eigenDispersion(options),
+      eigenModeFieldMeta: (
+        sampleIndex: number,
+        modeIndex: number,
+        options?: RequestOptions,
+      ) => this.analysis.eigen.eigenModeFieldMeta(sampleIndex, modeIndex, options),
+      eigenSpectrumV2: (options?: RequestOptions) =>
+        this.analysis.eigen.eigenSpectrumV2(options),
+      manifestV1: (options?: RequestOptions) =>
+        this.requestJson<FrequencyDomainManifestResource>(
+          ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
+          options,
+        ),
+      responseDiagnosticsV1: (options?: RequestOptions) =>
+        this.requestJson<FrequencyDomainJsonArtifactResource>(
+          ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_DIAGNOSTICS_V1_PATH,
+          options,
+        ),
+      responseFieldMeta: (frequencyIndex: number, options?: RequestOptions) =>
+        this.requestJson<FrequencyDomainFieldResource>(
+          ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FIELD_META_PATH,
+          options,
+          { path: { frequency_index: frequencyIndex } },
+        ),
+      responseFrequencyPoint: (
+        frequencyIndex: number,
+        options?: RequestOptions,
+      ) =>
+        this.requestJson<FrequencyDomainJsonArtifactResource>(
+          ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FREQUENCY_POINT_PATH,
+          options,
+          { path: { frequency_index: frequencyIndex } },
+        ),
+      responseMagneticSweep: (options?: RequestOptions) =>
+        this.requestJson<FrequencyDomainJsonArtifactResource>(
+          ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+          options,
+        ),
+      responseCancelRequestedV1: (options?: RequestOptions) =>
+        this.requestJson<FrequencyDomainSweepProgressResource>(
+          ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
+          options,
+        ),
+      responseProgressV1: (options?: RequestOptions) =>
+        this.requestJson<FrequencyDomainSweepProgressResource>(
+          ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
+          options,
+        ),
+    },
     frequencyResponse: {
+      fieldMeta: (frequencyIndex: number, options?: RequestOptions) =>
+        this.analysis.frequencyDomain.responseFieldMeta(frequencyIndex, options),
+      frequencyPoint: (frequencyIndex: number, options?: RequestOptions) =>
+        this.analysis.frequencyDomain.responseFrequencyPoint(
+          frequencyIndex,
+          options,
+        ),
       magneticSweepV1: (options?: RequestOptions) =>
         this.requestJson<MagneticResponseSweepResource>(
           ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH,
           options,
         ),
+      magneticSweepV2: (options?: RequestOptions) =>
+        this.analysis.frequencyDomain.responseMagneticSweep(options),
     },
     hysteresis: {
       points: (stageId: string, options?: RequestOptions) =>
@@ -426,6 +562,22 @@ export class ControlRoomApi {
           ANALYSIS_HYSTERESIS_BRANCHES_PATH,
           options,
           { path: { stage_id: stageId } },
+        ),
+      family: (stageId: string, options?: RequestOptions) =>
+        this.requestJson<HysteresisAngularFamilyResource>(
+          ANALYSIS_HYSTERESIS_FAMILY_PATH,
+          options,
+          { path: { stage_id: stageId } },
+        ),
+      familyVariantPoints: (
+        stageId: string,
+        variantId: string,
+        options?: RequestOptions,
+      ) =>
+        this.requestJson<HysteresisPointSchema[]>(
+          ANALYSIS_HYSTERESIS_FAMILY_VARIANT_POINTS_PATH,
+          options,
+          { path: { stage_id: stageId, variant_id: variantId } },
         ),
       minorLoops: (stageId: string, options?: RequestOptions) =>
         this.requestJson<HysteresisMinorLoopSchema[]>(
@@ -592,6 +744,11 @@ export class ControlRoomApi {
       this.requestJson<MeshSemanticsResource>(MESHING_SEMANTICS_PATH, options),
     summary: (options?: RequestOptions) =>
       this.requestJson<MeshSummaryResource>(MESHING_SUMMARY_PATH, options),
+    periodicPairs: (options?: RequestOptions) =>
+      this.requestJson<MeshPeriodicPairsResource>(
+        MESHING_PERIODIC_PAIRS_PATH,
+        options,
+      ),
     builds: {
       history: (options?: RequestOptions) =>
         this.requestJson<MeshBuildHistoryResource>(MESHING_BUILDS_PATH, options),

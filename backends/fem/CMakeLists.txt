@@ -129,10 +129,25 @@ set(FEM_SOURCES
     cpu/mfem/runtime/stage_completion.cpp
     cpu/mfem/runtime/state_io.cpp
     cpu/mfem/runtime/step_metrics.cpp
+    cpu/frequency_domain/dense_driven_response.cpp
+    cpu/frequency_domain/mfem_driven_response_validation.cpp
     gpu/cuda/demag_poisson/hypre_device_solver.cpp
     gpu/cuda/demag_poisson/operators.cpp
     gpu/cuda/demag_poisson/poisson.cpp
     gpu/cuda/demag_poisson/stage_compute.cpp
+    cpu/frequency_domain/mfem_exchange_operator.cpp
+    cpu/frequency_domain/mfem_linearized_operator.cpp
+    cpu/frequency_domain/mfem_operator_context.cpp
+    cpu/frequency_domain/mfem_tangent_space.cpp
+    cpu/frequency_domain/mfem_zeeman_operator.cpp
+    src/frequency_domain/driven_response_solver.cpp
+    src/frequency_domain/equilibrium_state.cpp
+    src/frequency_domain/excitation.cpp
+    src/frequency_domain/frequency_domain_contract.cpp
+    src/frequency_domain/operator_contract.cpp
+    src/frequency_domain/operator_terms.cpp
+    src/frequency_domain/tangent_frame.cpp
+    src/frequency_domain/zeeman_operator.cpp
     src/api.cpp
     src/context.cpp
     src/dmi_weak_residual.cpp
@@ -317,6 +332,10 @@ add_fem_source_facade_contract(
 add_fem_source_facade_contract(
     fem_relaxation_source_contract
     tests/relaxation_source_contract.cpp
+)
+add_fem_source_facade_contract(
+    fem_frequency_domain_contract
+    tests/frequency_domain/frequency_domain_contract.cpp
 )
 
 add_executable(fem_dmi_weak_residual tests/dmi_weak_residual.cpp)

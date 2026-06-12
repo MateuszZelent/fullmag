@@ -395,6 +395,12 @@
   gap: var(--fm-space-1);
 }
 
+.fm-hysteresis-status {
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+  line-height: var(--fm-line-height-tight);
+}
+
 .fm-hysteresis-chart-canvas {
   width: 100%;
   height: 360px;

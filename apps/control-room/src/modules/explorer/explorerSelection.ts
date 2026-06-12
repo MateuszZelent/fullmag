@@ -5,7 +5,71 @@ import { selectCrossSectionPlot } from "@/kernel/workspace/crossSectionWorkspace
 
 import type { ExplorerNode } from "./explorerTypes";
 
+type StudyStageSelectionKind = Extract<
+  SelectionRef,
+  { type: "study-stage" }
+>["kind"];
+
+const STUDY_STAGE_SELECTION_KINDS = new Set<string>([
+  "study.stage.action",
+  "study.stage.eigenmodes",
+  "study.stage.eigenmodes.setup",
+  "study.stage.eigenmodes.calculation_mode",
+  "study.stage.eigenmodes.equilibrium",
+  "study.stage.eigenmodes.operator",
+  "study.stage.eigenmodes.boundary",
+  "study.stage.eigenmodes.periodic_pairs",
+  "study.stage.eigenmodes.k_path",
+  "study.stage.eigenmodes.solver",
+  "study.stage.eigenmodes.outputs",
+  "study.stage.eigenmodes.diagnostics",
+  "study.stage.frequency_response",
+  "study.stage.frequency_response.setup",
+  "study.stage.frequency_response.calculation_mode",
+  "study.stage.frequency_response.equilibrium",
+  "study.stage.frequency_response.operator",
+  "study.stage.frequency_response.boundary",
+  "study.stage.frequency_response.periodic_pairs",
+  "study.stage.frequency_response.k_grid",
+  "study.stage.frequency_response.excitation",
+  "study.stage.frequency_response.sweep",
+  "study.stage.frequency_response.solver",
+  "study.stage.frequency_response.outputs",
+  "study.stage.frequency_response.diagnostics",
+  "study.stage.hysteresis",
+  "study.stage.relax",
+  "study.stage.run",
+  "study.stage.save_state",
+]);
+
+function isStudyStageSelectionKind(
+  kind: ExplorerNode["kind"],
+): kind is StudyStageSelectionKind {
+  return STUDY_STAGE_SELECTION_KINDS.has(kind);
+}
+
 function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
+  if (isFrequencyDomainSelectionNode(node)) {
+    return {
+      ...(node.analysisRunId ? { analysisRunId: node.analysisRunId } : {}),
+      ...(node.analysisStageId ? { analysisStageId: node.analysisStageId } : {}),
+      ...(node.artifactPath ? { artifactPath: node.artifactPath } : {}),
+      ...(node.branchId ? { branchId: node.branchId } : {}),
+      ...(node.calculationMode ? { calculationMode: node.calculationMode } : {}),
+      ...(node.fieldId ? { fieldId: node.fieldId } : {}),
+      ...(node.frequencyIndex !== undefined
+        ? { frequencyIndex: node.frequencyIndex }
+        : {}),
+      kind: node.kind,
+      ...(node.modeIndex !== undefined ? { modeIndex: node.modeIndex } : {}),
+      nodeId: node.id,
+      ...(node.observableId ? { observableId: node.observableId } : {}),
+      ...(node.resourceRef ? { resourceRef: node.resourceRef } : {}),
+      ...(node.sampleIndex !== undefined ? { sampleIndex: node.sampleIndex } : {}),
+      type: "frequency-domain",
+    };
+  }
+
   if (
     node.objectId &&
     (node.kind === "object.root" ||
@@ -102,13 +166,7 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
   if (
     node.stageId &&
     node.stageIndex !== undefined &&
-    (node.kind === "study.stage.action" ||
-      node.kind === "study.stage.eigenmodes" ||
-      node.kind === "study.stage.frequency_response" ||
-      node.kind === "study.stage.hysteresis" ||
-      node.kind === "study.stage.relax" ||
-      node.kind === "study.stage.run" ||
-      node.kind === "study.stage.save_state")
+    isStudyStageSelectionKind(node.kind)
   ) {
     return {
       kind: node.kind,
@@ -129,6 +187,20 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
   }
 
   return null;
+}
+
+function isFrequencyDomainSelectionNode(node: ExplorerNode): boolean {
+  return (
+    node.kind.startsWith("results.frequency_domain") ||
+    node.kind.startsWith("results.eigen") ||
+    node.kind.startsWith("results.frequency_response") ||
+    node.kind.startsWith("resources.analysis.frequency_domain") ||
+    node.kind.startsWith("resources.analysis.eigen") ||
+    node.kind.startsWith("resources.analysis.frequency_response") ||
+    node.kind === "resources.mesh.periodic_pairs" ||
+    node.kind.startsWith("jobs.frequency_domain") ||
+    node.kind.startsWith("diagnostics.frequency_domain")
+  );
 }
 
 export function selectExplorerNode(

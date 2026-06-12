@@ -155,6 +155,22 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain("window.__FULLMAG_CONFIG__");
   });
 
+  it("can verify hysteresis replay routes snapshots through the field data plane", () => {
+    const smokeScript = readFileSync(smokeScriptUrl, "utf8");
+
+    expect(smokeScript).toContain("CONTROL_ROOM_SMOKE_HYSTERESIS_REPLAY");
+    expect(smokeScript).toContain("CONTROL_ROOM_SMOKE_HYSTERESIS_REPLAY_ONLY");
+    expect(smokeScript).toContain("verifyHysteresisReplaySmoke");
+    expect(smokeScript).toContain("!hysteresisReplayOnly");
+    expect(smokeScript).toContain("loadHysteresisReplaySnapshot");
+    expect(smokeScript).toContain("data-hysteresis-replay-snapshot-id");
+    expect(smokeScript).toContain("data-hysteresis-replay-stage-id");
+    expect(smokeScript).toContain('params.get("snapshot_id") === hysteresisReplaySnapshotId');
+    expect(smokeScript).toContain('params.get("component") === "full"');
+    expect(smokeScript).toContain('params.get("scope_kind") === "full"');
+    expect(smokeScript).toContain("Hysteresis replay smoke passed:");
+  });
+
   it("asserts camera gestures do not issue data/model/visualization fetches", () => {
     const smokeScript = readFileSync(smokeScriptUrl, "utf8");
 
@@ -258,7 +274,7 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain("verifyRegionAuthoringOverlayFlow");
     expect(smokeScript).toContain("CONTROL_ROOM_SMOKE_REGION_ONLY_OBJECT_ID");
     expect(smokeScript).toContain("isObjectRegionCreateUrl");
-    expect(smokeScript).toContain("if (!regionOnlyObjectId)");
+    expect(smokeScript).toContain("if (!regionOnlyObjectId && !hysteresisReplayOnly)");
     expect(smokeScript).toContain("ensureExplorerNodeExpanded");
     expect(smokeScript).toContain(
       'if ((await node.getAttribute("aria-expanded")) === "false")',

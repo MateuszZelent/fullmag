@@ -18,6 +18,10 @@ import { EChartsSurface } from "./components/EChartsSurface";
 
 export function AnalysisPlotsView({
   kernel,
+  frequencyDomainSeries = [],
+  frequencyDomainStatus = "idle",
+  frequencyDomainTitle = "Frequency-domain analysis",
+  frequencyDomainUnavailableReason = null,
   selectedStageId,
   onClearRange,
   onPointSelect,
@@ -33,6 +37,10 @@ export function AnalysisPlotsView({
   yAxisIds,
 }: {
   kernel: KernelApi;
+  frequencyDomainSeries?: readonly ChartSeries[];
+  frequencyDomainStatus?: string;
+  frequencyDomainTitle?: string;
+  frequencyDomainUnavailableReason?: string | null;
   selectedStageId?: string | null;
   onClearRange: () => void;
   onPointSelect: (point: AnalysisChartCursorPoint) => void;
@@ -72,7 +80,15 @@ export function AnalysisPlotsView({
   const activeYSeriesCount = chartSeries.length;
   const seriesLegend = buildSeriesLegend(chartSeries);
   const energyLegend = buildSeriesLegend(solverEnergySeries);
+  const frequencyDomainLegend = buildSeriesLegend(frequencyDomainSeries);
   const xAxisLabel = formatXAxisLabel(chartSeries, xAxisId);
+  const showFrequencyDomainPanel =
+    !selectedStageId &&
+    (frequencyDomainSeries.length > 0 ||
+      Boolean(frequencyDomainUnavailableReason) ||
+      frequencyDomainStatus === "loading" ||
+      frequencyDomainStatus === "error" ||
+      frequencyDomainStatus === "stale");
 
   return (
     <div className="fm-analysis-plots">
@@ -213,6 +229,62 @@ export function AnalysisPlotsView({
             />
           </div>
         ) : null}
+        {showFrequencyDomainPanel ? (
+          <div className="fm-analysis-plots__subchart fm-analysis-plots__subchart--frequency-domain">
+            <header className="fm-analysis-plots__subchart-header">
+              <h4>{frequencyDomainTitle}</h4>
+              <span>
+                {frequencyDomainSeries.length > 0
+                  ? formatSeriesCount(frequencyDomainSeries.length)
+                  : frequencyDomainStatus}
+              </span>
+            </header>
+            {frequencyDomainSeries.length > 0 ? (
+              <>
+                <div
+                  className="fm-analysis-plots__legend"
+                  aria-label="Frequency-domain series legend"
+                >
+                  {frequencyDomainLegend.map((series, index) => (
+                    <button
+                      aria-label={`Series ${series.label} unit ${series.unit} latest ${series.latest}`}
+                      className="fm-analysis-plots__legend-item"
+                      key={series.columnId}
+                      onClick={() => onSeriesSelect(series.series)}
+                      title={`${series.label} [${series.unit}] latest ${series.latest} from ${series.source}`}
+                      type="button"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className={`fm-analysis-plots__legend-swatch fm-analysis-plots__legend-swatch--${index % 5}`}
+                      />
+                      <span className="fm-analysis-plots__legend-label">
+                        {series.label}
+                      </span>
+                      <span className="fm-analysis-plots__legend-unit">
+                        {series.unit}
+                      </span>
+                      <span className="fm-analysis-plots__legend-latest">
+                        {series.latest}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+                <EChartsSurface
+                  dataStatus={frequencyDomainStatus}
+                  onPointSelect={onPointSelect}
+                  series={frequencyDomainSeries}
+                  xAxisLabel={formatFrequencyDomainXAxisLabel(frequencyDomainSeries)}
+                />
+              </>
+            ) : (
+              <div className="fm-analysis-plots__empty" role="status">
+                {frequencyDomainUnavailableReason ??
+                  formatFrequencyDomainEmptyState(frequencyDomainStatus)}
+              </div>
+            )}
+          </div>
+        ) : null}
       </section>
     </div>
   );
@@ -274,6 +346,18 @@ function buildSeriesLegend(
 function formatXAxisLabel(chartSeries: readonly ChartSeries[], xAxisId: string): string {
   const unit = chartSeries.find((series) => series.xUnit)?.xUnit;
   return unit ? `${xAxisId} [${unit}]` : xAxisId;
+}
+
+function formatFrequencyDomainXAxisLabel(chartSeries: readonly ChartSeries[]): string {
+  const unit = chartSeries.find((series) => series.xUnit)?.xUnit;
+  return unit ? `x [${unit}]` : "x";
+}
+
+function formatFrequencyDomainEmptyState(status: string): string {
+  if (status === "loading") return "Loading frequency-domain artifacts";
+  if (status === "error") return "Frequency-domain artifacts failed to load";
+  if (status === "stale") return "Frequency-domain artifacts are missing or stale";
+  return "No frequency-domain series available";
 }
 
 function resourceStatusFromString(status: string): ResourceStatus {

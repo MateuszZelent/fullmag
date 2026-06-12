@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import { ControlRoomApi } from "@/kernel/api/ControlRoomApi";
+import {
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+  MESHING_PERIODIC_PAIRS_PATH,
+} from "@/kernel/api/apiPaths";
 import { RequestDiagnosticsController } from "@/kernel/api/RequestDiagnosticsController";
 import { CommandDiagnosticsController } from "@/kernel/commands/CommandDiagnosticsController";
 import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
@@ -12,6 +20,7 @@ import { RealtimeInvalidationBridge } from "@/kernel/realtime/RealtimeInvalidati
 import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
 import { SelectionController } from "@/kernel/selection/SelectionController";
 import type { KernelApi } from "@/kernel/types";
+import { AnalysisFieldOverlayController } from "@/kernel/visualization/AnalysisFieldOverlayController";
 import { CameraRegistryController } from "@/kernel/visualization/CameraRegistryController";
 import { ObjectVisualizationController } from "@/kernel/visualization/ObjectVisualizationController";
 import { VisualizationRegistrySyncController } from "@/kernel/visualization/VisualizationRegistrySyncController";
@@ -28,6 +37,7 @@ function makeKernel(): KernelApi {
   const api = new ControlRoomApi({ fetchImpl: async () => new Response("{}") });
   return {
     api,
+    analysisFieldOverlay: new AnalysisFieldOverlayController(),
     bus,
     cameraRegistry: new CameraRegistryController({ api: api.visualization }),
     commandDiagnostics: new CommandDiagnosticsController(),
@@ -130,6 +140,195 @@ describe("selectExplorerNode", () => {
         nodeId: "model:mesh:airbox-quality",
         type: "airbox",
         visualizationTargetId: "airbox",
+      },
+    });
+  });
+
+  it("preserves frequency-domain response point metadata for inspectors", () => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      fieldId: "analysis:frequency-response:frequency-0001",
+      frequencyIndex: 1,
+      id: "results:frequency-response:frequency-points:1",
+      kind: "results.frequency_response.frequency_point",
+      label: "Frequency 1",
+      parentId: "results:frequency-response:frequency-points",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+    };
+
+    selectExplorerNode(kernel, node, "explorer");
+
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "results.frequency_response.frequency_point",
+      nodeId: "results:frequency-response:frequency-points:1",
+      ref: {
+        fieldId: "analysis:frequency-response:frequency-0001",
+        frequencyIndex: 1,
+        kind: "results.frequency_response.frequency_point",
+        nodeId: "results:frequency-response:frequency-points:1",
+        resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+        type: "frequency-domain",
+      },
+    });
+  });
+
+  it("preserves frequency-domain response observable metadata for inspectors", () => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      id: "results:frequency-response:observables:mx",
+      kind: "results.frequency_response.observable",
+      label: "mx",
+      observableId: "mx",
+      parentId: "results:frequency-response:observables",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+    };
+
+    selectExplorerNode(kernel, node, "explorer");
+
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "results.frequency_response.observable",
+      nodeId: "results:frequency-response:observables:mx",
+      ref: {
+        kind: "results.frequency_response.observable",
+        nodeId: "results:frequency-response:observables:mx",
+        observableId: "mx",
+        resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+        type: "frequency-domain",
+      },
+    });
+  });
+
+  it("preserves frequency-domain eigen mode metadata for inspectors and 3D plotting", () => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      branchId: "branch-0",
+      contextCommands: ["analysis.eigen.plot-mode-3d"],
+      fieldId: "analysis:eigen:sample-0000:mode-0002",
+      id: "results:eigen:sample:0:mode:2",
+      kind: "results.eigen.mode",
+      label: "Sample 0 Mode 2",
+      modeIndex: 2,
+      parentId: "results:eigen:modes",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+      sampleIndex: 0,
+    };
+
+    selectExplorerNode(kernel, node, "explorer");
+
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "results.eigen.mode",
+      nodeId: "results:eigen:sample:0:mode:2",
+      ref: {
+        branchId: "branch-0",
+        fieldId: "analysis:eigen:sample-0000:mode-0002",
+        kind: "results.eigen.mode",
+        modeIndex: 2,
+        nodeId: "results:eigen:sample:0:mode:2",
+        resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+        sampleIndex: 0,
+        type: "frequency-domain",
+      },
+    });
+  });
+
+  it("preserves frequency-domain eigen branch metadata for dispersion inspectors", () => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      branchId: "branch-0",
+      calculationMode: "dispersion_modal",
+      id: "results:eigen:branches:branch:branch-0",
+      kind: "results.eigen.branch",
+      label: "acoustic",
+      parentId: "results:eigen:branches",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
+    };
+
+    selectExplorerNode(kernel, node, "explorer");
+
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "results.eigen.branch",
+      nodeId: "results:eigen:branches:branch:branch-0",
+      ref: {
+        branchId: "branch-0",
+        calculationMode: "dispersion_modal",
+        kind: "results.eigen.branch",
+        nodeId: "results:eigen:branches:branch:branch-0",
+        resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
+        type: "frequency-domain",
+      },
+    });
+  });
+
+  it("preserves frequency-domain eigen k-path resource metadata for dispersion inspectors", () => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      id: "results:eigen:k-path",
+      kind: "results.eigen.k_path",
+      label: "k-Path",
+      parentId: "results:frequency-domain:dispersion",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+    };
+
+    selectExplorerNode(kernel, node, "explorer");
+
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "results.eigen.k_path",
+      nodeId: "results:eigen:k-path",
+      ref: {
+        kind: "results.eigen.k_path",
+        nodeId: "results:eigen:k-path",
+        resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+        type: "frequency-domain",
+      },
+    });
+  });
+
+  it("preserves frequency-domain cancel-requested resource metadata for inspectors", () => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      artifactPath: "response/cancel_requested.v1.json",
+      id: "results:frequency-response:cancel-requested",
+      kind: "results.frequency_response.cancel_requested",
+      label: "Cancel Requested",
+      parentId: "results:frequency-response",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
+    };
+
+    selectExplorerNode(kernel, node, "explorer");
+
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "results.frequency_response.cancel_requested",
+      nodeId: "results:frequency-response:cancel-requested",
+      ref: {
+        artifactPath: "response/cancel_requested.v1.json",
+        kind: "results.frequency_response.cancel_requested",
+        nodeId: "results:frequency-response:cancel-requested",
+        resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
+        type: "frequency-domain",
+      },
+    });
+  });
+
+  it("preserves periodic-pair resource metadata for frequency-domain PBC inspectors", () => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      id: "resources:mesh:periodic-pairs",
+      kind: "resources.mesh.periodic_pairs",
+      label: "Periodic Pairs",
+      parentId: "resources:analysis:frequency-domain",
+      resourceRef: MESHING_PERIODIC_PAIRS_PATH,
+    };
+
+    selectExplorerNode(kernel, node, "explorer");
+
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "resources.mesh.periodic_pairs",
+      nodeId: "resources:mesh:periodic-pairs",
+      ref: {
+        kind: "resources.mesh.periodic_pairs",
+        nodeId: "resources:mesh:periodic-pairs",
+        resourceRef: MESHING_PERIODIC_PAIRS_PATH,
+        type: "frequency-domain",
       },
     });
   });

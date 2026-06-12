@@ -51,6 +51,58 @@ export const ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH = openApiV2Path(
   "/v2/sessions/current/analysis/frequency-response/magnetic-sweep.v1",
 );
 
+export const ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/frequency-domain/manifest.v1",
+);
+
+export const ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2",
+);
+
+export const ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2",
+);
+
+export const ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion",
+);
+
+export const ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DIAGNOSTICS_V2_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2",
+);
+
+export const ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_FIELD_META_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/{sample_index}/{mode_index}/meta",
+);
+
+export const ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH =
+  openApiV2Path(
+    "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep",
+  );
+
+export const ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/frequency-domain/response/progress.v1",
+);
+
+export const ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH =
+  openApiV2Path(
+    "/v2/sessions/current/analysis/frequency-domain/response/cancel-requested.v1",
+  );
+
+export const ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_DIAGNOSTICS_V1_PATH =
+  openApiV2Path(
+    "/v2/sessions/current/analysis/frequency-domain/response/diagnostics.v1",
+  );
+
+export const ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FREQUENCY_POINT_PATH =
+  openApiV2Path(
+    "/v2/sessions/current/analysis/frequency-domain/response/frequency-points/{frequency_index}",
+  );
+
+export const ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FIELD_META_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/frequency-domain/response/field/{frequency_index}/meta",
+);
+
 export const ANALYSIS_HYSTERESIS_POINTS_PATH = openApiV2Path(
   "/v2/sessions/current/analysis/hysteresis/{stage_id}/points",
 );
@@ -65,6 +117,14 @@ export const ANALYSIS_HYSTERESIS_SATURATION_PATH = openApiV2Path(
 
 export const ANALYSIS_HYSTERESIS_BRANCHES_PATH = openApiV2Path(
   "/v2/sessions/current/analysis/hysteresis/{stage_id}/branches",
+);
+
+export const ANALYSIS_HYSTERESIS_FAMILY_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/hysteresis-family/{stage_id}",
+);
+
+export const ANALYSIS_HYSTERESIS_FAMILY_VARIANT_POINTS_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/hysteresis-family/{stage_id}/variants/{variant_id}/points",
 );
 
 export const ANALYSIS_HYSTERESIS_MINOR_LOOPS_PATH = openApiV2Path(

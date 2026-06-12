@@ -387,6 +387,101 @@ pub struct fullmag_fem_availability_info {
 }
 
 #[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fem_frequency_domain_status {
+    FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OK = 0,
+    FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_UNAVAILABLE = 1,
+    FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_VALIDATION_ERROR = 2,
+    FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OPERATOR_ERROR = 3,
+    FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_SOLVE_ERROR = 4,
+    FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_ARTIFACT_ERROR = 5,
+    FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_INTERRUPTED = 6,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fem_frequency_domain_study_kind {
+    FULLMAG_FEM_FREQUENCY_DOMAIN_STUDY_RESPONSE = 1,
+    FULLMAG_FEM_FREQUENCY_DOMAIN_STUDY_EIGENMODES = 2,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_frequency_domain_availability_request {
+    pub study_kind: fullmag_fem_frequency_domain_study_kind,
+    pub requires_driven_solver: i32,
+    pub requires_modal_solver: i32,
+    pub requires_floquet_boundary: i32,
+    pub requires_nonzero_k_dynamic_demag: i32,
+    pub requires_gpu: i32,
+    pub strict_device: i32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_frequency_domain_availability_info {
+    pub status: fullmag_fem_frequency_domain_status,
+    pub driven_response_available: i32,
+    pub modal_solver_available: i32,
+    pub floquet_modal_available: i32,
+    pub floquet_response_available: i32,
+    pub dynamic_demag_k_available: i32,
+    pub gpu_available: i32,
+    pub status_name: [c_char; 64],
+    pub study_kind_name: [c_char; 64],
+    pub reason: [c_char; 256],
+    pub diagnostics_json: [c_char; 512],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_frequency_domain_sweep_progress {
+    pub total_frequency_points: u64,
+    pub completed_frequency_points: u64,
+    pub written_frequency_point_artifacts: u64,
+    pub current_frequency_hz: f64,
+    pub partial_artifacts_available: i32,
+    pub latest_artifact_manifest_path: [c_char; 256],
+    pub progress_json: [c_char; 512],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_frequency_domain_driven_response_request {
+    pub node_count: u64,
+    pub tangent_dof_count: u64,
+    pub alpha: f64,
+    pub gamma0: f64,
+    pub frequencies_hz: *const f64,
+    pub frequency_count: u64,
+    pub output_directory: *const c_char,
+    pub write_response_fields: i32,
+    pub write_partial_artifacts: i32,
+    pub cancel_requested: Option<unsafe extern "C" fn(user_data: *mut c_void) -> i32>,
+    pub cancel_user_data: *mut c_void,
+    pub tiny_validation_enabled: i32,
+    pub tiny_validation_tangent_dof_count: u64,
+    pub tiny_validation_stiffness_matrix_row_major: *const f64,
+    pub tiny_validation_mass_matrix_row_major: *const f64,
+    pub tiny_validation_stiffness_diagonal: *const f64,
+    pub tiny_validation_mass_diagonal: *const f64,
+    pub tiny_validation_drive_real: *const f64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_frequency_domain_solve_result {
+    pub status: fullmag_fem_frequency_domain_status,
+    pub total_frequency_count: u64,
+    pub completed_frequency_count: u64,
+    pub written_frequency_point_artifacts: u64,
+    pub error_message: *mut c_char,
+    pub diagnostics_json: *mut c_char,
+    pub result_json: *mut c_char,
+    pub artifact_manifest_path: *mut c_char,
+}
+
+#[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct fullmag_fem_transfer_audit {
     pub h2d_bytes: u64,
@@ -462,6 +557,45 @@ pub struct fullmag_fem_backend {
 extern "C" {
     pub fn fullmag_fem_is_available() -> i32;
     pub fn fullmag_fem_get_availability_info(out_info: *mut fullmag_fem_availability_info) -> i32;
+    pub fn fullmag_fem_get_frequency_domain_availability_info(
+        request: *const fullmag_fem_frequency_domain_availability_request,
+        out_info: *mut fullmag_fem_frequency_domain_availability_info,
+    ) -> i32;
+    pub fn fullmag_fem_frequency_domain_initial_sweep_progress(
+        total_frequency_points: u64,
+        out_progress: *mut fullmag_fem_frequency_domain_sweep_progress,
+    ) -> i32;
+    pub fn fullmag_fem_frequency_domain_interrupted_sweep_progress(
+        total_frequency_points: u64,
+        completed_frequency_points: u64,
+        written_frequency_point_artifacts: u64,
+        current_frequency_hz: f64,
+        latest_artifact_manifest_path: *const c_char,
+        out_progress: *mut fullmag_fem_frequency_domain_sweep_progress,
+    ) -> i32;
+    pub fn fullmag_fem_frequency_domain_cancelling_sweep_progress(
+        total_frequency_points: u64,
+        completed_frequency_points: u64,
+        written_frequency_point_artifacts: u64,
+        current_frequency_hz: f64,
+        latest_artifact_manifest_path: *const c_char,
+        out_progress: *mut fullmag_fem_frequency_domain_sweep_progress,
+    ) -> i32;
+    pub fn fullmag_fem_frequency_domain_completed_sweep_progress(
+        total_frequency_points: u64,
+        completed_frequency_points: u64,
+        written_frequency_point_artifacts: u64,
+        current_frequency_hz: f64,
+        latest_artifact_manifest_path: *const c_char,
+        out_progress: *mut fullmag_fem_frequency_domain_sweep_progress,
+    ) -> i32;
+    pub fn fullmag_fem_frequency_domain_solve_driven_response(
+        request: *const fullmag_fem_frequency_domain_driven_response_request,
+        out_result: *mut fullmag_fem_frequency_domain_solve_result,
+    ) -> i32;
+    pub fn fullmag_fem_frequency_domain_solve_result_release(
+        result: *mut fullmag_fem_frequency_domain_solve_result,
+    );
 
     pub fn fullmag_fem_backend_create(
         plan: *const fullmag_fem_plan_desc,
@@ -696,6 +830,103 @@ mod tests {
         assert_eq!(info.libceed_used_hot_path, 0);
         assert_eq!(info.gpu_memory_free_bytes, 0);
         assert_eq!(info.gpu_memory_total_bytes, 0);
+    }
+
+    #[test]
+    fn frequency_domain_availability_abi_has_status_and_capability_fields() {
+        let request = fullmag_fem_frequency_domain_availability_request {
+            study_kind:
+                fullmag_fem_frequency_domain_study_kind::FULLMAG_FEM_FREQUENCY_DOMAIN_STUDY_RESPONSE,
+            requires_driven_solver: 0,
+            requires_modal_solver: 0,
+            requires_floquet_boundary: 0,
+            requires_nonzero_k_dynamic_demag: 0,
+            requires_gpu: 0,
+            strict_device: 0,
+        };
+        assert_eq!(
+            request.study_kind,
+            fullmag_fem_frequency_domain_study_kind::FULLMAG_FEM_FREQUENCY_DOMAIN_STUDY_RESPONSE
+        );
+        assert_eq!(request.requires_driven_solver, 0);
+        assert_eq!(request.requires_modal_solver, 0);
+        assert_eq!(request.requires_floquet_boundary, 0);
+        assert_eq!(request.requires_nonzero_k_dynamic_demag, 0);
+        assert_eq!(request.requires_gpu, 0);
+        assert_eq!(request.strict_device, 0);
+
+        let info =
+            std::mem::MaybeUninit::<fullmag_fem_frequency_domain_availability_info>::zeroed();
+        let info = unsafe { info.assume_init() };
+        assert_eq!(
+            info.status,
+            fullmag_fem_frequency_domain_status::FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OK
+        );
+        assert_eq!(info.driven_response_available, 0);
+        assert_eq!(info.modal_solver_available, 0);
+        assert_eq!(info.floquet_modal_available, 0);
+        assert_eq!(info.floquet_response_available, 0);
+        assert_eq!(info.dynamic_demag_k_available, 0);
+        assert_eq!(info.gpu_available, 0);
+        assert_eq!(info.status_name[0], 0);
+        assert_eq!(info.study_kind_name[0], 0);
+        assert_eq!(info.reason[0], 0);
+        assert_eq!(info.diagnostics_json[0], 0);
+    }
+
+    #[test]
+    fn frequency_domain_sweep_progress_abi_exposes_partial_artifact_state() {
+        let progress =
+            std::mem::MaybeUninit::<fullmag_fem_frequency_domain_sweep_progress>::zeroed();
+        let progress = unsafe { progress.assume_init() };
+        assert_eq!(progress.total_frequency_points, 0);
+        assert_eq!(progress.completed_frequency_points, 0);
+        assert_eq!(progress.written_frequency_point_artifacts, 0);
+        assert_eq!(progress.current_frequency_hz, 0.0);
+        assert_eq!(progress.partial_artifacts_available, 0);
+        assert_eq!(progress.latest_artifact_manifest_path[0], 0);
+        assert_eq!(progress.progress_json[0], 0);
+    }
+
+    #[test]
+    fn frequency_domain_driven_response_solve_abi_has_owned_result_boundary() {
+        let request =
+            std::mem::MaybeUninit::<fullmag_fem_frequency_domain_driven_response_request>::zeroed();
+        let request = unsafe { request.assume_init() };
+        assert_eq!(request.node_count, 0);
+        assert_eq!(request.tangent_dof_count, 0);
+        assert_eq!(request.alpha, 0.0);
+        assert_eq!(request.gamma0, 0.0);
+        assert!(request.frequencies_hz.is_null());
+        assert_eq!(request.frequency_count, 0);
+        assert!(request.output_directory.is_null());
+        assert_eq!(request.write_response_fields, 0);
+        assert_eq!(request.write_partial_artifacts, 0);
+        assert!(request.cancel_requested.is_none());
+        assert!(request.cancel_user_data.is_null());
+        assert_eq!(request.tiny_validation_enabled, 0);
+        assert_eq!(request.tiny_validation_tangent_dof_count, 0);
+        assert!(request
+            .tiny_validation_stiffness_matrix_row_major
+            .is_null());
+        assert!(request.tiny_validation_mass_matrix_row_major.is_null());
+        assert!(request.tiny_validation_stiffness_diagonal.is_null());
+        assert!(request.tiny_validation_mass_diagonal.is_null());
+        assert!(request.tiny_validation_drive_real.is_null());
+
+        let result = std::mem::MaybeUninit::<fullmag_fem_frequency_domain_solve_result>::zeroed();
+        let result = unsafe { result.assume_init() };
+        assert_eq!(
+            result.status,
+            fullmag_fem_frequency_domain_status::FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OK
+        );
+        assert_eq!(result.total_frequency_count, 0);
+        assert_eq!(result.completed_frequency_count, 0);
+        assert_eq!(result.written_frequency_point_artifacts, 0);
+        assert!(result.error_message.is_null());
+        assert!(result.diagnostics_json.is_null());
+        assert!(result.result_json.is_null());
+        assert!(result.artifact_manifest_path.is_null());
     }
 
     #[test]

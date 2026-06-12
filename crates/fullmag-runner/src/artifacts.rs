@@ -940,6 +940,7 @@ fn periodic_mesh(plan: &fullmag_ir::ExecutionPlanIR) -> Option<&fullmag_ir::Mesh
     match &plan.backend_plan {
         BackendPlanIR::Fem(fem) => Some(&fem.mesh),
         BackendPlanIR::FemEigen(fem) => Some(&fem.mesh),
+        BackendPlanIR::FemFrequencyResponse(fem) => Some(&fem.mesh),
         BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
     }
 }
@@ -1677,6 +1678,17 @@ pub(crate) fn field_layout(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Va
             "n_nodes": fem.mesh.nodes.len(),
             "n_elements": fem.mesh.elements.len(),
             "mode_count": fem.count,
+            "operator": fem.operator,
+        }),
+        BackendPlanIR::FemFrequencyResponse(fem) => serde_json::json!({
+            "backend": "fem_frequency_response",
+            "mesh_name": fem.mesh.mesh_name,
+            "mesh_source": fem.mesh_source,
+            "fe_order": fem.fe_order,
+            "hmax": fem.hmax,
+            "n_nodes": fem.mesh.nodes.len(),
+            "n_elements": fem.mesh.elements.len(),
+            "frequency_count": fem.frequencies_hz.values_hz.len(),
             "operator": fem.operator,
         }),
     }

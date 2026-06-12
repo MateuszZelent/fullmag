@@ -35,6 +35,8 @@ import { HysteresisSettlePipelineInspector } from "./hysteresis/HysteresisSettle
 import { HysteresisSettleTraceInspector } from "./hysteresis/HysteresisSettleTraceInspector";
 import { HysteresisSnapshotsInspector } from "./hysteresis/HysteresisSnapshotsInspector";
 import {
+  activeHysteresisPointSelection,
+  activeHysteresisPointSelectionEquals,
   activeHysteresisSnapshotSelection,
   activeHysteresisSnapshotSelectionEquals,
   type HysteresisInspectorView,
@@ -54,6 +56,10 @@ export function HysteresisStageInspector(props: HysteresisStageInspectorProps) {
   const activeSnapshot = useSelectionSelector(
     (selection) => activeHysteresisSnapshotSelection(selection, stageId),
     { isEqual: activeHysteresisSnapshotSelectionEquals },
+  );
+  const activePoint = useSelectionSelector(
+    (selection) => activeHysteresisPointSelection(selection, stageId),
+    { isEqual: activeHysteresisPointSelectionEquals },
   );
 
   const pointsRes = useHysteresisPointsResource(stageId);
@@ -76,8 +82,8 @@ export function HysteresisStageInspector(props: HysteresisStageInspectorProps) {
   const orientationRes = useHysteresisOrientationResource(stageId);
   const settleTraceRes = useHysteresisSettleTraceResource(
     stageId,
-    activeSnapshot?.pointId,
-    { enabled: activeSnapshot?.pointId != null },
+    activePoint?.pointId,
+    { enabled: activePoint?.pointId != null },
   );
 
   const points = Array.isArray(pointsRes.data) ? pointsRes.data : [];
@@ -145,6 +151,13 @@ export function HysteresisStageInspector(props: HysteresisStageInspectorProps) {
       />
     ),
     snapshots: <HysteresisSnapshotsInspector draft={props.draft} points={points} />,
+    "settle-trace": (
+      <HysteresisSettleTraceInspector
+        activePoint={activePoint}
+        settleTrace={settleTrace}
+        settleTraceStatus={settleTraceRes.status}
+      />
+    ),
   } satisfies Record<Exclude<HysteresisInspectorView, "overview">, ReactElement>;
 
   if (view !== "overview") {
@@ -176,7 +189,7 @@ export function HysteresisStageInspector(props: HysteresisStageInspectorProps) {
         settlePipeline={settlePipeline}
       />
       <HysteresisSettleTraceInspector
-        activeSnapshot={activeSnapshot}
+        activePoint={activePoint}
         settleTrace={settleTrace}
         settleTraceStatus={settleTraceRes.status}
       />

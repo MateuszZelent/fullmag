@@ -38,6 +38,8 @@ import { STUDY_RUNTIME_COMMANDS } from "./runtime/studyRuntimeCommandContributio
 import { SelectionController } from "./selection/SelectionController";
 import type { KernelApi } from "./types";
 import { CameraRegistryController } from "./visualization/CameraRegistryController";
+import { AnalysisFieldOverlayController } from "./visualization/AnalysisFieldOverlayController";
+import { ANALYSIS_FIELD_OVERLAY_COMMANDS } from "./visualization/analysisFieldOverlayCommandContributions";
 import { ObjectVisualizationController } from "./visualization/ObjectVisualizationController";
 import { VisualizationRegistrySyncController } from "./visualization/VisualizationRegistrySyncController";
 import { VISUALIZATION_TARGET_COMMANDS } from "./visualization/visualizationCommandContributions";
@@ -68,6 +70,7 @@ function createKernel(): KernelApi {
   const cameraRegistry = new CameraRegistryController({
     api: api.visualization,
   });
+  const analysisFieldOverlay = new AnalysisFieldOverlayController();
   const visualization = new ObjectVisualizationController();
   const visualizationSync = new VisualizationRegistrySyncController({
     api: api.visualization,
@@ -98,6 +101,9 @@ function createKernel(): KernelApi {
   for (const cmd of VISUALIZATION_TARGET_COMMANDS) {
     commands.register(cmd);
   }
+  for (const cmd of ANALYSIS_FIELD_OVERLAY_COMMANDS) {
+    commands.register(cmd);
+  }
 
   // Register modules and auto-register their contributed commands.
   for (const manifest of resolveControlRoomModules()) {
@@ -111,6 +117,7 @@ function createKernel(): KernelApi {
 
   return {
     api,
+    analysisFieldOverlay,
     bus,
     cameraRegistry,
     commandDiagnostics,
@@ -222,6 +229,16 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
         disableRealtime?: boolean;
       };
       __FULLMAG_CONTROL_ROOM_AUDIT__?: {
+        loadHysteresisReplaySnapshot: (input: {
+          fieldVal?: number | null;
+          fieldRevision?: string | number | null;
+          mVal?: number | null;
+          measurementAxis?: string | null;
+          meshIdentity?: string | null;
+          pointId: number;
+          snapshotId: string;
+          stageId: string;
+        }) => void;
         setGlobalQuantity: (quantityId: string) => Promise<void>;
       };
     };
@@ -230,6 +247,51 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
     }
 
     const auditApi = {
+      loadHysteresisReplaySnapshot: (input: {
+        fieldVal?: number | null;
+        fieldRevision?: string | number | null;
+        mVal?: number | null;
+        measurementAxis?: string | null;
+        meshIdentity?: string | null;
+        pointId: number;
+        snapshotId: string;
+        stageId: string;
+      }) => {
+        const fieldVal = input.fieldVal ?? input.pointId;
+        const mVal = input.mVal ?? 0;
+        kernel.selection.set(
+          {
+            kind: "analysis.chart-point",
+            label: `Point ${input.pointId} (${fieldVal} mT)`,
+            nodeId: `analysis:hysteresis:${input.stageId}:point:${input.pointId}`,
+            objectId: null,
+            ref: {
+              chartId: `hysteresis:${input.stageId}`,
+              fieldRevision: input.fieldRevision ?? null,
+              kind: "analysis.chart-point",
+              measurementAxis: input.measurementAxis ?? null,
+              meshIdentity: input.meshIdentity ?? null,
+              nodeId: `analysis:hysteresis:${input.stageId}:point:${input.pointId}`,
+              pointId: input.pointId,
+              quantity: "m",
+              quantityId: "m",
+              rowIndex: input.pointId,
+              seriesId: `hysteresis:${input.stageId}:m`,
+              snapshotId: input.snapshotId,
+              stageId: input.stageId,
+              tableId: `hysteresis:${input.stageId}`,
+              targetId: `hysteresis-step:${input.stageId}:${input.pointId}`,
+              targetKind: "hysteresis-step",
+              type: "analysis-chart-point",
+              x: fieldVal,
+              y: mVal,
+            },
+          },
+          "analysis-plots",
+        );
+        kernel.layout.setActiveViewportMainModule("viewport-3d");
+        kernel.layout.setFocusedSlot("viewport-main");
+      },
       setGlobalQuantity: async (quantityId: string) => {
         const activeQuantityId = normalizeQuantityIdOrDefault(quantityId);
         kernel.visualizationSync.queuePatch({

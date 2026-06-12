@@ -1326,6 +1326,9 @@ pub(crate) fn resolve_with_registry(
             BackendPlanIR::FemEigen(_) => {
                 resolve_fem_engine_with_registry(problem, registry, explicit_selection, None)
             }
+            BackendPlanIR::FemFrequencyResponse(_) => {
+                resolve_fem_engine_with_registry(problem, registry, explicit_selection, None)
+            }
         },
         None => match &plan.backend_plan {
             BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => {
@@ -1359,6 +1362,21 @@ pub(crate) fn resolve_with_registry(
                 })
             }
             BackendPlanIR::FemEigen(_) => {
+                let resolution = resolve_fem_engine_with_trail(problem)?;
+                Ok(DispatchEngineResolution {
+                    engine: DispatchEngine::Fem(resolution.engine),
+                    fallback: resolution.fallback,
+                    runtime_family: None,
+                    worker: None,
+                    resolved_backend: "fem".to_string(),
+                    resolved_device: match resolution.engine {
+                        FemEngine::NativeGpu => "gpu".to_string(),
+                        FemEngine::CpuNative => "cpu".to_string(),
+                    },
+                    resolved_precision: runtime_precision(problem).to_string(),
+                })
+            }
+            BackendPlanIR::FemFrequencyResponse(_) => {
                 let resolution = resolve_fem_engine_with_trail(problem)?;
                 Ok(DispatchEngineResolution {
                     engine: DispatchEngine::Fem(resolution.engine),

@@ -233,7 +233,9 @@ Current state:
 
 Target chart:
 
-- x-axis: `path_s`.
+- x-axis: `path_s` for dispersion only. Do not use `path_s` as the x-axis for
+  single-sample spectra; spectra use mode index or frequency depending on the
+  chart type.
 - y-axis: frequency.
 - series: one per branch when branch tracking exists.
 - fallback: scatter per raw mode when branch tracking is absent.
@@ -257,6 +259,35 @@ Tests:
 - handles missing branches with raw scatter,
 - maps click to sample/mode selection,
 - displays path labels.
+
+## Frequency Response Chart Version Strategy
+
+Current state:
+
+- Existing response resources may expose `response/magnetic_response_sweep.v1.json`.
+- New response artifacts can add `response/magnetic_response_sweep.v2.json` when
+  field payload links, per-frequency metadata, or provenance require a schema
+  bump.
+
+Target behavior:
+
+- Build the first chart model against the v1 shape because it is the existing
+  compatibility artifact.
+- Prefer v2 when the v2 response artifact exists and fall back to v1 only as a
+  degraded compatibility path.
+- The resource hook must expose the selected artifact version to the chart
+  model.
+- The chart must render a provenance/version badge: `response.v2` for the
+  preferred artifact or `response.v1 compatibility` for fallback.
+- If v2 exists but fails validation, do not silently fall back to v1 without a
+  warning diagnostic; otherwise bad v2 writers would be hidden.
+
+Tests:
+
+- v2 artifact is preferred when both v1 and v2 exist.
+- v1 fallback works when v2 is absent.
+- invalid v2 produces a visible degraded-state diagnostic.
+- chart provenance badge reports the data source version.
 
 ## Branch Table And Branch Detail
 
@@ -337,7 +368,16 @@ Tests:
 
 ## Cross-Module Selection Types
 
-Add shared selection refs:
+Add shared selection refs. In the current Control Room implementation,
+`apps/control-room/src/kernel/selection/selectionTypes.ts` already represents
+frequency-domain selections as a flat `SelectionRef` branch with
+`type: "frequency-domain"` and optional fields such as `analysisRunId`,
+`analysisStageId`, `sampleIndex`, `modeIndex`, `branchId`, `frequencyIndex`,
+`observableId`, `fieldId`, `resourceRef`, and `calculationMode`. Prefer
+extending and testing that existing branch over introducing a parallel
+selection hierarchy.
+
+Target semantic selection payloads:
 
 ```ts
 type FrequencyDomainSelectionRef =
@@ -375,6 +415,14 @@ Rules:
 - Selection refs do not contain large data.
 - Selection refs carry enough IDs to refetch metadata.
 - `moduleSource` records who initiated selection.
+- Chart model helpers may expose typed builder functions for eigen modes,
+  dispersion points, and response frequency points, but their output must lower
+  to the canonical flat `SelectionRef` branch used by Explorer selection.
+- Response point selections must include `frequencyIndex`, `fieldId` when
+  available, `resourceRef` or artifact path, `observableId` when the chart
+  series represents a specific observable, and `calculationMode`.
+- Dispersion point selections must include `sampleIndex`, `modeIndex`,
+  `branchId`, `fieldId` when available, and `calculationMode`.
 
 ## 3D Mode Visualization Target
 
@@ -399,10 +447,12 @@ type AnalysisModeOverlayState = {
   rawModeIndex: number | null;
   branchId: string | null;
   frequencyIndex: number | null;
-  view: "real" | "imag" | "amplitude" | "phase" | "phase_rotated_real";
+  view: "real" | "imag" | "abs" | "amplitude" | "phase" | "phase_rotated_real";
   component: "vector" | "x" | "y" | "z" | "norm";
-  phaseRad: number;
+  visualizationPhaseRad: number;
   animatePhase: boolean;
+  animationRateHz: number;
+  animationStartedAtMs: number | null;
   glyphDensity: number;
   normalizeGlyphs: boolean;
   colorBy: "amplitude" | "phase" | "component" | "none";
@@ -420,9 +470,12 @@ Implementation steps:
 7. Reuse `VectorFieldLayer` where possible.
 8. Add a surface scalar color mode for amplitude if the payload can provide scalar amplitude.
 9. Keep phase animation dirty-driven:
-   - animation updates phase state on a controlled interval,
+   - animation updates `visualizationPhaseRad = (visualizationPhaseRad + 2*pi*animationRateHz*dt) mod 2*pi` for the currently displayed `fieldId`,
+   - animation state lives in the shared visualization overlay resource so Explorer, inspector, chart, and viewport agree on the active mode,
+   - animation may run only for `view=phase_rotated_real` or an explicitly documented animated glyph mode; scalar `phase` view is not animated by pretending the phase data changed,
    - viewport invalidates only while animation is enabled,
-   - stopping animation releases the interval.
+   - stopping animation releases the interval and leaves the last phase visible,
+   - switching mode clears the old resource subscription before starting the new animation.
 10. Ensure switching modes releases previous mode field resource subscriptions.
 
 Tests:
@@ -430,6 +483,12 @@ Tests:
 - command writes analysis overlay state with field ID.
 - viewport builds field-vector query for analysis mode field.
 - changing phase changes resource key or shader uniform according to chosen implementation.
+- play/pause advances only the currently displayed mode phase.
+- reset-to-zero sets only `visualizationPhaseRad` and leaves mode metadata untouched.
+- static real, imaginary, abs/amplitude, and phase display modes remain selectable
+  and do not depend on playback.
+- animation stops on overlay clear and component unmount.
+- switching modes while animation is active does not keep requesting the previous mode-field resource.
 - switching modes releases old resource key.
 - clearing overlay removes layer.
 - browser smoke confirms canvas visible, WebGL context not lost, drawing buffer non-zero, and overlay draw call exists.
@@ -440,9 +499,11 @@ Mode views:
 
 - `real`: real component of complex mode.
 - `imag`: imaginary component.
-- `amplitude`: magnitude of complex vector.
+- `abs`/`amplitude`: magnitude of complex vector.
 - `phase`: phase scalar, shown as scalar coloring where meaningful.
-- `phase_rotated_real`: `Re(delta_m * exp(i phase_rad))`.
+- `phase_rotated_real`: `Re(delta_m * exp(i * visualizationPhaseRad))`.
+- Real, imaginary, abs/amplitude, and phase are static explicit display modes.
+  They remain available even when animation controls are disabled.
 
 Glyph semantics:
 
@@ -455,7 +516,29 @@ Animation semantics:
 
 - Animation is visualization-only.
 - It must not change solver data.
-- It uses the phasor convention from mode metadata.
+- It animates the currently displayed mode by varying `visualizationPhaseRad` in
+  the phase-rotated reconstruction.
+- The reconstruction may consume either `real_imag` modal components or
+  `amplitude_phase` modal components. For `amplitude_phase`, each component is
+  reconstructed as
+  `Re(amplitude * exp(i * (modePhaseRad + visualizationPhaseRad)))`; this is
+  the expected fast path when the inspector already has amplitude and phase
+  maps for the selected mode.
+- The canonical animation surface is the selected `results.eigen.mode`
+  inspector for the mode already plotted in 3D; charts and tables may only
+  route selection into that inspector or dispatch the initial plot command.
+- The rendered time-like sequence is
+  `visible_delta_m(visualizationPhaseRad) = Re(delta_m_complex * exp(i * visualizationPhaseRad))`.
+  The UI phase is a visualization parameter; it is not a physical time-step
+  integrator and it does not imply a driven frequency-response solve.
+- `visualizationPhaseRad` is separate from the physical mode phase contained in
+  the complex eigenvector and separate from phasor/Floquet convention metadata.
+  The inspector must show the convention metadata but must not overwrite it when
+  playback changes the visualization phase.
+- It uses the phasor convention from mode metadata and displays that convention in the inspector.
+- It must expose play, pause, visualization phase slider, rate, and reset-to-zero controls in the selected mode inspector.
+- It must not use a permanent render loop when animation is disabled.
+- It must pause with a visible missing-resource or unsupported-view reason if the current mode-field payload is unavailable.
 - It must display the phase convention in the inspector.
 
 ## Analysis Module Layout
@@ -496,6 +579,8 @@ Viewport:
 
 - No continuous render loop except active phase animation.
 - Phase animation stops on unmount and on overlay clear.
+- Playback invalidates the 3D viewport only for the selected mode overlay and
+  only while the visualization phase is changing.
 - Mode switching releases old buffers.
 - Binary resources use cache revision rules.
 - Large mode payloads must not enter React props as plain arrays if a typed array/resource object is available.
@@ -508,5 +593,6 @@ This layer is complete only when:
 - Chart selections update Explorer/inspector selection.
 - Mode inspector and chart can plot a selected mode in 3D.
 - Response point inspector can plot a response field in 3D when payload exists.
-- 3D overlay supports real, imaginary, amplitude, phase, and phase-rotated views.
+- 3D overlay supports static real, imaginary, amplitude/abs, and phase views,
+  plus animated phase-rotated real playback for a selected mode.
 - Browser smoke proves the 3D overlay renders without WebGL context loss.

@@ -12,6 +12,7 @@ import {
 import type { ECharts, EChartsOption } from "echarts";
 
 import type {
+  HysteresisAngularFamilyResource,
   HysteresisOrientationSchema,
   HysteresisPointSchema,
   HysteresisProgressSchema,
@@ -22,6 +23,7 @@ import type { Selection } from "@/kernel/selection/selectionTypes";
 import type { ModuleId } from "@/kernel/types";
 import {
   useHysteresisBranchesResource,
+  useHysteresisFamilyResource,
   useHysteresisMetricsResource,
   useHysteresisMinorLoopsResource,
   useHysteresisOrientationResource,
@@ -56,7 +58,7 @@ export type YAxisKey =
   | "m_avg_y"
   | "m_avg_z";
 type XAxisUnit = "mT" | "kA/m";
-type ViewMode = "full" | "virgin" | "forward" | "return" | "minor" | "oop-ip-overlay" | "rgb-overlay";
+type ViewMode = "full" | "virgin" | "forward" | "return" | "minor" | "oop-ip-overlay" | "rgb-overlay" | "angular-family";
 type ChartDataPoint = [number, number, number];
 interface HysteresisChartLineSeriesModel {
   branchId: string | null;
@@ -181,7 +183,7 @@ function isChartDataPoint(value: unknown): value is ChartDataPoint {
 }
 
 function isViewMode(value: string): value is ViewMode {
-  return value === "full" || value === "virgin" || value === "forward" || value === "return" || value === "minor" || value === "oop-ip-overlay" || value === "rgb-overlay";
+  return value === "full" || value === "virgin" || value === "forward" || value === "return" || value === "minor" || value === "oop-ip-overlay" || value === "rgb-overlay" || value === "angular-family";
 }
 
 function getPointYValue(p: HysteresisPointSchema, key: YAxisKey): number {
@@ -359,6 +361,25 @@ export function buildHysteresisChartLineSeriesModel(
   }));
 }
 
+export function buildHysteresisAngularFamilyLineSeriesModel(
+  family: HysteresisAngularFamilyResource | null | undefined,
+  yAxisKey: YAxisKey,
+  formatXValue: (fieldValmT: number) => number = (fieldValmT) => fieldValmT,
+): HysteresisChartLineSeriesModel[] {
+  const series = Array.isArray(family?.series) ? family.series : [];
+  return series
+    .filter((entry) => Array.isArray(entry.points) && entry.points.length > 0)
+    .map((entry) => ({
+      branchId: `angular-family:${entry.variant_id}`,
+      data: entry.points.map((p) => [
+        formatXValue(p.field_value_mT),
+        getPointYValue(p, yAxisKey),
+        p.point_id,
+      ]),
+      name: entry.label ? `${entry.label} (${entry.variant_id})` : entry.variant_id,
+    }));
+}
+
 export function getProgressYValue(
   progress: HysteresisProgressSchema | null | undefined,
   key: YAxisKey,
@@ -455,8 +476,18 @@ export function hysteresisTargetMetadataFromOrientation(
       stringifyHysteresisOrientation(orientation.orientation) ??
       stringifyHysteresisDirection(orientation.direction),
     fieldRevision: orientation.revision,
-    measurementAxis: orientation.measurement_axis ?? null,
+    measurementAxis: stringifyHysteresisMeasurementAxis(orientation.measurement_axis),
   };
+}
+
+function stringifyHysteresisMeasurementAxis(value: unknown): string | null {
+  if (value == null) return null;
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
 }
 
 function stringifyHysteresisOrientation(value: unknown): string | null {
@@ -511,6 +542,7 @@ export function HysteresisChart({
 }: HysteresisChartProps) {
   const pointsRes = useHysteresisPointsResource(stageId);
   const branchesRes = useHysteresisBranchesResource(stageId);
+  const familyRes = useHysteresisFamilyResource(stageId);
   const minorLoopsRes = useHysteresisMinorLoopsResource(stageId);
   const metricsRes = useHysteresisMetricsResource(stageId);
   const orientationRes = useHysteresisOrientationResource(stageId);
@@ -526,6 +558,7 @@ export function HysteresisChart({
   const minorLoops = Array.isArray(minorLoopsRes.data)
     ? minorLoopsRes.data
     : EMPTY_HYSTERESIS_MINOR_LOOPS;
+  const angularFamily = familyRes.data;
   const metrics = metricsRes.data;
   const progress = progressRes.data;
   const branchMode = protocolRes.data?.branch_mode ?? null;
@@ -573,6 +606,13 @@ export function HysteresisChart({
   const liveYValue = activePoint ? getPointYValue(activePoint, yAxisKey) : getProgressYValue(progress, yAxisKey);
   const liveSettleLabel = progressSettleLabel(progress);
   const activePointSnapshotId = activePoint?.snapshot_id ?? null;
+  const angularFamilyStatus = useMemo(() => {
+    const series = Array.isArray(angularFamily?.series) ? angularFamily.series : [];
+    if (series.length === 0) return null;
+    const computed = series.filter((entry) => entry.point_count > 0).length;
+    const pending = series.length - computed;
+    return `${computed}/${series.length} angular variants computed${pending > 0 ? `, ${pending} pending` : ""}`;
+  }, [angularFamily]);
   const targetMetadata = useMemo(
     () => hysteresisTargetMetadataFromOrientation(orientationRes.data),
     [orientationRes.data],
@@ -684,16 +724,22 @@ export function HysteresisChart({
       });
 
       const seriesList: Array<Record<string, unknown>> = [];
-      const lineSeries = buildHysteresisChartLineSeriesModel(
-        points,
-        branches,
-        minorLoops,
-        viewMode,
-        yAxisKey,
-        formatXValue,
-        branchMode,
-      );
-      for (const series of lineSeries) {
+      const lineSeries = viewMode === "angular-family"
+        ? buildHysteresisAngularFamilyLineSeriesModel(
+            angularFamily,
+            yAxisKey,
+            formatXValue,
+          )
+        : buildHysteresisChartLineSeriesModel(
+            points,
+            branches,
+            minorLoops,
+            viewMode,
+            yAxisKey,
+            formatXValue,
+            branchMode,
+          );
+      lineSeries.forEach((series, seriesIndex) => {
         if (series.branchId == null) {
           seriesList.push({
             name: series.name,
@@ -705,9 +751,18 @@ export function HysteresisChart({
             lineStyle: { width: 3, color: colors.branchDescending },
             itemStyle: { color: colors.branchDescending },
           });
-          continue;
+          return;
         }
-        const color = series.branchId === "oop-overlay"
+        const angularFamilyColors = [
+          colors.metric,
+          colors.branchAscending,
+          colors.branchDescending,
+          colors.remanence,
+          colors.active,
+        ];
+        const color = series.branchId.startsWith("angular-family:")
+          ? angularFamilyColors[seriesIndex % angularFamilyColors.length]
+          : series.branchId === "oop-overlay"
           ? colors.remanence
           : series.branchId === "mx-overlay"
             ? colors.metric
@@ -728,7 +783,7 @@ export function HysteresisChart({
           lineStyle: { width: 3, color },
           itemStyle: { color },
         });
-      }
+      });
 
       const markPoints: Array<Record<string, unknown>> = [];
       const markLines: Array<Record<string, unknown>> = [];
@@ -831,6 +886,8 @@ export function HysteresisChart({
             ? "Magnetization M/Ms (oop / ip)"
             : viewMode === "rgb-overlay"
               ? "Magnetization M/Ms (x / y / z)"
+              : viewMode === "angular-family"
+                ? `Magnetization M/Ms (${yAxisKey.replace("m_", "")}) by angle`
             : `Magnetization M/Ms (${yAxisKey.replace("m_", "")})`,
           splitLine: { show: true, lineStyle: { color: colors.border } },
           axisLabel: { color: colors.axis },
@@ -886,7 +943,7 @@ export function HysteresisChart({
       resizeObserver.disconnect();
       chartRef.current?.dispose();
     };
-  }, [activePoint, branchMode, branches, formatXValue, liveFieldValue, liveYValue, metrics, minorLoops, points, progress, selectPoint, viewMode, xAxisUnit, yAxisKey]);
+  }, [activePoint, angularFamily, branchMode, branches, formatXValue, liveFieldValue, liveYValue, metrics, minorLoops, points, progress, selectPoint, viewMode, xAxisUnit, yAxisKey]);
 
   return (
     <div
@@ -934,8 +991,15 @@ export function HysteresisChart({
             <option value="minor">Minor Loops</option>
             <option value="oop-ip-overlay">OOP/IP Overlay</option>
             <option value="rgb-overlay">RGB Components</option>
+            <option value="angular-family">Angular Family</option>
           </select>
         </div>
+
+        {viewMode === "angular-family" && angularFamilyStatus ? (
+          <div className="fm-hysteresis-status">
+            {angularFamilyStatus}
+          </div>
+        ) : null}
 
         <div className="fm-hysteresis-player-controls">
           <Button

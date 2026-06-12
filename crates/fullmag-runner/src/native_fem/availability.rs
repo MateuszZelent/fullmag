@@ -30,6 +30,242 @@ pub(crate) struct GpuAvailability {
     pub reason_gpu: String,
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FrequencyDomainStudyKind {
+    FrequencyResponse,
+    Eigenmodes,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub(crate) struct FrequencyDomainAvailabilityRequest {
+    pub study_kind: FrequencyDomainStudyKind,
+    pub requires_driven_solver: bool,
+    pub requires_modal_solver: bool,
+    pub requires_floquet_boundary: bool,
+    pub requires_nonzero_k_dynamic_demag: bool,
+    pub requires_gpu: bool,
+    pub strict_device: bool,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub(crate) struct FrequencyDomainAvailability {
+    pub status: String,
+    pub study_kind: String,
+    pub driven_response_available: bool,
+    pub modal_solver_available: bool,
+    pub floquet_modal_available: bool,
+    pub floquet_response_available: bool,
+    pub dynamic_demag_k_available: bool,
+    pub gpu_available: bool,
+    pub reason: String,
+    pub diagnostics_json: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub(crate) struct FrequencyDomainSweepProgress {
+    pub total_frequency_points: u64,
+    pub completed_frequency_points: u64,
+    pub written_frequency_point_artifacts: u64,
+    pub current_frequency_hz: f64,
+    pub partial_artifacts_available: bool,
+    pub latest_artifact_manifest_path: String,
+    pub progress_json: String,
+}
+
+impl FrequencyDomainSweepProgress {
+    #[allow(dead_code)]
+    pub(crate) fn not_started(total_frequency_points: u64) -> Self {
+        #[cfg(feature = "fem-gpu")]
+        {
+            let mut progress = empty_ffi_sweep_progress();
+            let rc = unsafe {
+                ffi::fullmag_fem_frequency_domain_initial_sweep_progress(
+                    total_frequency_points,
+                    &mut progress,
+                )
+            };
+            if rc == ffi::FULLMAG_FEM_OK {
+                return Self::from_ffi(progress);
+            }
+        }
+
+        Self::not_started_fallback(total_frequency_points)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn interrupted(
+        total_frequency_points: u64,
+        completed_frequency_points: u64,
+        written_frequency_point_artifacts: u64,
+        current_frequency_hz: f64,
+        latest_artifact_manifest_path: &str,
+    ) -> Self {
+        #[cfg(feature = "fem-gpu")]
+        {
+            let mut progress = empty_ffi_sweep_progress();
+            let manifest_path = std::ffi::CString::new(latest_artifact_manifest_path)
+                .unwrap_or_else(|_| std::ffi::CString::new("").expect("empty CString is valid"));
+            let rc = unsafe {
+                ffi::fullmag_fem_frequency_domain_interrupted_sweep_progress(
+                    total_frequency_points,
+                    completed_frequency_points,
+                    written_frequency_point_artifacts,
+                    current_frequency_hz,
+                    manifest_path.as_ptr(),
+                    &mut progress,
+                )
+            };
+            if rc == ffi::FULLMAG_FEM_OK {
+                return Self::from_ffi(progress);
+            }
+        }
+
+        let partial_artifacts_available =
+            completed_frequency_points > 0 || written_frequency_point_artifacts > 0;
+        Self {
+            total_frequency_points,
+            completed_frequency_points,
+            written_frequency_point_artifacts,
+            current_frequency_hz,
+            partial_artifacts_available,
+            latest_artifact_manifest_path: latest_artifact_manifest_path.to_string(),
+            progress_json: format!(
+                "{{\"schema_version\":\"frequency_domain_sweep_progress.v1\",\"state\":\"interrupted\",\"partial_artifacts_available\":{partial_artifacts_available}}}"
+            ),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn cancelling(
+        total_frequency_points: u64,
+        completed_frequency_points: u64,
+        written_frequency_point_artifacts: u64,
+        current_frequency_hz: f64,
+        latest_artifact_manifest_path: &str,
+    ) -> Self {
+        #[cfg(feature = "fem-gpu")]
+        {
+            let mut progress = empty_ffi_sweep_progress();
+            let manifest_path = std::ffi::CString::new(latest_artifact_manifest_path)
+                .unwrap_or_else(|_| std::ffi::CString::new("").expect("empty CString is valid"));
+            let rc = unsafe {
+                ffi::fullmag_fem_frequency_domain_cancelling_sweep_progress(
+                    total_frequency_points,
+                    completed_frequency_points,
+                    written_frequency_point_artifacts,
+                    current_frequency_hz,
+                    manifest_path.as_ptr(),
+                    &mut progress,
+                )
+            };
+            if rc == ffi::FULLMAG_FEM_OK {
+                return Self::from_ffi(progress);
+            }
+        }
+
+        let partial_artifacts_available =
+            completed_frequency_points > 0 || written_frequency_point_artifacts > 0;
+        Self {
+            total_frequency_points,
+            completed_frequency_points,
+            written_frequency_point_artifacts,
+            current_frequency_hz,
+            partial_artifacts_available,
+            latest_artifact_manifest_path: latest_artifact_manifest_path.to_string(),
+            progress_json: format!(
+                "{{\"schema_version\":\"frequency_domain_sweep_progress.v1\",\"state\":\"cancel_requested\",\"partial_artifacts_available\":{partial_artifacts_available}}}"
+            ),
+        }
+    }
+
+    pub(crate) fn completed(
+        total_frequency_points: u64,
+        completed_frequency_points: u64,
+        written_frequency_point_artifacts: u64,
+        current_frequency_hz: f64,
+        latest_artifact_manifest_path: &str,
+    ) -> Self {
+        #[cfg(feature = "fem-gpu")]
+        {
+            let mut progress = empty_ffi_sweep_progress();
+            let manifest_path = std::ffi::CString::new(latest_artifact_manifest_path)
+                .unwrap_or_else(|_| std::ffi::CString::new("").expect("empty CString is valid"));
+            let rc = unsafe {
+                ffi::fullmag_fem_frequency_domain_completed_sweep_progress(
+                    total_frequency_points,
+                    completed_frequency_points,
+                    written_frequency_point_artifacts,
+                    current_frequency_hz,
+                    manifest_path.as_ptr(),
+                    &mut progress,
+                )
+            };
+            if rc == ffi::FULLMAG_FEM_OK {
+                return Self::from_ffi(progress);
+            }
+        }
+
+        Self {
+            total_frequency_points,
+            completed_frequency_points,
+            written_frequency_point_artifacts,
+            current_frequency_hz,
+            partial_artifacts_available:
+                completed_frequency_points > 0 || written_frequency_point_artifacts > 0,
+            latest_artifact_manifest_path: latest_artifact_manifest_path.to_string(),
+            progress_json:
+                "{\"schema_version\":\"frequency_domain_sweep_progress.v1\",\"state\":\"completed\",\"partial_artifacts_available\":true}"
+                    .to_string(),
+        }
+    }
+
+    fn not_started_fallback(total_frequency_points: u64) -> Self {
+        Self {
+            total_frequency_points,
+            completed_frequency_points: 0,
+            written_frequency_point_artifacts: 0,
+            current_frequency_hz: 0.0,
+            partial_artifacts_available: false,
+            latest_artifact_manifest_path: String::new(),
+            progress_json: format!(
+                "{{\"schema_version\":\"frequency_domain_sweep_progress.v1\",\"state\":\"not_started\",\"total_frequency_points\":{total_frequency_points},\"partial_artifacts_available\":false}}"
+            ),
+        }
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    fn from_ffi(progress: ffi::fullmag_fem_frequency_domain_sweep_progress) -> Self {
+        Self {
+            total_frequency_points: progress.total_frequency_points,
+            completed_frequency_points: progress.completed_frequency_points,
+            written_frequency_point_artifacts: progress.written_frequency_point_artifacts,
+            current_frequency_hz: progress.current_frequency_hz,
+            partial_artifacts_available: progress.partial_artifacts_available == 1,
+            latest_artifact_manifest_path: c_char_array_to_string(
+                &progress.latest_artifact_manifest_path,
+            ),
+            progress_json: c_char_array_to_string(&progress.progress_json),
+        }
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn empty_ffi_sweep_progress() -> ffi::fullmag_fem_frequency_domain_sweep_progress {
+    ffi::fullmag_fem_frequency_domain_sweep_progress {
+        total_frequency_points: 0,
+        completed_frequency_points: 0,
+        written_frequency_point_artifacts: 0,
+        current_frequency_hz: 0.0,
+        partial_artifacts_available: 0,
+        latest_artifact_manifest_path: [0; 256],
+        progress_json: [0; 512],
+    }
+}
+
 pub(crate) fn is_gpu_available() -> bool {
     native_availability().native_fem_gpu_available
 }
@@ -153,6 +389,110 @@ pub(crate) fn native_availability() -> GpuAvailability {
             reason_gpu: "fullmag-runner was built without the fem-gpu feature".to_string(),
         }
     }
+}
+
+#[allow(dead_code)]
+pub(crate) fn native_frequency_domain_availability(
+    request: FrequencyDomainAvailabilityRequest,
+) -> FrequencyDomainAvailability {
+    #[cfg(feature = "fem-gpu")]
+    {
+        let ffi_request = ffi::fullmag_fem_frequency_domain_availability_request {
+            study_kind: match request.study_kind {
+                FrequencyDomainStudyKind::FrequencyResponse => {
+                    ffi::fullmag_fem_frequency_domain_study_kind::FULLMAG_FEM_FREQUENCY_DOMAIN_STUDY_RESPONSE
+                }
+                FrequencyDomainStudyKind::Eigenmodes => {
+                    ffi::fullmag_fem_frequency_domain_study_kind::FULLMAG_FEM_FREQUENCY_DOMAIN_STUDY_EIGENMODES
+                }
+            },
+            requires_driven_solver: request.requires_driven_solver as i32,
+            requires_modal_solver: request.requires_modal_solver as i32,
+            requires_floquet_boundary: request.requires_floquet_boundary as i32,
+            requires_nonzero_k_dynamic_demag: request.requires_nonzero_k_dynamic_demag as i32,
+            requires_gpu: request.requires_gpu as i32,
+            strict_device: request.strict_device as i32,
+        };
+        let mut info = ffi::fullmag_fem_frequency_domain_availability_info {
+            status:
+                ffi::fullmag_fem_frequency_domain_status::FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OK,
+            driven_response_available: 0,
+            modal_solver_available: 0,
+            floquet_modal_available: 0,
+            floquet_response_available: 0,
+            dynamic_demag_k_available: 0,
+            gpu_available: 0,
+            status_name: [0; 64],
+            study_kind_name: [0; 64],
+            reason: [0; 256],
+            diagnostics_json: [0; 512],
+        };
+        let rc = unsafe {
+            ffi::fullmag_fem_get_frequency_domain_availability_info(&ffi_request, &mut info)
+        };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return frequency_domain_unavailable(
+                study_kind_label(request.study_kind),
+                last_global_error_or(
+                    "fullmag_fem_get_frequency_domain_availability_info failed without an error message",
+                ),
+            );
+        }
+
+        FrequencyDomainAvailability {
+            status: c_char_array_to_string(&info.status_name),
+            study_kind: c_char_array_to_string(&info.study_kind_name),
+            driven_response_available: info.driven_response_available == 1,
+            modal_solver_available: info.modal_solver_available == 1,
+            floquet_modal_available: info.floquet_modal_available == 1,
+            floquet_response_available: info.floquet_response_available == 1,
+            dynamic_demag_k_available: info.dynamic_demag_k_available == 1,
+            gpu_available: info.gpu_available == 1,
+            reason: c_char_array_to_string(&info.reason),
+            diagnostics_json: c_char_array_to_string(&info.diagnostics_json),
+        }
+    }
+    #[cfg(not(feature = "fem-gpu"))]
+    {
+        frequency_domain_unavailable(
+            study_kind_label(request.study_kind),
+            "fullmag-runner was built without the fem-gpu feature".to_string(),
+        )
+    }
+}
+
+#[allow(dead_code)]
+fn frequency_domain_unavailable(
+    study_kind: &'static str,
+    reason: String,
+) -> FrequencyDomainAvailability {
+    FrequencyDomainAvailability {
+        status: "unavailable".to_string(),
+        study_kind: study_kind.to_string(),
+        driven_response_available: false,
+        modal_solver_available: false,
+        floquet_modal_available: false,
+        floquet_response_available: false,
+        dynamic_demag_k_available: false,
+        gpu_available: false,
+        reason,
+        diagnostics_json: "{}".to_string(),
+    }
+}
+
+#[allow(dead_code)]
+fn study_kind_label(study_kind: FrequencyDomainStudyKind) -> &'static str {
+    match study_kind {
+        FrequencyDomainStudyKind::FrequencyResponse => "frequency_response",
+        FrequencyDomainStudyKind::Eigenmodes => "eigenmodes",
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn c_char_array_to_string<const N: usize>(chars: &[std::os::raw::c_char; N]) -> String {
+    unsafe { CStr::from_ptr(chars.as_ptr()) }
+        .to_string_lossy()
+        .to_string()
 }
 
 #[cfg(feature = "fem-gpu")]

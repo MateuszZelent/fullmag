@@ -2,6 +2,16 @@
 
 This file orders the work so backend contracts land before UI surfaces that depend on them.
 
+Stage ordering note:
+
+- Stage 4 keeps driven response before the modal production upgrade because the
+  missing product feature is the direct harmonic `FrequencyResponse` solver.
+- Stage 5 may be pulled earlier as a risk-reduction PR if the team needs a
+  faster UI feedback loop on already-working modal artifacts, but that must not
+  rename modal eigen/dispersion work as the driven frequency-domain solver.
+- If Stage 5 moves before Stage 4, all capability flags and UI labels must still
+  say that driven `frequency_response` remains unavailable until Stage 4 lands.
+
 ## Stage 0 - Freeze Current Facts
 
 Goal:
@@ -189,6 +199,26 @@ Verification:
 - Managed recipe `just verify-fem-eigen-runtime`.
 - API tests for generated modal artifacts.
 
+Runner test migration:
+
+- Keep `crates/fullmag-runner/src/fem_eigen.rs` and
+  `crates/fullmag-runner/tests/physics_validation.rs` as the reference modal
+  oracle while the native modal backend is qualified.
+- Add native modal tests beside the backend and compare them against the runner
+  reference on small deterministic meshes.
+- Do not delete or weaken runner reference tests until equivalent native CPU
+  production, native/reference parity, and artifact/API gates exist.
+- Mark modal tests by lane in names or fixtures:
+  `reference_modal_runner`, `native_modal_cpu`,
+  `native_modal_gpu_reference`.
+- Keep the current runner-side artifact tests for `eigen/spectrum.v2.json`,
+  `eigen/branches.v2.json`, `eigen/dispersion.csv`, mode metadata, damping
+  metadata, and Floquet diagnostics until native artifacts prove field-for-field
+  compatibility.
+- New native modal tests must not replace the runner tests by deletion in the
+  same PR; first add parity tests, then demote duplicate runner assertions only
+  after a separate review confirms equivalent coverage.
+
 Exit criteria:
 
 - Supported FEM modal runs produce manifest, spectrum, modes, branches/dispersion when requested, diagnostics, provenance, and optional linewidth/absorption postprocessing.
@@ -345,6 +375,10 @@ Implementation:
 7. Add complex view controls.
 8. Add phase animation.
 9. Add colorbar handling for amplitude and phase.
+10. Keep animation controls in the selected `results.eigen.mode` inspector for
+    the concrete mode displayed in the 3D overlay.
+11. Keep static real, imaginary, abs/amplitude, and phase views explicit and
+    separate from animated phase-rotated real playback.
 
 Verification:
 
@@ -352,6 +386,14 @@ Verification:
 - Viewport resource key tests.
 - Scene model tests.
 - Resource release tests.
+- Selected mode inspector tests for phase slider, play, pause, rate control, reset-to-zero, unsupported-view pause, missing-resource pause, overlay clear, and unmount cleanup.
+- Selected mode inspector tests prove static real, imaginary, abs/amplitude, and
+  phase views remain selectable when playback is disabled.
+- Animation tests prove that only `visualizationPhaseRad` in visualization state
+  changes; solver artifacts, physical mode phase in the complex eigenvector, and
+  mode metadata remain unchanged.
+- Viewport tests prove playback invalidates only the selected mode overlay while
+  running and stops invalidating when paused, reset, cleared, or unmounted.
 - Browser smoke:
   - canvas visible,
   - WebGL context not lost,
@@ -483,8 +525,10 @@ Migration rules:
 
 Verification:
 
-- Existing runner tests pass before and after native modal work.
-- Native modal smoke tests pass in the managed FEM container.
+- Existing runner tests pass before and after native modal work; they remain the
+  reference modal oracle until the native solver has equivalent parity gates.
+- Native modal smoke tests pass in the managed FEM container through a
+  repo-owned `just` recipe.
 - Cross-lane parity test records reference versus native residuals and frequency deltas.
 
 ## Global Verification Matrix

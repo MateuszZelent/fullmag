@@ -1,0 +1,673 @@
+import type { AnalysisChartResourceRef } from "./chartCursorPoint";
+import {
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+} from "@/kernel/api/apiPaths";
+import type { SelectionRef } from "@/kernel/selection/selectionTypes";
+
+type ResourceStatus = "idle" | "loading" | "ready" | "stale" | "error";
+export type FrequencyDomainCalculationMode =
+  | "dispersion_modal"
+  | "fmr_modal"
+  | "fmr_response"
+  | "free_modes"
+  | "response_map";
+
+export interface FrequencyDomainChartRoute {
+  mode: FrequencyDomainCalculationMode;
+  primaryChart:
+    | "dispersion"
+    | "modal-spectrum"
+    | "response-map"
+    | "response-sweep";
+  supportingCharts: string[];
+  status: "available" | "unavailable";
+  unavailableReason: string | null;
+}
+
+export interface FrequencyDomainJsonArtifactLike {
+  artifact_path?: string | null;
+  payload?: unknown;
+  status: string;
+}
+
+export interface FrequencyDomainTextArtifactLike {
+  status: string;
+  text?: string | null;
+}
+
+const FREQUENCY_DOMAIN_EIGEN_SPECTRUM_RESOURCE_KEY =
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH;
+const FREQUENCY_DOMAIN_EIGEN_DISPERSION_RESOURCE_KEY =
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH;
+const FREQUENCY_DOMAIN_RESPONSE_SWEEP_RESOURCE_KEY =
+  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH;
+
+export interface FrequencyDomainChartBuildResult<TPoint> {
+  dataSourceVersion: "unknown" | "response.v1" | "response.v2";
+  diagnostics: string[];
+  droppedPointCount: number;
+  points: TPoint[];
+  series: FrequencyDomainChartSeries[];
+}
+
+export interface FrequencyDomainChartPoint {
+  rowIndex: number;
+  x: number;
+  y: number;
+}
+
+export interface FrequencyDomainChartSeries {
+  id: string;
+  label: string;
+  points: readonly FrequencyDomainChartPoint[];
+  quantity: string;
+  source: AnalysisChartResourceRef;
+  status: ResourceStatus;
+  unit: string;
+  xUnit: string;
+}
+
+export interface EigenSpectrumPoint {
+  branchId: string | null;
+  dampingRateHz: number | null;
+  frequencyHz: number;
+  imaginaryFrequencyHz: number | null;
+  modeFieldId: string | null;
+  rawModeIndex: number;
+  residualNorm: number | null;
+  sampleIndex: number;
+  tangentLeakageMax: number | null;
+}
+
+export interface EigenDispersionPoint {
+  branchId: string | null;
+  frequencyHz: number;
+  overlap: number | null;
+  pathS: number;
+  rawModeIndex: number;
+  residualNorm: number | null;
+  sampleIndex: number;
+}
+
+export interface EigenBranchPoint {
+  frequencyImagHz: number | null;
+  frequencyRealHz: number;
+  overlapPrev: number | null;
+  rawModeIndex: number;
+  sampleIndex: number;
+  trackingConfidence: number | null;
+}
+
+export interface EigenBranch {
+  branchId: string;
+  frequencyMaxHz: number | null;
+  frequencyMinHz: number | null;
+  label: string | null;
+  overlapPrevMin: number | null;
+  points: EigenBranchPoint[];
+  sampleMax: number | null;
+  sampleMin: number | null;
+  trackingConfidenceMin: number | null;
+}
+
+export interface FrequencyResponsePoint {
+  absorbedPowerDensity: number | null;
+  amplitude: number | null;
+  fieldId: string | null;
+  frequencyIndex: number | null;
+  frequencyHz: number;
+  observableId: string;
+  phaseRad: number | null;
+  residualNorm: number | null;
+  susceptibility: readonly number[] | null;
+}
+
+export interface FrequencyDomainSelectionContext {
+  analysisRunId?: string | null;
+  analysisStageId?: string | null;
+  artifactPath?: string | null;
+  calculationMode?: FrequencyDomainCalculationMode | null;
+  nodeId?: string | null;
+  resourceRef?: string | null;
+}
+
+type JsonRecord = Record<string, unknown>;
+
+function record(value: unknown): JsonRecord | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as JsonRecord)
+    : null;
+}
+
+function array(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function finiteNumber(value: unknown): number | null {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function finiteInteger(value: unknown, fallback = 0): number {
+  const parsed = finiteNumber(value);
+  return parsed == null ? fallback : Math.trunc(parsed);
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+export function routeFrequencyDomainCalculationMode(
+  manifestPayload: unknown,
+): FrequencyDomainChartRoute {
+  const manifest = record(manifestPayload);
+  const requested = record(manifest?.requested_execution);
+  const physics = record(manifest?.physics);
+  const artifacts = record(manifest?.artifacts);
+  const rawMode =
+    stringValue(requested?.calculation_mode) ??
+    calculationModeFromStageKind(stringValue(manifest?.stage_kind));
+  const mode = normalizeCalculationMode(rawMode);
+
+  if (mode === "dispersion_modal") {
+    return {
+      mode,
+      primaryChart: "dispersion",
+      supportingCharts: ["branch-table", "selected-mode-overlay"],
+      status: stringValue(artifacts?.dispersion_csv_path) ? "available" : "unavailable",
+      unavailableReason: stringValue(artifacts?.dispersion_csv_path)
+        ? null
+        : "dispersion artifact is missing",
+    };
+  }
+  if (mode === "fmr_response" || mode === "response_map") {
+    const hasSweep =
+      stringValue(artifacts?.response_sweep_v2_path) != null ||
+      stringValue(artifacts?.response_sweep_v1_path) != null;
+    return {
+      mode,
+      primaryChart: mode === "response_map" ? "response-map" : "response-sweep",
+      supportingCharts: ["peak-table", "phase-chart", "response-field-overlay"],
+      status: hasSweep ? "available" : "unavailable",
+      unavailableReason: hasSweep ? null : "response sweep artifact is missing",
+    };
+  }
+  return {
+    mode,
+    primaryChart: "modal-spectrum",
+    supportingCharts:
+      mode === "fmr_modal"
+        ? ["mode-table", "fmr-validation", "selected-mode-overlay"]
+        : ["mode-table", "selected-mode-overlay"],
+    status: stringValue(artifacts?.spectrum_v2_path) ? "available" : "unavailable",
+    unavailableReason: stringValue(artifacts?.spectrum_v2_path)
+      ? null
+      : `${physics?.analysis_family === "magnetic_frequency_domain" ? "modal" : "spectrum"} artifact is missing`,
+  };
+}
+
+function artifactStatus(
+  resource: Pick<FrequencyDomainJsonArtifactLike, "status"> | null | undefined,
+): ResourceStatus {
+  return resource?.status === "ready" ? "ready" : "stale";
+}
+
+function calculationModeFromStageKind(stageKind: string | null): string | null {
+  if (stageKind === "frequency_response") return "fmr_response";
+  if (stageKind === "eigenmodes") return "free_modes";
+  return null;
+}
+
+function normalizeCalculationMode(rawMode: string | null): FrequencyDomainCalculationMode {
+  switch (rawMode) {
+    case "dispersion":
+    case "dispersion_modal":
+      return "dispersion_modal";
+    case "fmr":
+    case "fmr_modal":
+      return "fmr_modal";
+    case "frequency_response":
+    case "fmr_response":
+      return "fmr_response";
+    case "response_map":
+      return "response_map";
+    case "free_modes":
+    default:
+      return "free_modes";
+  }
+}
+
+export function buildEigenSpectrumChartModel(
+  resource: FrequencyDomainJsonArtifactLike | null | undefined,
+): FrequencyDomainChartBuildResult<EigenSpectrumPoint> {
+  const rows = spectrumRows(resource?.payload);
+  const points: EigenSpectrumPoint[] = [];
+  let droppedPointCount = 0;
+
+  rows.forEach((row, rowIndex) => {
+    const item = record(row);
+    const frequencyHz = finiteNumber(
+      item?.frequency_hz ?? item?.frequencyHz ?? item?.f_hz,
+    );
+    if (frequencyHz == null) {
+      droppedPointCount += 1;
+      return;
+    }
+    points.push({
+      branchId: stringValue(item?.branch_id ?? item?.branchId),
+      dampingRateHz: finiteNumber(item?.damping_rate_hz ?? item?.dampingRateHz),
+      frequencyHz,
+      imaginaryFrequencyHz: finiteNumber(
+        item?.imag_frequency_hz ?? item?.imaginary_frequency_hz,
+      ),
+      modeFieldId: stringValue(item?.mode_field_id ?? item?.modeFieldId),
+      rawModeIndex: finiteInteger(
+        item?.raw_mode_index ?? item?.mode_index ?? item?.modeIndex,
+        rowIndex,
+      ),
+      residualNorm: finiteNumber(item?.residual_norm ?? item?.relative_residual_norm),
+      sampleIndex: finiteInteger(item?.sample_index ?? item?.sampleIndex),
+      tangentLeakageMax: finiteNumber(
+        item?.tangent_leakage_max ?? item?.tangentLeakageMax,
+      ),
+    });
+  });
+
+  return {
+    dataSourceVersion: "unknown",
+    diagnostics: [],
+    droppedPointCount,
+    points,
+    series: [
+      {
+        id: "analysis.frequency-domain:eigen:spectrum:frequency",
+        label: "Eigen frequency",
+        points: points.map((point, rowIndex) => ({
+          rowIndex,
+          x: point.rawModeIndex,
+          y: point.frequencyHz / 1e9,
+        })),
+        quantity: "frequency",
+        source: {
+          kind: "analysis.frequency_domain",
+          resourceKey: FREQUENCY_DOMAIN_EIGEN_SPECTRUM_RESOURCE_KEY,
+          tableId: "frequency-domain:eigen-spectrum",
+        },
+        status: artifactStatus(resource),
+        unit: "GHz",
+        xUnit: "mode index",
+      },
+    ],
+  };
+}
+
+export function buildEigenModeSelectionRef(
+  point: EigenSpectrumPoint,
+  context: FrequencyDomainSelectionContext = {},
+): SelectionRef {
+  return cleanFrequencyDomainSelectionRef({
+    analysisRunId: context.analysisRunId ?? undefined,
+    analysisStageId: context.analysisStageId ?? undefined,
+    artifactPath: context.artifactPath ?? undefined,
+    branchId: point.branchId ?? undefined,
+    calculationMode: context.calculationMode ?? "free_modes",
+    fieldId: point.modeFieldId ?? undefined,
+    kind: "results.eigen.mode",
+    modeIndex: point.rawModeIndex,
+    nodeId: context.nodeId ?? frequencyDomainModeNodeId(point),
+    resourceRef: context.resourceRef ?? undefined,
+    sampleIndex: point.sampleIndex,
+    type: "frequency-domain",
+  });
+}
+
+export function buildEigenDispersionChartModel(
+  resource: FrequencyDomainTextArtifactLike | null | undefined,
+): FrequencyDomainChartBuildResult<EigenDispersionPoint> {
+  const parsed = parseDispersionCsv(resource?.text ?? "");
+  const branchIds = new Set(parsed.points.map((point) => point.branchId ?? "raw"));
+  const series = [...branchIds].map((branchId) => ({
+    id: `analysis.frequency-domain:eigen:dispersion:${branchId}`,
+    label: branchId === "raw" ? "Raw modes" : `Branch ${branchId}`,
+    points: parsed.points
+      .map((point, rowIndex) => ({ point, rowIndex }))
+      .filter(({ point }) => (point.branchId ?? "raw") === branchId)
+      .map(({ point, rowIndex }) => ({
+        rowIndex,
+        x: point.pathS,
+        y: point.frequencyHz / 1e9,
+      })),
+    quantity: "frequency",
+    source: {
+      kind: "analysis.frequency_domain" as const,
+      resourceKey: FREQUENCY_DOMAIN_EIGEN_DISPERSION_RESOURCE_KEY,
+      tableId: "frequency-domain:eigen-dispersion",
+    },
+    status: resource?.status === "ready" ? "ready" as const : "stale" as const,
+    unit: "GHz",
+    xUnit: "rad/m",
+  }));
+
+  return {
+    dataSourceVersion: "unknown",
+    diagnostics: [],
+    droppedPointCount: parsed.droppedPointCount,
+    points: parsed.points,
+    series,
+  };
+}
+
+export function buildEigenDispersionPointSelectionRef(
+  point: EigenDispersionPoint,
+  context: FrequencyDomainSelectionContext = {},
+): SelectionRef {
+  return cleanFrequencyDomainSelectionRef({
+    analysisRunId: context.analysisRunId ?? undefined,
+    analysisStageId: context.analysisStageId ?? undefined,
+    artifactPath: context.artifactPath ?? undefined,
+    branchId: point.branchId ?? undefined,
+    calculationMode: context.calculationMode ?? "dispersion_modal",
+    kind: "results.eigen.dispersion",
+    modeIndex: point.rawModeIndex,
+    nodeId: context.nodeId ?? frequencyDomainDispersionPointNodeId(point),
+    resourceRef: context.resourceRef ?? FREQUENCY_DOMAIN_EIGEN_DISPERSION_RESOURCE_KEY,
+    sampleIndex: point.sampleIndex,
+    type: "frequency-domain",
+  });
+}
+
+export function buildEigenBranchesModel(
+  resource: FrequencyDomainJsonArtifactLike | null | undefined,
+): {
+  branches: EigenBranch[];
+  diagnostics: string[];
+  droppedBranchCount: number;
+  droppedPointCount: number;
+} {
+  const root = record(resource?.payload);
+  const branches: EigenBranch[] = [];
+  const diagnostics: string[] = [];
+  let droppedBranchCount = 0;
+  let droppedPointCount = 0;
+
+  array(root?.branches ?? record(root?.payload)?.branches).forEach((entry) => {
+    const branch = record(entry);
+    const branchIdValue = branch?.branch_id ?? branch?.branchId;
+    const branchId =
+      typeof branchIdValue === "number"
+        ? String(branchIdValue)
+        : stringValue(branchIdValue);
+    if (!branchId) {
+      droppedBranchCount += 1;
+      return;
+    }
+    const points: EigenBranchPoint[] = [];
+    array(branch?.points).forEach((pointEntry) => {
+      const point = record(pointEntry);
+      const frequencyRealHz = finiteNumber(
+        point?.frequency_real_hz ?? point?.frequencyRealHz ?? point?.frequency_hz,
+      );
+      if (frequencyRealHz == null) {
+        droppedPointCount += 1;
+        return;
+      }
+      points.push({
+        frequencyImagHz: finiteNumber(
+          point?.frequency_imag_hz ?? point?.frequencyImagHz,
+        ),
+        frequencyRealHz,
+        overlapPrev: finiteNumber(point?.overlap_prev ?? point?.overlapPrev),
+        rawModeIndex: finiteInteger(
+          point?.raw_mode_index ?? point?.rawModeIndex ?? point?.mode_index,
+        ),
+        sampleIndex: finiteInteger(point?.sample_index ?? point?.sampleIndex),
+        trackingConfidence: finiteNumber(
+          point?.tracking_confidence ?? point?.trackingConfidence,
+        ),
+      });
+    });
+
+    branches.push({
+      branchId,
+      frequencyMaxHz: minMax(points.map((point) => point.frequencyRealHz)).max,
+      frequencyMinHz: minMax(points.map((point) => point.frequencyRealHz)).min,
+      label: stringValue(branch?.label),
+      overlapPrevMin: minMax(
+        points
+          .map((point) => point.overlapPrev)
+          .filter((value): value is number => value != null),
+      ).min,
+      points,
+      sampleMax: minMax(points.map((point) => point.sampleIndex)).max,
+      sampleMin: minMax(points.map((point) => point.sampleIndex)).min,
+      trackingConfidenceMin: minMax(
+        points
+          .map((point) => point.trackingConfidence)
+          .filter((value): value is number => value != null),
+      ).min,
+    });
+  });
+
+  if (resource?.status === "ready" && !root) {
+    diagnostics.push("branches.v2 artifact is ready but has no JSON payload");
+  }
+
+  return { branches, diagnostics, droppedBranchCount, droppedPointCount };
+}
+
+export function buildFrequencyResponseChartModel(
+  resource: FrequencyDomainJsonArtifactLike | null | undefined,
+): FrequencyDomainChartBuildResult<FrequencyResponsePoint> {
+  const dataSourceVersion = responseDataSourceVersion(resource);
+  const diagnostics: string[] = [];
+  const rows = responseRows(resource?.payload);
+  const points: FrequencyResponsePoint[] = [];
+  let droppedPointCount = 0;
+
+  if (dataSourceVersion === "response.v2" && resource?.payload && rows.length === 0) {
+    diagnostics.push("response.v2 artifact is present but contains no readable points");
+  }
+
+  rows.forEach((row) => {
+    const item = record(row);
+    const frequencyHz = finiteNumber(item?.frequency_hz ?? item?.frequencyHz);
+    if (frequencyHz == null) {
+      droppedPointCount += 1;
+      return;
+    }
+    const susceptibility = array(item?.susceptibility)
+      .map(finiteNumber)
+      .filter((value): value is number => value != null);
+    points.push({
+      absorbedPowerDensity: finiteNumber(
+        item?.absorbed_power_density ?? item?.absorbedPowerDensity,
+      ),
+      amplitude: finiteNumber(
+        item?.amplitude ?? item?.response_amplitude ?? item?.max_response_amplitude,
+      ),
+      fieldId:
+        stringValue(item?.field_id ?? item?.fieldId) ??
+        responseFieldIdFromIndex(item?.frequency_index ?? item?.frequencyIndex),
+      frequencyIndex: finiteNumber(item?.frequency_index ?? item?.frequencyIndex),
+      frequencyHz,
+      observableId: stringValue(item?.observable_id ?? item?.observableId) ?? "response",
+      phaseRad: finiteNumber(item?.phase_rad ?? item?.phaseRad),
+      residualNorm: finiteNumber(item?.residual_norm ?? item?.relative_residual_norm),
+      susceptibility: susceptibility.length ? susceptibility : null,
+    });
+  });
+
+  return {
+    dataSourceVersion,
+    diagnostics,
+    droppedPointCount,
+    points,
+    series: [
+      responseSeries(points, resource, "amplitude", "Amplitude", "a.u.", (point) =>
+        point.amplitude),
+      responseSeries(points, resource, "phase", "Phase", "rad", (point) =>
+        point.phaseRad),
+      responseSeries(
+        points,
+        resource,
+        "absorbed-power-density",
+        "Absorbed power density",
+        "W/m^3",
+        (point) => point.absorbedPowerDensity,
+      ),
+    ].filter((series) => series.points.length > 0),
+  };
+}
+
+export function buildFrequencyResponsePointSelectionRef(
+  point: FrequencyResponsePoint,
+  context: FrequencyDomainSelectionContext = {},
+): SelectionRef {
+  return cleanFrequencyDomainSelectionRef({
+    analysisRunId: context.analysisRunId ?? undefined,
+    analysisStageId: context.analysisStageId ?? undefined,
+    artifactPath: context.artifactPath ?? undefined,
+    calculationMode: context.calculationMode ?? "fmr_response",
+    fieldId: point.fieldId ?? undefined,
+    frequencyIndex: point.frequencyIndex ?? undefined,
+    kind: "results.frequency_response.frequency_point",
+    nodeId: context.nodeId ?? frequencyDomainResponsePointNodeId(point),
+    observableId: point.observableId,
+    resourceRef: context.resourceRef ?? FREQUENCY_DOMAIN_RESPONSE_SWEEP_RESOURCE_KEY,
+    type: "frequency-domain",
+  });
+}
+
+function cleanFrequencyDomainSelectionRef(
+  ref: Extract<SelectionRef, { type: "frequency-domain" }>,
+): SelectionRef {
+  return Object.fromEntries(
+    Object.entries(ref).filter(([, value]) => value !== undefined),
+  ) as SelectionRef;
+}
+
+function frequencyDomainModeNodeId(point: EigenSpectrumPoint): string {
+  return `results:eigen:sample:${point.sampleIndex}:mode:${point.rawModeIndex}`;
+}
+
+function frequencyDomainDispersionPointNodeId(point: EigenDispersionPoint): string {
+  return `results:eigen:dispersion:sample:${point.sampleIndex}:mode:${point.rawModeIndex}`;
+}
+
+function frequencyDomainResponsePointNodeId(point: FrequencyResponsePoint): string {
+  const index = point.frequencyIndex ?? Math.round(point.frequencyHz);
+  return `results:frequency-response:frequency:${index}`;
+}
+
+function responseFieldIdFromIndex(value: unknown): string | null {
+  const index = finiteNumber(value);
+  return index == null
+    ? null
+    : `analysis:frequency-response:frequency-${Math.trunc(index).toString().padStart(4, "0")}`;
+}
+
+function minMax(values: readonly number[]): { max: number | null; min: number | null } {
+  if (values.length === 0) return { max: null, min: null };
+  return {
+    max: Math.max(...values),
+    min: Math.min(...values),
+  };
+}
+
+function spectrumRows(payload: unknown): unknown[] {
+  const root = record(payload);
+  return array(
+    root?.modes ??
+      root?.spectrum ??
+      root?.rows ??
+      record(root?.payload)?.modes,
+  );
+}
+
+function responseRows(payload: unknown): unknown[] {
+  const root = record(payload);
+  return array(
+    root?.points ??
+      root?.frequencies ??
+      root?.frequency_points ??
+      root?.rows ??
+      record(root?.payload)?.points,
+  );
+}
+
+function responseDataSourceVersion(
+  resource: FrequencyDomainJsonArtifactLike | null | undefined,
+): "unknown" | "response.v1" | "response.v2" {
+  const root = record(resource?.payload);
+  const schema = stringValue(root?.schema_version);
+  const artifactPath = resource?.artifact_path ?? "";
+  if (schema === "magnetic_response_sweep.v2" || artifactPath.endsWith(".v2.json")) {
+    return "response.v2";
+  }
+  if (schema === "magnetic_response_sweep.v1" || artifactPath.endsWith(".v1.json")) {
+    return "response.v1";
+  }
+  return "unknown";
+}
+
+function parseDispersionCsv(csv: string): {
+  droppedPointCount: number;
+  points: EigenDispersionPoint[];
+} {
+  const lines = csv.split(/\r?\n/).filter((line) => line.trim().length > 0);
+  if (lines.length === 0) return { droppedPointCount: 0, points: [] };
+  const headers = lines[0]?.split(",").map((item) => item.trim()) ?? [];
+  const points: EigenDispersionPoint[] = [];
+  let droppedPointCount = 0;
+
+  for (const line of lines.slice(1)) {
+    const columns = line.split(",").map((item) => item.trim());
+    const row = Object.fromEntries(headers.map((header, index) => [header, columns[index]]));
+    const frequencyHz = finiteNumber(row.frequency_hz ?? row.frequencyHz);
+    const pathS = finiteNumber(row.path_s ?? row.pathS ?? row.k_path_s);
+    if (frequencyHz == null || pathS == null) {
+      droppedPointCount += 1;
+      continue;
+    }
+    points.push({
+      branchId: stringValue(row.branch_id ?? row.branchId),
+      frequencyHz,
+      overlap: finiteNumber(row.overlap),
+      pathS,
+      rawModeIndex: finiteInteger(row.raw_mode_index ?? row.mode_index),
+      residualNorm: finiteNumber(row.residual_norm),
+      sampleIndex: finiteInteger(row.sample_index),
+    });
+  }
+
+  return { droppedPointCount, points };
+}
+
+function responseSeries(
+  points: readonly FrequencyResponsePoint[],
+  resource: FrequencyDomainJsonArtifactLike | null | undefined,
+  quantity: string,
+  label: string,
+  unit: string,
+  selector: (point: FrequencyResponsePoint) => number | null,
+): FrequencyDomainChartSeries {
+  return {
+    id: `analysis.frequency-domain:response:${quantity}`,
+    label,
+    points: points.flatMap((point, rowIndex) => {
+      const y = selector(point);
+      return y == null ? [] : [{ rowIndex, x: point.frequencyHz / 1e9, y }];
+    }),
+    quantity,
+    source: {
+      kind: "analysis.frequency_domain",
+      resourceKey: FREQUENCY_DOMAIN_RESPONSE_SWEEP_RESOURCE_KEY,
+      tableId: "frequency-domain:response-sweep",
+    },
+    status: artifactStatus(resource),
+    unit,
+    xUnit: "GHz",
+  };
+}

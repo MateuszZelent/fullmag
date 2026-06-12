@@ -11,7 +11,7 @@ Current implemented pieces:
 - `docs/physics/0600-fem-eigenmodes-linearized-llg.md` states that the current modal executable path is CPU reference quality and that native MFEM/SLEPc integration is future work.
 - `crates/fullmag-ir/src/study.rs` has `StudyIR::Eigenmodes` and `StudyIR::FrequencyResponse`.
 - `crates/fullmag-plan/src/fem.rs` can plan `BackendTarget::Fem + StudyIR::Eigenmodes`.
-- `crates/fullmag-plan/src/lib.rs` rejects `StudyIR::FrequencyResponse` as semantic-only.
+- `crates/fullmag-plan/src/lib.rs` rejects `StudyIR::FrequencyResponse` on FDM and routes supported FEM cases into `FemFrequencyResponsePlanIR` for the dense validation response lane.
 - `crates/fullmag-runner/src/fem_eigen.rs` assembles and solves a transitional modal eigen problem.
 - `crates/fullmag-runner/src/native_fem/eigen.rs` exposes a small dense GPU cuSolver helper when `fem-gpu` is enabled.
 - `crates/fullmag-runner/tests/physics_validation.rs` validates the current FEM eigen reference path against smoke, order-of-magnitude, resolution stability, periodic/Floquet, damping, surface anisotropy, demag, boundary conditions, and v2 dispersion artifacts.
@@ -25,9 +25,9 @@ Current limitations:
 - The production native FEM source tree does not own a dedicated frequency-domain module.
 - The current modal runner path is orchestration/reference quality, not the final MFEM/hypre/libCEED/SLEPc production modal backend.
 - The dense GPU path is useful for small modal matrices but is not a scalable production modal eigensolver.
-- Driven frequency response is not executable.
+- Driven frequency response is executable only as the dense FEM validation lane; the production native MFEM/hypre/libCEED driven solver is not executable yet.
 - Equilibrium preparation, tangent-space projection, operator assembly, driven solve, modal solve, diagnostics, and artifact writing are not separated into backend-owned contracts.
-- There is no managed `just verify-fem-frequency-domain-runtime` recipe.
+- `just verify-fem-frequency-domain-runtime` exists as the managed dense-validation runtime smoke, but full production runtime proof still requires running it in the managed FEM container.
 - There is no single backend module that can answer: "given this equilibrium and this FEM mesh, assemble the exact linearized operator used for both free modes and driven response."
 
 ## Target State
@@ -318,9 +318,9 @@ Verification:
 Current state:
 
 - Python and IR expose `FrequencyResponse`.
-- Planner rejects `StudyIR::FrequencyResponse` as semantic-only.
-- API can serve `response/magnetic_response_sweep.v1.json` when an artifact exists.
-- No production driven solver writes that artifact.
+- Planner produces `FemFrequencyResponsePlanIR` for supported dense FEM validation cases and rejects unsupported FDM/GPU/precision cases explicitly.
+- API can serve `response/magnetic_response_sweep.v1.json` and v2 response resources when artifacts exist.
+- The dense validation response writer can emit those artifacts, but no production native MFEM/hypre/libCEED driven solver writes them yet.
 
 Target state:
 
@@ -333,7 +333,7 @@ Instructions:
 
 1. Add `FemFrequencyResponsePlanIR` in the planner layer only after the native solver contract exists.
 2. Define the driven system as the documented harmonic linearized LLG problem.
-3. Build the excitation vector from `excitation.field_au_per_m` projected into tangent space.
+3. Build the excitation vector from `excitation.field_a_per_m` projected into tangent space.
 4. For each frequency, solve the complex linear system with the same sign and phase convention as the physics note.
 5. Reuse factorization or preconditioner across frequency points where the backend supports it.
 6. Compute observables:
@@ -458,7 +458,8 @@ Verification:
 Current state:
 
 - The `justfile` has managed FEM recipes such as `ensure-managed-fem-runtime`, `rebuild-fem-runtime`, `fem-gpu-headless`, and `verify-fem-relaxation-runtime`.
-- No frequency-domain managed verification recipe exists.
+- `verify-fem-frequency-domain-native-contract` runs the native frequency-domain contract test through the managed FEM container.
+- `verify-fem-frequency-domain-runtime` runs the dense FEM validation response smoke through the managed FEM container and verifies the v1/v2 response bundle, progress, diagnostics, field payload, and frequency-domain manifest artifacts.
 
 Target state:
 

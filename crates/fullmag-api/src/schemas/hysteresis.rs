@@ -53,6 +53,35 @@ pub struct HysteresisBranchSchema {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct HysteresisAngularFamilyResource {
+    pub revision: u64,
+    pub stage_id: String,
+    pub stage_index: u32,
+    pub family_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_variant_id: Option<String>,
+    pub series: Vec<HysteresisAngularFamilySeriesSchema>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct HysteresisAngularFamilySeriesSchema {
+    pub variant_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub orientation: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub measurement_axis: Option<Value>,
+    pub data_status: String,
+    pub point_count: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metrics: Option<HysteresisMetricsSchema>,
+    pub points: Vec<HysteresisPointSchema>,
+    pub points_resource_ref: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct HysteresisMinorLoopSchema {
     pub loop_id: String,
     #[serde(rename = "reversal_field_mT")]
@@ -199,6 +228,10 @@ pub struct HysteresisStagePlanSchema {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub schedule_refinements: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub angular_family: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adaptive_refinement: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub minor_loops: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch_mode: Option<String>,
@@ -229,7 +262,7 @@ pub struct HysteresisOrientationSchema {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub direction: Option<[f64; 3]>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub measurement_axis: Option<String>,
+    pub measurement_axis: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

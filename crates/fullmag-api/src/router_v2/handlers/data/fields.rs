@@ -2,6 +2,7 @@
 
 use std::borrow::Cow;
 use std::collections::BTreeSet;
+use std::io::{BufRead, BufReader, Read};
 use std::sync::Arc;
 
 use axum::extract::{Path as AxumPath, Query, State};
@@ -64,6 +65,15 @@ static HDR_VALUE_COUNT: &str = "x-fullmag-value-count";
 static HDR_SCOPE_KIND: &str = "x-fullmag-scope-kind";
 static HDR_SCOPE_ID: &str = "x-fullmag-scope-id";
 static HDR_SNAPSHOT_ID: &str = "x-fullmag-snapshot-id";
+const HYSTERESIS_ZARR_STORE: &str = "hysteresis.zarr";
+const HYSTERESIS_ZARR_M_FIELD: &str = "fields/m";
+
+#[derive(Debug)]
+struct HysteresisZarrSampleRef {
+    chunk_key: String,
+    cell_count: usize,
+    grid: [u32; 3],
+}
 
 fn canonical_quantity_id(requested: &str) -> Cow<'_, str> {
     normalize_quantity_id(requested)
@@ -90,6 +100,12 @@ fn persisted_hysteresis_magnetization_values(
     }
     let artifact_dir = current_artifact_dir(snapshot)
         .ok_or_else(|| ApiError::not_found("no artifact directory for persisted field snapshot"))?;
+    if let Some((values, grid)) =
+        persisted_hysteresis_zarr_magnetization_values(&artifact_dir, snapshot_id)?
+    {
+        validate_persisted_hysteresis_snapshot_domain(snapshot, snapshot_id, &values, grid)?;
+        return Ok((values, grid));
+    }
     let path = artifact_dir
         .join("hysteresis_snapshots")
         .join(snapshot_id)
@@ -111,14 +127,146 @@ fn persisted_hysteresis_magnetization_values(
         ))
     })?;
     let values = flatten_json_field_values(&raw);
-    if !field_values_match_current_domain(snapshot, "m", 3, &values) {
-        return Err(ApiError::not_found(format!(
+    let element_count = values.len() / 3;
+    let grid = json_field_grid(&raw).unwrap_or([element_count as u32, 1, 1]);
+    validate_persisted_hysteresis_snapshot_domain(snapshot, snapshot_id, &values, grid)?;
+    Ok((values, grid))
+}
+
+fn validate_persisted_hysteresis_snapshot_domain(
+    snapshot: &SessionStateResponse,
+    snapshot_id: &str,
+    values: &[f64],
+    grid: [u32; 3],
+) -> Result<(), ApiError> {
+    let element_count = values.len() / 3;
+    let grid_count = (grid[0] as usize)
+        .checked_mul(grid[1] as usize)
+        .and_then(|count| count.checked_mul(grid[2] as usize))
+        .ok_or_else(|| {
+            ApiError::conflict(format!(
+                "hysteresis snapshot '{snapshot_id}' grid dimensions overflow"
+            ))
+        })?;
+    if grid_count != element_count {
+        return Err(ApiError::conflict(format!(
+            "hysteresis snapshot '{snapshot_id}' grid does not match its magnetization payload"
+        )));
+    }
+    if !field_values_match_current_domain(snapshot, "m", 3, values) {
+        return Err(ApiError::conflict(format!(
             "hysteresis snapshot '{snapshot_id}' does not match the current magnetic domain"
         )));
     }
-    let element_count = values.len() / 3;
-    let grid = json_field_grid(&raw).unwrap_or([element_count as u32, 1, 1]);
-    Ok((values, grid))
+    Ok(())
+}
+
+fn persisted_hysteresis_zarr_magnetization_values(
+    artifact_dir: &std::path::Path,
+    snapshot_id: &str,
+) -> Result<Option<(Vec<f64>, [u32; 3])>, ApiError> {
+    let field_dir = artifact_dir
+        .join(HYSTERESIS_ZARR_STORE)
+        .join(HYSTERESIS_ZARR_M_FIELD);
+    let Some(sample_ref) =
+        find_hysteresis_zarr_sample(&field_dir.join("samples.csv"), snapshot_id)?
+    else {
+        return Ok(None);
+    };
+    let chunk_path = field_dir.join(&sample_ref.chunk_key);
+    let mut raw = Vec::new();
+    std::fs::File::open(&chunk_path)
+        .map_err(|error| {
+            ApiError::internal(format!(
+                "failed to open hysteresis Zarr chunk '{}': {}",
+                chunk_path.display(),
+                error
+            ))
+        })?
+        .read_to_end(&mut raw)
+        .map_err(|error| {
+            ApiError::internal(format!(
+                "failed to read hysteresis Zarr chunk '{}': {}",
+                chunk_path.display(),
+                error
+            ))
+        })?;
+    let expected_len = sample_ref.cell_count * 3 * std::mem::size_of::<f64>();
+    if raw.len() != expected_len {
+        return Err(ApiError::internal(format!(
+            "hysteresis Zarr chunk '{}' has {} bytes, expected {}",
+            chunk_path.display(),
+            raw.len(),
+            expected_len
+        )));
+    }
+    let mut values = vec![0.0; sample_ref.cell_count * 3];
+    for component in 0..3 {
+        for cell in 0..sample_ref.cell_count {
+            let source_offset = (component * sample_ref.cell_count + cell) * 8;
+            let mut bytes = [0_u8; 8];
+            bytes.copy_from_slice(&raw[source_offset..source_offset + 8]);
+            values[cell * 3 + component] = f64::from_le_bytes(bytes);
+        }
+    }
+    Ok(Some((values, sample_ref.grid)))
+}
+
+fn find_hysteresis_zarr_sample(
+    samples_path: &std::path::Path,
+    snapshot_id: &str,
+) -> Result<Option<HysteresisZarrSampleRef>, ApiError> {
+    if !samples_path.exists() {
+        return Ok(None);
+    }
+    let file = std::fs::File::open(samples_path).map_err(|error| {
+        ApiError::internal(format!(
+            "failed to open hysteresis Zarr sample index '{}': {}",
+            samples_path.display(),
+            error
+        ))
+    })?;
+    for line in BufReader::new(file).lines().skip(1) {
+        let line = line.map_err(|error| {
+            ApiError::internal(format!(
+                "failed to read hysteresis Zarr sample index '{}': {}",
+                samples_path.display(),
+                error
+            ))
+        })?;
+        let columns: Vec<&str> = line.split(',').collect();
+        if columns.len() < 12 || columns[1] != snapshot_id {
+            continue;
+        }
+        let cell_count = columns[8].parse::<usize>().map_err(|error| {
+            ApiError::internal(format!(
+                "invalid hysteresis Zarr cell_count for snapshot '{snapshot_id}': {error}"
+            ))
+        })?;
+        let grid = [
+            columns[9].parse::<u32>().map_err(|error| {
+                ApiError::internal(format!(
+                    "invalid hysteresis Zarr grid_x for snapshot '{snapshot_id}': {error}"
+                ))
+            })?,
+            columns[10].parse::<u32>().map_err(|error| {
+                ApiError::internal(format!(
+                    "invalid hysteresis Zarr grid_y for snapshot '{snapshot_id}': {error}"
+                ))
+            })?,
+            columns[11].parse::<u32>().map_err(|error| {
+                ApiError::internal(format!(
+                    "invalid hysteresis Zarr grid_z for snapshot '{snapshot_id}': {error}"
+                ))
+            })?,
+        ];
+        return Ok(Some(HysteresisZarrSampleRef {
+            chunk_key: columns[5].to_string(),
+            cell_count,
+            grid,
+        }));
+    }
+    Ok(None)
 }
 
 fn insert_field_headers(
@@ -302,6 +450,8 @@ pub async fn get_field_catalog(
     ),
     responses(
         (status = 200, description = "Field metadata", body = FieldMeta),
+        (status = 400, description = "Invalid snapshot or component parameter"),
+        (status = 409, description = "Snapshot does not match the current domain"),
         (status = 404, description = "Field not found"),
     ),
     tag = "data"
@@ -339,7 +489,7 @@ pub async fn get_field_meta(
 
     if let Some(snapshot_id) = requested_snapshot_id {
         if quantity_id != "m" {
-            return Err(ApiError::not_found(format!(
+            return Err(ApiError::bad_request(format!(
                 "persisted hysteresis snapshot '{snapshot_id}' is only available for magnetization"
             )));
         }
@@ -875,8 +1025,9 @@ fn sample_unscoped_field_values(
         (status = 200, description = "Binary FMVP v2 field vector", content_type = "application/octet-stream"),
         (status = 204, description = "Recognized field quantity is not available yet"),
         (status = 304, description = "Not modified — ETag matched"),
-        (status = 400, description = "Invalid component parameter"),
+        (status = 400, description = "Invalid component or snapshot parameter"),
         (status = 404, description = "Field not found"),
+        (status = 409, description = "Snapshot does not match the current domain"),
     ),
     tag = "data"
 )]
@@ -897,6 +1048,16 @@ pub async fn get_field_vector(
     let Some(snapshot) = guard.as_ref() else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
+    if let Some(response) =
+        analysis_frequency_response_vector_response(snapshot, quantity_id, &query, &headers)?
+    {
+        return Ok(response);
+    }
+    if let Some(response) =
+        analysis_eigen_mode_vector_response(snapshot, quantity_id, &query, &headers)?
+    {
+        return Ok(response);
+    }
 
     let spec = quantity_spec(quantity_id);
     let n_comp: usize = spec.map(|s| s.n_comp as usize).unwrap_or(3);
@@ -947,7 +1108,7 @@ pub async fn get_field_vector(
     let raw_values_opt: Option<(Vec<f64>, [u32; 3])> =
         if let Some(snapshot_id) = requested_snapshot_id {
             if quantity_id != "m" {
-                return Err(ApiError::not_found(format!(
+                return Err(ApiError::bad_request(format!(
                 "persisted hysteresis snapshot '{snapshot_id}' is only available for magnetization"
             )));
             }
@@ -1118,6 +1279,283 @@ pub async fn get_field_vector(
     Ok(resp)
 }
 
+fn analysis_frequency_response_vector_response(
+    snapshot: &SessionStateResponse,
+    field_id: &str,
+    query: &FieldVectorQuery,
+    headers: &HeaderMap,
+) -> Result<Option<axum::response::Response>, ApiError> {
+    let Some(frequency_index) = parse_analysis_frequency_response_field_id(field_id) else {
+        return Ok(None);
+    };
+    let artifact_dir = current_artifact_dir(snapshot)
+        .ok_or_else(|| ApiError::not_found("no artifact directory for analysis field payload"))?;
+    let relative_path =
+        format!("response/field_payloads/frequency_{frequency_index:04}/vector.bin");
+    let path = artifact_dir.join(&relative_path);
+    let bytes = std::fs::read(&path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            ApiError::not_found(format!(
+                "analysis frequency-response field payload is missing: {relative_path}"
+            ))
+        } else {
+            ApiError::internal(format!(
+                "failed to read analysis frequency-response field payload '{}': {}",
+                relative_path, error
+            ))
+        }
+    })?;
+    let values = decode_complex_f64_pairs_little_endian(&bytes)?;
+    let (raw_values, n_comp, default_component) =
+        analysis_frequency_response_view_values(&values, query.view.as_deref(), query.phase_rad)?;
+    let component = parse_component(query.component.as_deref().or(default_component), n_comp)?;
+    let (out_n_comp, projected) = project_values(&raw_values, n_comp, &component)?;
+    let point_count = raw_values.len() / n_comp;
+    let out_grid = [point_count as u32, 1, 1];
+    let binary = serialize_field_vector_binary_v2(field_id, out_n_comp, out_grid, &projected)
+        .map_err(ApiError::internal)?;
+    let revision = analysis_payload_revision(snapshot, &relative_path, bytes.len());
+    let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
+        "{field_id}:{revision}:{}:{}:{}",
+        query.view.as_deref().unwrap_or("complex"),
+        query
+            .component
+            .as_deref()
+            .unwrap_or(default_component.unwrap_or("full")),
+        query.phase_rad.unwrap_or(0.0)
+    ));
+    let mut resp =
+        crate::router_v2::handlers::shared::conditional_binary_response(headers, &etag, binary);
+    insert_field_headers(
+        &mut resp,
+        field_id,
+        &component,
+        revision,
+        domain_generation_id(snapshot),
+        point_count,
+        projected.len(),
+    );
+    Ok(Some(resp))
+}
+
+fn analysis_eigen_mode_vector_response(
+    snapshot: &SessionStateResponse,
+    field_id: &str,
+    query: &FieldVectorQuery,
+    headers: &HeaderMap,
+) -> Result<Option<axum::response::Response>, ApiError> {
+    let Some((sample_index, mode_index)) = parse_analysis_eigen_mode_field_id(field_id) else {
+        return Ok(None);
+    };
+    let artifact_dir = current_artifact_dir(snapshot)
+        .ok_or_else(|| ApiError::not_found("no artifact directory for analysis field payload"))?;
+    let relative_path =
+        format!("eigen/mode_fields/sample_{sample_index:04}/mode_{mode_index:04}/vector.bin");
+    let path = artifact_dir.join(&relative_path);
+    let bytes = std::fs::read(&path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            ApiError::not_found(format!(
+                "analysis eigen mode field payload is missing: {relative_path}"
+            ))
+        } else {
+            ApiError::internal(format!(
+                "failed to read analysis eigen mode field payload '{}': {}",
+                relative_path, error
+            ))
+        }
+    })?;
+    let values = decode_complex_f64_pairs_little_endian(&bytes)?;
+    let (raw_values, n_comp, default_component) =
+        analysis_complex_vector_view_values(&values, query.view.as_deref(), query.phase_rad)?;
+    let component = parse_component(query.component.as_deref().or(default_component), n_comp)?;
+    let (out_n_comp, projected) = project_values(&raw_values, n_comp, &component)?;
+    let point_count = raw_values.len() / n_comp;
+    let out_grid = [point_count as u32, 1, 1];
+    let binary = serialize_field_vector_binary_v2(field_id, out_n_comp, out_grid, &projected)
+        .map_err(ApiError::internal)?;
+    let revision = analysis_payload_revision(snapshot, &relative_path, bytes.len());
+    let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
+        "{field_id}:{revision}:{}:{}:{}",
+        query.view.as_deref().unwrap_or("complex"),
+        query
+            .component
+            .as_deref()
+            .unwrap_or(default_component.unwrap_or("full")),
+        query.phase_rad.unwrap_or(0.0)
+    ));
+    let mut resp =
+        crate::router_v2::handlers::shared::conditional_binary_response(headers, &etag, binary);
+    insert_field_headers(
+        &mut resp,
+        field_id,
+        &component,
+        revision,
+        domain_generation_id(snapshot),
+        point_count,
+        projected.len(),
+    );
+    Ok(Some(resp))
+}
+
+fn analysis_frequency_response_view_values(
+    values: &[f64],
+    view: Option<&str>,
+    phase_rad: Option<f64>,
+) -> Result<(Vec<f64>, usize, Option<&'static str>), ApiError> {
+    if values.len() % 6 == 0 {
+        return analysis_complex_vector_view_values(values, view, phase_rad);
+    }
+    match view.unwrap_or("complex") {
+        "complex" | "full" => Ok((values.to_vec(), 2, None)),
+        "real" => Ok((
+            complex_pair_scalar_view(values, |real, _imag| real),
+            1,
+            Some("full"),
+        )),
+        "imag" => Ok((
+            complex_pair_scalar_view(values, |_real, imag| imag),
+            1,
+            Some("full"),
+        )),
+        "abs" | "amplitude" => Ok((
+            complex_pair_scalar_view(values, |real, imag| real.hypot(imag)),
+            1,
+            Some("full"),
+        )),
+        "phase" => Ok((
+            complex_pair_scalar_view(values, |real, imag| imag.atan2(real)),
+            1,
+            Some("full"),
+        )),
+        "phase_rotated_real" => {
+            let phase = phase_rad.unwrap_or(0.0);
+            if !phase.is_finite() {
+                return Err(ApiError::bad_request("phase_rad must be finite"));
+            }
+            let cos_phase = phase.cos();
+            let sin_phase = phase.sin();
+            Ok((
+                complex_pair_scalar_view(values, |real, imag| real * cos_phase - imag * sin_phase),
+                1,
+                Some("full"),
+            ))
+        }
+        other => Err(ApiError::bad_request(format!(
+            "unsupported frequency-domain field view '{other}'"
+        ))),
+    }
+}
+
+fn analysis_complex_vector_view_values(
+    values: &[f64],
+    view: Option<&str>,
+    phase_rad: Option<f64>,
+) -> Result<(Vec<f64>, usize, Option<&'static str>), ApiError> {
+    if values.len() % 6 != 0 {
+        return Err(ApiError::internal(
+            "analysis eigen mode payload must contain complex xyz vector values",
+        ));
+    }
+    match view.unwrap_or("complex") {
+        "complex" | "full" => Ok((values.to_vec(), 6, None)),
+        "real" => Ok((
+            complex_vector_view(values, |real, _imag| real),
+            3,
+            Some("full"),
+        )),
+        "imag" => Ok((
+            complex_vector_view(values, |_real, imag| imag),
+            3,
+            Some("full"),
+        )),
+        "abs" | "amplitude" => Ok((
+            complex_vector_view(values, |real, imag| real.hypot(imag)),
+            3,
+            Some("full"),
+        )),
+        "phase" => Ok((
+            complex_vector_view(values, |real, imag| imag.atan2(real)),
+            3,
+            Some("full"),
+        )),
+        "phase_rotated_real" => {
+            let phase = phase_rad.unwrap_or(0.0);
+            if !phase.is_finite() {
+                return Err(ApiError::bad_request("phase_rad must be finite"));
+            }
+            let cos_phase = phase.cos();
+            let sin_phase = phase.sin();
+            Ok((
+                complex_vector_view(values, |real, imag| real * cos_phase - imag * sin_phase),
+                3,
+                Some("full"),
+            ))
+        }
+        other => Err(ApiError::bad_request(format!(
+            "unsupported frequency-domain field view '{other}'"
+        ))),
+    }
+}
+
+fn complex_pair_scalar_view(values: &[f64], map: impl Fn(f64, f64) -> f64) -> Vec<f64> {
+    values
+        .chunks_exact(2)
+        .map(|pair| map(pair[0], pair[1]))
+        .collect()
+}
+
+fn complex_vector_view(values: &[f64], map: impl Fn(f64, f64) -> f64) -> Vec<f64> {
+    values
+        .chunks_exact(2)
+        .map(|pair| map(pair[0], pair[1]))
+        .collect()
+}
+
+fn parse_analysis_frequency_response_field_id(field_id: &str) -> Option<u32> {
+    field_id
+        .strip_prefix("analysis:frequency-response:frequency-")
+        .and_then(|index| index.parse::<u32>().ok())
+}
+
+fn parse_analysis_eigen_mode_field_id(field_id: &str) -> Option<(u32, u32)> {
+    let rest = field_id.strip_prefix("analysis:eigen:sample-")?;
+    let (sample_index, mode_index) = rest.split_once(":mode-")?;
+    Some((sample_index.parse().ok()?, mode_index.parse().ok()?))
+}
+
+fn decode_complex_f64_pairs_little_endian(bytes: &[u8]) -> Result<Vec<f64>, ApiError> {
+    if bytes.len() % std::mem::size_of::<f64>() != 0 || bytes.len() % 16 != 0 {
+        return Err(ApiError::internal(
+            "analysis frequency-response payload must contain little-endian f64 complex pairs",
+        ));
+    }
+    let mut values = Vec::with_capacity(bytes.len() / std::mem::size_of::<f64>());
+    for chunk in bytes.chunks_exact(std::mem::size_of::<f64>()) {
+        let mut raw = [0u8; std::mem::size_of::<f64>()];
+        raw.copy_from_slice(chunk);
+        let value = f64::from_le_bytes(raw);
+        if !value.is_finite() {
+            return Err(ApiError::internal(
+                "analysis frequency-response payload contains non-finite values",
+            ));
+        }
+        values.push(value);
+    }
+    Ok(values)
+}
+
+fn analysis_payload_revision(
+    snapshot: &SessionStateResponse,
+    relative_path: &str,
+    byte_len: usize,
+) -> u64 {
+    let mut hash = domain_generation_id(snapshot) ^ (byte_len as u64);
+    for byte in relative_path.as_bytes() {
+        hash = hash.wrapping_mul(1099511628211).wrapping_add(*byte as u64);
+    }
+    hash
+}
+
 // ── 2D slice — P2 ────────────────────────────────────────────────────────────
 
 fn compute_projection(
@@ -1171,6 +1609,7 @@ fn is_fem_runtime(snapshot: &crate::types::SessionStateResponse) -> bool {
                 | RuntimeEngineId::FemNativeGpu
                 | RuntimeEngineId::FemEigenCpuBaseline
                 | RuntimeEngineId::FemEigenNativeGpu
+                | RuntimeEngineId::FemFrequencyResponseDenseValidation
         )
     ) || snapshot.fem_mesh.is_some()
 }
@@ -3088,4 +3527,154 @@ fn urlencoding(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        analysis_complex_vector_view_values, analysis_frequency_response_view_values,
+        decode_complex_f64_pairs_little_endian, parse_analysis_eigen_mode_field_id,
+        parse_analysis_frequency_response_field_id,
+    };
+
+    #[test]
+    fn parses_frequency_response_analysis_field_id() {
+        assert_eq!(
+            parse_analysis_frequency_response_field_id(
+                "analysis:frequency-response:frequency-0007"
+            ),
+            Some(7)
+        );
+        assert_eq!(
+            parse_analysis_frequency_response_field_id("analysis:eigen:sample-0000:mode-0001"),
+            None
+        );
+    }
+
+    #[test]
+    fn parses_eigen_mode_analysis_field_id() {
+        assert_eq!(
+            parse_analysis_eigen_mode_field_id("analysis:eigen:sample-0007:mode-0011"),
+            Some((7, 11))
+        );
+        assert_eq!(
+            parse_analysis_eigen_mode_field_id("analysis:frequency-response:frequency-0001"),
+            None
+        );
+    }
+
+    #[test]
+    fn decodes_complex_f64_pair_payload() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&1.25f64.to_le_bytes());
+        bytes.extend_from_slice(&(-0.5f64).to_le_bytes());
+
+        let values = decode_complex_f64_pairs_little_endian(&bytes)
+            .expect("complex f64 pair payload should decode");
+
+        assert_eq!(values, vec![1.25, -0.5]);
+    }
+
+    #[test]
+    fn rejects_incomplete_complex_f64_pair_payload() {
+        let bytes = 1.25f64.to_le_bytes();
+
+        let error = decode_complex_f64_pairs_little_endian(&bytes)
+            .expect_err("single f64 is not a complete complex pair");
+
+        assert!(error.message.contains("complex pairs"), "{}", error.message);
+    }
+
+    #[test]
+    fn frequency_response_view_amplitude_returns_scalar_values_for_single_component_payload() {
+        let (values, n_comp, default_component) =
+            analysis_frequency_response_view_values(&[3.0, 4.0], Some("amplitude"), None)
+                .expect("amplitude view should resolve");
+
+        assert_eq!(values, vec![5.0]);
+        assert_eq!(n_comp, 1);
+        assert_eq!(default_component, Some("full"));
+    }
+
+    #[test]
+    fn frequency_response_view_abs_alias_returns_scalar_values_for_single_component_payload() {
+        let (values, n_comp, default_component) =
+            analysis_frequency_response_view_values(&[3.0, 4.0], Some("abs"), None)
+                .expect("abs view should resolve");
+
+        assert_eq!(values, vec![5.0]);
+        assert_eq!(n_comp, 1);
+        assert_eq!(default_component, Some("full"));
+    }
+
+    #[test]
+    fn frequency_response_view_phase_rotated_real_returns_xyz_values_for_vector_payload() {
+        let (values, n_comp, default_component) = analysis_frequency_response_view_values(
+            &[1.0, 0.0, 0.0, 1.0, 3.0, 4.0],
+            Some("phase_rotated_real"),
+            Some(0.0),
+        )
+        .expect("vector response view should resolve");
+
+        assert_eq!(values, vec![1.0, 0.0, 3.0]);
+        assert_eq!(n_comp, 3);
+        assert_eq!(default_component, Some("full"));
+    }
+
+    #[test]
+    fn frequency_response_view_phase_rotated_real_applies_phase() {
+        let (values, n_comp, _) = analysis_frequency_response_view_values(
+            &[1.0, 0.0],
+            Some("phase_rotated_real"),
+            Some(std::f64::consts::FRAC_PI_2),
+        )
+        .expect("phase rotated view should resolve");
+
+        assert!((values[0]).abs() < 1.0e-12);
+        assert_eq!(n_comp, 1);
+    }
+
+    #[test]
+    fn eigen_mode_view_phase_rotated_real_returns_xyz_values() {
+        let (values, n_comp, default_component) = analysis_complex_vector_view_values(
+            &[1.0, 0.0, 0.0, 1.0, 3.0, 4.0],
+            Some("phase_rotated_real"),
+            Some(std::f64::consts::FRAC_PI_2),
+        )
+        .expect("phase rotated vector view should resolve");
+
+        assert!((values[0]).abs() < 1.0e-12);
+        assert!((values[1] + 1.0).abs() < 1.0e-12);
+        assert_eq!(values[2], -4.0);
+        assert_eq!(n_comp, 3);
+        assert_eq!(default_component, Some("full"));
+    }
+
+    #[test]
+    fn eigen_mode_view_abs_alias_returns_xyz_amplitudes() {
+        let (values, n_comp, default_component) = analysis_complex_vector_view_values(
+            &[3.0, 4.0, 5.0, 12.0, 8.0, 15.0],
+            Some("abs"),
+            None,
+        )
+        .expect("abs vector view should resolve");
+
+        assert_eq!(values, vec![5.0, 13.0, 17.0]);
+        assert_eq!(n_comp, 3);
+        assert_eq!(default_component, Some("full"));
+    }
+
+    #[test]
+    fn rejects_unknown_frequency_response_view() {
+        let error = analysis_frequency_response_view_values(&[1.0, 0.0], Some("bad"), None)
+            .expect_err("unknown view should fail");
+
+        assert!(
+            error
+                .message
+                .contains("unsupported frequency-domain field view"),
+            "{}",
+            error.message
+        );
+    }
 }

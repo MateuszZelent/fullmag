@@ -8,6 +8,10 @@ import { useAnalysisPlotsWorkspaceSelector } from "@/kernel/workspace/useAnalysi
 import {
   shouldLoadRuntimeScalars,
   useSolverEnergyHistoryResource,
+  useFrequencyDomainEigenDispersionResource,
+  useFrequencyDomainEigenSpectrumResource,
+  useFrequencyDomainManifestResource,
+  useFrequencyDomainResponseSweepResource,
   useTableColumnsResource,
   useTableRowsBinaryResource,
 } from "@/kernel/resources/studyRuntimeResources";
@@ -15,6 +19,7 @@ import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { yAxisIdsAfterXAxisSelection } from "@/shared/domain/analysis/axisSelection";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
+import type { Selection } from "@/kernel/selection/selectionTypes";
 import { nextYAxisIdsForToggle } from "@/shared/domain/analysis/TableColumnList";
 
 import type { ChartValueRange } from "./chartTableModel";
@@ -36,6 +41,16 @@ import {
   recordChartSeriesSelectedEvent,
 } from "./components/chartDiagnostics";
 import { buildSolverEnergyHistoryChartSeries } from "./energyHistoryAdapter";
+import {
+  buildEigenDispersionPointSelectionRef,
+  buildEigenDispersionChartModel,
+  buildEigenModeSelectionRef,
+  buildEigenSpectrumChartModel,
+  buildFrequencyResponsePointSelectionRef,
+  buildFrequencyResponseChartModel,
+  routeFrequencyDomainCalculationMode,
+} from "@/shared/domain/analysis/frequencyDomainChartModels";
+import { frequencyDomainChartSeriesForAnalysisPlots } from "./frequencyDomainSeriesAdapter";
 import {
   ANALYSIS_SCALAR_COLUMNS,
   tableResourceReducer,
@@ -87,6 +102,62 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
       ),
     [solverEnergyHistory.data, solverEnergyHistory.status],
   );
+  const frequencyDomainManifest = useFrequencyDomainManifestResource();
+  const frequencyDomainRoute = routeFrequencyDomainCalculationMode(
+    frequencyDomainManifest.data?.result_manifest?.payload,
+  );
+  const frequencyDomainSpectrum = useFrequencyDomainEigenSpectrumResource({
+    enabled: frequencyDomainRoute.primaryChart === "modal-spectrum",
+  });
+  const frequencyDomainDispersion = useFrequencyDomainEigenDispersionResource({
+    enabled: frequencyDomainRoute.primaryChart === "dispersion",
+  });
+  const frequencyDomainResponse = useFrequencyDomainResponseSweepResource({
+    enabled: frequencyDomainRoute.primaryChart === "response-sweep",
+  });
+  const frequencyDomainSpectrumModel = useMemo(
+    () => buildEigenSpectrumChartModel(frequencyDomainSpectrum.data),
+    [frequencyDomainSpectrum.data],
+  );
+  const frequencyDomainDispersionModel = useMemo(
+    () => buildEigenDispersionChartModel(frequencyDomainDispersion.data),
+    [frequencyDomainDispersion.data],
+  );
+  const frequencyDomainResponseModel = useMemo(
+    () => buildFrequencyResponseChartModel(frequencyDomainResponse.data),
+    [frequencyDomainResponse.data],
+  );
+  const frequencyDomainSeries = useMemo(() => {
+    switch (frequencyDomainRoute.primaryChart) {
+      case "dispersion":
+        return frequencyDomainChartSeriesForAnalysisPlots(
+          frequencyDomainDispersionModel,
+        );
+      case "modal-spectrum":
+        return frequencyDomainChartSeriesForAnalysisPlots(
+          frequencyDomainSpectrumModel,
+        );
+      case "response-sweep":
+        return frequencyDomainChartSeriesForAnalysisPlots(
+          frequencyDomainResponseModel,
+        );
+      case "response-map":
+        return [];
+    }
+  }, [
+    frequencyDomainDispersionModel,
+    frequencyDomainRoute.primaryChart,
+    frequencyDomainResponseModel,
+    frequencyDomainSpectrumModel,
+  ]);
+  const frequencyDomainResourceStatus =
+    frequencyDomainRoute.primaryChart === "dispersion"
+      ? frequencyDomainDispersion.status
+      : frequencyDomainRoute.primaryChart === "response-sweep"
+        ? frequencyDomainResponse.status
+        : frequencyDomainRoute.primaryChart === "modal-spectrum"
+          ? frequencyDomainSpectrum.status
+          : frequencyDomainManifest.status;
 
   const setXAxisId = (columnId: string) => {
     analysisPlotsWorkspaceStore.setAxes(
@@ -123,6 +194,17 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
   };
   const selectPoint = (point: AnalysisChartCursorPoint) => {
     analysisPlotsWorkspaceStore.setSelectedPoint(point);
+    const frequencyDomainSelection = frequencyDomainSelectionFromPoint({
+      dispersionModel: frequencyDomainDispersionModel,
+      point,
+      responseModel: frequencyDomainResponseModel,
+      routeMode: frequencyDomainRoute.mode,
+      spectrumModel: frequencyDomainSpectrumModel,
+    });
+    if (frequencyDomainSelection) {
+      selection.set(frequencyDomainSelection, "analysis-plots");
+      return;
+    }
     selection.set(
       {
         kind: "analysis.chart-point",
@@ -267,6 +349,21 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     selectPoint,
     selectSeries,
     setRange,
+    frequencyDomainSeries,
+    frequencyDomainStatus:
+      frequencyDomainRoute.status === "available"
+        ? frequencyDomainResourceStatus
+        : frequencyDomainManifest.status === "ready"
+          ? "stale"
+          : frequencyDomainManifest.status,
+    frequencyDomainTitle: frequencyDomainChartTitle(frequencyDomainRoute.primaryChart),
+    frequencyDomainUnavailableReason:
+      frequencyDomainRoute.unavailableReason ??
+      firstFrequencyDomainDiagnostic([
+        frequencyDomainDispersionModel.diagnostics,
+        frequencyDomainResponseModel.diagnostics,
+        frequencyDomainSpectrumModel.diagnostics,
+      ]),
     solverEnergySeries,
     solverEnergyStatus: solverEnergyHistory.status,
     setXAxisId,
@@ -277,6 +374,90 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     yAxisIds,
     selectedStageId,
   };
+}
+
+export function frequencyDomainSelectionFromPoint({
+  dispersionModel,
+  point,
+  responseModel,
+  routeMode,
+  spectrumModel,
+}: {
+  dispersionModel: ReturnType<typeof buildEigenDispersionChartModel>;
+  point: AnalysisChartCursorPoint;
+  responseModel: ReturnType<typeof buildFrequencyResponseChartModel>;
+  routeMode: ReturnType<typeof routeFrequencyDomainCalculationMode>["mode"];
+  spectrumModel: ReturnType<typeof buildEigenSpectrumChartModel>;
+}): Partial<Omit<Selection, "moduleSource">> | null {
+  if (point.source.kind !== "analysis.frequency_domain") return null;
+  const nodeId = analysisChartPointNodeId(point);
+  const base = {
+    calculationMode: routeMode,
+    nodeId,
+    resourceRef: point.source.resourceKey,
+  };
+  if (point.source.tableId === "frequency-domain:eigen-spectrum") {
+    const spectrumPoint = spectrumModel.points[point.point.rowIndex];
+    if (!spectrumPoint) return null;
+    const ref = buildEigenModeSelectionRef(spectrumPoint, base);
+    return {
+      kind: ref.kind,
+      label: `${point.label} ${formatAnalysisPointValue(point.point.y, point.unit)}`,
+      nodeId,
+      objectId: null,
+      ref,
+    };
+  }
+  if (point.source.tableId === "frequency-domain:eigen-dispersion") {
+    const dispersionPoint = dispersionModel.points[point.point.rowIndex];
+    if (!dispersionPoint) return null;
+    const ref = buildEigenDispersionPointSelectionRef(dispersionPoint, base);
+    return {
+      kind: ref.kind,
+      label: `${point.label} ${formatAnalysisPointValue(point.point.y, point.unit)}`,
+      nodeId,
+      objectId: null,
+      ref,
+    };
+  }
+  if (point.source.tableId === "frequency-domain:response-sweep") {
+    const responsePoint = responseModel.points[point.point.rowIndex];
+    if (!responsePoint) return null;
+    const ref = buildFrequencyResponsePointSelectionRef(responsePoint, base);
+    return {
+      kind: ref.kind,
+      label: `${point.label} ${formatAnalysisPointValue(point.point.y, point.unit)}`,
+      nodeId,
+      objectId: null,
+      ref,
+    };
+  }
+  return null;
+}
+
+function frequencyDomainChartTitle(primaryChart: string): string {
+  switch (primaryChart) {
+    case "dispersion":
+      return "Frequency-domain dispersion";
+    case "modal-spectrum":
+      return "Frequency-domain modal spectrum";
+    case "response-sweep":
+      return "Frequency-domain response sweep";
+    case "response-map":
+      return "Frequency-domain response map";
+    default:
+      return "Frequency-domain analysis";
+  }
+}
+
+function firstFrequencyDomainDiagnostic(
+  diagnosticGroups: readonly (readonly string[])[],
+): string | null {
+  for (const diagnostics of diagnosticGroups) {
+    const first = diagnostics.find((entry) => entry.length > 0);
+    if (first) return first;
+  }
+  return null;
 }
 
 function analysisChartPointNodeId(point: AnalysisChartCursorPoint): string {
