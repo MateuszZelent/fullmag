@@ -122,7 +122,7 @@ study.tableautosave(1e-16, quantities=["t", "step", "mx", "my", "mz", "E_total"]
 
 
 study.stages.add_minimize(
-    method="b4b",
+    method="bb",
     max_steps=200,
     tol=1e-4,
 )

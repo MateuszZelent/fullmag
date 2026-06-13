@@ -126,6 +126,17 @@ struct ModeArtifact {
     tangent_leakage_max_abs: Option<f64>,
     dominant_polarization: String,
     k_vector: [f64; 3],
+    value_kind: &'static str,
+    component_basis: &'static str,
+    component_count: usize,
+    components: [&'static str; 3],
+    payload_encoding: &'static str,
+    binary_layout: &'static str,
+    complex_pair_count: usize,
+    payload_value_count: usize,
+    available_views: [&'static str; 7],
+    default_view: &'static str,
+    default_phase_rad: f64,
     mode_field_sample_count: usize,
     amplitude_summary: ModeAmplitudeSummary,
     component_summary: ModeComponentSummary,
@@ -174,6 +185,15 @@ struct ResponseSweepV2PointArtifact {
     frequency_index: usize,
     frequency_hz: f64,
     angular_frequency_rad_per_s: f64,
+    storage_format: &'static str,
+    zarr_store_path: &'static str,
+    zarr_array_path: String,
+    zarr_chunk_path: String,
+    zarr_dtype: &'static str,
+    zarr_shape: [usize; 2],
+    zarr_chunk_shape: [usize; 2],
+    zarr_compressor: Option<&'static str>,
+    compatibility_binary_payload_path: String,
     response_field_payload_path: String,
     frequency_point_artifact_path: String,
     response_field_binary_layout: &'static str,
@@ -345,6 +365,15 @@ struct ResponseFrequencyPointArtifact<'a> {
     source_sweep_artifact: &'static str,
     field_payload_path: String,
     response_field_payload_path: String,
+    storage_format: &'static str,
+    zarr_store_path: &'static str,
+    zarr_array_path: String,
+    zarr_chunk_path: String,
+    zarr_dtype: &'static str,
+    zarr_shape: [usize; 2],
+    zarr_chunk_shape: [usize; 2],
+    zarr_compressor: Option<&'static str>,
+    compatibility_binary_payload_path: String,
     value_kind: &'static str,
     component_basis: &'static str,
     component_count: usize,
@@ -454,20 +483,34 @@ pub fn write_response_sweep_bundle_with_progress(
     let response_dir = base_dir.join("response");
     let frequency_points_dir = response_dir.join("frequency_points");
     fs::create_dir_all(&frequency_points_dir)?;
+    if !artifact.points.is_empty() {
+        write_response_zarr_store_metadata(base_dir)?;
+    }
 
     let mut frequency_point_artifacts = Vec::with_capacity(artifact.points.len());
     for (index, point) in artifact.points.iter().enumerate() {
         let relative_path = format!("response/frequency_points/frequency_{index:04}.json");
-        let field_payload_path = format!("response/field_payloads/frequency_{index:04}/vector.bin");
-        write_complex_response_field_payload(base_dir, &field_payload_path, &point.m_complex)?;
+        let zarr_array_path = response_zarr_array_path(index);
+        let zarr_chunk_path = response_zarr_chunk_path(index);
+        let compatibility_payload_path = response_compatibility_payload_path(index);
+        write_complex_response_field_payloads(base_dir, index, &point.m_complex)?;
         let point_artifact = ResponseFrequencyPointArtifact {
             schema_version: "frequency_response_point.v1",
             frequency_index: index,
             frequency_hz: point.frequency_hz,
             angular_frequency_rad_per_s: point.angular_frequency_rad_per_s,
             source_sweep_artifact: "response/magnetic_response_sweep.v1.json",
-            field_payload_path: field_payload_path.clone(),
-            response_field_payload_path: field_payload_path,
+            field_payload_path: zarr_chunk_path.clone(),
+            response_field_payload_path: zarr_chunk_path.clone(),
+            storage_format: "zarr",
+            zarr_store_path: response_zarr_store_path(),
+            zarr_array_path,
+            zarr_chunk_path,
+            zarr_dtype: "<f8",
+            zarr_shape: [point.m_complex.len(), 2],
+            zarr_chunk_shape: [point.m_complex.len().max(1), 2],
+            zarr_compressor: None,
+            compatibility_binary_payload_path: compatibility_payload_path,
             value_kind: "complex_spatial_vector",
             component_basis: "global_xyz",
             component_count: 3,
@@ -563,23 +606,34 @@ fn write_response_sweep_v2_artifact(
         .points
         .iter()
         .enumerate()
-        .map(|(index, point)| ResponseSweepV2PointArtifact {
-            frequency_index: index,
-            frequency_hz: point.frequency_hz,
-            angular_frequency_rad_per_s: point.angular_frequency_rad_per_s,
-            response_field_payload_path: format!(
-                "response/field_payloads/frequency_{index:04}/vector.bin"
-            ),
-            frequency_point_artifact_path: format!(
-                "response/frequency_points/frequency_{index:04}.json"
-            ),
-            response_field_binary_layout: "complex_f64_pairs_little_endian",
-            max_response_amplitude: finite_max(&point.response_amplitude),
-            phase_rad: dominant_phase_rad(point),
-            absorbed_power_density: point.absorbed_power_density,
-            residual_l2_norm: point.residual_l2_norm,
-            relative_residual_l2_norm: point.relative_residual_l2_norm,
-            excitation_provenance: point.excitation_provenance.clone(),
+        .map(|(index, point)| {
+            let zarr_array_path = response_zarr_array_path(index);
+            let zarr_chunk_path = response_zarr_chunk_path(index);
+            ResponseSweepV2PointArtifact {
+                frequency_index: index,
+                frequency_hz: point.frequency_hz,
+                angular_frequency_rad_per_s: point.angular_frequency_rad_per_s,
+                storage_format: "zarr",
+                zarr_store_path: response_zarr_store_path(),
+                zarr_array_path,
+                zarr_chunk_path: zarr_chunk_path.clone(),
+                zarr_dtype: "<f8",
+                zarr_shape: [point.m_complex.len(), 2],
+                zarr_chunk_shape: [point.m_complex.len().max(1), 2],
+                zarr_compressor: None,
+                compatibility_binary_payload_path: response_compatibility_payload_path(index),
+                response_field_payload_path: zarr_chunk_path,
+                frequency_point_artifact_path: format!(
+                    "response/frequency_points/frequency_{index:04}.json"
+                ),
+                response_field_binary_layout: "complex_f64_pairs_little_endian",
+                max_response_amplitude: finite_max(&point.response_amplitude),
+                phase_rad: dominant_phase_rad(point),
+                absorbed_power_density: point.absorbed_power_density,
+                residual_l2_norm: point.residual_l2_norm,
+                relative_residual_l2_norm: point.relative_residual_l2_norm,
+                excitation_provenance: point.excitation_provenance.clone(),
+            }
         })
         .collect::<Vec<_>>();
     let frequency_point_artifact_paths = points
@@ -723,21 +777,128 @@ fn write_response_cancel_requested_artifact(
     )
 }
 
-fn write_complex_response_field_payload(
+fn response_zarr_store_path() -> &'static str {
+    "response/field_payloads.zarr"
+}
+
+fn response_zarr_frequency_group_path(frequency_index: usize) -> String {
+    format!("response/field_payloads.zarr/frequency_{frequency_index:04}")
+}
+
+fn response_zarr_array_path(frequency_index: usize) -> String {
+    format!(
+        "{}/vector_xyz_complex",
+        response_zarr_frequency_group_path(frequency_index)
+    )
+}
+
+fn response_zarr_chunk_path(frequency_index: usize) -> String {
+    format!("{}/0.0.0", response_zarr_array_path(frequency_index))
+}
+
+fn response_compatibility_payload_path(frequency_index: usize) -> String {
+    format!("response/field_payloads/frequency_{frequency_index:04}/vector.bin")
+}
+
+fn write_response_zarr_store_metadata(base_dir: &Path) -> std::io::Result<()> {
+    let store_dir = base_dir.join(response_zarr_store_path());
+    fs::create_dir_all(&store_dir)?;
+    fs::write(
+        store_dir.join(".zgroup"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "zarr_format": 2,
+        }))
+        .unwrap(),
+    )?;
+    fs::write(
+        store_dir.join(".zattrs"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "fullmag_kind": "frequency_domain_response_field_store",
+            "schema_version": 1,
+            "preferred_container": "zarr",
+            "quantity_ids": ["dynamic_response"],
+            "axes": ["frequency", "complex_pair", "complex"],
+            "complex_order": ["real", "imag"],
+            "storage_layout": "complex_pair_major",
+            "compatibility_binary_exports": true,
+        }))
+        .unwrap(),
+    )
+}
+
+fn write_response_zarr_array_metadata(
     base_dir: &Path,
-    relative_path: &str,
-    values: &[[f64; 2]],
+    frequency_index: usize,
+    complex_pair_count: usize,
 ) -> std::io::Result<()> {
-    let path = base_dir.join(relative_path);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
+    let group_dir = base_dir.join(response_zarr_frequency_group_path(frequency_index));
+    let array_dir = base_dir.join(response_zarr_array_path(frequency_index));
+    fs::create_dir_all(&array_dir)?;
+    fs::write(
+        group_dir.join(".zgroup"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "zarr_format": 2,
+        }))
+        .unwrap(),
+    )?;
+    fs::write(
+        array_dir.join(".zarray"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "zarr_format": 2,
+            "shape": [complex_pair_count, 2],
+            "chunks": [complex_pair_count.max(1), 2],
+            "dtype": "<f8",
+            "compressor": serde_json::Value::Null,
+            "fill_value": 0.0,
+            "order": "C",
+            "filters": serde_json::Value::Null,
+            "dimension_separator": ".",
+        }))
+        .unwrap(),
+    )?;
+    fs::write(
+        array_dir.join(".zattrs"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "quantity_id": "dynamic_response",
+            "unit": "A_per_m",
+            "value_kind": "complex_spatial_vector",
+            "component_basis": "global_xyz",
+            "axes": ["complex_pair", "complex"],
+            "complex_order": ["real", "imag"],
+            "frequency_index": frequency_index,
+            "complex_pair_count": complex_pair_count,
+            "storage_layout": "complex_pair_major",
+        }))
+        .unwrap(),
+    )
+}
+
+fn complex_response_field_payload_bytes(values: &[[f64; 2]]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(values.len() * 2 * std::mem::size_of::<f64>());
     for [real, imag] in values {
         bytes.extend_from_slice(&real.to_le_bytes());
         bytes.extend_from_slice(&imag.to_le_bytes());
     }
-    fs::write(path, bytes)
+    bytes
+}
+
+fn write_complex_response_field_payloads(
+    base_dir: &Path,
+    frequency_index: usize,
+    values: &[[f64; 2]],
+) -> std::io::Result<()> {
+    write_response_zarr_array_metadata(base_dir, frequency_index, values.len())?;
+    let bytes = complex_response_field_payload_bytes(values);
+    let zarr_chunk_path = base_dir.join(response_zarr_chunk_path(frequency_index));
+    if let Some(parent) = zarr_chunk_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(zarr_chunk_path, &bytes)?;
+    let compatibility_path = base_dir.join(response_compatibility_payload_path(frequency_index));
+    if let Some(parent) = compatibility_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(compatibility_path, bytes)
 }
 
 fn write_complex_vector_field_payload(
@@ -1438,6 +1599,25 @@ pub fn write_mode_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
                 tangent_leakage_max_abs: mode.tangent_leakage_max_abs,
                 dominant_polarization: mode.dominant_polarization.clone(),
                 k_vector: sample.sample.k_vector,
+                value_kind: "complex_spatial_vector",
+                component_basis: "global_xyz",
+                component_count: 3,
+                components: ["x", "y", "z"],
+                payload_encoding: "f64_interleaved_real_imag_xyz",
+                binary_layout: "complex_f64_pairs_little_endian",
+                complex_pair_count: real.len().max(imag.len()) * 3,
+                payload_value_count: real.len().max(imag.len()) * 6,
+                available_views: [
+                    "complex",
+                    "real",
+                    "imag",
+                    "abs",
+                    "amplitude",
+                    "phase",
+                    "phase_rotated_real",
+                ],
+                default_view: "phase_rotated_real",
+                default_phase_rad: 0.0,
                 mode_field_sample_count: real.len().max(imag.len()),
                 amplitude_summary: mode_amplitude_summary(amplitude),
                 component_summary: mode_component_summary(real, imag),
@@ -1642,6 +1822,28 @@ mod tests {
         assert_eq!(mode["amplitude_summary"]["max"], 1.0);
         assert_eq!(mode["component_summary"]["real_sample_count"], 1);
         assert_eq!(mode["component_summary"]["imag_sample_count"], 1);
+        assert_eq!(mode["value_kind"], "complex_spatial_vector");
+        assert_eq!(mode["component_basis"], "global_xyz");
+        assert_eq!(mode["component_count"], 3);
+        assert_eq!(mode["components"], serde_json::json!(["x", "y", "z"]));
+        assert_eq!(mode["payload_encoding"], "f64_interleaved_real_imag_xyz");
+        assert_eq!(mode["binary_layout"], "complex_f64_pairs_little_endian");
+        assert_eq!(mode["complex_pair_count"], 3);
+        assert_eq!(mode["payload_value_count"], 6);
+        assert_eq!(
+            mode["available_views"],
+            serde_json::json!([
+                "complex",
+                "real",
+                "imag",
+                "abs",
+                "amplitude",
+                "phase",
+                "phase_rotated_real"
+            ])
+        );
+        assert_eq!(mode["default_view"], "phase_rotated_real");
+        assert_eq!(mode["default_phase_rad"], 0.0);
         assert!(
             mode.get("real").is_none()
                 && mode.get("imag").is_none()
@@ -1683,6 +1885,20 @@ mod tests {
             family_manifest["requested_execution"]["calculation_mode"],
             "free_modes"
         );
+        assert_eq!(
+            family_manifest["physics"]["analysis_family"],
+            "magnetic_frequency_domain"
+        );
+        assert_eq!(
+            family_manifest["physics"]["phase_convention"],
+            "exp_minus_i_omega_t"
+        );
+        assert_eq!(family_manifest["physics"]["frequency_units"], "Hz");
+        assert_eq!(
+            family_manifest["physics"]["field_units"],
+            "dimensionless_delta_m"
+        );
+        assert_eq!(family_manifest["physics"]["normalization"], "unit_l2");
         assert_eq!(
             family_manifest["artifacts"]["spectrum_v2_path"],
             "eigen/spectrum.v2.json"
@@ -1801,10 +2017,16 @@ mod tests {
         assert_eq!(point["point"]["angular_frequency_rad_per_s"], 3.0);
         assert_eq!(
             point["response_field_payload_path"],
-            "response/field_payloads/frequency_0001/vector.bin"
+            "response/field_payloads.zarr/frequency_0001/vector_xyz_complex/0.0.0"
         );
         assert_eq!(
             point["field_payload_path"],
+            "response/field_payloads.zarr/frequency_0001/vector_xyz_complex/0.0.0"
+        );
+        assert_eq!(point["storage_format"], "zarr");
+        assert_eq!(point["zarr_store_path"], "response/field_payloads.zarr");
+        assert_eq!(
+            point["compatibility_binary_payload_path"],
             "response/field_payloads/frequency_0001/vector.bin"
         );
         assert_eq!(point["payload_encoding"], "f64_interleaved_real_imag_xyz");
@@ -1829,9 +2051,14 @@ mod tests {
         );
         assert_eq!(point["default_view"], "phase_rotated_real");
         assert_eq!(point["default_phase_rad"], 0.0);
-        let payload = std::fs::read(response_dir.join("field_payloads/frequency_0001/vector.bin"))
-            .expect("response field payload should be written");
+        let payload = std::fs::read(
+            response_dir.join("field_payloads.zarr/frequency_0001/vector_xyz_complex/0.0.0"),
+        )
+        .expect("response field Zarr payload should be written");
         assert_eq!(payload.len(), 16);
+        assert!(response_dir
+            .join("field_payloads/frequency_0001/vector.bin")
+            .is_file());
         assert!(response_dir
             .join("magnetic_response_sweep.v1.json")
             .is_file());
@@ -1886,7 +2113,7 @@ mod tests {
         );
         assert_eq!(
             response_v2["response_field_payload_paths"][1],
-            "response/field_payloads/frequency_0001/vector.bin"
+            "response/field_payloads.zarr/frequency_0001/vector_xyz_complex/0.0.0"
         );
         assert_eq!(
             response_v2["points"][1]["frequency_point_artifact_path"],
@@ -1894,6 +2121,11 @@ mod tests {
         );
         assert_eq!(
             response_v2["points"][1]["response_field_payload_path"],
+            "response/field_payloads.zarr/frequency_0001/vector_xyz_complex/0.0.0"
+        );
+        assert_eq!(response_v2["points"][1]["storage_format"], "zarr");
+        assert_eq!(
+            response_v2["points"][1]["compatibility_binary_payload_path"],
             "response/field_payloads/frequency_0001/vector.bin"
         );
         assert_eq!(
@@ -2093,11 +2325,19 @@ mod tests {
             .is_file());
         assert!(temp
             .path
+            .join("response/field_payloads.zarr/frequency_0000/vector_xyz_complex/0.0.0")
+            .is_file());
+        assert!(temp
+            .path
             .join("response/field_payloads/frequency_0000/vector.bin")
             .is_file());
         assert!(!temp
             .path
             .join("response/frequency_points/frequency_0001.json")
+            .exists());
+        assert!(!temp
+            .path
+            .join("response/field_payloads.zarr/frequency_0001/vector_xyz_complex/0.0.0")
             .exists());
         assert!(!temp
             .path
@@ -2174,6 +2414,10 @@ mod tests {
         assert!(!temp
             .path
             .join("response/field_payloads/frequency_0000/vector.bin")
+            .exists());
+        assert!(!temp
+            .path
+            .join("response/field_payloads.zarr/frequency_0000/vector_xyz_complex/0.0.0")
             .exists());
     }
 }

@@ -409,6 +409,61 @@ describe("study runtime command contributions", () => {
     });
   });
 
+  it("continues a completed hysteresis stage by adding an explicit next run stage", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const layout = new LayoutController(bus);
+    const selection = new SelectionController(bus);
+    const scene = vi.fn(async () => ({
+      scene_revision: 8,
+      study: {
+        stages: [
+          {
+            kind: "hysteresis",
+            stage_id: "hysteresis-1",
+          },
+        ],
+      },
+    }));
+    const commitTransaction = vi.fn(async () => ({ scene_revision: 9 }));
+
+    const result = await registry.execute("hysteresis.continue-to-next-stage", {
+      api: {
+        model: { scene, commitTransaction },
+      } as never,
+      layout,
+      resources,
+      selection,
+      source: "test",
+    }, {
+      stageId: "hysteresis-1",
+    });
+
+    expect(result).toEqual({
+      message: "Continuation run stage added after hysteresis-1.",
+      status: "completed",
+    });
+    const [[request]] = commitTransaction.mock.calls as unknown as [[
+      { merge_patch: { study: { stages: Array<Record<string, unknown>> } } },
+    ]];
+    expect(request.merge_patch.study.stages).toHaveLength(2);
+    expect(request.merge_patch.study.stages[1]).toMatchObject({
+      kind: "run",
+      stage_id: "run-2",
+    });
+    expect(resources.getRevision(MODEL_STUDY_PATH)).toBe(9);
+    expect(resources.getRevision(SIMULATION_STAGES_EXECUTION_PATH)).toBe(9);
+    expect(selection.get()).toMatchObject({
+      kind: "study.stage.run",
+      ref: {
+        stageId: "run-2",
+        stageIndex: 1,
+      },
+    });
+    expect(layout.get().activeModuleTab).toBe("study");
+  });
+
   it("loads a hysteresis point in 3D by publishing an analysis chart point selection", async () => {
     const registry = registryWithStudyRuntimeCommands();
     const bus = new EventBus<KernelEventMap>();

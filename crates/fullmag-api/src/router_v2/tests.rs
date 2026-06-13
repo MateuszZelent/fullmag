@@ -11485,6 +11485,172 @@ async fn commands_endpoint_persists_runtime_intent_fields() {
 }
 
 #[tokio::test]
+async fn commands_endpoint_invalidates_hysteresis_stage_resources() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 13;
+        snapshot.scalar_revision = 5;
+        snapshot.scene_document = Some(sample_scene_document_with_stage(serde_json::json!({
+            "entrypoint_kind": "flat_hysteresis",
+            "field_values_mT": [100.0, 50.0, 0.0, -50.0, -100.0],
+            "kind": "hysteresis",
+            "stage_id": "hysteresis-1"
+        })));
+        snapshot.stage_execution = Some(StageExecutionState {
+            total_stages: 1,
+            completed_stage_indexes: Vec::new(),
+            stages: vec![StageExecutionRecord {
+                stage_id: Some("hysteresis-1".into()),
+                kind: Some("flat_hysteresis".into()),
+                status: StageLifecycleState::Running,
+                command_id: Some("cmd-hysteresis-run".into()),
+                started_at_unix_ms: Some(1_700_000_002_000),
+                completed_at_unix_ms: None,
+                reason: None,
+                artifact_refs: vec!["artifacts/hysteresis-1".into()],
+                checkpoint_ref: None,
+                loaded_state_ref: None,
+                resume_from_checkpoint_ref: None,
+                state_transition: None,
+                state_transition_kind: None,
+                state_transition_reason: None,
+                state_transfer_operator_kind: None,
+                state_transition_ui_presentation: None,
+                metric_name: None,
+                metric_value: None,
+                threshold: None,
+                current_field_m_t: Some(50.0),
+                current_point_index: Some(1),
+                current_settle_step_index: Some(0),
+                current_settle_step_kind: Some("relax".into()),
+                current_settle_step_method: Some("llg_heun".into()),
+            }],
+            stage_statuses: vec![StageLifecycleState::Running],
+            active_stage_index: Some(0),
+            active_stage_kind: Some("hysteresis".into()),
+            runtime_state: RuntimeLifecycleState::Running,
+        });
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "stop",
+                        "target": {
+                            "kind": "stage_index",
+                            "stage_index": 0
+                        },
+                        "precondition": {
+                            "runtime_state": "running"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = response.status();
+    let body = body_bytes(response).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "unexpected response body: {}",
+        String::from_utf8_lossy(&body)
+    );
+    let submitted: serde_json::Value =
+        serde_json::from_slice(&body).expect("response should be json");
+    let command_id = submitted["command_id"]
+        .as_str()
+        .expect("command_id should be present");
+
+    let detail_response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/v2/sessions/current/simulation/commands/{command_id}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(detail_response.status(), StatusCode::OK);
+    let detail = body_json(detail_response).await;
+    assert_eq!(detail["stage_id"], "hysteresis-1");
+    let invalidations = detail["resource_invalidations"]
+        .as_array()
+        .expect("resource_invalidations should be an array");
+    assert_command_invalidation(invalidations, "simulation/commands", "observed");
+    assert_command_invalidation(
+        invalidations,
+        "simulation/stages/hysteresis-1/hysteresis/progress",
+        "expected",
+    );
+    assert_command_invalidation(
+        invalidations,
+        "simulation/stages/hysteresis-1/hysteresis/execution-tree",
+        "expected",
+    );
+    assert_command_invalidation(
+        invalidations,
+        "simulation/stages/hysteresis-1/hysteresis/saturation",
+        "expected",
+    );
+    assert_command_invalidation(
+        invalidations,
+        "analysis/hysteresis/hysteresis-1/metrics",
+        "expected",
+    );
+    assert_command_invalidation(
+        invalidations,
+        "analysis/hysteresis/hysteresis-1/points",
+        "expected",
+    );
+    assert_command_invalidation(
+        invalidations,
+        "analysis/hysteresis/hysteresis-1/branches",
+        "expected",
+    );
+    assert_command_invalidation(
+        invalidations,
+        "analysis/hysteresis/hysteresis-1/minor-loops",
+        "expected",
+    );
+    assert_command_invalidation(
+        invalidations,
+        "analysis/hysteresis/hysteresis-1/reversal-fields",
+        "expected",
+    );
+    assert_command_invalidation(
+        invalidations,
+        "analysis/hysteresis/hysteresis-1/adaptive-refinement",
+        "expected",
+    );
+    assert_command_invalidation(
+        invalidations,
+        "analysis/hysteresis/hysteresis-1/saturation",
+        "expected",
+    );
+    assert_command_invalidation(
+        invalidations,
+        "analysis/hysteresis-family/hysteresis-1",
+        "expected",
+    );
+    assert_command_invalidation(invalidations, "data/artifacts", "expected");
+}
+
+#[tokio::test]
 async fn commands_endpoint_rejects_runtime_precondition_mismatch() {
     let state = test_app_state_with_live_session().await;
     let app = build_v2_router().with_state(state);
@@ -12734,6 +12900,158 @@ async fn hysteresis_progress_endpoint_projects_live_magnetization_for_sample_ang
 }
 
 #[tokio::test]
+async fn hysteresis_progress_endpoint_averages_only_magnetic_fem_nodes() {
+    let (app, state, _repo_root) = test_router_with_session_store_state().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mesh = sample_scoped_fem_mesh_payload();
+        snapshot.state_version = 16;
+        snapshot.scene_document = Some(sample_scene_document_with_stage(serde_json::json!({
+            "entrypoint_kind": "flat_hysteresis",
+            "field_values_mT": [100.0, 50.0, 0.0],
+            "kind": "hysteresis",
+            "orientation": {
+                "kind": "preset",
+                "preset_name": "in_plane_y"
+            },
+            "stage_id": "stage-fem-magnetic-average"
+        })));
+        if let Some(live_state) = snapshot.live_state.as_mut() {
+            live_state.latest_step.fem_mesh = Some(mesh);
+            live_state.latest_step.magnetization = Some(vec![
+                0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            ]);
+        }
+        snapshot.stage_execution = Some(StageExecutionState {
+            total_stages: 1,
+            completed_stage_indexes: Vec::new(),
+            stages: vec![StageExecutionRecord {
+                stage_id: Some("stage-fem-magnetic-average".into()),
+                kind: Some("flat_hysteresis".into()),
+                status: StageLifecycleState::Running,
+                command_id: Some("cmd-hyst".into()),
+                started_at_unix_ms: Some(1_700_000_002_000),
+                completed_at_unix_ms: None,
+                reason: None,
+                artifact_refs: Vec::new(),
+                checkpoint_ref: None,
+                loaded_state_ref: None,
+                resume_from_checkpoint_ref: None,
+                state_transition: None,
+                state_transition_kind: None,
+                state_transition_reason: None,
+                state_transfer_operator_kind: None,
+                state_transition_ui_presentation: None,
+                metric_name: None,
+                metric_value: None,
+                threshold: None,
+                current_field_m_t: Some(50.0),
+                current_point_index: Some(1),
+                current_settle_step_index: Some(0),
+                current_settle_step_kind: Some("minimize".into()),
+                current_settle_step_method: Some("projected_gradient_bb".into()),
+            }],
+            stage_statuses: vec![StageLifecycleState::Running],
+            active_stage_index: Some(0),
+            active_stage_kind: Some("flat_hysteresis".into()),
+            runtime_state: RuntimeLifecycleState::Running,
+        });
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/stages/stage-fem-magnetic-average/hysteresis/progress")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["current_m_avg"], serde_json::json!([0.0, 1.0, 0.0]));
+    assert!((json["current_m_parallel"].as_f64().unwrap() - 1.0).abs() < 1e-12);
+}
+
+#[tokio::test]
+async fn hysteresis_progress_endpoint_uses_snapshot_fem_mesh_for_live_average() {
+    let (app, state, _repo_root) = test_router_with_session_store_state().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_scoped_fem_mesh_payload());
+        snapshot.state_version = 17;
+        snapshot.scene_document = Some(sample_scene_document_with_stage(serde_json::json!({
+            "entrypoint_kind": "flat_hysteresis",
+            "field_values_mT": [100.0, 50.0, 0.0],
+            "kind": "hysteresis",
+            "orientation": {
+                "kind": "preset",
+                "preset_name": "in_plane_y"
+            },
+            "stage_id": "stage-snapshot-fem-average"
+        })));
+        if let Some(live_state) = snapshot.live_state.as_mut() {
+            live_state.latest_step.fem_mesh = None;
+            live_state.latest_step.magnetization = Some(vec![
+                0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            ]);
+        }
+        snapshot.stage_execution = Some(StageExecutionState {
+            total_stages: 1,
+            completed_stage_indexes: Vec::new(),
+            stages: vec![StageExecutionRecord {
+                stage_id: Some("stage-snapshot-fem-average".into()),
+                kind: Some("flat_hysteresis".into()),
+                status: StageLifecycleState::Running,
+                command_id: Some("cmd-hyst".into()),
+                started_at_unix_ms: Some(1_700_000_002_000),
+                completed_at_unix_ms: None,
+                reason: None,
+                artifact_refs: Vec::new(),
+                checkpoint_ref: None,
+                loaded_state_ref: None,
+                resume_from_checkpoint_ref: None,
+                state_transition: None,
+                state_transition_kind: None,
+                state_transition_reason: None,
+                state_transfer_operator_kind: None,
+                state_transition_ui_presentation: None,
+                metric_name: None,
+                metric_value: None,
+                threshold: None,
+                current_field_m_t: Some(50.0),
+                current_point_index: Some(1),
+                current_settle_step_index: Some(0),
+                current_settle_step_kind: Some("minimize".into()),
+                current_settle_step_method: Some("projected_gradient_bb".into()),
+            }],
+            stage_statuses: vec![StageLifecycleState::Running],
+            active_stage_index: Some(0),
+            active_stage_kind: Some("flat_hysteresis".into()),
+            runtime_state: RuntimeLifecycleState::Running,
+        });
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/stages/stage-snapshot-fem-average/hysteresis/progress")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["current_m_avg"], serde_json::json!([0.0, 1.0, 0.0]));
+    assert!((json["current_m_parallel"].as_f64().unwrap() - 1.0).abs() < 1e-12);
+}
+
+#[tokio::test]
 async fn hysteresis_execution_tree_returns_windowed_active_points() {
     let (app, state, repo_root) = test_router_with_session_store_state().await;
     let artifact_dir = repo_root.join("artifacts");
@@ -12750,12 +13068,20 @@ async fn hysteresis_execution_tree_returns_windowed_active_points() {
                 "m_avg": [0.0, 0.0, 0.3],
                 "status": "running",
                 "warning_count": 2,
-                "snapshot_id": "hysteresis_point_004"
+                "snapshot_id": "hysteresis_point_004",
+                "field_orientation": {
+                    "kind": "preset",
+                    "preset_name": "oop_positive"
+                },
+                "measurement_axis": {
+                    "kind": "field_axis"
+                }
             }
         ]))
         .expect("hysteresis points should serialize"),
     )
     .expect("hysteresis points should be writable");
+    write_hysteresis_zarr_snapshot_fixture(&artifact_dir, "hysteresis_point_004");
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.state_version = 13;
         snapshot.scene_document = Some(sample_scene_document_with_stage(serde_json::json!({
@@ -12863,6 +13189,19 @@ async fn hysteresis_execution_tree_returns_windowed_active_points() {
     assert_eq!(json["nodes"][2]["children"][2]["kind"], "snapshot");
     assert_eq!(json["nodes"][2]["children"][2]["status"], "done");
     assert_eq!(
+        json["nodes"][2]["children"][2]["field_orientation"],
+        serde_json::json!({
+            "kind": "preset",
+            "preset_name": "oop_positive"
+        })
+    );
+    assert_eq!(
+        json["nodes"][2]["children"][2]["measurement_axis"],
+        serde_json::json!({
+            "kind": "field_axis"
+        })
+    );
+    assert_eq!(
         json["nodes"][2]["children"][2]["resource_ref"],
         "/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full&snapshot_id=hysteresis_point_004&stage_id=hysteresis-1"
     );
@@ -12877,6 +13216,98 @@ async fn hysteresis_execution_tree_returns_windowed_active_points() {
     assert_eq!(json["nodes"][3]["status"], "queued");
     assert_eq!(json["nodes"][4]["kind"], "transition");
     assert_eq!(json["nodes"][4]["status"], "queued");
+}
+
+#[tokio::test]
+async fn hysteresis_execution_tree_marks_missing_snapshot_payloads() {
+    let (app, state, repo_root) = test_router_with_session_store_state().await;
+    let artifact_dir = repo_root.join("artifacts");
+    fs::create_dir_all(&artifact_dir).expect("artifact dir should be writable");
+    fs::write(
+        artifact_dir.join("hysteresis_points.json"),
+        serde_json::to_vec(&serde_json::json!([
+            {
+                "point_id": 0,
+                "field_value_mT": 20.0,
+                "m_parallel": 0.3,
+                "m_oop": 0.3,
+                "m_ip": 0.0,
+                "m_avg": [0.0, 0.0, 0.3],
+                "status": "completed",
+                "snapshot_id": "hysteresis_point_missing"
+            }
+        ]))
+        .expect("hysteresis points should serialize"),
+    )
+    .expect("hysteresis points should be writable");
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 14;
+        snapshot.scene_document = Some(sample_scene_document_with_stage(serde_json::json!({
+            "entrypoint_kind": "flat_hysteresis",
+            "field_values_mT": [20.0],
+            "kind": "hysteresis",
+            "stage_id": "hysteresis-1"
+        })));
+        snapshot.stage_execution = Some(StageExecutionState {
+            total_stages: 1,
+            completed_stage_indexes: vec![0],
+            stages: vec![StageExecutionRecord {
+                stage_id: Some("hysteresis-1".into()),
+                kind: Some("hysteresis".into()),
+                status: StageLifecycleState::Completed,
+                command_id: Some("cmd-hyst".into()),
+                started_at_unix_ms: Some(1_700_000_002_000),
+                completed_at_unix_ms: Some(1_700_000_003_000),
+                reason: None,
+                artifact_refs: Vec::new(),
+                checkpoint_ref: None,
+                loaded_state_ref: None,
+                resume_from_checkpoint_ref: None,
+                state_transition: None,
+                state_transition_kind: None,
+                state_transition_reason: None,
+                state_transfer_operator_kind: None,
+                state_transition_ui_presentation: None,
+                metric_name: None,
+                metric_value: None,
+                threshold: None,
+                current_field_m_t: Some(20.0),
+                current_point_index: Some(0),
+                current_settle_step_index: None,
+                current_settle_step_kind: None,
+                current_settle_step_method: None,
+            }],
+            stage_statuses: vec![StageLifecycleState::Completed],
+            active_stage_index: None,
+            active_stage_kind: Some("hysteresis".into()),
+            runtime_state: RuntimeLifecycleState::Completed,
+        });
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/stages/hysteresis-1/hysteresis/execution-tree?window=all")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["nodes"].as_array().map(Vec::len), Some(1));
+    assert_eq!(json["nodes"][0]["children"][0]["kind"], "snapshot");
+    assert_eq!(json["nodes"][0]["children"][0]["status"], "missing");
+    assert_eq!(
+        json["nodes"][0]["children"][0]["label"],
+        "Snapshot hysteresis_point_missing missing"
+    );
+    assert_eq!(
+        json["nodes"][0]["children"][0]["resource_ref"],
+        "/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full&snapshot_id=hysteresis_point_missing&stage_id=hysteresis-1"
+    );
 }
 
 #[tokio::test]
@@ -15596,9 +16027,16 @@ async fn hysteresis_analysis_endpoints_read_typed_artifacts() {
                 "algorithm_id": "settle_step_000_minimize",
                 "method": "projected_gradient_bb",
                 "status": "non_converged",
+                "stop_reason": "max_steps",
                 "fallback_reason": null,
                 "retry_attempt": 0,
                 "resolved_timestep_s": 1e-13,
+                "resolved_parameters": {
+                    "kind": "minimize",
+                    "method": "projected_gradient_bb",
+                    "energy_tolerance": 1e-20,
+                    "max_steps": 200
+                },
                 "torque": 7.0,
                 "energy": -3.5
             },
@@ -15609,9 +16047,16 @@ async fn hysteresis_analysis_endpoints_read_typed_artifacts() {
                 "algorithm_id": "settle_step_001_relax",
                 "method": "llg_overdamped",
                 "status": "converged",
+                "stop_reason": "torque",
                 "fallback_reason": "previous_step_non_converged",
                 "retry_attempt": 0,
                 "resolved_timestep_s": 1e-13,
+                "resolved_parameters": {
+                    "kind": "relax",
+                    "method": "llg_overdamped",
+                    "alpha": 1.0,
+                    "max_steps": 100
+                },
                 "torque": 1.0,
                 "energy": -4.0
             },
@@ -15974,6 +16419,11 @@ async fn hysteresis_analysis_endpoints_read_typed_artifacts() {
     assert_eq!(settle_trace.as_array().map(Vec::len), Some(2));
     assert_eq!(settle_trace[0]["point_id"], 2);
     assert_eq!(settle_trace[0]["algorithm_id"], "settle_step_000_minimize");
+    assert_eq!(settle_trace[0]["stop_reason"], "max_steps");
+    assert_eq!(
+        settle_trace[0]["resolved_parameters"]["energy_tolerance"],
+        1e-20
+    );
     assert_eq!(
         settle_trace[1]["fallback_reason"],
         "previous_step_non_converged"
@@ -20909,7 +21359,18 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
         serde_json::to_vec(&serde_json::json!({
             "schema_version": "eigen_mode.v2",
             "sample_index": 0,
-            "raw_mode_index": 3
+            "raw_mode_index": 3,
+            "value_kind": "complex_spatial_vector",
+            "component_basis": "global_xyz",
+            "component_count": 3,
+            "components": ["x", "y", "z"],
+            "payload_encoding": "f64_interleaved_real_imag_xyz",
+            "binary_layout": "complex_f64_pairs_little_endian",
+            "complex_pair_count": 3,
+            "payload_value_count": 6,
+            "available_views": ["complex", "real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"],
+            "default_view": "phase_rotated_real",
+            "default_phase_rad": 0.0
         }))
         .expect("mode metadata fixture should serialize"),
     )
@@ -20921,16 +21382,25 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
         serde_json::to_vec(&serde_json::json!({
             "schema_version": "frequency_domain_manifest.v1",
             "stage_kind": "combined",
+            "physics": {
+                "analysis_family": "magnetic_frequency_domain",
+                "phase_convention": "exp_minus_i_omega_t",
+                "frequency_units": "Hz",
+                "field_units": "dimensionless_delta_m",
+                "normalization": "unit_l2"
+            },
             "artifacts": {
                 "spectrum_v2_path": "eigen/spectrum.v2.json",
                 "branches_v2_path": "eigen/branches.v2.json",
                 "dispersion_csv_path": "eigen/dispersion.csv",
                 "mode_metadata_paths": ["eigen/modes/sample_0000/mode_0003.json"],
-                "response_sweep_v2_path": "response/magnetic_response_sweep.v2.json"
+                "response_sweep_v2_path": "response/magnetic_response_sweep.v2.json",
+                "response_cancel_requested_v1_path": null
             },
             "resources": {
                 "eigen_diagnostics_resource_key": "/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2",
                 "response_diagnostics_resource_key": "/v2/sessions/current/analysis/frequency-domain/response/diagnostics.v1",
+                "response_cancel_requested_resource_key": null,
                 "mode_field_resources": ["/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/0/3/meta"]
             }
         }))
@@ -21032,6 +21502,26 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
         "eigen/spectrum.v2.json"
     );
     assert_eq!(
+        payload["result_manifest"]["payload"]["physics"]["analysis_family"],
+        "magnetic_frequency_domain"
+    );
+    assert_eq!(
+        payload["result_manifest"]["payload"]["physics"]["phase_convention"],
+        "exp_minus_i_omega_t"
+    );
+    assert_eq!(
+        payload["result_manifest"]["payload"]["physics"]["frequency_units"],
+        "Hz"
+    );
+    assert_eq!(
+        payload["result_manifest"]["payload"]["physics"]["field_units"],
+        "dimensionless_delta_m"
+    );
+    assert_eq!(
+        payload["result_manifest"]["payload"]["physics"]["normalization"],
+        "unit_l2"
+    );
+    assert_eq!(
         payload["result_manifest"]["payload"]["artifacts"]["branches_v2_path"],
         "eigen/branches.v2.json"
     );
@@ -21042,6 +21532,15 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
     assert_eq!(
         payload["result_manifest"]["payload"]["artifacts"]["mode_metadata_paths"][0],
         "eigen/modes/sample_0000/mode_0003.json"
+    );
+    assert_eq!(
+        payload["result_manifest"]["payload"]["artifacts"]["response_cancel_requested_v1_path"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        payload["result_manifest"]["payload"]["resources"]
+            ["response_cancel_requested_resource_key"],
+        serde_json::Value::Null
     );
     assert_eq!(
         payload["result_manifest"]["payload"]["resources"]["mode_field_resources"][0],
@@ -21151,7 +21650,14 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["status"], "missing");
     assert_eq!(payload["field_id"], "analysis:eigen:sample-0000:mode-0003");
-    assert_eq!(payload["value_kind"], "complex_vector");
+    assert_eq!(payload["value_kind"], "complex_spatial_vector");
+    assert_eq!(payload["component_basis"], "global_xyz");
+    assert_eq!(payload["component_count"], 3);
+    assert_eq!(payload["components"], serde_json::json!(["x", "y", "z"]));
+    assert_eq!(payload["payload_encoding"], "f64_interleaved_real_imag_xyz");
+    assert_eq!(payload["binary_layout"], "complex_f64_pairs_little_endian");
+    assert_eq!(payload["complex_pair_count"], 3);
+    assert_eq!(payload["payload_value_count"], 6);
     assert_eq!(payload["default_view"], "phase_rotated_real");
     assert_eq!(payload["default_phase_rad"], 0.0);
     assert_eq!(
@@ -21200,6 +21706,8 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
     assert_eq!(payload["value_kind"], "complex_spatial_vector");
     assert_eq!(payload["component_basis"], "global_xyz");
     assert_eq!(payload["component_count"], 3);
+    assert_eq!(payload["components"], serde_json::json!(["x", "y", "z"]));
+    assert_eq!(payload["payload_encoding"], "f64_interleaved_real_imag_xyz");
     assert_eq!(payload["binary_layout"], "complex_f64_pairs_little_endian");
     assert_eq!(payload["complex_pair_count"], 3);
     assert_eq!(payload["payload_value_count"], 6);
@@ -21256,6 +21764,49 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
         .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
         .collect();
     assert_eq!(values, vec![1.0, 0.0, 3.0]);
+
+    fs::write(
+        eigen_dir
+            .join("modes")
+            .join("sample_0000")
+            .join("mode_0003.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "eigen_mode.v2",
+            "sample_index": 0,
+            "raw_mode_index": 3,
+            "value_kind": "complex_spatial_vector",
+            "component_basis": "global_xyz",
+            "component_count": 3,
+            "components": ["x", "y", "z"],
+            "payload_encoding": "f64_interleaved_real_imag_xyz",
+            "binary_layout": "complex_f64_pairs_little_endian",
+            "complex_pair_count": 3,
+            "payload_value_count": 12,
+            "available_views": ["complex", "real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"],
+            "default_view": "phase_rotated_real",
+            "default_phase_rad": 0.0
+        }))
+        .expect("invalid mode metadata fixture should serialize"),
+    )
+    .expect("invalid mode metadata fixture should be written");
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0003/samples/vector")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = body_bytes(response).await;
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(payload["error"]
+        .as_str()
+        .expect("error should be present")
+        .contains("payload"));
 
     let response = app
         .clone()
@@ -21378,6 +21929,92 @@ async fn frequency_domain_eigen_mode_field_meta_rejects_invalid_complex_xyz_payl
 }
 
 #[tokio::test]
+async fn frequency_domain_eigen_mode_field_prefers_zarr_payload_path() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let mode_dir = artifact_dir.join("eigen").join("modes").join("sample_0000");
+    fs::create_dir_all(&mode_dir).expect("mode metadata directory should be created");
+    let zarr_array_dir = artifact_dir
+        .join("eigen")
+        .join("mode_fields.zarr")
+        .join("sample_0000")
+        .join("mode_0003")
+        .join("vector_xyz_complex");
+    fs::create_dir_all(&zarr_array_dir).expect("mode Zarr directory should be created");
+    let zarr_chunk_path = "eigen/mode_fields.zarr/sample_0000/mode_0003/vector_xyz_complex/0.0.0";
+    fs::write(
+        mode_dir.join("mode_0003.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "eigen_mode.v2",
+            "sample_index": 0,
+            "raw_mode_index": 3,
+            "value_kind": "complex_spatial_vector",
+            "component_basis": "global_xyz",
+            "component_count": 3,
+            "components": ["x", "y", "z"],
+            "storage_format": "zarr",
+            "zarr_store_path": "eigen/mode_fields.zarr",
+            "zarr_array_path": "eigen/mode_fields.zarr/sample_0000/mode_0003/vector_xyz_complex",
+            "zarr_chunk_path": zarr_chunk_path,
+            "zarr_dtype": "<f8",
+            "zarr_shape": [1, 3, 2],
+            "zarr_chunk_shape": [1, 3, 2],
+            "zarr_compressor": null,
+            "compatibility_binary_payload_path": "eigen/mode_fields/sample_0000/mode_0003/vector.bin",
+            "payload_encoding": "f64_interleaved_real_imag_xyz",
+            "binary_layout": "complex_f64_pairs_little_endian",
+            "complex_pair_count": 3,
+            "payload_value_count": 6,
+            "available_views": ["complex", "real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"],
+            "default_view": "phase_rotated_real",
+            "default_phase_rad": 0.0
+        }))
+        .expect("mode metadata should serialize"),
+    )
+    .expect("mode metadata should be written");
+    let mut zarr_chunk_bytes = Vec::new();
+    for value in [2.0f64, 0.0, 0.0, 2.0, 5.0, 12.0] {
+        zarr_chunk_bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    fs::write(zarr_array_dir.join("0.0.0"), zarr_chunk_bytes)
+        .expect("Zarr mode chunk should be written");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/0/3/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_bytes(response).await;
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["status"], "ready");
+    assert_eq!(payload["artifact_path"], zarr_chunk_path);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0003/samples/vector")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_bytes(response).await;
+    let values: Vec<f64> = body[48..]
+        .chunks_exact(8)
+        .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
+        .collect();
+    assert_eq!(values, vec![2.0, 0.0, 5.0]);
+}
+
+#[tokio::test]
 async fn frequency_domain_progress_reports_interrupted_partial_response_bundle() {
     let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
     write_response_sweep_bundle_with_progress(
@@ -21465,6 +22102,60 @@ async fn frequency_domain_progress_fallback_reads_nested_frequency_point_hz() {
     assert_eq!(payload["completed_frequency_points"], 2);
     assert_eq!(payload["state"], "completed");
     assert_eq!(payload["current_frequency_hz"], 2.0e9);
+}
+
+#[tokio::test]
+async fn frequency_domain_eigen_mode_field_rejects_payload_without_metadata() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let mode_field_dir = artifact_dir
+        .join("eigen")
+        .join("mode_fields")
+        .join("sample_0000")
+        .join("mode_0000");
+    fs::create_dir_all(&mode_field_dir).expect("mode field directory should be created");
+    let mut mode_field_bytes = Vec::new();
+    for value in [1.0f64, 0.0, 0.0, 1.0, 3.0, 4.0] {
+        mode_field_bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    fs::write(mode_field_dir.join("vector.bin"), mode_field_bytes)
+        .expect("mode field payload should be written");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/0/0/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = body_bytes(response).await;
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(payload["error"]
+        .as_str()
+        .expect("error should be present")
+        .contains("metadata"));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0000/samples/vector")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = body_bytes(response).await;
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(payload["error"]
+        .as_str()
+        .expect("error should be present")
+        .contains("metadata"));
 }
 
 #[tokio::test]
@@ -21998,6 +22689,125 @@ async fn frequency_domain_response_field_fallback_uses_spatial_xyz_payload() {
             .and_then(|value| value.to_str().ok()),
         Some("3")
     );
+}
+
+#[tokio::test]
+async fn frequency_domain_response_field_prefers_zarr_payload_path() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let response_dir = artifact_dir.join("response");
+    let frequency_points_dir = response_dir.join("frequency_points");
+    let zarr_array_dir = response_dir
+        .join("field_payloads.zarr")
+        .join("frequency_0001")
+        .join("vector_xyz_complex");
+    fs::create_dir_all(&frequency_points_dir).expect("frequency point directory should exist");
+    fs::create_dir_all(&zarr_array_dir).expect("response Zarr array directory should exist");
+    let zarr_chunk_path = "response/field_payloads.zarr/frequency_0001/vector_xyz_complex/0.0.0";
+    let mut spatial_payload = Vec::new();
+    for value in [
+        9.0f64, 0.0, 1.0, 0.0, 8.0, 0.0, 2.0, 0.0, 7.0, 0.0, 3.0, 0.0,
+    ] {
+        spatial_payload.extend_from_slice(&value.to_le_bytes());
+    }
+    fs::write(zarr_array_dir.join("0.0.0"), spatial_payload)
+        .expect("Zarr response chunk should be written");
+    fs::write(
+        frequency_points_dir.join("frequency_0001.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "frequency_response_point.v1",
+            "frequency_index": 1,
+            "frequency_hz": 2.0e9,
+            "field_payload_path": zarr_chunk_path,
+            "storage_format": "zarr",
+            "zarr_store_path": "response/field_payloads.zarr",
+            "zarr_array_path": "response/field_payloads.zarr/frequency_0001/vector_xyz_complex",
+            "zarr_chunk_path": zarr_chunk_path,
+            "zarr_dtype": "<f8",
+            "zarr_shape": [2, 3, 2],
+            "zarr_chunk_shape": [2, 3, 2],
+            "zarr_compressor": null,
+            "compatibility_binary_payload_path": "response/field_payloads/frequency_0001/vector_xyz.bin",
+            "payload_encoding": "f64_interleaved_real_imag_xyz",
+            "binary_layout": "complex_f64_pairs_little_endian",
+            "value_kind": "complex_spatial_vector",
+            "component_basis": "global_xyz",
+            "component_count": 3,
+            "components": ["x", "y", "z"],
+            "complex_pair_count": 6,
+            "payload_value_count": 12,
+            "available_views": ["complex", "real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"],
+            "default_view": "phase_rotated_real",
+            "default_phase_rad": 0.0
+        }))
+        .expect("response point metadata fixture should serialize"),
+    )
+    .expect("response point metadata fixture should be written");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/response/field/1/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_bytes(response).await;
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["status"], "ready");
+    assert_eq!(payload["artifact_path"], zarr_chunk_path);
+    assert_eq!(payload["storage_format"], "zarr");
+    assert_eq!(payload["zarr_store_path"], "response/field_payloads.zarr");
+    assert_eq!(
+        payload["zarr_array_path"],
+        "response/field_payloads.zarr/frequency_0001/vector_xyz_complex"
+    );
+    assert_eq!(payload["zarr_chunk_path"], zarr_chunk_path);
+    assert_eq!(payload["zarr_dtype"], "<f8");
+    assert_eq!(payload["zarr_shape"], serde_json::json!([2, 3, 2]));
+    assert_eq!(payload["zarr_chunk_shape"], serde_json::json!([2, 3, 2]));
+    assert!(payload["zarr_compressor"].is_null());
+    assert_eq!(
+        payload["compatibility_binary_payload_path"],
+        "response/field_payloads/frequency_0001/vector_xyz.bin"
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/data/fields/analysis:frequency-response:frequency-0001/samples/vector?view=phase_rotated_real&phase_rad=0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-point-count")
+            .and_then(|value| value.to_str().ok()),
+        Some("2")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-n-comp")
+            .and_then(|value| value.to_str().ok()),
+        Some("3")
+    );
+    let body = body_bytes(response).await;
+    let values: Vec<f64> = body[48..]
+        .chunks_exact(8)
+        .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
+        .collect();
+    assert_eq!(values, vec![9.0, 1.0, 8.0, 2.0, 7.0, 3.0]);
 }
 
 #[tokio::test]

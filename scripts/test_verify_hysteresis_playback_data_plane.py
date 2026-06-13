@@ -22,25 +22,34 @@ def write_playback_fixture(
     root: Path,
     *,
     average_weights: list[float] | None = None,
+    include_second_snapshot: bool = False,
     point_average: list[float] | None = None,
 ) -> None:
     field_root = root / "hysteresis.zarr" / "fields" / "m"
     field_root.mkdir(parents=True)
     (root / "hysteresis_snapshots" / "hysteresis_point_001").mkdir(parents=True)
+    if include_second_snapshot:
+        (root / "hysteresis_snapshots" / "hysteresis_point_002").mkdir(parents=True)
     expected_average = point_average or [0.5, 0.5, 0.0]
-
-    (root / "hysteresis_points.json").write_text(
-        json.dumps(
-            [
-                {
-                    "point_id": 0,
-                    "field_value_mT": 25.0,
-                    "m_avg": expected_average,
-                    "snapshot_id": "hysteresis_point_001",
-                }
-            ]
+    points = [
+        {
+            "point_id": 0,
+            "field_value_mT": 25.0,
+            "m_avg": expected_average,
+            "snapshot_id": "hysteresis_point_001",
+        }
+    ]
+    if include_second_snapshot:
+        points.append(
+            {
+                "point_id": 1,
+                "field_value_mT": -25.0,
+                "m_avg": [0.0, 0.5, 0.5],
+                "snapshot_id": "hysteresis_point_002",
+            }
         )
-    )
+
+    (root / "hysteresis_points.json").write_text(json.dumps(points))
     (root / "hysteresis.zarr" / ".zgroup").write_text(json.dumps({"zarr_format": 2}))
     root_attrs = {"preferred_container": "zarr", "quantity_ids": ["m"]}
     field_attrs = {
@@ -57,7 +66,7 @@ def write_playback_fixture(
         json.dumps(
             {
                 "zarr_format": 2,
-                "shape": [1, 3, 2],
+                "shape": [2 if include_second_snapshot else 1, 3, 2],
                 "chunks": [1, 3, 2],
                 "dtype": "<f8",
                 "compressor": None,
@@ -69,18 +78,25 @@ def write_playback_fixture(
         )
     )
     (field_root / ".zattrs").write_text(json.dumps(field_attrs))
-    (field_root / "samples.csv").write_text(
-        "\n".join(
-            [
-                "sample_index,snapshot_id,point_id,field_value_mT,quantity_id,chunk_key,grid_x,grid_y,cell_count,grid_z,component_count,dtype",
-                "0,hysteresis_point_001,0,25.0,m,0.0.0,2,1,2,1,3,<f8",
-            ]
+    sample_rows = [
+        "sample_index,snapshot_id,point_id,field_value_mT,quantity_id,chunk_key,grid_x,grid_y,cell_count,grid_z,component_count,dtype",
+        "0,hysteresis_point_001,0,25.0,m,0.0.0,2,1,2,1,3,<f8",
+    ]
+    if include_second_snapshot:
+        sample_rows.append(
+            "1,hysteresis_point_002,1,-25.0,m,1.0.0,2,1,2,1,3,<f8"
         )
-        + "\n"
-    )
+    (field_root / "samples.csv").write_text("\n".join(sample_rows) + "\n")
     (field_root / "0.0.0").write_bytes(
         b"".join(struct.pack("<d", value) for value in [1.0, 0.0, 0.0, 1.0, 0.0, 0.0])
     )
+    if include_second_snapshot:
+        (field_root / "1.0.0").write_bytes(
+            b"".join(
+                struct.pack("<d", value)
+                for value in [0.0, 0.0, 0.5, 0.5, 0.5, 0.5]
+            )
+        )
     if average_weights is not None:
         weights_root = field_root / "average_weights"
         weights_root.mkdir()
@@ -112,6 +128,17 @@ def write_playback_fixture(
             }
         )
     )
+    if include_second_snapshot:
+        (root / "hysteresis_snapshots" / "hysteresis_point_002" / "m.json").write_text(
+            json.dumps(
+                {
+                    "quantity_id": "m",
+                    "snapshot_id": "hysteresis_point_002",
+                    "layout": {"grid_cells": [2, 1, 1]},
+                    "values": [[0.0, 0.5, 0.5], [0.0, 0.5, 0.5]],
+                }
+            )
+        )
 
 
 def fmvp_payload(values: list[float], *, quantity_id: str = "m") -> bytes:
@@ -135,15 +162,19 @@ def fmvp_payload(values: list[float], *, quantity_id: str = "m") -> bytes:
 class HysteresisApiHandler(BaseHTTPRequestHandler):
     point_m_avg = [0.5, 0.5, 0.0]
     point_count_header = "2"
+    points_payload: list[dict] | None = None
     value_count_header = "6"
     received_snapshot_payload: dict | None = None
     vector_requests: list[str] = []
+    vector_values_by_snapshot = {
+        "hysteresis_point_001": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+    }
 
     def log_message(self, _format: str, *_args: object) -> None:
         return
 
     def do_POST(self) -> None:
-        if self.path != "/v1/internal/live/current/snapshot":
+        if self.path != "/v2/sessions/current/internal/live/snapshot":
             self.send_error(404)
             return
         length = int(self.headers.get("content-length", "0"))
@@ -158,39 +189,38 @@ class HysteresisApiHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/v2/sessions/current/analysis/hysteresis/stage_0/points":
+            points_payload = HysteresisApiHandler.points_payload or [
+                {
+                    "point_id": 0,
+                    "field_value_mT": 25.0,
+                    "m_avg": HysteresisApiHandler.point_m_avg,
+                    "snapshot_id": "hysteresis_point_001",
+                    "snapshot_vector_resource_ref": "/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full&snapshot_id=hysteresis_point_001&stage_id=stage-000",
+                }
+            ]
             self.send_response(200)
             self.send_header("content-type", "application/json")
             self.end_headers()
-            self.wfile.write(
-                json.dumps(
-                    [
-                        {
-                            "point_id": 0,
-                            "field_value_mT": 25.0,
-                            "m_avg": HysteresisApiHandler.point_m_avg,
-                            "snapshot_id": "hysteresis_point_001",
-                            "snapshot_vector_resource_ref": "/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full&snapshot_id=hysteresis_point_001&stage_id=stage-000",
-                        }
-                    ]
-                ).encode("utf-8")
-            )
+            self.wfile.write(json.dumps(points_payload).encode("utf-8"))
             return
         if parsed.path == "/v2/sessions/current/data/fields/m/samples/vector":
             query = parse_qs(parsed.query)
             HysteresisApiHandler.vector_requests.append(self.path)
-            if query.get("snapshot_id") != ["hysteresis_point_001"]:
+            snapshot_id = query.get("snapshot_id", [""])[0]
+            values = HysteresisApiHandler.vector_values_by_snapshot.get(snapshot_id)
+            if values is None:
                 self.send_error(400)
                 return
             if query.get("stage_id") != ["stage-000"]:
                 self.send_error(400)
                 return
-            body = fmvp_payload([1.0, 0.0, 0.0, 0.0, 1.0, 0.0])
+            body = fmvp_payload(values)
             self.send_response(200)
             self.send_header("content-type", "application/octet-stream")
             self.send_header("x-fullmag-encoding", "FMVP;version=2")
             self.send_header("x-fullmag-quantity-id", "m")
             self.send_header("x-fullmag-component", "full")
-            self.send_header("x-fullmag-snapshot-id", "hysteresis_point_001")
+            self.send_header("x-fullmag-snapshot-id", snapshot_id)
             self.send_header("x-fullmag-point-count", HysteresisApiHandler.point_count_header)
             self.send_header("x-fullmag-value-count", HysteresisApiHandler.value_count_header)
             self.end_headers()
@@ -199,13 +229,21 @@ class HysteresisApiHandler(BaseHTTPRequestHandler):
         self.send_error(404)
 
 
-def test_validator_syncs_artifact_dir_and_replays_snapshot_vector(tmp_path: Path) -> None:
-    write_playback_fixture(tmp_path)
-    HysteresisApiHandler.point_m_avg = [0.5, 0.5, 0.0]
+def reset_hysteresis_api_handler(*, point_m_avg: list[float]) -> None:
+    HysteresisApiHandler.point_m_avg = point_m_avg
     HysteresisApiHandler.point_count_header = "2"
+    HysteresisApiHandler.points_payload = None
     HysteresisApiHandler.value_count_header = "6"
     HysteresisApiHandler.received_snapshot_payload = None
     HysteresisApiHandler.vector_requests = []
+    HysteresisApiHandler.vector_values_by_snapshot = {
+        "hysteresis_point_001": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+    }
+
+
+def test_validator_syncs_artifact_dir_and_replays_snapshot_vector(tmp_path: Path) -> None:
+    write_playback_fixture(tmp_path)
+    reset_hysteresis_api_handler(point_m_avg=[0.5, 0.5, 0.0])
     server = ThreadingHTTPServer(("127.0.0.1", 0), HysteresisApiHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -238,13 +276,62 @@ def test_validator_syncs_artifact_dir_and_replays_snapshot_vector(tmp_path: Path
     ]
 
 
+def test_validator_replays_every_saved_snapshot_vector(tmp_path: Path) -> None:
+    write_playback_fixture(tmp_path, include_second_snapshot=True)
+    reset_hysteresis_api_handler(point_m_avg=[0.5, 0.5, 0.0])
+    HysteresisApiHandler.points_payload = [
+        {
+            "point_id": 0,
+            "field_value_mT": 25.0,
+            "m_avg": [0.5, 0.5, 0.0],
+            "snapshot_id": "hysteresis_point_001",
+            "snapshot_vector_resource_ref": "/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full&snapshot_id=hysteresis_point_001&stage_id=stage-000",
+        },
+        {
+            "point_id": 1,
+            "field_value_mT": -25.0,
+            "m_avg": [0.0, 0.5, 0.5],
+            "snapshot_id": "hysteresis_point_002",
+            "snapshot_vector_resource_ref": "/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full&snapshot_id=hysteresis_point_002&stage_id=stage-000",
+        },
+    ]
+    HysteresisApiHandler.vector_values_by_snapshot = {
+        "hysteresis_point_001": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+        "hysteresis_point_002": [0.0, 0.5, 0.5, 0.0, 0.5, 0.5],
+    }
+    server = ThreadingHTTPServer(("127.0.0.1", 0), HysteresisApiHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(VALIDATOR),
+                f"http://127.0.0.1:{server.server_port}",
+                str(tmp_path),
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "snapshots=2" in result.stdout
+    assert HysteresisApiHandler.vector_requests == [
+        "/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full&snapshot_id=hysteresis_point_001&stage_id=stage-000",
+        "/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full&snapshot_id=hysteresis_point_002&stage_id=stage-000",
+    ]
+
+
 def test_validator_rejects_api_payload_average_mismatch(tmp_path: Path) -> None:
     write_playback_fixture(tmp_path)
-    HysteresisApiHandler.point_m_avg = [1.0, 0.0, 0.0]
-    HysteresisApiHandler.point_count_header = "2"
-    HysteresisApiHandler.value_count_header = "6"
-    HysteresisApiHandler.received_snapshot_payload = None
-    HysteresisApiHandler.vector_requests = []
+    reset_hysteresis_api_handler(point_m_avg=[1.0, 0.0, 0.0])
     server = ThreadingHTTPServer(("127.0.0.1", 0), HysteresisApiHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -281,11 +368,7 @@ def test_validator_uses_zarr_average_weights_for_api_payload_average(
         average_weights=[3.0, 1.0],
         point_average=[0.75, 0.25, 0.0],
     )
-    HysteresisApiHandler.point_m_avg = [0.75, 0.25, 0.0]
-    HysteresisApiHandler.point_count_header = "2"
-    HysteresisApiHandler.value_count_header = "6"
-    HysteresisApiHandler.received_snapshot_payload = None
-    HysteresisApiHandler.vector_requests = []
+    reset_hysteresis_api_handler(point_m_avg=[0.75, 0.25, 0.0])
     server = ThreadingHTTPServer(("127.0.0.1", 0), HysteresisApiHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -321,11 +404,7 @@ def test_validator_rejects_declared_average_weights_missing_store(
         point_average=[0.75, 0.25, 0.0],
     )
     shutil.rmtree(tmp_path / "hysteresis.zarr" / "fields" / "m" / "average_weights")
-    HysteresisApiHandler.point_m_avg = [0.75, 0.25, 0.0]
-    HysteresisApiHandler.point_count_header = "2"
-    HysteresisApiHandler.value_count_header = "6"
-    HysteresisApiHandler.received_snapshot_payload = None
-    HysteresisApiHandler.vector_requests = []
+    reset_hysteresis_api_handler(point_m_avg=[0.75, 0.25, 0.0])
     server = ThreadingHTTPServer(("127.0.0.1", 0), HysteresisApiHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -354,11 +433,8 @@ def test_validator_rejects_declared_average_weights_missing_store(
 
 def test_validator_rejects_data_plane_count_header_mismatch(tmp_path: Path) -> None:
     write_playback_fixture(tmp_path)
-    HysteresisApiHandler.point_m_avg = [0.5, 0.5, 0.0]
-    HysteresisApiHandler.point_count_header = "2"
+    reset_hysteresis_api_handler(point_m_avg=[0.5, 0.5, 0.0])
     HysteresisApiHandler.value_count_header = "5"
-    HysteresisApiHandler.received_snapshot_payload = None
-    HysteresisApiHandler.vector_requests = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), HysteresisApiHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

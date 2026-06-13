@@ -553,7 +553,7 @@ API:
 - OpenAPI route presence,
 - manifest tests,
 - artifact endpoint tests,
-- field binary resource tests,
+- Zarr-backed field resource tests plus compatibility binary export tests,
 - realtime invalidation tests.
 
 Frontend API:

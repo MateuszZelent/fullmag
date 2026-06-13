@@ -467,6 +467,43 @@ describe("analysis field overlay commands", () => {
     });
   });
 
+  it("starts eigen mode phase animation directly from inspector table input", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+
+    const result = await commands.execute(
+      "analysis.eigen.set-mode-3d-animation",
+      {
+        analysisFieldOverlay: overlay,
+        source: "test",
+      },
+      {
+        animatePhase: true,
+        animationRateHz: 1,
+        fieldId: "analysis:eigen:sample-0000:mode-0002",
+        label: "Mode 2",
+        phaseRad: 0,
+        source: "eigen-mode",
+        view: "phase_rotated_real",
+      },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(overlay.getSnapshot()).toMatchObject({
+      animation: {
+        animatePhase: true,
+        animationRateHz: 1,
+      },
+      fieldId: "analysis:eigen:sample-0000:mode-0002",
+      label: "Mode 2",
+      query: {
+        phase_rad: 0,
+        view: "phase_rotated_real",
+      },
+      source: "eigen-mode",
+    });
+  });
+
   it("updates response field phase through the frequency-domain phase command", async () => {
     const commands = commandRegistry();
     const overlay = new AnalysisFieldOverlayController();
@@ -564,6 +601,80 @@ describe("analysis field overlay commands", () => {
         view: "phase_rotated_real",
       },
       source: "frequency-response",
+    });
+  });
+
+  it("starts response field phase animation directly from inspector input", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+
+    const result = await commands.execute(
+      "analysis.frequency-domain.set-3d-animation",
+      {
+        analysisFieldOverlay: overlay,
+        source: "test",
+      },
+      {
+        animatePhase: true,
+        animationRateHz: 2,
+        fieldId: "analysis:frequency-response:frequency-0001",
+        label: "1 GHz",
+        phaseRad: 0.25,
+        source: "frequency-response",
+        view: "abs",
+      },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(overlay.getSnapshot()).toMatchObject({
+      animation: {
+        animatePhase: true,
+        animationRateHz: 2,
+      },
+      fieldId: "analysis:frequency-response:frequency-0001",
+      label: "1 GHz",
+      query: {
+        phase_rad: 0.25,
+        view: "phase_rotated_real",
+      },
+      source: "frequency-response",
+    });
+  });
+
+  it("starts eigen mode phase animation directly from inspector input", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+
+    const result = await commands.execute(
+      "analysis.frequency-domain.set-3d-animation",
+      {
+        analysisFieldOverlay: overlay,
+        source: "test",
+      },
+      {
+        animatePhase: true,
+        animationRateHz: 1.5,
+        fieldId: "analysis:eigen:sample-0000:mode-0002",
+        label: "Mode 2",
+        phaseRad: 0.5,
+        source: "eigen-mode",
+        view: "phase",
+      },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(overlay.getSnapshot()).toMatchObject({
+      animation: {
+        animatePhase: true,
+        animationRateHz: 1.5,
+      },
+      fieldId: "analysis:eigen:sample-0000:mode-0002",
+      label: "Mode 2",
+      query: {
+        phase_rad: 0.5,
+        view: "phase_rotated_real",
+      },
+      source: "eigen-mode",
     });
   });
 

@@ -2,6 +2,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import {
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
   ANALYSIS_HYSTERESIS_POINTS_PATH,
   DATA_FIELD_VECTOR_PATH,
@@ -1183,6 +1185,113 @@ describe("AnalysisPlotsView", () => {
           "analysis:charts:frequency-domain:response-sweep:point:analysis.frequency-domain:response:amplitude:0",
         observableId: "mx",
         resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+        type: "frequency-domain",
+      },
+    });
+  });
+
+  it("maps modal spectrum ECharts clicks to eigen mode selections", () => {
+    const spectrumModel = buildEigenSpectrumChartModel({
+      artifact_path: "eigen/spectrum.v2.json",
+      payload: {
+        modes: [
+          {
+            frequency_hz: 9.5e9,
+            mode_field_id: "analysis:eigen:sample-0000:mode-0001",
+            mode_field_resource_key:
+              "/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0001/samples/vector?view=phase_rotated_real&phase_rad=0",
+            raw_mode_index: 1,
+            sample_index: 0,
+          },
+        ],
+      },
+      status: "ready",
+    });
+
+    const selection = frequencyDomainSelectionFromPoint({
+      dispersionModel: buildEigenDispersionChartModel({ status: "idle" }),
+      point: {
+        label: "Eigen frequency",
+        point: { rowIndex: 0, x: 1, y: 9.5 },
+        quantity: "frequency",
+        seriesId: "analysis.frequency-domain:eigen:spectrum:frequency",
+        source: {
+          kind: "analysis.frequency_domain",
+          resourceKey: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+          tableId: "frequency-domain:eigen-spectrum",
+        },
+        unit: "GHz",
+        xUnit: "mode index",
+      },
+      responseModel: buildFrequencyResponseChartModel({ status: "idle" }),
+      routeMode: "free_modes",
+      spectrumModel,
+    });
+
+    expect(selection).toEqual({
+      kind: "results.eigen.mode",
+      label: "Eigen frequency 9.5 GHz",
+      nodeId:
+        "analysis:charts:frequency-domain:eigen-spectrum:point:analysis.frequency-domain:eigen:spectrum:frequency:0",
+      objectId: null,
+      ref: {
+        calculationMode: "free_modes",
+        fieldId: "analysis:eigen:sample-0000:mode-0001",
+        kind: "results.eigen.mode",
+        modeIndex: 1,
+        nodeId:
+          "analysis:charts:frequency-domain:eigen-spectrum:point:analysis.frequency-domain:eigen:spectrum:frequency:0",
+        resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+        sampleIndex: 0,
+        type: "frequency-domain",
+      },
+    });
+  });
+
+  it("maps dispersion ECharts clicks to dispersion point selections", () => {
+    const dispersionModel = buildEigenDispersionChartModel({
+      status: "ready",
+      text: [
+        "sample_index,raw_mode_index,branch_id,path_s_rad_per_m,frequency_hz",
+        "4,5,acoustic,78539816.33974482,12.5e9",
+      ].join("\n"),
+    });
+
+    const selection = frequencyDomainSelectionFromPoint({
+      dispersionModel,
+      point: {
+        label: "Branch acoustic",
+        point: { rowIndex: 0, x: 78539816.33974482, y: 12.5 },
+        quantity: "frequency",
+        seriesId: "analysis.frequency-domain:eigen:dispersion:acoustic",
+        source: {
+          kind: "analysis.frequency_domain",
+          resourceKey: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+          tableId: "frequency-domain:eigen-dispersion",
+        },
+        unit: "GHz",
+        xUnit: "rad/m",
+      },
+      responseModel: buildFrequencyResponseChartModel({ status: "idle" }),
+      routeMode: "dispersion_modal",
+      spectrumModel: buildEigenSpectrumChartModel({ status: "idle" }),
+    });
+
+    expect(selection).toEqual({
+      kind: "results.eigen.dispersion",
+      label: "Branch acoustic 12.5 GHz",
+      nodeId:
+        "analysis:charts:frequency-domain:eigen-dispersion:point:analysis.frequency-domain:eigen:dispersion:acoustic:0",
+      objectId: null,
+      ref: {
+        branchId: "acoustic",
+        calculationMode: "dispersion_modal",
+        kind: "results.eigen.dispersion",
+        modeIndex: 5,
+        nodeId:
+          "analysis:charts:frequency-domain:eigen-dispersion:point:analysis.frequency-domain:eigen:dispersion:acoustic:0",
+        resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+        sampleIndex: 4,
         type: "frequency-domain",
       },
     });

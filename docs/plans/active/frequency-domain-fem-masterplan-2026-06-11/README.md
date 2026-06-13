@@ -40,6 +40,17 @@ Active implementation delta:
   during rollout. The required product split remains: modal eigen products are
   not the driven frequency-response solver.
 
+Storage policy:
+
+- JSON is control-plane only: manifests, metadata, summaries, provenance,
+  diagnostics, small tables, and links.
+- Zarr is the default heavy-data format for frequency-domain mode fields,
+  driven-response fields, dense response maps, and future multi-mode tensors.
+- HDF5/H5 is allowed as an alternate backend or export format only when the API
+  preserves the same named resource semantics.
+- Raw `vector.bin` payloads are transitional compatibility exports, not the
+  production default.
+
 ## Local External Solver Audit
 
 The reference implementation must be based on the local solver sources in `external_solvers`, not only on web references.

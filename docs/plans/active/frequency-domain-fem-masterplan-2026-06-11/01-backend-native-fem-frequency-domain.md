@@ -347,7 +347,11 @@ Instructions:
 9. Add a v2 response artifact when the UI needs frequency-point field payloads:
    - `response/magnetic_response_sweep.v2.json`,
    - `response/frequency_points/{index}.json`,
-   - field-like response payload refs for 3D visualization.
+   - field-like response payload refs for 3D visualization,
+   - Zarr-backed response arrays in `response/field_payloads.zarr` by default.
+     HDF5/H5 may be used as an alternate backend/export only when the API
+     preserves the same field resource contract. Raw `vector.bin` payloads are
+     compatibility exports, not the production default.
 10. Keep frequency values in Hz externally and angular frequency in rad/s internally where equations require it.
 11. Use TetraX absorption only as an optional modal postprocessing reference, not as the implementation of direct driven response.
 12. Use Tetmag RF/pulse/sweep semantics as a time-domain validation/reference source, not as the direct solver implementation.

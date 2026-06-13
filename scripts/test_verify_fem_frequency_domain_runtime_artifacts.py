@@ -39,8 +39,12 @@ def write_frequency_domain_fixture(
     manifest_point_paths_override: list[str] | None = None,
     omit_manifest_field_resources: bool = False,
     manifest_field_resources_override: list[dict[str, object]] | None = None,
+    omit_manifest_cancel_requested_links: bool = False,
     omit_sweep_excitation_provenance: bool = False,
     omit_sweep_v2_excitation_provenance: bool = False,
+    omit_sweep_v2_sweep_reuse: bool = False,
+    omit_point_excitation_provenance: bool = False,
+    omit_point_sweep_reuse: bool = False,
     omit_sweep_v2_phase_rad: bool = False,
     omit_sweep_v2_angular_frequency: bool = False,
     omit_sweep_v2_response_amplitude: bool = False,
@@ -49,6 +53,7 @@ def write_frequency_domain_fixture(
     omit_sweep_v1_point_count: bool = False,
     omit_sweep_v1_si_units: bool = False,
     omit_progress_schema_version: bool = False,
+    omit_cancel_requested_artifact: bool = False,
     emitted_frequency_point_count: int = 2,
     progress_total_frequency_points: int = 2,
     progress_completed_frequency_points: int = 2,
@@ -73,7 +78,7 @@ def write_frequency_domain_fixture(
     manifest_completed_frequency_count: int = 2,
     manifest_legacy_completed_frequency_count: int | None = None,
     manifest_written_frequency_point_artifacts: int = 2,
-    sweep_v2_point_count: int = 2,
+    sweep_v2_point_count: int | None = None,
     sweep_operator_template_reused: bool = True,
     sweep_excitation_kind: str = "field",
     sweep_excitation_phase_rad: float = 0.0,
@@ -91,23 +96,60 @@ def write_frequency_domain_fixture(
     (root / "response" / "frequency_points").mkdir(parents=True)
     for index in range(emitted_frequency_point_count):
         if write_response_fields:
+            (
+                root
+                / "response"
+                / "field_payloads.zarr"
+                / f"frequency_{index:04d}"
+                / "vector_xyz_complex"
+            ).mkdir(parents=True)
             (root / "response" / "field_payloads" / f"frequency_{index:04d}").mkdir(
                 parents=True
             )
     (root / "frequency_domain").mkdir(parents=True)
+    if write_response_fields and emitted_frequency_point_count > 0:
+        (root / "response" / "field_payloads.zarr" / ".zgroup").write_text(
+            json.dumps({"zarr_format": 2})
+        )
+        (root / "response" / "field_payloads.zarr" / ".zattrs").write_text(
+            json.dumps(
+                {
+                    "fullmag_kind": "frequency_domain_response_field_store",
+                    "schema_version": 1,
+                    "preferred_container": "zarr",
+                    "quantity_ids": ["dynamic_response"],
+                    "compatibility_binary_exports": True,
+                }
+            )
+        )
 
     point_paths: list[str] = []
     payload_paths: list[str] = []
     sweep_points: list[dict[str, object]] = []
     for index in range(emitted_frequency_point_count):
         point_path = f"response/frequency_points/frequency_{index:04d}.json"
-        payload_path = f"response/field_payloads/frequency_{index:04d}/vector_xyz.bin"
+        zarr_array_path = (
+            f"response/field_payloads.zarr/frequency_{index:04d}/vector_xyz_complex"
+        )
+        payload_path = f"{zarr_array_path}/0.0.0"
+        compatibility_payload_path = f"response/field_payloads/frequency_{index:04d}/vector_xyz.bin"
         tangent_payload_path = f"response/field_payloads/frequency_{index:04d}/vector.bin"
         frequency_hz = float(index + 1) * 1.0e9
         angular_frequency_rad_per_s = frequency_hz * 6.283185307179586
         point_paths.append(point_path)
         if write_response_fields:
             payload_paths.append(payload_path)
+        sweep_reuse = {
+            "operator_template_reused": sweep_operator_template_reused,
+            "warm_start": None
+            if index == 0
+            else {
+                "kind": "previous_frequency_response",
+                "source_frequency_rad_per_s": float(index) * 1.0e9 * 6.283185307179586,
+                "residual_l2_norm": None,
+                "relative_residual_l2_norm": None,
+            },
+        }
         point = {
             "schema_version": "frequency_response_point.v1",
             "frequency_index": index,
@@ -141,8 +183,18 @@ def write_frequency_domain_fixture(
             "residual_l2_norm": 0.0,
             "relative_residual_l2_norm": 0.0,
             "residual_source": "matrix_free_gmres",
+            "excitation_provenance": {
+                "kind": sweep_excitation_kind,
+                "phase_rad": sweep_excitation_phase_rad,
+            },
+            "sweep_reuse": sweep_reuse,
         }
+        if omit_point_excitation_provenance and index == 0:
+            del point["excitation_provenance"]
+        if omit_point_sweep_reuse and index == 0:
+            del point["sweep_reuse"]
         if write_response_fields:
+            zarr_sample_count = complex_pair_count // 3
             point.update(
                 {
                     "payload_encoding": "f64_interleaved_real_imag_xyz",
@@ -153,6 +205,15 @@ def write_frequency_domain_fixture(
                     "components": ["x", "y", "z"],
                     "complex_pair_count": complex_pair_count,
                     "payload_value_count": payload_value_count,
+                    "storage_format": "zarr",
+                    "zarr_store_path": "response/field_payloads.zarr",
+                    "zarr_array_path": zarr_array_path,
+                    "zarr_chunk_path": payload_path,
+                    "zarr_dtype": "<f8",
+                    "zarr_shape": [zarr_sample_count, 3, 2],
+                    "zarr_chunk_shape": [max(zarr_sample_count, 1), 3, 2],
+                    "zarr_compressor": None,
+                    "compatibility_binary_payload_path": compatibility_payload_path,
                     "available_views": [
                         "complex",
                         "real",
@@ -198,6 +259,22 @@ def write_frequency_domain_fixture(
         (root / point_path).write_text(json.dumps(point))
         if write_response_fields:
             (root / payload_path).write_bytes(b"\0" * payload_size)
+            (root / compatibility_payload_path).write_bytes(b"\0" * payload_size)
+            (root / zarr_array_path / ".zarray").write_text(
+                json.dumps(
+                    {
+                        "zarr_format": 2,
+                        "shape": [zarr_sample_count, 3, 2],
+                        "chunks": [max(zarr_sample_count, 1), 3, 2],
+                        "dtype": "<f8",
+                        "compressor": None,
+                        "fill_value": 0.0,
+                        "order": "C",
+                        "filters": None,
+                        "dimension_separator": ".",
+                    }
+                )
+            )
         if write_response_fields and include_tangent_payload:
             (root / tangent_payload_path).write_bytes(b"\0" * tangent_payload_size)
         sweep_points.append(
@@ -205,6 +282,23 @@ def write_frequency_domain_fixture(
                 "frequency_index": index,
                 "frequency_point_artifact_path": point_path,
                 "response_field_payload_path": payload_path if write_response_fields else None,
+                "storage_format": "zarr" if write_response_fields else None,
+                "zarr_store_path": "response/field_payloads.zarr"
+                if write_response_fields
+                else None,
+                "zarr_array_path": zarr_array_path if write_response_fields else None,
+                "zarr_chunk_path": payload_path if write_response_fields else None,
+                "zarr_dtype": "<f8" if write_response_fields else None,
+                "zarr_shape": [zarr_sample_count, 3, 2]
+                if write_response_fields
+                else None,
+                "zarr_chunk_shape": [max(zarr_sample_count, 1), 3, 2]
+                if write_response_fields
+                else None,
+                "zarr_compressor": None if write_response_fields else None,
+                "compatibility_binary_payload_path": compatibility_payload_path
+                if write_response_fields
+                else None,
                 "frequency_hz": point["frequency_hz"],
                 "angular_frequency_rad_per_s": angular_frequency_rad_per_s,
                 "m_complex": [[1.0, 0.0], [0.0, 0.0]],
@@ -234,6 +328,7 @@ def write_frequency_domain_fixture(
                 "residual_l2_norm": 0.0,
                 "relative_residual_l2_norm": 0.0,
                 "residual_source": "matrix_free_gmres",
+                "sweep_reuse": sweep_reuse,
             }
         )
         if not omit_sweep_v2_angular_frequency:
@@ -253,6 +348,8 @@ def write_frequency_domain_fixture(
                 "kind": sweep_excitation_kind,
                 "phase_rad": sweep_excitation_phase_rad,
             }
+        if omit_sweep_v2_sweep_reuse and index == 0:
+            del sweep_points[-1]["sweep_reuse"]
         if write_response_fields and include_tangent_payload and not omit_sweep_tangent_link:
             sweep_points[-1]["response_tangent_field_payload_path"] = (
                 sweep_tangent_link_override or tangent_payload_path
@@ -282,7 +379,7 @@ def write_frequency_domain_fixture(
     if not omit_sweep_v1_si_units:
         sweep_v1["si_units"] = {"frequency": "Hz", "angular_frequency": "rad/s"}
     if not omit_sweep_v1_point_count:
-        sweep_v1["point_count"] = 2
+        sweep_v1["point_count"] = emitted_frequency_point_count
     (root / "response" / "magnetic_response_sweep.v1.json").write_text(
         json.dumps(sweep_v1)
     )
@@ -297,7 +394,17 @@ def write_frequency_domain_fixture(
                 "response_field_payload_paths": payload_paths,
                 "points": sweep_points,
             }
-            | ({} if omit_sweep_v2_point_count else {"point_count": sweep_v2_point_count})
+            | (
+                {}
+                if omit_sweep_v2_point_count
+                else {
+                    "point_count": (
+                        emitted_frequency_point_count
+                        if sweep_v2_point_count is None
+                        else sweep_v2_point_count
+                    )
+                }
+            )
         )
     )
     progress: dict[str, object] = {
@@ -314,6 +421,16 @@ def write_frequency_domain_fixture(
     if omit_progress_schema_version:
         del progress["schema_version"]
     (root / "response" / "progress.v1.json").write_text(json.dumps(progress))
+    if progress_status == "interrupted" and not omit_cancel_requested_artifact:
+        cancel_requested = {
+            **progress,
+            "status": "cancel_requested",
+            "state": "cancel_requested",
+            "complete": False,
+        }
+        (root / "response" / "cancel_requested.v1.json").write_text(
+            json.dumps(cancel_requested)
+        )
     diagnostics: dict[str, object] = {
         "schema_version": "frequency_domain_response_diagnostics.v1",
         "status": diagnostics_status,
@@ -385,6 +502,14 @@ def write_frequency_domain_fixture(
         }
         for index, payload_path in enumerate(payload_paths)
     ]
+    manifest_cancel_requested_artifact_path = (
+        "response/cancel_requested.v1.json" if manifest_status == "interrupted" else None
+    )
+    manifest_cancel_requested_resource_key = (
+        "/v2/sessions/current/analysis/frequency-domain/response/cancel-requested.v1"
+        if manifest_status == "interrupted"
+        else None
+    )
     manifest: dict[str, object] = {
         "schema_version": "frequency_domain_manifest.v1",
         "created_at": "1970-01-01T00:00:00Z",
@@ -406,6 +531,7 @@ def write_frequency_domain_fixture(
             "solve_kind": "direct_harmonic_response",
         },
         "artifacts": {
+            "response_cancel_requested_v1_path": manifest_cancel_requested_artifact_path,
             "frequency_point_paths": (
                 manifest_point_paths_override
                 if manifest_point_paths_override is not None
@@ -438,6 +564,7 @@ def write_frequency_domain_fixture(
             "response_sweep_resource_key": (
                 "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep"
             ),
+            "response_cancel_requested_resource_key": manifest_cancel_requested_resource_key,
             "response_field_resources": (
                 manifest_field_resources_override
                 if manifest_field_resources_override is not None
@@ -460,6 +587,13 @@ def write_frequency_domain_fixture(
         resources = manifest["resources"]
         assert isinstance(resources, dict)
         del resources["response_field_resources"]
+    if omit_manifest_cancel_requested_links:
+        artifacts = manifest["artifacts"]
+        resources = manifest["resources"]
+        assert isinstance(artifacts, dict)
+        assert isinstance(resources, dict)
+        del artifacts["response_cancel_requested_v1_path"]
+        del resources["response_cancel_requested_resource_key"]
     if omit_manifest_created_at:
         del manifest["created_at"]
     if omit_manifest_physics:
@@ -537,6 +671,7 @@ def write_unavailable_frequency_domain_fixture(root: Path) -> None:
                 "status": "unavailable",
                 "complete": False,
                 "solver_kind": "production_unavailable",
+                "requested_frequency_count": 2,
                 "completed_frequency_point_count": 0,
                 "written_frequency_point_artifacts": 0,
             }
@@ -588,11 +723,13 @@ def write_unavailable_frequency_domain_fixture(root: Path) -> None:
                 "artifacts": {
                     "response_diagnostics_v1_path": "response/diagnostics.v1.json",
                     "response_progress_v1_path": "response/progress.v1.json",
+                    "response_cancel_requested_v1_path": None,
                     "frequency_point_paths": [],
                 },
                 "resources": {
                     "response_progress_resource_key": "/v2/sessions/current/analysis/frequency-domain/response/progress.v1",
                     "response_diagnostics_resource_key": "/v2/sessions/current/analysis/frequency-domain/response/diagnostics.v1",
+                    "response_cancel_requested_resource_key": None,
                     "response_field_resources": [],
                 },
                 "diagnostics": {
@@ -714,6 +851,38 @@ def test_validator_rejects_unavailable_manifest_missing_capability_snapshot(
 
     assert result.returncode != 0
     assert "manifest.capabilities" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_unavailable_diagnostics_missing_requested_frequency_count(
+    tmp_path: Path,
+) -> None:
+    write_unavailable_frequency_domain_fixture(tmp_path)
+    diagnostics_path = tmp_path / "response" / "diagnostics.v1.json"
+    diagnostics = json.loads(diagnostics_path.read_text())
+    del diagnostics["requested_frequency_count"]
+    diagnostics_path.write_text(json.dumps(diagnostics))
+
+    result = run_validator(tmp_path, allow_unavailable=True)
+
+    assert result.returncode != 0
+    assert "diagnostics.requested_frequency_count" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_unavailable_requested_frequency_count_mismatch(
+    tmp_path: Path,
+) -> None:
+    write_unavailable_frequency_domain_fixture(tmp_path)
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["requested_execution"]["frequency_count"] = 3
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(tmp_path, allow_unavailable=True)
+
+    assert result.returncode != 0
+    assert "requested frequency count" in (result.stderr + result.stdout)
 
 
 def test_validator_accepts_missing_optional_tangent_payload(tmp_path: Path) -> None:
@@ -876,6 +1045,24 @@ def test_validator_rejects_missing_sweep_v1_si_units(tmp_path: Path) -> None:
 
     assert result.returncode != 0
     assert "sweep_v1.si_units" in (result.stderr + result.stdout)
+
+
+def test_validator_accepts_three_frequency_complete_sweep(tmp_path: Path) -> None:
+    write_frequency_domain_fixture(
+        tmp_path,
+        emitted_frequency_point_count=3,
+        progress_total_frequency_points=3,
+        progress_completed_frequency_points=3,
+        progress_written_frequency_point_artifacts=3,
+        diagnostics_completed_frequency_point_count=3,
+        manifest_completed_frequency_count=3,
+        manifest_written_frequency_point_artifacts=3,
+        sweep_v2_point_count=3,
+    )
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode == 0, result.stderr + result.stdout
 
 
 def test_validator_rejects_non_native_sweep_backend(tmp_path: Path) -> None:
@@ -1097,6 +1284,62 @@ def test_validator_accepts_interrupted_sweep_before_first_point(tmp_path: Path) 
     assert result.returncode == 0, result.stderr + result.stdout
 
 
+def test_validator_rejects_interrupted_sweep_without_cancel_requested_artifact(
+    tmp_path: Path,
+) -> None:
+    write_frequency_domain_fixture(
+        tmp_path,
+        emitted_frequency_point_count=1,
+        omit_cancel_requested_artifact=True,
+        progress_completed_frequency_points=1,
+        progress_written_frequency_point_artifacts=1,
+        progress_status="interrupted",
+        progress_complete=False,
+        progress_state="interrupted",
+        diagnostics_status="interrupted",
+        diagnostics_complete=False,
+        diagnostics_completed_frequency_point_count=1,
+        manifest_status="interrupted",
+        manifest_complete=False,
+        manifest_completed_frequency_count=1,
+        manifest_written_frequency_point_artifacts=1,
+    )
+
+    result = run_validator(tmp_path, allow_interrupted=True)
+
+    assert result.returncode != 0
+    assert "response/cancel_requested.v1.json" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_interrupted_manifest_without_cancel_requested_links(
+    tmp_path: Path,
+) -> None:
+    write_frequency_domain_fixture(
+        tmp_path,
+        emitted_frequency_point_count=1,
+        omit_manifest_cancel_requested_links=True,
+        progress_completed_frequency_points=1,
+        progress_written_frequency_point_artifacts=1,
+        progress_status="interrupted",
+        progress_complete=False,
+        progress_state="interrupted",
+        diagnostics_status="interrupted",
+        diagnostics_complete=False,
+        diagnostics_completed_frequency_point_count=1,
+        manifest_status="interrupted",
+        manifest_complete=False,
+        manifest_completed_frequency_count=1,
+        manifest_written_frequency_point_artifacts=1,
+    )
+
+    result = run_validator(tmp_path, allow_interrupted=True)
+
+    assert result.returncode != 0
+    assert "manifest.artifacts.response_cancel_requested_v1_path" in (
+        result.stderr + result.stdout
+    )
+
+
 def test_validator_rejects_interrupted_written_count_mismatch(tmp_path: Path) -> None:
     write_frequency_domain_fixture(
         tmp_path,
@@ -1129,6 +1372,36 @@ def test_validator_rejects_missing_sweep_v2_excitation_provenance(tmp_path: Path
     assert result.returncode != 0
     output = result.stderr + result.stdout
     assert "sweep.points[0].excitation_provenance" in output
+
+
+def test_validator_rejects_missing_sweep_v2_sweep_reuse(tmp_path: Path) -> None:
+    write_frequency_domain_fixture(tmp_path, omit_sweep_v2_sweep_reuse=True)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    output = result.stderr + result.stdout
+    assert "sweep.points[0].sweep_reuse" in output
+
+
+def test_validator_rejects_missing_point_excitation_provenance(tmp_path: Path) -> None:
+    write_frequency_domain_fixture(tmp_path, omit_point_excitation_provenance=True)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    output = result.stderr + result.stdout
+    assert "response/frequency_points/frequency_0000.json.excitation_provenance" in output
+
+
+def test_validator_rejects_missing_point_sweep_reuse(tmp_path: Path) -> None:
+    write_frequency_domain_fixture(tmp_path, omit_point_sweep_reuse=True)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    output = result.stderr + result.stdout
+    assert "response/frequency_points/frequency_0000.json.sweep_reuse" in output
 
 
 def test_validator_rejects_missing_sweep_v2_phase_rad(tmp_path: Path) -> None:
@@ -1535,7 +1808,7 @@ def test_validator_rejects_mismatched_manifest_response_field_resources(tmp_path
             {
                 "frequency_index": 0,
                 "field_resource_id": "analysis:frequency-response:frequency-0000",
-                "payload_path": "response/field_payloads/frequency_0000/vector_xyz.bin",
+                "payload_path": "response/field_payloads.zarr/frequency_0000/vector_xyz_complex/0.0.0",
             },
         ],
     )
@@ -1553,12 +1826,12 @@ def test_validator_rejects_manifest_response_field_resource_id_mismatch(tmp_path
             {
                 "frequency_index": 0,
                 "field_resource_id": "analysis:frequency-response:frequency-9999",
-                "payload_path": "response/field_payloads/frequency_0000/vector_xyz.bin",
+                "payload_path": "response/field_payloads.zarr/frequency_0000/vector_xyz_complex/0.0.0",
             },
             {
                 "frequency_index": 1,
                 "field_resource_id": "analysis:frequency-response:frequency-0001",
-                "payload_path": "response/field_payloads/frequency_0001/vector_xyz.bin",
+                "payload_path": "response/field_payloads.zarr/frequency_0001/vector_xyz_complex/0.0.0",
             },
         ],
     )
@@ -1581,7 +1854,7 @@ def test_validator_rejects_manifest_response_field_payload_path_mismatch(tmp_pat
             {
                 "frequency_index": 1,
                 "field_resource_id": "analysis:frequency-response:frequency-0001",
-                "payload_path": "response/field_payloads/frequency_0001/vector_xyz.bin",
+                "payload_path": "response/field_payloads.zarr/frequency_0001/vector_xyz_complex/0.0.0",
             },
         ],
     )
@@ -1590,3 +1863,16 @@ def test_validator_rejects_manifest_response_field_payload_path_mismatch(tmp_pat
 
     assert result.returncode != 0
     assert "payload_path" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_flattened_response_zarr_shape(tmp_path: Path) -> None:
+    write_frequency_domain_fixture(tmp_path)
+    point_path = tmp_path / "response" / "frequency_points" / "frequency_0000.json"
+    point = json.loads(point_path.read_text())
+    point["zarr_shape"] = [3, 2]
+    point_path.write_text(json.dumps(point))
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "zarr_shape" in (result.stderr + result.stdout)

@@ -751,6 +751,105 @@ FrequencyDomainStatus write_binary_artifact(
     return FrequencyDomainStatus::ok;
 }
 
+FrequencyDomainStatus write_zarr_group_artifact(
+    const char *path,
+    char error_message[128]) noexcept
+{
+    char zgroup_path[256]{};
+    if (std::snprintf(zgroup_path, sizeof(zgroup_path), "%s/.zgroup", path) < 0 ||
+        std::strlen(zgroup_path) >= sizeof(zgroup_path) - 1) {
+        std::snprintf(error_message, 128, "failed to format Zarr group artifact path");
+        return FrequencyDomainStatus::artifact_error;
+    }
+    return write_text_artifact(zgroup_path, "{\"zarr_format\":2}", error_message);
+}
+
+FrequencyDomainStatus write_response_zarr_store_attrs(
+    const char *field_payloads_zarr_dir,
+    char error_message[128]) noexcept
+{
+    char zattrs_path[256]{};
+    if (std::snprintf(zattrs_path, sizeof(zattrs_path), "%s/.zattrs", field_payloads_zarr_dir) < 0 ||
+        std::strlen(zattrs_path) >= sizeof(zattrs_path) - 1) {
+        std::snprintf(error_message, 128, "failed to format Zarr store attrs path");
+        return FrequencyDomainStatus::artifact_error;
+    }
+    return write_text_artifact(
+        zattrs_path,
+        "{\"fullmag_kind\":\"frequency_domain_response_field_store\","
+        "\"schema_version\":1,"
+        "\"preferred_container\":\"zarr\","
+        "\"quantity_ids\":[\"delta_m\"],"
+        "\"axes\":[\"frequency\",\"spatial_sample\",\"component\",\"complex\"],"
+        "\"component_order\":[\"x\",\"y\",\"z\"],"
+        "\"complex_order\":[\"real\",\"imag\"],"
+        "\"storage_layout\":\"aos_xyz_complex_pairs\","
+        "\"compatibility_binary_exports\":true}",
+        error_message);
+}
+
+FrequencyDomainStatus write_response_zarr_array_artifacts(
+    const char *array_dir,
+    std::uint64_t sample_count,
+    std::uint64_t component_count,
+    const char *component_order_json,
+    const char *component_basis,
+    const char *value_kind,
+    char error_message[128]) noexcept
+{
+    char zarray_path[256]{};
+    char zattrs_path[256]{};
+    if (std::snprintf(zarray_path, sizeof(zarray_path), "%s/.zarray", array_dir) < 0 ||
+        std::snprintf(zattrs_path, sizeof(zattrs_path), "%s/.zattrs", array_dir) < 0 ||
+        std::strlen(zarray_path) >= sizeof(zarray_path) - 1 ||
+        std::strlen(zattrs_path) >= sizeof(zattrs_path) - 1) {
+        std::snprintf(error_message, 128, "failed to format Zarr array artifact path");
+        return FrequencyDomainStatus::artifact_error;
+    }
+    std::string zarray_json;
+    if (!append_format(
+            zarray_json,
+            error_message,
+            "{\"zarr_format\":2,"
+            "\"shape\":[%llu,%llu,2],"
+            "\"chunks\":[%llu,%llu,2],"
+            "\"dtype\":\"<f8\","
+            "\"compressor\":null,"
+            "\"fill_value\":0.0,"
+            "\"order\":\"C\","
+            "\"filters\":null,"
+            "\"dimension_separator\":\".\"}",
+            static_cast<unsigned long long>(sample_count),
+            static_cast<unsigned long long>(component_count),
+            static_cast<unsigned long long>(sample_count == 0 ? 1 : sample_count),
+            static_cast<unsigned long long>(component_count))) {
+        return FrequencyDomainStatus::artifact_error;
+    }
+    FrequencyDomainStatus status =
+        write_text_artifact(zarray_path, zarray_json.c_str(), error_message);
+    if (status != FrequencyDomainStatus::ok) {
+        return status;
+    }
+    std::string zattrs_json;
+    if (!append_format(
+            zattrs_json,
+            error_message,
+            "{\"quantity_id\":\"delta_m\","
+            "\"unit\":\"1\","
+            "\"value_kind\":\"%s\","
+            "\"component_basis\":\"%s\","
+            "\"axes\":[\"spatial_sample\",\"component\",\"complex\"],"
+            "\"component_order\":%s,"
+            "\"complex_order\":[\"real\",\"imag\"],"
+            "\"storage_layout\":\"aos_component_complex_pairs\"}",
+            value_kind,
+            component_basis,
+            component_order_json)) {
+        return FrequencyDomainStatus::artifact_error;
+    }
+    return write_text_artifact(zattrs_path, zattrs_json.c_str(), error_message);
+}
+
 FrequencyDomainStatus ensure_directory(const char *path, char error_message[128]) noexcept
 {
     if (mkdir(path, 0777) == 0 || errno == EEXIST) {
@@ -796,6 +895,7 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
     char mesh_dir[256]{};
     char frequency_points_dir[256]{};
     char field_payloads_dir[256]{};
+    char field_payloads_zarr_dir[256]{};
     char manifest[256]{};
     char sweep[256]{};
     char sweep_v2[256]{};
@@ -807,6 +907,7 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
         std::snprintf(mesh_dir, sizeof(mesh_dir), "%s/mesh", request.output_directory) < 0 ||
         std::snprintf(frequency_points_dir, sizeof(frequency_points_dir), "%s/frequency_points", response_dir) < 0 ||
         std::snprintf(field_payloads_dir, sizeof(field_payloads_dir), "%s/field_payloads", response_dir) < 0 ||
+        std::snprintf(field_payloads_zarr_dir, sizeof(field_payloads_zarr_dir), "%s/field_payloads.zarr", response_dir) < 0 ||
         std::snprintf(manifest, sizeof(manifest), "%s/manifest.v1.json", frequency_domain_dir) < 0 ||
         std::snprintf(sweep, sizeof(sweep), "%s/magnetic_response_sweep.v1.json", response_dir) < 0 ||
         std::snprintf(sweep_v2, sizeof(sweep_v2), "%s/magnetic_response_sweep.v2.json", response_dir) < 0 ||
@@ -821,6 +922,7 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
         std::strlen(mesh_dir) >= sizeof(mesh_dir) - 1 ||
         std::strlen(frequency_points_dir) >= sizeof(frequency_points_dir) - 1 ||
         std::strlen(field_payloads_dir) >= sizeof(field_payloads_dir) - 1 ||
+        std::strlen(field_payloads_zarr_dir) >= sizeof(field_payloads_zarr_dir) - 1 ||
         std::strlen(manifest) >= sizeof(manifest) - 1 ||
         std::strlen(sweep) >= sizeof(sweep) - 1 ||
         std::strlen(sweep_v2) >= sizeof(sweep_v2) - 1 ||
@@ -858,6 +960,12 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
     const char *assembled_flag = production_cpu ? "false" : "true";
     const char *dense_flag = production_cpu ? "false" : "true";
     const char *production_solver_flag = production_cpu ? "true" : "false";
+    const char *response_cancel_requested_path_json =
+        complete ? "null" : "\"response/cancel_requested.v1.json\"";
+    const char *response_cancel_requested_resource_json =
+        complete
+            ? "null"
+            : "\"/v2/sessions/current/analysis/frequency-domain/response/cancel-requested.v1\"";
     const char *production_native_available = production_cpu ? "true" : "false";
     const char *validation_artifact = production_cpu ? "false" : "true";
     const double excitation_phase_rad = drive_global_phase_rad(
@@ -968,6 +1076,8 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
         char tangent_field_payload_path[96]{};
         char field_payload_path_json[128]{};
         char tangent_field_payload_path_json[128]{};
+        char compatibility_field_payload_path_json[128]{};
+        char storage_metadata_json[512]{};
         char sweep_reuse_json[256]{};
         const int point_path_written = std::snprintf(
             frequency_point_path,
@@ -979,13 +1089,17 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
         int payload_path_json_written = std::snprintf(field_payload_path_json, sizeof(field_payload_path_json), "null");
         int tangent_payload_path_json_written =
             std::snprintf(tangent_field_payload_path_json, sizeof(tangent_field_payload_path_json), "null");
+        int compatibility_payload_path_json_written =
+            std::snprintf(compatibility_field_payload_path_json, sizeof(compatibility_field_payload_path_json), "null");
+        int storage_metadata_written =
+            std::snprintf(storage_metadata_json, sizeof(storage_metadata_json), "\"storage_format\":null");
         if (write_field_payloads) {
             payload_path_written = std::snprintf(
                 field_payload_path,
                 sizeof(field_payload_path),
                 write_spatial_field_payloads ?
-                    "response/field_payloads/frequency_%04llu/vector_xyz.bin" :
-                    "response/field_payloads/frequency_%04llu/vector.bin",
+                    "response/field_payloads.zarr/frequency_%04llu/vector_xyz_complex/0.0.0" :
+                    "response/field_payloads.zarr/frequency_%04llu/vector_tangent_complex/0.0.0",
                 static_cast<unsigned long long>(frequency_index));
             if (payload_path_written >= 0 &&
                 static_cast<std::size_t>(payload_path_written) < sizeof(field_payload_path)) {
@@ -998,7 +1112,7 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
             tangent_payload_path_written = std::snprintf(
                 tangent_field_payload_path,
                 sizeof(tangent_field_payload_path),
-                "response/field_payloads/frequency_%04llu/vector.bin",
+                "response/field_payloads.zarr/frequency_%04llu/vector_tangent_complex/0.0.0",
                 static_cast<unsigned long long>(frequency_index));
             if (tangent_payload_path_written >= 0 &&
                 static_cast<std::size_t>(tangent_payload_path_written) < sizeof(tangent_field_payload_path)) {
@@ -1008,6 +1122,39 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
                     "\"%s\"",
                     tangent_field_payload_path);
             }
+            compatibility_payload_path_json_written = std::snprintf(
+                compatibility_field_payload_path_json,
+                sizeof(compatibility_field_payload_path_json),
+                write_spatial_field_payloads ?
+                    "\"response/field_payloads/frequency_%04llu/vector_xyz.bin\"" :
+                    "\"response/field_payloads/frequency_%04llu/vector.bin\"",
+                static_cast<unsigned long long>(frequency_index));
+            storage_metadata_written = std::snprintf(
+                storage_metadata_json,
+                sizeof(storage_metadata_json),
+                "\"storage_format\":\"zarr\","
+                "\"zarr_store_path\":\"response/field_payloads.zarr\","
+                "\"zarr_array_path\":\"response/field_payloads.zarr/frequency_%04llu/%s\","
+                "\"zarr_chunk_path\":%s,"
+                "\"zarr_dtype\":\"<f8\","
+                "\"zarr_shape\":[%llu,%u,2],"
+                "\"zarr_chunk_shape\":[%llu,%u,2],"
+                "\"zarr_compressor\":null,"
+                "\"compatibility_binary_payload_path\":%s",
+                static_cast<unsigned long long>(frequency_index),
+                write_spatial_field_payloads ? "vector_xyz_complex" : "vector_tangent_complex",
+                field_payload_path_json,
+                static_cast<unsigned long long>(
+                    write_spatial_field_payloads ?
+                        request.mfem_validation_problem.descriptor.node_count :
+                        validation_result.response_dof_count / 2),
+                write_spatial_field_payloads ? 3u : 2u,
+                static_cast<unsigned long long>(
+                    write_spatial_field_payloads ?
+                        request.mfem_validation_problem.descriptor.node_count :
+                        validation_result.response_dof_count / 2),
+                write_spatial_field_payloads ? 3u : 2u,
+                compatibility_field_payload_path_json);
         }
         const int sweep_reuse_written =
             frequency_index == 0 ?
@@ -1031,6 +1178,10 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
             static_cast<std::size_t>(payload_path_json_written) >= sizeof(field_payload_path_json) ||
             tangent_payload_path_json_written < 0 ||
             static_cast<std::size_t>(tangent_payload_path_json_written) >= sizeof(tangent_field_payload_path_json) ||
+            compatibility_payload_path_json_written < 0 ||
+            static_cast<std::size_t>(compatibility_payload_path_json_written) >= sizeof(compatibility_field_payload_path_json) ||
+            storage_metadata_written < 0 ||
+            static_cast<std::size_t>(storage_metadata_written) >= sizeof(storage_metadata_json) ||
             sweep_reuse_written < 0 ||
             static_cast<std::size_t>(sweep_reuse_written) >= sizeof(sweep_reuse_json) ||
             (write_field_payloads &&
@@ -1071,6 +1222,7 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
             "\"frequency_point_artifact_path\":\"%s\","
             "\"response_field_payload_path\":%s,"
             "\"response_tangent_field_payload_path\":%s,"
+            "%s,"
             "\"frequency_hz\":%.17g,"
             "\"angular_frequency_rad_per_s\":%.17g,"
             "\"m_complex\":%s,"
@@ -1097,6 +1249,7 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
             frequency_point_path,
             field_payload_path_json,
             tangent_field_payload_path_json,
+            storage_metadata_json,
             request.solve_request.frequencies_hz[frequency_index],
             angular_frequency_rad_per_s,
             series.m_complex.c_str(),
@@ -1137,13 +1290,13 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
                 field_payload_path,
                 sizeof(field_payload_path),
                 write_spatial_field_payloads ?
-                    "response/field_payloads/frequency_%04llu/vector_xyz.bin" :
-                    "response/field_payloads/frequency_%04llu/vector.bin",
+                    "response/field_payloads.zarr/frequency_%04llu/vector_xyz_complex/0.0.0" :
+                    "response/field_payloads.zarr/frequency_%04llu/vector_tangent_complex/0.0.0",
                 static_cast<unsigned long long>(frequency_index));
             tangent_payload_path_written = std::snprintf(
                 tangent_field_payload_path,
                 sizeof(tangent_field_payload_path),
-                "response/field_payloads/frequency_%04llu/vector.bin",
+                "response/field_payloads.zarr/frequency_%04llu/vector_tangent_complex/0.0.0",
                 static_cast<unsigned long long>(frequency_index));
         }
         if (point_path_written < 0 ||
@@ -1176,6 +1329,7 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
                 error_message,
                 "%s{\"frequency_index\":%llu,"
                 "\"field_resource_id\":\"analysis:frequency-response:frequency-%04llu\","
+                "\"storage_format\":\"zarr\","
                 "\"payload_path\":\"%s\"}",
                 frequency_index == 0 ? "" : ",",
                 static_cast<unsigned long long>(frequency_index),
@@ -1236,11 +1390,13 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
         "\"response_sweep_v2_path\":\"response/magnetic_response_sweep.v2.json\","
         "\"response_diagnostics_v1_path\":\"response/diagnostics.v1.json\","
         "\"response_progress_v1_path\":\"response/progress.v1.json\","
+        "\"response_cancel_requested_v1_path\":%s,"
         "\"periodic_pairs_v1_path\":%s,"
         "\"frequency_point_paths\":%s},"
         "\"resources\":{\"response_sweep_resource_key\":\"/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep\","
         "\"response_progress_resource_key\":\"/v2/sessions/current/analysis/frequency-domain/response/progress.v1\","
         "\"response_diagnostics_resource_key\":\"/v2/sessions/current/analysis/frequency-domain/response/diagnostics.v1\","
+        "\"response_cancel_requested_resource_key\":%s,"
         "\"response_field_resources\":%s},"
         "\"diagnostics\":{\"assembled_mfem_operator_solver\":%s,"
         "\"matrix_free_solver\":%s,"
@@ -1261,7 +1417,7 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
         "\"gpu_available\":false}}",
         revision,
         stage_id,
-        run_status,
+        complete ? "ready" : "interrupted",
         complete ? "true" : "false",
         static_cast<unsigned long long>(request.solve_request.frequency_count),
         request.solve_request.write_response_fields ? "true" : "false",
@@ -1278,8 +1434,10 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
         phase_convention_to_string(request.phase_convention),
         spin_wave_bc_kind,
         static_periodic_artifact ? "true" : "false",
+        response_cancel_requested_path_json,
         periodic_pairs_artifact_json,
         frequency_point_paths_json.c_str(),
+        response_cancel_requested_resource_json,
         field_payload_resources_json.c_str(),
         assembled_flag,
         production_cpu ? "true" : "false",
@@ -1318,8 +1476,8 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
     const char *first_payload_path_json = "null";
     if (write_field_payloads && validation_result.completed_frequency_count > 0) {
         first_payload_path_json = write_spatial_field_payloads ?
-            "\"response/field_payloads/frequency_0000/vector_xyz.bin\"" :
-            "\"response/field_payloads/frequency_0000/vector.bin\"";
+            "\"response/field_payloads.zarr/frequency_0000/vector_xyz_complex/0.0.0\"" :
+            "\"response/field_payloads.zarr/frequency_0000/vector_tangent_complex/0.0.0\"";
     }
     if (!append_format(
         sweep_v2_json,
@@ -1423,6 +1581,18 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
         if (status != FrequencyDomainStatus::ok) {
             return status;
         }
+        status = ensure_directory(field_payloads_zarr_dir, error_message);
+        if (status != FrequencyDomainStatus::ok) {
+            return status;
+        }
+        status = write_zarr_group_artifact(field_payloads_zarr_dir, error_message);
+        if (status != FrequencyDomainStatus::ok) {
+            return status;
+        }
+        status = write_response_zarr_store_attrs(field_payloads_zarr_dir, error_message);
+        if (status != FrequencyDomainStatus::ok) {
+            return status;
+        }
     }
 
     status = write_text_artifact(sweep, sweep_json.c_str(), error_message);
@@ -1455,8 +1625,14 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
          ++frequency_index) {
         char frequency_point[256]{};
         char field_payload_dir[256]{};
+        char zarr_frequency_group_dir[256]{};
+        char zarr_tangent_array_dir[256]{};
+        char zarr_spatial_array_dir[256]{};
+        char zarr_tangent_chunk[256]{};
+        char zarr_spatial_chunk[256]{};
         char field_payload[256]{};
         char spatial_field_payload[256]{};
+        char sweep_reuse_json[256]{};
         std::string frequency_point_json;
         if (std::snprintf(
                 frequency_point,
@@ -1474,14 +1650,55 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
                 "%s/frequency_%04llu",
                 field_payloads_dir,
                 static_cast<unsigned long long>(frequency_index)) < 0 ||
+                std::snprintf(
+                    zarr_frequency_group_dir,
+                    sizeof(zarr_frequency_group_dir),
+                    "%s/frequency_%04llu",
+                    field_payloads_zarr_dir,
+                    static_cast<unsigned long long>(frequency_index)) < 0 ||
+                std::snprintf(
+                    zarr_tangent_array_dir,
+                    sizeof(zarr_tangent_array_dir),
+                    "%s/vector_tangent_complex",
+                    zarr_frequency_group_dir) < 0 ||
+                std::snprintf(
+                    zarr_spatial_array_dir,
+                    sizeof(zarr_spatial_array_dir),
+                    "%s/vector_xyz_complex",
+                    zarr_frequency_group_dir) < 0 ||
+                std::snprintf(zarr_tangent_chunk, sizeof(zarr_tangent_chunk), "%s/0.0.0", zarr_tangent_array_dir) < 0 ||
+                std::snprintf(zarr_spatial_chunk, sizeof(zarr_spatial_chunk), "%s/0.0.0", zarr_spatial_array_dir) < 0 ||
                 std::snprintf(field_payload, sizeof(field_payload), "%s/vector.bin", field_payload_dir) < 0 ||
                 std::snprintf(spatial_field_payload, sizeof(spatial_field_payload), "%s/vector_xyz.bin", field_payload_dir) < 0)) {
             std::snprintf(error_message, 128, "failed to format frequency response point artifact path");
             return FrequencyDomainStatus::artifact_error;
         }
+        const int sweep_reuse_written =
+            frequency_index == 0 ?
+                std::snprintf(
+                    sweep_reuse_json,
+                    sizeof(sweep_reuse_json),
+                    "{\"operator_template_reused\":true,\"warm_start\":null}") :
+                std::snprintf(
+                    sweep_reuse_json,
+                    sizeof(sweep_reuse_json),
+                    "{\"operator_template_reused\":true,"
+                    "\"warm_start\":{\"kind\":\"previous_frequency_response\","
+                    "\"source_frequency_rad_per_s\":%.17g,"
+                    "\"residual_l2_norm\":null,"
+                    "\"relative_residual_l2_norm\":null}}",
+                    request.solve_request.frequencies_hz[frequency_index - 1] *
+                        6.28318530717958647692);
         if (std::strlen(frequency_point) >= sizeof(frequency_point) - 1 ||
+            sweep_reuse_written < 0 ||
+            static_cast<std::size_t>(sweep_reuse_written) >= sizeof(sweep_reuse_json) ||
             (write_field_payloads &&
                 (std::strlen(field_payload_dir) >= sizeof(field_payload_dir) - 1 ||
+                    std::strlen(zarr_frequency_group_dir) >= sizeof(zarr_frequency_group_dir) - 1 ||
+                    std::strlen(zarr_tangent_array_dir) >= sizeof(zarr_tangent_array_dir) - 1 ||
+                    std::strlen(zarr_spatial_array_dir) >= sizeof(zarr_spatial_array_dir) - 1 ||
+                    std::strlen(zarr_tangent_chunk) >= sizeof(zarr_tangent_chunk) - 1 ||
+                    std::strlen(zarr_spatial_chunk) >= sizeof(zarr_spatial_chunk) - 1 ||
                     std::strlen(field_payload) >= sizeof(field_payload) - 1 ||
                     std::strlen(spatial_field_payload) >= sizeof(spatial_field_payload) - 1))) {
             std::snprintf(error_message, 128, "frequency response point artifact path exceeded fixed buffer");
@@ -1524,8 +1741,17 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
                     "\"phase_rad\":%.17g,"
                     "\"component_response_amplitude\":%s,"
                     "\"component_response_phase\":%s,"
-                    "\"field_payload_path\":\"response/field_payloads/frequency_%04llu/vector_xyz.bin\","
-                    "\"tangent_field_payload_path\":\"response/field_payloads/frequency_%04llu/vector.bin\","
+                    "\"field_payload_path\":\"response/field_payloads.zarr/frequency_%04llu/vector_xyz_complex/0.0.0\","
+                    "\"tangent_field_payload_path\":\"response/field_payloads.zarr/frequency_%04llu/vector_tangent_complex/0.0.0\","
+                    "\"storage_format\":\"zarr\","
+                    "\"zarr_store_path\":\"response/field_payloads.zarr\","
+                    "\"zarr_array_path\":\"response/field_payloads.zarr/frequency_%04llu/vector_xyz_complex\","
+                    "\"zarr_chunk_path\":\"response/field_payloads.zarr/frequency_%04llu/vector_xyz_complex/0.0.0\","
+                    "\"zarr_dtype\":\"<f8\","
+                    "\"zarr_shape\":[%llu,3,2],"
+                    "\"zarr_chunk_shape\":[%llu,3,2],"
+                    "\"zarr_compressor\":null,"
+                    "\"compatibility_binary_payload_path\":\"response/field_payloads/frequency_%04llu/vector_xyz.bin\","
                     "\"payload_encoding\":\"f64_interleaved_real_imag_xyz\","
                     "\"tangent_payload_encoding\":\"f64_interleaved_real_imag_tangent\","
                     "\"binary_layout\":\"complex_f64_pairs_little_endian\","
@@ -1554,7 +1780,9 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
                     "\"residual_l2_norm\":%.17g,"
                     "\"relative_residual_l2_norm\":%.17g,"
                     "\"residual_source\":\"%s\","
-                    "\"tangent_leakage\":%s}",
+                    "\"tangent_leakage\":%s,"
+                    "\"excitation_provenance\":{\"kind\":\"field\",\"phase_rad\":%.17g},"
+                    "\"sweep_reuse\":%s}",
                     static_cast<unsigned long long>(frequency_index),
                     request.solve_request.frequencies_hz[frequency_index],
                     angular_frequency_rad_per_s,
@@ -1565,6 +1793,11 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
                     series.component_amplitude.c_str(),
                     series.component_phase.c_str(),
                     static_cast<unsigned long long>(frequency_index),
+                    static_cast<unsigned long long>(frequency_index),
+                    static_cast<unsigned long long>(frequency_index),
+                    static_cast<unsigned long long>(frequency_index),
+                    static_cast<unsigned long long>(request.mfem_validation_problem.descriptor.node_count),
+                    static_cast<unsigned long long>(request.mfem_validation_problem.descriptor.node_count),
                     static_cast<unsigned long long>(frequency_index),
                     static_cast<unsigned long long>(request.mfem_validation_problem.descriptor.full_dof_count),
                     static_cast<unsigned long long>(
@@ -1577,7 +1810,9 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
                     residual_l2_norm[frequency_index],
                     relative_residual_l2_norm[frequency_index],
                     residual_source,
-                    observables.tangent_leakage.c_str())) {
+                    observables.tangent_leakage.c_str(),
+                    excitation_phase_rad,
+                    sweep_reuse_json)) {
                     return FrequencyDomainStatus::artifact_error;
                 }
             } else {
@@ -1594,7 +1829,16 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
                     "\"phase_rad\":%.17g,"
                     "\"component_response_amplitude\":%s,"
                     "\"component_response_phase\":%s,"
-                    "\"field_payload_path\":\"response/field_payloads/frequency_%04llu/vector.bin\","
+                    "\"field_payload_path\":\"response/field_payloads.zarr/frequency_%04llu/vector_tangent_complex/0.0.0\","
+                    "\"storage_format\":\"zarr\","
+                    "\"zarr_store_path\":\"response/field_payloads.zarr\","
+                    "\"zarr_array_path\":\"response/field_payloads.zarr/frequency_%04llu/vector_tangent_complex\","
+                    "\"zarr_chunk_path\":\"response/field_payloads.zarr/frequency_%04llu/vector_tangent_complex/0.0.0\","
+                    "\"zarr_dtype\":\"<f8\","
+                    "\"zarr_shape\":[%llu,2,2],"
+                    "\"zarr_chunk_shape\":[%llu,2,2],"
+                    "\"zarr_compressor\":null,"
+                    "\"compatibility_binary_payload_path\":\"response/field_payloads/frequency_%04llu/vector.bin\","
                     "\"payload_encoding\":\"f64_interleaved_real_imag_tangent\","
                     "\"binary_layout\":\"complex_f64_pairs_little_endian\","
                     "\"value_kind\":\"complex_tangent_vector\","
@@ -1616,7 +1860,9 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
                     "\"residual_l2_norm\":%.17g,"
                     "\"relative_residual_l2_norm\":%.17g,"
                     "\"residual_source\":\"%s\","
-                    "\"tangent_leakage\":%s}",
+                    "\"tangent_leakage\":%s,"
+                    "\"excitation_provenance\":{\"kind\":\"field\",\"phase_rad\":%.17g},"
+                    "\"sweep_reuse\":%s}",
                     static_cast<unsigned long long>(frequency_index),
                     request.solve_request.frequencies_hz[frequency_index],
                     angular_frequency_rad_per_s,
@@ -1627,6 +1873,11 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
                     series.component_amplitude.c_str(),
                     series.component_phase.c_str(),
                     static_cast<unsigned long long>(frequency_index),
+                    static_cast<unsigned long long>(frequency_index),
+                    static_cast<unsigned long long>(frequency_index),
+                    static_cast<unsigned long long>(validation_result.response_dof_count / 2),
+                    static_cast<unsigned long long>(validation_result.response_dof_count / 2),
+                    static_cast<unsigned long long>(frequency_index),
                     static_cast<unsigned long long>(validation_result.response_dof_count),
                     static_cast<unsigned long long>(validation_result.response_dof_count * 2),
                     observables.susceptibility_tensor.c_str(),
@@ -1635,7 +1886,9 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
                     residual_l2_norm[frequency_index],
                     relative_residual_l2_norm[frequency_index],
                     residual_source,
-                    observables.tangent_leakage.c_str())) {
+                    observables.tangent_leakage.c_str(),
+                    excitation_phase_rad,
+                    sweep_reuse_json)) {
                     return FrequencyDomainStatus::artifact_error;
                 }
             }
@@ -1675,7 +1928,9 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
                 "\"residual_l2_norm\":%.17g,"
                 "\"relative_residual_l2_norm\":%.17g,"
                 "\"residual_source\":\"%s\","
-                "\"tangent_leakage\":%s}",
+                "\"tangent_leakage\":%s,"
+                "\"excitation_provenance\":{\"kind\":\"field\",\"phase_rad\":%.17g},"
+                "\"sweep_reuse\":%s}",
                 static_cast<unsigned long long>(frequency_index),
                 request.solve_request.frequencies_hz[frequency_index],
                 angular_frequency_rad_per_s,
@@ -1692,7 +1947,9 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
                 residual_l2_norm[frequency_index],
                 relative_residual_l2_norm[frequency_index],
                 residual_source,
-                observables.tangent_leakage.c_str())) {
+                observables.tangent_leakage.c_str(),
+                excitation_phase_rad,
+                sweep_reuse_json)) {
                 return FrequencyDomainStatus::artifact_error;
             }
         }
@@ -1707,12 +1964,43 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
         if (status != FrequencyDomainStatus::ok) {
             return status;
         }
+        status = ensure_directory(zarr_frequency_group_dir, error_message);
+        if (status != FrequencyDomainStatus::ok) {
+            return status;
+        }
+        status = write_zarr_group_artifact(zarr_frequency_group_dir, error_message);
+        if (status != FrequencyDomainStatus::ok) {
+            return status;
+        }
+        status = ensure_directory(zarr_tangent_array_dir, error_message);
+        if (status != FrequencyDomainStatus::ok) {
+            return status;
+        }
+        status = write_response_zarr_array_artifacts(
+            zarr_tangent_array_dir,
+            validation_result.response_dof_count / 2,
+            2,
+            "[\"tangent_e1\",\"tangent_e2\"]",
+            "local_tangent_frame",
+            "complex_tangent_vector",
+            error_message);
+        if (status != FrequencyDomainStatus::ok) {
+            return status;
+        }
         const std::uint64_t payload_value_count = validation_result.response_dof_count * 2;
         std::vector<double> payload(static_cast<std::size_t>(payload_value_count));
         for (std::uint64_t dof = 0; dof < validation_result.response_dof_count; ++dof) {
             const std::uint64_t response_index = frequency_index * validation_result.response_dof_count + dof;
             payload[dof * 2] = response_real[response_index];
             payload[dof * 2 + 1] = response_imag[response_index];
+        }
+        status = write_binary_artifact(
+            zarr_tangent_chunk,
+            payload.data(),
+            static_cast<std::size_t>(payload_value_count * sizeof(double)),
+            error_message);
+        if (status != FrequencyDomainStatus::ok) {
+            return status;
         }
         status = write_binary_artifact(
             field_payload,
@@ -1723,6 +2011,21 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
             return status;
         }
         if (write_spatial_field_payloads) {
+            status = ensure_directory(zarr_spatial_array_dir, error_message);
+            if (status != FrequencyDomainStatus::ok) {
+                return status;
+            }
+            status = write_response_zarr_array_artifacts(
+                zarr_spatial_array_dir,
+                request.mfem_validation_problem.descriptor.node_count,
+                3,
+                "[\"x\",\"y\",\"z\"]",
+                "global_xyz",
+                "complex_spatial_vector",
+                error_message);
+            if (status != FrequencyDomainStatus::ok) {
+                return status;
+            }
             const std::uint64_t node_count = request.mfem_validation_problem.descriptor.node_count;
             const std::uint64_t full_dof_count = request.mfem_validation_problem.descriptor.full_dof_count;
             std::vector<double> spatial_real(static_cast<std::size_t>(full_dof_count));
@@ -1741,6 +2044,14 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
             for (std::uint64_t dof = 0; dof < full_dof_count; ++dof) {
                 spatial_payload[dof * 2] = spatial_real[dof];
                 spatial_payload[dof * 2 + 1] = spatial_imag[dof];
+            }
+            status = write_binary_artifact(
+                zarr_spatial_chunk,
+                spatial_payload.data(),
+                static_cast<std::size_t>(spatial_payload.size() * sizeof(double)),
+                error_message);
+            if (status != FrequencyDomainStatus::ok) {
+                return status;
             }
             status = write_binary_artifact(
                 spatial_field_payload,
@@ -1880,9 +2191,11 @@ FrequencyDomainStatus write_unavailable_response_artifacts(
         "\"periodic_or_floquet\":false},"
         "\"artifacts\":{\"response_diagnostics_v1_path\":\"response/diagnostics.v1.json\","
         "\"response_progress_v1_path\":\"response/progress.v1.json\","
+        "\"response_cancel_requested_v1_path\":null,"
         "\"frequency_point_paths\":[]},"
         "\"resources\":{\"response_progress_resource_key\":\"/v2/sessions/current/analysis/frequency-domain/response/progress.v1\","
         "\"response_diagnostics_resource_key\":\"/v2/sessions/current/analysis/frequency-domain/response/diagnostics.v1\","
+        "\"response_cancel_requested_resource_key\":null,"
         "\"response_field_resources\":[]},"
         "\"diagnostics\":{\"requested_frequency_count\":%llu,"
         "\"completed_frequency_point_count\":0,"

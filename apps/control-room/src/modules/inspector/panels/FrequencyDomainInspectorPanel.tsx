@@ -34,6 +34,21 @@ import {
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
+import {
+  FrequencyDomainDispersionChart,
+  FrequencyDomainResponseChart,
+  FrequencyDomainSpectrumChart,
+} from "./FrequencyDomainCharts";
+import {
+  FrequencyDomainBranchTable,
+  FrequencyDomainFmrPeakTable,
+  FrequencyDomainModeTable,
+  FrequencyDomainResponsePointTable,
+} from "./FrequencyDomainTables";
+import type {
+  FrequencyDomainModeTableAction,
+  FrequencyDomainResponsePointAction,
+} from "./FrequencyDomainTables";
 import { resolveFrequencyDomainNodeDetail } from "./frequencyDomainNodeDetails";
 import { FieldRow } from "../primitives/FieldRow";
 import { InspectorSection } from "../primitives/InspectorSection";
@@ -385,6 +400,7 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
   );
   const data = manifest.data;
   const manifestPayload = data?.result_manifest?.payload;
+  const manifestPhysics = record(record(manifestPayload)?.physics);
   const spectrumModel = buildEigenSpectrumChartModel(spectrum.data);
   const branchesModel = buildEigenBranchesModel(branches.data);
   const dispersionModel = buildEigenDispersionChartModel(dispersion.data);
@@ -448,6 +464,62 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
     selectedFieldMeta?.default_view,
   );
   const nodeDetail = resolveFrequencyDomainNodeDetail(selection);
+  const plotModePoint = (
+    point: (typeof spectrumModel.points)[number],
+    action: FrequencyDomainModeTableAction = DEFAULT_ANALYSIS_FIELD_VIEW,
+  ): void => {
+    if (!point.modeFieldId) return;
+    const animate = action === "animate";
+    void kernel.commands
+      .execute(
+        animate
+          ? "analysis.eigen.set-mode-3d-animation"
+          : "analysis.eigen.plot-mode-3d",
+        createCommandContext("inspector", kernel, {
+          sourceDetail: selection.kind ?? "frequency-domain",
+        }),
+        {
+          animatePhase: animate ? true : undefined,
+          animationRateHz: animate ? 1 : undefined,
+          fieldId: point.modeFieldId,
+          label: `Mode ${point.rawModeIndex}`,
+          phaseRad: 0,
+          source: "eigen-mode",
+          view: animate ? DEFAULT_ANALYSIS_FIELD_VIEW : action,
+        },
+      )
+      .then((result) => {
+        setCommandMessage(result.message ?? result.status);
+      });
+  };
+  const plotResponsePoint = (
+    point: (typeof responseModel.points)[number],
+    action: FrequencyDomainResponsePointAction = DEFAULT_ANALYSIS_FIELD_VIEW,
+  ): void => {
+    if (!point.fieldId) return;
+    const animate = action === "animate";
+    void kernel.commands
+      .execute(
+        animate
+          ? "analysis.frequency-domain.set-3d-animation"
+          : "analysis.frequency-response.plot-response-field-3d",
+        createCommandContext("inspector", kernel, {
+          sourceDetail: selection.kind ?? "frequency-domain",
+        }),
+        {
+          animatePhase: animate ? true : undefined,
+          animationRateHz: animate ? 1 : undefined,
+          fieldId: point.fieldId,
+          label: `${point.observableId} ${point.frequencyHz} Hz`,
+          phaseRad: point.phaseRad ?? 0,
+          source: "frequency-response",
+          view: animate ? DEFAULT_ANALYSIS_FIELD_VIEW : action,
+        },
+      )
+      .then((result) => {
+        setCommandMessage(result.message ?? result.status);
+      });
+  };
 
   return (
     <div className="fm-inspector-panel">
@@ -500,6 +572,32 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
         <FieldRow
           label="Floquet nonzero-k demag"
           value={formatBoolean(data?.floquet_nonzero_k_demag_supported)}
+        />
+      </InspectorSection>
+
+      <InspectorSection
+        title="Physics Contract"
+        badge={formatRecordField(manifestPhysics, "analysis_family")}
+      >
+        <FieldRow
+          label="Analysis family"
+          value={formatRecordField(manifestPhysics, "analysis_family")}
+        />
+        <FieldRow
+          label="Temporal phase convention"
+          value={formatRecordField(manifestPhysics, "phase_convention")}
+        />
+        <FieldRow
+          label="Frequency units"
+          value={formatRecordField(manifestPhysics, "frequency_units")}
+        />
+        <FieldRow
+          label="Field units"
+          value={formatRecordField(manifestPhysics, "field_units")}
+        />
+        <FieldRow
+          label="Normalization"
+          value={formatRecordField(manifestPhysics, "normalization")}
         />
       </InspectorSection>
 
@@ -1014,6 +1112,21 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
                     finiteNumber(
                       analysisFieldAnimationRateInputRef.current?.value,
                     ) ?? 1,
+                  componentBasis: selectedFieldMeta?.component_basis ?? null,
+                  componentCount: selectedFieldMeta?.component_count ?? null,
+                  fieldId: selectedFieldId,
+                  label: selection.label ?? selectedFieldId,
+                  phaseRad:
+                    finiteNumber(analysisFieldPhaseInputRef.current?.value) ??
+                    selectedFieldMeta?.default_phase_rad ??
+                    0,
+                  source: selection.kind?.includes("eigen")
+                    ? "eigen-mode"
+                    : "frequency-response",
+                  valueKind: selectedFieldMeta?.value_kind ?? null,
+                  view:
+                    analysisFieldViewSelectRef.current?.value ??
+                    defaultAnalysisFieldView,
                 },
               )
               .then((result) => {
@@ -1040,6 +1153,21 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
                     finiteNumber(
                       analysisFieldAnimationRateInputRef.current?.value,
                     ) ?? 1,
+                  componentBasis: selectedFieldMeta?.component_basis ?? null,
+                  componentCount: selectedFieldMeta?.component_count ?? null,
+                  fieldId: selectedFieldId,
+                  label: selection.label ?? selectedFieldId,
+                  phaseRad:
+                    finiteNumber(analysisFieldPhaseInputRef.current?.value) ??
+                    selectedFieldMeta?.default_phase_rad ??
+                    0,
+                  source: selection.kind?.includes("eigen")
+                    ? "eigen-mode"
+                    : "frequency-response",
+                  valueKind: selectedFieldMeta?.value_kind ?? null,
+                  view:
+                    analysisFieldViewSelectRef.current?.value ??
+                    defaultAnalysisFieldView,
                 },
               )
               .then((result) => {
@@ -1206,6 +1334,7 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
           label="Branch resource"
           value={frequencyDomainRef?.resourceRef ?? "not selected"}
         />
+        <FrequencyDomainBranchTable branches={branchesModel.branches} />
         {branches.error ? (
           <FieldRow
             label="Branch resource error"
@@ -1390,6 +1519,7 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
               : "none"
           }
         />
+        <FrequencyDomainFmrPeakTable peaks={fmrPeakModel.peaks} />
       </InspectorSection>
 
       <InspectorSection title="Chart Resources" badge="resource-driven">
@@ -1421,13 +1551,24 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
           label="Eigen spectrum"
           value={`${spectrumModel.points.length} points, ${spectrumModel.droppedPointCount} dropped`}
         />
+        <FrequencyDomainSpectrumChart model={spectrumModel} />
+        <FrequencyDomainModeTable
+          points={spectrumModel.points}
+          onPlotMode={plotModePoint}
+        />
         <FieldRow
           label="Dispersion"
           value={`${dispersionModel.points.length} points, ${dispersionModel.series.length} series`}
         />
+        <FrequencyDomainDispersionChart model={dispersionModel} />
         <FieldRow
           label="Driven response"
           value={`${responseModel.points.length} points, ${responseModel.series.length} series`}
+        />
+        <FrequencyDomainResponseChart model={responseModel} />
+        <FrequencyDomainResponsePointTable
+          points={responseModel.points}
+          onPlotResponsePoint={plotResponsePoint}
         />
         <FieldRow
           label="Response progress"

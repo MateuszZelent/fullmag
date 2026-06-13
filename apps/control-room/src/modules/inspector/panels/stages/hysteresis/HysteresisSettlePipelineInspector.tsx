@@ -20,6 +20,20 @@ function settleStepValue(value: unknown): string | null {
   return String(value);
 }
 
+function settleBranchKey(branch: Record<string, unknown>, index: number): string {
+  return (
+    displayValue(branch.branch_id) ??
+    displayValue(branch.branchId) ??
+    displayValue(branch.id) ??
+    `${index}:${displayValue(branch.when) ?? "branch"}`
+  );
+}
+
+function settleBranchRunKind(branch: Record<string, unknown>): string {
+  const run = isRecord(branch.run) ? branch.run : null;
+  return displayValue(run?.algorithm_kind) ?? displayValue(run?.kind) ?? "n/a";
+}
+
 export function HysteresisSettlePipelineInspector({
   draft,
   executionTree,
@@ -34,6 +48,12 @@ export function HysteresisSettlePipelineInspector({
   const settleSteps = resolvedSteps.length > 0
     ? resolvedSteps
     : parseJsonArray(draft?.settleSteps);
+  const resolvedBranches = Array.isArray(pipeline?.branches)
+    ? pipeline.branches.filter(isRecord)
+    : [];
+  const settleBranches = resolvedBranches.length > 0
+    ? resolvedBranches
+    : parseJsonArray(draft?.settleBranches);
   const activeNode = executionTree?.nodes.find((node) => node.status === "active");
   const activeStep = activeNode?.children?.find((node) => node.status === "active");
 
@@ -104,6 +124,34 @@ export function HysteresisSettlePipelineInspector({
       ) : (
         <div className="fm-hysteresis-inspector-empty">
           Using solver default relaxation sequence.
+        </div>
+      )}
+      {settleBranches.length > 0 && (
+        <div className="fm-hysteresis-inspector-step-list">
+          <FieldRow label="Fallback branches" value={`${settleBranches.length}`} />
+          {settleBranches.map((branch, index) => (
+            <div
+              className="fm-hysteresis-inspector-step"
+              key={settleBranchKey(branch, index)}
+            >
+              <div className="fm-hysteresis-inspector-step__header">
+                <span className="fm-hysteresis-inspector-step__title">
+                  Branch {index + 1}
+                </span>
+                <span className="fm-hysteresis-inspector-step__method">
+                  {displayValue(branch.branch_id) ??
+                    displayValue(branch.branchId) ??
+                    "fallback"}
+                </span>
+              </div>
+              <div className="fm-hysteresis-inspector-step__meta">
+                {displayValue(branch.when) && (
+                  <span>Trigger: {displayValue(branch.when)}</span>
+                )}
+                <span>Run: {settleBranchRunKind(branch)}</span>
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </InspectorSection>

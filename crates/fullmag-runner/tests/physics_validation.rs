@@ -931,11 +931,105 @@ fn fem_eigen_smoke_completes_without_errors() {
         has_spectrum,
         "FEM eigen smoke: spectrum.json must be written"
     );
+    let spectrum_v2: serde_json::Value = serde_json::from_slice(
+        result
+            .artifact_bytes("eigen/spectrum.v2.json")
+            .expect("FEM eigen smoke: spectrum.v2.json must be written"),
+    )
+    .expect("FEM eigen smoke: spectrum.v2.json must be valid json");
+    assert_eq!(
+        spectrum_v2["schema_version"].as_str(),
+        Some("eigen_spectrum.v2")
+    );
+    assert_eq!(spectrum_v2["samples"].as_array().map(Vec::len), Some(1));
+    assert_eq!(spectrum_v2["samples"][0]["label"].as_str(), Some("Γ"));
+    assert!(
+        result.artifact_bytes("eigen/branches.v2.json").is_some(),
+        "FEM eigen smoke: branches.v2.json must be written"
+    );
+    assert!(
+        result.artifact_bytes("eigen/dispersion.csv").is_some(),
+        "FEM eigen smoke: dispersion.csv must be written for the v2 bundle"
+    );
     // Mode 0 spatial profile artifact must be present
     let has_mode = result
         .artifact_bytes("eigen/modes/mode_0000.json")
         .is_some();
     assert!(has_mode, "FEM eigen smoke: mode_0000.json must be written");
+    let mode_v2: serde_json::Value = serde_json::from_slice(
+        result
+            .artifact_bytes("eigen/modes/sample_0000/mode_0000.json")
+            .expect("FEM eigen smoke: nested mode v2 metadata must be written"),
+    )
+    .expect("FEM eigen smoke: nested mode v2 metadata must be valid json");
+    assert_eq!(mode_v2["schema_version"].as_str(), Some("eigen_mode.v2"));
+    assert_eq!(mode_v2["storage_format"].as_str(), Some("zarr"));
+    assert_eq!(
+        mode_v2["zarr_array_path"].as_str(),
+        Some("eigen/mode_fields.zarr/sample_0000/mode_0000/vector_xyz_complex")
+    );
+    assert_eq!(
+        mode_v2["compatibility_binary_payload_path"].as_str(),
+        Some("eigen/mode_fields/sample_0000/mode_0000/vector.bin")
+    );
+    assert_eq!(
+        mode_v2["available_views"].as_array().map(Vec::len),
+        Some(7),
+        "FEM eigen smoke: mode metadata must expose real/imag/complex/abs/amplitude/phase/phase_rotated_real views"
+    );
+    assert!(
+        result
+            .artifact_bytes("eigen/mode_fields/sample_0000/mode_0000/vector.bin")
+            .is_some(),
+        "FEM eigen smoke: mode v2 binary payload must be written"
+    );
+    assert!(
+        result
+            .artifact_bytes("eigen/mode_fields.zarr/.zgroup")
+            .is_some(),
+        "FEM eigen smoke: mode field Zarr store must be written"
+    );
+    assert!(
+        result
+            .artifact_bytes(
+                "eigen/mode_fields.zarr/sample_0000/mode_0000/vector_xyz_complex/.zarray"
+            )
+            .is_some(),
+        "FEM eigen smoke: mode field Zarr array metadata must be written"
+    );
+    assert!(
+        result
+            .artifact_bytes("eigen/mode_fields.zarr/sample_0000/mode_0000/vector_xyz_complex/0.0.0")
+            .is_some(),
+        "FEM eigen smoke: mode field Zarr chunk must be written"
+    );
+    let manifest: serde_json::Value = serde_json::from_slice(
+        result
+            .artifact_bytes("frequency_domain/manifest.v1.json")
+            .expect("FEM eigen smoke: frequency-domain manifest must be written"),
+    )
+    .expect("FEM eigen smoke: frequency-domain manifest must be valid json");
+    assert_eq!(
+        manifest["schema_version"].as_str(),
+        Some("frequency_domain_manifest.v1")
+    );
+    assert_eq!(
+        manifest["physics"]["phase_convention"].as_str(),
+        Some("exp_minus_i_omega_t")
+    );
+    assert_eq!(manifest["physics"]["frequency_units"].as_str(), Some("Hz"));
+    assert_eq!(
+        manifest["artifacts"]["spectrum_v2_path"].as_str(),
+        Some("eigen/spectrum.v2.json")
+    );
+    assert_eq!(
+        manifest["artifacts"]["mode_field_storage_format"].as_str(),
+        Some("zarr")
+    );
+    assert_eq!(
+        manifest["artifacts"]["mode_field_zarr_store_path"].as_str(),
+        Some("eigen/mode_fields.zarr")
+    );
 }
 
 /// EIG-031 analytic benchmark: lowest Zeeman-only mode frequency must be in

@@ -522,6 +522,50 @@ def assert_settle_trace_covers_snapshot_points(
         )
 
 
+def load_minor_loop_snapshot_points(root: Path) -> list[dict]:
+    path = root / "hysteresis_minor_loops.json"
+    if not path.is_file():
+        return []
+    loops = load_json(path)
+    if not isinstance(loops, list):
+        raise SystemExit("hysteresis_minor_loops.json must contain a list")
+
+    snapshot_points: list[dict] = []
+    for loop_index, loop in enumerate(loops):
+        if not isinstance(loop, dict):
+            raise SystemExit(f"hysteresis_minor_loops[{loop_index}] must be an object")
+        loop_id = loop.get("loop_id")
+        if not isinstance(loop_id, str) or not loop_id:
+            loop_id = f"minor_loop_{loop_index + 1:03}"
+        points = loop.get("points")
+        if points is None:
+            continue
+        if not isinstance(points, list):
+            raise SystemExit(f"hysteresis_minor_loops[{loop_index}].points must be a list")
+        trace = loop.get("settle_trace")
+        if not isinstance(trace, list) or not trace:
+            raise SystemExit(f"minor-loop {loop_id} with snapshots requires settle_trace")
+        trace_point_ids = {
+            record.get("point_id")
+            for record in trace
+            if isinstance(record, dict) and isinstance(record.get("point_id"), int)
+        }
+        for point_index, point in enumerate(points):
+            if not isinstance(point, dict):
+                raise SystemExit(
+                    f"hysteresis_minor_loops[{loop_index}].points[{point_index}] must be an object"
+                )
+            if not point.get("snapshot_id"):
+                continue
+            point_id = point.get("point_id")
+            if point_id not in trace_point_ids:
+                raise SystemExit(
+                    f"minor-loop {loop_id} settle_trace is missing snapshot point id {point_id}"
+                )
+            snapshot_points.append(point)
+    return snapshot_points
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         raise SystemExit(
@@ -563,10 +607,12 @@ def main() -> int:
             "hysteresis_metrics.json magnetization_average_weighting must be a non-empty string"
         )
 
-    snapshot_points = [point for point in points if point.get("snapshot_id")]
-    if not snapshot_points:
+    major_snapshot_points = [point for point in points if point.get("snapshot_id")]
+    minor_snapshot_points = load_minor_loop_snapshot_points(root)
+    snapshot_points = major_snapshot_points + minor_snapshot_points
+    if not major_snapshot_points:
         raise SystemExit("no hysteresis points contain snapshot_id values")
-    if len(snapshot_points) != len(points):
+    if len(major_snapshot_points) != len(points):
         missing_snapshot_points = [
             str(point.get("point_id", index))
             for index, point in enumerate(points)
@@ -614,13 +660,13 @@ def main() -> int:
     if len(samples) != len(snapshot_points):
         raise SystemExit(
             f"sample count mismatch: samples.csv has {len(samples)}, "
-            f"hysteresis_points.json has {len(snapshot_points)} snapshot points"
+            f"major/minor-loop artifacts have {len(snapshot_points)} snapshot points"
         )
     if shape[0] != len(samples):
         raise SystemExit(
             f"Zarr point axis mismatch: shape[0]={shape[0]}, samples={len(samples)}"
         )
-    assert_settle_trace_covers_snapshot_points(root, snapshot_points)
+    assert_settle_trace_covers_snapshot_points(root, major_snapshot_points)
 
     rows_by_snapshot = {row.get("snapshot_id"): row for row in samples}
     missing_rows = [
@@ -630,7 +676,8 @@ def main() -> int:
     ]
     if missing_rows:
         raise SystemExit(
-            "missing Zarr sample rows for snapshot ids:\n" + "\n".join(missing_rows)
+            "missing Zarr sample rows for major/minor-loop snapshot ids:\n"
+            + "\n".join(missing_rows)
         )
 
     for point in snapshot_points:
@@ -660,6 +707,7 @@ def main() -> int:
     print(
         f"validated hysteresis playback: points={len(points)} "
         f"snapshots={len(snapshot_points)} cell_count={shape[2]} "
+        f"minor_loop_snapshots={len(minor_snapshot_points)} "
         f"container=zarr average_weighting={weighting} storage_policy={storage_policy}"
     )
     return 0

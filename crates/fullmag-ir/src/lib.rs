@@ -2115,6 +2115,8 @@ fn validate_settle_step(step: &SettleStepIR, idx: usize, errors: &mut Vec<String
             alpha,
             torque_tolerance,
             max_steps,
+            applies_to,
+            stop_criteria,
             timestep_s,
             max_pseudotime_s,
             max_physical_time_s,
@@ -2151,6 +2153,8 @@ fn validate_settle_step(step: &SettleStepIR, idx: usize, errors: &mut Vec<String
                 idx,
                 errors,
             );
+            validate_settle_applies_to(applies_to.as_ref(), idx, errors);
+            validate_settle_stop_criteria(stop_criteria.as_ref(), idx, errors);
             validate_settle_non_convergence_policy(on_non_convergence, idx, errors);
             validate_settle_retry_policy(
                 on_non_convergence,
@@ -2165,6 +2169,8 @@ fn validate_settle_step(step: &SettleStepIR, idx: usize, errors: &mut Vec<String
             torque_tolerance,
             energy_tolerance,
             max_steps,
+            applies_to,
+            stop_criteria,
             timestep_s,
             max_pseudotime_s,
             max_physical_time_s,
@@ -2198,6 +2204,8 @@ fn validate_settle_step(step: &SettleStepIR, idx: usize, errors: &mut Vec<String
                 idx,
                 errors,
             );
+            validate_settle_applies_to(applies_to.as_ref(), idx, errors);
+            validate_settle_stop_criteria(stop_criteria.as_ref(), idx, errors);
             validate_settle_non_convergence_policy(on_non_convergence, idx, errors);
             validate_settle_retry_policy(
                 on_non_convergence,
@@ -2211,6 +2219,8 @@ fn validate_settle_step(step: &SettleStepIR, idx: usize, errors: &mut Vec<String
             method,
             damping,
             max_steps,
+            applies_to,
+            stop_criteria,
             timestep_s,
             max_pseudotime_s,
             max_physical_time_s,
@@ -2244,6 +2254,8 @@ fn validate_settle_step(step: &SettleStepIR, idx: usize, errors: &mut Vec<String
                 idx,
                 errors,
             );
+            validate_settle_applies_to(applies_to.as_ref(), idx, errors);
+            validate_settle_stop_criteria(stop_criteria.as_ref(), idx, errors);
             validate_settle_non_convergence_policy(on_non_convergence, idx, errors);
             validate_settle_retry_policy(
                 on_non_convergence,
@@ -2465,6 +2477,12 @@ fn validate_hysteresis_saturation_probe(probe: &SaturationProbeIR, errors: &mut 
                 .to_string(),
         );
     }
+    if !matches!(
+        probe.on_failure.as_str(),
+        "continue_with_warning" | "stop_stage"
+    ) {
+        errors.push("study.stages[].hysteresis.saturation.on_failure is unsupported".to_string());
+    }
 }
 
 fn validate_hysteresis_storage(policy: &HysteresisStorageIR, errors: &mut Vec<String>) {
@@ -2501,6 +2519,96 @@ fn validate_hysteresis_minor_loops(loops: &[MinorLoopIR], errors: &mut Vec<Strin
                 idx
             ));
         }
+    }
+}
+
+fn validate_settle_applies_to(
+    applies_to: Option<&serde_json::Value>,
+    idx: usize,
+    errors: &mut Vec<String>,
+) {
+    let Some(value) = applies_to else {
+        return;
+    };
+    if !validate_settle_applies_to_value(value) {
+        errors.push(format!(
+            "study.stages[].hysteresis.settle_pipeline.steps[{}].applies_to is unsupported",
+            idx
+        ));
+    }
+}
+
+fn validate_settle_applies_to_value(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::String(selector) => matches!(
+            selector.as_str(),
+            "all_points"
+                | "preparation"
+                | "saturation_probe"
+                | "major"
+                | "minor"
+                | "recoil"
+                | "key_events"
+                | "branch_id"
+                | "point_selector"
+        ),
+        serde_json::Value::Array(selectors) => {
+            !selectors.is_empty() && selectors.iter().all(validate_settle_applies_to_value)
+        }
+        serde_json::Value::Object(object) => object
+            .get("kind")
+            .is_some_and(validate_settle_applies_to_value),
+        _ => false,
+    }
+}
+
+fn validate_settle_stop_criteria(
+    stop_criteria: Option<&serde_json::Value>,
+    idx: usize,
+    errors: &mut Vec<String>,
+) {
+    let Some(value) = stop_criteria else {
+        return;
+    };
+    if !validate_settle_stop_criteria_value(value) {
+        errors.push(format!(
+            "study.stages[].hysteresis.settle_pipeline.steps[{}].stop_criteria is unsupported",
+            idx
+        ));
+    }
+}
+
+fn validate_settle_stop_criteria_value(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::String(criterion) => matches!(
+            criterion.as_str(),
+            "torque_below"
+                | "energy_delta_below"
+                | "max_steps"
+                | "max_pseudotime_s"
+                | "max_physical_time_s"
+                | "m_delta_below"
+        ),
+        serde_json::Value::Array(criteria) => {
+            !criteria.is_empty() && criteria.iter().all(validate_settle_stop_criteria_value)
+        }
+        serde_json::Value::Object(object) => {
+            let Some(kind) = object.get("kind").and_then(|value| value.as_str()) else {
+                return false;
+            };
+            if !matches!(kind, "all_of" | "any_of") {
+                return false;
+            }
+            object
+                .get("criteria")
+                .is_some_and(|criteria| match criteria {
+                    serde_json::Value::Array(items) => {
+                        !items.is_empty() && items.iter().all(validate_settle_stop_criteria_value)
+                    }
+                    _ => false,
+                })
+        }
+        _ => false,
     }
 }
 

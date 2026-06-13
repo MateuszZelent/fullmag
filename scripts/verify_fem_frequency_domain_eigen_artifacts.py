@@ -58,6 +58,12 @@ def require_string_list(value: object, name: str) -> list[str]:
     return value
 
 
+def require_ordered_string_list(value: object, expected: list[str], name: str) -> None:
+    items = require_string_list(value, name)
+    if items != expected:
+        fail(f"{name}: got {items!r}, expected {expected!r}")
+
+
 def mode_field_id(sample_index: int, raw_mode_index: int) -> str:
     return f"analysis:eigen:sample-{sample_index:04d}:mode-{raw_mode_index:04d}"
 
@@ -84,7 +90,22 @@ def mode_payload_path(sample_index: int, raw_mode_index: int) -> str:
     return f"eigen/mode_fields/sample_{sample_index:04d}/mode_{raw_mode_index:04d}/vector.bin"
 
 
-def require_mode_payload(root: Path, relative_path: str, name: str) -> None:
+def mode_zarr_store_path() -> str:
+    return "eigen/mode_fields.zarr"
+
+
+def mode_zarr_array_path(sample_index: int, raw_mode_index: int) -> str:
+    return (
+        f"{mode_zarr_store_path()}/sample_{sample_index:04d}/"
+        f"mode_{raw_mode_index:04d}/vector_xyz_complex"
+    )
+
+
+def mode_zarr_chunk_path(sample_index: int, raw_mode_index: int) -> str:
+    return f"{mode_zarr_array_path(sample_index, raw_mode_index)}/0.0.0"
+
+
+def require_mode_payload(root: Path, relative_path: str, name: str) -> int:
     path = root / relative_path
     require_file(path)
     size = path.stat().st_size
@@ -95,6 +116,31 @@ def require_mode_payload(root: Path, relative_path: str, name: str) -> None:
     f64_count = size // 8
     if f64_count % 6 != 0:
         fail(f"{name} payload must contain complex xyz f64 tuples")
+    return f64_count
+
+
+def require_mode_zarr_payload(
+    root: Path,
+    array_path: str,
+    sample_count: int,
+    expected_payload_value_count: int,
+    name: str,
+) -> int:
+    zarray_path = root / array_path / ".zarray"
+    chunk_path = root / array_path / "0.0.0"
+    require_file(zarray_path)
+    require_file(chunk_path)
+    zarray = load_json(zarray_path)
+    require_equal(zarray.get("zarr_format"), 2, f"{name}.zarray.zarr_format")
+    require_equal(zarray.get("shape"), [sample_count, 3, 2], f"{name}.zarray.shape")
+    require_equal(zarray.get("chunks"), [max(sample_count, 1), 3, 2], f"{name}.zarray.chunks")
+    require_equal(zarray.get("dtype"), "<f8", f"{name}.zarray.dtype")
+    require_equal(zarray.get("order"), "C", f"{name}.zarray.order")
+    size = chunk_path.stat().st_size
+    expected_size = expected_payload_value_count * 8
+    if size != expected_size:
+        fail(f"{name} Zarr chunk byte size: got {size}, expected {expected_size}")
+    return size // 8
 
 
 def require_mode_metadata_summaries(metadata: dict, metadata_path: str) -> None:
@@ -130,6 +176,132 @@ def require_mode_metadata_summaries(metadata: dict, metadata_path: str) -> None:
         component_summary.get("imag_sample_count"),
         sample_count,
         f"{metadata_path}.component_summary.imag_sample_count",
+    )
+
+
+def require_mode_field_metadata(
+    metadata: dict,
+    metadata_path: str,
+    sample_index: int,
+    raw_mode_index: int,
+) -> None:
+    sample_count = require_non_negative_int(
+        metadata.get("mode_field_sample_count"),
+        f"{metadata_path}.mode_field_sample_count",
+    )
+    require_equal(
+        metadata.get("value_kind"),
+        "complex_spatial_vector",
+        f"{metadata_path}.value_kind",
+    )
+    require_equal(
+        metadata.get("component_basis"),
+        "global_xyz",
+        f"{metadata_path}.component_basis",
+    )
+    require_equal(metadata.get("component_count"), 3, f"{metadata_path}.component_count")
+    require_ordered_string_list(
+        metadata.get("components"),
+        ["x", "y", "z"],
+        f"{metadata_path}.components",
+    )
+    expected_zarr_array_path = mode_zarr_array_path(sample_index, raw_mode_index)
+    require_equal(metadata.get("storage_format"), "zarr", f"{metadata_path}.storage_format")
+    require_equal(
+        metadata.get("zarr_store_path"),
+        mode_zarr_store_path(),
+        f"{metadata_path}.zarr_store_path",
+    )
+    require_equal(
+        metadata.get("zarr_array_path"),
+        expected_zarr_array_path,
+        f"{metadata_path}.zarr_array_path",
+    )
+    require_equal(
+        metadata.get("zarr_chunk_path"),
+        mode_zarr_chunk_path(sample_index, raw_mode_index),
+        f"{metadata_path}.zarr_chunk_path",
+    )
+    require_equal(metadata.get("zarr_dtype"), "<f8", f"{metadata_path}.zarr_dtype")
+    require_equal(
+        metadata.get("zarr_shape"),
+        [sample_count, 3, 2],
+        f"{metadata_path}.zarr_shape",
+    )
+    require_equal(
+        metadata.get("zarr_chunk_shape"),
+        [max(sample_count, 1), 3, 2],
+        f"{metadata_path}.zarr_chunk_shape",
+    )
+    require_equal(
+        metadata.get("compatibility_binary_payload_path"),
+        mode_payload_path(sample_index, raw_mode_index),
+        f"{metadata_path}.compatibility_binary_payload_path",
+    )
+    require_equal(
+        metadata.get("payload_encoding"),
+        "f64_interleaved_real_imag_xyz",
+        f"{metadata_path}.payload_encoding",
+    )
+    require_equal(
+        metadata.get("binary_layout"),
+        "complex_f64_pairs_little_endian",
+        f"{metadata_path}.binary_layout",
+    )
+    require_equal(
+        metadata.get("complex_pair_count"),
+        sample_count * 3,
+        f"{metadata_path}.complex_pair_count",
+    )
+    require_equal(
+        metadata.get("payload_value_count"),
+        sample_count * 6,
+        f"{metadata_path}.payload_value_count",
+    )
+    require_ordered_string_list(
+        metadata.get("available_views"),
+        ["complex", "real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"],
+        f"{metadata_path}.available_views",
+    )
+    require_equal(
+        metadata.get("default_view"),
+        "phase_rotated_real",
+        f"{metadata_path}.default_view",
+    )
+    require_finite_number(
+        metadata.get("default_phase_rad"),
+        f"{metadata_path}.default_phase_rad",
+    )
+
+
+def validate_manifest_physics(manifest: dict) -> None:
+    physics = manifest.get("physics")
+    if not isinstance(physics, dict):
+        fail("manifest.physics must be an object")
+    require_equal(
+        physics.get("analysis_family"),
+        "magnetic_frequency_domain",
+        "manifest.physics.analysis_family",
+    )
+    phase_convention = physics.get("phase_convention")
+    if phase_convention not in {"exp_i_omega_t", "exp_minus_i_omega_t"}:
+        fail(
+            "manifest.physics.phase_convention must be exp_i_omega_t "
+            "or exp_minus_i_omega_t"
+        )
+    require_equal(
+        physics.get("frequency_units"),
+        "Hz",
+        "manifest.physics.frequency_units",
+    )
+    require_equal(
+        physics.get("field_units"),
+        "dimensionless_delta_m",
+        "manifest.physics.field_units",
+    )
+    require_non_empty_string(
+        physics.get("normalization"),
+        "manifest.physics.normalization",
     )
 
 
@@ -174,14 +346,44 @@ def validate_mode_summary(
         f"{metadata_path}.mode_field_resource_key",
     )
     require_mode_metadata_summaries(metadata, metadata_path)
+    require_mode_field_metadata(metadata, metadata_path, sample_index, raw_mode_index)
 
     expected_meta_resource = mode_meta_resource_key(sample_index, raw_mode_index)
     if manifest_mode_resources and expected_meta_resource not in manifest_mode_resources:
         fail(f"manifest.resources.mode_field_resources missing {expected_meta_resource}")
-    require_mode_payload(
+    payload_value_count = require_non_negative_int(
+        metadata.get("payload_value_count"),
+        f"{metadata_path}.payload_value_count",
+    )
+    zarr_payload_value_count = require_mode_zarr_payload(
+        root,
+        mode_zarr_array_path(sample_index, raw_mode_index),
+        require_non_negative_int(
+            metadata.get("mode_field_sample_count"),
+            f"{metadata_path}.mode_field_sample_count",
+        ),
+        payload_value_count,
+        f"mode {sample_index}/{raw_mode_index}",
+    )
+    require_equal(
+        zarr_payload_value_count,
+        payload_value_count,
+        f"{metadata_path}.zarr_payload_value_count",
+    )
+    payload_value_count = require_mode_payload(
         root,
         mode_payload_path(sample_index, raw_mode_index),
         f"mode {sample_index}/{raw_mode_index}",
+    )
+    require_equal(
+        metadata.get("payload_value_count"),
+        payload_value_count,
+        f"{metadata_path}.payload_value_count",
+    )
+    require_equal(
+        metadata.get("complex_pair_count"),
+        payload_value_count // 2,
+        f"{metadata_path}.complex_pair_count",
     )
     return sample_index, raw_mode_index
 
@@ -244,10 +446,21 @@ def main() -> int:
         "manifest.schema_version",
     )
     require_equal(manifest.get("stage_kind"), "eigenmodes", "manifest.stage_kind")
+    validate_manifest_physics(manifest)
     require_equal(
         manifest.get("artifacts", {}).get("spectrum_v2_path"),
         "eigen/spectrum.v2.json",
         "manifest.artifacts.spectrum_v2_path",
+    )
+    require_equal(
+        manifest.get("artifacts", {}).get("mode_field_storage_format"),
+        "zarr",
+        "manifest.artifacts.mode_field_storage_format",
+    )
+    require_equal(
+        manifest.get("artifacts", {}).get("mode_field_zarr_store_path"),
+        mode_zarr_store_path(),
+        "manifest.artifacts.mode_field_zarr_store_path",
     )
 
     manifest_mode_paths = set(

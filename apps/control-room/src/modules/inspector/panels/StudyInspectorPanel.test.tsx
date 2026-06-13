@@ -509,6 +509,143 @@ describe("StudyInspectorPanel", () => {
     expect(html).toContain("hysteresis_snapshots/hysteresis_point_003/m.json");
   });
 
+  it("renders a structured piecewise field segment editor for hysteresis authoring", () => {
+    const draft = createDefaultStudyStageDraft("hysteresis", 0);
+    const html = renderToStaticMarkup(
+      <StudyStageDraftEditor
+        draft={{
+          ...draft,
+          fieldScheduleMode: "piecewise",
+          fieldSegments: JSON.stringify([
+            {
+              endpointPolicy: "skip_start",
+              label: "Dense after remanence",
+              reason: "dense_after_remanence",
+              segmentId: "dense_after_remanence",
+              startField: 200,
+              step: 5,
+              stopField: -50,
+              unit: "mT",
+            },
+          ]),
+        }}
+        index={0}
+        validation={[]}
+        onUpdate={() => undefined}
+      />,
+    );
+
+    expect(html).toContain("Piecewise field segments");
+    expect(html).toContain("Segment 1");
+    expect(html).toContain("Segment ID");
+    expect(html).toContain("Start field");
+    expect(html).toContain("Stop field");
+    expect(html).toContain("Endpoint policy");
+    expect(html).toContain("Dense after remanence");
+    expect(html).toContain("Add segment");
+  });
+
+  it("renders a structured dense-window editor for hysteresis authoring", () => {
+    const draft = createDefaultStudyStageDraft("hysteresis", 0);
+    const html = renderToStaticMarkup(
+      <StudyStageDraftEditor
+        draft={{
+          ...draft,
+          denseWindows: JSON.stringify([
+            {
+              center_mT: 0,
+              half_width_mT: 25,
+              priority: 10,
+              reason: "remanence",
+              step_mT: 1,
+            },
+          ]),
+        }}
+        index={0}
+        validation={[]}
+        onUpdate={() => undefined}
+      />,
+    );
+
+    expect(html).toContain("Dense refinement windows");
+    expect(html).toContain("Window 1");
+    expect(html).toContain("Center field");
+    expect(html).toContain("Half width");
+    expect(html).toContain("Priority");
+    expect(html).toContain("remanence");
+    expect(html).toContain("Add window");
+  });
+
+  it("renders a structured minor-loop editor for hysteresis authoring", () => {
+    const draft = createDefaultStudyStageDraft("hysteresis", 0);
+    const html = renderToStaticMarkup(
+      <StudyStageDraftEditor
+        draft={{
+          ...draft,
+          minorLoops: JSON.stringify([
+            {
+              closure_policy: "branch_only",
+              parent_branch: "descending",
+              return_mT: -25,
+              reversal_mT: 25,
+            },
+          ]),
+          protocolKind: "major_with_minor_loops",
+        }}
+        index={0}
+        validation={[]}
+        onUpdate={() => undefined}
+      />,
+    );
+
+    expect(html).toContain("Minor loop branches");
+    expect(html).toContain("Loop 1");
+    expect(html).toContain("Reversal field");
+    expect(html).toContain("Return field");
+    expect(html).toContain("Parent branch");
+    expect(html).toContain("Closure policy");
+    expect(html).toContain("Branch only");
+    expect(html).toContain("Add minor loop");
+  });
+
+  it("renders a structured settle-branch editor for hysteresis tree authoring", () => {
+    const draft = createDefaultStudyStageDraft("hysteresis", 0);
+    const html = renderToStaticMarkup(
+      <StudyStageDraftEditor
+        draft={{
+          ...draft,
+          settleBranches: JSON.stringify([
+            {
+              branch_id: "non_converged_fallback",
+              run: {
+                alpha: 1,
+                kind: "relax",
+                max_steps: 100,
+                method: "llg_overdamped",
+                on_non_convergence: "continue_with_warning",
+                torque_tolerance: 1e-5,
+              },
+              when: "non_converged",
+            },
+          ]),
+          settlePipelineMode: "tree",
+        }}
+        index={0}
+        validation={[]}
+        onUpdate={() => undefined}
+      />,
+    );
+
+    expect(html).toContain("Settle tree branches");
+    expect(html).toContain("Branch 1");
+    expect(html).toContain("Branch ID");
+    expect(html).toContain("Trigger");
+    expect(html).toContain("Non-converged fallback");
+    expect(html).toContain("Run step JSON");
+    expect(html).toContain("non_converged_fallback");
+    expect(html).toContain("Add branch");
+  });
+
   it("keeps root pipeline validation visible when stage editor is hidden", () => {
     const draft = { ...createDefaultStudyStageDraft("relax", 0), stageId: "" };
     const html = renderToStaticMarkup(

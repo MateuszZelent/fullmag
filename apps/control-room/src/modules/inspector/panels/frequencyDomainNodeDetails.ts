@@ -312,7 +312,7 @@ const FREQUENCY_DOMAIN_RESULT_NODE_DETAILS: Record<
     visualization: "completed frequencies, partial artifacts, and current solve state",
   },
   "results.frequency_response.cancel_requested": {
-    artifact: "response/cancel-requested.v1.json",
+    artifact: "response/cancel_requested.v1.json",
     focus: "response cancellation",
     resource: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
     title: "Frequency Response Cancellation Node Detail",
@@ -451,7 +451,7 @@ const FREQUENCY_DOMAIN_RESOURCE_NODE_DETAILS: Record<
     visualization: "frequency sweep progress, cancellation, and partial artifacts",
   },
   "resources.analysis.frequency_response.cancel_requested": {
-    artifact: "response/cancel-requested.v1.json",
+    artifact: "response/cancel_requested.v1.json",
     focus: "response cancellation resource",
     resource: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
     title: "Response Cancellation Resource Detail",

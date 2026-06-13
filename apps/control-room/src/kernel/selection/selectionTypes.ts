@@ -126,6 +126,10 @@ export type SelectionRef =
     }
   | {
       kind: "study.stage.action";
+      fieldOrientation?: string | null;
+      fieldRevision?: string | number | null;
+      measurementAxis?: string | null;
+      meshIdentity?: string | null;
       nodeId: string;
       pointId: number;
       quantityId: string;
@@ -348,6 +352,10 @@ export function selectionRefEquals(
         left.snapshotId === right.snapshotId &&
         left.quantityId === right.quantityId &&
         nullableStringEquals(left.resourceRef, right.resourceRef) &&
+        nullableStringEquals(left.meshIdentity, right.meshIdentity) &&
+        nullableStringEquals(left.fieldOrientation, right.fieldOrientation) &&
+        nullableStringEquals(left.measurementAxis, right.measurementAxis) &&
+        (left.fieldRevision ?? null) === (right.fieldRevision ?? null) &&
         left.targetId === right.targetId
       );
     case "study-stage":

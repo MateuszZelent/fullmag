@@ -7885,6 +7885,8 @@ fn minimal_hysteresis_study() -> StudyIR {
                 alpha: 1.0,
                 torque_tolerance: 1.0e-5,
                 max_steps: 25,
+                applies_to: None,
+                stop_criteria: None,
                 timestep_s: None,
                 max_pseudotime_s: None,
                 max_physical_time_s: None,

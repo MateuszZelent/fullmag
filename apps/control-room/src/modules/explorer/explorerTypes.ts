@@ -227,12 +227,16 @@ export interface ExplorerNode {
   crossSectionDraftId?: "draft";
   crossSectionPlotId?: string;
   fieldId?: string;
+  fieldOrientation?: string;
+  fieldRevision?: number | string;
   frequencyIndex?: number;
   icon?: ExplorerIconToken;
   hysteresisExecutionNodeId?: string;
   hysteresisExecutionNodeKind?: string;
   hysteresisPointId?: number;
   hysteresisSnapshotId?: string;
+  measurementAxis?: string;
+  meshIdentity?: string;
   modeIndex?: number;
   objectId?: string;
   observableId?: string;

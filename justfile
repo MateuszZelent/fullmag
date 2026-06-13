@@ -97,6 +97,7 @@ verify-fem-frequency-domain-runtime-suite:
     just verify-fem-frequency-domain-runtime
     just verify-fem-frequency-domain-static-periodic-runtime
     just verify-fem-frequency-domain-eigen-runtime
+    just verify-fem-fmr-periodic-k0-runtime
 
 verify-fem-frequency-response-runtime:
     just verify-fem-frequency-domain-runtime
@@ -124,9 +125,101 @@ verify-fem-frequency-domain-eigen-runtime:
         test -f .fullmag/reports/frequency-domain-eigen-runtime/artifacts/eigen/branches.v2.json && \
         test -f .fullmag/reports/frequency-domain-eigen-runtime/artifacts/eigen/dispersion.csv && \
         test -f .fullmag/reports/frequency-domain-eigen-runtime/artifacts/eigen/modes/sample_0000/mode_0000.json && \
-        test -f .fullmag/reports/frequency-domain-eigen-runtime/artifacts/eigen/mode_fields/sample_0000/mode_0000/vector.bin && \
+        test -f .fullmag/reports/frequency-domain-eigen-runtime/artifacts/eigen/mode_fields.zarr/sample_0000/mode_0000/vector_xyz_complex/0.0.0 && \
         test -f .fullmag/reports/frequency-domain-eigen-runtime/artifacts/frequency_domain/manifest.v1.json && \
         python3 scripts/verify_fem_frequency_domain_eigen_artifacts.py .fullmag/reports/frequency-domain-eigen-runtime/artifacts'
+
+fem-fmr-periodic-k0-example:
+    just verify-fem-fmr-periodic-k0-runtime
+    printf '\nFMR k=0 periodic example outputs:\n'
+    printf '  spectrum: .fullmag/reports/fmr-periodic-k0-runtime/artifacts/eigen/spectrum.v2.json\n'
+    printf '  mode metadata: .fullmag/reports/fmr-periodic-k0-runtime/artifacts/eigen/modes/sample_0000/mode_0000.json\n'
+    printf '  mode field: .fullmag/reports/fmr-periodic-k0-runtime/artifacts/eigen/mode_fields.zarr/sample_0000/mode_0000/vector_xyz_complex/0.0.0\n'
+    printf '  plots: .fullmag/reports/fmr-periodic-k0-runtime/plots\n'
+
+run-permalloy-box-fmr-modes:
+    just verify-permalloy-box-fmr-modes-runtime
+    printf '\nPermalloy strip-hole modal FMR example outputs:\n'
+    printf '  spectrum: .fullmag/reports/permalloy-box-fmr-modes/artifacts/eigen/spectrum.v2.json\n'
+    printf '  mode metadata: .fullmag/reports/permalloy-box-fmr-modes/artifacts/eigen/modes/sample_0000/mode_0000.json\n'
+    printf '  mode field: .fullmag/reports/permalloy-box-fmr-modes/artifacts/eigen/mode_fields.zarr/sample_0000/mode_0000/vector_xyz_complex/0.0.0\n'
+    printf '  plots: .fullmag/reports/permalloy-box-fmr-modes/plots\n'
+
+verify-permalloy-box-fmr-modes-runtime:
+    just ensure-managed-fem-runtime
+    rm -rf .fullmag/reports/permalloy-box-fmr-modes
+    mkdir -p .fullmag/reports/permalloy-box-fmr-modes
+    docker compose --profile fem-gpu run --rm \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_FDM_EXECUTION=cpu \
+      -e FULLMAG_FEM_EXECUTION=cpu \
+      -e FULLMAG_RELAX_DEVICE=cpu \
+      -e FULLMAG_CPU_THREADS="${FULLMAG_CPU_THREADS:-auto}" \
+      fem-gpu bash -lc 'cd /workspace && \
+        rm -rf .fullmag/reports/permalloy-box-fmr-modes/artifacts && \
+        .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu \
+          examples/permalloy_box_relax_300x1000x10nm.py \
+          --backend fem \
+          --headless \
+          --json \
+          --output-dir .fullmag/reports/permalloy-box-fmr-modes/artifacts && \
+        test -f .fullmag/reports/permalloy-box-fmr-modes/artifacts/eigen/spectrum.v2.json && \
+        test -f .fullmag/reports/permalloy-box-fmr-modes/artifacts/eigen/branches.v2.json && \
+        test -f .fullmag/reports/permalloy-box-fmr-modes/artifacts/eigen/dispersion.csv && \
+        test -f .fullmag/reports/permalloy-box-fmr-modes/artifacts/eigen/modes/sample_0000/mode_0000.json && \
+        test -f .fullmag/reports/permalloy-box-fmr-modes/artifacts/eigen/mode_fields.zarr/sample_0000/mode_0000/vector_xyz_complex/0.0.0 && \
+        test -f .fullmag/reports/permalloy-box-fmr-modes/artifacts/frequency_domain/manifest.v1.json && \
+        python3 scripts/verify_fem_frequency_domain_eigen_artifacts.py .fullmag/reports/permalloy-box-fmr-modes/artifacts && \
+        python3 scripts/plot_fem_frequency_domain_eigen_artifacts.py \
+          .fullmag/reports/permalloy-box-fmr-modes/artifacts \
+          --output-dir .fullmag/reports/permalloy-box-fmr-modes/plots \
+          --modes 0,1,2,3 && \
+        test -f .fullmag/reports/permalloy-box-fmr-modes/plots/spectrum.svg && \
+        test -f .fullmag/reports/permalloy-box-fmr-modes/plots/mode_sample_0000_mode_0000_real.svg && \
+        test -f .fullmag/reports/permalloy-box-fmr-modes/plots/mode_sample_0000_mode_0000_imag.svg && \
+        test -f .fullmag/reports/permalloy-box-fmr-modes/plots/mode_sample_0000_mode_0000_complex.svg && \
+        test -f .fullmag/reports/permalloy-box-fmr-modes/plots/mode_sample_0000_mode_0000_abs.svg && \
+        test -f .fullmag/reports/permalloy-box-fmr-modes/plots/mode_sample_0000_mode_0000_phase.svg && \
+        test -f .fullmag/reports/permalloy-box-fmr-modes/plots/mode_sample_0000_mode_0000_animation.svg'
+
+verify-fem-fmr-periodic-k0-runtime:
+    just ensure-managed-fem-runtime
+    rm -rf .fullmag/reports/fmr-periodic-k0-runtime
+    mkdir -p .fullmag/reports/fmr-periodic-k0-runtime
+    docker compose --profile fem-gpu run --rm \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_FDM_EXECUTION=cpu \
+      -e FULLMAG_FEM_EXECUTION=cpu \
+      -e FULLMAG_RELAX_DEVICE=cpu \
+      -e FULLMAG_CPU_THREADS="${FULLMAG_CPU_THREADS:-auto}" \
+      fem-gpu bash -lc 'cd /workspace && \
+        rm -rf .fullmag/reports/fmr-periodic-k0-runtime/artifacts && \
+        .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu \
+          examples/fem_fmr_periodic_k0_smoke.py \
+          --backend fem \
+          --headless \
+          --json \
+          --output-dir .fullmag/reports/fmr-periodic-k0-runtime/artifacts && \
+        test -f .fullmag/reports/fmr-periodic-k0-runtime/artifacts/eigen/spectrum.v2.json && \
+        test -f .fullmag/reports/fmr-periodic-k0-runtime/artifacts/eigen/branches.v2.json && \
+        test -f .fullmag/reports/fmr-periodic-k0-runtime/artifacts/eigen/dispersion.csv && \
+        test -f .fullmag/reports/fmr-periodic-k0-runtime/artifacts/eigen/modes/sample_0000/mode_0000.json && \
+        test -f .fullmag/reports/fmr-periodic-k0-runtime/artifacts/eigen/mode_fields.zarr/sample_0000/mode_0000/vector_xyz_complex/0.0.0 && \
+        test -f .fullmag/reports/fmr-periodic-k0-runtime/artifacts/frequency_domain/manifest.v1.json && \
+        python3 scripts/verify_fem_frequency_domain_eigen_artifacts.py .fullmag/reports/fmr-periodic-k0-runtime/artifacts && \
+        python3 scripts/plot_fem_frequency_domain_eigen_artifacts.py \
+          .fullmag/reports/fmr-periodic-k0-runtime/artifacts \
+          --output-dir .fullmag/reports/fmr-periodic-k0-runtime/plots \
+          --modes 0,1,2 && \
+        test -f .fullmag/reports/fmr-periodic-k0-runtime/plots/spectrum.svg && \
+        test -f .fullmag/reports/fmr-periodic-k0-runtime/plots/mode_sample_0000_mode_0000_real.svg && \
+        test -f .fullmag/reports/fmr-periodic-k0-runtime/plots/mode_sample_0000_mode_0000_imag.svg && \
+        test -f .fullmag/reports/fmr-periodic-k0-runtime/plots/mode_sample_0000_mode_0000_complex.svg && \
+        test -f .fullmag/reports/fmr-periodic-k0-runtime/plots/mode_sample_0000_mode_0000_abs.svg && \
+        test -f .fullmag/reports/fmr-periodic-k0-runtime/plots/mode_sample_0000_mode_0000_phase.svg && \
+        test -f .fullmag/reports/fmr-periodic-k0-runtime/plots/mode_sample_0000_mode_0000_animation.svg'
 
 verify-fem-frequency-domain-runtime:
     just ensure-managed-fem-runtime
@@ -152,7 +245,7 @@ verify-fem-frequency-domain-runtime:
         test -f .fullmag/reports/frequency-domain-runtime/artifacts/response/progress.v1.json && \
         test -f .fullmag/reports/frequency-domain-runtime/artifacts/response/diagnostics.v1.json && \
         test -f .fullmag/reports/frequency-domain-runtime/artifacts/response/frequency_points/frequency_0000.json && \
-        test -f .fullmag/reports/frequency-domain-runtime/artifacts/response/field_payloads/frequency_0000/vector_xyz.bin && \
+        test -f .fullmag/reports/frequency-domain-runtime/artifacts/response/field_payloads.zarr/frequency_0000/vector_xyz_complex/0.0.0 && \
         test -f .fullmag/reports/frequency-domain-runtime/artifacts/frequency_domain/manifest.v1.json && \
         python3 scripts/verify_fem_frequency_domain_runtime_artifacts.py .fullmag/reports/frequency-domain-runtime/artifacts'
 
@@ -180,7 +273,7 @@ verify-fem-frequency-domain-static-periodic-runtime:
         test -f .fullmag/reports/frequency-domain-static-periodic-runtime/artifacts/response/progress.v1.json && \
         test -f .fullmag/reports/frequency-domain-static-periodic-runtime/artifacts/response/diagnostics.v1.json && \
         test -f .fullmag/reports/frequency-domain-static-periodic-runtime/artifacts/response/frequency_points/frequency_0000.json && \
-        test -f .fullmag/reports/frequency-domain-static-periodic-runtime/artifacts/response/field_payloads/frequency_0000/vector_xyz.bin && \
+        test -f .fullmag/reports/frequency-domain-static-periodic-runtime/artifacts/response/field_payloads.zarr/frequency_0000/vector_xyz_complex/0.0.0 && \
         test -f .fullmag/reports/frequency-domain-static-periodic-runtime/artifacts/frequency_domain/manifest.v1.json && \
         python3 scripts/verify_fem_frequency_domain_runtime_artifacts.py --require-static-periodic .fullmag/reports/frequency-domain-static-periodic-runtime/artifacts'
 
@@ -424,6 +517,16 @@ fullmag opt_1="" opt_2="" opt_3="" opt_4="" opt_5="" opt_6="" opt_7="" opt_8="":
         if [ "$force" = "true" ]; then just rebuild-fem-runtime; \
         elif [ "$build" = "true" ]; then just ensure-managed-fem-runtime; \
         elif [ ! -x "{{gpu_runtime_bin}}" ]; then echo "Managed FEM runtime is missing; run with build=True or force=True once." >&2; exit 2; fi; \
+        if [ "$build" = "false" ]; then \
+          if [ ! -f "{{gpu_runtime_manifest}}" ]; then echo "Managed FEM runtime manifest is missing; run with build=True or force=True once." >&2; exit 2; fi; \
+          stale_source="$(find crates/fullmag-api crates/fullmag-authoring crates/fullmag-cli crates/fullmag-runner crates/fullmag-quantities crates/fullmag-plan crates/fullmag-ir crates/fullmag-engine crates/fullmag-session crates/fullmag-fdm-demag crates/fullmag-fdm-sys crates/fullmag-fem-sys native/CMakeLists.txt native/include backends/fem backends/fdm docker/fem-gpu/Dockerfile compose.yaml scripts/export_fem_gpu_runtime.sh Cargo.toml Cargo.lock rust-toolchain.toml -type f ! -path '*/.fullmag/*' ! -path '*/__pycache__/*' ! -name '*.pyc' -newer '{{gpu_runtime_manifest}}' -print -quit 2>/dev/null)"; \
+          if [ -n "$stale_source" ]; then \
+            echo "Managed FEM runtime bundle is stale; newer runtime source detected: $stale_source" >&2; \
+            echo "Run: just fullmag build=True fem $device $script" >&2; \
+            echo "Or force a clean runtime export: just fullmag force=True fem $device $script" >&2; \
+            exit 2; \
+          fi; \
+        fi; \
         bin="{{gpu_runtime_bin}}"; path_prefix=""; \
       else \
         if [ "$force" = "true" ]; then just build fullmag; \
@@ -534,6 +637,61 @@ verify-hysteresis-waveguide-playback-data-plane api_url="http://localhost:8081" 
     python3 scripts/verify_hysteresis_playback_artifacts.py "{{artifact_dir}}"
     python3 scripts/verify_hysteresis_playback_data_plane.py "{{api_url}}" "{{artifact_dir}}"
 
+verify-hysteresis-waveguide-browser-replay device="cpu" api_port="8181" web_port="3191":
+    just verify-hysteresis-waveguide-playback-runtime "{{device}}"
+    bash -euo pipefail -c '\
+      api_port="{{api_port}}"; \
+      web_port="{{web_port}}"; \
+      api_url="http://localhost:${api_port}"; \
+      web_url="http://localhost:${web_port}/workspace"; \
+      artifact_dir=".fullmag/reports/hysteresis-waveguide-playback-runtime/artifacts"; \
+      if [ ! -d "$artifact_dir" ]; then echo "missing hysteresis artifact dir: $artifact_dir" >&2; exit 2; fi; \
+      if command -v pnpm >/dev/null 2>&1; then PNPM_CMD=pnpm; \
+      elif command -v corepack >/dev/null 2>&1; then PNPM_CMD="corepack pnpm"; \
+      else echo "pnpm or corepack not found on PATH" >&2; exit 127; fi; \
+      mkdir -p .fullmag/logs; \
+      api_pid=""; web_pid=""; \
+      cleanup() { \
+        if [ -n "$web_pid" ] && kill -0 "$web_pid" >/dev/null 2>&1; then kill "$web_pid" >/dev/null 2>&1 || true; fi; \
+        if [ -n "$api_pid" ] && kill -0 "$api_pid" >/dev/null 2>&1; then kill "$api_pid" >/dev/null 2>&1 || true; fi; \
+      }; \
+      trap cleanup EXIT INT TERM; \
+      FULLMAG_API_PORT="$api_port" CARGO_TARGET_DIR=.fullmag/codex-target cargo +nightly run -p fullmag-api \
+        > .fullmag/logs/hysteresis-waveguide-browser-replay-api.log 2>&1 & \
+      api_pid=$!; \
+      for i in $(seq 1 600); do \
+        curl -fsS "$api_url/healthz" >/dev/null 2>&1 && break; \
+        if ! kill -0 "$api_pid" >/dev/null 2>&1; then echo "fullmag-api exited early; see .fullmag/logs/hysteresis-waveguide-browser-replay-api.log" >&2; exit 1; fi; \
+        sleep 0.2; \
+      done; \
+      curl -fsS "$api_url/healthz" >/dev/null 2>&1 || { echo "fullmag-api did not become ready at $api_url" >&2; exit 1; }; \
+      python3 scripts/verify_hysteresis_playback_data_plane.py "$api_url" "$artifact_dir"; \
+      NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL="$api_url" \
+      NEXT_PUBLIC_RUNTIME_HTTP_BASE="$api_url" \
+      NEXT_PUBLIC_API_URL="$api_url" \
+      NEXT_PUBLIC_FULLMAG_API_URL="$api_url" \
+      FULLMAG_API_URL="$api_url" \
+      FULLMAG_API_PROXY_TARGET="$api_url" \
+      $PNPM_CMD --dir apps/control-room dev --hostname 127.0.0.1 --port "$web_port" \
+        > .fullmag/logs/hysteresis-waveguide-browser-replay-web.log 2>&1 & \
+      web_pid=$!; \
+      for i in $(seq 1 600); do \
+        curl -fsS "$web_url" >/dev/null 2>&1 && break; \
+        if ! kill -0 "$web_pid" >/dev/null 2>&1; then echo "control-room dev server exited early; see .fullmag/logs/hysteresis-waveguide-browser-replay-web.log" >&2; exit 1; fi; \
+        sleep 0.2; \
+      done; \
+      curl -fsS "$web_url" >/dev/null 2>&1 || { echo "control-room did not become ready at $web_url" >&2; exit 1; }; \
+      CONTROL_ROOM_URL="$web_url" \
+      CONTROL_ROOM_API_BASE_URL="$api_url" \
+      NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL="$api_url" \
+      CONTROL_ROOM_SMOKE_HYSTERESIS_REPLAY=1 \
+      CONTROL_ROOM_SMOKE_HYSTERESIS_REPLAY_ONLY=1 \
+      CONTROL_ROOM_SMOKE_HYSTERESIS_STAGE_ID=stage_0 \
+      CONTROL_ROOM_SMOKE_HYSTERESIS_POINT_ID=0 \
+      CONTROL_ROOM_SMOKE_HYSTERESIS_SNAPSHOT_ID=hysteresis_point_001 \
+      CONTROL_ROOM_SMOKE_SKIP_CAMERA_GESTURES=1 \
+      $PNPM_CMD --dir apps/control-room smoke:viewport-3d'
+
 run-hysteresis-waveguide-angular-family-smoke device="cpu":
     FULLMAG_DISABLE_CHARTS=1 FULLMAG_DISABLE_PREVIEW_3D=1 \
     FULLMAG_HYSTERESIS_FIELD_VALUES_MT=50,0,-50 FULLMAG_HYSTERESIS_MAX_STEPS=25 \
@@ -548,7 +706,7 @@ verify-hysteresis-angular-family-artifacts artifacts_dir:
 
 run-hysteresis-waveguide-projection-benchmark-smoke device="cpu":
     FULLMAG_DISABLE_CHARTS=1 FULLMAG_DISABLE_PREVIEW_3D=1 \
-    FULLMAG_HYSTERESIS_FIELD_VALUES_MT=50 FULLMAG_HYSTERESIS_MAX_STEPS=1 \
+    FULLMAG_HYSTERESIS_FIELD_VALUES_MT=50,0,-50,0,50 FULLMAG_HYSTERESIS_MAX_STEPS=1 \
     FULLMAG_HYSTERESIS_ANGULAR_FAMILY=1 \
     just fullmag build=False static fem "{{device}}" headless examples/hysteresis_waveguide_300x50x10nm.py
 

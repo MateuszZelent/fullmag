@@ -433,6 +433,24 @@ describe("ControlRoomApi", () => {
           study_kind: "frequency_response",
         },
         response_progress: null,
+        result_manifest: {
+          artifact_path: "frequency_domain/manifest.v1.json",
+          payload: {
+            physics: {
+              analysis_family: "magnetic_frequency_domain",
+              field_units: "dimensionless_delta_m",
+              frequency_units: "Hz",
+              normalization: "unit_l2",
+              phase_convention: "exp_minus_i_omega_t",
+            },
+            schema_version: "frequency_domain_manifest.v1",
+            stage_kind: "eigenmodes",
+          },
+          resource_key:
+            "/v2/sessions/current/analysis/frequency-domain/manifest.v1",
+          schema_version: "frequency_domain_manifest.v1",
+          status: "ready",
+        },
         schema_version: "frequency_domain_manifest.v1",
       });
     });
@@ -453,6 +471,15 @@ describe("ControlRoomApi", () => {
     expect(manifest.response.floquet_response_available).toBe(false);
     expect(manifest.response.gpu_available).toBe(false);
     expect(manifest.eigenmodes.study_kind).toBe("eigenmodes");
+    expect(manifest.result_manifest?.payload).toMatchObject({
+      physics: {
+        analysis_family: "magnetic_frequency_domain",
+        field_units: "dimensionless_delta_m",
+        frequency_units: "Hz",
+        normalization: "unit_l2",
+        phase_convention: "exp_minus_i_omega_t",
+      },
+    });
     expect(observedUrl).toBe(
       "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-domain/manifest.v1",
     );
@@ -686,19 +713,33 @@ describe("ControlRoomApi", () => {
       if (target.endsWith("/eigen/mode-field/1/2/meta")) {
         return jsonResponse({
           artifact_path: "eigen/mode_fields/sample_0001/mode_0002/vector.bin",
-          available_views: ["real", "imag", "amplitude", "phase_rotated_real"],
+          available_views: [
+            "complex",
+            "real",
+            "imag",
+            "abs",
+            "amplitude",
+            "phase",
+            "phase_rotated_real",
+          ],
+          binary_layout: "complex_f64_pairs_little_endian",
+          complex_pair_count: 3,
+          component_basis: "global_xyz",
+          component_count: 3,
           components: ["x", "y", "z"],
           default_phase_rad: 0,
           default_view: "phase_rotated_real",
           field_id: "analysis:eigen:sample-0001:mode-0002",
           missing_reason: null,
+          payload_encoding: "f64_interleaved_real_imag_xyz",
+          payload_value_count: 6,
           quantity: "delta_m",
           resource_key:
             "/v2/sessions/current/data/fields/analysis:eigen:sample-0001:mode-0002/samples/vector?view=phase_rotated_real&phase_rad=0",
           schema_version: "frequency_domain_eigen_field.v1",
           source_family: "analysis/eigen",
           status: "ready",
-          value_kind: "complex_vector",
+          value_kind: "complex_spatial_vector",
         });
       }
       if (target.endsWith("/analysis/eigen/modes/1/2")) {
@@ -733,13 +774,22 @@ describe("ControlRoomApi", () => {
     await api.analysis.eigen.eigenDiagnosticsV2();
     await api.analysis.eigen.eigenDispersion();
     const mode = await api.analysis.eigen.modeV2(1, 2);
-    await api.analysis.eigen.eigenModeFieldMeta(1, 2);
+    const modeMeta = await api.analysis.eigen.eigenModeFieldMeta(1, 2);
     await api.analysis.frequencyDomain.eigenSpectrumV2();
 
     expect(mode).toMatchObject({
       field_id: "analysis:eigen:sample-0001:mode-0002",
       schema_version: "eigen_mode.v2",
     });
+    expect(modeMeta.value_kind).toBe("complex_spatial_vector");
+    expect(modeMeta.component_basis).toBe("global_xyz");
+    expect(modeMeta.component_count).toBe(3);
+    expect(modeMeta.payload_encoding).toBe("f64_interleaved_real_imag_xyz");
+    expect(modeMeta.binary_layout).toBe("complex_f64_pairs_little_endian");
+    expect(modeMeta.complex_pair_count).toBe(3);
+    expect(modeMeta.payload_value_count).toBe(6);
+    expect(modeMeta.available_views).toContain("complex");
+    expect(modeMeta.available_views).toContain("abs");
     expect(observedUrls).toEqual([
       "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2",
       "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2",

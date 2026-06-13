@@ -11,6 +11,14 @@ from typing import Any
 
 
 REQUIRED_VARIANTS = {"ip_x", "oop", "custom_theta45_phi30"}
+REQUIRED_METRIC_FIELDS = {
+    "H_c_plus",
+    "H_c_minus",
+    "H_c",
+    "M_r_plus",
+    "M_r_minus",
+    "loop_area",
+}
 TOL = 1.0e-9
 
 
@@ -80,6 +88,46 @@ def require_points(root: Path, relative_path: str, variant_id: str) -> list[dict
     return points
 
 
+def require_metrics(root: Path, relative_path: str, variant_id: str) -> dict[str, Any]:
+    path = root / relative_path
+    if not path.is_file():
+        raise SystemExit(f"missing metrics artifact for {variant_id}: {path}")
+    metrics = load_json(path)
+    if not isinstance(metrics, dict):
+        raise SystemExit(f"metrics artifact for {variant_id} must be a JSON object")
+    missing = sorted(REQUIRED_METRIC_FIELDS.difference(metrics))
+    if missing:
+        raise SystemExit(
+            f"metrics artifact for {variant_id} is missing publication metrics: "
+            + ", ".join(missing)
+        )
+    for field in sorted(REQUIRED_METRIC_FIELDS):
+        value = metrics.get(field)
+        if not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+            raise SystemExit(
+                f"metrics artifact for {variant_id} must provide finite {field}, got {value!r}"
+            )
+    return metrics
+
+
+def validate_full_loop_points(points: list[dict[str, Any]], variant_id: str) -> None:
+    if len(points) < 5:
+        raise SystemExit(
+            f"variant {variant_id} must contain a full loop with at least 5 points, "
+            f"got {len(points)}"
+        )
+    fields = [float(point["field_value_mT"]) for point in points]
+    if not any(field > 0.0 for field in fields) or not any(field < 0.0 for field in fields):
+        raise SystemExit(
+            f"variant {variant_id} full loop must include positive and negative fields"
+        )
+    if abs(fields[0] - fields[-1]) > TOL:
+        raise SystemExit(
+            f"variant {variant_id} full loop must return to its starting field "
+            f"({fields[0]} != {fields[-1]})"
+        )
+
+
 def validate_variant_manifest_contract(variant: dict[str, Any], variant_id: str) -> None:
     status = variant.get("data_status")
     if status not in ("computed_active_stage", "computed_variant_run"):
@@ -105,10 +153,20 @@ def validate_variant(root: Path, variant: dict[str, Any]) -> int:
     points_path = variant.get("points_path")
     if not isinstance(points_path, str):
         raise SystemExit(f"variant {variant_id} is missing points_path")
+    metrics_path = variant.get("metrics_path")
+    if not isinstance(metrics_path, str):
+        raise SystemExit(f"variant {variant_id} is missing metrics_path")
 
     field_axis = orientation_axis(orientation)
     meas_axis = measurement_axis(variant.get("measurement_axis"), field_axis)
     points = require_points(root, points_path, variant_id)
+    require_metrics(root, metrics_path, variant_id)
+    validate_full_loop_points(points, variant_id)
+    if int(variant.get("point_count", -1)) != len(points):
+        raise SystemExit(
+            f"variant {variant_id} point_count mismatch: "
+            f"{variant.get('point_count')} != {len(points)}"
+        )
 
     for index, point in enumerate(points):
         m_avg = point.get("m_avg")

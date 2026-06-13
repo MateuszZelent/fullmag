@@ -84,7 +84,7 @@ study.save("mode", indices=(0, 1, 2, 3))
 study.stages.add_relax(
     algorithm="llg_overdamped",
     solver="rk23",
-    max_steps=500,
+    max_steps=1000,
     tol=1e-5,
 )
 study.stages.add_eigenmodes(

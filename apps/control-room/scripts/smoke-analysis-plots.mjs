@@ -77,6 +77,7 @@ async function main() {
     await openAnalysisPlots(page);
     await waitForAnalysisRowsAndCanvas(page);
     await verifySeriesLegend(page);
+    await verifyFrequencyDomainSubchart(page);
     await verifySeriesSelectionEvent(page, rowsBinRequests);
     await verifyPointSelection(page);
     if (await hasAxisControlPanel(page)) {
@@ -244,6 +245,47 @@ async function verifySeriesLegend(page) {
     const body = await page.locator(".fm-analysis-plots").innerText();
     throw new Error(
       `analysis series legend is missing or incomplete. Analysis snippet:\n${body.slice(0, 1_000)}`,
+    );
+  });
+}
+
+async function verifyFrequencyDomainSubchart(page) {
+  const panel = page.locator(
+    ".fm-analysis-plots__subchart--frequency-domain",
+  );
+  if ((await panel.count()) === 0) return;
+  await page.waitForFunction(
+    () => {
+      const panel = document.querySelector(
+        ".fm-analysis-plots__subchart--frequency-domain",
+      );
+      if (!(panel instanceof HTMLElement)) return true;
+      const title = panel.querySelector("h4")?.textContent?.trim() ?? "";
+      const titleMatches =
+        title === "Frequency-domain modal spectrum" ||
+        title === "Frequency-domain dispersion" ||
+        title === "Frequency-domain response sweep" ||
+        title === "Frequency-domain response map" ||
+        title === "Frequency-domain analysis";
+      if (!titleMatches) return false;
+      const empty = panel.querySelector(".fm-analysis-plots__empty");
+      if (empty instanceof HTMLElement) {
+        return Boolean(empty.textContent?.trim());
+      }
+      const legend = panel.querySelector(".fm-analysis-plots__legend");
+      const canvas = panel.querySelector(".fm-analysis-plots__echarts canvas");
+      return (
+        legend instanceof HTMLElement &&
+        canvas instanceof HTMLCanvasElement &&
+        canvas.width > 0 &&
+        canvas.height > 0
+      );
+    },
+    { timeout: timeoutMs },
+  ).catch(async () => {
+    const body = await panel.first().innerText({ timeout: 5_000 });
+    throw new Error(
+      `frequency-domain subchart is incomplete. Subchart snippet:\n${body.slice(0, 1_000)}`,
     );
   });
 }

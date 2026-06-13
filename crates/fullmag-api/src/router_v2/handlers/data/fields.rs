@@ -1570,7 +1570,9 @@ fn analysis_frequency_response_vector_response(
     {
         path
     } else {
-        format!("response/field_payloads/frequency_{frequency_index:04}/vector_xyz.bin")
+        format!(
+            "response/field_payloads.zarr/frequency_{frequency_index:04}/vector_xyz_complex/0.0.0"
+        )
     };
     let Some(path) = try_resolve_artifact_path(&artifact_dir, &relative_path)? else {
         return Err(ApiError::not_found(format!(
@@ -1747,6 +1749,7 @@ fn response_field_payload_path_from_point_artifact(
 }
 
 struct ResponseFieldDataPlaneMetadata {
+    payload_path: String,
     component_count: Option<usize>,
     payload_value_count: Option<u64>,
     available_views: Vec<String>,
@@ -1812,6 +1815,7 @@ fn response_field_data_plane_metadata_from_point_artifact(
 ) -> Result<ResponseFieldDataPlaneMetadata, ApiError> {
     if try_resolve_artifact_path(artifact_dir, relative_path)?.is_none() {
         return Ok(ResponseFieldDataPlaneMetadata {
+            payload_path: relative_path.to_string(),
             component_count: Some(3),
             payload_value_count: None,
             available_views: default_frequency_domain_field_views(),
@@ -1869,12 +1873,120 @@ fn response_field_data_plane_metadata_from_point_artifact(
     let default_view = validate_response_field_default_view(&point, relative_path)?;
     let default_phase_rad = validate_response_field_default_phase_rad(&point, relative_path)?;
     Ok(ResponseFieldDataPlaneMetadata {
+        payload_path: relative_path.to_string(),
         component_count: Some(component_count as usize),
         payload_value_count: Some(payload_value_count),
         available_views,
         default_view,
         default_phase_rad,
     })
+}
+
+fn eigen_mode_data_plane_metadata_from_mode_artifact(
+    artifact_dir: &std::path::Path,
+    sample_index: u32,
+    mode_index: u32,
+) -> Result<ResponseFieldDataPlaneMetadata, ApiError> {
+    let relative_path = format!("eigen/modes/sample_{sample_index:04}/mode_{mode_index:04}.json");
+    if try_resolve_artifact_path(artifact_dir, &relative_path)?.is_none() {
+        return Err(ApiError::internal(format!(
+            "eigen mode field payload is present but metadata '{}' is missing",
+            relative_path
+        )));
+    }
+    let mode = read_json_artifact_value(artifact_dir, &relative_path)?;
+    let Some(component_count) = mode
+        .get("component_count")
+        .and_then(serde_json::Value::as_u64)
+    else {
+        return Err(ApiError::internal(format!(
+            "missing required eigen mode field component_count in '{}'",
+            relative_path
+        )));
+    };
+    if component_count == 0 || component_count > 64 {
+        return Err(ApiError::internal(format!(
+            "invalid eigen mode field component_count in '{}'",
+            relative_path
+        )));
+    }
+    let Some(complex_pair_count) = mode
+        .get("complex_pair_count")
+        .and_then(serde_json::Value::as_u64)
+    else {
+        return Err(ApiError::internal(format!(
+            "missing required eigen mode field complex_pair_count in '{}'",
+            relative_path
+        )));
+    };
+    let Some(payload_value_count) = mode
+        .get("payload_value_count")
+        .and_then(serde_json::Value::as_u64)
+    else {
+        return Err(ApiError::internal(format!(
+            "missing required eigen mode field payload_value_count in '{}'",
+            relative_path
+        )));
+    };
+    let Some(expected_payload_value_count) = complex_pair_count.checked_mul(2) else {
+        return Err(ApiError::internal(format!(
+            "eigen mode field complex_pair_count overflows payload_value_count in '{}'",
+            relative_path
+        )));
+    };
+    if payload_value_count != expected_payload_value_count {
+        return Err(ApiError::internal(format!(
+            "invalid eigen mode field payload_value_count in '{}'",
+            relative_path
+        )));
+    }
+    let available_views = validate_response_field_available_views(&mode, &relative_path)?;
+    let default_view = validate_response_field_default_view(&mode, &relative_path)?;
+    let default_phase_rad = validate_response_field_default_phase_rad(&mode, &relative_path)?;
+    let payload_path = eigen_mode_data_plane_payload_path(
+        artifact_dir,
+        &mode,
+        sample_index,
+        mode_index,
+        &relative_path,
+    )?;
+    Ok(ResponseFieldDataPlaneMetadata {
+        payload_path,
+        component_count: Some(component_count as usize),
+        payload_value_count: Some(payload_value_count),
+        available_views,
+        default_view,
+        default_phase_rad,
+    })
+}
+
+fn eigen_mode_data_plane_payload_path(
+    artifact_dir: &std::path::Path,
+    mode: &serde_json::Value,
+    sample_index: u32,
+    mode_index: u32,
+    mode_metadata_path: &str,
+) -> Result<String, ApiError> {
+    for field in ["zarr_chunk_path", "compatibility_binary_payload_path"] {
+        if let Some(path) = mode.get(field).and_then(serde_json::Value::as_str) {
+            if try_resolve_artifact_path(artifact_dir, path)?.is_some() {
+                return Ok(path.to_string());
+            }
+        }
+    }
+    let legacy_path =
+        format!("eigen/mode_fields/sample_{sample_index:04}/mode_{mode_index:04}/vector.bin");
+    if try_resolve_artifact_path(artifact_dir, &legacy_path)?.is_some() {
+        return Ok(legacy_path);
+    }
+    if mode.get("zarr_chunk_path").is_some()
+        || mode.get("compatibility_binary_payload_path").is_some()
+    {
+        return Err(ApiError::not_found(format!(
+            "analysis eigen mode field payload is missing for metadata: {mode_metadata_path}"
+        )));
+    }
+    Ok(legacy_path)
 }
 
 fn validate_response_field_available_views(
@@ -2013,8 +2125,9 @@ fn analysis_eigen_mode_vector_response(
     };
     let artifact_dir = current_artifact_dir(snapshot)
         .ok_or_else(|| ApiError::not_found("no artifact directory for analysis field payload"))?;
-    let relative_path =
-        format!("eigen/mode_fields/sample_{sample_index:04}/mode_{mode_index:04}/vector.bin");
+    let metadata =
+        eigen_mode_data_plane_metadata_from_mode_artifact(&artifact_dir, sample_index, mode_index)?;
+    let relative_path = metadata.payload_path.clone();
     let path = artifact_dir.join(&relative_path);
     let bytes = std::fs::read(&path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
@@ -2028,13 +2141,33 @@ fn analysis_eigen_mode_vector_response(
             ))
         }
     })?;
+    if let Some(payload_value_count) = metadata.payload_value_count {
+        let expected_size = payload_value_count.checked_mul(8).ok_or_else(|| {
+            ApiError::internal(format!(
+                "eigen mode field payload_value_count overflows byte size in '{}'",
+                relative_path
+            ))
+        })?;
+        if bytes.len() as u64 != expected_size {
+            return Err(ApiError::internal(format!(
+                "analysis eigen mode field payload '{}' has {} bytes, expected {}",
+                relative_path,
+                bytes.len(),
+                expected_size
+            )));
+        }
+    }
     let values = decode_complex_f64_pairs_little_endian(&bytes)?;
-    let available_views = default_frequency_domain_field_views();
-    let effective_view = query.view.as_deref().unwrap_or("phase_rotated_real");
-    let effective_phase_rad = query.phase_rad.unwrap_or(0.0);
-    validate_response_field_requested_view(&relative_path, &available_views, Some(effective_view))?;
-    let (raw_values, n_comp, default_component) = analysis_complex_vector_view_values(
+    let effective_view = query.view.as_deref().unwrap_or(&metadata.default_view);
+    let effective_phase_rad = query.phase_rad.unwrap_or(metadata.default_phase_rad);
+    validate_response_field_requested_view(
+        &relative_path,
+        &metadata.available_views,
+        Some(effective_view),
+    )?;
+    let (raw_values, n_comp, default_component) = analysis_complex_component_view_values(
         &values,
+        metadata.component_count.unwrap_or(3),
         Some(effective_view),
         Some(effective_phase_rad),
     )?;

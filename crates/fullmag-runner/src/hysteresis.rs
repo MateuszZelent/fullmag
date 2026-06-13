@@ -262,9 +262,13 @@ pub struct HysteresisSettleTraceEntry {
     pub algorithm_id: String,
     pub method: String,
     pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<String>,
     pub fallback_reason: Option<String>,
     pub retry_attempt: u32,
     pub resolved_timestep_s: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_parameters: Option<serde_json::Value>,
     pub torque: Option<f64>,
     pub energy: Option<f64>,
 }
@@ -555,6 +559,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
     let mut global_step_count = 0;
     let mut final_status = RunStatus::Completed;
     let mut saturation_result: Option<HysteresisSaturationResult> = None;
+    let mut stop_after_saturation_probe = false;
     let mut preparation_field_mT =
         hysteresis_preparation_field_mT(initial_protocol, saturation.as_ref(), &sweep_values_mT);
     let averaging = hysteresis_averaging_context(&plan.backend_plan);
@@ -587,6 +592,10 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
         final_status = probe_run.status;
         preparation_field_mT = probe_run.result.preparation_field_mT;
         append_stage_steps(&mut steps_stats, &mut global_step_count, probe_run.steps);
+        stop_after_saturation_probe = saturation_probe_should_stop_stage(
+            saturation.as_ref().expect("checked saturation is present"),
+            &probe_run.result,
+        );
         saturation_result = Some(probe_run.result);
     } else if let Some(preparation_field_mT) = preparation_field_mT {
         let preparation_field_Apm = field_mT_to_h_apm(preparation_field_mT);
@@ -602,6 +611,8 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
             Some(HysteresisProgressContext {
                 point_idx: None,
                 field_m_t: preparation_field_mT,
+                point_role: "preparation",
+                branch_id: None,
             }),
             settle_pipeline.as_ref(),
             until_seconds,
@@ -620,185 +631,190 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
         current_m = solve_res.executed_run.result.final_magnetization.clone();
     }
 
-    for (point_idx, H_mT) in sweep_values_mT.iter().copied().enumerate() {
-        let H_Apm = field_mT_to_h_apm(H_mT);
-        let H_ext = [H_Apm * u_H[0], H_Apm * u_H[1], H_Apm * u_H[2]];
-        let field_vector_A_per_m = H_ext;
-
-        let point_run = run_settle_at_field(
-            &plan.backend_plan,
-            problem,
-            &current_m,
-            H_ext,
-            Some(HysteresisProgressContext {
-                point_idx: Some(point_idx),
-                field_m_t: H_mT,
-            }),
-            settle_pipeline.as_ref(),
-            until_seconds,
-            field_every_n,
-            display_selection,
-            interrupt_requested,
-            initial_snapshot,
-            on_step,
-        )?;
-
-        current_m = point_run.executed_run.result.final_magnetization.clone();
-        final_status = point_run.executed_run.result.status;
-        let point_non_converged = point_run
-            .trace
-            .iter()
-            .any(|entry| entry.status == "non_converged");
-        let point_quality =
-            hysteresis_point_quality(point_run.executed_run.result.status, &point_run.trace);
-        settle_trace.extend(point_run.trace);
-
-        let m_avg = average_hysteresis_magnetization(&current_m, &averaging);
-        let m_parallel = hysteresis_project_m_parallel(m_avg, u_meas);
-        let (m_oop, m_ip) = hysteresis_oop_ip_components(m_avg, hysteresis_sample_normal());
-
-        let point_stats = point_run
-            .executed_run
-            .result
-            .steps
-            .last()
-            .cloned()
-            .unwrap_or_else(|| StepStats {
-                step: global_step_count,
-                ..StepStats::default()
-            });
-
-        append_stage_steps(
-            &mut steps_stats,
-            &mut global_step_count,
-            point_run.executed_run.result.steps.clone(),
-        );
-
-        let snapshot_context = HysteresisSnapshotDecisionContext {
-            point_idx,
-            field_value_mT: H_mT,
-            previous_field_value_mT: point_idx
-                .checked_sub(1)
-                .and_then(|idx| sweep_values_mT.get(idx).copied()),
-            next_field_value_mT: sweep_values_mT.get(point_idx + 1).copied(),
-            m_parallel,
-            previous_m_parallel: hysteresis_points
-                .last()
-                .map(|point: &HysteresisPoint| point.m_parallel),
-            status: point_run.executed_run.result.status,
-            non_converged: point_non_converged,
-        };
-        let snapshot_id = if should_store_hysteresis_snapshot(storage.as_ref(), snapshot_context) {
-            Some(format!("hysteresis_point_{:03}", point_idx + 1))
-        } else {
-            None
-        };
-        if let Some(snapshot_id) = snapshot_id.as_deref() {
+    if !stop_after_saturation_probe {
+        for (point_idx, H_mT) in sweep_values_mT.iter().copied().enumerate() {
+            let H_Apm = field_mT_to_h_apm(H_mT);
+            let H_ext = [H_Apm * u_H[0], H_Apm * u_H[1], H_Apm * u_H[2]];
+            let field_vector_A_per_m = H_ext;
             let index_metadata =
                 primary_hysteresis_snapshot_index_metadata(&sweep_values_mT, point_idx);
-            write_hysteresis_magnetization_snapshot(
-                output_dir,
-                snapshot_id,
-                point_idx,
-                H_mT,
-                hysteresis_magnetization_grid(plan, &current_m),
-                &current_m,
-                &averaging.weighting,
-                averaging.weights.as_deref(),
-                storage
-                    .as_ref()
-                    .map(|policy| policy.magnetization.as_str())
-                    .unwrap_or("unspecified"),
-                index_metadata,
-            )?;
-        }
 
-        let point = HysteresisPoint {
-            point_id: point_idx,
-            field_value_mT: H_mT,
-            m_parallel,
-            m_oop,
-            m_ip,
-            m_avg,
-            status: point_quality.run_status.clone(),
-            run_status: point_quality.run_status,
-            settle_status: point_quality.settle_status,
-            has_non_converged_steps: point_quality.has_non_converged_steps,
-            terminal_settle_reason: point_quality.terminal_settle_reason,
-            warning_count: point_quality.warning_count,
-            snapshot_id,
-            protocol_role: None,
-            branch_id: None,
-            branch_ids: None,
-            branch_index: None,
-            parent_branch_id: None,
-            minor_loop_id: None,
-            snapshot_resource_ref: None,
-            snapshot_vector_resource_ref: None,
-            snapshot_json_artifact_ref: None,
-            snapshot_zarr_store_ref: None,
-            snapshot_storage_format: None,
-            field_vector_A_per_m: Some(field_vector_A_per_m),
-            field_orientation: Some(hysteresis_point_field_orientation_value(
-                orientation.as_ref(),
-                u_H,
-            )),
-            measurement_axis: Some(hysteresis_point_measurement_axis_value(measurement_axis)),
-            field_display_unit: Some("mT".to_string()),
-            is_reversal_field: None,
-            reversal_index: None,
-            recoil_start_point_id: None,
-            adaptive_inserted: None,
-            refinement_reason: None,
-            refinement_parent_left_point_id: None,
-            refinement_parent_right_point_id: None,
-        };
-        if let Some(states) = major_point_states.as_mut() {
-            states.push(HysteresisMajorPointState {
-                point: point.clone(),
-                magnetization: current_m.clone(),
+            let point_run = run_settle_at_field(
+                &plan.backend_plan,
+                problem,
+                &current_m,
+                H_ext,
+                Some(HysteresisProgressContext {
+                    point_idx: Some(point_idx),
+                    field_m_t: H_mT,
+                    point_role: "major",
+                    branch_id: index_metadata.branch_id.map(str::to_string),
+                }),
+                settle_pipeline.as_ref(),
+                until_seconds,
+                field_every_n,
+                display_selection,
+                interrupt_requested,
+                initial_snapshot,
+                on_step,
+            )?;
+
+            current_m = point_run.executed_run.result.final_magnetization.clone();
+            final_status = point_run.executed_run.result.status;
+            let point_non_converged = point_run
+                .trace
+                .iter()
+                .any(|entry| entry.status == "non_converged");
+            let point_quality =
+                hysteresis_point_quality(point_run.executed_run.result.status, &point_run.trace);
+            settle_trace.extend(point_run.trace);
+
+            let m_avg = average_hysteresis_magnetization(&current_m, &averaging);
+            let m_parallel = hysteresis_project_m_parallel(m_avg, u_meas);
+            let (m_oop, m_ip) = hysteresis_oop_ip_components(m_avg, hysteresis_sample_normal());
+
+            let point_stats = point_run
+                .executed_run
+                .result
+                .steps
+                .last()
+                .cloned()
+                .unwrap_or_else(|| StepStats {
+                    step: global_step_count,
+                    ..StepStats::default()
+                });
+
+            append_stage_steps(
+                &mut steps_stats,
+                &mut global_step_count,
+                point_run.executed_run.result.steps.clone(),
+            );
+
+            let snapshot_context = HysteresisSnapshotDecisionContext {
+                point_idx,
+                field_value_mT: H_mT,
+                previous_field_value_mT: point_idx
+                    .checked_sub(1)
+                    .and_then(|idx| sweep_values_mT.get(idx).copied()),
+                next_field_value_mT: sweep_values_mT.get(point_idx + 1).copied(),
+                m_parallel,
+                previous_m_parallel: hysteresis_points
+                    .last()
+                    .map(|point: &HysteresisPoint| point.m_parallel),
+                status: point_run.executed_run.result.status,
+                non_converged: point_non_converged,
+            };
+            let snapshot_id =
+                if should_store_hysteresis_snapshot(storage.as_ref(), snapshot_context) {
+                    Some(format!("hysteresis_point_{:03}", point_idx + 1))
+                } else {
+                    None
+                };
+            if let Some(snapshot_id) = snapshot_id.as_deref() {
+                write_hysteresis_magnetization_snapshot(
+                    output_dir,
+                    snapshot_id,
+                    point_idx,
+                    H_mT,
+                    hysteresis_magnetization_grid(plan, &current_m),
+                    &current_m,
+                    &averaging.weighting,
+                    averaging.weights.as_deref(),
+                    storage
+                        .as_ref()
+                        .map(|policy| policy.magnetization.as_str())
+                        .unwrap_or("unspecified"),
+                    index_metadata,
+                )?;
+            }
+
+            let point = HysteresisPoint {
+                point_id: point_idx,
+                field_value_mT: H_mT,
+                m_parallel,
+                m_oop,
+                m_ip,
+                m_avg,
+                status: point_quality.run_status.clone(),
+                run_status: point_quality.run_status,
+                settle_status: point_quality.settle_status,
+                has_non_converged_steps: point_quality.has_non_converged_steps,
+                terminal_settle_reason: point_quality.terminal_settle_reason,
+                warning_count: point_quality.warning_count,
+                snapshot_id,
+                protocol_role: None,
+                branch_id: None,
+                branch_ids: None,
+                branch_index: None,
+                parent_branch_id: None,
+                minor_loop_id: None,
+                snapshot_resource_ref: None,
+                snapshot_vector_resource_ref: None,
+                snapshot_json_artifact_ref: None,
+                snapshot_zarr_store_ref: None,
+                snapshot_storage_format: None,
+                field_vector_A_per_m: Some(field_vector_A_per_m),
+                field_orientation: Some(hysteresis_point_field_orientation_value(
+                    orientation.as_ref(),
+                    u_H,
+                )),
+                measurement_axis: Some(hysteresis_point_measurement_axis_value(measurement_axis)),
+                field_display_unit: Some("mT".to_string()),
+                is_reversal_field: None,
+                reversal_index: None,
+                recoil_start_point_id: None,
+                adaptive_inserted: None,
+                refinement_reason: None,
+                refinement_parent_left_point_id: None,
+                refinement_parent_right_point_id: None,
+            };
+            if let Some(states) = major_point_states.as_mut() {
+                states.push(HysteresisMajorPointState {
+                    point: point.clone(),
+                    magnetization: current_m.clone(),
+                });
+            }
+            hysteresis_points.push(point);
+
+            let partial_metrics = calculate_metrics_with_weighting(
+                &hysteresis_points,
+                initial_protocol,
+                saturation.as_ref(),
+                preparation_field_mT,
+                &averaging.weighting,
+            );
+            write_hysteresis_progress_artifacts(
+                output_dir,
+                &hysteresis_points,
+                &partial_metrics,
+                &settle_trace,
+                adaptive_refinement.as_ref(),
+                stage_id,
+            )?;
+
+            (*on_step)(StepUpdate {
+                stats: StepStats {
+                    step: global_step_count,
+                    mx: m_avg[0],
+                    my: m_avg[1],
+                    mz: m_avg[2],
+                    e_total: point_stats.e_total,
+                    ..point_stats
+                },
+                grid: hysteresis_magnetization_grid(plan, &current_m),
+                fem_mesh: None,
+                magnetization: Some(current_m.iter().flat_map(|v| v.iter().copied()).collect()),
+                preview_field: None,
+                cached_preview_fields: None,
+                hysteresis_field_m_t: Some(H_mT),
+                hysteresis_point_index: Some(point_idx as u32),
+                hysteresis_settle_step_index: None,
+                hysteresis_settle_step_kind: None,
+                hysteresis_settle_step_method: None,
+                scalar_row_due: true,
+                finished: point_idx == sweep_values_mT.len() - 1,
             });
         }
-        hysteresis_points.push(point);
-
-        let partial_metrics = calculate_metrics_with_weighting(
-            &hysteresis_points,
-            initial_protocol,
-            saturation.as_ref(),
-            preparation_field_mT,
-            &averaging.weighting,
-        );
-        write_hysteresis_progress_artifacts(
-            output_dir,
-            &hysteresis_points,
-            &partial_metrics,
-            &settle_trace,
-            adaptive_refinement.as_ref(),
-            stage_id,
-        )?;
-
-        (*on_step)(StepUpdate {
-            stats: StepStats {
-                step: global_step_count,
-                mx: m_avg[0],
-                my: m_avg[1],
-                mz: m_avg[2],
-                e_total: point_stats.e_total,
-                ..point_stats
-            },
-            grid: hysteresis_magnetization_grid(plan, &current_m),
-            fem_mesh: None,
-            magnetization: Some(current_m.iter().flat_map(|v| v.iter().copied()).collect()),
-            preview_field: None,
-            cached_preview_fields: None,
-            hysteresis_field_m_t: Some(H_mT),
-            hysteresis_point_index: Some(point_idx as u32),
-            hysteresis_settle_step_index: None,
-            hysteresis_settle_step_kind: None,
-            hysteresis_settle_step_method: None,
-            scalar_row_due: true,
-            finished: point_idx == sweep_values_mT.len() - 1,
-        });
     }
 
     let mut metrics = calculate_metrics_with_weighting(
@@ -836,78 +852,53 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
 
     let mut angular_family_variant_runs: Vec<(String, HysteresisAngularFamilyVariantRun)> =
         Vec::new();
-    if let Some(family) = angular_family.as_ref() {
-        let active_variant_id = active_hysteresis_angular_variant_id(family, orientation.as_ref());
-        for variant in &family.variants {
-            if active_variant_id
-                .as_deref()
-                .is_some_and(|active_id| active_id == variant.variant_id)
-            {
-                continue;
+    if !stop_after_saturation_probe {
+        if let Some(family) = angular_family.as_ref() {
+            let active_variant_id =
+                active_hysteresis_angular_variant_id(family, orientation.as_ref());
+            for variant in &family.variants {
+                if active_variant_id
+                    .as_deref()
+                    .is_some_and(|active_id| active_id == variant.variant_id)
+                {
+                    continue;
+                }
+                let variant_run = run_hysteresis_angular_family_variant(
+                    variant,
+                    plan,
+                    problem,
+                    output_dir,
+                    &family_initial_m,
+                    &sweep_values_mT,
+                    measurement_axis,
+                    storage.as_ref(),
+                    settle_pipeline.as_ref(),
+                    until_seconds,
+                    field_every_n,
+                    display_selection,
+                    interrupt_requested,
+                    stage_id,
+                    on_step,
+                )?;
+                final_status = combine_run_status(final_status, variant_run.status);
+                append_stage_steps(
+                    &mut steps_stats,
+                    &mut global_step_count,
+                    variant_run.steps.clone(),
+                );
+                angular_family_variant_runs.push((variant.variant_id.clone(), variant_run));
             }
-            let variant_run = run_hysteresis_angular_family_variant(
-                variant,
-                plan,
-                problem,
-                output_dir,
-                &family_initial_m,
-                &sweep_values_mT,
-                measurement_axis,
-                storage.as_ref(),
-                settle_pipeline.as_ref(),
-                until_seconds,
-                field_every_n,
-                display_selection,
-                interrupt_requested,
-                stage_id,
-                on_step,
-            )?;
-            final_status = combine_run_status(final_status, variant_run.status);
-            append_stage_steps(
-                &mut steps_stats,
-                &mut global_step_count,
-                variant_run.steps.clone(),
-            );
-            angular_family_variant_runs.push((variant.variant_id.clone(), variant_run));
         }
     }
 
-    if let (Some(policy), Some(states)) =
-        (adaptive_refinement.as_ref(), major_point_states.as_deref())
-    {
-        let adaptive_run = run_hysteresis_adaptive_refinement(
-            policy,
-            states,
-            plan,
-            problem,
-            output_dir,
-            u_H,
-            u_meas,
-            &averaging,
-            storage.as_ref(),
-            settle_pipeline.as_ref(),
-            until_seconds,
-            field_every_n,
-            display_selection,
-            interrupt_requested,
-            stage_id,
-            on_step,
-        )?;
-        final_status = combine_run_status(final_status, adaptive_run.status);
-        append_stage_steps(&mut steps_stats, &mut global_step_count, adaptive_run.steps);
-        write_hysteresis_json_artifact(
-            output_dir,
-            "hysteresis_adaptive_refinement.json",
-            &adaptive_run.artifact,
-        )?;
-    }
-
-    if let Some(minor_loops) = minor_loops.as_deref() {
-        let artifact = if let Some(states) = major_point_states.as_deref() {
-            let minor_run = run_hysteresis_minor_loops(
-                minor_loops,
+    if !stop_after_saturation_probe {
+        if let (Some(policy), Some(states)) =
+            (adaptive_refinement.as_ref(), major_point_states.as_deref())
+        {
+            let adaptive_run = run_hysteresis_adaptive_refinement(
+                policy,
                 states,
-                &plan,
+                plan,
                 problem,
                 output_dir,
                 u_H,
@@ -922,14 +913,46 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
                 stage_id,
                 on_step,
             )?;
-            final_status = minor_run.status;
-            append_stage_steps(&mut steps_stats, &mut global_step_count, minor_run.steps);
-            minor_run.loops
-        } else {
-            build_hysteresis_minor_loops(minor_loops, &hysteresis_points, stage_id)
-        };
-        if let Ok(json) = serde_json::to_string_pretty(&artifact) {
-            fs::write(output_dir.join("hysteresis_minor_loops.json"), json).ok();
+            final_status = combine_run_status(final_status, adaptive_run.status);
+            append_stage_steps(&mut steps_stats, &mut global_step_count, adaptive_run.steps);
+            write_hysteresis_json_artifact(
+                output_dir,
+                "hysteresis_adaptive_refinement.json",
+                &adaptive_run.artifact,
+            )?;
+        }
+    }
+
+    if !stop_after_saturation_probe {
+        if let Some(minor_loops) = minor_loops.as_deref() {
+            let artifact = if let Some(states) = major_point_states.as_deref() {
+                let minor_run = run_hysteresis_minor_loops(
+                    minor_loops,
+                    states,
+                    &plan,
+                    problem,
+                    output_dir,
+                    u_H,
+                    u_meas,
+                    &averaging,
+                    storage.as_ref(),
+                    settle_pipeline.as_ref(),
+                    until_seconds,
+                    field_every_n,
+                    display_selection,
+                    interrupt_requested,
+                    stage_id,
+                    on_step,
+                )?;
+                final_status = minor_run.status;
+                append_stage_steps(&mut steps_stats, &mut global_step_count, minor_run.steps);
+                minor_run.loops
+            } else {
+                build_hysteresis_minor_loops(minor_loops, &hysteresis_points, stage_id)
+            };
+            if let Ok(json) = serde_json::to_string_pretty(&artifact) {
+                fs::write(output_dir.join("hysteresis_minor_loops.json"), json).ok();
+            }
         }
     }
     if let Some(saturation_result) = saturation_result {
@@ -1160,6 +1183,8 @@ fn run_hysteresis_saturation_probe(
             Some(HysteresisProgressContext {
                 point_idx: None,
                 field_m_t: field_value_mT,
+                point_role: "saturation_probe",
+                branch_id: None,
             }),
             settle_pipeline,
             until_seconds,
@@ -1289,6 +1314,15 @@ fn classify_hysteresis_saturation_probe(
         "capped_by_limit".to_string(),
         "max_probe_field_mT reached before saturation criteria were satisfied".to_string(),
     )
+}
+
+fn saturation_probe_should_stop_stage(
+    probe: &fullmag_ir::SaturationProbeIR,
+    result: &HysteresisSaturationResult,
+) -> bool {
+    probe.on_failure == "stop_stage"
+        && result.status != "saturated"
+        && result.status != "probably_saturated"
 }
 
 fn is_hysteresis_key_event(
@@ -2031,10 +2065,12 @@ fn fem_engine_kind(engine: dispatch::FemEngine) -> fem::engine::FemEngineKind {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct HysteresisProgressContext {
     point_idx: Option<usize>,
     field_m_t: f64,
+    point_role: &'static str,
+    branch_id: Option<String>,
 }
 
 fn run_settle_at_field(
@@ -2068,6 +2104,24 @@ fn run_settle_at_field(
             continue;
         }
         let step = planned_step.step;
+        if let Some(progress) = hysteresis_progress.as_ref() {
+            if !settle_step_applies_to_context(&step, progress) {
+                if let Some(point_idx) = progress.point_idx {
+                    trace.push(settle_trace_entry(
+                        point_idx,
+                        progress.field_m_t,
+                        settle_idx,
+                        &step,
+                        "skipped".to_string(),
+                        Some(format!("applies_to_not_matching_{}", progress.point_role)),
+                        0,
+                        Some(resolved_settle_timestep(backend_plan, &step, None)),
+                        None,
+                    ));
+                }
+                continue;
+            }
+        }
         let fallback_reason = planned_step.fallback_reason.clone().or_else(|| {
             if previous_non_converged {
                 pending_fallback_reason.take()
@@ -2075,7 +2129,7 @@ fn run_settle_at_field(
                 None
             }
         });
-        if let Some(progress) = hysteresis_progress {
+        if let Some(progress) = hysteresis_progress.as_ref() {
             let averaging = hysteresis_averaging_context(backend_plan);
             let stats = pre_solver_hysteresis_stats(&current_magnetization, H_ext, &averaging);
             let action = (*on_step)(hysteresis_progress_update(
@@ -2151,11 +2205,12 @@ fn run_settle_at_field(
                 interrupt_requested,
                 initial_snapshot && settle_idx == 0 && retry_attempt == 0,
                 hysteresis_progress
+                    .as_ref()
                     .map(|progress| (progress.point_idx, progress.field_m_t, settle_idx, &step)),
                 on_step,
             )?;
             let settle_status = settle_status(&executed_run.result);
-            if let Some(progress) = hysteresis_progress {
+            if let Some(progress) = hysteresis_progress.as_ref() {
                 if let Some(point_idx) = progress.point_idx {
                     trace.push(settle_trace_entry(
                         point_idx,
@@ -2183,7 +2238,7 @@ fn run_settle_at_field(
         };
 
         current_magnetization = executed_run.result.final_magnetization.clone();
-        if let Some(progress) = hysteresis_progress {
+        if let Some(progress) = hysteresis_progress.as_ref() {
             let action = (*on_step)(hysteresis_progress_update(
                 backend_plan,
                 progress.point_idx,
@@ -2581,6 +2636,97 @@ fn settle_step_on_non_convergence(step: &SettleStepIR) -> &str {
     }
 }
 
+fn settle_step_applies_to(step: &SettleStepIR) -> Option<&serde_json::Value> {
+    match step {
+        SettleStepIR::Relax { applies_to, .. }
+        | SettleStepIR::Minimize { applies_to, .. }
+        | SettleStepIR::DynamicsSettle { applies_to, .. } => applies_to.as_ref(),
+    }
+}
+
+#[cfg(test)]
+fn settle_step_applies_to_point_role(step: &SettleStepIR, point_role: &'static str) -> bool {
+    settle_applies_to_matches_context(
+        settle_step_applies_to(step),
+        &HysteresisProgressContext {
+            point_idx: None,
+            field_m_t: 0.0,
+            point_role,
+            branch_id: None,
+        },
+    )
+}
+
+fn settle_step_applies_to_context(
+    step: &SettleStepIR,
+    context: &HysteresisProgressContext,
+) -> bool {
+    settle_applies_to_matches_context(settle_step_applies_to(step), context)
+}
+
+fn settle_applies_to_matches_context(
+    applies_to: Option<&serde_json::Value>,
+    context: &HysteresisProgressContext,
+) -> bool {
+    let Some(applies_to) = applies_to else {
+        return true;
+    };
+    match applies_to {
+        serde_json::Value::String(selector) => {
+            settle_selector_matches_point_role(selector, context.point_role)
+        }
+        serde_json::Value::Array(selectors) => selectors
+            .iter()
+            .any(|selector| settle_applies_to_matches_context(Some(selector), context)),
+        serde_json::Value::Object(object) => {
+            settle_applies_to_object_matches_context(object, context)
+        }
+        _ => true,
+    }
+}
+
+fn settle_applies_to_object_matches_context(
+    object: &serde_json::Map<String, serde_json::Value>,
+    context: &HysteresisProgressContext,
+) -> bool {
+    let Some(kind) = object.get("kind").and_then(|value| value.as_str()) else {
+        return true;
+    };
+    match kind {
+        "branch_id" => object
+            .get("branch_id")
+            .and_then(|value| value.as_str())
+            .is_some_and(|branch_id| context.branch_id.as_deref() == Some(branch_id)),
+        "point_selector" => object
+            .get("point_ids")
+            .and_then(|value| value.as_array())
+            .is_some_and(|point_ids| {
+                let Some(point_idx) = context.point_idx else {
+                    return false;
+                };
+                point_ids
+                    .iter()
+                    .filter_map(|value| value.as_u64())
+                    .any(|selected| selected == point_idx as u64)
+            }),
+        _ => settle_selector_matches_point_role(kind, context.point_role),
+    }
+}
+
+fn settle_selector_matches_point_role(selector: &str, point_role: &str) -> bool {
+    match selector {
+        "all_points" => true,
+        "major" => matches!(point_role, "major" | "major_descending" | "major_ascending"),
+        "minor" => point_role == "minor",
+        "recoil" => point_role == "recoil",
+        "key_events" => point_role == "key_event",
+        "preparation" => point_role == "preparation",
+        "saturation_probe" => point_role == "saturation_probe",
+        "branch_id" | "point_selector" => true,
+        _ => true,
+    }
+}
+
 fn settle_step_retry_timestep_scale(step: &SettleStepIR) -> Result<f64, RunError> {
     let scale = match step {
         SettleStepIR::Relax {
@@ -2683,6 +2829,8 @@ fn settle_trace_entry(
     resolved_timestep_s: Option<f64>,
     stats: Option<&StepStats>,
 ) -> HysteresisSettleTraceEntry {
+    let stop_reason = Some(status.clone());
+    let resolved_parameters = Some(settle_trace_resolved_parameters(step, resolved_timestep_s));
     HysteresisSettleTraceEntry {
         point_id,
         field_value_mT,
@@ -2694,11 +2842,106 @@ fn settle_trace_entry(
         ),
         method: hysteresis_settle_step_method(step).to_string(),
         status,
+        stop_reason,
         fallback_reason,
         retry_attempt,
         resolved_timestep_s,
+        resolved_parameters,
         torque: stats.map(|stats| stats.max_torque_Apm),
         energy: stats.map(|stats| stats.e_total),
+    }
+}
+
+fn settle_trace_resolved_parameters(
+    step: &SettleStepIR,
+    resolved_timestep_s: Option<f64>,
+) -> serde_json::Value {
+    match step {
+        SettleStepIR::Relax {
+            method,
+            alpha,
+            torque_tolerance,
+            max_steps,
+            applies_to,
+            stop_criteria,
+            timestep_s,
+            max_pseudotime_s,
+            max_physical_time_s,
+            on_non_convergence,
+            retry_timestep_scale,
+            retry_max_attempts,
+        } => serde_json::json!({
+            "kind": "relax",
+            "method": method,
+            "alpha": alpha,
+            "torque_tolerance": torque_tolerance,
+            "max_steps": max_steps,
+            "applies_to": applies_to.as_ref().cloned().unwrap_or(serde_json::Value::Null),
+            "stop_criteria": stop_criteria.as_ref().cloned().unwrap_or(serde_json::Value::Null),
+            "timestep_s": timestep_s,
+            "resolved_timestep_s": resolved_timestep_s,
+            "max_pseudotime_s": max_pseudotime_s,
+            "max_physical_time_s": max_physical_time_s,
+            "on_non_convergence": on_non_convergence,
+            "retry_timestep_scale": retry_timestep_scale,
+            "retry_max_attempts": retry_max_attempts,
+        }),
+        SettleStepIR::Minimize {
+            method,
+            torque_tolerance,
+            energy_tolerance,
+            max_steps,
+            applies_to,
+            stop_criteria,
+            timestep_s,
+            max_pseudotime_s,
+            max_physical_time_s,
+            on_non_convergence,
+            retry_timestep_scale,
+            retry_max_attempts,
+        } => serde_json::json!({
+            "kind": "minimize",
+            "method": method,
+            "torque_tolerance": torque_tolerance,
+            "energy_tolerance": energy_tolerance,
+            "max_steps": max_steps,
+            "applies_to": applies_to.as_ref().cloned().unwrap_or(serde_json::Value::Null),
+            "stop_criteria": stop_criteria.as_ref().cloned().unwrap_or(serde_json::Value::Null),
+            "timestep_s": timestep_s,
+            "resolved_timestep_s": resolved_timestep_s,
+            "max_pseudotime_s": max_pseudotime_s,
+            "max_physical_time_s": max_physical_time_s,
+            "on_non_convergence": on_non_convergence,
+            "retry_timestep_scale": retry_timestep_scale,
+            "retry_max_attempts": retry_max_attempts,
+        }),
+        SettleStepIR::DynamicsSettle {
+            method,
+            damping,
+            max_steps,
+            applies_to,
+            stop_criteria,
+            timestep_s,
+            max_pseudotime_s,
+            max_physical_time_s,
+            on_non_convergence,
+            retry_timestep_scale,
+            retry_max_attempts,
+        } => serde_json::json!({
+            "kind": "dynamics_settle",
+            "method": method,
+            "damping": damping,
+            "max_steps": max_steps,
+            "applies_to": applies_to.as_ref().cloned().unwrap_or(serde_json::Value::Null),
+            "stop_criteria": stop_criteria.as_ref().cloned().unwrap_or(serde_json::Value::Null),
+            "timestep_s": timestep_s,
+            "resolved_timestep_s": resolved_timestep_s,
+            "max_pseudotime_s": max_pseudotime_s,
+            "max_physical_time_s": max_physical_time_s,
+            "on_non_convergence": on_non_convergence,
+            "retry_timestep_scale": retry_timestep_scale,
+            "retry_max_attempts": retry_max_attempts,
+        }),
     }
 }
 
@@ -3487,6 +3730,8 @@ fn materialize_settle_steps(pipeline: Option<&SettlePipelineIR>) -> Vec<PlannedS
                 alpha: 1.0,
                 torque_tolerance: 1e-5,
                 max_steps: 10000,
+                applies_to: None,
+                stop_criteria: None,
                 timestep_s: None,
                 max_pseudotime_s: None,
                 max_physical_time_s: None,
@@ -3746,6 +3991,10 @@ fn run_hysteresis_angular_family_variant(
             Some(HysteresisProgressContext {
                 point_idx: Some(point_idx),
                 field_m_t: H_mT,
+                point_role: "major",
+                branch_id: primary_hysteresis_snapshot_index_metadata(sweep_values_mT, point_idx)
+                    .branch_id
+                    .map(str::to_string),
             }),
             settle_pipeline,
             until_seconds,
@@ -3991,6 +4240,8 @@ fn run_hysteresis_adaptive_refinement(
             Some(HysteresisProgressContext {
                 point_idx: Some(point_id),
                 field_m_t: candidate.field_value_mT,
+                point_role: "key_event",
+                branch_id: parent.point.branch_id.clone(),
             }),
             settle_pipeline,
             until_seconds,
@@ -4133,6 +4384,131 @@ fn run_hysteresis_minor_loops(
             continue;
         };
         let loop_id = format!("minor_loop_{:03}", idx + 1);
+        let reversal_field_mT = configured.reversal_mT;
+        let reversal_field_Apm = field_mT_to_h_apm(reversal_field_mT);
+        let reversal_field_vector_A_per_m = [
+            reversal_field_Apm * u_H[0],
+            reversal_field_Apm * u_H[1],
+            reversal_field_Apm * u_H[2],
+        ];
+        let (reversal_magnetization, reversal_point, mut settle_trace) =
+            if same_field_value(parent.point.field_value_mT, reversal_field_mT) {
+                let mut point = parent.point.clone();
+                point.point_id = 0;
+                point.minor_loop_id = Some(loop_id.clone());
+                point.parent_branch_id = parent.point.branch_id.clone();
+                point.recoil_start_point_id = Some(parent.point.point_id);
+                point.protocol_role = Some("minor".to_string());
+                (parent.magnetization.clone(), point, Vec::new())
+            } else {
+                let reversal_res = run_settle_at_field(
+                    &plan.backend_plan,
+                    problem,
+                    &parent.magnetization,
+                    reversal_field_vector_A_per_m,
+                    Some(HysteresisProgressContext {
+                        point_idx: Some(0),
+                        field_m_t: reversal_field_mT,
+                        point_role: "minor",
+                        branch_id: parent.point.branch_id.clone(),
+                    }),
+                    settle_pipeline,
+                    until_seconds,
+                    field_every_n,
+                    display_selection,
+                    interrupt_requested,
+                    false,
+                    on_step,
+                )?;
+                status = combine_run_status(status, reversal_res.executed_run.result.status);
+
+                let magnetization = reversal_res.executed_run.result.final_magnetization.clone();
+                let point_quality = hysteresis_point_quality(
+                    reversal_res.executed_run.result.status,
+                    &reversal_res.trace,
+                );
+                let m_avg = average_hysteresis_magnetization(&magnetization, averaging);
+                let m_parallel = hysteresis_project_m_parallel(m_avg, u_meas);
+                let (m_oop, m_ip) = hysteresis_oop_ip_components(m_avg, hysteresis_sample_normal());
+                let point_non_converged = reversal_res
+                    .trace
+                    .iter()
+                    .any(|entry| entry.status == "non_converged");
+                let snapshot_context = HysteresisSnapshotDecisionContext {
+                    point_idx: 0,
+                    field_value_mT: reversal_field_mT,
+                    previous_field_value_mT: Some(parent.point.field_value_mT),
+                    next_field_value_mT: Some(configured.return_mT),
+                    m_parallel,
+                    previous_m_parallel: Some(parent.point.m_parallel),
+                    status: reversal_res.executed_run.result.status,
+                    non_converged: point_non_converged,
+                };
+                let snapshot_id = if should_store_hysteresis_snapshot(storage, snapshot_context) {
+                    Some(format!("hysteresis_{}_reversal_{:03}", loop_id, 1))
+                } else {
+                    None
+                };
+                if let Some(snapshot_id) = snapshot_id.as_deref() {
+                    write_hysteresis_magnetization_snapshot(
+                        output_dir,
+                        snapshot_id,
+                        0,
+                        reversal_field_mT,
+                        hysteresis_magnetization_grid(plan, &magnetization),
+                        &magnetization,
+                        &averaging.weighting,
+                        averaging.weights.as_deref(),
+                        storage
+                            .map(|policy| policy.magnetization.as_str())
+                            .unwrap_or("unspecified"),
+                        HysteresisSnapshotIndexMetadata {
+                            branch_id: parent.point.branch_id.as_deref(),
+                            protocol_role: Some("minor"),
+                        },
+                    )?;
+                }
+
+                let point = HysteresisPoint {
+                    point_id: 0,
+                    field_value_mT: reversal_field_mT,
+                    m_parallel,
+                    m_oop,
+                    m_ip,
+                    m_avg,
+                    status: point_quality.run_status.clone(),
+                    run_status: point_quality.run_status,
+                    settle_status: point_quality.settle_status,
+                    has_non_converged_steps: point_quality.has_non_converged_steps,
+                    terminal_settle_reason: point_quality.terminal_settle_reason,
+                    warning_count: point_quality.warning_count,
+                    snapshot_id,
+                    protocol_role: Some("minor".to_string()),
+                    branch_id: parent.point.branch_id.clone(),
+                    branch_ids: parent.point.branch_ids.clone(),
+                    branch_index: parent.point.branch_index,
+                    parent_branch_id: parent.point.branch_id.clone(),
+                    minor_loop_id: Some(loop_id.clone()),
+                    snapshot_resource_ref: None,
+                    snapshot_vector_resource_ref: None,
+                    snapshot_json_artifact_ref: None,
+                    snapshot_zarr_store_ref: None,
+                    snapshot_storage_format: None,
+                    field_vector_A_per_m: Some(reversal_field_vector_A_per_m),
+                    field_orientation: parent.point.field_orientation.clone(),
+                    measurement_axis: parent.point.measurement_axis.clone(),
+                    field_display_unit: Some("mT".to_string()),
+                    is_reversal_field: Some(true),
+                    reversal_index: Some(0),
+                    recoil_start_point_id: Some(parent.point.point_id),
+                    adaptive_inserted: None,
+                    refinement_reason: None,
+                    refinement_parent_left_point_id: None,
+                    refinement_parent_right_point_id: None,
+                };
+                all_steps.extend(reversal_res.executed_run.result.steps);
+                (magnetization, point, reversal_res.trace)
+            };
         let return_field_mT = configured.return_mT;
         let return_field_Apm = field_mT_to_h_apm(return_field_mT);
         let field_vector_A_per_m = [
@@ -4143,11 +4519,13 @@ fn run_hysteresis_minor_loops(
         let solve_res = run_settle_at_field(
             &plan.backend_plan,
             problem,
-            &parent.magnetization,
+            &reversal_magnetization,
             field_vector_A_per_m,
             Some(HysteresisProgressContext {
                 point_idx: Some(1),
                 field_m_t: return_field_mT,
+                point_role: "minor",
+                branch_id: parent.point.branch_id.clone(),
             }),
             settle_pipeline,
             until_seconds,
@@ -4157,10 +4535,11 @@ fn run_hysteresis_minor_loops(
             false,
             on_step,
         )?;
-        status = solve_res.executed_run.result.status;
+        status = combine_run_status(status, solve_res.executed_run.result.status);
 
         let return_magnetization = solve_res.executed_run.result.final_magnetization.clone();
-        let point_quality = hysteresis_point_quality(status, &solve_res.trace);
+        let point_quality =
+            hysteresis_point_quality(solve_res.executed_run.result.status, &solve_res.trace);
         let m_avg = average_hysteresis_magnetization(&return_magnetization, averaging);
         let m_parallel = hysteresis_project_m_parallel(m_avg, u_meas);
         let (m_oop, m_ip) = hysteresis_oop_ip_components(m_avg, hysteresis_sample_normal());
@@ -4171,10 +4550,10 @@ fn run_hysteresis_minor_loops(
         let snapshot_context = HysteresisSnapshotDecisionContext {
             point_idx: 1,
             field_value_mT: return_field_mT,
-            previous_field_value_mT: Some(parent.point.field_value_mT),
+            previous_field_value_mT: Some(reversal_field_mT),
             next_field_value_mT: None,
             m_parallel,
-            previous_m_parallel: Some(parent.point.m_parallel),
+            previous_m_parallel: Some(reversal_point.m_parallel),
             status: solve_res.executed_run.result.status,
             non_converged: point_non_converged,
         };
@@ -4202,13 +4581,6 @@ fn run_hysteresis_minor_loops(
                 },
             )?;
         }
-
-        let mut reversal_point = parent.point.clone();
-        reversal_point.point_id = 0;
-        reversal_point.minor_loop_id = Some(loop_id.clone());
-        reversal_point.parent_branch_id = parent.point.branch_id.clone();
-        reversal_point.recoil_start_point_id = Some(parent.point.point_id);
-        reversal_point.protocol_role = Some("minor".to_string());
 
         let mut return_point = HysteresisPoint {
             point_id: 1,
@@ -4251,10 +4623,10 @@ fn run_hysteresis_minor_loops(
         let mut points = vec![reversal_point, return_point.clone()];
         annotate_hysteresis_points_for_artifact(&mut points, stage_id);
         return_point = points[1].clone();
-        let settle_trace = solve_res.trace;
+        settle_trace.extend(solve_res.trace);
         let loop_artifact = HysteresisMinorLoop {
             loop_id,
-            reversal_field_mT: parent.point.field_value_mT,
+            reversal_field_mT,
             return_field_mT,
             parent_branch_id: parent.point.branch_id.clone(),
             reversal_point_id: Some(0),
@@ -4892,6 +5264,8 @@ mod tests {
             alpha: 1.0,
             torque_tolerance: 1e-5,
             max_steps: 100,
+            applies_to: None,
+            stop_criteria: None,
             timestep_s: None,
             max_pseudotime_s: None,
             max_physical_time_s: None,
@@ -4911,6 +5285,8 @@ mod tests {
             torque_tolerance: 1e-5,
             energy_tolerance: 1e-20,
             max_steps: 100,
+            applies_to: None,
+            stop_criteria: None,
             timestep_s: None,
             max_pseudotime_s: None,
             max_physical_time_s: None,
@@ -4929,6 +5305,8 @@ mod tests {
             method: "heun_dynamics_settle".to_string(),
             damping: 1.0,
             max_steps: 100,
+            applies_to: None,
+            stop_criteria: None,
             timestep_s: None,
             max_pseudotime_s: None,
             max_physical_time_s: None,
@@ -4951,6 +5329,8 @@ mod tests {
             torque_tolerance: 1e-5,
             energy_tolerance: 1e-20,
             max_steps: 100,
+            applies_to: None,
+            stop_criteria: None,
             timestep_s: None,
             max_pseudotime_s: None,
             max_physical_time_s: None,
@@ -5025,6 +5405,8 @@ mod tests {
                     alpha: 1.0,
                     torque_tolerance: 1.0e-3,
                     max_steps: 4,
+                    applies_to: None,
+                    stop_criteria: None,
                     timestep_s: None,
                     max_pseudotime_s: None,
                     max_physical_time_s: None,
@@ -5283,6 +5665,8 @@ mod tests {
             alpha: 1.0,
             torque_tolerance: 1e-5,
             max_steps: 10000,
+            applies_to: None,
+            stop_criteria: None,
             timestep_s: None,
             max_pseudotime_s: None,
             max_physical_time_s: None,
@@ -5340,6 +5724,11 @@ mod tests {
             torque_tolerance: 5e-5,
             energy_tolerance: 1e-20,
             max_steps: 2000,
+            applies_to: Some(serde_json::json!(["key_events", "minor"])),
+            stop_criteria: Some(serde_json::json!({
+                "kind": "any_of",
+                "criteria": ["energy_delta_below", "m_delta_below"],
+            })),
             timestep_s: None,
             max_pseudotime_s: None,
             max_physical_time_s: None,
@@ -5686,6 +6075,64 @@ mod tests {
     }
 
     #[test]
+    fn hysteresis_saturation_stop_stage_blocks_main_sweep_when_capped_by_limit() {
+        let mut problem = minimal_fdm_hysteresis_problem();
+        if let StudyIR::Hysteresis {
+            initial_protocol,
+            saturation,
+            ..
+        } = &mut problem.study
+        {
+            *initial_protocol = "positive_saturation".to_string();
+            *saturation = Some(fullmag_ir::SaturationProbeIR {
+                mode: "auto".to_string(),
+                max_field_mT: 1.0,
+                susceptibility_threshold: 1.0e-12,
+                transverse_threshold: 1.0e-12,
+                on_failure: "stop_stage".to_string(),
+            });
+        } else {
+            panic!("minimal problem must be hysteresis");
+        }
+
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-hysteresis-saturation-stop-stage-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&output_dir);
+
+        crate::run_problem_with_callback(&problem, 0.0, &output_dir, 1, |_| StepAction::Continue)
+            .expect("capped saturation probe with stop_stage should end the stage cleanly");
+
+        let saturation: HysteresisSaturationResult = serde_json::from_str(
+            &std::fs::read_to_string(output_dir.join("hysteresis_saturation.json"))
+                .expect("saturation artifact should be written"),
+        )
+        .expect("saturation artifact should decode");
+        assert_eq!(saturation.status, "capped_by_limit");
+
+        let points: Vec<HysteresisPoint> = serde_json::from_str(
+            &std::fs::read_to_string(output_dir.join("hysteresis_points.json"))
+                .expect("points artifact should be written"),
+        )
+        .expect("points artifact should decode");
+        assert!(
+            points.is_empty(),
+            "stop_stage should not write ordinary major-loop points after capped saturation: {points:?}"
+        );
+
+        let metrics: HysteresisMetrics = serde_json::from_str(
+            &std::fs::read_to_string(output_dir.join("hysteresis_metrics.json"))
+                .expect("metrics artifact should be written"),
+        )
+        .expect("metrics artifact should decode");
+        assert_eq!(metrics.saturation_status, "capped_by_limit");
+        assert_eq!(metrics.saturation_preparation_field_mT, Some(1.0));
+
+        let _ = std::fs::remove_dir_all(&output_dir);
+    }
+
+    #[test]
     fn hysteresis_runtime_writes_angular_family_manifest_for_active_variant() {
         let mut problem = minimal_fdm_hysteresis_problem();
         if let StudyIR::Hysteresis {
@@ -5944,6 +6391,8 @@ mod tests {
                     torque_tolerance: 5e-5,
                     energy_tolerance: 1e-20,
                     max_steps: 200,
+                    applies_to: None,
+                    stop_criteria: None,
                     timestep_s: None,
                     max_pseudotime_s: None,
                     max_physical_time_s: None,
@@ -6074,6 +6523,103 @@ mod tests {
     }
 
     #[test]
+    fn configured_minor_loop_computes_off_grid_reversal_state() {
+        let mut problem = minimal_fdm_hysteresis_problem();
+        if let StudyIR::Hysteresis {
+            branch_mode,
+            field_values_mT,
+            minor_loops,
+            storage,
+            ..
+        } = &mut problem.study
+        {
+            *field_values_mT = Some(vec![100.0, -100.0]);
+            *branch_mode = "major_with_minor_loops".to_string();
+            *minor_loops = Some(vec![fullmag_ir::MinorLoopIR {
+                reversal_mT: 50.0,
+                return_mT: -100.0,
+            }]);
+            *storage = Some(fullmag_ir::HysteresisStorageIR {
+                scalar_history: true,
+                magnetization: "every_step".to_string(),
+                every_n: 1,
+                key_events: false,
+                key_event_threshold_dm: 0.02,
+            });
+        } else {
+            panic!("minimal problem must be hysteresis");
+        }
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-hysteresis-minor-loop-off-grid-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&output_dir);
+
+        crate::run_problem_with_callback(&problem, 0.0, &output_dir, 1, |_| StepAction::Continue)
+            .expect("off-grid minor loop hysteresis run should complete");
+
+        let minor_loops_json =
+            std::fs::read_to_string(output_dir.join("hysteresis_minor_loops.json"))
+                .expect("minor loop artifact should be written");
+        let minor_loops: Vec<HysteresisMinorLoop> =
+            serde_json::from_str(&minor_loops_json).expect("minor loop artifact should decode");
+
+        assert_eq!(minor_loops.len(), 1);
+        assert_eq!(minor_loops[0].policy.as_deref(), Some("branch_only"));
+        assert_eq!(minor_loops[0].reversal_field_mT, 50.0);
+        assert_eq!(
+            minor_loops[0]
+                .points
+                .iter()
+                .map(|point| point.field_value_mT)
+                .collect::<Vec<_>>(),
+            vec![50.0, -100.0],
+        );
+        assert_eq!(minor_loops[0].reversal_point_id, Some(0));
+        assert_eq!(minor_loops[0].return_point_id, Some(1));
+        assert_eq!(minor_loops[0].points[0].recoil_start_point_id, Some(0));
+        assert_eq!(
+            minor_loops[0].points[0].snapshot_id.as_deref(),
+            Some("hysteresis_minor_loop_001_reversal_001")
+        );
+        assert_eq!(
+            minor_loops[0]
+                .settle_trace
+                .iter()
+                .map(|entry| entry.field_value_mT)
+                .collect::<Vec<_>>(),
+            vec![50.0, -100.0],
+        );
+        let samples =
+            std::fs::read_to_string(output_dir.join("hysteresis.zarr/fields/m/samples.csv"))
+                .expect("minor-loop Zarr sample index should be written");
+        assert!(
+            samples.contains("hysteresis_minor_loop_001_reversal_001"),
+            "minor-loop reversal snapshot must be indexed in Zarr samples.csv:\n{samples}"
+        );
+        assert!(
+            samples.contains("hysteresis_minor_loop_001_return_001"),
+            "minor-loop return snapshot must be indexed in Zarr samples.csv:\n{samples}"
+        );
+        assert!(
+            samples.contains(",descending,minor,"),
+            "minor-loop snapshots must preserve branch/protocol metadata in samples.csv:\n{samples}"
+        );
+        let points_index = std::fs::read_to_string(output_dir.join("hysteresis.zarr/points.csv"))
+            .expect("minor-loop Zarr root point index should be written");
+        assert!(
+            points_index.contains("hysteresis_minor_loop_001_reversal_001"),
+            "minor-loop reversal snapshot must be indexed in root points.csv:\n{points_index}"
+        );
+        assert!(
+            points_index.contains("hysteresis_minor_loop_001_return_001"),
+            "minor-loop return snapshot must be indexed in root points.csv:\n{points_index}"
+        );
+
+        let _ = std::fs::remove_dir_all(&output_dir);
+    }
+
+    #[test]
     fn piecewise_schedule_respects_skip_start_boundary_policy() {
         let values = materialize_piecewise_field_schedule(&FieldScheduleIR {
             segments: vec![
@@ -6179,6 +6725,8 @@ mod tests {
                 alpha: 0.8,
                 torque_tolerance: 2e-5,
                 max_steps: 5000,
+                applies_to: None,
+                stop_criteria: None,
                 timestep_s: None,
                 max_pseudotime_s: None,
                 max_physical_time_s: None,
@@ -6194,6 +6742,8 @@ mod tests {
                         alpha: 1.0,
                         torque_tolerance: 1e-5,
                         max_steps: 12000,
+                        applies_to: None,
+                        stop_criteria: None,
                         timestep_s: None,
                         max_pseudotime_s: None,
                         max_physical_time_s: None,
@@ -6209,6 +6759,8 @@ mod tests {
                         torque_tolerance: 5e-6,
                         energy_tolerance: 1e-20,
                         max_steps: 2000,
+                        applies_to: None,
+                        stop_criteria: None,
                         timestep_s: None,
                         max_pseudotime_s: None,
                         max_physical_time_s: None,
@@ -6242,6 +6794,139 @@ mod tests {
     }
 
     #[test]
+    fn settle_step_applies_to_filters_by_point_role() {
+        let major_step = SettleStepIR::Relax {
+            method: "llg_overdamped".to_string(),
+            alpha: 1.0,
+            torque_tolerance: 1e-5,
+            max_steps: 100,
+            applies_to: Some(serde_json::json!("major")),
+            stop_criteria: None,
+            timestep_s: None,
+            max_pseudotime_s: None,
+            max_physical_time_s: None,
+            on_non_convergence: "continue_with_warning".to_string(),
+            retry_timestep_scale: None,
+            retry_max_attempts: None,
+        };
+        let key_event_step = SettleStepIR::Minimize {
+            method: "projected_gradient_bb".to_string(),
+            torque_tolerance: 5e-5,
+            energy_tolerance: 1e-20,
+            max_steps: 25,
+            applies_to: Some(serde_json::json!(["key_events", "minor"])),
+            stop_criteria: None,
+            timestep_s: None,
+            max_pseudotime_s: None,
+            max_physical_time_s: None,
+            on_non_convergence: "continue_with_warning".to_string(),
+            retry_timestep_scale: None,
+            retry_max_attempts: None,
+        };
+
+        assert!(settle_step_applies_to_point_role(&major_step, "major"));
+        assert!(settle_step_applies_to_point_role(
+            &major_step,
+            "major_descending"
+        ));
+        assert!(!settle_step_applies_to_point_role(&major_step, "minor"));
+        assert!(!settle_step_applies_to_point_role(&key_event_step, "major"));
+        assert!(settle_step_applies_to_point_role(
+            &key_event_step,
+            "key_event"
+        ));
+        assert!(settle_step_applies_to_point_role(&key_event_step, "minor"));
+
+        let skipped = settle_trace_entry(
+            7,
+            25.0,
+            1,
+            &key_event_step,
+            "skipped".to_string(),
+            Some("applies_to_not_matching_major".to_string()),
+            0,
+            Some(HYSTERESIS_SETTLE_STEP_DT_SECONDS),
+            None,
+        );
+        assert_eq!(skipped.status, "skipped");
+        assert_eq!(
+            skipped.fallback_reason.as_deref(),
+            Some("applies_to_not_matching_major")
+        );
+        assert_eq!(
+            skipped
+                .resolved_parameters
+                .as_ref()
+                .and_then(|params| params.get("applies_to")),
+            Some(&serde_json::json!(["key_events", "minor"]))
+        );
+
+        let branch_step = SettleStepIR::Relax {
+            method: "llg_overdamped".to_string(),
+            alpha: 1.0,
+            torque_tolerance: 1e-5,
+            max_steps: 100,
+            applies_to: Some(serde_json::json!({
+                "kind": "branch_id",
+                "branch_id": "descending",
+            })),
+            stop_criteria: None,
+            timestep_s: None,
+            max_pseudotime_s: None,
+            max_physical_time_s: None,
+            on_non_convergence: "continue_with_warning".to_string(),
+            retry_timestep_scale: None,
+            retry_max_attempts: None,
+        };
+        let point_step = SettleStepIR::Relax {
+            method: "llg_overdamped".to_string(),
+            alpha: 1.0,
+            torque_tolerance: 1e-5,
+            max_steps: 100,
+            applies_to: Some(serde_json::json!({
+                "kind": "point_selector",
+                "point_ids": [2, 4],
+            })),
+            stop_criteria: None,
+            timestep_s: None,
+            max_pseudotime_s: None,
+            max_physical_time_s: None,
+            on_non_convergence: "continue_with_warning".to_string(),
+            retry_timestep_scale: None,
+            retry_max_attempts: None,
+        };
+        let descending_context = HysteresisProgressContext {
+            point_idx: Some(2),
+            field_m_t: 50.0,
+            point_role: "major_descending",
+            branch_id: Some("descending".to_string()),
+        };
+        let ascending_context = HysteresisProgressContext {
+            point_idx: Some(3),
+            field_m_t: -50.0,
+            point_role: "major_ascending",
+            branch_id: Some("ascending".to_string()),
+        };
+
+        assert!(settle_step_applies_to_context(
+            &branch_step,
+            &descending_context
+        ));
+        assert!(!settle_step_applies_to_context(
+            &branch_step,
+            &ascending_context
+        ));
+        assert!(settle_step_applies_to_context(
+            &point_step,
+            &descending_context
+        ));
+        assert!(!settle_step_applies_to_context(
+            &point_step,
+            &ascending_context
+        ));
+    }
+
+    #[test]
     fn settle_sequence_runs_all_steps_in_order() {
         let steps = materialize_settle_steps(Some(&SettlePipelineIR::Sequence {
             steps: vec![
@@ -6250,6 +6935,8 @@ mod tests {
                     torque_tolerance: 5e-5,
                     energy_tolerance: 1e-20,
                     max_steps: 2000,
+                    applies_to: None,
+                    stop_criteria: None,
                     timestep_s: None,
                     max_pseudotime_s: None,
                     max_physical_time_s: None,
@@ -6262,6 +6949,8 @@ mod tests {
                     alpha: 1.0,
                     torque_tolerance: 1e-5,
                     max_steps: 10000,
+                    applies_to: None,
+                    stop_criteria: None,
                     timestep_s: None,
                     max_pseudotime_s: None,
                     max_physical_time_s: None,
@@ -6327,6 +7016,8 @@ mod tests {
                     torque_tolerance: 5e-5,
                     energy_tolerance: 1e-20,
                     max_steps: 2000,
+                    applies_to: None,
+                    stop_criteria: None,
                     timestep_s: None,
                     max_pseudotime_s: None,
                     max_physical_time_s: None,
@@ -6349,6 +7040,8 @@ mod tests {
                     alpha: 1.0,
                     torque_tolerance: 1e-5,
                     max_steps: 10000,
+                    applies_to: None,
+                    stop_criteria: None,
                     timestep_s: None,
                     max_pseudotime_s: None,
                     max_physical_time_s: None,
@@ -6380,6 +7073,11 @@ mod tests {
             torque_tolerance: 5e-5,
             energy_tolerance: 1e-20,
             max_steps: 2000,
+            applies_to: Some(serde_json::json!(["key_events", "minor"])),
+            stop_criteria: Some(serde_json::json!({
+                "kind": "any_of",
+                "criteria": ["energy_delta_below", "m_delta_below"],
+            })),
             timestep_s: None,
             max_pseudotime_s: None,
             max_physical_time_s: None,
@@ -6417,6 +7115,40 @@ mod tests {
         );
         assert_eq!(entry.retry_attempt, 1);
         assert_eq!(entry.resolved_timestep_s, Some(5e-14));
+        assert_eq!(entry.stop_reason.as_deref(), Some("non_converged"));
+        assert_eq!(
+            entry
+                .resolved_parameters
+                .as_ref()
+                .and_then(|params| params.get("kind"))
+                .and_then(|kind| kind.as_str()),
+            Some("minimize")
+        );
+        assert_eq!(
+            entry
+                .resolved_parameters
+                .as_ref()
+                .and_then(|params| params.get("energy_tolerance"))
+                .and_then(|value| value.as_f64()),
+            Some(1e-20)
+        );
+        assert_eq!(
+            entry
+                .resolved_parameters
+                .as_ref()
+                .and_then(|params| params.get("applies_to")),
+            Some(&serde_json::json!(["key_events", "minor"]))
+        );
+        assert_eq!(
+            entry
+                .resolved_parameters
+                .as_ref()
+                .and_then(|params| params.get("stop_criteria")),
+            Some(&serde_json::json!({
+                "kind": "any_of",
+                "criteria": ["energy_delta_below", "m_delta_below"],
+            }))
+        );
         assert_eq!(entry.torque, Some(7.0));
         assert_eq!(entry.energy, Some(-3.5));
     }
@@ -6504,6 +7236,8 @@ mod tests {
             alpha: 1.0,
             torque_tolerance: 1e-5,
             max_steps: 10000,
+            applies_to: None,
+            stop_criteria: None,
             timestep_s: None,
             max_pseudotime_s: None,
             max_physical_time_s: None,
@@ -6522,6 +7256,8 @@ mod tests {
             torque_tolerance: 5e-5,
             energy_tolerance: 1e-20,
             max_steps: 2000,
+            applies_to: None,
+            stop_criteria: None,
             timestep_s: None,
             max_pseudotime_s: None,
             max_physical_time_s: None,
@@ -6543,6 +7279,8 @@ mod tests {
             alpha: 1.0,
             torque_tolerance: 1e-5,
             max_steps: 10_000,
+            applies_to: None,
+            stop_criteria: None,
             on_non_convergence: "continue_with_warning".to_string(),
             retry_timestep_scale: None,
             retry_max_attempts: None,
@@ -6561,6 +7299,8 @@ mod tests {
             alpha: 1.0,
             torque_tolerance: 1e-5,
             max_steps: 10_000,
+            applies_to: None,
+            stop_criteria: None,
             on_non_convergence: "continue_with_warning".to_string(),
             retry_timestep_scale: None,
             retry_max_attempts: None,
@@ -6579,6 +7319,8 @@ mod tests {
             alpha: 1.0,
             torque_tolerance: 1e-5,
             max_steps: 4,
+            applies_to: None,
+            stop_criteria: None,
             timestep_s: Some(2e-13),
             max_pseudotime_s: None,
             max_physical_time_s: None,
@@ -6597,6 +7339,8 @@ mod tests {
             torque_tolerance: 5e-5,
             energy_tolerance: 1e-20,
             max_steps: 2000,
+            applies_to: None,
+            stop_criteria: None,
             on_non_convergence: "run_next_algorithm".to_string(),
             retry_timestep_scale: None,
             retry_max_attempts: None,
@@ -6624,6 +7368,8 @@ mod tests {
             alpha: 1.0,
             torque_tolerance: 1e-5,
             max_steps: 4,
+            applies_to: None,
+            stop_criteria: None,
             timestep_s: None,
             max_pseudotime_s: None,
             max_physical_time_s: None,
@@ -6772,6 +7518,7 @@ mod tests {
             max_field_mT: 350.0,
             susceptibility_threshold: 1e-3,
             transverse_threshold: 1e-2,
+            on_failure: "continue_with_warning".to_string(),
         };
 
         assert_eq!(
@@ -6811,6 +7558,7 @@ mod tests {
             max_field_mT: 350.0,
             susceptibility_threshold: 1e-3,
             transverse_threshold: 1e-2,
+            on_failure: "continue_with_warning".to_string(),
         };
         let points = vec![
             test_hysteresis_point(0, 100.0, 1.0, None),
@@ -6859,6 +7607,7 @@ mod tests {
             max_field_mT: 300.0,
             susceptibility_threshold: 1e-3,
             transverse_threshold: 1e-2,
+            on_failure: "continue_with_warning".to_string(),
         };
         let mut points = vec![
             HysteresisSaturationProbePoint {
@@ -7130,6 +7879,8 @@ mod tests {
                     alpha: 1.0,
                     torque_tolerance: 1.0e-3,
                     max_steps: 1,
+                    applies_to: None,
+                    stop_criteria: None,
                     timestep_s: None,
                     max_pseudotime_s: None,
                     max_physical_time_s: None,
@@ -7207,9 +7958,15 @@ mod tests {
             algorithm_id: "relax:0".to_string(),
             method: "llg_overdamped".to_string(),
             status: "Completed".to_string(),
+            stop_reason: Some("Completed".to_string()),
             fallback_reason: None,
             retry_attempt: 0,
             resolved_timestep_s: Some(HYSTERESIS_SETTLE_STEP_DT_SECONDS),
+            resolved_parameters: Some(serde_json::json!({
+                "kind": "relax",
+                "method": "llg_overdamped",
+                "resolved_timestep_s": HYSTERESIS_SETTLE_STEP_DT_SECONDS
+            })),
             torque: Some(1e-6),
             energy: Some(-1e-18),
         }];

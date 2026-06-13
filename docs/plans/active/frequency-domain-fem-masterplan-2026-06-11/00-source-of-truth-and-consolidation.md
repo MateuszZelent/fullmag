@@ -36,7 +36,7 @@ Use this order when documents disagree.
 | Document | Owns | Import Into This Masterplan |
 |---|---|---|
 | `docs/physics/frequency_domain_solver_physics.md` | Broad magnetic, magnetoelastic, quasistatic, elastodynamic, and coupled frequency-domain physics contract. | The actual driven solver is magnetic-only harmonic response first. Magnetoelastic, elastodynamic, and coupled modes stay future gated capabilities. |
-| `docs/physics/0700-frequency-domain-linearized-llg.md` | Linearized LLG convention, tangent constraint, phase convention, demag policy, Floquet validation. | Production FEM must solve in tangent variables. Three-component fields are output reconstruction only. |
+| `docs/physics/0700-frequency-domain-linearized-llg.md` | Linearized LLG convention, tangent constraint, phase convention, COMSOL parity requirements, complex phasor UI views, mode animation semantics, demag policy, Floquet validation. | Production FEM must solve in tangent variables. Three-component fields are output reconstruction only. UI mode views and animation must reconstruct from `delta_m`, not invent a time-domain solve. |
 | `docs/physics/0710-periodic-and-floquet-boundary-conditions.md` | Periodic and Floquet/Bloch phase convention, capability policy, mesh metadata, pair diagnostics, and sign test. | Use `exp_minus_i_k_dot_delta_r`, require backend enforcement, and reject unsupported Floquet demag. |
 | `docs/physics/0600-fem-eigenmodes-linearized-llg.md` | Current FEM eigenmode physics and implementation status. | Current executable eigenmode path is reference/transitional modal support, not the driven frequency-response solver. |
 | `docs/physics/fullmag_fem_eigenproblem_plan.md` | Historical but correct separation of eigenproblem from frequency-response spectrum. | Preserve the statement that true eigenmodes and RF frequency-response spectra are not the same product. |
@@ -247,7 +247,8 @@ eigen/dispersion.csv
 eigen/modes/...
 response/magnetic_response_sweep.v1.json
 response/frequency_points/...
-binary field payload resources for mode and response overlays
+Zarr-backed field payload resources for mode and response overlays
+optional HDF5/H5 export or backend storage with identical resource semantics
 mesh/periodic_pairs.v1.json
 ```
 

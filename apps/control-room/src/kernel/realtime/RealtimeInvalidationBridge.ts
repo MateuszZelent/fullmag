@@ -2,7 +2,10 @@ import type { ResourceRevision } from "../api/apiTypes";
 import type { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
 import {
+  ANALYSIS_HYSTERESIS_ADAPTIVE_REFINEMENT_PATH,
   ANALYSIS_HYSTERESIS_BRANCHES_PATH,
+  ANALYSIS_HYSTERESIS_FAMILY_PATH,
+  ANALYSIS_HYSTERESIS_FAMILY_VARIANT_POINTS_PATH,
   ANALYSIS_HYSTERESIS_METRICS_PATH,
   ANALYSIS_HYSTERESIS_MINOR_LOOPS_PATH,
   ANALYSIS_HYSTERESIS_POINT_PATH,
@@ -677,6 +680,18 @@ export class RealtimeInvalidationBridge {
           ) ||
           matchesStageScopedResource(
             resourceKey,
+            ANALYSIS_HYSTERESIS_ADAPTIVE_REFINEMENT_PATH,
+          ) ||
+          matchesStageScopedResource(
+            resourceKey,
+            ANALYSIS_HYSTERESIS_FAMILY_PATH,
+          ) ||
+          matchesStageScopedResource(
+            resourceKey,
+            ANALYSIS_HYSTERESIS_FAMILY_VARIANT_POINTS_PATH,
+          ) ||
+          matchesStageScopedResource(
+            resourceKey,
             ANALYSIS_HYSTERESIS_BRANCHES_PATH,
           ) ||
           matchesStageScopedResource(
@@ -718,6 +733,26 @@ export class RealtimeInvalidationBridge {
         matchesConcreteStageScopedResource(
           resourceKey,
           ANALYSIS_HYSTERESIS_METRICS_PATH,
+          stageId,
+        ) ||
+        matchesConcreteStageScopedResource(
+          resourceKey,
+          ANALYSIS_HYSTERESIS_SATURATION_PATH,
+          stageId,
+        ) ||
+        matchesConcreteStageScopedResource(
+          resourceKey,
+          ANALYSIS_HYSTERESIS_ADAPTIVE_REFINEMENT_PATH,
+          stageId,
+        ) ||
+        matchesConcreteStageScopedResource(
+          resourceKey,
+          ANALYSIS_HYSTERESIS_FAMILY_PATH,
+          stageId,
+        ) ||
+        matchesConcreteStageScopedResource(
+          resourceKey,
+          ANALYSIS_HYSTERESIS_FAMILY_VARIANT_POINTS_PATH,
           stageId,
         ) ||
         matchesConcreteStageScopedResource(

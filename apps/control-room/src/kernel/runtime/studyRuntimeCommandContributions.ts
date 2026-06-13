@@ -1487,6 +1487,22 @@ function selectedStageIndex(context: CommandContext): number | null {
     : null;
 }
 
+function selectedStageId(context: CommandContext): string | null {
+  const selection = context.selection?.get();
+  const stageId = selection?.ref?.type === "study-stage"
+    ? selection.ref.stageId
+    : null;
+  return typeof stageId === "string" && stageId.trim() ? stageId : null;
+}
+
+function commandInputStageId(input: unknown): string | null {
+  if (!input || typeof input !== "object" || !("stageId" in input)) {
+    return null;
+  }
+  const stageId = (input as { stageId?: unknown }).stageId;
+  return typeof stageId === "string" && stageId.trim() ? stageId : null;
+}
+
 function sceneRevision(value: unknown): string | number {
   const revision = record(value).scene_revision ?? record(record(value).committed_scene).revision;
   return typeof revision === "number" || typeof revision === "string"
@@ -1543,6 +1559,70 @@ function addStageCommand(
       selectAuthoredStage(context, addedStage, currentStages.length);
 
       return { message: successMessage, status: "completed" };
+    },
+  };
+}
+
+function continueHysteresisToNextStageCommand(): CommandContribution {
+  return {
+    id: "hysteresis.continue-to-next-stage",
+    title: "Continue to Next Stage",
+    category: "Study",
+    group: "hysteresis",
+    scope: "runtime",
+    isEnabled: isApiAvailable,
+    disabledReason: disabledWithoutApi,
+    run: async (context) => {
+      if (!context.api) {
+        return { message: "Control-room API is unavailable.", status: "failed" };
+      }
+      const stageId = commandInputStageId(context.input) ?? selectedStageId(context);
+      if (!stageId) {
+        return {
+          message: "Select a hysteresis stage before continuing.",
+          status: "failed",
+        };
+      }
+
+      const scene = await context.api.model.scene();
+      const currentStages = studyStages(scene);
+      const sourceIndex = currentStages.findIndex(
+        (stage) => stage.stage_id === stageId,
+      );
+      if (sourceIndex < 0) {
+        return {
+          message: `Hysteresis stage ${stageId} is no longer present.`,
+          status: "failed",
+        };
+      }
+      if (stageKind(currentStages[sourceIndex]) !== "hysteresis") {
+        return {
+          message: "Selected stage is not a hysteresis stage.",
+          status: "failed",
+        };
+      }
+
+      const addedStage = stageWithDefaultId(DEFAULT_RUN_STAGE, currentStages.length);
+      const nextStages = [
+        ...currentStages,
+        addedStage,
+      ];
+      const response = await context.api.model.commitTransaction({
+        kind: "merge_patch",
+        merge_patch: {
+          study: {
+            stages: nextStages,
+          },
+        },
+      });
+      const revision = sceneRevision(response);
+      invalidateStudyAuthoringResources(context, revision);
+      selectAuthoredStage(context, addedStage, currentStages.length);
+
+      return {
+        message: `Continuation run stage added after ${stageId}.`,
+        status: "completed",
+      };
     },
   };
 }
@@ -1654,6 +1734,7 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
     DEFAULT_SAVE_STATE_STAGE,
     "Save-state stage added.",
   ),
+  continueHysteresisToNextStageCommand(),
   removeSelectedStageCommand(),
   {
     id: "diagnostics.toggle-solver-profiler",

@@ -28,9 +28,9 @@ def run_validator(root: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
-def point(m_avg: list[float], m_parallel: float) -> dict:
+def point(field_value_mT: float, m_avg: list[float], m_parallel: float) -> dict:
     return {
-        "field_value_mT": 25.0,
+        "field_value_mT": field_value_mT,
         "m_avg": m_avg,
         "m_ip": (m_avg[0] * m_avg[0] + m_avg[1] * m_avg[1]) ** 0.5,
         "m_oop": m_avg[2],
@@ -47,14 +47,17 @@ def write_projection_fixture(
     ip_resource_ref: str = "/v2/sessions/current/analysis/hysteresis-family/stage-0/variants/ip_x/points",
     ip_m_parallel: float = 0.6,
     ip_m_avg: list[float] | None = None,
+    include_metrics: bool = True,
+    single_point: bool = False,
 ) -> None:
     variants = [
         {
             "data_status": ip_status,
             "measurement_axis": "field_axis",
             "orientation": {"kind": "preset", "preset_name": "in_plane_x"},
-            "point_count": 1,
+            "point_count": 1 if single_point else 5,
             "points_path": "hysteresis_points.json",
+            "metrics_path": "hysteresis_metrics.json",
             "points_resource_ref": ip_resource_ref,
             "variant_id": "ip_x",
         },
@@ -62,8 +65,9 @@ def write_projection_fixture(
             "data_status": "computed_variant_run",
             "measurement_axis": "field_axis",
             "orientation": {"kind": "preset", "preset_name": "oop_positive"},
-            "point_count": 1,
+            "point_count": 1 if single_point else 5,
             "points_path": "hysteresis_angular_family/oop/hysteresis_points.json",
+            "metrics_path": "hysteresis_angular_family/oop/hysteresis_metrics.json",
             "points_resource_ref": "/v2/sessions/current/analysis/hysteresis-family/stage-0/variants/oop/points",
             "variant_id": "oop",
         },
@@ -71,8 +75,9 @@ def write_projection_fixture(
             "data_status": "computed_variant_run",
             "measurement_axis": "field_axis",
             "orientation": {"kind": "sample", "theta": 45.0, "phi": 30.0},
-            "point_count": 1,
+            "point_count": 1 if single_point else 5,
             "points_path": "hysteresis_angular_family/custom_theta45_phi30/hysteresis_points.json",
+            "metrics_path": "hysteresis_angular_family/custom_theta45_phi30/hysteresis_metrics.json",
             "points_resource_ref": "/v2/sessions/current/analysis/hysteresis-family/stage-0/variants/custom_theta45_phi30/points",
             "variant_id": "custom_theta45_phi30",
         },
@@ -85,13 +90,21 @@ def write_projection_fixture(
             "variants": variants,
         },
     )
+    fields = [50.0] if single_point else [50.0, 0.0, -50.0, 0.0, 50.0]
     write_json(
         root / "hysteresis_points.json",
-        [point(ip_m_avg if ip_m_avg is not None else [ip_m_parallel, 0.0, 0.0], ip_m_parallel)],
+        [
+            point(
+                field,
+                ip_m_avg if ip_m_avg is not None else [ip_m_parallel, 0.0, 0.0],
+                ip_m_parallel,
+            )
+            for field in fields
+        ],
     )
     write_json(
         root / "hysteresis_angular_family/oop/hysteresis_points.json",
-        [point([0.0, 0.0, 0.7], 0.7)],
+        [point(field, [0.0, 0.0, 0.7], 0.7) for field in fields],
     )
     axis_x = 0.6123724356957946
     axis_y = 0.35355339059327373
@@ -99,8 +112,26 @@ def write_projection_fixture(
     m_avg = [0.2, 0.3, 0.4]
     write_json(
         root / "hysteresis_angular_family/custom_theta45_phi30/hysteresis_points.json",
-        [point(m_avg, m_avg[0] * axis_x + m_avg[1] * axis_y + m_avg[2] * axis_z)],
+        [
+            point(field, m_avg, m_avg[0] * axis_x + m_avg[1] * axis_y + m_avg[2] * axis_z)
+            for field in fields
+        ],
     )
+    if include_metrics:
+        metrics = {
+            "H_c_plus": 10.0,
+            "H_c_minus": -10.0,
+            "H_c": 10.0,
+            "M_r_plus": 0.2,
+            "M_r_minus": -0.2,
+            "loop_area": 1.0,
+        }
+        write_json(root / "hysteresis_metrics.json", metrics)
+        write_json(root / "hysteresis_angular_family/oop/hysteresis_metrics.json", metrics)
+        write_json(
+            root / "hysteresis_angular_family/custom_theta45_phi30/hysteresis_metrics.json",
+            metrics,
+        )
 
 
 def test_projection_validator_accepts_public_computed_variants(tmp_path: Path) -> None:
@@ -140,3 +171,21 @@ def test_projection_validator_rejects_parallel_projection_mismatch(tmp_path: Pat
 
     assert result.returncode != 0
     assert "m_parallel" in (result.stderr + result.stdout)
+
+
+def test_projection_validator_rejects_single_point_placeholder(tmp_path: Path) -> None:
+    write_projection_fixture(tmp_path, single_point=True)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "full loop" in (result.stderr + result.stdout)
+
+
+def test_projection_validator_rejects_missing_publication_metrics(tmp_path: Path) -> None:
+    write_projection_fixture(tmp_path, include_metrics=False)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "metrics" in (result.stderr + result.stdout)

@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use fullmag_ir::{BackendPlanIR, ExecutionPlanIR, FemDomainMeshModeIR};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::control_room::*;
 use crate::live_workspace::*;
@@ -936,10 +936,10 @@ fn apply_step_stats_to_idle_live_state(
 #[cfg(test)]
 mod tests {
     use super::{
-        CurrentLiveControlState, CurrentLiveDisplaySelectionHandle,
-        apply_step_stats_to_idle_live_state,
+        apply_step_stats_to_idle_live_state, CurrentLiveControlState,
+        CurrentLiveDisplaySelectionHandle,
     };
-    use crate::live_workspace::{LocalLiveWorkspaceState, bootstrap_live_state};
+    use crate::live_workspace::{bootstrap_live_state, LocalLiveWorkspaceState};
     use crate::types::{
         CurrentLiveLatestFields, CurrentLivePreviewFieldCache, RunManifest, SessionCommand,
         SessionManifest,

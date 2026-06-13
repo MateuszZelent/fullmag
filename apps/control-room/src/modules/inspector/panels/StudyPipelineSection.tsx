@@ -47,6 +47,38 @@ type HysteresisSettleStepDraft = {
   on_non_convergence?: string;
 };
 
+type HysteresisFieldSegmentDraft = {
+  segmentId: string;
+  label: string;
+  startField: string;
+  stopField: string;
+  step: string;
+  unit: string;
+  endpointPolicy: string;
+  reason: string;
+};
+
+type HysteresisDenseWindowDraft = {
+  centerField: string;
+  halfWidth: string;
+  step: string;
+  priority: string;
+  reason: string;
+};
+
+type HysteresisMinorLoopDraft = {
+  reversalField: string;
+  returnField: string;
+  parentBranch: string;
+  closurePolicy: string;
+};
+
+type HysteresisSettleBranchDraft = {
+  branchId: string;
+  when: string;
+  run: string;
+};
+
 const DEFAULT_RELAX_SETTLE_STEP: HysteresisSettleStepDraft = {
   kind: "relax",
   method: "llg_overdamped",
@@ -577,23 +609,9 @@ function HysteresisStageDraftFields({
         onChange={(event) => onUpdate({ fieldStepMt: event.target.value })}
       />
       {draft.fieldScheduleMode === "piecewise" ? (
-        <FormField
-          label="Field segments"
-          rows={5}
-          type="textarea"
-          value={draft.fieldSegments}
-          onChange={(event) =>
-            onUpdate({ fieldSegments: event.target.value })
-          }
-        />
+        <HysteresisFieldSegmentsEditor draft={draft} onUpdate={onUpdate} />
       ) : null}
-      <FormField
-        label="Dense windows"
-        rows={4}
-        type="textarea"
-        value={draft.denseWindows}
-        onChange={(event) => onUpdate({ denseWindows: event.target.value })}
-      />
+      <HysteresisDenseWindowsEditor draft={draft} onUpdate={onUpdate} />
       <FormField
         label="Saturation mode"
         type="select"
@@ -642,23 +660,9 @@ function HysteresisStageDraftFields({
         onChange={(event) => onUpdate({ settleSteps: event.target.value })}
       />
       {draft.settlePipelineMode === "tree" ? (
-        <FormField
-          label="Settle branches"
-          rows={5}
-          type="textarea"
-          value={draft.settleBranches}
-          onChange={(event) =>
-            onUpdate({ settleBranches: event.target.value })
-          }
-        />
+        <HysteresisSettleBranchesEditor draft={draft} onUpdate={onUpdate} />
       ) : null}
-      <FormField
-        label="Minor loops"
-        rows={4}
-        type="textarea"
-        value={draft.minorLoops}
-        onChange={(event) => onUpdate({ minorLoops: event.target.value })}
-      />
+      <HysteresisMinorLoopsEditor draft={draft} onUpdate={onUpdate} />
       <FormField
         label="Storage policy"
         rows={5}
@@ -680,6 +684,493 @@ function HysteresisStageDraftFields({
         onChange={(event) => onUpdate({ torqueTolerance: event.target.value })}
       />
     </>
+  );
+}
+
+function HysteresisSettleBranchesEditor({
+  draft,
+  onUpdate,
+}: {
+  draft: StudyStageDraft;
+  onUpdate: (patch: Partial<StudyStageDraft>) => void;
+}) {
+  const branches = parseHysteresisSettleBranches(draft.settleBranches);
+  const commitBranches = (nextBranches: HysteresisSettleBranchDraft[]) => {
+    onUpdate({
+      settleBranches: JSON.stringify(
+        nextBranches.map((branch) => ({
+          branch_id: branch.branchId,
+          run: parseJsonObjectOrString(branch.run),
+          when: branch.when,
+        })),
+      ),
+    });
+  };
+  const updateBranch = (
+    index: number,
+    patch: Partial<HysteresisSettleBranchDraft>,
+  ) => {
+    commitBranches(
+      branches.map((branch, branchIndex) =>
+        branchIndex === index ? { ...branch, ...patch } : branch,
+      ),
+    );
+  };
+
+  return (
+    <div className="fm-inspector-form-section">
+      <div className="fm-inspector-form-section__header">
+        <strong>Settle tree branches</strong>
+      </div>
+      {branches.map((branch, index) => (
+        <div className="fm-inspector-form-section" key={index}>
+          <div className="fm-inspector-form-section__header">
+            <strong>Branch {index + 1}</strong>
+            <div className="fm-inspector-toolbar">
+              <Button
+                aria-label="Remove settle branch"
+                disabled={branches.length <= 1}
+                size="icon"
+                title="Remove settle branch"
+                type="button"
+                variant="ghost"
+                onClick={() =>
+                  commitBranches(
+                    branches.filter(
+                      (_, branchIndex) => branchIndex !== index,
+                    ),
+                  )
+                }
+              >
+                <Trash2 size={14} aria-hidden="true" />
+              </Button>
+            </div>
+          </div>
+          <FormField
+            label="Branch ID"
+            value={branch.branchId}
+            onChange={(event) =>
+              updateBranch(index, { branchId: event.target.value })
+            }
+          />
+          <FormField
+            label="Trigger"
+            type="select"
+            value={branch.when}
+            onChange={(event) =>
+              updateBranch(index, { when: event.target.value })
+            }
+          >
+            <option value="non_converged">Non-converged fallback</option>
+            <option value="fallback">Fallback</option>
+            <option value="run_next_algorithm">Run next algorithm</option>
+            <option value="always">Always</option>
+          </FormField>
+          <FormField
+            label="Run step JSON"
+            rows={5}
+            type="textarea"
+            value={branch.run}
+            onChange={(event) =>
+              updateBranch(index, { run: event.target.value })
+            }
+          />
+        </div>
+      ))}
+      <div className="fm-inspector-toolbar">
+        <Button
+          size="sm"
+          type="button"
+          variant="secondary"
+          onClick={() =>
+            commitBranches([
+              ...branches,
+              defaultHysteresisSettleBranch(branches.length),
+            ])
+          }
+        >
+          Add branch
+        </Button>
+      </div>
+      <FormField
+        label="Settle branches JSON"
+        rows={5}
+        type="textarea"
+        value={draft.settleBranches}
+        onChange={(event) =>
+          onUpdate({ settleBranches: event.target.value })
+        }
+      />
+    </div>
+  );
+}
+
+function HysteresisMinorLoopsEditor({
+  draft,
+  onUpdate,
+}: {
+  draft: StudyStageDraft;
+  onUpdate: (patch: Partial<StudyStageDraft>) => void;
+}) {
+  const loops = parseHysteresisMinorLoops(draft.minorLoops);
+  const commitLoops = (nextLoops: HysteresisMinorLoopDraft[]) => {
+    onUpdate({ minorLoops: JSON.stringify(nextLoops) });
+  };
+  const updateLoop = (
+    index: number,
+    patch: Partial<HysteresisMinorLoopDraft>,
+  ) => {
+    commitLoops(
+      loops.map((loop, loopIndex) =>
+        loopIndex === index ? { ...loop, ...patch } : loop,
+      ),
+    );
+  };
+
+  return (
+    <div className="fm-inspector-form-section">
+      <div className="fm-inspector-form-section__header">
+        <strong>Minor loop branches</strong>
+      </div>
+      {loops.map((loop, index) => (
+        <div className="fm-inspector-form-section" key={index}>
+          <div className="fm-inspector-form-section__header">
+            <strong>Loop {index + 1}</strong>
+            <div className="fm-inspector-toolbar">
+              <Button
+                aria-label="Remove minor loop"
+                disabled={loops.length <= 1}
+                size="icon"
+                title="Remove minor loop"
+                type="button"
+                variant="ghost"
+                onClick={() =>
+                  commitLoops(
+                    loops.filter((_, loopIndex) => loopIndex !== index),
+                  )
+                }
+              >
+                <Trash2 size={14} aria-hidden="true" />
+              </Button>
+            </div>
+          </div>
+          <FormField
+            label="Reversal field"
+            unit="mT"
+            value={loop.reversalField}
+            onChange={(event) =>
+              updateLoop(index, { reversalField: event.target.value })
+            }
+          />
+          <FormField
+            label="Return field"
+            unit="mT"
+            value={loop.returnField}
+            onChange={(event) =>
+              updateLoop(index, { returnField: event.target.value })
+            }
+          />
+          <FormField
+            label="Parent branch"
+            type="select"
+            value={loop.parentBranch}
+            onChange={(event) =>
+              updateLoop(index, { parentBranch: event.target.value })
+            }
+          >
+            <option value="descending">Descending</option>
+            <option value="ascending">Ascending</option>
+            <option value="major">Major</option>
+          </FormField>
+          <FormField
+            label="Closure policy"
+            type="select"
+            value={loop.closurePolicy}
+            onChange={(event) =>
+              updateLoop(index, { closurePolicy: event.target.value })
+            }
+          >
+            <option value="branch_only">Branch only</option>
+            <option value="resume_parent">Resume parent</option>
+            <option value="closed">Closed</option>
+          </FormField>
+        </div>
+      ))}
+      <div className="fm-inspector-toolbar">
+        <Button
+          size="sm"
+          type="button"
+          variant="secondary"
+          onClick={() =>
+            commitLoops([
+              ...loops,
+              defaultHysteresisMinorLoop(loops.length, draft),
+            ])
+          }
+        >
+          Add minor loop
+        </Button>
+      </div>
+      <FormField
+        label="Minor loops JSON"
+        rows={4}
+        type="textarea"
+        value={draft.minorLoops}
+        onChange={(event) => onUpdate({ minorLoops: event.target.value })}
+      />
+    </div>
+  );
+}
+
+function HysteresisFieldSegmentsEditor({
+  draft,
+  onUpdate,
+}: {
+  draft: StudyStageDraft;
+  onUpdate: (patch: Partial<StudyStageDraft>) => void;
+}) {
+  const segments = parseHysteresisFieldSegments(draft.fieldSegments);
+  const commitSegments = (nextSegments: HysteresisFieldSegmentDraft[]) => {
+    onUpdate({ fieldSegments: JSON.stringify(nextSegments) });
+  };
+  const updateSegment = (
+    index: number,
+    patch: Partial<HysteresisFieldSegmentDraft>,
+  ) => {
+    commitSegments(
+      segments.map((segment, segmentIndex) =>
+        segmentIndex === index ? { ...segment, ...patch } : segment,
+      ),
+    );
+  };
+
+  return (
+    <div className="fm-inspector-form-section">
+      <div className="fm-inspector-form-section__header">
+        <strong>Piecewise field segments</strong>
+      </div>
+      {segments.map((segment, index) => (
+        <div className="fm-inspector-form-section" key={index}>
+          <div className="fm-inspector-form-section__header">
+            <strong>Segment {index + 1}</strong>
+            <div className="fm-inspector-toolbar">
+              <Button
+                aria-label="Remove segment"
+                disabled={segments.length <= 1}
+                size="icon"
+                title="Remove segment"
+                type="button"
+                variant="ghost"
+                onClick={() =>
+                  commitSegments(
+                    segments.filter(
+                      (_, segmentIndex) => segmentIndex !== index,
+                    ),
+                  )
+                }
+              >
+                <Trash2 size={14} aria-hidden="true" />
+              </Button>
+            </div>
+          </div>
+          <FormField
+            label="Segment ID"
+            value={segment.segmentId}
+            onChange={(event) =>
+              updateSegment(index, { segmentId: event.target.value })
+            }
+          />
+          <FormField
+            label="Label"
+            value={segment.label}
+            onChange={(event) =>
+              updateSegment(index, { label: event.target.value })
+            }
+          />
+          <FormField
+            label="Start field"
+            unit="mT"
+            value={segment.startField}
+            onChange={(event) =>
+              updateSegment(index, { startField: event.target.value })
+            }
+          />
+          <FormField
+            label="Stop field"
+            unit="mT"
+            value={segment.stopField}
+            onChange={(event) =>
+              updateSegment(index, { stopField: event.target.value })
+            }
+          />
+          <FormField
+            label="Step"
+            unit="mT"
+            value={segment.step}
+            onChange={(event) =>
+              updateSegment(index, { step: event.target.value })
+            }
+          />
+          <FormField
+            label="Endpoint policy"
+            type="select"
+            value={segment.endpointPolicy}
+            onChange={(event) =>
+              updateSegment(index, { endpointPolicy: event.target.value })
+            }
+          >
+            <option value="include_stop">Include stop</option>
+            <option value="skip_start">Skip start</option>
+            <option value="include_both">Include both</option>
+          </FormField>
+          <FormField
+            label="Reason"
+            value={segment.reason}
+            onChange={(event) =>
+              updateSegment(index, { reason: event.target.value })
+            }
+          />
+        </div>
+      ))}
+      <div className="fm-inspector-toolbar">
+        <Button
+          size="sm"
+          type="button"
+          onClick={() =>
+            commitSegments([
+              ...segments,
+              defaultHysteresisFieldSegment(segments.length, draft),
+            ])
+          }
+        >
+          Add segment
+        </Button>
+      </div>
+      <FormField
+        label="Field segments JSON"
+        rows={5}
+        type="textarea"
+        value={draft.fieldSegments}
+        onChange={(event) => onUpdate({ fieldSegments: event.target.value })}
+      />
+    </div>
+  );
+}
+
+function HysteresisDenseWindowsEditor({
+  draft,
+  onUpdate,
+}: {
+  draft: StudyStageDraft;
+  onUpdate: (patch: Partial<StudyStageDraft>) => void;
+}) {
+  const windows = parseHysteresisDenseWindows(draft.denseWindows);
+  const commitWindows = (nextWindows: HysteresisDenseWindowDraft[]) => {
+    onUpdate({ denseWindows: JSON.stringify(nextWindows) });
+  };
+  const updateWindow = (
+    index: number,
+    patch: Partial<HysteresisDenseWindowDraft>,
+  ) => {
+    commitWindows(
+      windows.map((window, windowIndex) =>
+        windowIndex === index ? { ...window, ...patch } : window,
+      ),
+    );
+  };
+
+  return (
+    <div className="fm-inspector-form-section">
+      <div className="fm-inspector-form-section__header">
+        <strong>Dense refinement windows</strong>
+      </div>
+      {windows.map((window, index) => (
+        <div className="fm-inspector-form-section" key={index}>
+          <div className="fm-inspector-form-section__header">
+            <strong>Window {index + 1}</strong>
+            <div className="fm-inspector-toolbar">
+              <Button
+                aria-label="Remove dense window"
+                disabled={windows.length <= 1}
+                size="icon"
+                title="Remove dense window"
+                type="button"
+                variant="ghost"
+                onClick={() =>
+                  commitWindows(
+                    windows.filter(
+                      (_, windowIndex) => windowIndex !== index,
+                    ),
+                  )
+                }
+              >
+                <Trash2 size={14} aria-hidden="true" />
+              </Button>
+            </div>
+          </div>
+          <FormField
+            label="Center field"
+            unit="mT"
+            value={window.centerField}
+            onChange={(event) =>
+              updateWindow(index, { centerField: event.target.value })
+            }
+          />
+          <FormField
+            label="Half width"
+            unit="mT"
+            value={window.halfWidth}
+            onChange={(event) =>
+              updateWindow(index, { halfWidth: event.target.value })
+            }
+          />
+          <FormField
+            label="Step"
+            unit="mT"
+            value={window.step}
+            onChange={(event) =>
+              updateWindow(index, { step: event.target.value })
+            }
+          />
+          <FormField
+            label="Priority"
+            value={window.priority}
+            onChange={(event) =>
+              updateWindow(index, { priority: event.target.value })
+            }
+          />
+          <FormField
+            label="Reason"
+            value={window.reason}
+            onChange={(event) =>
+              updateWindow(index, { reason: event.target.value })
+            }
+          />
+        </div>
+      ))}
+      <div className="fm-inspector-toolbar">
+        <Button
+          size="sm"
+          type="button"
+          variant="secondary"
+          onClick={() =>
+            commitWindows([
+              ...windows,
+              defaultHysteresisDenseWindow(windows.length, draft),
+            ])
+          }
+        >
+          Add window
+        </Button>
+      </div>
+      <FormField
+        label="Dense windows JSON"
+        rows={4}
+        type="textarea"
+        value={draft.denseWindows}
+        onChange={(event) => onUpdate({ denseWindows: event.target.value })}
+      />
+    </div>
   );
 }
 
@@ -943,6 +1434,229 @@ function parseHysteresisSettleSteps(value: string): HysteresisSettleStepDraft[] 
   } catch {
     return [DEFAULT_RELAX_SETTLE_STEP];
   }
+}
+
+function parseHysteresisFieldSegments(
+  value: string,
+): HysteresisFieldSegmentDraft[] {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return [defaultHysteresisFieldSegment(0)];
+    const segments = parsed
+      .filter((segment): segment is Record<string, unknown> => isRecord(segment))
+      .map((segment, index) => normalizeHysteresisFieldSegment(segment, index));
+    return segments.length > 0 ? segments : [defaultHysteresisFieldSegment(0)];
+  } catch {
+    return [defaultHysteresisFieldSegment(0)];
+  }
+}
+
+function normalizeHysteresisFieldSegment(
+  segment: Record<string, unknown>,
+  index: number,
+): HysteresisFieldSegmentDraft {
+  return {
+    endpointPolicy: stringFromUnknown(
+      segment.endpointPolicy ?? segment.endpoint_policy,
+      index === 0 ? "include_stop" : "skip_start",
+    ),
+    label: stringFromUnknown(segment.label, `Segment ${index + 1}`),
+    reason: stringFromUnknown(segment.reason, ""),
+    segmentId: stringFromUnknown(
+      segment.segmentId ?? segment.segment_id,
+      `segment_${index + 1}`,
+    ),
+    startField: stringFromUnknown(
+      segment.startField ?? segment.start_field ?? segment.start,
+      "",
+    ),
+    step: stringFromUnknown(
+      segment.step ?? segment.step_mT ?? segment.field_step_mT,
+      "",
+    ),
+    stopField: stringFromUnknown(
+      segment.stopField ?? segment.stop_field ?? segment.stop,
+      "",
+    ),
+    unit: stringFromUnknown(segment.unit, "mT"),
+  };
+}
+
+function defaultHysteresisFieldSegment(
+  index: number,
+  draft?: StudyStageDraft,
+): HysteresisFieldSegmentDraft {
+  return {
+    endpointPolicy: index === 0 ? "include_stop" : "skip_start",
+    label: index === 0 ? "Coarse start" : `Segment ${index + 1}`,
+    reason: index === 0 ? "coarse_start" : "",
+    segmentId: index === 0 ? "coarse_start" : `segment_${index + 1}`,
+    startField: draft?.fieldMaxMt ?? "",
+    step: draft?.fieldStepMt ?? "",
+    stopField: draft?.fieldMinMt ?? "",
+    unit: "mT",
+  };
+}
+
+function parseHysteresisDenseWindows(
+  value: string,
+): HysteresisDenseWindowDraft[] {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return [defaultHysteresisDenseWindow(0)];
+    const windows = parsed
+      .filter((window): window is Record<string, unknown> => isRecord(window))
+      .map((window, index) => normalizeHysteresisDenseWindow(window, index));
+    return windows.length > 0 ? windows : [defaultHysteresisDenseWindow(0)];
+  } catch {
+    return [defaultHysteresisDenseWindow(0)];
+  }
+}
+
+function normalizeHysteresisDenseWindow(
+  window: Record<string, unknown>,
+  index: number,
+): HysteresisDenseWindowDraft {
+  return {
+    centerField: stringFromUnknown(
+      window.centerField ?? window.center_mT ?? window.center,
+      "0",
+    ),
+    halfWidth: stringFromUnknown(
+      window.halfWidth ??
+        window.halfWidthMt ??
+        window.half_width_mT ??
+        window.half_width,
+      "",
+    ),
+    priority: stringFromUnknown(window.priority, String(index + 1)),
+    reason: stringFromUnknown(window.reason, ""),
+    step: stringFromUnknown(window.step ?? window.stepMt ?? window.step_mT, ""),
+  };
+}
+
+function defaultHysteresisDenseWindow(
+  index: number,
+  draft?: StudyStageDraft,
+): HysteresisDenseWindowDraft {
+  return {
+    centerField: "0",
+    halfWidth: "",
+    priority: String(index + 1),
+    reason: index === 0 ? "remanence" : "",
+    step: draft?.fieldStepMt ?? "",
+  };
+}
+
+function parseHysteresisMinorLoops(value: string): HysteresisMinorLoopDraft[] {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return [defaultHysteresisMinorLoop(0)];
+    const loops = parsed
+      .filter((loop): loop is Record<string, unknown> => isRecord(loop))
+      .map((loop) => normalizeHysteresisMinorLoop(loop));
+    return loops.length > 0 ? loops : [defaultHysteresisMinorLoop(0)];
+  } catch {
+    return [defaultHysteresisMinorLoop(0)];
+  }
+}
+
+function parseHysteresisSettleBranches(
+  value: string,
+): HysteresisSettleBranchDraft[] {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return [defaultHysteresisSettleBranch(0)];
+    const branches = parsed
+      .filter((branch): branch is Record<string, unknown> => isRecord(branch))
+      .map((branch, index) => normalizeHysteresisSettleBranch(branch, index));
+    return branches.length > 0 ? branches : [defaultHysteresisSettleBranch(0)];
+  } catch {
+    return [defaultHysteresisSettleBranch(0)];
+  }
+}
+
+function normalizeHysteresisSettleBranch(
+  branch: Record<string, unknown>,
+  index: number,
+): HysteresisSettleBranchDraft {
+  return {
+    branchId: stringFromUnknown(
+      branch.branchId ?? branch.branch_id,
+      index === 0 ? "non_converged_fallback" : `settle_branch_${index + 1}`,
+    ),
+    run: stringifyJsonDraftValue(branch.run, DEFAULT_RELAX_SETTLE_STEP),
+    when: stringFromUnknown(branch.when, "non_converged"),
+  };
+}
+
+function defaultHysteresisSettleBranch(
+  index: number,
+): HysteresisSettleBranchDraft {
+  return {
+    branchId:
+      index === 0 ? "non_converged_fallback" : `settle_branch_${index + 1}`,
+    run: JSON.stringify(DEFAULT_RELAX_SETTLE_STEP),
+    when: index === 0 ? "non_converged" : "always",
+  };
+}
+
+function stringifyJsonDraftValue(value: unknown, fallback: unknown): string {
+  if (typeof value === "string") return value;
+  if (value === undefined || value === null) return JSON.stringify(fallback);
+  return JSON.stringify(value);
+}
+
+function parseJsonObjectOrString(value: string): unknown {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return isRecord(parsed) ? parsed : value;
+  } catch {
+    return value;
+  }
+}
+
+function normalizeHysteresisMinorLoop(
+  loop: Record<string, unknown>,
+): HysteresisMinorLoopDraft {
+  return {
+    closurePolicy: stringFromUnknown(
+      loop.closurePolicy ?? loop.closure_policy,
+      "branch_only",
+    ),
+    parentBranch: stringFromUnknown(
+      loop.parentBranch ?? loop.parent_branch,
+      "descending",
+    ),
+    returnField: stringFromUnknown(
+      loop.returnField ?? loop.returnMt ?? loop.return_mT,
+      "",
+    ),
+    reversalField: stringFromUnknown(
+      loop.reversalField ?? loop.reversalMt ?? loop.reversal_mT,
+      "",
+    ),
+  };
+}
+
+function defaultHysteresisMinorLoop(
+  index: number,
+  draft?: StudyStageDraft,
+): HysteresisMinorLoopDraft {
+  const fieldStep = Number(draft?.fieldStepMt);
+  const offset = Number.isFinite(fieldStep) && fieldStep > 0 ? fieldStep : 25;
+  return {
+    closurePolicy: "branch_only",
+    parentBranch: "descending",
+    returnField: String(-offset * (index + 1)),
+    reversalField: String(offset * (index + 1)),
+  };
+}
+
+function stringFromUnknown(value: unknown, fallback: string): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return fallback;
 }
 
 function normalizeHysteresisSettleStepPatch(

@@ -4546,6 +4546,12 @@
               "null"
             ]
           },
+          "compatibility_binary_payload_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "complex_pair_count": {
             "format": "int64",
             "minimum": 0,
@@ -4622,6 +4628,12 @@
           "status": {
             "type": "string"
           },
+          "storage_format": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "tangent_complex_pair_count": {
             "format": "int64",
             "minimum": 0,
@@ -4681,6 +4693,53 @@
           },
           "value_kind": {
             "type": "string"
+          },
+          "zarr_array_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "zarr_chunk_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "zarr_chunk_shape": {
+            "items": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "zarr_compressor": {},
+          "zarr_dtype": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "zarr_shape": {
+            "items": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "zarr_store_path": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -5803,11 +5862,27 @@
             },
             "type": "array"
           },
+          "field_orientation": {},
+          "field_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "kind": {
             "type": "string"
           },
           "label": {
             "type": "string"
+          },
+          "measurement_axis": {},
+          "mesh_identity": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "node_id": {
             "type": "string"
@@ -6773,6 +6848,7 @@
             "minimum": 0,
             "type": "integer"
           },
+          "resolved_parameters": {},
           "resolved_timestep_s": {
             "format": "double",
             "type": [
@@ -6791,6 +6867,12 @@
           "step_index": {
             "minimum": 0,
             "type": "integer"
+          },
+          "stop_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "torque": {
             "format": "double",

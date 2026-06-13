@@ -8,11 +8,15 @@ import {
   DATA_FIELD_VECTOR_PATH,
   DATA_TABLE_ROWS_PATH,
   ANALYSIS_HYSTERESIS_BRANCHES_PATH,
+  ANALYSIS_HYSTERESIS_ADAPTIVE_REFINEMENT_PATH,
+  ANALYSIS_HYSTERESIS_FAMILY_PATH,
+  ANALYSIS_HYSTERESIS_FAMILY_VARIANT_POINTS_PATH,
   ANALYSIS_HYSTERESIS_METRICS_PATH,
   ANALYSIS_HYSTERESIS_MINOR_LOOPS_PATH,
   ANALYSIS_HYSTERESIS_POINT_PATH,
   ANALYSIS_HYSTERESIS_POINTS_PATH,
   ANALYSIS_HYSTERESIS_REVERSAL_FIELDS_PATH,
+  ANALYSIS_HYSTERESIS_SATURATION_PATH,
   ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
@@ -911,6 +915,24 @@ describe("RealtimeInvalidationBridge", () => {
       "{stage_id}",
       "stage-000",
     );
+    const saturationKey = ANALYSIS_HYSTERESIS_SATURATION_PATH.replace(
+      "{stage_id}",
+      "stage-000",
+    );
+    const adaptiveRefinementKey =
+      ANALYSIS_HYSTERESIS_ADAPTIVE_REFINEMENT_PATH.replace(
+        "{stage_id}",
+        "stage-000",
+      );
+    const familyKey = ANALYSIS_HYSTERESIS_FAMILY_PATH.replace(
+      "{stage_id}",
+      "stage-000",
+    );
+    const familyVariantPointsKey =
+      ANALYSIS_HYSTERESIS_FAMILY_VARIANT_POINTS_PATH.replace(
+        "{stage_id}",
+        "stage-000",
+      ).replace("{variant_id}", "oop");
     const minorLoopsKey = ANALYSIS_HYSTERESIS_MINOR_LOOPS_PATH.replace(
       "{stage_id}",
       "stage-000",
@@ -936,6 +958,10 @@ describe("RealtimeInvalidationBridge", () => {
       pointsKey,
       branchesKey,
       metricsKey,
+      saturationKey,
+      adaptiveRefinementKey,
+      familyKey,
+      familyVariantPointsKey,
       minorLoopsKey,
       reversalFieldsKey,
       pointKey,
@@ -964,6 +990,18 @@ describe("RealtimeInvalidationBridge", () => {
       dependentRevision(pointsKey, 51),
     );
     expect(resources.getRevision(metricsKey)).toBe(
+      dependentRevision(pointsKey, 51),
+    );
+    expect(resources.getRevision(saturationKey)).toBe(
+      dependentRevision(pointsKey, 51),
+    );
+    expect(resources.getRevision(adaptiveRefinementKey)).toBe(
+      dependentRevision(pointsKey, 51),
+    );
+    expect(resources.getRevision(familyKey)).toBe(
+      dependentRevision(pointsKey, 51),
+    );
+    expect(resources.getRevision(familyVariantPointsKey)).toBe(
       dependentRevision(pointsKey, 51),
     );
     expect(resources.getRevision(minorLoopsKey)).toBe(

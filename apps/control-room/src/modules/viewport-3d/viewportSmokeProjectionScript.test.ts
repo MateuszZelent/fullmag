@@ -167,6 +167,7 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain("verifyHysteresisChartReplaySmoke");
     expect(smokeScript).toContain("verifyHysteresisReplaySmoke");
     expect(smokeScript).toContain("if (hysteresisReplayOnly) {");
+    expect(smokeScript).toContain("enableAuditHooks: hysteresisReplaySmoke");
     expect(smokeScript).toContain("loadHysteresisReplaySnapshot");
     expect(smokeScript).toContain(".fm-hysteresis-container");
     expect(smokeScript).toContain("data-hysteresis-point-count");
@@ -177,6 +178,11 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain('params.get("stage_id") === hysteresisReplayStageId');
     expect(smokeScript).toContain('params.get("component") === "full"');
     expect(smokeScript).toContain('params.get("scope_kind") === "full"');
+    expect(smokeScript).toContain("hysteresis replay return-to-live field-vector request");
+    expect(smokeScript).toContain('params.get("snapshot_id") == null');
+    expect(smokeScript).toContain('params.get("stage_id") == null');
+    expect(smokeScript).toContain("Return to live");
+    expect(smokeScript).toContain("Hysteresis replay return-to-live smoke passed");
     expect(smokeScript).toContain("Hysteresis replay smoke passed:");
     expect(hysteresisChartSource).toContain("data-hysteresis-stage-id");
     expect(hysteresisChartSource).toContain("data-hysteresis-point-count");

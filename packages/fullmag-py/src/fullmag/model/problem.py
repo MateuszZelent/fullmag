@@ -472,7 +472,7 @@ def build_geometry_assets_for_request(
         )
         from fullmag.meshing.gmsh_bridge import MeshData
 
-        fem_mesh_cache_dir = _fem_mesh_cache_dir()
+        fem_mesh_cache_dir: Path | None = None
         has_shared_domain_mesh_asset = (
             explicit_domain_mesh_source is not None or study_universe is not None
         )
@@ -491,13 +491,24 @@ def build_geometry_assets_for_request(
                     emit_progress(
                         f"Preparing FEM mesh asset for '{geometry.geometry_name}' from MeshIR JSON"
                     )
+                    mesh_path = Path(mesh_source).expanduser()
+                    with mesh_path.open("r", encoding="utf-8") as handle:
+                        mesh_ir = json.load(handle)
+                    is_valid = validate_mesh_ir(mesh_ir)
+                    if is_valid is False:
+                        raise ValueError(
+                            f"MeshIR asset for '{geometry.geometry_name}' failed Rust validation"
+                        )
                     assets["fem_mesh_assets"].append(
                         {
                             "geometry_name": geometry.geometry_name,
                             "mesh_source": mesh_source,
+                            "mesh": mesh_ir,
                         }
                     )
                 else:
+                    if fem_mesh_cache_dir is None:
+                        fem_mesh_cache_dir = _fem_mesh_cache_dir()
                     mesh_cache_key = _fem_mesh_cache_key(
                         geometry,
                         discretization.fem,

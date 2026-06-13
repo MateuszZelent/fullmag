@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, mpsc};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 use crate::communication_policy::{
@@ -598,9 +598,9 @@ impl CurrentLivePublisher {
 #[cfg(test)]
 mod tests {
     use super::{
+        apply_python_progress_event, bootstrap_live_state, merge_pending_publish_payload,
         CurrentLivePublisher, CurrentLiveScalarRow, CurrentLiveSnapshotPayload,
         LiveTelemetryPublishGate, LocalLiveWorkspace, LocalLiveWorkspaceState,
-        apply_python_progress_event, bootstrap_live_state, merge_pending_publish_payload,
     };
     use crate::types::{PythonProgressEvent, RunManifest, SessionManifest};
 

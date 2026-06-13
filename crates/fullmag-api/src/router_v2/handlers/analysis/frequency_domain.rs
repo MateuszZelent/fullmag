@@ -166,6 +166,24 @@ pub struct FrequencyDomainFieldResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub payload_value_count: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub storage_format: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zarr_store_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zarr_array_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zarr_chunk_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zarr_dtype: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zarr_shape: Option<Vec<u64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zarr_chunk_shape: Option<Vec<u64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zarr_compressor: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compatibility_binary_payload_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tangent_field_payload_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tangent_payload_encoding: Option<String>,
@@ -489,15 +507,14 @@ pub async fn get_frequency_domain_eigen_mode_field_meta(
     Path((sample_index, mode_index)): Path<(u32, u32)>,
 ) -> Result<Json<FrequencyDomainFieldResource>, ApiError> {
     let artifact_dir = require_current_live_artifact_dir(&state).await?;
-    let artifact_path = format!(
-        "eigen/mode_fields/sample_{:04}/mode_{:04}/vector.bin",
-        sample_index, mode_index
-    );
+    let artifact_path =
+        eigen_mode_field_preferred_payload_path(&artifact_dir, sample_index, mode_index)?;
     let field_id = format!(
         "analysis:eigen:sample-{:04}:mode-{:04}",
         sample_index, mode_index
     );
-    let metadata = eigen_mode_field_payload_metadata(&artifact_dir, &artifact_path)?;
+    let metadata =
+        eigen_mode_field_metadata(&artifact_dir, sample_index, mode_index, &artifact_path)?;
     field_resource(
         &state,
         "frequency_domain_mode_field.v1",
@@ -824,7 +841,7 @@ pub async fn get_frequency_domain_response_field_meta(
         path
     } else {
         format!(
-            "response/field_payloads/frequency_{:04}/vector_xyz.bin",
+            "response/field_payloads.zarr/frequency_{:04}/vector_xyz_complex/0.0.0",
             frequency_index
         )
     };
@@ -1164,6 +1181,15 @@ async fn field_resource(
         binary_layout: metadata.binary_layout,
         complex_pair_count: metadata.complex_pair_count,
         payload_value_count: metadata.payload_value_count,
+        storage_format: metadata.storage_format,
+        zarr_store_path: metadata.zarr_store_path,
+        zarr_array_path: metadata.zarr_array_path,
+        zarr_chunk_path: metadata.zarr_chunk_path,
+        zarr_dtype: metadata.zarr_dtype,
+        zarr_shape: metadata.zarr_shape,
+        zarr_chunk_shape: metadata.zarr_chunk_shape,
+        zarr_compressor: metadata.zarr_compressor,
+        compatibility_binary_payload_path: metadata.compatibility_binary_payload_path,
         tangent_field_payload_path: metadata.tangent_field_payload_path,
         tangent_payload_encoding: metadata.tangent_payload_encoding,
         tangent_value_kind: metadata.tangent_value_kind,
@@ -1190,6 +1216,15 @@ struct FrequencyDomainFieldMetadata {
     binary_layout: Option<String>,
     complex_pair_count: Option<u64>,
     payload_value_count: Option<u64>,
+    storage_format: Option<String>,
+    zarr_store_path: Option<String>,
+    zarr_array_path: Option<String>,
+    zarr_chunk_path: Option<String>,
+    zarr_dtype: Option<String>,
+    zarr_shape: Option<Vec<u64>>,
+    zarr_chunk_shape: Option<Vec<u64>>,
+    zarr_compressor: Option<Value>,
+    compatibility_binary_payload_path: Option<String>,
     tangent_field_payload_path: Option<String>,
     tangent_payload_encoding: Option<String>,
     tangent_value_kind: Option<String>,
@@ -1214,6 +1249,15 @@ impl Default for FrequencyDomainFieldMetadata {
             binary_layout: None,
             complex_pair_count: None,
             payload_value_count: None,
+            storage_format: None,
+            zarr_store_path: None,
+            zarr_array_path: None,
+            zarr_chunk_path: None,
+            zarr_dtype: None,
+            zarr_shape: None,
+            zarr_chunk_shape: None,
+            zarr_compressor: None,
+            compatibility_binary_payload_path: None,
             tangent_field_payload_path: None,
             tangent_payload_encoding: None,
             tangent_value_kind: None,
@@ -1239,6 +1283,69 @@ fn default_complex_field_views() -> Vec<String> {
         "phase".to_string(),
         "phase_rotated_real".to_string(),
     ]
+}
+
+fn optional_u64_array_field(
+    payload: &Value,
+    field: &str,
+    artifact_path: &str,
+    label: &str,
+) -> Result<Option<Vec<u64>>, ApiError> {
+    let Some(value) = payload.get(field) else {
+        return Ok(None);
+    };
+    let Some(array) = value.as_array() else {
+        return Err(ApiError::internal(format!(
+            "invalid {label} {field} in '{artifact_path}'"
+        )));
+    };
+    let mut out = Vec::with_capacity(array.len());
+    for item in array {
+        let Some(value) = item.as_u64() else {
+            return Err(ApiError::internal(format!(
+                "invalid {label} {field} in '{artifact_path}'"
+            )));
+        };
+        out.push(value);
+    }
+    Ok((!out.is_empty()).then_some(out))
+}
+
+fn copy_storage_metadata(
+    payload: &Value,
+    metadata: &mut FrequencyDomainFieldMetadata,
+    artifact_path: &str,
+    label: &str,
+) -> Result<(), ApiError> {
+    metadata.storage_format = payload
+        .get("storage_format")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    metadata.zarr_store_path = payload
+        .get("zarr_store_path")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    metadata.zarr_array_path = payload
+        .get("zarr_array_path")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    metadata.zarr_chunk_path = payload
+        .get("zarr_chunk_path")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    metadata.zarr_dtype = payload
+        .get("zarr_dtype")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    metadata.zarr_shape = optional_u64_array_field(payload, "zarr_shape", artifact_path, label)?;
+    metadata.zarr_chunk_shape =
+        optional_u64_array_field(payload, "zarr_chunk_shape", artifact_path, label)?;
+    metadata.zarr_compressor = payload.get("zarr_compressor").cloned();
+    metadata.compatibility_binary_payload_path = payload
+        .get("compatibility_binary_payload_path")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    Ok(())
 }
 
 fn response_field_payload_metadata(
@@ -1284,6 +1391,12 @@ fn response_field_payload_metadata(
         .map(str::to_string);
     metadata.complex_pair_count = payload.get("complex_pair_count").and_then(Value::as_u64);
     metadata.payload_value_count = payload.get("payload_value_count").and_then(Value::as_u64);
+    copy_storage_metadata(
+        &payload,
+        &mut metadata,
+        frequency_point_artifact_path,
+        "frequency response field",
+    )?;
     metadata.tangent_field_payload_path = payload
         .get("tangent_field_payload_path")
         .and_then(Value::as_str)
@@ -1383,6 +1496,180 @@ fn response_field_payload_metadata(
         tangent_metadata_present,
     )?;
     Ok(metadata)
+}
+
+fn eigen_mode_field_metadata(
+    artifact_dir: &std::path::Path,
+    sample_index: u32,
+    mode_index: u32,
+    artifact_path: &str,
+) -> Result<Option<FrequencyDomainFieldMetadata>, ApiError> {
+    let mode_artifact_path = format!(
+        "eigen/modes/sample_{:04}/mode_{:04}.json",
+        sample_index, mode_index
+    );
+    let mode_metadata =
+        eigen_mode_field_metadata_from_mode_artifact(artifact_dir, &mode_artifact_path)?;
+    let payload_metadata = eigen_mode_field_payload_metadata(artifact_dir, artifact_path)?;
+    if mode_metadata.is_none() && payload_metadata.is_some() {
+        return Err(ApiError::internal(format!(
+            "eigen mode field payload '{}' is present but metadata '{}' is missing",
+            artifact_path, mode_artifact_path
+        )));
+    }
+    let mut metadata = mode_metadata.unwrap_or_default();
+    if let Some(payload_metadata) = payload_metadata {
+        if let Some(payload_value_count) = payload_metadata.payload_value_count {
+            let expected = metadata.payload_value_count.unwrap_or(payload_value_count);
+            if expected != payload_value_count {
+                return Err(ApiError::internal(format!(
+                    "eigen mode field payload_value_count mismatch between '{}' and '{}'",
+                    mode_artifact_path, artifact_path
+                )));
+            }
+            metadata.payload_value_count = Some(payload_value_count);
+        }
+        if let Some(complex_pair_count) = payload_metadata.complex_pair_count {
+            let expected = metadata.complex_pair_count.unwrap_or(complex_pair_count);
+            if expected != complex_pair_count {
+                return Err(ApiError::internal(format!(
+                    "eigen mode field complex_pair_count mismatch between '{}' and '{}'",
+                    mode_artifact_path, artifact_path
+                )));
+            }
+            metadata.complex_pair_count = Some(complex_pair_count);
+        }
+    }
+    validate_component_count(
+        &mode_artifact_path,
+        "eigen mode field",
+        metadata.component_count,
+        true,
+    )?;
+    validate_complex_payload_counts(
+        &mode_artifact_path,
+        "eigen mode field",
+        metadata.complex_pair_count,
+        metadata.payload_value_count,
+        try_resolve_artifact_path(artifact_dir, artifact_path)?.is_some(),
+    )?;
+    validate_available_views(
+        &mode_artifact_path,
+        "eigen mode field",
+        &metadata.available_views,
+    )?;
+    validate_default_view(
+        &mode_artifact_path,
+        "eigen mode field",
+        &metadata.available_views,
+        &metadata.default_view,
+    )?;
+    validate_default_phase_rad(
+        &mode_artifact_path,
+        "eigen mode field",
+        metadata.default_phase_rad,
+    )?;
+    Ok(Some(metadata))
+}
+
+fn eigen_mode_artifact_path(sample_index: u32, mode_index: u32) -> String {
+    format!("eigen/modes/sample_{sample_index:04}/mode_{mode_index:04}.json")
+}
+
+fn legacy_eigen_mode_field_payload_path(sample_index: u32, mode_index: u32) -> String {
+    format!("eigen/mode_fields/sample_{sample_index:04}/mode_{mode_index:04}/vector.bin")
+}
+
+fn eigen_mode_field_preferred_payload_path(
+    artifact_dir: &std::path::Path,
+    sample_index: u32,
+    mode_index: u32,
+) -> Result<String, ApiError> {
+    let mode_artifact_path = eigen_mode_artifact_path(sample_index, mode_index);
+    if try_resolve_artifact_path(artifact_dir, &mode_artifact_path)?.is_some() {
+        let mode = read_json_artifact_value(artifact_dir, &mode_artifact_path)?;
+        for field in ["zarr_chunk_path", "compatibility_binary_payload_path"] {
+            if let Some(path) = mode.get(field).and_then(Value::as_str) {
+                if try_resolve_artifact_path(artifact_dir, path)?.is_some() {
+                    return Ok(path.to_string());
+                }
+            }
+        }
+    }
+    Ok(legacy_eigen_mode_field_payload_path(
+        sample_index,
+        mode_index,
+    ))
+}
+
+fn eigen_mode_field_metadata_from_mode_artifact(
+    artifact_dir: &std::path::Path,
+    mode_artifact_path: &str,
+) -> Result<Option<FrequencyDomainFieldMetadata>, ApiError> {
+    let Some(path) = try_resolve_artifact_path(artifact_dir, mode_artifact_path)? else {
+        return Ok(None);
+    };
+    let payload: Value = serde_json::from_slice(&std::fs::read(&path).map_err(|error| {
+        ApiError::internal(format!(
+            "failed to read eigen mode field metadata '{}': {}",
+            mode_artifact_path, error
+        ))
+    })?)
+    .map_err(|error| {
+        ApiError::internal(format!(
+            "invalid eigen mode field metadata JSON '{}': {}",
+            mode_artifact_path, error
+        ))
+    })?;
+    let mut metadata = FrequencyDomainFieldMetadata::default();
+    metadata.value_kind = payload
+        .get("value_kind")
+        .and_then(Value::as_str)
+        .unwrap_or(&metadata.value_kind)
+        .to_string();
+    metadata.component_basis = payload
+        .get("component_basis")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or(metadata.component_basis);
+    metadata.component_count = payload.get("component_count").and_then(Value::as_u64);
+    if let Some(components) = payload.get("components") {
+        metadata.components = parse_available_views(
+            mode_artifact_path,
+            "eigen mode field components",
+            components,
+        )?;
+    }
+    metadata.payload_encoding = payload
+        .get("payload_encoding")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    metadata.binary_layout = payload
+        .get("binary_layout")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    metadata.complex_pair_count = payload.get("complex_pair_count").and_then(Value::as_u64);
+    metadata.payload_value_count = payload.get("payload_value_count").and_then(Value::as_u64);
+    copy_storage_metadata(
+        &payload,
+        &mut metadata,
+        mode_artifact_path,
+        "eigen mode field",
+    )?;
+    if let Some(available_views) = payload.get("available_views") {
+        metadata.available_views =
+            parse_available_views(mode_artifact_path, "eigen mode field", available_views)?;
+    }
+    metadata.default_view = payload
+        .get("default_view")
+        .and_then(Value::as_str)
+        .unwrap_or(&metadata.default_view)
+        .to_string();
+    metadata.default_phase_rad = payload
+        .get("default_phase_rad")
+        .and_then(Value::as_f64)
+        .or(metadata.default_phase_rad);
+    Ok(Some(metadata))
 }
 
 fn eigen_mode_field_payload_metadata(

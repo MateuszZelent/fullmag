@@ -3942,6 +3942,7 @@ export interface components {
             artifact_path: string;
             available_views: string[];
             binary_layout?: string | null;
+            compatibility_binary_payload_path?: string | null;
             /** Format: int64 */
             complex_pair_count?: number | null;
             component_basis?: string | null;
@@ -3961,6 +3962,7 @@ export interface components {
             schema_version: string;
             source_family: string;
             status: string;
+            storage_format?: string | null;
             /** Format: int64 */
             tangent_complex_pair_count?: number | null;
             tangent_component_basis?: string | null;
@@ -3973,6 +3975,13 @@ export interface components {
             tangent_payload_value_count?: number | null;
             tangent_value_kind?: string | null;
             value_kind: string;
+            zarr_array_path?: string | null;
+            zarr_chunk_path?: string | null;
+            zarr_chunk_shape?: number[] | null;
+            zarr_compressor?: unknown;
+            zarr_dtype?: string | null;
+            zarr_shape?: number[] | null;
+            zarr_store_path?: string | null;
         };
         FrequencyDomainJsonArtifactResource: {
             artifact_path: string;
@@ -4244,8 +4253,13 @@ export interface components {
         };
         HysteresisExecutionTreeNode: {
             children?: components["schemas"]["HysteresisExecutionTreeNode"][];
+            field_orientation?: unknown;
+            /** Format: int64 */
+            field_revision?: number | null;
             kind: string;
             label: string;
+            measurement_axis?: unknown;
+            mesh_identity?: string | null;
             node_id: string;
             /** Format: int32 */
             point_id?: number | null;
@@ -4487,12 +4501,14 @@ export interface components {
             field_value_mT: number;
             method: string;
             point_id: number;
+            resolved_parameters?: unknown;
             /** Format: double */
             resolved_timestep_s?: number | null;
             /** Format: int32 */
             retry_attempt: number;
             status: string;
             step_index: number;
+            stop_reason?: string | null;
             /** Format: double */
             torque?: number | null;
         };

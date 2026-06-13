@@ -1413,6 +1413,10 @@ async fn main() {
             post(sync_current_live_snapshot),
         )
         .route(
+            "/v2/sessions/current/internal/live/snapshot",
+            post(sync_current_live_snapshot),
+        )
+        .route(
             "/v1/internal/live/current/session",
             post(sync_current_live_session_frame),
         )

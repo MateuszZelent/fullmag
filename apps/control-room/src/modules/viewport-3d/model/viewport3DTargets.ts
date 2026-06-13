@@ -97,10 +97,10 @@ export function resolveHysteresisStepViewportTarget(
       snapshotId: ref.snapshotId,
       resourceRef: ref.resourceRef ?? null,
       quantityId: ref.quantityId,
-      meshIdentity: null,
-      fieldOrientation: null,
-      measurementAxis: null,
-      fieldRevision: null,
+      meshIdentity: ref.meshIdentity ?? null,
+      fieldOrientation: ref.fieldOrientation ?? null,
+      measurementAxis: ref.measurementAxis ?? null,
+      fieldRevision: ref.fieldRevision ?? null,
     };
   }
   if (

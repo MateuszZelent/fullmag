@@ -70,7 +70,8 @@ Use this vocabulary across Python, IR, planner, runtime, API, and frontend:
 - `dispersion`: frequency versus path coordinate or k coordinate.
 - `response_sweep`: direct driven response observables versus frequency.
 - `frequency_point`: one driven response solve at one frequency.
-- `mode_field`: field-like binary payload for 3D rendering.
+- `mode_field`: field-like data-plane resource for 3D rendering, backed by
+  Zarr by default and optionally HDF5/H5 with identical resource semantics.
 - `phase_convention`: phasor and Floquet sign convention.
 - `equilibrium_residual`: equilibrium quality metric before linearization.
 - `tangent_leakage`: violation of the tangent constraint.
@@ -276,11 +277,14 @@ Current state:
 
 - Eigen v2 JSON routes exist.
 - Response v1 JSON route exists.
-- Mode field binary payloads for 3D visualization do not exist as canonical analysis resources.
+- Mode field data-plane resources for 3D visualization do not exist as canonical analysis resources.
 
 Target state:
 
-- OpenAPI has all JSON and binary resources needed for professional UI.
+- OpenAPI has all JSON control-plane resources and data-plane field resources
+  needed for professional UI. Large arrays are stored in Zarr by default;
+  HDF5/H5 is an alternate backend/export with the same public resource
+  contract.
 
 Required existing routes to keep:
 
@@ -305,7 +309,10 @@ GET /v2/sessions/current/data/fields/{field_id}/samples/vector
 Mode-field rule:
 
 - Mode profiles and driven response profiles are registered as field-like data resources with `source_family = analysis/eigen` or `source_family = analysis/frequency-response`.
-- The viewport uses the existing binary field-vector resource path after the manifest maps a mode or frequency point to a `field_id`.
+- The viewport uses the existing field-vector data-plane resource path after
+  the manifest maps a mode or frequency point to a `field_id`. The HTTP
+  response may be binary, but the artifact storage default is Zarr, not raw
+  JSON arrays.
 - The UI must not fetch large mode vectors from JSON mode metadata.
 
 Instructions:
@@ -313,7 +320,8 @@ Instructions:
 1. Add an analysis manifest that indexes all frequency-domain result artifacts from the active run.
 2. Include resource keys, artifact paths, schema versions, revision values, sample indices, raw mode indices, branch IDs, and field IDs.
 3. Keep JSON mode endpoint focused on metadata and small summaries.
-4. Register mode field payloads in the data-plane field catalog.
+4. Register mode field payloads in the data-plane field catalog and record
+   `storage_format = zarr` plus the Zarr array path in metadata/provenance.
 5. Add OpenAPI schemas for:
    - frequency-domain manifest,
    - eigen spectrum v2 typed shape,

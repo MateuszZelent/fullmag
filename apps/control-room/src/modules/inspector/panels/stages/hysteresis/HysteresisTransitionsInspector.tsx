@@ -33,6 +33,7 @@ export function HysteresisTransitionsInspector({
     selectedPoint?.snapshot_storage_status,
     selectedPoint?.snapshot_storage_reason,
   );
+  const stageCompleted = progress?.status === "completed";
 
   const usePointAsInitialState = useCallback(() => {
     if (!stageId || !selectedPoint?.snapshot_id) return;
@@ -43,6 +44,21 @@ export function HysteresisTransitionsInspector({
       snapshotResourceRef: selectedPoint.snapshot_resource_ref ?? null,
     });
   }, [commandContext, kernel, selectedPoint, stageId]);
+
+  const continueToNextStage = useCallback(() => {
+    if (!stageId) return;
+    kernel.commands.execute("hysteresis.continue-to-next-stage", commandContext, {
+      stageId,
+    });
+  }, [commandContext, kernel, stageId]);
+
+  const exportLoopCsv = useCallback(() => {
+    if (!stageId || points.length === 0) return;
+    kernel.commands.execute("hysteresis.export-loop-csv", commandContext, {
+      points,
+      stageId,
+    });
+  }, [commandContext, kernel, points, stageId]);
 
   return (
     <InspectorSection
@@ -67,7 +83,41 @@ export function HysteresisTransitionsInspector({
             : "none"
         }
       />
+      <FieldRow
+        label="Continuation"
+        value={
+          stageCompleted
+            ? "explicit next run stage"
+            : "available after completion"
+        }
+      />
       <div className="fm-hysteresis-inspector-actions">
+        <Button
+          size="sm"
+          variant="secondary"
+          disabled={!stageCompleted || !stageId}
+          onClick={continueToNextStage}
+          title={
+            stageCompleted
+              ? "Add an explicit run stage after this hysteresis stage."
+              : "Finish the hysteresis stage before continuing to another stage."
+          }
+        >
+          Continue to next stage
+        </Button>
+        <Button
+          size="sm"
+          variant="secondary"
+          disabled={!stageCompleted || points.length === 0}
+          onClick={exportLoopCsv}
+          title={
+            stageCompleted
+              ? "Export the completed hysteresis loop points as CSV."
+              : "Finish the hysteresis stage before exporting the loop."
+          }
+        >
+          Export loop CSV
+        </Button>
         <Button
           size="sm"
           variant="secondary"

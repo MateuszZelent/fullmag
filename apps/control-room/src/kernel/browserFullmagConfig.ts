@@ -22,6 +22,7 @@ export interface BrowserFullmagConfig {
   readonly disableViewport3DPrimitiveObjectLayer?: unknown;
   readonly disableViewport3DSceneLayers?: unknown;
   readonly disableViewport3DTopologyMeshLayer?: unknown;
+  readonly enableAuditHooks?: unknown;
   readonly enablePerformanceDiagnostics?: unknown;
   readonly enableViewport3DOrbitDebug?: unknown;
   readonly runtimeHttpBase?: unknown;

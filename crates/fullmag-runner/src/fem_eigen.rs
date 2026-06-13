@@ -552,6 +552,12 @@ fn execute_fem_eigen_inner(
                 .into_bytes(),
         });
     }
+    write_eigen_v2_bundle(
+        plan,
+        &summary_payload,
+        &requested_modes,
+        &mut auxiliary_artifacts,
+    )?;
 
     let stats = StepStats {
         step: relaxation_steps,
@@ -2175,6 +2181,506 @@ fn json_artifact(
         relative_path: path.into(),
         bytes,
     })
+}
+
+fn binary_artifact(path: impl Into<String>, bytes: Vec<u8>) -> AuxiliaryArtifact {
+    AuxiliaryArtifact {
+        relative_path: path.into(),
+        bytes,
+    }
+}
+
+fn mode_field_id(raw_mode_index: u64) -> String {
+    format!("analysis:eigen:sample-0000:mode-{raw_mode_index:04}")
+}
+
+fn mode_field_resource_key(raw_mode_index: u64) -> String {
+    format!(
+        "/v2/sessions/current/data/fields/{}/samples/vector?view=phase_rotated_real&phase_rad=0",
+        mode_field_id(raw_mode_index)
+    )
+}
+
+fn mode_meta_resource_key(raw_mode_index: u64) -> String {
+    format!(
+        "/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/0/{raw_mode_index}/meta"
+    )
+}
+
+fn mode_metadata_path(raw_mode_index: u64) -> String {
+    format!("eigen/modes/sample_0000/mode_{raw_mode_index:04}.json")
+}
+
+fn mode_payload_path(raw_mode_index: u64) -> String {
+    format!("eigen/mode_fields/sample_0000/mode_{raw_mode_index:04}/vector.bin")
+}
+
+fn mode_zarr_store_path() -> &'static str {
+    "eigen/mode_fields.zarr"
+}
+
+fn mode_zarr_sample_group_path() -> &'static str {
+    "eigen/mode_fields.zarr/sample_0000"
+}
+
+fn mode_zarr_mode_group_path(raw_mode_index: u64) -> String {
+    format!("eigen/mode_fields.zarr/sample_0000/mode_{raw_mode_index:04}")
+}
+
+fn mode_zarr_array_path(raw_mode_index: u64) -> String {
+    format!(
+        "{}/vector_xyz_complex",
+        mode_zarr_mode_group_path(raw_mode_index)
+    )
+}
+
+fn mode_zarr_chunk_path(raw_mode_index: u64) -> String {
+    format!("{}/0.0.0", mode_zarr_array_path(raw_mode_index))
+}
+
+fn mode_vector_entries(value: &serde_json::Value, field: &str) -> Vec<[f64; 3]> {
+    value
+        .get(field)
+        .and_then(|field_value| field_value.as_array())
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| {
+                    let components = entry.as_array()?;
+                    Some([
+                        components
+                            .first()
+                            .and_then(|value| value.as_f64())
+                            .unwrap_or(0.0),
+                        components
+                            .get(1)
+                            .and_then(|value| value.as_f64())
+                            .unwrap_or(0.0),
+                        components
+                            .get(2)
+                            .and_then(|value| value.as_f64())
+                            .unwrap_or(0.0),
+                    ])
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn mode_payload_bytes(real: &[[f64; 3]], imag: &[[f64; 3]]) -> Vec<u8> {
+    let sample_count = real.len().max(imag.len());
+    let mut bytes = Vec::with_capacity(sample_count * 6 * std::mem::size_of::<f64>());
+    for index in 0..sample_count {
+        let real_sample = real.get(index).copied().unwrap_or([0.0, 0.0, 0.0]);
+        let imag_sample = imag.get(index).copied().unwrap_or([0.0, 0.0, 0.0]);
+        for component in 0..3 {
+            bytes.extend_from_slice(&real_sample[component].to_le_bytes());
+            bytes.extend_from_slice(&imag_sample[component].to_le_bytes());
+        }
+    }
+    bytes
+}
+
+fn mode_amplitude_summary(amplitude: &serde_json::Value, sample_count: usize) -> serde_json::Value {
+    let values: Vec<f64> = amplitude
+        .as_array()
+        .map(|items| items.iter().filter_map(|item| item.as_f64()).collect())
+        .unwrap_or_default();
+    let max = values.iter().copied().fold(0.0, f64::max);
+    let mean = if values.is_empty() {
+        0.0
+    } else {
+        values.iter().sum::<f64>() / values.len() as f64
+    };
+    serde_json::json!({
+        "sample_count": sample_count,
+        "max": max,
+        "mean": mean,
+    })
+}
+
+fn mode_component_summary(sample_count: usize) -> serde_json::Value {
+    serde_json::json!({
+        "real_sample_count": sample_count,
+        "imag_sample_count": sample_count,
+        "component_count": 3,
+    })
+}
+
+fn zarr_group_artifact(path: impl Into<String>) -> Result<AuxiliaryArtifact, RunError> {
+    json_artifact(
+        format!("{}/.zgroup", path.into()),
+        &serde_json::json!({
+            "zarr_format": 2,
+        }),
+    )
+}
+
+fn mode_zarr_store_attrs_artifact() -> Result<AuxiliaryArtifact, RunError> {
+    json_artifact(
+        format!("{}/.zattrs", mode_zarr_store_path()),
+        &serde_json::json!({
+            "fullmag_kind": "frequency_domain_mode_field_store",
+            "schema_version": 1,
+            "preferred_container": "zarr",
+            "quantity_ids": ["delta_m"],
+            "axes": ["sample", "mode", "spatial_sample", "component", "complex"],
+            "component_order": ["x", "y", "z"],
+            "complex_order": ["real", "imag"],
+            "storage_layout": "aos_xyz_complex_pairs",
+            "compatibility_binary_exports": true,
+        }),
+    )
+}
+
+fn mode_zarr_array_metadata_artifact(
+    raw_mode_index: u64,
+    sample_count: usize,
+) -> Result<AuxiliaryArtifact, RunError> {
+    let chunk_sample_count = sample_count.max(1);
+    json_artifact(
+        format!("{}/.zarray", mode_zarr_array_path(raw_mode_index)),
+        &serde_json::json!({
+            "zarr_format": 2,
+            "shape": [sample_count, 3, 2],
+            "chunks": [chunk_sample_count, 3, 2],
+            "dtype": "<f8",
+            "compressor": serde_json::Value::Null,
+            "fill_value": 0.0,
+            "order": "C",
+            "filters": serde_json::Value::Null,
+            "dimension_separator": ".",
+        }),
+    )
+}
+
+fn mode_zarr_array_attrs_artifact(
+    raw_mode_index: u64,
+    sample_count: usize,
+) -> Result<AuxiliaryArtifact, RunError> {
+    json_artifact(
+        format!("{}/.zattrs", mode_zarr_array_path(raw_mode_index)),
+        &serde_json::json!({
+            "quantity_id": "delta_m",
+            "unit": "1",
+            "value_kind": "complex_spatial_vector",
+            "component_basis": "global_xyz",
+            "axes": ["spatial_sample", "component", "complex"],
+            "component_order": ["x", "y", "z"],
+            "complex_order": ["real", "imag"],
+            "sample_index": 0,
+            "raw_mode_index": raw_mode_index,
+            "mode_field_sample_count": sample_count,
+            "storage_layout": "aos_xyz_complex_pairs",
+        }),
+    )
+}
+
+fn write_eigen_v2_bundle(
+    plan: &FemEigenPlanIR,
+    summary_payload: &serde_json::Value,
+    requested_modes: &std::collections::BTreeSet<u32>,
+    auxiliary_artifacts: &mut Vec<AuxiliaryArtifact>,
+) -> Result<(), RunError> {
+    let modes = summary_payload
+        .get("modes")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let k_vector = match plan.k_sampling.as_ref() {
+        Some(KSamplingIR::Single { k_vector }) => *k_vector,
+        Some(KSamplingIR::Path { .. }) | None => [0.0, 0.0, 0.0],
+    };
+    let label = if k_vector.iter().all(|value| *value == 0.0) {
+        "Γ"
+    } else {
+        ""
+    };
+
+    let spectrum_modes: Vec<serde_json::Value> = modes
+        .iter()
+        .map(|mode| {
+            let raw_mode_index = mode
+                .get("index")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0);
+            let mut mode = mode.clone();
+            if let Some(object) = mode.as_object_mut() {
+                object.insert(
+                    "raw_mode_index".to_string(),
+                    serde_json::json!(raw_mode_index),
+                );
+                object.insert("branch_id".to_string(), serde_json::json!(raw_mode_index));
+                object.insert(
+                    "mode_field_id".to_string(),
+                    serde_json::json!(mode_field_id(raw_mode_index)),
+                );
+                object.insert(
+                    "mode_field_resource_key".to_string(),
+                    serde_json::json!(mode_field_resource_key(raw_mode_index)),
+                );
+            }
+            mode
+        })
+        .collect();
+    let spectrum_v2 = serde_json::json!({
+        "schema_version": "eigen_spectrum.v2",
+        "solver_model": summary_payload["solver_kind"],
+        "sample_count": 1,
+        "samples": [{
+            "sample_index": 0,
+            "label": label,
+            "k_vector": k_vector,
+            "path_s": 0.0,
+            "segment_index": 0,
+            "t_in_segment": 0.0,
+            "modes": spectrum_modes,
+        }],
+    });
+    auxiliary_artifacts.push(json_artifact("eigen/spectrum.v2.json", &spectrum_v2)?);
+
+    let branches: Vec<serde_json::Value> = modes
+        .iter()
+        .map(|mode| {
+            let raw_mode_index = mode
+                .get("index")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0);
+            serde_json::json!({
+                "branch_id": raw_mode_index,
+                "label": format!("mode_{raw_mode_index:04}"),
+                "points": [{
+                    "sample_index": 0,
+                    "raw_mode_index": raw_mode_index,
+                    "frequency_real_hz": mode["frequency_real_hz"],
+                    "frequency_imag_hz": mode["frequency_imag_hz"],
+                    "tracking_confidence": 1.0,
+                    "overlap_prev": null,
+                }],
+            })
+        })
+        .collect();
+    auxiliary_artifacts.push(json_artifact(
+        "eigen/branches.v2.json",
+        &serde_json::json!({
+            "schema_version": "eigen_branches.v2",
+            "solver_model": summary_payload["solver_kind"],
+            "branches": branches,
+        }),
+    )?);
+    if !auxiliary_artifacts
+        .iter()
+        .any(|artifact| artifact.relative_path == "eigen/dispersion.csv")
+    {
+        auxiliary_artifacts.push(AuxiliaryArtifact {
+            relative_path: "eigen/dispersion.csv".to_string(),
+            bytes: dispersion_v2_csv(plan.k_sampling.as_ref(), &summary_payload["modes"])
+                .into_bytes(),
+        });
+    }
+
+    let mut mode_metadata_paths = Vec::new();
+    let mut mode_resource_keys = Vec::new();
+    let mut wrote_mode_zarr_store = false;
+    for raw_mode_index in requested_modes.iter().copied().map(u64::from) {
+        let legacy_path = format!("eigen/modes/mode_{raw_mode_index:04}.json");
+        let legacy_mode = auxiliary_artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == legacy_path)
+            .and_then(|artifact| serde_json::from_slice::<serde_json::Value>(&artifact.bytes).ok());
+        let Some(legacy_mode) = legacy_mode else {
+            continue;
+        };
+        let real = mode_vector_entries(&legacy_mode, "real");
+        let imag = mode_vector_entries(&legacy_mode, "imag");
+        let sample_count = real.len().max(imag.len());
+        let metadata_path = mode_metadata_path(raw_mode_index);
+        let payload_path = mode_payload_path(raw_mode_index);
+        let zarr_array_path = mode_zarr_array_path(raw_mode_index);
+        let zarr_chunk_path = mode_zarr_chunk_path(raw_mode_index);
+        let field_id = mode_field_id(raw_mode_index);
+        let field_resource = mode_field_resource_key(raw_mode_index);
+        let mut metadata = serde_json::json!({
+            "schema_version": "eigen_mode.v2",
+            "solver_model": summary_payload["solver_kind"],
+            "sample_index": 0,
+            "raw_mode_index": raw_mode_index,
+            "branch_id": raw_mode_index,
+            "frequency_real_hz": legacy_mode["frequency_real_hz"],
+            "frequency_imag_hz": legacy_mode["frequency_imag_hz"],
+            "angular_frequency_rad_per_s": legacy_mode["angular_frequency_rad_per_s"],
+            "eigenvalue_real": legacy_mode["eigenvalue_real"],
+            "eigenvalue_imag": legacy_mode["eigenvalue_imag"],
+            "normalization": legacy_mode["normalization"],
+            "damping_policy": legacy_mode["damping_policy"],
+        });
+        if let Some(object) = metadata.as_object_mut() {
+            object.insert("mode_field_id".to_string(), serde_json::json!(field_id));
+            object.insert(
+                "mode_field_resource_key".to_string(),
+                serde_json::json!(field_resource),
+            );
+            object.insert(
+                "residual_norm".to_string(),
+                legacy_mode["residual_norm"].clone(),
+            );
+            object.insert(
+                "residual_linf".to_string(),
+                legacy_mode["residual_linf"].clone(),
+            );
+            object.insert(
+                "tangent_leakage_mean_abs".to_string(),
+                legacy_mode["tangent_leakage_mean_abs"].clone(),
+            );
+            object.insert(
+                "tangent_leakage_max_abs".to_string(),
+                legacy_mode["tangent_leakage_max_abs"].clone(),
+            );
+            object.insert(
+                "dominant_polarization".to_string(),
+                legacy_mode["dominant_polarization"].clone(),
+            );
+            object.insert("k_vector".to_string(), legacy_mode["k_vector"].clone());
+            object.insert(
+                "value_kind".to_string(),
+                serde_json::json!("complex_spatial_vector"),
+            );
+            object.insert(
+                "component_basis".to_string(),
+                serde_json::json!("global_xyz"),
+            );
+            object.insert("component_count".to_string(), serde_json::json!(3));
+            object.insert("components".to_string(), serde_json::json!(["x", "y", "z"]));
+            object.insert(
+                "payload_encoding".to_string(),
+                serde_json::json!("f64_interleaved_real_imag_xyz"),
+            );
+            object.insert(
+                "binary_layout".to_string(),
+                serde_json::json!("complex_f64_pairs_little_endian"),
+            );
+            object.insert(
+                "complex_pair_count".to_string(),
+                serde_json::json!(sample_count * 3),
+            );
+            object.insert(
+                "payload_value_count".to_string(),
+                serde_json::json!(sample_count * 6),
+            );
+            object.insert(
+                "available_views".to_string(),
+                serde_json::json!([
+                    "complex",
+                    "real",
+                    "imag",
+                    "abs",
+                    "amplitude",
+                    "phase",
+                    "phase_rotated_real"
+                ]),
+            );
+            object.insert(
+                "default_view".to_string(),
+                serde_json::json!("phase_rotated_real"),
+            );
+            object.insert("default_phase_rad".to_string(), serde_json::json!(0.0));
+            object.insert(
+                "mode_field_sample_count".to_string(),
+                serde_json::json!(sample_count),
+            );
+            object.insert(
+                "amplitude_summary".to_string(),
+                mode_amplitude_summary(&legacy_mode["amplitude"], sample_count),
+            );
+            object.insert(
+                "component_summary".to_string(),
+                mode_component_summary(sample_count),
+            );
+            object.insert("storage_format".to_string(), serde_json::json!("zarr"));
+            object.insert(
+                "zarr_store_path".to_string(),
+                serde_json::json!(mode_zarr_store_path()),
+            );
+            object.insert(
+                "zarr_array_path".to_string(),
+                serde_json::json!(zarr_array_path),
+            );
+            object.insert(
+                "zarr_chunk_path".to_string(),
+                serde_json::json!(zarr_chunk_path.clone()),
+            );
+            object.insert("zarr_dtype".to_string(), serde_json::json!("<f8"));
+            object.insert(
+                "zarr_shape".to_string(),
+                serde_json::json!([sample_count, 3, 2]),
+            );
+            object.insert(
+                "zarr_chunk_shape".to_string(),
+                serde_json::json!([sample_count.max(1), 3, 2]),
+            );
+            object.insert("zarr_compressor".to_string(), serde_json::Value::Null);
+            object.insert(
+                "compatibility_binary_payload_path".to_string(),
+                serde_json::json!(payload_path.clone()),
+            );
+        }
+        auxiliary_artifacts.push(json_artifact(metadata_path.clone(), &metadata)?);
+        let payload_bytes = mode_payload_bytes(&real, &imag);
+        if !wrote_mode_zarr_store {
+            auxiliary_artifacts.push(zarr_group_artifact(mode_zarr_store_path())?);
+            auxiliary_artifacts.push(mode_zarr_store_attrs_artifact()?);
+            auxiliary_artifacts.push(zarr_group_artifact(mode_zarr_sample_group_path())?);
+            wrote_mode_zarr_store = true;
+        }
+        auxiliary_artifacts.push(zarr_group_artifact(mode_zarr_mode_group_path(
+            raw_mode_index,
+        ))?);
+        auxiliary_artifacts.push(mode_zarr_array_metadata_artifact(
+            raw_mode_index,
+            sample_count,
+        )?);
+        auxiliary_artifacts.push(mode_zarr_array_attrs_artifact(
+            raw_mode_index,
+            sample_count,
+        )?);
+        auxiliary_artifacts.push(binary_artifact(zarr_chunk_path, payload_bytes.clone()));
+        auxiliary_artifacts.push(binary_artifact(payload_path, payload_bytes));
+        mode_metadata_paths.push(metadata_path);
+        mode_resource_keys.push(mode_meta_resource_key(raw_mode_index));
+    }
+
+    auxiliary_artifacts.push(json_artifact(
+        "frequency_domain/manifest.v1.json",
+        &serde_json::json!({
+            "schema_version": "frequency_domain_manifest.v1",
+            "stage_kind": "eigenmodes",
+            "status": "ready",
+            "complete": true,
+            "physics": {
+                "analysis_family": "magnetic_frequency_domain",
+                "phase_convention": "exp_minus_i_omega_t",
+                "frequency_units": "Hz",
+                "field_units": "dimensionless_delta_m",
+                "normalization": normalization_label(plan.normalization),
+            },
+            "artifacts": {
+                "spectrum_v2_path": "eigen/spectrum.v2.json",
+                "branches_v2_path": "eigen/branches.v2.json",
+                "dispersion_csv_path": "eigen/dispersion.csv",
+                "mode_field_zarr_store_path": mode_zarr_store_path(),
+                "mode_field_storage_format": "zarr",
+                "mode_metadata_paths": mode_metadata_paths,
+            },
+            "resources": {
+                "spectrum_resource_key": "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2",
+                "branches_resource_key": "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2",
+                "dispersion_resource_key": "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion",
+                "mode_field_resources": mode_resource_keys,
+            },
+        }),
+    )?);
+
+    Ok(())
 }
 
 fn normalization_label(normalization: EigenNormalizationIR) -> &'static str {

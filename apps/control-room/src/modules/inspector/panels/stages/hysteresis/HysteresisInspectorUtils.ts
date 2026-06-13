@@ -82,8 +82,8 @@ export function resolveHysteresisInspectorView(
   if (/:field-point:\d+:[^:]+:/.test(nodeId)) {
     return "execution-node";
   }
-  if (nodeId.includes(":branches:branch:")) return "branch-detail";
   if (nodeId.includes(":field-point:")) return "point-detail";
+  if (nodeId.includes(":branches:branch:")) return "branch-detail";
   if (nodeId.includes(":field-current:algorithm:")) return "settle-pipeline";
   if (nodeId.includes(":algorithm:")) return "settle-trace";
   const match = HYSTERESIS_NODE_VIEW_SUFFIXES.find(([suffix]) =>

@@ -434,4 +434,37 @@ hole_refinement.mesh(minimum_element_size=0.5e-9, maximum_element_size=1e-9, ord
             Some(1.0e-9)
         );
     }
+
+    #[test]
+    fn load_scene_document_state_accepts_frequency_response_stage() {
+        let root = repo_root();
+        let script_path = root.join("examples/fem_frequency_response_smoke.py");
+        let scene = load_scene_document_state(&root, &root, &script_path)
+            .expect("frequency-response script should export a scene document");
+
+        assert!(
+            scene
+                .study
+                .stages
+                .iter()
+                .any(|stage| stage.kind == "frequency_response"),
+            "scene document should preserve the frequency_response stage"
+        );
+        let pipeline = scene
+            .study
+            .study_pipeline
+            .as_ref()
+            .expect("frequency-response scene should include a study pipeline");
+        assert!(
+            pipeline.nodes.iter().any(|node| {
+                matches!(
+                    node,
+                    fullmag_authoring::StudyPipelineNode::Primitive(stage)
+                        if stage.stage_kind
+                            == fullmag_authoring::StudyPrimitiveStageKind::FrequencyResponse
+                )
+            }),
+            "study pipeline should deserialize frequency_response primitive stage"
+        );
+    }
 }

@@ -26,6 +26,9 @@ Frequency-domain results must behave like versioned runtime resources:
 - Spectrum, branches, dispersion, modes, response sweeps, frequency points, diagnostics, and field payloads are discoverable.
 - Heavy mode and response fields are exposed through the data plane as field-like resources.
 - JSON artifacts carry metadata, small summaries, provenance, diagnostics, and links.
+- Zarr is the default heavy-data store for production-size frequency-domain
+  arrays; HDF5/H5 is an allowed alternate backend/export when it preserves the
+  same resource semantics.
 - Realtime invalidation tells the UI when manifest, spectrum, mode table, response sweep, diagnostics, or field payload revisions changed.
 - Every result references requested intent and resolved execution reality.
 
@@ -41,7 +44,7 @@ eigen/diagnostics.v2.json
 eigen/modes/sample_0000/mode_0000.json
 eigen/modes/sample_0000/mode_0001.json
 eigen/modes/sample_0001/mode_0000.json
-eigen/mode_fields/sample_0000/mode_0000/vector.bin
+eigen/mode_fields.zarr/sample_0000/mode_0000/vector_xyz_complex/0.0.0
 ```
 
 Driven-response artifacts:
@@ -51,9 +54,21 @@ response/magnetic_response_sweep.v1.json
 response/magnetic_response_sweep.v2.json
 response/frequency_points/frequency_0000.json
 response/frequency_points/frequency_0001.json
-response/field_payloads/frequency_0000/vector.bin
+response/field_payloads.zarr/frequency_0000/vector_xyz_complex/0.0.0
 response/diagnostics.v1.json
 ```
+
+Storage sequence:
+
+- JSON remains control-plane only: manifest, metadata, summaries, provenance,
+  diagnostics, and links.
+- Zarr is the default production store for modal fields, driven response
+  fields, dense response maps, and future multi-mode tensors.
+- HDF5/H5 is acceptable as an implementation backend or export path when the
+  runtime has HDF5 support and the API exposes identical resource semantics.
+- Raw `vector.bin` payloads are transitional compatibility exports for tests,
+  smoke examples, and old readers; they are not the target production storage
+  format.
 
 Version sequence:
 
@@ -190,7 +205,8 @@ Required `resources` fields:
 
 ## Mode Metadata Schema
 
-Mode JSON must be small enough for inspector use and must not carry large vector arrays.
+Mode metadata JSON must be small enough for inspector use and must not carry
+large vector arrays. Large modal arrays live in the Zarr-backed data plane.
 
 Required fields:
 
@@ -230,7 +246,9 @@ Diagnostics inside each mode:
 
 ## Mode Field Resource Contract
 
-Mode and response fields must be field-like resources.
+Mode and response fields must be field-like resources backed by Zarr by
+default. HDF5/H5 may back the same resources only when the runtime and API keep
+the identical resource contract.
 
 Resource registration:
 
@@ -243,12 +261,16 @@ Resource registration:
   "domain_id": "mesh-or-domain-id",
   "mesh_scope": "magnetic",
   "components": ["x", "y", "z"],
+  "storage_format": "zarr",
+  "zarr_array_path": "eigen/mode_fields.zarr/sample_0000/mode_0003/vector_xyz_complex",
+  "zarr_chunk_path": "eigen/mode_fields.zarr/sample_0000/mode_0003/vector_xyz_complex/0.0.0",
   "available_views": ["real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"],
   "resource_key": "/v2/sessions/current/data/fields/analysis:eigen:stage-1:sample-0000:mode-0003/samples/vector"
 }
 ```
 
-The binary payload must support query parameters:
+The data-plane field resource must support query parameters independent of
+whether the backing store is Zarr, HDF5/H5, or a transitional binary export:
 
 - `view=real`
 - `view=imag`

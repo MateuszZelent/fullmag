@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH } from "@/kernel/api/apiPaths";
 import {
+  buildEigenDispersionChartModel,
   buildEigenSpectrumChartModel,
   buildFrequencyResponseChartModel,
   type FrequencyDomainChartBuildResult,
@@ -11,6 +12,7 @@ import {
 import {
   frequencyDomainChartSeriesForAnalysisPlots,
   frequencyDomainPrimarySeries,
+  frequencyDomainXAxisLabel,
 } from "./frequencyDomainSeriesAdapter";
 
 describe("frequencyDomainSeriesAdapter", () => {
@@ -103,5 +105,37 @@ describe("frequencyDomainSeriesAdapter", () => {
         id: "analysis.frequency-domain:eigen:spectrum:frequency",
       } satisfies Partial<FrequencyDomainChartSeries>),
     );
+  });
+
+  it("labels ECharts x axes by frequency-domain chart semantics", () => {
+    const spectrum = frequencyDomainChartSeriesForAnalysisPlots(
+      buildEigenSpectrumChartModel({
+        payload: {
+          modes: [{ frequency_hz: 3e9, raw_mode_index: 1, sample_index: 0 }],
+        },
+        status: "ready",
+      }),
+    );
+    const dispersion = frequencyDomainChartSeriesForAnalysisPlots(
+      buildEigenDispersionChartModel({
+        status: "ready",
+        text: [
+          "sample_index,raw_mode_index,branch_id,path_s_rad_per_m,frequency_hz",
+          "0,1,acoustic,78539816.33974482,9.5e9",
+        ].join("\n"),
+      }),
+    );
+    const response = frequencyDomainChartSeriesForAnalysisPlots(
+      buildFrequencyResponseChartModel({
+        payload: {
+          points: [{ frequency_hz: 9.5e9, max_response_amplitude: 2 }],
+        },
+        status: "ready",
+      }),
+    );
+
+    expect(frequencyDomainXAxisLabel(spectrum)).toBe("mode index");
+    expect(frequencyDomainXAxisLabel(dispersion)).toBe("path_s [rad/m]");
+    expect(frequencyDomainXAxisLabel(response)).toBe("frequency [GHz]");
   });
 });

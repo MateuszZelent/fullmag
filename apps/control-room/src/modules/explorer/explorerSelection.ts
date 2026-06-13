@@ -171,7 +171,11 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
     node.hysteresisPointId !== undefined
   ) {
     return {
+      ...(node.fieldOrientation ? { fieldOrientation: node.fieldOrientation } : {}),
+      ...(node.fieldRevision !== undefined ? { fieldRevision: node.fieldRevision } : {}),
       kind: "study.stage.action",
+      ...(node.measurementAxis ? { measurementAxis: node.measurementAxis } : {}),
+      ...(node.meshIdentity ? { meshIdentity: node.meshIdentity } : {}),
       nodeId: node.id,
       pointId: node.hysteresisPointId,
       quantityId: "m",

@@ -126,9 +126,11 @@ pub struct HysteresisSettleTraceEntrySchema {
     pub algorithm_id: String,
     pub method: String,
     pub status: String,
+    pub stop_reason: Option<String>,
     pub fallback_reason: Option<String>,
     pub retry_attempt: u32,
     pub resolved_timestep_s: Option<f64>,
+    pub resolved_parameters: Option<Value>,
     pub torque: Option<f64>,
     pub energy: Option<f64>,
 }
@@ -433,6 +435,14 @@ pub struct HysteresisExecutionTreeNode {
     pub resource_ref: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selection_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mesh_identity: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field_orientation: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub measurement_axis: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field_revision: Option<u64>,
     pub updated_revision: u64,
     #[schema(no_recursion)]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

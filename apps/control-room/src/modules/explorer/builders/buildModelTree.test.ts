@@ -1490,6 +1490,42 @@ describe("buildModelTree", () => {
       status: "ready",
     });
 
+    const inconsistentModeFieldManifest: FrequencyDomainManifestResource = {
+      ...FREQUENCY_DOMAIN_MANIFEST,
+      result_manifest: {
+        artifact_path: "frequency_domain/manifest.v1.json",
+        missing_reason: null,
+        payload: {
+          artifacts: {
+            mode_metadata_paths: [],
+          },
+          resources: {
+            mode_field_resources: [
+              ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_FIELD_META_PATH
+                .replace("{sample_index}", "0")
+                .replace("{mode_index}", "2"),
+            ],
+          },
+        },
+        resource_key: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
+        schema_version: "frequency_domain_manifest.v1",
+        status: "ready",
+      },
+    };
+    const inconsistentResources = flattenExplorerNodes(
+      buildExplorerTree("resources", {
+        frequencyDomainManifest: inconsistentModeFieldManifest,
+      }),
+    );
+    expect(
+      inconsistentResources.find(
+        (node) => node.kind === "resources.analysis.eigen.mode_field",
+      ),
+    ).toMatchObject({
+      badge: "metadata missing",
+      status: "stale",
+    });
+
     const jobs = flattenExplorerNodes(buildExplorerTree("jobs"));
     expect(jobs.map((node) => node.kind)).toEqual(
       expect.arrayContaining([
@@ -1760,8 +1796,12 @@ describe("buildModelTree", () => {
               updated_revision: 22,
             },
             {
+              field_orientation: { kind: "preset", preset_name: "in_plane_x" },
+              field_revision: 12,
               kind: "snapshot",
               label: "Snapshot hysteresis_point_007",
+              measurement_axis: { kind: "custom", vector: [1, 0, 0] },
+              mesh_identity: "study_domain:rev-12",
               node_id: "point-7:snapshot:hysteresis_point_007",
               point_id: 7,
               resource_ref: snapshotVectorResourceKey("hysteresis_point_007_from_resource"),
@@ -1779,6 +1819,17 @@ describe("buildModelTree", () => {
               selection_ref: "hysteresis-warning:hysteresis-1:7",
               stage_id: "hysteresis-1",
               status: "warning",
+              updated_revision: 22,
+            },
+            {
+              kind: "snapshot",
+              label: "Snapshot hysteresis_point_missing missing",
+              node_id: "point-7:snapshot:hysteresis_point_missing",
+              point_id: 7,
+              resource_ref: snapshotVectorResourceKey("hysteresis_point_missing"),
+              selection_ref: "hysteresis-snapshot:hysteresis-1:7:hysteresis_point_missing",
+              stage_id: "hysteresis-1",
+              status: "missing",
               updated_revision: 22,
             },
           ],
@@ -1829,7 +1880,11 @@ describe("buildModelTree", () => {
     expect(
       flattened.find((node) => node.id === `${stageId}:field-point:7:snapshot:hysteresis_point_007`),
     ).toMatchObject({
+      fieldOrientation: JSON.stringify({ kind: "preset", preset_name: "in_plane_x" }),
+      fieldRevision: 12,
       hysteresisSnapshotId: "hysteresis_point_007_from_selection",
+      measurementAxis: JSON.stringify({ kind: "custom", vector: [1, 0, 0] }),
+      meshIdentity: "study_domain:rev-12",
       resourceRef: snapshotVectorResourceKey("hysteresis_point_007_from_resource"),
       label: "Snapshot hysteresis_point_007",
       status: "completed",
@@ -1849,8 +1904,12 @@ describe("buildModelTree", () => {
           node.id === `${stageId}:points:bookmarks:snapshot:hysteresis_point_007`,
       ),
     ).toMatchObject({
+      fieldOrientation: JSON.stringify({ kind: "preset", preset_name: "in_plane_x" }),
+      fieldRevision: 12,
       hysteresisSnapshotId: "hysteresis_point_007_from_selection",
       label: "Snapshot hysteresis_point_007",
+      measurementAxis: JSON.stringify({ kind: "custom", vector: [1, 0, 0] }),
+      meshIdentity: "study_domain:rev-12",
       resourceRef: snapshotVectorResourceKey("hysteresis_point_007_from_resource"),
       status: "completed",
     });
@@ -1863,6 +1922,19 @@ describe("buildModelTree", () => {
       label: "2 warning(s)",
       resourceRef: hysteresisPointResourceKey("hysteresis-1", 7),
       status: "warning",
+    });
+    expect(
+      flattened.find((node) => node.id === `${stageId}:field-point:7:snapshot:hysteresis_point_missing`),
+    ).toMatchObject({
+      hysteresisExecutionNodeId: "point-7:snapshot:hysteresis_point_missing",
+      hysteresisExecutionNodeKind: "snapshot",
+      label: "Snapshot hysteresis_point_missing missing",
+      status: "failed",
+    });
+    expect(
+      flattened.find((node) => node.id === `${stageId}:field-point:7:snapshot:hysteresis_point_missing`),
+    ).not.toMatchObject({
+      hysteresisSnapshotId: "hysteresis_point_missing",
     });
   });
 
@@ -1930,6 +2002,18 @@ describe("buildModelTree", () => {
           stage_id: "hysteresis-1",
           status: "active",
           updated_revision: 32,
+          children: [
+            {
+              kind: "field_point",
+              label: "H = -20.000 mT",
+              node_id: "branch:ascending:point:12",
+              point_id: 12,
+              resource_ref: hysteresisPointResourceKey("hysteresis-1", 12),
+              stage_id: "hysteresis-1",
+              status: "active",
+              updated_revision: 32,
+            },
+          ],
         },
         {
           kind: "branch",
@@ -1963,6 +2047,18 @@ describe("buildModelTree", () => {
       hysteresisExecutionNodeId: "branch:ascending",
       hysteresisExecutionNodeKind: "branch",
       label: "Ascending branch",
+      status: "running",
+    });
+    expect(
+      flattened.find(
+        (node) => node.id === `${stageId}:branches:branch:ascending:field-point:12`,
+      ),
+    ).toMatchObject({
+      hysteresisExecutionNodeId: "branch:ascending:point:12",
+      hysteresisExecutionNodeKind: "field_point",
+      hysteresisPointId: 12,
+      label: "H = -20.000 mT",
+      resourceRef: hysteresisPointResourceKey("hysteresis-1", 12),
       status: "running",
     });
     expect(flattened.find((node) => node.id === `${stageId}:branches:forward`)).toBeUndefined();
@@ -2115,6 +2211,96 @@ describe("buildModelTree", () => {
       badge: "after completion",
       label: "Transitions",
       status: "queued",
+    });
+    expect(
+      flattened.find((node) => node.id === `${stageId}:transitions:continue`),
+    ).toMatchObject({
+      label: "Continue to next stage",
+      badge: "pending",
+      status: "queued",
+    });
+    expect(
+      flattened.find((node) => node.id === `${stageId}:transitions:export-loop`),
+    ).toMatchObject({
+      label: "Export loop CSV",
+      badge: "after completion",
+      status: "queued",
+    });
+  });
+
+  it("keeps completed hysteresis continuation explicit without marking it executable", () => {
+    const snapshot = modelTreeSnapshotWithStageExecution(
+      modelTreeSnapshotFromScene({
+        objects: [],
+        study: {
+          stages: [
+            {
+              kind: "hysteresis",
+              stage_id: "hysteresis-1",
+              field_max_mT: 100,
+              field_min_mT: -100,
+              field_step_mT: 10,
+            },
+          ],
+        },
+      }),
+      {
+        active_stage_index: null,
+        active_stage_kind: null,
+        completed_stage_indexes: [0],
+        revision: 16,
+        runtime_state: "completed",
+        stage_statuses: ["completed"],
+        stages: [
+          {
+            index: 0,
+            stage_id: "hysteresis-1",
+            status: "completed",
+          },
+        ],
+        total_stages: 1,
+      } as never,
+    );
+    const flattened = flattenExplorerNodes(buildModelTree(snapshot));
+    const stageId = "model:study:stages:stage:hysteresis-1";
+
+    expect(flattened.find((node) => node.id === `${stageId}:transitions`)).toMatchObject({
+      badge: "available",
+      label: "Transitions",
+      status: "ready",
+    });
+    expect(
+      flattened.find((node) => node.id === `${stageId}:transitions:continue`),
+    ).toMatchObject({
+      label: "Continue to next stage",
+      badge: "available",
+      contextCommands: expect.arrayContaining(["hysteresis.continue-to-next-stage"]),
+      status: "ready",
+    });
+    expect(
+      flattened.find(
+        (node) => node.id === `${stageId}:transitions:use-selected-point`,
+      ),
+    ).toMatchObject({
+      label: "Use selected point as initial state",
+      badge: "explicit action",
+      status: "ready",
+    });
+    expect(
+      flattened.find((node) => node.id === `${stageId}:transitions:export-loop`),
+    ).toMatchObject({
+      label: "Export loop CSV",
+      badge: "available",
+      status: "ready",
+    });
+    expect(
+      flattened.find(
+        (node) => node.id === `${stageId}:transitions:open-snapshots`,
+      ),
+    ).toMatchObject({
+      label: "Open snapshots",
+      badge: "snapshot branch",
+      status: "ready",
     });
   });
 

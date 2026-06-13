@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 //! Reference FDM runner: executes a planned simulation via `fullmag-engine`.
 //!
 //! Module layout:

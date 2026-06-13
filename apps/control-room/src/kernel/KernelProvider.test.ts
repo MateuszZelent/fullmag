@@ -94,6 +94,7 @@ describe("KernelProvider performance contracts", () => {
 
   it("exposes a controlled browser audit hook for hysteresis replay selection", () => {
     expect(kernelProviderSource).toContain("loadHysteresisReplaySnapshot");
+    expect(kernelProviderSource).toContain("enableAuditHooks");
     expect(kernelProviderSource).toContain('targetKind: "hysteresis-step"');
     expect(kernelProviderSource).toContain("kernel.layout.setActiveViewportMainModule(\"viewport-3d\")");
     expect(kernelProviderSource).toContain("kernel.layout.setFocusedSlot(\"viewport-main\")");

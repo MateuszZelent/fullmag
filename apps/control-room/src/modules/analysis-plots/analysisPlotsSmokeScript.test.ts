@@ -21,6 +21,7 @@ describe("analysis plots smoke script", () => {
     const smokeScript = readFileSync(smokeScriptUrl, "utf8");
     expect(smokeScript).toContain("openAnalysisPlots");
     expect(smokeScript).toContain("waitForAnalysisRowsAndCanvas");
+    expect(smokeScript).toContain("verifyFrequencyDomainSubchart");
     expect(smokeScript).toContain("verifyAxisControlInteraction");
     expect(smokeScript).toContain("verifyThirdUnitSelectionDisabled");
     expect(smokeScript).toContain("verifyAtLeastOneYAxisRemainsSelected");
@@ -36,6 +37,7 @@ describe("analysis plots smoke script", () => {
     expect(smokeScript).toContain("collectAnalysisPlotProof");
     expect(smokeScript).toContain("ECharts canvas appears blank");
     expect(smokeScript).toContain("analysis series legend is missing");
+    expect(smokeScript).toContain("frequency-domain subchart is incomplete");
     expect(smokeScript).toContain("rows.bin requests after axis interaction");
     expect(smokeScript).toContain("third-unit Y-axis checkbox remained enabled");
     expect(smokeScript).toContain("rows.bin requests after Y-axis toggle");

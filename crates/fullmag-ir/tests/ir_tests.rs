@@ -370,6 +370,8 @@ fn hysteresis_validation_rejects_run_next_algorithm_without_next_step() {
                 torque_tolerance: 5e-5,
                 energy_tolerance: 1e-20,
                 max_steps: 2000,
+                applies_to: None,
+                stop_criteria: None,
                 timestep_s: None,
                 max_pseudotime_s: None,
                 max_physical_time_s: None,
@@ -425,6 +427,8 @@ fn hysteresis_validation_rejects_run_next_algorithm_tree_without_fallback_branch
                 torque_tolerance: 5e-5,
                 energy_tolerance: 1e-20,
                 max_steps: 2000,
+                applies_to: None,
+                stop_criteria: None,
                 timestep_s: None,
                 max_pseudotime_s: None,
                 max_physical_time_s: None,
@@ -484,6 +488,8 @@ fn hysteresis_validation_rejects_retry_with_smaller_dt_without_scale() {
                 alpha: 1.0,
                 torque_tolerance: 1e-5,
                 max_steps: 100,
+                applies_to: None,
+                stop_criteria: None,
                 timestep_s: None,
                 max_pseudotime_s: None,
                 max_physical_time_s: None,
@@ -515,6 +521,69 @@ fn hysteresis_validation_rejects_retry_with_smaller_dt_without_scale() {
 }
 
 #[test]
+fn hysteresis_validation_rejects_invalid_settle_step_selection_contract() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study = StudyIR::Hysteresis {
+        field_min_mT: Some(-100.0),
+        field_max_mT: Some(100.0),
+        field_step_mT: Some(10.0),
+        field_values_mT: None,
+        field_unit_provenance: None,
+        direction: None,
+        orientation: Some(FieldOrientationIR::Preset {
+            preset_name: "oop_positive".to_string(),
+        }),
+        measurement_axis: MeasurementAxisIR::field_axis(),
+        angular_family: None,
+        initial_protocol: "positive_saturation".to_string(),
+        initial_state_ref: None,
+        saturation: None,
+        branch_mode: "major_loop".to_string(),
+        settle_pipeline: Some(SettlePipelineIR::Sequence {
+            steps: vec![SettleStepIR::Relax {
+                method: "llg_overdamped".to_string(),
+                alpha: 1.0,
+                torque_tolerance: 1e-5,
+                max_steps: 100,
+                applies_to: Some(serde_json::json!("unknown_selector")),
+                stop_criteria: Some(serde_json::json!({
+                    "kind": "any_of",
+                    "criteria": ["torque_below", "unknown_stop"]
+                })),
+                timestep_s: None,
+                max_pseudotime_s: None,
+                max_physical_time_s: None,
+                on_non_convergence: "continue_with_warning".to_string(),
+                retry_timestep_scale: None,
+                retry_max_attempts: None,
+            }],
+        }),
+        storage: None,
+        field_schedule: None,
+        schedule_refinements: None,
+        adaptive_refinement: None,
+        minor_loops: None,
+        sampling: SamplingIR {
+            outputs: vec![OutputIR::Scalar {
+                name: "mz".to_string(),
+                every_seconds: 1.0e-12,
+            }],
+            table_autosave: None,
+        },
+    };
+
+    let errors = ir
+        .validate()
+        .expect_err("invalid settle step selection contract must fail validation");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("settle_pipeline.steps[0].applies_to")));
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("settle_pipeline.steps[0].stop_criteria")));
+}
+
+#[test]
 fn hysteresis_validation_rejects_invalid_public_contract_values() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.study = StudyIR::Hysteresis {
@@ -536,6 +605,7 @@ fn hysteresis_validation_rejects_invalid_public_contract_values() {
             max_field_mT: f64::NAN,
             susceptibility_threshold: -1.0,
             transverse_threshold: 0.0,
+            on_failure: "pretend_saturated".to_string(),
         }),
         branch_mode: "minor_loop".to_string(),
         settle_pipeline: Some(SettlePipelineIR::Sequence {
@@ -544,6 +614,8 @@ fn hysteresis_validation_rejects_invalid_public_contract_values() {
                 alpha: 1.0,
                 torque_tolerance: 1e-5,
                 max_steps: 1,
+                applies_to: None,
+                stop_criteria: None,
                 timestep_s: Some(0.0),
                 max_pseudotime_s: Some(f64::NAN),
                 max_physical_time_s: Some(-1.0),
@@ -588,6 +660,7 @@ fn hysteresis_validation_rejects_invalid_public_contract_values() {
         "initial_protocol is unsupported",
         "saturation.mode must not be empty",
         "saturation.max_field_mT must be finite and positive",
+        "saturation.on_failure is unsupported",
         "branch_mode is unsupported",
         "settle_pipeline.steps[0].method must not be empty",
         "settle_pipeline.steps[0].timestep_s must be finite and positive",
@@ -1074,6 +1147,19 @@ fn object_region_material_transition_invalid_widths_are_rejected() {
     assert!(errors.iter().any(|error| {
         error.contains("object_regions[1].material_transition.width must be finite and > 0")
     }));
+}
+
+#[test]
+fn saturation_probe_defaults_on_failure_for_existing_ir_payloads() {
+    let probe: SaturationProbeIR = serde_json::from_value(serde_json::json!({
+        "mode": "auto",
+        "max_field_mT": 300.0,
+        "susceptibility_threshold": 0.001,
+        "transverse_threshold": 0.01
+    }))
+    .expect("legacy saturation probe payload should deserialize");
+
+    assert_eq!(probe.on_failure, "continue_with_warning");
 }
 
 #[test]

@@ -251,6 +251,7 @@ function setOverlayPhaseCommand(options: {
 
 function setOverlayAnimationCommand(options: {
   activeOverlay: (context: CommandContext) => AnalysisFieldOverlayState | null;
+  defaultSource: AnalysisFieldOverlaySource;
   id: string;
   missingMessage: string;
   title: string;
@@ -269,11 +270,24 @@ function setOverlayAnimationCommand(options: {
     },
     group: "analysis.frequency-domain",
     isEnabled: (context) =>
-      Boolean(context.analysisFieldOverlay && options.activeOverlay(context)),
+      Boolean(
+        context.analysisFieldOverlay &&
+          (options.activeOverlay(context) ||
+            overlayStateFromContext(context, options.defaultSource)),
+      ),
     run: (context) => {
-      const overlay = options.activeOverlay(context);
+      const existingOverlay = options.activeOverlay(context);
       const controller = context.analysisFieldOverlay;
-      if (!overlay || !controller) {
+      if (!controller) {
+        return {
+          status: "failed",
+          message: options.missingMessage,
+        };
+      }
+      const overlay =
+        existingOverlay ??
+        overlayStateFromContext(context, options.defaultSource);
+      if (!overlay) {
         return {
           status: "failed",
           message: options.missingMessage,
@@ -282,7 +296,8 @@ function setOverlayAnimationCommand(options: {
       const input = overlayCommandInput(context);
       const animatePhase = booleanValue(input.animatePhase) ?? true;
       const animationRateHz = clampAnimationRateHz(numberValue(input.animationRateHz));
-      controller.update({
+      const nextOverlay = {
+        ...overlay,
         animation: {
           animatePhase,
           animationRateHz,
@@ -293,7 +308,12 @@ function setOverlayAnimationCommand(options: {
               view: DEFAULT_ANALYSIS_FIELD_VIEW,
             }
           : overlay.query,
-      });
+      };
+      if (existingOverlay) {
+        controller.update(nextOverlay);
+      } else {
+        controller.set(nextOverlay);
+      }
       return {
         status: "completed",
         message: animatePhase
@@ -409,6 +429,7 @@ export const ANALYSIS_FIELD_OVERLAY_COMMANDS: CommandContribution[] = [
   }),
   setOverlayAnimationCommand({
     activeOverlay: activeEigenModeOverlay,
+    defaultSource: "eigen-mode",
     id: "analysis.eigen.set-mode-3d-animation",
     missingMessage: "No eigen mode overlay is active.",
     title: "Animate eigen mode phase",
@@ -421,6 +442,7 @@ export const ANALYSIS_FIELD_OVERLAY_COMMANDS: CommandContribution[] = [
   }),
   setOverlayAnimationCommand({
     activeOverlay: activeAnalysisOverlay,
+    defaultSource: "frequency-response",
     id: "analysis.frequency-domain.set-3d-animation",
     missingMessage: "No frequency-domain field overlay is active.",
     title: "Animate frequency-domain phase",

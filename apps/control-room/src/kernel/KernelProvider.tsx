@@ -227,6 +227,7 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
       __FULLMAG_CONFIG__?: {
         allowMissingSessionSmoke?: boolean;
         disableRealtime?: boolean;
+        enableAuditHooks?: boolean;
       };
       __FULLMAG_CONTROL_ROOM_AUDIT__?: {
         loadHysteresisReplaySnapshot: (input: {
@@ -239,10 +240,17 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
           snapshotId: string;
           stageId: string;
         }) => void;
+        returnHysteresisReplayToLive: (input?: {
+          stageId?: string | null;
+        }) => Promise<void>;
         setGlobalQuantity: (quantityId: string) => Promise<void>;
       };
     };
-    if (!auditWindow.__FULLMAG_CONFIG__?.allowMissingSessionSmoke) {
+    const browserConfig = auditWindow.__FULLMAG_CONFIG__;
+    if (
+      !browserConfig?.allowMissingSessionSmoke &&
+      !browserConfig?.enableAuditHooks
+    ) {
       return;
     }
 
@@ -291,6 +299,15 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
         );
         kernel.layout.setActiveViewportMainModule("viewport-3d");
         kernel.layout.setFocusedSlot("viewport-main");
+      },
+      returnHysteresisReplayToLive: async (input?: {
+        stageId?: string | null;
+      }) => {
+        await kernel.commands.execute(
+          "hysteresis.return-to-live",
+          createCommandContext("analysis-plots", kernel),
+          { stageId: input?.stageId ?? null },
+        );
       },
       setGlobalQuantity: async (quantityId: string) => {
         const activeQuantityId = normalizeQuantityIdOrDefault(quantityId);

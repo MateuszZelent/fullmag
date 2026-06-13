@@ -800,17 +800,25 @@ function eigenResourceNode(
       "resources",
       "mode_field_resources",
     );
+    const metadataPaths = manifestStringArray(
+      manifest,
+      "artifacts",
+      "mode_metadata_paths",
+    );
+    const ready = resources.length > 0 && metadataPaths.length > 0;
     return {
       id: `resources:analysis:eigen:${key}`,
       kind: `resources.analysis.eigen.${suffix}` as ExplorerNode["kind"],
       label,
       parentId,
       badge:
-        resources.length > 0
+        ready
           ? `${resources.length} mode fields`
+          : resources.length > 0
+            ? "metadata missing"
           : "waiting for artifacts",
       icon,
-      status: resources.length > 0 ? "ready" : manifest ? "stale" : "unsupported",
+      status: ready ? "ready" : manifest ? "stale" : "unsupported",
       resourceRef:
         resources[0] ?? ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_FIELD_META_PATH,
     };

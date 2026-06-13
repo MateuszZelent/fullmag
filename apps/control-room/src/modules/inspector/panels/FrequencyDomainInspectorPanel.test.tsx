@@ -20,6 +20,7 @@ import type { Selection } from "@/kernel/selection/selectionTypes";
 
 import { FREQUENCY_DOMAIN_INSPECTOR_SELECTION_KINDS } from "../inspectorRegistry";
 import { FrequencyDomainInspectorPanel } from "./FrequencyDomainInspectorPanel";
+import { resolveFrequencyDomainNodeDetail } from "./frequencyDomainNodeDetails";
 
 const emptyResource = {
   data: null,
@@ -287,6 +288,13 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
           requested_execution: {
             calculation_mode: "fmr_response",
           },
+          physics: {
+            analysis_family: "magnetic_frequency_domain",
+            field_units: "dimensionless_delta_m",
+            frequency_units: "Hz",
+            normalization: "unit_l2",
+            phase_convention: "exp_minus_i_omega_t",
+          },
           resources: {
             response_field_resources: [
               {
@@ -498,6 +506,44 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
 }));
 
 describe("FrequencyDomainInspectorPanel", () => {
+  it("keeps cancel-requested resource endpoint distinct from the disk artifact path", () => {
+    const resultDetail = resolveFrequencyDomainNodeDetail({
+      kind: "results.frequency_response.cancel_requested",
+      label: "Cancel Requested",
+      moduleSource: "explorer",
+      nodeId: "results:frequency-response:cancel-requested",
+      objectId: null,
+      ref: {
+        kind: "results.frequency_response.cancel_requested",
+        nodeId: "results:frequency-response:cancel-requested",
+        resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
+        type: "frequency-domain",
+      },
+    });
+    const resourceDetail = resolveFrequencyDomainNodeDetail({
+      kind: "resources.analysis.frequency_response.cancel_requested",
+      label: "Cancel Requested Resource",
+      moduleSource: "explorer",
+      nodeId: "resources:analysis:frequency-response:cancel-requested",
+      objectId: null,
+      ref: {
+        kind: "resources.analysis.frequency_response.cancel_requested",
+        nodeId: "resources:analysis:frequency-response:cancel-requested",
+        resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
+        type: "frequency-domain",
+      },
+    });
+
+    expect(resultDetail.artifact).toBe("response/cancel_requested.v1.json");
+    expect(resourceDetail.artifact).toBe("response/cancel_requested.v1.json");
+    expect(resultDetail.resource).toBe(
+      ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
+    );
+    expect(resourceDetail.resource).toBe(
+      ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
+    );
+  });
+
   it("shows the selected frequency-domain resource reference", () => {
     const selection: Selection = {
       kind: "resources.analysis.frequency_response.progress",
@@ -553,6 +599,15 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("partial_production_executable");
     expect(html).toContain("Floquet response");
     expect(html).toContain("GPU lane");
+    expect(html).toContain("Physics Contract");
+    expect(html).toContain("Temporal phase convention");
+    expect(html).toContain("exp_minus_i_omega_t");
+    expect(html).toContain("Frequency units");
+    expect(html).toContain("Hz");
+    expect(html).toContain("Field units");
+    expect(html).toContain("dimensionless_delta_m");
+    expect(html).toContain("Normalization");
+    expect(html).toContain("unit_l2");
     expect(html).toContain("FMR response sweep");
     expect(html).toContain("can be exposed by response artifacts");
   });
@@ -855,6 +910,49 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("9500000000 Hz");
   });
 
+  it("renders Recharts frequency-domain charts for spectrum, dispersion, and response", () => {
+    const selection: Selection = {
+      kind: "results.frequency_domain.fmr",
+      label: "FMR",
+      moduleSource: "explorer",
+      nodeId: "results:frequency-domain:fmr",
+      objectId: null,
+      ref: {
+        kind: "results.frequency_domain.fmr",
+        nodeId: "results:frequency-domain:fmr",
+        type: "frequency-domain",
+      },
+    };
+
+    const html = renderToStaticMarkup(
+      <FrequencyDomainInspectorPanel selection={selection} />,
+    );
+
+    expect(html).toContain("FMR / eigen modal spectrum");
+    expect(html).toContain("Bloch / Floquet dispersion");
+    expect(html).toContain("Driven FMR frequency response");
+    expect(html).toContain('class="fm-frequency-domain-chart"');
+    expect(html).toContain('data-renderer="recharts"');
+    expect(html).toContain("Frequency-domain mode table");
+    expect(html).toContain("Frequency-domain response point table");
+    expect(html).toContain("Frequency-domain branch table");
+    expect(html).toContain("Frequency-domain FMR peak table");
+    expect(html).toContain("mode 1: 9.5 GHz");
+    expect(html).toContain("mode 2: 12 GHz");
+    expect(html).toContain("Branch acoustic: 2 samples");
+    expect(html).toContain("Amplitude: 1 samples");
+    expect(html).toContain("<td>branch-0</td><td>acoustic</td><td>2</td>");
+    expect(html).toContain("<td>modal</td><td>9.5 GHz</td>");
+    expect(html).toContain("<td>0</td><td>1</td>");
+    expect(html).toContain("<td>0</td><td>mx</td>");
+    expect(html).toContain("available");
+    expect(html).toContain("Plot real");
+    expect(html).toContain("Plot imag");
+    expect(html).toContain("Plot abs");
+    expect(html).toContain("Plot phase");
+    expect(html).toContain("Animate");
+  });
+
   it.each([
     [
       "results.frequency_domain.calculation_modes",
@@ -969,6 +1067,12 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Animation rate");
     expect(html).toContain("Set phase");
     expect(html).toContain("Plot in 3D");
+    expect(html).toContain("Plot rotated");
+    expect(html).toContain("Plot real");
+    expect(html).toContain("Plot imag");
+    expect(html).toContain("Plot abs");
+    expect(html).toContain("Plot phase");
+    expect(html).toContain("Animate");
   });
 
   it("wires Plot in 3D to the user-entered phase value", () => {
@@ -979,6 +1083,12 @@ describe("FrequencyDomainInspectorPanel", () => {
 
     expect(source).toContain("analysisFieldPhaseInputRef.current?.value");
     expect(source).toContain("selectedFieldMeta?.default_phase_rad");
+    expect(source).toContain('"analysis.frequency-domain.set-3d-animation"');
+    expect(source).toContain("fieldId: selectedFieldId");
+    expect(source).toContain("analysisFieldViewSelectRef.current?.value");
+    expect(source).toContain('source: selection.kind?.includes("eigen")');
+    expect(source).toContain('"analysis.eigen.set-mode-3d-animation"');
+    expect(source).toContain("action === \"animate\"");
   });
 
   it("renders dedicated diagnostic node detail for frequency-domain diagnostics", () => {

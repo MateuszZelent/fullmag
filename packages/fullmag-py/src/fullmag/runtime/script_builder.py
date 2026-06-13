@@ -2952,6 +2952,7 @@ def _render_hysteresis_saturation(value: object) -> str:
         f"max_field_mT={_py_number(float(payload.get('max_field_mT', 300.0)))}",
         f"susceptibility_threshold={_py_number(float(payload.get('susceptibility_threshold', 1e-3)))}",
         f"transverse_threshold={_py_number(float(payload.get('transverse_threshold', 1e-2)))}",
+        f"on_failure={_py_repr(str(payload.get('on_failure') or 'continue_with_warning'))}",
     ]
     return f"fm.SaturationProbe({', '.join(args)})"
 
@@ -3014,6 +3015,8 @@ def _render_hysteresis_settle_step(value: object) -> str:
         "energy_tolerance",
         "damping",
         "max_steps",
+        "applies_to",
+        "stop_criteria",
         "timestep_s",
         "max_pseudotime_s",
         "max_physical_time_s",

@@ -201,6 +201,85 @@ def write_playback_fixture(
     )
 
 
+def add_minor_loop_snapshot_without_zarr_row(root: Path) -> None:
+    snapshot_id = "hysteresis_minor_loop_001_reversal_001"
+    snapshot_dir = root / "hysteresis_snapshots" / snapshot_id
+    snapshot_dir.mkdir(parents=True)
+    minor_point = {
+        "point_id": 0,
+        "field_value_mT": 50.0,
+        "m_parallel": 0.5,
+        "m_oop": 0.0,
+        "m_ip": math.sqrt(0.5),
+        "m_avg": [0.5, 0.5, 0.0],
+        "status": "Completed",
+        "run_status": "Completed",
+        "settle_status": "converged",
+        "has_non_converged_steps": False,
+        "warning_count": 0,
+        "snapshot_id": snapshot_id,
+        "branch_id": "descending",
+        "protocol_role": "minor",
+        "snapshot_storage_format": "zarr_v2_json_fallback",
+        "snapshot_json_artifact_ref": f"hysteresis_snapshots/{snapshot_id}/m.json",
+        "snapshot_zarr_store_ref": "hysteresis.zarr",
+        "snapshot_resource_ref": (
+            "/v2/sessions/current/data/fields/m/samples/vector"
+            f"?component=full&scope_kind=full&snapshot_id={snapshot_id}&stage_id=stage-000"
+        ),
+        "snapshot_vector_resource_ref": (
+            "/v2/sessions/current/data/fields/m/samples/vector"
+            f"?component=full&scope_kind=full&snapshot_id={snapshot_id}&stage_id=stage-000"
+        ),
+        "field_vector_A_per_m": [39788.735772973836, 0.0, 0.0],
+        "field_orientation": {
+            "kind": "preset",
+            "preset_name": "in_plane_x",
+        },
+        "measurement_axis": "field_axis",
+    }
+    (root / "hysteresis_minor_loops.json").write_text(
+        json.dumps(
+            [
+                {
+                    "loop_id": "minor_loop_001",
+                    "reversal_field_mT": 50.0,
+                    "return_field_mT": -25.0,
+                    "policy": "branch_only",
+                    "settle_trace": [
+                        {
+                            "point_id": 0,
+                            "field_value_mT": 50.0,
+                            "step_index": 0,
+                            "algorithm_id": "settle_step_000_minimize",
+                            "method": "projected_gradient_bb",
+                            "status": "converged",
+                            "fallback_reason": None,
+                            "retry_attempt": 0,
+                            "resolved_timestep_s": 1e-13,
+                            "torque": 1.0e-4,
+                            "energy": 1.0e-18,
+                        }
+                    ],
+                    "points": [minor_point],
+                }
+            ]
+        )
+    )
+    (snapshot_dir / "m.json").write_text(
+        json.dumps(
+            {
+                "quantity_id": "m",
+                "snapshot_id": snapshot_id,
+                "point_id": 0,
+                "field_value_mT": 50.0,
+                "layout": {"grid_cells": [2, 1, 1]},
+                "values": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            }
+        )
+    )
+
+
 def test_validator_rejects_zarr_chunk_that_disagrees_with_json_fallback(tmp_path: Path) -> None:
     write_playback_fixture(tmp_path, chunk_values=[1.0, 0.0, 0.0, 0.0, 0.0, 1.0])
 
@@ -306,6 +385,25 @@ def test_validator_rejects_playback_history_without_snapshot_for_every_point(
     assert "playback requires snapshot_id for every hysteresis point" in (
         result.stderr + result.stdout
     )
+
+
+def test_validator_rejects_minor_loop_snapshot_without_zarr_sample(
+    tmp_path: Path,
+) -> None:
+    write_playback_fixture(tmp_path, chunk_values=[1.0, 0.0, 0.0, 1.0, 0.0, 0.0])
+    add_minor_loop_snapshot_without_zarr_row(tmp_path)
+
+    result = subprocess.run(
+        [sys.executable, str(VALIDATOR), str(tmp_path)],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "minor-loop" in (result.stderr + result.stdout)
+    assert "snapshot" in (result.stderr + result.stdout)
 
 
 def test_validator_rejects_snapshot_point_without_settle_trace(tmp_path: Path) -> None:

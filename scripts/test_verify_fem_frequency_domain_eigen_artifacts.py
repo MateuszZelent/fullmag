@@ -16,8 +16,12 @@ VALIDATOR = REPO_ROOT / "scripts" / "verify_fem_frequency_domain_eigen_artifacts
 def write_eigen_fixture(
     root: Path,
     *,
+    manifest_physics_override: dict[str, object] | None = None,
     omit_spectrum_mode_field_resource_key: bool = False,
     inline_mode_vectors: bool = False,
+    omit_mode_payload_encoding: bool = False,
+    available_views_override: list[str] | None = None,
+    complex_pair_count_override: int | None = None,
     payload_size: int = 48,
     manifest_mode_resources_override: list[str] | None = None,
 ) -> None:
@@ -25,6 +29,15 @@ def write_eigen_fixture(
     (root / "eigen" / "mode_fields" / "sample_0000" / "mode_0000").mkdir(
         parents=True
     )
+    zarr_array_dir = (
+        root
+        / "eigen"
+        / "mode_fields.zarr"
+        / "sample_0000"
+        / "mode_0000"
+        / "vector_xyz_complex"
+    )
+    zarr_array_dir.mkdir(parents=True)
     (root / "frequency_domain").mkdir(parents=True)
 
     field_id = "analysis:eigen:sample-0000:mode-0000"
@@ -127,6 +140,42 @@ def write_eigen_fixture(
         "tangent_leakage_max_abs": 0.0,
         "dominant_polarization": "linear",
         "k_vector": [0.0, 0.0, 0.0],
+        "value_kind": "complex_spatial_vector",
+        "component_basis": "global_xyz",
+        "component_count": 3,
+        "components": ["x", "y", "z"],
+        "storage_format": "zarr",
+        "zarr_store_path": "eigen/mode_fields.zarr",
+        "zarr_array_path": "eigen/mode_fields.zarr/sample_0000/mode_0000/vector_xyz_complex",
+        "zarr_chunk_path": "eigen/mode_fields.zarr/sample_0000/mode_0000/vector_xyz_complex/0.0.0",
+        "zarr_dtype": "<f8",
+        "zarr_shape": [1, 3, 2],
+        "zarr_chunk_shape": [1, 3, 2],
+        "zarr_compressor": None,
+        "compatibility_binary_payload_path": "eigen/mode_fields/sample_0000/mode_0000/vector.bin",
+        "payload_encoding": "f64_interleaved_real_imag_xyz",
+        "binary_layout": "complex_f64_pairs_little_endian",
+        "complex_pair_count": (
+            complex_pair_count_override
+            if complex_pair_count_override is not None
+            else 3
+        ),
+        "payload_value_count": 6,
+        "available_views": (
+            available_views_override
+            if available_views_override is not None
+            else [
+                "complex",
+                "real",
+                "imag",
+                "abs",
+                "amplitude",
+                "phase",
+                "phase_rotated_real",
+            ]
+        ),
+        "default_view": "phase_rotated_real",
+        "default_phase_rad": 0.0,
         "mode_field_sample_count": 1,
         "amplitude_summary": {
             "sample_count": 1,
@@ -139,6 +188,8 @@ def write_eigen_fixture(
             "component_count": 3,
         },
     }
+    if omit_mode_payload_encoding:
+        del mode["payload_encoding"]
     if inline_mode_vectors:
         mode["real"] = [[1.0, 0.0, 0.0]]
         mode["imag"] = [[0.0, 1.0, 0.0]]
@@ -147,6 +198,64 @@ def write_eigen_fixture(
     (root / "eigen" / "modes" / "sample_0000" / "mode_0000.json").write_text(
         json.dumps(mode)
     )
+    (root / "eigen" / "mode_fields.zarr" / ".zgroup").write_text(
+        json.dumps({"zarr_format": 2})
+    )
+    (root / "eigen" / "mode_fields.zarr" / ".zattrs").write_text(
+        json.dumps(
+            {
+                "fullmag_kind": "frequency_domain_mode_field_store",
+                "schema_version": 1,
+                "preferred_container": "zarr",
+                "quantity_ids": ["delta_m"],
+                "compatibility_binary_exports": True,
+            }
+        )
+    )
+    (root / "eigen" / "mode_fields.zarr" / "sample_0000" / ".zgroup").write_text(
+        json.dumps({"zarr_format": 2})
+    )
+    (
+        root
+        / "eigen"
+        / "mode_fields.zarr"
+        / "sample_0000"
+        / "mode_0000"
+        / ".zgroup"
+    ).write_text(json.dumps({"zarr_format": 2}))
+    (zarr_array_dir / ".zarray").write_text(
+        json.dumps(
+            {
+                "zarr_format": 2,
+                "shape": [1, 3, 2],
+                "chunks": [1, 3, 2],
+                "dtype": "<f8",
+                "compressor": None,
+                "fill_value": 0.0,
+                "order": "C",
+                "filters": None,
+                "dimension_separator": ".",
+            }
+        )
+    )
+    (zarr_array_dir / ".zattrs").write_text(
+        json.dumps(
+            {
+                "quantity_id": "delta_m",
+                "unit": "1",
+                "value_kind": "complex_spatial_vector",
+                "component_basis": "global_xyz",
+                "axes": ["spatial_sample", "component", "complex"],
+                "component_order": ["x", "y", "z"],
+                "complex_order": ["real", "imag"],
+                "sample_index": 0,
+                "raw_mode_index": 0,
+                "mode_field_sample_count": 1,
+                "storage_layout": "aos_xyz_complex_pairs",
+            }
+        )
+    )
+    (zarr_array_dir / "0.0.0").write_bytes(b"\0" * 48)
     (root / "eigen" / "mode_fields" / "sample_0000" / "mode_0000" / "vector.bin").write_bytes(
         b"\0" * payload_size
     )
@@ -160,6 +269,8 @@ def write_eigen_fixture(
             "spectrum_v2_path": "eigen/spectrum.v2.json",
             "branches_v2_path": "eigen/branches.v2.json",
             "dispersion_csv_path": "eigen/dispersion.csv",
+            "mode_field_zarr_store_path": "eigen/mode_fields.zarr",
+            "mode_field_storage_format": "zarr",
             "mode_metadata_paths": ["eigen/modes/sample_0000/mode_0000.json"],
         },
         "resources": {
@@ -169,6 +280,17 @@ def write_eigen_fixture(
                 else [meta_resource]
             ),
         },
+        "physics": (
+            manifest_physics_override
+            if manifest_physics_override is not None
+            else {
+                "analysis_family": "magnetic_frequency_domain",
+                "phase_convention": "exp_minus_i_omega_t",
+                "frequency_units": "Hz",
+                "field_units": "dimensionless_delta_m",
+                "normalization": "unit_l2",
+            }
+        ),
     }
     (root / "frequency_domain" / "manifest.v1.json").write_text(json.dumps(manifest))
 
@@ -232,3 +354,108 @@ def test_validator_rejects_inline_mode_vectors_in_metadata(tmp_path: Path) -> No
 
     assert result.returncode != 0
     assert "must not inline vector arrays" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_missing_mode_payload_encoding(tmp_path: Path) -> None:
+    write_eigen_fixture(tmp_path, omit_mode_payload_encoding=True)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "payload_encoding" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_mode_available_view_drift(tmp_path: Path) -> None:
+    write_eigen_fixture(
+        tmp_path,
+        available_views_override=["real", "imag", "phase_rotated_real"],
+    )
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "available_views" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_mode_payload_count_drift(tmp_path: Path) -> None:
+    write_eigen_fixture(tmp_path, complex_pair_count_override=2)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "complex_pair_count" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_mode_payload_byte_count_mismatch(tmp_path: Path) -> None:
+    write_eigen_fixture(tmp_path, payload_size=96)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "payload_value_count" in (result.stderr + result.stdout)
+
+
+def test_validator_accepts_exp_i_omega_t_phase_convention(tmp_path: Path) -> None:
+    write_eigen_fixture(
+        tmp_path,
+        manifest_physics_override={
+            "analysis_family": "magnetic_frequency_domain",
+            "phase_convention": "exp_i_omega_t",
+            "frequency_units": "Hz",
+            "field_units": "dimensionless_delta_m",
+            "normalization": "unit_l2",
+        },
+    )
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_rejects_missing_manifest_physics(tmp_path: Path) -> None:
+    write_eigen_fixture(tmp_path, manifest_physics_override=None)
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    del manifest["physics"]
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "manifest.physics" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_unknown_phase_convention(tmp_path: Path) -> None:
+    write_eigen_fixture(
+        tmp_path,
+        manifest_physics_override={
+            "analysis_family": "magnetic_frequency_domain",
+            "phase_convention": "exp_plus_i_k_dot_r",
+            "frequency_units": "Hz",
+            "field_units": "dimensionless_delta_m",
+            "normalization": "unit_l2",
+        },
+    )
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "manifest.physics.phase_convention" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_mode_field_unit_drift(tmp_path: Path) -> None:
+    write_eigen_fixture(
+        tmp_path,
+        manifest_physics_override={
+            "analysis_family": "magnetic_frequency_domain",
+            "phase_convention": "exp_minus_i_omega_t",
+            "frequency_units": "Hz",
+            "field_units": "A_per_m",
+            "normalization": "unit_l2",
+        },
+    )
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "manifest.physics.field_units" in (result.stderr + result.stdout)

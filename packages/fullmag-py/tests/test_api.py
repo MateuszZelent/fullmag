@@ -1008,6 +1008,43 @@ class ProblemApiTests(unittest.TestCase):
             {"x_faces"},
         )
 
+    def test_periodic_k0_fmr_eigenmodes_smoke_example_loads_contract(self) -> None:
+        example_path = (
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "fem_fmr_periodic_k0_smoke.py"
+        )
+
+        loaded = fm.load_problem_from_script(example_path, lightweight_assets=True)
+
+        self.assertEqual(len(loaded.stages), 2)
+        relax = loaded.stages[0].problem.study.to_ir()
+        self.assertEqual(relax["kind"], "relaxation")
+        self.assertEqual(relax["stop"]["max_steps"], 1000)
+
+        problem = loaded.stages[1].problem
+        study = problem.study.to_ir()
+        self.assertEqual(study["kind"], "eigenmodes")
+        self.assertEqual(study["operator"]["include_demag"], False)
+        self.assertIsNone(study["k_sampling"])
+        self.assertEqual(study["spin_wave_bc"], {"kind": "periodic", "pair_ids": ["x_faces"]})
+        self.assertEqual(
+            study["sampling"]["outputs"],
+            [
+                {"kind": "eigen_spectrum", "quantity": "eigenfrequency", "scope": "per_sample"},
+                {"kind": "eigen_mode", "field": "mode", "indices": [0, 1, 2]},
+            ],
+        )
+
+        mesh_source = problem.to_ir()["geometry_assets"]["fem_mesh_assets"][0]["mesh_source"]
+        mesh_payload = json.loads(Path(mesh_source).read_text(encoding="utf-8"))
+        self.assertEqual(mesh_payload["periodic_boundary_pairs"][0]["pair_id"], "x_faces")
+        self.assertEqual(len(mesh_payload["periodic_node_pairs"]), 4)
+        self.assertEqual(
+            {pair["pair_id"] for pair in mesh_payload["periodic_node_pairs"]},
+            {"x_faces"},
+        )
+
     def test_frequency_response_rejects_invalid_eigen_options(self) -> None:
         with self.assertRaisesRegex(ValueError, "operator"):
             fm.FrequencyResponse(
@@ -3828,6 +3865,37 @@ class ProblemApiTests(unittest.TestCase):
             {"kind": "periodic", "pair_ids": ["x_faces"]},
         )
 
+    def test_fmr_example_is_modal_with_free_demag_airbox(self) -> None:
+        example_path = (
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "fem_fmr_periodic_k0_smoke.py"
+        )
+
+        loaded = fm.load_problem_from_script(example_path, lightweight_assets=True)
+        ir = loaded.to_ir(
+            requested_backend="fem",
+            execution_mode="strict",
+            execution_precision="double",
+            include_geometry_assets=False,
+        )
+
+        self.assertEqual(
+            [stage.entrypoint_kind for stage in loaded.stages],
+            ["flat_relax", "flat_eigenmodes"],
+        )
+        self.assertIn(
+            "demag",
+            {term["kind"] for term in ir["energy_terms"]},
+        )
+        mesh_workflow = ir["problem_meta"]["runtime_metadata"]["mesh_workflow"]
+        self.assertEqual(mesh_workflow["build_target"], "domain")
+        self.assertEqual(mesh_workflow["domain_mesh_mode"], "generated_shared_domain_mesh")
+        nodes = ir["problem_meta"]["runtime_metadata"]["study_pipeline"]["nodes"]
+        self.assertEqual([node["stage_kind"] for node in nodes], ["relax", "eigenmodes"])
+        self.assertEqual(nodes[1]["payload"]["eigen_include_demag"], True)
+        self.assertEqual(nodes[1]["payload"]["eigen_spin_wave_bc"], "free")
+
     def test_study_builder_stage_authoring_captures_without_execution(self) -> None:
         script = """
         import fullmag as fm
@@ -3974,7 +4042,7 @@ class ProblemApiTests(unittest.TestCase):
             field_step_mT=5.0,
             orientation=fm.FieldOrientation.preset("oop_positive"),
             initial_protocol="positive_saturation",
-            saturation=fm.SaturationProbe(mode="auto", max_field_mT=300.0),
+            saturation=fm.SaturationProbe(mode="auto", max_field_mT=300.0, on_failure="stop_stage"),
             branch_mode="major_loop",
             settle_pipeline=fm.SettlePipeline([
                 fm.MinimizeStep(max_steps=2000),
@@ -4012,6 +4080,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(ir["initial_protocol"], "positive_saturation")
         self.assertEqual(ir["branch_mode"], "major_loop")
         self.assertEqual(ir["saturation"]["max_field_mT"], 300.0)
+        self.assertEqual(ir["saturation"]["on_failure"], "stop_stage")
         self.assertEqual(ir["settle_pipeline"]["kind"], "sequence")
         self.assertEqual(len(ir["settle_pipeline"]["steps"]), 2)
         self.assertEqual(ir["settle_pipeline"]["steps"][0]["max_steps"], 2000)
@@ -4037,6 +4106,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertIn("max_field_mT=300", rewritten)
         self.assertIn("susceptibility_threshold=0.001", rewritten)
         self.assertIn("transverse_threshold=0.01", rewritten)
+        self.assertIn('on_failure="stop_stage"', rewritten)
         self.assertIn("settle_pipeline=fm.SettlePipeline([", rewritten)
         self.assertIn("fm.MinimizeStep(", rewritten)
         self.assertIn("fm.RelaxStep(", rewritten)
@@ -4403,6 +4473,66 @@ class ProblemApiTests(unittest.TestCase):
             steps,
         )
 
+    def test_study_stage_builder_hysteresis_settle_step_selection_round_trip(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("stage_hysteresis_settle_selection")
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.m = fm.texture.uniform(1, 0, 0)
+        study.stages.add_hysteresis_sweep(
+            field_min_mT=-10.0,
+            field_max_mT=10.0,
+            field_step_mT=10.0,
+            settle_pipeline=fm.SettlePipeline([
+                fm.RelaxStep(
+                    applies_to="major",
+                    stop_criteria=["torque_below", "max_steps"],
+                    max_steps=50,
+                ),
+                fm.MinimizeStep(
+                    applies_to=["key_events", "minor"],
+                    stop_criteria={"kind": "any_of", "criteria": ["energy_delta_below", "m_delta_below"]},
+                    on_non_convergence="continue_with_warning",
+                    max_steps=25,
+                ),
+            ]),
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_builder_hysteresis_settle_selection.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+
+        steps = loaded.stages[0].problem.study.to_ir()["settle_pipeline"]["steps"]
+        self.assertEqual(steps[0]["applies_to"], "major")
+        self.assertEqual(steps[0]["stop_criteria"], ["torque_below", "max_steps"])
+        self.assertEqual(steps[1]["applies_to"], ["key_events", "minor"])
+        self.assertEqual(
+            steps[1]["stop_criteria"],
+            {"kind": "any_of", "criteria": ["energy_delta_below", "m_delta_below"]},
+        )
+
+        rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+        self.assertIn('applies_to="major"', rewritten)
+        self.assertIn('stop_criteria=["torque_below", "max_steps"]', rewritten)
+        self.assertIn('applies_to=["key_events", "minor"]', rewritten)
+        self.assertIn('"kind": "any_of"', rewritten)
+        self.assertIn('"criteria": ["energy_delta_below", "m_delta_below"]', rewritten)
+
+        with TemporaryDirectory() as tmp_dir:
+            rewritten_path = Path(tmp_dir) / "rewritten_hysteresis_settle_selection.py"
+            rewritten_path.write_text(rewritten, encoding="utf-8")
+            reloaded = fm.load_problem_from_script(rewritten_path, lightweight_assets=True)
+
+        self.assertEqual(
+            reloaded.stages[0].problem.study.to_ir()["settle_pipeline"]["steps"],
+            steps,
+        )
+
     def test_study_stage_builder_hysteresis_normalizes_legacy_signed_segment_step(self) -> None:
         segment = fm.FieldSegment(
             start=1000.0,
@@ -4685,6 +4815,14 @@ class ProblemApiTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "SaturationProbe.max_field_mT"):
             fm.SaturationProbe(max_field_mT=float("nan"))
+
+        self.assertEqual(
+            fm.SaturationProbe().to_ir()["on_failure"],
+            "continue_with_warning",
+        )
+
+        with self.assertRaisesRegex(ValueError, "SaturationProbe.on_failure"):
+            fm.SaturationProbe(on_failure="pretend_saturated")
 
         with self.assertRaisesRegex(ValueError, "HysteresisStorage.magnetization"):
             fm.HysteresisStorage(magnetization="sometimes")

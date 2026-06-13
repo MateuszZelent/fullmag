@@ -15,7 +15,7 @@ from urllib.request import Request, urlopen
 
 
 HEADER_LEN = 48
-SNAPSHOT_ENDPOINT = "/v1/internal/live/current/snapshot"
+SNAPSHOT_ENDPOINT = "/v2/sessions/current/internal/live/snapshot"
 POINTS_ENDPOINT = "/v2/sessions/current/analysis/hysteresis/stage_0/points"
 
 
@@ -94,9 +94,10 @@ def sync_artifact_dir(api_base_url: str, artifact_dir: Path) -> None:
     )
 
 
-def find_snapshot_point(points: object) -> dict:
+def find_snapshot_points(points: object) -> list[dict]:
     if not isinstance(points, list) or not points:
         raise SystemExit("hysteresis points endpoint must return a non-empty list")
+    snapshot_points: list[dict] = []
     for point in points:
         if not isinstance(point, dict):
             continue
@@ -108,7 +109,9 @@ def find_snapshot_point(points: object) -> dict:
                     "snapshot_vector_resource_ref must target full m playback: "
                     f"{snapshot_ref}"
                 )
-            return point
+            snapshot_points.append(point)
+    if snapshot_points:
+        return snapshot_points
     raise SystemExit("no hysteresis point exposes snapshot_id and snapshot_vector_resource_ref")
 
 
@@ -331,36 +334,48 @@ def main() -> int:
 
     sync_artifact_dir(api_base_url, artifact_dir)
     points = request_json("GET", urljoin(api_base_url, POINTS_ENDPOINT))
-    point = find_snapshot_point(points)
-    snapshot_id = point["snapshot_id"]
-    snapshot_ref = point["snapshot_vector_resource_ref"]
-    payload, headers = request_bytes(urljoin(api_base_url, snapshot_ref))
+    snapshot_points = find_snapshot_points(points)
+    total_values = 0
+    first_snapshot_id = str(snapshot_points[0]["snapshot_id"])
 
-    if headers.get("x-fullmag-snapshot-id") != snapshot_id:
-        raise SystemExit(
-            "data-plane snapshot header mismatch: "
-            f"got {headers.get('x-fullmag-snapshot-id')!r}, expected {snapshot_id!r}"
-        )
-    if headers.get("x-fullmag-quantity-id") != "m":
-        raise SystemExit(f"data-plane quantity header mismatch: {headers.get('x-fullmag-quantity-id')!r}")
-    if headers.get("x-fullmag-component") != "full":
-        raise SystemExit(f"data-plane component header mismatch: {headers.get('x-fullmag-component')!r}")
+    for point in snapshot_points:
+        snapshot_id = point["snapshot_id"]
+        snapshot_ref = point["snapshot_vector_resource_ref"]
+        payload, headers = request_bytes(urljoin(api_base_url, snapshot_ref))
 
-    quantity_id, n_comp, grid, api_values = decode_fmvp(payload)
-    if quantity_id != "m" or n_comp != 3:
-        raise SystemExit(f"unexpected FMVP vector identity: quantity={quantity_id!r} n_comp={n_comp}")
-    assert_count_header(headers, "x-fullmag-point-count", len(api_values) // n_comp, snapshot_id)
-    assert_count_header(headers, "x-fullmag-value-count", len(api_values), snapshot_id)
-    zarr_values, zarr_grid = load_zarr_values(artifact_dir, snapshot_id)
-    if grid != zarr_grid:
-        raise SystemExit(f"FMVP grid mismatch for {snapshot_id}: API={grid} Zarr={zarr_grid}")
-    assert_values_match(snapshot_id, api_values, zarr_values)
-    average_weights = load_average_weights(artifact_dir, len(api_values) // 3)
-    assert_api_average_matches_point(snapshot_id, point, api_values, average_weights)
+        if headers.get("x-fullmag-snapshot-id") != snapshot_id:
+            raise SystemExit(
+                "data-plane snapshot header mismatch: "
+                f"got {headers.get('x-fullmag-snapshot-id')!r}, expected {snapshot_id!r}"
+            )
+        if headers.get("x-fullmag-quantity-id") != "m":
+            raise SystemExit(
+                f"data-plane quantity header mismatch: {headers.get('x-fullmag-quantity-id')!r}"
+            )
+        if headers.get("x-fullmag-component") != "full":
+            raise SystemExit(
+                f"data-plane component header mismatch: {headers.get('x-fullmag-component')!r}"
+            )
+
+        quantity_id, n_comp, grid, api_values = decode_fmvp(payload)
+        if quantity_id != "m" or n_comp != 3:
+            raise SystemExit(
+                f"unexpected FMVP vector identity: quantity={quantity_id!r} n_comp={n_comp}"
+            )
+        assert_count_header(headers, "x-fullmag-point-count", len(api_values) // n_comp, snapshot_id)
+        assert_count_header(headers, "x-fullmag-value-count", len(api_values), snapshot_id)
+        zarr_values, zarr_grid = load_zarr_values(artifact_dir, snapshot_id)
+        if grid != zarr_grid:
+            raise SystemExit(f"FMVP grid mismatch for {snapshot_id}: API={grid} Zarr={zarr_grid}")
+        assert_values_match(snapshot_id, api_values, zarr_values)
+        average_weights = load_average_weights(artifact_dir, len(api_values) // 3)
+        assert_api_average_matches_point(snapshot_id, point, api_values, average_weights)
+        total_values += len(api_values)
 
     print(
         "validated hysteresis data-plane playback: "
-        f"points={len(points)} snapshot_id={snapshot_id} values={len(api_values)}"
+        f"points={len(points)} snapshots={len(snapshot_points)} "
+        f"snapshot_id={first_snapshot_id} values={total_values}"
     )
     return 0
 

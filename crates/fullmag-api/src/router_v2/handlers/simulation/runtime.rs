@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
@@ -676,8 +676,9 @@ async fn attach_hysteresis_live_magnetization(
     let m_avg = snapshot
         .live_state
         .as_ref()
-        .and_then(|live| live.latest_step.magnetization.as_ref())
-        .and_then(|values| average_flat_magnetization(values, 0, values.len() / 3))
+        .and_then(|live| {
+            average_hysteresis_live_magnetization(&live.latest_step, snapshot.fem_mesh.as_ref())
+        })
         .or_else(|| {
             snapshot
                 .scalar_rows
@@ -693,6 +694,46 @@ async fn attach_hysteresis_live_magnetization(
 
     progress.current_m_avg = Some(m_avg);
     progress.current_m_parallel = Some(project_hysteresis_m_parallel(m_avg, &stage.value));
+}
+
+fn average_hysteresis_live_magnetization(
+    step: &crate::types::StepUpdateView,
+    snapshot_mesh: Option<&fullmag_runner::FemMeshPayload>,
+) -> Option<[f64; 3]> {
+    let values = step.magnetization.as_ref()?;
+    if values.len() < 3 || values.len() % 3 != 0 {
+        return None;
+    }
+    if let Some(mesh) = step.fem_mesh.as_ref().or(snapshot_mesh) {
+        let mut node_indices = BTreeSet::new();
+        for part in &mesh.mesh_parts {
+            if part.role != "magnetic_object" {
+                continue;
+            }
+            if !part.node_indices.is_empty() {
+                node_indices.extend(part.node_indices.iter().copied());
+            } else {
+                let start = part.node_start;
+                let end = part.node_start.saturating_add(part.node_count);
+                node_indices.extend(start..end);
+            }
+        }
+        if !node_indices.is_empty() {
+            return average_indexed_magnetization(values, node_indices);
+        }
+        if !mesh.object_segments.is_empty() {
+            let mut segment_indices = BTreeSet::new();
+            for segment in &mesh.object_segments {
+                let start = segment.node_start;
+                let end = segment.node_start.saturating_add(segment.node_count);
+                segment_indices.extend(start..end);
+            }
+            if !segment_indices.is_empty() {
+                return average_indexed_magnetization(values, segment_indices);
+            }
+        }
+    }
+    average_flat_magnetization(values, 0, values.len() / 3)
 }
 
 fn project_hysteresis_m_parallel(m_avg: [f64; 3], stage: &serde_json::Map<String, Value>) -> f64 {
@@ -1876,6 +1917,10 @@ fn hysteresis_branch_node(
             "hysteresis-branch-points:{}:{branch_id}",
             stage.stage_id
         )),
+        mesh_identity: None,
+        field_orientation: None,
+        measurement_axis: None,
+        field_revision: None,
         updated_revision: revision,
         children: Vec::new(),
     }];
@@ -1909,6 +1954,10 @@ fn hysteresis_branch_node(
             stage.stage_id
         )),
         selection_ref: Some(format!("hysteresis-branch:{}:{branch_id}", stage.stage_id)),
+        mesh_identity: None,
+        field_orientation: None,
+        measurement_axis: None,
+        field_revision: None,
         updated_revision: revision,
         children,
     }
@@ -1989,6 +2038,10 @@ fn hysteresis_minor_loop_branch_node(
             "hysteresis-minor-loop-points:{}:{}",
             stage.stage_id, minor_loop.loop_id
         )),
+        mesh_identity: None,
+        field_orientation: None,
+        measurement_axis: None,
+        field_revision: None,
         updated_revision: revision,
         children: Vec::new(),
     }];
@@ -2035,6 +2088,10 @@ fn hysteresis_minor_loop_branch_node(
             "hysteresis-minor-loop:{}:{}",
             stage.stage_id, minor_loop.loop_id
         )),
+        mesh_identity: None,
+        field_orientation: None,
+        measurement_axis: None,
+        field_revision: None,
         updated_revision: revision,
         children,
     })
@@ -2144,6 +2201,10 @@ fn hysteresis_summary_node(
         label,
         resource_ref: None,
         selection_ref: None,
+        mesh_identity: None,
+        field_orientation: None,
+        measurement_axis: None,
+        field_revision: None,
         updated_revision: revision,
         children: Vec::new(),
     }
@@ -2192,6 +2253,10 @@ fn hysteresis_field_point_node(
             stage.stage_id
         )),
         selection_ref: Some(format!("hysteresis-point:{}:{point_id}", stage.stage_id)),
+        mesh_identity: None,
+        field_orientation: None,
+        measurement_axis: None,
+        field_revision: None,
         updated_revision: stage.revision.max(progress.revision),
         children,
     }
@@ -2217,19 +2282,29 @@ fn hysteresis_point_observation_nodes(
                         stage.stage_id
                     )
                 });
+            let snapshot_status = hysteresis_snapshot_tree_status(point);
+            let snapshot_label = if snapshot_status == "missing" {
+                format!("Snapshot {snapshot_id} missing")
+            } else {
+                format!("Snapshot {snapshot_id}")
+            };
             nodes.push(HysteresisExecutionTreeNode {
                 node_id: format!("{}:point:{point_id}:snapshot:{snapshot_id}", stage.stage_id),
                 kind: "snapshot".to_string(),
                 stage_id: stage.stage_id.clone(),
                 point_id: Some(point_id),
                 settle_step_id: None,
-                status: "done".to_string(),
-                label: format!("Snapshot {snapshot_id}"),
+                status: snapshot_status.to_string(),
+                label: snapshot_label,
                 resource_ref: Some(resource_ref),
                 selection_ref: Some(format!(
                     "hysteresis-snapshot:{}:{point_id}:{snapshot_id}",
                     stage.stage_id
                 )),
+                mesh_identity: None,
+                field_orientation: point.field_orientation.clone(),
+                measurement_axis: point.measurement_axis.clone(),
+                field_revision: None,
                 updated_revision: revision,
                 children: Vec::new(),
             });
@@ -2250,12 +2325,24 @@ fn hysteresis_point_observation_nodes(
                     stage.stage_id
                 )),
                 selection_ref: Some(format!("hysteresis-warning:{}:{point_id}", stage.stage_id)),
+                mesh_identity: None,
+                field_orientation: None,
+                measurement_axis: None,
+                field_revision: None,
                 updated_revision: revision,
                 children: Vec::new(),
             });
         }
     }
     nodes
+}
+
+fn hysteresis_snapshot_tree_status(point: &HysteresisPointSchema) -> &'static str {
+    match point.snapshot_storage_status.as_deref() {
+        Some("missing") => "missing",
+        Some("unknown") => "warning",
+        _ => "done",
+    }
 }
 
 fn hysteresis_settle_algorithm_nodes(
@@ -2300,6 +2387,10 @@ fn hysteresis_settle_algorithm_nodes(
                     "hysteresis-settle:{}:{point_id}:{idx_u32}",
                     stage.stage_id
                 )),
+                mesh_identity: None,
+                field_orientation: None,
+                measurement_axis: None,
+                field_revision: None,
                 updated_revision: stage.revision.max(progress.revision),
                 children: Vec::new(),
             }
@@ -2579,7 +2670,12 @@ fn command_stage_linkage_from_record(
     record: &StageExecutionRecord,
 ) -> CommandStageLinkage {
     CommandStageLinkage {
-        stage_id: Some(stage_id_for_index(index)),
+        stage_id: Some(
+            record
+                .stage_id
+                .clone()
+                .unwrap_or_else(|| stage_id_for_index(index)),
+        ),
         stage_index: Some(index as u32),
         started_at_unix_ms: record.started_at_unix_ms.map(u128::from),
         completed_at_unix_ms: record.completed_at_unix_ms.map(u128::from),
@@ -2745,6 +2841,10 @@ fn command_resource_invalidations(
         _ => {}
     }
 
+    if let Some(stage_id) = hysteresis_invalidation_stage_id(snapshot, stage_linkage) {
+        push_hysteresis_command_invalidations(&mut resources, &stage_id, snapshot, state);
+    }
+
     if stage_linkage.is_some_and(|linkage| !linkage.artifact_refs.is_empty()) {
         push_command_invalidation(
             &mut resources,
@@ -2776,6 +2876,63 @@ fn command_resource_invalidations(
     );
 
     resources
+}
+
+fn hysteresis_invalidation_stage_id(
+    snapshot: &SessionStateResponse,
+    stage_linkage: Option<&CommandStageLinkage>,
+) -> Option<String> {
+    let stage_execution = snapshot.stage_execution.as_ref()?;
+    let linkage = stage_linkage?;
+    let stage_index = linkage.stage_index? as usize;
+    let stage_record = stage_execution.stages.get(stage_index)?;
+    if is_hysteresis_stage_kind(stage_record.kind.as_deref())
+        || is_hysteresis_stage_kind(stage_execution.active_stage_kind.as_deref())
+    {
+        return linkage.stage_id.clone();
+    }
+    None
+}
+
+fn push_hysteresis_command_invalidations(
+    resources: &mut Vec<CommandResourceInvalidationResource>,
+    stage_id: &str,
+    snapshot: &SessionStateResponse,
+    state: &str,
+) {
+    let stage_revision = snapshot.state_version;
+    let scalar_revision = snapshot.scalar_revision.max(snapshot.state_version);
+    for resource_key in [
+        format!("simulation/stages/{stage_id}/hysteresis/progress"),
+        format!("simulation/stages/{stage_id}/hysteresis/execution-tree"),
+        format!("simulation/stages/{stage_id}/hysteresis/saturation"),
+    ] {
+        push_command_invalidation(
+            resources,
+            &resource_key,
+            stage_revision,
+            "hysteresis stage runtime",
+            state,
+        );
+    }
+    for resource_key in [
+        format!("analysis/hysteresis/{stage_id}/metrics"),
+        format!("analysis/hysteresis/{stage_id}/points"),
+        format!("analysis/hysteresis/{stage_id}/branches"),
+        format!("analysis/hysteresis/{stage_id}/minor-loops"),
+        format!("analysis/hysteresis/{stage_id}/reversal-fields"),
+        format!("analysis/hysteresis/{stage_id}/adaptive-refinement"),
+        format!("analysis/hysteresis/{stage_id}/saturation"),
+        format!("analysis/hysteresis-family/{stage_id}"),
+    ] {
+        push_command_invalidation(
+            resources,
+            &resource_key,
+            scalar_revision,
+            "hysteresis analysis readback",
+            state,
+        );
+    }
 }
 
 fn push_command_invalidation(

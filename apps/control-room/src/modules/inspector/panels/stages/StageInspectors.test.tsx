@@ -278,6 +278,11 @@ describe("Study stage inspectors", () => {
       resolveHysteresisInspectorView("study:stage:0:branches:branch:ascending"),
     ).toBe("branch-detail");
     expect(
+      resolveHysteresisInspectorView(
+        "study:stage:0:branches:branch:ascending:field-point:12",
+      ),
+    ).toBe("point-detail");
+    expect(
       resolveHysteresisInspectorView("study:stage:0:branches:minor-loops"),
     ).toBe("branch-detail");
     expect(resolveHysteresisInspectorView("study:stage:0:field-point:4")).toBe(
@@ -353,6 +358,21 @@ describe("Study stage inspectors", () => {
           timestep_s: 1e-12,
         },
       ]),
+      settleBranches: JSON.stringify([
+        {
+          branch_id: "non_converged_fallback",
+          run: {
+            alpha: 1,
+            kind: "relax",
+            max_steps: 100,
+            method: "llg_overdamped",
+            on_non_convergence: "continue_with_warning",
+            torque_tolerance: 1e-5,
+          },
+          when: "non_converged",
+        },
+      ]),
+      settlePipelineMode: "tree",
     };
     const markup = render(
       <HysteresisStageInspector
@@ -371,6 +391,10 @@ describe("Study stage inspectors", () => {
     expect(markup).toContain("Retry attempts: 3");
     expect(markup).toContain("Stop criteria");
     expect(markup).toContain("max_torque_T");
+    expect(markup).toContain("Fallback branches");
+    expect(markup).toContain("non_converged_fallback");
+    expect(markup).toContain("Trigger: non_converged");
+    expect(markup).toContain("Run: relax");
     expect(markup).not.toContain("Measurement Plan");
     expect(markup).not.toContain("Live Progress");
     expect(markup.indexOf("Settle Pipeline")).toBeLessThan(
@@ -1271,6 +1295,9 @@ describe("Study stage inspectors", () => {
     expect(markup).toContain("Transitions");
     expect(markup).toContain("5 / 5");
     expect(markup).toContain("4 at 25.000 mT");
+    expect(markup).toContain("Continue to next stage");
+    expect(markup).not.toContain("explicit action pending runtime command");
+    expect(markup).toContain("Export loop CSV");
     expect(markup).toContain("Use selected point as initial");
     expect(markup).not.toContain("Select a saved hysteresis point");
 
@@ -1606,12 +1633,17 @@ describe("Study stage inspectors", () => {
         field_value_mT: 25,
         method: "projected_gradient_bb",
         point_id: 4,
+        resolved_parameters: {
+          energy_tolerance: 1e-20,
+          max_steps: 200,
+        },
         resolved_timestep_s: 1e-13,
         retry_attempt: 0,
         status: "converged",
+        stop_reason: "energy",
         step_index: 0,
         torque: 2.6e-2,
-      },
+      } as HysteresisSettleTraceEntrySchema,
       {
         algorithm_id: "relax",
         energy: -5.94e-16,
@@ -1638,6 +1670,9 @@ describe("Study stage inspectors", () => {
     expect(markup).toContain("llg_overdamped");
     expect(markup).toContain("previous_step_non_converged");
     expect(markup).toContain("retry 1");
+    expect(markup).toContain("Stop reason: energy");
+    expect(markup).toContain("Resolved params");
+    expect(markup).toContain("energy_tolerance");
 
     selection.clear("analysis-plots");
   });

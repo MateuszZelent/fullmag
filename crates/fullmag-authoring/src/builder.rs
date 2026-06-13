@@ -276,6 +276,7 @@ pub enum StudyPrimitiveStageKind {
     Relax,
     Run,
     Eigenmodes,
+    FrequencyResponse,
     Hysteresis,
     SetField,
     SetCurrent,

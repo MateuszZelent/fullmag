@@ -155,6 +155,13 @@ $\mathbf{H}_{\text{ext}}$ in $\text{A/m}$; lowering therefore records
   the start as `saturated`, `probably_saturated`, or `capped_by_limit` using
   the last-point susceptibility, transverse magnetization, and
   distance-to-saturation checks.
+- `SaturationProbe.on_failure` controls what happens when the probe cannot
+  verify at least `probably_saturated` before the field limit. The default is
+  `continue_with_warning` for backward compatibility: the main sweep continues,
+  but metrics and saturation resources expose the limited interpretation.
+  `stop_stage` records the saturation artifact and terminates the hysteresis
+  stage before writing ordinary major-loop points, preventing a capped
+  preparation field from being presented as a valid measured loop.
 - The reported saturation estimates are named `H_sat+` and `H_sat-` for
   positive and negative preparation directions. They are only available when
   probe evidence exists; a preparation field inferred from a schedule is
@@ -220,11 +227,16 @@ $\mathbf{H}_{\text{ext}}$ in $\text{A/m}$; lowering therefore records
 - This policy is useful for UI/API contract validation and branch-aware
   analysis plumbing, but it is not a history-dependent minor-loop fork.
 - The runner now supports the first history-dependent execution policy:
-  `branch_only`. It selects the nearest executed parent major-loop state at the
-  configured reversal field, forks from that parent magnetization, executes a
-  settle branch to the configured return field, and records a dedicated
-  minor-loop settle trace, closure diagnostics, and branch-local points in
-  `hysteresis_minor_loops.json`.
+  `branch_only`. If the configured reversal field is an already executed
+  parent major-loop field, the branch forks from that parent magnetization. If
+  the configured reversal field is off-grid, the runtime selects the nearest
+  executed parent major-loop state as the physical initial state, executes an
+  additional settle point at the exact configured reversal field, then forks
+  the return branch from that computed reversal magnetization. The artifact
+  must report the configured reversal field, not the nearest parent field, and
+  must record both the parent point reference and the reversal settle trace.
+  This avoids presenting an interpolated or snapped state as a measured minor
+  loop branch.
 - The public contract uses `minor_loop_id`, `reversal_field`, `return_field`,
   and `parent_branch_id` to keep a minor-loop branch distinct from the major
   loop and from derived chart windows.

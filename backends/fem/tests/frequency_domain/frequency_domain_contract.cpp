@@ -1648,6 +1648,9 @@ void driven_response_solver_writes_failure_artifacts_for_unavailable_run()
     check(contains(manifest.c_str(), "\"stage_kind\":\"frequency_response\""), "failure manifest records response stage");
     check(contains(manifest.c_str(), "\"status\":\"unavailable\""), "failure manifest records unavailable status");
     check(contains(manifest.c_str(), "\"complete\":false"), "failure manifest records incomplete state");
+    check(
+        contains(manifest.c_str(), "\"frequency_count\":2"),
+        "failure manifest records requested frequency count");
     check(contains(manifest.c_str(), "\"production_solver_available\":false"), "failure manifest records production solver unavailable");
     check(
         contains(manifest.c_str(), "\"response_diagnostics_v1_path\":\"response/diagnostics.v1.json\""),
@@ -1655,6 +1658,12 @@ void driven_response_solver_writes_failure_artifacts_for_unavailable_run()
     check(
         contains(manifest.c_str(), "\"response_progress_v1_path\":\"response/progress.v1.json\""),
         "failure manifest links response progress artifact");
+    check(
+        contains(manifest.c_str(), "\"response_cancel_requested_v1_path\":null"),
+        "failure manifest records no cancel-request artifact link");
+    check(
+        contains(manifest.c_str(), "\"response_cancel_requested_resource_key\":null"),
+        "failure manifest records no cancel-request resource link");
     check(
         contains(manifest.c_str(), "\"frequency_point_paths\":[]"),
         "failure manifest records no frequency point artifacts");
@@ -1674,6 +1683,9 @@ void driven_response_solver_writes_failure_artifacts_for_unavailable_run()
     check(
         contains(diagnostics.c_str(), "\"solver_kind\":\"production_unavailable\""),
         "failure diagnostics records unavailable solver kind");
+    check(
+        contains(diagnostics.c_str(), "\"requested_frequency_count\":2"),
+        "failure diagnostics records requested frequency count");
     check(
         contains(diagnostics.c_str(), "\"completed_frequency_point_count\":0"),
         "failure diagnostics records completed frequency point count");
@@ -1695,6 +1707,9 @@ void driven_response_solver_writes_failure_artifacts_for_unavailable_run()
     check(
         contains(progress.c_str(), "\"partial_artifacts_available\":false"),
         "failure progress reports no partial artifacts");
+    check(
+        contains(progress.c_str(), "\"total_frequency_points\":2"),
+        "failure progress records requested frequency count");
 
     char response_path[256]{};
     std::snprintf(
@@ -1750,6 +1765,9 @@ void production_gpu_unavailable_artifact_reports_gpu_lane()
         contains(manifest.c_str(), "\"lane_classification\":\"fem_gpu_production\""),
         "GPU unavailable manifest records GPU lane classification");
     check(
+        contains(manifest.c_str(), "\"frequency_count\":1"),
+        "GPU unavailable manifest records requested frequency count");
+    check(
         !contains(manifest.c_str(), "\"lane_classification\":\"fem_cpu_production\""),
         "GPU unavailable manifest must not report CPU lane classification");
 
@@ -1767,6 +1785,9 @@ void production_gpu_unavailable_artifact_reports_gpu_lane()
         contains(diagnostics.c_str(), "\"validation_fallback_used\":false"),
         "GPU unavailable diagnostics record that validation fallback was not used");
     check(
+        contains(diagnostics.c_str(), "\"requested_frequency_count\":1"),
+        "GPU unavailable diagnostics record requested frequency count");
+    check(
         !contains(diagnostics.c_str(), "\"validation_fallback_used\":true"),
         "GPU unavailable diagnostics must not report validation fallback");
     char progress_path[256]{};
@@ -1777,6 +1798,9 @@ void production_gpu_unavailable_artifact_reports_gpu_lane()
         output_directory);
     const std::string progress = read_text_file(progress_path);
     check(contains(progress.c_str(), "\"state\":\"unavailable\""), "GPU unavailable progress records unavailable state");
+    check(
+        contains(progress.c_str(), "\"total_frequency_points\":1"),
+        "GPU unavailable progress records requested frequency count");
 
     fd::release_driven_frequency_response_result(&result);
 }
@@ -3037,7 +3061,7 @@ void production_cpu_lane_writes_matrix_free_response_artifacts()
     std::snprintf(
         payload_path,
         sizeof(payload_path),
-        "%s/response/field_payloads/frequency_0000/vector_xyz.bin",
+        "%s/response/field_payloads.zarr/frequency_0000/vector_xyz_complex/0.0.0",
         output_directory);
     const std::string sweep_v1 = read_text_file(sweep_v1_path);
     check(
@@ -3060,11 +3084,11 @@ void production_cpu_lane_writes_matrix_free_response_artifacts()
         "production CPU v1 response sweep reports sweep reuse provenance");
     const std::string sweep_v2 = read_text_file(sweep_v2_path);
     check(
-        contains(sweep_v2.c_str(), "\"response_field_payload_path\":\"response/field_payloads/frequency_0000/vector_xyz.bin\""),
-        "production CPU sweep links spatial field payload");
+        contains(sweep_v2.c_str(), "\"response_field_payload_path\":\"response/field_payloads.zarr/frequency_0000/vector_xyz_complex/0.0.0\""),
+        "production CPU sweep links Zarr spatial field payload");
     check(
-        contains(sweep_v2.c_str(), "\"response_tangent_field_payload_path\":\"response/field_payloads/frequency_0000/vector.bin\""),
-        "production CPU sweep keeps tangent field payload link");
+        contains(sweep_v2.c_str(), "\"response_tangent_field_payload_path\":\"response/field_payloads.zarr/frequency_0000/vector_tangent_complex/0.0.0\""),
+        "production CPU sweep keeps Zarr tangent field payload link");
     check(file_exists(payload_path), "production CPU writes field payload");
 
     char point_path[256]{};
@@ -3075,11 +3099,17 @@ void production_cpu_lane_writes_matrix_free_response_artifacts()
         output_directory);
     const std::string point = read_text_file(point_path);
     check(
-        contains(point.c_str(), "\"field_payload_path\":\"response/field_payloads/frequency_0000/vector_xyz.bin\""),
-        "production CPU point metadata links spatial payload");
+        contains(point.c_str(), "\"field_payload_path\":\"response/field_payloads.zarr/frequency_0000/vector_xyz_complex/0.0.0\""),
+        "production CPU point metadata links Zarr spatial payload");
     check(
-        contains(point.c_str(), "\"tangent_field_payload_path\":\"response/field_payloads/frequency_0000/vector.bin\""),
-        "production CPU point metadata links tangent payload");
+        contains(point.c_str(), "\"tangent_field_payload_path\":\"response/field_payloads.zarr/frequency_0000/vector_tangent_complex/0.0.0\""),
+        "production CPU point metadata links Zarr tangent payload");
+    check(
+        contains(point.c_str(), "\"storage_format\":\"zarr\""),
+        "production CPU point metadata records Zarr storage format");
+    check(
+        contains(point.c_str(), "\"compatibility_binary_payload_path\":\"response/field_payloads/frequency_0000/vector_xyz.bin\""),
+        "production CPU point metadata keeps compatibility binary payload link");
     check(
         contains(point.c_str(), "\"value_kind\":\"complex_spatial_vector\""),
         "production CPU point metadata records spatial value kind");
@@ -3101,6 +3131,12 @@ void production_cpu_lane_writes_matrix_free_response_artifacts()
     check(
         contains(point.c_str(), "\"default_phase_rad\":0.0"),
         "production CPU point metadata records default phase angle");
+    check(
+        contains(point.c_str(), "\"excitation_provenance\":{\"kind\":\"field\",\"phase_rad\":0"),
+        "production CPU point metadata records drive phasor provenance");
+    check(
+        contains(point.c_str(), "\"sweep_reuse\":{\"operator_template_reused\":true"),
+        "production CPU point metadata records sweep reuse provenance");
 
     fd::release_driven_frequency_response_result(&result);
 }
@@ -3185,7 +3221,7 @@ void production_cpu_lane_writes_large_matrix_free_field_payload()
     std::snprintf(
         payload_path,
         sizeof(payload_path),
-        "%s/response/field_payloads/frequency_0000/vector_xyz.bin",
+        "%s/response/field_payloads.zarr/frequency_0000/vector_xyz_complex/0.0.0",
         output_directory);
     check(file_exists(payload_path), "large production CPU writes spatial field payload");
     check(
@@ -3196,7 +3232,7 @@ void production_cpu_lane_writes_large_matrix_free_field_payload()
     std::snprintf(
         tangent_payload_path,
         sizeof(tangent_payload_path),
-        "%s/response/field_payloads/frequency_0000/vector.bin",
+        "%s/response/field_payloads.zarr/frequency_0000/vector_tangent_complex/0.0.0",
         output_directory);
     check(file_exists(tangent_payload_path), "large production CPU keeps tangent field payload");
     check(
@@ -3379,9 +3415,9 @@ void driven_response_solver_writes_minimal_assembled_validation_artifacts()
         contains(manifest.c_str(), "\"field_resource_id\":\"analysis:frequency-response:frequency-0001\""),
         "manifest response field resources include data-plane field id");
     check(
-        contains(manifest.c_str(), "\"payload_path\":\"response/field_payloads/frequency_0001/vector_xyz.bin\""),
+        contains(manifest.c_str(), "\"payload_path\":\"response/field_payloads.zarr/frequency_0001/vector_xyz_complex/0.0.0\""),
         "manifest response field resources include payload path");
-    check(contains(manifest.c_str(), "response/field_payloads/frequency_0001/vector_xyz.bin"), "manifest links second spatial field payload resource");
+    check(contains(manifest.c_str(), "response/field_payloads.zarr/frequency_0001/vector_xyz_complex/0.0.0"), "manifest links second Zarr spatial field payload resource");
 
     char sweep_path[256]{};
     std::snprintf(
@@ -3449,10 +3485,10 @@ void driven_response_solver_writes_minimal_assembled_validation_artifacts()
         contains(sweep_v2.c_str(), "\"frequency_point_artifact_path\":\"response/frequency_points/frequency_0001.json\""),
         "response sweep v2 records per-point metadata path");
     check(
-        contains(sweep_v2.c_str(), "\"response_field_payload_path\":\"response/field_payloads/frequency_0001/vector_xyz.bin\""),
-        "response sweep v2 records per-point spatial field payload path");
+        contains(sweep_v2.c_str(), "\"response_field_payload_path\":\"response/field_payloads.zarr/frequency_0001/vector_xyz_complex/0.0.0\""),
+        "response sweep v2 records per-point Zarr spatial field payload path");
     check(contains(sweep_v2.c_str(), "response/frequency_points/frequency_0001.json"), "response sweep v2 links second point");
-    check(contains(sweep_v2.c_str(), "response/field_payloads/frequency_0001/vector_xyz.bin"), "response sweep v2 links second spatial payload");
+    check(contains(sweep_v2.c_str(), "response/field_payloads.zarr/frequency_0001/vector_xyz_complex/0.0.0"), "response sweep v2 links second Zarr spatial payload");
 
     char diagnostics_path[256]{};
     std::snprintf(
@@ -3526,8 +3562,8 @@ void driven_response_solver_writes_minimal_assembled_validation_artifacts()
         "frequency point metadata schema is written");
     check(contains(point.c_str(), "\"frequency_index\":0"), "frequency point metadata records index");
     check(
-        contains(point.c_str(), "\"field_payload_path\":\"response/field_payloads/frequency_0000/vector_xyz.bin\""),
-        "frequency point metadata links spatial field payload");
+        contains(point.c_str(), "\"field_payload_path\":\"response/field_payloads.zarr/frequency_0000/vector_xyz_complex/0.0.0\""),
+        "frequency point metadata links Zarr spatial field payload");
     check(
         contains(point.c_str(), "\"angular_frequency_rad_per_s\":1"),
         "frequency point metadata records angular frequency");
@@ -3547,8 +3583,8 @@ void driven_response_solver_writes_minimal_assembled_validation_artifacts()
         contains(point.c_str(), "\"component_response_phase\":[-1.570796326794896"),
         "frequency point metadata records component response phases");
     check(
-        contains(point.c_str(), "\"tangent_field_payload_path\":\"response/field_payloads/frequency_0000/vector.bin\""),
-        "frequency point metadata links tangent field payload");
+        contains(point.c_str(), "\"tangent_field_payload_path\":\"response/field_payloads.zarr/frequency_0000/vector_tangent_complex/0.0.0\""),
+        "frequency point metadata links Zarr tangent field payload");
     check(
         contains(point.c_str(), "\"binary_layout\":\"complex_f64_pairs_little_endian\""),
         "frequency point metadata records binary layout");
@@ -3600,12 +3636,18 @@ void driven_response_solver_writes_minimal_assembled_validation_artifacts()
     check(
         contains(point.c_str(), "\"tangent_leakage\":{\"status\":\"evaluated\""),
         "frequency point metadata records evaluated tangent leakage");
+    check(
+        contains(point.c_str(), "\"excitation_provenance\":{\"kind\":\"field\",\"phase_rad\":0"),
+        "frequency point metadata records drive phasor provenance");
+    check(
+        contains(point.c_str(), "\"sweep_reuse\":{\"operator_template_reused\":true"),
+        "frequency point metadata records sweep reuse provenance");
 
     char payload_path[256]{};
     std::snprintf(
         payload_path,
         sizeof(payload_path),
-        "%s/response/field_payloads/frequency_0000/vector_xyz.bin",
+        "%s/response/field_payloads.zarr/frequency_0000/vector_xyz_complex/0.0.0",
         output_directory);
     std::ifstream payload(payload_path, std::ios::binary | std::ios::ate);
     check(payload.good(), "response spatial field payload is readable");
@@ -3620,8 +3662,8 @@ void driven_response_solver_writes_minimal_assembled_validation_artifacts()
     const std::string point_1 = read_text_file(point_1_path);
     check(contains(point_1.c_str(), "\"frequency_index\":1"), "second frequency point metadata records index");
     check(
-        contains(point_1.c_str(), "\"field_payload_path\":\"response/field_payloads/frequency_0001/vector_xyz.bin\""),
-        "second frequency point metadata links spatial field payload");
+        contains(point_1.c_str(), "\"field_payload_path\":\"response/field_payloads.zarr/frequency_0001/vector_xyz_complex/0.0.0\""),
+        "second frequency point metadata links Zarr spatial field payload");
     check(
         contains(point_1.c_str(), "\"available_views\":[\"complex\",\"real\",\"imag\",\"abs\",\"amplitude\",\"phase\",\"phase_rotated_real\"]"),
         "second frequency point metadata records all supported complex field views");
@@ -3633,7 +3675,7 @@ void driven_response_solver_writes_minimal_assembled_validation_artifacts()
     std::snprintf(
         payload_1_path,
         sizeof(payload_1_path),
-        "%s/response/field_payloads/frequency_0001/vector_xyz.bin",
+        "%s/response/field_payloads.zarr/frequency_0001/vector_xyz_complex/0.0.0",
         output_directory);
     std::ifstream payload_1(payload_1_path, std::ios::binary | std::ios::ate);
     check(payload_1.good(), "second response spatial field payload is readable");
@@ -3833,8 +3875,14 @@ void production_cpu_lane_interruption_preserves_partial_artifacts()
     check(contains(manifest.c_str(), "\"written_frequency_point_artifacts\":1"), "production CPU interrupted manifest records written count");
     check(contains(manifest.c_str(), "response/frequency_points/frequency_0000.json"), "production CPU interrupted manifest links completed point");
     check(!contains(manifest.c_str(), "response/frequency_points/frequency_0001.json"), "production CPU interrupted manifest does not link incomplete point");
-    check(contains(manifest.c_str(), "response/field_payloads/frequency_0000/vector_xyz.bin"), "production CPU interrupted manifest links completed spatial payload");
-    check(!contains(manifest.c_str(), "response/field_payloads/frequency_0001/vector_xyz.bin"), "production CPU interrupted manifest does not link incomplete spatial payload");
+    check(contains(manifest.c_str(), "response/field_payloads.zarr/frequency_0000/vector_xyz_complex/0.0.0"), "production CPU interrupted manifest links completed Zarr spatial payload");
+    check(!contains(manifest.c_str(), "response/field_payloads.zarr/frequency_0001/vector_xyz_complex/0.0.0"), "production CPU interrupted manifest does not link incomplete Zarr spatial payload");
+    check(
+        contains(manifest.c_str(), "\"response_cancel_requested_v1_path\":\"response/cancel_requested.v1.json\""),
+        "production CPU interrupted manifest links cancel-request artifact");
+    check(
+        contains(manifest.c_str(), "\"response_cancel_requested_resource_key\":\"/v2/sessions/current/analysis/frequency-domain/response/cancel-requested.v1\""),
+        "production CPU interrupted manifest links cancel-request resource");
 
     char progress_path[256]{};
     std::snprintf(progress_path, sizeof(progress_path), "%s/response/progress.v1.json", output_directory);
@@ -3935,8 +3983,14 @@ void driven_response_solver_interruption_preserves_partial_validation_artifacts(
     check(contains(manifest.c_str(), "\"written_frequency_point_artifacts\":1"), "interrupted manifest records written count");
     check(contains(manifest.c_str(), "response/frequency_points/frequency_0000.json"), "interrupted manifest links completed point");
     check(!contains(manifest.c_str(), "response/frequency_points/frequency_0001.json"), "interrupted manifest does not link incomplete point");
-    check(contains(manifest.c_str(), "response/field_payloads/frequency_0000/vector_xyz.bin"), "interrupted manifest links completed spatial payload");
-    check(!contains(manifest.c_str(), "response/field_payloads/frequency_0001/vector_xyz.bin"), "interrupted manifest does not link incomplete spatial payload");
+    check(contains(manifest.c_str(), "response/field_payloads.zarr/frequency_0000/vector_xyz_complex/0.0.0"), "interrupted manifest links completed Zarr spatial payload");
+    check(!contains(manifest.c_str(), "response/field_payloads.zarr/frequency_0001/vector_xyz_complex/0.0.0"), "interrupted manifest does not link incomplete Zarr spatial payload");
+    check(
+        contains(manifest.c_str(), "\"response_cancel_requested_v1_path\":\"response/cancel_requested.v1.json\""),
+        "interrupted manifest links cancel-request artifact");
+    check(
+        contains(manifest.c_str(), "\"response_cancel_requested_resource_key\":\"/v2/sessions/current/analysis/frequency-domain/response/cancel-requested.v1\""),
+        "interrupted manifest links cancel-request resource");
     check(
         contains(manifest.c_str(), "\"response_progress_v1_path\":\"response/progress.v1.json\""),
         "interrupted manifest links progress artifact");
@@ -4641,6 +4695,12 @@ void c_abi_production_cpu_lane_interruption_preserves_partial_artifacts()
     check(contains(manifest.c_str(), "\"completed_frequency_point_count\":1"), "C ABI production CPU interrupted manifest records completed point count");
     check(contains(manifest.c_str(), "response/frequency_points/frequency_0000.json"), "C ABI production CPU interrupted manifest links completed point");
     check(!contains(manifest.c_str(), "response/frequency_points/frequency_0001.json"), "C ABI production CPU interrupted manifest omits incomplete point");
+    check(
+        contains(manifest.c_str(), "\"response_cancel_requested_v1_path\":\"response/cancel_requested.v1.json\""),
+        "C ABI production CPU interrupted manifest links cancel-request artifact");
+    check(
+        contains(manifest.c_str(), "\"response_cancel_requested_resource_key\":\"/v2/sessions/current/analysis/frequency-domain/response/cancel-requested.v1\""),
+        "C ABI production CPU interrupted manifest links cancel-request resource");
 
     char progress_path[256]{};
     std::snprintf(progress_path, sizeof(progress_path), "%s/response/progress.v1.json", output_directory);
@@ -4934,6 +4994,9 @@ void c_abi_driven_response_solve_reports_unavailable_failure_artifacts()
     const std::string manifest = read_text_file(result.artifact_manifest_path);
     check(contains(manifest.c_str(), "\"status\":\"unavailable\""), "C ABI failure manifest records unavailable");
     check(
+        contains(manifest.c_str(), "\"frequency_count\":1"),
+        "C ABI failure manifest records requested frequency count");
+    check(
         contains(manifest.c_str(), "\"response_diagnostics_v1_path\":\"response/diagnostics.v1.json\""),
         "C ABI failure manifest links diagnostics");
 
@@ -4947,6 +5010,9 @@ void c_abi_driven_response_solve_reports_unavailable_failure_artifacts()
     check(
         contains(diagnostics.c_str(), "\"solver_kind\":\"production_unavailable\""),
         "C ABI failure diagnostics records unavailable solver kind");
+    check(
+        contains(diagnostics.c_str(), "\"requested_frequency_count\":1"),
+        "C ABI failure diagnostics records requested frequency count");
     char progress_path[256]{};
     std::snprintf(
         progress_path,
@@ -4955,6 +5021,9 @@ void c_abi_driven_response_solve_reports_unavailable_failure_artifacts()
         output_directory);
     const std::string progress = read_text_file(progress_path);
     check(contains(progress.c_str(), "\"state\":\"unavailable\""), "C ABI failure progress records unavailable state");
+    check(
+        contains(progress.c_str(), "\"total_frequency_points\":1"),
+        "C ABI failure progress records requested frequency count");
 
     fullmag_fem_frequency_domain_solve_result_release(&result);
 }

@@ -123,13 +123,21 @@ async function installMissingSessionFastFailRoutes(page) {
   });
 }
 
-await page.addInitScript(({ allowMissingSessionSmoke, baseUrl }) => {
-  window.__FULLMAG_CONFIG__ = {
-    ...(window.__FULLMAG_CONFIG__ ?? {}),
-    ...(baseUrl ? { controlRoomApiBase: baseUrl } : {}),
-    ...(allowMissingSessionSmoke ? { allowMissingSessionSmoke: true } : {}),
-  };
-}, { allowMissingSessionSmoke: allowMissingSession, baseUrl: apiBase });
+await page.addInitScript(
+  ({ allowMissingSessionSmoke, baseUrl, enableAuditHooks }) => {
+    window.__FULLMAG_CONFIG__ = {
+      ...(window.__FULLMAG_CONFIG__ ?? {}),
+      ...(baseUrl ? { controlRoomApiBase: baseUrl } : {}),
+      ...(allowMissingSessionSmoke ? { allowMissingSessionSmoke: true } : {}),
+      ...(enableAuditHooks ? { enableAuditHooks: true } : {}),
+    };
+  },
+  {
+    allowMissingSessionSmoke: allowMissingSession,
+    baseUrl: apiBase,
+    enableAuditHooks: hysteresisReplaySmoke,
+  },
+);
 
 page.on("console", (message) => {
   if (message.type() === "error") {
@@ -503,6 +511,47 @@ async function verifyHysteresisReplaySmoke(page) {
   console.log(
     `Hysteresis replay smoke passed: snapshot_id=${hysteresisReplaySnapshotId} stage_id=${hysteresisReplayStageId} source=${usedChart ? "chart" : "audit"}`,
   );
+
+  const returnStartIndex = fieldVectorRequests.length;
+  const returnSource = await returnHysteresisReplayToLive(page);
+  await waitForCondition("hysteresis replay viewport target cleared", async () => {
+    const attrs = await page.evaluate((selector) => {
+      const node = document.querySelector(selector);
+      return {
+        snapshotId: node?.getAttribute("data-hysteresis-replay-snapshot-id") ?? "",
+        stageId: node?.getAttribute("data-hysteresis-replay-stage-id") ?? "",
+      };
+    }, VIEWPORT_3D_SELECTOR);
+    if (!attrs.snapshotId && !attrs.stageId) return attrs;
+    throw new Error(
+      `Hysteresis replay target still active after Return to live: snapshot=${attrs.snapshotId || "missing"} stage=${attrs.stageId || "missing"}.`,
+    );
+  });
+  await waitForCondition("hysteresis replay return-to-live field-vector request", () => {
+    const matching = fieldVectorRequests
+      .slice(returnStartIndex)
+      .find((request) => {
+        const params = new URLSearchParams(request.search);
+        return (
+          request.method === "GET" &&
+          params.get("snapshot_id") == null &&
+          params.get("stage_id") == null &&
+          params.get("component") === "full" &&
+          params.get("scope_kind") === "full"
+        );
+      });
+    if (matching) return matching;
+    throw new Error("No live field-vector request after hysteresis Return to live.");
+  });
+  const livePixelSample = await sampleCanvasComposite(page);
+  if (!livePixelSample.nonBlank) {
+    throw new Error(
+      `3D viewport canvas became blank after hysteresis Return to live: ${livePixelSample.variedPixels}/${livePixelSample.sampledPixels} sampled pixels differ from background.`,
+    );
+  }
+  console.log(
+    `Hysteresis replay return-to-live smoke passed: stage_id=${hysteresisReplayStageId} source=${returnSource}`,
+  );
 }
 
 async function verifyHysteresisChartReplaySmoke(page) {
@@ -552,6 +601,24 @@ async function verifyHysteresisChartReplaySmoke(page) {
 
   await chart.getByRole("button", { name: "Load in 3D" }).click();
   return true;
+}
+
+async function returnHysteresisReplayToLive(page) {
+  const returnToLiveButton = page
+    .getByRole("button", { name: /^(Return to live|Live)$/ })
+    .first();
+  if (await returnToLiveButton.isVisible().catch(() => false)) {
+    await returnToLiveButton.click();
+    return "button";
+  }
+  await page.evaluate((stageId) => {
+    const audit = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
+    if (!audit?.returnHysteresisReplayToLive) {
+      throw new Error("Missing __FULLMAG_CONTROL_ROOM_AUDIT__.returnHysteresisReplayToLive.");
+    }
+    return audit.returnHysteresisReplayToLive({ stageId });
+  }, hysteresisReplayStageId);
+  return "audit";
 }
 
 async function assertCameraGestureDoesNotFetch(page, gestureName, gesture) {

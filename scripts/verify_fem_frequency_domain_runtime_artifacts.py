@@ -349,7 +349,12 @@ def require_manifest_physics(manifest: dict) -> None:
         )
 
 
-def require_field_payload_metadata(point: dict, point_name: str) -> None:
+def require_field_payload_metadata(
+    root: Path,
+    point: dict,
+    point_name: str,
+    expected_payload_path: str,
+) -> None:
     expected = {
         "payload_encoding": "f64_interleaved_real_imag_xyz",
         "binary_layout": "complex_f64_pairs_little_endian",
@@ -390,6 +395,52 @@ def require_field_payload_metadata(point: dict, point_name: str) -> None:
             f"{point_name}.complex_pair_count overflows payload_value_count"
         )
     require_equal(payload_value_count, complex_pair_count * 2, f"{point_name}.payload_value_count")
+    if point.get("storage_format") == "zarr":
+        if complex_pair_count % 3 != 0:
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                f"{point_name}.complex_pair_count must be divisible by 3 for global_xyz Zarr payloads"
+            )
+        sample_count = complex_pair_count // 3
+        require_equal(
+            point.get("zarr_chunk_path"),
+            expected_payload_path,
+            f"{point_name}.zarr_chunk_path",
+        )
+        zarr_array_path = require_non_empty_string(
+            point.get("zarr_array_path"),
+            f"{point_name}.zarr_array_path",
+        )
+        require_equal(point.get("zarr_dtype"), "<f8", f"{point_name}.zarr_dtype")
+        require_equal(
+            point.get("zarr_shape"),
+            [sample_count, 3, 2],
+            f"{point_name}.zarr_shape",
+        )
+        require_equal(
+            point.get("zarr_chunk_shape"),
+            [max(sample_count, 1), 3, 2],
+            f"{point_name}.zarr_chunk_shape",
+        )
+        zarray_path = root / zarr_array_path / ".zarray"
+        if not zarray_path.is_file():
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                f"missing Zarr array metadata: {zarr_array_path}/.zarray"
+            )
+        zarray = load_json(zarray_path)
+        require_equal(zarray.get("zarr_format"), 2, f"{point_name}.zarray.zarr_format")
+        require_equal(
+            zarray.get("shape"),
+            [sample_count, 3, 2],
+            f"{point_name}.zarray.shape",
+        )
+        require_equal(
+            zarray.get("chunks"),
+            [max(sample_count, 1), 3, 2],
+            f"{point_name}.zarray.chunks",
+        )
+        require_equal(zarray.get("dtype"), "<f8", f"{point_name}.zarray.dtype")
 
 
 def require_tangent_payload_metadata(point: dict, point_name: str) -> tuple[str | None, int | None]:
@@ -604,6 +655,29 @@ def main() -> int:
                 "invalid frequency-domain runtime artifacts:\n"
                 "manifest.requested_execution.frequency_count must be an integer"
             )
+        requested_frequency_count = requested_execution["frequency_count"]
+        if requested_frequency_count < 0:
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                "manifest.requested_execution.frequency_count must be non-negative"
+            )
+        diagnostics_requested_frequency_count = diagnostics.get(
+            "requested_frequency_count"
+        )
+        if diagnostics_requested_frequency_count != requested_frequency_count:
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                "unavailable requested frequency count mismatch: "
+                f"manifest.requested_execution.frequency_count={requested_frequency_count!r}, "
+                f"diagnostics.requested_frequency_count={diagnostics_requested_frequency_count!r}"
+            )
+        if progress.get("total_frequency_points") != requested_frequency_count:
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                "unavailable requested frequency count mismatch: "
+                f"manifest.requested_execution.frequency_count={requested_frequency_count!r}, "
+                f"progress.total_frequency_points={progress.get('total_frequency_points')!r}"
+            )
         if not isinstance(requested_execution.get("write_response_fields"), bool):
             raise SystemExit(
                 "invalid frequency-domain runtime artifacts:\n"
@@ -634,7 +708,16 @@ def main() -> int:
                 manifest_artifacts.get("response_progress_v1_path"),
                 "response/progress.v1.json",
             ),
+            "manifest.artifacts.response_cancel_requested_v1_path": (
+                manifest_artifacts.get("response_cancel_requested_v1_path"),
+                None,
+            ),
         }
+        if "response_cancel_requested_v1_path" not in manifest_artifacts:
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                "manifest.artifacts.response_cancel_requested_v1_path is missing"
+            )
         require_expected(unavailable_artifact_refs)
         if manifest_artifacts.get("frequency_point_paths") != []:
             raise SystemExit(
@@ -656,7 +739,16 @@ def main() -> int:
                 manifest_resources.get("response_diagnostics_resource_key"),
                 "/v2/sessions/current/analysis/frequency-domain/response/diagnostics.v1",
             ),
+            "manifest.resources.response_cancel_requested_resource_key": (
+                manifest_resources.get("response_cancel_requested_resource_key"),
+                None,
+            ),
         }
+        if "response_cancel_requested_resource_key" not in manifest_resources:
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                "manifest.resources.response_cancel_requested_resource_key is missing"
+            )
         require_expected(unavailable_resource_refs)
         if manifest_resources.get("response_field_resources") != []:
             raise SystemExit(
@@ -694,13 +786,41 @@ def main() -> int:
     expected_complete = False if interrupted else True
     expected_status = "interrupted" if interrupted else "ready"
     expected_state = "interrupted" if interrupted else "completed"
-    expected_total_frequency_points = 2
-    expected_completed_frequency_points = (
-        progress.get("completed_frequency_points") if interrupted else 2
-    )
-    expected_written_frequency_point_artifacts = (
-        progress.get("written_frequency_point_artifacts") if interrupted else 2
-    )
+    expected_total_frequency_points = progress.get("total_frequency_points")
+    if (
+        not isinstance(expected_total_frequency_points, int)
+        or expected_total_frequency_points <= 0
+    ):
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "progress.total_frequency_points must be a positive integer"
+        )
+    expected_completed_frequency_points = progress.get("completed_frequency_points")
+    expected_written_frequency_point_artifacts = progress.get("written_frequency_point_artifacts")
+    if isinstance(expected_completed_frequency_points, int) and (
+        expected_completed_frequency_points > expected_total_frequency_points
+    ):
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "progress.total_frequency_points must be >= completed_frequency_points"
+        )
+    if isinstance(expected_written_frequency_point_artifacts, int) and (
+        expected_written_frequency_point_artifacts > expected_total_frequency_points
+    ):
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "progress.total_frequency_points must be >= written_frequency_point_artifacts"
+        )
+    if not interrupted and expected_completed_frequency_points != expected_total_frequency_points:
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "progress.completed_frequency_points must equal total_frequency_points for completed artifacts"
+        )
+    if not interrupted and expected_written_frequency_point_artifacts != expected_total_frequency_points:
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "progress.written_frequency_point_artifacts must equal total_frequency_points for completed artifacts"
+        )
     if interrupted:
         if not isinstance(expected_completed_frequency_points, int):
             raise SystemExit(
@@ -712,7 +832,10 @@ def main() -> int:
                 "invalid frequency-domain runtime artifacts:\n"
                 "progress.written_frequency_point_artifacts must be an integer for interrupted artifacts"
             )
-        if expected_completed_frequency_points < 0 or expected_completed_frequency_points >= 2:
+        if (
+            expected_completed_frequency_points < 0
+            or expected_completed_frequency_points >= expected_total_frequency_points
+        ):
             raise SystemExit(
                 "invalid frequency-domain runtime artifacts:\n"
                 "interrupted progress.completed_frequency_points must be >= 0 and < total_frequency_points"
@@ -722,7 +845,64 @@ def main() -> int:
                 "invalid frequency-domain runtime artifacts:\n"
                 "interrupted written_frequency_point_artifacts must match completed_frequency_points"
             )
+        cancel_requested_path = root / "response/cancel_requested.v1.json"
+        if not cancel_requested_path.is_file():
+            raise SystemExit(
+                "missing required frequency-domain runtime artifacts:\n"
+                "response/cancel_requested.v1.json"
+            )
+        cancel_requested = load_json(cancel_requested_path)
+        cancel_expected = {
+            "cancel_requested.schema_version": (
+                cancel_requested.get("schema_version"),
+                "frequency_domain_sweep_progress.v1",
+            ),
+            "cancel_requested.status": (
+                cancel_requested.get("status"),
+                "cancel_requested",
+            ),
+            "cancel_requested.state": (
+                cancel_requested.get("state"),
+                "cancel_requested",
+            ),
+            "cancel_requested.complete": (cancel_requested.get("complete"), False),
+            "cancel_requested.total_frequency_points": (
+                cancel_requested.get("total_frequency_points"),
+                expected_total_frequency_points,
+            ),
+            "cancel_requested.completed_frequency_points": (
+                cancel_requested.get("completed_frequency_points"),
+                expected_completed_frequency_points,
+            ),
+            "cancel_requested.written_frequency_point_artifacts": (
+                cancel_requested.get("written_frequency_point_artifacts"),
+                expected_written_frequency_point_artifacts,
+            ),
+            "cancel_requested.partial_artifacts_available": (
+                cancel_requested.get("partial_artifacts_available"),
+                expected_written_frequency_point_artifacts > 0,
+            ),
+            "manifest.artifacts.response_cancel_requested_v1_path": (
+                manifest.get("artifacts", {}).get("response_cancel_requested_v1_path"),
+                "response/cancel_requested.v1.json",
+            ),
+            "manifest.resources.response_cancel_requested_resource_key": (
+                manifest.get("resources", {}).get(
+                    "response_cancel_requested_resource_key"
+                ),
+                "/v2/sessions/current/analysis/frequency-domain/response/cancel-requested.v1",
+            ),
+        }
+        require_expected(cancel_expected)
 
+    expected_cancel_requested_artifact_path = (
+        "response/cancel_requested.v1.json" if interrupted else None
+    )
+    expected_cancel_requested_resource_key = (
+        "/v2/sessions/current/analysis/frequency-domain/response/cancel-requested.v1"
+        if interrupted
+        else None
+    )
     expected = {
         "sweep_v1.schema_version": (
             sweep_v1.get("schema_version"),
@@ -762,7 +942,7 @@ def main() -> int:
         ),
         "sweep_v1.point_count": (
             sweep_v1.get("point_count"),
-            2,
+            expected_completed_frequency_points,
         ),
         "sweep.schema_version": (
             sweep.get("schema_version"),
@@ -776,7 +956,7 @@ def main() -> int:
         ),
         "sweep.point_count": (
             sweep.get("point_count"),
-            expected_total_frequency_points,
+            expected_completed_frequency_points,
         ),
         "progress.status": (progress.get("status"), expected_status),
         "progress.schema_version": (
@@ -878,6 +1058,14 @@ def main() -> int:
         "manifest.resources.response_sweep_resource_key": (
             manifest.get("resources", {}).get("response_sweep_resource_key"),
             "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep",
+        ),
+        "manifest.artifacts.response_cancel_requested_v1_path": (
+            manifest.get("artifacts", {}).get("response_cancel_requested_v1_path"),
+            expected_cancel_requested_artifact_path,
+        ),
+        "manifest.resources.response_cancel_requested_resource_key": (
+            manifest.get("resources", {}).get("response_cancel_requested_resource_key"),
+            expected_cancel_requested_resource_key,
         ),
         "manifest.diagnostics.completed_frequency_point_count": (
             manifest_completed_frequency_point_count(manifest),
@@ -1137,13 +1325,6 @@ def main() -> int:
                 "invalid frequency-domain runtime artifacts:\n"
                 f"first frequency point path: got {point_paths[0]!r}, expected {expected_first_point!r}"
             )
-    if write_response_fields and completed_count > 0:
-        expected_first_payload = "response/field_payloads/frequency_0000/vector_xyz.bin"
-        if payload_paths[0] != expected_first_payload:
-            raise SystemExit(
-                "invalid frequency-domain runtime artifacts:\n"
-                f"first payload path: got {payload_paths[0]!r}, expected {expected_first_payload!r}"
-            )
     missing_linked = [
         relative_path
         for relative_path in [*point_paths, *payload_paths]
@@ -1217,6 +1398,7 @@ def main() -> int:
         )
         require_response_observables(point_value, f"sweep.points[{index}]")
         require_response_series(point_value, f"sweep.points[{index}]")
+        require_sweep_reuse(point_value, f"sweep.points[{index}]")
         require_finite_number(
             point_value.get("relative_residual_l2_norm"),
             f"sweep.points[{index}].relative_residual_l2_norm",
@@ -1250,9 +1432,13 @@ def main() -> int:
         )
         require_response_observables(point_artifact, expected_point_path)
         require_response_series(point_artifact, expected_point_path)
+        require_excitation_provenance(point_artifact, expected_point_path)
+        require_sweep_reuse(point_artifact, expected_point_path)
         for observable_key in [
             "angular_frequency_rad_per_s",
             "absorbed_power_density",
+            "excitation_provenance",
+            "sweep_reuse",
             "m_complex",
             "response_amplitude",
             "response_phase",
@@ -1277,7 +1463,12 @@ def main() -> int:
             f"{expected_point_path}.field_payload_path",
         )
         if write_response_fields:
-            require_field_payload_metadata(point_artifact, expected_point_path)
+            require_field_payload_metadata(
+                root,
+                point_artifact,
+                expected_point_path,
+                expected_payload_path,
+            )
         tangent_payload_path, tangent_payload_value_count = require_tangent_payload_metadata(
             point_artifact,
             expected_point_path,

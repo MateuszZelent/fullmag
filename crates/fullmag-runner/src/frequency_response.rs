@@ -1399,6 +1399,73 @@ mod tests {
         periodic.mesh.periodic_boundary_pairs[0].translation = Some([1.0, 0.0, 0.0]);
         assert!(super::production_cpu_frequency_response_rejection_reason(&periodic).is_none());
 
+        let mut multi_pair = minimal_frequency_response_plan();
+        multi_pair.mesh.nodes = vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        multi_pair.equilibrium_magnetization =
+            vec![[1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 0.0]];
+        multi_pair.mesh.periodic_boundary_pairs = vec![
+            fullmag_ir::MeshPeriodicBoundaryPairIR {
+                pair_id: "x_faces".to_string(),
+                source_marker: None,
+                destination_marker: None,
+                marker_a: 1,
+                marker_b: 2,
+                translation: Some([1.0, 0.0, 0.0]),
+                tolerance: Some(1.0e-12),
+                axis_hint: Some("x".to_string()),
+                orientation: None,
+                pairing_policy: None,
+            },
+            fullmag_ir::MeshPeriodicBoundaryPairIR {
+                pair_id: "y_faces".to_string(),
+                source_marker: None,
+                destination_marker: None,
+                marker_a: 3,
+                marker_b: 4,
+                translation: Some([0.0, 1.0, 0.0]),
+                tolerance: Some(1.0e-12),
+                axis_hint: Some("y".to_string()),
+                orientation: None,
+                pairing_policy: None,
+            },
+        ];
+        multi_pair.mesh.periodic_node_pairs = vec![
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "x_faces".to_string(),
+                node_a: 0,
+                node_b: 1,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "y_faces".to_string(),
+                node_a: 0,
+                node_b: 2,
+            },
+        ];
+        multi_pair.spin_wave_bc =
+            fullmag_ir::SpinWaveBoundaryConditionIR::Config(fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: fullmag_ir::SpinWaveBoundaryKindIR::Periodic,
+                boundary_pair_id: None,
+                pair_ids: vec!["x_faces".to_string(), "y_faces".to_string()],
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            });
+        assert!(super::production_cpu_frequency_response_rejection_reason(&multi_pair).is_none());
+        multi_pair.spin_wave_bc =
+            fullmag_ir::SpinWaveBoundaryConditionIR::Config(fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: fullmag_ir::SpinWaveBoundaryKindIR::Periodic,
+                boundary_pair_id: None,
+                pair_ids: vec!["x_faces".to_string(), "z_faces".to_string()],
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            });
+        assert!(
+            super::production_cpu_frequency_response_rejection_reason(&multi_pair)
+                .expect("unknown selected periodic pair id should reject")
+                .contains("unknown periodic boundary pair")
+        );
+
         let mut bad_translation = periodic.clone();
         bad_translation.mesh.periodic_boundary_pairs[0].translation = Some([0.5, 0.0, 0.0]);
         assert!(

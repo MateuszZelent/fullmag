@@ -1354,6 +1354,127 @@ button.fm-mesh-detail-list__item:focus-visible {
   font-weight: 550;
 }
 
+.fm-frequency-domain-chart {
+  display: grid;
+  gap: var(--fm-space-2);
+  width: 100%;
+  min-height: 160px;
+  padding: var(--fm-space-3);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-lg);
+  background:
+    radial-gradient(
+      circle at 12% 0%,
+      color-mix(in srgb, var(--fm-chart-blue) 12%, transparent),
+      transparent 34%
+    ),
+    var(--fm-bg-panel-raised);
+}
+
+.fm-frequency-domain-chart__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--fm-space-2);
+  color: var(--fm-text-primary);
+  font-size: var(--fm-font-size-sm);
+  font-weight: 650;
+}
+
+.fm-frequency-domain-chart__header small {
+  color: var(--fm-text-muted);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-xs);
+  font-weight: 500;
+}
+
+.fm-frequency-domain-chart__canvas {
+  width: 100%;
+  min-height: 180px;
+}
+
+.fm-frequency-domain-chart__summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--fm-space-2);
+  color: var(--fm-text-muted);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-frequency-domain-chart__summary span {
+  padding: var(--fm-space-1) var(--fm-space-2);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-lg);
+  background: color-mix(in srgb, var(--fm-bg-surface) 72%, transparent);
+}
+
+.fm-frequency-domain-chart__empty {
+  display: grid;
+  min-height: 96px;
+  place-items: center;
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-sm);
+}
+
+.fm-frequency-domain-table-wrap {
+  width: 100%;
+  margin-top: var(--fm-space-2);
+  overflow-x: auto;
+}
+
+.fm-frequency-domain-table {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--fm-text-primary);
+  font-size: var(--fm-font-size-xs);
+  text-align: left;
+}
+
+.fm-frequency-domain-table th,
+.fm-frequency-domain-table td {
+  padding: var(--fm-space-1) var(--fm-space-2);
+  border-bottom: 1px solid var(--fm-border-subtle);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.fm-frequency-domain-table th {
+  border-bottom-color: var(--fm-border-strong);
+  color: var(--fm-text-muted);
+  font-weight: 650;
+}
+
+.fm-frequency-domain-table tr[data-status="missing"] {
+  background: color-mix(in srgb, var(--fm-warning) 7%, transparent);
+}
+
+.fm-frequency-domain-table__actions-heading {
+  text-align: right;
+}
+
+.fm-frequency-domain-table__actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.fm-frequency-domain-table__actions .fm-inspector-action-button {
+  min-height: 22px;
+  padding: 0 var(--fm-space-2);
+  font-size: 10px;
+}
+
+.fm-frequency-domain-table-empty {
+  display: grid;
+  min-height: 64px;
+  margin-top: var(--fm-space-2);
+  place-items: center;
+  border: 1px dashed var(--fm-border-subtle);
+  border-radius: var(--fm-radius-md);
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+}
+
 .fm-mesh-size-distributions {
   display: grid;
   gap: var(--fm-space-3);

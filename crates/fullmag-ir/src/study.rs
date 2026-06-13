@@ -965,6 +965,8 @@ pub struct SaturationProbeIR {
     pub max_field_mT: f64,
     pub susceptibility_threshold: f64,
     pub transverse_threshold: f64,
+    #[serde(default = "default_saturation_on_failure")]
+    pub on_failure: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1101,6 +1103,10 @@ pub enum SettleStepIR {
         torque_tolerance: f64,
         max_steps: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        applies_to: Option<serde_json::Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stop_criteria: Option<serde_json::Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         timestep_s: Option<f64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_pseudotime_s: Option<f64>,
@@ -1118,6 +1124,10 @@ pub enum SettleStepIR {
         energy_tolerance: f64,
         max_steps: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        applies_to: Option<serde_json::Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stop_criteria: Option<serde_json::Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         timestep_s: Option<f64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_pseudotime_s: Option<f64>,
@@ -1133,6 +1143,10 @@ pub enum SettleStepIR {
         method: String,
         damping: f64,
         max_steps: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        applies_to: Option<serde_json::Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stop_criteria: Option<serde_json::Value>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timestep_s: Option<f64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1187,6 +1201,10 @@ fn default_measurement_axis() -> MeasurementAxisIR {
 
 fn default_initial_protocol() -> String {
     "positive_saturation".to_string()
+}
+
+fn default_saturation_on_failure() -> String {
+    "continue_with_warning".to_string()
 }
 
 fn default_branch_mode() -> String {

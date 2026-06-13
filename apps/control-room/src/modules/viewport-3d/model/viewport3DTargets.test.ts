@@ -86,6 +86,55 @@ describe("viewport3DTargets", () => {
     });
   });
 
+  it("preserves replay metadata from explorer hysteresis snapshot selections", () => {
+    const selection: Selection = {
+      kind: "study.stage.action",
+      label: "Snapshot hysteresis_point_005",
+      moduleSource: "explorer",
+      nodeId:
+        "model:study:stages:stage:hysteresis-1:field-point:4:snapshot:hysteresis_point_005",
+      objectId: null,
+      ref: {
+        fieldOrientation: JSON.stringify({ kind: "preset", preset_name: "in_plane_x" }),
+        fieldRevision: 12,
+        kind: "study.stage.action",
+        measurementAxis: JSON.stringify({ kind: "custom", vector: [1, 0, 0] }),
+        meshIdentity: "study_domain:rev-12",
+        nodeId:
+          "model:study:stages:stage:hysteresis-1:field-point:4:snapshot:hysteresis_point_005",
+        pointId: 4,
+        quantityId: "m",
+        resourceRef: fieldVectorResourceRef(
+          "m",
+          "hysteresis_point_005",
+          "hysteresis-1",
+        ),
+        snapshotId: "hysteresis_point_005",
+        stageId: "hysteresis-1",
+        stageIndex: 0,
+        targetId: "hysteresis-step:hysteresis-1:4",
+        type: "hysteresis-snapshot",
+      },
+    };
+
+    expect(resolveHysteresisStepViewportTarget(selection)).toEqual({
+      fieldOrientation: JSON.stringify({ kind: "preset", preset_name: "in_plane_x" }),
+      fieldRevision: 12,
+      measurementAxis: JSON.stringify({ kind: "custom", vector: [1, 0, 0] }),
+      meshIdentity: "study_domain:rev-12",
+      pointId: 4,
+      quantityId: "m",
+      resourceRef: fieldVectorResourceRef(
+        "m",
+        "hysteresis_point_005",
+        "hysteresis-1",
+      ),
+      snapshotId: "hysteresis_point_005",
+      stageId: "hysteresis-1",
+      targetId: "hysteresis-step:hysteresis-1:4",
+    });
+  });
+
   it("detects hysteresis replay mesh identity mismatches without remapping", () => {
     expect(
       resolveHysteresisReplayMeshCompatibility(

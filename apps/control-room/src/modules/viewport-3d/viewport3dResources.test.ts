@@ -105,6 +105,24 @@ describe("viewport3dResources", () => {
     );
   });
 
+  it("includes eigen mode analysis field ids, view, and phase in field vector resource keys", () => {
+    expect(
+      resolveViewport3DFieldVectorResourceKey(
+        "analysis:eigen:sample-0000:mode-0002",
+        {
+          component: "full",
+          phase_rad: 0.5,
+          view: "phase_rotated_real",
+        },
+      ),
+    ).toBe(
+      `${DATA_FIELD_VECTOR_PATH.replace(
+        "{quantity_id}",
+        "analysis%3Aeigen%3Asample-0000%3Amode-0002",
+      )}?component=full&view=phase_rotated_real&phase_rad=0.5`,
+    );
+  });
+
   it("preserves analysis view and phase in the field-vector hook query", () => {
     const source = readFileSync(viewport3dResourcesSourceUrl, "utf8");
 

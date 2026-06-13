@@ -15,11 +15,40 @@ The canonical artifact family is:
 artifacts/eigen/spectrum.v2.json
 artifacts/eigen/branches.v2.json
 artifacts/eigen/dispersion.csv
-artifacts/eigen/modes/sample_XXXX_mode_YYYY.json
+artifacts/eigen/modes/sample_XXXX/mode_YYYY.json
+artifacts/eigen/mode_fields.zarr/
 artifacts/response/magnetic_response_sweep.v1.json
 artifacts/response/magnetic_response_sweep.v2.json
+artifacts/response/field_payloads.zarr/
 artifacts/mesh/periodic_pairs.v1.json
 ```
+
+## Storage format policy
+
+JSON is the control-plane format only. Frequency-domain JSON artifacts may
+carry schema versions, small summaries, provenance, diagnostics, resource
+keys, and links, but must not become the default storage format for large
+numerical arrays.
+
+The default heavy-data format for new frequency-domain artifacts is a Zarr
+directory store:
+
+- modal mode fields: `eigen/mode_fields.zarr`,
+- driven response field payloads: `response/field_payloads.zarr`,
+- future dense response maps over `(k, f, component)`,
+- future multi-mode amplitude/phase tensors.
+
+HDF5/H5 is an allowed alternate backend or export format when the runtime
+environment already provides an HDF5 stack and the API can expose the same
+resource semantics. HDF5/H5 must not change the public resource identity:
+Control Room consumes named v2 resources and data-plane field endpoints, not
+backend-specific file paths.
+
+Raw `*.bin` payloads and JSON-heavy payloads are compatibility formats. New
+writers may keep them for migration tests, small smoke fixtures, or
+backward-compatible readers. Production-size mode fields and response fields
+should be written to Zarr by default, with compression enabled for chunked
+floating-point arrays.
 
 Legacy artifacts may remain readable, but new dispersion UI and API surfaces
 must prefer the v2 family.
@@ -100,7 +129,7 @@ sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_m
 `residual_norm` may be empty only for solver paths that explicitly report the
 diagnostic as unavailable.
 
-## modes/sample_XXXX_mode_YYYY.json
+## modes/sample_XXXX/mode_YYYY.json
 
 Required fields:
 
@@ -127,13 +156,54 @@ Required fields:
 
 Mode metadata must not inline large vector arrays such as `real`, `imag`,
 `amplitude`, or `phase`. Reconstructed physical vectors live in
-`eigen/mode_fields/sample_XXXX/mode_YYYY/vector.bin` and are exposed through
-the data-plane field resource referenced by `mode_field_resource_key`.
+`eigen/mode_fields.zarr` by default and are exposed through the data-plane
+field resource referenced by `mode_field_resource_key`.
+
+The canonical Zarr group layout for modal fields is:
+
+```text
+eigen/mode_fields.zarr/
+  sample_XXXX/
+    mode_YYYY/
+      vector_xyz_complex
+```
+
+`vector_xyz_complex` stores chunked floating-point values with logical shape
+`[node, component, complex]`, where `component = x|y|z` and
+`complex = real|imag`. The preferred dtype is `float64` for production
+validation and `float32` only when the run provenance explicitly records a
+qualified single-precision execution. The array must be compressed by the Zarr
+codec configured for the runtime. If a compatibility `vector.bin` file exists,
+it is a derived/export payload, not the authoritative production store.
+
 `residual_norm` and `residual_linf` are the generalized eigen residual norms
 reported by the producing solver for the exported mode. Tangent leakage
 diagnostics are the mean and max absolute `m0 dot dm` over the exported real
 and imaginary mode vectors, and must be emitted whenever the solver
 reconstructs physical mode vectors.
+
+## frequency_domain/manifest.v1.json
+
+The manifest is the entry point for UI and post-processing discovery. Modal
+eigen manifests must include:
+
+- `schema_version = "frequency_domain_manifest.v1"`,
+- `stage_kind = "eigenmodes"`,
+- `physics.analysis_family = "magnetic_frequency_domain"`,
+- `physics.phase_convention` as either `exp_i_omega_t` or
+  `exp_minus_i_omega_t`,
+- `physics.frequency_units = "Hz"`,
+- `physics.field_units = "dimensionless_delta_m"`,
+- `physics.normalization`,
+- `artifacts.spectrum_v2_path = "eigen/spectrum.v2.json"`,
+- `artifacts.branches_v2_path = "eigen/branches.v2.json"`,
+- `artifacts.dispersion_csv_path = "eigen/dispersion.csv"`,
+- `artifacts.mode_metadata_paths[]`,
+- `resources.mode_field_resources[]`.
+
+Driven response manifests use the same temporal phase convention field, but
+their field units are `A_per_m` because the response payloads are dynamic
+magnetic-field-space vectors rather than normalized modal perturbations.
 
 ## response/magnetic_response_sweep.v1.json
 
@@ -220,8 +290,13 @@ complete. The first entries must follow the canonical layout:
 
 ```text
 response/frequency_points/frequency_0000.json
-response/field_payloads/frequency_0000/vector_xyz.bin
+response/field_payloads.zarr/frequency_0000/vector_xyz_complex/0.0.0
 ```
+
+`point_count` is the number of published point rows and must equal
+`completed_frequency_point_count`. The full requested sweep size belongs to
+`response/progress.v1.json.total_frequency_points`, so interrupted runs can
+publish `point_count < total_frequency_points`.
 
 Each point should include:
 
@@ -233,6 +308,7 @@ Each point should include:
 - `absorbed_power_density`,
 - `relative_residual_l2_norm`,
 - `excitation_provenance`,
+- `sweep_reuse`,
 - `response_field_payload_path`,
 - `frequency_point_artifact_path`,
 - `response_tangent_field_payload_path` when the point artifact declares
@@ -292,6 +368,43 @@ fields or set `static_periodic_projection = false` with zero pair count and
 finite zero mismatches. Consumers must not interpret these fields as nonzero-k
 Floquet/Bloch support.
 
+## response/cancel_requested.v1.json
+
+This artifact records the moment a driven-response sweep observed a cancellation
+request. It is distinct from the final interrupted `response/progress.v1.json`
+so the UI can explain that a user/runtime stop request was seen before the
+solver wrote its final partial bundle.
+
+Interrupted response sweeps must write this artifact. Completed, unavailable,
+or never-started response sweeps may omit it.
+
+Required fields:
+
+- `schema_version = "frequency_domain_sweep_progress.v1"`,
+- `status = "cancel_requested"`,
+- `state = "cancel_requested"`,
+- `complete = false`,
+- `total_frequency_points`,
+- `completed_frequency_points`,
+- `written_frequency_point_artifacts`,
+- `partial_artifacts_available`.
+
+`completed_frequency_points`, `written_frequency_point_artifacts`, and
+`partial_artifacts_available` must match the final interrupted
+`response/progress.v1.json` checkpoint. The API resource is
+`/v2/sessions/current/analysis/frequency-domain/response/cancel-requested.v1`,
+while the artifact path on disk is `response/cancel_requested.v1.json`.
+
+`frequency_domain/manifest.v1.json` links this artifact explicitly:
+
+- `artifacts.response_cancel_requested_v1_path =
+  "response/cancel_requested.v1.json"` for interrupted response sweeps,
+- `resources.response_cancel_requested_resource_key =
+  "/v2/sessions/current/analysis/frequency-domain/response/cancel-requested.v1"`
+  for interrupted response sweeps.
+
+Both manifest fields are `null` for completed and unavailable response sweeps.
+
 ## response/frequency_points/frequency_XXXX.json
 
 This artifact is the per-frequency response point descriptor. It is the source
@@ -335,13 +448,31 @@ table:
 - `residual_l2_norm`,
 - `relative_residual_l2_norm`,
 - `residual_source`,
-- `tangent_leakage`.
+- `tangent_leakage`,
+- `excitation_provenance`,
+- `sweep_reuse`.
+
+`excitation_provenance` and `sweep_reuse` must match the corresponding
+`magnetic_response_sweep.v2.json.points[]` row. Point inspectors and API
+resource handlers may load a single frequency point without the full sweep, so
+drive phasor provenance and operator-template/warm-start reuse provenance must
+be self-contained in the point artifact.
 
 For the native FEM magnetic driven-response slice, the canonical 3D
 visualization payload metadata is:
 
 ```json
 {
+  "storage_format": "zarr",
+  "zarr_store_path": "response/field_payloads.zarr",
+  "zarr_array_path": "response/field_payloads.zarr/frequency_0000/vector_xyz_complex",
+  "zarr_chunk_path": "response/field_payloads.zarr/frequency_0000/vector_xyz_complex/0.0.0",
+  "zarr_dtype": "<f8",
+  "zarr_shape": [1234, 3, 2],
+  "zarr_chunk_shape": [1234, 3, 2],
+  "zarr_compressor": null,
+  "field_payload_path": "response/field_payloads.zarr/frequency_0000/vector_xyz_complex/0.0.0",
+  "compatibility_binary_payload_path": "response/field_payloads/frequency_0000/vector_xyz.bin",
   "payload_encoding": "f64_interleaved_real_imag_xyz",
   "binary_layout": "complex_f64_pairs_little_endian",
   "value_kind": "complex_spatial_vector",
@@ -350,6 +481,11 @@ visualization payload metadata is:
   "components": ["x", "y", "z"]
 }
 ```
+
+`zarr_array_path` identifies the logical Zarr array directory. `zarr_chunk_path`
+and `field_payload_path` identify the concrete chunk read by the binary
+data-plane resource. JSON resources must expose both so UI inspectors can show
+storage provenance while the field codec reads a single bounded payload.
 
 Production native FEM writers may also include:
 
@@ -366,7 +502,10 @@ These tangent fields are diagnostic/raw-solver payloads. UI 3D overlays must
 use the canonical `field_payload_path` spatial XYZ payload unless they
 explicitly implement tangent-frame reconstruction.
 
-The binary file stores little-endian `f64` values as interleaved complex pairs:
+The canonical Zarr array stores chunked floating-point values with logical
+shape `[node, component, complex]`, where `component = x|y|z` and
+`complex = real|imag`. Compatibility binary exports store little-endian `f64`
+values as interleaved complex pairs:
 
 ```text
 x_re, x_im, y_re, y_im, z_re, z_im, x_re, x_im, y_re, y_im, z_re, z_im, ...
@@ -375,8 +514,11 @@ x_re, x_im, y_re, y_im, z_re, z_im, x_re, x_im, y_re, y_im, z_re, z_im, ...
 `complex_pair_count` is the number of complex spatial components in the file.
 For three XYZ components per magnetic node, `complex_pair_count = 3 *
 magnetic_node_count`. `payload_value_count` is the number of scalar `f64` values
-and must equal `2 * complex_pair_count`. When `field_payload_path` is not null,
-the binary file size must equal `payload_value_count * 8` bytes.
+and must equal `2 * complex_pair_count`. When `storage_format = "zarr"`, the
+Zarr array metadata and chunks are authoritative, and `payload_value_count` is a
+consistency check against the declared logical shape. When a compatibility
+binary `field_payload_path` is not null, the binary file size must equal
+`payload_value_count * 8` bytes.
 
 `available_views[]` must include at least:
 
@@ -396,14 +538,17 @@ descriptors, not bare payload paths:
 {
   "frequency_index": 0,
   "field_resource_id": "analysis:frequency-response:frequency-0000",
-  "payload_path": "response/field_payloads/frequency_0000/vector_xyz.bin"
+  "payload_path": "response/field_payloads.zarr/frequency_0000/vector_xyz_complex/0.0.0",
+  "zarr_array_path": "response/field_payloads.zarr/frequency_0000/vector_xyz_complex",
+  "zarr_chunk_path": "response/field_payloads.zarr/frequency_0000/vector_xyz_complex/0.0.0"
 }
 ```
 
 `field_resource_id` is the data-plane field id used by
 `/v2/sessions/current/data/fields/{field_id}/samples/vector`. `payload_path`
-must match the corresponding `response_field_payload_paths[]` entry in
-`magnetic_response_sweep.v2.json`.
+must match the corresponding chunk-level `response_field_payload_paths[]` entry
+in `magnetic_response_sweep.v2.json`. The array directory remains available via
+`zarr_array_path` for storage inspection and provenance.
 
 ## periodic_pairs.v1.json
 

@@ -70,8 +70,19 @@ function HysteresisSettleTraceRow({
         )}
         {entry.torque != null && <span>Torque: {entry.torque.toExponential(2)}</span>}
         {entry.energy != null && <span>Energy: {entry.energy.toExponential(2)}</span>}
+        {entry.stop_reason && <span>Stop reason: {entry.stop_reason}</span>}
+        {entry.resolved_parameters != null && (
+          <span>
+            Resolved params: {settleTraceValue(entry.resolved_parameters)}
+          </span>
+        )}
         {entry.fallback_reason && <span>Fallback: {entry.fallback_reason}</span>}
       </div>
     </div>
   );
+}
+
+function settleTraceValue(value: unknown): string {
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
 }

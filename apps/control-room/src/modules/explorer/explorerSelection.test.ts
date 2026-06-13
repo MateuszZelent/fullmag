@@ -162,6 +162,38 @@ describe("selectExplorerNode", () => {
     });
   });
 
+  it("preserves hysteresis snapshot replay metadata for viewport compatibility checks", () => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      id: "model:study:stages:stage:hysteresis-1:field-point:7:snapshot:hysteresis_point_007",
+      kind: "study.stage.action",
+      label: "Snapshot hysteresis_point_007",
+      parentId: "model:study:stages:stage:hysteresis-1:field-point:7",
+      fieldOrientation: JSON.stringify({ kind: "preset", preset_name: "in_plane_x" }),
+      fieldRevision: 12,
+      hysteresisPointId: 7,
+      hysteresisSnapshotId: "hysteresis_point_007",
+      measurementAxis: JSON.stringify({ kind: "custom", vector: [1, 0, 0] }),
+      meshIdentity: "study_domain:rev-12",
+      resourceRef: snapshotVectorResourceKey("hysteresis_point_007"),
+      stageId: "hysteresis-1",
+      stageIndex: 0,
+    };
+
+    selectExplorerNode(kernel, node, "explorer");
+
+    expect(kernel.selection.get()).toMatchObject({
+      ref: {
+        fieldOrientation: JSON.stringify({ kind: "preset", preset_name: "in_plane_x" }),
+        fieldRevision: 12,
+        measurementAxis: JSON.stringify({ kind: "custom", vector: [1, 0, 0] }),
+        meshIdentity: "study_domain:rev-12",
+        snapshotId: "hysteresis_point_007",
+        type: "hysteresis-snapshot",
+      },
+    });
+  });
+
   it("preserves hysteresis execution-tree metadata on study-stage selections", () => {
     const kernel = makeKernel();
     const node: ExplorerNode = {

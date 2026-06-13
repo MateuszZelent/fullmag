@@ -15,6 +15,7 @@ import {
   type TableRowsLike,
 } from "./chartTableModel";
 import { EChartsSurface } from "./components/EChartsSurface";
+import { frequencyDomainXAxisLabel } from "./frequencyDomainSeriesAdapter";
 
 const EMPTY_CHART_SERIES: readonly ChartSeries[] = [];
 
@@ -276,7 +277,7 @@ export function AnalysisPlotsView({
                   dataStatus={frequencyDomainStatus}
                   onPointSelect={onPointSelect}
                   series={frequencyDomainSeries}
-                  xAxisLabel={formatFrequencyDomainXAxisLabel(frequencyDomainSeries)}
+                  xAxisLabel={frequencyDomainXAxisLabel(frequencyDomainSeries)}
                 />
               </>
             ) : (
@@ -348,11 +349,6 @@ function buildSeriesLegend(
 function formatXAxisLabel(chartSeries: readonly ChartSeries[], xAxisId: string): string {
   const unit = chartSeries.find((series) => series.xUnit)?.xUnit;
   return unit ? `${xAxisId} [${unit}]` : xAxisId;
-}
-
-function formatFrequencyDomainXAxisLabel(chartSeries: readonly ChartSeries[]): string {
-  const unit = chartSeries.find((series) => series.xUnit)?.xUnit;
-  return unit ? `x [${unit}]` : "x";
 }
 
 function formatFrequencyDomainEmptyState(status: string): string {

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import math
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from fullmag.model.dynamics import LLG
 from fullmag.model.eigen import ModeTracking, coerce_k_sampling
@@ -42,6 +42,30 @@ SUPPORTED_SETTLE_NON_CONVERGENCE_POLICIES = {
     "stop_stage",
     "run_next_algorithm",
     "retry_with_smaller_dt",
+}
+SUPPORTED_SETTLE_APPLIES_TO = {
+    "all_points",
+    "preparation",
+    "saturation_probe",
+    "major",
+    "minor",
+    "recoil",
+    "key_events",
+    "branch_id",
+    "point_selector",
+}
+SUPPORTED_SETTLE_STOP_CRITERIA = {
+    "torque_below",
+    "energy_delta_below",
+    "max_steps",
+    "max_pseudotime_s",
+    "max_physical_time_s",
+    "m_delta_below",
+}
+SUPPORTED_SETTLE_STOP_CRITERIA_GROUPS = {"all_of", "any_of"}
+SUPPORTED_SATURATION_FAILURE_POLICIES = {
+    "continue_with_warning",
+    "stop_stage",
 }
 SUPPORTED_FIELD_ORIENTATION_PRESETS = {
     "oop_positive",
@@ -967,9 +991,14 @@ class SaturationProbe:
     max_field_mT: float = 300.0
     susceptibility_threshold: float = 1e-3
     transverse_threshold: float = 1e-2
+    on_failure: str = "continue_with_warning"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "mode", require_non_empty(self.mode, "SaturationProbe.mode"))
+        on_failure = require_non_empty(self.on_failure, "SaturationProbe.on_failure")
+        if on_failure not in SUPPORTED_SATURATION_FAILURE_POLICIES:
+            supported = ", ".join(sorted(SUPPORTED_SATURATION_FAILURE_POLICIES))
+            raise ValueError(f"SaturationProbe.on_failure must be one of: {supported}")
         max_field = float(self.max_field_mT)
         susceptibility = float(self.susceptibility_threshold)
         transverse = float(self.transverse_threshold)
@@ -982,6 +1011,7 @@ class SaturationProbe:
         object.__setattr__(self, "max_field_mT", max_field)
         object.__setattr__(self, "susceptibility_threshold", susceptibility)
         object.__setattr__(self, "transverse_threshold", transverse)
+        object.__setattr__(self, "on_failure", on_failure)
 
     def to_ir(self) -> dict[str, object]:
         return {
@@ -989,6 +1019,7 @@ class SaturationProbe:
             "max_field_mT": self.max_field_mT,
             "susceptibility_threshold": self.susceptibility_threshold,
             "transverse_threshold": self.transverse_threshold,
+            "on_failure": self.on_failure,
         }
 
 
@@ -1254,6 +1285,70 @@ def _validate_settle_retry_policy(
         raise ValueError("retry_with_smaller_dt requires retry_timestep_scale")
 
 
+def _require_supported_settle_applies_to(value: object | None) -> object | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        normalized = require_non_empty(value, "applies_to")
+        if normalized not in SUPPORTED_SETTLE_APPLIES_TO:
+            supported = ", ".join(sorted(SUPPORTED_SETTLE_APPLIES_TO))
+            raise ValueError(f"applies_to must be one of: {supported}")
+        return normalized
+    if isinstance(value, Sequence):
+        normalized = [
+            _require_supported_settle_applies_to(item)
+            for item in value
+            if item is not None
+        ]
+        if not normalized:
+            raise ValueError("applies_to list must not be empty")
+        return normalized
+    if isinstance(value, Mapping):
+        kind = require_non_empty(str(value.get("kind", "")), "applies_to.kind")
+        if kind not in SUPPORTED_SETTLE_APPLIES_TO:
+            supported = ", ".join(sorted(SUPPORTED_SETTLE_APPLIES_TO))
+            raise ValueError(f"applies_to.kind must be one of: {supported}")
+        return dict(value)
+    raise TypeError("applies_to must be a string, list, mapping, or None")
+
+
+def _require_supported_settle_stop_criteria(value: object | None) -> object | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        normalized = require_non_empty(value, "stop_criteria")
+        if normalized not in SUPPORTED_SETTLE_STOP_CRITERIA:
+            supported = ", ".join(sorted(SUPPORTED_SETTLE_STOP_CRITERIA))
+            raise ValueError(f"stop_criteria must be one of: {supported}")
+        return normalized
+    if isinstance(value, Sequence):
+        normalized = [
+            _require_supported_settle_stop_criteria(item)
+            for item in value
+            if item is not None
+        ]
+        if not normalized:
+            raise ValueError("stop_criteria list must not be empty")
+        return normalized
+    if isinstance(value, Mapping):
+        kind = require_non_empty(str(value.get("kind", "")), "stop_criteria.kind")
+        if kind not in SUPPORTED_SETTLE_STOP_CRITERIA_GROUPS:
+            supported = ", ".join(sorted(SUPPORTED_SETTLE_STOP_CRITERIA_GROUPS))
+            raise ValueError(f"stop_criteria.kind must be one of: {supported}")
+        criteria = value.get("criteria")
+        if not isinstance(criteria, Sequence) or isinstance(criteria, str):
+            raise ValueError("stop_criteria.criteria must be a non-empty list")
+        normalized_criteria = [
+            _require_supported_settle_stop_criteria(item)
+            for item in criteria
+            if item is not None
+        ]
+        if not normalized_criteria:
+            raise ValueError("stop_criteria.criteria must not be empty")
+        return {"kind": kind, "criteria": normalized_criteria}
+    raise TypeError("stop_criteria must be a string, list, mapping, or None")
+
+
 class SettleStep:
     pass
 
@@ -1264,6 +1359,8 @@ class RelaxStep(SettleStep):
     alpha: float = 1.0
     torque_tolerance: float = 1e-5
     max_steps: int = 10000
+    applies_to: object | None = None
+    stop_criteria: object | None = None
     timestep_s: float | None = None
     max_pseudotime_s: float | None = None
     max_physical_time_s: float | None = None
@@ -1284,6 +1381,14 @@ class RelaxStep(SettleStep):
             require_positive(self.max_physical_time_s, "max_physical_time_s")
         policy = _require_supported_settle_non_convergence(self.on_non_convergence)
         _validate_settle_retry_policy(policy, self.retry_timestep_scale, self.retry_max_attempts)
+        object.__setattr__(
+            self, "applies_to", _require_supported_settle_applies_to(self.applies_to)
+        )
+        object.__setattr__(
+            self,
+            "stop_criteria",
+            _require_supported_settle_stop_criteria(self.stop_criteria),
+        )
 
     def to_ir(self) -> dict[str, object]:
         payload = {
@@ -1294,6 +1399,10 @@ class RelaxStep(SettleStep):
             "max_steps": self.max_steps,
             "on_non_convergence": self.on_non_convergence,
         }
+        if self.applies_to is not None:
+            payload["applies_to"] = self.applies_to
+        if self.stop_criteria is not None:
+            payload["stop_criteria"] = self.stop_criteria
         if self.timestep_s is not None:
             payload["timestep_s"] = self.timestep_s
         if self.max_pseudotime_s is not None:
@@ -1313,6 +1422,8 @@ class MinimizeStep(SettleStep):
     torque_tolerance: float = 5e-5
     energy_tolerance: float = 1e-20
     max_steps: int = 2000
+    applies_to: object | None = None
+    stop_criteria: object | None = None
     timestep_s: float | None = None
     max_pseudotime_s: float | None = None
     max_physical_time_s: float | None = None
@@ -1333,6 +1444,14 @@ class MinimizeStep(SettleStep):
             require_positive(self.max_physical_time_s, "max_physical_time_s")
         policy = _require_supported_settle_non_convergence(self.on_non_convergence)
         _validate_settle_retry_policy(policy, self.retry_timestep_scale, self.retry_max_attempts)
+        object.__setattr__(
+            self, "applies_to", _require_supported_settle_applies_to(self.applies_to)
+        )
+        object.__setattr__(
+            self,
+            "stop_criteria",
+            _require_supported_settle_stop_criteria(self.stop_criteria),
+        )
 
     def to_ir(self) -> dict[str, object]:
         payload = {
@@ -1343,6 +1462,10 @@ class MinimizeStep(SettleStep):
             "max_steps": self.max_steps,
             "on_non_convergence": self.on_non_convergence,
         }
+        if self.applies_to is not None:
+            payload["applies_to"] = self.applies_to
+        if self.stop_criteria is not None:
+            payload["stop_criteria"] = self.stop_criteria
         if self.timestep_s is not None:
             payload["timestep_s"] = self.timestep_s
         if self.max_pseudotime_s is not None:
@@ -1361,6 +1484,8 @@ class DynamicsSettleStep(SettleStep):
     method: str = "heun_dynamics_settle"
     damping: float = 1.0
     max_steps: int = 10000
+    applies_to: object | None = None
+    stop_criteria: object | None = None
     timestep_s: float | None = None
     max_pseudotime_s: float | None = None
     max_physical_time_s: float | None = None
@@ -1380,6 +1505,14 @@ class DynamicsSettleStep(SettleStep):
             require_positive(self.max_physical_time_s, "max_physical_time_s")
         policy = _require_supported_settle_non_convergence(self.on_non_convergence)
         _validate_settle_retry_policy(policy, self.retry_timestep_scale, self.retry_max_attempts)
+        object.__setattr__(
+            self, "applies_to", _require_supported_settle_applies_to(self.applies_to)
+        )
+        object.__setattr__(
+            self,
+            "stop_criteria",
+            _require_supported_settle_stop_criteria(self.stop_criteria),
+        )
 
     def to_ir(self) -> dict[str, object]:
         payload = {
@@ -1389,6 +1522,10 @@ class DynamicsSettleStep(SettleStep):
             "max_steps": self.max_steps,
             "on_non_convergence": self.on_non_convergence,
         }
+        if self.applies_to is not None:
+            payload["applies_to"] = self.applies_to
+        if self.stop_criteria is not None:
+            payload["stop_criteria"] = self.stop_criteria
         if self.timestep_s is not None:
             payload["timestep_s"] = self.timestep_s
         if self.max_pseudotime_s is not None:

@@ -419,15 +419,42 @@ function buildHysteresisTransitionsNode(
         stageId: nodeStageId,
         stageIndex: stage.index,
         status: stageCompleted ? "ready" : "queued",
-        contextCommands: ["workspace.focus-selection"],
+        contextCommands: [
+          "hysteresis.continue-to-next-stage",
+          "workspace.focus-selection",
+        ],
       },
       {
         id: `${transitionsNodeId}:use-selected-point`,
         kind: "study.stage.action",
-        label: "Use selected point as initial",
+        label: "Use selected point as initial state",
         parentId: transitionsNodeId,
         badge: "explicit action",
         icon: "magnet",
+        stageId: nodeStageId,
+        stageIndex: stage.index,
+        status: "ready",
+        contextCommands: ["workspace.focus-selection"],
+      },
+      {
+        id: `${transitionsNodeId}:export-loop`,
+        kind: "study.stage.action",
+        label: "Export loop CSV",
+        parentId: transitionsNodeId,
+        badge: stageCompleted ? "available" : "after completion",
+        icon: "database",
+        stageId: nodeStageId,
+        stageIndex: stage.index,
+        status: stageCompleted ? "ready" : "queued",
+        contextCommands: ["workspace.focus-selection"],
+      },
+      {
+        id: `${transitionsNodeId}:open-snapshots`,
+        kind: "study.stage.action",
+        label: "Open snapshots",
+        parentId: transitionsNodeId,
+        badge: "snapshot branch",
+        icon: "database",
         stageId: nodeStageId,
         stageIndex: stage.index,
         status: "ready",
@@ -494,7 +521,7 @@ function buildHysteresisExecutionTreeChildNode(
 ): ExplorerNode {
   const idSuffix = hysteresisExecutionTreeChildIdSuffix(node, index);
   const replayableSnapshotPointId =
-    node.kind === "snapshot" && typeof node.point_id === "number"
+    isReplayableHysteresisSnapshotNode(node) && typeof node.point_id === "number"
       ? node.point_id
       : null;
   return {
@@ -510,11 +537,27 @@ function buildHysteresisExecutionTreeChildNode(
       ? { hysteresisPointId: node.point_id }
       : {}),
     ...(node.resource_ref ? { resourceRef: node.resource_ref } : {}),
+    ...(node.field_orientation ? { fieldOrientation: JSON.stringify(node.field_orientation) } : {}),
+    ...(node.field_revision !== undefined && node.field_revision !== null
+      ? { fieldRevision: node.field_revision }
+      : {}),
+    ...(node.measurement_axis ? { measurementAxis: JSON.stringify(node.measurement_axis) } : {}),
+    ...(node.mesh_identity ? { meshIdentity: node.mesh_identity } : {}),
     ...(replayableSnapshotPointId !== null
       ? {
           hysteresisPointId: replayableSnapshotPointId,
           hysteresisSnapshotId: hysteresisSnapshotIdFromExecutionNode(node) ?? undefined,
           resourceRef: node.resource_ref ?? undefined,
+          ...(node.field_orientation
+            ? { fieldOrientation: JSON.stringify(node.field_orientation) }
+            : {}),
+          ...(node.field_revision !== undefined && node.field_revision !== null
+            ? { fieldRevision: node.field_revision }
+            : {}),
+          ...(node.measurement_axis
+            ? { measurementAxis: JSON.stringify(node.measurement_axis) }
+            : {}),
+          ...(node.mesh_identity ? { meshIdentity: node.mesh_identity } : {}),
         }
       : {}),
     stageId: nodeStageId,
@@ -536,6 +579,9 @@ function hysteresisExecutionTreeChildIdSuffix(
   }
   if (node.kind === "warning") {
     return `warning:${sanitizeExplorerIdSegment(node.node_id) ?? index}`;
+  }
+  if (node.kind === "field_point" && typeof node.point_id === "number") {
+    return `field-point:${node.point_id}`;
   }
   return `${sanitizeExplorerIdSegment(node.kind) ?? "node"}:${sanitizeExplorerIdSegment(node.node_id) ?? index}`;
 }
@@ -717,12 +763,13 @@ function buildHysteresisBookmarkNodes(
     (node) =>
       node.kind === "bookmark" ||
       node.kind === "key_event" ||
-      node.kind === "snapshot",
+      isReplayableHysteresisSnapshotNode(node),
   );
 
   return interestingNodes.map((node, index) => {
-    const snapshotId =
-      node.kind === "snapshot" ? hysteresisSnapshotIdFromExecutionNode(node) : null;
+    const snapshotId = isReplayableHysteresisSnapshotNode(node)
+      ? hysteresisSnapshotIdFromExecutionNode(node)
+      : null;
     return {
       id: `${parentId}:bookmarks:${hysteresisExecutionTreeChildIdSuffix(node, index)}`,
       kind: "study.stage.action",
@@ -736,11 +783,27 @@ function buildHysteresisBookmarkNodes(
         ? { hysteresisPointId: node.point_id }
         : {}),
       ...(node.resource_ref ? { resourceRef: node.resource_ref } : {}),
+      ...(node.field_orientation ? { fieldOrientation: JSON.stringify(node.field_orientation) } : {}),
+      ...(node.field_revision !== undefined && node.field_revision !== null
+        ? { fieldRevision: node.field_revision }
+        : {}),
+      ...(node.measurement_axis ? { measurementAxis: JSON.stringify(node.measurement_axis) } : {}),
+      ...(node.mesh_identity ? { meshIdentity: node.mesh_identity } : {}),
       ...(typeof node.point_id === "number" && snapshotId
         ? {
             hysteresisPointId: node.point_id,
             hysteresisSnapshotId: snapshotId,
             resourceRef: node.resource_ref ?? undefined,
+            ...(node.field_orientation
+              ? { fieldOrientation: JSON.stringify(node.field_orientation) }
+              : {}),
+            ...(node.field_revision !== undefined && node.field_revision !== null
+              ? { fieldRevision: node.field_revision }
+              : {}),
+            ...(node.measurement_axis
+              ? { measurementAxis: JSON.stringify(node.measurement_axis) }
+              : {}),
+            ...(node.mesh_identity ? { meshIdentity: node.mesh_identity } : {}),
           }
         : {}),
       stageId: nodeStageId,
@@ -749,6 +812,12 @@ function buildHysteresisBookmarkNodes(
       contextCommands: ["workspace.focus-selection"],
     };
   });
+}
+
+function isReplayableHysteresisSnapshotNode(
+  node: HysteresisExecutionTreeNode,
+): boolean {
+  return node.kind === "snapshot" && node.status.toLowerCase() !== "missing";
 }
 
 function flattenHysteresisExecutionTreeNodes(
@@ -956,6 +1025,7 @@ function explorerStatusFromExecutionTree(status: string): ExplorerNode["status"]
     return normalized;
   }
   if (normalized === "done") return "completed";
+  if (normalized === "missing") return "failed";
   if (normalized === "error" || normalized === "rejected") return "failed";
   return "ready";
 }

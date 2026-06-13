@@ -28,6 +28,41 @@ with:
 m0 dot delta_m = 0
 ```
 
+## COMSOL parity requirements
+
+`docs/comsol/Manual_for_Micromagnetics_Module.pdf` is not a Fullmag semantic
+source, but it is a useful parity reference for user-facing frequency-domain
+behavior. Fullmag must preserve the following product-level distinctions:
+
+- Time-domain dynamics and frequency-domain dynamics are separate study
+  surfaces.
+- Frequency-domain dynamics means linearized LLG around a static equilibrium
+  `m0`.
+- Modal `eigenmodes` and driven `frequency_response` are separate solvers.
+  The modal path solves the eigensystem; the driven path solves a forced
+  harmonic linear system at requested frequencies.
+- The dynamic magnetization perturbation `delta_m` is a complex phasor. Field
+  resources and inspectors must expose `real`, `imag`, `abs`, and `phase`
+  views.
+- Mode animation is phasor reconstruction, not time integration:
+
+```text
+m_anim(r,t) = m0(r) + scale * Re[delta_m(r) exp(i (omega t + phi0))]
+```
+
+- A dynamic drive `delta_h` is a phasor. Public UI/API surfaces must not require
+  users to encode the sinusoidal `sin(omega t)` or `cos(omega t)` factor by
+  hand.
+- For textured states, the equilibrium used by the frequency-domain study must
+  come from an explicit static or relaxation stage, and artifacts must preserve
+  the equilibrium provenance and residual diagnostics.
+- Floquet/Bloch periodic studies use the phase convention owned by
+  `docs/physics/0710-periodic-and-floquet-boundary-conditions.md`, including
+  the `exp_minus_i_k_dot_delta_r` sign convention.
+- Nonzero-k Floquet dynamic demagnetization remains unsupported until Fullmag
+  implements and validates a mathematically consistent dynamic demag-k
+  operator.
+
 ## Linearized equation
 
 The frequency-domain perturbation satisfies:
