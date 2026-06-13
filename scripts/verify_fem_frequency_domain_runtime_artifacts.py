@@ -525,6 +525,100 @@ def main() -> int:
             ),
         }
         require_expected(unavailable_expected)
+        require_manifest_physics(manifest)
+        requested_execution = manifest.get("requested_execution")
+        if not isinstance(requested_execution, dict):
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                "manifest.requested_execution must be an object"
+            )
+        resolved_execution = manifest.get("resolved_execution")
+        if not isinstance(resolved_execution, dict):
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                "manifest.resolved_execution must be an object"
+            )
+        capabilities = manifest.get("capabilities")
+        if not isinstance(capabilities, dict):
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                "manifest.capabilities must be an object"
+            )
+        unavailable_manifest_contract = {
+            "manifest.requested_execution.solve_equation": (
+                requested_execution.get("solve_equation"),
+                "(i omega B - L) q = f",
+            ),
+            "manifest.requested_execution.solve_kind": (
+                requested_execution.get("solve_kind"),
+                "direct_harmonic_response",
+            ),
+            "manifest.requested_execution.study_kind": (
+                requested_execution.get("study_kind"),
+                "frequency_response",
+            ),
+            "manifest.resolved_execution.backend_engine_id": (
+                resolved_execution.get("backend_engine_id"),
+                "native_fem_mfem",
+            ),
+            "manifest.resolved_execution.reference_or_production": (
+                resolved_execution.get("reference_or_production"),
+                "production",
+            ),
+            "manifest.resolved_execution.solve_kind": (
+                resolved_execution.get("solve_kind"),
+                "direct_harmonic_response",
+            ),
+            "manifest.resolved_execution.solver_kind": (
+                resolved_execution.get("solver_kind"),
+                "production_unavailable",
+            ),
+            "manifest.resolved_execution.production_solver": (
+                resolved_execution.get("production_solver"),
+                True,
+            ),
+            "manifest.capabilities.production_solver_available": (
+                capabilities.get("production_solver_available"),
+                False,
+            ),
+            "manifest.capabilities.production_native_solver_available": (
+                capabilities.get("production_native_solver_available"),
+                False,
+            ),
+            "manifest.capabilities.validation_artifact": (
+                capabilities.get("validation_artifact"),
+                False,
+            ),
+            "manifest.capabilities.dynamic_demag_k_available": (
+                capabilities.get("dynamic_demag_k_available"),
+                False,
+            ),
+            "manifest.capabilities.floquet_response_available": (
+                capabilities.get("floquet_response_available"),
+                False,
+            ),
+        }
+        require_expected(unavailable_manifest_contract)
+        if not isinstance(requested_execution.get("frequency_count"), int):
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                "manifest.requested_execution.frequency_count must be an integer"
+            )
+        if not isinstance(requested_execution.get("write_response_fields"), bool):
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                "manifest.requested_execution.write_response_fields must be a boolean"
+            )
+        if not isinstance(resolved_execution.get("requested_execution_lane"), str):
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                "manifest.resolved_execution.requested_execution_lane must be a string"
+            )
+        if not isinstance(resolved_execution.get("lane_classification"), str):
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                "manifest.resolved_execution.lane_classification must be a string"
+            )
         manifest_artifacts = manifest.get("artifacts", {})
         if not isinstance(manifest_artifacts, dict):
             raise SystemExit(
