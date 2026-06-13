@@ -115,6 +115,15 @@ function formatNumber(value: unknown, unit = ""): string {
   return `${parsed}${unit}`;
 }
 
+function formatFrequency(valueHz: unknown): string {
+  const parsed = finiteNumber(valueHz);
+  if (parsed == null) return "not available";
+  const abs = Math.abs(parsed);
+  if (abs >= 1e9) return `${parsed / 1e9} GHz`;
+  if (abs >= 1e6) return `${parsed / 1e6} MHz`;
+  return `${parsed} Hz`;
+}
+
 function arrayLength(value: unknown): string {
   return Array.isArray(value) ? String(value.length) : "not available";
 }
@@ -312,12 +321,51 @@ function parseKPathSummary(csv: string | null | undefined): {
   };
 }
 
+function isFrequencyDomainKind(
+  kind: string,
+  ...matches: readonly string[]
+): boolean {
+  return matches.some((match) => kind === match || kind.startsWith(`${match}.`));
+}
+
+function isExactFrequencyDomainKind(
+  kind: string,
+  ...matches: readonly string[]
+): boolean {
+  return matches.includes(kind);
+}
+
+function modePointKey(point: {
+  rawModeIndex: number;
+  sampleIndex: number;
+}): string {
+  return `${point.sampleIndex}:${point.rawModeIndex}`;
+}
+
+function modePointLabel(point: {
+  frequencyHz: number;
+  rawModeIndex: number;
+  sampleIndex: number;
+}): string {
+  return `sample ${point.sampleIndex}, mode ${point.rawModeIndex}, ${formatFrequency(point.frequencyHz)}`;
+}
+
 export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps) {
   const kernel = useKernel();
   const [commandMessage, setCommandMessage] = useState<string | null>(null);
+  const [selectedSpectrumModeKey, setSelectedSpectrumModeKey] =
+    useState<string | null>(null);
   const analysisFieldViewSelectRef = useRef<HTMLSelectElement | null>(null);
   const analysisFieldPhaseInputRef = useRef<HTMLInputElement | null>(null);
   const analysisFieldAnimationRateInputRef = useRef<HTMLInputElement | null>(null);
+  const eigenModeBrowserViewSelectRef = useRef<HTMLSelectElement | null>(null);
+  const eigenModeBrowserPhaseInputRef = useRef<HTMLInputElement | null>(null);
+  const eigenModeBrowserAnimationRateInputRef =
+    useRef<HTMLInputElement | null>(null);
+  const selectedEigenModeViewSelectRef = useRef<HTMLSelectElement | null>(null);
+  const selectedEigenModePhaseInputRef = useRef<HTMLInputElement | null>(null);
+  const selectedEigenModeAnimationRateInputRef =
+    useRef<HTMLInputElement | null>(null);
   const frequencyDomainRef =
     selection.ref?.type === "frequency-domain" ? selection.ref : null;
   const manifest = useFrequencyDomainManifestResource();
@@ -463,13 +511,279 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
   const defaultAnalysisFieldView = normalizeAnalysisFieldView(
     selectedFieldMeta?.default_view,
   );
+  const spectrumModeRows = [...spectrumModel.points].sort(
+    (left, right) =>
+      left.sampleIndex - right.sampleIndex ||
+      left.frequencyHz - right.frequencyHz ||
+      left.rawModeIndex - right.rawModeIndex,
+  );
+  const selectedSpectrumMode =
+    spectrumModeRows.find(
+      (point) => modePointKey(point) === selectedSpectrumModeKey,
+    ) ??
+    spectrumModeRows.find(
+      (point) =>
+        point.sampleIndex === frequencyDomainRef?.sampleIndex &&
+        point.rawModeIndex === frequencyDomainRef?.modeIndex,
+    ) ??
+    spectrumModeRows[0] ??
+    null;
+  const selectedEigenModePoint =
+    spectrumModeRows.find(
+      (point) =>
+        point.sampleIndex === frequencyDomainRef?.sampleIndex &&
+        point.rawModeIndex === frequencyDomainRef?.modeIndex,
+    ) ?? selectedSpectrumMode;
+  const selectedEigenModeFieldId =
+    selectedFieldId ??
+    selectedEigenModePoint?.modeFieldId ??
+    frequencyDomainRef?.fieldId ??
+    null;
+  const eigenModePayloadResourceRef = formatRecordField(
+    eigenModePayload,
+    "mode_field_resource_key",
+    "",
+  );
+  const selectedEigenModeResourceRef =
+    frequencyDomainRef?.resourceRef ??
+    (eigenModePayloadResourceRef || selectedEigenModePoint?.modeFieldResourceKey) ??
+    null;
+  const selectedEigenMode3DReady =
+    Boolean(selectedEigenModeFieldId) && canPlotSelectedFieldIn3D(selectedFieldMeta);
   const nodeDetail = resolveFrequencyDomainNodeDetail(selection);
+  const kind = selection.kind ?? "";
+  const selectedFieldIsEigen = kind.includes("eigen");
+  const selectedFieldPlotCommand = selectedFieldIsEigen
+    ? "analysis.eigen.plot-mode-3d"
+    : "analysis.frequency-response.plot-response-field-3d";
+  const selectedFieldPhaseCommand = selectedFieldIsEigen
+    ? "analysis.eigen.set-mode-3d-phase"
+    : "analysis.frequency-domain.set-3d-phase";
+  const selectedFieldAnimationCommand = selectedFieldIsEigen
+    ? "analysis.eigen.set-mode-3d-animation"
+    : "analysis.frequency-domain.set-3d-animation";
+  const selectedFieldOverlaySource = selectedFieldIsEigen
+    ? "eigen-mode"
+    : "frequency-response";
+  const showFamilyContract = isExactFrequencyDomainKind(
+    kind,
+    "results.frequency_domain.root",
+    "results.frequency_domain.run",
+    "resources.analysis.frequency_domain",
+    "resources.analysis.frequency_domain.manifest",
+    "diagnostics.frequency_domain.root",
+    "diagnostics.frequency_domain.capabilities",
+  );
+  const showPhysicsContract = isFrequencyDomainKind(
+    kind,
+    "results.frequency_domain.run",
+    "results.eigen.study",
+    "results.eigen.provenance",
+    "results.frequency_response.study",
+    "results.frequency_response.provenance",
+    "study.stage.eigenmodes.setup",
+    "study.stage.eigenmodes.equilibrium",
+    "study.stage.eigenmodes.operator",
+    "study.stage.frequency_response.setup",
+    "study.stage.frequency_response.equilibrium",
+    "study.stage.frequency_response.operator",
+    "diagnostics.frequency_domain.equilibrium",
+    "diagnostics.frequency_domain.operator",
+  );
+  const showPeriodicSection = isFrequencyDomainKind(
+    kind,
+    "resources.mesh.periodic_pairs",
+    "study.stage.eigenmodes.boundary",
+    "study.stage.eigenmodes.periodic_pairs",
+    "study.stage.eigenmodes.k_path",
+    "study.stage.frequency_response.boundary",
+    "study.stage.frequency_response.periodic_pairs",
+    "study.stage.frequency_response.k_grid",
+    "results.eigen.k_path",
+    "results.eigen.dispersion",
+    "results.frequency_domain.dispersion",
+    "diagnostics.frequency_domain.periodic_floquet",
+  );
+  const showDrivenSolver = isExactFrequencyDomainKind(
+    kind,
+    "results.frequency_response.root",
+    "results.frequency_response.study",
+    "results.frequency_response.diagnostics",
+    "results.frequency_response.provenance",
+    "resources.analysis.frequency_response.diagnostics",
+    "resources.analysis.frequency_response",
+    "results.frequency_domain.fmr_response_sweep",
+    "study.stage.frequency_response",
+    "study.stage.frequency_response.setup",
+    "study.stage.frequency_response.excitation",
+    "study.stage.frequency_response.sweep",
+    "study.stage.frequency_response.solver",
+  );
+  const showResponseFields = isFrequencyDomainKind(
+    kind,
+    "resources.analysis.frequency_response.field",
+    "results.frequency_response.frequency_points",
+    "results.frequency_response.frequency_point",
+  );
+  const showResponseCancellation = isFrequencyDomainKind(
+    kind,
+    "results.frequency_response.progress",
+    "results.frequency_response.cancel_requested",
+    "resources.analysis.frequency_response.progress",
+    "resources.analysis.frequency_response.cancel_requested",
+    "jobs.frequency_domain.response_progress",
+  );
+  const showModalSolver = isExactFrequencyDomainKind(
+    kind,
+    "results.eigen.root",
+    "results.eigen.study",
+    "results.eigen.diagnostics",
+    "results.eigen.provenance",
+    "resources.analysis.eigen.diagnostics",
+    "results.frequency_domain.fmr_modal_spectrum",
+    "study.stage.eigenmodes",
+    "study.stage.eigenmodes.setup",
+    "study.stage.eigenmodes.solver",
+    "study.stage.eigenmodes.outputs",
+    "study.stage.eigenmodes.diagnostics",
+  );
+  const showPlotReadiness = isExactFrequencyDomainKind(
+    kind,
+    "results.frequency_domain.root",
+    "results.frequency_domain.run",
+    "results.frequency_domain.calculation_modes",
+    "results.frequency_domain.fmr",
+    "results.frequency_domain.fmr_modal_spectrum",
+    "results.frequency_domain.fmr_response_sweep",
+    "results.frequency_domain.dispersion",
+    "results.frequency_domain.response_map",
+    "results.frequency_domain.comparison",
+    "diagnostics.frequency_domain.visualization",
+  );
+  const showKPath = isFrequencyDomainKind(
+    kind,
+    "results.eigen.k_path",
+    "results.eigen.dispersion",
+    "results.eigen.branches",
+    "results.eigen.branch",
+    "results.frequency_domain.dispersion",
+    "resources.analysis.eigen.dispersion",
+    "resources.analysis.eigen.branches",
+    "study.stage.eigenmodes.k_path",
+  );
+  const isEigenModeResultNode = isFrequencyDomainKind(kind, "results.eigen.mode");
+  const hasConcreteFrequencyDomainFieldSelection =
+    Boolean(selectedFieldId) ||
+    frequencyDomainRef?.frequencyIndex != null ||
+    (frequencyDomainRef?.sampleIndex != null &&
+      frequencyDomainRef?.modeIndex != null);
+  const hasConcreteEigenModeSelection =
+    selectedFieldIsEigen &&
+    (Boolean(frequencyDomainRef?.fieldId) ||
+      (frequencyDomainRef?.sampleIndex != null &&
+        frequencyDomainRef?.modeIndex != null));
+  const showSelectedField =
+    hasConcreteFrequencyDomainFieldSelection &&
+    ((Boolean(selectedFieldId) && !isEigenModeResultNode) ||
+      isFrequencyDomainKind(
+        kind,
+        "resources.analysis.eigen.mode_field",
+        "results.frequency_response.frequency_point",
+        "resources.analysis.frequency_response.field",
+      ));
+  const showSelectedEigenMode = isFrequencyDomainKind(
+    kind,
+    "results.eigen.mode",
+    "resources.analysis.eigen.mode_metadata",
+    "resources.analysis.eigen.mode_field",
+  ) && hasConcreteEigenModeSelection;
+  const showSelectedBranch = isFrequencyDomainKind(
+    kind,
+    "results.eigen.branch",
+    "results.eigen.branches",
+  );
+  const showSelectedResponsePoint = isFrequencyDomainKind(
+    kind,
+    "results.frequency_response.frequency_point",
+    "resources.analysis.frequency_response.frequency_point",
+    "resources.analysis.frequency_response.field",
+  );
+  const showSelectedObservable = isFrequencyDomainKind(
+    kind,
+    "results.frequency_response.observable",
+    "results.frequency_response.observables",
+    "resources.analysis.frequency_response.observables",
+  );
+  const showFmrPeaks = isFrequencyDomainKind(
+    kind,
+    "results.frequency_domain.fmr",
+    "results.frequency_domain.fmr_peaks",
+  );
+  const showModalSpectrum = isFrequencyDomainKind(
+    kind,
+    "results.eigen.root",
+    "results.eigen.spectrum",
+    "results.eigen.modes",
+    "resources.analysis.eigen.spectrum",
+    "results.frequency_domain.fmr",
+    "results.frequency_domain.fmr_modal_spectrum",
+    "results.frequency_domain.fmr_peaks",
+  );
+  const showEigenModeBrowser =
+    spectrumModeRows.length > 0 &&
+    isExactFrequencyDomainKind(
+      kind,
+      "results.eigen.root",
+      "results.eigen.spectrum",
+      "results.eigen.modes",
+      "resources.analysis.eigen.spectrum",
+      "resources.analysis.eigen.mode_metadata",
+      "resources.analysis.eigen.mode_field",
+      "results.frequency_domain.fmr",
+      "results.frequency_domain.fmr_modal_spectrum",
+      "results.frequency_domain.fmr_peaks",
+      "study.stage.eigenmodes.setup",
+      "study.stage.eigenmodes.solver",
+      "study.stage.eigenmodes.outputs",
+      "diagnostics.frequency_domain.visualization",
+    );
+  const showDispersionChart = isFrequencyDomainKind(
+    kind,
+    "results.eigen.dispersion",
+    "results.eigen.k_path",
+    "results.eigen.branches",
+    "results.eigen.branch",
+    "resources.analysis.eigen.dispersion",
+    "resources.analysis.eigen.branches",
+    "results.frequency_domain.dispersion",
+  );
+  const showDrivenResponseChart = isFrequencyDomainKind(
+    kind,
+    "results.frequency_domain.fmr",
+    "results.frequency_response.sweep",
+    "results.frequency_response.frequency_points",
+    "results.frequency_response.frequency_point",
+    "results.frequency_response.observables",
+    "results.frequency_response.observable",
+    "resources.analysis.frequency_response.sweep",
+    "results.frequency_domain.fmr_response_sweep",
+  );
   const plotModePoint = (
     point: (typeof spectrumModel.points)[number],
     action: FrequencyDomainModeTableAction = DEFAULT_ANALYSIS_FIELD_VIEW,
+    options: {
+      animationRateHz?: number | null;
+      phaseRad?: number | null;
+      view?: string | null;
+    } = {},
   ): void => {
+    setSelectedSpectrumModeKey(modePointKey(point));
+    if (action === "inspect") return;
     if (!point.modeFieldId) return;
     const animate = action === "animate";
+    const view = normalizeAnalysisFieldView(
+      options.view ?? (animate ? DEFAULT_ANALYSIS_FIELD_VIEW : action),
+    );
     void kernel.commands
       .execute(
         animate
@@ -480,12 +794,65 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
         }),
         {
           animatePhase: animate ? true : undefined,
-          animationRateHz: animate ? 1 : undefined,
+          animationRateHz: animate ? options.animationRateHz ?? 1 : undefined,
           fieldId: point.modeFieldId,
           label: `Mode ${point.rawModeIndex}`,
-          phaseRad: 0,
+          phaseRad: options.phaseRad ?? 0,
           source: "eigen-mode",
-          view: animate ? DEFAULT_ANALYSIS_FIELD_VIEW : action,
+          view,
+        },
+      )
+      .then((result) => {
+        setCommandMessage(result.message ?? result.status);
+      });
+  };
+  const plotSelectedSpectrumMode = (
+    action: FrequencyDomainModeTableAction,
+  ): void => {
+    if (!selectedSpectrumMode) return;
+    plotModePoint(selectedSpectrumMode, action, {
+      animationRateHz: finiteNumber(
+        eigenModeBrowserAnimationRateInputRef.current?.value,
+      ),
+      phaseRad: finiteNumber(eigenModeBrowserPhaseInputRef.current?.value),
+      view: eigenModeBrowserViewSelectRef.current?.value,
+    });
+  };
+  const plotSelectedEigenModeField = (
+    action: FrequencyDomainModeTableAction,
+  ): void => {
+    if (action === "inspect" || !selectedEigenModeFieldId) return;
+    const animate = action === "animate";
+    const selectedView = selectedEigenModeViewSelectRef.current?.value;
+    const view = normalizeAnalysisFieldView(
+      selectedView ?? (animate ? DEFAULT_ANALYSIS_FIELD_VIEW : action),
+    );
+    void kernel.commands
+      .execute(
+        animate
+          ? "analysis.eigen.set-mode-3d-animation"
+          : "analysis.eigen.plot-mode-3d",
+        createCommandContext("inspector", kernel, {
+          sourceDetail: selection.kind ?? "frequency-domain",
+        }),
+        {
+          animatePhase: animate ? true : undefined,
+          animationRateHz: animate
+            ? finiteNumber(selectedEigenModeAnimationRateInputRef.current?.value) ?? 1
+            : undefined,
+          componentBasis: selectedFieldMeta?.component_basis ?? null,
+          componentCount: selectedFieldMeta?.component_count ?? null,
+          fieldId: selectedEigenModeFieldId,
+          label:
+            selection.label ??
+            `Mode ${selectedEigenModePoint?.rawModeIndex ?? frequencyDomainRef?.modeIndex ?? ""}`,
+          phaseRad:
+            finiteNumber(selectedEigenModePhaseInputRef.current?.value) ??
+            selectedFieldMeta?.default_phase_rad ??
+            0,
+          source: "eigen-mode",
+          valueKind: selectedFieldMeta?.value_kind ?? null,
+          view,
         },
       )
       .then((result) => {
@@ -510,7 +877,7 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
           animatePhase: animate ? true : undefined,
           animationRateHz: animate ? 1 : undefined,
           fieldId: point.fieldId,
-          label: `${point.observableId} ${point.frequencyHz} Hz`,
+          label: `${point.observableId} ${formatFrequency(point.frequencyHz)}`,
           phaseRad: point.phaseRad ?? 0,
           source: "frequency-response",
           view: animate ? DEFAULT_ANALYSIS_FIELD_VIEW : action,
@@ -551,6 +918,7 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
         <FieldRow label="Visualization contract" value={nodeDetail.visualization} />
       </InspectorSection>
 
+      {showFamilyContract ? (
       <InspectorSection title="Solver Family Contract" badge={data?.schema_version ?? "missing"}>
         <FieldRow
           label="Family namespace"
@@ -574,7 +942,9 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
           value={formatBoolean(data?.floquet_nonzero_k_demag_supported)}
         />
       </InspectorSection>
+      ) : null}
 
+      {showPhysicsContract ? (
       <InspectorSection
         title="Physics Contract"
         badge={formatRecordField(manifestPhysics, "analysis_family")}
@@ -600,7 +970,9 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
           value={formatRecordField(manifestPhysics, "normalization")}
         />
       </InspectorSection>
+      ) : null}
 
+      {showPeriodicSection ? (
       <InspectorSection
         title="Periodic / Floquet Boundary Conditions"
         badge={periodicPairs.data?.schema_version ?? periodicPairs.status}
@@ -701,7 +1073,9 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
           />
         ) : null}
       </InspectorSection>
+      ) : null}
 
+      {showDrivenSolver ? (
       <InspectorSection title="Driven Response Solver" badge={data?.response.status ?? "unknown"}>
         <FieldRow
           label="Study kind"
@@ -726,7 +1100,9 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
         <FieldRow label="GPU lane" value={formatBoolean(data?.response.gpu_available)} />
         <FieldRow label="Reason" value={data?.response.reason ?? "not reported"} />
       </InspectorSection>
+      ) : null}
 
+      {showResponseFields ? (
       <InspectorSection
         title="Response Field Resources"
         badge={
@@ -755,7 +1131,9 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
           />
         ))}
       </InspectorSection>
+      ) : null}
 
+      {showResponseCancellation ? (
       <InspectorSection
         title="Response Cancellation"
         badge={responseCancelRequested.data?.status ?? responseCancelRequested.status}
@@ -800,7 +1178,9 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
           />
         ) : null}
       </InspectorSection>
+      ) : null}
 
+      {showModalSolver ? (
       <InspectorSection title="Modal Eigen Solver" badge={data?.eigenmodes.status ?? "unknown"}>
         <FieldRow
           label="Study kind"
@@ -817,7 +1197,9 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
         <FieldRow label="GPU lane" value={formatBoolean(data?.eigenmodes.gpu_available)} />
         <FieldRow label="Reason" value={data?.eigenmodes.reason ?? "not reported"} />
       </InspectorSection>
+      ) : null}
 
+      {showPlotReadiness ? (
       <InspectorSection title="Plot Readiness" badge="manifest-driven">
         <FieldRow
           label="FMR modal spectrum"
@@ -848,8 +1230,10 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
           value="waiting for mode-field artifacts"
         />
       </InspectorSection>
+      ) : null}
 
-      <InspectorSection title="k-Path Samples" badge={dispersion.status}>
+      {showKPath ? (
+      <InspectorSection title="Bloch k-Path Parameters" badge={dispersion.status}>
         <FieldRow
           label="path_s range"
           value={kPathSummary.pathSRange}
@@ -867,7 +1251,180 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
           value="path_s_rad_per_m"
         />
       </InspectorSection>
+      ) : null}
 
+      {showEigenModeBrowser ? (
+      <InspectorSection
+        title="Eigen Mode Browser"
+        badge={`${spectrumModeRows.length} mode(s)`}
+      >
+        <FieldRow
+          label="Calculation mode"
+          value={frequencyDomainRef?.calculationMode ?? chartRoute.mode}
+        />
+        <FieldRow
+          label="Mode source"
+          value={spectrum.data?.resource_key ?? "eigen spectrum resource"}
+        />
+        <FieldRow
+          label="Selected mode"
+          value={
+            selectedSpectrumMode
+              ? (
+                  <select
+                    aria-label="Select eigen mode for 3D visualization"
+                    className="fm-inspector-select"
+                    defaultValue={modePointKey(selectedSpectrumMode)}
+                    key={`mode-browser:${modePointKey(selectedSpectrumMode)}:${spectrumModeRows.length}`}
+                    onChange={(event) => {
+                      setSelectedSpectrumModeKey(event.currentTarget.value);
+                    }}
+                  >
+                    {spectrumModeRows.map((point) => (
+                      <option key={modePointKey(point)} value={modePointKey(point)}>
+                        {modePointLabel(point)}
+                      </option>
+                    ))}
+                  </select>
+                )
+              : "not available"
+          }
+        />
+        {selectedSpectrumMode ? (
+          <>
+            <FieldRow
+              label="Selected mode frequency"
+              value={formatFrequency(selectedSpectrumMode.frequencyHz)}
+            />
+            <FieldRow
+              label="Selected sample"
+              value={String(selectedSpectrumMode.sampleIndex)}
+            />
+            <FieldRow
+              label="Selected raw mode"
+              value={String(selectedSpectrumMode.rawModeIndex)}
+            />
+            <FieldRow
+              label="Selected branch"
+              value={selectedSpectrumMode.branchId ?? "not assigned"}
+            />
+            <FieldRow
+              label="Selected damping"
+              value={formatFrequency(selectedSpectrumMode.dampingRateHz)}
+            />
+            <FieldRow
+              label="Selected residual"
+              value={formatNumber(selectedSpectrumMode.residualNorm)}
+            />
+            <FieldRow
+              label="Selected mode field"
+              value={selectedSpectrumMode.modeFieldId ?? "not available"}
+            />
+            <FieldRow
+              label="3D view"
+              value={
+                <select
+                  aria-label="Eigen mode browser 3D view"
+                  className="fm-inspector-select"
+                  defaultValue={DEFAULT_ANALYSIS_FIELD_VIEW}
+                  disabled={!selectedSpectrumMode.modeFieldId}
+                  key={`mode-browser-view:${modePointKey(selectedSpectrumMode)}`}
+                  ref={eigenModeBrowserViewSelectRef}
+                >
+                  {ANALYSIS_FIELD_VIEW_OPTIONS.map((view) => (
+                    <option key={view} value={view}>
+                      {analysisFieldViewLabel(view)}
+                    </option>
+                  ))}
+                </select>
+              }
+            />
+            <FieldRow
+              label="Phase"
+              value={
+                <input
+                  aria-label="Eigen mode browser phase"
+                  className="fm-inspector-input"
+                  defaultValue="0"
+                  disabled={!selectedSpectrumMode.modeFieldId}
+                  key={`mode-browser-phase:${modePointKey(selectedSpectrumMode)}`}
+                  ref={eigenModeBrowserPhaseInputRef}
+                  step="0.1"
+                  type="number"
+                />
+              }
+            />
+            <FieldRow
+              label="Animation rate"
+              value={
+                <input
+                  aria-label="Eigen mode browser animation rate"
+                  className="fm-inspector-input"
+                  defaultValue="1"
+                  disabled={!selectedSpectrumMode.modeFieldId}
+                  key={`mode-browser-rate:${modePointKey(selectedSpectrumMode)}`}
+                  max="10"
+                  min="0.05"
+                  ref={eigenModeBrowserAnimationRateInputRef}
+                  step="0.05"
+                  type="number"
+                />
+              }
+            />
+            <button
+              className="fm-inspector-action-button"
+              disabled={!selectedSpectrumMode.modeFieldId}
+              type="button"
+              onClick={() => plotSelectedSpectrumMode("phase_rotated_real")}
+            >
+              Plot selected rotated
+            </button>
+            <button
+              className="fm-inspector-action-button"
+              disabled={!selectedSpectrumMode.modeFieldId}
+              type="button"
+              onClick={() => plotSelectedSpectrumMode("real")}
+            >
+              Plot selected real
+            </button>
+            <button
+              className="fm-inspector-action-button"
+              disabled={!selectedSpectrumMode.modeFieldId}
+              type="button"
+              onClick={() => plotSelectedSpectrumMode("imag")}
+            >
+              Plot selected imag
+            </button>
+            <button
+              className="fm-inspector-action-button"
+              disabled={!selectedSpectrumMode.modeFieldId}
+              type="button"
+              onClick={() => plotSelectedSpectrumMode("abs")}
+            >
+              Plot selected abs
+            </button>
+            <button
+              className="fm-inspector-action-button"
+              disabled={!selectedSpectrumMode.modeFieldId}
+              type="button"
+              onClick={() => plotSelectedSpectrumMode("phase")}
+            >
+              Plot selected phase
+            </button>
+            <button
+              className="fm-inspector-action-button"
+              disabled={!selectedSpectrumMode.modeFieldId}
+              type="button"
+              onClick={() => plotSelectedSpectrumMode("animate")}
+            >
+              Animate selected mode
+            </button>
+          </>
+        ) : null}
+      </InspectorSection>
+      ) : null}
+
+      {showSelectedField ? (
       <InspectorSection title="Selected Field Metadata" badge={selectedFieldStatus}>
         <FieldRow
           label="Field ID"
@@ -1037,12 +1594,9 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
           disabled={!selectedField3DReady}
           type="button"
           onClick={() => {
-            const commandId = selection.kind?.includes("eigen")
-              ? "analysis.eigen.plot-mode-3d"
-              : "analysis.frequency-response.plot-response-field-3d";
             void kernel.commands
               .execute(
-                commandId,
+                selectedFieldPlotCommand,
                 createCommandContext("inspector", kernel, {
                   sourceDetail: selection.kind ?? "frequency-domain",
                 }),
@@ -1055,9 +1609,7 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
                     0,
                   componentBasis: selectedFieldMeta?.component_basis ?? null,
                   componentCount: selectedFieldMeta?.component_count ?? null,
-                  source: selection.kind?.includes("eigen")
-                    ? "eigen-mode"
-                    : "frequency-response",
+                  source: selectedFieldOverlaySource,
                   valueKind: selectedFieldMeta?.value_kind ?? null,
                   view:
                     analysisFieldViewSelectRef.current?.value ??
@@ -1071,6 +1623,43 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
         >
           Plot in 3D
         </button>
+        {["phase_rotated_real", "real", "imag", "abs", "phase"].map((view) => (
+          <button
+            className="fm-inspector-action-button"
+            disabled={!selectedField3DReady}
+            key={view}
+            type="button"
+            onClick={() => {
+              void kernel.commands
+                .execute(
+                  selectedFieldPlotCommand,
+                  createCommandContext("inspector", kernel, {
+                    sourceDetail: selection.kind ?? "frequency-domain",
+                  }),
+                  {
+                    fieldId: selectedFieldId,
+                    label: selection.label ?? selectedFieldId,
+                    phaseRad:
+                      finiteNumber(analysisFieldPhaseInputRef.current?.value) ??
+                      selectedFieldMeta?.default_phase_rad ??
+                      0,
+                    componentBasis: selectedFieldMeta?.component_basis ?? null,
+                    componentCount: selectedFieldMeta?.component_count ?? null,
+                    source: selectedFieldOverlaySource,
+                    valueKind: selectedFieldMeta?.value_kind ?? null,
+                    view,
+                  },
+                )
+                .then((result) => {
+                  setCommandMessage(result.message ?? result.status);
+                });
+            }}
+          >
+            {view === "phase_rotated_real"
+              ? "Plot rotated"
+              : `Plot ${view}`}
+          </button>
+        ))}
         <button
           className="fm-inspector-action-button"
           disabled={!selectedField3DReady}
@@ -1078,7 +1667,7 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
           onClick={() => {
             void kernel.commands
               .execute(
-                "analysis.frequency-domain.set-3d-phase",
+                selectedFieldPhaseCommand,
                 createCommandContext("inspector", kernel, {
                   sourceDetail: selection.kind ?? "frequency-domain",
                 }),
@@ -1102,7 +1691,7 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
           onClick={() => {
             void kernel.commands
               .execute(
-                "analysis.frequency-domain.set-3d-animation",
+                selectedFieldAnimationCommand,
                 createCommandContext("inspector", kernel, {
                   sourceDetail: selection.kind ?? "frequency-domain",
                 }),
@@ -1120,9 +1709,7 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
                     finiteNumber(analysisFieldPhaseInputRef.current?.value) ??
                     selectedFieldMeta?.default_phase_rad ??
                     0,
-                  source: selection.kind?.includes("eigen")
-                    ? "eigen-mode"
-                    : "frequency-response",
+                  source: selectedFieldOverlaySource,
                   valueKind: selectedFieldMeta?.value_kind ?? null,
                   view:
                     analysisFieldViewSelectRef.current?.value ??
@@ -1143,7 +1730,7 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
           onClick={() => {
             void kernel.commands
               .execute(
-                "analysis.frequency-domain.set-3d-animation",
+                selectedFieldAnimationCommand,
                 createCommandContext("inspector", kernel, {
                   sourceDetail: selection.kind ?? "frequency-domain",
                 }),
@@ -1161,9 +1748,7 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
                     finiteNumber(analysisFieldPhaseInputRef.current?.value) ??
                     selectedFieldMeta?.default_phase_rad ??
                     0,
-                  source: selection.kind?.includes("eigen")
-                    ? "eigen-mode"
-                    : "frequency-response",
+                  source: selectedFieldOverlaySource,
                   valueKind: selectedFieldMeta?.value_kind ?? null,
                   view:
                     analysisFieldViewSelectRef.current?.value ??
@@ -1199,7 +1784,9 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
           <FieldRow label="3D command" value={commandMessage} />
         ) : null}
       </InspectorSection>
+      ) : null}
 
+      {showSelectedEigenMode ? (
       <InspectorSection
         title="Selected Eigen Mode"
         badge={eigenMode.status}
@@ -1215,34 +1802,156 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
         />
         <FieldRow
           label="Mode field resource"
+          value={selectedEigenModeResourceRef ?? "not selected"}
+        />
+        <FieldRow
+          label="Mode field ID"
+          value={selectedEigenModeFieldId ?? "not selected"}
+        />
+        <FieldRow
+          label="Mode field status"
+          value={selectedEigenModeFieldId ? "3D command payload available" : "missing"}
+        />
+        <FieldRow
+          label="Mode view"
           value={
-            frequencyDomainRef?.resourceRef ??
-            formatRecordField(eigenModePayload, "mode_field_resource_key", "not selected")
+            <select
+              aria-label="Selected eigen mode 3D view"
+              className="fm-inspector-select"
+              defaultValue={defaultAnalysisFieldView}
+              disabled={!selectedEigenMode3DReady}
+              key={`${selectedEigenModeFieldId ?? "none"}:selected-mode-view`}
+              ref={selectedEigenModeViewSelectRef}
+            >
+              {selectedFieldViewOptions.map((view) => (
+                <option key={view} value={view}>
+                  {analysisFieldViewLabel(view)}
+                </option>
+              ))}
+            </select>
           }
         />
         <FieldRow
+          label="Mode phase"
+          value={
+            <input
+              aria-label="Selected eigen mode phase"
+              className="fm-inspector-input"
+              defaultValue={String(selectedFieldMeta?.default_phase_rad ?? 0)}
+              disabled={!selectedEigenMode3DReady}
+              key={`${selectedEigenModeFieldId ?? "none"}:selected-mode-phase`}
+              ref={selectedEigenModePhaseInputRef}
+              step="0.1"
+              type="number"
+            />
+          }
+        />
+        <FieldRow
+          label="Mode animation rate"
+          value={
+            <input
+              aria-label="Selected eigen mode animation rate"
+              className="fm-inspector-input"
+              defaultValue="1"
+              disabled={!selectedEigenMode3DReady}
+              key={`${selectedEigenModeFieldId ?? "none"}:selected-mode-rate`}
+              max="10"
+              min="0.05"
+              ref={selectedEigenModeAnimationRateInputRef}
+              step="0.05"
+              type="number"
+            />
+          }
+        />
+        <button
+          className="fm-inspector-action-button"
+          disabled={!selectedEigenMode3DReady}
+          type="button"
+          onClick={() => plotSelectedEigenModeField("phase_rotated_real")}
+        >
+          Plot mode rotated
+        </button>
+        <button
+          className="fm-inspector-action-button"
+          disabled={!selectedEigenMode3DReady}
+          type="button"
+          onClick={() => plotSelectedEigenModeField("real")}
+        >
+          Plot mode real
+        </button>
+        <button
+          className="fm-inspector-action-button"
+          disabled={!selectedEigenMode3DReady}
+          type="button"
+          onClick={() => plotSelectedEigenModeField("imag")}
+        >
+          Plot mode imag
+        </button>
+        <button
+          className="fm-inspector-action-button"
+          disabled={!selectedEigenMode3DReady}
+          type="button"
+          onClick={() => plotSelectedEigenModeField("abs")}
+        >
+          Plot mode abs
+        </button>
+        <button
+          className="fm-inspector-action-button"
+          disabled={!selectedEigenMode3DReady}
+          type="button"
+          onClick={() => plotSelectedEigenModeField("phase")}
+        >
+          Plot mode phase
+        </button>
+        <button
+          className="fm-inspector-action-button"
+          disabled={!selectedEigenMode3DReady}
+          type="button"
+          onClick={() => plotSelectedEigenModeField("animate")}
+        >
+          Animate mode phase
+        </button>
+        <FieldRow
           label="Sample index"
           value={
-            frequencyDomainRef?.sampleIndex != null
-              ? String(frequencyDomainRef.sampleIndex)
+            frequencyDomainRef?.sampleIndex != null ||
+            selectedEigenModePoint?.sampleIndex != null
+              ? String(
+                  frequencyDomainRef?.sampleIndex ??
+                    selectedEigenModePoint?.sampleIndex,
+                )
               : "not selected"
           }
         />
         <FieldRow
           label="Raw mode index"
           value={
-            frequencyDomainRef?.modeIndex != null
-              ? String(frequencyDomainRef.modeIndex)
+            frequencyDomainRef?.modeIndex != null ||
+            selectedEigenModePoint?.rawModeIndex != null
+              ? String(
+                  frequencyDomainRef?.modeIndex ??
+                    selectedEigenModePoint?.rawModeIndex,
+                )
               : "not selected"
           }
         />
         <FieldRow
+          label="Spectrum branch"
+          value={selectedEigenModePoint?.branchId ?? "not assigned"}
+        />
+        <FieldRow
           label="Mode frequency"
-          value={formatNumber(eigenModePayload?.frequency_real_hz, " Hz")}
+          value={formatFrequency(
+            eigenModePayload?.frequency_real_hz ??
+              selectedEigenModePoint?.frequencyHz,
+          )}
         />
         <FieldRow
           label="Imaginary frequency"
-          value={formatNumber(eigenModePayload?.frequency_imag_hz, " Hz")}
+          value={formatFrequency(
+            eigenModePayload?.frequency_imag_hz ??
+              selectedEigenModePoint?.imaginaryFrequencyHz,
+          )}
         />
         <FieldRow
           label="Angular frequency"
@@ -1253,11 +1962,17 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
         />
         <FieldRow
           label="Residual"
-          value={formatNumber(eigenModePayload?.residual_norm)}
+          value={formatNumber(
+            eigenModePayload?.residual_norm ??
+              selectedEigenModePoint?.residualNorm,
+          )}
         />
         <FieldRow
           label="Tangent leakage max"
-          value={formatNumber(eigenModePayload?.tangent_leakage_max_abs)}
+          value={formatNumber(
+            eigenModePayload?.tangent_leakage_max_abs ??
+              selectedEigenModePoint?.tangentLeakageMax,
+          )}
         />
         <FieldRow
           label="Dominant polarization"
@@ -1286,7 +2001,9 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
           />
         ) : null}
       </InspectorSection>
+      ) : null}
 
+      {showSelectedBranch ? (
       <InspectorSection
         title="Selected Eigen Branch"
         badge={branches.status}
@@ -1342,7 +2059,9 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
           />
         ) : null}
       </InspectorSection>
+      ) : null}
 
+      {showSelectedResponsePoint ? (
       <InspectorSection
         title="Selected Response Frequency Point"
         badge={responseFrequencyPoint.data?.status ?? responseFrequencyPoint.status}
@@ -1357,7 +2076,7 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
         />
         <FieldRow
           label="Frequency"
-          value={formatNumber(responseFrequencyPointPayload?.frequency_hz, " Hz")}
+          value={formatFrequency(responseFrequencyPointPayload?.frequency_hz)}
         />
         <FieldRow
           label="Angular frequency"
@@ -1455,7 +2174,9 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
           />
         ) : null}
       </InspectorSection>
+      ) : null}
 
+      {showSelectedObservable ? (
       <InspectorSection
         title="Selected Response Observable"
         badge={responseSweep.status}
@@ -1472,7 +2193,7 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
           label="Frequency range"
           value={
             selectedObservableFrequencies.length > 0
-              ? `${Math.min(...selectedObservableFrequencies)}-${Math.max(...selectedObservableFrequencies)} Hz`
+              ? `${formatFrequency(Math.min(...selectedObservableFrequencies))}-${formatFrequency(Math.max(...selectedObservableFrequencies))}`
               : "not available"
           }
         />
@@ -1494,7 +2215,9 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
           value={frequencyDomainRef?.resourceRef ?? "not selected"}
         />
       </InspectorSection>
+      ) : null}
 
+      {showFmrPeaks ? (
       <InspectorSection title="FMR Peaks" badge={fmrPeakModel.peaks.length > 0 ? "ready" : "missing"}>
         <FieldRow label="Peak count" value={String(fmrPeakModel.peaks.length)} />
         <FieldRow label="Modal peaks" value={String(modalPeakCount)} />
@@ -1505,7 +2228,7 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
         />
         <FieldRow
           label="First peak frequency"
-          value={formatNumber(firstFmrPeak?.frequencyHz, " Hz")}
+          value={formatFrequency(firstFmrPeak?.frequencyHz)}
         />
         <FieldRow
           label="First peak field"
@@ -1521,8 +2244,47 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
         />
         <FrequencyDomainFmrPeakTable peaks={fmrPeakModel.peaks} />
       </InspectorSection>
+      ) : null}
 
-      <InspectorSection title="Chart Resources" badge="resource-driven">
+      {showModalSpectrum ? (
+      <InspectorSection title="Modal Spectrum" badge={spectrum.data?.status ?? spectrum.status}>
+        <FieldRow
+          label="Eigen spectrum"
+          value={`${spectrumModel.points.length} points, ${spectrumModel.droppedPointCount} dropped`}
+        />
+        <FieldRow
+          label="Mode controls"
+          value={
+            showEigenModeBrowser
+              ? "available in Eigen Mode Browser"
+              : "not available"
+          }
+        />
+        <FrequencyDomainSpectrumChart model={spectrumModel} />
+        <FrequencyDomainModeTable
+          points={spectrumModel.points}
+          onPlotMode={plotModePoint}
+        />
+        <FieldRow
+          label="Spectrum resource"
+          value={spectrum.data?.status ?? spectrum.status}
+        />
+      </InspectorSection>
+      ) : null}
+
+      {showDispersionChart ? (
+      <InspectorSection title="Dispersion Chart" badge={dispersion.status}>
+        <FieldRow
+          label="Dispersion"
+          value={`${dispersionModel.points.length} points, ${dispersionModel.series.length} series`}
+        />
+        <FrequencyDomainDispersionChart model={dispersionModel} />
+        <FrequencyDomainBranchTable branches={branchesModel.branches} />
+      </InspectorSection>
+      ) : null}
+
+      {showDrivenResponseChart ? (
+      <InspectorSection title="Driven Response Chart" badge={responseSweep.data?.status ?? responseSweep.status}>
         <FieldRow
           label="Primary chart"
           value={`${chartRoute.primaryChart} (${chartRoute.mode})`}
@@ -1547,20 +2309,6 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
               : "none"
           }
         />
-        <FieldRow
-          label="Eigen spectrum"
-          value={`${spectrumModel.points.length} points, ${spectrumModel.droppedPointCount} dropped`}
-        />
-        <FrequencyDomainSpectrumChart model={spectrumModel} />
-        <FrequencyDomainModeTable
-          points={spectrumModel.points}
-          onPlotMode={plotModePoint}
-        />
-        <FieldRow
-          label="Dispersion"
-          value={`${dispersionModel.points.length} points, ${dispersionModel.series.length} series`}
-        />
-        <FrequencyDomainDispersionChart model={dispersionModel} />
         <FieldRow
           label="Driven response"
           value={`${responseModel.points.length} points, ${responseModel.series.length} series`}
@@ -1602,14 +2350,11 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
           }
         />
         <FieldRow
-          label="Spectrum resource"
-          value={spectrum.data?.status ?? spectrum.status}
-        />
-        <FieldRow
           label="Response resource"
           value={responseSweep.data?.status ?? responseSweep.status}
         />
       </InspectorSection>
+      ) : null}
     </div>
   );
 }

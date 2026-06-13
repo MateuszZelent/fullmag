@@ -21631,7 +21631,7 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
     assert_eq!(payload["payload"]["frequency_hz"], 2.0e9);
     assert_eq!(
         payload["payload"]["response_field_payload_path"],
-        "response/field_payloads/frequency_0001/vector.bin"
+        "response/field_payloads.zarr/frequency_0001/vector_xyz_complex/0.0.0"
     );
 
     let response = app
@@ -23597,8 +23597,9 @@ async fn frequency_domain_response_data_plane_defaults_to_spatial_xyz_without_po
     let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
     let field_payload_dir = artifact_dir
         .join("response")
-        .join("field_payloads")
-        .join("frequency_0001");
+        .join("field_payloads.zarr")
+        .join("frequency_0001")
+        .join("vector_xyz_complex");
     fs::create_dir_all(&field_payload_dir).expect("field payload directory should exist");
     let mut spatial_payload = Vec::new();
     for value in [
@@ -23606,8 +23607,8 @@ async fn frequency_domain_response_data_plane_defaults_to_spatial_xyz_without_po
     ] {
         spatial_payload.extend_from_slice(&value.to_le_bytes());
     }
-    fs::write(field_payload_dir.join("vector_xyz.bin"), spatial_payload)
-        .expect("spatial fallback payload should be written");
+    fs::write(field_payload_dir.join("0.0.0"), spatial_payload)
+        .expect("default Zarr fallback payload should be written");
 
     let response = app
         .oneshot(

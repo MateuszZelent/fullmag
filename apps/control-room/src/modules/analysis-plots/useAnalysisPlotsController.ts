@@ -172,6 +172,8 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
         ? frequencyDomainResponse.status
         : frequencyDomainRoute.primaryChart === "modal-spectrum"
           ? frequencyDomainSpectrum.status
+          : frequencyDomainRoute.primaryChart === "response-map"
+            ? "error"
           : frequencyDomainManifest.status;
 
   const setXAxisId = (columnId: string) => {
@@ -363,19 +365,23 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     setRange,
     frequencyDomainSeries,
     frequencyDomainStatus:
-      frequencyDomainRoute.status === "available"
+      frequencyDomainRoute.primaryChart === "response-map"
+        ? "error"
+        : frequencyDomainRoute.status === "available"
         ? frequencyDomainResourceStatus
         : frequencyDomainManifest.status === "ready"
           ? "stale"
           : frequencyDomainManifest.status,
     frequencyDomainTitle: frequencyDomainChartTitle(frequencyDomainRoute.primaryChart),
     frequencyDomainUnavailableReason:
-      frequencyDomainRoute.unavailableReason ??
-      firstFrequencyDomainDiagnostic([
-        frequencyDomainDispersionModel.diagnostics,
-        frequencyDomainResponseModel.diagnostics,
-        frequencyDomainSpectrumModel.diagnostics,
-      ]),
+      frequencyDomainRoute.primaryChart === "response-map"
+        ? "response-map chart adapter is not available yet"
+        : frequencyDomainRoute.unavailableReason ??
+          firstFrequencyDomainDiagnostic([
+            frequencyDomainDispersionModel.diagnostics,
+            frequencyDomainResponseModel.diagnostics,
+            frequencyDomainSpectrumModel.diagnostics,
+          ]),
     solverEnergySeries,
     solverEnergyStatus: solverEnergyHistory.status,
     setXAxisId,
@@ -406,6 +412,7 @@ export function frequencyDomainChartRouteOverrideFromSelection(
   }
   if (
     kind === "results.frequency_domain.response_map" ||
+    kind === "resources.analysis.frequency_domain.response_map" ||
     kind === "study.stage.frequency_response.k_grid"
   ) {
     return { mode: "response_map", primaryChart: "response-map" };

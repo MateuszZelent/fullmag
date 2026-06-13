@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+  DATA_FIELD_VECTOR_PATH,
 } from "@/kernel/api/apiPaths";
 
 import {
@@ -37,6 +38,10 @@ function textResource(text: string): FrequencyDomainTextArtifactLike {
   };
 }
 
+function fieldVectorResourceKey(fieldId: string): string {
+  return `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", fieldId)}?view=phase_rotated_real&phase_rad=0`;
+}
+
 describe("frequencyDomainChartModels", () => {
   it("maps eigen spectrum rows into finite GHz chart points with mode identity", () => {
     const model = buildEigenSpectrumChartModel(
@@ -46,8 +51,7 @@ describe("frequencyDomainChartModels", () => {
             branch_id: "b0",
             frequency_hz: 2.5e9,
             mode_field_id: "field-0",
-            mode_field_resource_key:
-              "/v2/sessions/current/data/fields/field-0/samples/vector?view=phase_rotated_real&phase_rad=0",
+            mode_field_resource_key: fieldVectorResourceKey("field-0"),
             raw_mode_index: 3,
             residual_norm: 1e-7,
             sample_index: 2,
@@ -64,14 +68,136 @@ describe("frequencyDomainChartModels", () => {
         branchId: "b0",
         frequencyHz: 2.5e9,
         modeFieldId: "field-0",
-        modeFieldResourceKey:
-          "/v2/sessions/current/data/fields/field-0/samples/vector?view=phase_rotated_real&phase_rad=0",
+        modeFieldResourceKey: fieldVectorResourceKey("field-0"),
         rawModeIndex: 3,
         sampleIndex: 2,
       }),
     ]);
     expect(model.series[0]?.points).toEqual([{ rowIndex: 0, x: 3, y: 2.5 }]);
     expect(model.series[0]?.unit).toBe("GHz");
+  });
+
+  it("maps canonical v2 sample modes into finite spectrum points with field ids", () => {
+    const mode0ResourceKey = fieldVectorResourceKey(
+      "analysis:eigen:sample-0000:mode-0000",
+    );
+    const mode1ResourceKey = fieldVectorResourceKey(
+      "analysis:eigen:sample-0003:mode-0001",
+    );
+
+    const model = buildEigenSpectrumChartModel(
+      jsonResource({
+        samples: [
+          {
+            label: "Gamma",
+            modes: [
+              {
+                frequency_hz: 1.481196536e9,
+                mode_field_id: "analysis:eigen:sample-0000:mode-0000",
+                mode_field_resource_key: mode0ResourceKey,
+                raw_mode_index: 0,
+                residual_norm: 1e-10,
+              },
+            ],
+            sample_index: 0,
+          },
+          {
+            modes: [
+              {
+                frequency_hz: 2.25e9,
+                mode_field_id: "analysis:eigen:sample-0003:mode-0001",
+                mode_field_resource_key: mode1ResourceKey,
+                raw_mode_index: 1,
+              },
+            ],
+            sample_index: 3,
+          },
+        ],
+        schema_version: "frequency_domain_eigen_spectrum.v2",
+      }),
+    );
+
+    expect(model.droppedPointCount).toBe(0);
+    expect(model.points).toEqual([
+      expect.objectContaining({
+        frequencyHz: 1.481196536e9,
+        modeFieldId: "analysis:eigen:sample-0000:mode-0000",
+        modeFieldResourceKey: mode0ResourceKey,
+        rawModeIndex: 0,
+        residualNorm: 1e-10,
+        sampleIndex: 0,
+      }),
+      expect.objectContaining({
+        frequencyHz: 2.25e9,
+        modeFieldId: "analysis:eigen:sample-0003:mode-0001",
+        modeFieldResourceKey: mode1ResourceKey,
+        rawModeIndex: 1,
+        sampleIndex: 3,
+      }),
+    ]);
+    expect(model.series[0]?.points).toEqual([
+      { rowIndex: 0, x: 0, y: 1.481196536 },
+      { rowIndex: 1, x: 1, y: 2.25 },
+    ]);
+  });
+
+  it("accepts modal writer frequency_real_hz fields when frequency_hz alias is absent", () => {
+    const model = buildEigenSpectrumChartModel(
+      jsonResource({
+        samples: [
+          {
+            modes: [
+              {
+                frequency_imag_hz: -12.5e6,
+                frequency_real_hz: 1.75e9,
+                raw_mode_index: 2,
+              },
+            ],
+            sample_index: 4,
+          },
+        ],
+        schema_version: "frequency_domain_eigen_spectrum.v2",
+      }),
+    );
+
+    expect(model.droppedPointCount).toBe(0);
+    expect(model.points).toEqual([
+      expect.objectContaining({
+        frequencyHz: 1.75e9,
+        imaginaryFrequencyHz: -12.5e6,
+        modeFieldId: "analysis:eigen:sample-0004:mode-0002",
+        modeFieldResourceKey: fieldVectorResourceKey(
+          "analysis:eigen:sample-0004:mode-0002",
+        ),
+        rawModeIndex: 2,
+        sampleIndex: 4,
+      }),
+    ]);
+  });
+
+  it("derives eigen mode field ids from sample and mode indices when spectrum rows omit them", () => {
+    const model = buildEigenSpectrumChartModel(
+      jsonResource({
+        modes: [
+          {
+            frequency_hz: 750e6,
+            raw_mode_index: 7,
+            sample_index: 3,
+          },
+        ],
+      }),
+    );
+
+    expect(model.points[0]).toEqual(
+      expect.objectContaining({
+        modeFieldId: "analysis:eigen:sample-0003:mode-0007",
+        modeFieldResourceKey: fieldVectorResourceKey(
+          "analysis:eigen:sample-0003:mode-0007",
+        ),
+        rawModeIndex: 7,
+        sampleIndex: 3,
+      }),
+    );
   });
 
   it("builds canonical frequency-domain selection refs for eigen modes", () => {
@@ -82,8 +208,7 @@ describe("frequencyDomainChartModels", () => {
             branch_id: "b0",
             frequency_hz: 2.5e9,
             mode_field_id: "field-0",
-            mode_field_resource_key:
-              "/v2/sessions/current/data/fields/field-0/samples/vector?view=phase_rotated_real&phase_rad=0",
+            mode_field_resource_key: fieldVectorResourceKey("field-0"),
             raw_mode_index: 3,
             sample_index: 2,
           },
@@ -106,8 +231,7 @@ describe("frequencyDomainChartModels", () => {
       kind: "results.eigen.mode",
       modeIndex: 3,
       nodeId: "results:eigen:sample:2:mode:3",
-      resourceRef:
-        "/v2/sessions/current/data/fields/field-0/samples/vector?view=phase_rotated_real&phase_rad=0",
+      resourceRef: fieldVectorResourceKey("field-0"),
       sampleIndex: 2,
       type: "frequency-domain",
     });
@@ -522,6 +646,24 @@ describe("frequencyDomainChartModels", () => {
       }),
     );
     expect(route.supportingCharts).toContain("response-field-overlay");
+  });
+
+  it("does not treat response sweep artifacts as computed response maps", () => {
+    const route = routeFrequencyDomainCalculationMode({
+      artifacts: {
+        response_sweep_v2_path: "response/magnetic_response_sweep.v2.json",
+      },
+      requested_execution: { calculation_mode: "response_map" },
+      stage_kind: "frequency_response",
+    });
+
+    expect(route).toEqual(
+      expect.objectContaining({
+        mode: "response_map",
+        primaryChart: "response-sweep",
+        status: "available",
+      }),
+    );
   });
 
   it("routes dispersion_modal manifests to path_s dispersion charts", () => {

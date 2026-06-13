@@ -97,7 +97,7 @@ verify-fem-frequency-domain-runtime-suite:
     just verify-fem-frequency-domain-runtime
     just verify-fem-frequency-domain-static-periodic-runtime
     just verify-fem-frequency-domain-eigen-runtime
-    just verify-fem-fmr-periodic-k0-runtime
+    just verify-fem-fmr-free-demag-airbox-runtime
 
 verify-fem-frequency-response-runtime:
     just verify-fem-frequency-domain-runtime
@@ -129,13 +129,19 @@ verify-fem-frequency-domain-eigen-runtime:
         test -f .fullmag/reports/frequency-domain-eigen-runtime/artifacts/frequency_domain/manifest.v1.json && \
         python3 scripts/verify_fem_frequency_domain_eigen_artifacts.py .fullmag/reports/frequency-domain-eigen-runtime/artifacts'
 
+fem-fmr-free-demag-airbox-example:
+    just verify-fem-fmr-free-demag-airbox-runtime
+    printf '\nFMR free-boundary demag-airbox example outputs:\n'
+    printf '  spectrum: .fullmag/reports/fmr-free-demag-airbox-runtime/artifacts/eigen/spectrum.v2.json\n'
+    printf '  mode metadata: .fullmag/reports/fmr-free-demag-airbox-runtime/artifacts/eigen/modes/sample_0000/mode_0000.json\n'
+    printf '  mode field: .fullmag/reports/fmr-free-demag-airbox-runtime/artifacts/eigen/mode_fields.zarr/sample_0000/mode_0000/vector_xyz_complex/0.0.0\n'
+    printf '  plots: .fullmag/reports/fmr-free-demag-airbox-runtime/plots\n'
+
+fem-fmr-free-demag-airbox-ui:
+    just fullmag fem cpu examples/fem_fmr_free_demag_airbox_smoke.py
+
 fem-fmr-periodic-k0-example:
-    just verify-fem-fmr-periodic-k0-runtime
-    printf '\nFMR k=0 periodic example outputs:\n'
-    printf '  spectrum: .fullmag/reports/fmr-periodic-k0-runtime/artifacts/eigen/spectrum.v2.json\n'
-    printf '  mode metadata: .fullmag/reports/fmr-periodic-k0-runtime/artifacts/eigen/modes/sample_0000/mode_0000.json\n'
-    printf '  mode field: .fullmag/reports/fmr-periodic-k0-runtime/artifacts/eigen/mode_fields.zarr/sample_0000/mode_0000/vector_xyz_complex/0.0.0\n'
-    printf '  plots: .fullmag/reports/fmr-periodic-k0-runtime/plots\n'
+    just fem-fmr-free-demag-airbox-example
 
 run-permalloy-box-fmr-modes:
     just verify-permalloy-box-fmr-modes-runtime
@@ -183,10 +189,10 @@ verify-permalloy-box-fmr-modes-runtime:
         test -f .fullmag/reports/permalloy-box-fmr-modes/plots/mode_sample_0000_mode_0000_phase.svg && \
         test -f .fullmag/reports/permalloy-box-fmr-modes/plots/mode_sample_0000_mode_0000_animation.svg'
 
-verify-fem-fmr-periodic-k0-runtime:
+verify-fem-fmr-free-demag-airbox-runtime:
     just ensure-managed-fem-runtime
-    rm -rf .fullmag/reports/fmr-periodic-k0-runtime
-    mkdir -p .fullmag/reports/fmr-periodic-k0-runtime
+    rm -rf .fullmag/reports/fmr-free-demag-airbox-runtime
+    mkdir -p .fullmag/reports/fmr-free-demag-airbox-runtime
     docker compose --profile fem-gpu run --rm \
       -e PYTHONPATH=/workspace/packages/fullmag-py/src \
       -e FULLMAG_PYTHON=/usr/bin/python3 \
@@ -195,31 +201,34 @@ verify-fem-fmr-periodic-k0-runtime:
       -e FULLMAG_RELAX_DEVICE=cpu \
       -e FULLMAG_CPU_THREADS="${FULLMAG_CPU_THREADS:-auto}" \
       fem-gpu bash -lc 'cd /workspace && \
-        rm -rf .fullmag/reports/fmr-periodic-k0-runtime/artifacts && \
+        rm -rf .fullmag/reports/fmr-free-demag-airbox-runtime/artifacts && \
         .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu \
-          examples/fem_fmr_periodic_k0_smoke.py \
+          examples/fem_fmr_free_demag_airbox_smoke.py \
           --backend fem \
           --headless \
           --json \
-          --output-dir .fullmag/reports/fmr-periodic-k0-runtime/artifacts && \
-        test -f .fullmag/reports/fmr-periodic-k0-runtime/artifacts/eigen/spectrum.v2.json && \
-        test -f .fullmag/reports/fmr-periodic-k0-runtime/artifacts/eigen/branches.v2.json && \
-        test -f .fullmag/reports/fmr-periodic-k0-runtime/artifacts/eigen/dispersion.csv && \
-        test -f .fullmag/reports/fmr-periodic-k0-runtime/artifacts/eigen/modes/sample_0000/mode_0000.json && \
-        test -f .fullmag/reports/fmr-periodic-k0-runtime/artifacts/eigen/mode_fields.zarr/sample_0000/mode_0000/vector_xyz_complex/0.0.0 && \
-        test -f .fullmag/reports/fmr-periodic-k0-runtime/artifacts/frequency_domain/manifest.v1.json && \
-        python3 scripts/verify_fem_frequency_domain_eigen_artifacts.py .fullmag/reports/fmr-periodic-k0-runtime/artifacts && \
+          --output-dir .fullmag/reports/fmr-free-demag-airbox-runtime/artifacts && \
+        test -f .fullmag/reports/fmr-free-demag-airbox-runtime/artifacts/eigen/spectrum.v2.json && \
+        test -f .fullmag/reports/fmr-free-demag-airbox-runtime/artifacts/eigen/branches.v2.json && \
+        test -f .fullmag/reports/fmr-free-demag-airbox-runtime/artifacts/eigen/dispersion.csv && \
+        test -f .fullmag/reports/fmr-free-demag-airbox-runtime/artifacts/eigen/modes/sample_0000/mode_0000.json && \
+        test -f .fullmag/reports/fmr-free-demag-airbox-runtime/artifacts/eigen/mode_fields.zarr/sample_0000/mode_0000/vector_xyz_complex/0.0.0 && \
+        test -f .fullmag/reports/fmr-free-demag-airbox-runtime/artifacts/frequency_domain/manifest.v1.json && \
+        python3 scripts/verify_fem_frequency_domain_eigen_artifacts.py .fullmag/reports/fmr-free-demag-airbox-runtime/artifacts && \
         python3 scripts/plot_fem_frequency_domain_eigen_artifacts.py \
-          .fullmag/reports/fmr-periodic-k0-runtime/artifacts \
-          --output-dir .fullmag/reports/fmr-periodic-k0-runtime/plots \
+          .fullmag/reports/fmr-free-demag-airbox-runtime/artifacts \
+          --output-dir .fullmag/reports/fmr-free-demag-airbox-runtime/plots \
           --modes 0,1,2 && \
-        test -f .fullmag/reports/fmr-periodic-k0-runtime/plots/spectrum.svg && \
-        test -f .fullmag/reports/fmr-periodic-k0-runtime/plots/mode_sample_0000_mode_0000_real.svg && \
-        test -f .fullmag/reports/fmr-periodic-k0-runtime/plots/mode_sample_0000_mode_0000_imag.svg && \
-        test -f .fullmag/reports/fmr-periodic-k0-runtime/plots/mode_sample_0000_mode_0000_complex.svg && \
-        test -f .fullmag/reports/fmr-periodic-k0-runtime/plots/mode_sample_0000_mode_0000_abs.svg && \
-        test -f .fullmag/reports/fmr-periodic-k0-runtime/plots/mode_sample_0000_mode_0000_phase.svg && \
-        test -f .fullmag/reports/fmr-periodic-k0-runtime/plots/mode_sample_0000_mode_0000_animation.svg'
+        test -f .fullmag/reports/fmr-free-demag-airbox-runtime/plots/spectrum.svg && \
+        test -f .fullmag/reports/fmr-free-demag-airbox-runtime/plots/mode_sample_0000_mode_0000_real.svg && \
+        test -f .fullmag/reports/fmr-free-demag-airbox-runtime/plots/mode_sample_0000_mode_0000_imag.svg && \
+        test -f .fullmag/reports/fmr-free-demag-airbox-runtime/plots/mode_sample_0000_mode_0000_complex.svg && \
+        test -f .fullmag/reports/fmr-free-demag-airbox-runtime/plots/mode_sample_0000_mode_0000_abs.svg && \
+        test -f .fullmag/reports/fmr-free-demag-airbox-runtime/plots/mode_sample_0000_mode_0000_phase.svg && \
+        test -f .fullmag/reports/fmr-free-demag-airbox-runtime/plots/mode_sample_0000_mode_0000_animation.svg'
+
+verify-fem-fmr-periodic-k0-runtime:
+    just verify-fem-fmr-free-demag-airbox-runtime
 
 verify-fem-frequency-domain-runtime:
     just ensure-managed-fem-runtime

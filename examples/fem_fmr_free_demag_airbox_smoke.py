@@ -5,7 +5,14 @@ Permalloy film. It relaxes the equilibrium state first, then assembles the FEM
 linearized-LLG eigenproblem with demag enabled through a Poisson-Robin airbox.
 
 Usage:
-    fullmag examples/fem_fmr_periodic_k0_smoke.py --headless
+    just fem-fmr-free-demag-airbox-example
+
+For the interactive Control Room:
+    just fem-fmr-free-demag-airbox-ui
+
+The current managed runtime must execute this eigenmode smoke on CPU unless it
+was rebuilt with CUDA cuSolver support. Running it through ``just fullmag fem
+gpu ...`` explicitly requests the unavailable FEM eigen GPU lane.
 
 Expected artifacts include:
     spectrum            frequency table for the requested modes
@@ -23,19 +30,19 @@ study.engine("fem")
 study.device("cpu", precision="double")
 study.universe(
     mode="auto",
-    size=(200e-9, 200e-9, 90e-9),
+    size=(180e-9, 180e-9, 90e-9),
     center=(0.0, 0.0, 0.0),
     padding=(0.0, 0.0, 0.0),
 )
 study.universe.mesh(maximum_element_size=120e-9)
 study.airbox.visualization(show=True, mode="vectors", active_quantity_id="h_eff")
 
-body = study.geometry(fm.Box(size=(120e-9, 120e-9, 10e-9), name="body"), name="body")
+body = study.geometry(fm.Box(size=(60e-9, 60e-9, 10e-9), name="body"), name="body")
 body.Ms = 800e3
 body.Aex = 13e-12
 body.alpha = 0.02
 body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
-body.mesh(maximum_element_size=5e-9, order=1)
+body.mesh(maximum_element_size=40e-9, order=1)
 
 study.demag(realization="poisson_robin")
 study.build_domain_mesh()

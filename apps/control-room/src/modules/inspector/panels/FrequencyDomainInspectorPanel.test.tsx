@@ -14,6 +14,7 @@ import {
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FREQUENCY_POINT_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
+  DATA_FIELD_VECTOR_PATH,
   MESHING_PERIODIC_PAIRS_PATH,
 } from "@/kernel/api/apiPaths";
 import type { Selection } from "@/kernel/selection/selectionTypes";
@@ -29,6 +30,74 @@ const emptyResource = {
   revision: null,
   status: "idle",
 } as const;
+
+function analysisFieldVectorResourceKey(fieldId: string): string {
+  return `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", fieldId)}?view=phase_rotated_real&phase_rad=0`;
+}
+
+const EXPLORER_GENERATED_FREQUENCY_DOMAIN_NODE_KINDS = [
+  "results.frequency_domain.root",
+  "results.frequency_domain.run",
+  "results.frequency_domain.calculation_modes",
+  "results.frequency_domain.fmr",
+  "results.frequency_domain.fmr_modal_spectrum",
+  "results.frequency_domain.fmr_response_sweep",
+  "results.frequency_domain.fmr_peaks",
+  "results.frequency_domain.dispersion",
+  "results.frequency_domain.response_map",
+  "results.frequency_domain.comparison",
+  "results.frequency_domain.exports",
+  "results.eigen.root",
+  "results.eigen.study",
+  "results.eigen.spectrum",
+  "results.eigen.modes",
+  "results.eigen.mode",
+  "results.eigen.dispersion",
+  "results.eigen.k_path",
+  "results.eigen.branches",
+  "results.eigen.branch",
+  "results.eigen.provenance",
+  "results.frequency_response.root",
+  "results.frequency_response.study",
+  "results.frequency_response.sweep",
+  "results.frequency_response.progress",
+  "results.frequency_response.cancel_requested",
+  "results.frequency_response.frequency_points",
+  "results.frequency_response.frequency_point",
+  "results.frequency_response.observables",
+  "results.frequency_response.observable",
+  "results.frequency_response.provenance",
+  "resources.analysis.frequency_domain",
+  "resources.analysis.frequency_domain.manifest",
+  "resources.analysis.eigen.spectrum",
+  "resources.analysis.eigen.branches",
+  "resources.analysis.eigen.dispersion",
+  "resources.analysis.eigen.diagnostics",
+  "resources.analysis.eigen.mode_metadata",
+  "resources.analysis.eigen.mode_field",
+  "resources.analysis.frequency_response.sweep",
+  "resources.analysis.frequency_response.frequency_point",
+  "resources.analysis.frequency_response.field",
+  "resources.analysis.frequency_response.observables",
+  "resources.analysis.frequency_response.progress",
+  "resources.analysis.frequency_response.cancel_requested",
+  "resources.analysis.frequency_response.diagnostics",
+  "jobs.frequency_domain.root",
+  "jobs.frequency_domain.stage_run",
+  "jobs.frequency_domain.eigen_sample",
+  "jobs.frequency_domain.response_frequency",
+  "jobs.frequency_domain.response_progress",
+  "jobs.frequency_domain.artifact_export",
+  "diagnostics.frequency_domain.root",
+  "diagnostics.frequency_domain.capabilities",
+  "diagnostics.frequency_domain.equilibrium",
+  "diagnostics.frequency_domain.operator",
+  "diagnostics.frequency_domain.solver",
+  "diagnostics.frequency_domain.artifacts",
+  "diagnostics.frequency_domain.api_resources",
+  "diagnostics.frequency_domain.visualization",
+  "diagnostics.frequency_domain.periodic_floquet",
+] as const;
 
 vi.mock("@/kernel/KernelContext", () => ({
   useKernel: () => ({
@@ -92,7 +161,62 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
     revision: "dispersion:1",
     status: "ready",
   }),
-  useFrequencyDomainEigenModeFieldMetaResource: () => emptyResource,
+  useFrequencyDomainEigenModeFieldMetaResource: (
+    sampleIndex: number | null | undefined,
+    modeIndex: number | null | undefined,
+  ) =>
+    sampleIndex === 0 && modeIndex === 2
+      ? {
+          ...emptyResource,
+          data: {
+            artifact_path:
+              "eigen/mode_fields.zarr/sample_0000/mode_0002/vector_xyz_complex",
+            available_views: [
+              "phase_rotated_real",
+              "real",
+              "imag",
+              "abs",
+              "phase",
+            ],
+            binary_layout: "zarr_v2_aos_xyz_complex_pairs",
+            complex_pair_count: 3,
+            component_basis: "global_xyz",
+            component_count: 3,
+            components: ["x", "y", "z"],
+            default_phase_rad: 0,
+            default_view: "phase_rotated_real",
+            field_id: "analysis:eigen:sample-0000:mode-0002",
+            missing_reason: null,
+            payload_encoding: "f64_interleaved_real_imag_xyz",
+            payload_value_count: 18,
+            quantity: "delta_m",
+            resource_key: analysisFieldVectorResourceKey(
+              "analysis:eigen:sample-0000:mode-0002",
+            ),
+            schema_version: "frequency_domain_eigen_field.v1",
+            source_family: "analysis/eigen",
+            status: "ready",
+            tangent_component_basis: "local_tangent_e1_e2",
+            tangent_components: ["e1", "e2"],
+            tangent_field_payload_path:
+              "eigen/mode_fields.zarr/sample_0000/mode_0002/tangent_complex/0.0.0",
+            tangent_payload_encoding: "f64_interleaved_real_imag_e1_e2",
+            tangent_value_kind: "complex_tangent_vector",
+            value_kind: "complex_spatial_vector",
+            zarr_array_path:
+              "eigen/mode_fields.zarr/sample_0000/mode_0002/vector_xyz_complex",
+            zarr_chunk_path:
+              "eigen/mode_fields.zarr/sample_0000/mode_0002/vector_xyz_complex/0.0.0",
+            zarr_chunk_shape: [3, 3, 2],
+            zarr_compressor: null,
+            zarr_dtype: "<f8",
+            zarr_shape: [3, 3, 2],
+            zarr_store_path: "eigen/mode_fields.zarr",
+          },
+          revision: "mode-field-meta:0:2",
+          status: "ready",
+        }
+      : emptyResource,
   useFrequencyDomainEigenModeResource: () => ({
     ...emptyResource,
     data: {
@@ -105,8 +229,9 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
       dominant_polarization: "counter_clockwise",
       frequency_imag_hz: -12000000,
       frequency_real_hz: 12000000000,
-      mode_field_resource_key:
-        "/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0002/samples/vector?view=phase_rotated_real&phase_rad=0",
+      mode_field_resource_key: analysisFieldVectorResourceKey(
+        "analysis:eigen:sample-0000:mode-0002",
+      ),
       mode_field_sample_count: 3,
       raw_mode_index: 2,
       residual_norm: 1e-8,
@@ -579,37 +704,10 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain(
       ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
     );
-    expect(html).toContain("Response data source");
-    expect(html).toContain("response.v2");
-    expect(html).toContain("Primary chart");
-    expect(html).toContain("response-sweep (fmr_response)");
-    expect(html).toContain("Response progress status");
-    expect(html).toContain("Response progress state");
-    expect(html).toContain("unavailable");
-    expect(html).toContain("Response progress reason");
-    expect(html).toContain("frequency-domain response is unavailable");
-    expect(html).toContain("Latest response manifest");
-    expect(html).toContain("frequency_domain/manifest.v1.json");
-    expect(html).toContain("Demag-k policy");
-    expect(html).toContain("dynamic demag-k is blocked for nonzero-k Floquet");
-    expect(html).toContain("Driven Response Solver");
-    expect(html).toContain("Driven response");
-    expect(html).toContain("yes");
-    expect(html).toContain("Static-periodic response");
-    expect(html).toContain("partial_production_executable");
-    expect(html).toContain("Floquet response");
-    expect(html).toContain("GPU lane");
-    expect(html).toContain("Physics Contract");
-    expect(html).toContain("Temporal phase convention");
-    expect(html).toContain("exp_minus_i_omega_t");
-    expect(html).toContain("Frequency units");
-    expect(html).toContain("Hz");
-    expect(html).toContain("Field units");
-    expect(html).toContain("dimensionless_delta_m");
-    expect(html).toContain("Normalization");
-    expect(html).toContain("unit_l2");
-    expect(html).toContain("FMR response sweep");
-    expect(html).toContain("can be exposed by response artifacts");
+    expect(html).not.toContain("Driven Response Solver");
+    expect(html).not.toContain("Driven Response Chart");
+    expect(html).not.toContain("Physics Contract");
+    expect(html).not.toContain("Periodic / Floquet Boundary Conditions");
   });
 
   it("renders manifest response field resources for response field resource nodes", () => {
@@ -763,12 +861,73 @@ describe("FrequencyDomainInspectorPanel", () => {
       expect(html).toContain(expectedTitle);
       expect(html).toContain(expectedVisualization);
       expect(html).not.toContain("family overview");
+      if (kind.includes(".boundary") || kind.includes(".periodic_pairs")) {
+        expect(html).not.toContain("Modal Eigen Solver");
+        expect(html).not.toContain("Driven Response Solver");
+        expect(html).not.toContain("Solver Family Contract");
+        expect(html).not.toContain("Plot Readiness");
+        expect(html).not.toContain("Eigen Mode Browser");
+      }
+      if (kind.includes("k_path") || kind.includes("k_grid")) {
+        expect(html).not.toContain("Modal Eigen Solver");
+        expect(html).not.toContain("Driven Response Solver");
+        expect(html).not.toContain("Solver Family Contract");
+        expect(html).not.toContain("Plot Readiness");
+      }
       if (kind.includes("k_path")) {
-        expect(html).toContain("k-Path Samples");
+        expect(html).toContain("Bloch k-Path Parameters");
         expect(html).toContain("path_s range");
         expect(html).toContain("0-78539816.33974482 rad/m");
         expect(html).toContain("Endpoint labels");
         expect(html).toContain("Gamma -&gt; X");
+      }
+    },
+  );
+
+  it.each([
+    [
+      "diagnostics.frequency_domain.solver",
+      "Solver Diagnostic Detail",
+      ["Solver Family Contract", "Plot Readiness", "Eigen Mode Browser"],
+    ],
+    [
+      "results.eigen.branch",
+      "Eigen Branch Node Detail",
+      ["Modal Eigen Solver", "Modal Spectrum", "Eigen Mode Browser"],
+    ],
+    [
+      "resources.analysis.eigen.diagnostics",
+      "Eigen Diagnostics Resource Detail",
+      ["Modal Spectrum", "Eigen Mode Browser", "Selected Eigen Mode"],
+    ],
+    [
+      "jobs.frequency_domain.artifact_export",
+      "Artifact Export Job Detail",
+      ["Solver Family Contract", "Modal Spectrum", "Driven Response Chart"],
+    ],
+  ])(
+    "does not render unrelated shared sections for %s",
+    (kind, expectedTitle, forbiddenSections) => {
+      const selection: Selection = {
+        kind,
+        label: expectedTitle,
+        moduleSource: "explorer",
+        nodeId: `test:${kind}`,
+        objectId: null,
+        ref: {
+          kind,
+          nodeId: `test:${kind}`,
+          type: "frequency-domain",
+        },
+      };
+
+      const html = renderToStaticMarkup(
+        <FrequencyDomainInspectorPanel selection={selection} />,
+      );
+
+      expect(html).toContain(expectedTitle);
+      for (const forbiddenSection of forbiddenSections) {
+        expect(html).not.toContain(forbiddenSection);
       }
     },
   );
@@ -804,7 +963,7 @@ describe("FrequencyDomainInspectorPanel", () => {
       ),
     );
     expect(html).toContain("response/frequency_points/frequency_0001.json");
-    expect(html).toContain("9500000000 Hz");
+    expect(html).toContain("9.5 GHz");
     expect(html).toContain("42 W/m^3");
     expect(html).toContain("Absorbed power provenance");
     expect(html).toContain("drive_projected_absorption_proxy");
@@ -871,7 +1030,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("mx");
     expect(html).toContain("Observable points");
     expect(html).toContain("1");
-    expect(html).toContain("9500000000-9500000000 Hz");
+    expect(html).toContain("9.5 GHz-9.5 GHz");
     expect(html).toContain("Mean amplitude");
     expect(html).toContain("1.5");
     expect(html).toContain(ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH);
@@ -907,10 +1066,10 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("First peak source");
     expect(html).toContain("modal");
     expect(html).toContain("First peak frequency");
-    expect(html).toContain("9500000000 Hz");
+    expect(html).toContain("9.5 GHz");
   });
 
-  it("renders Recharts frequency-domain charts for spectrum, dispersion, and response", () => {
+  it("renders contextual ECharts frequency-domain charts for FMR", () => {
     const selection: Selection = {
       kind: "results.frequency_domain.fmr",
       label: "FMR",
@@ -929,19 +1088,32 @@ describe("FrequencyDomainInspectorPanel", () => {
     );
 
     expect(html).toContain("FMR / eigen modal spectrum");
-    expect(html).toContain("Bloch / Floquet dispersion");
     expect(html).toContain("Driven FMR frequency response");
     expect(html).toContain('class="fm-frequency-domain-chart"');
-    expect(html).toContain('data-renderer="recharts"');
+    expect(html).toContain('data-renderer="echarts"');
+    expect(html).toContain("Eigen Mode Browser");
+    expect(html).toContain("Select eigen mode for 3D visualization");
+    expect(html).toContain("Selected mode frequency");
+    expect(html).toContain("Selected sample");
+    expect(html).toContain("Selected raw mode");
+    expect(html).toContain("Selected mode field");
+    expect(html).toContain("Eigen mode browser 3D view");
+    expect(html).toContain("Eigen mode browser phase");
+    expect(html).toContain("Eigen mode browser animation rate");
+    expect(html).toContain("Plot selected rotated");
+    expect(html).toContain("Plot selected real");
+    expect(html).toContain("Plot selected imag");
+    expect(html).toContain("Plot selected abs");
+    expect(html).toContain("Plot selected phase");
+    expect(html).toContain("Animate selected mode");
     expect(html).toContain("Frequency-domain mode table");
     expect(html).toContain("Frequency-domain response point table");
-    expect(html).toContain("Frequency-domain branch table");
     expect(html).toContain("Frequency-domain FMR peak table");
+    expect(html).not.toContain("Bloch / Floquet dispersion");
+    expect(html).not.toContain("Frequency-domain branch table");
     expect(html).toContain("mode 1: 9.5 GHz");
     expect(html).toContain("mode 2: 12 GHz");
-    expect(html).toContain("Branch acoustic: 2 samples");
     expect(html).toContain("Amplitude: 1 samples");
-    expect(html).toContain("<td>branch-0</td><td>acoustic</td><td>2</td>");
     expect(html).toContain("<td>modal</td><td>9.5 GHz</td>");
     expect(html).toContain("<td>0</td><td>1</td>");
     expect(html).toContain("<td>0</td><td>mx</td>");
@@ -950,7 +1122,85 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Plot imag");
     expect(html).toContain("Plot abs");
     expect(html).toContain("Plot phase");
+    expect(html).toContain("Select");
     expect(html).toContain("Animate");
+  });
+
+  it("renders mode browser controls for eigen mode field resource nodes", () => {
+    const selection: Selection = {
+      kind: "resources.analysis.eigen.mode_field",
+      label: "Mode Field Resource",
+      moduleSource: "explorer",
+      nodeId: "resources:analysis:eigen:mode-field",
+      objectId: null,
+      ref: {
+        artifactPath:
+          "eigen/mode_fields.zarr/sample_0000/mode_0002/vector_xyz_complex",
+        fieldId: "analysis:eigen:sample-0000:mode-0002",
+        kind: "resources.analysis.eigen.mode_field",
+        nodeId: "resources:analysis:eigen:mode-field",
+        resourceRef: analysisFieldVectorResourceKey(
+          "analysis:eigen:sample-0000:mode-0002",
+        ),
+        type: "frequency-domain",
+      },
+    };
+
+    const html = renderToStaticMarkup(
+      <FrequencyDomainInspectorPanel selection={selection} />,
+    );
+
+    expect(html).toContain("Eigen Mode Field Resource Detail");
+    expect(html).toContain("Eigen Mode Browser");
+    expect(html).toContain("Select eigen mode for 3D visualization");
+    expect(html).toContain("sample 0, mode 1, 9.5 GHz");
+    expect(html).toContain("sample 0, mode 2, 12 GHz");
+    expect(html).toContain("Selected mode field");
+    expect(html).toContain("analysis:eigen:sample-0000:mode-0001");
+    expect(html).toContain("Eigen mode browser 3D view");
+    expect(html).toContain("Phase-rotated real");
+    expect(html).toContain("Real");
+    expect(html).toContain("Imag");
+    expect(html).toContain("Complex (abs)");
+    expect(html).toContain("Phase");
+    expect(html).toContain("Plot selected rotated");
+    expect(html).toContain("Plot selected real");
+    expect(html).toContain("Plot selected imag");
+    expect(html).toContain("Plot selected abs");
+    expect(html).toContain("Plot selected phase");
+    expect(html).toContain("Animate selected mode");
+    expect(html).not.toContain("Mode controls</span><span class=\"fm-inspector-field-row__value\">not available");
+  });
+
+  it("does not render empty field metadata for eigen mode-field folder nodes", () => {
+    const selection: Selection = {
+      kind: "resources.analysis.eigen.mode_field",
+      label: "Mode Fields",
+      moduleSource: "explorer",
+      nodeId: "resources:analysis:eigen:mode-fields",
+      objectId: null,
+      ref: {
+        kind: "resources.analysis.eigen.mode_field",
+        nodeId: "resources:analysis:eigen:mode-fields",
+        resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+        type: "frequency-domain",
+      },
+    };
+
+    const html = renderToStaticMarkup(
+      <FrequencyDomainInspectorPanel selection={selection} />,
+    );
+
+    expect(html).toContain("Eigen Mode Browser");
+    expect(html).toContain("Select eigen mode for 3D visualization");
+    expect(html).toContain("sample 0, mode 1, 9.5 GHz");
+    expect(html).toContain("sample 0, mode 2, 12 GHz");
+    expect(html).toContain("Selected mode field");
+    expect(html).toContain("Plot selected rotated");
+    expect(html).toContain("Animate selected mode");
+    expect(html).not.toContain("Selected Field Metadata");
+    expect(html).not.toContain("Field ID</span><span class=\"fm-inspector-field-row__value\">not selected");
+    expect(html).not.toContain("Value kind</span><span class=\"fm-inspector-field-row__value\">not available");
   });
 
   it.each([
@@ -1027,8 +1277,9 @@ describe("FrequencyDomainInspectorPanel", () => {
         kind: "results.eigen.mode",
         modeIndex: 2,
         nodeId: "results:eigen:sample:0:mode:2",
-        resourceRef:
-          "/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0002/samples/vector?view=phase_rotated_real&phase_rad=0",
+        resourceRef: analysisFieldVectorResourceKey(
+          "analysis:eigen:sample-0000:mode-0002",
+        ),
         sampleIndex: 0,
         type: "frequency-domain",
       },
@@ -1042,37 +1293,42 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Eigen Mode Node Detail");
     expect(html).toContain("sample 0, mode 2");
     expect(html).toContain("real, imag, complex abs, phase, animated phase");
+    expect(html).toContain("Mode field ID");
+    expect(html).toContain("3D command payload available");
+    expect(html).toContain("Spectrum branch");
+    expect(html).toContain("Selected eigen mode 3D view");
+    expect(html).toContain("Selected eigen mode phase");
+    expect(html).toContain("Selected eigen mode animation rate");
+    expect(html).toContain("Plot mode rotated");
+    expect(html).toContain("Plot mode real");
+    expect(html).toContain("Plot mode imag");
+    expect(html).toContain("Plot mode abs");
+    expect(html).toContain("Plot mode phase");
+    expect(html).toContain("Animate mode phase");
     expect(html).toContain("eigen/modes/sample_0000/mode_0002.json");
     expect(html).toContain(
-      "/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0002/samples/vector?view=phase_rotated_real&amp;phase_rad=0",
+      analysisFieldVectorResourceKey(
+        "analysis:eigen:sample-0000:mode-0002",
+      ).replace("&", "&amp;"),
     );
-    expect(html).toContain("12000000000 Hz");
-    expect(html).toContain("-12000000 Hz");
+    expect(html).toContain("12 GHz");
+    expect(html).toContain("-12 MHz");
     expect(html).toContain("counter_clockwise");
     expect(html).toContain("Tangent leakage max");
     expect(html).toContain("Real samples");
     expect(html).toContain("Imag samples");
-    expect(html).toContain("3D mode view");
     expect(html).toContain("Phase-rotated real");
     expect(html).toContain("Real");
     expect(html).toContain("Imag");
     expect(html).toContain("Complex (abs)");
     expect(html).toContain("Phase");
-    const fieldViewSelectStart = html.indexOf("Frequency-domain 3D field view");
+    const fieldViewSelectStart = html.indexOf("Selected eigen mode 3D view");
     const fieldViewSelect = html.slice(fieldViewSelectStart);
     expect(fieldViewSelect.indexOf("Phase-rotated real")).toBeLessThan(
       fieldViewSelect.indexOf("Complex (abs)"),
     );
-    expect(html).toContain("Animate field phase");
-    expect(html).toContain("Animation rate");
-    expect(html).toContain("Set phase");
-    expect(html).toContain("Plot in 3D");
-    expect(html).toContain("Plot rotated");
-    expect(html).toContain("Plot real");
-    expect(html).toContain("Plot imag");
-    expect(html).toContain("Plot abs");
-    expect(html).toContain("Plot phase");
-    expect(html).toContain("Animate");
+    expect(html).not.toContain("Value kind</span><strong>not available");
+    expect(html).not.toContain("Frequency-domain 3D field view");
   });
 
   it("wires Plot in 3D to the user-entered phase value", () => {
@@ -1083,10 +1339,15 @@ describe("FrequencyDomainInspectorPanel", () => {
 
     expect(source).toContain("analysisFieldPhaseInputRef.current?.value");
     expect(source).toContain("selectedFieldMeta?.default_phase_rad");
+    expect(source).toContain("const selectedFieldIsEigen = kind.includes(\"eigen\")");
+    expect(source).toContain("const selectedFieldPlotCommand = selectedFieldIsEigen");
+    expect(source).toContain("const selectedFieldPhaseCommand = selectedFieldIsEigen");
+    expect(source).toContain("const selectedFieldAnimationCommand = selectedFieldIsEigen");
+    expect(source).toContain('"analysis.eigen.set-mode-3d-phase"');
     expect(source).toContain('"analysis.frequency-domain.set-3d-animation"');
     expect(source).toContain("fieldId: selectedFieldId");
     expect(source).toContain("analysisFieldViewSelectRef.current?.value");
-    expect(source).toContain('source: selection.kind?.includes("eigen")');
+    expect(source).toContain("source: selectedFieldOverlaySource");
     expect(source).toContain('"analysis.eigen.set-mode-3d-animation"');
     expect(source).toContain("action === \"animate\"");
   });
@@ -1203,6 +1464,29 @@ describe("FrequencyDomainInspectorPanel", () => {
       expect(html).not.toContain("Analysis Resource Node Detail");
       expect(html).not.toContain("Frequency-Domain Job Node Detail");
       expect(html).not.toContain("Frequency-Domain Diagnostic Node Detail");
+    },
+  );
+
+  it.each(EXPLORER_GENERATED_FREQUENCY_DOMAIN_NODE_KINDS)(
+    "registers a dedicated inspector for explorer node %s",
+    (kind) => {
+      expect(FREQUENCY_DOMAIN_INSPECTOR_SELECTION_KINDS).toContain(kind);
+
+      const detail = resolveFrequencyDomainNodeDetail({
+        kind,
+        label: `Selection ${kind}`,
+        moduleSource: "explorer",
+        nodeId: `test:${kind}`,
+        objectId: null,
+        ref: {
+          kind,
+          nodeId: `test:${kind}`,
+          type: "frequency-domain",
+        },
+      });
+
+      expect(detail.title).not.toBe("Unknown Frequency-Domain Node Detail");
+      expect(detail.visualization).not.toContain("unknown node kind");
     },
   );
 });

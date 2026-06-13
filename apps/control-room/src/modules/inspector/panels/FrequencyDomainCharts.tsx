@@ -1,7 +1,8 @@
 "use client";
 
-import dynamic from "next/dynamic";
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
+
+import type { ECharts, EChartsOption } from "echarts";
 
 import type {
   EigenDispersionPoint,
@@ -11,42 +12,6 @@ import type {
   FrequencyResponsePoint,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 
-const Bar = dynamic(() => import("recharts").then((module) => module.Bar), {
-  ssr: false,
-});
-const BarChart = dynamic(
-  () => import("recharts").then((module) => module.BarChart),
-  { ssr: false },
-);
-const CartesianGrid = dynamic(
-  () => import("recharts").then((module) => module.CartesianGrid),
-  { ssr: false },
-);
-const Legend = dynamic(() => import("recharts").then((module) => module.Legend), {
-  ssr: false,
-});
-const Line = dynamic(() => import("recharts").then((module) => module.Line), {
-  ssr: false,
-});
-const LineChart = dynamic(
-  () => import("recharts").then((module) => module.LineChart),
-  { ssr: false },
-);
-const ResponsiveContainer = dynamic(
-  () => import("recharts").then((module) => module.ResponsiveContainer),
-  { ssr: false },
-);
-const Tooltip = dynamic(
-  () => import("recharts").then((module) => module.Tooltip),
-  { ssr: false },
-);
-const XAxis = dynamic(() => import("recharts").then((module) => module.XAxis), {
-  ssr: false,
-});
-const YAxis = dynamic(() => import("recharts").then((module) => module.YAxis), {
-  ssr: false,
-});
-
 const CHART_COLORS = [
   "var(--fm-chart-blue)",
   "var(--fm-chart-green)",
@@ -54,10 +19,6 @@ const CHART_COLORS = [
   "var(--fm-chart-red)",
   "var(--fm-chart-mauve)",
 ] as const;
-
-function formatGHz(valueHz: number): string {
-  return `${formatNumber(valueHz / 1e9)} GHz`;
-}
 
 function formatNumber(value: number): string {
   if (!Number.isFinite(value)) return "n/a";
@@ -67,116 +28,45 @@ function formatNumber(value: number): string {
   return Number(value.toPrecision(5)).toLocaleString("en-US");
 }
 
-function chartFrame({
-  children,
-  droppedPointCount,
-  pointCount,
-  renderer,
-  title,
-}: {
-  children: ReactNode;
-  droppedPointCount: number;
-  pointCount: number;
-  renderer: string;
-  title: string;
-}) {
-  return (
-    <div
-      aria-label={title}
-      className="fm-frequency-domain-chart"
-      data-renderer={renderer}
-    >
-      <div className="fm-frequency-domain-chart__header">
-        <span>{title}</span>
-        <small>
-          Recharts, {pointCount} points
-          {droppedPointCount > 0 ? `, ${droppedPointCount} dropped` : ""}
-        </small>
-      </div>
-      {pointCount > 0 ? (
-        <div className="fm-frequency-domain-chart__canvas">{children}</div>
-      ) : (
-        <div className="fm-frequency-domain-chart__empty">
-          No chartable frequency-domain samples.
-        </div>
-      )}
-    </div>
-  );
-}
-
 export function FrequencyDomainSpectrumChart({
   model,
 }: {
   model: FrequencyDomainChartBuildResult<EigenSpectrumPoint>;
 }) {
-  const data = model.points.map((point) => ({
-    dampingGHz:
-      point.dampingRateHz == null ? null : Math.abs(point.dampingRateHz) / 1e9,
-    frequencyGHz: point.frequencyHz / 1e9,
-    frequencyLabel: formatGHz(point.frequencyHz),
-    mode: point.rawModeIndex,
-    name: `mode ${point.rawModeIndex}`,
-    residualNorm: point.residualNorm,
-    sample: point.sampleIndex,
-  }));
-
-  return chartFrame({
-    droppedPointCount: model.droppedPointCount,
-    pointCount: data.length,
-    renderer: "recharts",
-    title: "FMR / eigen modal spectrum",
-    children: (
-      <>
-        <ResponsiveContainer height={180} width="100%">
-          <BarChart data={data} margin={{ top: 12, right: 8, bottom: 8, left: 0 }}>
-            <CartesianGrid stroke="var(--fm-border-subtle)" strokeDasharray="3 3" />
-            <XAxis
-              axisLine={{ stroke: "var(--fm-border-strong)" }}
-              dataKey="mode"
-              name="mode"
-              tick={{ fill: "var(--fm-text-muted)", fontSize: 10 }}
-              tickLine={false}
-            />
-            <YAxis
-              axisLine={false}
-              name="GHz"
-              tick={{ fill: "var(--fm-text-muted)", fontSize: 10 }}
-              tickFormatter={(value) =>
-                typeof value === "number" ? formatNumber(value) : String(value)
-              }
-              tickLine={false}
-            />
-            <Tooltip
-              contentStyle={{
-                background: "var(--fm-bg-panel-raised)",
-                borderColor: "var(--fm-border-default)",
-                borderRadius: "var(--fm-radius-md)",
-                color: "var(--fm-text-primary)",
-              }}
-              formatter={(value) =>
-                typeof value === "number" ? formatNumber(value) : String(value)
-              }
-              labelFormatter={(value) => `mode ${String(value)}`}
-            />
-            <Legend />
-            <Bar
-              dataKey="frequencyGHz"
-              fill="var(--fm-chart-blue)"
-              name="frequency [GHz]"
-              radius={[5, 5, 0, 0]}
-            />
-          </BarChart>
-        </ResponsiveContainer>
-        <div className="fm-frequency-domain-chart__summary">
-          {data.slice(0, 4).map((point) => (
-            <span key={`${point.sample}:${point.mode}`}>
-              mode {point.mode}: {point.frequencyLabel}
-            </span>
-          ))}
-        </div>
-      </>
-    ),
+  const frequencySeries = model.series.find(
+    (series) => series.quantity === "frequency",
+  );
+  const frequencyUnit = frequencySeries?.unit ?? "Hz";
+  const data = model.points.map((point, rowIndex) => {
+    const frequencyValue =
+      frequencySeries?.points.find((seriesPoint) => seriesPoint.rowIndex === rowIndex)
+        ?.y ?? point.frequencyHz;
+    return {
+      dampingGHz:
+        point.dampingRateHz == null ? null : Math.abs(point.dampingRateHz) / 1e9,
+      frequencyLabel: `${formatNumber(frequencyValue)} ${frequencyUnit}`,
+      frequencyValue,
+      mode: point.rawModeIndex,
+      name: `mode ${point.rawModeIndex}`,
+      residualNorm: point.residualNorm,
+      sample: point.sampleIndex,
+    };
   });
+
+  return (
+    <FrequencyDomainEChartsFrame
+      droppedPointCount={model.droppedPointCount}
+      option={buildSpectrumOption(data, frequencyUnit)}
+      pointCount={data.length}
+      title="FMR / eigen modal spectrum"
+    >
+      {data.slice(0, 4).map((point) => (
+        <span key={`${point.sample}:${point.mode}`}>
+          mode {point.mode}: {point.frequencyLabel}
+        </span>
+      ))}
+    </FrequencyDomainEChartsFrame>
+  );
 }
 
 export function FrequencyDomainDispersionChart({
@@ -204,7 +94,7 @@ export function FrequencyDomainResponseChart({
       droppedPointCount={model.droppedPointCount}
       series={model.series}
       title="Driven FMR frequency response"
-      xLabel="frequency [Hz]"
+      xLabel="frequency"
     />
   );
 }
@@ -221,84 +111,235 @@ function FrequencyDomainSeriesChart({
   xLabel: string;
 }) {
   const chartSeries = series.filter((entry) => entry.points.length > 0);
-  const rowsByX = new Map<number, Record<string, number | string>>();
-  chartSeries.forEach((entry, seriesIndex) => {
-    const key = `series${seriesIndex}`;
-    entry.points.forEach((point) => {
-      const row = rowsByX.get(point.x) ?? { x: point.x };
-      row[key] = point.y;
-      rowsByX.set(point.x, row);
-    });
-  });
-  const data = [...rowsByX.values()].sort((a, b) => Number(a.x) - Number(b.x));
   const pointCount = chartSeries.reduce(
     (count, entry) => count + entry.points.length,
     0,
   );
 
-  return chartFrame({
-    droppedPointCount,
-    pointCount,
-    renderer: "recharts",
-    title,
-    children: (
-      <>
-        <ResponsiveContainer height={180} width="100%">
-          <LineChart data={data} margin={{ top: 12, right: 8, bottom: 8, left: 0 }}>
-            <CartesianGrid stroke="var(--fm-border-subtle)" strokeDasharray="3 3" />
-            <XAxis
-              axisLine={{ stroke: "var(--fm-border-strong)" }}
-              dataKey="x"
-              name={xLabel}
-              tick={{ fill: "var(--fm-text-muted)", fontSize: 10 }}
-              tickFormatter={(value) =>
-                typeof value === "number" ? formatNumber(value) : String(value)
-              }
-              tickLine={false}
-              type="number"
-            />
-            <YAxis
-              axisLine={false}
-              tick={{ fill: "var(--fm-text-muted)", fontSize: 10 }}
-              tickFormatter={(value) =>
-                typeof value === "number" ? formatNumber(value) : String(value)
-              }
-              tickLine={false}
-            />
-            <Tooltip
-              contentStyle={{
-                background: "var(--fm-bg-panel-raised)",
-                borderColor: "var(--fm-border-default)",
-                borderRadius: "var(--fm-radius-md)",
-                color: "var(--fm-text-primary)",
-              }}
-              formatter={(value) =>
-                typeof value === "number" ? formatNumber(value) : String(value)
-              }
-              labelFormatter={(value) => `${xLabel}: ${String(value)}`}
-            />
-            <Legend />
-            {chartSeries.map((entry, index) => (
-              <Line
-                dataKey={`series${index}`}
-                dot={false}
-                key={entry.id}
-                name={`${entry.label} [${entry.unit}]`}
-                stroke={CHART_COLORS[index % CHART_COLORS.length]}
-                strokeWidth={2}
-                type="monotone"
-              />
-            ))}
-          </LineChart>
-        </ResponsiveContainer>
-        <div className="fm-frequency-domain-chart__summary">
-          {chartSeries.slice(0, 4).map((entry) => (
-            <span key={entry.id}>
-              {entry.label}: {entry.points.length} samples
-            </span>
-          ))}
+  return (
+    <FrequencyDomainEChartsFrame
+      droppedPointCount={droppedPointCount}
+      option={buildFrequencyDomainSeriesOption(chartSeries, xLabel)}
+      pointCount={pointCount}
+      title={title}
+    >
+      {chartSeries.slice(0, 4).map((entry) => (
+        <span key={entry.id}>
+          {entry.label}: {entry.points.length} samples
+        </span>
+      ))}
+    </FrequencyDomainEChartsFrame>
+  );
+}
+
+function FrequencyDomainEChartsFrame({
+  children,
+  droppedPointCount,
+  option,
+  pointCount,
+  title,
+}: {
+  children: ReactNode;
+  droppedPointCount: number;
+  option: EChartsOption;
+  pointCount: number;
+  title: string;
+}) {
+  const elementRef = useRef<HTMLDivElement | null>(null);
+  const chartRef = useRef<ECharts | null>(null);
+  const optionRef = useRef(option);
+
+  useEffect(() => {
+    optionRef.current = option;
+  }, [option]);
+
+  useEffect(() => {
+    const element = elementRef.current;
+    if (!element) return;
+    let disposed = false;
+    let resizeObserver: ResizeObserver | null = null;
+
+    void import("echarts")
+      .then((echarts) => {
+        if (disposed) return;
+        const chart = echarts.init(element, undefined, { renderer: "canvas" });
+        chartRef.current = chart;
+        chart.setOption(optionRef.current, true);
+        resizeObserver = new ResizeObserver(() => {
+          requestAnimationFrame(() => {
+            if (!disposed) chart.resize();
+          });
+        });
+        resizeObserver.observe(element);
+      })
+      .catch(() => {
+        if (!disposed) chartRef.current = null;
+      });
+
+    return () => {
+      disposed = true;
+      resizeObserver?.disconnect();
+      chartRef.current?.dispose();
+      chartRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    chartRef.current?.setOption(option, true);
+  }, [option]);
+
+  return (
+    <div
+      aria-label={title}
+      className="fm-frequency-domain-chart"
+      data-renderer="echarts"
+    >
+      <div className="fm-frequency-domain-chart__header">
+        <span>{title}</span>
+        <small>
+          ECharts, {pointCount} points
+          {droppedPointCount > 0 ? `, ${droppedPointCount} dropped` : ""}
+        </small>
+      </div>
+      {pointCount > 0 ? (
+        <>
+          <div ref={elementRef} className="fm-frequency-domain-chart__canvas" />
+          <div className="fm-frequency-domain-chart__summary">{children}</div>
+        </>
+      ) : (
+        <div className="fm-frequency-domain-chart__empty">
+          No chartable frequency-domain samples.
         </div>
-      </>
-    ),
-  });
+      )}
+    </div>
+  );
+}
+
+function buildSpectrumOption(
+  data: {
+    frequencyValue: number;
+    mode: number;
+    name: string;
+    sample: number;
+  }[],
+  frequencyUnit: string,
+): EChartsOption {
+  const frequencyLabel = `frequency [${frequencyUnit}]`;
+  return {
+    animation: false,
+    color: [CHART_COLORS[0]],
+    grid: chartGrid(),
+    series: [
+      {
+        data: data.map((point) => [point.mode, point.frequencyValue, point.name]),
+        itemStyle: { borderRadius: [5, 5, 0, 0] },
+        name: frequencyLabel,
+        type: "bar",
+      },
+    ],
+    tooltip: chartTooltip("mode"),
+    xAxis: xValueAxis("mode"),
+    yAxis: yValueAxis(frequencyLabel),
+  };
+}
+
+export function buildFrequencyDomainSeriesOption(
+  chartSeries: readonly FrequencyDomainChartSeries[],
+  xLabel: string,
+): EChartsOption {
+  const resolvedXLabel = resolveSeriesXLabel(chartSeries, xLabel);
+  return {
+    animation: false,
+    color: [...CHART_COLORS],
+    grid: chartGrid(),
+    legend: {
+      icon: "circle",
+      textStyle: { color: "var(--fm-text-primary)" },
+      top: 0,
+      type: "scroll",
+    },
+    series: chartSeries.map((entry) => ({
+      data: entry.points.map((point) => [point.x, point.y]),
+      lineStyle: { width: 2 },
+      name: `${entry.label} [${entry.unit}]`,
+      showSymbol: false,
+      type: "line",
+    })),
+    tooltip: chartTooltip(resolvedXLabel),
+    xAxis: xValueAxis(resolvedXLabel),
+    yAxis: yValueAxis("response"),
+  };
+}
+
+function resolveSeriesXLabel(
+  chartSeries: readonly FrequencyDomainChartSeries[],
+  xLabel: string,
+): string {
+  if (xLabel.includes("[")) return xLabel;
+  const unit = chartSeries.find((entry) => entry.xUnit)?.xUnit;
+  return unit ? `${xLabel} [${unit}]` : xLabel;
+}
+
+function chartGrid(): EChartsOption["grid"] {
+  return {
+    bottom: 42,
+    containLabel: true,
+    left: 8,
+    right: 12,
+    top: 36,
+  };
+}
+
+function xValueAxis(name: string): EChartsOption["xAxis"] {
+  return {
+    axisLabel: {
+      color: "var(--fm-text-muted)",
+      formatter: (value: number | string) =>
+        typeof value === "number" ? formatNumber(value) : String(value),
+    },
+    axisLine: { lineStyle: { color: "var(--fm-border-strong)" } },
+    axisTick: { show: false },
+    name,
+    nameTextStyle: { color: "var(--fm-text-secondary)" },
+    splitLine: { lineStyle: { color: "var(--fm-border-subtle)" } },
+    type: "value",
+  };
+}
+
+function yValueAxis(name: string): EChartsOption["yAxis"] {
+  return {
+    axisLabel: {
+      color: "var(--fm-text-muted)",
+      formatter: (value: number | string) =>
+        typeof value === "number" ? formatNumber(value) : String(value),
+    },
+    axisLine: { lineStyle: { color: "var(--fm-border-strong)" } },
+    axisTick: { show: false },
+    name,
+    nameTextStyle: { color: "var(--fm-text-secondary)" },
+    splitLine: { lineStyle: { color: "var(--fm-border-subtle)" } },
+    type: "value",
+  };
+}
+
+function chartTooltip(axisLabel: string): EChartsOption["tooltip"] {
+  return {
+    axisPointer: {
+      crossStyle: { color: "var(--fm-border-strong)", type: "dashed" },
+      type: "cross",
+    },
+    backgroundColor: "var(--fm-bg-panel-raised)",
+    borderColor: "var(--fm-border-default)",
+    textStyle: { color: "var(--fm-text-primary)" },
+    trigger: "axis",
+    valueFormatter: (value) =>
+      typeof value === "number" ? formatNumber(value) : String(value),
+    formatter: (params) => {
+      const items = Array.isArray(params) ? params : [params];
+      return [
+        `<strong>${axisLabel}</strong>`,
+        ...items.map((item) => `${item.marker ?? ""}${item.seriesName}: ${item.value}`),
+      ].join("<br/>");
+    },
+  };
 }

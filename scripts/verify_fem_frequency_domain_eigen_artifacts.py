@@ -10,6 +10,9 @@ import sys
 from pathlib import Path
 
 
+TWO_PI = 2.0 * math.pi
+
+
 def fail(message: str) -> None:
     raise SystemExit(f"invalid frequency-domain eigen artifacts:\n{message}")
 
@@ -38,6 +41,23 @@ def require_finite_number(value: object, name: str) -> float:
     if not isinstance(value, (int, float)) or not math.isfinite(float(value)):
         fail(f"{name} must be a finite number")
     return float(value)
+
+
+def require_close(
+    actual: float,
+    expected: float,
+    name: str,
+    *,
+    relative_tolerance: float = 1.0e-9,
+    absolute_tolerance: float = 1.0e-6,
+) -> None:
+    if not math.isclose(
+        actual,
+        expected,
+        rel_tol=relative_tolerance,
+        abs_tol=absolute_tolerance,
+    ):
+        fail(f"{name}: got {actual!r}, expected {expected!r}")
 
 
 def require_non_negative_int(value: object, name: str) -> int:
@@ -127,8 +147,10 @@ def require_mode_zarr_payload(
     name: str,
 ) -> int:
     zarray_path = root / array_path / ".zarray"
+    zattrs_path = root / array_path / ".zattrs"
     chunk_path = root / array_path / "0.0.0"
     require_file(zarray_path)
+    require_file(zattrs_path)
     require_file(chunk_path)
     zarray = load_json(zarray_path)
     require_equal(zarray.get("zarr_format"), 2, f"{name}.zarray.zarr_format")
@@ -136,11 +158,71 @@ def require_mode_zarr_payload(
     require_equal(zarray.get("chunks"), [max(sample_count, 1), 3, 2], f"{name}.zarray.chunks")
     require_equal(zarray.get("dtype"), "<f8", f"{name}.zarray.dtype")
     require_equal(zarray.get("order"), "C", f"{name}.zarray.order")
+    zattrs = load_json(zattrs_path)
+    require_equal(zattrs.get("quantity_id"), "delta_m", f"{name}.zattrs.quantity_id")
+    require_equal(zattrs.get("unit"), "1", f"{name}.zattrs.unit")
+    require_equal(
+        zattrs.get("value_kind"),
+        "complex_spatial_vector",
+        f"{name}.zattrs.value_kind",
+    )
+    require_equal(
+        zattrs.get("component_basis"),
+        "global_xyz",
+        f"{name}.zattrs.component_basis",
+    )
+    require_ordered_string_list(
+        zattrs.get("axes"),
+        ["spatial_sample", "component", "complex"],
+        f"{name}.zattrs.axes",
+    )
+    require_ordered_string_list(
+        zattrs.get("component_order"),
+        ["x", "y", "z"],
+        f"{name}.zattrs.component_order",
+    )
+    require_ordered_string_list(
+        zattrs.get("complex_order"),
+        ["real", "imag"],
+        f"{name}.zattrs.complex_order",
+    )
     size = chunk_path.stat().st_size
     expected_size = expected_payload_value_count * 8
     if size != expected_size:
         fail(f"{name} Zarr chunk byte size: got {size}, expected {expected_size}")
     return size // 8
+
+
+def require_mode_zarr_store(root: Path) -> None:
+    store_root = root / mode_zarr_store_path()
+    zgroup_path = store_root / ".zgroup"
+    zattrs_path = store_root / ".zattrs"
+    require_file(zgroup_path)
+    require_file(zattrs_path)
+    zgroup = load_json(zgroup_path)
+    require_equal(zgroup.get("zarr_format"), 2, "mode_fields.zarr/.zgroup.zarr_format")
+    zattrs = load_json(zattrs_path)
+    require_equal(
+        zattrs.get("fullmag_kind"),
+        "frequency_domain_mode_field_store",
+        "mode_fields.zarr/.zattrs.fullmag_kind",
+    )
+    require_equal(zattrs.get("schema_version"), 1, "mode_fields.zarr/.zattrs.schema_version")
+    require_equal(
+        zattrs.get("preferred_container"),
+        "zarr",
+        "mode_fields.zarr/.zattrs.preferred_container",
+    )
+    require_ordered_string_list(
+        zattrs.get("quantity_ids"),
+        ["delta_m"],
+        "mode_fields.zarr/.zattrs.quantity_ids",
+    )
+    require_equal(
+        zattrs.get("compatibility_binary_exports"),
+        True,
+        "mode_fields.zarr/.zattrs.compatibility_binary_exports",
+    )
 
 
 def require_mode_metadata_summaries(metadata: dict, metadata_path: str) -> None:
@@ -311,7 +393,7 @@ def validate_mode_summary(
     sample_index: int,
     manifest_mode_paths: set[str],
     manifest_mode_resources: set[str],
-) -> tuple[int, int]:
+) -> tuple[int, int, float, float, float]:
     raw_mode_index = require_non_negative_int(mode.get("raw_mode_index"), "mode.raw_mode_index")
     expected_field_id = mode_field_id(sample_index, raw_mode_index)
     expected_resource_key = mode_field_resource_key(expected_field_id)
@@ -321,11 +403,19 @@ def validate_mode_summary(
         expected_resource_key,
         "mode.mode_field_resource_key",
     )
-    require_finite_number(mode.get("frequency_real_hz"), "mode.frequency_real_hz")
+    frequency_hz = require_finite_number(mode.get("frequency_hz"), "mode.frequency_hz")
+    frequency_real_hz = require_finite_number(mode.get("frequency_real_hz"), "mode.frequency_real_hz")
+    require_close(frequency_hz, frequency_real_hz, "mode.frequency_hz")
     require_finite_number(mode.get("frequency_imag_hz"), "mode.frequency_imag_hz")
-    require_finite_number(
+    angular_frequency_rad_per_s = require_finite_number(
         mode.get("angular_frequency_rad_per_s"),
         "mode.angular_frequency_rad_per_s",
+    )
+    require_close(
+        angular_frequency_rad_per_s,
+        TWO_PI * frequency_hz,
+        "mode.angular_frequency_rad_per_s",
+        absolute_tolerance=1.0e-3,
     )
     require_non_empty_string(mode.get("dominant_polarization"), "mode.dominant_polarization")
 
@@ -344,6 +434,30 @@ def validate_mode_summary(
         metadata.get("mode_field_resource_key"),
         expected_resource_key,
         f"{metadata_path}.mode_field_resource_key",
+    )
+    metadata_frequency_hz = require_finite_number(
+        metadata.get("frequency_hz"),
+        f"{metadata_path}.frequency_hz",
+    )
+    require_close(metadata_frequency_hz, frequency_hz, f"{metadata_path}.frequency_hz")
+    metadata_frequency_real_hz = require_finite_number(
+        metadata.get("frequency_real_hz"),
+        f"{metadata_path}.frequency_real_hz",
+    )
+    require_close(
+        metadata_frequency_real_hz,
+        frequency_real_hz,
+        f"{metadata_path}.frequency_real_hz",
+    )
+    metadata_angular_frequency = require_finite_number(
+        metadata.get("angular_frequency_rad_per_s"),
+        f"{metadata_path}.angular_frequency_rad_per_s",
+    )
+    require_close(
+        metadata_angular_frequency,
+        angular_frequency_rad_per_s,
+        f"{metadata_path}.angular_frequency_rad_per_s",
+        absolute_tolerance=1.0e-3,
     )
     require_mode_metadata_summaries(metadata, metadata_path)
     require_mode_field_metadata(metadata, metadata_path, sample_index, raw_mode_index)
@@ -385,10 +499,19 @@ def validate_mode_summary(
         payload_value_count // 2,
         f"{metadata_path}.complex_pair_count",
     )
-    return sample_index, raw_mode_index
+    return (
+        sample_index,
+        raw_mode_index,
+        frequency_hz,
+        frequency_real_hz,
+        angular_frequency_rad_per_s,
+    )
 
 
-def validate_dispersion(root: Path, known_modes: set[tuple[int, int]]) -> None:
+def validate_dispersion(
+    root: Path,
+    known_modes: dict[tuple[int, int], tuple[float, float, float]],
+) -> None:
     path = root / "eigen/dispersion.csv"
     require_file(path)
     rows = list(csv.DictReader(path.read_text().splitlines()))
@@ -415,13 +538,32 @@ def validate_dispersion(root: Path, known_modes: set[tuple[int, int]]) -> None:
             int(row["raw_mode_index"]),
             f"dispersion row {row_index}.raw_mode_index",
         )
-        if (sample_index, raw_mode_index) not in known_modes:
+        mode_key = (sample_index, raw_mode_index)
+        if mode_key not in known_modes:
             fail(
                 "eigen/dispersion.csv references unknown mode "
                 f"sample={sample_index}, raw_mode={raw_mode_index}"
             )
-        require_finite_number(float(row["frequency_hz"]), f"dispersion row {row_index}.frequency_hz")
-        require_finite_number(float(row["omega_rad_s"]), f"dispersion row {row_index}.omega_rad_s")
+        frequency_hz = require_finite_number(
+            float(row["frequency_hz"]),
+            f"dispersion row {row_index}.frequency_hz",
+        )
+        omega_rad_s = require_finite_number(
+            float(row["omega_rad_s"]),
+            f"dispersion row {row_index}.omega_rad_s",
+        )
+        known_frequency_hz, _, known_angular_frequency = known_modes[mode_key]
+        require_close(
+            frequency_hz,
+            known_frequency_hz,
+            f"dispersion row {row_index}.frequency_hz",
+        )
+        require_close(
+            omega_rad_s,
+            known_angular_frequency,
+            f"dispersion row {row_index}.omega_rad_s",
+            absolute_tolerance=1.0e-3,
+        )
 
 
 def main() -> int:
@@ -462,6 +604,7 @@ def main() -> int:
         mode_zarr_store_path(),
         "manifest.artifacts.mode_field_zarr_store_path",
     )
+    require_mode_zarr_store(root)
 
     manifest_mode_paths = set(
         require_string_list(
@@ -478,7 +621,7 @@ def main() -> int:
 
     samples = require_object_list(spectrum.get("samples"), "spectrum.samples")
     require_equal(spectrum.get("sample_count"), len(samples), "spectrum.sample_count")
-    known_modes: set[tuple[int, int]] = set()
+    known_modes: dict[tuple[int, int], tuple[float, float, float]] = {}
     for sample_position, sample in enumerate(samples):
         sample_index = require_non_negative_int(
             sample.get("sample_index"),
@@ -487,14 +630,23 @@ def main() -> int:
         require_finite_number(sample.get("path_s"), f"spectrum.samples[{sample_position}].path_s")
         modes = require_object_list(sample.get("modes"), f"spectrum.samples[{sample_position}].modes")
         for mode in modes:
-            known_modes.add(
-                validate_mode_summary(
-                    root,
-                    mode,
-                    sample_index,
-                    manifest_mode_paths,
-                    manifest_mode_resources,
-                )
+            (
+                known_sample_index,
+                known_raw_mode_index,
+                known_frequency_hz,
+                known_frequency_real_hz,
+                known_angular_frequency,
+            ) = validate_mode_summary(
+                root,
+                mode,
+                sample_index,
+                manifest_mode_paths,
+                manifest_mode_resources,
+            )
+            known_modes[(known_sample_index, known_raw_mode_index)] = (
+                known_frequency_hz,
+                known_frequency_real_hz,
+                known_angular_frequency,
             )
     if not known_modes:
         fail("spectrum.samples must include at least one mode")
@@ -508,8 +660,43 @@ def main() -> int:
                 point.get("raw_mode_index"),
                 "branch point.raw_mode_index",
             )
-            branch_modes.add((sample_index, raw_mode_index))
-    unknown_branch_modes = branch_modes.difference(known_modes)
+            branch_mode_key = (sample_index, raw_mode_index)
+            branch_modes.add(branch_mode_key)
+            if branch_mode_key in known_modes:
+                frequency_hz = require_finite_number(
+                    point.get("frequency_hz"),
+                    "branch point.frequency_hz",
+                )
+                frequency_real_hz = require_finite_number(
+                    point.get("frequency_real_hz"),
+                    "branch point.frequency_real_hz",
+                )
+                angular_frequency = require_finite_number(
+                    point.get("angular_frequency_rad_per_s"),
+                    "branch point.angular_frequency_rad_per_s",
+                )
+                (
+                    known_frequency_hz,
+                    known_frequency_real_hz,
+                    known_angular_frequency,
+                ) = known_modes[branch_mode_key]
+                require_close(
+                    frequency_hz,
+                    known_frequency_hz,
+                    "branch point.frequency_hz",
+                )
+                require_close(
+                    frequency_real_hz,
+                    known_frequency_real_hz,
+                    "branch point.frequency_real_hz",
+                )
+                require_close(
+                    angular_frequency,
+                    known_angular_frequency,
+                    "branch point.angular_frequency_rad_per_s",
+                    absolute_tolerance=1.0e-3,
+                )
+    unknown_branch_modes = branch_modes.difference(known_modes.keys())
     if unknown_branch_modes:
         fail(f"branches reference unknown modes: {sorted(unknown_branch_modes)!r}")
 

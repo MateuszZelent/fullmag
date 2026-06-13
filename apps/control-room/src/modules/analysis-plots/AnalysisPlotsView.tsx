@@ -84,14 +84,16 @@ export function AnalysisPlotsView({
   const seriesLegend = buildSeriesLegend(chartSeries);
   const energyLegend = buildSeriesLegend(solverEnergySeries);
   const frequencyDomainLegend = buildSeriesLegend(frequencyDomainSeries);
+  const selectedFrequencyDomainPoint = useMemo(
+    () => buildFrequencyDomainCursorSummary(selectedPoint),
+    [selectedPoint],
+  );
   const xAxisLabel = formatXAxisLabel(chartSeries, xAxisId);
   const showFrequencyDomainPanel =
     !selectedStageId &&
     (frequencyDomainSeries.length > 0 ||
-      Boolean(frequencyDomainUnavailableReason) ||
       frequencyDomainStatus === "loading" ||
-      frequencyDomainStatus === "error" ||
-      frequencyDomainStatus === "stale");
+      frequencyDomainStatus === "error");
 
   return (
     <div className="fm-analysis-plots">
@@ -279,6 +281,29 @@ export function AnalysisPlotsView({
                   series={frequencyDomainSeries}
                   xAxisLabel={frequencyDomainXAxisLabel(frequencyDomainSeries)}
                 />
+                {selectedFrequencyDomainPoint ? (
+                  <div
+                    aria-label="Selected frequency-domain point"
+                    className="fm-analysis-plots__status fm-analysis-plots__status--frequency-domain-selection"
+                  >
+                    <StatusPill
+                      label="Selected"
+                      value={selectedFrequencyDomainPoint.title}
+                    />
+                    <StatusPill
+                      label={selectedFrequencyDomainPoint.xLabel}
+                      value={selectedFrequencyDomainPoint.xValue}
+                    />
+                    <StatusPill
+                      label={selectedFrequencyDomainPoint.yLabel}
+                      value={selectedFrequencyDomainPoint.yValue}
+                    />
+                    <StatusPill
+                      label="Inspector"
+                      value={selectedFrequencyDomainPoint.inspectorTarget}
+                    />
+                  </div>
+                ) : null}
               </>
             ) : (
               <div className="fm-analysis-plots__empty" role="status">
@@ -358,6 +383,59 @@ function formatFrequencyDomainEmptyState(status: string): string {
   return "No frequency-domain series available";
 }
 
+function buildFrequencyDomainCursorSummary(
+  point: AnalysisChartCursorPoint | null,
+): {
+  inspectorTarget: string;
+  title: string;
+  xLabel: string;
+  xValue: string;
+  yLabel: string;
+  yValue: string;
+} | null {
+  if (!point || point.source.kind !== "analysis.frequency_domain") return null;
+  const xValue = formatPointValue(point.point.x, point.xUnit);
+  const yValue = formatPointValue(point.point.y, point.unit);
+  switch (point.source.tableId) {
+    case "frequency-domain:eigen-spectrum":
+      return {
+        inspectorTarget: "Mode inspector and 3D mode controls",
+        title: "eigen mode",
+        xLabel: "mode",
+        xValue,
+        yLabel: point.quantity || "frequency",
+        yValue,
+      };
+    case "frequency-domain:eigen-dispersion":
+      return {
+        inspectorTarget: "Dispersion inspector",
+        title: "dispersion point",
+        xLabel: "path_s",
+        xValue,
+        yLabel: point.quantity || "frequency",
+        yValue,
+      };
+    case "frequency-domain:response-sweep":
+      return {
+        inspectorTarget: "Response point inspector and 3D response controls",
+        title: "response point",
+        xLabel: "frequency",
+        xValue,
+        yLabel: point.quantity || "response",
+        yValue,
+      };
+    default:
+      return {
+        inspectorTarget: "Frequency-domain inspector",
+        title: "frequency-domain point",
+        xLabel: "x",
+        xValue,
+        yLabel: point.quantity || "value",
+        yValue,
+      };
+  }
+}
+
 function resourceStatusFromString(status: string): ResourceStatus {
   switch (status) {
     case "idle":
@@ -369,6 +447,11 @@ function resourceStatusFromString(status: string): ResourceStatus {
     default:
       return "idle";
   }
+}
+
+function formatPointValue(value: number, unit: string | undefined): string {
+  const formatted = formatLatestValue(value);
+  return unit ? `${formatted} ${unit}` : formatted;
 }
 
 function formatLatestValue(value: number | undefined): string {

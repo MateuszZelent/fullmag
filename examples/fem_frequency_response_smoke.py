@@ -6,7 +6,7 @@ response from that relaxed state at explicitly requested probe frequencies.
 
 This is not the modal FMR discovery workflow. If the resonance frequencies are
 unknown, run a relax-then-eigenmodes example first, such as
-``examples/fem_fmr_periodic_k0_smoke.py`` or
+``examples/fem_fmr_free_demag_airbox_smoke.py`` or
 ``examples/permalloy_box_relax_300x1000x10nm.py``. The driven response stage is
 for a known frequency list, for example a sweep window chosen after modal
 eigensolve or from an experimental range.

@@ -1008,11 +1008,11 @@ class ProblemApiTests(unittest.TestCase):
             {"x_faces"},
         )
 
-    def test_periodic_k0_fmr_eigenmodes_smoke_example_loads_contract(self) -> None:
+    def test_free_demag_airbox_fmr_eigenmodes_smoke_example_loads_contract(self) -> None:
         example_path = (
             Path(__file__).resolve().parents[3]
             / "examples"
-            / "fem_fmr_periodic_k0_smoke.py"
+            / "fem_fmr_free_demag_airbox_smoke.py"
         )
 
         loaded = fm.load_problem_from_script(example_path, lightweight_assets=True)
@@ -1020,30 +1020,35 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(len(loaded.stages), 2)
         relax = loaded.stages[0].problem.study.to_ir()
         self.assertEqual(relax["kind"], "relaxation")
-        self.assertEqual(relax["stop"]["max_steps"], 1000)
+        self.assertEqual(relax["stop"]["max_steps"], 120)
 
         problem = loaded.stages[1].problem
         study = problem.study.to_ir()
         self.assertEqual(study["kind"], "eigenmodes")
-        self.assertEqual(study["operator"]["include_demag"], False)
+        self.assertEqual(study["operator"]["include_demag"], True)
         self.assertIsNone(study["k_sampling"])
-        self.assertEqual(study["spin_wave_bc"], {"kind": "periodic", "pair_ids": ["x_faces"]})
+        self.assertEqual(study["spin_wave_bc"], "free")
         self.assertEqual(
             study["sampling"]["outputs"],
             [
                 {"kind": "eigen_spectrum", "quantity": "eigenfrequency", "scope": "per_sample"},
-                {"kind": "eigen_mode", "field": "mode", "indices": [0, 1, 2]},
+                {"kind": "eigen_mode", "field": "mode", "indices": list(range(8))},
             ],
         )
-
-        mesh_source = problem.to_ir()["geometry_assets"]["fem_mesh_assets"][0]["mesh_source"]
-        mesh_payload = json.loads(Path(mesh_source).read_text(encoding="utf-8"))
-        self.assertEqual(mesh_payload["periodic_boundary_pairs"][0]["pair_id"], "x_faces")
-        self.assertEqual(len(mesh_payload["periodic_node_pairs"]), 4)
-        self.assertEqual(
-            {pair["pair_id"] for pair in mesh_payload["periodic_node_pairs"]},
-            {"x_faces"},
+        ir = loaded.to_ir(
+            requested_backend="fem",
+            execution_mode="strict",
+            execution_precision="double",
+            include_geometry_assets=False,
         )
+        self.assertIn("demag", {term["kind"] for term in ir["energy_terms"]})
+        mesh_workflow = ir["problem_meta"]["runtime_metadata"]["mesh_workflow"]
+        self.assertEqual(mesh_workflow["build_target"], "domain")
+        self.assertEqual(mesh_workflow["domain_mesh_mode"], "generated_shared_domain_mesh")
+        nodes = ir["problem_meta"]["runtime_metadata"]["study_pipeline"]["nodes"]
+        self.assertEqual([node["stage_kind"] for node in nodes], ["relax", "eigenmodes"])
+        self.assertEqual(nodes[1]["payload"]["eigen_include_demag"], True)
+        self.assertEqual(nodes[1]["payload"]["eigen_spin_wave_bc"], "free")
 
     def test_frequency_response_rejects_invalid_eigen_options(self) -> None:
         with self.assertRaisesRegex(ValueError, "operator"):
@@ -3864,37 +3869,6 @@ class ProblemApiTests(unittest.TestCase):
             reloaded.stages[0].problem.study.to_ir()["spin_wave_bc"],
             {"kind": "periodic", "pair_ids": ["x_faces"]},
         )
-
-    def test_fmr_example_is_modal_with_free_demag_airbox(self) -> None:
-        example_path = (
-            Path(__file__).resolve().parents[3]
-            / "examples"
-            / "fem_fmr_periodic_k0_smoke.py"
-        )
-
-        loaded = fm.load_problem_from_script(example_path, lightweight_assets=True)
-        ir = loaded.to_ir(
-            requested_backend="fem",
-            execution_mode="strict",
-            execution_precision="double",
-            include_geometry_assets=False,
-        )
-
-        self.assertEqual(
-            [stage.entrypoint_kind for stage in loaded.stages],
-            ["flat_relax", "flat_eigenmodes"],
-        )
-        self.assertIn(
-            "demag",
-            {term["kind"] for term in ir["energy_terms"]},
-        )
-        mesh_workflow = ir["problem_meta"]["runtime_metadata"]["mesh_workflow"]
-        self.assertEqual(mesh_workflow["build_target"], "domain")
-        self.assertEqual(mesh_workflow["domain_mesh_mode"], "generated_shared_domain_mesh")
-        nodes = ir["problem_meta"]["runtime_metadata"]["study_pipeline"]["nodes"]
-        self.assertEqual([node["stage_kind"] for node in nodes], ["relax", "eigenmodes"])
-        self.assertEqual(nodes[1]["payload"]["eigen_include_demag"], True)
-        self.assertEqual(nodes[1]["payload"]["eigen_spin_wave_bc"], "free")
 
     def test_study_builder_stage_authoring_captures_without_execution(self) -> None:
         script = """
@@ -7509,6 +7483,61 @@ class ProblemApiTests(unittest.TestCase):
                 "dataset": None,
             },
         )
+
+    def test_fem_fmr_free_demag_airbox_example_materializes_relax_then_eigenmodes(self) -> None:
+        example_path = Path("examples/fem_fmr_free_demag_airbox_smoke.py")
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            exit_code = runtime_helper.main(
+                [
+                    "export-run-config",
+                    "--script",
+                    str(example_path),
+                    "--backend",
+                    "fem",
+                    "--mode",
+                    "strict",
+                    "--precision",
+                    "double",
+                    "--skip-geometry-assets",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(len(payload["stages"]), 2)
+        self.assertEqual(payload["stages"][0]["entrypoint_kind"], "flat_relax")
+        self.assertEqual(payload["stages"][1]["entrypoint_kind"], "flat_eigenmodes")
+
+        root_metadata = payload["ir"]["problem_meta"]["runtime_metadata"]
+        self.assertEqual(
+            root_metadata["mesh_workflow"]["domain_mesh_mode"],
+            "generated_shared_domain_mesh",
+        )
+        self.assertEqual(root_metadata["mesh_workflow"]["build_target"], "domain")
+        self.assertEqual(root_metadata["runtime_selection"]["backend"], "fem")
+        self.assertEqual(root_metadata["runtime_selection"]["device"], "cpu")
+        self.assertEqual(root_metadata["runtime_selection"]["execution_precision"], "double")
+        self.assertIn(
+            {"kind": "demag", "realization": "poisson_robin"},
+            payload["ir"]["energy_terms"],
+        )
+
+        relax = payload["stages"][0]["ir"]["study"]
+        self.assertEqual(relax["kind"], "relaxation")
+        self.assertEqual(relax["algorithm"], "projected_gradient_bb")
+        self.assertEqual(relax["stop"]["max_steps"], 120)
+
+        eigen = payload["stages"][1]["ir"]["study"]
+        self.assertEqual(eigen["kind"], "eigenmodes")
+        self.assertEqual(eigen["count"], 8)
+        self.assertTrue(eigen["operator"]["include_demag"])
+        self.assertEqual(eigen["equilibrium"], {"kind": "relaxed_initial_state"})
+        self.assertEqual(eigen["spin_wave_bc"], "free")
+        self.assertEqual(eigen["sampling"]["outputs"][0]["kind"], "eigen_spectrum")
+        self.assertEqual(eigen["sampling"]["outputs"][1]["kind"], "eigen_mode")
+        self.assertEqual(eigen["sampling"]["outputs"][1]["indices"], list(range(8)))
 
 
 if __name__ == "__main__":

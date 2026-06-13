@@ -115,6 +115,19 @@ describe("viewport3dTopologyStaleness", () => {
     ).toBe("current");
   });
 
+  it("keeps loaded FEM domain topology renderable while scene resources are unavailable", () => {
+    expect(
+      resolveViewport3DTopologyFreshness(
+        null,
+        null,
+        {
+          domainMeta: { discretization: "fem" },
+          topology: { nodeCount: 76 },
+        },
+      ),
+    ).toBe("current");
+  });
+
   it("keeps matching manifest provenance current", () => {
     expect(
       resolveViewport3DTopologyFreshness(

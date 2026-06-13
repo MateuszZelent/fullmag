@@ -22,6 +22,11 @@ def write_eigen_fixture(
     omit_mode_payload_encoding: bool = False,
     available_views_override: list[str] | None = None,
     complex_pair_count_override: int | None = None,
+    frequency_hz_override: float | None = None,
+    branch_frequency_hz_override: float | None = None,
+    dispersion_frequency_hz_override: float | None = None,
+    zarr_quantity_id_override: str | None = None,
+    zarr_root_preferred_container_override: str | None = None,
     payload_size: int = 48,
     manifest_mode_resources_override: list[str] | None = None,
 ) -> None:
@@ -55,6 +60,7 @@ def write_eigen_fixture(
         "branch_id": 0,
         "mode_field_id": field_id,
         "mode_field_resource_key": field_resource,
+        "frequency_hz": frequency_hz_override if frequency_hz_override is not None else 1.0e9,
         "frequency_real_hz": 1.0e9,
         "frequency_imag_hz": 0.0,
         "angular_frequency_rad_per_s": 6.283185307179586e9,
@@ -100,8 +106,14 @@ def write_eigen_fixture(
                     {
                         "sample_index": 0,
                         "raw_mode_index": 0,
+                        "frequency_hz": (
+                            branch_frequency_hz_override
+                            if branch_frequency_hz_override is not None
+                            else 1.0e9
+                        ),
                         "frequency_real_hz": 1.0e9,
                         "frequency_imag_hz": 0.0,
+                        "angular_frequency_rad_per_s": 6.283185307179586e9,
                         "tracking_confidence": 1.0,
                         "overlap_prev": None,
                     }
@@ -114,7 +126,11 @@ def write_eigen_fixture(
         "\n".join(
             [
                 "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,line_width_hz,residual_norm,overlap_score",
-                "0,0,0,0,0,G,0,0,1.0e9,6.283185307179586e9,0,1.0e-9,",
+                (
+                    "0,0,0,0,0,G,0,0,"
+                    f"{dispersion_frequency_hz_override if dispersion_frequency_hz_override is not None else 1.0e9},"
+                    "6.283185307179586e9,0,1.0e-9,"
+                ),
             ]
         )
     )
@@ -125,6 +141,7 @@ def write_eigen_fixture(
         "sample_index": 0,
         "raw_mode_index": 0,
         "branch_id": 0,
+        "frequency_hz": 1.0e9,
         "frequency_real_hz": 1.0e9,
         "frequency_imag_hz": 0.0,
         "angular_frequency_rad_per_s": 6.283185307179586e9,
@@ -206,7 +223,11 @@ def write_eigen_fixture(
             {
                 "fullmag_kind": "frequency_domain_mode_field_store",
                 "schema_version": 1,
-                "preferred_container": "zarr",
+                "preferred_container": (
+                    zarr_root_preferred_container_override
+                    if zarr_root_preferred_container_override is not None
+                    else "zarr"
+                ),
                 "quantity_ids": ["delta_m"],
                 "compatibility_binary_exports": True,
             }
@@ -241,7 +262,11 @@ def write_eigen_fixture(
     (zarr_array_dir / ".zattrs").write_text(
         json.dumps(
             {
-                "quantity_id": "delta_m",
+                "quantity_id": (
+                    zarr_quantity_id_override
+                    if zarr_quantity_id_override is not None
+                    else "delta_m"
+                ),
                 "unit": "1",
                 "value_kind": "complex_spatial_vector",
                 "component_basis": "global_xyz",
@@ -384,6 +409,53 @@ def test_validator_rejects_mode_payload_count_drift(tmp_path: Path) -> None:
 
     assert result.returncode != 0
     assert "complex_pair_count" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_frequency_alias_drift(tmp_path: Path) -> None:
+    write_eigen_fixture(tmp_path, frequency_hz_override=2.0e9)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "mode.frequency_hz" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_branch_frequency_drift(tmp_path: Path) -> None:
+    write_eigen_fixture(tmp_path, branch_frequency_hz_override=2.0e9)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "branch point.frequency_hz" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_dispersion_frequency_drift(tmp_path: Path) -> None:
+    write_eigen_fixture(tmp_path, dispersion_frequency_hz_override=2.0e9)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "dispersion row 0.frequency_hz" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_mode_zarr_quantity_drift(tmp_path: Path) -> None:
+    write_eigen_fixture(tmp_path, zarr_quantity_id_override="m")
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "mode 0/0.zattrs.quantity_id" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_mode_zarr_root_container_drift(tmp_path: Path) -> None:
+    write_eigen_fixture(tmp_path, zarr_root_preferred_container_override="json")
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "mode_fields.zarr/.zattrs.preferred_container" in (
+        result.stderr + result.stdout
+    )
 
 
 def test_validator_rejects_mode_payload_byte_count_mismatch(tmp_path: Path) -> None:

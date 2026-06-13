@@ -112,6 +112,7 @@ export const FREQUENCY_DOMAIN_INSPECTOR_SELECTION_KINDS = [
   "resources.analysis.frequency_response.cancel_requested",
   "resources.analysis.frequency_response.frequency_point",
   "resources.analysis.frequency_response.field",
+  "resources.analysis.frequency_response.observables",
   "resources.analysis.frequency_response.diagnostics",
   "jobs.frequency_domain.root",
   "jobs.frequency_domain.stage_run",

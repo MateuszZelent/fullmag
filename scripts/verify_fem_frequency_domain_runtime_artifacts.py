@@ -443,6 +443,49 @@ def require_field_payload_metadata(
         require_equal(zarray.get("dtype"), "<f8", f"{point_name}.zarray.dtype")
 
 
+def require_response_zarr_store(root: Path) -> None:
+    store_root = root / "response/field_payloads.zarr"
+    zgroup_path = store_root / ".zgroup"
+    zattrs_path = store_root / ".zattrs"
+    if not zgroup_path.is_file():
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "missing Zarr store metadata: response/field_payloads.zarr/.zgroup"
+        )
+    if not zattrs_path.is_file():
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "missing Zarr store metadata: response/field_payloads.zarr/.zattrs"
+        )
+    zgroup = load_json(zgroup_path)
+    require_equal(zgroup.get("zarr_format"), 2, "field_payloads.zarr/.zgroup.zarr_format")
+    zattrs = load_json(zattrs_path)
+    require_equal(
+        zattrs.get("fullmag_kind"),
+        "frequency_domain_response_field_store",
+        "field_payloads.zarr/.zattrs.fullmag_kind",
+    )
+    require_equal(zattrs.get("schema_version"), 1, "field_payloads.zarr/.zattrs.schema_version")
+    require_equal(
+        zattrs.get("preferred_container"),
+        "zarr",
+        "field_payloads.zarr/.zattrs.preferred_container",
+    )
+    require_equal(
+        require_string_list(
+            zattrs.get("quantity_ids"),
+            "field_payloads.zarr/.zattrs.quantity_ids",
+        ),
+        ["dynamic_response"],
+        "field_payloads.zarr/.zattrs.quantity_ids",
+    )
+    require_equal(
+        zattrs.get("compatibility_binary_exports"),
+        True,
+        "field_payloads.zarr/.zattrs.compatibility_binary_exports",
+    )
+
+
 def require_tangent_payload_metadata(point: dict, point_name: str) -> tuple[str | None, int | None]:
     tangent_fields = [
         "tangent_field_payload_path",
@@ -712,12 +755,25 @@ def main() -> int:
                 manifest_artifacts.get("response_cancel_requested_v1_path"),
                 None,
             ),
+            "manifest.artifacts.response_map_v1_path": (
+                manifest_artifacts.get("response_map_v1_path"),
+                None,
+            ),
+            "manifest.artifacts.response_map_v2_path": (
+                manifest_artifacts.get("response_map_v2_path"),
+                None,
+            ),
         }
-        if "response_cancel_requested_v1_path" not in manifest_artifacts:
-            raise SystemExit(
-                "invalid frequency-domain runtime artifacts:\n"
-                "manifest.artifacts.response_cancel_requested_v1_path is missing"
-            )
+        for required_key in [
+            "response_cancel_requested_v1_path",
+            "response_map_v1_path",
+            "response_map_v2_path",
+        ]:
+            if required_key not in manifest_artifacts:
+                raise SystemExit(
+                    "invalid frequency-domain runtime artifacts:\n"
+                    f"manifest.artifacts.{required_key} is missing"
+                )
         require_expected(unavailable_artifact_refs)
         if manifest_artifacts.get("frequency_point_paths") != []:
             raise SystemExit(
@@ -743,12 +799,20 @@ def main() -> int:
                 manifest_resources.get("response_cancel_requested_resource_key"),
                 None,
             ),
+            "manifest.resources.response_map_resource_key": (
+                manifest_resources.get("response_map_resource_key"),
+                None,
+            ),
         }
-        if "response_cancel_requested_resource_key" not in manifest_resources:
-            raise SystemExit(
-                "invalid frequency-domain runtime artifacts:\n"
-                "manifest.resources.response_cancel_requested_resource_key is missing"
-            )
+        for required_key in [
+            "response_cancel_requested_resource_key",
+            "response_map_resource_key",
+        ]:
+            if required_key not in manifest_resources:
+                raise SystemExit(
+                    "invalid frequency-domain runtime artifacts:\n"
+                    f"manifest.resources.{required_key} is missing"
+                )
         require_expected(unavailable_resource_refs)
         if manifest_resources.get("response_field_resources") != []:
             raise SystemExit(
@@ -1059,6 +1123,18 @@ def main() -> int:
             manifest.get("resources", {}).get("response_sweep_resource_key"),
             "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep",
         ),
+        "manifest.artifacts.response_map_v1_path": (
+            manifest.get("artifacts", {}).get("response_map_v1_path"),
+            None,
+        ),
+        "manifest.artifacts.response_map_v2_path": (
+            manifest.get("artifacts", {}).get("response_map_v2_path"),
+            None,
+        ),
+        "manifest.resources.response_map_resource_key": (
+            manifest.get("resources", {}).get("response_map_resource_key"),
+            None,
+        ),
         "manifest.artifacts.response_cancel_requested_v1_path": (
             manifest.get("artifacts", {}).get("response_cancel_requested_v1_path"),
             expected_cancel_requested_artifact_path,
@@ -1289,10 +1365,33 @@ def main() -> int:
         manifest.get("artifacts", {}).get("frequency_point_paths"),
         "manifest.artifacts.frequency_point_paths",
     )
+    manifest_artifacts = manifest.get("artifacts", {})
+    if not isinstance(manifest_artifacts, dict):
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "manifest.artifacts must be an object"
+        )
+    for required_key in ["response_map_v1_path", "response_map_v2_path"]:
+        if required_key not in manifest_artifacts:
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                f"manifest.artifacts.{required_key} is missing"
+            )
     manifest_payload_resources = require_object_list(
         manifest.get("resources", {}).get("response_field_resources"),
         "manifest.resources.response_field_resources",
     )
+    manifest_resources = manifest.get("resources", {})
+    if not isinstance(manifest_resources, dict):
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "manifest.resources must be an object"
+        )
+    if "response_map_resource_key" not in manifest_resources:
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "manifest.resources.response_map_resource_key is missing"
+        )
     if len(point_paths) != completed_count:
         raise SystemExit(
             "invalid frequency-domain runtime artifacts:\n"
@@ -1318,6 +1417,8 @@ def main() -> int:
             f"manifest.resources.response_field_resources length: got "
             f"{len(manifest_payload_resources)}, expected {expected_payload_count}"
         )
+    if expected_payload_count > 0:
+        require_response_zarr_store(root)
     if completed_count > 0:
         expected_first_point = "response/frequency_points/frequency_0000.json"
         if point_paths[0] != expected_first_point:

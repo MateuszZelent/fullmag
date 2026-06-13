@@ -64,6 +64,10 @@ function snapshotVectorResourceKey(snapshotId: string): string {
   return `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?component=full&scope_kind=full&snapshot_id=${snapshotId}`;
 }
 
+function analysisFieldVectorResourceKey(fieldId: string): string {
+  return `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", fieldId)}?view=phase_rotated_real&phase_rad=0`;
+}
+
 const mockKernel = {
   commands: {
     execute: () => Promise.resolve(),
@@ -1062,7 +1066,66 @@ describe("AnalysisPlotsView", () => {
     expect(html).toContain(ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH);
   });
 
-  it("renders frequency-domain missing artifact state instead of hiding the analysis subchart", () => {
+  it("renders selected frequency-domain point context for inspector follow-up", () => {
+    const html = renderToStaticMarkup(
+      <AnalysisPlotsView
+        kernel={mockKernel}
+        frequencyDomainSeries={[
+          {
+            id: "analysis.frequency-domain:eigen:spectrum:frequency",
+            label: "Eigen frequency",
+            points: [{ rowIndex: 0, x: 1, y: 9.5 }],
+            quantity: "frequency",
+            source: {
+              kind: "analysis.frequency_domain",
+              resourceKey: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+              tableId: "frequency-domain:eigen-spectrum",
+            },
+            status: "ready",
+            unit: "GHz",
+            xUnit: "mode index",
+          },
+        ]}
+        frequencyDomainStatus="ready"
+        frequencyDomainTitle="Frequency-domain modal spectrum"
+        onClearRange={() => undefined}
+        onPointSelect={() => undefined}
+        onRangeChange={() => undefined}
+        onSeriesSelect={() => undefined}
+        range={null}
+        selectedPoint={{
+          label: "Eigen frequency",
+          point: { rowIndex: 0, x: 1, y: 9.5 },
+          quantity: "frequency",
+          seriesId: "analysis.frequency-domain:eigen:spectrum:frequency",
+          source: {
+            kind: "analysis.frequency_domain",
+            resourceKey: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+            tableId: "frequency-domain:eigen-spectrum",
+          },
+          unit: "GHz",
+          xUnit: "mode index",
+        }}
+        solverEnergySeries={[]}
+        solverEnergyStatus="idle"
+        tableRowsStatus="idle"
+        visibleTable={null}
+        xAxisId="step"
+        yAxisIds={["mx"]}
+      />,
+    );
+
+    expect(html).toContain("Selected frequency-domain point");
+    expect(html).toContain("Selected");
+    expect(html).toContain("eigen mode");
+    expect(html).toContain("mode");
+    expect(html).toContain("1 mode index");
+    expect(html).toContain("frequency");
+    expect(html).toContain("9.5 GHz");
+    expect(html).toContain("Mode inspector and 3D mode controls");
+  });
+
+  it("hides uncomputed frequency-domain results instead of rendering a stale placeholder subchart", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
         kernel={mockKernel}
@@ -1085,9 +1148,8 @@ describe("AnalysisPlotsView", () => {
       />,
     );
 
-    expect(html).toContain("Frequency-domain modal spectrum");
-    expect(html).toContain("stale");
-    expect(html).toContain("spectrum artifact is missing");
+    expect(html).not.toContain("Frequency-domain modal spectrum");
+    expect(html).not.toContain("spectrum artifact is missing");
     expect(html).not.toContain("Frequency-domain series legend");
   });
 
@@ -1115,6 +1177,65 @@ describe("AnalysisPlotsView", () => {
 
     expect(html).toContain("Frequency-domain dispersion");
     expect(html).toContain("Loading frequency-domain artifacts");
+  });
+
+  it("renders explicit response-map unavailable state when the mode is selected", () => {
+    const html = renderToStaticMarkup(
+      <AnalysisPlotsView
+        kernel={mockKernel}
+        frequencyDomainSeries={[]}
+        frequencyDomainStatus="error"
+        frequencyDomainTitle="Frequency-domain response map"
+        frequencyDomainUnavailableReason="response-map chart adapter is not available yet"
+        onClearRange={() => undefined}
+        onPointSelect={() => undefined}
+        onRangeChange={() => undefined}
+        onSeriesSelect={() => undefined}
+        range={null}
+        selectedPoint={null}
+        solverEnergySeries={[]}
+        solverEnergyStatus="idle"
+        tableRowsStatus="idle"
+        visibleTable={null}
+        xAxisId="step"
+        yAxisIds={["mx"]}
+      />,
+    );
+
+    expect(html).toContain("Frequency-domain response map");
+    expect(html).toContain("response-map chart adapter is not available yet");
+    expect(html).not.toContain("Frequency-domain series legend");
+  });
+
+  it("routes response-map explorer selections to the response-map chart surface", () => {
+    expect(
+      frequencyDomainChartRouteOverrideFromSelection({
+        kind: "results.frequency_domain.response_map",
+        label: "Response map",
+        moduleSource: "explorer",
+        nodeId: "results:frequency-domain:response-map",
+        objectId: null,
+        ref: {
+          kind: "results.frequency_domain.response_map",
+          nodeId: "results:frequency-domain:response-map",
+          type: "frequency-domain",
+        },
+      }),
+    ).toEqual({ mode: "response_map", primaryChart: "response-map" });
+    expect(
+      frequencyDomainChartRouteOverrideFromSelection({
+        kind: "study.stage.frequency_response.k_grid",
+        label: "k-Grid",
+        moduleSource: "explorer",
+        nodeId: "model:study:stages:stage:freq-1:k-grid",
+        objectId: null,
+        ref: {
+          kind: "study.stage.frequency_response.k_grid",
+          nodeId: "model:study:stages:stage:freq-1:k-grid",
+          type: "frequency-domain",
+        },
+      }),
+    ).toEqual({ mode: "response_map", primaryChart: "response-map" });
   });
 
   it("maps frequency-domain chart clicks to frequency-domain selections", () => {
@@ -1198,8 +1319,9 @@ describe("AnalysisPlotsView", () => {
           {
             frequency_hz: 9.5e9,
             mode_field_id: "analysis:eigen:sample-0000:mode-0001",
-            mode_field_resource_key:
-              "/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0001/samples/vector?view=phase_rotated_real&phase_rad=0",
+            mode_field_resource_key: analysisFieldVectorResourceKey(
+              "analysis:eigen:sample-0000:mode-0001",
+            ),
             raw_mode_index: 1,
             sample_index: 0,
           },

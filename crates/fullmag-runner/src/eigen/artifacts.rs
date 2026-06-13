@@ -107,6 +107,7 @@ struct ModeArtifact {
     raw_mode_index: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     branch_id: Option<usize>,
+    frequency_hz: f64,
     frequency_real_hz: f64,
     frequency_imag_hz: f64,
     angular_frequency_rad_per_s: f64,
@@ -190,8 +191,8 @@ struct ResponseSweepV2PointArtifact {
     zarr_array_path: String,
     zarr_chunk_path: String,
     zarr_dtype: &'static str,
-    zarr_shape: [usize; 2],
-    zarr_chunk_shape: [usize; 2],
+    zarr_shape: [usize; 3],
+    zarr_chunk_shape: [usize; 3],
     zarr_compressor: Option<&'static str>,
     compatibility_binary_payload_path: String,
     response_field_payload_path: String,
@@ -316,6 +317,8 @@ struct FrequencyDomainArtifactIndex {
     eigen_diagnostics_v2_path: Option<&'static str>,
     response_sweep_v1_path: Option<&'static str>,
     response_sweep_v2_path: Option<&'static str>,
+    response_map_v1_path: Option<&'static str>,
+    response_map_v2_path: Option<&'static str>,
     response_diagnostics_v1_path: Option<&'static str>,
     response_progress_v1_path: Option<&'static str>,
     response_cancel_requested_v1_path: Option<&'static str>,
@@ -331,6 +334,7 @@ struct FrequencyDomainResourceIndex {
     diagnostics_resource_key: Option<&'static str>,
     eigen_diagnostics_resource_key: Option<&'static str>,
     response_sweep_resource_key: Option<&'static str>,
+    response_map_resource_key: Option<&'static str>,
     response_progress_resource_key: Option<&'static str>,
     response_cancel_requested_resource_key: Option<&'static str>,
     response_diagnostics_resource_key: Option<&'static str>,
@@ -370,8 +374,8 @@ struct ResponseFrequencyPointArtifact<'a> {
     zarr_array_path: String,
     zarr_chunk_path: String,
     zarr_dtype: &'static str,
-    zarr_shape: [usize; 2],
-    zarr_chunk_shape: [usize; 2],
+    zarr_shape: [usize; 3],
+    zarr_chunk_shape: [usize; 3],
     zarr_compressor: Option<&'static str>,
     compatibility_binary_payload_path: String,
     value_kind: &'static str,
@@ -493,7 +497,9 @@ pub fn write_response_sweep_bundle_with_progress(
         let zarr_array_path = response_zarr_array_path(index);
         let zarr_chunk_path = response_zarr_chunk_path(index);
         let compatibility_payload_path = response_compatibility_payload_path(index);
-        write_complex_response_field_payloads(base_dir, index, &point.m_complex)?;
+        let response_field_values = response_spatial_vector_values(&point.m_complex);
+        let response_field_sample_count = response_field_values.len() / 3;
+        write_complex_response_field_payloads(base_dir, index, &response_field_values)?;
         let point_artifact = ResponseFrequencyPointArtifact {
             schema_version: "frequency_response_point.v1",
             frequency_index: index,
@@ -507,8 +513,8 @@ pub fn write_response_sweep_bundle_with_progress(
             zarr_array_path,
             zarr_chunk_path,
             zarr_dtype: "<f8",
-            zarr_shape: [point.m_complex.len(), 2],
-            zarr_chunk_shape: [point.m_complex.len().max(1), 2],
+            zarr_shape: [response_field_sample_count, 3, 2],
+            zarr_chunk_shape: [response_field_sample_count.max(1), 3, 2],
             zarr_compressor: None,
             compatibility_binary_payload_path: compatibility_payload_path,
             value_kind: "complex_spatial_vector",
@@ -517,8 +523,8 @@ pub fn write_response_sweep_bundle_with_progress(
             components: ["x", "y", "z"],
             payload_encoding: "f64_interleaved_real_imag_xyz",
             binary_layout: "complex_f64_pairs_little_endian",
-            complex_pair_count: point.m_complex.len(),
-            payload_value_count: point.m_complex.len() * 2,
+            complex_pair_count: response_field_values.len(),
+            payload_value_count: response_field_values.len() * 2,
             available_views: [
                 "complex",
                 "real",
@@ -607,6 +613,8 @@ fn write_response_sweep_v2_artifact(
         .iter()
         .enumerate()
         .map(|(index, point)| {
+            let response_field_values = response_spatial_vector_values(&point.m_complex);
+            let response_field_sample_count = response_field_values.len() / 3;
             let zarr_array_path = response_zarr_array_path(index);
             let zarr_chunk_path = response_zarr_chunk_path(index);
             ResponseSweepV2PointArtifact {
@@ -618,8 +626,8 @@ fn write_response_sweep_v2_artifact(
                 zarr_array_path,
                 zarr_chunk_path: zarr_chunk_path.clone(),
                 zarr_dtype: "<f8",
-                zarr_shape: [point.m_complex.len(), 2],
-                zarr_chunk_shape: [point.m_complex.len().max(1), 2],
+                zarr_shape: [response_field_sample_count, 3, 2],
+                zarr_chunk_shape: [response_field_sample_count.max(1), 3, 2],
                 zarr_compressor: None,
                 compatibility_binary_payload_path: response_compatibility_payload_path(index),
                 response_field_payload_path: zarr_chunk_path,
@@ -796,6 +804,19 @@ fn response_zarr_chunk_path(frequency_index: usize) -> String {
     format!("{}/0.0.0", response_zarr_array_path(frequency_index))
 }
 
+fn response_spatial_vector_values(values: &[[f64; 2]]) -> Vec<[f64; 2]> {
+    if values.len() % 3 == 0 {
+        return values.to_vec();
+    }
+    let mut spatial_values = Vec::with_capacity(values.len() * 3);
+    for value in values {
+        spatial_values.push(*value);
+        spatial_values.push([0.0, 0.0]);
+        spatial_values.push([0.0, 0.0]);
+    }
+    spatial_values
+}
+
 fn response_compatibility_payload_path(frequency_index: usize) -> String {
     format!("response/field_payloads/frequency_{frequency_index:04}/vector.bin")
 }
@@ -831,6 +852,7 @@ fn write_response_zarr_array_metadata(
     frequency_index: usize,
     complex_pair_count: usize,
 ) -> std::io::Result<()> {
+    let sample_count = complex_pair_count / 3;
     let group_dir = base_dir.join(response_zarr_frequency_group_path(frequency_index));
     let array_dir = base_dir.join(response_zarr_array_path(frequency_index));
     fs::create_dir_all(&array_dir)?;
@@ -845,8 +867,8 @@ fn write_response_zarr_array_metadata(
         array_dir.join(".zarray"),
         serde_json::to_vec_pretty(&serde_json::json!({
             "zarr_format": 2,
-            "shape": [complex_pair_count, 2],
-            "chunks": [complex_pair_count.max(1), 2],
+            "shape": [sample_count, 3, 2],
+            "chunks": [sample_count.max(1), 3, 2],
             "dtype": "<f8",
             "compressor": serde_json::Value::Null,
             "fill_value": 0.0,
@@ -863,11 +885,13 @@ fn write_response_zarr_array_metadata(
             "unit": "A_per_m",
             "value_kind": "complex_spatial_vector",
             "component_basis": "global_xyz",
-            "axes": ["complex_pair", "complex"],
+            "axes": ["spatial_sample", "component", "complex"],
+            "component_order": ["x", "y", "z"],
             "complex_order": ["real", "imag"],
             "frequency_index": frequency_index,
+            "sample_count": sample_count,
             "complex_pair_count": complex_pair_count,
-            "storage_layout": "complex_pair_major",
+            "storage_layout": "aos_xyz_complex_pairs",
         }))
         .unwrap(),
     )
@@ -1098,6 +1122,8 @@ fn write_frequency_domain_response_manifest(
             eigen_diagnostics_v2_path: None,
             response_sweep_v1_path: Some("response/magnetic_response_sweep.v1.json"),
             response_sweep_v2_path: Some("response/magnetic_response_sweep.v2.json"),
+            response_map_v1_path: None,
+            response_map_v2_path: None,
             response_diagnostics_v1_path: Some("response/diagnostics.v1.json"),
             response_progress_v1_path: Some("response/progress.v1.json"),
             response_cancel_requested_v1_path: interrupted
@@ -1124,6 +1150,7 @@ fn write_frequency_domain_response_manifest(
             response_sweep_resource_key: Some(
                 "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep",
             ),
+            response_map_resource_key: None,
             response_progress_resource_key: Some(
                 "/v2/sessions/current/analysis/frequency-domain/response/progress.v1",
             ),
@@ -1239,6 +1266,8 @@ pub fn write_frequency_domain_eigen_manifest(
             eigen_diagnostics_v2_path: None,
             response_sweep_v1_path: None,
             response_sweep_v2_path: None,
+            response_map_v1_path: None,
+            response_map_v2_path: None,
             response_diagnostics_v1_path: None,
             response_progress_v1_path: None,
             response_cancel_requested_v1_path: None,
@@ -1260,6 +1289,7 @@ pub fn write_frequency_domain_eigen_manifest(
                 "/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2",
             ),
             response_sweep_resource_key: None,
+            response_map_resource_key: None,
             response_progress_resource_key: None,
             response_cancel_requested_resource_key: None,
             response_diagnostics_resource_key: None,
@@ -1584,6 +1614,7 @@ pub fn write_mode_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
                 sample_index: sample.sample.sample_index,
                 raw_mode_index: mode.raw_mode_index,
                 branch_id: mode.branch_id,
+                frequency_hz: mode.frequency_real_hz,
                 frequency_real_hz: mode.frequency_real_hz,
                 frequency_imag_hz: mode.frequency_imag_hz,
                 angular_frequency_rad_per_s: mode.angular_frequency_rad_per_s,
@@ -1798,6 +1829,8 @@ mod tests {
         .expect("mode artifact should be valid JSON");
         assert_eq!(mode["sample_index"], 0);
         assert_eq!(mode["raw_mode_index"], 0);
+        assert_eq!(mode["frequency_hz"], 1.0e9);
+        assert_eq!(mode["frequency_real_hz"], 1.0e9);
         assert_eq!(
             mode["mode_field_id"],
             "analysis:eigen:sample-0000:mode-0000"
@@ -2035,8 +2068,10 @@ mod tests {
         assert_eq!(point["component_basis"], "global_xyz");
         assert_eq!(point["component_count"], 3);
         assert_eq!(point["components"], serde_json::json!(["x", "y", "z"]));
-        assert_eq!(point["complex_pair_count"], 1);
-        assert_eq!(point["payload_value_count"], 2);
+        assert_eq!(point["complex_pair_count"], 3);
+        assert_eq!(point["payload_value_count"], 6);
+        assert_eq!(point["zarr_shape"], serde_json::json!([1, 3, 2]));
+        assert_eq!(point["zarr_chunk_shape"], serde_json::json!([1, 3, 2]));
         assert_eq!(
             point["available_views"],
             serde_json::json!([
@@ -2055,7 +2090,24 @@ mod tests {
             response_dir.join("field_payloads.zarr/frequency_0001/vector_xyz_complex/0.0.0"),
         )
         .expect("response field Zarr payload should be written");
-        assert_eq!(payload.len(), 16);
+        assert_eq!(payload.len(), 48);
+        let zattrs: Value = serde_json::from_slice(
+            &std::fs::read(
+                response_dir.join("field_payloads.zarr/frequency_0001/vector_xyz_complex/.zattrs"),
+            )
+            .expect("response field Zarr attrs should be written"),
+        )
+        .expect("response field Zarr attrs should be valid JSON");
+        assert_eq!(zattrs["quantity_id"], "dynamic_response");
+        assert_eq!(
+            zattrs["axes"],
+            serde_json::json!(["spatial_sample", "component", "complex"])
+        );
+        assert_eq!(
+            zattrs["component_order"],
+            serde_json::json!(["x", "y", "z"])
+        );
+        assert_eq!(zattrs["complex_order"], serde_json::json!(["real", "imag"]));
         assert!(response_dir
             .join("field_payloads/frequency_0001/vector.bin")
             .is_file());
@@ -2148,6 +2200,18 @@ mod tests {
         assert_eq!(
             family_manifest["artifacts"]["response_sweep_v2_path"],
             "response/magnetic_response_sweep.v2.json"
+        );
+        assert!(
+            family_manifest["artifacts"]["response_map_v1_path"].is_null(),
+            "frequency response sweep must not claim a response-map v1 artifact"
+        );
+        assert!(
+            family_manifest["artifacts"]["response_map_v2_path"].is_null(),
+            "frequency response sweep must not claim a response-map v2 artifact"
+        );
+        assert!(
+            family_manifest["resources"]["response_map_resource_key"].is_null(),
+            "frequency response sweep must not claim a response-map resource"
         );
         assert_eq!(
             family_manifest["requested_execution"]["solver_family"],
@@ -2255,6 +2319,18 @@ mod tests {
         assert_eq!(
             family_manifest["artifacts"]["response_cancel_requested_v1_path"],
             "response/cancel_requested.v1.json"
+        );
+        assert!(
+            family_manifest["artifacts"]["response_map_v1_path"].is_null(),
+            "partial response sweep must not claim a response-map v1 artifact"
+        );
+        assert!(
+            family_manifest["artifacts"]["response_map_v2_path"].is_null(),
+            "partial response sweep must not claim a response-map v2 artifact"
+        );
+        assert!(
+            family_manifest["resources"]["response_map_resource_key"].is_null(),
+            "partial response sweep must not claim a response-map resource"
         );
         assert_eq!(
             family_manifest["resources"]["response_progress_resource_key"],

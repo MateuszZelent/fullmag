@@ -24,10 +24,12 @@ def finite_number(value: object, fallback: float = 0.0) -> float:
     return fallback
 
 
-def read_complex_xyz(path: Path) -> list[tuple[tuple[float, float, float], tuple[float, float, float]]]:
-    data = path.read_bytes()
+def decode_complex_xyz(
+    data: bytes,
+    source: Path,
+) -> list[tuple[tuple[float, float, float], tuple[float, float, float]]]:
     if len(data) % 48 != 0:
-        raise SystemExit(f"{path} size must be a multiple of 48 bytes")
+        raise SystemExit(f"{source} size must be a multiple of 48 bytes")
     values = struct.unpack("<" + "d" * (len(data) // 8), data)
     samples = []
     for index in range(0, len(values), 6):
@@ -38,6 +40,10 @@ def read_complex_xyz(path: Path) -> list[tuple[tuple[float, float, float], tuple
             )
         )
     return samples
+
+
+def read_complex_xyz(path: Path) -> list[tuple[tuple[float, float, float], tuple[float, float, float]]]:
+    return decode_complex_xyz(path.read_bytes(), path)
 
 
 def vector_norm(values: tuple[float, float, float]) -> float:
@@ -76,11 +82,11 @@ def write_spectrum_svg(path: Path, modes: list[dict]) -> None:
     width = 760
     height = 320
     margin = 44
-    max_frequency = max((finite_number(mode.get("frequency_real_hz")) for mode in modes), default=1.0)
+    max_frequency = max((mode_frequency_hz(mode) for mode in modes), default=1.0)
     max_frequency = max(max_frequency, 1.0)
     bars = []
     for index, mode in enumerate(modes):
-        frequency_hz = finite_number(mode.get("frequency_real_hz"))
+        frequency_hz = mode_frequency_hz(mode)
         x = margin + index * max(1.0, (width - 2 * margin) / max(len(modes), 1))
         bar_width = max(8.0, (width - 2 * margin) / max(len(modes), 1) * 0.55)
         bar_height = (height - 2 * margin) * frequency_hz / max_frequency
@@ -216,6 +222,37 @@ def selected_modes(modes: list[dict], requested: set[int] | None) -> list[dict]:
     return [mode for mode in modes if int(mode.get("raw_mode_index", -1)) in requested]
 
 
+def mode_frequency_hz(mode: dict) -> float:
+    return finite_number(
+        mode.get("frequency_hz")
+        or mode.get("frequency_real_hz")
+        or mode.get("frequency_Hz")
+    )
+
+
+def mode_metadata_path(root: Path, sample_index: int, raw_mode: int) -> Path:
+    return root / "eigen" / "modes" / f"sample_{sample_index:04d}" / f"mode_{raw_mode:04d}.json"
+
+
+def resolve_mode_payload_path(root: Path, sample_index: int, raw_mode: int) -> Path:
+    metadata_path = mode_metadata_path(root, sample_index, raw_mode)
+    metadata = load_json(metadata_path) if metadata_path.is_file() else {}
+    for key in ("zarr_chunk_path", "compatibility_binary_payload_path"):
+        relative_path = metadata.get(key)
+        if isinstance(relative_path, str) and relative_path:
+            candidate = root / relative_path
+            if candidate.is_file():
+                return candidate
+    return (
+        root
+        / "eigen"
+        / "mode_fields"
+        / f"sample_{sample_index:04d}"
+        / f"mode_{raw_mode:04d}"
+        / "vector.bin"
+    )
+
+
 def render(root: Path, output_dir: Path, mode_indices: set[int] | None) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     modes = spectrum_modes(root)
@@ -224,21 +261,14 @@ def render(root: Path, output_dir: Path, mode_indices: set[int] | None) -> None:
     print("mode,frequency_GHz,residual")
     for mode in modes:
         raw_mode = int(mode.get("raw_mode_index", 0))
-        frequency_ghz = finite_number(mode.get("frequency_real_hz")) / 1.0e9
+        frequency_ghz = mode_frequency_hz(mode) / 1.0e9
         residual = finite_number(mode.get("residual_norm"), float("nan"))
         print(f"{raw_mode},{frequency_ghz:.9g},{residual:.9g}")
 
     for mode in selected_modes(modes, mode_indices):
         sample_index = int(mode.get("sample_index", 0))
         raw_mode = int(mode.get("raw_mode_index", 0))
-        payload_path = (
-            root
-            / "eigen"
-            / "mode_fields"
-            / f"sample_{sample_index:04d}"
-            / f"mode_{raw_mode:04d}"
-            / "vector.bin"
-        )
+        payload_path = resolve_mode_payload_path(root, sample_index, raw_mode)
         samples = read_complex_xyz(payload_path)
         for view in VIEWS:
             values = [scalar_for_view(sample, view) for sample in samples]

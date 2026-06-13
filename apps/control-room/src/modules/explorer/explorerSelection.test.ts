@@ -4,7 +4,6 @@ import { ControlRoomApi } from "@/kernel/api/ControlRoomApi";
 import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
-  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
   DATA_FIELD_VECTOR_PATH,
@@ -31,6 +30,10 @@ import type { ExplorerNode } from "./explorerTypes";
 
 function snapshotVectorResourceKey(snapshotId: string): string {
   return `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?component=full&scope_kind=full&snapshot_id=${snapshotId}`;
+}
+
+function analysisFieldVectorResourceKey(fieldId: string): string {
+  return `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", fieldId)}?view=phase_rotated_real&phase_rad=0`;
 }
 
 function makeKernel(): KernelApi {
@@ -322,7 +325,9 @@ describe("selectExplorerNode", () => {
       label: "Sample 0 Mode 2",
       modeIndex: 2,
       parentId: "results:eigen:modes",
-      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+      resourceRef: analysisFieldVectorResourceKey(
+        "analysis:eigen:sample-0000:mode-0002",
+      ),
       sampleIndex: 0,
     };
 
@@ -337,7 +342,9 @@ describe("selectExplorerNode", () => {
         kind: "results.eigen.mode",
         modeIndex: 2,
         nodeId: "results:eigen:sample:0:mode:2",
-        resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+        resourceRef: analysisFieldVectorResourceKey(
+          "analysis:eigen:sample-0000:mode-0002",
+        ),
         sampleIndex: 0,
         type: "frequency-domain",
       },

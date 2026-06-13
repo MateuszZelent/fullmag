@@ -1350,8 +1350,12 @@ export function useViewport3DSceneModel({
       resolveViewport3DTopologyFreshness(
         scene.data,
         sharedDomainManifest.data,
+        {
+          domainMeta: domainMeta.data,
+          topology: topology.data,
+        },
       ),
-    [scene.data, sharedDomainManifest.data],
+    [domainMeta.data, scene.data, sharedDomainManifest.data, topology.data],
   );
   useEffect(() => {
     const refreshKey = resolveUnknownTopologyProvenanceRefreshKey(

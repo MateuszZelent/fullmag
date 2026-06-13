@@ -7,8 +7,11 @@ import type {
   FrequencyResponsePoint,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 
-function formatGHz(valueHz: number): string {
-  return `${formatCompact(valueHz / 1e9)} GHz`;
+function formatFrequency(valueHz: number): string {
+  const abs = Math.abs(valueHz);
+  if (abs >= 1e9) return `${formatCompact(valueHz / 1e9)} GHz`;
+  if (abs >= 1e6) return `${formatCompact(valueHz / 1e6)} MHz`;
+  return `${formatCompact(valueHz)} Hz`;
 }
 
 function formatMHz(valueHz: number | null): string {
@@ -24,6 +27,7 @@ function formatCompact(value: number | null | undefined): string {
 }
 
 export type FrequencyDomainModeTableAction =
+  | "inspect"
   | "phase_rotated_real"
   | "real"
   | "imag"
@@ -44,6 +48,11 @@ const MODE_ACTIONS: readonly {
   label: string;
   title: string;
 }[] = [
+  {
+    action: "inspect",
+    label: "Select",
+    title: "Select this eigen mode for inspector controls",
+  },
   {
     action: "phase_rotated_real",
     label: "Plot rotated",
@@ -168,7 +177,7 @@ export function FrequencyDomainModeTable({
               <td>{point.sampleIndex}</td>
               <td>{point.rawModeIndex}</td>
               <td>{point.branchId ?? "-"}</td>
-              <td>{formatGHz(point.frequencyHz)}</td>
+              <td>{formatFrequency(point.frequencyHz)}</td>
               <td>{formatMHz(point.dampingRateHz)}</td>
               <td>{formatCompact(point.residualNorm)}</td>
               <td>{formatCompact(point.tangentLeakageMax)}</td>
@@ -177,10 +186,12 @@ export function FrequencyDomainModeTable({
                 {MODE_ACTIONS.map((entry) => (
                   <button
                     className="fm-inspector-action-button"
-                    disabled={!point.modeFieldId}
+                    disabled={entry.action !== "inspect" && !point.modeFieldId}
                     key={entry.action}
                     title={
-                      point.modeFieldId ? entry.title : "Mode field artifact is missing"
+                      point.modeFieldId || entry.action === "inspect"
+                        ? entry.title
+                        : "Mode field artifact is missing"
                     }
                     type="button"
                     onClick={() => onPlotMode(point, entry.action)}
@@ -248,7 +259,7 @@ export function FrequencyDomainResponsePointTable({
             >
               <td>{point.frequencyIndex ?? "-"}</td>
               <td>{point.observableId}</td>
-              <td>{formatGHz(point.frequencyHz)}</td>
+              <td>{formatFrequency(point.frequencyHz)}</td>
               <td>{formatCompact(point.amplitude)}</td>
               <td>{formatCompact(point.phaseRad)}</td>
               <td>{formatCompact(point.absorbedPowerDensity)}</td>
@@ -327,7 +338,7 @@ export function FrequencyDomainBranchTable({
               </td>
               <td>
                 {branch.frequencyMinHz != null && branch.frequencyMaxHz != null
-                  ? `${formatGHz(branch.frequencyMinHz)}-${formatGHz(branch.frequencyMaxHz)}`
+                  ? `${formatFrequency(branch.frequencyMinHz)}-${formatFrequency(branch.frequencyMaxHz)}`
                   : "-"}
               </td>
               <td>{formatCompact(branch.overlapPrevMin)}</td>
@@ -380,7 +391,7 @@ export function FrequencyDomainFmrPeakTable({
               key={`${peak.source}:${peak.frequencyHz}:${peak.frequencyPointIndex ?? peak.modeRef?.rawModeIndex ?? "raw"}`}
             >
               <td>{peak.source}</td>
-              <td>{formatGHz(peak.frequencyHz)}</td>
+              <td>{formatFrequency(peak.frequencyHz)}</td>
               <td>{formatPeakRef(peak)}</td>
               <td>{formatCompact(peak.amplitude)}</td>
               <td>{formatCompact(peak.phaseRad)}</td>

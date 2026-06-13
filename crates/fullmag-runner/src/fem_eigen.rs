@@ -2452,8 +2452,10 @@ fn write_eigen_v2_bundle(
                 "points": [{
                     "sample_index": 0,
                     "raw_mode_index": raw_mode_index,
+                    "frequency_hz": mode["frequency_hz"],
                     "frequency_real_hz": mode["frequency_real_hz"],
                     "frequency_imag_hz": mode["frequency_imag_hz"],
+                    "angular_frequency_rad_per_s": mode["angular_frequency_rad_per_s"],
                     "tracking_confidence": 1.0,
                     "overlap_prev": null,
                 }],
@@ -2506,6 +2508,7 @@ fn write_eigen_v2_bundle(
             "sample_index": 0,
             "raw_mode_index": raw_mode_index,
             "branch_id": raw_mode_index,
+            "frequency_hz": legacy_mode["frequency_hz"],
             "frequency_real_hz": legacy_mode["frequency_real_hz"],
             "frequency_imag_hz": legacy_mode["frequency_imag_hz"],
             "angular_frequency_rad_per_s": legacy_mode["angular_frequency_rad_per_s"],

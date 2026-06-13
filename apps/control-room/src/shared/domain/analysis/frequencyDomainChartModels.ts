@@ -3,6 +3,7 @@ import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+  DATA_FIELD_VECTOR_PATH,
 } from "@/kernel/api/apiPaths";
 import type { SelectionRef } from "@/kernel/selection/selectionTypes";
 
@@ -154,6 +155,12 @@ export interface FrequencyDomainResponseFieldResource {
 }
 
 type JsonRecord = Record<string, unknown>;
+type FrequencyChartUnit = "GHz" | "MHz" | "Hz";
+
+interface FrequencyChartScale {
+  divisor: number;
+  unit: FrequencyChartUnit;
+}
 
 function record(value: unknown): JsonRecord | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -174,6 +181,26 @@ function finiteNumberList(value: unknown): number[] {
   return array(value)
     .map(finiteNumber)
     .filter((item): item is number => item != null);
+}
+
+function frequencyChartScale(valuesHz: readonly number[]): FrequencyChartScale {
+  let maxAbs = 0;
+  for (const value of valuesHz) {
+    if (!Number.isFinite(value)) continue;
+    maxAbs = Math.max(maxAbs, Math.abs(value));
+  }
+  if (maxAbs >= 1e9) return { divisor: 1e9, unit: "GHz" };
+  if (maxAbs >= 1e6) return { divisor: 1e6, unit: "MHz" };
+  return { divisor: 1, unit: "Hz" };
+}
+
+function eigenModeFieldId(sampleIndex: number, modeIndex: number): string | null {
+  if (sampleIndex < 0 || modeIndex < 0) return null;
+  return `analysis:eigen:sample-${String(sampleIndex).padStart(4, "0")}:mode-${String(modeIndex).padStart(4, "0")}`;
+}
+
+function fieldVectorResourceKey(fieldId: string): string {
+  return `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", fieldId)}?view=phase_rotated_real&phase_rad=0`;
 }
 
 function susceptibilityValues(value: unknown): number[] {
@@ -227,12 +254,18 @@ export function routeFrequencyDomainCalculationMode(
     const hasSweep =
       stringValue(artifacts?.response_sweep_v2_path) != null ||
       stringValue(artifacts?.response_sweep_v1_path) != null;
+    const hasResponseMap =
+      stringValue(artifacts?.response_map_v1_path) != null ||
+      stringValue(artifacts?.response_map_v2_path) != null;
     return {
       mode,
-      primaryChart: mode === "response_map" ? "response-map" : "response-sweep",
+      primaryChart: mode === "response_map" && hasResponseMap
+        ? "response-map"
+        : "response-sweep",
       supportingCharts: ["peak-table", "phase-chart", "response-field-overlay"],
-      status: hasSweep ? "available" : "unavailable",
-      unavailableReason: hasSweep ? null : "response sweep artifact is missing",
+      status: hasResponseMap || hasSweep ? "available" : "unavailable",
+      unavailableReason:
+        hasResponseMap || hasSweep ? null : "response sweep artifact is missing",
     };
   }
   return {
@@ -315,34 +348,51 @@ export function buildEigenSpectrumChartModel(
   rows.forEach((row, rowIndex) => {
     const item = record(row);
     const frequencyHz = finiteNumber(
-      item?.frequency_hz ?? item?.frequencyHz ?? item?.f_hz,
+      item?.frequency_hz ??
+        item?.frequency_real_hz ??
+        item?.frequencyHz ??
+        item?.frequencyRealHz ??
+        item?.f_hz,
     );
     if (frequencyHz == null) {
       droppedPointCount += 1;
       return;
     }
+    const rawModeIndex = finiteInteger(
+      item?.raw_mode_index ?? item?.mode_index ?? item?.modeIndex,
+      rowIndex,
+    );
+    const sampleIndex = finiteInteger(item?.sample_index ?? item?.sampleIndex);
+    const modeFieldId =
+      stringValue(item?.mode_field_id ?? item?.modeFieldId) ??
+      eigenModeFieldId(sampleIndex, rawModeIndex);
+    const modeFieldResourceKey =
+      stringValue(item?.mode_field_resource_key ?? item?.modeFieldResourceKey) ??
+      (modeFieldId ? fieldVectorResourceKey(modeFieldId) : null);
     points.push({
       branchId: stringValue(item?.branch_id ?? item?.branchId),
       dampingRateHz: finiteNumber(item?.damping_rate_hz ?? item?.dampingRateHz),
       frequencyHz,
       imaginaryFrequencyHz: finiteNumber(
-        item?.imag_frequency_hz ?? item?.imaginary_frequency_hz,
+        item?.frequency_imag_hz ??
+          item?.frequencyImagHz ??
+          item?.imag_frequency_hz ??
+          item?.imaginary_frequency_hz,
       ),
-      modeFieldId: stringValue(item?.mode_field_id ?? item?.modeFieldId),
-      modeFieldResourceKey: stringValue(
-        item?.mode_field_resource_key ?? item?.modeFieldResourceKey,
-      ),
-      rawModeIndex: finiteInteger(
-        item?.raw_mode_index ?? item?.mode_index ?? item?.modeIndex,
-        rowIndex,
-      ),
+      modeFieldId,
+      modeFieldResourceKey,
+      rawModeIndex,
       residualNorm: finiteNumber(item?.residual_norm ?? item?.relative_residual_norm),
-      sampleIndex: finiteInteger(item?.sample_index ?? item?.sampleIndex),
+      sampleIndex,
       tangentLeakageMax: finiteNumber(
         item?.tangent_leakage_max ?? item?.tangentLeakageMax,
       ),
     });
   });
+
+  const frequencyScale = frequencyChartScale(
+    points.map((point) => point.frequencyHz),
+  );
 
   return {
     dataSourceVersion: "unknown",
@@ -356,7 +406,7 @@ export function buildEigenSpectrumChartModel(
         points: points.map((point, rowIndex) => ({
           rowIndex,
           x: point.rawModeIndex,
-          y: point.frequencyHz / 1e9,
+          y: point.frequencyHz / frequencyScale.divisor,
         })),
         quantity: "frequency",
         source: {
@@ -365,7 +415,7 @@ export function buildEigenSpectrumChartModel(
           tableId: "frequency-domain:eigen-spectrum",
         },
         status: artifactStatus(resource),
-        unit: "GHz",
+        unit: frequencyScale.unit,
         xUnit: "mode index",
       },
     ],
@@ -397,6 +447,9 @@ export function buildEigenDispersionChartModel(
 ): FrequencyDomainChartBuildResult<EigenDispersionPoint> {
   const parsed = parseDispersionCsv(resource?.text ?? "");
   const branchIds = new Set(parsed.points.map((point) => point.branchId ?? "raw"));
+  const frequencyScale = frequencyChartScale(
+    parsed.points.map((point) => point.frequencyHz),
+  );
   const series = [...branchIds].map((branchId) => ({
     id: `analysis.frequency-domain:eigen:dispersion:${branchId}`,
     label: branchId === "raw" ? "Raw modes" : `Branch ${branchId}`,
@@ -406,7 +459,7 @@ export function buildEigenDispersionChartModel(
       .map(({ point, rowIndex }) => ({
         rowIndex,
         x: point.pathS,
-        y: point.frequencyHz / 1e9,
+        y: point.frequencyHz / frequencyScale.divisor,
       })),
     quantity: "frequency",
     source: {
@@ -415,10 +468,9 @@ export function buildEigenDispersionChartModel(
       tableId: "frequency-domain:eigen-dispersion",
     },
     status: resource?.status === "ready" ? "ready" as const : "stale" as const,
-    unit: "GHz",
+    unit: frequencyScale.unit,
     xUnit: "rad/m",
   }));
-
   return {
     dataSourceVersion: "unknown",
     diagnostics: [],
@@ -581,19 +633,38 @@ export function buildFrequencyResponseChartModel(
     });
   });
 
+  const frequencyScale = frequencyChartScale(
+    points.map((point) => point.frequencyHz),
+  );
+
   return {
     dataSourceVersion,
     diagnostics,
     droppedPointCount,
     points,
     series: [
-      responseSeries(points, resource, "amplitude", "Amplitude", "a.u.", (point) =>
-        point.amplitude),
-      responseSeries(points, resource, "phase", "Phase", "rad", (point) =>
-        point.phaseRad),
       responseSeries(
         points,
         resource,
+        frequencyScale,
+        "amplitude",
+        "Amplitude",
+        "a.u.",
+        (point) => point.amplitude,
+      ),
+      responseSeries(
+        points,
+        resource,
+        frequencyScale,
+        "phase",
+        "Phase",
+        "rad",
+        (point) => point.phaseRad,
+      ),
+      responseSeries(
+        points,
+        resource,
+        frequencyScale,
         "absorbed-power-density",
         "Absorbed power density",
         "W/m^3",
@@ -602,6 +673,7 @@ export function buildFrequencyResponseChartModel(
       responseSeries(
         points,
         resource,
+        frequencyScale,
         "susceptibility-max-abs",
         "Max |susceptibility|",
         "a.u.",
@@ -758,12 +830,36 @@ function minMax(values: readonly number[]): { max: number | null; min: number | 
 
 function spectrumRows(payload: unknown): unknown[] {
   const root = record(payload);
-  return array(
+  const directRows = array(
     root?.modes ??
       root?.spectrum ??
       root?.rows ??
       record(root?.payload)?.modes,
   );
+  if (directRows.length > 0) return directRows;
+  return sampleModeRows(root?.samples ?? record(root?.payload)?.samples);
+}
+
+function sampleModeRows(samplesValue: unknown): unknown[] {
+  return array(samplesValue).flatMap((sample, sampleOrdinal) => {
+    const sampleRecord = record(sample);
+    if (!sampleRecord) return [];
+    const sampleIndex = finiteInteger(
+      sampleRecord.sample_index ?? sampleRecord.sampleIndex,
+      sampleOrdinal,
+    );
+    return array(sampleRecord.modes).flatMap((mode) => {
+      const modeRecord = record(mode);
+      if (!modeRecord) return [];
+      return [
+        {
+          ...modeRecord,
+          sample_index:
+            modeRecord.sample_index ?? modeRecord.sampleIndex ?? sampleIndex,
+        },
+      ];
+    });
+  });
 }
 
 function responseRows(payload: unknown): unknown[] {
@@ -830,6 +926,7 @@ function parseDispersionCsv(csv: string): {
 function responseSeries(
   points: readonly FrequencyResponsePoint[],
   resource: FrequencyDomainJsonArtifactLike | null | undefined,
+  frequencyScale: FrequencyChartScale,
   quantity: string,
   label: string,
   unit: string,
@@ -840,7 +937,9 @@ function responseSeries(
     label,
     points: points.flatMap((point, rowIndex) => {
       const y = selector(point);
-      return y == null ? [] : [{ rowIndex, x: point.frequencyHz / 1e9, y }];
+      return y == null
+        ? []
+        : [{ rowIndex, x: point.frequencyHz / frequencyScale.divisor, y }];
     }),
     quantity,
     source: {
@@ -850,7 +949,7 @@ function responseSeries(
     },
     status: artifactStatus(resource),
     unit,
-    xUnit: "GHz",
+    xUnit: frequencyScale.unit,
   };
 }
 

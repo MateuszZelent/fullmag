@@ -92,6 +92,7 @@ def write_frequency_domain_fixture(
     omit_manifest_created_at: bool = False,
     omit_manifest_physics: bool = False,
     omit_static_periodic_mesh_artifact: bool = False,
+    response_zarr_root_preferred_container_override: str | None = None,
 ) -> None:
     (root / "response" / "frequency_points").mkdir(parents=True)
     for index in range(emitted_frequency_point_count):
@@ -116,7 +117,11 @@ def write_frequency_domain_fixture(
                 {
                     "fullmag_kind": "frequency_domain_response_field_store",
                     "schema_version": 1,
-                    "preferred_container": "zarr",
+                    "preferred_container": (
+                        response_zarr_root_preferred_container_override
+                        if response_zarr_root_preferred_container_override is not None
+                        else "zarr"
+                    ),
                     "quantity_ids": ["dynamic_response"],
                     "compatibility_binary_exports": True,
                 }
@@ -532,6 +537,8 @@ def write_frequency_domain_fixture(
         },
         "artifacts": {
             "response_cancel_requested_v1_path": manifest_cancel_requested_artifact_path,
+            "response_map_v1_path": None,
+            "response_map_v2_path": None,
             "frequency_point_paths": (
                 manifest_point_paths_override
                 if manifest_point_paths_override is not None
@@ -565,6 +572,7 @@ def write_frequency_domain_fixture(
                 "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep"
             ),
             "response_cancel_requested_resource_key": manifest_cancel_requested_resource_key,
+            "response_map_resource_key": None,
             "response_field_resources": (
                 manifest_field_resources_override
                 if manifest_field_resources_override is not None
@@ -724,12 +732,15 @@ def write_unavailable_frequency_domain_fixture(root: Path) -> None:
                     "response_diagnostics_v1_path": "response/diagnostics.v1.json",
                     "response_progress_v1_path": "response/progress.v1.json",
                     "response_cancel_requested_v1_path": None,
+                    "response_map_v1_path": None,
+                    "response_map_v2_path": None,
                     "frequency_point_paths": [],
                 },
                 "resources": {
                     "response_progress_resource_key": "/v2/sessions/current/analysis/frequency-domain/response/progress.v1",
                     "response_diagnostics_resource_key": "/v2/sessions/current/analysis/frequency-domain/response/diagnostics.v1",
                     "response_cancel_requested_resource_key": None,
+                    "response_map_resource_key": None,
                     "response_field_resources": [],
                 },
                 "diagnostics": {
@@ -806,6 +817,24 @@ def test_validator_rejects_unavailable_manifest_missing_diagnostics_artifact_ref
 
     assert result.returncode != 0
     assert "manifest.artifacts.response_diagnostics_v1_path" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_unavailable_manifest_missing_response_map_refs(
+    tmp_path: Path,
+) -> None:
+    write_unavailable_frequency_domain_fixture(tmp_path)
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    del manifest["artifacts"]["response_map_v1_path"]
+    del manifest["resources"]["response_map_resource_key"]
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(tmp_path, allow_unavailable=True)
+
+    assert result.returncode != 0
+    assert "manifest.artifacts.response_map_v1_path" in (
         result.stderr + result.stdout
     )
 
@@ -1640,6 +1669,20 @@ def test_validator_rejects_payload_value_count_mismatch(tmp_path: Path) -> None:
 
     assert result.returncode != 0
     assert "payload_value_count" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_response_zarr_root_container_drift(tmp_path: Path) -> None:
+    write_frequency_domain_fixture(
+        tmp_path,
+        response_zarr_root_preferred_container_override="json",
+    )
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "field_payloads.zarr/.zattrs.preferred_container" in (
+        result.stderr + result.stdout
+    )
 
 
 def test_validator_rejects_missing_complex_pair_count(tmp_path: Path) -> None:

@@ -471,6 +471,13 @@ const FREQUENCY_DOMAIN_RESOURCE_NODE_DETAILS: Record<
     title: "Response Field Resource Detail",
     visualization: "real, imag, abs, phase, and animated phase field views",
   },
+  "resources.analysis.frequency_response.observables": {
+    artifact: "response/magnetic_response_sweep.v2.json",
+    focus: "response observable resources",
+    resource: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+    title: "Response Observable Resource Detail",
+    visualization: "observable response curves, phase traces, susceptibility, and absorbed power",
+  },
   "resources.analysis.frequency_response.diagnostics": {
     artifact: "response/diagnostics.v1.json",
     focus: "response diagnostics resource",

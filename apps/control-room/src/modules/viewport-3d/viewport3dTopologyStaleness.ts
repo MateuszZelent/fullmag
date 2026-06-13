@@ -11,7 +11,16 @@ import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectV
 export function resolveViewport3DTopologyFreshness(
   scene: unknown,
   manifest: unknown,
+  context: {
+    domainMeta?: unknown;
+    topology?: unknown;
+  } = {},
 ): Viewport3DTopologyFreshness {
+  if (hasLoadedFemDomainTopology(context.domainMeta, context.topology)) {
+    const resolved = resolveVisualizationTopologyFreshness(scene, manifest);
+    return resolved === "unknown" ? "current" : resolved;
+  }
+
   return resolveVisualizationTopologyFreshness(scene, manifest);
 }
 
@@ -74,4 +83,15 @@ function asRecord(value: unknown): JsonRecord | null {
 
 function asFiniteNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function hasLoadedFemDomainTopology(domainMeta: unknown, topology: unknown): boolean {
+  const metaRecord = asRecord(domainMeta);
+  const topologyRecord = asRecord(topology);
+  const nodeCount = asFiniteNumber(topologyRecord?.nodeCount);
+  return (
+    metaRecord?.discretization === "fem" &&
+    nodeCount !== null &&
+    nodeCount > 0
+  );
 }

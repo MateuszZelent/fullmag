@@ -142,6 +142,7 @@ type ExplorerNodeKind =
   | "resources.analysis.frequency_response.cancel_requested"
   | "resources.analysis.frequency_response.frequency_point"
   | "resources.analysis.frequency_response.field"
+  | "resources.analysis.frequency_response.observables"
   | "resources.analysis.frequency_response.diagnostics"
   | "resources.field"
   | "resources.mesh"

@@ -319,6 +319,29 @@ describe("study runtime command resource bundles", () => {
     expect(studyRuntimeCommandSessionStatusEquals(previous, next)).toBe(false);
   });
 
+  it("treats domain generation changes as full runtime command state changes", () => {
+    const previous = selectStudyRuntimeCommandSessionStatus({
+      data: statusWith({
+        discretization: "fem",
+        resources: {
+          domain_generation_id: 0,
+          mesh_revision: 0,
+        },
+      }) as LiveStatusResource,
+    });
+    const next = selectStudyRuntimeCommandSessionStatus({
+      data: statusWith({
+        discretization: "fem",
+        resources: {
+          domain_generation_id: 5,
+          mesh_revision: 0,
+        },
+      }) as LiveStatusResource,
+    });
+
+    expect(studyRuntimeCommandSessionStatusEquals(previous, next)).toBe(false);
+  });
+
   it("keeps always-mounted command controls off the full runtime resource bundle", () => {
     expect(STUDY_RUNTIME_CONTROL_RESOURCE_KEYS).not.toEqual(
       expect.arrayContaining([
@@ -642,11 +665,14 @@ describe("study runtime command resource bundles", () => {
     ).toBe(true);
   });
 
-  it("loads shared-domain manifest only when FEM or explicit topology has a mesh revision", () => {
+  it("loads shared-domain manifest when FEM or explicit topology has a mesh or domain revision", () => {
     expect(
       shouldLoadRuntimeMeshManifest(
         true,
-        statusWith({ discretization: "fem" }),
+        statusWith({
+          discretization: "fem",
+          resources: { domain_generation_id: 0 },
+        }),
       ),
     ).toBe(false);
     expect(
@@ -661,6 +687,15 @@ describe("study runtime command resource bundles", () => {
         statusWith({
           discretization: "fem",
           resources: { mesh_revision: 5 },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      shouldLoadRuntimeMeshManifest(
+        true,
+        statusWith({
+          discretization: "fem",
+          resources: { domain_generation_id: 5, mesh_revision: 0 },
         }),
       ),
     ).toBe(true);

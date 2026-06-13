@@ -138,4 +138,58 @@ describe("frequencyDomainSeriesAdapter", () => {
     expect(frequencyDomainXAxisLabel(dispersion)).toBe("path_s [rad/m]");
     expect(frequencyDomainXAxisLabel(response)).toBe("frequency [GHz]");
   });
+
+  it("uses MHz axis units for sub-GHz frequency-response sweeps", () => {
+    const series = frequencyDomainChartSeriesForAnalysisPlots(
+      buildFrequencyResponseChartModel({
+        payload: {
+          points: [{ frequency_hz: 500e6, max_response_amplitude: 2 }],
+        },
+        status: "ready",
+      }),
+    );
+
+    expect(series[0]).toEqual(
+      expect.objectContaining({
+        xUnit: "MHz",
+      }),
+    );
+    expect(series[0]?.points).toEqual([{ rowIndex: 0, x: 500, y: 2 }]);
+    expect(frequencyDomainXAxisLabel(series)).toBe("frequency [MHz]");
+  });
+
+  it("uses MHz units for sub-GHz eigen spectrum frequencies", () => {
+    const model = buildEigenSpectrumChartModel({
+      payload: {
+        modes: [{ frequency_hz: 750e6, raw_mode_index: 1, sample_index: 0 }],
+      },
+      status: "ready",
+    });
+
+    expect(model.series[0]).toEqual(
+      expect.objectContaining({
+        unit: "MHz",
+      }),
+    );
+    expect(model.series[0]?.points).toEqual([{ rowIndex: 0, x: 1, y: 750 }]);
+  });
+
+  it("uses MHz units for sub-GHz dispersion frequencies", () => {
+    const model = buildEigenDispersionChartModel({
+      status: "ready",
+      text: [
+        "sample_index,raw_mode_index,branch_id,path_s_rad_per_m,frequency_hz",
+        "0,1,acoustic,78539816.33974482,250e6",
+      ].join("\n"),
+    });
+
+    expect(model.series[0]).toEqual(
+      expect.objectContaining({
+        unit: "MHz",
+      }),
+    );
+    expect(model.series[0]?.points).toEqual([
+      { rowIndex: 0, x: 78539816.33974482, y: 250 },
+    ]);
+  });
 });

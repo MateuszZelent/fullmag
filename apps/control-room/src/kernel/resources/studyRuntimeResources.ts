@@ -157,6 +157,7 @@ export const STUDY_RUNTIME_CONTROL_RESOURCE_KEYS = [
 const RUNTIME_COMMAND_CONTROL_STATUS_RESOURCE_KEYS = [
   "command_completion_revision",
   "commands_revision",
+  "domain_generation_id",
   "mesh_build_revision",
   "mesh_revision",
   "scene_revision",
@@ -175,10 +176,11 @@ type StudyRuntimeCommandSessionStatus = {
     | "artifacts_revision"
     | "command_completion_revision"
     | "commands_revision"
-        | "mesh_build_revision"
-        | "mesh_revision"
-        | "scene_revision"
-        | "stages_revision"
+    | "domain_generation_id"
+    | "mesh_build_revision"
+    | "mesh_revision"
+    | "scene_revision"
+    | "stages_revision"
   >;
   run: Pick<NonNullable<LiveStatusResource["run"]>, "run_id"> | null;
   session: Pick<LiveStatusResource["session"], "session_id">;
@@ -202,6 +204,7 @@ export function selectStudyRuntimeCommandSessionStatus(status: {
       command_completion_revision:
         status.data.resources.command_completion_revision,
       commands_revision: status.data.resources.commands_revision,
+      domain_generation_id: status.data.resources.domain_generation_id,
       mesh_build_revision: status.data.resources.mesh_build_revision,
       mesh_revision: status.data.resources.mesh_revision,
       scene_revision: status.data.resources.scene_revision,
@@ -230,6 +233,8 @@ export function studyRuntimeCommandSessionStatusEquals(
     previous.resources.command_completion_revision ===
       next.resources.command_completion_revision &&
     previous.resources.commands_revision === next.resources.commands_revision &&
+    previous.resources.domain_generation_id ===
+      next.resources.domain_generation_id &&
     previous.resources.mesh_build_revision ===
       next.resources.mesh_build_revision &&
     previous.resources.mesh_revision === next.resources.mesh_revision &&
@@ -352,7 +357,10 @@ export function shouldLoadRuntimeMeshManifest(
           "explicit_topology"
         >;
         domain: Pick<LiveStatusResource["domain"], "discretization">;
-        resources: Pick<LiveStatusResource["resources"], "mesh_revision">;
+        resources: Pick<LiveStatusResource["resources"], "mesh_revision"> &
+          Partial<
+            Pick<LiveStatusResource["resources"], "domain_generation_id">
+          >;
       }
     | null
     | undefined,
@@ -363,7 +371,8 @@ export function shouldLoadRuntimeMeshManifest(
     status.domain.discretization.toLowerCase() === "fem";
   return (
     requiresSharedDomain &&
-    hasPositiveRevision(status.resources.mesh_revision)
+    (hasPositiveRevision(status.resources.mesh_revision) ||
+      hasPositiveRevision(status.resources.domain_generation_id))
   );
 }
 
