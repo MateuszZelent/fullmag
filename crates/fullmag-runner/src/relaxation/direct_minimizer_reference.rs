@@ -6,6 +6,7 @@
 
 use fullmag_engine::{
     add, dot, normalized, scale, sub, ExchangeLlgProblem, FftWorkspace, Vector3, VectorFieldSoA,
+    MU0,
 };
 use fullmag_ir::RelaxationControlIR;
 
@@ -33,6 +34,7 @@ pub struct RelaxationResult {
     pub steps_taken: u64,
     pub pseudo_time_s: f64,
     pub final_energy: f64,
+    pub final_energy_plateau_range_j: Option<f64>,
     pub final_max_torque: f64,
     pub converged: bool,
 }
@@ -84,6 +86,38 @@ fn global_dot_soa(a: &VectorFieldSoA, b: &VectorFieldSoA) -> f64 {
     let mut sum = 0.0;
     for i in 0..a.len() {
         sum += a.x[i] * b.x[i] + a.y[i] * b.y[i] + a.z[i] * b.z[i];
+    }
+    sum
+}
+
+fn energy_directional_derivative(
+    problem: &ExchangeLlgProblem,
+    gradient: &[Vector3],
+    direction: &[Vector3],
+) -> f64 {
+    debug_assert_eq!(gradient.len(), direction.len());
+    let cell_volume = problem.cell_size.volume();
+    gradient
+        .iter()
+        .zip(direction.iter())
+        .enumerate()
+        .map(|(i, (g, p))| MU0 * problem.ms_at(i) * cell_volume * dot(*g, *p))
+        .sum()
+}
+
+fn energy_directional_derivative_soa(
+    problem: &ExchangeLlgProblem,
+    gradient: &VectorFieldSoA,
+    direction: &VectorFieldSoA,
+) -> f64 {
+    debug_assert_eq!(gradient.len(), direction.len());
+    let cell_volume = problem.cell_size.volume();
+    let mut sum = 0.0;
+    for i in 0..gradient.len() {
+        let dot = gradient.x[i] * direction.x[i]
+            + gradient.y[i] * direction.y[i]
+            + gradient.z[i] * direction.z[i];
+        sum += MU0 * problem.ms_at(i) * cell_volume * dot;
     }
     sum
 }
@@ -225,12 +259,13 @@ fn execute_projected_gradient_bb_soa(
             converged = true;
             break;
         }
+        let descent_derivative = -energy_directional_derivative_soa(problem, &g, &g);
 
         loop {
             scaled_retraction_soa_into(&m, &g, -trial_lambda, &mut m_trial);
             let candidate_energy =
                 problem.total_energy_from_soa_ws(&m_trial, ws, &mut energy_scratch);
-            if candidate_energy <= energy - c_armijo * trial_lambda * g_norm_sq {
+            if candidate_energy <= energy + c_armijo * trial_lambda * descent_derivative {
                 accepted_energy = Some(candidate_energy);
                 break;
             }
@@ -326,6 +361,7 @@ fn execute_projected_gradient_bb_soa(
         steps_taken: steps,
         pseudo_time_s,
         final_energy: energy,
+        final_energy_plateau_range_j: energy_plateau.range().map(|range| range.value),
         final_max_torque: final_torque,
         converged,
     }
@@ -383,6 +419,7 @@ fn execute_projected_gradient_bb_aos(
             converged = true;
             break;
         }
+        let descent_derivative = -energy_directional_derivative(problem, &g, &g);
 
         loop {
             let candidate_m = (0..n)
@@ -393,8 +430,9 @@ fn execute_projected_gradient_bb_aos(
 
             let candidate_energy = problem.total_energy_from_vectors_ws(&candidate_m, ws);
 
-            // Armijo sufficient decrease: E(trial) <= E(m) - c * λ * ||g||²
-            if candidate_energy <= energy - c_armijo * trial_lambda * g_norm_sq {
+            // Armijo sufficient decrease in joules, using dE/dlambda for the
+            // field-scaled tangent gradient.
+            if candidate_energy <= energy + c_armijo * trial_lambda * descent_derivative {
                 accepted_trial = Some((candidate_m, candidate_energy));
                 break;
             }
@@ -498,6 +536,7 @@ fn execute_projected_gradient_bb_aos(
         steps_taken: steps,
         pseudo_time_s,
         final_energy: energy,
+        final_energy_plateau_range_j: energy_plateau.range().map(|range| range.value),
         final_max_torque: final_torque,
         converged,
     }
@@ -574,7 +613,7 @@ fn execute_nonlinear_cg_soa(
         if p_dot_g >= 0.0 {
             copy_scaled_soa_into(&g, -1.0, &mut p);
         }
-        let p_dot_g = global_dot_soa(&p, &g);
+        let directional_derivative = energy_directional_derivative_soa(problem, &g, &p);
 
         let p_norm = global_dot_soa(&p, &p).sqrt();
         let mut lambda = if p_norm > 0.0 {
@@ -590,7 +629,7 @@ fn execute_nonlinear_cg_soa(
             scaled_retraction_soa_into(&m, &p, lambda, &mut m_new);
             let candidate_energy =
                 problem.total_energy_from_soa_ws(&m_new, ws, &mut energy_scratch);
-            if candidate_energy <= energy + c_armijo * lambda * p_dot_g {
+            if candidate_energy <= energy + c_armijo * lambda * directional_derivative {
                 accepted_energy = Some(candidate_energy);
                 break;
             }
@@ -667,6 +706,7 @@ fn execute_nonlinear_cg_soa(
         steps_taken: steps,
         pseudo_time_s,
         final_energy: energy,
+        final_energy_plateau_range_j: energy_plateau.range().map(|range| range.value),
         final_max_torque: final_torque,
         converged,
     }
@@ -722,7 +762,7 @@ fn execute_nonlinear_cg_aos(
             // p is not a descent direction — restart to steepest descent
             p = g.iter().map(|gi| scale(*gi, -1.0)).collect();
         }
-        let p_dot_g = global_dot(&p, &g); // recompute after possible restart
+        let directional_derivative = energy_directional_derivative(problem, &g, &p);
 
         // Initial step size based on conservative estimate
         let p_norm = global_dot(&p, &p).sqrt();
@@ -743,7 +783,7 @@ fn execute_nonlinear_cg_aos(
             let candidate_energy = problem.total_energy_from_vectors_ws(&candidate_m, ws);
 
             // Armijo condition
-            if candidate_energy <= energy + c_armijo * lambda * p_dot_g {
+            if candidate_energy <= energy + c_armijo * lambda * directional_derivative {
                 accepted_trial = Some((candidate_m, candidate_energy));
                 break;
             }
@@ -830,6 +870,7 @@ fn execute_nonlinear_cg_aos(
         steps_taken: steps,
         pseudo_time_s,
         final_energy: energy,
+        final_energy_plateau_range_j: energy_plateau.range().map(|range| range.value),
         final_max_torque: final_torque,
         converged,
     }
@@ -841,6 +882,7 @@ mod tests {
     use crate::types::ExecutionProvenance;
     use fullmag_engine::{
         CellSize, EffectiveFieldTerms, GridShape, LlgConfig, MaterialParameters, TimeIntegrator,
+        UniaxialAnisotropyConfig,
     };
     use fullmag_ir::{RelaxStopIR, RelaxationAlgorithmIR};
 
@@ -898,6 +940,27 @@ mod tests {
             [0.2, 0.9, 0.4],
             [0.0, 1.0, 0.0],
         ]
+    }
+
+    fn macrospin_sw_problem(field_m_t: f64) -> ExchangeLlgProblem {
+        let grid = GridShape::new(1, 1, 1).expect("valid grid");
+        ExchangeLlgProblem::with_terms(
+            grid,
+            CellSize::new(5.0e-9, 5.0e-9, 5.0e-9).expect("valid cell size"),
+            MaterialParameters::new(8.0e5, 1.0e-12, 1.0).expect("valid material"),
+            LlgConfig::new(2.211e5, TimeIntegrator::Heun).expect("valid llg config"),
+            EffectiveFieldTerms {
+                exchange: false,
+                demag: false,
+                external_field: Some([0.0, 0.0, field_m_t * 1.0e-3 / MU0]),
+                uniaxial_anisotropy: Some(UniaxialAnisotropyConfig {
+                    ku1: 8.0e3,
+                    ku2: 0.0,
+                    axis: [0.0, 0.0, 1.0],
+                }),
+                ..Default::default()
+            },
+        )
     }
 
     fn assert_relaxation_result_close(
@@ -967,6 +1030,36 @@ mod tests {
         let aos = execute_projected_gradient_bb_aos(&problem, &initial, &mut aos_ws, &control);
 
         assert_relaxation_result_close(&soa, &aos, 1e-8);
+    }
+
+    #[test]
+    fn projected_gradient_bb_accepts_macrospin_energy_scale() {
+        let field_m_t = 35.0;
+        let problem = macrospin_sw_problem(field_m_t);
+        let initial = vec![[0.019999999600000016, 0.0, 0.9997999800040007]];
+        let control = RelaxationControlIR {
+            algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
+            stop: RelaxStopIR {
+                torque_tolerance_apm: Some(5e-4),
+                energy_tolerance_j: Some(1e-24),
+                max_steps: Some(10),
+                max_pseudotime_s: None,
+                max_physical_time_s: None,
+            },
+        };
+        let mut ws = problem.create_workspace();
+
+        let result = execute_projected_gradient_bb(&problem, &initial, &mut ws, &control);
+
+        assert!(
+            result.steps_taken > 0,
+            "BB should accept at least one descent step for small macrospin energies"
+        );
+        assert!(
+            (result.final_magnetization[0][0] - initial[0][0]).abs() > 1e-8
+                || (result.final_magnetization[0][2] - initial[0][2]).abs() > 1e-8,
+            "macrospin magnetization should change after an accepted BB step"
+        );
     }
 
     #[test]

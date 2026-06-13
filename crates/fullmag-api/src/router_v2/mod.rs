@@ -640,6 +640,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::analysis::get_saturation),
         )
         .route(
+            "/v2/sessions/current/analysis/hysteresis/:stage_id/adaptive-refinement",
+            get(handlers::analysis::get_adaptive_refinement),
+        )
+        .route(
             "/v2/sessions/current/analysis/hysteresis/:stage_id/branches",
             get(handlers::analysis::hysteresis::get_branches),
         )

@@ -23,7 +23,13 @@ interface MeshHistogramHover {
 export type MeshSizeHistogramHighlightScope =
   | { kind: "airbox" }
   | { kind: "all" }
-  | { kind: "object"; objectId: string };
+  | { kind: "object"; objectId: string }
+  | {
+      kind: "region";
+      meshPartIds: readonly string[];
+      objectId: string;
+      regionId: string;
+    };
 
 export interface MeshSizeHistogramHighlight {
   binLabel: string;

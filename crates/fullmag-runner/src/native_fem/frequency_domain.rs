@@ -6,6 +6,8 @@ use std::ffi::{c_void, CStr, CString};
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
+use super::availability::FrequencyDomainPhaseConvention;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
 pub(crate) enum NativeFrequencyDomainStatus {
@@ -18,19 +20,48 @@ pub(crate) enum NativeFrequencyDomainStatus {
     Interrupted,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum NativeFrequencyDomainExecutionLane {
+    Validation,
+    ProductionCpu,
+    ProductionGpu,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(dead_code)]
+pub(crate) struct NativeFrequencyDomainProgress {
+    pub frequency_index: u64,
+    pub completed_frequency_count: u64,
+    pub total_frequency_count: u64,
+    pub iteration_count: u64,
+    pub frequency_hz: f64,
+    pub residual_l2_norm: f64,
+    pub relative_residual_l2_norm: f64,
+    pub converged: bool,
+}
+
+pub(crate) type NativeFrequencyDomainProgressCallback<'a> =
+    dyn Fn(NativeFrequencyDomainProgress) + 'a;
+pub(crate) type NativeFrequencyDomainCancelCallback<'a> = dyn Fn() -> bool + 'a;
+
+#[derive(Clone)]
 #[allow(dead_code)]
 pub(crate) struct NativeDrivenFrequencyResponseRequest<'a> {
     pub node_count: u64,
     pub tangent_dof_count: u64,
     pub alpha: f64,
     pub gamma0: f64,
+    pub execution_lane: NativeFrequencyDomainExecutionLane,
     pub frequencies_hz: &'a [f64],
     pub output_directory: &'a Path,
     pub write_response_fields: bool,
     pub write_partial_artifacts: bool,
     pub interrupt_requested: Option<&'a AtomicBool>,
+    pub cancel_requested: Option<&'a NativeFrequencyDomainCancelCallback<'a>>,
+    pub progress_callback: Option<&'a NativeFrequencyDomainProgressCallback<'a>>,
     pub tiny_validation_problem: Option<NativeDrivenFrequencyResponseTinyValidationProblem<'a>>,
+    pub mfem_operator_problem: Option<NativeDrivenFrequencyResponseMfemOperatorProblem<'a>>,
 }
 
 #[derive(Debug, Clone)]
@@ -42,6 +73,73 @@ pub(crate) struct NativeDrivenFrequencyResponseTinyValidationProblem<'a> {
     pub stiffness_diagonal: Option<&'a [f64]>,
     pub mass_diagonal: Option<&'a [f64]>,
     pub drive_real: &'a [f64],
+    pub drive_imag: Option<&'a [f64]>,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) struct NativeDrivenFrequencyResponseMfemOperatorProblem<'a> {
+    pub equilibrium_m: &'a [[f64; 3]],
+    pub h_ext_a_per_m: &'a [f64; 3],
+    pub uniaxial_anisotropy_axis: Option<&'a [f64; 3]>,
+    pub uniaxial_anisotropy_field_a_per_m: f64,
+    pub alpha_per_node: Option<&'a [f64]>,
+    pub drive_real: &'a [f64],
+    pub drive_imag: Option<&'a [f64]>,
+    pub exchange_edges: &'a [NativeDrivenFrequencyResponseExchangeEdge],
+    pub dmi_elements: &'a [NativeDrivenFrequencyResponseDmiElement],
+    pub dmi_lumped_mass: Option<&'a [f64]>,
+    pub dmi_ms_field: Option<&'a [f64]>,
+    pub dmi_uniform_ms: f64,
+    pub include_zeeman: bool,
+    pub static_periodic_node_pairs: &'a [NativeDrivenFrequencyResponsePeriodicNodePair],
+    pub floquet_k_vector_rad_per_m: Option<[f64; 3]>,
+    pub phase_convention: FrequencyDomainPhaseConvention,
+    pub floquet_periodic_pairs: &'a [NativeDrivenFrequencyResponseFloquetPeriodicPair<'a>],
+}
+
+#[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
+pub(crate) struct NativeDrivenFrequencyResponseExchangeEdge {
+    pub node_i: u64,
+    pub node_j: u64,
+    pub stiffness: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
+pub(crate) struct NativeDrivenFrequencyResponsePeriodicNodePair {
+    pub node_a: u64,
+    pub node_b: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
+pub(crate) struct NativeDrivenFrequencyResponseFloquetPeriodicPair<'a> {
+    pub pair_id: Option<&'a str>,
+    pub node_a: u64,
+    pub node_b: u64,
+    pub translation_m: Option<[f64; 3]>,
+    pub phase_rad: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum NativeDrivenFrequencyResponseDmiKind {
+    Interfacial,
+    Bulk,
+}
+
+#[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
+pub(crate) struct NativeDrivenFrequencyResponseDmiElement {
+    pub kind: NativeDrivenFrequencyResponseDmiKind,
+    pub node_indices: [u32; 4],
+    pub shape: [f64; 4],
+    pub grad_shape: [f64; 12],
+    pub weight: f64,
+    pub d: f64,
+    pub normal: [f64; 3],
 }
 
 #[derive(Debug, Clone)]
@@ -70,21 +168,141 @@ fn solve_native_driven_frequency_response_impl(
 ) -> Result<NativeDrivenFrequencyResponseResult, String> {
     let output_directory = CString::new(request.output_directory.to_string_lossy().as_bytes())
         .map_err(|_| "native FEM frequency response output path contains NUL".to_string())?;
-    let (cancel_requested, cancel_user_data) = request.interrupt_requested.map_or(
-        (None, std::ptr::null_mut()),
-        |flag| {
-            (
-                Some(poll_atomic_interrupt_flag as unsafe extern "C" fn(*mut c_void) -> i32),
-                flag as *const AtomicBool as *mut c_void,
-            )
-        },
-    );
+    let cancel_callback = request.cancel_requested;
+    let (cancel_requested, cancel_user_data) = if cancel_callback.is_some() {
+        (
+            Some(
+                dispatch_native_frequency_domain_cancel as unsafe extern "C" fn(*mut c_void) -> i32,
+            ),
+            (&cancel_callback as *const Option<&NativeFrequencyDomainCancelCallback<'_>>)
+                as *mut c_void,
+        )
+    } else {
+        request
+            .interrupt_requested
+            .map_or((None, std::ptr::null_mut()), |flag| {
+                (
+                    Some(poll_atomic_interrupt_flag as unsafe extern "C" fn(*mut c_void) -> i32),
+                    flag as *const AtomicBool as *mut c_void,
+                )
+            })
+    };
+    let progress_callback = request.progress_callback;
+    let (progress_callback_fn, progress_user_data) = if progress_callback.is_some() {
+        (
+            Some(
+                dispatch_native_frequency_domain_progress
+                    as unsafe extern "C" fn(
+                        *mut c_void,
+                        *const ffi::fullmag_fem_frequency_domain_progress,
+                    ),
+            ),
+            (&progress_callback as *const Option<&NativeFrequencyDomainProgressCallback<'_>>)
+                as *mut c_void,
+        )
+    } else {
+        (None, std::ptr::null_mut())
+    };
     let tiny_validation = request.tiny_validation_problem.as_ref();
+    let mfem_operator = request.mfem_operator_problem.as_ref();
+    let exchange_edges = mfem_operator
+        .map(|problem| {
+            problem
+                .exchange_edges
+                .iter()
+                .map(|edge| ffi::fullmag_fem_frequency_domain_exchange_edge {
+                    node_i: edge.node_i,
+                    node_j: edge.node_j,
+                    stiffness: edge.stiffness,
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let dmi_elements = mfem_operator
+        .map(|problem| {
+            problem
+                .dmi_elements
+                .iter()
+                .map(|element| ffi::fullmag_fem_frequency_domain_dmi_element {
+                    kind: map_dmi_kind(element.kind),
+                    node_indices: element.node_indices,
+                    shape: element.shape,
+                    grad_shape: element.grad_shape,
+                    weight: element.weight,
+                    d: element.d,
+                    normal: element.normal,
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let static_periodic_node_pairs = mfem_operator
+        .map(|problem| {
+            problem
+                .static_periodic_node_pairs
+                .iter()
+                .map(
+                    |pair| ffi::fullmag_fem_frequency_domain_periodic_node_pair {
+                        node_a: pair.node_a,
+                        node_b: pair.node_b,
+                    },
+                )
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let floquet_pair_ids = mfem_operator
+        .map(|problem| {
+            problem
+                .floquet_periodic_pairs
+                .iter()
+                .map(|pair| {
+                    pair.pair_id
+                        .map(|pair_id| {
+                            CString::new(pair_id.as_bytes()).map_err(|_| {
+                                "native FEM frequency response Floquet pair id contains NUL"
+                                    .to_string()
+                            })
+                        })
+                        .transpose()
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
+    let floquet_periodic_pairs = mfem_operator
+        .map(|problem| {
+            problem
+                .floquet_periodic_pairs
+                .iter()
+                .zip(floquet_pair_ids.iter())
+                .map(
+                    |(pair, pair_id)| ffi::fullmag_fem_frequency_domain_floquet_periodic_pair {
+                        pair_id: pair_id
+                            .as_ref()
+                            .map_or(std::ptr::null(), |value| value.as_ptr()),
+                        node_a: pair.node_a,
+                        node_b: pair.node_b,
+                        has_translation: pair.translation_m.is_some() as i32,
+                        translation_m: pair.translation_m.unwrap_or([0.0; 3]),
+                        has_phase: pair.phase_rad.is_some() as i32,
+                        phase_rad: pair.phase_rad.unwrap_or(0.0),
+                    },
+                )
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if mfem_operator.is_some_and(|problem| {
+        problem.floquet_k_vector_rad_per_m.is_some() || !problem.floquet_periodic_pairs.is_empty()
+    }) {
+        return Ok(floquet_response_unavailable_result(
+            request.frequencies_hz.len() as u64,
+        ));
+    }
     let ffi_request = ffi::fullmag_fem_frequency_domain_driven_response_request {
         node_count: request.node_count,
         tangent_dof_count: request.tangent_dof_count,
         alpha: request.alpha,
         gamma0: request.gamma0,
+        requested_execution_lane: map_execution_lane(request.execution_lane),
         frequencies_hz: if request.frequencies_hz.is_empty() {
             std::ptr::null()
         } else {
@@ -96,31 +314,101 @@ fn solve_native_driven_frequency_response_impl(
         write_partial_artifacts: request.write_partial_artifacts as i32,
         cancel_requested,
         cancel_user_data,
+        progress_callback: progress_callback_fn,
+        progress_user_data,
         tiny_validation_enabled: tiny_validation.is_some() as i32,
         tiny_validation_tangent_dof_count: tiny_validation
             .map(|problem| problem.tangent_dof_count)
             .unwrap_or(0),
         tiny_validation_stiffness_matrix_row_major: tiny_validation
             .and_then(|problem| problem.stiffness_matrix_row_major)
-            .map_or(std::ptr::null(), |values| values.as_ptr()),
+            .map_or(std::ptr::null(), slice_ptr_or_null),
         tiny_validation_mass_matrix_row_major: tiny_validation
             .and_then(|problem| problem.mass_matrix_row_major)
-            .map_or(std::ptr::null(), |values| values.as_ptr()),
+            .map_or(std::ptr::null(), slice_ptr_or_null),
         tiny_validation_stiffness_diagonal: tiny_validation
             .and_then(|problem| problem.stiffness_diagonal)
-            .map_or(std::ptr::null(), |values| values.as_ptr()),
+            .map_or(std::ptr::null(), slice_ptr_or_null),
         tiny_validation_mass_diagonal: tiny_validation
             .and_then(|problem| problem.mass_diagonal)
-            .map_or(std::ptr::null(), |values| values.as_ptr()),
-        tiny_validation_drive_real: tiny_validation
-            .map_or(std::ptr::null(), |problem| problem.drive_real.as_ptr()),
+            .map_or(std::ptr::null(), slice_ptr_or_null),
+        tiny_validation_drive_real: tiny_validation.map_or(std::ptr::null(), |problem| {
+            slice_ptr_or_null(problem.drive_real)
+        }),
+        mfem_operator_enabled: mfem_operator.is_some() as i32,
+        mfem_include_zeeman: mfem_operator.is_some_and(|problem| problem.include_zeeman) as i32,
+        mfem_equilibrium_m: mfem_operator.map_or(std::ptr::null(), |problem| {
+            if problem.equilibrium_m.is_empty() {
+                std::ptr::null()
+            } else {
+                problem.equilibrium_m.as_ptr().cast::<f64>()
+            }
+        }),
+        mfem_h_ext_a_per_m: mfem_operator
+            .map_or(std::ptr::null(), |problem| problem.h_ext_a_per_m.as_ptr()),
+        mfem_uniaxial_anisotropy_axis: mfem_operator
+            .and_then(|problem| problem.uniaxial_anisotropy_axis)
+            .map_or(std::ptr::null(), |axis| axis.as_ptr()),
+        mfem_uniaxial_anisotropy_field_a_per_m: mfem_operator
+            .map_or(0.0, |problem| problem.uniaxial_anisotropy_field_a_per_m),
+        mfem_alpha_per_node: mfem_operator
+            .and_then(|problem| problem.alpha_per_node)
+            .map_or(std::ptr::null(), slice_ptr_or_null),
+        mfem_drive_real: mfem_operator.map_or(std::ptr::null(), |problem| {
+            slice_ptr_or_null(problem.drive_real)
+        }),
+        mfem_exchange_edges: if exchange_edges.is_empty() {
+            std::ptr::null()
+        } else {
+            exchange_edges.as_ptr()
+        },
+        mfem_exchange_edge_count: exchange_edges.len() as u64,
+        mfem_dmi_elements: if dmi_elements.is_empty() {
+            std::ptr::null()
+        } else {
+            dmi_elements.as_ptr()
+        },
+        mfem_dmi_element_count: dmi_elements.len() as u64,
+        mfem_dmi_lumped_mass: mfem_operator
+            .and_then(|problem| problem.dmi_lumped_mass)
+            .map_or(std::ptr::null(), slice_ptr_or_null),
+        mfem_dmi_ms_field: mfem_operator
+            .and_then(|problem| problem.dmi_ms_field)
+            .map_or(std::ptr::null(), slice_ptr_or_null),
+        mfem_dmi_uniform_ms: mfem_operator.map_or(0.0, |problem| problem.dmi_uniform_ms),
+        tiny_validation_drive_imag: tiny_validation
+            .and_then(|problem| problem.drive_imag)
+            .map_or(std::ptr::null(), slice_ptr_or_null),
+        mfem_drive_imag: mfem_operator
+            .and_then(|problem| problem.drive_imag)
+            .map_or(std::ptr::null(), slice_ptr_or_null),
+        mfem_static_periodic_node_pairs: if static_periodic_node_pairs.is_empty() {
+            std::ptr::null()
+        } else {
+            static_periodic_node_pairs.as_ptr()
+        },
+        mfem_static_periodic_node_pair_count: static_periodic_node_pairs.len() as u64,
+        has_floquet_k_vector: mfem_operator
+            .and_then(|problem| problem.floquet_k_vector_rad_per_m)
+            .is_some() as i32,
+        floquet_k_vector_rad_per_m: mfem_operator
+            .and_then(|problem| problem.floquet_k_vector_rad_per_m)
+            .unwrap_or([0.0; 3]),
+        phase_convention: map_phase_convention(
+            mfem_operator
+                .map(|problem| problem.phase_convention)
+                .unwrap_or(FrequencyDomainPhaseConvention::ExpIOmegaT),
+        ),
+        mfem_floquet_periodic_pairs: if floquet_periodic_pairs.is_empty() {
+            std::ptr::null()
+        } else {
+            floquet_periodic_pairs.as_ptr()
+        },
+        mfem_floquet_periodic_pair_count: floquet_periodic_pairs.len() as u64,
     };
     let mut ffi_result = NativeDrivenFrequencyResponseFfiResult::default();
     let rc = unsafe {
-        ffi::fullmag_fem_frequency_domain_solve_driven_response(
-            &ffi_request,
-            &mut ffi_result.inner,
-        )
+        ffi::fullmag_fem_frequency_domain_solve_driven_response(&ffi_request, &mut ffi_result.inner)
     };
     if rc != ffi::FULLMAG_FEM_OK {
         return Err(format!(
@@ -130,12 +418,86 @@ fn solve_native_driven_frequency_response_impl(
     Ok(ffi_result.to_owned_result())
 }
 
+#[cfg(feature = "fem-gpu")]
+fn floquet_response_unavailable_result(
+    total_frequency_count: u64,
+) -> NativeDrivenFrequencyResponseResult {
+    NativeDrivenFrequencyResponseResult {
+        status: NativeFrequencyDomainStatus::Unavailable,
+        total_frequency_count,
+        completed_frequency_count: 0,
+        written_frequency_point_artifacts: 0,
+        error_message:
+            "native FEM driven frequency response does not implement Floquet/Bloch nonzero-k solve"
+                .to_string(),
+        diagnostics_json:
+            "{\"schema_version\":\"frequency_domain_response_diagnostics.v1\",\"status\":\"unavailable\",\"complete\":false,\"unsupported_reason\":\"floquet_bloch_nonzero_k\"}"
+                .to_string(),
+        result_json: "{\"status\":\"unavailable\"}".to_string(),
+        artifact_manifest_path: String::new(),
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn slice_ptr_or_null<T>(values: &[T]) -> *const T {
+    if values.is_empty() {
+        std::ptr::null()
+    } else {
+        values.as_ptr()
+    }
+}
+
 #[cfg(not(feature = "fem-gpu"))]
 fn solve_native_driven_frequency_response_impl(
     request: NativeDrivenFrequencyResponseRequest<'_>,
 ) -> Result<NativeDrivenFrequencyResponseResult, String> {
     let _ = request;
     Err("native FEM frequency response requires the fem-gpu feature".to_string())
+}
+
+#[cfg(feature = "fem-gpu")]
+fn map_dmi_kind(
+    kind: NativeDrivenFrequencyResponseDmiKind,
+) -> ffi::fullmag_fem_frequency_domain_dmi_kind {
+    match kind {
+        NativeDrivenFrequencyResponseDmiKind::Interfacial => {
+            ffi::fullmag_fem_frequency_domain_dmi_kind::FULLMAG_FEM_FREQUENCY_DOMAIN_DMI_INTERFACIAL
+        }
+        NativeDrivenFrequencyResponseDmiKind::Bulk => {
+            ffi::fullmag_fem_frequency_domain_dmi_kind::FULLMAG_FEM_FREQUENCY_DOMAIN_DMI_BULK
+        }
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn map_execution_lane(
+    execution_lane: NativeFrequencyDomainExecutionLane,
+) -> ffi::fullmag_fem_frequency_domain_execution_lane {
+    match execution_lane {
+        NativeFrequencyDomainExecutionLane::Validation => {
+            ffi::fullmag_fem_frequency_domain_execution_lane::FULLMAG_FEM_FREQUENCY_DOMAIN_EXECUTION_VALIDATION
+        }
+        NativeFrequencyDomainExecutionLane::ProductionCpu => {
+            ffi::fullmag_fem_frequency_domain_execution_lane::FULLMAG_FEM_FREQUENCY_DOMAIN_EXECUTION_PRODUCTION_CPU
+        }
+        NativeFrequencyDomainExecutionLane::ProductionGpu => {
+            ffi::fullmag_fem_frequency_domain_execution_lane::FULLMAG_FEM_FREQUENCY_DOMAIN_EXECUTION_PRODUCTION_GPU
+        }
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn map_phase_convention(
+    phase_convention: FrequencyDomainPhaseConvention,
+) -> ffi::fullmag_fem_frequency_domain_phase_convention {
+    match phase_convention {
+        FrequencyDomainPhaseConvention::ExpIOmegaT => {
+            ffi::fullmag_fem_frequency_domain_phase_convention::FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_I_OMEGA_T
+        }
+        FrequencyDomainPhaseConvention::ExpMinusIOmegaT => {
+            ffi::fullmag_fem_frequency_domain_phase_convention::FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_MINUS_I_OMEGA_T
+        }
+    }
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -152,6 +514,45 @@ unsafe extern "C" fn poll_atomic_interrupt_flag(user_data: *mut c_void) -> i32 {
 }
 
 #[cfg(feature = "fem-gpu")]
+unsafe extern "C" fn dispatch_native_frequency_domain_cancel(user_data: *mut c_void) -> i32 {
+    if user_data.is_null() {
+        return 0;
+    }
+    let callback =
+        unsafe { &*user_data.cast::<Option<&NativeFrequencyDomainCancelCallback<'_>>>() };
+    if callback.is_some_and(|callback| callback()) {
+        1
+    } else {
+        0
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+unsafe extern "C" fn dispatch_native_frequency_domain_progress(
+    user_data: *mut c_void,
+    progress: *const ffi::fullmag_fem_frequency_domain_progress,
+) {
+    if user_data.is_null() || progress.is_null() {
+        return;
+    }
+    let callback =
+        unsafe { &*user_data.cast::<Option<&NativeFrequencyDomainProgressCallback<'_>>>() };
+    if let Some(callback) = callback {
+        let progress = unsafe { *progress };
+        callback(NativeFrequencyDomainProgress {
+            frequency_index: progress.frequency_index,
+            completed_frequency_count: progress.completed_frequency_count,
+            total_frequency_count: progress.total_frequency_count,
+            iteration_count: progress.iteration_count,
+            frequency_hz: progress.frequency_hz,
+            residual_l2_norm: progress.residual_l2_norm,
+            relative_residual_l2_norm: progress.relative_residual_l2_norm,
+            converged: progress.converged != 0,
+        });
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
 struct NativeDrivenFrequencyResponseFfiResult {
     inner: ffi::fullmag_fem_frequency_domain_solve_result,
 }
@@ -161,7 +562,8 @@ impl Default for NativeDrivenFrequencyResponseFfiResult {
     fn default() -> Self {
         Self {
             inner: ffi::fullmag_fem_frequency_domain_solve_result {
-                status: ffi::fullmag_fem_frequency_domain_status::FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OK,
+                status:
+                    ffi::fullmag_fem_frequency_domain_status::FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OK,
                 total_frequency_count: 0,
                 completed_frequency_count: 0,
                 written_frequency_point_artifacts: 0,
@@ -204,14 +606,14 @@ fn ffi_string(value: *const std::os::raw::c_char) -> String {
     if value.is_null() {
         String::new()
     } else {
-        unsafe { CStr::from_ptr(value) }.to_string_lossy().to_string()
+        unsafe { CStr::from_ptr(value) }
+            .to_string_lossy()
+            .to_string()
     }
 }
 
 #[cfg(feature = "fem-gpu")]
-fn map_status(
-    status: ffi::fullmag_fem_frequency_domain_status,
-) -> NativeFrequencyDomainStatus {
+fn map_status(status: ffi::fullmag_fem_frequency_domain_status) -> NativeFrequencyDomainStatus {
     match status {
         ffi::fullmag_fem_frequency_domain_status::FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OK => {
             NativeFrequencyDomainStatus::Ok
@@ -246,21 +648,147 @@ mod tests {
         #[cfg(not(feature = "fem-gpu"))]
         {
             let frequencies_hz = [1.0e9];
-            let err = solve_native_driven_frequency_response(NativeDrivenFrequencyResponseRequest {
-                node_count: 2,
-                tangent_dof_count: 4,
-                alpha: 0.01,
-                gamma0: 2.211e5,
-                frequencies_hz: &frequencies_hz,
-                output_directory: Path::new(""),
-                write_response_fields: false,
-                write_partial_artifacts: false,
-                interrupt_requested: None,
-                tiny_validation_problem: None,
-            })
-            .expect_err("native solve should require fem-gpu feature");
+            let err =
+                solve_native_driven_frequency_response(NativeDrivenFrequencyResponseRequest {
+                    node_count: 2,
+                    tangent_dof_count: 4,
+                    alpha: 0.01,
+                    gamma0: 2.211e5,
+                    execution_lane: NativeFrequencyDomainExecutionLane::Validation,
+                    frequencies_hz: &frequencies_hz,
+                    output_directory: Path::new(""),
+                    write_response_fields: false,
+                    write_partial_artifacts: false,
+                    interrupt_requested: None,
+                    cancel_requested: None,
+                    progress_callback: None,
+                    tiny_validation_problem: None,
+                    mfem_operator_problem: None,
+                })
+                .expect_err("native solve should require fem-gpu feature");
             assert!(err.contains("fem-gpu"));
         }
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn native_frequency_response_rejects_invalid_floquet_pair_id_before_ffi() {
+        let frequencies_hz = [1.0e9];
+        let equilibrium_m = [[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]];
+        let h_ext_a_per_m = [0.0, 0.0, 1.0];
+        let drive_real = [0.0, 1.0, 0.0, 1.0];
+        let floquet_pairs = [NativeDrivenFrequencyResponseFloquetPeriodicPair {
+            pair_id: Some("bad\0pair"),
+            node_a: 0,
+            node_b: 1,
+            translation_m: Some([1.0e-9, 0.0, 0.0]),
+            phase_rad: Some(0.25),
+        }];
+
+        let err = solve_native_driven_frequency_response(NativeDrivenFrequencyResponseRequest {
+            node_count: 2,
+            tangent_dof_count: 4,
+            alpha: 0.01,
+            gamma0: 2.211e5,
+            execution_lane: NativeFrequencyDomainExecutionLane::ProductionCpu,
+            frequencies_hz: &frequencies_hz,
+            output_directory: Path::new("/tmp"),
+            write_response_fields: false,
+            write_partial_artifacts: false,
+            interrupt_requested: None,
+            cancel_requested: None,
+            progress_callback: None,
+            tiny_validation_problem: None,
+            mfem_operator_problem: Some(NativeDrivenFrequencyResponseMfemOperatorProblem {
+                equilibrium_m: &equilibrium_m,
+                h_ext_a_per_m: &h_ext_a_per_m,
+                uniaxial_anisotropy_axis: None,
+                uniaxial_anisotropy_field_a_per_m: 0.0,
+                alpha_per_node: None,
+                drive_real: &drive_real,
+                drive_imag: None,
+                exchange_edges: &[],
+                dmi_elements: &[],
+                dmi_lumped_mass: None,
+                dmi_ms_field: None,
+                dmi_uniform_ms: 0.0,
+                include_zeeman: true,
+                static_periodic_node_pairs: &[],
+                floquet_k_vector_rad_per_m: Some([1.0e7, 0.0, 0.0]),
+                phase_convention: FrequencyDomainPhaseConvention::ExpMinusIOmegaT,
+                floquet_periodic_pairs: &floquet_pairs,
+            }),
+        })
+        .expect_err("invalid Floquet pair id should reject before C ABI call");
+
+        assert!(err.contains("Floquet pair id contains NUL"), "{err}");
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn native_frequency_response_rejects_floquet_metadata_before_native_call() {
+        let frequencies_hz = [1.0e9];
+        let equilibrium_m = [[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]];
+        let h_ext_a_per_m = [0.0, 0.0, 1.0];
+        let drive_real = [0.0, 1.0, 0.0, 1.0];
+        let floquet_pairs = [NativeDrivenFrequencyResponseFloquetPeriodicPair {
+            pair_id: Some("x_faces"),
+            node_a: 0,
+            node_b: 1,
+            translation_m: Some([1.0e-9, 0.0, 0.0]),
+            phase_rad: Some(0.25),
+        }];
+
+        let result = solve_native_driven_frequency_response(NativeDrivenFrequencyResponseRequest {
+            node_count: 2,
+            tangent_dof_count: 4,
+            alpha: 0.01,
+            gamma0: 2.211e5,
+            execution_lane: NativeFrequencyDomainExecutionLane::ProductionCpu,
+            frequencies_hz: &frequencies_hz,
+            output_directory: Path::new("/tmp"),
+            write_response_fields: false,
+            write_partial_artifacts: false,
+            interrupt_requested: None,
+            cancel_requested: None,
+            progress_callback: None,
+            tiny_validation_problem: None,
+            mfem_operator_problem: Some(NativeDrivenFrequencyResponseMfemOperatorProblem {
+                equilibrium_m: &equilibrium_m,
+                h_ext_a_per_m: &h_ext_a_per_m,
+                uniaxial_anisotropy_axis: None,
+                uniaxial_anisotropy_field_a_per_m: 0.0,
+                alpha_per_node: None,
+                drive_real: &drive_real,
+                drive_imag: None,
+                exchange_edges: &[],
+                dmi_elements: &[],
+                dmi_lumped_mass: None,
+                dmi_ms_field: None,
+                dmi_uniform_ms: 0.0,
+                include_zeeman: true,
+                static_periodic_node_pairs: &[],
+                floquet_k_vector_rad_per_m: Some([1.0e7, 0.0, 0.0]),
+                phase_convention: FrequencyDomainPhaseConvention::ExpMinusIOmegaT,
+                floquet_periodic_pairs: &floquet_pairs,
+            }),
+        })
+        .expect("native frequency response boundary should return a structured result");
+
+        assert_eq!(result.status, NativeFrequencyDomainStatus::Unavailable);
+        assert_eq!(result.total_frequency_count, 1);
+        assert_eq!(result.completed_frequency_count, 0);
+        assert_eq!(result.written_frequency_point_artifacts, 0);
+        assert!(result.error_message.contains("Floquet/Bloch"));
+        assert!(result.error_message.contains("nonzero-k"));
+        assert!(result
+            .diagnostics_json
+            .contains("frequency_domain_response_diagnostics.v1"));
+        assert!(result
+            .diagnostics_json
+            .contains("\"unsupported_reason\":\"floquet_bloch_nonzero_k\""));
+        assert!(result.result_json.contains("\"status\":\"unavailable\""));
+        assert_eq!(result.artifact_manifest_path, "");
     }
 
     #[cfg(feature = "fem-gpu")]
@@ -280,17 +808,164 @@ mod tests {
             unique_suffix
         ));
 
-        let result =
+        let result = solve_native_driven_frequency_response(NativeDrivenFrequencyResponseRequest {
+            node_count: 1,
+            tangent_dof_count: 2,
+            alpha: 0.01,
+            gamma0: 2.211e5,
+            execution_lane: NativeFrequencyDomainExecutionLane::Validation,
+            frequencies_hz: &frequencies_hz,
+            output_directory: &output_dir,
+            write_response_fields: false,
+            write_partial_artifacts: false,
+            interrupt_requested: None,
+            cancel_requested: None,
+            progress_callback: None,
+            mfem_operator_problem: None,
+            tiny_validation_problem: Some(NativeDrivenFrequencyResponseTinyValidationProblem {
+                tangent_dof_count: 2,
+                stiffness_matrix_row_major: None,
+                mass_matrix_row_major: None,
+                stiffness_diagonal: Some(&stiffness_diagonal),
+                mass_diagonal: Some(&mass_diagonal),
+                drive_real: &drive_real,
+                drive_imag: None,
+            }),
+        })
+        .expect("native frequency response boundary should return a structured result");
+
+        assert_eq!(result.status, NativeFrequencyDomainStatus::Ok);
+        assert_eq!(result.total_frequency_count, 1);
+        assert_eq!(result.completed_frequency_count, 1);
+        assert_eq!(result.written_frequency_point_artifacts, 0);
+        assert!(result
+            .diagnostics_json
+            .contains("frequency_domain_response_diagnostics.v1"));
+        assert!(result
+            .diagnostics_json
+            .contains("\"tiny_validation_solver\":true"));
+        assert!(result.result_json.contains("\"status\":\"ok\""));
+        assert!(result.result_json.contains("\"max_abs_response\""));
+        assert_eq!(result.artifact_manifest_path, "");
+        assert!(!output_dir
+            .join("frequency_domain/manifest.v1.json")
+            .exists());
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn native_frequency_response_preserves_tiny_validation_solve_error() {
+        let frequencies_hz = [0.15915494309189535];
+        let stiffness_diagonal = [0.0, 0.0];
+        let mass_diagonal = [0.0, 0.0];
+        let drive_real = [1.0, 0.0];
+
+        let result = solve_native_driven_frequency_response(NativeDrivenFrequencyResponseRequest {
+            node_count: 1,
+            tangent_dof_count: 2,
+            alpha: 0.01,
+            gamma0: 2.211e5,
+            execution_lane: NativeFrequencyDomainExecutionLane::Validation,
+            frequencies_hz: &frequencies_hz,
+            output_directory: Path::new(""),
+            write_response_fields: false,
+            write_partial_artifacts: false,
+            interrupt_requested: None,
+            cancel_requested: None,
+            progress_callback: None,
+            mfem_operator_problem: None,
+            tiny_validation_problem: Some(NativeDrivenFrequencyResponseTinyValidationProblem {
+                tangent_dof_count: 2,
+                stiffness_matrix_row_major: None,
+                mass_matrix_row_major: None,
+                stiffness_diagonal: Some(&stiffness_diagonal),
+                mass_diagonal: Some(&mass_diagonal),
+                drive_real: &drive_real,
+                drive_imag: None,
+            }),
+        })
+        .expect("native frequency response boundary should return a structured result");
+
+        assert_eq!(result.status, NativeFrequencyDomainStatus::SolveError);
+        assert_eq!(result.completed_frequency_count, 0);
+        assert_eq!(result.written_frequency_point_artifacts, 0);
+        assert!(result.error_message.contains("singular"));
+        assert!(result.result_json.contains("\"status\":\"solve_error\""));
+        assert!(result
+            .diagnostics_json
+            .contains("\"schema_version\":\"frequency_domain_response_diagnostics.v1\""));
+        assert!(result
+            .diagnostics_json
+            .contains("\"status\":\"solve_error\""));
+        assert!(!result.result_json.contains("\"status\":\"artifact_error\""));
+        assert!(!result
+            .diagnostics_json
+            .contains("\"status\":\"artifact_error\""));
+        assert_eq!(result.artifact_manifest_path, "");
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn native_frequency_response_production_cpu_does_not_fallback_to_validation() {
+        let frequencies_hz = [1.0e9];
+        let stiffness_diagonal = [2.0, 4.0];
+        let mass_diagonal = [1.0, 2.0];
+        let drive_real = [1.0, 2.0];
+
+        let result = solve_native_driven_frequency_response(NativeDrivenFrequencyResponseRequest {
+            node_count: 1,
+            tangent_dof_count: 2,
+            alpha: 0.01,
+            gamma0: 2.211e5,
+            execution_lane: NativeFrequencyDomainExecutionLane::ProductionCpu,
+            frequencies_hz: &frequencies_hz,
+            output_directory: Path::new(""),
+            write_response_fields: false,
+            write_partial_artifacts: false,
+            interrupt_requested: None,
+            cancel_requested: None,
+            progress_callback: None,
+            mfem_operator_problem: None,
+            tiny_validation_problem: Some(NativeDrivenFrequencyResponseTinyValidationProblem {
+                tangent_dof_count: 2,
+                stiffness_matrix_row_major: None,
+                mass_matrix_row_major: None,
+                stiffness_diagonal: Some(&stiffness_diagonal),
+                mass_diagonal: Some(&mass_diagonal),
+                drive_real: &drive_real,
+                drive_imag: None,
+            }),
+        })
+        .expect("native frequency response boundary should return a structured result");
+
+        assert_eq!(result.status, NativeFrequencyDomainStatus::Unavailable);
+        assert_eq!(result.completed_frequency_count, 0);
+        assert!(result.error_message.contains("production CPU"));
+        assert!(result
+            .diagnostics_json
+            .contains("\"requested_execution_lane\":\"production_cpu\""));
+        assert!(result
+            .diagnostics_json
+            .contains("\"validation_fallback_used\":false"));
+        assert!(!result
+            .diagnostics_json
+            .contains("\"tiny_validation_solver\":true"));
+
+        let gpu_result =
             solve_native_driven_frequency_response(NativeDrivenFrequencyResponseRequest {
                 node_count: 1,
                 tangent_dof_count: 2,
                 alpha: 0.01,
                 gamma0: 2.211e5,
+                execution_lane: NativeFrequencyDomainExecutionLane::ProductionGpu,
                 frequencies_hz: &frequencies_hz,
-                output_directory: &output_dir,
+                output_directory: Path::new(""),
                 write_response_fields: false,
                 write_partial_artifacts: false,
                 interrupt_requested: None,
+                cancel_requested: None,
+                progress_callback: None,
+                mfem_operator_problem: None,
                 tiny_validation_problem: Some(NativeDrivenFrequencyResponseTinyValidationProblem {
                     tangent_dof_count: 2,
                     stiffness_matrix_row_major: None,
@@ -298,19 +973,306 @@ mod tests {
                     stiffness_diagonal: Some(&stiffness_diagonal),
                     mass_diagonal: Some(&mass_diagonal),
                     drive_real: &drive_real,
+                    drive_imag: None,
                 }),
             })
             .expect("native frequency response boundary should return a structured result");
 
-        assert_eq!(result.status, NativeFrequencyDomainStatus::Ok);
+        assert_eq!(gpu_result.status, NativeFrequencyDomainStatus::Unavailable);
+        assert_eq!(gpu_result.completed_frequency_count, 0);
+        assert!(gpu_result.error_message.contains("production GPU"));
+        assert!(gpu_result
+            .diagnostics_json
+            .contains("\"requested_execution_lane\":\"production_gpu\""));
+        assert!(gpu_result
+            .diagnostics_json
+            .contains("\"validation_fallback_used\":false"));
+        assert!(!gpu_result
+            .diagnostics_json
+            .contains("\"tiny_validation_solver\":true"));
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn native_frequency_domain_status_bridge_maps_all_c_abi_statuses() {
+        assert_eq!(
+            map_status(
+                ffi::fullmag_fem_frequency_domain_status::FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OK
+            ),
+            NativeFrequencyDomainStatus::Ok
+        );
+        assert_eq!(
+            map_status(
+                ffi::fullmag_fem_frequency_domain_status::FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_UNAVAILABLE
+            ),
+            NativeFrequencyDomainStatus::Unavailable
+        );
+        assert_eq!(
+            map_status(
+                ffi::fullmag_fem_frequency_domain_status::FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_VALIDATION_ERROR
+            ),
+            NativeFrequencyDomainStatus::ValidationError
+        );
+        assert_eq!(
+            map_status(
+                ffi::fullmag_fem_frequency_domain_status::FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OPERATOR_ERROR
+            ),
+            NativeFrequencyDomainStatus::OperatorError
+        );
+        assert_eq!(
+            map_status(
+                ffi::fullmag_fem_frequency_domain_status::FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_SOLVE_ERROR
+            ),
+            NativeFrequencyDomainStatus::SolveError
+        );
+        assert_eq!(
+            map_status(
+                ffi::fullmag_fem_frequency_domain_status::FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_ARTIFACT_ERROR
+            ),
+            NativeFrequencyDomainStatus::ArtifactError
+        );
+        assert_eq!(
+            map_status(
+                ffi::fullmag_fem_frequency_domain_status::FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_INTERRUPTED
+            ),
+            NativeFrequencyDomainStatus::Interrupted
+        );
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn native_frequency_response_progress_callback_bridge_maps_c_abi_progress() {
+        use std::cell::RefCell;
+
+        let observed = RefCell::new(Vec::new());
+        let callback = |progress: NativeFrequencyDomainProgress| {
+            observed.borrow_mut().push(progress);
+        };
+        let callback_ref: Option<&NativeFrequencyDomainProgressCallback<'_>> = Some(&callback);
+        let ffi_progress = ffi::fullmag_fem_frequency_domain_progress {
+            frequency_index: 2,
+            completed_frequency_count: 3,
+            total_frequency_count: 5,
+            iteration_count: 13,
+            frequency_hz: 4.25e9,
+            residual_l2_norm: 1.0e-8,
+            relative_residual_l2_norm: 2.5e-9,
+            converged: 1,
+        };
+
+        unsafe {
+            dispatch_native_frequency_domain_progress(
+                (&callback_ref as *const Option<&NativeFrequencyDomainProgressCallback<'_>>)
+                    as *mut c_void,
+                &ffi_progress,
+            );
+        }
+
+        let observed = observed.borrow();
+        assert_eq!(
+            observed.as_slice(),
+            &[NativeFrequencyDomainProgress {
+                frequency_index: 2,
+                completed_frequency_count: 3,
+                total_frequency_count: 5,
+                iteration_count: 13,
+                frequency_hz: 4.25e9,
+                residual_l2_norm: 1.0e-8,
+                relative_residual_l2_norm: 2.5e-9,
+                converged: true,
+            }]
+        );
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn native_frequency_response_cancel_callback_bridge_maps_rust_callback() {
+        let cancel_requested = || true;
+        let cancel_ref: Option<&NativeFrequencyDomainCancelCallback<'_>> = Some(&cancel_requested);
+
+        let cancelled = unsafe {
+            dispatch_native_frequency_domain_cancel(
+                (&cancel_ref as *const Option<&NativeFrequencyDomainCancelCallback<'_>>)
+                    as *mut c_void,
+            )
+        };
+
+        assert_eq!(cancelled, 1);
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    #[ignore = "requires native FEM library with production CPU MFEM-operator support"]
+    fn native_frequency_response_production_cpu_runs_mfem_operator_and_writes_artifacts() {
+        let frequencies_hz = [0.15915494309189535];
+        let equilibrium_m = [[0.0, 0.0, 1.0]];
+        let h_ext_a_per_m = [0.0, 0.0, 2.0];
+        let drive_real = [1.0, 0.0];
+        let exchange_edges = [];
+        let unique_suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-runner-native-frequency-response-production-cpu-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+
+        let result = solve_native_driven_frequency_response(NativeDrivenFrequencyResponseRequest {
+            node_count: 1,
+            tangent_dof_count: 2,
+            alpha: 0.01,
+            gamma0: 2.211e5,
+            execution_lane: NativeFrequencyDomainExecutionLane::ProductionCpu,
+            frequencies_hz: &frequencies_hz,
+            output_directory: &output_dir,
+            write_response_fields: true,
+            write_partial_artifacts: true,
+            interrupt_requested: None,
+            cancel_requested: None,
+            progress_callback: None,
+            tiny_validation_problem: None,
+            mfem_operator_problem: Some(NativeDrivenFrequencyResponseMfemOperatorProblem {
+                equilibrium_m: &equilibrium_m,
+                h_ext_a_per_m: &h_ext_a_per_m,
+                uniaxial_anisotropy_axis: None,
+                uniaxial_anisotropy_field_a_per_m: 0.0,
+                alpha_per_node: None,
+                drive_real: &drive_real,
+                drive_imag: None,
+                exchange_edges: &exchange_edges,
+                dmi_elements: &[],
+                dmi_lumped_mass: None,
+                dmi_ms_field: None,
+                dmi_uniform_ms: 0.0,
+                include_zeeman: true,
+                static_periodic_node_pairs: &[],
+                floquet_k_vector_rad_per_m: None,
+                phase_convention: FrequencyDomainPhaseConvention::ExpIOmegaT,
+                floquet_periodic_pairs: &[],
+            }),
+        })
+        .expect("native frequency response boundary should return a structured result");
+
+        assert_eq!(
+            result.status,
+            NativeFrequencyDomainStatus::Ok,
+            "error_message={}, diagnostics_json={}",
+            result.error_message,
+            result.diagnostics_json
+        );
         assert_eq!(result.total_frequency_count, 1);
         assert_eq!(result.completed_frequency_count, 1);
-        assert_eq!(result.written_frequency_point_artifacts, 0);
-        assert!(result.diagnostics_json.contains("frequency_domain_driven_response_result.v1"));
-        assert!(result.diagnostics_json.contains("\"tiny_validation_solver\":true"));
+        assert_eq!(result.written_frequency_point_artifacts, 1);
+        assert!(result
+            .diagnostics_json
+            .contains("\"requested_execution_lane\":\"production_cpu\""));
+        assert!(result
+            .diagnostics_json
+            .contains("\"matrix_free_solver\":true"));
+        assert!(result
+            .diagnostics_json
+            .contains("\"validation_fallback_used\":false"));
+        assert!(!result
+            .diagnostics_json
+            .contains("\"tiny_validation_solver\":true"));
         assert!(result.result_json.contains("\"status\":\"ok\""));
         assert!(result.result_json.contains("\"max_abs_response\""));
-        assert_eq!(result.artifact_manifest_path, "");
-        assert!(!output_dir.join("frequency_domain/manifest.v1.json").exists());
+        assert!(output_dir
+            .join("frequency_domain/manifest.v1.json")
+            .exists());
+        assert!(output_dir
+            .join("response/magnetic_response_sweep.v2.json")
+            .exists());
+        assert!(output_dir
+            .join("response/field_payloads/frequency_0000/vector.bin")
+            .exists());
+
+        let _ = std::fs::remove_dir_all(output_dir);
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    #[ignore = "requires native FEM library with production CPU MFEM-operator support"]
+    fn native_frequency_response_production_cpu_runs_mfem_dmi_operator() {
+        let frequencies_hz = [0.15915494309189535];
+        let equilibrium_m = [
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+        ];
+        let h_ext_a_per_m = [0.0, 0.0, 0.0];
+        let drive_real = [1.0, 0.0, 0.5, 0.0, -0.25, 0.0, 0.125, 0.0];
+        let exchange_edges = [];
+        let volume = 1.0 / 6.0;
+        let lumped_mass = volume * 0.25;
+        let dmi_lumped_mass = [lumped_mass, lumped_mass, lumped_mass, lumped_mass];
+        let dmi_elements = [NativeDrivenFrequencyResponseDmiElement {
+            kind: NativeDrivenFrequencyResponseDmiKind::Bulk,
+            node_indices: [0, 1, 2, 3],
+            shape: [0.25, 0.25, 0.25, 0.25],
+            grad_shape: [
+                -1.0, -1.0, -1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0,
+            ],
+            weight: volume,
+            d: 2.0e-3,
+            normal: [0.0, 0.0, 1.0],
+        }];
+
+        let result = solve_native_driven_frequency_response(NativeDrivenFrequencyResponseRequest {
+            node_count: 4,
+            tangent_dof_count: 8,
+            alpha: 0.01,
+            gamma0: 1.0,
+            execution_lane: NativeFrequencyDomainExecutionLane::ProductionCpu,
+            frequencies_hz: &frequencies_hz,
+            output_directory: Path::new(""),
+            write_response_fields: false,
+            write_partial_artifacts: false,
+            interrupt_requested: None,
+            cancel_requested: None,
+            progress_callback: None,
+            tiny_validation_problem: None,
+            mfem_operator_problem: Some(NativeDrivenFrequencyResponseMfemOperatorProblem {
+                equilibrium_m: &equilibrium_m,
+                h_ext_a_per_m: &h_ext_a_per_m,
+                uniaxial_anisotropy_axis: None,
+                uniaxial_anisotropy_field_a_per_m: 0.0,
+                alpha_per_node: None,
+                drive_real: &drive_real,
+                drive_imag: None,
+                exchange_edges: &exchange_edges,
+                dmi_elements: &dmi_elements,
+                dmi_lumped_mass: Some(&dmi_lumped_mass),
+                dmi_ms_field: None,
+                dmi_uniform_ms: 800000.0,
+                include_zeeman: false,
+                static_periodic_node_pairs: &[],
+                floquet_k_vector_rad_per_m: None,
+                phase_convention: FrequencyDomainPhaseConvention::ExpIOmegaT,
+                floquet_periodic_pairs: &[],
+            }),
+        })
+        .expect("native frequency response DMI boundary should return a structured result");
+
+        assert_eq!(
+            result.status,
+            NativeFrequencyDomainStatus::Ok,
+            "error_message={}, diagnostics_json={}",
+            result.error_message,
+            result.diagnostics_json
+        );
+        assert_eq!(result.completed_frequency_count, 1);
+        assert!(result
+            .diagnostics_json
+            .contains("\"requested_execution_lane\":\"production_cpu\""));
+        assert!(result
+            .diagnostics_json
+            .contains("\"matrix_free_solver\":true"));
+        assert!(result
+            .diagnostics_json
+            .contains("\"validation_fallback_used\":false"));
     }
 }

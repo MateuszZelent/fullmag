@@ -5,6 +5,21 @@ import { InspectorSection } from "../../../primitives/InspectorSection";
 import { displayValue, isRecord, parseJsonArray } from "./HysteresisInspectorUtils";
 import type { HysteresisInspectorCommonProps } from "./HysteresisInspectorTypes";
 
+function settleStepKey(step: Record<string, unknown>): string {
+  const explicitId =
+    displayValue(step.id) ??
+    displayValue(step.step_id) ??
+    displayValue(step.algorithm_id);
+  if (explicitId) return explicitId;
+  return JSON.stringify(step);
+}
+
+function settleStepValue(value: unknown): string | null {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
 export function HysteresisSettlePipelineInspector({
   draft,
   executionTree,
@@ -41,7 +56,7 @@ export function HysteresisSettlePipelineInspector({
       {settleSteps.length > 0 ? (
         <div className="fm-hysteresis-inspector-step-list">
           {settleSteps.map((step, idx) => (
-            <div key={idx} className="fm-hysteresis-inspector-step">
+            <div key={settleStepKey(step)} className="fm-hysteresis-inspector-step">
               <div className="fm-hysteresis-inspector-step__header">
                 <span className="fm-hysteresis-inspector-step__title">
                   {idx + 1}. {displayValue(step.algorithm_kind) ?? displayValue(step.kind) ?? "Step"}
@@ -51,12 +66,37 @@ export function HysteresisSettlePipelineInspector({
                 </span>
               </div>
               <div className="fm-hysteresis-inspector-step__meta">
+                {settleStepValue(step.step_id) && (
+                  <span>Step ID: {settleStepValue(step.step_id)}</span>
+                )}
+                {settleStepValue(step.applies_to) && (
+                  <span>Applies to: {settleStepValue(step.applies_to)}</span>
+                )}
                 {displayValue(step.torque_tolerance) && (
                   <span>Torque tol: {displayValue(step.torque_tolerance)}</span>
                 )}
+                {displayValue(step.energy_tolerance) && (
+                  <span>Energy tol: {displayValue(step.energy_tolerance)}</span>
+                )}
                 {displayValue(step.max_steps) && <span>Max steps: {displayValue(step.max_steps)}</span>}
                 {displayValue(step.alpha) && <span>Alpha: {displayValue(step.alpha)}</span>}
+                {displayValue(step.damping) && <span>Damping: {displayValue(step.damping)}</span>}
+                {displayValue(step.timestep_s) && (
+                  <span>Timestep: {displayValue(step.timestep_s)}</span>
+                )}
                 {displayValue(step.dt) && <span>dt: {displayValue(step.dt)}</span>}
+                {displayValue(step.on_non_convergence) && (
+                  <span>On non-convergence: {displayValue(step.on_non_convergence)}</span>
+                )}
+                {displayValue(step.retry_timestep_scale) && (
+                  <span>Retry scale: {displayValue(step.retry_timestep_scale)}</span>
+                )}
+                {displayValue(step.retry_max_attempts) && (
+                  <span>Retry attempts: {displayValue(step.retry_max_attempts)}</span>
+                )}
+                {settleStepValue(step.stop_criteria) && (
+                  <span>Stop criteria: {settleStepValue(step.stop_criteria)}</span>
+                )}
               </div>
             </div>
           ))}

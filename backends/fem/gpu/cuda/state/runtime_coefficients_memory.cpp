@@ -26,6 +26,9 @@ bool gpu_runtime_coefficients_allocate(
         !gpu_device_allocate_double(materials.alpha, node_count, device_bytes, error) ||
         !gpu_device_allocate_double(materials.ku, node_count, device_bytes, error) ||
         !gpu_device_allocate_double(materials.ku2, node_count, device_bytes, error) ||
+        !gpu_device_allocate_double(materials.anisotropy_axis_x, node_count, device_bytes, error) ||
+        !gpu_device_allocate_double(materials.anisotropy_axis_y, node_count, device_bytes, error) ||
+        !gpu_device_allocate_double(materials.anisotropy_axis_z, node_count, device_bytes, error) ||
         !gpu_device_allocate_double(materials.dind, node_count, device_bytes, error) ||
         !gpu_device_allocate_double(materials.dbulk, node_count, device_bytes, error) ||
         !gpu_device_allocate_double(materials.kc1, node_count, device_bytes, error) ||
@@ -53,6 +56,9 @@ void gpu_runtime_coefficients_free(
     gpu_device_free_double(materials.alpha);
     gpu_device_free_double(materials.ku);
     gpu_device_free_double(materials.ku2);
+    gpu_device_free_double(materials.anisotropy_axis_x);
+    gpu_device_free_double(materials.anisotropy_axis_y);
+    gpu_device_free_double(materials.anisotropy_axis_z);
     gpu_device_free_double(materials.dind);
     gpu_device_free_double(materials.dbulk);
     gpu_device_free_double(materials.kc1);

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::time::Instant;
 
 use crate::communication_policy::{
@@ -598,9 +598,9 @@ impl CurrentLivePublisher {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_python_progress_event, bootstrap_live_state, merge_pending_publish_payload,
         CurrentLivePublisher, CurrentLiveScalarRow, CurrentLiveSnapshotPayload,
         LiveTelemetryPublishGate, LocalLiveWorkspace, LocalLiveWorkspaceState,
+        apply_python_progress_event, bootstrap_live_state, merge_pending_publish_payload,
     };
     use crate::types::{PythonProgressEvent, RunManifest, SessionManifest};
 
@@ -807,6 +807,8 @@ mod tests {
             step,
             time: step as f64,
             solver_dt: 1.0,
+            pseudo_time_s: None,
+            active_runtime_s: None,
             mx: 0.0,
             my: 0.0,
             mz: 1.0,
@@ -1123,6 +1125,7 @@ pub(crate) fn bootstrap_live_state(status: &str) -> LiveStateManifest {
             step: 0,
             time: 0.0,
             dt: 0.0,
+            pseudo_time_s: None,
             e_ex: 0.0,
             e_demag: 0.0,
             e_ext: 0.0,
@@ -1158,15 +1161,22 @@ pub(crate) fn set_live_state_status(
     }
 }
 
-pub(crate) fn scalar_row_from_update(update: &fullmag_runner::StepUpdate) -> CurrentLiveScalarRow {
-    scalar_row_from_stats(&update.stats)
+pub(crate) fn scalar_row_from_stats(stats: &fullmag_runner::StepStats) -> CurrentLiveScalarRow {
+    scalar_row_from_stats_with_active_runtime(stats, stats.wall_time_ns as f64 * 1.0e-9)
 }
 
-pub(crate) fn scalar_row_from_stats(stats: &fullmag_runner::StepStats) -> CurrentLiveScalarRow {
+fn scalar_row_from_stats_with_active_runtime(
+    stats: &fullmag_runner::StepStats,
+    active_runtime_s: f64,
+) -> CurrentLiveScalarRow {
     CurrentLiveScalarRow {
         step: stats.step,
         time: stats.time,
         solver_dt: stats.dt,
+        pseudo_time_s: stats.pseudo_time_s,
+        active_runtime_s: active_runtime_s
+            .is_finite()
+            .then_some(active_runtime_s.max(0.0)),
         mx: stats.mx,
         my: stats.my,
         mz: stats.mz,
@@ -1196,7 +1206,16 @@ pub(crate) fn set_latest_scalar_row_if_due(
     // to publish a workspace update.  The `scalar_row_due` flag is an artifact-recorder
     // concern (zarr on disk); for live telemetry we want every throttled live-update to
     // carry a new chart point so the Charts panel populates continuously.
-    state.latest_scalar_row = Some(scalar_row_from_update(update));
+    let previous_runtime_s = state
+        .latest_scalar_row
+        .as_ref()
+        .and_then(|row| row.active_runtime_s)
+        .unwrap_or(0.0);
+    let active_runtime_s = previous_runtime_s + update.stats.wall_time_ns as f64 * 1.0e-9;
+    state.latest_scalar_row = Some(scalar_row_from_stats_with_active_runtime(
+        &update.stats,
+        active_runtime_s,
+    ));
 }
 
 pub(crate) fn clear_cached_preview_fields(state: &mut LocalLiveWorkspaceState) {

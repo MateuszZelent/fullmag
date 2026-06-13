@@ -11,7 +11,7 @@ Current implemented pieces:
 - `docs/physics/0600-fem-eigenmodes-linearized-llg.md` states that the current modal executable path is CPU reference quality and that native MFEM/SLEPc integration is future work.
 - `crates/fullmag-ir/src/study.rs` has `StudyIR::Eigenmodes` and `StudyIR::FrequencyResponse`.
 - `crates/fullmag-plan/src/fem.rs` can plan `BackendTarget::Fem + StudyIR::Eigenmodes`.
-- `crates/fullmag-plan/src/lib.rs` rejects `StudyIR::FrequencyResponse` on FDM and routes supported FEM cases into `FemFrequencyResponsePlanIR` for the dense validation response lane.
+- `crates/fullmag-plan/src/lib.rs` rejects `StudyIR::FrequencyResponse` on FDM and routes supported FEM cases into `FemFrequencyResponsePlanIR`. Active rollout work routes the gamma-point/free-boundary magnetic slice through native MFEM production CPU when available, with dense validation retained only as a validation/reference lane.
 - `crates/fullmag-runner/src/fem_eigen.rs` assembles and solves a transitional modal eigen problem.
 - `crates/fullmag-runner/src/native_fem/eigen.rs` exposes a small dense GPU cuSolver helper when `fem-gpu` is enabled.
 - `crates/fullmag-runner/tests/physics_validation.rs` validates the current FEM eigen reference path against smoke, order-of-magnitude, resolution stability, periodic/Floquet, damping, surface anisotropy, demag, boundary conditions, and v2 dispersion artifacts.
@@ -25,9 +25,9 @@ Current limitations:
 - The production native FEM source tree does not own a dedicated frequency-domain module.
 - The current modal runner path is orchestration/reference quality, not the final MFEM/hypre/libCEED/SLEPc production modal backend.
 - The dense GPU path is useful for small modal matrices but is not a scalable production modal eigensolver.
-- Driven frequency response is executable only as the dense FEM validation lane; the production native MFEM/hypre/libCEED driven solver is not executable yet.
+- Driven frequency response is executable as dense FEM validation and as a limited native MFEM production CPU slice for gamma-point/free-boundary and k=0 static-periodic magnetic response with exchange, Zeeman, uniaxial anisotropy, interfacial/bulk DMI on supported P1 tetrahedral meshes, and Gilbert damping. Static-periodic response requires validated `mesh.periodic_node_pairs` and is enforced by tangent-space periodic projection. Demag, nonzero-k Floquet/Bloch response, Floquet phase enforcement, magnetoelastic response, and production GPU response remain explicitly unsupported.
 - Equilibrium preparation, tangent-space projection, operator assembly, driven solve, modal solve, diagnostics, and artifact writing are not separated into backend-owned contracts.
-- `just verify-fem-frequency-domain-runtime` exists as the managed dense-validation runtime smoke, but full production runtime proof still requires running it in the managed FEM container.
+- `just verify-fem-frequency-domain-runtime` exists as the managed production-CPU runtime smoke and must prove native MFEM production CPU provenance in the managed FEM container before the slice is considered runtime-verified.
 - There is no single backend module that can answer: "given this equilibrium and this FEM mesh, assemble the exact linearized operator used for both free modes and driven response."
 
 ## Target State
@@ -318,9 +318,9 @@ Verification:
 Current state:
 
 - Python and IR expose `FrequencyResponse`.
-- Planner produces `FemFrequencyResponsePlanIR` for supported dense FEM validation cases and rejects unsupported FDM/GPU/precision cases explicitly.
+- Planner produces `FemFrequencyResponsePlanIR` for supported FEM response cases and rejects unsupported FDM/GPU/precision cases explicitly.
 - API can serve `response/magnetic_response_sweep.v1.json` and v2 response resources when artifacts exist.
-- The dense validation response writer can emit those artifacts, but no production native MFEM/hypre/libCEED driven solver writes them yet.
+- The dense validation response writer can emit those artifacts, and the limited native MFEM production CPU response lane now writes the same response/manifest family for its supported slice.
 
 Target state:
 
@@ -450,7 +450,7 @@ Instructions:
 Verification:
 
 - Managed GPU recipe: `just fem-gpu-headless ...` remains smoke-level for FEM GPU runtime.
-- New recipe: `just verify-fem-frequency-domain-gpu` proves at least one GPU eigen smoke and one unsupported-path failure.
+- Current recipe: `just verify-fem-frequency-domain-gpu` runs the native frequency-domain contract and proves explicit production-GPU driven-response requests fail as unavailable without validation fallback. It must be extended to at least one GPU eigen smoke before `supports_frequency_domain_gpu=true`.
 - API status exposes requested device and resolved device separately.
 
 ## Implementation Stage B7 - Managed `just` Recipes
@@ -460,6 +460,7 @@ Current state:
 - The `justfile` has managed FEM recipes such as `ensure-managed-fem-runtime`, `rebuild-fem-runtime`, `fem-gpu-headless`, and `verify-fem-relaxation-runtime`.
 - `verify-fem-frequency-domain-native-contract` runs the native frequency-domain contract test through the managed FEM container.
 - `verify-fem-frequency-domain-runtime` runs the dense FEM validation response smoke through the managed FEM container and verifies the v1/v2 response bundle, progress, diagnostics, field payload, and frequency-domain manifest artifacts.
+- `verify-fem-frequency-domain-static-periodic-runtime` runs the k = 0 static-periodic driven-response smoke through the same managed FEM container and requires `static_periodic_*` diagnostics in the response diagnostics and manifest artifacts.
 
 Target state:
 
@@ -471,9 +472,10 @@ Instructions:
 2. Add `just verify-fem-eigen-runtime` for current and production eigen tests.
 3. Add `just verify-fem-frequency-response-runtime` when driven response becomes executable.
 4. Add `just verify-fem-frequency-domain-runtime` as the aggregate recipe used before PR completion.
-5. Ensure recipes run through the same managed FEM container mechanism as existing FEM recipes.
-6. Ensure recipes set stable artifact output roots under ignored build/test directories.
-7. Document which recipe is required for CPU-only machines and which one needs CUDA.
+5. Add `just verify-fem-frequency-domain-static-periodic-runtime` as the explicit k = 0 static-periodic response gate.
+6. Ensure recipes run through the same managed FEM container mechanism as existing FEM recipes.
+7. Ensure recipes set stable artifact output roots under ignored build/test directories.
+8. Document which recipe is required for CPU-only machines and which one needs CUDA.
 
 Verification:
 

@@ -156,21 +156,89 @@ describe("inspectorRegistry", () => {
       resolveInspectorPanel({ kind: "study.stage.frequency_response" })?.id,
     ).toBe("study-stage");
     expect(
-      resolveInspectorPanel({ kind: "study.stage.eigenmodes.k_path" })?.id,
-    ).toBe("study-stage");
-    expect(
-      resolveInspectorPanel({ kind: "study.stage.eigenmodes.periodic_pairs" })?.id,
-    ).toBe("study-stage");
-    expect(
       resolveInspectorPanel({ kind: "study.stage.frequency_response.excitation" })
         ?.id,
-    ).toBe("study-stage");
-    expect(
-      resolveInspectorPanel({ kind: "study.stage.frequency_response.k_grid" })?.id,
-    ).toBe("study-stage");
+    ).toBe("frequency-domain");
     expect(resolveInspectorPanel({ kind: "study.stage.save_state" })?.id).toBe(
       "study-stage",
     );
+  });
+
+  it("routes frequency-domain stage child nodes to the frequency-domain inspector", () => {
+    expect(resolveInspectorPanel({ kind: "study.stage.eigenmodes.setup" })?.id).toBe(
+      "frequency-domain",
+    );
+    expect(
+      resolveInspectorPanel({ kind: "study.stage.eigenmodes.calculation_mode" })
+        ?.id,
+    ).toBe("frequency-domain");
+    expect(
+      resolveInspectorPanel({ kind: "study.stage.eigenmodes.equilibrium" })?.id,
+    ).toBe("frequency-domain");
+    expect(
+      resolveInspectorPanel({ kind: "study.stage.eigenmodes.operator" })?.id,
+    ).toBe("frequency-domain");
+    expect(
+      resolveInspectorPanel({ kind: "study.stage.eigenmodes.boundary" })?.id,
+    ).toBe("frequency-domain");
+    expect(
+      resolveInspectorPanel({ kind: "study.stage.eigenmodes.k_path" })?.id,
+    ).toBe("frequency-domain");
+    expect(
+      resolveInspectorPanel({ kind: "study.stage.eigenmodes.periodic_pairs" })?.id,
+    ).toBe("frequency-domain");
+    expect(
+      resolveInspectorPanel({ kind: "study.stage.eigenmodes.solver" })?.id,
+    ).toBe("frequency-domain");
+    expect(
+      resolveInspectorPanel({ kind: "study.stage.eigenmodes.outputs" })?.id,
+    ).toBe("frequency-domain");
+    expect(
+      resolveInspectorPanel({ kind: "study.stage.eigenmodes.diagnostics" })?.id,
+    ).toBe("frequency-domain");
+    expect(
+      resolveInspectorPanel({ kind: "study.stage.frequency_response.setup" })?.id,
+    ).toBe("frequency-domain");
+    expect(
+      resolveInspectorPanel({
+        kind: "study.stage.frequency_response.calculation_mode",
+      })?.id,
+    ).toBe("frequency-domain");
+    expect(
+      resolveInspectorPanel({
+        kind: "study.stage.frequency_response.equilibrium",
+      })?.id,
+    ).toBe("frequency-domain");
+    expect(
+      resolveInspectorPanel({ kind: "study.stage.frequency_response.operator" })
+        ?.id,
+    ).toBe("frequency-domain");
+    expect(
+      resolveInspectorPanel({ kind: "study.stage.frequency_response.boundary" })
+        ?.id,
+    ).toBe("frequency-domain");
+    expect(
+      resolveInspectorPanel({
+        kind: "study.stage.frequency_response.periodic_pairs",
+      })?.id,
+    ).toBe("frequency-domain");
+    expect(
+      resolveInspectorPanel({ kind: "study.stage.frequency_response.k_grid" })?.id,
+    ).toBe("frequency-domain");
+    expect(
+      resolveInspectorPanel({ kind: "study.stage.frequency_response.sweep" })?.id,
+    ).toBe("frequency-domain");
+    expect(
+      resolveInspectorPanel({ kind: "study.stage.frequency_response.solver" })?.id,
+    ).toBe("frequency-domain");
+    expect(
+      resolveInspectorPanel({ kind: "study.stage.frequency_response.outputs" })?.id,
+    ).toBe("frequency-domain");
+    expect(
+      resolveInspectorPanel({
+        kind: "study.stage.frequency_response.diagnostics",
+      })?.id,
+    ).toBe("frequency-domain");
   });
 
   it("routes all frequency-domain result, resource, job, and diagnostic nodes away from placeholder", () => {

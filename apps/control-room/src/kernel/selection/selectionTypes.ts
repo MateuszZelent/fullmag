@@ -110,6 +110,7 @@ export type SelectionRef =
       x: number;
       y: number;
       snapshotId?: string | null;
+      resourceRef?: string | null;
       targetId?: string | null;
       targetKind?: "hysteresis-step" | null;
       quantityId?: string | null;
@@ -122,6 +123,18 @@ export type SelectionRef =
       kind: "study.execution" | "study.recovery" | "study.root" | "study.stages";
       nodeId: string;
       type: "study";
+    }
+  | {
+      kind: "study.stage.action";
+      nodeId: string;
+      pointId: number;
+      quantityId: string;
+      resourceRef?: string;
+      snapshotId: string;
+      stageId: string;
+      stageIndex: number;
+      targetId: `hysteresis-step:${string}:${number}`;
+      type: "hysteresis-snapshot";
     }
   | {
       kind:
@@ -154,7 +167,11 @@ export type SelectionRef =
         | "study.stage.relax"
         | "study.stage.run"
         | "study.stage.save_state";
+      hysteresisExecutionNodeId?: string;
+      hysteresisExecutionNodeKind?: string;
+      hysteresisPointId?: number;
       nodeId: string;
+      resourceRef?: string;
       stageId: string;
       stageIndex: number;
       type: "study-stage";
@@ -305,6 +322,7 @@ export function selectionRefEquals(
         left.x === right.x &&
         left.y === right.y &&
         left.snapshotId === right.snapshotId &&
+        nullableStringEquals(left.resourceRef, right.resourceRef) &&
         nullableStringEquals(left.targetId, right.targetId) &&
         nullableStringEquals(left.targetKind, right.targetKind) &&
         nullableStringEquals(left.quantityId, right.quantityId) &&
@@ -319,13 +337,37 @@ export function selectionRefEquals(
         left.kind === right.kind &&
         left.nodeId === right.nodeId
       );
+    case "hysteresis-snapshot":
+      return (
+        right.type === "hysteresis-snapshot" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.stageId === right.stageId &&
+        left.stageIndex === right.stageIndex &&
+        left.pointId === right.pointId &&
+        left.snapshotId === right.snapshotId &&
+        left.quantityId === right.quantityId &&
+        nullableStringEquals(left.resourceRef, right.resourceRef) &&
+        left.targetId === right.targetId
+      );
     case "study-stage":
       return (
         right.type === "study-stage" &&
         left.kind === right.kind &&
         left.nodeId === right.nodeId &&
         left.stageId === right.stageId &&
-        left.stageIndex === right.stageIndex
+        left.stageIndex === right.stageIndex &&
+        nullableStringEquals(
+          left.hysteresisExecutionNodeId,
+          right.hysteresisExecutionNodeId,
+        ) &&
+        nullableStringEquals(
+          left.hysteresisExecutionNodeKind,
+          right.hysteresisExecutionNodeKind,
+        ) &&
+        (left.hysteresisPointId ?? null) ===
+          (right.hysteresisPointId ?? null) &&
+        nullableStringEquals(left.resourceRef, right.resourceRef)
       );
     case "frequency-domain":
       return (

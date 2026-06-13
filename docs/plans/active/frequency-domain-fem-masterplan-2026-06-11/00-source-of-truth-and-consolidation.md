@@ -43,8 +43,8 @@ Use this order when documents disagree.
 | `docs/physics/0800-fem-static-pbc-demag.md` | Static/time-domain FEM demag PBC semantics. | Reuse static/zero-phase periodic demag rules for k = 0 FMR where applicable; do not imply nonzero-k dynamic demag. |
 | `docs/physics/0810-fem-static-pbc-dmi.md` | Static/time-domain DMI PBC seam semantics. | Periodic seam is not a physical free boundary; DMI seam handling must be explicit. |
 | `docs/specs/frequency-domain-artifacts-v2.md` | Canonical v2 artifact family for spectrum, branches, dispersion, modes, response sweep, and periodic pairs. | Reuse `eigen/*.v2`, `response/magnetic_response_sweep.v1.json`, and diagnostic 404 semantics. |
-| `docs/specs/fullmag_magnetoelastic_frequency_patch_specs.md` | Patch-level IR, planner, capability, artifact, UI, API, test, and benchmark contract. | Historical baseline: keep production capability flags separate. Current rollout adds a FEM dense validation response lane without promoting production CPU/GPU response. |
-| `docs/specs/capability-matrix-v0.md` | Current capability status and deferred booleans. | `StudyIR::FrequencyResponse` is reference-executable only for the dense FEM validation response path; production CPU/GPU response remains unsupported and `frequency_domain_capabilities.v1` is the precise UI-gating source. |
+| `docs/specs/fullmag_magnetoelastic_frequency_patch_specs.md` | Patch-level IR, planner, capability, artifact, UI, API, test, and benchmark contract. | Historical baseline: keep production capability flags separate. Current rollout keeps that separation and promotes only the explicitly gated native FEM production CPU response slice. |
+| `docs/specs/capability-matrix-v0.md` | Current capability status and deferred booleans. | `StudyIR::FrequencyResponse` is partial-production-executable for the native FEM CPU gamma/free-boundary magnetic slice, reference-executable for dense validation artifacts, and unsupported for production GPU, demag, nonzero-k Floquet/Bloch response, and magnetoelastic response. `frequency_domain_capabilities.v1` is the precise UI-gating source. |
 | `docs/specs/runtime-engine-naming-v0.md` | Current FEM eigen engine names and production/reference labels. | Keep `fem_eigen_*` engine names scoped to modal eigen paths. Do not promote them as response engines. |
 | `docs/specs/resource-first-control-room-api-v2.md` | Resource-first v2 API rules. | Add frequency-domain resources through the typed API/facade/resource-hook layers only. |
 | `docs/engineering/frequency_domain_solver_engineering.md` | Engineering backlog, solve stack, ABI direction, frontend/CLI, tests, benchmarks, release gates. | Use the staged MR path: semantic contract, scalable modal path, then driven response, then mechanics/coupling. |
@@ -63,8 +63,8 @@ Backend and public contract status:
 - Python exposes `Eigenmodes` and `FrequencyResponse`.
 - IR exposes `StudyIR::Eigenmodes` and `StudyIR::FrequencyResponse`.
 - Planner can produce FEM eigen plans.
-- Planner can produce `FemFrequencyResponsePlanIR` for the dense FEM validation
-  response path and rejects FDM response explicitly.
+- Planner can produce `FemFrequencyResponsePlanIR` for FEM response paths and
+  rejects FDM response explicitly.
 - Runtime capabilities expose frequency-domain deferred flags for compatibility
   and the nested `frequency_domain_capabilities.v1` snapshot for precise
   reference/production/unsupported UI gating.
@@ -72,9 +72,10 @@ Backend and public contract status:
 - The runner contains dense validation primitives for a field-driven response
   sweep and can write an artifact-shaped
   `response/magnetic_response_sweep.v1.json`.
-- The dense response primitive and FEM response plan are runtime integration for
-  the validation lane, not the production native MFEM/hypre/libCEED driven
-  solver and not a production capability promotion.
+- The runner also orchestrates a limited native FEM/MFEM production CPU response
+  lane for the supported gamma/free-boundary magnetic slice. That slice is a
+  partial production capability, not a promotion of demag, nonzero-k
+  Floquet/Bloch, magnetoelastic, or GPU response.
 - The v2 API can serve `response/magnetic_response_sweep.v1.json` when present
   and must return explicit diagnostic 404 when absent.
 

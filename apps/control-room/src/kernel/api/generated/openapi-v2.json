@@ -4354,8 +4354,15 @@
               "null"
             ]
           },
+          "stage_id": {
+            "description": "Optional hysteresis stage id that owns `snapshot_id`.\n\nWhen present, the data-plane reader validates that the requested\nsnapshot appears in that stage's hysteresis point history before\nloading persisted magnetization data.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "view": {
-            "description": "Optional complex analysis view for frequency-domain fields.\n\nAccepted values for analysis fields: `real`, `imag`, `abs`, `amplitude`,\n`phase`, `phase_rotated_real`.",
+            "description": "Optional complex analysis view for frequency-domain fields.\n\nAccepted values for analysis fields: `complex`, `full`, `real`, `imag`,\n`abs`, `amplitude`, `phase`, `phase_rotated_real`.",
             "type": [
               "string",
               "null"
@@ -4390,6 +4397,9 @@
           "reason": {
             "type": "string"
           },
+          "static_periodic_response_available": {
+            "type": "boolean"
+          },
           "status": {
             "type": "string"
           },
@@ -4402,6 +4412,7 @@
           "study_kind",
           "driven_response_available",
           "modal_solver_available",
+          "static_periodic_response_available",
           "floquet_modal_available",
           "floquet_response_available",
           "dynamic_demag_k_available",
@@ -4529,6 +4540,34 @@
             },
             "type": "array"
           },
+          "binary_layout": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "complex_pair_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "component_basis": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "component_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "components": {
             "items": {
               "type": "string"
@@ -4554,6 +4593,20 @@
               "null"
             ]
           },
+          "payload_encoding": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "payload_value_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "quantity": {
             "type": "string"
           },
@@ -4568,6 +4621,63 @@
           },
           "status": {
             "type": "string"
+          },
+          "tangent_complex_pair_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "tangent_component_basis": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tangent_component_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "tangent_components": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "tangent_field_payload_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tangent_payload_encoding": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tangent_payload_value_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "tangent_value_kind": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "value_kind": {
             "type": "string"
@@ -4638,6 +4748,9 @@
           "floquet_nonzero_k_demag_supported": {
             "type": "boolean"
           },
+          "floquet_nonzero_k_response_supported": {
+            "type": "boolean"
+          },
           "response": {
             "$ref": "#/components/schemas/FrequencyDomainAvailabilitySummaryResource"
           },
@@ -4682,6 +4795,7 @@
           "eigen_namespace",
           "response",
           "eigenmodes",
+          "floquet_nonzero_k_response_supported",
           "floquet_nonzero_k_demag_supported",
           "capabilities"
         ],
@@ -4798,6 +4912,9 @@
           "schema_version": {
             "type": "string"
           },
+          "state": {
+            "type": "string"
+          },
           "status": {
             "type": "string"
           },
@@ -4815,6 +4932,7 @@
         "required": [
           "schema_version",
           "status",
+          "state",
           "complete",
           "total_frequency_points",
           "completed_frequency_points",
@@ -5366,6 +5484,118 @@
         ],
         "type": "object"
       },
+      "HysteresisAdaptiveRefinementCandidateSchema": {
+        "properties": {
+          "candidate_id": {
+            "type": "string"
+          },
+          "dm_dh_per_mT": {
+            "format": "double",
+            "type": "number"
+          },
+          "field_value_mT": {
+            "format": "double",
+            "type": "number"
+          },
+          "parent_left_field_mT": {
+            "format": "double",
+            "type": "number"
+          },
+          "parent_left_point_id": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "parent_right_field_mT": {
+            "format": "double",
+            "type": "number"
+          },
+          "parent_right_point_id": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pass_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "candidate_id",
+          "pass_index",
+          "field_value_mT",
+          "parent_left_point_id",
+          "parent_right_point_id",
+          "parent_left_field_mT",
+          "parent_right_field_mT",
+          "dm_dh_per_mT",
+          "reasons",
+          "status"
+        ],
+        "type": "object"
+      },
+      "HysteresisAdaptiveRefinementSchema": {
+        "properties": {
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/HysteresisAdaptiveRefinementCandidateSchema"
+            },
+            "type": "array"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "max_insertions_per_pass": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_passes": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/HysteresisPointSchema"
+            },
+            "type": "array"
+          },
+          "settle_trace": {
+            "items": {
+              "$ref": "#/components/schemas/HysteresisSettleTraceEntrySchema"
+            },
+            "type": "array"
+          },
+          "source_point_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "status",
+          "enabled",
+          "source_point_count",
+          "max_passes",
+          "max_insertions_per_pass"
+        ],
+        "type": "object"
+      },
       "HysteresisAngularFamilyResource": {
         "properties": {
           "active_variant_id": {
@@ -5534,6 +5764,37 @@
         ],
         "type": "object"
       },
+      "HysteresisConvergenceQualitySummarySchema": {
+        "properties": {
+          "converged_points": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "non_converged_points": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          },
+          "total_points": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "warning_points": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "status",
+          "total_points",
+          "converged_points",
+          "warning_points",
+          "non_converged_points"
+        ],
+        "type": "object"
+      },
       "HysteresisExecutionTreeNode": {
         "properties": {
           "children": {
@@ -5671,6 +5932,78 @@
         ],
         "type": "object"
       },
+      "HysteresisFieldUnitProvenanceSchema": {
+        "properties": {
+          "authored_quantity": {
+            "type": "string"
+          },
+          "authored_unit": {
+            "type": "string"
+          },
+          "canonical_quantity": {
+            "type": "string"
+          },
+          "canonical_unit": {
+            "type": "string"
+          },
+          "display_unit": {
+            "type": "string"
+          },
+          "mu0_h_per_m": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "authored_quantity",
+          "authored_unit",
+          "canonical_quantity",
+          "canonical_unit",
+          "display_unit",
+          "mu0_h_per_m"
+        ],
+        "type": "object"
+      },
+      "HysteresisLoopClosureSummarySchema": {
+        "properties": {
+          "field_gap_mT": {
+            "format": "double",
+            "type": "number"
+          },
+          "m_parallel_gap": {
+            "format": "double",
+            "type": "number"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "field_gap_mT",
+          "m_parallel_gap",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "HysteresisMetricStatusSchema": {
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "reason"
+        ],
+        "type": "object"
+      },
       "HysteresisMetricsSchema": {
         "properties": {
           "H_c": {
@@ -5715,12 +6048,48 @@
               "null"
             ]
           },
+          "convergence_quality_summary": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/HysteresisConvergenceQualitySummarySchema"
+              }
+            ]
+          },
           "loop_area": {
             "format": "double",
             "type": "number"
           },
+          "loop_closure_summary": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/HysteresisLoopClosureSummarySchema"
+              }
+            ]
+          },
           "magnetization_average_weighting": {
             "type": "string"
+          },
+          "max_differential_susceptibility": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "metric_statuses": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/HysteresisMetricStatusSchema"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
           },
           "saturation_preparation_field_mT": {
             "format": "double",
@@ -5731,6 +6100,18 @@
           },
           "saturation_status": {
             "type": "string"
+          },
+          "switching_field_candidates": {
+            "items": {
+              "$ref": "#/components/schemas/HysteresisSwitchingFieldCandidateSchema"
+            },
+            "type": "array"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           }
         },
         "required": [
@@ -5863,6 +6244,12 @@
       },
       "HysteresisPointSchema": {
         "properties": {
+          "adaptive_inserted": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "branch_id": {
             "type": [
               "string",
@@ -5886,9 +6273,26 @@
               "null"
             ]
           },
+          "field_display_unit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "field_orientation": {},
           "field_value_mT": {
             "format": "double",
             "type": "number"
+          },
+          "field_vector_A_per_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "has_non_converged_steps": {
             "type": [
@@ -5921,6 +6325,7 @@
             "format": "double",
             "type": "number"
           },
+          "measurement_axis": {},
           "minor_loop_id": {
             "type": [
               "string",
@@ -5950,6 +6355,29 @@
               "null"
             ]
           },
+          "refinement_parent_left_point_id": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "refinement_parent_right_point_id": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "refinement_reason": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "reversal_index": {
             "format": "int32",
             "minimum": 0,
@@ -5976,7 +6404,43 @@
               "null"
             ]
           },
+          "snapshot_json_artifact_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "snapshot_resource_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "snapshot_storage_format": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "snapshot_storage_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "snapshot_storage_status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "snapshot_vector_resource_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "snapshot_zarr_store_ref": {
             "type": [
               "string",
               "null"
@@ -6379,6 +6843,16 @@
               "null"
             ]
           },
+          "field_unit_provenance": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/HysteresisFieldUnitProvenanceSchema"
+              }
+            ]
+          },
           "field_values_mT": {
             "items": {
               "format": "double",
@@ -6403,6 +6877,16 @@
             "format": "int32",
             "minimum": 0,
             "type": "integer"
+          },
+          "storage_estimate": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/HysteresisStorageEstimateSchema"
+              }
+            ]
           }
         },
         "required": [
@@ -6451,6 +6935,105 @@
           "stage_index",
           "result_status",
           "analysis_resource_ref"
+        ],
+        "type": "object"
+      },
+      "HysteresisStorageEstimateSchema": {
+        "properties": {
+          "bytes_per_component": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "components_per_site": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "estimated_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "point_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "policy": {
+            "type": "string"
+          },
+          "site_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "snapshot_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "policy",
+          "components_per_site",
+          "bytes_per_component",
+          "status",
+          "warnings"
+        ],
+        "type": "object"
+      },
+      "HysteresisSwitchingFieldCandidateSchema": {
+        "properties": {
+          "branch_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "field_value_mT": {
+            "format": "double",
+            "type": "number"
+          },
+          "point_id_after": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "point_id_before": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "susceptibility_per_mT": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "field_value_mT",
+          "susceptibility_per_mT",
+          "point_id_before",
+          "point_id_after"
         ],
         "type": "object"
       },
@@ -13630,6 +14213,13 @@
       },
       "SolverStatusResource": {
         "properties": {
+          "active_runtime_seconds": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
           "algorithm": {
             "type": [
               "string",
@@ -13690,6 +14280,13 @@
             ]
           },
           "max_torque_T": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "pseudo_time_seconds": {
             "format": "double",
             "type": [
               "number",
@@ -17424,6 +18021,40 @@
         ]
       }
     },
+    "/v2/sessions/current/analysis/hysteresis/{stage_id}/adaptive-refinement": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_hysteresis_stage_id_adaptive_refinement",
+        "parameters": [
+          {
+            "description": "Hysteresis stage index or stage identifier",
+            "in": "path",
+            "name": "stage_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HysteresisAdaptiveRefinementSchema"
+                }
+              }
+            },
+            "description": "Executed hysteresis adaptive refinement candidates and inserted points"
+          },
+          "404": {
+            "description": "Hysteresis adaptive refinement artifact not found"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
     "/v2/sessions/current/analysis/hysteresis/{stage_id}/branches": {
       "get": {
         "operationId": "analysis_get_sessions_current_analysis_hysteresis_stage_id_branches",
@@ -17973,6 +18604,18 @@
             "description": "Optional persisted analysis snapshot id, for example a saved\nhysteresis-point magnetization state.",
             "in": "query",
             "name": "snapshot_id",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional hysteresis stage id that owns `snapshot_id`.",
+            "in": "query",
+            "name": "stage_id",
             "required": false,
             "schema": {
               "type": [
@@ -19990,7 +20633,19 @@
             }
           },
           {
-            "description": "Optional complex analysis view for frequency-domain fields.\n\nAccepted values for analysis fields: `real`, `imag`, `abs`, `amplitude`,\n`phase`, `phase_rotated_real`.",
+            "description": "Optional hysteresis stage id that owns `snapshot_id`.\n\nWhen present, the data-plane reader validates that the requested\nsnapshot appears in that stage's hysteresis point history before\nloading persisted magnetization data.",
+            "in": "query",
+            "name": "stage_id",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional complex analysis view for frequency-domain fields.\n\nAccepted values for analysis fields: `complex`, `full`, `real`, `imag`,\n`abs`, `amplitude`, `phase`, `phase_rotated_real`.",
             "in": "query",
             "name": "view",
             "required": false,

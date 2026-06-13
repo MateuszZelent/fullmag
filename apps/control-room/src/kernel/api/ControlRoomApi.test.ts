@@ -409,6 +409,7 @@ describe("ControlRoomApi", () => {
           floquet_response_available: false,
           gpu_available: false,
           modal_solver_available: false,
+          static_periodic_response_available: false,
           reason: "native FEM modal dynamic-matrix solver is not implemented",
           status: "unavailable",
           study_kind: "eigenmodes",
@@ -416,16 +417,19 @@ describe("ControlRoomApi", () => {
         existing_frequency_response_namespace_preserved: true,
         family_namespace: "frequencyDomain",
         floquet_nonzero_k_demag_supported: false,
+        floquet_nonzero_k_response_supported: false,
         response: {
-          diagnostics_json: "{}",
-          driven_response_available: false,
+          diagnostics_json:
+            '{"schema_version":"frequency_domain_availability.v1","execution_lane":"native_fem_mfem_frequency_domain_cpu","scope":"gamma_free_or_static_periodic_magnetic_response"}',
+          driven_response_available: true,
           dynamic_demag_k_available: false,
           floquet_modal_available: false,
           floquet_response_available: false,
           gpu_available: false,
           modal_solver_available: false,
-          reason: "native FEM driven frequency-response solver is not implemented",
-          status: "unavailable",
+          static_periodic_response_available: true,
+          reason: "",
+          status: "ok",
           study_kind: "frequency_response",
         },
         response_progress: null,
@@ -444,6 +448,10 @@ describe("ControlRoomApi", () => {
     expect(manifest.schema_version).toBe("frequency_domain_manifest.v1");
     expect(manifest.existing_frequency_response_namespace_preserved).toBe(true);
     expect(manifest.response.study_kind).toBe("frequency_response");
+    expect(manifest.response.status).toBe("ok");
+    expect(manifest.response.driven_response_available).toBe(true);
+    expect(manifest.response.floquet_response_available).toBe(false);
+    expect(manifest.response.gpu_available).toBe(false);
     expect(manifest.eigenmodes.study_kind).toBe("eigenmodes");
     expect(observedUrl).toBe(
       "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-domain/manifest.v1",
@@ -467,6 +475,7 @@ describe("ControlRoomApi", () => {
           missing_reason: null,
           partial_artifacts_available: true,
           schema_version: "frequency_domain_sweep_progress.v1",
+          state: "completed",
           status: "ready",
           total_frequency_points: 2,
           written_frequency_point_artifacts: 1,
@@ -482,6 +491,7 @@ describe("ControlRoomApi", () => {
           progress_json:
             '{"schema_version":"frequency_domain_sweep_progress.v1","state":"cancel_requested"}',
           schema_version: "frequency_domain_sweep_progress.v1",
+          state: "cancel_requested",
           status: "cancel_requested",
           total_frequency_points: 2,
           written_frequency_point_artifacts: 1,
@@ -489,7 +499,7 @@ describe("ControlRoomApi", () => {
       }
       if (target.endsWith("/response/field/7/meta")) {
         return jsonResponse({
-          artifact_path: "response/field_payloads/frequency_0007/vector.bin",
+          artifact_path: "response/field_payloads/frequency_0007/vector_xyz.bin",
           available_views: [
             "complex",
             "real",
@@ -498,18 +508,33 @@ describe("ControlRoomApi", () => {
             "phase",
             "phase_rotated_real",
           ],
+          binary_layout: "complex_f64_pairs_little_endian",
+          complex_pair_count: 6,
+          component_basis: "global_xyz",
+          component_count: 3,
           components: ["x", "y", "z"],
           default_phase_rad: 0,
           default_view: "phase_rotated_real",
           field_id: "analysis:frequency-response:frequency-0007",
           missing_reason: null,
+          payload_encoding: "f64_interleaved_real_imag_xyz",
+          payload_value_count: 12,
           quantity: "delta_m",
           resource_key:
             "/v2/sessions/current/data/fields/analysis:frequency-response:frequency-0007/samples/vector?view=phase_rotated_real&phase_rad=0",
           schema_version: "frequency_domain_response_field.v1",
           source_family: "analysis/frequency-response",
           status: "ready",
-          value_kind: "complex_vector",
+          tangent_component_basis: "local_tangent_frame",
+          tangent_component_count: 2,
+          tangent_components: ["tangent_e1", "tangent_e2"],
+          tangent_complex_pair_count: 4,
+          tangent_field_payload_path:
+            "response/field_payloads/frequency_0007/vector.bin",
+          tangent_payload_encoding: "f64_interleaved_real_imag_tangent",
+          tangent_payload_value_count: 8,
+          tangent_value_kind: "complex_tangent_vector",
+          value_kind: "complex_spatial_vector",
         });
       }
       return jsonResponse({
@@ -539,6 +564,26 @@ describe("ControlRoomApi", () => {
     expect(sweep.status).toBe("ready");
     expect(fieldMeta.default_view).toBe("phase_rotated_real");
     expect(fieldMeta.default_phase_rad).toBe(0);
+    expect(fieldMeta.value_kind).toBe("complex_spatial_vector");
+    expect(fieldMeta.component_basis).toBe("global_xyz");
+    expect(fieldMeta.component_count).toBe(3);
+    expect(fieldMeta.components).toEqual(["x", "y", "z"]);
+    expect(fieldMeta.payload_encoding).toBe("f64_interleaved_real_imag_xyz");
+    expect(fieldMeta.binary_layout).toBe("complex_f64_pairs_little_endian");
+    expect(fieldMeta.complex_pair_count).toBe(6);
+    expect(fieldMeta.payload_value_count).toBe(12);
+    expect(fieldMeta.tangent_field_payload_path).toBe(
+      "response/field_payloads/frequency_0007/vector.bin",
+    );
+    expect(fieldMeta.tangent_payload_encoding).toBe(
+      "f64_interleaved_real_imag_tangent",
+    );
+    expect(fieldMeta.tangent_value_kind).toBe("complex_tangent_vector");
+    expect(fieldMeta.tangent_component_basis).toBe("local_tangent_frame");
+    expect(fieldMeta.tangent_component_count).toBe(2);
+    expect(fieldMeta.tangent_components).toEqual(["tangent_e1", "tangent_e2"]);
+    expect(fieldMeta.tangent_complex_pair_count).toBe(4);
+    expect(fieldMeta.tangent_payload_value_count).toBe(8);
     expect(fieldMeta.available_views).toContain("complex");
     expect(cancelRequested.status).toBe("cancel_requested");
     expect(progress.completed_frequency_points).toBe(1);
@@ -558,20 +603,35 @@ describe("ControlRoomApi", () => {
       observedUrls.push(target);
       if (target.endsWith("/response/field/4/meta")) {
         return jsonResponse({
-          artifact_path: "response/field_payloads/frequency_0004/vector.bin",
+          artifact_path: "response/field_payloads/frequency_0004/vector_xyz.bin",
           available_views: ["real", "imag", "phase_rotated_real"],
+          binary_layout: "complex_f64_pairs_little_endian",
+          complex_pair_count: 2,
+          component_basis: "global_xyz",
+          component_count: 3,
           components: ["x", "y", "z"],
           default_phase_rad: 0,
           default_view: "phase_rotated_real",
           field_id: "analysis:frequency-response:frequency-0004",
           missing_reason: null,
+          payload_encoding: "f64_interleaved_real_imag_xyz",
+          payload_value_count: 6,
           quantity: "delta_m",
           resource_key:
             "/v2/sessions/current/data/fields/analysis:frequency-response:frequency-0004/samples/vector?view=phase_rotated_real&phase_rad=0",
           schema_version: "frequency_domain_response_field.v1",
           source_family: "analysis/frequency-response",
           status: "ready",
-          value_kind: "complex_vector",
+          tangent_component_basis: "local_tangent_frame",
+          tangent_component_count: 2,
+          tangent_components: ["tangent_e1", "tangent_e2"],
+          tangent_complex_pair_count: 2,
+          tangent_field_payload_path:
+            "response/field_payloads/frequency_0004/vector.bin",
+          tangent_payload_encoding: "f64_interleaved_real_imag_tangent",
+          tangent_payload_value_count: 4,
+          tangent_value_kind: "complex_tangent_vector",
+          value_kind: "complex_spatial_vector",
         });
       }
       return jsonResponse({
@@ -593,7 +653,12 @@ describe("ControlRoomApi", () => {
 
     await api.analysis.frequencyResponse.magneticSweepV2();
     await api.analysis.frequencyResponse.frequencyPoint(4);
-    await api.analysis.frequencyResponse.fieldMeta(4);
+    const responseMeta = await api.analysis.frequencyResponse.fieldMeta(4);
+
+    expect(responseMeta.component_basis).toBe("global_xyz");
+    expect(responseMeta.components).toEqual(["x", "y", "z"]);
+    expect(responseMeta.tangent_component_basis).toBe("local_tangent_frame");
+    expect(responseMeta.tangent_components).toEqual(["tangent_e1", "tangent_e2"]);
 
     expect(observedUrls).toEqual([
       "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep",
@@ -2177,11 +2242,12 @@ describe("ControlRoomApi", () => {
       component: "full",
       scope_kind: "full",
       snapshot_id: "hysteresis-stage-1-point-4",
+      stage_id: "hysteresis-1",
     });
 
     expect(result.status).toBe("ready");
     expect(observedUrl).toBe(
-      "http://127.0.0.1:8765/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full&snapshot_id=hysteresis-stage-1-point-4",
+      "http://127.0.0.1:8765/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full&snapshot_id=hysteresis-stage-1-point-4&stage_id=hysteresis-1",
     );
   });
 

@@ -1,8 +1,11 @@
 "use client";
 
 import type {
+  HysteresisAdaptiveRefinementSchema,
+  HysteresisAngularFamilyResource,
   HysteresisMetricsSchema,
   HysteresisMinorLoopSchema,
+  HysteresisOrientationSchema,
   HysteresisPointSchema,
   HysteresisProgressSchema,
   HysteresisBranchSchema,
@@ -18,6 +21,7 @@ import type { HysteresisTargetMetadata } from "@/shared/domain/study/HysteresisC
 
 import type {
   ActiveHysteresisPointSelection,
+  ActiveHysteresisBranchSelection,
   ActiveHysteresisSnapshotSelection,
 } from "./HysteresisInspectorUtils";
 import type { StageInspectorFrameProps } from "../StageInspectorFrame";
@@ -25,12 +29,16 @@ import type { StageInspectorFrameProps } from "../StageInspectorFrame";
 export interface HysteresisInspectorCommonProps {
   activeSnapshot: ActiveHysteresisSnapshotSelection | null;
   activePoint: ActiveHysteresisPointSelection | null;
+  activeBranch: ActiveHysteresisBranchSelection | null;
+  adaptiveRefinement: HysteresisAdaptiveRefinementSchema | null | undefined;
+  angularFamily: HysteresisAngularFamilyResource | null | undefined;
   branches: HysteresisBranchSchema[];
   draft: StageInspectorFrameProps["draft"];
   executionTree: HysteresisExecutionTreeResource | null | undefined;
   kernel: KernelApi;
   metrics: HysteresisMetricsSchema | null | undefined;
   minorLoops: HysteresisMinorLoopSchema[];
+  orientation: HysteresisOrientationSchema | null | undefined;
   points: HysteresisPointSchema[];
   progress: HysteresisProgressSchema | null | undefined;
   protocol: HysteresisProtocolSchema | null | undefined;

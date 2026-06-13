@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useEffectEvent,
   useMemo,
   useRef,
   useState,
@@ -13,6 +14,7 @@ import type { ECharts, EChartsOption } from "echarts";
 
 import type {
   HysteresisAngularFamilyResource,
+  HysteresisMetricsSchema,
   HysteresisOrientationSchema,
   HysteresisPointSchema,
   HysteresisProgressSchema,
@@ -66,6 +68,34 @@ interface HysteresisChartLineSeriesModel {
   name: string;
 }
 
+export type HysteresisMetricMarkerKind =
+  | "adaptive"
+  | "coercivity"
+  | "remanence"
+  | "reversal"
+  | "saturation"
+  | "switching-candidate"
+  | "warning";
+
+export interface HysteresisMetricMarkerModel {
+  fieldValueMt: number;
+  kind: HysteresisMetricMarkerKind;
+  label: string;
+  pointId: number | null;
+  value: number | null;
+  x: number;
+}
+
+const HYSTERESIS_METRIC_MARKER_ORDER = new Map<HysteresisMetricMarkerKind, number>([
+  ["coercivity", 0],
+  ["remanence", 1],
+  ["saturation", 2],
+  ["switching-candidate", 3],
+  ["reversal", 4],
+  ["adaptive", 5],
+  ["warning", 6],
+]);
+
 const EMPTY_HYSTERESIS_POINTS: HysteresisPointSchema[] = [];
 const EMPTY_HYSTERESIS_BRANCHES: HysteresisBranch[] = [];
 const EMPTY_HYSTERESIS_MINOR_LOOPS: HysteresisMinorLoop[] = [];
@@ -108,7 +138,12 @@ export function clearHysteresisPointSelectionForLive(
   source: ModuleId,
 ): boolean {
   const ref = kernel.selection.get().ref;
-  if (ref?.type !== "analysis-chart-point" || ref.stageId !== stageId) {
+  if (
+    !(
+      (ref?.type === "analysis-chart-point" || ref?.type === "hysteresis-snapshot") &&
+      ref.stageId === stageId
+    )
+  ) {
     return false;
   }
   kernel.selection.clear(source);
@@ -148,6 +183,32 @@ export function nextHysteresisPlaybackIndex(
   if (pointCount <= 0) return -1;
   const base = resolveHysteresisNavigationIndex(activeIndex, progressIndex, pointCount);
   return base < 0 ? 0 : (base + 1) % pointCount;
+}
+
+export function resolveHysteresisKeyboardNavigationIndex(
+  key: string,
+  activeIndex: number,
+  progressIndex: number | null,
+  pointCount: number,
+): number | null {
+  if (pointCount <= 0) return null;
+  if (key === "ArrowRight") {
+    return adjacentHysteresisPointIndex(activeIndex, progressIndex, pointCount, 1);
+  }
+  if (key === "ArrowLeft") {
+    return adjacentHysteresisPointIndex(activeIndex, progressIndex, pointCount, -1);
+  }
+  return null;
+}
+
+export function resolveHysteresisScrubberPointIndex(
+  value: number | string,
+  pointCount: number,
+): number | null {
+  if (pointCount <= 0) return null;
+  const numericValue = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numericValue)) return null;
+  return Math.min(Math.max(Math.round(numericValue), 0), pointCount - 1);
 }
 
 interface ChartClickParams {
@@ -203,6 +264,19 @@ function getPointYValue(p: HysteresisPointSchema, key: YAxisKey): number {
   }
 }
 
+function uniqueHysteresisPointsById(
+  points: HysteresisPointSchema[],
+): HysteresisPointSchema[] {
+  const seen = new Set<number>();
+  const unique: HysteresisPointSchema[] = [];
+  points.forEach((point) => {
+    if (seen.has(point.point_id)) return;
+    seen.add(point.point_id);
+    unique.push(point);
+  });
+  return unique;
+}
+
 function leadingMonotonicHysteresisPoints(
   points: HysteresisPointSchema[],
 ): HysteresisPointSchema[] {
@@ -224,6 +298,140 @@ function leadingMonotonicHysteresisPoints(
     selected.push(current);
   }
   return selected;
+}
+
+function visibleHysteresisChartPoints(
+  points: HysteresisPointSchema[],
+  branches: HysteresisBranch[],
+  minorLoops: HysteresisMinorLoop[],
+  viewMode: ViewMode,
+  branchMode?: string | null,
+): HysteresisPointSchema[] {
+  if (viewMode === "virgin") {
+    const sourcePoints = points.length > 0
+      ? points
+      : branches.flatMap((branch) => branch.points);
+    return branchMode === "virgin_curve"
+      ? sourcePoints
+      : leadingMonotonicHysteresisPoints(sourcePoints);
+  }
+  if (viewMode === "minor") {
+    return minorLoops.flatMap((loop) => loop.points);
+  }
+  if (
+    viewMode === "full" ||
+    viewMode === "oop-ip-overlay" ||
+    viewMode === "rgb-overlay"
+  ) {
+    return points.length > 0
+      ? points
+      : branches.flatMap((branch) => branch.points);
+  }
+  const filteredBranches = branches.filter((branch) => {
+    if (viewMode === "forward") return branch.branch_id === "ascending";
+    if (viewMode === "return") return branch.branch_id === "descending";
+    return true;
+  });
+  return filteredBranches.length > 0 ? filteredBranches.flatMap((branch) => branch.points) : [];
+}
+
+export function buildHysteresisAdaptivePointMarkerModel(
+  points: HysteresisPointSchema[],
+  branches: HysteresisBranch[],
+  minorLoops: HysteresisMinorLoop[],
+  viewMode: ViewMode,
+  yAxisKey: YAxisKey,
+  formatXValue: (fieldValmT: number) => number = (fieldValmT) => fieldValmT,
+  branchMode?: string | null,
+): ChartDataPoint[] {
+  return uniqueHysteresisPointsById(
+    visibleHysteresisChartPoints(points, branches, minorLoops, viewMode, branchMode),
+  )
+    .filter((point) => point.adaptive_inserted === true)
+    .map((point) => [
+      formatXValue(point.field_value_mT),
+      getPointYValue(point, yAxisKey),
+      point.point_id,
+    ]);
+}
+
+export function buildHysteresisMetricMarkerModel({
+  formatXValue = (fieldValueMt) => fieldValueMt,
+  metrics,
+  points,
+  yAxisKey,
+}: {
+  formatXValue?: (fieldValueMt: number) => number;
+  metrics: HysteresisMetricsSchema | null | undefined;
+  points: readonly HysteresisPointSchema[];
+  yAxisKey: YAxisKey;
+}): HysteresisMetricMarkerModel[] {
+  const markers: HysteresisMetricMarkerModel[] = [];
+  const pushFieldMarker = (
+    kind: HysteresisMetricMarkerKind,
+    label: string,
+    fieldValueMt: number | null | undefined,
+    value: number | null,
+    pointId: number | null,
+  ) => {
+    if (typeof fieldValueMt !== "number" || !Number.isFinite(fieldValueMt)) {
+      return;
+    }
+    markers.push({
+      fieldValueMt,
+      kind,
+      label,
+      pointId,
+      value,
+      x: formatXValue(fieldValueMt),
+    });
+  };
+
+  if (metrics) {
+    pushFieldMarker("coercivity", "Hc+", metrics.H_c_plus, 0, null);
+    pushFieldMarker("coercivity", "Hc-", metrics.H_c_minus, 0, null);
+    pushFieldMarker("remanence", "Mr+", 0, metrics.M_r_plus ?? null, null);
+    pushFieldMarker("remanence", "Mr-", 0, metrics.M_r_minus ?? null, null);
+    pushFieldMarker(
+      "saturation",
+      "Hsat",
+      metrics.saturation_preparation_field_mT,
+      null,
+      null,
+    );
+    for (const candidate of metrics.switching_field_candidates ?? []) {
+      const point =
+        points.find((entry) => entry.point_id === candidate.point_id_after) ??
+        points.find((entry) => entry.point_id === candidate.point_id_before) ??
+        null;
+      pushFieldMarker(
+        "switching-candidate",
+        "Switch candidate",
+        candidate.field_value_mT,
+        point ? getPointYValue(point, yAxisKey) : null,
+        point?.point_id ?? null,
+      );
+    }
+  }
+
+  for (const point of points) {
+    const value = getPointYValue(point, yAxisKey);
+    if (point.is_reversal_field) {
+      pushFieldMarker("reversal", "Reversal", point.field_value_mT, value, point.point_id);
+    }
+    if (point.adaptive_inserted) {
+      pushFieldMarker("adaptive", "Adaptive", point.field_value_mT, value, point.point_id);
+    }
+    if (point.has_non_converged_steps || String(point.status).toLowerCase() === "warning") {
+      pushFieldMarker("warning", "Warning", point.field_value_mT, value, point.point_id);
+    }
+  }
+
+  return markers.toSorted(
+    (left, right) =>
+      (HYSTERESIS_METRIC_MARKER_ORDER.get(left.kind) ?? 99) -
+      (HYSTERESIS_METRIC_MARKER_ORDER.get(right.kind) ?? 99),
+  );
 }
 
 export function buildHysteresisChartLineSeriesModel(
@@ -427,6 +635,8 @@ export function buildHysteresisChartPointSelection({
   const chartId = `hysteresis:${stageId}`;
   const nodeId = `analysis:hysteresis:${stageId}:point:${point.point_id}`;
   const y = getPointYValue(point, yAxisKey);
+  const pointTargetMetadata = hysteresisPointTargetMetadata(point, targetMetadata);
+  const snapshotResourceRef = hysteresisPointVectorResourceRef(point);
   return {
     kind: "analysis.chart-point",
     label: `Hysteresis point ${point.point_id} (${point.field_value_mT} mT)`,
@@ -443,13 +653,14 @@ export function buildHysteresisChartPointSelection({
       ...(includeSnapshot
         ? {
             snapshotId: point.snapshot_id ?? null,
+            resourceRef: snapshotResourceRef,
             targetId: `hysteresis-step:${stageId}:${point.point_id}`,
             targetKind: "hysteresis-step",
             quantityId: "m",
-            meshIdentity: targetMetadata.meshIdentity ?? null,
-            fieldOrientation: targetMetadata.fieldOrientation ?? null,
-            measurementAxis: targetMetadata.measurementAxis ?? null,
-            fieldRevision: targetMetadata.fieldRevision ?? null,
+            meshIdentity: pointTargetMetadata.meshIdentity ?? null,
+            fieldOrientation: pointTargetMetadata.fieldOrientation ?? null,
+            measurementAxis: pointTargetMetadata.measurementAxis ?? null,
+            fieldRevision: pointTargetMetadata.fieldRevision ?? null,
           }
         : {}),
       stageId,
@@ -458,6 +669,83 @@ export function buildHysteresisChartPointSelection({
       x: point.field_value_mT,
       y,
     },
+  };
+}
+
+export function buildHysteresisLoadPointIn3DInput({
+  point,
+  stageId,
+  targetMetadata = {},
+  yAxisKey,
+}: {
+  point: HysteresisPointSchema;
+  stageId: string;
+  targetMetadata?: HysteresisTargetMetadata;
+  yAxisKey: YAxisKey;
+}) {
+  const pointTargetMetadata = hysteresisPointTargetMetadata(point, targetMetadata);
+  return {
+    stageId,
+    pointId: point.point_id,
+    fieldVal: point.field_value_mT,
+    mVal: getPointYValue(point, yAxisKey),
+    snapshotId: point.snapshot_id ?? null,
+    snapshotResourceRef: hysteresisPointVectorResourceRef(point),
+    snapshotStorageStatus: point.snapshot_storage_status ?? null,
+    snapshotStorageReason: point.snapshot_storage_reason ?? null,
+    meshIdentity: pointTargetMetadata.meshIdentity ?? null,
+    fieldOrientation: pointTargetMetadata.fieldOrientation ?? null,
+    measurementAxis: pointTargetMetadata.measurementAxis ?? null,
+    fieldRevision: pointTargetMetadata.fieldRevision ?? null,
+  };
+}
+
+export function hysteresisChartReplayActionPresentation(
+  snapshotId?: string | null,
+  snapshotStorageStatus?: string | null,
+  snapshotStorageReason?: string | null,
+): { disabled: boolean; title: string } {
+  if (!snapshotId) {
+    return {
+      disabled: true,
+      title: "Snapshot not saved for this point",
+    };
+  }
+  if (snapshotStorageStatus === "missing") {
+    return {
+      disabled: true,
+      title: snapshotStorageReason
+        ? `Snapshot payload is missing for this point: ${snapshotStorageReason}`
+        : "Snapshot payload is missing for this point",
+    };
+  }
+  return {
+    disabled: false,
+    title: "Load point magnetization in 3D viewport",
+  };
+}
+
+export function hysteresisPointVectorResourceRef(
+  point: HysteresisPointSchema,
+): string | null {
+  return point.snapshot_vector_resource_ref ?? point.snapshot_resource_ref ?? null;
+}
+
+export function hysteresisPointTargetMetadata(
+  point: HysteresisPointSchema,
+  fallback: HysteresisTargetMetadata = {},
+): HysteresisTargetMetadata {
+  return {
+    fieldOrientation:
+      stringifyHysteresisOrientation(point.field_orientation) ??
+      fallback.fieldOrientation ??
+      null,
+    fieldRevision: fallback.fieldRevision ?? null,
+    measurementAxis:
+      stringifyHysteresisMeasurementAxis(point.measurement_axis) ??
+      fallback.measurementAxis ??
+      null,
+    meshIdentity: fallback.meshIdentity ?? null,
   };
 }
 
@@ -535,6 +823,42 @@ function readHysteresisChartColors(element: HTMLElement): HysteresisChartColors 
   };
 }
 
+function formatHysteresisMetricMarkerValue(marker: HysteresisMetricMarkerModel): string {
+  switch (marker.kind) {
+    case "coercivity":
+    case "saturation":
+    case "switching-candidate":
+    case "reversal":
+    case "adaptive":
+    case "warning":
+      return `${marker.label}: ${marker.fieldValueMt.toFixed(1)} mT`;
+    case "remanence":
+      return marker.value == null
+        ? marker.label
+        : `${marker.label}: ${marker.value.toFixed(3)}`;
+  }
+}
+
+function hysteresisMetricMarkerColor(
+  kind: HysteresisMetricMarkerKind,
+  colors: HysteresisChartColors,
+): string {
+  switch (kind) {
+    case "coercivity":
+    case "saturation":
+    case "switching-candidate":
+      return colors.metric;
+    case "remanence":
+      return colors.remanence;
+    case "adaptive":
+      return colors.active;
+    case "reversal":
+      return colors.branchAscending;
+    case "warning":
+      return colors.branchDescending;
+  }
+}
+
 export function HysteresisChart({
   commandSource = "analysis-plots",
   kernel,
@@ -606,6 +930,11 @@ export function HysteresisChart({
   const liveYValue = activePoint ? getPointYValue(activePoint, yAxisKey) : getProgressYValue(progress, yAxisKey);
   const liveSettleLabel = progressSettleLabel(progress);
   const activePointSnapshotId = activePoint?.snapshot_id ?? null;
+  const replayAction = hysteresisChartReplayActionPresentation(
+    activePointSnapshotId,
+    activePoint?.snapshot_storage_status ?? null,
+    activePoint?.snapshot_storage_reason ?? null,
+  );
   const angularFamilyStatus = useMemo(() => {
     const series = Array.isArray(angularFamily?.series) ? angularFamily.series : [];
     if (series.length === 0) return null;
@@ -647,57 +976,61 @@ export function HysteresisChart({
 
   const loadSelectedPointIn3D = useCallback(() => {
     if (!activePoint) return;
-    kernel.commands.execute("hysteresis.load-point-in-3d", commandContext, {
-      stageId,
-      pointId: activePoint.point_id,
-      fieldVal: activePoint.field_value_mT,
-      mVal: getPointYValue(activePoint, yAxisKey),
-      snapshotId: activePoint.snapshot_id ?? null,
-      meshIdentity: targetMetadata.meshIdentity ?? null,
-      fieldOrientation: targetMetadata.fieldOrientation ?? null,
-      measurementAxis: targetMetadata.measurementAxis ?? null,
-      fieldRevision: targetMetadata.fieldRevision ?? null,
-    });
+    kernel.commands.execute(
+      "hysteresis.load-point-in-3d",
+      commandContext,
+      buildHysteresisLoadPointIn3DInput({
+        point: activePoint,
+        stageId,
+        targetMetadata,
+        yAxisKey,
+      }),
+    );
   }, [activePoint, commandContext, kernel.commands, stageId, targetMetadata, yAxisKey]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLDivElement>) => {
       if (points.length === 0) return;
-      if (e.key === "ArrowRight") {
-        e.preventDefault();
-        const next = adjacentHysteresisPointIndex(
-          selectedIndex,
-          progressIndex,
-          points.length,
-          1,
-        );
-        selectPoint(next);
-      } else if (e.key === "ArrowLeft") {
-        e.preventDefault();
-        const prev = adjacentHysteresisPointIndex(
-          selectedIndex,
-          progressIndex,
-          points.length,
-          -1,
-        );
-        selectPoint(prev);
-      }
-    },
-    [selectedIndex, progressIndex, selectPoint, points],
-  );
-
-  useEffect(() => {
-    if (!isPlaying || points.length === 0) return;
-    const interval = setInterval(() => {
-      const next = nextHysteresisPlaybackIndex(
+      const nextIndex = resolveHysteresisKeyboardNavigationIndex(
+        e.key,
         selectedIndex,
         progressIndex,
         points.length,
       );
-      selectPoint(next);
+      if (nextIndex == null) return;
+      e.preventDefault();
+      selectPoint(nextIndex);
+    },
+    [selectedIndex, progressIndex, selectPoint, points],
+  );
+
+  const advancePlayback = useEffectEvent(() => {
+    const next = nextHysteresisPlaybackIndex(
+      selectedIndex,
+      progressIndex,
+      points.length,
+    );
+    selectPoint(next);
+  });
+
+  const handleChartClick = useEffectEvent((params: unknown) => {
+    const event = params as ChartClickParams;
+    if (event.componentType === "series" && isChartDataPoint(event.data)) {
+      const ptId = event.data[2];
+      const idx = points.findIndex((p) => p.point_id === ptId);
+      if (idx !== -1) {
+        selectPoint(idx);
+      }
+    }
+  });
+
+  useEffect(() => {
+    if (!isPlaying || points.length === 0) return;
+    const interval = setInterval(() => {
+      advancePlayback();
     }, 800);
     return () => clearInterval(interval);
-  }, [isPlaying, progressIndex, selectPoint, selectedIndex, points]);
+  }, [isPlaying, points.length]);
 
   useEffect(() => {
     const element = elementRef.current;
@@ -712,16 +1045,7 @@ export function HysteresisChart({
       chartRef.current = chart;
       const colors = readHysteresisChartColors(element);
 
-      chart.on("click", (params: unknown) => {
-        const event = params as ChartClickParams;
-        if (event.componentType === "series" && isChartDataPoint(event.data)) {
-          const ptId = event.data[2];
-          const idx = points.findIndex((p) => p.point_id === ptId);
-          if (idx !== -1) {
-            selectPoint(idx);
-          }
-        }
-      });
+      chart.on("click", handleChartClick);
 
       const seriesList: Array<Record<string, unknown>> = [];
       const lineSeries = viewMode === "angular-family"
@@ -739,6 +1063,15 @@ export function HysteresisChart({
             formatXValue,
             branchMode,
           );
+      const adaptiveMarkerData = buildHysteresisAdaptivePointMarkerModel(
+        points,
+        branches,
+        minorLoops,
+        viewMode,
+        yAxisKey,
+        formatXValue,
+        branchMode,
+      );
       lineSeries.forEach((series, seriesIndex) => {
         if (series.branchId == null) {
           seriesList.push({
@@ -787,41 +1120,20 @@ export function HysteresisChart({
 
       const markPoints: Array<Record<string, unknown>> = [];
       const markLines: Array<Record<string, unknown>> = [];
-
-      if (metrics) {
-        if (metrics.H_c_plus != null) {
-          markPoints.push({
-            name: "Hc+",
-            value: `Hc+: ${metrics.H_c_plus.toFixed(1)} mT`,
-            coord: [formatXValue(metrics.H_c_plus), 0],
-            itemStyle: { color: colors.metric },
-          });
-        }
-        if (metrics.H_c_minus != null) {
-          markPoints.push({
-            name: "Hc-",
-            value: `Hc-: ${metrics.H_c_minus.toFixed(1)} mT`,
-            coord: [formatXValue(metrics.H_c_minus), 0],
-            itemStyle: { color: colors.metric },
-          });
-        }
-        if (metrics.M_r_plus != null) {
-          markPoints.push({
-            name: "Mr+",
-            value: `Mr+: ${metrics.M_r_plus.toFixed(3)}`,
-            coord: [0, metrics.M_r_plus],
-            itemStyle: { color: colors.remanence },
-          });
-        }
-        if (metrics.M_r_minus != null) {
-          markPoints.push({
-            name: "Mr-",
-            value: `Mr-: ${metrics.M_r_minus.toFixed(3)}`,
-            coord: [0, metrics.M_r_minus],
-            itemStyle: { color: colors.remanence },
-          });
-        }
-      }
+      const metricMarkers = buildHysteresisMetricMarkerModel({
+        formatXValue,
+        metrics,
+        points,
+        yAxisKey,
+      });
+      metricMarkers.forEach((marker) => {
+        markPoints.push({
+          name: marker.label,
+          value: formatHysteresisMetricMarkerValue(marker),
+          coord: [marker.x, marker.value ?? 0],
+          itemStyle: { color: hysteresisMetricMarkerColor(marker.kind, colors) },
+        });
+      });
 
       if (liveFieldValue != null) {
         markLines.push({
@@ -906,6 +1218,20 @@ export function HysteresisChart({
               data: markLines,
             } : undefined,
           })),
+          ...(adaptiveMarkerData.length > 0 ? [{
+            name: "Adaptive refinement points",
+            type: "scatter",
+            coordinateSystem: "cartesian2d",
+            data: adaptiveMarkerData,
+            symbol: "diamond",
+            symbolSize: 11,
+            itemStyle: {
+              borderColor: colors.surface,
+              borderWidth: 1,
+              color: colors.metric,
+            },
+            z: 9,
+          }] : []),
           ...(activePoint ? [{
             name: "Active Point",
             type: "effectScatter",
@@ -941,13 +1267,21 @@ export function HysteresisChart({
     return () => {
       disposed = true;
       resizeObserver.disconnect();
+      chartRef.current?.off("click", handleChartClick);
       chartRef.current?.dispose();
     };
-  }, [activePoint, angularFamily, branchMode, branches, formatXValue, liveFieldValue, liveYValue, metrics, minorLoops, points, progress, selectPoint, viewMode, xAxisUnit, yAxisKey]);
+  }, [activePoint, angularFamily, branchMode, branches, formatXValue, liveFieldValue, liveYValue, metrics, minorLoops, points, progress, viewMode, xAxisUnit, yAxisKey]);
 
   return (
     <div
       className="fm-hysteresis-container"
+      data-hysteresis-active-point-id={activePoint?.point_id ?? ""}
+      data-hysteresis-active-snapshot-id={activePointSnapshotId ?? ""}
+      data-hysteresis-live-field-mt={liveFieldValue ?? ""}
+      data-hysteresis-point-count={points.length}
+      data-hysteresis-stage-id={stageId}
+      role="group"
+      aria-label="Hysteresis chart"
       tabIndex={0}
       onKeyDown={handleKeyDown}
     >
@@ -1049,12 +1383,8 @@ export function HysteresisChart({
             size="sm"
             variant="primary"
             onClick={loadSelectedPointIn3D}
-            disabled={!activePointSnapshotId}
-            title={
-              activePointSnapshotId
-                ? "Load point magnetization in 3D viewport"
-                : "Snapshot not saved for this point"
-            }
+            disabled={replayAction.disabled}
+            title={replayAction.title}
           >
             Load in 3D
           </Button>
@@ -1102,7 +1432,14 @@ export function HysteresisChart({
               min="0"
               max={points.length - 1}
               value={resolvedActiveIndex >= 0 ? resolvedActiveIndex : 0}
-              onChange={(e) => selectPoint(Number(e.target.value))}
+              onChange={(e) => {
+                const nextIndex = resolveHysteresisScrubberPointIndex(
+                  e.target.value,
+                  points.length,
+                );
+                if (nextIndex != null) selectPoint(nextIndex);
+              }}
+              aria-label="Hysteresis point scrubber"
               className="fm-hysteresis-scrubber"
             />
           )}

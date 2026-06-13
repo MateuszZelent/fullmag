@@ -102,7 +102,7 @@ use crate::fdm::cpu::reference as cpu_reference;
 use crate::fdm::gpu::cuda::native as native_fdm;
 use crate::native_fem::{
     native_frequency_domain_availability, FrequencyDomainAvailabilityRequest,
-    FrequencyDomainStudyKind,
+    FrequencyDomainPhaseConvention, FrequencyDomainStudyKind,
 };
 use fullmag_ir::{BackendPlanIR, FdmMultilayerPlanIR, FdmPlanIR, OutputIR, ProblemIR};
 use interactive::InteractiveBackend;
@@ -130,6 +130,7 @@ pub struct FrequencyDomainAvailabilitySummary {
     pub study_kind: String,
     pub driven_response_available: bool,
     pub modal_solver_available: bool,
+    pub static_periodic_response_available: bool,
     pub floquet_modal_available: bool,
     pub floquet_response_available: bool,
     pub dynamic_demag_k_available: bool,
@@ -221,6 +222,7 @@ pub struct FrequencyDomainManifest {
     pub eigen_namespace: String,
     pub response: FrequencyDomainAvailabilitySummary,
     pub eigenmodes: FrequencyDomainAvailabilitySummary,
+    pub floquet_nonzero_k_response_supported: bool,
     pub floquet_nonzero_k_demag_supported: bool,
     pub capabilities: FrequencyDomainCapabilitySnapshot,
 }
@@ -230,19 +232,25 @@ pub fn frequency_domain_manifest_v1() -> FrequencyDomainManifest {
         study_kind: FrequencyDomainStudyKind::FrequencyResponse,
         requires_driven_solver: true,
         requires_modal_solver: false,
+        requires_static_periodic_boundary: false,
         requires_floquet_boundary: false,
         requires_nonzero_k_dynamic_demag: false,
         requires_gpu: false,
         strict_device: false,
+        floquet_k_vector_rad_per_m: None,
+        phase_convention: FrequencyDomainPhaseConvention::ExpIOmegaT,
     });
     let eigenmodes = native_frequency_domain_availability(FrequencyDomainAvailabilityRequest {
         study_kind: FrequencyDomainStudyKind::Eigenmodes,
         requires_driven_solver: false,
         requires_modal_solver: true,
+        requires_static_periodic_boundary: false,
         requires_floquet_boundary: true,
         requires_nonzero_k_dynamic_demag: true,
         requires_gpu: false,
         strict_device: false,
+        floquet_k_vector_rad_per_m: Some([1.0, 0.0, 0.0]),
+        phase_convention: FrequencyDomainPhaseConvention::ExpIOmegaT,
     });
 
     FrequencyDomainManifest {
@@ -250,6 +258,7 @@ pub fn frequency_domain_manifest_v1() -> FrequencyDomainManifest {
         existing_frequency_response_namespace_preserved: true,
         family_namespace: "frequencyDomain".to_string(),
         eigen_namespace: "eigen".to_string(),
+        floquet_nonzero_k_response_supported: response.floquet_response_available,
         floquet_nonzero_k_demag_supported: response.dynamic_demag_k_available
             || eigenmodes.dynamic_demag_k_available,
         response: response.into(),
@@ -271,47 +280,110 @@ fn frequency_domain_capability_snapshot_v1() -> FrequencyDomainCapabilitySnapsho
     FrequencyDomainCapabilitySnapshot {
         schema_version: "frequency_domain_capabilities.v1".to_string(),
         modal: FrequencyDomainModalCapabilities {
-            reference_cpu: capability("reference_executable", "runner FEM eigen reference path emits modal artifacts"),
+            reference_cpu: capability(
+                "reference_executable",
+                "runner FEM eigen reference path emits modal artifacts",
+            ),
             production_cpu: capability("unsupported", unsupported),
             production_gpu: capability("unsupported", unsupported),
-            k_path: capability("reference_executable", "runner FEM eigen reference path emits k-path dispersion artifacts"),
-            mode_tracking: capability("reference_executable", "runner FEM eigen reference path emits branch tracking artifacts"),
-            mode_field_payload: capability("reference_executable", "mode metadata and binary mode-field payloads are artifact-backed"),
-            linewidths: capability("reference_executable", "modal artifacts preserve imaginary-frequency linewidth metadata"),
+            k_path: capability(
+                "reference_executable",
+                "runner FEM eigen reference path emits k-path dispersion artifacts",
+            ),
+            mode_tracking: capability(
+                "reference_executable",
+                "runner FEM eigen reference path emits branch tracking artifacts",
+            ),
+            mode_field_payload: capability(
+                "reference_executable",
+                "mode metadata and binary mode-field payloads are artifact-backed",
+            ),
+            linewidths: capability(
+                "reference_executable",
+                "modal artifacts preserve imaginary-frequency linewidth metadata",
+            ),
             absorption_from_modes: capability("unsupported", unsupported),
         },
         boundary: FrequencyDomainBoundaryCapabilities {
-            static_periodic: capability("semantic_only", "periodic pair metadata is represented but not production-enforced for frequency-domain solves"),
-            floquet_modal: capability("semantic_only", "Floquet modal semantics exist, but production operator enforcement is not available"),
-            floquet_response: capability("unsupported", "driven nonzero-k Floquet response is gated until operator and drive assembly enforce phase constraints"),
-            periodic_pair_diagnostics: capability("reference_executable", "mesh periodic-pair diagnostics are exposed as session resources"),
+            static_periodic: capability(
+                "partial_production_executable",
+                "k=0 static-periodic driven response is production-enforced on the native FEM CPU response lane when mesh.periodic_node_pairs metadata is present; nonzero-k Floquet remains unsupported",
+            ),
+            floquet_modal: capability(
+                "semantic_only",
+                "Floquet modal semantics exist, but production operator enforcement is not available",
+            ),
+            floquet_response: capability(
+                "unsupported",
+                "driven nonzero-k Floquet response is gated until operator and drive assembly enforce phase constraints",
+            ),
+            periodic_pair_diagnostics: capability(
+                "reference_executable",
+                "mesh periodic-pair diagnostics are exposed as session resources",
+            ),
         },
         demag: FrequencyDomainDemagCapabilities {
-            static_periodic_pbc: capability("semantic_only", "static FEM demag PBC semantics are documented but not promoted for frequency-domain production solves"),
+            static_periodic_pbc: capability(
+                "semantic_only",
+                "static FEM demag PBC semantics are documented but not promoted for frequency-domain production solves",
+            ),
             floquet_dynamic_k: capability("unsupported", dynamic_demag_k),
         },
         dispersion: FrequencyDomainDispersionCapabilities {
-            k_path: capability("reference_executable", "runner FEM eigen reference path emits dispersion.csv"),
-            branch_tracking: capability("reference_executable", "runner FEM eigen reference path emits branches.v2 artifacts"),
+            k_path: capability(
+                "reference_executable",
+                "runner FEM eigen reference path emits dispersion.csv",
+            ),
+            branch_tracking: capability(
+                "reference_executable",
+                "runner FEM eigen reference path emits branches.v2 artifacts",
+            ),
         },
         validation: FrequencyDomainValidationCapabilities {
-            fmr_k0: capability("source_visible", "validation artifacts and tests are being assembled; no production FMR gate is complete"),
+            fmr_k0: capability(
+                "source_visible",
+                "validation artifacts and tests are being assembled; no production FMR gate is complete",
+            ),
         },
         response: FrequencyDomainResponseCapabilities {
-            magnetic_cpu: capability("reference_executable", "dense block-real validation path emits driven response sweep artifacts"),
+            magnetic_cpu: capability(
+                "partial_production_executable",
+                "native FEM production CPU response executes the gamma/free-boundary and k=0 static-periodic exchange/Zeeman/uniaxial-anisotropy/interfacial-DMI/bulk-DMI/damping slice; demag, nonzero-k Floquet/Bloch, and missing periodic mesh-pair metadata are rejected before dense validation fallback",
+            ),
             magnetic_gpu: capability("unsupported", unsupported),
-            frequency_sweep: capability("reference_executable", "dense block-real validation path emits per-frequency artifacts and progress"),
+            frequency_sweep: capability(
+                "partial_production_executable",
+                "production CPU and dense validation lanes emit per-frequency artifacts and progress for supported response slices",
+            ),
             mode_projected: capability("unsupported", unsupported),
             magnetoelastic_quasistatic: capability("unsupported", unsupported),
             magnetoelastic_elastodynamic: capability("unsupported", unsupported),
         },
         visualization: FrequencyDomainVisualizationCapabilities {
-            modal_spectrum_chart: capability("reference_executable", "artifact-backed spectrum chart resources are exposed"),
-            modal_dispersion_chart: capability("reference_executable", "artifact-backed dispersion chart resources are exposed"),
-            mode_table: capability("reference_executable", "artifact-backed modal table resources are exposed"),
-            mode_3d_overlay: capability("reference_executable", "artifact-backed mode-field payloads can be projected in 3D"),
-            response_sweep_chart: capability("reference_executable", "artifact-backed response sweep chart resources are exposed"),
-            response_field_3d_overlay: capability("reference_executable", "artifact-backed response field payloads can be projected in 3D"),
+            modal_spectrum_chart: capability(
+                "reference_executable",
+                "artifact-backed spectrum chart resources are exposed",
+            ),
+            modal_dispersion_chart: capability(
+                "reference_executable",
+                "artifact-backed dispersion chart resources are exposed",
+            ),
+            mode_table: capability(
+                "reference_executable",
+                "artifact-backed modal table resources are exposed",
+            ),
+            mode_3d_overlay: capability(
+                "reference_executable",
+                "artifact-backed mode-field payloads can be projected in 3D",
+            ),
+            response_sweep_chart: capability(
+                "reference_executable",
+                "artifact-backed response sweep chart resources are exposed",
+            ),
+            response_field_3d_overlay: capability(
+                "reference_executable",
+                "artifact-backed response field payloads can be projected in 3D",
+            ),
         },
     }
 }
@@ -323,6 +395,7 @@ impl From<crate::native_fem::FrequencyDomainAvailability> for FrequencyDomainAva
             study_kind: value.study_kind,
             driven_response_available: value.driven_response_available,
             modal_solver_available: value.modal_solver_available,
+            static_periodic_response_available: value.static_periodic_response_available,
             floquet_modal_available: value.floquet_modal_available,
             floquet_response_available: value.floquet_response_available,
             dynamic_demag_k_available: value.dynamic_demag_k_available,
@@ -347,13 +420,23 @@ mod frequency_domain_manifest_tests {
         assert_eq!(manifest.eigen_namespace, "eigen");
         assert_eq!(manifest.response.study_kind, "frequency_response");
         assert_eq!(manifest.eigenmodes.study_kind, "eigenmodes");
-        assert!(!manifest.response.driven_response_available);
+        assert_eq!(
+            manifest.response.driven_response_available,
+            manifest.response.status == "ok"
+        );
+        assert!(!manifest.floquet_nonzero_k_response_supported);
         assert!(!manifest.eigenmodes.modal_solver_available);
         assert!(!manifest.floquet_nonzero_k_demag_supported);
         assert_eq!(
             manifest.capabilities.response.magnetic_cpu.status,
-            "reference_executable"
+            "partial_production_executable"
         );
+        assert!(manifest
+            .capabilities
+            .response
+            .magnetic_cpu
+            .reason
+            .contains("bulk-DMI"));
         assert_eq!(
             manifest.capabilities.response.magnetic_gpu.status,
             "unsupported"
@@ -628,7 +711,7 @@ pub fn run_planned_problem(
     output_dir: &Path,
 ) -> Result<RunResult, RunError> {
     if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
-        return hysteresis::run_planned_hysteresis(problem, plan, until_seconds, output_dir);
+        return hysteresis::run_planned_hysteresis(problem, plan, until_seconds, output_dir, None);
     }
     let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start(
         output_dir.to_path_buf(),
@@ -691,7 +774,7 @@ pub fn run_planned_problem(
         }
         BackendPlanIR::FemFrequencyResponse(response) => {
             frequency_response::execute_fem_frequency_response_validation(
-                response, output_dir, None,
+                response, output_dir, None, None,
             )
         }
     });
@@ -725,6 +808,30 @@ pub fn run_planned_problem(
     }
 
     Ok(executed.result)
+}
+
+/// Run a problem while providing the canonical stage id for hysteresis artifacts.
+///
+/// Existing callers can use `run_planned_problem`; scripted stage orchestrators
+/// use this variant so persisted hysteresis snapshot refs can be scoped to the
+/// owning stage.
+pub fn run_planned_problem_with_hysteresis_stage_id(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    until_seconds: f64,
+    output_dir: &Path,
+    hysteresis_stage_id: Option<&str>,
+) -> Result<RunResult, RunError> {
+    if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
+        return hysteresis::run_planned_hysteresis(
+            problem,
+            plan,
+            until_seconds,
+            output_dir,
+            hysteresis_stage_id,
+        );
+    }
+    run_planned_problem(problem, plan, until_seconds, output_dir)
 }
 
 pub fn fem_observables_for_magnetization(
@@ -774,6 +881,7 @@ pub fn run_planned_problem_with_callback(
             until_seconds,
             output_dir,
             field_every_n,
+            None,
             &mut on_step,
         );
     }
@@ -857,7 +965,10 @@ pub fn run_planned_problem_with_callback(
         }
         BackendPlanIR::FemFrequencyResponse(response) => {
             frequency_response::execute_fem_frequency_response_validation(
-                response, output_dir, None,
+                response,
+                output_dir,
+                None,
+                Some(&mut on_step as &mut dyn FnMut(StepUpdate) -> StepAction),
             )
         }
     });
@@ -945,6 +1056,37 @@ pub fn run_planned_problem_with_callback(
     });
 
     Ok(executed.result)
+}
+
+/// Run a problem with a live callback and scoped hysteresis artifact refs.
+pub fn run_planned_problem_with_callback_and_hysteresis_stage_id(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    until_seconds: f64,
+    output_dir: &Path,
+    field_every_n: u64,
+    hysteresis_stage_id: Option<&str>,
+    mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+) -> Result<RunResult, RunError> {
+    if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
+        return hysteresis::run_planned_hysteresis_with_callback(
+            problem,
+            plan,
+            until_seconds,
+            output_dir,
+            field_every_n,
+            hysteresis_stage_id,
+            &mut on_step,
+        );
+    }
+    run_planned_problem_with_callback(
+        problem,
+        plan,
+        until_seconds,
+        output_dir,
+        field_every_n,
+        on_step,
+    )
 }
 
 /// Run a problem with a live-preview request provider.
@@ -1038,6 +1180,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
             display_selection,
             interrupt_requested,
             initial_snapshot,
+            None,
             &mut on_step,
         );
     }
@@ -1129,6 +1272,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
                 response,
                 output_dir,
                 interrupt_requested,
+                Some(&mut on_step as &mut dyn FnMut(StepUpdate) -> StepAction),
             )
         }
     });
@@ -1209,6 +1353,46 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
     });
 
     Ok(executed.result)
+}
+
+/// Run a problem with live preview and scoped hysteresis artifact refs.
+pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_hysteresis_stage_id(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    until_seconds: f64,
+    output_dir: &Path,
+    field_every_n: u64,
+    display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
+    interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
+    initial_snapshot: bool,
+    hysteresis_stage_id: Option<&str>,
+    mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+) -> Result<RunResult, RunError> {
+    if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
+        return hysteresis::run_planned_hysteresis_with_live_preview(
+            problem,
+            plan,
+            until_seconds,
+            output_dir,
+            field_every_n,
+            display_selection,
+            interrupt_requested,
+            initial_snapshot,
+            hysteresis_stage_id,
+            &mut on_step,
+        );
+    }
+    run_planned_problem_with_live_preview_interruptible_with_initial_snapshot(
+        problem,
+        plan,
+        until_seconds,
+        output_dir,
+        field_every_n,
+        display_selection,
+        interrupt_requested,
+        initial_snapshot,
+        on_step,
+    )
 }
 
 /// Run an FDM problem using a persistent interactive runtime for low-latency
@@ -1702,12 +1886,16 @@ pub fn resolve_planned_runtime_engine(
                 accelerator: accelerator.to_string(),
             })
         }
-        BackendPlanIR::FemFrequencyResponse(_) => Ok(RuntimeEngineInfo {
-            backend_family: "fem_frequency_response".to_string(),
-            engine_id: "fem_frequency_response_dense_validation".to_string(),
-            engine_label: "FEM Frequency Response Dense Validation".to_string(),
-            accelerator: "cpu".to_string(),
-        }),
+        BackendPlanIR::FemFrequencyResponse(_) => {
+            let (engine_id, engine_label, accelerator) =
+                fem_frequency_response_runtime_engine_info();
+            Ok(RuntimeEngineInfo {
+                backend_family: "fem_frequency_response".to_string(),
+                engine_id: engine_id.to_string(),
+                engine_label: engine_label.to_string(),
+                accelerator: accelerator.to_string(),
+            })
+        }
     }
 }
 
@@ -1778,16 +1966,49 @@ fn fem_frequency_response_session_runtime_defaults(
     engine: dispatch::FemEngine,
 ) -> (&'static str, &'static str, &'static str) {
     match engine {
+        #[cfg(feature = "fem-gpu")]
+        dispatch::FemEngine::CpuNative => (
+            "fem-frequency-response-production-cpu",
+            "fem_frequency_response_production_cpu",
+            "bin/fullmag-fem-gpu-bin",
+        ),
+        #[cfg(not(feature = "fem-gpu"))]
         dispatch::FemEngine::CpuNative => (
             "fem-frequency-response-validation",
             "fem_frequency_response_dense_validation",
             "../../bin/fullmag-bin",
         ),
+        #[cfg(feature = "fem-gpu")]
+        dispatch::FemEngine::NativeGpu => (
+            "fem-frequency-response-production-cpu",
+            "fem_frequency_response_production_cpu",
+            "bin/fullmag-fem-gpu-bin",
+        ),
+        #[cfg(not(feature = "fem-gpu"))]
         dispatch::FemEngine::NativeGpu => (
             "fem-frequency-response-validation",
             "fem_frequency_response_dense_validation",
             "../../bin/fullmag-bin",
         ),
+    }
+}
+
+fn fem_frequency_response_runtime_engine_info() -> (&'static str, &'static str, &'static str) {
+    #[cfg(feature = "fem-gpu")]
+    {
+        (
+            "fem_frequency_response_production_cpu",
+            "FEM Frequency Response Production CPU",
+            "cpu",
+        )
+    }
+    #[cfg(not(feature = "fem-gpu"))]
+    {
+        (
+            "fem_frequency_response_dense_validation",
+            "FEM Frequency Response Dense Validation",
+            "cpu",
+        )
     }
 }
 
@@ -2112,6 +2333,7 @@ mod tests {
     use fullmag_ir::{FdmGridAssetIR, GeometryAssetsIR, GeometryEntryIR};
     use serde_json::json;
     use std::fs;
+    #[cfg(not(feature = "fem-gpu"))]
     use std::sync::atomic::AtomicBool;
     use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -2173,6 +2395,7 @@ mod tests {
             spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
             excitation: fullmag_ir::FrequencyExcitationIR {
                 field_au_per_m: [0.0, 0.0, 1.0],
+                phase_rad: 0.0,
             },
             frequencies_hz: fullmag_ir::FrequencySweepIR {
                 values_hz: frequencies_hz,
@@ -2185,6 +2408,42 @@ mod tests {
             },
         };
         problem
+    }
+
+    #[cfg(not(feature = "fem-gpu"))]
+    fn assert_frequency_response_rejects_without_dense_artifacts(
+        problem: &fullmag_ir::ProblemIR,
+        plan: &fullmag_ir::ExecutionPlanIR,
+        output_dir_slug: &str,
+        expected_reason: &str,
+    ) {
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-runner-frequency-response-{output_dir_slug}-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+
+        let err = run_planned_problem(problem, plan, 0.0, &output_dir)
+            .expect_err("unsupported frequency response must not fall back to dense validation");
+
+        assert!(err.message.contains(expected_reason), "{}", err.message);
+        assert!(
+            err.message
+                .contains("Dense validation fallback is disabled"),
+            "{}",
+            err.message
+        );
+        assert!(
+            !output_dir
+                .join("response/magnetic_response_sweep.v1.json")
+                .exists(),
+            "unsupported response must not write dense validation sweep artifacts"
+        );
+        let _ = fs::remove_dir_all(&output_dir);
     }
 
     #[test]
@@ -3518,6 +3777,7 @@ mod tests {
         fs::remove_dir_all(&output_dir).expect("temporary artifact directory should be removable");
     }
 
+    #[cfg(not(feature = "fem-gpu"))]
     #[test]
     fn fem_frequency_response_plan_runs_dense_validation_and_writes_response_bundle() {
         let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
@@ -3572,6 +3832,7 @@ mod tests {
             spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
             excitation: fullmag_ir::FrequencyExcitationIR {
                 field_au_per_m: [0.0, 0.0, 1.0],
+                phase_rad: 0.0,
             },
             frequencies_hz: fullmag_ir::FrequencySweepIR {
                 values_hz: vec![1.0e9, 2.0e9],
@@ -3644,7 +3905,7 @@ mod tests {
         .expect("response diagnostics should parse");
         assert_eq!(
             diagnostics["schema_version"],
-            "frequency_response_diagnostics.v1"
+            "frequency_domain_response_diagnostics.v1"
         );
         assert_eq!(diagnostics["status"], "completed");
         assert_eq!(diagnostics["complete"], true);
@@ -3672,6 +3933,362 @@ mod tests {
         fs::remove_dir_all(&output_dir).expect("temporary artifact directory should be removable");
     }
 
+    #[cfg(not(feature = "fem-gpu"))]
+    #[test]
+    fn fem_frequency_response_planned_callback_reports_dense_validation_progress() {
+        let problem = fem_frequency_response_validation_problem(vec![1.0e9, 2.0e9]);
+        let plan = fullmag_plan::plan(&problem).expect("frequency response should plan");
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-runner-frequency-response-live-progress-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+        let mut seen_updates = Vec::new();
+
+        let result =
+            run_planned_problem_with_callback(&problem, &plan, 0.0, &output_dir, 1, |update| {
+                seen_updates.push((update.stats.step, update.finished));
+                StepAction::Continue
+            })
+            .expect("frequency response validation runner should stream progress");
+
+        assert_eq!(result.status, RunStatus::Completed);
+        assert_eq!(seen_updates, vec![(1, false), (2, false), (2, true)]);
+        fs::remove_dir_all(&output_dir).expect("temporary artifact directory should be removable");
+    }
+
+    #[cfg(not(feature = "fem-gpu"))]
+    #[test]
+    fn fem_frequency_response_dmi_rejects_dense_validation_fallback() {
+        let mut problem = fem_frequency_response_validation_problem(vec![1.0e9]);
+        problem.energy_terms = vec![
+            fullmag_ir::EnergyTermIR::Exchange,
+            fullmag_ir::EnergyTermIR::BulkDmi { d: 2.5e-3 },
+        ];
+        let plan = fullmag_plan::plan(&problem).expect("frequency response with DMI should plan");
+        assert_frequency_response_rejects_without_dense_artifacts(
+            &problem,
+            &plan,
+            "dmi-reject",
+            "requires the native FEM production CPU solver",
+        );
+    }
+
+    #[test]
+    fn fem_frequency_response_nonzero_k_rejects_dense_validation_fallback() {
+        let mut problem = fem_frequency_response_validation_problem(vec![1.0e9]);
+        if let fullmag_ir::StudyIR::FrequencyResponse { k_sampling, .. } = &mut problem.study {
+            *k_sampling = Some(fullmag_ir::KSamplingIR::Single {
+                k_vector: [1.0e6, 0.0, 0.0],
+            });
+        }
+        let error = fullmag_plan::plan(&problem)
+            .expect_err("nonzero-k frequency response should reject during planning");
+        assert!(
+            error
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("nonzero-k Floquet/Bloch")),
+            "expected nonzero-k Floquet/Bloch rejection, got {error:?}"
+        );
+    }
+
+    #[test]
+    fn fem_frequency_response_periodic_floquet_rejects_dense_validation_fallback() {
+        let mut problem = fem_frequency_response_validation_problem(vec![1.0e9]);
+        let mesh = problem
+            .geometry_assets
+            .as_mut()
+            .expect("fixture should carry FEM geometry assets")
+            .fem_mesh_assets
+            .first_mut()
+            .expect("fixture should carry one FEM mesh asset")
+            .mesh
+            .as_mut()
+            .expect("fixture should carry inline FEM mesh");
+        mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
+            pair_id: "x_faces".to_string(),
+            source_marker: None,
+            destination_marker: None,
+            marker_a: 10,
+            marker_b: 11,
+            translation: None,
+            tolerance: None,
+            axis_hint: None,
+            orientation: None,
+            pairing_policy: None,
+        }];
+        mesh.periodic_node_pairs = vec![fullmag_ir::MeshPeriodicNodePairIR {
+            pair_id: "x_faces".to_string(),
+            node_a: 0,
+            node_b: 1,
+        }];
+        if let fullmag_ir::StudyIR::FrequencyResponse { spin_wave_bc, .. } = &mut problem.study {
+            *spin_wave_bc = fullmag_ir::SpinWaveBoundaryConditionIR::Config(
+                fullmag_ir::SpinWaveBoundaryConfigIR {
+                    kind: fullmag_ir::SpinWaveBoundaryKindIR::Floquet,
+                    boundary_pair_id: Some("x_faces".to_string()),
+                    pair_ids: Vec::new(),
+                    phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                    surface_anisotropy_ks: None,
+                    surface_anisotropy_axis: None,
+                },
+            );
+        }
+        let error = fullmag_plan::plan(&problem)
+            .expect_err("Floquet frequency response should reject during planning");
+        assert!(
+            error
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("nonzero-k Floquet/Bloch")),
+            "expected Floquet/Bloch rejection, got {error:?}"
+        );
+    }
+
+    #[test]
+    fn fem_frequency_response_native_production_cpu_unavailable_is_not_dense_fallback() {
+        let source = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/frequency_response.rs"
+        ))
+        .expect("frequency_response.rs should be readable");
+
+        assert!(
+            !source.contains("NativeFrequencyDomainStatus::Unavailable => Ok(None)"),
+            "native production CPU unavailable must surface as an error, not dense validation fallback"
+        );
+        assert!(
+            !source.contains("let Ok(native_result) = native_result else"),
+            "native production CPU invocation errors must surface as errors, not dense validation fallback"
+        );
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    #[ignore = "requires native FEM library with production CPU frequency-domain support"]
+    fn fem_frequency_response_exchange_zeeman_runs_native_production_cpu() {
+        let mut problem = fem_frequency_response_validation_problem(vec![0.15915494309189535]);
+        const MU0: f64 = 4.0 * std::f64::consts::PI * 1.0e-7;
+        problem.energy_terms = vec![
+            fullmag_ir::EnergyTermIR::Exchange,
+            fullmag_ir::EnergyTermIR::Zeeman {
+                b: [0.0, 0.0, 2.0 * MU0],
+            },
+        ];
+        if let fullmag_ir::StudyIR::FrequencyResponse {
+            excitation,
+            k_sampling,
+            ..
+        } = &mut problem.study
+        {
+            excitation.field_au_per_m = [1.0, 0.0, 0.0];
+            *k_sampling = Some(fullmag_ir::KSamplingIR::Single {
+                k_vector: [0.0, 0.0, 0.0],
+            });
+        }
+        let plan =
+            fullmag_plan::plan(&problem).expect("exchange+Zeeman frequency response should plan");
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-runner-frequency-response-production-cpu-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+
+        let result = run_planned_problem(&problem, &plan, 0.0, &output_dir)
+            .expect("exchange+Zeeman frequency response should run through native production CPU");
+
+        assert_eq!(result.status, RunStatus::Completed);
+        let family_manifest_path = output_dir.join("frequency_domain/manifest.v1.json");
+        let sweep_v2_path = output_dir.join("response/magnetic_response_sweep.v2.json");
+        let field_payload_path =
+            output_dir.join("response/field_payloads/frequency_0000/vector.bin");
+        assert!(family_manifest_path.is_file());
+        assert!(sweep_v2_path.is_file());
+        assert!(field_payload_path.is_file());
+        let family_manifest: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(family_manifest_path)
+                .expect("production CPU frequency-domain manifest should be readable"),
+        )
+        .expect("production CPU frequency-domain manifest should parse");
+        assert_eq!(
+            family_manifest["resolved_execution"]["engine"],
+            "native_fem_mfem_frequency_domain_cpu"
+        );
+        assert_eq!(
+            family_manifest["resolved_execution"]["reference_or_production"],
+            "production"
+        );
+        assert_eq!(
+            family_manifest["resolved_execution"]["solver_model"],
+            "matrix_free_gmres"
+        );
+        assert_eq!(
+            family_manifest["capabilities"]["production_native_solver_available"],
+            true
+        );
+        assert_eq!(
+            family_manifest["capabilities"]["validation_artifact"],
+            false
+        );
+
+        fs::remove_dir_all(&output_dir).expect("temporary artifact directory should be removable");
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    #[ignore = "requires native FEM library with production CPU frequency-domain DMI support"]
+    fn fem_frequency_response_bulk_dmi_runs_native_production_cpu() {
+        let mut problem = fem_frequency_response_validation_problem(vec![0.15915494309189535]);
+        problem.energy_terms = vec![
+            fullmag_ir::EnergyTermIR::Exchange,
+            fullmag_ir::EnergyTermIR::BulkDmi { d: 2.5e-3 },
+        ];
+        if let fullmag_ir::StudyIR::FrequencyResponse {
+            excitation,
+            k_sampling,
+            ..
+        } = &mut problem.study
+        {
+            excitation.field_au_per_m = [1.0, 0.5, 0.0];
+            *k_sampling = Some(fullmag_ir::KSamplingIR::Single {
+                k_vector: [0.0, 0.0, 0.0],
+            });
+        }
+        let plan =
+            fullmag_plan::plan(&problem).expect("bulk-DMI frequency response should plan for FEM");
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-runner-frequency-response-production-cpu-dmi-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+
+        let result = run_planned_problem(&problem, &plan, 0.0, &output_dir)
+            .expect("bulk-DMI frequency response should run through native production CPU");
+
+        assert_eq!(result.status, RunStatus::Completed);
+        let family_manifest_path = output_dir.join("frequency_domain/manifest.v1.json");
+        let sweep_v2_path = output_dir.join("response/magnetic_response_sweep.v2.json");
+        let field_payload_path =
+            output_dir.join("response/field_payloads/frequency_0000/vector.bin");
+        assert!(family_manifest_path.is_file());
+        assert!(sweep_v2_path.is_file());
+        assert!(field_payload_path.is_file());
+        let family_manifest: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(family_manifest_path)
+                .expect("production CPU DMI frequency-domain manifest should be readable"),
+        )
+        .expect("production CPU DMI frequency-domain manifest should parse");
+        assert_eq!(
+            family_manifest["resolved_execution"]["engine"],
+            "native_fem_mfem_frequency_domain_cpu"
+        );
+        assert_eq!(
+            family_manifest["resolved_execution"]["reference_or_production"],
+            "production"
+        );
+        assert_eq!(
+            family_manifest["capabilities"]["production_native_solver_available"],
+            true
+        );
+        assert_eq!(
+            family_manifest["capabilities"]["validation_artifact"],
+            false
+        );
+
+        fs::remove_dir_all(&output_dir).expect("temporary artifact directory should be removable");
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    #[ignore = "requires native FEM library with production CPU frequency-domain DMI support"]
+    fn fem_frequency_response_interfacial_dmi_runs_native_production_cpu() {
+        let mut problem = fem_frequency_response_validation_problem(vec![0.15915494309189535]);
+        problem.energy_terms = vec![
+            fullmag_ir::EnergyTermIR::Exchange,
+            fullmag_ir::EnergyTermIR::InterfacialDmi {
+                d: 1.5e-3,
+                interface_normal: Some([0.0, 0.0, 2.0]),
+            },
+        ];
+        if let fullmag_ir::StudyIR::FrequencyResponse {
+            excitation,
+            k_sampling,
+            ..
+        } = &mut problem.study
+        {
+            excitation.field_au_per_m = [0.5, 1.0, 0.0];
+            *k_sampling = Some(fullmag_ir::KSamplingIR::Single {
+                k_vector: [0.0, 0.0, 0.0],
+            });
+        }
+        let plan = fullmag_plan::plan(&problem)
+            .expect("interfacial-DMI frequency response should plan for FEM");
+        if let fullmag_ir::BackendPlanIR::FemFrequencyResponse(response) = &plan.backend_plan {
+            assert_eq!(response.interfacial_dmi, Some(1.5e-3));
+            assert_eq!(response.dmi_interface_normal, Some([0.0, 0.0, 1.0]));
+        } else {
+            panic!("expected FEM frequency response plan");
+        }
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-runner-frequency-response-production-cpu-idmi-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+
+        let result = run_planned_problem(&problem, &plan, 0.0, &output_dir)
+            .expect("interfacial-DMI frequency response should run through native production CPU");
+
+        assert_eq!(result.status, RunStatus::Completed);
+        let family_manifest_path = output_dir.join("frequency_domain/manifest.v1.json");
+        let sweep_v2_path = output_dir.join("response/magnetic_response_sweep.v2.json");
+        let field_payload_path =
+            output_dir.join("response/field_payloads/frequency_0000/vector.bin");
+        assert!(family_manifest_path.is_file());
+        assert!(sweep_v2_path.is_file());
+        assert!(field_payload_path.is_file());
+        let family_manifest: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(family_manifest_path)
+                .expect("production CPU iDMI frequency-domain manifest should be readable"),
+        )
+        .expect("production CPU iDMI frequency-domain manifest should parse");
+        assert_eq!(
+            family_manifest["resolved_execution"]["engine"],
+            "native_fem_mfem_frequency_domain_cpu"
+        );
+        assert_eq!(
+            family_manifest["resolved_execution"]["reference_or_production"],
+            "production"
+        );
+        assert_eq!(
+            family_manifest["capabilities"]["production_native_solver_available"],
+            true
+        );
+        assert_eq!(
+            family_manifest["capabilities"]["validation_artifact"],
+            false
+        );
+
+        fs::remove_dir_all(&output_dir).expect("temporary artifact directory should be removable");
+    }
+
+    #[cfg(not(feature = "fem-gpu"))]
     #[test]
     fn fem_frequency_response_interrupt_before_first_point_writes_cancelled_manifest() {
         let problem = fem_frequency_response_validation_problem(vec![1.0e9, 2.0e9, 3.0e9]);
@@ -3893,6 +4510,16 @@ mod tests {
                 "../../bin/fullmag-bin",
             )
         );
+        #[cfg(feature = "fem-gpu")]
+        assert_eq!(
+            fem_frequency_response_session_runtime_defaults(dispatch::FemEngine::CpuNative),
+            (
+                "fem-frequency-response-production-cpu",
+                "fem_frequency_response_production_cpu",
+                "bin/fullmag-fem-gpu-bin",
+            )
+        );
+        #[cfg(not(feature = "fem-gpu"))]
         assert_eq!(
             fem_frequency_response_session_runtime_defaults(dispatch::FemEngine::CpuNative),
             (

@@ -81,6 +81,7 @@ struct TangentFrequencyMassDiagnostics {
     std::uint64_t node_count = 0;
     std::uint64_t tangent_dof_count = 0;
     double alpha = 0.0;
+    double max_alpha = 0.0;
     double max_abs_output = 0.0;
     char error_message[128] = "";
 };
@@ -140,6 +141,7 @@ FrequencyDomainStatus apply_tangent_frequency_mass_operator(
     const double *tangent_delta,
     TangentWorkspaceShape shape,
     double alpha,
+    const double *alpha_per_node,
     double *out_mass_tangent,
     TangentFrequencyMassDiagnostics *out_diagnostics) noexcept;
 

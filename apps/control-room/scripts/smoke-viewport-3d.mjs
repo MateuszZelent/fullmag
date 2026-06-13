@@ -253,55 +253,60 @@ try {
       await collectViewport3DPerformancePhase(page, "hysteresis-replay"),
     );
   }
-  if (!skipCameraGestureSmoke) {
-    viewport3DPerformancePhases.push(
-      ...(await verifyCameraGesturesStayLocal({ page })),
-    );
-  }
-  if (cameraOnlySmoke) {
+  if (hysteresisReplayOnly) {
     logViewport3DPerformancePhases(viewport3DPerformancePhases);
-    console.log(`Viewport 3D camera smoke passed at ${url}.`);
-  } else {
-    if (!regionOnlyObjectId && !hysteresisReplayOnly) {
-      await verifyProjectionRoundTrip({ canvas, page });
-      viewport3DPerformancePhases.push(
-        await collectViewport3DPerformancePhase(page, "projection-round-trip"),
-      );
-      await verifyDimensionFrameCage({ canvas, page });
-      viewport3DPerformancePhases.push(
-        await collectViewport3DPerformancePhase(page, "dimension-frame-cage"),
-      );
-    }
-    if (requireGeometryFlow) {
-      if (regionOnlyObjectId) {
-        await verifyObjectInViewportRenderModel(page, regionOnlyObjectId);
-        await verifyRegionAuthoringOverlayFlow({
-          baseline: pixelSample,
-          objectId: regionOnlyObjectId,
-          page,
-        });
-      } else {
-        await verifyGeometryAuthoringFlow({
-          canvas,
-          canvasBaseline: pixelSample,
-          page,
-          realtimeMessages,
-          sceneResponses,
-        });
-      }
-      viewport3DPerformancePhases.push(
-        await collectViewport3DPerformancePhase(page, "geometry-authoring"),
-      );
-    }
-
-    const computeMetrics = await collectComputePerformanceProbe(
-      page,
-      "viewport-3d-smoke",
-      { scope: "all" },
-    );
-    logViewport3DPerformancePhases(viewport3DPerformancePhases);
-    logComputePerformanceProbe(computeMetrics);
     console.log(`Viewport 3D smoke passed at ${url}.`);
+  } else {
+    if (!skipCameraGestureSmoke) {
+      viewport3DPerformancePhases.push(
+        ...(await verifyCameraGesturesStayLocal({ page })),
+      );
+    }
+    if (cameraOnlySmoke) {
+      logViewport3DPerformancePhases(viewport3DPerformancePhases);
+      console.log(`Viewport 3D camera smoke passed at ${url}.`);
+    } else {
+      if (!regionOnlyObjectId) {
+        await verifyProjectionRoundTrip({ canvas, page });
+        viewport3DPerformancePhases.push(
+          await collectViewport3DPerformancePhase(page, "projection-round-trip"),
+        );
+        await verifyDimensionFrameCage({ canvas, page });
+        viewport3DPerformancePhases.push(
+          await collectViewport3DPerformancePhase(page, "dimension-frame-cage"),
+        );
+      }
+      if (requireGeometryFlow) {
+        if (regionOnlyObjectId) {
+          await verifyObjectInViewportRenderModel(page, regionOnlyObjectId);
+          await verifyRegionAuthoringOverlayFlow({
+            baseline: pixelSample,
+            objectId: regionOnlyObjectId,
+            page,
+          });
+        } else {
+          await verifyGeometryAuthoringFlow({
+            canvas,
+            canvasBaseline: pixelSample,
+            page,
+            realtimeMessages,
+            sceneResponses,
+          });
+        }
+        viewport3DPerformancePhases.push(
+          await collectViewport3DPerformancePhase(page, "geometry-authoring"),
+        );
+      }
+
+      const computeMetrics = await collectComputePerformanceProbe(
+        page,
+        "viewport-3d-smoke",
+        { scope: "all" },
+      );
+      logViewport3DPerformancePhases(viewport3DPerformancePhases);
+      logComputePerformanceProbe(computeMetrics);
+      console.log(`Viewport 3D smoke passed at ${url}.`);
+    }
   }
 } finally {
   await browser.close();
@@ -425,26 +430,29 @@ async function verifyHysteresisReplaySmoke(page) {
   }
 
   const startIndex = fieldVectorRequests.length;
-  await page.evaluate(
-    ({ pointId, snapshotId, stageId }) => {
-      const audit = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
-      if (!audit?.loadHysteresisReplaySnapshot) {
-        throw new Error("Missing __FULLMAG_CONTROL_ROOM_AUDIT__.loadHysteresisReplaySnapshot.");
-      }
-      audit.loadHysteresisReplaySnapshot({
-        fieldVal: pointId,
-        mVal: 0,
-        pointId,
-        snapshotId,
-        stageId,
-      });
-    },
-    {
-      pointId: hysteresisReplayPointId,
-      snapshotId: hysteresisReplaySnapshotId,
-      stageId: hysteresisReplayStageId,
-    },
-  );
+  const usedChart = await verifyHysteresisChartReplaySmoke(page);
+  if (!usedChart) {
+    await page.evaluate(
+      ({ pointId, snapshotId, stageId }) => {
+        const audit = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
+        if (!audit?.loadHysteresisReplaySnapshot) {
+          throw new Error("Missing __FULLMAG_CONTROL_ROOM_AUDIT__.loadHysteresisReplaySnapshot.");
+        }
+        audit.loadHysteresisReplaySnapshot({
+          fieldVal: pointId,
+          mVal: 0,
+          pointId,
+          snapshotId,
+          stageId,
+        });
+      },
+      {
+        pointId: hysteresisReplayPointId,
+        snapshotId: hysteresisReplaySnapshotId,
+        stageId: hysteresisReplayStageId,
+      },
+    );
+  }
 
   await waitForCondition("hysteresis replay viewport target", async () => {
     const attrs = await page.evaluate((selector) => {
@@ -475,6 +483,7 @@ async function verifyHysteresisReplaySmoke(page) {
         return (
           request.method === "GET" &&
           params.get("snapshot_id") === hysteresisReplaySnapshotId &&
+          params.get("stage_id") === hysteresisReplayStageId &&
           params.get("component") === "full" &&
           params.get("scope_kind") === "full"
         );
@@ -492,8 +501,57 @@ async function verifyHysteresisReplaySmoke(page) {
     );
   }
   console.log(
-    `Hysteresis replay smoke passed: snapshot_id=${hysteresisReplaySnapshotId} stage_id=${hysteresisReplayStageId}`,
+    `Hysteresis replay smoke passed: snapshot_id=${hysteresisReplaySnapshotId} stage_id=${hysteresisReplayStageId} source=${usedChart ? "chart" : "audit"}`,
   );
+}
+
+async function verifyHysteresisChartReplaySmoke(page) {
+  const chart = page.locator(".fm-hysteresis-container").first();
+  if (!(await chart.isVisible().catch(() => false))) {
+    return false;
+  }
+
+  await waitForCondition("hysteresis chart point data", async () => {
+    const attrs = await chart.evaluate((node) => ({
+      activeSnapshotId: node.getAttribute("data-hysteresis-active-snapshot-id") ?? "",
+      pointCount: Number(node.getAttribute("data-hysteresis-point-count") ?? "0"),
+      stageId: node.getAttribute("data-hysteresis-stage-id") ?? "",
+    }));
+    if (attrs.stageId !== hysteresisReplayStageId) {
+      throw new Error(
+        `chart stage=${attrs.stageId || "missing"}, expected ${hysteresisReplayStageId}`,
+      );
+    }
+    if (!Number.isFinite(attrs.pointCount) || attrs.pointCount <= 0) {
+      throw new Error(`chart point-count=${attrs.pointCount}`);
+    }
+    return attrs;
+  });
+
+  const activeSnapshotId = await chart.getAttribute(
+    "data-hysteresis-active-snapshot-id",
+  );
+  if (activeSnapshotId !== hysteresisReplaySnapshotId) {
+    const scrubber = chart.getByRole("slider", {
+      name: "Hysteresis point scrubber",
+    });
+    if (!(await scrubber.isVisible().catch(() => false))) {
+      throw new Error("Hysteresis chart has points but no visible point scrubber.");
+    }
+    await scrubber.fill(String(hysteresisReplayPointId));
+    await waitForCondition("hysteresis chart selected replay snapshot", async () => {
+      const snapshotId = await chart.getAttribute(
+        "data-hysteresis-active-snapshot-id",
+      );
+      if (snapshotId === hysteresisReplaySnapshotId) return snapshotId;
+      throw new Error(
+        `active snapshot=${snapshotId || "missing"}, expected ${hysteresisReplaySnapshotId}`,
+      );
+    });
+  }
+
+  await chart.getByRole("button", { name: "Load in 3D" }).click();
+  return true;
 }
 
 async function assertCameraGestureDoesNotFetch(page, gestureName, gesture) {

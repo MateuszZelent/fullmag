@@ -17,13 +17,13 @@ import fullmag as fm
 
 NM = 1e-9
 
-LAYER_SIZE = (300 * NM, 1000 * NM, 10 * NM)
+LAYER_SIZE = (2000 * NM, 600 * NM, 10 * NM)
 RING_OUTER_RADIUS = 150 * NM
 RING_INNER_RADIUS = 50 * NM
 RING_WIDTH = RING_OUTER_RADIUS - RING_INNER_RADIUS
 RING_THICKNESS = 50 * NM
 RING_GAP_FROM_LAYER = 10 * NM
-RING_AXIS = (0.0, 0.0, 1.0)
+RING_AXIS = (1.0, 0.0, 0.0)
 RING_CENTER_Z = (LAYER_SIZE[2] / 2.0) + RING_GAP_FROM_LAYER + RING_OUTER_RADIUS
 
 
@@ -50,7 +50,7 @@ study.engine("fem")
 study.device("gpu", precision="double")
 study.universe(
     mode="auto",
-    size=(1.7e-6, 2.4e-6, 9.0e-7),
+    size=(2.4e-6, 1.7e-6, 9.0e-7),
     center=(0.0, 0.0, 0.0),
     padding=(0.0, 0.0, 0.0),
 )
@@ -65,12 +65,12 @@ layer = study.geometry(
     fm.Box(size=LAYER_SIZE, name="permalloy_layer"),
     name="permalloy_layer",
 )
-layer.Ms = 800e3
-layer.Aex = 1.3e-12
-layer.alpha = 0.15
-# layer.Ku1 = 0.0
-# layer.anisU = RING_AXIS
-layer.m = fm.texture.uniform(0.0, 1.0, 0.0)
+layer.Ms = 1.46e5
+layer.Aex = 6.5e-12
+layer.alpha = 0.001
+layer.Ku1 = 1.e3
+layer.anisU = (0,0,1)
+layer.m = fm.texture.uniform(1.0, 0.0, 0.0)
 layer.mesh(maximum_element_size=8 * NM, minimum_element_size=2 * NM, order=1)
 
 top_ring = study.geometry(
@@ -82,14 +82,22 @@ bottom_ring = study.geometry(
     name="cofeb_bottom_ring",
 )
 
-for ring in (top_ring, bottom_ring):
+for ring in (bottom_ring,):
     ring.Ms = 1.51e6
     ring.Aex = 15e-12
     ring.alpha = 0.1
     ring.Ku1 = 1.0e6
     ring.anisU = RING_AXIS
-    ring.m = fm.texture.uniform(*RING_AXIS)
-    ring.mesh(maximum_element_size=50 * NM, minimum_element_size=5 * NM, order=1)
+    ring.m = fm.texture.uniform(1,0,0)
+    ring.mesh(maximum_element_size=25 * NM, minimum_element_size=2.5 * NM, order=1)
+for ring in (top_ring,):
+    ring.Ms = 1.51e6
+    ring.Aex = 15e-12
+    ring.alpha = 0.1
+    ring.Ku1 = 1.0e6
+    ring.anisU = RING_AXIS
+    ring.m = fm.texture.uniform(-1,0,0)
+    ring.mesh(maximum_element_size=25 * NM, minimum_element_size=2.5 * NM, order=1)
 
 # Interactions, mesh, and solver
 # study.exchange()
@@ -114,7 +122,16 @@ study.tableautosave(1e-16, quantities=["t", "step", "mx", "my", "mz", "E_total"]
 
 
 study.stages.add_minimize(
-    method="bb",
-    max_steps=4000,
-    tol=1e-30,
+    method="b4b",
+    max_steps=200,
+    tol=1e-4,
+)
+
+study.stages.add_relax(
+    algorithm="llg_overdamped",
+    solver="rk23",
+    max_error=1e-6,
+    dt_min=1e-17,
+    max_steps=350,
+    tol=1e-4,
 )

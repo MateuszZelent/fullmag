@@ -26,6 +26,7 @@ import { OrthographicCamera, PerspectiveCamera } from "@react-three/drei";
 import { useThree } from "@react-three/fiber";
 import {
   useEffect,
+  useEffectEvent,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -47,6 +48,7 @@ import type {
   Viewport3DMeshPart,
   Viewport3DPartSelection,
 } from "../viewport3dDomainAdapter";
+import type { HysteresisReplayGlyphModel } from "../model/viewport3DTargets";
 import type {
   Viewport3DInspectSample,
   Viewport3DInspectScreenPosition,
@@ -101,6 +103,7 @@ import { RegionMeshOverlayLayer } from "./RegionMeshOverlayLayer";
 import { PostProcessingLayer } from "./PostProcessingLayer";
 import { PrimitiveObjectLayer } from "./PrimitiveObjectLayer";
 import { FdmCuboidLayer, type FdmCuboidInstanceModel } from "./FdmCuboidLayer";
+import { HysteresisReplayGlyphLayer } from "./HysteresisReplayGlyphLayer";
 import { Viewport3DLightingRig } from "./Viewport3DLightingRig";
 import { ClipPlaneFramePreviewLayer, ClipPlaneLayer } from "./ClipPlaneLayer";
 import { pickRegionOverlayFromRay } from "./regionOverlayPicking";
@@ -146,6 +149,7 @@ interface Viewport3DSceneProps {
   fieldVector: DecodedFieldVector | null | undefined;
   femDomain: FemManifestRenderDomain;
   fieldModel: Viewport3DFieldRenderModel | null;
+  hysteresisReplayGlyphModel: HysteresisReplayGlyphModel | null;
   fitRevision: number;
   getObjectSettings: (
     object: Viewport3DPrimitiveObject,
@@ -599,6 +603,7 @@ function Viewport3DOverlayLayerStack({
 
 function Viewport3DModelLayerStack({
   airboxSettings,
+  bounds,
   colors,
   fdmDomain,
   fdmInstanceModel,
@@ -609,6 +614,7 @@ function Viewport3DModelLayerStack({
   fallbackSettings,
   femDomain,
   getRegionSettings,
+  hysteresisReplayGlyphModel,
   getObjectSettings,
   getPartSettings,
   inspectEnabled,
@@ -643,6 +649,7 @@ function Viewport3DModelLayerStack({
 }: Pick<
   Viewport3DSceneProps,
   | "airboxSettings"
+  | "bounds"
   | "colors"
   | "fdmDomain"
   | "fdmInstanceModel"
@@ -655,6 +662,7 @@ function Viewport3DModelLayerStack({
   | "getRegionSettings"
   | "getObjectSettings"
   | "getPartSettings"
+  | "hysteresisReplayGlyphModel"
   | "magnetizationTexturePreviews"
   | "maxVectorGlyphs"
   | "meshQualityColors"
@@ -807,6 +815,11 @@ function Viewport3DModelLayerStack({
           tracker={tracker}
         />
       ) : null}
+      <HysteresisReplayGlyphLayer
+        bounds={bounds}
+        glyphModel={hysteresisReplayGlyphModel}
+        tracker={tracker}
+      />
     </>
   );
 }
@@ -831,6 +844,7 @@ function RegionOverlayNativePickingLayer({
       }),
     [regions, selectedObjectId, selectedRegionId],
   );
+  const handleSelectRegion = useEffectEvent(onSelectRegion);
 
   useEffect(() => {
     if (regionPickModels.length === 0) return undefined;
@@ -855,7 +869,7 @@ function RegionOverlayNativePickingLayer({
 
       event.preventDefault();
       event.stopImmediatePropagation();
-      onSelectRegion(pickedRegion);
+      handleSelectRegion(pickedRegion);
     };
 
     canvas.addEventListener("pointerdown", handlePointerDown, { capture: true });
@@ -864,7 +878,7 @@ function RegionOverlayNativePickingLayer({
         capture: true,
       });
     };
-  }, [camera, gl, onSelectRegion, regionPickModels]);
+  }, [camera, gl, regionPickModels]);
 
   return null;
 }
@@ -965,6 +979,7 @@ export function Viewport3DScene({
   getObjectSettings,
   getPartSettings,
   getRegionSettings,
+  hysteresisReplayGlyphModel,
   magnetizationTexturePreviews,
   maxVectorGlyphs,
   meshQualityColors,
@@ -1115,6 +1130,7 @@ export function Viewport3DScene({
       />
       <Viewport3DModelLayerStack
         airboxSettings={airboxSettings}
+        bounds={bounds}
         colors={colors}
         fdmDomain={fdmDomain}
         fdmInstanceModel={fdmInstanceModel}
@@ -1129,6 +1145,7 @@ export function Viewport3DScene({
         getObjectSettings={getObjectSettings}
         getPartSettings={getPartSettings}
         getRegionSettings={getRegionSettings}
+        hysteresisReplayGlyphModel={hysteresisReplayGlyphModel}
         magnetizationTexturePreviews={magnetizationTexturePreviews}
         materialProfile={materialProfile}
         maxVectorGlyphs={maxVectorGlyphs}

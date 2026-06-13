@@ -100,6 +100,7 @@ pub(crate) fn live_state_manifest_from_update(
             step: update.stats.step,
             time: update.stats.time,
             dt: update.stats.dt,
+            pseudo_time_s: update.stats.pseudo_time_s,
             e_ex: update.stats.e_ex,
             e_demag: update.stats.e_demag,
             e_ext: update.stats.e_ext,
@@ -1085,6 +1086,10 @@ fn materialize_pipeline_frequency_response(
         .as_ref()
         .map(|current| current.6.field_au_per_m)
         .unwrap_or([0.0, 0.0, 1.0]);
+    let default_excitation_phase_rad = current_frequency
+        .as_ref()
+        .map(|current| current.6.phase_rad)
+        .unwrap_or(0.0);
     let default_frequencies = current_frequency
         .as_ref()
         .map(|current| current.7.values_hz.clone())
@@ -1098,6 +1103,11 @@ fn materialize_pipeline_frequency_response(
             .any(|value| !value.is_finite() || *value <= 0.0)
     {
         bail!("study pipeline frequency_response stage requires positive frequency_values_hz");
+    }
+    let excitation_phase_rad = payload_f64(payload, "frequency_excitation_phase_rad")?
+        .unwrap_or(default_excitation_phase_rad);
+    if !excitation_phase_rad.is_finite() {
+        bail!("study pipeline frequency_response stage requires finite frequency_excitation_phase_rad");
     }
 
     let frequency_payload = frequency_payload_as_eigen_payload(payload);
@@ -1120,6 +1130,7 @@ fn materialize_pipeline_frequency_response(
                 "frequency_excitation_field_au_per_m",
                 default_excitation,
             )?,
+            phase_rad: excitation_phase_rad,
         },
         frequencies_hz: fullmag_ir::FrequencySweepIR {
             values_hz: frequencies_hz,
@@ -2999,7 +3010,8 @@ mod tests {
                             "kind": "frequency_response",
                             "entrypoint_kind": "pipeline_frequency_response",
                             "frequency_values_hz": "1e9,2e9",
-                            "frequency_excitation_field_au_per_m": "0,0,1"
+                            "frequency_excitation_field_au_per_m": "0,0,1",
+                            "frequency_excitation_phase_rad": "0.375"
                         }))
                         .expect("payload"),
                     },
@@ -3010,6 +3022,11 @@ mod tests {
 
         let stages = materialize_script_stages(config).expect("pipeline should materialize");
         assert_eq!(stages.len(), 4);
+        assert!(matches!(
+            &stages[3].ir.study,
+            fullmag_ir::StudyIR::FrequencyResponse { excitation, .. }
+                if (excitation.phase_rad - 0.375).abs() < 1e-15
+        ));
         assert!(stages[0].incoming_transition.is_none());
         for stage in stages.iter().skip(1) {
             let transition = stage
@@ -3083,6 +3100,7 @@ mod tests {
             spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
             excitation: fullmag_ir::FrequencyExcitationIR {
                 field_au_per_m: [0.0, 0.0, 1.0],
+                phase_rad: 0.0,
             },
             frequencies_hz: fullmag_ir::FrequencySweepIR {
                 values_hz: vec![1.0e9, 2.0e9],

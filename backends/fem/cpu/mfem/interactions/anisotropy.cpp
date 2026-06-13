@@ -31,6 +31,15 @@ void normalize_axis_if_nonzero(std::array<double, 3> &axis)
     }
 }
 
+void copy_field(std::vector<double> &dst, const double *src, uint64_t len)
+{
+    if (src == nullptr || len == 0) {
+        dst.clear();
+        return;
+    }
+    dst.assign(src, src + len);
+}
+
 } // namespace
 
 void initialize_anisotropy_plan_fields(Context &ctx, const fullmag_fem_plan_desc &plan)
@@ -43,6 +52,18 @@ void initialize_anisotropy_plan_fields(Context &ctx, const fullmag_fem_plan_desc
         plan.anisotropy_axis[1],
         plan.anisotropy_axis[2],
     };
+    copy_field(
+        ctx.anisotropy.uniaxial_axis_x_field,
+        plan.anisotropy_axis_x_field,
+        plan.anisotropy_axis_x_field_len);
+    copy_field(
+        ctx.anisotropy.uniaxial_axis_y_field,
+        plan.anisotropy_axis_y_field,
+        plan.anisotropy_axis_y_field_len);
+    copy_field(
+        ctx.anisotropy.uniaxial_axis_z_field,
+        plan.anisotropy_axis_z_field,
+        plan.anisotropy_axis_z_field_len);
 
     ctx.anisotropy.cubic_enabled = plan.has_cubic_anisotropy != 0;
     ctx.anisotropy.cubic_Kc1 = plan.cubic_kc1;
@@ -56,6 +77,37 @@ bool normalize_anisotropy_axes(Context &ctx, std::string &error)
 {
     if (ctx.anisotropy.uniaxial_enabled) {
         normalize_axis_if_nonzero(ctx.anisotropy.uniaxial_axis);
+        const size_t n = ctx.mesh.n_nodes;
+        const bool has_axis_field =
+            !ctx.anisotropy.uniaxial_axis_x_field.empty() ||
+            !ctx.anisotropy.uniaxial_axis_y_field.empty() ||
+            !ctx.anisotropy.uniaxial_axis_z_field.empty();
+        if (has_axis_field) {
+            if (ctx.anisotropy.uniaxial_axis_x_field.size() != n ||
+                ctx.anisotropy.uniaxial_axis_y_field.size() != n ||
+                ctx.anisotropy.uniaxial_axis_z_field.size() != n) {
+                error = "uniaxial anisotropy axis fields must all have length mesh.n_nodes";
+                return false;
+            }
+            for (size_t i = 0; i < n; ++i) {
+                std::array<double, 3> axis{
+                    ctx.anisotropy.uniaxial_axis_x_field[i],
+                    ctx.anisotropy.uniaxial_axis_y_field[i],
+                    ctx.anisotropy.uniaxial_axis_z_field[i],
+                };
+                const double len = std::sqrt(
+                    axis[0] * axis[0] +
+                    axis[1] * axis[1] +
+                    axis[2] * axis[2]);
+                if (!std::isfinite(len) || len <= kAxisZeroThreshold) {
+                    error = "uniaxial anisotropy axis fields must contain finite non-zero axes";
+                    return false;
+                }
+                ctx.anisotropy.uniaxial_axis_x_field[i] = axis[0] / len;
+                ctx.anisotropy.uniaxial_axis_y_field[i] = axis[1] / len;
+                ctx.anisotropy.uniaxial_axis_z_field[i] = axis[2] / len;
+            }
+        }
     }
     if (!ctx.anisotropy.cubic_enabled) {
         return true;

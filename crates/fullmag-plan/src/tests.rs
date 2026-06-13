@@ -3758,6 +3758,24 @@ fn fem_plan_promotes_active_anisotropy_axis_material_for_heterogeneous_regions()
     assert!(fem.material.alpha_field.is_some());
     assert_eq!(fem.material.anisotropy_axis, Some([0.0, 0.0, 1.0]));
     assert_eq!(
+        fem.anisotropy_axis_field
+            .as_ref()
+            .map(|values| values.as_slice()),
+        Some(
+            [
+                [0.0, 1.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [0.0, 0.0, 1.0],
+                [0.0, 0.0, 1.0],
+                [0.0, 0.0, 1.0],
+            ]
+            .as_slice(),
+        )
+    );
+    assert_eq!(
         fem.material
             .ku_field
             .as_ref()
@@ -4215,6 +4233,32 @@ fn nonlinear_cg_is_now_plannable() {
         }
         _ => panic!("expected FDM plan"),
     }
+}
+
+#[test]
+fn direct_minimizer_rejects_physical_time_stop_budget() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study = fullmag_ir::StudyIR::Relaxation {
+        algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+        dynamics: ir.study.dynamics().clone(),
+        stop: fullmag_ir::RelaxStopIR {
+            torque_tolerance_apm: Some(1e-3),
+            energy_tolerance_j: None,
+            max_steps: Some(250),
+            max_pseudotime_s: None,
+            max_physical_time_s: Some(1e-9),
+        },
+        sampling: ir.study.sampling().clone(),
+    };
+
+    let err = plan(&ir).expect_err("direct minimizers do not advance physical time");
+    assert!(err.reasons.iter().any(|reason| {
+        reason.contains("projected_gradient_bb")
+            && reason.contains("direct minimizer")
+            && reason.contains("max_physical_time_s")
+            && reason.contains("max_pseudotime_s")
+            && reason.contains("llg_overdamped")
+    }));
 }
 
 #[test]
@@ -5870,6 +5914,193 @@ fn fem_eigen_surface_anisotropy_requires_positive_ks_and_axis() {
 
 #[test]
 fn fem_frequency_response_with_mesh_asset_plans_successfully() {
+    let ir = fem_frequency_response_mesh_asset_problem();
+
+    let planned = plan(&ir).expect("FEM frequency response mesh asset should plan");
+    match planned.backend_plan {
+        BackendPlanIR::FemFrequencyResponse(fem) => {
+            assert_eq!(fem.mesh_name, "strip");
+            assert_eq!(fem.frequencies_hz.values_hz, vec![1.0e9, 2.0e9]);
+            assert_eq!(fem.excitation.field_au_per_m, [0.0, 0.0, 1.0]);
+            assert_eq!(fem.excitation.phase_rad, 0.375);
+            assert!(fem.enable_exchange);
+            assert!(!fem.enable_demag);
+            assert_eq!(
+                fem.operator.kind,
+                fullmag_ir::EigenOperatorIR::LinearizedLlg
+            );
+        }
+        other => panic!("expected FemFrequencyResponse plan, got {other:?}"),
+    }
+}
+
+#[test]
+fn fem_frequency_response_rejects_unsupported_production_slice_cases() {
+    let mut demag = fem_frequency_response_mesh_asset_problem();
+    demag.energy_terms = vec![
+        fullmag_ir::EnergyTermIR::Exchange,
+        fullmag_ir::EnergyTermIR::Demag {
+            realization: fullmag_ir::RequestedFemDemagIR::FredkinKoehler,
+        },
+    ];
+    if let fullmag_ir::StudyIR::FrequencyResponse { operator, .. } = &mut demag.study {
+        operator.include_demag = true;
+    }
+    let err = plan(&demag).expect_err("frequency-response demag should be gated");
+    assert!(
+        err.reasons.iter().any(|reason| {
+            reason.contains("gamma/free-boundary magnetic slice")
+                && reason.contains("dynamic demag")
+        }),
+        "unexpected demag rejection reasons: {:?}",
+        err.reasons
+    );
+
+    let mut shared_domain = fem_frequency_response_mesh_asset_problem();
+    let geometry_assets = shared_domain
+        .geometry_assets
+        .as_mut()
+        .expect("test problem should carry FEM mesh assets");
+    let mut domain_mesh = geometry_assets
+        .fem_mesh_assets
+        .first()
+        .and_then(|asset| asset.mesh.as_ref())
+        .expect("test problem should carry an inline FEM mesh")
+        .clone();
+    domain_mesh.nodes.extend([
+        [-2.0, -2.0, -2.0],
+        [2.0, -2.0, -2.0],
+        [-2.0, 2.0, -2.0],
+        [-2.0, -2.0, 2.0],
+    ]);
+    domain_mesh.elements.push([4, 5, 6, 7]);
+    domain_mesh.element_markers.push(0);
+    geometry_assets.fem_domain_mesh_asset = Some(fullmag_ir::FemDomainMeshAssetIR {
+        mesh_source: None,
+        mesh: Some(domain_mesh),
+        region_markers: vec![fullmag_ir::FemDomainRegionMarkerIR {
+            geometry_name: "strip".to_string(),
+            marker: 1,
+        }],
+        object_region_markers: Vec::new(),
+        build_report: None,
+    });
+    let err = plan(&shared_domain).expect_err("shared-domain response should be gated");
+    assert!(
+        err.reasons.iter().any(|reason| {
+            reason.contains("gamma/free-boundary magnetic slice")
+                && reason.contains("shared-domain airbox")
+        }),
+        "unexpected shared-domain rejection reasons: {:?}",
+        err.reasons
+    );
+
+    let mut nonzero_k = fem_frequency_response_mesh_asset_problem();
+    if let fullmag_ir::StudyIR::FrequencyResponse { k_sampling, .. } = &mut nonzero_k.study {
+        *k_sampling = Some(fullmag_ir::KSamplingIR::Single {
+            k_vector: [1.0e6, 0.0, 0.0],
+        });
+    }
+    let err = plan(&nonzero_k).expect_err("nonzero-k response should be gated");
+    assert!(err.reasons.iter().any(|reason| {
+        reason.contains("gamma/free-boundary magnetic slice")
+            && reason.contains("nonzero-k Floquet/Bloch")
+    }));
+
+    let mut periodic_without_pairs = fem_frequency_response_mesh_asset_problem();
+    if let fullmag_ir::StudyIR::FrequencyResponse { spin_wave_bc, .. } =
+        &mut periodic_without_pairs.study
+    {
+        *spin_wave_bc =
+            fullmag_ir::SpinWaveBoundaryConditionIR::Config(fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: fullmag_ir::SpinWaveBoundaryKindIR::Periodic,
+                boundary_pair_id: Some("x_faces".to_string()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            });
+    }
+    let err = plan(&periodic_without_pairs)
+        .expect_err("periodic response without mesh pairs should gate");
+    assert!(
+        err.reasons
+            .iter()
+            .any(|reason| reason.contains("mesh.periodic_node_pairs")),
+        "unexpected periodic-without-pairs rejection reasons: {:?}",
+        err.reasons
+    );
+
+    let mut periodic = fem_frequency_response_mesh_asset_problem();
+    let periodic_mesh = periodic
+        .geometry_assets
+        .as_mut()
+        .and_then(|assets| assets.fem_mesh_assets.first_mut())
+        .and_then(|asset| asset.mesh.as_mut())
+        .expect("test problem should carry an inline FEM mesh");
+    periodic_mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
+        pair_id: "x_faces".to_string(),
+        source_marker: None,
+        destination_marker: None,
+        marker_a: 1,
+        marker_b: 2,
+        translation: Some([1.0, 0.0, 0.0]),
+        tolerance: Some(1.0e-12),
+        axis_hint: None,
+        orientation: None,
+        pairing_policy: None,
+    }];
+    periodic_mesh.periodic_node_pairs = vec![fullmag_ir::MeshPeriodicNodePairIR {
+        pair_id: "x_faces".to_string(),
+        node_a: 0,
+        node_b: 1,
+    }];
+    if let fullmag_ir::StudyIR::FrequencyResponse { spin_wave_bc, .. } = &mut periodic.study {
+        *spin_wave_bc =
+            fullmag_ir::SpinWaveBoundaryConditionIR::Config(fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: fullmag_ir::SpinWaveBoundaryKindIR::Periodic,
+                boundary_pair_id: Some("x_faces".to_string()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            });
+    }
+    let planned = plan(&periodic).expect("static-periodic k=0 driven response should plan");
+    match planned.backend_plan {
+        BackendPlanIR::FemFrequencyResponse(fem) => {
+            assert_eq!(fem.mesh.periodic_node_pairs.len(), 1);
+            assert_eq!(
+                fem.spin_wave_bc.kind(),
+                fullmag_ir::SpinWaveBoundaryKindIR::Periodic
+            );
+        }
+        other => panic!("expected FemFrequencyResponse plan, got {other:?}"),
+    }
+
+    let mut floquet = periodic;
+    if let fullmag_ir::StudyIR::FrequencyResponse { spin_wave_bc, .. } = &mut floquet.study {
+        *spin_wave_bc =
+            fullmag_ir::SpinWaveBoundaryConditionIR::Config(fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: fullmag_ir::SpinWaveBoundaryKindIR::Floquet,
+                boundary_pair_id: Some("x_faces".to_string()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            });
+    }
+    let err = plan(&floquet).expect_err("Floquet driven response should be gated");
+    assert!(
+        err.reasons
+            .iter()
+            .any(|reason| reason.contains("nonzero-k Floquet/Bloch")),
+        "unexpected Floquet rejection reasons: {:?}",
+        err.reasons
+    );
+}
+
+fn fem_frequency_response_mesh_asset_problem() -> ProblemIR {
     let mut ir = ProblemIR::bootstrap_example();
     ir.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fem;
     ir.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
@@ -5922,6 +6153,7 @@ fn fem_frequency_response_with_mesh_asset_plans_successfully() {
         spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
         excitation: fullmag_ir::FrequencyExcitationIR {
             field_au_per_m: [0.0, 0.0, 1.0],
+            phase_rad: 0.375,
         },
         frequencies_hz: fullmag_ir::FrequencySweepIR {
             values_hz: vec![1.0e9, 2.0e9],
@@ -5933,22 +6165,7 @@ fn fem_frequency_response_with_mesh_asset_plans_successfully() {
             }],
         },
     };
-
-    let planned = plan(&ir).expect("FEM frequency response mesh asset should plan");
-    match planned.backend_plan {
-        BackendPlanIR::FemFrequencyResponse(fem) => {
-            assert_eq!(fem.mesh_name, "strip");
-            assert_eq!(fem.frequencies_hz.values_hz, vec![1.0e9, 2.0e9]);
-            assert_eq!(fem.excitation.field_au_per_m, [0.0, 0.0, 1.0]);
-            assert!(fem.enable_exchange);
-            assert!(!fem.enable_demag);
-            assert_eq!(
-                fem.operator.kind,
-                fullmag_ir::EigenOperatorIR::LinearizedLlg
-            );
-        }
-        other => panic!("expected FemFrequencyResponse plan, got {other:?}"),
-    }
+    ir
 }
 
 #[test]
@@ -5970,6 +6187,7 @@ fn fdm_frequency_response_remains_explicitly_not_executable() {
         spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
         excitation: fullmag_ir::FrequencyExcitationIR {
             field_au_per_m: [0.0, 0.0, 1.0],
+            phase_rad: 0.0,
         },
         frequencies_hz: fullmag_ir::FrequencySweepIR {
             values_hz: vec![1.0e9, 2.0e9],
@@ -6027,6 +6245,7 @@ fn frequency_response_planner_controls_do_not_validate_time_integrator_settings(
         spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
         excitation: fullmag_ir::FrequencyExcitationIR {
             field_au_per_m: [0.0, 0.0, 1.0],
+            phase_rad: 0.0,
         },
         frequencies_hz: fullmag_ir::FrequencySweepIR {
             values_hz: vec![1.0e9, 2.0e9],
@@ -6040,11 +6259,15 @@ fn frequency_response_planner_controls_do_not_validate_time_integrator_settings(
     };
 
     let mut errors = Vec::new();
-    let _ = validate::planned_study_controls(&ir, BackendTarget::Fem, &mut errors);
+    let controls = validate::planned_study_controls(&ir, BackendTarget::Fem, &mut errors);
 
     assert!(
         errors.is_empty(),
         "frequency response is a direct harmonic solve and must not fail planner controls on time-integrator-only settings: {errors:?}"
+    );
+    assert!(
+        controls.integrator.is_none(),
+        "frequency response is a direct harmonic solve and must not resolve a time integrator"
     );
 }
 
@@ -6075,6 +6298,7 @@ fn frequency_response_planner_controls_ignore_invalid_time_integrator_alias() {
         spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
         excitation: fullmag_ir::FrequencyExcitationIR {
             field_au_per_m: [0.0, 0.0, 1.0],
+            phase_rad: 0.0,
         },
         frequencies_hz: fullmag_ir::FrequencySweepIR {
             values_hz: vec![1.0e9],
@@ -6088,11 +6312,15 @@ fn frequency_response_planner_controls_ignore_invalid_time_integrator_alias() {
     };
 
     let mut errors = Vec::new();
-    let _ = validate::planned_study_controls(&ir, BackendTarget::Fem, &mut errors);
+    let controls = validate::planned_study_controls(&ir, BackendTarget::Fem, &mut errors);
 
     assert!(
         errors.is_empty(),
         "frequency response planner controls must ignore time-integrator-only aliases: {errors:?}"
+    );
+    assert!(
+        controls.integrator.is_none(),
+        "frequency response must keep time integrator non-applicable even when an invalid alias is present"
     );
 }
 
@@ -7648,6 +7876,7 @@ fn minimal_hysteresis_study() -> StudyIR {
         measurement_axis: fullmag_ir::MeasurementAxisIR::field_axis(),
         angular_family: None,
         initial_protocol: "as_authored".to_string(),
+        initial_state_ref: None,
         saturation: None,
         branch_mode: "major_loop".to_string(),
         settle_pipeline: Some(fullmag_ir::SettlePipelineIR::Sequence {
@@ -7672,6 +7901,7 @@ fn minimal_hysteresis_study() -> StudyIR {
             key_event_threshold_dm: 0.02,
         }),
         field_schedule: None,
+        field_unit_provenance: None,
         schedule_refinements: None,
         adaptive_refinement: None,
         minor_loops: None,

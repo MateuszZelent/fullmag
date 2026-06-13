@@ -220,6 +220,7 @@ impl InteractiveRuntime {
                 display_selection,
                 interrupt_requested,
                 true,
+                None,
                 &mut on_step,
             )?;
             self.upload_magnetization(&result.final_magnetization)?;

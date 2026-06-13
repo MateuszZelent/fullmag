@@ -202,6 +202,7 @@ mod tests {
                 step: 1,
                 time: 0.0,
                 dt: 1.0e-12,
+                pseudo_time_s: None,
                 e_ex: 0.0,
                 e_demag: 0.0,
                 e_ext: 0.0,

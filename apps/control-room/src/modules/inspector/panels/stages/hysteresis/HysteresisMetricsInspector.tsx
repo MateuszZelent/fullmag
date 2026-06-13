@@ -48,6 +48,35 @@ export function HysteresisMetricsInspector({
             label="Loop Area"
             value={metrics.loop_area != null ? metrics.loop_area.toExponential(4) : "n/a"}
           />
+          {metrics.loop_closure_summary && (
+            <FieldRow
+              label="Loop Closure"
+              value={`${metrics.loop_closure_summary.status}: dH=${metrics.loop_closure_summary.field_gap_mT.toFixed(3)} mT, dm=${metrics.loop_closure_summary.m_parallel_gap.toExponential(3)}`}
+            />
+          )}
+          <FieldRow
+            label="Max Differential Susceptibility"
+            value={
+              metrics.max_differential_susceptibility != null
+                ? metrics.max_differential_susceptibility.toExponential(4)
+                : "n/a"
+            }
+            unit={metrics.max_differential_susceptibility != null ? "1/mT" : undefined}
+          />
+          <FieldRow
+            label="Switching Candidates"
+            value={
+              metrics.switching_field_candidates &&
+              metrics.switching_field_candidates.length > 0
+                ? metrics.switching_field_candidates
+                    .map(
+                      (candidate) =>
+                        `${candidate.field_value_mT.toFixed(3)} mT (${candidate.susceptibility_per_mT.toExponential(3)} 1/mT)`,
+                    )
+                    .join(", ")
+                : "none detected"
+            }
+          />
           <FieldRow label="Saturation Status" value={metrics.saturation_status ?? "n/a"} />
           {metrics.saturation_preparation_field_mT != null && (
             <FieldRow
@@ -55,6 +84,21 @@ export function HysteresisMetricsInspector({
               value={metrics.saturation_preparation_field_mT.toFixed(3)}
               unit="mT"
             />
+          )}
+          {metrics.convergence_quality_summary && (
+            <FieldRow
+              label="Convergence Summary"
+              value={`${metrics.convergence_quality_summary.status}: ${metrics.convergence_quality_summary.converged_points}/${metrics.convergence_quality_summary.total_points} converged, ${metrics.convergence_quality_summary.warning_points} warning, ${metrics.convergence_quality_summary.non_converged_points} non-converged`}
+            />
+          )}
+          {metrics.metric_statuses && Object.keys(metrics.metric_statuses).length > 0 && (
+            <FieldRow
+              label="Metric Statuses"
+              value={formatMetricStatuses(metrics.metric_statuses)}
+            />
+          )}
+          {metrics.warnings && metrics.warnings.length > 0 && (
+            <FieldRow label="Metric Warnings" value={metrics.warnings.join("; ")} />
           )}
           <FieldRow
             label="Reversal Fields"
@@ -77,4 +121,14 @@ export function HysteresisMetricsInspector({
       )}
     </InspectorSection>
   );
+}
+
+function formatMetricStatuses(
+  statuses: NonNullable<
+    NonNullable<HysteresisInspectorCommonProps["metrics"]>["metric_statuses"]
+  >,
+): string {
+  return Object.entries(statuses)
+    .map(([metricId, status]) => `${metricId}: ${status.status}`)
+    .join("; ");
 }

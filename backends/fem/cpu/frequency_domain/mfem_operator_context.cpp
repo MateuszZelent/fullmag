@@ -100,6 +100,7 @@ FrequencyDomainStatus build_mfem_operator_context_descriptor(
     out_descriptor->demag_kind = request.operator_request.demag_kind;
     out_descriptor->exchange_enabled = request.operator_request.include_exchange;
     out_descriptor->zeeman_enabled = request.operator_request.include_zeeman;
+    out_descriptor->uniaxial_anisotropy_enabled = false;
     out_descriptor->demag_enabled = request.operator_request.demag_kind != FrequencyDomainDemagKind::none;
     out_descriptor->mfem_mesh_available = request.has_mfem_mesh;
     out_descriptor->periodic_reduced_mesh = request.periodic_reduced_mesh;

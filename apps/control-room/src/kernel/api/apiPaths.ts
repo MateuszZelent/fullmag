@@ -115,6 +115,10 @@ export const ANALYSIS_HYSTERESIS_SATURATION_PATH = openApiV2Path(
   "/v2/sessions/current/analysis/hysteresis/{stage_id}/saturation",
 );
 
+export const ANALYSIS_HYSTERESIS_ADAPTIVE_REFINEMENT_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/hysteresis/{stage_id}/adaptive-refinement",
+);
+
 export const ANALYSIS_HYSTERESIS_BRANCHES_PATH = openApiV2Path(
   "/v2/sessions/current/analysis/hysteresis/{stage_id}/branches",
 );

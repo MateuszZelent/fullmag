@@ -53,6 +53,9 @@ FrequencyDomainStatus apply_mfem_linearized_cpu_operator(
     const TangentOperatorEdgeBlock *exchange_edges,
     std::uint64_t exchange_edge_count,
     const double h_ext_a_per_m[3],
+    const double uniaxial_anisotropy_axis[3],
+    double uniaxial_anisotropy_field_a_per_m,
+    const double *alpha_per_node,
     double gamma0,
     double alpha,
     const MfemLinearizedOperatorWorkspace &workspace,
@@ -86,7 +89,10 @@ FrequencyDomainStatus apply_mfem_linearized_cpu_operator(
         }
         return FrequencyDomainStatus::validation_error;
     }
-    if (!descriptor.exchange_enabled && !descriptor.zeeman_enabled) {
+    if (!descriptor.exchange_enabled &&
+        !descriptor.zeeman_enabled &&
+        !descriptor.uniaxial_anisotropy_enabled &&
+        !descriptor.dmi_enabled) {
         if (out_diagnostics != nullptr) {
             copy_error(out_diagnostics->error_message, "MFEM linearized operator requires at least one field term");
         }
@@ -110,10 +116,54 @@ FrequencyDomainStatus apply_mfem_linearized_cpu_operator(
         }
         return FrequencyDomainStatus::validation_error;
     }
+    if (descriptor.uniaxial_anisotropy_enabled &&
+        (workspace.uniaxial_anisotropy_tangent == nullptr ||
+            workspace.uniaxial_anisotropy_blocks == nullptr ||
+            uniaxial_anisotropy_axis == nullptr ||
+            !std::isfinite(uniaxial_anisotropy_field_a_per_m))) {
+        if (out_diagnostics != nullptr) {
+            copy_error(out_diagnostics->error_message, "MFEM linearized operator requires uniaxial anisotropy workspace and finite field");
+        }
+        return FrequencyDomainStatus::validation_error;
+    }
+    const bool has_dmi_element_operator =
+        workspace.dmi_elements != nullptr ||
+        workspace.dmi_element_count != 0 ||
+        workspace.dmi_lumped_mass != nullptr ||
+        workspace.dmi_delta_xyz != nullptr ||
+        workspace.dmi_residual_xyz != nullptr ||
+        workspace.dmi_field_xyz != nullptr;
+    if (descriptor.dmi_enabled && workspace.dmi_tangent == nullptr) {
+        if (out_diagnostics != nullptr) {
+            copy_error(out_diagnostics->error_message, "MFEM linearized operator requires DMI output workspace");
+        }
+        return FrequencyDomainStatus::validation_error;
+    }
+    if (descriptor.dmi_enabled &&
+        has_dmi_element_operator &&
+        (workspace.dmi_elements == nullptr ||
+            workspace.dmi_element_count == 0 ||
+            workspace.dmi_lumped_mass == nullptr ||
+            workspace.dmi_delta_xyz == nullptr ||
+            workspace.dmi_residual_xyz == nullptr ||
+            workspace.dmi_field_xyz == nullptr)) {
+        if (out_diagnostics != nullptr) {
+            copy_error(out_diagnostics->error_message, "MFEM linearized operator requires complete DMI element workspace");
+        }
+        return FrequencyDomainStatus::validation_error;
+    }
+    if (descriptor.dmi_enabled && !has_dmi_element_operator && workspace.dmi_blocks == nullptr) {
+        if (out_diagnostics != nullptr) {
+            copy_error(out_diagnostics->error_message, "MFEM linearized operator requires DMI blocks or element data");
+        }
+        return FrequencyDomainStatus::validation_error;
+    }
 
     const std::uint64_t tangent_dof_count = descriptor.tangent_dof_count;
     zero_buffer(workspace.exchange_tangent, tangent_dof_count);
     zero_buffer(workspace.zeeman_tangent, tangent_dof_count);
+    zero_buffer(workspace.uniaxial_anisotropy_tangent, tangent_dof_count);
+    zero_buffer(workspace.dmi_tangent, tangent_dof_count);
     zero_buffer(workspace.effective_field_tangent, tangent_dof_count);
 
     if (descriptor.exchange_enabled) {
@@ -159,10 +209,88 @@ FrequencyDomainStatus apply_mfem_linearized_cpu_operator(
         }
     }
 
+    if (descriptor.uniaxial_anisotropy_enabled) {
+        UniaxialAnisotropyTangentOperatorDiagnostics anisotropy_diagnostics{};
+        FrequencyDomainStatus status = build_uniaxial_anisotropy_tangent_blocks(
+            nodes,
+            uniaxial_anisotropy_axis,
+            uniaxial_anisotropy_field_a_per_m,
+            descriptor.node_count,
+            workspace.uniaxial_anisotropy_blocks,
+            &anisotropy_diagnostics);
+        if (status != FrequencyDomainStatus::ok) {
+            if (out_diagnostics != nullptr) {
+                copy_error(out_diagnostics->error_message, anisotropy_diagnostics.error_message);
+            }
+            return status;
+        }
+        TangentOperatorDiagnostics operator_diagnostics{};
+        status = apply_tangent_nodewise_operator(
+            workspace.uniaxial_anisotropy_blocks,
+            tangent_in,
+            TangentWorkspaceShape{
+                descriptor.node_count,
+                descriptor.full_dof_count,
+                descriptor.tangent_dof_count,
+            },
+            workspace.uniaxial_anisotropy_tangent,
+            &operator_diagnostics);
+        if (status != FrequencyDomainStatus::ok) {
+            if (out_diagnostics != nullptr) {
+                copy_error(out_diagnostics->error_message, operator_diagnostics.error_message);
+            }
+            return status;
+        }
+        if (out_diagnostics != nullptr) {
+            out_diagnostics->max_abs_uniaxial_anisotropy_field =
+                operator_diagnostics.max_abs_output;
+        }
+    }
+
+    if (descriptor.dmi_enabled) {
+        MfemDmiOperatorDiagnostics dmi_diagnostics{};
+        const FrequencyDomainStatus status = has_dmi_element_operator ?
+            apply_mfem_dmi_element_tangent_operator(
+                descriptor,
+                layout,
+                nodes,
+                workspace.dmi_elements,
+                workspace.dmi_element_count,
+                workspace.dmi_lumped_mass,
+                workspace.dmi_ms_field,
+                workspace.dmi_uniform_ms,
+                tangent_in,
+                workspace.dmi_delta_xyz,
+                workspace.dmi_residual_xyz,
+                workspace.dmi_field_xyz,
+                workspace.dmi_tangent,
+                &dmi_diagnostics) :
+            apply_mfem_dmi_operator(
+                descriptor,
+                layout,
+                workspace.dmi_blocks,
+                tangent_in,
+                workspace.dmi_tangent,
+                &dmi_diagnostics);
+        if (status != FrequencyDomainStatus::ok) {
+            if (out_diagnostics != nullptr) {
+                copy_error(out_diagnostics->error_message, dmi_diagnostics.error_message);
+            }
+            return status;
+        }
+        if (out_diagnostics != nullptr) {
+            out_diagnostics->max_abs_dmi_field = dmi_diagnostics.max_abs_output;
+        }
+    }
+
     for (std::uint64_t dof = 0; dof < tangent_dof_count; ++dof) {
         const double exchange_value = descriptor.exchange_enabled ? workspace.exchange_tangent[dof] : 0.0;
         const double zeeman_value = descriptor.zeeman_enabled ? workspace.zeeman_tangent[dof] : 0.0;
-        workspace.effective_field_tangent[dof] = exchange_value + zeeman_value;
+        const double anisotropy_value = descriptor.uniaxial_anisotropy_enabled ?
+            workspace.uniaxial_anisotropy_tangent[dof] :
+            0.0;
+        const double dmi_value = descriptor.dmi_enabled ? workspace.dmi_tangent[dof] : 0.0;
+        workspace.effective_field_tangent[dof] = exchange_value + zeeman_value + anisotropy_value + dmi_value;
     }
 
     TangentPrecessionDiagnostics precession_diagnostics{};
@@ -194,6 +322,7 @@ FrequencyDomainStatus apply_mfem_linearized_cpu_operator(
             descriptor.tangent_dof_count,
         },
         alpha,
+        alpha_per_node,
         out_mass_tangent,
         &mass_diagnostics);
     if (status != FrequencyDomainStatus::ok) {

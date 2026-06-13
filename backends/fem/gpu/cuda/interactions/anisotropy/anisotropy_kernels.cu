@@ -19,6 +19,9 @@ __global__ void uniaxial_anisotropy_field_energy_blocks_kernel(
     const double *__restrict__ ms,
     const double *__restrict__ ku,
     const double *__restrict__ ku2,
+    const double *__restrict__ axis_x_field,
+    const double *__restrict__ axis_y_field,
+    const double *__restrict__ axis_z_field,
     const double *__restrict__ lumped_mass,
     const uint8_t *__restrict__ magnetic_node_mask,
     double *__restrict__ h_ani_x,
@@ -32,6 +35,7 @@ __global__ void uniaxial_anisotropy_field_energy_blocks_kernel(
     double axis_z,
     bool use_ku_field,
     bool use_ku2_field,
+    bool use_axis_field,
     int N)
 {
     constexpr double kMu0 = 1.2566370614359172953850573533118e-6;
@@ -42,7 +46,10 @@ __global__ void uniaxial_anisotropy_field_energy_blocks_kernel(
         const double ms_i = ms[i];
         const double ku_i = use_ku_field ? ku[i] : uniform_ku;
         const double ku2_i = use_ku2_field ? ku2[i] : uniform_ku2;
-        const double m_dot_u = mx[i] * axis_x + my[i] * axis_y + mz[i] * axis_z;
+        const double ux = use_axis_field ? axis_x_field[i] : axis_x;
+        const double uy = use_axis_field ? axis_y_field[i] : axis_y;
+        const double uz = use_axis_field ? axis_z_field[i] : axis_z;
+        const double m_dot_u = mx[i] * ux + my[i] * uy + mz[i] * uz;
         const double m_dot_u2 = m_dot_u * m_dot_u;
         double hx = 0.0;
         double hy = 0.0;
@@ -51,9 +58,9 @@ __global__ void uniaxial_anisotropy_field_energy_blocks_kernel(
             const double prefactor = 2.0 * ku_i / (kMu0 * ms_i);
             const double prefactor2 = 4.0 * ku2_i / (kMu0 * ms_i);
             const double coeff = prefactor * m_dot_u + prefactor2 * m_dot_u * m_dot_u2;
-            hx = coeff * axis_x;
-            hy = coeff * axis_y;
-            hz = coeff * axis_z;
+            hx = coeff * ux;
+            hy = coeff * uy;
+            hz = coeff * uz;
         }
         h_ani_x[i] = hx;
         h_ani_y[i] = hy;
@@ -173,6 +180,9 @@ void fullmag_cuda_uniaxial_anisotropy_field_energy_blocks(
     const double *ms,
     const double *ku,
     const double *ku2,
+    const double *axis_x_field,
+    const double *axis_y_field,
+    const double *axis_z_field,
     const double *lumped_mass,
     const uint8_t *magnetic_node_mask,
     double *h_ani_x,
@@ -186,6 +196,7 @@ void fullmag_cuda_uniaxial_anisotropy_field_energy_blocks(
     double axis_z,
     bool use_ku_field,
     bool use_ku2_field,
+    bool use_axis_field,
     int N,
     cudaStream_t stream)
 {
@@ -197,6 +208,9 @@ void fullmag_cuda_uniaxial_anisotropy_field_energy_blocks(
         ms,
         ku,
         ku2,
+        axis_x_field,
+        axis_y_field,
+        axis_z_field,
         lumped_mass,
         magnetic_node_mask,
         h_ani_x,
@@ -210,6 +224,7 @@ void fullmag_cuda_uniaxial_anisotropy_field_energy_blocks(
         axis_z,
         use_ku_field,
         use_ku2_field,
+        use_axis_field,
         N);
 }
 

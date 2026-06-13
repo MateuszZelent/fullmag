@@ -33,6 +33,15 @@ import { LayoutController } from "../layout/LayoutController";
 import { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 import { SelectionController } from "../selection/SelectionController";
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
+import {
+  resolveViewport3DActiveQuantityId,
+  resolveViewport3DPrimaryFieldQuery,
+  resolveViewport3DSelectedSnapshotId,
+  resolveViewport3DSelectedSnapshotQuery,
+} from "@/modules/viewport-3d/hooks/useViewport3DSceneModel";
+import {
+  resolveViewport3DFieldVectorResourceKey,
+} from "@/modules/viewport-3d/viewport3dResources";
 
 import { STUDY_RUNTIME_COMMANDS } from "./studyRuntimeCommandContributions";
 
@@ -64,6 +73,30 @@ function objectSelection(objectId = "body") {
         visualizationTargetId: `object:${objectId}`,
       },
     }),
+  };
+}
+
+function hysteresisCommandPoint() {
+  return {
+    branch_id: "descending",
+    branch_ids: ["descending"],
+    branch_index: 0,
+    field_value_mT: 25,
+    m_avg: [0.1, 0.2, 0.8],
+    m_ip: 0.1,
+    m_oop: 0.7,
+    m_parallel: 0.8,
+    minor_loop_id: null,
+    parent_branch_id: null,
+    point_id: 4,
+    protocol_role: "descending",
+    recoil_start_point_id: null,
+    reversal_index: null,
+    run_status: "completed",
+    settle_status: "converged",
+    snapshot_id: "hysteresis_point_005",
+    snapshot_resource_ref: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?snapshot_id=hysteresis_point_005`,
+    status: "completed",
   };
 }
 
@@ -392,6 +425,7 @@ describe("study runtime command contributions", () => {
       mVal: 0.8,
       pointId: 4,
       snapshotId: "hysteresis_point_005",
+      snapshotResourceRef: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?snapshot_id=hysteresis_point_005&stage_id=hysteresis-1`,
       stageId: "hysteresis-1",
     });
 
@@ -409,6 +443,7 @@ describe("study runtime command contributions", () => {
         chartId: "hysteresis:hysteresis-1",
         pointId: 4,
         quantity: "m",
+        resourceRef: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?snapshot_id=hysteresis_point_005&stage_id=hysteresis-1`,
         snapshotId: "hysteresis_point_005",
         stageId: "hysteresis-1",
         tableId: "hysteresis:hysteresis-1",
@@ -421,6 +456,32 @@ describe("study runtime command contributions", () => {
     });
     expect(layout.get().activeViewportMainModuleId).toBe("viewport-3d");
     expect(layout.get().focusedSlot).toBe("viewport-main");
+
+    const selectedSnapshotId = resolveViewport3DSelectedSnapshotId(selection.get());
+    const quantityId = resolveViewport3DActiveQuantityId({
+      selectedSnapshotId,
+      selection: selection.get(),
+      visualizationState: { active_quantity_id: "H_eff" } as never,
+    });
+    const fieldQuery = resolveViewport3DPrimaryFieldQuery({
+      fdmInstanceModelNeedsFieldVector: false,
+      fdmSurfaceColorMode: null,
+      fdmTopographyEnabled: false,
+      fdmVectorsVisible: false,
+      fieldRenderOptions: {
+        fullVectorBudget: 0,
+        partVectorBudgets: new Map(),
+        scalarColorModes: new Set(),
+        scalarColorsVisible: false,
+      },
+      snapshotId: selectedSnapshotId,
+      snapshotQuery: resolveViewport3DSelectedSnapshotQuery(selection.get()),
+    });
+
+    expect(quantityId).toBe("m");
+    expect(resolveViewport3DFieldVectorResourceKey(quantityId, fieldQuery)).toBe(
+      `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?component=full&scope_kind=full&snapshot_id=hysteresis_point_005&stage_id=hysteresis-1`,
+    );
   });
 
   it("returns from a loaded hysteresis point snapshot to the live field", async () => {
@@ -462,6 +523,78 @@ describe("study runtime command contributions", () => {
     });
   });
 
+  it("replaces the 3D hysteresis replay query when loading another saved point", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const selection = new SelectionController(bus);
+
+    await registry.execute("hysteresis.load-point-in-3d", {
+      selection,
+      source: "test",
+    }, {
+      fieldVal: 25,
+      mVal: 0.8,
+      pointId: 4,
+      snapshotId: "hysteresis_point_005",
+      snapshotResourceRef: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?snapshot_id=hysteresis_point_005&stage_id=hysteresis-1`,
+      stageId: "hysteresis-1",
+    });
+
+    await registry.execute("hysteresis.load-point-in-3d", {
+      selection,
+      source: "test",
+    }, {
+      fieldVal: -15,
+      mVal: -0.35,
+      pointId: 8,
+      snapshotId: "hysteresis_point_009",
+      snapshotResourceRef: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?snapshot_id=hysteresis_point_009&stage_id=hysteresis-1`,
+      stageId: "hysteresis-1",
+    });
+
+    const selectedSnapshotId = resolveViewport3DSelectedSnapshotId(selection.get());
+    const quantityId = resolveViewport3DActiveQuantityId({
+      selectedSnapshotId,
+      selection: selection.get(),
+      visualizationState: { active_quantity_id: "H_eff" } as never,
+    });
+    const fieldQuery = resolveViewport3DPrimaryFieldQuery({
+      fdmInstanceModelNeedsFieldVector: false,
+      fdmSurfaceColorMode: null,
+      fdmTopographyEnabled: false,
+      fdmVectorsVisible: false,
+      fieldRenderOptions: {
+        fullVectorBudget: 0,
+        partVectorBudgets: new Map(),
+        scalarColorModes: new Set(),
+        scalarColorsVisible: false,
+      },
+      snapshotId: selectedSnapshotId,
+      snapshotQuery: resolveViewport3DSelectedSnapshotQuery(selection.get()),
+    });
+
+    expect(selection.get()).toMatchObject({
+      nodeId: "analysis:hysteresis:hysteresis-1:point:8",
+      ref: {
+        pointId: 8,
+        resourceRef: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?snapshot_id=hysteresis_point_009&stage_id=hysteresis-1`,
+        snapshotId: "hysteresis_point_009",
+        stageId: "hysteresis-1",
+        type: "analysis-chart-point",
+      },
+    });
+    expect(quantityId).toBe("m");
+    expect(fieldQuery).toEqual({
+      component: "full",
+      scope_kind: "full",
+      snapshot_id: "hysteresis_point_009",
+      stage_id: "hysteresis-1",
+    });
+    expect(resolveViewport3DFieldVectorResourceKey(quantityId, fieldQuery)).toBe(
+      `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?component=full&scope_kind=full&snapshot_id=hysteresis_point_009&stage_id=hysteresis-1`,
+    );
+  });
+
   it("does not clear another hysteresis stage when returning one stage to live", async () => {
     const registry = registryWithStudyRuntimeCommands();
     const bus = new EventBus<KernelEventMap>();
@@ -496,6 +629,186 @@ describe("study runtime command contributions", () => {
     });
   });
 
+  it("selects a hysteresis point for comparison in the analysis chart", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const layout = new LayoutController(bus);
+    const selection = new SelectionController(bus);
+    layout.setActiveViewportMainModule("viewport-3d");
+
+    const result = await registry.execute("hysteresis.compare-point", {
+      layout,
+      selection,
+      source: "test",
+    }, {
+      point: hysteresisCommandPoint(),
+      stageId: "hysteresis-1",
+    });
+
+    expect(result).toEqual({
+      message: "Selected hysteresis point 4 for comparison.",
+      status: "completed",
+    });
+    expect(selection.get()).toMatchObject({
+      kind: "analysis.chart-point",
+      label: "Point 4 (25 mT)",
+      moduleSource: "analysis-plots",
+      ref: {
+        pointId: 4,
+        quantity: "m",
+        snapshotId: "hysteresis_point_005",
+        stageId: "hysteresis-1",
+        type: "analysis-chart-point",
+        x: 25,
+        y: 0.8,
+      },
+    });
+    expect(layout.get().activeViewportMainModuleId).toBe("analysis-plots");
+    expect(layout.get().focusedSlot).toBe("viewport-main");
+  });
+
+  it("exports a hysteresis point as a local CSV action", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+
+    const result = await registry.execute("hysteresis.export-point-csv", {
+      source: "test",
+    }, {
+      point: hysteresisCommandPoint(),
+      stageId: "hysteresis-1",
+    });
+
+    expect(result).toEqual({
+      message: "Exported hysteresis point 4 as CSV.",
+      status: "completed",
+    });
+  });
+
+  it("exports a full hysteresis loop as a local CSV action", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+
+    const result = await registry.execute("hysteresis.export-loop-csv", {
+      source: "test",
+    }, {
+      points: [
+        hysteresisCommandPoint(),
+        {
+          ...hysteresisCommandPoint(),
+          field_value_mT: -25,
+          m_parallel: -0.75,
+          point_id: 5,
+          snapshot_id: "hysteresis_point_006",
+        },
+      ],
+      stageId: "hysteresis-1",
+    });
+
+    expect(result).toEqual({
+      message: "Exported hysteresis loop with 2 points as CSV.",
+      status: "completed",
+    });
+  });
+
+  it("rejects full hysteresis loop CSV export without point data", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+
+    const result = await registry.execute("hysteresis.export-loop-csv", {
+      source: "test",
+    }, {
+      points: [],
+      stageId: "hysteresis-1",
+    });
+
+    expect(result).toEqual({
+      message: "No hysteresis points are available to export.",
+      status: "failed",
+    });
+  });
+
+  it("bookmarks a hysteresis point in browser local storage", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const storage = new Map<string, string>();
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: vi.fn((key: string) => storage.get(key) ?? null),
+        setItem: vi.fn((key: string, value: string) => {
+          storage.set(key, value);
+        }),
+      },
+    });
+
+    const result = await registry.execute("hysteresis.bookmark-point", {
+      source: "test",
+    }, {
+      point: hysteresisCommandPoint(),
+      stageId: "hysteresis-1",
+    });
+
+    expect(result).toEqual({
+      message: "Bookmarked hysteresis point 4.",
+      status: "completed",
+    });
+    expect(
+      JSON.parse(
+        storage.get("fullmag.hysteresis.point-bookmarks.v1") ?? "[]",
+      ),
+    ).toMatchObject([
+      {
+        field_value_mT: 25,
+        m_parallel: 0.8,
+        point_id: 4,
+        snapshot_id: "hysteresis_point_005",
+        stage_id: "hysteresis-1",
+      },
+    ]);
+
+    vi.unstubAllGlobals();
+  });
+
+  it("clears a hysteresis snapshot explorer selection when returning that stage to live", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const selection = new SelectionController(bus);
+
+    selection.set({
+      kind: "study.stage.action",
+      label: "Snapshot hysteresis_point_005",
+      nodeId: "study:stage:0:field-point:4:snapshot:hysteresis_point_005",
+      objectId: null,
+      ref: {
+        kind: "study.stage.action",
+        nodeId: "study:stage:0:field-point:4:snapshot:hysteresis_point_005",
+        pointId: 4,
+        quantityId: "m",
+        resourceRef: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?snapshot_id=hysteresis_point_005`,
+        snapshotId: "hysteresis_point_005",
+        stageId: "hysteresis-1",
+        stageIndex: 0,
+        targetId: "hysteresis-step:hysteresis-1:4",
+        type: "hysteresis-snapshot",
+      },
+    }, "explorer");
+
+    const result = await registry.execute("hysteresis.return-to-live", {
+      selection,
+      source: "test",
+    }, {
+      stageId: "hysteresis-1",
+    });
+
+    expect(result).toEqual({
+      message: "Returned 3D viewport to the live magnetization field.",
+      status: "completed",
+    });
+    expect(selection.get()).toEqual({
+      kind: null,
+      label: null,
+      moduleSource: "analysis-plots",
+      nodeId: null,
+      objectId: null,
+      ref: null,
+    });
+  });
+
   it("does not claim a hysteresis point is loaded in 3D without a saved snapshot", async () => {
     const registry = registryWithStudyRuntimeCommands();
     const bus = new EventBus<KernelEventMap>();
@@ -514,6 +827,39 @@ describe("study runtime command contributions", () => {
 
     expect(result).toEqual({
       message: "This hysteresis point has no saved magnetization snapshot.",
+      status: "failed",
+    });
+    expect(selection.get()).toEqual({
+      kind: null,
+      label: null,
+      moduleSource: null,
+      nodeId: null,
+      objectId: null,
+      ref: null,
+    });
+  });
+
+  it("does not load a hysteresis point in 3D when the saved snapshot payload is missing", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const selection = new SelectionController(bus);
+
+    const result = await registry.execute("hysteresis.load-point-in-3d", {
+      selection,
+      source: "test",
+    }, {
+      fieldVal: 25,
+      mVal: 0.8,
+      pointId: 4,
+      snapshotId: "hysteresis_point_005",
+      snapshotStorageReason: "snapshot payload not found in hysteresis.zarr or JSON fallback",
+      snapshotStorageStatus: "missing",
+      stageId: "hysteresis-1",
+    });
+
+    expect(result).toEqual({
+      message:
+        "Snapshot payload is missing for this hysteresis point: snapshot payload not found in hysteresis.zarr or JSON fallback",
       status: "failed",
     });
     expect(selection.get()).toEqual({
@@ -568,11 +914,12 @@ describe("study runtime command contributions", () => {
     expect(resources.getRevision(PERSISTENCE_FIELD_STATE_IMPORTS_PATH)).toBe(11);
   });
 
-  it("uses the hysteresis point snapshot resource ref when applying an initial state", async () => {
+  it("uses the hysteresis point snapshot artifact ref when applying an initial state", async () => {
     const registry = registryWithStudyRuntimeCommands();
+    const vectorResourceRef = `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?snapshot_id=hysteresis_point_005`;
     const importFieldState = vi.fn(async () => ({
       applied_point_count: 2,
-      artifact_ref: "runs/run-1/hysteresis/stage-0/points/005/m.json",
+      artifact_ref: "hysteresis_snapshots/hysteresis_point_005/m.json",
       field_revision: 12,
       mode: "apply",
       quantity_id: "m",
@@ -580,23 +927,68 @@ describe("study runtime command contributions", () => {
       warnings: [],
     }));
 
-    const result = await registry.execute("hysteresis.use-point-as-initial-state", {
-      api: {
-        persistence: {
-          fieldStates: { import: importFieldState },
-        },
-      } as never,
-      selection: objectSelection("body") as never,
-      source: "test",
-    }, {
-      snapshotId: "hysteresis_point_005",
-      snapshotResourceRef: "runs/run-1/hysteresis/stage-0/points/005/m.json",
-      stageId: "hysteresis-1",
-    });
+    const result = await registry.execute(
+      "hysteresis.use-point-as-initial-state",
+      {
+        api: {
+          persistence: {
+            fieldStates: { import: importFieldState },
+          },
+        } as never,
+        selection: objectSelection("body") as never,
+        source: "test",
+      },
+      {
+        snapshotId: "hysteresis_point_005",
+        snapshotArtifactRef: "hysteresis_snapshots/hysteresis_point_005/m.json",
+        snapshotResourceRef: vectorResourceRef,
+        stageId: "hysteresis-1",
+      },
+    );
 
     expect(result).toMatchObject({ status: "completed" });
     expect(importFieldState).toHaveBeenCalledWith({
-      artifact_ref: "runs/run-1/hysteresis/stage-0/points/005/m.json",
+      artifact_ref: "hysteresis_snapshots/hysteresis_point_005/m.json",
+      mode: "apply",
+      quantity_id: "m",
+      target: { id: "body", kind: "object" },
+    });
+  });
+
+  it("ignores legacy data-plane snapshot resource refs when applying an initial state", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const vectorResourceRef = `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?snapshot_id=hysteresis_point_005`;
+    const importFieldState = vi.fn(async () => ({
+      applied_point_count: 2,
+      artifact_ref: "hysteresis_snapshots/hysteresis_point_005/m.json",
+      field_revision: 12,
+      mode: "apply",
+      quantity_id: "m",
+      target: { id: "body", kind: "object" },
+      warnings: [],
+    }));
+
+    const result = await registry.execute(
+      "hysteresis.use-point-as-initial-state",
+      {
+        api: {
+          persistence: {
+            fieldStates: { import: importFieldState },
+          },
+        } as never,
+        selection: objectSelection("body") as never,
+        source: "test",
+      },
+      {
+        snapshotId: "hysteresis_point_005",
+        snapshotResourceRef: vectorResourceRef,
+        stageId: "hysteresis-1",
+      },
+    );
+
+    expect(result).toMatchObject({ status: "completed" });
+    expect(importFieldState).toHaveBeenCalledWith({
+      artifact_ref: "hysteresis_snapshots/hysteresis_point_005/m.json",
       mode: "apply",
       quantity_id: "m",
       target: { id: "body", kind: "object" },

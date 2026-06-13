@@ -104,6 +104,28 @@ describe("StudyStageAuthoringModel", () => {
     expect(
       createStudyStageDraft(
         {
+          entrypoint_kind: "pipeline_frequency_response",
+          frequency_excitation_field_au_per_m: [0, -2, 3],
+          frequency_excitation_phase_rad: 0.375,
+          frequency_observable: "mx",
+          frequency_values_hz: [1e9, 2e9],
+          kind: "frequency_response",
+          stage_id: "freq-1",
+        },
+        3,
+      ),
+    ).toMatchObject({
+      excitationField: "0, -2, 3",
+      excitationPhaseRad: "0.375",
+      frequenciesHz: "1000000000, 2000000000",
+      kind: "frequency_response",
+      observable: "mx",
+      stageId: "freq-1",
+    });
+
+    expect(
+      createStudyStageDraft(
+        {
           artifact_name: "checkpoint",
           dataset: "m",
           format: "fmstate",
@@ -236,6 +258,141 @@ describe("StudyStageAuthoringModel", () => {
     ).toEqual([]);
   });
 
+  it("validates hysteresis field orientation authoring", () => {
+    expect(
+      validateStudyStageDraft({
+        ...createDefaultStudyStageDraft("hysteresis", 0),
+        customDirection: "",
+        orientationMode: "preset",
+      }),
+    ).toContainEqual({
+      message: "Orientation preset is required.",
+      severity: "error",
+    });
+
+    expect(
+      validateStudyStageDraft({
+        ...createDefaultStudyStageDraft("hysteresis", 0),
+        customDirection: "diagonal",
+        orientationMode: "preset",
+      }),
+    ).toContainEqual({
+      message: "Orientation preset must be oop_positive, oop_negative, in_plane_x, in_plane_y.",
+      severity: "error",
+    });
+
+    expect(
+      validateStudyStageDraft({
+        ...createDefaultStudyStageDraft("hysteresis", 0),
+        orientationMode: "sample",
+        phiDeg: "",
+        thetaDeg: "",
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        { message: "Theta is required.", severity: "error" },
+        { message: "Phi is required.", severity: "error" },
+      ]),
+    );
+
+    expect(
+      validateStudyStageDraft({
+        ...createDefaultStudyStageDraft("hysteresis", 0),
+        customDirection: "0, 0, 0",
+        orientationMode: "global",
+      }),
+    ).toContainEqual({
+      message: "Orientation vector must not be the zero vector.",
+      severity: "error",
+    });
+  });
+
+  it("validates custom hysteresis measurement axis authoring", () => {
+    expect(
+      validateStudyStageDraft({
+        ...createDefaultStudyStageDraft("hysteresis", 0),
+        measurementAxis: "custom",
+      }).map((issue) => issue.message),
+    ).toContain("Custom measurement axis vector is required.");
+
+    expect(
+      validateStudyStageDraft({
+        ...createDefaultStudyStageDraft("hysteresis", 0),
+        measurementAxis: "custom",
+        measurementAxisCustomVector: "0, 0, 0",
+      }).map((issue) => issue.message),
+    ).toContain("Custom measurement axis vector must not be the zero vector.");
+
+    expect(
+      studyStageDraftToSceneStage({
+        ...createDefaultStudyStageDraft("hysteresis", 0),
+        measurementAxis: "custom",
+        measurementAxisCustomVector: "1, 0, 0",
+      }).measurement_axis,
+    ).toEqual({
+      kind: "custom",
+      vector: [1, 0, 0],
+    });
+
+    expect(
+      createStudyStageDraft(
+        {
+          field_max_mT: 100,
+          field_min_mT: -100,
+          field_step_mT: 10,
+          kind: "hysteresis",
+          measurement_axis: {
+            kind: "custom",
+            vector: [0, 1, 0],
+          },
+          stage_id: "hysteresis-custom-axis",
+        },
+        0,
+      ),
+    ).toMatchObject({
+      measurementAxis: "custom",
+      measurementAxisCustomVector: "0, 1, 0",
+    });
+  });
+
+  it("validates hysteresis checkpoint initial state authoring", () => {
+    expect(
+      validateStudyStageDraft({
+        ...createDefaultStudyStageDraft("hysteresis", 0),
+        initialStatePolicy: "checkpoint",
+      }).map((issue) => issue.message),
+    ).toContain("Initial state ref is required for checkpoint starts.");
+
+    expect(
+      studyStageDraftToSceneStage({
+        ...createDefaultStudyStageDraft("hysteresis", 0),
+        initialStatePolicy: "checkpoint",
+        initialStateRef: "hysteresis_snapshots/hysteresis_point_003/m.json",
+      }),
+    ).toMatchObject({
+      initial_protocol: "checkpoint",
+      initial_state_ref: "hysteresis_snapshots/hysteresis_point_003/m.json",
+    });
+
+    expect(
+      createStudyStageDraft(
+        {
+          field_max_mT: 100,
+          field_min_mT: -100,
+          field_step_mT: 10,
+          initial_protocol: "checkpoint",
+          initial_state_ref: "hysteresis_snapshots/hysteresis_point_003/m.json",
+          kind: "hysteresis",
+          stage_id: "hysteresis-checkpoint",
+        },
+        0,
+      ),
+    ).toMatchObject({
+      initialStatePolicy: "checkpoint",
+      initialStateRef: "hysteresis_snapshots/hysteresis_point_003/m.json",
+    });
+  });
+
   it("serializes relax and run drafts into a study stages merge patch", () => {
     const relax = {
       ...createDefaultStudyStageDraft("relax", 0),
@@ -356,6 +513,7 @@ describe("StudyStageAuthoringModel", () => {
       studyStageDraftToSceneStage({
         ...createDefaultStudyStageDraft("frequency_response", 1),
         excitationField: "0, -2, 3",
+        excitationPhaseRad: "0.375",
         frequenciesHz: "1e9, 2e9",
         observable: "mx",
         stageId: "freq-1",
@@ -363,7 +521,9 @@ describe("StudyStageAuthoringModel", () => {
     ).toMatchObject({
       entrypoint_kind: "flat_frequency_response",
       excitation_field_au_per_m: [0, -2, 3],
+      excitation_phase_rad: 0.375,
       frequency_excitation_field_au_per_m: [0, -2, 3],
+      frequency_excitation_phase_rad: 0.375,
       frequency_observable: "mx",
       frequency_values_hz: [1e9, 2e9],
       frequencies_hz: [1e9, 2e9],
@@ -465,6 +625,545 @@ describe("StudyStageAuthoringModel", () => {
     ]);
   });
 
+  it("validates simple hysteresis field range and point count", () => {
+    expect(
+      validateStudyStageDraft({
+        ...createDefaultStudyStageDraft("hysteresis", 0),
+        fieldMaxMt: "100",
+        fieldMinMt: "100",
+      }).map((issue) => issue.message),
+    ).toContain("Minimum field and maximum field must differ.");
+
+    expect(
+      validateStudyStageDraft({
+        ...createDefaultStudyStageDraft("hysteresis", 0),
+        fieldMaxMt: "-100",
+        fieldMinMt: "100",
+      }).map((issue) => issue.message),
+    ).toContain("Maximum field must be greater than minimum field.");
+
+    expect(
+      validateStudyStageDraft({
+        ...createDefaultStudyStageDraft("hysteresis", 0),
+        fieldMaxMt: "100",
+        fieldMinMt: "-100",
+        fieldStepMt: "0.01",
+      }).map((issue) => issue.message),
+    ).toContain(
+      "Simple field schedule has 40001 points; reduce the range, increase the step, or use explicit piecewise segments.",
+    );
+  });
+
+  it("validates hysteresis saturation probe thresholds", () => {
+    expect(
+      validateStudyStageDraft({
+        ...createDefaultStudyStageDraft("hysteresis", 0),
+        saturationMode: "auto",
+        saturationThresholds: "1e-3",
+      }).map((issue) => issue.message),
+    ).toContain(
+      "Saturation thresholds must contain susceptibility and transverse thresholds.",
+    );
+
+    expect(
+      validateStudyStageDraft({
+        ...createDefaultStudyStageDraft("hysteresis", 0),
+        saturationMode: "auto",
+        saturationThresholds: "bad, 1e-2",
+      }).map((issue) => issue.message),
+    ).toContain(
+      "Saturation thresholds must contain susceptibility and transverse thresholds.",
+    );
+
+    expect(
+      validateStudyStageDraft({
+        ...createDefaultStudyStageDraft("hysteresis", 0),
+        saturationMode: "auto",
+        saturationThresholds: "-1e-3, 0",
+      }).map((issue) => issue.message),
+    ).toEqual([
+      "Saturation susceptibility threshold must be a positive finite number.",
+      "Saturation transverse threshold must be a positive finite number.",
+    ]);
+
+    expect(
+      validateStudyStageDraft({
+        ...createDefaultStudyStageDraft("hysteresis", 0),
+        saturationMode: "auto",
+        saturationThresholds: "1e-3, 1e-2",
+      }).map((issue) => issue.message),
+    ).not.toContain(
+      "Saturation thresholds must contain susceptibility and transverse thresholds.",
+    );
+  });
+
+  it("requires acknowledgement for every-step hysteresis magnetization storage", () => {
+    const draft = {
+      ...createDefaultStudyStageDraft("hysteresis", 0),
+      storagePolicy: JSON.stringify({
+        magnetization: "every_step",
+        scalar_history: true,
+      }),
+    };
+
+    expect(
+      validateStudyStageDraft(draft).map((issue) => issue.message),
+    ).toContain(
+      "Every-step magnetization storage requires storage estimate acknowledgement.",
+    );
+
+    const acknowledged = {
+      ...draft,
+      storageEstimateAcknowledged: true,
+    };
+    expect(
+      validateStudyStageDraft(acknowledged).map((issue) => issue.message),
+    ).not.toContain(
+      "Every-step magnetization storage requires storage estimate acknowledgement.",
+    );
+    expect(studyStageDraftToSceneStage(acknowledged)).toMatchObject({
+      storage: {
+        magnetization: "every_step",
+        scalar_history: true,
+      },
+    });
+    expect(studyStageDraftToSceneStage(acknowledged).storage).not.toHaveProperty(
+      "storage_estimate_acknowledged",
+    );
+  });
+
+  it("validates hysteresis storage policy semantics", () => {
+    expect(
+      validateStudyStageDraft({
+        ...createDefaultStudyStageDraft("hysteresis", 0),
+        storagePolicy: JSON.stringify({
+          every_n: 0,
+          key_event_threshold_dm: -0.1,
+          magnetization: "selected",
+        }),
+      }).map((issue) => issue.message),
+    ).toEqual([
+      "Storage policy every_n must be positive when magnetization is selected or every_n.",
+      "Storage policy key_event_threshold_dm must be a positive finite number.",
+    ]);
+
+    expect(
+      validateStudyStageDraft({
+        ...createDefaultStudyStageDraft("hysteresis", 0),
+        storagePolicy: JSON.stringify({
+          every_n: -1,
+          magnetization: "unknown",
+        }),
+      }).map((issue) => issue.message),
+    ).toEqual([
+      "Storage policy magnetization must be none, selected, every_n, every_step, or key_events.",
+      "Storage policy every_n must be a non-negative integer.",
+    ]);
+
+    expect(
+      validateStudyStageDraft({
+        ...createDefaultStudyStageDraft("hysteresis", 0),
+        storagePolicy: JSON.stringify({
+          key_event_threshold_dm: 0.02,
+          magnetization: "none",
+        }),
+      }).map((issue) => issue.message),
+    ).not.toContain(
+      "Storage policy every_n must be positive when magnetization is selected or every_n.",
+    );
+  });
+
+  it("validates hysteresis settle pipeline step semantics", () => {
+    expect(
+      validateStudyStageDraft({
+        ...createDefaultStudyStageDraft("hysteresis", 0),
+        settleSteps: "[]",
+      }).map((issue) => issue.message),
+    ).toContain("Settle pipeline requires at least one step.");
+
+    expect(
+      validateStudyStageDraft({
+        ...createDefaultStudyStageDraft("hysteresis", 0),
+        settleSteps: JSON.stringify([
+          {
+            alpha: 0,
+            dt_min: 2e-12,
+            kind: "relax",
+            max_steps: 0,
+            method: "unknown_method",
+            on_non_convergence: "retry_with_smaller_dt",
+            timestep_s: 1e-12,
+            torque_tolerance: -1,
+          },
+        ]),
+      }).map((issue) => issue.message),
+    ).toEqual([
+      "Settle step 1 method is not supported for relax.",
+      "Settle step 1 max_steps must be a positive integer.",
+      "Settle step 1 alpha must be a positive finite number.",
+      "Settle step 1 torque_tolerance must be a positive finite number.",
+      "Settle step 1 retry_with_smaller_dt requires retry_timestep_scale.",
+      "Settle step 1 dt_min must be smaller than or equal to timestep_s.",
+    ]);
+
+    expect(
+      validateStudyStageDraft({
+        ...createDefaultStudyStageDraft("hysteresis", 0),
+        settleSteps: JSON.stringify([
+          {
+            energy_tolerance: 1e-20,
+            kind: "minimize",
+            max_steps: 100,
+            method: "projected_gradient_bb",
+            on_non_convergence: "run_next_algorithm",
+            torque_tolerance: 1e-5,
+          },
+        ]),
+      }).map((issue) => issue.message),
+    ).toContain("Settle step 1 run_next_algorithm requires a following step.");
+  });
+
+  it("serializes UI-authored hysteresis relax-minimize settle algorithms", () => {
+    const stage = studyStageDraftToSceneStage({
+      ...createDefaultStudyStageDraft("hysteresis", 0),
+      settleSteps: JSON.stringify([
+        {
+          alpha: 0.8,
+          kind: "relax",
+          max_steps: 50,
+          method: "llg_overdamped",
+          on_non_convergence: "continue_with_warning",
+          torque_tolerance: 1e-6,
+        },
+        {
+          energy_tolerance: 1e-20,
+          kind: "minimize",
+          max_steps: 200,
+          method: "projected_gradient_bb",
+          on_non_convergence: "fail_stage",
+          torque_tolerance: 1e-5,
+        },
+      ]),
+    });
+
+    expect(stage.settle_pipeline).toEqual({
+      kind: "sequence",
+      steps: [
+        {
+          alpha: 0.8,
+          kind: "relax",
+          max_steps: 50,
+          method: "llg_overdamped",
+          on_non_convergence: "continue_with_warning",
+          torque_tolerance: 1e-6,
+        },
+        {
+          energy_tolerance: 1e-20,
+          kind: "minimize",
+          max_steps: 200,
+          method: "projected_gradient_bb",
+          on_non_convergence: "fail_stage",
+          torque_tolerance: 1e-5,
+        },
+      ],
+    });
+  });
+
+  it("serializes UI-authored hysteresis dynamics retry and applies_to settings", () => {
+    const settleSteps = [
+      {
+        applies_to: "major",
+        damping: 0.5,
+        kind: "dynamics_settle",
+        max_steps: 25,
+        method: "heun_dynamics_settle",
+        on_non_convergence: "retry_with_smaller_dt",
+        retry_max_attempts: 3,
+        retry_timestep_scale: 0.5,
+        step_id: "field-dynamics",
+        stop_criteria: {
+          max_torque_T: 1e-4,
+        },
+        timestep_s: 1e-12,
+      },
+    ];
+    const stage = studyStageDraftToSceneStage({
+      ...createDefaultStudyStageDraft("hysteresis", 0),
+      protocolKind: "major_loop",
+      settleSteps: JSON.stringify(settleSteps),
+    });
+
+    expect(stage.settle_pipeline).toEqual({
+      kind: "sequence",
+      steps: settleSteps,
+    });
+    expect(validateStudyStageDraft({
+      ...createDefaultStudyStageDraft("hysteresis", 0),
+      protocolKind: "major_loop",
+      settleSteps: JSON.stringify(settleSteps),
+    })).toEqual([]);
+  });
+
+  it("validates hysteresis settle pipeline fallback topology", () => {
+    const missingFallback = validateStudyStageDraft({
+      ...createDefaultStudyStageDraft("hysteresis", 0),
+      settlePipelineMode: "tree",
+      settleBranches: "[]",
+      settleSteps: JSON.stringify([
+        {
+          energy_tolerance: 1e-20,
+          kind: "minimize",
+          max_steps: 100,
+          method: "projected_gradient_bb",
+          on_non_convergence: "run_next_algorithm",
+          torque_tolerance: 1e-5,
+        },
+      ]),
+    }).map((issue) => issue.message);
+    expect(missingFallback).toContain(
+      "Settle tree run_next_algorithm requires a non_converged fallback branch.",
+    );
+
+    const withFallback = validateStudyStageDraft({
+      ...createDefaultStudyStageDraft("hysteresis", 0),
+      settlePipelineMode: "tree",
+      settleBranches: JSON.stringify([
+        {
+          run: {
+            alpha: 1,
+            kind: "relax",
+            max_steps: 100,
+            method: "llg_overdamped",
+            on_non_convergence: "continue_with_warning",
+            torque_tolerance: 1e-5,
+          },
+          when: "non_converged",
+        },
+      ]),
+      settleSteps: JSON.stringify([
+        {
+          energy_tolerance: 1e-20,
+          kind: "minimize",
+          max_steps: 100,
+          method: "projected_gradient_bb",
+          on_non_convergence: "run_next_algorithm",
+          torque_tolerance: 1e-5,
+        },
+      ]),
+    }).map((issue) => issue.message);
+    expect(withFallback).not.toContain(
+      "Settle tree run_next_algorithm requires a non_converged fallback branch.",
+    );
+  });
+
+  it("validates hysteresis settle pipeline applies_to roles and branch selectors", () => {
+    const messages = validateStudyStageDraft({
+      ...createDefaultStudyStageDraft("hysteresis", 0),
+      settleSteps: JSON.stringify([
+        {
+          alpha: 1,
+          applies_to: ["minor", "recoil", "branch_id"],
+          kind: "relax",
+          max_steps: 100,
+          method: "llg_overdamped",
+          on_non_convergence: "continue_with_warning",
+          torque_tolerance: 1e-5,
+        },
+        {
+          alpha: 1,
+          applies_to: {
+            branch_id: "missing_branch",
+            kind: "branch_id",
+          },
+          kind: "relax",
+          max_steps: 100,
+          method: "llg_overdamped",
+          on_non_convergence: "continue_with_warning",
+          torque_tolerance: 1e-5,
+        },
+        {
+          alpha: 1,
+          applies_to: {
+            kind: "point_selector",
+          },
+          kind: "relax",
+          max_steps: 100,
+          method: "llg_overdamped",
+          on_non_convergence: "continue_with_warning",
+          torque_tolerance: 1e-5,
+        },
+      ]),
+    }).map((issue) => issue.message);
+
+    expect(messages).toContain(
+      "Settle step 1 applies_to role 'minor' does not exist for this hysteresis protocol.",
+    );
+    expect(messages).toContain(
+      "Settle step 1 applies_to role 'recoil' does not exist for this hysteresis protocol.",
+    );
+    expect(messages).toContain(
+      "Settle step 1 applies_to 'branch_id' requires a selector object.",
+    );
+    expect(messages).toContain(
+      "Settle step 2 applies_to branch_id 'missing_branch' does not exist for this hysteresis protocol.",
+    );
+    expect(messages).toContain(
+      "Settle step 3 applies_to point_selector requires selector object.",
+    );
+  });
+
+  it("accepts hysteresis settle pipeline applies_to selectors for existing roles", () => {
+    const messages = validateStudyStageDraft({
+      ...createDefaultStudyStageDraft("hysteresis", 0),
+      minorLoops: JSON.stringify([
+        {
+          returnMt: -25,
+          reversalMt: 25,
+        },
+      ]),
+      protocolKind: "major_with_minor_loops",
+      settleSteps: JSON.stringify([
+        {
+          alpha: 1,
+          applies_to: ["major", "minor", "key_events"],
+          kind: "relax",
+          max_steps: 100,
+          method: "llg_overdamped",
+          on_non_convergence: "continue_with_warning",
+          torque_tolerance: 1e-5,
+        },
+        {
+          alpha: 1,
+          applies_to: {
+            branch_id: "descending",
+            kind: "branch_id",
+          },
+          kind: "relax",
+          max_steps: 100,
+          method: "llg_overdamped",
+          on_non_convergence: "continue_with_warning",
+          torque_tolerance: 1e-5,
+        },
+      ]),
+    }).map((issue) => issue.message);
+
+    expect(messages).not.toContain(
+      "Settle step 1 applies_to role 'minor' does not exist for this hysteresis protocol.",
+    );
+    expect(messages).not.toContain(
+      "Settle step 2 applies_to branch_id 'descending' does not exist for this hysteresis protocol.",
+    );
+  });
+
+  it("accepts direct minimizer methods in hysteresis settle pipeline authoring", () => {
+    const draft = {
+      ...createDefaultStudyStageDraft("hysteresis", 0),
+      settleSteps: JSON.stringify([
+        {
+          energy_tolerance: 1e-20,
+          kind: "minimize",
+          max_steps: 100,
+          method: "nonlinear_cg",
+          on_non_convergence: "run_next_algorithm",
+          torque_tolerance: 1e-5,
+        },
+        {
+          energy_tolerance: 1e-20,
+          kind: "minimize",
+          max_steps: 100,
+          method: "tangent_plane_implicit",
+          on_non_convergence: "continue_with_warning",
+          torque_tolerance: 1e-5,
+        },
+      ]),
+    };
+
+    const messages = validateStudyStageDraft(draft).map((issue) => issue.message);
+
+    expect(messages).not.toContain("Settle step 1 method is not supported for minimize.");
+    expect(messages).not.toContain("Settle step 2 method is not supported for minimize.");
+    expect(studyStageDraftToSceneStage(draft)).toMatchObject({
+      settle_pipeline: {
+        steps: [
+          {
+            kind: "minimize",
+            method: "nonlinear_cg",
+          },
+          {
+            kind: "minimize",
+            method: "tangent_plane_implicit",
+          },
+        ],
+      },
+    });
+  });
+
+  it("preserves additional tree default steps as always branches", () => {
+    expect(
+      studyStageDraftToSceneStage({
+        ...createDefaultStudyStageDraft("hysteresis", 0),
+        settleBranches: JSON.stringify([
+          {
+            run: {
+              alpha: 1,
+              kind: "relax",
+              max_steps: 300,
+              method: "llg_overdamped",
+              on_non_convergence: "continue_with_warning",
+              torque_tolerance: 1e-6,
+            },
+            when: "non_converged",
+          },
+        ]),
+        settlePipelineMode: "tree",
+        settleSteps: JSON.stringify([
+          {
+            energy_tolerance: 1e-20,
+            kind: "minimize",
+            max_steps: 100,
+            method: "projected_gradient_bb",
+            on_non_convergence: "run_next_algorithm",
+            torque_tolerance: 1e-5,
+          },
+          {
+            alpha: 1,
+            kind: "relax",
+            max_steps: 200,
+            method: "llg_overdamped",
+            on_non_convergence: "continue_with_warning",
+            torque_tolerance: 1e-6,
+          },
+        ]),
+      }),
+    ).toMatchObject({
+      settle_pipeline: {
+        branches: [
+          {
+            run: {
+              kind: "relax",
+              max_steps: 200,
+              method: "llg_overdamped",
+            },
+            when: "always",
+          },
+          {
+            run: {
+              kind: "relax",
+              max_steps: 300,
+              method: "llg_overdamped",
+            },
+            when: "non_converged",
+          },
+        ],
+        default: {
+          kind: "minimize",
+          method: "projected_gradient_bb",
+        },
+        kind: "tree",
+      },
+    });
+  });
+
   it("validates hysteresis piecewise field segment shape", () => {
     expect(
       validateStudyStageDraft({
@@ -485,6 +1184,141 @@ describe("StudyStageAuthoringModel", () => {
       "Field segment 1 step must be a positive finite number.",
       "Field segment 1 startField and stopField must differ.",
     ]);
+  });
+
+  it("warns about hysteresis piecewise field schedule gaps and ambiguous shared boundaries", () => {
+    expect(
+      validateStudyStageDraft({
+        ...createDefaultStudyStageDraft("hysteresis", 0),
+        fieldScheduleMode: "piecewise",
+        fieldSegments: JSON.stringify([
+          {
+            endpointPolicy: "include_stop",
+            segmentId: "coarse_start",
+            startField: 100,
+            step: 50,
+            stopField: 20,
+          },
+          {
+            endpointPolicy: "include_stop",
+            segmentId: "dense_after_remanence",
+            startField: 20,
+            step: 5,
+            stopField: -5,
+          },
+          {
+            endpointPolicy: "skip_start",
+            segmentId: "negative_branch",
+            startField: -10,
+            step: 25,
+            stopField: -100,
+          },
+        ]),
+      }).map((issue) => issue.message),
+    ).toEqual([
+      "Field segment 2 shares a boundary with segment 1; choose skip_start or include_both explicitly.",
+      "Field segment 3 starts at -10 mT, leaving a discontinuity after segment 2 stops at -5 mT.",
+    ]);
+  });
+
+  it("validates overlapping hysteresis dense windows require distinct priorities", () => {
+    expect(
+      validateStudyStageDraft({
+        ...createDefaultStudyStageDraft("hysteresis", 0),
+        denseWindows: JSON.stringify([
+          {
+            centerMt: 0,
+            halfWidthMt: 25,
+            reason: "remanence",
+            stepMt: 1,
+          },
+          {
+            centerMt: 10,
+            halfWidthMt: 25,
+            priority: 1,
+            reason: "coercive",
+            stepMt: 1,
+          },
+        ]),
+      }).map((issue) => issue.message),
+    ).toEqual([
+      "Dense window 2 overlaps dense window 1; overlapping windows require explicit priority.",
+    ]);
+
+    expect(
+      validateStudyStageDraft({
+        ...createDefaultStudyStageDraft("hysteresis", 0),
+        denseWindows: JSON.stringify([
+          {
+            centerMt: 0,
+            halfWidthMt: 25,
+            priority: 1,
+            reason: "remanence",
+            stepMt: 1,
+          },
+          {
+            centerMt: 10,
+            halfWidthMt: 25,
+            priority: 1,
+            reason: "coercive",
+            stepMt: 1,
+          },
+        ]),
+      }).map((issue) => issue.message),
+    ).toEqual([
+      "Dense window 2 overlaps dense window 1; overlapping windows require distinct priority values.",
+    ]);
+  });
+
+  it("validates hysteresis minor loops against major-loop branch range", () => {
+    expect(
+      validateStudyStageDraft({
+        ...createDefaultStudyStageDraft("hysteresis", 0),
+        fieldMaxMt: "100",
+        fieldMinMt: "-100",
+        minorLoops: JSON.stringify([
+          {
+            returnMt: 25,
+            reversalMt: 25,
+          },
+          {
+            returnMt: -125,
+            reversalMt: 125,
+          },
+        ]),
+        protocolKind: "major_loop",
+      }).map((issue) => issue.message),
+    ).toEqual([
+      "Minor loop 1 reversal_mT and return_mT must differ.",
+      "Minor loops require branch mode major_with_minor_loops.",
+      "Minor loop 2 reversal_mT must be within the field range.",
+      "Minor loop 2 return_mT must be within the field range.",
+    ]);
+  });
+
+  it("accepts a hysteresis minor loop inside a major-with-minor-loops branch", () => {
+    const messages = validateStudyStageDraft({
+      ...createDefaultStudyStageDraft("hysteresis", 0),
+      fieldMaxMt: "100",
+      fieldMinMt: "-100",
+      minorLoops: JSON.stringify([
+        {
+          returnMt: -50,
+          reversalMt: 50,
+        },
+      ]),
+      protocolKind: "major_with_minor_loops",
+    }).map((issue) => issue.message);
+
+    expect(messages).not.toContain(
+      "Minor loops require branch mode major_with_minor_loops.",
+    );
+    expect(messages).not.toContain(
+      "Minor loop 1 reversal_mT must be within the field range.",
+    );
+    expect(messages).not.toContain(
+      "Minor loop 1 return_mT must be within the field range.",
+    );
   });
 
   it("serializes UI-authored hysteresis piecewise segments to canonical keys", () => {

@@ -31,6 +31,7 @@ pub const IR_VERSION: &str = "0.2.0";
 pub const CURRENT_IR_VERSION: &str = IR_VERSION;
 pub const PREVIOUS_PUBLIC_IR_VERSION: &str = "0.1.0";
 pub const SUPPORTED_READ_IR_VERSIONS: &[&str] = &[CURRENT_IR_VERSION, PREVIOUS_PUBLIC_IR_VERSION];
+const MU0_H_PER_M: f64 = 1.256_637_061_435_917_2e-6;
 
 pub fn is_supported_ir_version_for_read(version: &str) -> bool {
     let normalized = version.trim();
@@ -780,7 +781,7 @@ impl ProblemIR {
                 frequencies_hz,
                 ..
             } => {
-                validate_study_dynamics(dynamics, &mut errors);
+                validate_frequency_response_dynamics(dynamics, &mut errors);
                 match operator.kind {
                     EigenOperatorIR::LinearizedLlg => {}
                     EigenOperatorIR::Full2x2 => {}
@@ -836,6 +837,10 @@ impl ProblemIR {
                         "frequency_response.excitation.field_au_per_m must contain finite values"
                             .to_string(),
                     );
+                }
+                if !excitation.phase_rad.is_finite() {
+                    errors
+                        .push("frequency_response.excitation.phase_rad must be finite".to_string());
                 }
                 if frequencies_hz.values_hz.is_empty() {
                     errors.push(
@@ -896,6 +901,7 @@ impl ProblemIR {
                 measurement_axis,
                 angular_family,
                 initial_protocol,
+                initial_state_ref,
                 saturation,
                 branch_mode,
                 storage,
@@ -903,6 +909,7 @@ impl ProblemIR {
                 field_max_mT,
                 field_step_mT,
                 field_values_mT,
+                field_unit_provenance,
                 settle_pipeline,
                 field_schedule,
                 schedule_refinements,
@@ -942,9 +949,18 @@ impl ProblemIR {
                         | "zero_field_relaxed"
                         | "positive_saturation"
                         | "negative_saturation"
+                        | "checkpoint"
                 ) {
                     errors.push(
                         "study.stages[].hysteresis.initial_protocol is unsupported".to_string(),
+                    );
+                }
+                if initial_protocol == "checkpoint"
+                    && initial_state_ref.as_deref().is_none_or(str::is_empty)
+                {
+                    errors.push(
+                        "study.stages[].hysteresis.initial_state_ref is required when initial_protocol is checkpoint"
+                            .to_string(),
                     );
                 }
                 if !matches!(
@@ -976,6 +992,9 @@ impl ProblemIR {
                             ));
                         }
                     }
+                }
+                if let Some(provenance) = field_unit_provenance {
+                    validate_hysteresis_field_unit_provenance(provenance, &mut errors);
                 }
                 if let Some(step) = field_step_mT {
                     if !step.is_finite() {
@@ -2340,6 +2359,49 @@ fn validate_hysteresis_measurement_axis(
                 );
             }
         }
+    }
+}
+
+fn validate_hysteresis_field_unit_provenance(
+    provenance: &FieldUnitProvenanceIR,
+    errors: &mut Vec<String>,
+) {
+    if provenance.authored_quantity != "mu0_h" {
+        errors.push(
+            "study.stages[].hysteresis.field_unit_provenance.authored_quantity is unsupported"
+                .to_string(),
+        );
+    }
+    if provenance.authored_unit != "mT" {
+        errors.push(
+            "study.stages[].hysteresis.field_unit_provenance.authored_unit is unsupported"
+                .to_string(),
+        );
+    }
+    if provenance.canonical_quantity != "h_ext" {
+        errors.push(
+            "study.stages[].hysteresis.field_unit_provenance.canonical_quantity is unsupported"
+                .to_string(),
+        );
+    }
+    if provenance.canonical_unit != "A/m" {
+        errors.push(
+            "study.stages[].hysteresis.field_unit_provenance.canonical_unit is unsupported"
+                .to_string(),
+        );
+    }
+    if provenance.display_unit != "mT" {
+        errors.push(
+            "study.stages[].hysteresis.field_unit_provenance.display_unit is unsupported"
+                .to_string(),
+        );
+    }
+    if !provenance.mu0_h_per_m.is_finite() || (provenance.mu0_h_per_m - MU0_H_PER_M).abs() > 1.0e-18
+    {
+        errors.push(
+            "study.stages[].hysteresis.field_unit_provenance.mu0_h_per_m must match vacuum permeability"
+                .to_string(),
+        );
     }
 }
 

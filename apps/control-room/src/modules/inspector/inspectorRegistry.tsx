@@ -35,9 +35,6 @@ const FREQUENCY_DOMAIN_STAGE_SELECTION_KINDS = [
   "study.stage.eigenmodes.calculation_mode",
   "study.stage.eigenmodes.equilibrium",
   "study.stage.eigenmodes.operator",
-  "study.stage.eigenmodes.boundary",
-  "study.stage.eigenmodes.periodic_pairs",
-  "study.stage.eigenmodes.k_path",
   "study.stage.eigenmodes.solver",
   "study.stage.eigenmodes.outputs",
   "study.stage.eigenmodes.diagnostics",
@@ -45,9 +42,6 @@ const FREQUENCY_DOMAIN_STAGE_SELECTION_KINDS = [
   "study.stage.frequency_response.calculation_mode",
   "study.stage.frequency_response.equilibrium",
   "study.stage.frequency_response.operator",
-  "study.stage.frequency_response.boundary",
-  "study.stage.frequency_response.periodic_pairs",
-  "study.stage.frequency_response.k_grid",
   "study.stage.frequency_response.excitation",
   "study.stage.frequency_response.sweep",
   "study.stage.frequency_response.solver",
@@ -55,7 +49,18 @@ const FREQUENCY_DOMAIN_STAGE_SELECTION_KINDS = [
   "study.stage.frequency_response.diagnostics",
 ] as const;
 
+const FREQUENCY_DOMAIN_STAGE_DETAIL_SELECTION_KINDS = [
+  "study.stage.eigenmodes.boundary",
+  "study.stage.eigenmodes.periodic_pairs",
+  "study.stage.eigenmodes.k_path",
+  "study.stage.frequency_response.boundary",
+  "study.stage.frequency_response.periodic_pairs",
+  "study.stage.frequency_response.k_grid",
+] as const;
+
 export const FREQUENCY_DOMAIN_INSPECTOR_SELECTION_KINDS = [
+  ...FREQUENCY_DOMAIN_STAGE_SELECTION_KINDS,
+  ...FREQUENCY_DOMAIN_STAGE_DETAIL_SELECTION_KINDS,
   "results.frequency_domain.root",
   "results.frequency_domain.run",
   "results.frequency_domain.calculation_modes",
@@ -302,7 +307,6 @@ const PANELS: InspectorPanelContribution[] = [
       "study.stage.action",
       "study.stage.eigenmodes",
       "study.stage.frequency_response",
-      ...FREQUENCY_DOMAIN_STAGE_SELECTION_KINDS,
       "study.stage.hysteresis",
       "study.stage.relax",
       "study.stage.run",

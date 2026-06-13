@@ -192,6 +192,17 @@ describe("Viewport3DScene scale helpers", () => {
     expect(source).not.toContain("makeDefault");
   });
 
+  it("mounts the hysteresis replay glyph layer from the scene model", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DScene.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("HysteresisReplayGlyphLayer");
+    expect(source).toContain("glyphModel={hysteresisReplayGlyphModel}");
+    expect(source).toContain("bounds={bounds}");
+  });
+
   it("keeps camera pose out of declarative camera props so OrbitControls owns active gestures", () => {
     const source = readFileSync(
       new URL("./Viewport3DScene.tsx", import.meta.url),

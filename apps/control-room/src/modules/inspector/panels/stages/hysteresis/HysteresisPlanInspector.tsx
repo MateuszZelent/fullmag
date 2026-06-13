@@ -6,9 +6,10 @@ import { isRecord, parseJsonArray, parseJsonRecord } from "./HysteresisInspector
 import type { HysteresisInspectorCommonProps } from "./HysteresisInspectorTypes";
 
 export function HysteresisPlanInspector({
+  adaptiveRefinement,
   draft,
   stagePlan,
-}: Pick<HysteresisInspectorCommonProps, "draft" | "stagePlan">) {
+}: Pick<HysteresisInspectorCommonProps, "adaptiveRefinement" | "draft" | "stagePlan">) {
   const fieldSchedule = isRecord(stagePlan?.field_schedule)
     ? stagePlan.field_schedule
     : null;
@@ -29,6 +30,13 @@ export function HysteresisPlanInspector({
   const fieldMinMt = stagePlan?.field_min_mT ?? draft?.fieldMinMt;
   const fieldMaxMt = stagePlan?.field_max_mT ?? draft?.fieldMaxMt;
   const fieldStepMt = stagePlan?.field_step_mT ?? draft?.fieldStepMt;
+  const fieldUnitProvenance = stagePlan?.field_unit_provenance ?? null;
+  const authoredFieldUnit = fieldUnitProvenance
+    ? `${fieldUnitProvenance.authored_quantity} (${fieldUnitProvenance.authored_unit})`
+    : null;
+  const canonicalFieldUnit = fieldUnitProvenance
+    ? `${fieldUnitProvenance.canonical_quantity} (${fieldUnitProvenance.canonical_unit})`
+    : null;
 
   let storagePolicyFormatted = "average only";
   const policy = parseJsonRecord(draft?.storagePolicy);
@@ -43,6 +51,23 @@ export function HysteresisPlanInspector({
       storagePolicyFormatted = "scalar averages only";
     }
   }
+  const storageEstimate = stagePlan?.storage_estimate ?? null;
+  const storageEstimateSummary = storageEstimate
+    ? [
+        storageEstimate.status,
+        `${storageEstimate.point_count ?? "?"} point(s)`,
+        `${storageEstimate.snapshot_count ?? "?"} snapshot(s)`,
+        formatStorageBytes(storageEstimate.estimated_bytes),
+      ].join(" | ")
+    : "pending";
+  const storageWarnings = storageEstimate?.warnings?.filter(Boolean) ?? [];
+  const adaptiveCandidateCount = adaptiveRefinement?.candidates?.length ?? 0;
+  const adaptivePointCount = adaptiveRefinement?.points?.length ?? 0;
+  const adaptiveStatus = adaptiveRefinement
+    ? `${adaptiveRefinement.status} | ${adaptiveCandidateCount} candidate(s) | ${adaptivePointCount} computed point(s)`
+    : stagePlan?.adaptive_refinement
+      ? "configured, awaiting runtime artifact"
+      : "not configured";
 
   return (
     <InspectorSection
@@ -63,6 +88,17 @@ export function HysteresisPlanInspector({
         <FieldRow label="Direction vector" value={draft?.customDirection ?? "n/a"} />
       )}
       <FieldRow label="Measurement axis" value={draft?.measurementAxis ?? "n/a"} />
+      {fieldUnitProvenance && (
+        <>
+          <FieldRow label="Authored field" value={authoredFieldUnit} />
+          <FieldRow label="Canonical field" value={canonicalFieldUnit} />
+          <FieldRow
+            label="mu0"
+            value={fieldUnitProvenance.mu0_h_per_m.toExponential(12)}
+            unit="H/m"
+          />
+        </>
+      )}
       <FieldRow label="Schedule mode" value={scheduleMode ?? "n/a"} />
       {scheduleMode !== "piecewise" ? (
         <>
@@ -77,6 +113,28 @@ export function HysteresisPlanInspector({
         <FieldRow label="Minor loops" value={`${minorLoops.length} loop(s) configured`} />
       )}
       <FieldRow label="Storage policy" value={storagePolicyFormatted} />
+      <FieldRow label="Storage estimate" value={storageEstimateSummary} />
+      {storageWarnings.length > 0 && (
+        <FieldRow label="Storage warnings" value={storageWarnings.join("; ")} />
+      )}
+      <FieldRow label="Adaptive refinement" value={adaptiveStatus} />
     </InspectorSection>
   );
+}
+
+function formatStorageBytes(bytes: number | null | undefined): string {
+  if (typeof bytes !== "number" || !Number.isFinite(bytes)) {
+    return "size pending";
+  }
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  const units = ["KiB", "MiB", "GiB", "TiB"];
+  let value = bytes / 1024;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(value >= 10 ? 1 : 2)} ${units[unitIndex]}`;
 }

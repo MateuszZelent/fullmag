@@ -4,6 +4,7 @@ import type {
   LiveStatusResource,
   ObjectMetricsResource,
   SceneResource,
+  SolverStatusResource,
 } from "@/kernel/api/apiTypes";
 
 import {
@@ -109,6 +110,12 @@ const status: LiveStatusResource = {
   },
 };
 
+function solverStatusFixture(
+  value: SolverStatusResource & { active_runtime_seconds?: number | null },
+): SolverStatusResource {
+  return value;
+}
+
 const objectMetrics: ObjectMetricsResource = {
   energies: {
     anisotropy: 4,
@@ -160,7 +167,7 @@ describe("FooterTelemetry", () => {
       revision: 1,
       status: "ready",
     });
-    const model = buildFooterTelemetryModel(telemetryStatus, null, {
+    const model = buildFooterTelemetryModel(telemetryStatus, null, solverStatusFixture({
       algorithm: null,
       can_accept_commands: true,
       converged: false,
@@ -169,6 +176,8 @@ describe("FooterTelemetry", () => {
       is_busy: false,
       last_error: null,
       max_torque_T: 0,
+      active_runtime_seconds: null,
+      pseudo_time_seconds: null,
       revision: 4,
       run_id: status.run?.run_id ?? null,
       runtime_state: "waiting_for_compute",
@@ -179,13 +188,52 @@ describe("FooterTelemetry", () => {
       stage_kind: "relax",
       step_index: 0,
       warnings: [],
-    });
+    }));
 
     const dt = model.metrics.find((metric) => metric.id === "dt");
     expect(model.statusTitle).toBe("System Status: Waiting for compute");
     expect(model.onlineTitle).toBe("Online / Waiting");
     expect(model.statusState).toBe("waiting_for_compute");
     expect(dt?.subdetail).toBe("State: Waiting for compute");
+  });
+
+  it("shows physical simulation time when pseudotime is absent", () => {
+    const telemetryStatus = selectFooterTelemetryStatus({
+      data: status,
+      error: null,
+      refetch: () => {},
+      revision: 1,
+      status: "ready",
+    });
+    const model = buildFooterTelemetryModel(telemetryStatus, null, solverStatusFixture({
+      algorithm: "llg_overdamped",
+      can_accept_commands: false,
+      converged: false,
+      dt_seconds: 1e-13,
+      integrator: "rk23",
+      is_busy: true,
+      last_error: null,
+      max_torque_T: 0.002,
+      active_runtime_seconds: 0.25,
+      pseudo_time_seconds: null,
+      revision: 5,
+      run_id: status.run?.run_id ?? null,
+      runtime_state: "running",
+      runtime_status_code: "running",
+      runtime_status_kind: "running",
+      session_status: "running",
+      sim_time_seconds: 4e-9,
+      stage_kind: "relax",
+      step_index: 42,
+      warnings: [],
+    }));
+    const byId = Object.fromEntries(model.metrics.map((metric) => [metric.id, metric]));
+
+    expect(byId.time?.label).toBe("Sim time");
+    expect(byId.time?.detail).toBe("Physical simulation time");
+    expect(byId["sim-time"]).toBeUndefined();
+    expect(byId["active-runtime"]?.label).toBe("Runtime");
+    expect(byId["active-runtime"]?.detail).toBe("Active compute time");
   });
 
   it("uses live scalar samples for fast footer telemetry values", () => {
@@ -229,6 +277,99 @@ describe("FooterTelemetry", () => {
     expect(byId["energy-total"]?.value).toBe("3.1");
     expect(byId["energy-total"]?.subdetail).toBe("Live scalar sample");
     expect(byId["max-torque"]?.value).toBe("4.000000e-3 T");
+  });
+
+  it("shows pseudotime and keeps physical simulation time separate for direct minimizers", () => {
+    const telemetryStatus = selectFooterTelemetryStatus({
+      data: status,
+      error: null,
+      refetch: () => {},
+      revision: 1,
+      status: "ready",
+    });
+    const model = buildFooterTelemetryModel(
+      telemetryStatus,
+      objectMetrics,
+      solverStatusFixture({
+        algorithm: "projected_gradient_bb",
+        can_accept_commands: false,
+        converged: false,
+        dt_seconds: 2e-6,
+        integrator: null,
+        is_busy: true,
+        last_error: null,
+        max_torque_T: 0.004,
+        active_runtime_seconds: 0.12,
+        pseudo_time_seconds: 8e-6,
+        revision: 6,
+        run_id: status.run?.run_id ?? null,
+        runtime_state: "running",
+        runtime_status_code: "running",
+        runtime_status_kind: "running",
+        session_status: "running",
+        sim_time_seconds: 0,
+        stage_kind: "relax",
+        step_index: 8,
+        warnings: [],
+      }),
+      {
+        revision: 26,
+        row: {
+          active_runtime_s: 0.2,
+          pseudo_time_s: 9e-6,
+          step: 9,
+          time: 0,
+        },
+        runId: "run-1",
+        sessionId: "session-1",
+        step: 9,
+        time: 0,
+      },
+    );
+    const byId = Object.fromEntries(model.metrics.map((metric) => [metric.id, metric]));
+
+    expect(byId.time?.label).toBe("Pseudo time");
+    expect(byId.time?.detail).toBe("Direct minimizer pseudotime");
+    expect(byId["sim-time"]?.label).toBe("Sim time");
+    expect(byId["sim-time"]?.detail).toBe("Physical simulation time");
+    expect(byId["active-runtime"]?.label).toBe("Runtime");
+    expect(byId["active-runtime"]?.value).toBe("00h 00m 00s");
+    expect(byId.dt?.label).toBe("Pseudo dt");
+    expect(byId.dt?.detail).toBe("Minimizer pseudotime step");
+    expect(byId.step?.subdetail).toBe("t=0.000000e+0 s");
+  });
+
+  it("ignores stale live scalar samples from a previous run", () => {
+    const telemetryStatus = selectFooterTelemetryStatus({
+      data: {
+        ...status,
+        run: {
+          ...status.run!,
+          run_id: "run-2",
+        },
+      },
+      error: null,
+      refetch: () => {},
+      revision: 1,
+      status: "ready",
+    });
+    const model = buildFooterTelemetryModel(telemetryStatus, null, null, {
+      revision: 26,
+      row: {
+        pseudo_time_s: 9e-6,
+        step: 9,
+        time: 0,
+      },
+      runId: "run-1",
+      sessionId: "session-1",
+      step: 9,
+      time: 0,
+    });
+    const byId = Object.fromEntries(model.metrics.map((metric) => [metric.id, metric]));
+
+    expect(byId.time?.label).toBe("Sim time");
+    expect(byId["sim-time"]).toBeUndefined();
+    expect(byId.dt?.label).toBe("dt");
   });
 
   it("selects only telemetry-relevant status fields", () => {

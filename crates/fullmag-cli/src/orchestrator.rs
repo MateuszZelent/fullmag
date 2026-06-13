@@ -428,6 +428,31 @@ fn drain_solver_profile_commands(
     }
 }
 
+fn live_step_ingest_legacy_mag_len(update: &fullmag_runner::StepUpdate) -> usize {
+    update
+        .magnetization
+        .as_ref()
+        .map(|values| values.len())
+        .unwrap_or(0)
+}
+
+fn live_step_ingest_preview_len(update: &fullmag_runner::StepUpdate) -> usize {
+    update
+        .preview_field
+        .as_ref()
+        .map(|field| field.vector_field_values.len())
+        .unwrap_or(0)
+}
+
+fn live_step_ingest_cached_m_preview_len(update: &fullmag_runner::StepUpdate) -> usize {
+    update
+        .cached_preview_fields
+        .as_ref()
+        .and_then(|fields| fields.iter().find(|field| field.quantity == "m"))
+        .map(|field| field.vector_field_values.len())
+        .unwrap_or(0)
+}
+
 fn apply_live_step_update_to_workspace_state(
     state: &mut LocalLiveWorkspaceState,
     run_id: &str,
@@ -443,20 +468,18 @@ fn apply_live_step_update_to_workspace_state(
         .unwrap_or(0);
     if update.stats.step <= 2 || update.preview_field.is_some() || cached_preview_count > 0 {
         eprintln!(
-            "[fullmag-cli] live step ingest step={} mag_len={} preview_field={} preview_quantity={} cached_preview_fields={} scalar_row_due={} finished={}",
+            "[fullmag-cli] live step ingest step={} legacy_mag_len={} preview_field={} preview_quantity={} preview_len={} cached_preview_fields={} cached_m_preview_len={} scalar_row_due={} finished={}",
             update.stats.step,
-            update
-                .magnetization
-                .as_ref()
-                .map(|values| values.len())
-                .unwrap_or(0),
+            live_step_ingest_legacy_mag_len(update),
             update.preview_field.is_some(),
             update
                 .preview_field
                 .as_ref()
                 .map(|field| field.quantity.as_str())
                 .unwrap_or("-"),
+            live_step_ingest_preview_len(update),
             cached_preview_count,
+            live_step_ingest_cached_m_preview_len(update),
             update.scalar_row_due,
             update.finished,
         );
@@ -3502,6 +3525,7 @@ fn refresh_problem_energy_state(
         state.live_state.latest_step.step = step_stats.step;
         state.live_state.latest_step.time = step_stats.time;
         state.live_state.latest_step.dt = step_stats.dt;
+        state.live_state.latest_step.pseudo_time_s = step_stats.pseudo_time_s;
         state.live_state.latest_step.e_ex = step_stats.e_ex;
         state.live_state.latest_step.e_demag = step_stats.e_demag;
         state.live_state.latest_step.e_ext = step_stats.e_ext;
@@ -5392,6 +5416,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         );
         let is_final_stage = stage_index + 1 == stage_count;
         let is_session_final_stage = is_final_stage && !interactive_requested;
+        let current_stage_id = format!("stage-{stage_index:03}");
         let current_stage_artifact_dir = stage_artifact_dir(
             &workspace_dir,
             &artifact_dir,
@@ -5613,7 +5638,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 let mut live_cadence = LiveProgressCadence::default();
                 let display_selection = || display_selection_handle.display_selection_snapshot();
                 let interrupt_signal = display_selection_handle.running_interrupt_signal();
-                fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot(
+                fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_hysteresis_stage_id(
                     &stage.ir,
                     &execution_plan,
                     stage.until_seconds,
@@ -5622,6 +5647,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     &display_selection,
                     Some(interrupt_signal.as_ref()),
                     !args.headless,
+                    Some(&current_stage_id),
                     |update| {
                         let adjusted = offset_step_update(
                             &update,
@@ -5683,12 +5709,13 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 )
             } else {
                 let mut live_cadence = LiveProgressCadence::default();
-                fullmag_runner::run_planned_problem_with_callback(
+                fullmag_runner::run_planned_problem_with_callback_and_hysteresis_stage_id(
                     &stage.ir,
                     &execution_plan,
                     stage.until_seconds,
                     &current_stage_artifact_dir,
                     field_every_n,
+                    Some(&current_stage_id),
                     |update| {
                         let adjusted = offset_step_update(
                             &update,
@@ -5737,11 +5764,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 )
             }
         } else {
-            fullmag_runner::run_planned_problem(
+            fullmag_runner::run_planned_problem_with_hysteresis_stage_id(
                 &stage.ir,
                 &execution_plan,
                 stage.until_seconds,
                 &current_stage_artifact_dir,
+                Some(&current_stage_id),
             )
         } {
             Ok(result) => result,
@@ -6668,6 +6696,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 interactive_stage_index + 2,
                 &stage.entrypoint_kind,
             );
+            let current_stage_id = format!("stage-{interactive_stage_index:03}");
             fs::create_dir_all(&current_stage_artifact_dir).with_context(|| {
                 format!(
                     "failed to create interactive stage artifact dir {}",
@@ -6817,7 +6846,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     }
 
                     if hysteresis_study {
-                        fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot(
+                        fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_hysteresis_stage_id(
                             &stage.ir,
                             &execution_plan,
                             stage.until_seconds,
@@ -6826,6 +6855,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             &display_selection,
                             Some(interrupt_signal.as_ref()),
                             true,
+                            Some(&current_stage_id),
                             &mut on_step,
                         )
                     } else if let Some(runtime) = interactive_runtime_host.runtime_mut() {
@@ -6841,7 +6871,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             &mut on_step,
                         )
                     } else {
-                        fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot(
+                        fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_hysteresis_stage_id(
                             &stage.ir,
                             &execution_plan,
                             stage.until_seconds,
@@ -6850,17 +6880,19 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             &display_selection,
                             Some(interrupt_signal.as_ref()),
                             true,
+                            Some(&current_stage_id),
                             &mut on_step,
                         )
                     }
                 } else {
                     let mut live_cadence = LiveProgressCadence::default();
-                    fullmag_runner::run_planned_problem_with_callback(
+                    fullmag_runner::run_planned_problem_with_callback_and_hysteresis_stage_id(
                         &stage.ir,
                         &execution_plan,
                         stage.until_seconds,
                         &current_stage_artifact_dir,
                         field_every_n,
+                        Some(&current_stage_id),
                         |update| {
                             let adjusted =
                                 offset_step_update(&update, step_offset, time_offset, false);
@@ -6905,11 +6937,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     )
                 }
             } else {
-                fullmag_runner::run_planned_problem(
+                fullmag_runner::run_planned_problem_with_hysteresis_stage_id(
                     &stage.ir,
                     &execution_plan,
                     stage.until_seconds,
                     &current_stage_artifact_dir,
+                    Some(&current_stage_id),
                 )
             } {
                 Ok(result) => result,
@@ -7600,6 +7633,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             step: step.step,
             time: step.time,
             solver_dt: step.dt,
+            pseudo_time_s: step.pseudo_time_s,
+            active_runtime_s: Some(step.wall_time_ns as f64 * 1.0e-9),
             mx: step.mx,
             my: step.my,
             mz: step.mz,
@@ -7748,11 +7783,13 @@ mod tests {
         execute_synthetic_stage, fem_gpu_memory_preflight_message,
         fem_interactive_dense_ram_estimate, fem_live_mesh_payload_and_initial_magnetization,
         fem_mesh_payload_from_backend_plan, has_heavy_live_payload,
-        interactive_session_should_stay_alive, mesh_build_pipeline_status_json,
-        scripted_stage_execution_state, stage_allows_sampled_continuation_initial_state,
-        user_cancelled_stage_completion, wait_for_solve_prompt, wait_for_solve_should_block,
-        wait_for_solve_supported, ActiveSequenceState, LiveProgressCadence, SceneProblemPatch,
-        WaitForSolveCommandAction, LIVE_PROGRESS_PUBLISH_INTERVAL,
+        interactive_session_should_stay_alive, live_step_ingest_cached_m_preview_len,
+        live_step_ingest_legacy_mag_len, live_step_ingest_preview_len,
+        mesh_build_pipeline_status_json, scripted_stage_execution_state,
+        stage_allows_sampled_continuation_initial_state, user_cancelled_stage_completion,
+        wait_for_solve_prompt, wait_for_solve_should_block, wait_for_solve_supported,
+        ActiveSequenceState, LiveProgressCadence, SceneProblemPatch, WaitForSolveCommandAction,
+        LIVE_PROGRESS_PUBLISH_INTERVAL,
     };
     use crate::live_workspace::bootstrap_live_state;
     use crate::types::{
@@ -7815,6 +7852,20 @@ mod tests {
             auto_downscale_message: None,
             active_mask: None,
         }
+    }
+
+    #[test]
+    fn live_step_ingest_diagnostics_distinguish_preview_m_from_legacy_magnetization() {
+        let mut update = test_step_update(50);
+        update.preview_field = Some(test_preview_field("m", 7, -1.0));
+        update.cached_preview_fields = Some(vec![
+            test_preview_field("m", 7, -1.0),
+            test_preview_field("H_eff", 7, 2.0),
+        ]);
+
+        assert_eq!(live_step_ingest_legacy_mag_len(&update), 0);
+        assert_eq!(live_step_ingest_preview_len(&update), 3);
+        assert_eq!(live_step_ingest_cached_m_preview_len(&update), 3);
     }
 
     fn test_workspace_state() -> crate::live_workspace::LocalLiveWorkspaceState {
@@ -8339,6 +8390,7 @@ mod tests {
                 dind_field: None,
                 dbulk_field: None,
             },
+            anisotropy_axis_field: None,
             ms_element_field: None,
             a_element_field: None,
             region_materials: Vec::new(),
@@ -8472,6 +8524,7 @@ mod tests {
                 dind_field: None,
                 dbulk_field: None,
             },
+            anisotropy_axis_field: None,
             ms_element_field: None,
             a_element_field: None,
             region_materials: Vec::new(),

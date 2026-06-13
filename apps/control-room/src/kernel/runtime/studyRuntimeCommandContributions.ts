@@ -1,5 +1,6 @@
 import {
   DATA_FIELDS_PATH,
+  DATA_FIELD_VECTOR_PATH,
   DATA_SCALARS_PATH,
   DIAGNOSTICS_ENGINE_LOG_PATH,
   DIAGNOSTICS_SOLVER_PROFILE_PATH,
@@ -34,6 +35,7 @@ import type {
   MeshSharedDomainManifestResource,
   CurrentRunResource,
   FieldStateTargetRef,
+  HysteresisPointSchema,
   RegionDiagnosticsResource,
   RuntimeCommandPrecondition,
   RuntimeCommandTarget,
@@ -136,10 +138,12 @@ const DEFAULT_FREQUENCY_RESPONSE_STAGE: JsonObject = {
   entrypoint_kind: "flat_frequency_response",
   equilibrium_source: "provided",
   excitation_field_au_per_m: [0, 0, 1],
+  excitation_phase_rad: 0,
   frequencies_hz: [1e9],
   frequency_damping_policy: "ignore",
   frequency_equilibrium_source: "provided",
   frequency_excitation_field_au_per_m: [0, 0, 1],
+  frequency_excitation_phase_rad: 0,
   frequency_include_demag: true,
   frequency_normalization: "unit_l2",
   frequency_observable: "susceptibility_tensor",
@@ -884,6 +888,22 @@ function invalidateRestoredStateResources(
   context.resources?.invalidate(VISUALIZATION_STATE_PATH, revision);
 }
 
+function hysteresisSnapshotArtifactRefFromLegacyResource(
+  snapshotResourceRef: string | null | undefined,
+): string | null {
+  const trimmed = snapshotResourceRef?.trim();
+  const fieldVectorPrefix = DATA_FIELD_VECTOR_PATH.split("{quantity_id}")[0];
+  if (
+    !trimmed ||
+    trimmed.startsWith(fieldVectorPrefix) ||
+    trimmed.startsWith("http://") ||
+    trimmed.startsWith("https://")
+  ) {
+    return null;
+  }
+  return trimmed;
+}
+
 function invalidateImportedSessionResources(
   context: CommandContext,
   revision: string | number,
@@ -924,7 +944,7 @@ function maybeDownloadFmsExport(filename: string, fmsBase64: string): void {
 
 function maybeDownloadBinaryExport(
   filename: string,
-  data: ArrayBuffer,
+  data: BlobPart,
   contentType = "application/octet-stream",
 ): void {
   if (
@@ -947,6 +967,177 @@ function artifactFileName(artifactRef: string): string {
   return artifactRef.split("/").filter(Boolean).pop() ?? "field-state.h5";
 }
 
+function resolveHysteresisPointCommandInput(
+  input: unknown,
+): HysteresisPointCommandInput | null {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+  const candidate = input as Partial<HysteresisPointCommandInput>;
+  if (!candidate.stageId || !candidate.point) return null;
+  return {
+    point: candidate.point,
+    stageId: candidate.stageId,
+  };
+}
+
+function resolveHysteresisLoopCommandInput(
+  input: unknown,
+): HysteresisLoopCommandInput | null {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+  const candidate = input as Partial<HysteresisLoopCommandInput>;
+  if (!candidate.stageId || !Array.isArray(candidate.points)) return null;
+  return {
+    points: candidate.points,
+    stageId: candidate.stageId,
+  };
+}
+
+function hysteresisPointSelectionPayload(input: HysteresisPointCommandInput) {
+  return {
+    kind: "analysis.chart-point" as const,
+    label: `Point ${input.point.point_id} (${input.point.field_value_mT} mT)`,
+    nodeId: `analysis:hysteresis:${input.stageId}:point:${input.point.point_id}`,
+    objectId: null,
+    ref: {
+      type: "analysis-chart-point" as const,
+      kind: "analysis.chart-point" as const,
+      nodeId: `analysis:hysteresis:${input.stageId}:point:${input.point.point_id}`,
+      chartId: `hysteresis:${input.stageId}`,
+      tableId: `hysteresis:${input.stageId}`,
+      seriesId: `hysteresis:${input.stageId}:m`,
+      quantity: "m",
+      rowIndex: input.point.point_id,
+      stageId: input.stageId,
+      pointId: input.point.point_id,
+      x: input.point.field_value_mT,
+      y: input.point.m_parallel,
+      snapshotId: input.point.snapshot_id ?? null,
+      targetId: `hysteresis-step:${input.stageId}:${input.point.point_id}`,
+      targetKind: "hysteresis-step" as const,
+      quantityId: "m",
+    },
+  };
+}
+
+function hysteresisPointCsv(input: HysteresisPointCommandInput): string {
+  const point = input.point;
+  const mAvg = point.m_avg ?? [];
+  const rows: Array<[string, string | number | null | undefined]> = [
+    ["stage_id", input.stageId],
+    ["point_id", point.point_id],
+    ["field_value_mT", point.field_value_mT],
+    ["protocol_role", point.protocol_role],
+    ["branch_id", point.branch_id],
+    ["branch_index", point.branch_index],
+    ["minor_loop_id", point.minor_loop_id],
+    ["m_parallel", point.m_parallel],
+    ["m_oop", point.m_oop],
+    ["m_ip", point.m_ip],
+    ["m_x", mAvg[0]],
+    ["m_y", mAvg[1]],
+    ["m_z", mAvg[2]],
+    ["status", point.status],
+    ["settle_status", point.settle_status],
+    ["snapshot_id", point.snapshot_id],
+    ["snapshot_storage_status", point.snapshot_storage_status],
+    ["snapshot_resource_ref", point.snapshot_resource_ref],
+  ];
+  return [
+    "key,value",
+    ...rows.map(([key, value]) => `${csvCell(key)},${csvCell(value ?? "")}`),
+  ].join("\n");
+}
+
+function hysteresisLoopCsv(input: HysteresisLoopCommandInput): string {
+  const header = [
+    "stage_id",
+    "point_id",
+    "field_value_mT",
+    "protocol_role",
+    "branch_id",
+    "branch_index",
+    "minor_loop_id",
+    "m_parallel",
+    "m_oop",
+    "m_ip",
+    "m_x",
+    "m_y",
+    "m_z",
+    "status",
+    "settle_status",
+    "snapshot_id",
+    "snapshot_storage_status",
+    "snapshot_resource_ref",
+  ];
+  const rows = input.points.map((point) => {
+    const mAvg = point.m_avg ?? [];
+    return [
+      input.stageId,
+      point.point_id,
+      point.field_value_mT,
+      point.protocol_role,
+      point.branch_id,
+      point.branch_index,
+      point.minor_loop_id,
+      point.m_parallel,
+      point.m_oop,
+      point.m_ip,
+      mAvg[0],
+      mAvg[1],
+      mAvg[2],
+      point.status,
+      point.settle_status,
+      point.snapshot_id,
+      point.snapshot_storage_status,
+      point.snapshot_resource_ref,
+    ];
+  });
+  return [
+    header.map(csvCell).join(","),
+    ...rows.map((row) =>
+      row.map((value) => csvCell(value ?? "")).join(","),
+    ),
+  ].join("\n");
+}
+
+function csvCell(value: string | number): string {
+  const text = String(value);
+  if (!/[",\n]/.test(text)) return text;
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+function saveHysteresisPointBookmark(input: HysteresisPointCommandInput): boolean {
+  if (typeof window === "undefined" || !window.localStorage) return false;
+  const key = "fullmag.hysteresis.point-bookmarks.v1";
+  const stored = window.localStorage.getItem(key);
+  let bookmarks: unknown[] = [];
+  if (stored) {
+    try {
+      const parsed = JSON.parse(stored);
+      bookmarks = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      bookmarks = [];
+    }
+  }
+  const nextBookmark = {
+    branch_id: input.point.branch_id ?? null,
+    field_value_mT: input.point.field_value_mT,
+    m_parallel: input.point.m_parallel,
+    point_id: input.point.point_id,
+    snapshot_id: input.point.snapshot_id ?? null,
+    stage_id: input.stageId,
+  };
+  const filtered = bookmarks.filter((entry) => {
+    if (!entry || typeof entry !== "object") return false;
+    const record = entry as Record<string, unknown>;
+    return !(
+      record.stage_id === input.stageId &&
+      record.point_id === input.point.point_id
+    );
+  });
+  window.localStorage.setItem(key, JSON.stringify([...filtered, nextBookmark]));
+  return true;
+}
+
 interface ImportStateInput {
   fmsBase64?: string;
   fms_base64?: string;
@@ -963,6 +1154,16 @@ interface FieldStateInput {
   file_name?: string;
   format?: string;
   target?: FieldStateTargetRef;
+}
+
+interface HysteresisPointCommandInput {
+  point: HysteresisPointSchema;
+  stageId: string;
+}
+
+interface HysteresisLoopCommandInput {
+  points: HysteresisPointSchema[];
+  stageId: string;
 }
 
 function resolveFieldStateInput(input: unknown): FieldStateInput | null {
@@ -1859,6 +2060,9 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
         fieldVal: number;
         mVal: number;
         snapshotId: string | null;
+        snapshotResourceRef?: string | null;
+        snapshotStorageStatus?: string | null;
+        snapshotStorageReason?: string | null;
         meshIdentity?: string | null;
         fieldOrientation?: string | null;
         measurementAxis?: string | null;
@@ -1871,6 +2075,14 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
         return {
           status: "failed",
           message: "This hysteresis point has no saved magnetization snapshot.",
+        };
+      }
+      if (input.snapshotStorageStatus === "missing") {
+        return {
+          status: "failed",
+          message: input.snapshotStorageReason
+            ? `Snapshot payload is missing for this hysteresis point: ${input.snapshotStorageReason}`
+            : "Snapshot payload is missing for this hysteresis point.",
         };
       }
       if (!context.selection) {
@@ -1896,6 +2108,7 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
             x: input.fieldVal,
             y: input.mVal,
             snapshotId: input.snapshotId,
+            resourceRef: input.snapshotResourceRef ?? null,
             targetId: `hysteresis-step:${input.stageId}:${input.pointId}`,
             targetKind: "hysteresis-step",
             quantityId: "m",
@@ -1926,7 +2139,10 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
       const input = context.input as { stageId?: string | null } | null;
       if (input?.stageId) {
         const ref = context.selection.get().ref;
-        if (ref?.type === "analysis-chart-point" && ref.stageId === input.stageId) {
+        if (
+          (ref?.type === "analysis-chart-point" || ref?.type === "hysteresis-snapshot") &&
+          ref.stageId === input.stageId
+        ) {
           context.selection.clear("analysis-plots");
         }
       } else {
@@ -1935,6 +2151,112 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
       return {
         status: "completed",
         message: "Returned 3D viewport to the live magnetization field.",
+      };
+    },
+  },
+  {
+    id: "hysteresis.compare-point",
+    title: "Compare Point",
+    category: "Study",
+    group: "hysteresis",
+    scope: "runtime",
+    isEnabled: () => true,
+    run: (context) => {
+      const input = resolveHysteresisPointCommandInput(context.input);
+      if (!input) {
+        return { status: "failed", message: "Missing hysteresis point input." };
+      }
+      if (!context.selection) {
+        return { status: "failed", message: "Selection context not available." };
+      }
+      context.selection.set(
+        hysteresisPointSelectionPayload(input),
+        "analysis-plots",
+      );
+      context.layout?.setActiveViewportMainModule("analysis-plots");
+      context.layout?.setFocusedSlot("viewport-main");
+      return {
+        status: "completed",
+        message: `Selected hysteresis point ${input.point.point_id} for comparison.`,
+      };
+    },
+  },
+  {
+    id: "hysteresis.bookmark-point",
+    title: "Bookmark Point",
+    category: "Study",
+    group: "hysteresis",
+    scope: "runtime",
+    isEnabled: () => true,
+    run: (context) => {
+      const input = resolveHysteresisPointCommandInput(context.input);
+      if (!input) {
+        return { status: "failed", message: "Missing hysteresis point input." };
+      }
+      if (!saveHysteresisPointBookmark(input)) {
+        return {
+          status: "failed",
+          message:
+            "Browser local storage is unavailable; persistent hysteresis bookmarks need a backend resource.",
+        };
+      }
+      return {
+        status: "completed",
+        message: `Bookmarked hysteresis point ${input.point.point_id}.`,
+      };
+    },
+  },
+  {
+    id: "hysteresis.export-point-csv",
+    title: "Export Point CSV",
+    category: "Study",
+    group: "hysteresis",
+    scope: "runtime",
+    isEnabled: () => true,
+    run: (context) => {
+      const input = resolveHysteresisPointCommandInput(context.input);
+      if (!input) {
+        return { status: "failed", message: "Missing hysteresis point input." };
+      }
+      const csv = hysteresisPointCsv(input);
+      maybeDownloadBinaryExport(
+        `${input.stageId}-point-${input.point.point_id}.csv`,
+        new TextEncoder().encode(csv),
+        "text/csv;charset=utf-8",
+      );
+      return {
+        status: "completed",
+        message: `Exported hysteresis point ${input.point.point_id} as CSV.`,
+      };
+    },
+  },
+  {
+    id: "hysteresis.export-loop-csv",
+    title: "Export Loop CSV",
+    category: "Study",
+    group: "hysteresis",
+    scope: "runtime",
+    isEnabled: () => true,
+    run: (context) => {
+      const input = resolveHysteresisLoopCommandInput(context.input);
+      if (!input) {
+        return { status: "failed", message: "Missing hysteresis loop input." };
+      }
+      if (input.points.length === 0) {
+        return {
+          status: "failed",
+          message: "No hysteresis points are available to export.",
+        };
+      }
+      const csv = hysteresisLoopCsv(input);
+      maybeDownloadBinaryExport(
+        `${input.stageId}-hysteresis-loop.csv`,
+        new TextEncoder().encode(csv),
+        "text/csv;charset=utf-8",
+      );
+      return {
+        status: "completed",
+        message: `Exported hysteresis loop with ${input.points.length} points as CSV.`,
       };
     },
   },
@@ -1949,6 +2271,7 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
       const input = context.input as {
         stageId: string;
         snapshotId: string | null;
+        snapshotArtifactRef?: string | null;
         snapshotResourceRef?: string | null;
       };
       if (!input?.snapshotId) {
@@ -1966,7 +2289,8 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
         };
       }
       const artifactRef =
-        input.snapshotResourceRef?.trim() ||
+        input.snapshotArtifactRef?.trim() ||
+        hysteresisSnapshotArtifactRefFromLegacyResource(input.snapshotResourceRef) ||
         `hysteresis_snapshots/${input.snapshotId}/m.json`;
       const response = await context.api.persistence.fieldStates.import({
         artifact_ref: artifactRef,

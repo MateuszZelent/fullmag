@@ -579,14 +579,15 @@ pub(crate) fn plan_fdm(
         }
     };
 
-    let (
-        integrator,
-        fixed_timestep,
-        gyromagnetic_ratio,
-        relaxation,
-        adaptive_timestep,
-        field_refresh,
-    ) = planned_study_controls(problem, resolved_backend, &mut errors);
+    let controls = planned_study_controls(problem, resolved_backend, &mut errors);
+    let integrator = controls
+        .integrator
+        .expect("FDM time-domain plan requires a time integrator");
+    let fixed_timestep = controls.fixed_timestep;
+    let gyromagnetic_ratio = controls.gyromagnetic_ratio;
+    let relaxation = controls.relaxation;
+    let adaptive_timestep = controls.adaptive_timestep;
+    let field_refresh = controls.field_refresh;
     if !errors.is_empty() {
         return Err(PlanError { reasons: errors });
     }
@@ -1658,14 +1659,15 @@ pub(crate) fn plan_fdm_multilayer(
         (common_cells[0] * 2) as u64 * (common_cells[1] * 2) as u64 * (common_cells[2] * 2) as u64;
     let estimated_kernel_bytes = padded_len * 6 * 16 * estimated_unique_kernels as u64;
 
-    let (
-        integrator,
-        fixed_timestep,
-        gyromagnetic_ratio,
-        relaxation,
-        adaptive_timestep,
-        field_refresh,
-    ) = planned_study_controls(problem, resolved_backend, &mut errors);
+    let controls = planned_study_controls(problem, resolved_backend, &mut errors);
+    let integrator = controls
+        .integrator
+        .expect("FDM multilayer plan requires a time integrator");
+    let fixed_timestep = controls.fixed_timestep;
+    let gyromagnetic_ratio = controls.gyromagnetic_ratio;
+    let relaxation = controls.relaxation;
+    let adaptive_timestep = controls.adaptive_timestep;
+    let field_refresh = controls.field_refresh;
     if adaptive_timestep.is_some() {
         errors.push(
             "the public multilayer FDM runner does not yet support adaptive_timestep".to_string(),

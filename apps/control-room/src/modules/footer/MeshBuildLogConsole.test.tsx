@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
@@ -103,15 +101,24 @@ describe("MeshBuildLogConsole", () => {
     expect(html).toContain("Gmsh step 12");
   });
 
-  it("includes the visible row index in React keys for repeated log messages", () => {
-    const source = readFileSync(
-      new URL("./MeshBuildLogConsole.tsx", import.meta.url),
-      "utf8",
+  it("renders repeated messages without index-based keys", () => {
+    const repeatedRows: MeshJobsLogRow[] = [
+      { commandId: "cmd-1", level: "info", message: "started", time: "00:00:01" },
+      { commandId: "cmd-2", level: "info", message: "started", time: "00:00:01" },
+    ];
+    const html = renderToStaticMarkup(
+      <MeshBuildLogConsoleView
+        copyStatus="idle"
+        filters={{ level: "all", query: "", source: "all" }}
+        autoScrollPaused={false}
+        rows={repeatedRows}
+        totalRows={repeatedRows.length}
+        onCopy={() => {}}
+        onFiltersChange={() => {}}
+      />,
     );
 
-    expect(source).toContain("rows.map((entry, index)");
-    expect(source).toContain(
-      'key={`${entry.time}:${entry.level}:${entry.message}:${index}`}',
-    );
+    expect(html).toContain("2 visible");
+    expect(html).toContain("started");
   });
 });

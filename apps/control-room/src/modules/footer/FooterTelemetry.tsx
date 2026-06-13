@@ -157,8 +157,9 @@ type FooterTelemetryStatus = {
   >;
   run: Pick<
     NonNullable<LiveStatusResource["run"]>,
-    "solver_steps" | "solver_time"
+    "run_id" | "solver_steps" | "solver_time"
   > | null;
+  sessionId: string;
   solver: Pick<
     LiveStatusResource["solver"],
     "converged" | "dt" | "max_torque_T" | "state"
@@ -188,10 +189,12 @@ export function selectFooterTelemetryStatus(
     },
     run: data.run
       ? {
+          run_id: data.run.run_id,
           solver_steps: data.run.solver_steps,
           solver_time: data.run.solver_time,
         }
       : null,
+    sessionId: data.session.session_id,
     solver: {
       converged: data.solver.converged ?? null,
       dt: data.solver.dt ?? null,
@@ -211,6 +214,8 @@ export function footerTelemetryStatusEquals(
   return (
     Object.is(previous.metrics.steps_per_second, next.metrics.steps_per_second) &&
     Object.is(previous.metrics.total_steps, next.metrics.total_steps) &&
+    Object.is(previous.sessionId, next.sessionId) &&
+    Object.is(previous.run?.run_id ?? null, next.run?.run_id ?? null) &&
     Object.is(
       previous.run?.solver_steps ?? null,
       next.run?.solver_steps ?? null,
@@ -253,18 +258,29 @@ export function buildFooterTelemetryModel(
   solverStatus?: SolverStatusResource | null,
   liveSample?: FooterLiveScalarSample | null,
 ) {
-  const liveRow = liveSample?.row ?? null;
+  const liveSampleForStatus = resolveLiveSampleForStatus(status, liveSample);
+  const liveRow = liveSampleForStatus?.row ?? null;
   const runtimeState =
     resolveEffectiveRuntimeState({
       detailedRuntimeState: solverStatus?.runtime_state,
       sessionSolverState: status?.solver?.state,
     }) ?? "unknown";
   const runtimeStateLabel = formatRuntimeStateLabel(runtimeState);
-  const runTimeSeconds =
+  const simTimeSeconds =
     scalarSampleNumber(liveRow, "time") ??
     solverStatus?.sim_time_seconds ??
     status?.run?.solver_time ??
     0;
+  const pseudoTimeSeconds =
+    scalarSampleNumber(liveRow, "pseudo_time_s") ??
+    solverStatus?.pseudo_time_seconds ??
+    null;
+  const activeRuntimeSeconds =
+    scalarSampleNumber(liveRow, "active_runtime_s") ??
+    objectNumber(solverStatus, "active_runtime_seconds") ??
+    null;
+  const usesPseudoTime = pseudoTimeSeconds !== null;
+  const primaryTimeSeconds = usesPseudoTime ? pseudoTimeSeconds : simTimeSeconds;
   const totalSteps =
     scalarSampleNumber(liveRow, "step") ??
     solverStatus?.step_index ??
@@ -308,21 +324,50 @@ export function buildFooterTelemetryModel(
     : objectMetrics
       ? `Object: ${objectMetrics.object_id}`
       : "Session summary";
+  const timeSource = liveRow
+    ? `Scalar rev ${String(liveSampleForStatus?.revision ?? "")}`
+    : solverStatus
+      ? "Last sync: solver status"
+      : status
+        ? "Last sync: status"
+        : "Last sync: pending";
 
   return {
     metrics: [
       {
-        detail: "Elapsed Time",
+        detail: usesPseudoTime
+          ? "Direct minimizer pseudotime"
+          : "Physical simulation time",
         icon: <Clock3 size={13} aria-hidden="true" />,
         id: "time",
-        label: "Time",
-        subdetail: liveRow
-          ? `Scalar rev ${String(liveSample?.revision ?? "")}`
-          : status
-            ? "Last sync: status"
-            : "Last sync: pending",
-        value: formatDuration(runTimeSeconds),
+        label: usesPseudoTime ? "Pseudo time" : "Sim time",
+        subdetail: timeSource,
+        value: formatDuration(primaryTimeSeconds),
       },
+      ...(usesPseudoTime
+        ? [
+            {
+              detail: "Physical simulation time",
+              icon: <Clock3 size={13} aria-hidden="true" />,
+              id: "sim-time",
+              label: "Sim time",
+              subdetail: timeSource,
+              value: formatDuration(simTimeSeconds),
+            },
+          ]
+        : []),
+      ...(activeRuntimeSeconds !== null
+        ? [
+            {
+              detail: "Active compute time",
+              icon: <Clock3 size={13} aria-hidden="true" />,
+              id: "active-runtime",
+              label: "Runtime",
+              subdetail: timeSource,
+              value: formatDuration(activeRuntimeSeconds),
+            },
+          ]
+        : []),
       {
         detail: "Throughput",
         icon: <Radio size={13} aria-hidden="true" />,
@@ -338,8 +383,8 @@ export function buildFooterTelemetryModel(
         label: "Step",
         subdetail: `t=${formatScientific(
           liveRow
-            ? runTimeSeconds
-            : objectMetrics?.time_seconds ?? runTimeSeconds,
+            ? simTimeSeconds
+            : objectMetrics?.time_seconds ?? simTimeSeconds,
           "0.000000e+0",
         )} s`,
         value: formatInteger(
@@ -347,10 +392,10 @@ export function buildFooterTelemetryModel(
         ),
       },
       {
-        detail: "Solver timestep",
+        detail: usesPseudoTime ? "Minimizer pseudotime step" : "Solver timestep",
         icon: <Clock3 size={13} aria-hidden="true" />,
         id: "dt",
-        label: "dt",
+        label: usesPseudoTime ? "Pseudo dt" : "dt",
         subdetail: `State: ${runtimeStateLabel}`,
         unit: "s",
         value: formatScientific(dt, "0.000000e+0"),
@@ -491,6 +536,17 @@ export function buildFooterTelemetryModel(
   };
 }
 
+function resolveLiveSampleForStatus(
+  status: FooterTelemetryStatus | null | undefined,
+  liveSample: FooterLiveScalarSample | null | undefined,
+): FooterLiveScalarSample | null {
+  if (!liveSample) return null;
+  if (status?.sessionId && liveSample.sessionId !== status.sessionId) return null;
+  const runId = status?.run?.run_id ?? null;
+  if (runId && liveSample.runId !== runId) return null;
+  return liveSample;
+}
+
 export function resolvePrimaryTelemetryObjectId(
   scene: SceneResource | null | undefined,
   selectedObjectId?: string | null,
@@ -576,6 +632,12 @@ function scalarSampleNumber(
 ): number | null {
   const value = row?.[key];
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function objectNumber(value: unknown, key: string): number | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const item = (value as Record<string, unknown>)[key];
+  return typeof item === "number" && Number.isFinite(item) ? item : null;
 }
 
 function scalarSampleMagnetization(

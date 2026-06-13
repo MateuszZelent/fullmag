@@ -20,6 +20,9 @@ void fullmag_cuda_uniaxial_anisotropy_field_energy_blocks(
     const double *ms,
     const double *ku,
     const double *ku2,
+    const double *axis_x_field,
+    const double *axis_y_field,
+    const double *axis_z_field,
     const double *lumped_mass,
     const uint8_t *magnetic_node_mask,
     double *h_ani_x,
@@ -33,6 +36,7 @@ void fullmag_cuda_uniaxial_anisotropy_field_energy_blocks(
     double axis_z,
     bool use_ku_field,
     bool use_ku2_field,
+    bool use_axis_field,
     int N,
     cudaStream_t stream = nullptr);
 

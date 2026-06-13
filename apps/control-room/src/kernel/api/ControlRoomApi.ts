@@ -16,6 +16,7 @@ import {
   ANALYSIS_HYSTERESIS_POINTS_PATH,
   ANALYSIS_HYSTERESIS_METRICS_PATH,
   ANALYSIS_HYSTERESIS_SATURATION_PATH,
+  ANALYSIS_HYSTERESIS_ADAPTIVE_REFINEMENT_PATH,
   ANALYSIS_HYSTERESIS_BRANCHES_PATH,
   ANALYSIS_HYSTERESIS_FAMILY_PATH,
   ANALYSIS_HYSTERESIS_FAMILY_VARIANT_POINTS_PATH,
@@ -179,6 +180,7 @@ import type {
   FrequencyDomainFieldResource,
   FrequencyDomainSweepProgressResource,
   JsonValue,
+  HysteresisAdaptiveRefinementSchema,
   HysteresisAngularFamilyResource,
   HysteresisBranchSchema,
   HysteresisExecutionTreeResource,
@@ -554,6 +556,12 @@ export class ControlRoomApi {
       saturation: (stageId: string, options?: RequestOptions) =>
         this.requestJson<HysteresisSaturationResultSchema>(
           ANALYSIS_HYSTERESIS_SATURATION_PATH,
+          options,
+          { path: { stage_id: stageId } },
+        ),
+      adaptiveRefinement: (stageId: string, options?: RequestOptions) =>
+        this.requestJson<HysteresisAdaptiveRefinementSchema>(
+          ANALYSIS_HYSTERESIS_ADAPTIVE_REFINEMENT_PATH,
           options,
           { path: { stage_id: stageId } },
         ),

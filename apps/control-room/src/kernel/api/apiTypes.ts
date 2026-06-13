@@ -466,6 +466,10 @@ export type VisualizationClientAckResource =
   components["schemas"]["VisualizationClientAckResource"];
 
 export type HysteresisPointSchema = components["schemas"]["HysteresisPointSchema"];
+export type HysteresisAdaptiveRefinementCandidateSchema =
+  components["schemas"]["HysteresisAdaptiveRefinementCandidateSchema"];
+export type HysteresisAdaptiveRefinementSchema =
+  components["schemas"]["HysteresisAdaptiveRefinementSchema"];
 export type HysteresisBranchSchema = components["schemas"]["HysteresisBranchSchema"];
 export type HysteresisMinorLoopSchema =
   components["schemas"]["HysteresisMinorLoopSchema"];

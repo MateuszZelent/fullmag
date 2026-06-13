@@ -27,6 +27,7 @@ interface StudyStageSnapshot {
   torqueTolerance: string | null;
   torqueToleranceFormatted: string | null;
   torqueToleranceShortFormatted: string | null;
+  timeBudgetKind: "physical" | "pseudo";
   untilSeconds: string | null;
 }
 
@@ -232,8 +233,9 @@ export function resolveStudyInspectorModel({
   const relaxTimeStop = resolveRelaxTimeStop({
     activeStage: relaxReferenceStage,
     activeStageKind: stageExecution?.active_stage_kind ?? null,
-    currentSimTime:
+    currentPhysicalTime:
       solverStatus?.sim_time_seconds ?? currentRun?.solver_time_seconds ?? null,
+    currentPseudoTime: solverStatus?.pseudo_time_seconds ?? null,
   });
 
   return {
@@ -336,6 +338,10 @@ function stageSnapshot(value: unknown, index: number): StudyStageSnapshot {
     torqueApm === null ? null : formatTorquePairFromApm(torqueApm);
   const torqueToleranceShortFormatted =
     torqueApm === null ? null : formatTorqueT(teslaFromApm(torqueApm));
+  const hasPseudoTimeBudget =
+    stage?.max_pseudotime_s !== undefined &&
+    stage?.until_seconds === undefined &&
+    stage?.max_physical_time_s === undefined;
 
   return {
     algorithm: optionalString(stage?.relax_algorithm ?? stage?.algorithm),
@@ -348,6 +354,7 @@ function stageSnapshot(value: unknown, index: number): StudyStageSnapshot {
     torqueTolerance: rawTorque,
     torqueToleranceFormatted,
     torqueToleranceShortFormatted,
+    timeBudgetKind: hasPseudoTimeBudget ? "pseudo" : "physical",
     untilSeconds: optionalScalarText(
       stage?.until_seconds ??
       stage?.max_physical_time_s ??
@@ -500,11 +507,13 @@ function formatEnergyStopStatus(
 function resolveRelaxTimeStop({
   activeStage,
   activeStageKind,
-  currentSimTime,
+  currentPhysicalTime,
+  currentPseudoTime,
 }: {
   activeStage: StudyStageModel | null;
   activeStageKind: string | null;
-  currentSimTime: number | null;
+  currentPhysicalTime: number | null;
+  currentPseudoTime: number | null;
 }): StudyRelaxTimeStopModel | null {
   if (
     !activeStage ||
@@ -514,9 +523,17 @@ function resolveRelaxTimeStop({
     return null;
   }
 
-  let elapsed = finiteNumber(currentSimTime);
-  if (activeStage.status.toLowerCase() === "completed" && 
-      (activeStage.runtimeMetric?.name === "physical_time_s" || activeStage.runtimeMetric?.name === "pseudotime_s")) {
+  let elapsed = finiteNumber(
+    activeStage.timeBudgetKind === "pseudo"
+      ? currentPseudoTime
+      : currentPhysicalTime,
+  );
+  if (
+    activeStage.status.toLowerCase() === "completed" &&
+    (activeStage.runtimeMetric?.name === "physical_time_s" ||
+      activeStage.runtimeMetric?.name === "pseudotime_s" ||
+      activeStage.runtimeMetric?.name === "pseudo_time_s")
+  ) {
     elapsed = activeStage.runtimeMetric.rawValue ?? null;
   }
 
@@ -609,7 +626,12 @@ function metricValueText(name: string, value: number | null | undefined): string
   if (typeof value !== "number" || !Number.isFinite(value)) return "unavailable";
   if (name === "max_torque_apm") return formatTorquePairFromApm(value);
   if (name === "total_energy_plateau_range_J") return `${formatScientific(value)} J`;
-  if (name === "physical_time_s" || name === "pseudotime_s") return `${formatScientific(value)} s`;
+  if (
+    name === "physical_time_s" ||
+    name === "pseudotime_s" ||
+    name === "pseudo_time_s"
+  )
+    return `${formatScientific(value)} s`;
   if (name === "steps") return String(value);
   return formatScientific(value);
 }

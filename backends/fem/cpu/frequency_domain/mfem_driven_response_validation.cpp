@@ -69,8 +69,14 @@ FrequencyDomainStatus solve_mfem_driven_response_validation_problem(
     double stiffness_column[kMaxValidationTangentDofs]{};
     double mass_column[kMaxValidationTangentDofs]{};
     TangentOperatorLocalBlock zeeman_blocks[kMaxValidationNodes]{};
+    TangentOperatorLocalBlock anisotropy_blocks[kMaxValidationNodes]{};
     double exchange_workspace[kMaxValidationTangentDofs]{};
     double zeeman_workspace[kMaxValidationTangentDofs]{};
+    double anisotropy_workspace[kMaxValidationTangentDofs]{};
+    double dmi_workspace[kMaxValidationTangentDofs]{};
+    double dmi_delta_xyz[kMaxValidationNodes * 3]{};
+    double dmi_residual_xyz[kMaxValidationNodes * 3]{};
+    double dmi_field_xyz[kMaxValidationNodes * 3]{};
     double effective_field_workspace[kMaxValidationTangentDofs]{};
 
     for (std::uint64_t column = 0; column < tangent_dof_count; ++column) {
@@ -86,13 +92,28 @@ FrequencyDomainStatus solve_mfem_driven_response_validation_problem(
             problem.exchange_edges,
             problem.exchange_edge_count,
             problem.h_ext_a_per_m,
+            problem.uniaxial_anisotropy_axis,
+            problem.uniaxial_anisotropy_field_a_per_m,
+            problem.alpha_per_node,
             problem.gamma0,
             problem.alpha,
             MfemLinearizedOperatorWorkspace{
                 zeeman_blocks,
+                anisotropy_blocks,
                 exchange_workspace,
                 zeeman_workspace,
+                anisotropy_workspace,
                 effective_field_workspace,
+                nullptr,
+                dmi_workspace,
+                problem.dmi_elements,
+                problem.dmi_element_count,
+                problem.dmi_lumped_mass,
+                problem.dmi_ms_field,
+                problem.dmi_uniform_ms,
+                dmi_delta_xyz,
+                dmi_residual_xyz,
+                dmi_field_xyz,
             },
             basis,
             stiffness_column,
@@ -136,6 +157,7 @@ FrequencyDomainStatus solve_mfem_driven_response_validation_problem(
             problem.residual_capacity,
             problem.cancel_requested,
             problem.cancel_user_data,
+            problem.drive_imag,
         },
         &dense_result);
     if (dense_status != FrequencyDomainStatus::ok &&

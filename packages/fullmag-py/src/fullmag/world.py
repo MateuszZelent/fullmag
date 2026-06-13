@@ -1865,6 +1865,7 @@ class _WorldState:
 _state = _WorldState()
 _capture_enabled = False
 _capture_skip_geometry_assets = False
+_RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM = 1e-4
 
 
 @dataclass(frozen=True, slots=True)
@@ -1877,7 +1878,7 @@ class CapturedStage:
 
 @dataclass(frozen=True, slots=True)
 class RelaxStageSpec:
-    tol: float = 1e-6
+    tol: float = _RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM
     max_steps: int = 50_000
     algorithm: str = "llg_overdamped"
     energy_tolerance: float | None = None
@@ -1916,6 +1917,7 @@ class EigenmodesStageSpec:
 class FrequencyResponseStageSpec:
     frequencies_hz: Sequence[float]
     excitation_field_au_per_m: tuple[float, float, float] = (0.0, 0.0, 1.0)
+    excitation_phase_rad: float = 0.0
     observable: str = "susceptibility_tensor"
     include_demag: bool = True
     equilibrium_source: str = "provided"
@@ -2175,7 +2177,7 @@ def _resolve_flat_relax_stop(
 
 def relax_stage(
     *,
-    tol: float = 1e-6,
+    tol: float = _RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM,
     max_steps: int = 50_000,
     algorithm: str = "llg_overdamped",
     energy_tolerance: float | None = None,
@@ -2268,6 +2270,7 @@ def frequency_response_stage(
     *,
     frequencies_hz: Sequence[float],
     excitation_field_au_per_m: tuple[float, float, float] = (0.0, 0.0, 1.0),
+    excitation_phase_rad: float = 0.0,
     observable: str = "susceptibility_tensor",
     include_demag: bool = True,
     equilibrium_source: str = "provided",
@@ -2281,6 +2284,7 @@ def frequency_response_stage(
     return FrequencyResponseStageSpec(
         frequencies_hz=frequencies_hz,
         excitation_field_au_per_m=excitation_field_au_per_m,
+        excitation_phase_rad=excitation_phase_rad,
         observable=observable,
         include_demag=include_demag,
         equilibrium_source=equilibrium_source,
@@ -2379,6 +2383,7 @@ def _capture_stage(stage_spec: object) -> CapturedStage:
                 study_kind="frequency_response",
                 frequency_frequencies_hz=stage_spec.frequencies_hz,
                 frequency_excitation_field_au_per_m=stage_spec.excitation_field_au_per_m,
+                frequency_excitation_phase_rad=stage_spec.excitation_phase_rad,
                 frequency_observable=stage_spec.observable,
                 frequency_include_demag=stage_spec.include_demag,
                 frequency_equilibrium_source=stage_spec.equilibrium_source,
@@ -2820,7 +2825,7 @@ class StudyStagesBuilder:
     def add_relax(
         self,
         *,
-        tol: float = 1e-6,
+        tol: float = _RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM,
         max_steps: int = 50_000,
         algorithm: str = "llg_overdamped",
         energy_tolerance: float | None = None,
@@ -2859,7 +2864,7 @@ class StudyStagesBuilder:
         self,
         *,
         method: str = "bb",
-        tol: float = 1e-6,
+        tol: float = _RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM,
         max_steps: int = 50_000,
         energy_tolerance: float | None = None,
     ) -> "StudyStagesBuilder":
@@ -2907,6 +2912,7 @@ class StudyStagesBuilder:
         *,
         frequencies_hz: Sequence[float],
         excitation_field_au_per_m: tuple[float, float, float] = (0.0, 0.0, 1.0),
+        excitation_phase_rad: float = 0.0,
         observable: str = "susceptibility_tensor",
         include_demag: bool = True,
         equilibrium_source: str = "provided",
@@ -2921,6 +2927,7 @@ class StudyStagesBuilder:
             frequency_response_stage(
                 frequencies_hz=frequencies_hz,
                 excitation_field_au_per_m=excitation_field_au_per_m,
+                excitation_phase_rad=excitation_phase_rad,
                 observable=observable,
                 include_demag=include_demag,
                 equilibrium_source=equilibrium_source,
@@ -2963,6 +2970,7 @@ class StudyStagesBuilder:
         measurement_axis: str | MeasurementAxis = "field_axis",
         angular_family: HysteresisAngularFamily | None = None,
         initial_protocol: str = "positive_saturation",
+        initial_state_ref: str | None = None,
         saturation: SaturationProbe | None = None,
         branch_mode: str = "major_loop",
         settle_pipeline: SettlePipeline | SettleTree | None = None,
@@ -2990,6 +2998,7 @@ class StudyStagesBuilder:
             measurement_axis=measurement_axis,
             angular_family=angular_family,
             initial_protocol=initial_protocol,
+            initial_state_ref=initial_state_ref,
             saturation=saturation,
             branch_mode=branch_mode,
             settle_pipeline=settle_pipeline,
@@ -3821,7 +3830,7 @@ class StudyBuilder:
     def relax(
         self,
         *,
-        tol: float = 1e-6,
+        tol: float = _RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM,
         max_steps: int = 50_000,
         algorithm: str = "llg_overdamped",
         energy_tolerance: float | None = None,
@@ -3855,7 +3864,7 @@ class StudyBuilder:
         self,
         *,
         method: str = "bb",
-        tol: float = 1e-6,
+        tol: float = _RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM,
         max_steps: int = 50_000,
         energy_tolerance: float | None = None,
     ) -> Any:
@@ -3900,6 +3909,7 @@ class StudyBuilder:
         *,
         frequencies_hz: Sequence[float],
         excitation_field_au_per_m: tuple[float, float, float] = (0.0, 0.0, 1.0),
+        excitation_phase_rad: float = 0.0,
         observable: str = "susceptibility_tensor",
         include_demag: bool = True,
         equilibrium_source: str = "provided",
@@ -3913,6 +3923,7 @@ class StudyBuilder:
         return frequency_response(
             frequencies_hz=frequencies_hz,
             excitation_field_au_per_m=excitation_field_au_per_m,
+            excitation_phase_rad=excitation_phase_rad,
             observable=observable,
             include_demag=include_demag,
             equilibrium_source=equilibrium_source,
@@ -3929,6 +3940,7 @@ def frequency_response(
     *,
     frequencies_hz: Sequence[float],
     excitation_field_au_per_m: tuple[float, float, float] = (0.0, 0.0, 1.0),
+    excitation_phase_rad: float = 0.0,
     observable: str = "susceptibility_tensor",
     include_demag: bool = True,
     equilibrium_source: str = "provided",
@@ -3946,6 +3958,7 @@ def frequency_response(
         study_kind="frequency_response",
         frequency_frequencies_hz=frequencies_hz,
         frequency_excitation_field_au_per_m=excitation_field_au_per_m,
+        frequency_excitation_phase_rad=excitation_phase_rad,
         frequency_observable=observable,
         frequency_include_demag=include_demag,
         frequency_equilibrium_source=equilibrium_source,
@@ -5716,6 +5729,7 @@ def _build_problem(
     eigen_spin_wave_bc: str | dict[str, object] = "free",
     frequency_frequencies_hz: Sequence[float] = (1.0e9,),
     frequency_excitation_field_au_per_m: tuple[float, float, float] = (0.0, 0.0, 1.0),
+    frequency_excitation_phase_rad: float = 0.0,
     frequency_observable: str = "susceptibility_tensor",
     frequency_include_demag: bool = True,
     frequency_equilibrium_source: str = "provided",
@@ -5887,6 +5901,7 @@ def _build_problem(
             outputs=frequency_outputs,
             frequencies_hz=frequency_frequencies_hz,
             excitation_field_au_per_m=frequency_excitation_field_au_per_m,
+            excitation_phase_rad=frequency_excitation_phase_rad,
             include_demag=frequency_include_demag,
             equilibrium_source=frequency_equilibrium_source,
             equilibrium_artifact=frequency_equilibrium_artifact,
@@ -6009,7 +6024,9 @@ def run_while(
             if cfg.max_steps is not None:
                 chunk_steps = min(chunk_steps, cfg.max_steps)
             return relax_fn(
-                tol=float(relax_kwargs.get("tol", 1e-6)),
+                tol=float(
+                    relax_kwargs.get("tol", _RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM)
+                ),
                 max_steps=chunk_steps,
                 algorithm=str(relax_kwargs.get("algorithm", "llg_overdamped")),
                 energy_tolerance=relax_kwargs.get("energy_tolerance"),  # type: ignore[arg-type]
@@ -6052,7 +6069,9 @@ def run_while(
                     break
                 chunk_steps = min(chunk_steps, remaining)
             last_result = relax_fn(
-                tol=float(relax_kwargs.get("tol", 1e-6)),
+                tol=float(
+                    relax_kwargs.get("tol", _RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM)
+                ),
                 max_steps=chunk_steps,
                 algorithm=str(relax_kwargs.get("algorithm", "llg_overdamped")),
                 energy_tolerance=relax_kwargs.get("energy_tolerance"),  # type: ignore[arg-type]
@@ -6108,7 +6127,7 @@ def RunWhile(
 
 def relax(
     *,
-    tol: float = 1e-6,
+    tol: float = _RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM,
     max_steps: int = 50_000,
     algorithm: str = "llg_overdamped",
     energy_tolerance: float | None = None,
@@ -6233,7 +6252,7 @@ def _relaxation_default_until_seconds(study: Relaxation) -> float:
 def minimize(
     *,
     method: str = "bb",
-    tol: float = 1e-6,
+    tol: float = _RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM,
     max_steps: int = 50_000,
     energy_tolerance: float | None = None,
 ) -> Any:
@@ -6263,7 +6282,7 @@ def minimize(
 def Minimize(
     *,
     method: str = "bb",
-    tol: float = 1e-6,
+    tol: float = _RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM,
     max_steps: int = 50_000,
     energy_tolerance: float | None = None,
 ) -> Any:

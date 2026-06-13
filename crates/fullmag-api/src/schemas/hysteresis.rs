@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use utoipa::ToSchema;
 
 fn default_magnetization_average_weighting() -> String {
@@ -29,9 +30,24 @@ pub struct HysteresisPointSchema {
     pub parent_branch_id: Option<String>,
     pub minor_loop_id: Option<String>,
     pub snapshot_resource_ref: Option<String>,
+    pub snapshot_vector_resource_ref: Option<String>,
+    pub snapshot_json_artifact_ref: Option<String>,
+    pub snapshot_zarr_store_ref: Option<String>,
+    pub snapshot_storage_format: Option<String>,
+    pub snapshot_storage_status: Option<String>,
+    pub snapshot_storage_reason: Option<String>,
+    #[serde(rename = "field_vector_A_per_m")]
+    pub field_vector_a_per_m: Option<[f64; 3]>,
+    pub field_orientation: Option<Value>,
+    pub measurement_axis: Option<Value>,
+    pub field_display_unit: Option<String>,
     pub is_reversal_field: Option<bool>,
     pub reversal_index: Option<u32>,
     pub recoil_start_point_id: Option<usize>,
+    pub adaptive_inserted: Option<bool>,
+    pub refinement_reason: Option<Vec<String>>,
+    pub refinement_parent_left_point_id: Option<usize>,
+    pub refinement_parent_right_point_id: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -137,6 +153,86 @@ pub struct HysteresisMetricsSchema {
     pub saturation_status: String,
     #[serde(rename = "saturation_preparation_field_mT")]
     pub saturation_preparation_field_m_t: Option<f64>,
+    #[serde(default)]
+    pub metric_statuses: BTreeMap<String, HysteresisMetricStatusSchema>,
+    #[serde(default)]
+    pub loop_closure_summary: Option<HysteresisLoopClosureSummarySchema>,
+    pub max_differential_susceptibility: Option<f64>,
+    #[serde(default)]
+    pub switching_field_candidates: Vec<HysteresisSwitchingFieldCandidateSchema>,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+    #[serde(default)]
+    pub convergence_quality_summary: Option<HysteresisConvergenceQualitySummarySchema>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct HysteresisMetricStatusSchema {
+    pub status: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct HysteresisLoopClosureSummarySchema {
+    pub status: String,
+    #[serde(rename = "field_gap_mT")]
+    pub field_gap_m_t: f64,
+    pub m_parallel_gap: f64,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct HysteresisSwitchingFieldCandidateSchema {
+    #[serde(rename = "field_value_mT")]
+    pub field_value_m_t: f64,
+    #[serde(rename = "susceptibility_per_mT")]
+    pub susceptibility_per_m_t: f64,
+    pub point_id_before: usize,
+    pub point_id_after: usize,
+    pub branch_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct HysteresisConvergenceQualitySummarySchema {
+    pub status: String,
+    pub total_points: usize,
+    pub converged_points: usize,
+    pub warning_points: usize,
+    pub non_converged_points: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct HysteresisAdaptiveRefinementSchema {
+    pub kind: String,
+    pub status: String,
+    pub enabled: bool,
+    pub source_point_count: usize,
+    pub max_passes: u32,
+    pub max_insertions_per_pass: u32,
+    #[serde(default)]
+    pub candidates: Vec<HysteresisAdaptiveRefinementCandidateSchema>,
+    #[serde(default)]
+    pub points: Vec<HysteresisPointSchema>,
+    #[serde(default)]
+    pub settle_trace: Vec<HysteresisSettleTraceEntrySchema>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct HysteresisAdaptiveRefinementCandidateSchema {
+    pub candidate_id: String,
+    pub pass_index: u32,
+    #[serde(rename = "field_value_mT")]
+    pub field_value_m_t: f64,
+    pub parent_left_point_id: usize,
+    pub parent_right_point_id: usize,
+    #[serde(rename = "parent_left_field_mT")]
+    pub parent_left_field_m_t: f64,
+    #[serde(rename = "parent_right_field_mT")]
+    pub parent_right_field_m_t: f64,
+    #[serde(rename = "dm_dh_per_mT")]
+    pub dm_dh_per_m_t: f64,
+    pub reasons: Vec<String>,
+    pub status: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -211,6 +307,33 @@ pub struct HysteresisProgressSchema {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct HysteresisStorageEstimateSchema {
+    pub policy: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub point_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub site_count: Option<u64>,
+    pub components_per_site: u32,
+    pub bytes_per_component: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub estimated_bytes: Option<u64>,
+    pub status: String,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct HysteresisFieldUnitProvenanceSchema {
+    pub authored_quantity: String,
+    pub authored_unit: String,
+    pub canonical_quantity: String,
+    pub canonical_unit: String,
+    pub display_unit: String,
+    pub mu0_h_per_m: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct HysteresisStagePlanSchema {
     pub revision: u64,
     pub stage_id: String,
@@ -224,6 +347,8 @@ pub struct HysteresisStagePlanSchema {
     #[serde(rename = "field_values_mT", skip_serializing_if = "Option::is_none")]
     pub field_values_m_t: Option<Vec<f64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub field_unit_provenance: Option<HysteresisFieldUnitProvenanceSchema>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub field_schedule: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub schedule_refinements: Option<Value>,
@@ -235,6 +360,8 @@ pub struct HysteresisStagePlanSchema {
     pub minor_loops: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storage_estimate: Option<HysteresisStorageEstimateSchema>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

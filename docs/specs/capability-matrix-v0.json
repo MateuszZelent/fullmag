@@ -233,11 +233,11 @@
       "lanes": {
         "fdm_cpu_reference": "semantic_only",
         "fdm_gpu_production": "semantic_only",
-        "fem_cpu_public": "semantic_only",
+        "fem_cpu_public": "partial_production_executable",
         "fem_gpu_public": "semantic_only"
       },
       "validated_workloads": [],
-      "notes": "First-class public semantics exist in Python API and ProblemIR. Public planners reject execution explicitly until a driven frequency-domain solver backend is implemented. Runtime capabilities expose supports_frequency_response, supports_coupled_magnetoelastic_quasistatic, supports_coupled_magnetoelastic_elastodynamic, supports_frequency_domain_elastodynamics, and supports_coupled_eigenmodes as false for all current engines."
+      "notes": "First-class public semantics exist in Python API and ProblemIR. The native FEM CPU lane is partial-production-executable for the gamma/free-boundary and k=0 static-periodic magnetic response slice, and the dense FEM response lane remains reference-executable for validation artifacts. Static-periodic response requires mesh.periodic_node_pairs metadata. Production GPU, demag, nonzero-k Floquet/Bloch response, missing periodic pair metadata, magnetoelastic response, and coupled frequency-domain response remain explicitly gated. Runtime capabilities expose broad supports_frequency_response, supports_coupled_magnetoelastic_quasistatic, supports_coupled_magnetoelastic_elastodynamic, supports_frequency_domain_elastodynamics, and supports_coupled_eigenmodes as false; frequency_domain_capabilities.v1 is the precise UI-gating source."
     },
     {
       "id": "composite_free_layer_stno",

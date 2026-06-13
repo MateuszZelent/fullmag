@@ -27,20 +27,41 @@ enum class FrequencyDomainStudyKind {
     modal_dynamic_matrix,
 };
 
+enum class FrequencyDomainPhaseConvention {
+    exp_i_omega_t,
+    exp_minus_i_omega_t,
+};
+
+struct FrequencyDomainFloquetPeriodicPair {
+    const char *pair_id = nullptr;
+    std::uint64_t node_a = 0;
+    std::uint64_t node_b = 0;
+    bool has_translation = false;
+    double translation_m[3] = {0.0, 0.0, 0.0};
+    bool has_phase = false;
+    double phase_rad = 0.0;
+};
+
 struct FrequencyDomainAvailabilityRequest {
     FrequencyDomainStudyKind study_kind = FrequencyDomainStudyKind::driven_frequency_response;
     bool requires_driven_solver = false;
     bool requires_modal_solver = false;
+    bool requires_static_periodic_boundary = false;
     bool requires_floquet_boundary = false;
     bool requires_nonzero_k_dynamic_demag = false;
     bool requires_gpu = false;
     bool strict_device = false;
+    bool has_floquet_k_vector = false;
+    double floquet_k_vector_rad_per_m[3] = {0.0, 0.0, 0.0};
+    FrequencyDomainPhaseConvention phase_convention =
+        FrequencyDomainPhaseConvention::exp_i_omega_t;
 };
 
 struct FrequencyDomainAvailabilityResult {
     FrequencyDomainStatus status = FrequencyDomainStatus::unavailable;
     bool driven_response_available = false;
     bool modal_solver_available = false;
+    bool static_periodic_response_available = false;
     bool floquet_modal_available = false;
     bool floquet_response_available = false;
     bool dynamic_demag_k_available = false;

@@ -16,9 +16,11 @@ import {
 } from "./chartTableModel";
 import { EChartsSurface } from "./components/EChartsSurface";
 
+const EMPTY_CHART_SERIES: readonly ChartSeries[] = [];
+
 export function AnalysisPlotsView({
   kernel,
-  frequencyDomainSeries = [],
+  frequencyDomainSeries = EMPTY_CHART_SERIES,
   frequencyDomainStatus = "idle",
   frequencyDomainTitle = "Frequency-domain analysis",
   frequencyDomainUnavailableReason = null,

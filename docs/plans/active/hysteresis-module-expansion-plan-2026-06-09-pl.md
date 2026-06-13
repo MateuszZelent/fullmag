@@ -129,6 +129,8 @@ Notatka musi zdefiniowac:
    - `negative_saturation`: przygotowanie stanu w ujemnej saturacji i sweep w
      gore,
    - `checkpoint`: start z wybranego snapshotu/stanu poprzedniego runu,
+     wymagajacy jawnego `initial_state_ref` do artefaktu stanu pola albo
+     snapshotu magnetyzacji,
    - `ac_demagnetized` jako przyszly protokol, jezeli runtime bedzie wspieral
      malejaca oscylacyjna sekwencje pola.
 7. Nazwy eksperymentow:
@@ -1468,6 +1470,144 @@ Potwierdzone aktualnymi testami:
   - `pnpm --dir apps/control-room test src/modules/analysis-plots/AnalysisPlotsModule.test.tsx src/modules/explorer/builders/buildModelTree.test.ts src/modules/explorer/explorerSelection.test.ts`
     zwrocilo `59 passed`; ten zestaw pokrywa wybor stage histerezy przez
     Explorer/Analysis oraz budowe wykresu z live progress i historii punktow;
+  - authoring waliduje teraz piecewise field schedule i dense windows zgodnie
+    z Etapem G: segmenty pola dostaja ostrzezenia dla niejawnych wspolnych
+    granic i dziur, `endpointPolicy` jest ograniczony do
+    `include_stop`/`skip_start`/`include_both`, a nakladajace sie dense windows
+    wymagaja jawnych, roznych `priority`. Test
+    `pnpm --dir apps/control-room exec vitest run src/modules/inspector/panels/StudyStageAuthoringModel.test.ts`
+    zwrocil `17 passed`, `pnpm --dir apps/control-room typecheck` i
+    `pnpm --dir apps/control-room check:api-hygiene` przeszly;
+  - authoring waliduje teraz semantyke `settle_pipeline`: pusty pipeline jest
+    bledem, kazdy krok musi miec znane `kind`/`method`, dodatnie
+    `max_steps`, wymagane parametry metody (`alpha`, `torque_tolerance`,
+    `energy_tolerance`, `damping`), legalne `on_non_convergence`,
+    poprawna polityke `retry_with_smaller_dt` oraz `dt_min <= timestep_s`.
+    Sekwencja blokuje `run_next_algorithm` na ostatnim kroku, a drzewo wymaga
+    galezi fallback `non_converged`/`fallback`/`run_next_algorithm`. Test
+    `pnpm --dir apps/control-room exec vitest run src/modules/inspector/panels/StudyStageAuthoringModel.test.ts`
+    zwrocil `20 passed`, test panelu
+    `pnpm --dir apps/control-room exec vitest run src/modules/inspector/panels/StudyInspectorPanel.test.tsx`
+    zwrocil `10 passed`, `pnpm --dir apps/control-room typecheck` przeszedl,
+    a `git diff --check -- apps/control-room/src/modules/inspector/panels/StudyStageAuthoringModel.ts apps/control-room/src/modules/inspector/panels/StudyStageAuthoringModel.test.ts`
+    nie zwrocil bledow;
+  - authoring waliduje teraz `minorLoops` zgodnie z pierwszym kontraktem
+    `MinorLoopIR`: kazda petla musi miec skonczone `reversal_mT` i
+    `return_mT`, pola musza byc rozne, oba punkty musza miescic sie w
+    zaplanowanym zakresie `field_min_mT..field_max_mT`, a stage z petlami
+    minorowymi musi uzyc `branch_mode=major_with_minor_loops`. Test
+    `pnpm --dir apps/control-room exec vitest run src/modules/inspector/panels/StudyStageAuthoringModel.test.ts`
+    zwrocil `22 passed`, test panelu
+    `pnpm --dir apps/control-room exec vitest run src/modules/inspector/panels/StudyInspectorPanel.test.tsx`
+    zwrocil `10 passed`, `pnpm --dir apps/control-room typecheck` przeszedl,
+    a `git diff --check -- apps/control-room/src/modules/inspector/panels/StudyStageAuthoringModel.ts apps/control-room/src/modules/inspector/panels/StudyStageAuthoringModel.test.ts`
+    nie zwrocil bledow;
+  - authoring waliduje teraz prosty zakres pola przed startem: `field_max_mT`
+    musi byc wieksze od `field_min_mT`, zakres nie moze byc zerowy, a
+    estymowany harmonogram simple schedule nie moze przekroczyc 10 000
+    punktow. Licznik punktow odpowiada runtime materializacji `major_loop`,
+    `major_with_minor_loops`, `virgin_curve` i `virgin_then_major_loop`, ale
+    nie materializuje duzej tablicy w UI. Test
+    `pnpm --dir apps/control-room exec vitest run src/modules/inspector/panels/StudyStageAuthoringModel.test.ts`
+    zwrocil `23 passed`, test panelu
+    `pnpm --dir apps/control-room exec vitest run src/modules/inspector/panels/StudyInspectorPanel.test.tsx`
+    zwrocil `10 passed`, `pnpm --dir apps/control-room typecheck` przeszedl,
+    a `git diff --check -- apps/control-room/src/modules/inspector/panels/StudyStageAuthoringModel.ts apps/control-room/src/modules/inspector/panels/StudyStageAuthoringModel.test.ts`
+    nie zwrocil bledow;
+  - authoring waliduje teraz opcjonalne `applies_to` w krokach
+    `settle_pipeline`: string/array musza wskazywac role istniejace dla
+    aktualnego protokolu (`all_points`, `preparation`, `major`, `minor`,
+    `virgin`, `saturation_probe`, `key_events`/`key_events_only`), a
+    `branch_id` i `point_selector` wymagaja jawnych selector object. Dla
+    obecnego runtime branch selector sprawdza `descending`, `ascending` i
+    `virgin` tylko wtedy, gdy dany protokol je materializuje. Test
+    `pnpm --dir apps/control-room exec vitest run src/modules/inspector/panels/StudyStageAuthoringModel.test.ts`
+    zwrocil `25 passed`, test panelu
+    `pnpm --dir apps/control-room exec vitest run src/modules/inspector/panels/StudyInspectorPanel.test.tsx`
+    zwrocil `10 passed`, `pnpm --dir apps/control-room typecheck` przeszedl,
+    a `git diff --check -- apps/control-room/src/modules/inspector/panels/StudyStageAuthoringModel.ts apps/control-room/src/modules/inspector/panels/StudyStageAuthoringModel.test.ts`
+    nie zwrocil bledow;
+  - authoring waliduje teraz semantyke `storagePolicy` zgodnie z
+    `HysteresisStorage`: `magnetization` musi byc jedna z wartosci
+    `none|selected|every_n|every_step|key_events`, `every_n` musi byc
+    nieujemna liczba calkowita i dodatnia dla `selected/every_n`, a
+    `key_event_threshold_dm` musi byc dodatnia liczba skonczona. Test
+    `pnpm --dir apps/control-room exec vitest run src/modules/inspector/panels/StudyStageAuthoringModel.test.ts`
+    zwrocil `26 passed`, test panelu
+    `pnpm --dir apps/control-room exec vitest run src/modules/inspector/panels/StudyInspectorPanel.test.tsx`
+    zwrocil `10 passed`, `pnpm --dir apps/control-room typecheck` przeszedl,
+    a `git diff --check -- apps/control-room/src/modules/inspector/panels/StudyStageAuthoringModel.ts apps/control-room/src/modules/inspector/panels/StudyStageAuthoringModel.test.ts`
+    nie zwrocil bledow;
+  - authoring waliduje teraz `SaturationProbe` przed commitem: aktywny
+    `saturationMode` wymaga dodatniego `maxProbeField`, a
+    `saturationThresholds` musi zawierac dokladnie dwa dodatnie, skonczone
+    progi (`susceptibility_threshold`, `transverse_threshold`) bez cichego
+    fallbacku do wartosci domyslnych przy literowce. Test
+    `pnpm --dir apps/control-room exec vitest run src/modules/inspector/panels/StudyStageAuthoringModel.test.ts`
+    zwrocil `27 passed`, test panelu
+    `pnpm --dir apps/control-room exec vitest run src/modules/inspector/panels/StudyInspectorPanel.test.tsx`
+    zwrocil `10 passed`, `pnpm --dir apps/control-room typecheck` przeszedl,
+    a `git diff --check -- apps/control-room/src/modules/inspector/panels/StudyStageAuthoringModel.ts apps/control-room/src/modules/inspector/panels/StudyStageAuthoringModel.test.ts`
+    nie zwrocil bledow;
+  - authoring waliduje teraz `field_orientation` przed commitem zgodnie z
+    kontraktem Python DSL: preset nie moze byc pusty i musi byc jednym z
+    `oop_positive|oop_negative|in_plane_x|in_plane_y`, tryb sample wymaga
+    jawnych skonczonych `theta` i `phi` przy zachowaniu legalnosci wartosci
+    `0`, a global vector musi miec trzy skonczone skladowe i nie moze byc
+    wektorem zerowym. Serializacja nie robi juz cichego fallbacku z pustego
+    presetu na `oop_positive` ani z pustych katow sample na `0`. Test
+    `pnpm --dir apps/control-room exec vitest run src/modules/inspector/panels/StudyStageAuthoringModel.test.ts`
+    zwrocil `28 passed`, test panelu
+    `pnpm --dir apps/control-room exec vitest run src/modules/inspector/panels/StudyInspectorPanel.test.tsx`
+    zwrocil `10 passed`, `pnpm --dir apps/control-room typecheck`,
+    `pnpm --dir apps/control-room check:api-hygiene` i
+    `pnpm --dir apps/control-room lint --max-warnings=0` przeszly;
+  - authoring waliduje teraz `measurement_axis=custom` zgodnie z Python DSL,
+    ProblemIR i runnerem: custom axis wymaga jawnego, skonczonego,
+    niezerowego wektora 3D i serializuje sie do
+    `{kind:"custom", vector:[x,y,z]}`. Import sceny z takim payloadem
+    odtwarza `measurementAxis="custom"` oraz tekst wektora w draft UI, a panel
+    pokazuje osobne pole `Measurement vector` tylko dla osi custom. Test
+    `pnpm --dir apps/control-room exec vitest run src/modules/inspector/panels/StudyStageAuthoringModel.test.ts`
+    zwrocil `29 passed`, test panelu
+    `pnpm --dir apps/control-room exec vitest run src/modules/inspector/panels/StudyInspectorPanel.test.tsx`
+    zwrocil `10 passed`, `pnpm --dir apps/control-room typecheck`,
+    `pnpm --dir apps/control-room check:api-hygiene` i
+    `pnpm --dir apps/control-room lint --max-warnings=0` przeszly, a
+    `git diff --check -- apps/control-room/src/modules/inspector/panels/StudyStageAuthoringModel.ts apps/control-room/src/modules/inspector/panels/StudyStageAuthoringModel.test.ts apps/control-room/src/modules/inspector/panels/StudyPipelineSection.tsx docs/plans/active/hysteresis-module-expansion-plan-2026-06-09-pl.md`
+    nie zwrocil bledow;
+  - authoring UI pozwala teraz jawnie wybrac `major_with_minor_loops` w polu
+    `Protocol`, wiec uzytkownik moze skonfigurowac tryb wymagany przez edytor
+    `minorLoops` bez recznej edycji JSON/draftu. Test panelu
+    `pnpm --dir apps/control-room exec vitest run src/modules/inspector/panels/StudyInspectorPanel.test.tsx`
+    najpierw odtworzyl brak opcji, a po poprawce zwrocil `10 passed`;
+  - checkpoint start ma teraz spojny kontrakt authoringu i wykonania:
+    `initial_protocol="checkpoint"` wymaga jawnego `initial_state_ref`.
+    `ProblemIR` akceptuje checkpoint tylko z niepustym refem i odrzuca pusty
+    checkpoint, Python DSL `add_hysteresis_sweep` round-tripuje
+    `initial_state_ref`, a Control Room authoring pokazuje pole `Initial state
+    ref` i blokuje commit bez referencji. Runner materializuje teraz
+    `initial_state_ref` przed przygotowaniem saturacji/zero-field i laduje
+    magnetyzacje checkpointu z `hysteresis.zarr` z fallbackiem do
+    `hysteresis_snapshots/{snapshot_id}/m.json`; obslugiwane sa referencje
+    typu `snapshot_id`, `snapshot_resource_ref` z query `snapshot_id=...` oraz
+    sciezka JSON snapshotu. Weryfikacja:
+    `CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-ir hysteresis_validation_ --no-fail-fast`
+    zwrocila `11 passed`,
+    `PYTHONPATH=packages/fullmag-py/src python3 -m pytest packages/fullmag-py/tests/test_api.py -q -k hysteresis`
+    zwrocilo `20 passed`, `CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-plan hysteresis --no-fail-fast`
+    zwrocilo `3 passed`, `CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-runner hysteresis_checkpoint --no-fail-fast`
+    skompilowalo runnera bez testow pasujacych do filtra, a testy Control Room
+    `StudyStageAuthoringModel.test.ts` i `StudyInspectorPanel.test.tsx`
+    zwrocily odpowiednio `30 passed` i `11 passed`. Dodatkowo
+    `pnpm --dir apps/control-room typecheck`,
+    `pnpm --dir apps/control-room check:api-hygiene`,
+    `pnpm --dir apps/control-room lint --max-warnings=0` i
+    `git diff --check` dla zmienionych plikow przeszly. Dodatkowo w tej
+    kontynuacji `CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-runner checkpoint_initial_state_ --no-fail-fast`
+    zwrocil `2 passed`: test loadera potwierdzil odczyt Zarr po
+    `snapshot_id`, a test integracyjny potwierdzil, ze checkpoint seeduje
+    runtime pętli zamiast authored `initial_magnetization`;
   - `pnpm --dir apps/control-room typecheck`, `lint` i
     `check:api-hygiene` przeszly.
 - Milestone H/replay 3D snapshotow histerezy:
@@ -1484,15 +1624,87 @@ Potwierdzone aktualnymi testami:
     `field_vector_snapshot_id_loads_persisted_hysteresis_magnetization` i
     `field_meta_snapshot_id_reports_persisted_hysteresis_magnetization_stats`
     zwrocily po `1 passed`;
-  - zamknieto luke UI `use-point-as-initial-state`: inspector przekazuje teraz
-    `snapshot_resource_ref`, a komenda preferuje ten zasob nad recznie
-    skladana sciezka artefaktu. Obecny kompatybilny backend moze jeszcze
-    czytac pojedyncze snapshoty JSON, ale docelowy format playbacku
-    `every_step` jest opisany nizej jako Zarr/HDF5 container. Test
-    `uses the hysteresis point snapshot resource ref when applying an initial state`
-    najpierw odtworzyl blad, a po poprawce
-    `pnpm --dir apps/control-room test src/kernel/runtime/studyRuntimeCommandContributions.test.ts src/modules/inspector/panels/stages/StageInspectors.test.tsx src/modules/analysis-plots/AnalysisPlotsModule.test.tsx src/modules/viewport-3d/hooks/useViewport3DSceneModel.test.ts src/modules/viewport-3d/viewport3dResources.test.ts`
-    zwrocilo `144 passed`;
+  - zamknieto luke UI `use-point-as-initial-state` przez rozdzielenie
+    referencji snapshotu: `snapshot_vector_resource_ref` wskazuje data-plane
+    `data/fields/m/samples/vector?snapshot_id=...`, a
+    `snapshot_json_artifact_ref`, `snapshot_zarr_store_ref` i
+    `snapshot_storage_format` opisuja trwaly storage/import. Stary
+    `snapshot_resource_ref` zostaje kompatybilnym aliasem endpointu
+    wektorowego, ale komenda inicjalizacji ignoruje data-plane refs jako
+    `artifact_ref` i preferuje jawny artifact ref. Testy
+    `uses the hysteresis point snapshot artifact ref when applying an initial state`
+    oraz `ignores legacy data-plane snapshot resource refs when applying an initial state`
+    pokrywaja ten kontrakt. Weryfikacja:
+    `pnpm --dir apps/control-room exec vitest run src/kernel/runtime/studyRuntimeCommandContributions.test.ts src/modules/inspector/panels/stages/StageInspectors.test.tsx`
+    zwrocila `67 passed`, `pnpm --dir apps/control-room typecheck` i
+    `pnpm --dir apps/control-room check:api-hygiene` przeszly;
+  - punkty histerezy przenosza teraz per-point provenance wymagane do replay:
+    `field_vector_A_per_m`, `field_orientation`, `measurement_axis` i
+    `field_display_unit`. Runner zapisuje te pola dla glownej petli,
+    wariantow angular-family, punktow adaptacyjnych i minor-loop return point,
+    a OpenAPI v2/generowane typy TS eksponuja je w `HysteresisPointSchema`.
+    `HysteresisChart` i `HysteresisPointsInspector` preferuja point-level
+    `field_orientation`/`measurement_axis` przed fallbackiem stage-level, wiec
+    klikniecie punktu z inna osia pomiaru nie gubi provenance. Weryfikacja:
+    `CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-runner sample_normal_measurement_axis_projects_independently_from_field_axis`,
+    `CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-api hysteresis_analysis_endpoints_read_typed_artifacts`,
+    `pnpm --dir apps/control-room exec vitest run src/modules/analysis-plots/AnalysisPlotsModule.test.tsx src/modules/viewport-3d/hooks/useViewport3DSceneModel.test.ts src/modules/inspector/panels/stages/StageInspectors.test.tsx`,
+    `pnpm --dir apps/control-room typecheck` i
+    `pnpm --dir apps/control-room check:api-hygiene` przeszly;
+  - aktualizacja 2026-06-13: `HysteresisChart` ma teraz czysty model markerow
+    metryk `buildHysteresisMetricMarkerModel`, ktory buduje z danych resource
+    markery `Hc+/-`, `Mr+/-`, `Hsat`, switching candidates, reversal,
+    adaptive oraz warning/non-convergence z zachowanym `point_id`. Wykres
+    uzywa tego modelu do `markPoint`, zamiast recznie mapowac tylko `Hc/Mr`.
+    To domyka czesc Etapu H dotyczaca markerow i tooltip provenance bez
+    lokalnego store ani dodatkowego fetch. Weryfikacja:
+    `pnpm --dir apps/control-room test -- --run AnalysisPlotsModule.test.tsx -t "builds source-linked hysteresis metric markers"`
+    oraz `pnpm --dir apps/control-room test -- --run AnalysisPlotsModule.test.tsx`
+    zwrocily zielony suite Control Room (`247 passed`, `1807` testow);
+  - inspector punktow histerezy pokazuje teraz aktywny replay 3D rowniez w
+    widoku `points`: status `3D viewport state`, identyfikator snapshotu,
+    punkt/pole oraz akcje `Return to live`. Akcja korzysta z istniejacego
+    command registry `hysteresis.return-to-live` i selection store, bez
+    kopiowania historii punktow albo snapshotow do lokalnego store. Test
+    `renders active 3D replay controls in the hysteresis points inspector`
+    najpierw odtworzyl brak statusu w widoku `points`, a po poprawce
+    `pnpm --dir apps/control-room exec vitest run src/modules/inspector/panels/stages/StageInspectors.test.tsx`
+    zwrocil `18 passed`;
+  - Explorer i Inspector maja teraz osobna galez/widok orientacji pola
+    histerezy. Explorer emituje `:orientation`, `HysteresisStageInspector`
+    routuje widok `orientation` do osobnego pliku
+    `HysteresisOrientationInspector.tsx`, a panel pokazuje runtime
+    `HysteresisOrientationSchema`: resolved orientation, direction vector,
+    measurement axis i revision, z fallbackiem do authored draftu. Domknieto
+    tez routing konkretnych dzieci `:points:bookmarks:*`: snapshot child
+    przechodzi do `snapshots`, a bookmark/key-event child do
+    `points-bookmarks`, zamiast wracac do overview. Weryfikacja:
+    `pnpm --dir apps/control-room test src/modules/inspector/panels/stages/StageInspectors.test.tsx src/modules/explorer/builders/buildModelTree.test.ts`
+    zwrocilo `52 passed`, `pnpm --dir apps/control-room typecheck`
+    przeszedl, `pnpm --dir apps/control-room lint` przeszedl;
+  - dynamiczne dzieci drzewa wykonania histerezy maja teraz dedykowany
+    inspector zamiast generycznego `point-detail`: Explorer przenosi
+    `hysteresisExecutionNodeId`, `hysteresisExecutionNodeKind`,
+    `hysteresisPointId` i `resourceRef` przez selection `study-stage`, a
+    `HysteresisStageInspector` routuje `:field-point:*:warning:*` oraz
+    pozostale generyczne child nodes do osobnego pliku
+    `HysteresisExecutionNodeInspector.tsx`. Panel pokazuje label, kind,
+    status, node id, stage, revision, point, selection/resource ref oraz
+    dzieci node'a z runtime `HysteresisExecutionTreeResource`, bez importow
+    miedzy modulami Explorer i Inspector. Weryfikacja:
+    `pnpm --dir apps/control-room test src/modules/inspector/panels/stages/StageInspectors.test.tsx src/modules/explorer/explorerSelection.test.ts src/modules/explorer/builders/buildModelTree.test.ts`
+    zwrocilo `83 passed`;
+  - adaptive refinement ma teraz osobna galez Explorera i osobny widok
+    Inspectora zamiast pojedynczego streszczenia w `Measurement Plan`.
+    Explorer emituje `:adaptive-refinement`, `HysteresisStageInspector`
+    routuje widok do osobnego pliku
+    `HysteresisAdaptiveRefinementInspector.tsx`, a panel czyta istniejacy
+    resource hook `useHysteresisAdaptiveRefinementResource` i pokazuje status,
+    enabled/kind, limity pass/insertion, liczbe kandydatow, punkty inserted,
+    rodzicow odcinka, `dm/dH`, reasons oraz liczbe wierszy settle trace. Nie
+    dodano nowego endpointu ani lokalnego store. Weryfikacja:
+    `pnpm --dir apps/control-room test src/modules/inspector/panels/stages/StageInspectors.test.tsx src/modules/explorer/builders/buildModelTree.test.ts`
+    zwrocilo `54 passed`;
   - browser smoke replay 3D zostal domkniety kontrolowanym trybem
     `CONTROL_ROOM_SMOKE_HYSTERESIS_REPLAY=1`
     `CONTROL_ROOM_SMOKE_HYSTERESIS_REPLAY_ONLY=1`
@@ -1505,6 +1717,28 @@ Potwierdzone aktualnymi testami:
     zawieral `data-hysteresis-replay-snapshot-id`, a data-plane request
     `data/fields/m/samples/vector` zawieral `snapshot_id`, `component=full` i
     `scope_kind=full`;
+  - aktualizacja 2026-06-13: browser smoke replay nie ogranicza sie juz do
+    technicznego hooka `__FULLMAG_CONTROL_ROOM_AUDIT__`. Jezeli zamontowany
+    jest `HysteresisChart`, smoke czeka na `data-hysteresis-stage-id`,
+    `data-hysteresis-point-count` i aktywny `data-hysteresis-active-snapshot-id`,
+    przestawia scrubber "Hysteresis point scrubber" na zadany punkt, klika
+    realny przycisk `Load in 3D`, a dopiero gdy wykresu nie ma, spada do
+    starej sciezki audit fallback. Request do
+    `data/fields/m/samples/vector` musi zawierac `snapshot_id`, `stage_id`,
+    `component=full` i `scope_kind=full`. Weryfikacja:
+    `pnpm --dir apps/control-room test -- viewportSmokeProjectionScript.test.ts -t "can verify hysteresis replay"`
+    zwrocila zielony suite Control Room (`248 passed`, `1822` testy);
+  - domknieto luke w replay 3D dla per-target/per-object quantity overlays:
+    gdy wybrany jest punkt histerezy, `viewport-3d` dokleja teraz ten sam
+    `snapshot_id` i `stage_id` nie tylko do primary `m`, ale tez do
+    target-specific field queries, np. `H_eff` albo scalar surface overlays.
+    `mergeViewport3DFieldQuery` nie moze juz zredukowac query do live
+    `FULL_FIELD_QUERY` bez zachowania kontekstu replayu. Weryfikacja:
+    `pnpm --dir apps/control-room test src/modules/viewport-3d/hooks/useViewport3DSceneModel.test.ts src/modules/viewport-3d/viewport3dResources.test.ts`
+    zwrocilo `63 passed`, `pnpm --dir apps/control-room typecheck` przeszedl,
+    `pnpm --dir apps/control-room lint` przeszedl, a browser smoke
+    `CONTROL_ROOM_URL=http://localhost:3102/workspace CONTROL_ROOM_SMOKE_ALLOW_MISSING_SESSION=1 pnpm --dir apps/control-room smoke:viewport-3d`
+    zwrocil `Viewport 3D smoke passed at http://localhost:3102/workspace`;
 - Milestone E/storage container dla playbacku `m`:
   - runner zapisuje teraz kazdy przechwycony snapshot histerezy rownolegle do
     `hysteresis.zarr/fields/m` jako Zarr v2 store z osiami
@@ -1543,20 +1777,360 @@ Potwierdzone aktualnymi testami:
   - artefakty runtime zweryfikowano komenda
     `python3 scripts/verify_hysteresis_playback_artifacts.py .fullmag/local-live/history/session-1781246437482-1629188/artifacts`,
     ktora zwrocila `validated hysteresis playback: points=3 snapshots=3 cell_count=1137 container=zarr`.
+  - aktualizacja 2026-06-13: Milestone E/storage container zostal ponownie
+    zweryfikowany po dodaniu kontraktu `magnetization_storage_policy` w
+    `hysteresis.zarr/.zattrs` i `hysteresis.zarr/fields/m/.zattrs`.
+    Runner zapisuje polityke snapshotow w obu poziomach metadanych, a
+    walidator playbacku odrzuca kontener Zarr bez zgodnej polityki storage.
+    Dodatkowy test API
+    `field_vector_snapshot_id_loads_multiple_runtime_hysteresis_zarr_frames`
+    potwierdza, ze jeden runtime-style `hysteresis.zarr/fields/m/samples.csv`
+    z wieloma klatkami zwraca rozne payloady dla kolejnych `snapshot_id`.
+    Test `field_meta_snapshot_id_loads_multiple_runtime_hysteresis_zarr_frames`
+    potwierdza ten sam kontrakt dla `data/fields/m/meta?snapshot_id=...`,
+    czyli statystyki komponentow sa liczone z wybranej klatki, a nie z
+    pierwszego albo aktualnego live field.
+    Weryfikacja lokalna: `CARGO_TARGET_DIR=/tmp/fullmag-api-zarr-target cargo test -p fullmag-api field_vector_snapshot_id_loads_multiple_runtime_hysteresis_zarr_frames --no-fail-fast`
+    zwrocilo `1 passed`,
+    `CARGO_TARGET_DIR=/tmp/fullmag-api-zarr-target cargo test -p fullmag-api field_meta_snapshot_id_loads_multiple_runtime_hysteresis_zarr_frames --no-fail-fast`
+    zwrocilo `1 passed`,
+    laczony gate `CARGO_TARGET_DIR=/tmp/fullmag-api-zarr-target cargo test -p fullmag-api snapshot_id_loads_multiple_runtime_hysteresis_zarr_frames --no-fail-fast`
+    zwrocil `2 passed`,
+    `CARGO_TARGET_DIR=/tmp/fullmag-api-zarr-target cargo test -p fullmag-runner stored_hysteresis_snapshot --no-fail-fast`
+    zwrocilo `2 passed`,
+    `CARGO_TARGET_DIR=/tmp/fullmag-api-zarr-target cargo test -p fullmag-runner checkpoint_initial_state_loads_hysteresis_zarr_snapshot --no-fail-fast`
+    zwrocilo `1 passed`,
+    `python3 -m pytest scripts/test_verify_hysteresis_playback_artifacts.py scripts/test_verify_hysteresis_points_chart_data.py -q`
+    zwrocilo `14 passed`, a data-plane test
+    `python3 -m pytest scripts/test_verify_hysteresis_playback_data_plane.py -q`
+    zwrocil `1 passed` po uruchomieniu z dostepem do lokalnego socketu.
+    Kontenerowy proof runtime
+    `just verify-hysteresis-waveguide-playback-runtime cpu` odbudowal managed
+    FEM runtime i zakonczyl sesje `session-1781303037396-29` statusem
+    `completed`; walidatory w targetcie zwrocily:
+    `validated hysteresis chart points: points=3` oraz
+    `validated hysteresis playback: points=3 snapshots=3 cell_count=1136 container=zarr average_weighting=moment_weighted_fem_p1_lumped_ms_volume storage_policy=every_step`.
+    Aktualizacja po regresji indeksu Zarr: `just verify-hysteresis-waveguide-playback-runtime cpu`
+    zakonczyl sesje `session-1781318606840-29` statusem `completed`, a
+    walidatory targetu zwrocily `validated hysteresis chart points: points=3`
+    oraz `validated hysteresis playback: points=3 snapshots=3 cell_count=1151 container=zarr average_weighting=moment_weighted_fem_p1_lumped_ms_volume storage_policy=every_step`.
+    Rzeczywisty `hysteresis.zarr/fields/m/samples.csv` i root
+    `hysteresis.zarr/points.csv` maja teraz wspolny naglowek z
+    `component_count=3`, `dtype=<f8`, `mesh_identity` i `field_revision`;
+    root `chunk_key` wskazuje `fields/m/<chunk>`, a field-local `chunk_key`
+    wskazuje nazwe chunku w `fields/m`. Lokalna rewalidacja
+    `python3 scripts/verify_hysteresis_playback_artifacts.py .fullmag/reports/hysteresis-waveguide-playback-runtime/artifacts`
+    zwrocila `validated hysteresis playback: points=3 snapshots=3 cell_count=1151 container=zarr average_weighting=moment_weighted_fem_p1_lumped_ms_volume storage_policy=every_step`.
+    Skupiona bramka API
+    `CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-api hysteresis_analysis_ --no-fail-fast`
+    zwrocila `9 passed`, obejmujac live flat-artifact fallback,
+    `409 Conflict` dla zakonczonych punktow bez `hysteresis_points.json`,
+    aliasy stage id i zachowanie pustej listy przed pierwszym punktem.
+    Publiczny data-plane verifier zostal domkniety na dzialajacym lokalnie
+    `fullmag-api` na `localhost:8081`: najpierw sandbox zablokowal bind
+    listenera i lokalny POST, ale po uruchomieniu API oraz verifiera z
+    uprawnieniami do lokalnego socketu
+    `just verify-hysteresis-waveguide-playback-data-plane http://localhost:8081 .fullmag/reports/hysteresis-waveguide-playback-runtime/artifacts`
+    przeszedl caly lancuch: `analysis/hysteresis/stage_0/points` zwrocil
+    punkty, `snapshot_vector_resource_ref` pobral publiczny
+    `data/fields/m/samples/vector?snapshot_id=...&stage_id=stage_0&component=full&scope_kind=full`,
+    payload FMVP mial zgodne naglowki `x-fullmag-snapshot-id`,
+    `x-fullmag-quantity-id`, `x-fullmag-component`,
+    `x-fullmag-point-count` i `x-fullmag-value-count`, a wartosci oraz
+    weighted `m_avg` zgodzily sie z `hysteresis.zarr`. Wynik:
+    `validated hysteresis data-plane playback: points=3 snapshot_id=hysteresis_point_001 values=3453`.
+    Po proofie proces API zostal zatrzymany, a `localhost:8081` ponownie nie
+    odpowiadal, zeby nie zostawiac aktywnego serwera po walidacji.
+  - aktualizacja 2026-06-13: walidator playbacku wymaga teraz globalnego
+    indeksu `hysteresis.zarr/points.csv`, zgodnie z `point_index_file` w
+    root `.zattrs`, a nie tylko field-local
+    `hysteresis.zarr/fields/m/samples.csv`. Bramka porownuje liczbe wierszy,
+    `snapshot_id`, `point_id`, pole, quantity, grid/cell metadata,
+    branch/protocol provenance, mesh identity, revision oraz wymaga, zeby
+    root `chunk_key` wskazywal na `fields/m/<samples.chunk_key>`. Testy
+    `test_validator_rejects_missing_root_points_index` i
+    `test_validator_rejects_root_points_index_chunk_mismatch` zabezpieczaja
+    brak indeksu i zepsute mapowanie chunkow. Weryfikacja:
+    `python3 -m pytest scripts/test_verify_hysteresis_playback_artifacts.py -q`
+    dala `12 passed`,
+    `python3 -m pytest scripts/test_verify_hysteresis_playback_artifacts.py scripts/test_verify_hysteresis_points_chart_data.py scripts/test_verify_hysteresis_saturation_limit_artifacts.py scripts/test_verify_hysteresis_minor_loop_artifacts.py -q`
+    dala `22 passed`, a
+    `python3 -m py_compile scripts/verify_hysteresis_playback_artifacts.py scripts/test_verify_hysteresis_playback_artifacts.py`
+    przeszlo bez bledow. Runtime proof:
+    `CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-runner stored_hysteresis_snapshot_contains_vector_magnetization_payload --no-fail-fast`
+    zwrocil `1 passed` i potwierdzil, ze rzeczywisty writer snapshotu tworzy
+    `hysteresis.zarr/points.csv`, zawiera `hysteresis_point_002`, wskazuje
+    `fields/m/0.0.0` oraz przenosi branch/protocol provenance. Data-plane
+    proof: endpoint `data/fields/m/samples/vector?snapshot_id=...` odrzuca
+    teraz runtime Zarr bez root `points.csv`; test
+    `field_vector_snapshot_id_rejects_runtime_zarr_without_root_points_index`
+    najpierw odtworzyl blad `200 OK` dla niekompletnego kontenera, a po
+    poprawce
+    `CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-api field_vector_snapshot_id_rejects_runtime_zarr_without_root_points_index --no-fail-fast`
+    zwrocil `1 passed`. Pozytywne sciezki pozostaly zielone:
+    `field_vector_snapshot_id_loads_runtime_hysteresis_zarr_sample_index`,
+    `field_vector_snapshot_id_loads_multiple_runtime_hysteresis_zarr_frames`
+    i `field_meta_snapshot_id_loads_multiple_runtime_hysteresis_zarr_frames`
+    zwrocily po `1 passed`. Dodatkowo data-plane porownuje root
+    `points.csv` z field-local `samples.csv` dla provenance kolumn
+    `branch_id`, `protocol_role`, `mesh_identity` i `field_revision`, jezeli
+    sa obecne po obu stronach. Test
+    `field_vector_snapshot_id_rejects_runtime_zarr_root_points_provenance_mismatch`
+    najpierw odtworzyl blad `200 OK` dla root indexu z innym `branch_id`, a
+    po poprawce zwrocil `1 passed`.
+  - aktualizacja 2026-06-13: testowe fixture'y legacy Zarr uzywane przez API
+    `data/fields/m/samples/vector?snapshot_id=...` i
+    `data/fields/m/meta?snapshot_id=...` zostaly dostosowane do tego samego
+    kontraktu root indexu: `write_hysteresis_zarr_snapshot_fixture` zapisuje
+    teraz `hysteresis.zarr/points.csv` z `chunk_key=fields/m/<chunk>`, wiec
+    stare pozytywne testy Zarr nie omijaja juz produkcyjnego wymogu globalnego
+    indeksu. Weryfikacja:
+    `CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-api hysteresis --no-fail-fast`
+    zwrocila `27 passed`.
+  - aktualizacja 2026-06-13: zielony checkpoint runtime/API/playback:
+    `CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-api hysteresis --no-fail-fast`
+    zwrocil `27 passed`,
+    `CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-runner hysteresis --no-fail-fast`
+    zwrocil `52 passed`, a
+    `python3 -m pytest scripts/test_verify_hysteresis_playback_artifacts.py scripts/test_verify_hysteresis_playback_data_plane.py -q`
+    zwrocil `19 passed`. Ten checkpoint obejmuje stage-scoped snapshot refs,
+    Zarr root `points.csv`, runtime snapshot writer, weighted FEM/FDM averages,
+    minor-loop/adaptive artifacts i publiczny data-plane playback `m`.
+  - aktualizacja 2026-06-13: data-plane playback verifier sprawdza teraz, ze
+    pelny payload z publicznego endpointu
+    `data/fields/m/samples/vector?snapshot_id=...` odtwarza to samo `m_avg`,
+    ktore trafia do punktu histerezy/wykresu. RED test
+    `test_validator_rejects_api_payload_average_mismatch` najpierw pokazal, ze
+    walidator akceptowal punkt `m_avg=[1,0,0]` dla payloadu o sredniej
+    `[0.5,0.5,0]`; po poprawce walidator odrzuca taki przypadek komunikatem
+    `m_avg does not match API data-plane snapshot`. Weryfikacja:
+    `python3 -m pytest scripts/test_verify_hysteresis_playback_data_plane.py -q`
+    zwrocila `2 passed` po uruchomieniu z dostepem do lokalnego socketu, a
+    `python3 -m pytest scripts/test_verify_hysteresis_playback_artifacts.py scripts/test_verify_hysteresis_playback_data_plane.py -q`
+    zwrocila `14 passed`.
+  - aktualizacja 2026-06-13: data-plane playback verifier uzywa teraz
+    `hysteresis.zarr/fields/m/average_weights`, gdy root/field `.zattrs`
+    deklaruja weighted averaging. RED test
+    `test_validator_uses_zarr_average_weights_for_api_payload_average`
+    najpierw pokazal falszywy mismatch dla FEM-style punktu
+    `m_avg=[0.75,0.25,0]`, payloadu `[[1,0,0],[0,1,0]]` i wag `[3,1]`;
+    po poprawce walidator liczy moment-weighted average z publicznego payloadu
+    API. Weryfikacja:
+    `python3 -m pytest scripts/test_verify_hysteresis_playback_data_plane.py -q`
+    zwrocila `3 passed`, a
+    `python3 -m pytest scripts/test_verify_hysteresis_playback_artifacts.py scripts/test_verify_hysteresis_playback_data_plane.py -q`
+    zwrocila `15 passed`.
+  - aktualizacja 2026-06-13: error path weighted data-plane jest teraz
+    kontrolowany. RED test
+    `test_validator_rejects_declared_average_weights_missing_store` najpierw
+    odtworzyl niekontrolowany `FileNotFoundError`, gdy `.zattrs` deklarowaly
+    `average_weights_ref`, ale brakowalo store `fields/m/average_weights`;
+    po poprawce walidator konczy czytelnym komunikatem
+    `missing average_weights Zarr array` albo
+    `missing average_weights Zarr chunk`. Weryfikacja:
+    `python3 -m pytest scripts/test_verify_hysteresis_playback_data_plane.py -q`
+    zwrocila `4 passed`, a
+    `python3 -m pytest scripts/test_verify_hysteresis_playback_artifacts.py scripts/test_verify_hysteresis_playback_data_plane.py -q`
+    zwrocila `16 passed`.
+  - aktualizacja 2026-06-13: data-plane playback verifier sprawdza teraz
+    spojnosci naglowkow `x-fullmag-point-count` i
+    `x-fullmag-value-count` z rzeczywiscie odkodowanym payloadem FMVP. RED
+    test `test_validator_rejects_data_plane_count_header_mismatch` pokazal, ze
+    endpoint mogl zadeklarowac `x-fullmag-value-count=5` przy 6 wartosciach i
+    przejsc weryfikacje; po poprawce verifier odrzuca taki payload przed
+    porownaniem z `hysteresis.zarr`. Weryfikacja:
+    `python3 -m pytest scripts/test_verify_hysteresis_playback_data_plane.py -q`
+    zwrocila `5 passed`.
+  - aktualizacja 2026-06-13: artifact playback verifier egzekwuje teraz
+    manifest kontenera `hysteresis.zarr`, a nie tylko zgodnosc chunkow.
+    Root `.zattrs` musi deklarowac
+    `fullmag_kind="hysteresis_field_sequence"`,
+    dodatni `schema_version`, `preferred_container="zarr"`,
+    `quantity_ids` zawierajace `m` oraz `point_index_file="points.csv"`.
+    Field `.zattrs` musi deklarowac `quantity_id="m"`, `unit="1"`,
+    osie `[point, component, spatial_sample]`, `component_order=["x","y","z"]`,
+    `storage_layout="soa_component_major"` oraz
+    `sample_index_file="samples.csv"`. RED test
+    `test_validator_rejects_zarr_without_required_root_manifest` najpierw
+    pokazal, ze kontener bez `preferred_container` byl akceptowany; po
+    poprawce walidator odrzuca taki artefakt. Weryfikacja:
+    `python3 -m pytest scripts/test_verify_hysteresis_playback_artifacts.py -q`
+    zwrocila `13 passed`, a
+    `python3 -m py_compile scripts/verify_hysteresis_playback_artifacts.py scripts/test_verify_hysteresis_playback_artifacts.py`
+    przeszlo bez bledow.
+  - aktualizacja 2026-06-13: artifact playback verifier waliduje teraz takze
+    semantyke kazdego wiersza `hysteresis.zarr/fields/m/samples.csv`: kazda
+    klatka musi miec `quantity_id="m"`, `component_count=3`, `dtype="<f8"` i
+    `cell_count` zgodny z osia `spatial_sample` w `.zarray`. RED test
+    `test_validator_rejects_sample_index_for_non_m_quantity` pokazal, ze
+    indeks z `quantity_id="H_eff"` byl wczesniej akceptowany mimo sciezki
+    `fields/m`; po poprawce walidator odrzuca taki artifact. Weryfikacja:
+  `python3 -m pytest scripts/test_verify_hysteresis_playback_artifacts.py -q`
+  zwrocila `14 passed`.
+  - aktualizacja 2026-06-13: artifact playback verifier wymaga teraz
+    `hysteresis_settle_trace.json` i sprawdza, ze kazdy zapisany snapshot point
+    ma co najmniej jeden rekord trace z `point_id`, `algorithm_id`, `method`
+    oraz `status`. To zamyka luke, w ktorej playback tekstury byl poprawny,
+    ale punkt nie mogl wyjasnic, ktory algorytm `relax/minimize` go
+    zrelaksowal. RED test
+    `test_validator_rejects_snapshot_point_without_settle_trace` pokazal, ze
+    pusty trace byl akceptowany; po poprawce walidator odrzuca brakujace
+    rekordy. Weryfikacja:
+    `python3 -m pytest scripts/test_verify_hysteresis_playback_artifacts.py -q`
+    zwrocila `15 passed`, a
+    `python3 scripts/verify_hysteresis_playback_artifacts.py .fullmag/reports/hysteresis-waveguide-playback-runtime/artifacts`
+    zwrocilo `validated hysteresis playback: points=3 snapshots=3 cell_count=1151 container=zarr average_weighting=moment_weighted_fem_p1_lumped_ms_volume storage_policy=every_step`.
+- Milestone E/storage estimate przed startem histerezy:
+  - zasob `simulation/stages/{stage_id}/hysteresis/plan` zwraca teraz
+    `storage_estimate` z `policy`, `point_count`, `snapshot_count`,
+    `site_count`, `estimated_bytes`, `status` i `warnings`;
+  - liczba punktow jest liczona tym samym materializatorem schedule, ktorego
+    uzywa execution tree, a liczba snapshotow wynika z polityki
+    `storage.magnetization` (`every_step`, `selected/every_n`, `key_events`,
+    `none`);
+  - gdy rozmiar domeny nie jest jeszcze dostepny w zasobie planu, estimate
+    zwraca `status=partial`, `estimated_bytes=null` i ostrzezenie, zamiast
+    zgadywac koszt storage;
+  - aktualizacja 2026-06-13: zasob planu histerezy wypelnia teraz
+    `site_count` i `estimated_bytes`, gdy w aktywnej sesji jest dostepna
+    zrealizowana domena FEM. Dla FEM P1 koszt playbacku `m` liczony jest po
+    liczbie wezlow `fem_mesh.nodes.len()`, czyli po tej samej osi
+    `spatial_sample`, ktora zapisuje `hysteresis.zarr/fields/m`; fallback dla
+    braku domeny pozostaje `status=partial`. RED test
+    `hysteresis_stage_requested_resources_return_authoring_payload` pokazal,
+    ze plan z `selected_every_5` nadal zwracal `site_count=null`; po poprawce
+    dla testowego mesha FEM 4 wezly i 5 snapshotow daja
+    `estimated_bytes=480` oraz `status="estimated"`. Weryfikacja:
+    `CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-api hysteresis_stage_requested_resources_return_authoring_payload --no-fail-fast`
+    zwrocila `1 passed`;
+  - inspektor planu histerezy pokazuje `Storage estimate` oraz `Storage
+    warnings`, pochodzace z zasobu runtime, a kontrakt zostal zsynchronizowany
+    przez OpenAPI v2 i wygenerowane typy Control Room;
+  - authoring Control Room ma teraz lokalna bramke akceptacji kosztu storage:
+    gdy `storage.magnetization` w polityce histerezy ma wartosc `every_step`,
+    walidacja draftu blokuje commit do czasu zaznaczenia
+    `Storage estimate acknowledged`; bramka nie dopisuje zadnego pola do
+    kanonicznego `storage`, wiec nie wprowadza driftu wzgledem Python DSL,
+    ProblemIR ani OpenAPI;
+  - testy potwierdzone w tej kontynuacji:
+    `CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-api hysteresis_stage_requested_resources_return_authoring_payload -- --nocapture`
+    zwrocil `1 passed`,
+    `CARGO_TARGET_DIR=.fullmag/codex-target pnpm --dir apps/control-room generate:api`
+    zakonczyl sie powodzeniem,
+    `pnpm --dir apps/control-room exec vitest run src/modules/inspector/panels/stages/StageInspectors.test.tsx`
+    zwrocil `17 passed`, a `pnpm --dir apps/control-room typecheck` i
+    `pnpm --dir apps/control-room check:api-hygiene` przeszly;
+  - dodatkowo dla bramki `every_step` potwierdzono:
+    `pnpm --dir apps/control-room exec vitest run src/modules/inspector/panels/StudyStageAuthoringModel.test.ts src/modules/inspector/panels/StudyInspectorPanel.test.tsx`
+    zwrocil `28 passed`, `pnpm --dir apps/control-room typecheck` i
+    `pnpm --dir apps/control-room check:api-hygiene` przeszly, a
+    `git diff --check -- apps/control-room/src/modules/inspector/panels/StudyStageAuthoringModel.ts apps/control-room/src/modules/inspector/panels/StudyStageAuthoringModel.test.ts apps/control-room/src/modules/inspector/panels/StudyPipelineSection.tsx`
+    nie zwrocil bledow.
 - Milestone G/Explorer -> inspector trace:
-  - klikniecie wezla `field-point` albo `algorithm` w Explorerze mapuje teraz
-    inspector histerezy na dedykowany widok `settle-trace`, a nie na
-    generyczny `current-field`;
+  - klikniecie wezla `field-point` w Explorerze mapuje teraz inspector
+    histerezy na widok `current-field`, zeby wezel "Current Field" nie
+    otwieral pustego trace bez kontekstu punktu; klikniecie
+    `field-point:*:algorithm:*` nadal mapuje na `settle-trace`;
+  - klikniecie `field-current:algorithm:*` mapuje na `settle-pipeline`, bo dla
+    aktywnego pola bez konkretnego zakonczonego punktu nie ma jeszcze
+    punktowego trace do wyswietlenia;
   - inspector wyciaga `point_id` rowniez z kernel selection `nodeId`, wiec trace
     dziala dla wyboru z Explorera bez wymagania snapshotu 3D z wykresu;
+  - aktualizacja 2026-06-13: backendowy zasob
+    `/v2/sessions/current/analysis/hysteresis/{stage_id}/steps/{point_id}`
+    zostal doprecyzowany testowo jako stage-scoped point-detail resource dla
+    Explorera/Inspectora. Test `hysteresis_analysis_resolves_stage_directory_artifact_refs`
+    potwierdza, ze endpoint punktu dziala przez aliasy `stage-000`, `stage_0`
+    i `0`, zwraca te same dane punktu co `points`, oraz daje kontrolowany
+    `404 Not Found` dla brakujacego `point_id`. To utrzymuje zasade, ze
+    `analysis/hysteresis` zwraca lekki opis punktu i referencje snapshotu, a
+    ciezkie pole `m` dalej idzie przez `data/fields`.
+  - aktualizacja 2026-06-13: Explorer nie pokazuje juz statycznych galezi
+    `Forward`, `Return`, `Minor Loops`, gdy runtime dostarcza realne wezly
+    `kind="branch"` w `hysteresisExecutionTree`. `Branches` preferuje wtedy
+    dynamiczne branch nodes z `node_id`, statusem execution tree i metadanymi
+    `hysteresisExecutionNodeId`/`branchId`; statyczne dzieci pozostaja tylko
+    fallbackiem dla stage bez danych runtime. RED test
+    `renders hysteresis branches from the backend execution tree` pokazal, ze
+    builder zwracal wylacznie `forward/return/minor-loops`; po poprawce
+    zwraca `branch:descending`, `branch:ascending` i `branch:minor-loop-001`
+    oraz nie renderuje placeholderow. Weryfikacja:
+    `pnpm --dir apps/control-room test -- src/modules/explorer/builders/buildModelTree.test.ts -t "renders hysteresis branches from the backend execution tree"`
+    zwrocila `248 passed`, a `pnpm --dir apps/control-room typecheck` i
+    `git diff --check -- apps/control-room/src/modules/explorer/builders/study/hysteresisStageNode.ts apps/control-room/src/modules/explorer/builders/buildModelTree.test.ts`
+    przeszly.
+  - aktualizacja 2026-06-13: klikniecie dynamicznej galezi runtime
+    `:branches:branch:<id>` routuje teraz do `branch-detail` i wybiera
+    konkretny artefakt branch po `branch_id`, zamiast otwierac `overview` albo
+    pierwszy dostepny branch. Stare wezly `:branches:forward`,
+    `:branches:return` i `:branches:minor-loops` zachowuja dotychczasowe
+    mapowanie. RED test pokazal, ze `:branches:branch:ascending` rozwiazywal
+    sie do `overview`, a inspector renderowal `descending`; po poprawce
+    `HysteresisBranchDetailInspector` pokazuje `ascending`,
+    `return_ascending` i `3 point(s)`. Weryfikacja:
+    `pnpm --dir apps/control-room test -- src/modules/inspector/panels/stages/StageInspectors.test.tsx -t "runtime hysteresis branch|dedicated hysteresis inspector views"`
+    zwrocila `248 passed`, a `pnpm --dir apps/control-room typecheck` i
+    `git diff --check -- apps/control-room/src/modules/inspector/panels/stages/hysteresis/HysteresisInspectorUtils.ts apps/control-room/src/modules/inspector/panels/stages/hysteresis/HysteresisBranchDetailInspector.tsx apps/control-room/src/modules/inspector/panels/stages/StageInspectors.test.tsx`
+    przeszly.
+  - aktualizacja 2026-06-13: backendowy zasob
+    `/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/execution-tree`
+    generuje teraz rzeczywiste wezly `kind="branch"` dla wielosegmentowej
+    petli, np. `stage:branch:descending` i `stage:branch:ascending`, z
+    `resource_ref` do `/analysis/hysteresis/{stage_id}/branches`, statusem
+    `queued/active/done` wzgledem aktywnego punktu i lekkim dzieckiem summary
+    `Points start-end`. Monotoniczne okno aktywnych punktow nie dostaje
+    dodatkowych branch nodes, wiec Explorer nadal nie rozdmuchuje prostych
+    sweepow. RED test
+    `hysteresis_execution_tree_exposes_runtime_branch_nodes` pokazal, ze
+    endpoint zwracal zero branch nodes; po poprawce zwraca dwie galezie dla
+    `100 -> 0 -> -100 -> 0 -> 100 mT`. Weryfikacja:
+    `CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-api hysteresis_execution_tree_ -- --nocapture`
+    zwrocila `2 passed`, a
+    `git diff --check -- crates/fullmag-api/src/router_v2/handlers/simulation/runtime.rs crates/fullmag-api/src/router_v2/tests.rs`
+    przeszedl. OpenAPI v2 nie wymagal regeneracji, bo nie dodano pol ani
+    endpointow; wykorzystano istniejacy `HysteresisExecutionTreeNode.kind`.
+  - aktualizacja 2026-06-13: branch nodes w execution tree nie sa juz tylko
+    statycznym summary. Kazda galaz dostaje okienkowe `field_point` children
+    dla punktow nalezacych do tej galezi i widocznych w aktywnym oknie
+    `before/after`; aktywny punkt zachowuje swoje dzieci `settle_algorithm`,
+    `snapshot` i `warning` z tego samego buildera co top-level current field.
+    To pozwala Explorerowi pokazac `Branches -> Descending branch -> H=-...`
+    bez renderowania calej petli. Test
+    `hysteresis_execution_tree_exposes_runtime_branch_nodes` wymaga teraz, zeby
+    `descending` zawieral aktywny `field_point` `point_id=2` z
+    `resource_ref` do `/analysis/hysteresis/{stage_id}/steps/2`.
+    Weryfikacja:
+    `CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-api hysteresis_execution_tree_ -- --nocapture`
+    zwrocila `2 passed`, a
+    `git diff --check -- crates/fullmag-api/src/router_v2/handlers/simulation/runtime.rs crates/fullmag-api/src/router_v2/tests.rs`
+    przeszedl.
+  - aktualizacja 2026-06-13: execution tree wlacza teraz rowniez artefakt
+    `hysteresis_minor_loops.json` jako dynamiczne wezly `kind="branch"` dla
+    petli minorowych/recoil, np.
+    `hysteresis-branches:branch:minor-loop-001`, z `resource_ref` do
+    `/v2/sessions/current/analysis/hysteresis/{stage_id}/minor-loops`.
+    Wezel minor loop ma status `queued/active/done` liczony wzgledem
+    aktywnego punktu oraz okienkowe dzieci `field_point` ograniczone tym samym
+    `before/after`, wiec Explorer moze pokazac aktualna petle minorowa bez
+    renderowania wszystkich krokow pola. RED test najpierw pokazal, ze
+    `hysteresis_execution_tree_exposes_runtime_branch_nodes` zwracal tylko 2
+    galezie major-loop mimo obecnego `hysteresis_minor_loops.json`; po
+    poprawce zwraca 3 galezie: `descending`, `ascending` i
+    `minor-loop-001`. Weryfikacja:
+    `CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-api hysteresis_execution_tree_ -- --nocapture`
+    zwrocila `2 passed`.
   - test
-    `pnpm --dir apps/control-room test src/modules/inspector/panels/stages/StageInspectors.test.tsx`
-    zwrocil `16 passed`, a `pnpm --dir apps/control-room typecheck`
+    `pnpm --dir apps/control-room exec vitest run src/modules/inspector/panels/stages/StageInspectors.test.tsx`
+    zwrocil `17 passed`, a `pnpm --dir apps/control-room typecheck`
     przeszedl.
 - Milestone F/OpenAPI v2 + frontend facade/resource hooks:
   - backendowe zrodlo OpenAPI po dodaniu `409 Conflict` dla snapshot/domain
     mismatch zostalo zsynchronizowane przez
     `CARGO_TARGET_DIR=/tmp/fullmag-api-zarr-target pnpm --dir apps/control-room generate:api`;
+  - wygenerowane artefakty `openapi-v2.json`, `openapi-v2-types.ts` i
+    `openapi-v2-paths.ts` zawieraja tez
+    `/v2/sessions/current/analysis/hysteresis/{stage_id}/steps/{point_id}` i
+    `/v2/sessions/current/analysis/hysteresis/{stage_id}/steps/{point_id}/settle-trace`;
   - wygenerowane artefakty `openapi-v2.json`, `openapi-v2-types.ts` i
     `openapi-v2-paths.ts` zawieraja `409` dla
     `/v2/sessions/current/data/fields/{quantity_id}/meta` oraz
@@ -1585,6 +2159,79 @@ Potwierdzone aktualnymi testami:
     `pnpm --dir apps/control-room typecheck` przeszedl,
     `pnpm --dir apps/control-room check:api-hygiene` przeszedl,
     `pnpm --dir apps/control-room lint` przeszedl.
+  - aktualizacja 2026-06-13: dodano kontraktowy proof dla sekwencyjnego replayu
+    wielu snapshotow: `hysteresis.load-point-in-3d` zastępuje selection/ref
+    przy przejsciu punkt A -> punkt B, a `viewport-3d` buduje nowy
+    `data/fields/m/samples/vector` key z nowym `snapshot_id` i `stage_id`
+    bez pozostawienia starego query. Weryfikacja lokalna:
+    `pnpm --dir apps/control-room test -- --run studyRuntimeCommandContributions.test.ts -t "replaces the 3D hysteresis replay query"`
+  - aktualizacja 2026-06-13: execution-tree snapshot node jest teraz testowo
+    zgodny ze stage-scoped data-plane ref aktywnej histerezy. Test
+    `hysteresis_execution_tree_returns_windowed_active_points` oczekuje
+    `stage_id=hysteresis-1`, czyli tego samego stage id, ktory ma runtime
+    execution record i resource tree, zamiast starego aliasu `stage-000`.
+    Weryfikacja jest czescia
+    `CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-api hysteresis --no-fail-fast`,
+    ktory zwrocil `27 passed`.
+    oraz
+    `pnpm --dir apps/control-room test -- --run useViewport3DSceneModel.test.ts -t "switches replay field resource keys"`
+    zwrocily zielony suite Control Room (`247 passed`, odpowiednio `1805` i
+    `1806` testow po dodaniu drugiego przypadku).
+  - aktualizacja 2026-06-13: dodano czysty kontrakt wykrywania zgodnosci
+    topologii dla replayu snapshotu:
+    `resolveHysteresisReplayMeshCompatibility` porownuje `mesh_identity`
+    zapisany przy punkcie histerezy z aktualnym `meshGenerationId`/revision
+    topologii 3D i zwraca `compatible`, `mismatch` albo `unknown` z czytelna
+    przyczyna. Nie wykonuje automatycznego remapowania. Weryfikacja:
+    `pnpm --dir apps/control-room test -- --run viewport3DTargets.test.ts -t "detects hysteresis replay mesh identity mismatches"`
+    oraz `pnpm --dir apps/control-room test -- --run viewport3DTargets.test.ts`
+    zwrocily zielony suite Control Room (`247 passed`, `1808` testow).
+  - aktualizacja 2026-06-13: wynik
+    `resolveHysteresisReplayMeshCompatibility` jest podpiety do
+    `useViewport3DSceneModel`: przy `mismatch` hook wylacza primary field-vector
+    load dla replayu i zwraca `fieldDataIssue` z wymaganym oraz aktualnym
+    `mesh_identity`, bez automatycznego remapowania snapshotu. Weryfikacja:
+    RED test
+    `pnpm --dir apps/control-room test -- --run useViewport3DSceneModel.test.ts -t "blocks hysteresis 3D replay field loads"`
+    najpierw padl na braku `resolveViewport3DFieldDataIssue`, po implementacji
+    przeszedl zielono; dodatkowo
+    `pnpm --dir apps/control-room test -- --run useViewport3DSceneModel.test.ts viewport3DTargets.test.ts`
+    zwrocil zielony suite Control Room (`247 passed`, `1809` testow).
+- Milestone C/metrics diagnostics:
+  - publikacyjna nota `docs/physics/0930-hysteresis-sweep-semantics.md`
+    opisuje teraz diagnostyke podatnosci rozniczkowej
+    `max_differential_susceptibility` w jednostkach `1/mT`, kandydatow
+    przelaczenia oraz ostrzezenia metryk jako czesc wyniku naukowego;
+  - runner dopisuje do `hysteresis_metrics.json`
+    `max_differential_susceptibility`, ograniczona liste
+    `switching_field_candidates`, `metric_statuses`, `warnings` oraz
+    `convergence_quality_summary`;
+  - `metric_statuses` mapuje kluczowe metryki (`H_c+/-`, `H_c`, `H_eb`,
+    `M_r+/-`, `loop_area`, `max_differential_susceptibility`) na
+    `available | unavailable | warning` z tekstowym powodem, dzieki czemu UI
+    nie musi zgadywac statusu z `null` albo `0.0`;
+  - `loop_closure_summary` raportuje `field_gap_mT`, `m_parallel_gap`, status
+    `closed | open | unavailable` i powod; `loop_area` dostaje status
+    `warning`, gdy probkowana sciezka nie wraca do pola startowego albo nie
+    domyka `m_parallel`;
+  - kandydaci przelaczenia sa liczeni z najwiekszych skonczonych
+    `|dm_parallel/dH|` miedzy sasiednimi punktami i sa diagnostyka
+    przedzialow przejscia, nie zamiennikiem koercji;
+  - zasob `/v2/sessions/current/analysis/hysteresis/{stage_id}/metrics`,
+    OpenAPI v2 i wygenerowane typy Control Room przenosza nowe pola;
+  - inspector metryk pokazuje maksymalna podatnosc, kandydatow przelaczenia,
+    statusy poszczegolnych metryk, summary domkniecia petli, summary
+    zbieznosci i ostrzezenia metryk z resource hooka;
+  - testy potwierdzone w tej kontynuacji:
+    `CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-runner hysteresis_metrics -- --nocapture`
+    zwrocil `4 passed`,
+    `CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-api hysteresis_analysis_endpoints_read_typed_artifacts -- --nocapture`
+    zwrocil `1 passed`,
+    `CARGO_TARGET_DIR=.fullmag/codex-target pnpm --dir apps/control-room generate:api`
+    zakonczyl sie powodzeniem,
+    `pnpm --dir apps/control-room exec vitest run src/modules/inspector/panels/stages/StageInspectors.test.tsx`
+    zwrocil `17 passed`, a `pnpm --dir apps/control-room typecheck` i
+    `pnpm --dir apps/control-room check:api-hygiene` przeszly.
 
 Niezamkniete braki produkcyjne:
 
@@ -1624,6 +2271,14 @@ Niezamkniete braki produkcyjne:
   benchmarku porownania wielu pelnych petli dla wielu katow oraz
   zaawansowanego schedulera family dla wznowien/checkpointow i kosztow
   GPU/provenance.
+  Control Room ma tez osobna galez `:angular-family` i dedykowany
+  `HysteresisAngularFamilyInspector.tsx`: panel czyta
+  `useHysteresisFamilyResource`, pokazuje `family_id`, label, aktywny wariant,
+  revision, computed/pending counts, status kazdego wariantu, orientacje,
+  measurement axis, podsumowanie metryk i publiczny `points_resource_ref`.
+  Nie dodano nowego endpointu ani lokalnego store. Weryfikacja:
+  `pnpm --dir apps/control-room test src/modules/inspector/panels/stages/StageInspectors.test.tsx src/modules/explorer/builders/buildModelTree.test.ts`
+  zwrocilo `55 passed`.
 - Szybki walidacyjny smoke dla angular-family jest dostepny na tym samym malym
   waveguide: `FULLMAG_HYSTERESIS_ANGULAR_FAMILY=1` wlacza rodzine
   `ip_x`/`oop`/`custom_theta45_phi30` w
@@ -1634,18 +2289,32 @@ Niezamkniete braki produkcyjne:
   `just verify-hysteresis-angular-family-artifacts <artifact-dir>`, ktory
   sprawdza `hysteresis_angular_family.json`, co najmniej dwa policzone
   warianty, aktywny wariant `computed_active_stage`, dodatkowy wariant
-  `computed_variant_run` oraz osobne pliki punktow/metryk.
-  Aktualny runtime proof po rebuildzie managed FEM runtime:
+  `computed_variant_run`, osobne pliki punktow/metryk oraz publiczne
+  `points_resource_ref` dla kazdego policzonego wariantu.
+  Aktualizacja 2026-06-13: generic validator angular-family ma teraz test
+  jednostkowy i odrzuca brakujacy albo prywatny `points_resource_ref`
+  wskazujacy sciezke pliku artefaktu. RED gate
+  `python3 -m pytest scripts/test_verify_hysteresis_angular_family_artifacts.py -q -k "private_points_resource_ref or missing_points_resource_ref"`
+  najpierw pokazal, ze oba przypadki byly akceptowane; po poprawce pelny
+  test
+  `python3 -m pytest scripts/test_verify_hysteresis_angular_family_artifacts.py -q`
+  zwrocil `3 passed`. Stary runtime proof
+  `session-1781256544597-2008930` jest kontraktowo nieaktualny, bo manifest
+  nie zawieral `points_resource_ref`; zaostrzony walidator odrzuca go
+  komunikatem `variant 'ip_x' is missing public points_resource_ref`.
+  Aktualny proof po rebuildzie managed FEM runtime:
   `just ensure-managed-fem-runtime` przebudowal `.fullmag/runtimes/fem-gpu-host`
-  z aktualnym `fullmag-runner`; nastepnie
-  `just run-hysteresis-waveguide-angular-family-smoke cpu` zakonczyl sesje
-  `session-1781256544597-2008930`, a
-  `python3 scripts/verify_hysteresis_angular_family_artifacts.py .fullmag/local-live/history/session-1781256544597-2008930/artifacts`
-  zwrocil
-  `validated hysteresis angular family: family_id=waveguide_ip_oop_family variants=2`.
-  Manifest zawieral `ip_x` jako `computed_active_stage` i `oop` jako
-  `computed_variant_run` z osobnym
-  `hysteresis_angular_family/oop/hysteresis_points.json`.
+  z aktualnym `fullmag-runner`; nastepnie krotki FEM CPU projection smoke
+  `just run-hysteresis-waveguide-projection-benchmark-smoke cpu` zakonczyl
+  sesje `session-1781322911237-3503123`. Walidacja
+  `python3 scripts/verify_hysteresis_angular_family_artifacts.py .fullmag/local-live/history/session-1781322911237-3503123/artifacts`
+  oraz
+  `just verify-hysteresis-angular-family-artifacts .fullmag/local-live/history/session-1781322911237-3503123/artifacts`
+  zwrocily
+  `validated hysteresis angular family: family_id=waveguide_ip_oop_family variants=3`.
+  Manifest zawiera `ip_x` jako `computed_active_stage` oraz `oop` i
+  `custom_theta45_phi30` jako `computed_variant_run`, kazdy z publicznym
+  `/v2/sessions/current/analysis/hysteresis-family/stage-000/variants/<variant_id>/points`.
   W tym srodowisku `just run-hysteresis-waveguide-gpu-smoke` dochodzi do
   planowania/runtime, ale nie jest walidacja GPU, bo lokalny sterownik CUDA jest
   starszy niz runtime CUDA (`cudaGetDeviceCount failed ... CUDA driver version
@@ -1656,12 +2325,40 @@ Niezamkniete braki produkcyjne:
   `just run-hysteresis-waveguide-projection-benchmark-smoke cpu`. Target uzywa
   jednego pola i jednego kroku minimalizacji, zeby tanio wygenerowac artefakty
   dla `ip_x`, `oop` i `custom_theta45_phi30`. Walidacja:
-  `just verify-hysteresis-projection-benchmark .fullmag/local-live/history/session-1781257502282-2039282/artifacts`
+  `just verify-hysteresis-projection-benchmark .fullmag/local-live/history/session-1781322911237-3503123/artifacts`
   zwrocila
   `validated hysteresis projection benchmark: variants=3 points=3`. Verifier
   sprawdza, ze kazdy punkt spelnia kontrakt danych wykresu:
   `m_parallel = <m> . u_meas`, `m_oop = <m>_z`,
   `m_ip = sqrt(<m>_x^2 + <m>_y^2)` dla OOP, in-plane i custom-angle.
+  Walidator projekcji jest teraz pokryty testami jednostkowymi i wymaga, zeby
+  wszystkie wymagane warianty byly policzone (`computed_active_stage` albo
+  `computed_variant_run`) oraz zeby `points_resource_ref` wskazywal publiczny
+  zasob v2 `analysis/hysteresis-family/.../variants/.../points`, a nie
+  prywatna sciezke pliku artefaktu. Weryfikacja:
+  `python3 -m pytest scripts/test_verify_hysteresis_projection_benchmark.py -q`
+  zwrocilo `4 passed`; laczny zestaw walidatorow
+  `python3 -m pytest scripts/test_verify_hysteresis_projection_benchmark.py scripts/test_verify_hysteresis_points_chart_data.py scripts/test_verify_hysteresis_playback_artifacts.py scripts/test_verify_hysteresis_playback_data_plane.py -q`
+  wymagal uruchomienia poza sandboxem ze wzgledu na lokalny HTTP socket w
+  tescie data-plane i zwrocil `19 passed`.
+- Aktualizacja 2026-06-13: walidator danych wykresu odrzuca teraz
+  zdegenerowana wielopunktowa serie, w ktorej wszystkie punkty maja ten sam
+  `field_value_mT`; taki artefakt zwijal live chart do jednego polozenia na osi
+  X i maskowal blad zbierania punktow. RED gate
+  `python3 -m pytest scripts/test_verify_hysteresis_points_chart_data.py -q -k degenerate_multi_point`
+  najpierw zwrocil blad, po zmianie zwrocil `1 passed`, a pelny gate
+  `python3 -m pytest scripts/test_verify_hysteresis_points_chart_data.py -q`
+  zwrocil `5 passed`.
+- Aktualizacja 2026-06-13: `analysis-plots` utrzymuje teraz aktywny wykres
+  histerezy nie tylko dla root/Live Run/Points/Snapshot, ale tez dla
+  dedykowanych galezi Explorera `Orientation`, `Adaptive Refinement`,
+  `Angular Family`, `Settle Pipeline` i `Current Field`. RED gate
+  `pnpm --dir apps/control-room test -- AnalysisPlotsModule.test.tsx -t "keeps the hysteresis plot active"`
+  najpierw zwrocil `expected null to be 'hysteresis-1'`, po zmianie przeszedl.
+  Weryfikacja frontendowa po zmianie: `pnpm --dir apps/control-room test -- AnalysisPlotsModule.test.tsx -t "keeps the hysteresis plot active"`
+  zwrocil `1822 passed`, `pnpm --dir apps/control-room typecheck`,
+  `pnpm --dir apps/control-room lint` i
+  `pnpm --dir apps/control-room check:api-hygiene` przeszly bez bledow.
 - Automatyczny `adaptive_refinement` ma juz publiczny kontrakt Python DSL,
   lowering do `ProblemIR`, walidacje IR, pole w zasobie API planu etapu oraz
   runtime artifact `hysteresis_adaptive_refinement.json`. Runtime wykonuje
@@ -3138,6 +3835,10 @@ Instrukcja:
 4. Jezeli snapshotu brak:
    - viewport pokazuje czytelny empty/degraded state,
    - inspector/chart proponuje "snapshot not stored",
+   - command `hysteresis.load-point-in-3d` odrzuca `snapshot_storage_status="missing"`
+     nawet gdy `snapshot_id` istnieje,
+   - chart `Load in 3D` uzywa tego samego disabled/title state dla brakujacego
+     payloadu co inspektory,
    - nie probuje odtworzyc pola ze sredniej magnetyzacji.
 5. Jezeli mesh mismatch:
    - blokuj render,
@@ -3149,8 +3850,24 @@ Testy:
 - target parser/builders,
 - resource key includes snapshot id,
 - missing snapshot gives degraded state,
+- command-level guard rejects missing snapshot payload before mutating selection,
+- chart replay action disables missing snapshot payloads,
 - mesh mismatch blocks render,
 - field vector codec handles snapshot payload.
+
+Status 2026-06-13:
+
+- Brakujacy payload snapshotu jest pokryty na trzech poziomach UI/control
+  plane: `HysteresisChart` blokuje `Load in 3D` przez
+  `hysteresisChartReplayActionPresentation`, command
+  `hysteresis.load-point-in-3d` zwraca `failed` bez zmiany selection, a
+  inspektory punktow/snapshotow pokazuja ten sam stan disabled/title.
+  Weryfikacja lokalna:
+  `pnpm --dir apps/control-room test -- AnalysisPlotsModule.test.tsx -t "disables 3D replay for missing hysteresis snapshot payloads"`,
+  `pnpm --dir apps/control-room test -- studyRuntimeCommandContributions.test.ts -t "does not load a hysteresis point in 3D when the saved snapshot payload is missing"`
+  oraz
+  `pnpm --dir apps/control-room test -- StageInspectors.test.tsx -t "Snapshot payload is missing"`
+  zwrocily zielony suite Control Room (`248 passed`, `1822` testy).
 
 Weryfikacja:
 
@@ -3178,18 +3895,41 @@ Instrukcja:
    - optional label `H = ... mT`, `theta`, `phi`.
 2. Warstwa glyphow moze byc w `viewport-3d/layers/`, ale jej model danych
    musi byc generowany w adapterze, nie w komponencie chart.
+   - Status 2026-06-13: `viewport3DTargets` buduje juz domain-neutral
+     `HysteresisReplayGlyphModel` dla OOP/IP/custom vector i `useViewport3DSceneModel`
+     wystawia go jako `hysteresisReplayGlyphModel`.
+   - Status 2026-06-13: `HysteresisReplayGlyphLayer` renderuje lekkie
+     `lineSegments` dla `fieldDirection` i `measurementAxis`, konsumujac gotowy
+     model bez parsowania orientacji w komponencie/rendererze.
+   - Status 2026-06-13: `HysteresisReplayGlyphModel` zawiera teraz
+     `sampleNormal` jako domain-neutral os OOP, a
+     `HysteresisReplayGlyphLayer` buduje dla osi lekkie modele etykiet
+     z pozycjami koncow glyphow i `userData`, bez dodawania fontow/tekstur ani
+     ciaglego render loop.
 3. Dodaj scrubber:
    - UI control moze mieszkac w analysis chart albo inspector,
    - zmiana punktu dispatchuje command/selection,
    - viewport tylko reaguje na resource target.
+   - Status 2026-06-13: `HysteresisChart` uzywa
+     `resolveHysteresisScrubberPointIndex`, ktory odrzuca wartosci NaN i
+     clampuje indeks do zakresu zebranych punktow przed dispatchowaniem
+     selekcji; kontrolka ma `aria-label`.
 4. Keyboard navigation:
    - lewo/prawo zmienia aktywny punkt tylko gdy chart/scrubber ma focus,
    - nie przechwytuje globalnych shortcutow.
+   - Status 2026-06-13: `HysteresisChart` uzywa
+     `resolveHysteresisKeyboardNavigationIndex`; tylko `ArrowLeft` i
+     `ArrowRight` zwracaja indeks punktu, pusta historia i inne klawisze
+     zwracaja `null`, a handler pozostaje podpiety lokalnie do kontenera
+     wykresu z `tabIndex`.
 
 Testy:
 
 - glyph model dla OOP/IP/custom angle,
-- scrubber emits point selection,
+- glyph model includes sample normal,
+- scene model exposes hysteresis replay glyph model from selected target,
+- viewport scene contains hysteresis replay glyph layer, labels and tracks/release geometry,
+- scrubber clamps invalid/out-of-range values before point selection,
 - keyboard navigation respects focus,
 - viewport scene contains glyph layer when target has orientation.
 
@@ -3199,6 +3939,15 @@ Weryfikacja:
 pnpm --dir apps/control-room test -- viewport3dRenderModel
 pnpm --dir apps/control-room test -- Viewport3DScene
 pnpm --dir apps/control-room test -- analysisPlots
+pnpm --dir apps/control-room test -- --run viewport3DTargets.test.ts -t "domain-neutral glyph model"
+pnpm --dir apps/control-room test -- --run HysteresisReplayGlyphLayer.test.tsx
+pnpm --dir apps/control-room test -- --run viewport3DTargets.test.ts HysteresisReplayGlyphLayer.test.tsx Viewport3DScene.test.ts Viewport3DModule.test.ts
+pnpm --dir apps/control-room test -- --run AnalysisPlotsModule.test.tsx -t "resolves hysteresis keyboard navigation"
+pnpm --dir apps/control-room test -- --run AnalysisPlotsModule.test.tsx -t "resolves scrubber input values"
+pnpm --dir apps/control-room test -- --run AnalysisPlotsModule.test.tsx
+pnpm --dir apps/control-room typecheck
+pnpm --dir apps/control-room lint
+git diff --check
 ```
 
 Browser gate:
@@ -3268,20 +4017,116 @@ Status wykonania:
 - Zamkniety pierwszy fixture kontraktu projekcji runtime: maly FEM waveguide
   uruchamia `ip_x`, `oop` i `custom_theta45_phi30`, a
   `scripts/verify_hysteresis_projection_benchmark.py` sprawdza skladowe
-  `m_parallel`, `m_oop` i `m_ip` bez zaleznosci od UI. To nie zamyka jeszcze
-  makrospin/Stoner-Wohlfarth, OOP thin-film ani IP strip physics fixtures.
+  `m_parallel`, `m_oop` i `m_ip` bez zaleznosci od UI.
+- Zamkniety szybki fixture makrospin/Stoner-Wohlfarth dla FDM CPU:
+  `examples/hysteresis_fdm_macrospin_stoner_wohlfarth.py` uruchamia
+  jednoogniwowy uniaxialny makrospin z demag wylaczonym, wariant near-easy
+  `theta=30 deg` oraz wariant `theta=45 deg`. Target
+  `just run-hysteresis-fdm-macrospin-sw-smoke` uzywa
+  `projected_gradient_bb` i 2000 krokow maksymalizacji/minimalizacji per punkt.
+  Aktualizacja 2026-06-13: stary artifact `session-1781260506998-94` nie
+  spelnial juz obecnego kontraktu, bo raw `hysteresis_angular_family.json`
+  nie zawieral publicznych `points_resource_ref` i polegal na dopelnieniu
+  przez API. Runtime zapisuje teraz `points_resource_ref` bezposrednio w
+  artefakcie angular-family dla wariantu aktywnego i dodatkowych wariantow.
+  Aktualny smoke `just run-hysteresis-fdm-macrospin-sw-smoke` zakonczyl sesje
+  `session-1781319868287-664`, a
+  `python3 scripts/verify_hysteresis_fdm_macrospin_sw_artifacts.py .fullmag/local-live/history/session-1781319868287-664/artifacts`
+  zwrocil `validated FDM macrospin Stoner-Wohlfarth trend: Hc_easy=13.6318mT Hc_theta45=10.2317mT`.
+  Manifest zawiera teraz m.in.
+  `/v2/sessions/current/analysis/hysteresis-family/stage-000/variants/easy_axis/points`
+  i
+  `/v2/sessions/current/analysis/hysteresis-family/stage-000/variants/theta45/points`.
+  Ten fixture jest jakosciowym testem trendu katowego SW dla perturbowanego
+  near-easy wariantu (`theta=30 deg`, label `Near easy axis`) i `theta=45 deg`;
+  dokladnie kolinearny przypadek `theta=0 deg` pozostaje osobnym zadaniem, bo
+  wymaga jawnej polityki perturbacji/noise do opuszczenia torque-free saddle,
+  a nie moze byc ukrycie utozsamiany z wariantem near-easy.
+  Validator SW egzekwuje teraz ten kontrakt: wariant `easy_axis` musi miec
+  `orientation.theta=30.0`, wariant `theta45` musi miec
+  `orientation.theta=45.0`, a brak orientacji albo ukryte `theta=0` dla
+  `easy_axis` jest odrzucane. RED gate
+  `python3 -m pytest scripts/test_verify_hysteresis_fdm_macrospin_sw_artifacts.py -q -k "missing_variant_orientation or collinear_easy_axis"`
+  najpierw pokazal, ze oba przypadki byly akceptowane; po poprawce zwrocil
+  `2 passed`, pelny test validatora zwrocil `7 passed`, a aktualny runtime
+  artifact `session-1781319868287-664` nadal przechodzi walidacje z
+  `Hc_easy=13.6318mT Hc_theta45=10.2317mT`.
+  Dodatkowa bramka jednostkowa
+  `scripts/test_verify_hysteresis_fdm_macrospin_sw_artifacts.py` zabezpiecza
+  kontrakt artefaktow tego fixture: akceptuje tylko wymagane warianty
+  `easy_axis` i `theta45` ze statusem `computed_active_stage` albo
+  `computed_variant_run`, wymaga publicznego
+  `/v2/sessions/current/analysis/hysteresis-family/...` w
+  `points_resource_ref`, odrzuca brak przejscia koercji i odrzuca przypadek,
+  w ktorym `theta45` nie ma nizszego `H_c` od wariantu easy-axis. Weryfikacja:
+  `python3 -m pytest scripts/test_verify_hysteresis_projection_benchmark.py scripts/test_verify_hysteresis_fdm_macrospin_sw_artifacts.py -q`
+  dala `9 passed`, a
+  `python3 -m py_compile scripts/verify_hysteresis_fdm_macrospin_sw_artifacts.py scripts/test_verify_hysteresis_fdm_macrospin_sw_artifacts.py`
+  przeszlo bez bledow.
+- Zamkniety szybki fixture FDM CPU dla cienkiej warstwy OOP i paska in-plane:
+  `examples/hysteresis_fdm_thinfilm_oop_ip_validation.py` uruchamia maly
+  pasek `100 x 20 x 10 nm`, demag wlaczony, rodzine katowa `ip_near_x` oraz
+  `oop`, pole `300,0,-300,0,300 mT` i `projected_gradient_bb` z limitem
+  200 krokow. Target `just run-hysteresis-fdm-thinfilm-oop-ip-smoke`
+  wygenerowal sesje `session-1781262454675-302`, a
+  `just verify-hysteresis-fdm-thinfilm-oop-ip .fullmag/local-live/history/session-1781262454675-302/artifacts`
+  potwierdzil `IP_high=0.999009`, `OOP_high=0.552397`,
+  `IP_span=0.841946` i `OOP_span=1.10479`. Ten fixture zamyka szybka
+  regresje OOP/IP dla FDM CPU; gestsze publikacyjne sweepy pozostaja
+  parametryzowane przez `FULLMAG_HYSTERESIS_FIELD_VALUES_MT`.
+  Dodatkowa bramka jednostkowa
+  `scripts/test_verify_hysteresis_fdm_thinfilm_oop_ip_artifacts.py`
+  zabezpiecza kontrakt artefaktow fixture: warianty `ip_near_x` i `oop`
+  musza byc obliczone statusem `computed_active_stage` albo
+  `computed_variant_run`, musza miec publiczny
+  `/v2/sessions/current/analysis/hysteresis-family/...` w
+  `points_resource_ref`, a walidator odrzuca slaby response in-plane oraz brak
+  kontrastu demag OOP/IP. Weryfikacja:
+  `python3 -m pytest scripts/test_verify_hysteresis_projection_benchmark.py scripts/test_verify_hysteresis_fdm_macrospin_sw_artifacts.py scripts/test_verify_hysteresis_fdm_thinfilm_oop_ip_artifacts.py -q`
+  dala `14 passed`, a
+  `python3 -m py_compile scripts/verify_hysteresis_fdm_macrospin_sw_artifacts.py scripts/test_verify_hysteresis_fdm_macrospin_sw_artifacts.py scripts/verify_hysteresis_fdm_thinfilm_oop_ip_artifacts.py scripts/test_verify_hysteresis_fdm_thinfilm_oop_ip_artifacts.py`
+  przeszlo bez bledow.
 - Zamkniety fixture niewystarczajacego pola saturacji: target
   `just run-hysteresis-waveguide-saturation-limit-smoke cpu` uruchomil sesje
   `session-1781258014197-2056303`, a
   `just verify-hysteresis-saturation-limit .fullmag/local-live/history/session-1781258014197-2056303/artifacts`
   potwierdzil `status=capped_by_limit`, trzy punkty probe i zgodnosc
   `hysteresis_saturation.json` z `hysteresis_metrics.json`.
+  Dodatkowa bramka jednostkowa
+  `scripts/test_verify_hysteresis_saturation_limit_artifacts.py` zabezpiecza,
+  ze fixture odrzuca niespojny `saturation_status` w metrykach oraz measured
+  point bez provenance wymaganego do wykresu i replay
+  (`m_avg`, `field_vector_A_per_m`, `field_orientation`, `measurement_axis`,
+  `field_display_unit="mT"`).
 - Zamkniety prosty fixture minor-loop: target
   `just run-hysteresis-waveguide-minor-loop-smoke cpu` uruchomil sesje
   `session-1781258187258-2062365`, a
   `just verify-hysteresis-minor-loop .fullmag/local-live/history/session-1781258187258-2062365/artifacts`
   potwierdzil `loop_id=minor_loop_001`, polityke `branch_only`, dwa punkty
   lokalnej galezi oraz dedykowany `settle_trace`.
+  Dodatkowa bramka jednostkowa
+  `scripts/test_verify_hysteresis_minor_loop_artifacts.py` zabezpiecza, ze
+  major-loop `hysteresis_points.json` nie zawiera punktow z
+  `minor_loop_id`/`protocol_role="minor"`, a branch-local punkty minor-loop
+  przenosza field provenance wymagane do inspekcji/replay.
+  Aktualizacja 2026-06-13: computed return point minor-loop respektuje teraz
+  `HysteresisStorageIR`; przy `magnetization="every_step"` zapisuje snapshot
+  `hysteresis_minor_loop_001_return_001` do `hysteresis.zarr` + JSON fallback,
+  a branch-local point dostaje `snapshot_vector_resource_ref`,
+  `snapshot_zarr_store_ref="hysteresis.zarr"` i
+  `snapshot_storage_format="zarr_v2_json_fallback"`. Validator minor-loop
+  odrzuca return point bez `snapshot_id`, zeby UI playback nie konczyl jako
+  srednia magnetyzacja bez tekstury. Weryfikacja:
+  `CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-runner configured_minor_loop_executes_branch_from_parent_reversal_state -- --nocapture`
+  zwrocilo `1 passed`, a
+  `python3 -m pytest scripts/test_verify_hysteresis_minor_loop_artifacts.py -q`
+  zwrocilo `4 passed`. Wspolna
+  weryfikacja dla projekcji, macrospin/SW, thinfilm OOP/IP, saturation-limit
+  i minor-loop:
+  `python3 -m pytest scripts/test_verify_hysteresis_projection_benchmark.py scripts/test_verify_hysteresis_fdm_macrospin_sw_artifacts.py scripts/test_verify_hysteresis_fdm_thinfilm_oop_ip_artifacts.py scripts/test_verify_hysteresis_saturation_limit_artifacts.py scripts/test_verify_hysteresis_minor_loop_artifacts.py -q`
+  dala `20 passed`, a
+  `python3 -m py_compile scripts/verify_hysteresis_saturation_limit_artifacts.py scripts/test_verify_hysteresis_saturation_limit_artifacts.py scripts/verify_hysteresis_minor_loop_artifacts.py scripts/test_verify_hysteresis_minor_loop_artifacts.py`
+  przeszlo bez bledow.
 
 Brama produkcyjna:
 

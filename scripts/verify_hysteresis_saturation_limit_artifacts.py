@@ -23,6 +23,28 @@ def require_number(value: Any, field: str) -> float:
     return float(value)
 
 
+def require_vec3(value: Any, field: str) -> list[float]:
+    if not isinstance(value, list) or len(value) != 3:
+        raise SystemExit(f"{field} must be a 3-vector, got {value!r}")
+    return [require_number(component, f"{field}[{index}]") for index, component in enumerate(value)]
+
+
+def require_measured_point_provenance(point: dict[str, Any], field: str) -> None:
+    require_vec3(point.get("m_avg"), f"{field}.m_avg")
+    require_vec3(point.get("field_vector_A_per_m"), f"{field}.field_vector_A_per_m")
+    orientation = point.get("field_orientation")
+    if not isinstance(orientation, dict):
+        raise SystemExit(f"{field}.field_orientation must be an object, got {orientation!r}")
+    measurement_axis = point.get("measurement_axis")
+    if not (
+        measurement_axis == "field_axis"
+        or isinstance(measurement_axis, dict)
+    ):
+        raise SystemExit(f"{field}.measurement_axis must be present, got {measurement_axis!r}")
+    if point.get("field_display_unit") != "mT":
+        raise SystemExit(f"{field}.field_display_unit must be 'mT'")
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         raise SystemExit(
@@ -106,8 +128,12 @@ def main() -> int:
 
     if not isinstance(points, list) or len(points) != 1:
         raise SystemExit(f"expected one measured hysteresis point, got {points!r}")
-    if require_number(points[0].get("field_value_mT"), "points[0].field_value_mT") != 0.0:
+    measured_point = points[0]
+    if not isinstance(measured_point, dict):
+        raise SystemExit(f"measured hysteresis point must be an object, got {measured_point!r}")
+    if require_number(measured_point.get("field_value_mT"), "points[0].field_value_mT") != 0.0:
         raise SystemExit("measured smoke point must be at 0 mT")
+    require_measured_point_provenance(measured_point, "points[0]")
 
     print(
         "validated hysteresis saturation limit: "

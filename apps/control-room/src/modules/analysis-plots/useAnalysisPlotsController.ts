@@ -48,6 +48,7 @@ import {
   buildEigenSpectrumChartModel,
   buildFrequencyResponsePointSelectionRef,
   buildFrequencyResponseChartModel,
+  type FrequencyDomainChartRoute,
   routeFrequencyDomainCalculationMode,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import { frequencyDomainChartSeriesForAnalysisPlots } from "./frequencyDomainSeriesAdapter";
@@ -103,9 +104,16 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     [solverEnergyHistory.data, solverEnergyHistory.status],
   );
   const frequencyDomainManifest = useFrequencyDomainManifestResource();
-  const frequencyDomainRoute = routeFrequencyDomainCalculationMode(
+  const frequencyDomainManifestRoute = routeFrequencyDomainCalculationMode(
     frequencyDomainManifest.data?.result_manifest?.payload,
   );
+  const frequencyDomainRouteOverride = useSelectionSelector(
+    frequencyDomainChartRouteOverrideFromSelection,
+  );
+  const frequencyDomainRoute = {
+    ...frequencyDomainManifestRoute,
+    ...frequencyDomainRouteOverride,
+  };
   const frequencyDomainSpectrum = useFrequencyDomainEigenSpectrumResource({
     enabled: frequencyDomainRoute.primaryChart === "modal-spectrum",
   });
@@ -124,8 +132,15 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     [frequencyDomainDispersion.data],
   );
   const frequencyDomainResponseModel = useMemo(
-    () => buildFrequencyResponseChartModel(frequencyDomainResponse.data),
-    [frequencyDomainResponse.data],
+    () =>
+      buildFrequencyResponseChartModel(
+        frequencyDomainResponse.data,
+        frequencyDomainManifest.data?.result_manifest?.payload,
+      ),
+    [
+      frequencyDomainManifest.data?.result_manifest?.payload,
+      frequencyDomainResponse.data,
+    ],
   );
   const frequencyDomainSeries = useMemo(() => {
     switch (frequencyDomainRoute.primaryChart) {
@@ -335,12 +350,9 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     return clearChartDispatchSeriesRequest;
   }, [bus]);
 
-  const selectedStageId = useSelectionSelector((state) => {
-    if (state.kind === "study.stage.hysteresis" && state.ref?.type === "study-stage") {
-      return state.ref.stageId;
-    }
-    return null;
-  });
+  const selectedStageId = useSelectionSelector(
+    selectedHysteresisStageIdFromSelection,
+  );
 
   return {
     clearRange,
@@ -374,6 +386,46 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     yAxisIds,
     selectedStageId,
   };
+}
+
+export function frequencyDomainChartRouteOverrideFromSelection(
+  state: Selection,
+): Pick<FrequencyDomainChartRoute, "mode" | "primaryChart"> | null {
+  const kind = state.ref?.type === "frequency-domain"
+    ? state.ref.kind
+    : state.kind;
+  if (!kind) return null;
+  if (
+    kind.startsWith("results.frequency_response") ||
+    kind.startsWith("resources.analysis.frequency_response") ||
+    kind === "study.stage.frequency_response.sweep" ||
+    kind === "study.stage.frequency_response.outputs" ||
+    kind === "results.frequency_domain.fmr_response_sweep"
+  ) {
+    return { mode: "fmr_response", primaryChart: "response-sweep" };
+  }
+  if (
+    kind === "results.frequency_domain.response_map" ||
+    kind === "study.stage.frequency_response.k_grid"
+  ) {
+    return { mode: "response_map", primaryChart: "response-map" };
+  }
+  if (
+    kind.includes("dispersion") ||
+    kind.includes("k_path") ||
+    kind === "study.stage.eigenmodes.k_path"
+  ) {
+    return { mode: "dispersion_modal", primaryChart: "dispersion" };
+  }
+  if (
+    kind.startsWith("results.eigen") ||
+    kind.startsWith("resources.analysis.eigen") ||
+    kind === "results.frequency_domain.fmr_modal_spectrum" ||
+    kind === "study.stage.eigenmodes.outputs"
+  ) {
+    return { mode: "free_modes", primaryChart: "modal-spectrum" };
+  }
+  return null;
 }
 
 export function frequencyDomainSelectionFromPoint({
@@ -462,6 +514,46 @@ function firstFrequencyDomainDiagnostic(
 
 function analysisChartPointNodeId(point: AnalysisChartCursorPoint): string {
   return `analysis:charts:${point.source.tableId}:point:${point.seriesId}:${point.point.rowIndex}`;
+}
+
+export function selectedHysteresisStageIdFromSelection(
+  state: Selection,
+): string | null {
+  const ref = state.ref;
+  if (state.kind === "study.stage.hysteresis" && ref?.type === "study-stage") {
+    return ref.stageId;
+  }
+  if (ref?.type === "hysteresis-snapshot") {
+    return ref.stageId;
+  }
+  if (
+    state.kind === "study.stage.action" &&
+    ref?.type === "study-stage" &&
+    isHysteresisStageActionNodeId(ref.nodeId)
+  ) {
+    return ref.stageId;
+  }
+  return null;
+}
+
+function isHysteresisStageActionNodeId(nodeId: string): boolean {
+  return [
+    ":plan",
+    ":protocol",
+    ":orientation",
+    ":saturation",
+    ":adaptive-refinement",
+    ":angular-family",
+    ":settle-pipeline",
+    ":live-run",
+    ":branches",
+    ":points",
+    ":metrics",
+    ":snapshots",
+    ":field-point",
+    ":field-current",
+    ":transitions",
+  ].some((suffix) => nodeId.includes(suffix));
 }
 
 function emitRangeSelected(

@@ -43,10 +43,20 @@ pub(crate) struct FrequencyDomainAvailabilityRequest {
     pub study_kind: FrequencyDomainStudyKind,
     pub requires_driven_solver: bool,
     pub requires_modal_solver: bool,
+    pub requires_static_periodic_boundary: bool,
     pub requires_floquet_boundary: bool,
     pub requires_nonzero_k_dynamic_demag: bool,
     pub requires_gpu: bool,
     pub strict_device: bool,
+    pub floquet_k_vector_rad_per_m: Option<[f64; 3]>,
+    pub phase_convention: FrequencyDomainPhaseConvention,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FrequencyDomainPhaseConvention {
+    ExpIOmegaT,
+    ExpMinusIOmegaT,
 }
 
 #[allow(dead_code)]
@@ -56,6 +66,7 @@ pub(crate) struct FrequencyDomainAvailability {
     pub study_kind: String,
     pub driven_response_available: bool,
     pub modal_solver_available: bool,
+    pub static_periodic_response_available: bool,
     pub floquet_modal_available: bool,
     pub floquet_response_available: bool,
     pub dynamic_demag_k_available: bool,
@@ -395,6 +406,14 @@ pub(crate) fn native_availability() -> GpuAvailability {
 pub(crate) fn native_frequency_domain_availability(
     request: FrequencyDomainAvailabilityRequest,
 ) -> FrequencyDomainAvailability {
+    if matches!(
+        request.study_kind,
+        FrequencyDomainStudyKind::FrequencyResponse
+    ) && (request.requires_floquet_boundary || request.floquet_k_vector_rad_per_m.is_some())
+    {
+        return frequency_domain_response_floquet_unavailable();
+    }
+
     #[cfg(feature = "fem-gpu")]
     {
         let ffi_request = ffi::fullmag_fem_frequency_domain_availability_request {
@@ -408,16 +427,21 @@ pub(crate) fn native_frequency_domain_availability(
             },
             requires_driven_solver: request.requires_driven_solver as i32,
             requires_modal_solver: request.requires_modal_solver as i32,
+            requires_static_periodic_boundary: request.requires_static_periodic_boundary as i32,
             requires_floquet_boundary: request.requires_floquet_boundary as i32,
             requires_nonzero_k_dynamic_demag: request.requires_nonzero_k_dynamic_demag as i32,
             requires_gpu: request.requires_gpu as i32,
             strict_device: request.strict_device as i32,
+            has_floquet_k_vector: request.floquet_k_vector_rad_per_m.is_some() as i32,
+            floquet_k_vector_rad_per_m: request.floquet_k_vector_rad_per_m.unwrap_or([0.0; 3]),
+            phase_convention: map_phase_convention(request.phase_convention),
         };
         let mut info = ffi::fullmag_fem_frequency_domain_availability_info {
             status:
                 ffi::fullmag_fem_frequency_domain_status::FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OK,
             driven_response_available: 0,
             modal_solver_available: 0,
+            static_periodic_response_available: 0,
             floquet_modal_available: 0,
             floquet_response_available: 0,
             dynamic_demag_k_available: 0,
@@ -444,6 +468,7 @@ pub(crate) fn native_frequency_domain_availability(
             study_kind: c_char_array_to_string(&info.study_kind_name),
             driven_response_available: info.driven_response_available == 1,
             modal_solver_available: info.modal_solver_available == 1,
+            static_periodic_response_available: info.static_periodic_response_available == 1,
             floquet_modal_available: info.floquet_modal_available == 1,
             floquet_response_available: info.floquet_response_available == 1,
             dynamic_demag_k_available: info.dynamic_demag_k_available == 1,
@@ -471,6 +496,7 @@ fn frequency_domain_unavailable(
         study_kind: study_kind.to_string(),
         driven_response_available: false,
         modal_solver_available: false,
+        static_periodic_response_available: false,
         floquet_modal_available: false,
         floquet_response_available: false,
         dynamic_demag_k_available: false,
@@ -480,11 +506,45 @@ fn frequency_domain_unavailable(
     }
 }
 
+fn frequency_domain_response_floquet_unavailable() -> FrequencyDomainAvailability {
+    FrequencyDomainAvailability {
+        status: "unavailable".to_string(),
+        study_kind: "frequency_response".to_string(),
+        driven_response_available: false,
+        modal_solver_available: false,
+        static_periodic_response_available: false,
+        floquet_modal_available: false,
+        floquet_response_available: false,
+        dynamic_demag_k_available: false,
+        gpu_available: false,
+        reason:
+            "native FEM driven frequency response does not implement Floquet/Bloch nonzero-k solve"
+                .to_string(),
+        diagnostics_json:
+            "{\"schema_version\":\"frequency_domain_availability.v1\",\"study_kind\":\"frequency_response\",\"status\":\"unavailable\",\"unsupported_reason\":\"floquet_bloch_nonzero_k\"}"
+                .to_string(),
+    }
+}
+
 #[allow(dead_code)]
 fn study_kind_label(study_kind: FrequencyDomainStudyKind) -> &'static str {
     match study_kind {
         FrequencyDomainStudyKind::FrequencyResponse => "frequency_response",
         FrequencyDomainStudyKind::Eigenmodes => "eigenmodes",
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn map_phase_convention(
+    phase_convention: FrequencyDomainPhaseConvention,
+) -> ffi::fullmag_fem_frequency_domain_phase_convention {
+    match phase_convention {
+        FrequencyDomainPhaseConvention::ExpIOmegaT => {
+            ffi::fullmag_fem_frequency_domain_phase_convention::FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_I_OMEGA_T
+        }
+        FrequencyDomainPhaseConvention::ExpMinusIOmegaT => {
+            ffi::fullmag_fem_frequency_domain_phase_convention::FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_MINUS_I_OMEGA_T
+        }
     }
 }
 
@@ -505,4 +565,79 @@ fn last_global_error_or(fallback: &str) -> String {
         }
     }
     fallback.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        native_frequency_domain_availability, FrequencyDomainAvailabilityRequest,
+        FrequencyDomainPhaseConvention, FrequencyDomainStudyKind,
+    };
+
+    #[test]
+    fn frequency_domain_availability_request_can_carry_floquet_k_metadata() {
+        let request = FrequencyDomainAvailabilityRequest {
+            study_kind: FrequencyDomainStudyKind::FrequencyResponse,
+            requires_driven_solver: true,
+            requires_modal_solver: false,
+            requires_static_periodic_boundary: false,
+            requires_floquet_boundary: true,
+            requires_nonzero_k_dynamic_demag: false,
+            requires_gpu: false,
+            strict_device: false,
+            floquet_k_vector_rad_per_m: Some([1.0e6, 2.0e6, 0.0]),
+            phase_convention: FrequencyDomainPhaseConvention::ExpMinusIOmegaT,
+        };
+
+        assert_eq!(
+            request.floquet_k_vector_rad_per_m,
+            Some([1.0e6, 2.0e6, 0.0])
+        );
+        assert_eq!(
+            request.phase_convention,
+            FrequencyDomainPhaseConvention::ExpMinusIOmegaT
+        );
+    }
+
+    #[test]
+    fn frequency_domain_availability_fallback_keeps_floquet_metadata_unsupported() {
+        let availability =
+            native_frequency_domain_availability(FrequencyDomainAvailabilityRequest {
+                study_kind: FrequencyDomainStudyKind::FrequencyResponse,
+                requires_driven_solver: true,
+                requires_modal_solver: false,
+                requires_static_periodic_boundary: false,
+                requires_floquet_boundary: true,
+                requires_nonzero_k_dynamic_demag: false,
+                requires_gpu: false,
+                strict_device: false,
+                floquet_k_vector_rad_per_m: Some([1.0e6, 0.0, 0.0]),
+                phase_convention: FrequencyDomainPhaseConvention::ExpIOmegaT,
+            });
+
+        assert_eq!(availability.status, "unavailable");
+        assert_eq!(availability.study_kind, "frequency_response");
+        assert!(!availability.floquet_response_available);
+        assert!(availability.reason.contains("Floquet/Bloch"));
+        assert!(availability.reason.contains("nonzero-k"));
+        assert!(availability
+            .diagnostics_json
+            .contains("\"schema_version\":\"frequency_domain_availability.v1\""));
+        assert!(availability
+            .diagnostics_json
+            .contains("\"unsupported_reason\":\"floquet_bloch_nonzero_k\""));
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn frequency_domain_phase_convention_maps_to_c_abi() {
+        assert_eq!(
+            super::map_phase_convention(FrequencyDomainPhaseConvention::ExpIOmegaT),
+            super::ffi::fullmag_fem_frequency_domain_phase_convention::FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_I_OMEGA_T
+        );
+        assert_eq!(
+            super::map_phase_convention(FrequencyDomainPhaseConvention::ExpMinusIOmegaT),
+            super::ffi::fullmag_fem_frequency_domain_phase_convention::FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_MINUS_I_OMEGA_T
+        );
+    }
 }

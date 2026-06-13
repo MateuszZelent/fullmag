@@ -232,6 +232,12 @@ pub struct fullmag_fem_plan_desc {
     pub ku_field_len: u64,
     pub ku2_field: *const f64,
     pub ku2_field_len: u64,
+    pub anisotropy_axis_x_field: *const f64,
+    pub anisotropy_axis_x_field_len: u64,
+    pub anisotropy_axis_y_field: *const f64,
+    pub anisotropy_axis_y_field_len: u64,
+    pub anisotropy_axis_z_field: *const f64,
+    pub anisotropy_axis_z_field_len: u64,
     pub dind_field: *const f64,
     pub dind_field_len: u64,
     pub dbulk_field: *const f64,
@@ -406,15 +412,34 @@ pub enum fullmag_fem_frequency_domain_study_kind {
 }
 
 #[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fem_frequency_domain_execution_lane {
+    FULLMAG_FEM_FREQUENCY_DOMAIN_EXECUTION_VALIDATION = 0,
+    FULLMAG_FEM_FREQUENCY_DOMAIN_EXECUTION_PRODUCTION_CPU = 1,
+    FULLMAG_FEM_FREQUENCY_DOMAIN_EXECUTION_PRODUCTION_GPU = 2,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fem_frequency_domain_phase_convention {
+    FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_I_OMEGA_T = 0,
+    FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_MINUS_I_OMEGA_T = 1,
+}
+
+#[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct fullmag_fem_frequency_domain_availability_request {
     pub study_kind: fullmag_fem_frequency_domain_study_kind,
     pub requires_driven_solver: i32,
     pub requires_modal_solver: i32,
+    pub requires_static_periodic_boundary: i32,
     pub requires_floquet_boundary: i32,
     pub requires_nonzero_k_dynamic_demag: i32,
     pub requires_gpu: i32,
     pub strict_device: i32,
+    pub has_floquet_k_vector: i32,
+    pub floquet_k_vector_rad_per_m: [f64; 3],
+    pub phase_convention: fullmag_fem_frequency_domain_phase_convention,
 }
 
 #[repr(C)]
@@ -423,6 +448,7 @@ pub struct fullmag_fem_frequency_domain_availability_info {
     pub status: fullmag_fem_frequency_domain_status,
     pub driven_response_available: i32,
     pub modal_solver_available: i32,
+    pub static_periodic_response_available: i32,
     pub floquet_modal_available: i32,
     pub floquet_response_available: i32,
     pub dynamic_demag_k_available: i32,
@@ -447,11 +473,71 @@ pub struct fullmag_fem_frequency_domain_sweep_progress {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_frequency_domain_progress {
+    pub frequency_index: u64,
+    pub completed_frequency_count: u64,
+    pub total_frequency_count: u64,
+    pub iteration_count: u64,
+    pub frequency_hz: f64,
+    pub residual_l2_norm: f64,
+    pub relative_residual_l2_norm: f64,
+    pub converged: i32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_frequency_domain_exchange_edge {
+    pub node_i: u64,
+    pub node_j: u64,
+    pub stiffness: f64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_frequency_domain_periodic_node_pair {
+    pub node_a: u64,
+    pub node_b: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_frequency_domain_floquet_periodic_pair {
+    pub pair_id: *const c_char,
+    pub node_a: u64,
+    pub node_b: u64,
+    pub has_translation: i32,
+    pub translation_m: [f64; 3],
+    pub has_phase: i32,
+    pub phase_rad: f64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fem_frequency_domain_dmi_kind {
+    FULLMAG_FEM_FREQUENCY_DOMAIN_DMI_INTERFACIAL = 0,
+    FULLMAG_FEM_FREQUENCY_DOMAIN_DMI_BULK = 1,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_frequency_domain_dmi_element {
+    pub kind: fullmag_fem_frequency_domain_dmi_kind,
+    pub node_indices: [u32; 4],
+    pub shape: [f64; 4],
+    pub grad_shape: [f64; 12],
+    pub weight: f64,
+    pub d: f64,
+    pub normal: [f64; 3],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct fullmag_fem_frequency_domain_driven_response_request {
     pub node_count: u64,
     pub tangent_dof_count: u64,
     pub alpha: f64,
     pub gamma0: f64,
+    pub requested_execution_lane: fullmag_fem_frequency_domain_execution_lane,
     pub frequencies_hz: *const f64,
     pub frequency_count: u64,
     pub output_directory: *const c_char,
@@ -459,6 +545,13 @@ pub struct fullmag_fem_frequency_domain_driven_response_request {
     pub write_partial_artifacts: i32,
     pub cancel_requested: Option<unsafe extern "C" fn(user_data: *mut c_void) -> i32>,
     pub cancel_user_data: *mut c_void,
+    pub progress_callback: Option<
+        unsafe extern "C" fn(
+            user_data: *mut c_void,
+            progress: *const fullmag_fem_frequency_domain_progress,
+        ),
+    >,
+    pub progress_user_data: *mut c_void,
     pub tiny_validation_enabled: i32,
     pub tiny_validation_tangent_dof_count: u64,
     pub tiny_validation_stiffness_matrix_row_major: *const f64,
@@ -466,6 +559,30 @@ pub struct fullmag_fem_frequency_domain_driven_response_request {
     pub tiny_validation_stiffness_diagonal: *const f64,
     pub tiny_validation_mass_diagonal: *const f64,
     pub tiny_validation_drive_real: *const f64,
+    pub mfem_operator_enabled: i32,
+    pub mfem_include_zeeman: i32,
+    pub mfem_equilibrium_m: *const f64,
+    pub mfem_h_ext_a_per_m: *const f64,
+    pub mfem_uniaxial_anisotropy_axis: *const f64,
+    pub mfem_uniaxial_anisotropy_field_a_per_m: f64,
+    pub mfem_alpha_per_node: *const f64,
+    pub mfem_drive_real: *const f64,
+    pub mfem_exchange_edges: *const fullmag_fem_frequency_domain_exchange_edge,
+    pub mfem_exchange_edge_count: u64,
+    pub mfem_dmi_elements: *const fullmag_fem_frequency_domain_dmi_element,
+    pub mfem_dmi_element_count: u64,
+    pub mfem_dmi_lumped_mass: *const f64,
+    pub mfem_dmi_ms_field: *const f64,
+    pub mfem_dmi_uniform_ms: f64,
+    pub tiny_validation_drive_imag: *const f64,
+    pub mfem_drive_imag: *const f64,
+    pub mfem_static_periodic_node_pairs: *const fullmag_fem_frequency_domain_periodic_node_pair,
+    pub mfem_static_periodic_node_pair_count: u64,
+    pub has_floquet_k_vector: i32,
+    pub floquet_k_vector_rad_per_m: [f64; 3],
+    pub phase_convention: fullmag_fem_frequency_domain_phase_convention,
+    pub mfem_floquet_periodic_pairs: *const fullmag_fem_frequency_domain_floquet_periodic_pair,
+    pub mfem_floquet_periodic_pair_count: u64,
 }
 
 #[repr(C)]
@@ -479,6 +596,35 @@ pub struct fullmag_fem_frequency_domain_solve_result {
     pub diagnostics_json: *mut c_char,
     pub result_json: *mut c_char,
     pub artifact_manifest_path: *mut c_char,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct fullmag_fem_frequency_domain_abi_layout {
+    pub availability_request_size: u64,
+    pub availability_request_phase_convention_offset: u64,
+    pub availability_info_size: u64,
+    pub availability_info_diagnostics_json_offset: u64,
+    pub sweep_progress_size: u64,
+    pub sweep_progress_progress_json_offset: u64,
+    pub progress_size: u64,
+    pub progress_converged_offset: u64,
+    pub exchange_edge_size: u64,
+    pub exchange_edge_stiffness_offset: u64,
+    pub periodic_node_pair_size: u64,
+    pub periodic_node_pair_node_b_offset: u64,
+    pub floquet_periodic_pair_size: u64,
+    pub floquet_periodic_pair_phase_rad_offset: u64,
+    pub dmi_element_size: u64,
+    pub dmi_element_normal_offset: u64,
+    pub driven_response_request_size: u64,
+    pub driven_response_request_requested_execution_lane_offset: u64,
+    pub driven_response_request_progress_callback_offset: u64,
+    pub driven_response_request_tiny_validation_drive_imag_offset: u64,
+    pub driven_response_request_phase_convention_offset: u64,
+    pub driven_response_request_mfem_floquet_periodic_pair_count_offset: u64,
+    pub solve_result_size: u64,
+    pub solve_result_artifact_manifest_path_offset: u64,
 }
 
 #[repr(C)]
@@ -560,6 +706,9 @@ extern "C" {
     pub fn fullmag_fem_get_frequency_domain_availability_info(
         request: *const fullmag_fem_frequency_domain_availability_request,
         out_info: *mut fullmag_fem_frequency_domain_availability_info,
+    ) -> i32;
+    pub fn fullmag_fem_get_frequency_domain_abi_layout(
+        out_layout: *mut fullmag_fem_frequency_domain_abi_layout,
     ) -> i32;
     pub fn fullmag_fem_frequency_domain_initial_sweep_progress(
         total_frequency_points: u64,
@@ -839,10 +988,15 @@ mod tests {
                 fullmag_fem_frequency_domain_study_kind::FULLMAG_FEM_FREQUENCY_DOMAIN_STUDY_RESPONSE,
             requires_driven_solver: 0,
             requires_modal_solver: 0,
+            requires_static_periodic_boundary: 0,
             requires_floquet_boundary: 0,
             requires_nonzero_k_dynamic_demag: 0,
             requires_gpu: 0,
             strict_device: 0,
+            has_floquet_k_vector: 0,
+            floquet_k_vector_rad_per_m: [0.0; 3],
+            phase_convention:
+                fullmag_fem_frequency_domain_phase_convention::FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_I_OMEGA_T,
         };
         assert_eq!(
             request.study_kind,
@@ -850,10 +1004,17 @@ mod tests {
         );
         assert_eq!(request.requires_driven_solver, 0);
         assert_eq!(request.requires_modal_solver, 0);
+        assert_eq!(request.requires_static_periodic_boundary, 0);
         assert_eq!(request.requires_floquet_boundary, 0);
         assert_eq!(request.requires_nonzero_k_dynamic_demag, 0);
         assert_eq!(request.requires_gpu, 0);
         assert_eq!(request.strict_device, 0);
+        assert_eq!(request.has_floquet_k_vector, 0);
+        assert_eq!(request.floquet_k_vector_rad_per_m, [0.0; 3]);
+        assert_eq!(
+            request.phase_convention,
+            fullmag_fem_frequency_domain_phase_convention::FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_I_OMEGA_T
+        );
 
         let info =
             std::mem::MaybeUninit::<fullmag_fem_frequency_domain_availability_info>::zeroed();
@@ -864,6 +1025,7 @@ mod tests {
         );
         assert_eq!(info.driven_response_available, 0);
         assert_eq!(info.modal_solver_available, 0);
+        assert_eq!(info.static_periodic_response_available, 0);
         assert_eq!(info.floquet_modal_available, 0);
         assert_eq!(info.floquet_response_available, 0);
         assert_eq!(info.dynamic_demag_k_available, 0);
@@ -872,6 +1034,170 @@ mod tests {
         assert_eq!(info.study_kind_name[0], 0);
         assert_eq!(info.reason[0], 0);
         assert_eq!(info.diagnostics_json[0], 0);
+    }
+
+    #[test]
+    fn frequency_domain_status_abi_discriminants_are_stable() {
+        assert_eq!(
+            fullmag_fem_frequency_domain_status::FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OK as i32,
+            0
+        );
+        assert_eq!(
+            fullmag_fem_frequency_domain_status::FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_UNAVAILABLE
+                as i32,
+            1
+        );
+        assert_eq!(
+            fullmag_fem_frequency_domain_status::FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_VALIDATION_ERROR
+                as i32,
+            2
+        );
+        assert_eq!(
+            fullmag_fem_frequency_domain_status::FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OPERATOR_ERROR
+                as i32,
+            3
+        );
+        assert_eq!(
+            fullmag_fem_frequency_domain_status::FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_SOLVE_ERROR
+                as i32,
+            4
+        );
+        assert_eq!(
+            fullmag_fem_frequency_domain_status::FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_ARTIFACT_ERROR
+                as i32,
+            5
+        );
+        assert_eq!(
+            fullmag_fem_frequency_domain_status::FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_INTERRUPTED
+                as i32,
+            6
+        );
+    }
+
+    #[test]
+    fn frequency_domain_phase_convention_abi_discriminants_are_stable() {
+        assert_eq!(
+            fullmag_fem_frequency_domain_phase_convention::FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_I_OMEGA_T
+                as i32,
+            0
+        );
+        assert_eq!(
+            fullmag_fem_frequency_domain_phase_convention::FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_MINUS_I_OMEGA_T
+                as i32,
+            1
+        );
+    }
+
+    #[test]
+    fn frequency_domain_runtime_abi_layout_matches_rust_bindings() {
+        let mut layout = fullmag_fem_frequency_domain_abi_layout::default();
+        let status = unsafe { fullmag_fem_get_frequency_domain_abi_layout(&mut layout) };
+        assert_eq!(status, 0);
+
+        type AvailabilityRequest = fullmag_fem_frequency_domain_availability_request;
+        type AvailabilityInfo = fullmag_fem_frequency_domain_availability_info;
+        type SweepProgress = fullmag_fem_frequency_domain_sweep_progress;
+        type Progress = fullmag_fem_frequency_domain_progress;
+        type ExchangeEdge = fullmag_fem_frequency_domain_exchange_edge;
+        type PeriodicNodePair = fullmag_fem_frequency_domain_periodic_node_pair;
+        type FloquetPeriodicPair = fullmag_fem_frequency_domain_floquet_periodic_pair;
+        type DmiElement = fullmag_fem_frequency_domain_dmi_element;
+        type DrivenRequest = fullmag_fem_frequency_domain_driven_response_request;
+        type SolveResult = fullmag_fem_frequency_domain_solve_result;
+
+        assert_eq!(
+            layout.availability_request_size,
+            std::mem::size_of::<AvailabilityRequest>() as u64
+        );
+        assert_eq!(
+            layout.availability_request_phase_convention_offset,
+            std::mem::offset_of!(AvailabilityRequest, phase_convention) as u64
+        );
+        assert_eq!(
+            layout.availability_info_size,
+            std::mem::size_of::<AvailabilityInfo>() as u64
+        );
+        assert_eq!(
+            layout.availability_info_diagnostics_json_offset,
+            std::mem::offset_of!(AvailabilityInfo, diagnostics_json) as u64
+        );
+        assert_eq!(
+            layout.sweep_progress_size,
+            std::mem::size_of::<SweepProgress>() as u64
+        );
+        assert_eq!(
+            layout.sweep_progress_progress_json_offset,
+            std::mem::offset_of!(SweepProgress, progress_json) as u64
+        );
+        assert_eq!(layout.progress_size, std::mem::size_of::<Progress>() as u64);
+        assert_eq!(
+            layout.progress_converged_offset,
+            std::mem::offset_of!(Progress, converged) as u64
+        );
+        assert_eq!(
+            layout.exchange_edge_size,
+            std::mem::size_of::<ExchangeEdge>() as u64
+        );
+        assert_eq!(
+            layout.exchange_edge_stiffness_offset,
+            std::mem::offset_of!(ExchangeEdge, stiffness) as u64
+        );
+        assert_eq!(
+            layout.periodic_node_pair_size,
+            std::mem::size_of::<PeriodicNodePair>() as u64
+        );
+        assert_eq!(
+            layout.periodic_node_pair_node_b_offset,
+            std::mem::offset_of!(PeriodicNodePair, node_b) as u64
+        );
+        assert_eq!(
+            layout.floquet_periodic_pair_size,
+            std::mem::size_of::<FloquetPeriodicPair>() as u64
+        );
+        assert_eq!(
+            layout.floquet_periodic_pair_phase_rad_offset,
+            std::mem::offset_of!(FloquetPeriodicPair, phase_rad) as u64
+        );
+        assert_eq!(
+            layout.dmi_element_size,
+            std::mem::size_of::<DmiElement>() as u64
+        );
+        assert_eq!(
+            layout.dmi_element_normal_offset,
+            std::mem::offset_of!(DmiElement, normal) as u64
+        );
+        assert_eq!(
+            layout.driven_response_request_size,
+            std::mem::size_of::<DrivenRequest>() as u64
+        );
+        assert_eq!(
+            layout.driven_response_request_requested_execution_lane_offset,
+            std::mem::offset_of!(DrivenRequest, requested_execution_lane) as u64
+        );
+        assert_eq!(
+            layout.driven_response_request_progress_callback_offset,
+            std::mem::offset_of!(DrivenRequest, progress_callback) as u64
+        );
+        assert_eq!(
+            layout.driven_response_request_tiny_validation_drive_imag_offset,
+            std::mem::offset_of!(DrivenRequest, tiny_validation_drive_imag) as u64
+        );
+        assert_eq!(
+            layout.driven_response_request_phase_convention_offset,
+            std::mem::offset_of!(DrivenRequest, phase_convention) as u64
+        );
+        assert_eq!(
+            layout.driven_response_request_mfem_floquet_periodic_pair_count_offset,
+            std::mem::offset_of!(DrivenRequest, mfem_floquet_periodic_pair_count) as u64
+        );
+        assert_eq!(
+            layout.solve_result_size,
+            std::mem::size_of::<SolveResult>() as u64
+        );
+        assert_eq!(
+            layout.solve_result_artifact_manifest_path_offset,
+            std::mem::offset_of!(SolveResult, artifact_manifest_path) as u64
+        );
     }
 
     #[test]
@@ -889,6 +1215,20 @@ mod tests {
     }
 
     #[test]
+    fn frequency_domain_progress_abi_exposes_iteration_state() {
+        let progress = std::mem::MaybeUninit::<fullmag_fem_frequency_domain_progress>::zeroed();
+        let progress = unsafe { progress.assume_init() };
+        assert_eq!(progress.frequency_index, 0);
+        assert_eq!(progress.completed_frequency_count, 0);
+        assert_eq!(progress.total_frequency_count, 0);
+        assert_eq!(progress.iteration_count, 0);
+        assert_eq!(progress.frequency_hz, 0.0);
+        assert_eq!(progress.residual_l2_norm, 0.0);
+        assert_eq!(progress.relative_residual_l2_norm, 0.0);
+        assert_eq!(progress.converged, 0);
+    }
+
+    #[test]
     fn frequency_domain_driven_response_solve_abi_has_owned_result_boundary() {
         let request =
             std::mem::MaybeUninit::<fullmag_fem_frequency_domain_driven_response_request>::zeroed();
@@ -897,6 +1237,10 @@ mod tests {
         assert_eq!(request.tangent_dof_count, 0);
         assert_eq!(request.alpha, 0.0);
         assert_eq!(request.gamma0, 0.0);
+        assert_eq!(
+            request.requested_execution_lane,
+            fullmag_fem_frequency_domain_execution_lane::FULLMAG_FEM_FREQUENCY_DOMAIN_EXECUTION_VALIDATION
+        );
         assert!(request.frequencies_hz.is_null());
         assert_eq!(request.frequency_count, 0);
         assert!(request.output_directory.is_null());
@@ -904,15 +1248,42 @@ mod tests {
         assert_eq!(request.write_partial_artifacts, 0);
         assert!(request.cancel_requested.is_none());
         assert!(request.cancel_user_data.is_null());
+        assert!(request.progress_callback.is_none());
+        assert!(request.progress_user_data.is_null());
         assert_eq!(request.tiny_validation_enabled, 0);
         assert_eq!(request.tiny_validation_tangent_dof_count, 0);
-        assert!(request
-            .tiny_validation_stiffness_matrix_row_major
-            .is_null());
+        assert!(request.tiny_validation_stiffness_matrix_row_major.is_null());
         assert!(request.tiny_validation_mass_matrix_row_major.is_null());
         assert!(request.tiny_validation_stiffness_diagonal.is_null());
         assert!(request.tiny_validation_mass_diagonal.is_null());
         assert!(request.tiny_validation_drive_real.is_null());
+        assert_eq!(request.mfem_operator_enabled, 0);
+        assert_eq!(request.mfem_include_zeeman, 0);
+        assert!(request.mfem_equilibrium_m.is_null());
+        assert!(request.mfem_h_ext_a_per_m.is_null());
+        assert!(request.mfem_uniaxial_anisotropy_axis.is_null());
+        assert_eq!(request.mfem_uniaxial_anisotropy_field_a_per_m, 0.0);
+        assert!(request.mfem_alpha_per_node.is_null());
+        assert!(request.mfem_drive_real.is_null());
+        assert!(request.mfem_exchange_edges.is_null());
+        assert_eq!(request.mfem_exchange_edge_count, 0);
+        assert!(request.mfem_dmi_elements.is_null());
+        assert_eq!(request.mfem_dmi_element_count, 0);
+        assert!(request.mfem_dmi_lumped_mass.is_null());
+        assert!(request.mfem_dmi_ms_field.is_null());
+        assert!(request.tiny_validation_drive_imag.is_null());
+        assert!(request.mfem_drive_imag.is_null());
+        assert!(request.mfem_static_periodic_node_pairs.is_null());
+        assert_eq!(request.mfem_static_periodic_node_pair_count, 0);
+        assert_eq!(request.has_floquet_k_vector, 0);
+        assert_eq!(request.floquet_k_vector_rad_per_m, [0.0; 3]);
+        assert_eq!(
+            request.phase_convention,
+            fullmag_fem_frequency_domain_phase_convention::FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_I_OMEGA_T
+        );
+        assert!(request.mfem_floquet_periodic_pairs.is_null());
+        assert_eq!(request.mfem_floquet_periodic_pair_count, 0);
+        assert_eq!(request.mfem_dmi_uniform_ms, 0.0);
 
         let result = std::mem::MaybeUninit::<fullmag_fem_frequency_domain_solve_result>::zeroed();
         let result = unsafe { result.assume_init() };
@@ -927,6 +1298,73 @@ mod tests {
         assert!(result.diagnostics_json.is_null());
         assert!(result.result_json.is_null());
         assert!(result.artifact_manifest_path.is_null());
+    }
+
+    #[test]
+    fn frequency_domain_driven_response_solve_abi_keeps_floquet_tail_layout() {
+        type Request = fullmag_fem_frequency_domain_driven_response_request;
+
+        let static_pair_ptr = std::mem::offset_of!(Request, mfem_static_periodic_node_pairs);
+        let static_pair_count = std::mem::offset_of!(Request, mfem_static_periodic_node_pair_count);
+        let has_floquet_k_vector = std::mem::offset_of!(Request, has_floquet_k_vector);
+        let floquet_k_vector = std::mem::offset_of!(Request, floquet_k_vector_rad_per_m);
+        let phase_convention = std::mem::offset_of!(Request, phase_convention);
+        let floquet_pair_ptr = std::mem::offset_of!(Request, mfem_floquet_periodic_pairs);
+        let floquet_pair_count = std::mem::offset_of!(Request, mfem_floquet_periodic_pair_count);
+
+        assert!(static_pair_ptr < static_pair_count);
+        assert!(static_pair_count < has_floquet_k_vector);
+        assert!(has_floquet_k_vector < floquet_k_vector);
+        assert!(floquet_k_vector < phase_convention);
+        assert!(phase_convention < floquet_pair_ptr);
+        assert!(floquet_pair_ptr < floquet_pair_count);
+        assert!(
+            std::mem::size_of::<fullmag_fem_frequency_domain_floquet_periodic_pair>()
+                <= std::mem::size_of::<Request>()
+        );
+    }
+
+    #[test]
+    fn frequency_domain_dmi_element_abi_exposes_tetra_payload() {
+        let element = std::mem::MaybeUninit::<fullmag_fem_frequency_domain_dmi_element>::zeroed();
+        let element = unsafe { element.assume_init() };
+        assert_eq!(
+            element.kind,
+            fullmag_fem_frequency_domain_dmi_kind::FULLMAG_FEM_FREQUENCY_DOMAIN_DMI_INTERFACIAL
+        );
+        assert_eq!(element.node_indices, [0; 4]);
+        assert_eq!(element.shape, [0.0; 4]);
+        assert_eq!(element.grad_shape, [0.0; 12]);
+        assert_eq!(element.weight, 0.0);
+        assert_eq!(element.d, 0.0);
+        assert_eq!(element.normal, [0.0; 3]);
+        assert_eq!(
+            fullmag_fem_frequency_domain_dmi_kind::FULLMAG_FEM_FREQUENCY_DOMAIN_DMI_BULK as i32,
+            1
+        );
+    }
+
+    #[test]
+    fn frequency_domain_periodic_node_pair_abi_exposes_node_indices() {
+        let pair =
+            std::mem::MaybeUninit::<fullmag_fem_frequency_domain_periodic_node_pair>::zeroed();
+        let pair = unsafe { pair.assume_init() };
+        assert_eq!(pair.node_a, 0);
+        assert_eq!(pair.node_b, 0);
+    }
+
+    #[test]
+    fn frequency_domain_floquet_periodic_pair_abi_exposes_source_contract_metadata() {
+        let pair =
+            std::mem::MaybeUninit::<fullmag_fem_frequency_domain_floquet_periodic_pair>::zeroed();
+        let pair = unsafe { pair.assume_init() };
+        assert!(pair.pair_id.is_null());
+        assert_eq!(pair.node_a, 0);
+        assert_eq!(pair.node_b, 0);
+        assert_eq!(pair.has_translation, 0);
+        assert_eq!(pair.translation_m, [0.0; 3]);
+        assert_eq!(pair.has_phase, 0);
+        assert_eq!(pair.phase_rad, 0.0);
     }
 
     #[test]

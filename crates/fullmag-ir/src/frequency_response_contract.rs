@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FrequencyExcitationIR {
     pub field_au_per_m: [f64; 3],
+    #[serde(default)]
+    pub phase_rad: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

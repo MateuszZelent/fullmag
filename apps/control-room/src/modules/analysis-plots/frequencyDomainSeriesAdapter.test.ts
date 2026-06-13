@@ -25,6 +25,7 @@ describe("frequencyDomainSeriesAdapter", () => {
             frequency_index: 0,
             max_response_amplitude: 2,
             phase_rad: 0.5,
+            susceptibility: [0.25, -4],
           },
         ],
         schema_version: "magnetic_response_sweep.v2",
@@ -38,6 +39,7 @@ describe("frequencyDomainSeriesAdapter", () => {
       "amplitude",
       "phase",
       "absorbed-power-density",
+      "susceptibility-max-abs",
     ]);
     expect(series[0]).toEqual(
       expect.objectContaining({

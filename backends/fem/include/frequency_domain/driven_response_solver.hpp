@@ -1,6 +1,7 @@
 #pragma once
 
 #include "cpu/frequency_domain/mfem_driven_response_validation.hpp"
+#include "cpu/frequency_domain/production_cpu_driven_response.hpp"
 #include "frequency_domain/frequency_domain_contract.hpp"
 #include "frequency_domain/operator_contract.hpp"
 
@@ -16,6 +17,7 @@ struct DrivenFrequencyResponseTinyValidationProblem {
     const double *stiffness_diagonal = nullptr;
     const double *mass_diagonal = nullptr;
     const double *drive_real = nullptr;
+    const double *drive_imag = nullptr;
 };
 
 struct DrivenFrequencyResponseMfemValidationProblem {
@@ -26,7 +28,24 @@ struct DrivenFrequencyResponseMfemValidationProblem {
     const TangentOperatorEdgeBlock *exchange_edges = nullptr;
     std::uint64_t exchange_edge_count = 0;
     const double *h_ext_a_per_m = nullptr;
+    const double *uniaxial_anisotropy_axis = nullptr;
+    double uniaxial_anisotropy_field_a_per_m = 0.0;
+    const double *alpha_per_node = nullptr;
+    const MfemDmiElementTangentData *dmi_elements = nullptr;
+    std::uint64_t dmi_element_count = 0;
+    const double *dmi_lumped_mass = nullptr;
+    const double *dmi_ms_field = nullptr;
+    double dmi_uniform_ms = 0.0;
     const double *drive_real = nullptr;
+    const double *drive_imag = nullptr;
+    const std::uint64_t *static_periodic_node_pairs = nullptr;
+    std::uint64_t static_periodic_node_pair_count = 0;
+};
+
+enum class DrivenFrequencyResponseExecutionLane {
+    validation,
+    production_cpu,
+    production_gpu,
 };
 
 struct DrivenFrequencyResponseSolveRequest {
@@ -35,6 +54,16 @@ struct DrivenFrequencyResponseSolveRequest {
     bool write_partial_artifacts = false;
     bool (*cancel_requested)(void *user_data) = nullptr;
     void *cancel_user_data = nullptr;
+    ProductionCpuFrequencyDomainProgress progress_callback = nullptr;
+    void *progress_user_data = nullptr;
+    DrivenFrequencyResponseExecutionLane execution_lane =
+        DrivenFrequencyResponseExecutionLane::validation;
+    bool has_floquet_k_vector = false;
+    double floquet_k_vector_rad_per_m[3] = {0.0, 0.0, 0.0};
+    FrequencyDomainPhaseConvention phase_convention =
+        FrequencyDomainPhaseConvention::exp_i_omega_t;
+    const FrequencyDomainFloquetPeriodicPair *floquet_periodic_pairs = nullptr;
+    std::uint64_t floquet_periodic_pair_count = 0;
     DrivenFrequencyResponseTinyValidationProblem tiny_validation_problem{};
     DrivenFrequencyResponseMfemValidationProblem mfem_validation_problem{};
 };

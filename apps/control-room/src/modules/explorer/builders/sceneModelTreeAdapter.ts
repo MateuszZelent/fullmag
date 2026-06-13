@@ -1,5 +1,6 @@
 import type {
   CouplingListResource,
+  HysteresisExecutionTreeResource,
   MaterialParameterFieldListResource,
   RegionListResource,
   SceneResource,
@@ -155,6 +156,27 @@ export function modelTreeSnapshotWithStageExecution(
             runtimeStage?.current_settle_step_method ??
             stage.hysteresisCurrentSettleStepMethod ??
             null,
+        };
+      }),
+    },
+  };
+}
+
+export function modelTreeSnapshotWithHysteresisExecutionTree(
+  snapshot: ModelTreeSnapshot,
+  executionTree: HysteresisExecutionTreeResource | null | undefined,
+): ModelTreeSnapshot {
+  if (!snapshot.study || !executionTree) return snapshot;
+
+  return {
+    ...snapshot,
+    study: {
+      ...snapshot.study,
+      stages: snapshot.study.stages.map((stage) => {
+        if (stage.stageId !== executionTree.stage_id) return stage;
+        return {
+          ...stage,
+          hysteresisExecutionTree: executionTree,
         };
       }),
     },

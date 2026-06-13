@@ -1,4 +1,5 @@
 import type { CommandId } from "@/kernel/commands/commandTypes";
+import type { HysteresisExecutionTreeResource } from "@/kernel/api/apiTypes";
 import type {
   CrossSectionFrameExtent,
   CrossSectionPlot,
@@ -228,6 +229,10 @@ export interface ExplorerNode {
   fieldId?: string;
   frequencyIndex?: number;
   icon?: ExplorerIconToken;
+  hysteresisExecutionNodeId?: string;
+  hysteresisExecutionNodeKind?: string;
+  hysteresisPointId?: number;
+  hysteresisSnapshotId?: string;
   modeIndex?: number;
   objectId?: string;
   observableId?: string;
@@ -385,6 +390,7 @@ export interface ModelTreeStudyStageSnapshot {
   hysteresisFieldStepMt?: string | number | null;
   hysteresisInitialProtocol?: string | null;
   hysteresisSaturationMode?: string | null;
+  hysteresisExecutionTree?: HysteresisExecutionTreeResource | null;
   hysteresisSettleSteps?: readonly ModelTreeHysteresisSettleStepSnapshot[];
   stateTransition?: string | null;
   stateTransitionKind?: string | null;

@@ -70,9 +70,22 @@ function femDomainFixture(): FemManifestRenderDomain {
     object_id: "arch_waveguide",
     role: "magnetic",
   };
+  const regionPart = {
+    boundary_face_count: 0,
+    boundary_face_start: 0,
+    element_count: 1,
+    element_start: 1,
+    geometry_id: "arch_waveguide_geom",
+    id: "part:arch_waveguide:core",
+    label: "arch_waveguide core",
+    node_count: 4,
+    node_start: 4,
+    object_id: "arch_waveguide",
+    role: "magnetic",
+  };
   return {
     airboxParts: [airboxPart],
-    magneticParts: [objectPart],
+    magneticParts: [objectPart, regionPart],
     magneticSurfacePartsByPartId: new Map(),
     objectPartIds: new Map([
       ["arch_waveguide", ["arch_waveguide"]],
@@ -81,6 +94,7 @@ function femDomainFixture(): FemManifestRenderDomain {
     partsById: new Map([
       [airboxPart.id, airboxPart],
       [objectPart.id, objectPart],
+      [regionPart.id, regionPart],
     ]),
   };
 }
@@ -133,6 +147,30 @@ describe("buildViewport3DMeshSizeHighlightModel", () => {
     expect(model?.matchedElementCount).toBe(1);
     expect(Array.from(model?.edgeIndices ?? [])).toContain(7);
   });
+
+  it("uses region mesh-part ranges for region-scoped histogram hover", () => {
+    const model = buildViewport3DMeshSizeHighlightModel(
+      topologyFixture(),
+      topologyModelFixture(),
+      femDomainFixture(),
+      highlight({
+        binLabel: "2.00 to 3.00",
+        hi: 3,
+        lo: 2,
+        scope: {
+          kind: "region",
+          meshPartIds: ["part:arch_waveguide:core"],
+          objectId: "arch_waveguide",
+          regionId: "arch_waveguide:core",
+        },
+      }),
+    );
+
+    expect(model?.eligibleElementCount).toBe(1);
+    expect(model?.matchedElementCount).toBe(1);
+    expect(Array.from(model?.edgeIndices ?? [])).toContain(7);
+  });
+
 
   it("maps edge-length bins to tetrahedra containing matching edges", () => {
     const model = buildViewport3DMeshSizeHighlightModel(

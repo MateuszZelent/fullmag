@@ -15,6 +15,9 @@ vi.mock("@/kernel/KernelContext", () => ({
     commands: {
       execute: vi.fn(),
     },
+    bus: {
+      emit: vi.fn(),
+    },
     resources: {
       invalidate: vi.fn(),
     },
@@ -169,6 +172,63 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
     revision: 3,
     status: "ready",
   }),
+  useMeshRegionMembershipResource: () => ({
+    data: {
+      boundary_face_indices: [],
+      element_indices: [0, 1],
+      mesh_id: "shared-domain",
+      mesh_part_ids: ["part:film:core"],
+      mesh_revision: 3,
+      node_indices: [0, 1, 2, 3, 4],
+      realization_method: "conformal",
+      realization_warnings: [],
+      region_id: "film:core",
+      source: "realized_region",
+    },
+    error: null,
+    refetch: vi.fn(),
+    revision: 3,
+    status: "ready",
+  }),
+  useMeshSharedDomainQualityDataResource: () => ({
+    data: {
+      elementCount: 2,
+      gamma: new Float64Array([0.03, 0.72]),
+      sicn: new Float64Array([0.05, 0.81]),
+      volume: new Float64Array([1 / 6, 8 / 6]),
+    },
+    error: null,
+    refetch: vi.fn(),
+    revision: 3,
+    status: "ready",
+  }),
+  useMeshSharedDomainTopologyResource: () => ({
+    data: {
+      boundaryFaceCount: 0,
+      boundaryFaces: new Uint32Array(),
+      boundaryMarkers: new Uint32Array(),
+      elementCount: 2,
+      elementMarkers: new Uint32Array([1, 1]),
+      indices: new Uint32Array([
+        0, 1, 2, 3,
+        0, 4, 5, 6,
+      ]),
+      nodeCount: 7,
+      positions: new Float64Array([
+        0, 0, 0,
+        1, 0, 0,
+        0, 1, 0,
+        0, 0, 1,
+        2, 0, 0,
+        0, 2, 0,
+        0, 0, 2,
+      ]),
+    },
+    error: null,
+    refetch: vi.fn(),
+    revision: 3,
+    status: "ready",
+  }),
   useMeshUniverseQualityResource: () => ({
     data: {
       quality: qualityPayload,
@@ -317,6 +377,7 @@ import {
   ObjectMeshPolicyPanel,
   ObjectMeshTransactionsSection,
 } from "./ObjectMeshPolicyPanel";
+import { ObjectRegionMeshPanel } from "./region/ObjectRegionMeshPanel";
 
 const objectSelection: Selection = {
   kind: "object.mesh",
@@ -346,6 +407,103 @@ const airboxQualitySelection: Selection = {
 };
 
 describe("scoped mesh quality panels", () => {
+  it("renders region quality and element-size histograms in the region mesh panel", () => {
+    const html = renderToStaticMarkup(
+      <ObjectRegionMeshPanel
+        addMaterialOverride={vi.fn()}
+        applyRegion={vi.fn()}
+        canWriteRegion
+        couplingDependencies={[]}
+        deleteRegion={vi.fn()}
+        draft={{
+          enabled: true,
+          frame: "object",
+          materialOverrides: [],
+          meshPolicy: {
+            enabled: true,
+            maximumElementSize: 6e-9,
+            minimumElementSize: 2e-9,
+            order: 1,
+            transitionDistance: 10e-9,
+          },
+          name: "core",
+          ownerBounds: null,
+          priority: 10,
+          realizationPolicy: "conformal",
+          shape: {
+            axis: [0, 0, 1],
+            center: [0, 0, 0],
+            height: 1,
+            kind: "box",
+            radius: 1,
+            size: [1, 1, 1],
+          },
+        }}
+        duplicateRegion={vi.fn()}
+        feedback={null}
+        materialFields={null}
+        model={{
+          diagnosticCount: 0,
+          diagnostics: [],
+          effectiveMagnetizationRef: "m0",
+          enabled: true,
+          errorCount: 0,
+          frame: "object",
+          magnetizationRef: "m0",
+          materialFieldCount: 0,
+          materialOverrideCount: 0,
+          materialOverrides: [],
+          materialRef: "permalloy",
+          meshPolicy: {
+            enabled: true,
+            maximumElementSize: 6e-9,
+            minimumElementSize: 2e-9,
+            order: 1,
+            transitionDistance: 10e-9,
+          },
+          mode: "committed",
+          objectId: "film",
+          ownerBounds: null,
+          priority: 10,
+          realizationPolicy: "conformal",
+          realizationStatus: "realized",
+          regionId: "film:core",
+          regionMagnetizationRef: "inherits object",
+          regionName: "core",
+          revision: 3,
+          shape: {
+            axis: [0, 0, 1],
+            center: [0, 0, 0],
+            height: 1,
+            kind: "box",
+            radius: 1,
+            size: [1, 1, 1],
+          },
+          source: "authored_object_region",
+          textureAssignment: "inherited",
+          textureOverrideKind: "none",
+          warningCount: 0,
+        }}
+        pending={false}
+        removeMaterialOverride={vi.fn()}
+        revert={vi.fn()}
+        updateDraft={vi.fn()}
+        updateMaterialOverride={vi.fn()}
+        updateMeshPolicy={vi.fn()}
+        updateShape={vi.fn()}
+        updateShapeVector={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain("Region Quality Distributions");
+    expect(html).toContain("SICN");
+    expect(html).toContain("Gamma");
+    expect(html).toContain("Element size distributions");
+    expect(html).toContain("Tetra size");
+    expect(html).toContain("Worst elements");
+    expect(html).toContain("region:film:core");
+  });
+
   it("renders object quality histograms in the object mesh panel", () => {
     const html = renderToStaticMarkup(
       <ObjectMeshPolicyPanel selection={objectSelection} />,

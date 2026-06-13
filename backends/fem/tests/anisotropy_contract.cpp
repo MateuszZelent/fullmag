@@ -315,6 +315,15 @@ void anisotropy_plan_fields_are_imported_by_aggregate() {
     plan.anisotropy_axis[0] = 1.0;
     plan.anisotropy_axis[1] = 2.0;
     plan.anisotropy_axis[2] = 3.0;
+    const double axis_x[] = {1.0, 0.0};
+    const double axis_y[] = {0.0, 1.0};
+    const double axis_z[] = {0.0, 0.0};
+    plan.anisotropy_axis_x_field = axis_x;
+    plan.anisotropy_axis_x_field_len = 2;
+    plan.anisotropy_axis_y_field = axis_y;
+    plan.anisotropy_axis_y_field_len = 2;
+    plan.anisotropy_axis_z_field = axis_z;
+    plan.anisotropy_axis_z_field_len = 2;
     plan.has_cubic_anisotropy = 1;
     plan.cubic_kc1 = 4.0e4;
     plan.cubic_kc2 = 5.0e4;
@@ -334,6 +343,8 @@ void anisotropy_plan_fields_are_imported_by_aggregate() {
     check_near(ctx.anisotropy.uniaxial_axis[0], 1.0, 0.0, "uniaxial axis x plan import");
     check_near(ctx.anisotropy.uniaxial_axis[1], 2.0, 0.0, "uniaxial axis y plan import");
     check_near(ctx.anisotropy.uniaxial_axis[2], 3.0, 0.0, "uniaxial axis z plan import");
+    check(ctx.anisotropy.uniaxial_axis_x_field.size() == 2u, "uniaxial axis x field import");
+    check_near(ctx.anisotropy.uniaxial_axis_y_field[1], 1.0, 0.0, "uniaxial axis y field value");
     check(ctx.anisotropy.cubic_enabled, "cubic anisotropy plan enable import");
     check_near(ctx.anisotropy.cubic_Kc1, 4.0e4, 0.0, "cubic Kc1 plan import");
     check_near(ctx.anisotropy.cubic_Kc2, 5.0e4, 0.0, "cubic Kc2 plan import");
@@ -392,6 +403,34 @@ void uniaxial_uses_per_node_terms_and_energy_convention() {
         "uniaxial energy");
 }
 
+void uniaxial_uses_per_node_axis_field() {
+    auto ctx = make_base_context();
+    ctx.anisotropy.uniaxial_enabled = true;
+    ctx.anisotropy.uniaxial_axis = {0.0, 0.0, 1.0};
+    ctx.anisotropy.uniaxial_Ku = 1.0e5;
+    ctx.anisotropy.uniaxial_axis_x_field = {1.0, 0.0, 0.0};
+    ctx.anisotropy.uniaxial_axis_y_field = {0.0, 1.0, 0.0};
+    ctx.anisotropy.uniaxial_axis_z_field = {0.0, 0.0, 1.0};
+
+    const std::vector<double> m = {
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+        0.0, 0.0, 1.0,
+    };
+
+    std::vector<double> h;
+    double energy = 0.0;
+    fullmag::fem::compute_uniaxial_anisotropy_field(ctx, m, h, &energy);
+
+    const double expected_h = 2.0 * 1.0e5 / (kMu0Test * 800e3);
+    check_near(h[0], expected_h, std::fabs(expected_h) * 1e-12, "axis field h0 x");
+    check_near(h[1], 0.0, 0.0, "axis field h0 y");
+    check_near(h[2], 0.0, 0.0, "axis field h0 z");
+    check_near(h[3], 0.0, 0.0, "axis field h1 x");
+    check_near(h[4], expected_h, std::fabs(expected_h) * 1e-12, "axis field h1 y");
+    check_near(h[5], 0.0, 0.0, "axis field h1 z");
+}
+
 void cubic_reports_energy_and_field_in_crystal_frame() {
     auto ctx = make_base_context();
     ctx.anisotropy.cubic_enabled = true;
@@ -438,6 +477,10 @@ void anisotropy_axis_plan_values_are_normalized_and_validated() {
     fullmag::fem::Context ctx;
     ctx.anisotropy.uniaxial_enabled = true;
     ctx.anisotropy.uniaxial_axis = {0.0, 0.0, 4.0};
+    ctx.mesh.n_nodes = 2;
+    ctx.anisotropy.uniaxial_axis_x_field = {2.0, 0.0};
+    ctx.anisotropy.uniaxial_axis_y_field = {0.0, 3.0};
+    ctx.anisotropy.uniaxial_axis_z_field = {0.0, 0.0};
     ctx.anisotropy.cubic_enabled = true;
     ctx.anisotropy.cubic_axis1 = {2.0, 0.0, 0.0};
     ctx.anisotropy.cubic_axis2 = {0.0, 3.0, 0.0};
@@ -445,6 +488,8 @@ void anisotropy_axis_plan_values_are_normalized_and_validated() {
     std::string error;
     check(fullmag::fem::normalize_anisotropy_axes(ctx, error), error.c_str());
     check_near(ctx.anisotropy.uniaxial_axis[2], 1.0, 1e-12, "uniaxial axis normalized");
+    check_near(ctx.anisotropy.uniaxial_axis_x_field[0], 1.0, 1e-12, "uniaxial axis field x normalized");
+    check_near(ctx.anisotropy.uniaxial_axis_y_field[1], 1.0, 1e-12, "uniaxial axis field y normalized");
     check_near(ctx.anisotropy.cubic_axis1[0], 1.0, 1e-12, "cubic axis1 normalized");
     check_near(ctx.anisotropy.cubic_axis2[1], 1.0, 1e-12, "cubic axis2 normalized");
 
@@ -466,6 +511,7 @@ int main() {
     anisotropy_runtime_state_is_owned_by_aggregate_module();
     anisotropy_plan_fields_are_imported_by_aggregate();
     uniaxial_uses_per_node_terms_and_energy_convention();
+    uniaxial_uses_per_node_axis_field();
     cubic_reports_energy_and_field_in_crystal_frame();
     anisotropy_axis_plan_values_are_normalized_and_validated();
     return 0;

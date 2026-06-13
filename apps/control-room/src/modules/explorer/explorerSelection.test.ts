@@ -7,6 +7,7 @@ import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+  DATA_FIELD_VECTOR_PATH,
   MESHING_PERIODIC_PAIRS_PATH,
 } from "@/kernel/api/apiPaths";
 import { RequestDiagnosticsController } from "@/kernel/api/RequestDiagnosticsController";
@@ -27,6 +28,10 @@ import { VisualizationRegistrySyncController } from "@/kernel/visualization/Visu
 
 import { selectExplorerNode } from "./explorerSelection";
 import type { ExplorerNode } from "./explorerTypes";
+
+function snapshotVectorResourceKey(snapshotId: string): string {
+  return `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?component=full&scope_kind=full&snapshot_id=${snapshotId}`;
+}
 
 function makeKernel(): KernelApi {
   const bus = new EventBus<KernelEventMap>();
@@ -115,6 +120,82 @@ describe("selectExplorerNode", () => {
         nodeId: "model:airbox:mesh",
         type: "airbox",
         visualizationTargetId: "airbox",
+      },
+    });
+  });
+
+  it("selects hysteresis snapshot nodes as replayable snapshot selections", () => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      id: "model:study:stages:stage:hysteresis-1:field-point:7:snapshot:hysteresis_point_007",
+      kind: "study.stage.action",
+      label: "Snapshot hysteresis_point_007",
+      parentId: "model:study:stages:stage:hysteresis-1:field-point:7",
+      hysteresisPointId: 7,
+      hysteresisSnapshotId: "hysteresis_point_007",
+      resourceRef: snapshotVectorResourceKey("hysteresis_point_007"),
+      stageId: "hysteresis-1",
+      stageIndex: 0,
+    };
+
+    selectExplorerNode(kernel, node, "explorer");
+
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "study.stage.action",
+      label: "Snapshot hysteresis_point_007",
+      nodeId:
+        "model:study:stages:stage:hysteresis-1:field-point:7:snapshot:hysteresis_point_007",
+      objectId: null,
+      ref: {
+        kind: "study.stage.action",
+        nodeId:
+          "model:study:stages:stage:hysteresis-1:field-point:7:snapshot:hysteresis_point_007",
+        pointId: 7,
+        quantityId: "m",
+        resourceRef: snapshotVectorResourceKey("hysteresis_point_007"),
+        snapshotId: "hysteresis_point_007",
+        stageId: "hysteresis-1",
+        stageIndex: 0,
+        targetId: "hysteresis-step:hysteresis-1:7",
+        type: "hysteresis-snapshot",
+      },
+    });
+  });
+
+  it("preserves hysteresis execution-tree metadata on study-stage selections", () => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      id: "model:study:stages:stage:hysteresis-1:field-point:7:warning:point-7-warnings",
+      kind: "study.stage.action",
+      label: "2 warning(s)",
+      parentId: "model:study:stages:stage:hysteresis-1:field-point:7",
+      hysteresisExecutionNodeId: "point-7:warnings",
+      hysteresisExecutionNodeKind: "warning",
+      hysteresisPointId: 7,
+      resourceRef: "analysis/hysteresis/hysteresis-1/points/7",
+      stageId: "hysteresis-1",
+      stageIndex: 0,
+    };
+
+    selectExplorerNode(kernel, node, "explorer");
+
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "study.stage.action",
+      label: "2 warning(s)",
+      nodeId:
+        "model:study:stages:stage:hysteresis-1:field-point:7:warning:point-7-warnings",
+      objectId: null,
+      ref: {
+        hysteresisExecutionNodeId: "point-7:warnings",
+        hysteresisExecutionNodeKind: "warning",
+        hysteresisPointId: 7,
+        kind: "study.stage.action",
+        nodeId:
+          "model:study:stages:stage:hysteresis-1:field-point:7:warning:point-7-warnings",
+        resourceRef: "analysis/hysteresis/hysteresis-1/points/7",
+        stageId: "hysteresis-1",
+        stageIndex: 0,
+        type: "study-stage",
       },
     });
   });
@@ -259,6 +340,34 @@ describe("selectExplorerNode", () => {
     });
   });
 
+  it("preserves FMR peak metadata for modal-driven comparison inspectors", () => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      artifactPath: "response/magnetic_response_sweep.v2.json",
+      calculationMode: "fmr_response",
+      id: "results:frequency-domain:fmr:peaks",
+      kind: "results.frequency_domain.fmr_peaks",
+      label: "FMR Peaks",
+      parentId: "results:frequency-domain:fmr",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+    };
+
+    selectExplorerNode(kernel, node, "explorer");
+
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "results.frequency_domain.fmr_peaks",
+      nodeId: "results:frequency-domain:fmr:peaks",
+      ref: {
+        artifactPath: "response/magnetic_response_sweep.v2.json",
+        calculationMode: "fmr_response",
+        kind: "results.frequency_domain.fmr_peaks",
+        nodeId: "results:frequency-domain:fmr:peaks",
+        resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+        type: "frequency-domain",
+      },
+    });
+  });
+
   it("preserves frequency-domain eigen k-path resource metadata for dispersion inspectors", () => {
     const kernel = makeKernel();
     const node: ExplorerNode = {
@@ -332,6 +441,81 @@ describe("selectExplorerNode", () => {
       },
     });
   });
+
+  it.each([
+    "study.stage.eigenmodes.boundary",
+    "study.stage.eigenmodes.periodic_pairs",
+    "study.stage.eigenmodes.k_path",
+    "study.stage.frequency_response.boundary",
+    "study.stage.frequency_response.periodic_pairs",
+    "study.stage.frequency_response.k_grid",
+  ] as const)("selects %s as study-stage metadata for inspector routing", (kind) => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      id: `model:study:stages:stage:fd-1:${kind.split(".").pop()}`,
+      kind,
+      label: kind,
+      parentId: "model:study:stages:stage:fd-1",
+      stageId: "fd-1",
+      stageIndex: 2,
+    };
+
+    selectExplorerNode(kernel, node, "explorer");
+
+    expect(kernel.selection.get()).toMatchObject({
+      kind,
+      nodeId: node.id,
+      ref: {
+        kind,
+        nodeId: node.id,
+        stageId: "fd-1",
+        stageIndex: 2,
+        type: "study-stage",
+      },
+    });
+  });
+
+  it.each([
+    [
+      "results.frequency_domain.dispersion",
+      "results:frequency-domain:dispersion",
+      ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+      "eigen/dispersion.csv",
+    ],
+    [
+      "diagnostics.frequency_domain.periodic_floquet",
+      "diagnostics:frequency-domain:periodic-floquet",
+      MESHING_PERIODIC_PAIRS_PATH,
+      "frequency_domain/periodic_floquet_diagnostics.v1.json",
+    ],
+  ] as const)(
+    "preserves %s resource and artifact metadata for frequency-domain inspectors",
+    (kind, nodeId, resourceRef, artifactPath) => {
+      const kernel = makeKernel();
+      const node: ExplorerNode = {
+        artifactPath,
+        id: nodeId,
+        kind,
+        label: kind,
+        parentId: "results:frequency-domain",
+        resourceRef,
+      };
+
+      selectExplorerNode(kernel, node, "explorer");
+
+      expect(kernel.selection.get()).toMatchObject({
+        kind,
+        nodeId,
+        ref: {
+          artifactPath,
+          kind,
+          nodeId,
+          resourceRef,
+          type: "frequency-domain",
+        },
+      });
+    },
+  );
 
   it("selects object authoring child groups as scene-object selections", () => {
     const kernel = makeKernel();

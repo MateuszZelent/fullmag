@@ -157,18 +157,33 @@ describe("viewport smoke projection round-trip", () => {
 
   it("can verify hysteresis replay routes snapshots through the field data plane", () => {
     const smokeScript = readFileSync(smokeScriptUrl, "utf8");
+    const hysteresisChartSource = readFileSync(
+      new URL("../../shared/domain/study/HysteresisChart.tsx", import.meta.url),
+      "utf8",
+    );
 
     expect(smokeScript).toContain("CONTROL_ROOM_SMOKE_HYSTERESIS_REPLAY");
     expect(smokeScript).toContain("CONTROL_ROOM_SMOKE_HYSTERESIS_REPLAY_ONLY");
+    expect(smokeScript).toContain("verifyHysteresisChartReplaySmoke");
     expect(smokeScript).toContain("verifyHysteresisReplaySmoke");
-    expect(smokeScript).toContain("!hysteresisReplayOnly");
+    expect(smokeScript).toContain("if (hysteresisReplayOnly) {");
     expect(smokeScript).toContain("loadHysteresisReplaySnapshot");
+    expect(smokeScript).toContain(".fm-hysteresis-container");
+    expect(smokeScript).toContain("data-hysteresis-point-count");
+    expect(smokeScript).toContain("data-hysteresis-active-snapshot-id");
     expect(smokeScript).toContain("data-hysteresis-replay-snapshot-id");
     expect(smokeScript).toContain("data-hysteresis-replay-stage-id");
     expect(smokeScript).toContain('params.get("snapshot_id") === hysteresisReplaySnapshotId');
+    expect(smokeScript).toContain('params.get("stage_id") === hysteresisReplayStageId');
     expect(smokeScript).toContain('params.get("component") === "full"');
     expect(smokeScript).toContain('params.get("scope_kind") === "full"');
     expect(smokeScript).toContain("Hysteresis replay smoke passed:");
+    expect(hysteresisChartSource).toContain("data-hysteresis-stage-id");
+    expect(hysteresisChartSource).toContain("data-hysteresis-point-count");
+    expect(hysteresisChartSource).toContain("data-hysteresis-active-snapshot-id");
+    expect(smokeScript.indexOf("if (hysteresisReplayOnly) {")).toBeLessThan(
+      smokeScript.indexOf("verifyCameraGesturesStayLocal"),
+    );
   });
 
   it("asserts camera gestures do not issue data/model/visualization fetches", () => {
@@ -274,7 +289,10 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain("verifyRegionAuthoringOverlayFlow");
     expect(smokeScript).toContain("CONTROL_ROOM_SMOKE_REGION_ONLY_OBJECT_ID");
     expect(smokeScript).toContain("isObjectRegionCreateUrl");
-    expect(smokeScript).toContain("if (!regionOnlyObjectId && !hysteresisReplayOnly)");
+    expect(smokeScript).toContain("if (!regionOnlyObjectId)");
+    expect(smokeScript.indexOf("if (hysteresisReplayOnly) {")).toBeLessThan(
+      smokeScript.indexOf("if (!regionOnlyObjectId)"),
+    );
     expect(smokeScript).toContain("ensureExplorerNodeExpanded");
     expect(smokeScript).toContain(
       'if ((await node.getAttribute("aria-expanded")) === "false")',

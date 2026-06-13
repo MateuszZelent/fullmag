@@ -59,6 +59,7 @@ SUPPORTED_HYSTERESIS_INITIAL_PROTOCOLS = {
     "zero_field_relaxed",
     "positive_saturation",
     "negative_saturation",
+    "checkpoint",
 }
 SUPPORTED_HYSTERESIS_BRANCH_MODES = {
     "major_loop",
@@ -72,6 +73,15 @@ SUPPORTED_HYSTERESIS_STORAGE_MAGNETIZATION = {
     "every_n",
     "every_step",
     "key_events",
+}
+MU0_H_PER_M = 1.2566370614359172e-6
+DEFAULT_HYSTERESIS_FIELD_UNIT_PROVENANCE = {
+    "authored_quantity": "mu0_h",
+    "authored_unit": "mT",
+    "canonical_quantity": "h_ext",
+    "canonical_unit": "A/m",
+    "display_unit": "mT",
+    "mu0_h_per_m": MU0_H_PER_M,
 }
 DEFAULT_TABLE_AUTOSAVE_QUANTITIES = (
     "step",
@@ -653,6 +663,7 @@ class FrequencyResponse:
     outputs: Sequence[FrequencyOutputSpec]
     frequencies_hz: Sequence[float]
     excitation_field_au_per_m: tuple[float, float, float] = (0.0, 0.0, 1.0)
+    excitation_phase_rad: float = 0.0
     operator: str = "linearized_llg"
     equilibrium_source: str = "provided"
     equilibrium_artifact: str | None = None
@@ -681,6 +692,10 @@ class FrequencyResponse:
                 "excitation_field_au_per_m",
             ),
         )
+        phase_rad = float(self.excitation_phase_rad)
+        if not math.isfinite(phase_rad):
+            raise ValueError("excitation_phase_rad must be finite")
+        object.__setattr__(self, "excitation_phase_rad", phase_rad)
         object.__setattr__(
             self,
             "equilibrium_artifact",
@@ -718,7 +733,10 @@ class FrequencyResponse:
             "normalization": self.normalization,
             "damping_policy": self.damping_policy,
             "spin_wave_bc": _serialize_spin_wave_bc(self.spin_wave_bc),
-            "excitation": {"field_au_per_m": list(self.excitation_field_au_per_m)},
+            "excitation": {
+                "field_au_per_m": list(self.excitation_field_au_per_m),
+                "phase_rad": self.excitation_phase_rad,
+            },
             "frequencies_hz": {"values_hz": list(self.frequencies_hz)},
             "sampling": {"outputs": [output.to_ir() for output in self.outputs]},
         }
@@ -1452,6 +1470,7 @@ class Hysteresis:
     measurement_axis: str | MeasurementAxis = "field_axis"
     angular_family: HysteresisAngularFamily | None = None
     initial_protocol: str = "positive_saturation"
+    initial_state_ref: str | None = None
     saturation: SaturationProbe | None = None
     branch_mode: str = "major_loop"
     settle_pipeline: SettlePipeline | SettleTree | None = None
@@ -1515,6 +1534,12 @@ class Hysteresis:
         if self.initial_protocol not in SUPPORTED_HYSTERESIS_INITIAL_PROTOCOLS:
             supported = ", ".join(sorted(SUPPORTED_HYSTERESIS_INITIAL_PROTOCOLS))
             raise ValueError(f"initial_protocol must be one of: {supported}")
+        if self.initial_protocol == "checkpoint":
+            initial_state_ref = require_non_empty(
+                self.initial_state_ref,
+                "initial_state_ref",
+            )
+            object.__setattr__(self, "initial_state_ref", initial_state_ref)
         if self.branch_mode not in SUPPORTED_HYSTERESIS_BRANCH_MODES:
             supported = ", ".join(sorted(SUPPORTED_HYSTERESIS_BRANCH_MODES))
             raise ValueError(f"branch_mode must be one of: {supported}")
@@ -1530,6 +1555,7 @@ class Hysteresis:
     def to_ir(self) -> dict[str, object]:
         payload: dict[str, object] = {
             "kind": "hysteresis",
+            "field_unit_provenance": dict(DEFAULT_HYSTERESIS_FIELD_UNIT_PROVENANCE),
             "measurement_axis": (
                 self.measurement_axis.to_ir()
                 if isinstance(self.measurement_axis, MeasurementAxis)
@@ -1539,6 +1565,8 @@ class Hysteresis:
             "branch_mode": self.branch_mode,
             "sampling": {"outputs": [output.to_ir() for output in self.outputs]},
         }
+        if self.initial_state_ref is not None:
+            payload["initial_state_ref"] = self.initial_state_ref
         if self.field_min_mT is not None:
             payload["field_min_mT"] = self.field_min_mT
         if self.field_max_mT is not None:

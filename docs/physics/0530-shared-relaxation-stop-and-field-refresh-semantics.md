@@ -2,7 +2,7 @@
 
 - Status: draft
 - Owners: Fullmag core
-- Last updated: 2026-04-16
+- Last updated: 2026-06-12
 - Related ADRs:
   - `docs/adr/0001-physics-first-python-api.md`
 - Related specs:
@@ -65,6 +65,10 @@ the execution control explicit.
 4. If neither `max_pseudotime_s` nor `max_physical_time_s` is provided, the
    relax stage is not implicitly time-bounded. `max_steps` remains an iteration
    cap only and must not be converted into a synthetic pseudo-time budget.
+   Direct minimizers (`projected_gradient_bb`, `nonlinear_cg`, and
+   `tangent_plane_implicit`) do not advance physical time; their accepted line
+   search step size is recorded as pseudo-time. A physical-time budget is valid
+   only for true time-integrated relaxation such as `llg_overdamped`.
 5. `energy_tolerance_j` is a stagnation / plateau criterion, not a proof of a
    zero-torque state. Backends that publish `reason=energy` must evaluate it over
    a fixed accepted-step window of 50 total-energy samples. A single small
@@ -127,7 +131,8 @@ Add:
 - `Relaxation(stop=RelaxStop(...))`
 
 Existing scalar relax arguments remain supported as compatibility aliases and
-lower into `RelaxStop`.
+lower into `RelaxStop`. Their default torque tolerance is the same as
+`RelaxStop()`: `1e-4 A/m`.
 
 ### 4.2 ProblemIR representation
 
@@ -148,6 +153,9 @@ scalar fields spread across layers.
 - Absence of a time stop in `RelaxStop` must remain semantically unbounded
   across Python, CLI, planner, runner, and UI. No layer may silently inject a
   fallback like `dt_initial * max_steps`.
+- Planner must reject `max_physical_time_s` for direct minimizers because those
+  algorithms do not carry physical time. Users must choose `max_pseudotime_s`
+  for direct minimizers or `llg_overdamped` for physical-time relaxation.
 - Capability language remains shared; no UI-only relaxation semantics are
   permitted.
 - The capability matrix must describe this as shared executable relaxation

@@ -19,6 +19,11 @@ FIELD_VALUES_MT = [
     if value.strip()
 ]
 MAX_MINIMIZE_STEPS = int(os.environ.get("FULLMAG_HYSTERESIS_MAX_STEPS", "2000"))
+NEAR_EASY_AXIS_THETA_DEG = float(os.environ.get("FULLMAG_HYSTERESIS_NEAR_EASY_AXIS_THETA_DEG", "30.0"))
+NEAR_EASY_AXIS_ORIENTATION = fm.FieldOrientation.sample(
+    theta_deg=NEAR_EASY_AXIS_THETA_DEG,
+    phi_deg=0.0,
+)
 
 study = fm.study("hysteresis_fdm_macrospin_stoner_wohlfarth")
 study.engine("fdm")
@@ -50,7 +55,7 @@ study.tableautosave(
 )
 study.stages.add_hysteresis_sweep(
     field_values_mT=FIELD_VALUES_MT,
-    orientation=fm.FieldOrientation.preset("oop_positive"),
+    orientation=NEAR_EASY_AXIS_ORIENTATION,
     measurement_axis="field_axis",
     angular_family=fm.HysteresisAngularFamily(
         family_id="macrospin_sw_angles",
@@ -58,8 +63,8 @@ study.stages.add_hysteresis_sweep(
         variants=[
             fm.HysteresisAngularVariant(
                 "easy_axis",
-                fm.FieldOrientation.preset("oop_positive"),
-                label="Easy axis",
+                NEAR_EASY_AXIS_ORIENTATION,
+                label=f"Near easy axis ({NEAR_EASY_AXIS_THETA_DEG:g} deg)",
                 measurement_axis="field_axis",
             ),
             fm.HysteresisAngularVariant(

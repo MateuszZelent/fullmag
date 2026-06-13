@@ -170,13 +170,14 @@ FrequencyDomainStatus solve_dense_driven_response_validation_problem(
         double block_matrix[kMaxValidationBlockDofs][kMaxValidationBlockDofs]{};
         double rhs[kMaxValidationBlockDofs]{};
         for (std::uint64_t row = 0; row < tangent_dof_count; ++row) {
-            const double drive = problem.drive_real[row];
-            if (!std::isfinite(drive)) {
+            const double drive_real = problem.drive_real[row];
+            const double drive_imag = problem.drive_imag != nullptr ? problem.drive_imag[row] : 0.0;
+            if (!std::isfinite(drive_real) || !std::isfinite(drive_imag)) {
                 copy_error(out_result->error_message, "dense driven response validation problem has non-finite drive");
                 return FrequencyDomainStatus::validation_error;
             }
-            rhs[row] = drive;
-            rhs[row + tangent_dof_count] = 0.0;
+            rhs[row] = drive_real;
+            rhs[row + tangent_dof_count] = drive_imag;
             for (std::uint64_t column = 0; column < tangent_dof_count; ++column) {
                 const double stiffness = matrix_value(
                     problem.stiffness_matrix_row_major,
@@ -225,9 +226,11 @@ FrequencyDomainStatus solve_dense_driven_response_validation_problem(
         double residual_l2_squared = 0.0;
         double rhs_l2_squared = 0.0;
         for (std::uint64_t row = 0; row < tangent_dof_count; ++row) {
-            double residual_real = -problem.drive_real[row];
-            double residual_imag = 0.0;
-            rhs_l2_squared += problem.drive_real[row] * problem.drive_real[row];
+            const double drive_real = problem.drive_real[row];
+            const double drive_imag = problem.drive_imag != nullptr ? problem.drive_imag[row] : 0.0;
+            double residual_real = -drive_real;
+            double residual_imag = -drive_imag;
+            rhs_l2_squared += drive_real * drive_real + drive_imag * drive_imag;
             for (std::uint64_t column = 0; column < tangent_dof_count; ++column) {
                 const double stiffness = matrix_value(
                     problem.stiffness_matrix_row_major,

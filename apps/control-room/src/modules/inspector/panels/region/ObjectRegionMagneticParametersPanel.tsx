@@ -264,6 +264,15 @@ export function ObjectRegionMagneticParametersPanel({
     draft.materialOverrides.map((override) => override.parameter),
   );
   const inheritedParams = parameters.filter((p) => !overriddenParams.has(p));
+  const overrideKeys = draft.materialOverrides.map((override) =>
+    [
+      override.parameter,
+      override.value,
+      override.unit,
+      override.priority,
+      override.conflictPolicy,
+    ].join(":"),
+  );
 
   return (
     <Accordion
@@ -309,7 +318,7 @@ export function ObjectRegionMagneticParametersPanel({
             sceneData,
           );
           return (
-            <div className="fm-region-override" key={`${override.parameter}:${index}`} style={{ borderTop: "1px solid var(--fm-border, #ccc)", paddingTop: "12px", marginTop: "12px" }}>
+            <div className="fm-region-override" key={overrideKeys[index]} style={{ borderTop: "1px solid var(--fm-border, #ccc)", paddingTop: "12px", marginTop: "12px" }}>
               <FormField
                 label={`Override ${index + 1}`}
                 type="select"

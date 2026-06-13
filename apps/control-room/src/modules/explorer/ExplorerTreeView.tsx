@@ -52,6 +52,7 @@ import {
 } from "@/shared/ui/ContextMenu";
 
 import { selectExplorerNode } from "./explorerSelection";
+import { explorerStatusClassName } from "./explorerStatusClass";
 import {
   setExplorerKeyboardRow,
   toggleExplorerNode,
@@ -320,7 +321,10 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
 
   const row = (
     <div
-      className="fm-explorer-tree-row"
+      className={[
+        "fm-explorer-tree-row",
+        explorerStatusClassName(node.status),
+      ].filter(Boolean).join(" ")}
       data-active={active}
       data-node-id={node.id}
       data-status={statusLabel(node.status)}

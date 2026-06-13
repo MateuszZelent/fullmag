@@ -17,12 +17,24 @@ For `Ku1 > 0`, magnetization parallel to the axis `u` has lower energy than
 magnetization perpendicular to `u`. This differs from the shifted convention
 `Ku(1 - (m.u)^2)` only by a constant for uniform material parameters.
 
+For multi-body shared-domain FEM, `u` may be either a uniform material axis or
+a nodal realized axis field `u(x)` produced by the planner from per-object or
+per-region material assignments. The physical energy is then:
+
+```text
+E_ani = integral_Omega [-Ku1(x) (m.u(x))^2 - Ku2(x) (m.u(x))^4] dV
+```
+
+Each nonzero `u(x)` sample is normalized before the runtime uses it. Nodes with
+inactive anisotropy coefficients may carry the default axis; it has no physical
+effect while `Ku1(x) = Ku2(x) = 0`.
+
 ## Pole / torque
 
 Uniaxial anisotropy contributes an effective field, not a direct torque:
 
 ```text
-H_ani = [2 Ku1/(mu0 Ms) (m.u) + 4 Ku2/(mu0 Ms) (m.u)^3] u
+H_ani(x) = [2 Ku1(x)/(mu0 Ms(x)) (m.u(x)) + 4 Ku2(x)/(mu0 Ms(x)) (m.u(x))^3] u(x)
 ```
 
 `H_ani` is added to `H_eff` in `A/m`. The LLG integrator applies `gamma_mu0`
@@ -50,7 +62,10 @@ field contribution is zero.
 
 The current transition module evaluates the field at nodes and integrates
 energy with the available nodal lumped weights. Uniform `Ku1`, `Ku2`, and `Ms`
-are used unless the corresponding per-node fields are populated.
+are used unless the corresponding per-node fields are populated. Per-node
+anisotropy axis fields use the same P1 nodal ownership as `Ku1`, `Ku2`, and
+`Ms`; they are a realization detail of the FEM plan, not a new public authoring
+construct.
 
 ## Ograniczenia capability
 
@@ -60,6 +75,9 @@ are used unless the corresponding per-node fields are populated.
 - GPU parity is not claimed by this module.
 - Periodic maps require field projection by the caller, matching the current
   transitional `mfem_bridge.cpp` flow.
+- Heterogeneous uniaxial axes are supported only after shared-domain
+  materialization can prove nodal axis realization. Cubic-axis heterogeneity is
+  a separate capability and remains outside this slice.
 
 ## Testy
 

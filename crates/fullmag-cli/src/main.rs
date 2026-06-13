@@ -970,6 +970,7 @@ mod tests {
                 dind_field: None,
                 dbulk_field: None,
             },
+            anisotropy_axis_field: None,
             ms_element_field: None,
             a_element_field: None,
             region_materials: Vec::new(),

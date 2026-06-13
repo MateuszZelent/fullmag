@@ -3,6 +3,7 @@
  */
 
 #include "frequency_domain/frequency_domain_contract.hpp"
+#include "frequency_domain/anisotropy_operator.hpp"
 #include "frequency_domain/driven_response_solver.hpp"
 #include "frequency_domain/equilibrium_state.hpp"
 #include "frequency_domain/excitation.hpp"
@@ -12,18 +13,22 @@
 #include "frequency_domain/zeeman_operator.hpp"
 #include "fullmag_fem.h"
 #include "cpu/frequency_domain/mfem_exchange_operator.hpp"
+#include "cpu/frequency_domain/mfem_dmi_operator.hpp"
 #include "cpu/frequency_domain/mfem_driven_response_validation.hpp"
 #include "cpu/frequency_domain/mfem_linearized_operator.hpp"
 #include "cpu/frequency_domain/mfem_operator_context.hpp"
 #include "cpu/frequency_domain/mfem_tangent_space.hpp"
 #include "cpu/frequency_domain/mfem_zeeman_operator.hpp"
+#include "cpu/frequency_domain/production_cpu_driven_response.hpp"
 
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -64,9 +69,93 @@ bool file_exists(const char *path)
     return true;
 }
 
+long file_size_bytes(const char *path)
+{
+    FILE *input = std::fopen(path, "rb");
+    check(input != nullptr, "expected binary file is readable");
+    check(std::fseek(input, 0, SEEK_END) == 0, "expected binary file is seekable");
+    const long size = std::ftell(input);
+    std::fclose(input);
+    return size;
+}
+
 struct CancelAfterFirstPoll {
     int poll_count = 0;
 };
+
+struct DiagonalProductionOperator {
+    const double *stiffness = nullptr;
+    const double *mass = nullptr;
+    std::uint64_t tangent_dof_count = 0;
+    std::uint64_t stiffness_call_count = 0;
+    std::uint64_t mass_call_count = 0;
+};
+
+struct ProductionProgressRecorder {
+    std::uint64_t event_count = 0;
+    std::uint64_t last_frequency_index = 0;
+    std::uint64_t last_completed_frequency_count = 0;
+    std::uint64_t last_total_frequency_count = 0;
+    std::uint64_t last_iteration_count = 0;
+    double last_frequency_hz = 0.0;
+    double last_relative_residual_l2_norm = 0.0;
+    bool saw_converged = false;
+};
+
+struct CancelAfterCompletedProductionPoint {
+    bool cancel_requested = false;
+};
+
+struct CAbiProgressRecorder {
+    std::uint64_t event_count = 0;
+    std::uint64_t last_frequency_index = 0;
+    std::uint64_t last_completed_frequency_count = 0;
+    std::uint64_t last_total_frequency_count = 0;
+    std::uint64_t last_iteration_count = 0;
+    double last_frequency_hz = 0.0;
+    double last_relative_residual_l2_norm = 0.0;
+    bool saw_converged = false;
+};
+
+struct CAbiCancelAfterCompletedPoint {
+    bool cancel_requested = false;
+};
+
+fd::FrequencyDomainStatus apply_diagonal_stiffness(
+    void *user_data,
+    const double *in,
+    double *out,
+    char error_message[128])
+{
+    auto *op = static_cast<DiagonalProductionOperator *>(user_data);
+    if (op == nullptr || op->stiffness == nullptr || in == nullptr || out == nullptr) {
+        std::snprintf(error_message, 128, "missing diagonal stiffness operator buffers");
+        return fd::FrequencyDomainStatus::validation_error;
+    }
+    ++op->stiffness_call_count;
+    for (std::uint64_t index = 0; index < op->tangent_dof_count; ++index) {
+        out[index] = op->stiffness[index] * in[index];
+    }
+    return fd::FrequencyDomainStatus::ok;
+}
+
+fd::FrequencyDomainStatus apply_diagonal_mass(
+    void *user_data,
+    const double *in,
+    double *out,
+    char error_message[128])
+{
+    auto *op = static_cast<DiagonalProductionOperator *>(user_data);
+    if (op == nullptr || op->mass == nullptr || in == nullptr || out == nullptr) {
+        std::snprintf(error_message, 128, "missing diagonal mass operator buffers");
+        return fd::FrequencyDomainStatus::validation_error;
+    }
+    ++op->mass_call_count;
+    for (std::uint64_t index = 0; index < op->tangent_dof_count; ++index) {
+        out[index] = op->mass[index] * in[index];
+    }
+    return fd::FrequencyDomainStatus::ok;
+}
 
 bool cancel_after_first_poll(void *user_data)
 {
@@ -80,10 +169,77 @@ bool cancel_immediately(void *)
     return true;
 }
 
+bool cancel_after_completed_production_point(void *user_data)
+{
+    auto *state = static_cast<CancelAfterCompletedProductionPoint *>(user_data);
+    return state != nullptr && state->cancel_requested;
+}
+
+void record_production_progress(
+    void *user_data,
+    const fd::ProductionCpuDrivenResponseProgress &progress)
+{
+    auto *recorder = static_cast<ProductionProgressRecorder *>(user_data);
+    ++recorder->event_count;
+    recorder->last_frequency_index = progress.frequency_index;
+    recorder->last_completed_frequency_count = progress.completed_frequency_count;
+    recorder->last_total_frequency_count = progress.total_frequency_count;
+    recorder->last_iteration_count = progress.iteration_count;
+    recorder->last_frequency_hz = progress.frequency_hz;
+    recorder->last_relative_residual_l2_norm = progress.relative_residual_l2_norm;
+    recorder->saw_converged = recorder->saw_converged || progress.converged;
+}
+
+void request_cancel_after_completed_production_point(
+    void *user_data,
+    const fd::ProductionCpuDrivenResponseProgress &progress)
+{
+    auto *state = static_cast<CancelAfterCompletedProductionPoint *>(user_data);
+    if (state != nullptr && progress.completed_frequency_count >= 1) {
+        state->cancel_requested = true;
+    }
+}
+
 int c_abi_cancel_immediately(void *)
 {
     return 1;
 }
+
+void c_abi_record_progress(
+    void *user_data,
+    const fullmag_fem_frequency_domain_progress *progress)
+{
+    auto *recorder = static_cast<CAbiProgressRecorder *>(user_data);
+    check(progress != nullptr, "C ABI progress callback receives progress");
+    ++recorder->event_count;
+    recorder->last_frequency_index = progress->frequency_index;
+    recorder->last_completed_frequency_count = progress->completed_frequency_count;
+    recorder->last_total_frequency_count = progress->total_frequency_count;
+    recorder->last_iteration_count = progress->iteration_count;
+    recorder->last_frequency_hz = progress->frequency_hz;
+    recorder->last_relative_residual_l2_norm = progress->relative_residual_l2_norm;
+    recorder->saw_converged = recorder->saw_converged || progress->converged != 0;
+}
+
+int c_abi_cancel_after_completed_point(void *user_data)
+{
+    auto *state = static_cast<CAbiCancelAfterCompletedPoint *>(user_data);
+    return state != nullptr && state->cancel_requested ? 1 : 0;
+}
+
+void c_abi_request_cancel_after_completed_point(
+    void *user_data,
+    const fullmag_fem_frequency_domain_progress *progress)
+{
+    auto *state = static_cast<CAbiCancelAfterCompletedPoint *>(user_data);
+    if (state != nullptr &&
+        progress != nullptr &&
+        progress->completed_frequency_count >= 1) {
+        state->cancel_requested = true;
+    }
+}
+
+void fill_bulk_dmi_tetra_element(fd::MfemDmiElementTangentData &element, double d, double volume);
 
 void enum_strings_are_stable()
 {
@@ -105,6 +261,12 @@ void enum_strings_are_stable()
             fd::study_kind_to_string(fd::FrequencyDomainStudyKind::modal_dynamic_matrix),
             "eigenmodes") == 0,
         "modal study kind string is stable");
+    check(
+        static_cast<int>(FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_I_OMEGA_T) == 0,
+        "C ABI exp(+i omega t) phase convention discriminant is stable");
+    check(
+        static_cast<int>(FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_MINUS_I_OMEGA_T) == 1,
+        "C ABI exp(-i omega t) phase convention discriminant is stable");
 }
 
 void availability_probe_is_noexcept()
@@ -232,7 +394,7 @@ void completed_sweep_progress_preserves_completed_artifacts()
     check(contains(progress.progress_json, "completed"), "progress JSON reports completion");
 }
 
-void driven_response_is_explicitly_unavailable()
+void driven_response_cpu_slice_is_available()
 {
     fd::FrequencyDomainAvailabilityRequest request{};
     request.study_kind = fd::FrequencyDomainStudyKind::driven_frequency_response;
@@ -241,14 +403,82 @@ void driven_response_is_explicitly_unavailable()
     const fd::FrequencyDomainAvailabilityResult result =
         fd::frequency_domain_availability(request);
 
-    check(result.status == fd::FrequencyDomainStatus::unavailable, "driven status is unavailable");
-    check(fd::status_is_error(result.status), "unavailable driven status is an error");
-    check(!result.driven_response_available, "driven response is not marked available");
+    check(result.status == fd::FrequencyDomainStatus::ok, "driven CPU status is available");
+    check(!fd::status_is_error(result.status), "available driven CPU status is not an error");
+    check(result.driven_response_available, "driven response CPU slice is marked available");
     check(!result.modal_solver_available, "modal solver is not marked available");
-    check(contains(result.error_message, "driven"), "driven unavailable reason names solver");
+    check(
+        result.static_periodic_response_available,
+        "static-periodic response CPU slice is marked available");
+    check(result.error_message[0] == '\0', "available driven response has no error reason");
     check(
         contains(result.diagnostics_json, "frequency_domain_availability.v1"),
         "diagnostics schema is reported");
+    check(
+        contains(result.diagnostics_json, "\"driven_response_available\":true"),
+        "diagnostics mark driven response available");
+    check(
+        contains(result.diagnostics_json, "gamma_free_or_static_periodic_magnetic_response"),
+        "diagnostics identify the limited CPU response scope");
+}
+
+void static_periodic_driven_response_is_explicitly_available()
+{
+    fd::FrequencyDomainAvailabilityRequest request{};
+    request.study_kind = fd::FrequencyDomainStudyKind::driven_frequency_response;
+    request.requires_driven_solver = true;
+    request.requires_static_periodic_boundary = true;
+
+    const fd::FrequencyDomainAvailabilityResult result =
+        fd::frequency_domain_availability(request);
+
+    check(
+        result.status == fd::FrequencyDomainStatus::ok,
+        "static-periodic driven response status is available");
+    check(result.driven_response_available, "static-periodic response keeps driven response available");
+    check(
+        result.static_periodic_response_available,
+        "static-periodic response capability is marked available");
+    check(
+        contains(result.diagnostics_json, "\"static_periodic_response_available\":true"),
+        "diagnostics mark static-periodic response available");
+}
+
+void driven_response_floquet_boundary_is_explicitly_unavailable()
+{
+    fd::FrequencyDomainAvailabilityRequest request{};
+    request.study_kind = fd::FrequencyDomainStudyKind::driven_frequency_response;
+    request.requires_driven_solver = true;
+    request.requires_floquet_boundary = true;
+
+    const fd::FrequencyDomainAvailabilityResult result =
+        fd::frequency_domain_availability(request);
+
+    check(
+        result.status == fd::FrequencyDomainStatus::unavailable,
+        "Floquet driven response status is unavailable");
+    check(!result.driven_response_available, "Floquet response is not marked available");
+    check(!result.floquet_response_available, "Floquet response capability remains false");
+    check(contains(result.error_message, "Floquet"), "unavailable reason names Floquet");
+}
+
+void driven_response_floquet_k_metadata_is_explicitly_unavailable()
+{
+    fd::FrequencyDomainAvailabilityRequest request{};
+    request.study_kind = fd::FrequencyDomainStudyKind::driven_frequency_response;
+    request.requires_driven_solver = true;
+    request.has_floquet_k_vector = true;
+    request.floquet_k_vector_rad_per_m[0] = 1.0e6;
+
+    const fd::FrequencyDomainAvailabilityResult result =
+        fd::frequency_domain_availability(request);
+
+    check(
+        result.status == fd::FrequencyDomainStatus::unavailable,
+        "Floquet k-vector metadata status is unavailable");
+    check(!result.floquet_response_available, "Floquet response capability remains false");
+    check(contains(result.error_message, "Floquet/Bloch"), "unavailable reason names Floquet/Bloch");
+    check(contains(result.error_message, "nonzero-k"), "unavailable reason names nonzero-k");
 }
 
 void modal_solver_is_explicitly_unavailable()
@@ -309,21 +539,84 @@ void c_abi_reports_frequency_domain_availability()
 
     check(status == FULLMAG_FEM_OK, "C ABI frequency-domain availability query succeeds");
     check(
-        info.status == FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_UNAVAILABLE,
-        "C ABI reports unavailable status");
+        info.status == FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OK,
+        "C ABI reports available status");
     check(
-        std::strcmp(info.status_name, "unavailable") == 0,
+        std::strcmp(info.status_name, "ok") == 0,
         "C ABI reports status string");
     check(
         std::strcmp(info.study_kind_name, "frequency_response") == 0,
         "C ABI reports study kind string");
     check(
-        info.driven_response_available == 0,
-        "C ABI does not mark driven response available");
-    check(contains(info.reason, "driven"), "C ABI reason names driven solver");
+        info.driven_response_available == 1,
+        "C ABI marks driven response CPU slice available");
+    check(
+        info.static_periodic_response_available == 1,
+        "C ABI marks static-periodic response CPU slice available");
+    check(info.reason[0] == '\0', "C ABI reports no reason for available driven response");
     check(
         contains(info.diagnostics_json, "frequency_domain_availability.v1"),
         "C ABI diagnostics JSON reports schema");
+    check(
+        contains(info.diagnostics_json, "\"driven_response_available\":true"),
+        "C ABI diagnostics mark driven response available");
+    check(
+        contains(info.diagnostics_json, "\"static_periodic_response_available\":true"),
+        "C ABI diagnostics mark static-periodic response available");
+}
+
+void c_abi_reports_floquet_k_metadata_as_unavailable()
+{
+    fullmag_fem_frequency_domain_availability_request request{};
+    request.study_kind = FULLMAG_FEM_FREQUENCY_DOMAIN_STUDY_RESPONSE;
+    request.requires_driven_solver = 1;
+    request.has_floquet_k_vector = 1;
+    request.floquet_k_vector_rad_per_m[0] = 1.0e6;
+    request.phase_convention = FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_MINUS_I_OMEGA_T;
+
+    fullmag_fem_frequency_domain_availability_info info{};
+    const int status =
+        fullmag_fem_get_frequency_domain_availability_info(&request, &info);
+
+    check(status == FULLMAG_FEM_OK, "C ABI Floquet availability query succeeds");
+    check(
+        info.status == FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_UNAVAILABLE,
+        "C ABI Floquet metadata reports unavailable status");
+    check(info.floquet_response_available == 0, "C ABI Floquet response capability remains false");
+    check(contains(info.reason, "Floquet/Bloch"), "C ABI Floquet unavailable reason names Floquet/Bloch");
+    check(contains(info.reason, "nonzero-k"), "C ABI Floquet unavailable reason names nonzero-k");
+}
+
+void c_abi_frequency_domain_availability_rejects_unknown_study_kind()
+{
+    fullmag_fem_frequency_domain_availability_request request{};
+    request.study_kind = static_cast<fullmag_fem_frequency_domain_study_kind>(99);
+    request.requires_driven_solver = 1;
+
+    fullmag_fem_frequency_domain_availability_info info{};
+    const int status =
+        fullmag_fem_get_frequency_domain_availability_info(&request, &info);
+
+    check(
+        status == FULLMAG_FEM_ERR_INVALID,
+        "C ABI availability rejects unknown study kind");
+}
+
+void c_abi_frequency_domain_availability_rejects_unknown_phase_convention()
+{
+    fullmag_fem_frequency_domain_availability_request request{};
+    request.study_kind = FULLMAG_FEM_FREQUENCY_DOMAIN_STUDY_RESPONSE;
+    request.requires_driven_solver = 1;
+    request.phase_convention =
+        static_cast<fullmag_fem_frequency_domain_phase_convention>(99);
+
+    fullmag_fem_frequency_domain_availability_info info{};
+    const int status =
+        fullmag_fem_get_frequency_domain_availability_info(&request, &info);
+
+    check(
+        status == FULLMAG_FEM_ERR_INVALID,
+        "C ABI availability rejects unknown phase convention");
 }
 
 void c_abi_rejects_null_arguments()
@@ -658,6 +951,37 @@ void tangent_operator_rejects_unsupported_terms()
     check(contains(diagnostics.error_message, "unsupported"), "diagnostics explain rejection");
 }
 
+void tangent_operator_rejects_nonfinite_local_block_coefficients()
+{
+    const fd::TangentWorkspaceShape shape = fd::tangent_workspace_shape(1);
+    const fd::TangentOperatorLocalBlock term{
+        fd::FrequencyDomainOperatorTermKind::zeeman,
+        std::numeric_limits<double>::infinity(),
+        0.0,
+        0.0,
+        1.0,
+    };
+    const double tangent_in[] = {1.0, 0.0};
+    double tangent_out[2]{};
+    fd::TangentOperatorDiagnostics diagnostics{};
+
+    const fd::FrequencyDomainStatus status = fd::apply_tangent_local_operator(
+        &term,
+        1,
+        tangent_in,
+        shape,
+        tangent_out,
+        &diagnostics);
+
+    check(
+        status == fd::FrequencyDomainStatus::validation_error,
+        "local tangent operator rejects non-finite block coefficients");
+    check(
+        contains(diagnostics.error_message, "finite"),
+        "local tangent operator explains finite block coefficient requirement");
+    check(tangent_out[0] == 0.0 && tangent_out[1] == 0.0, "local non-finite block leaves output untouched");
+}
+
 void zeeman_tangent_block_uses_parallel_field_and_reports_transverse_residual()
 {
     const double equilibrium[] = {
@@ -715,6 +1039,63 @@ void zeeman_tangent_block_uses_parallel_field_and_reports_transverse_residual()
     check(std::abs(tangent_out[3] + 8.0) < 1.0e-12, "Zeeman output node1 e2");
 }
 
+void zeeman_tangent_block_rejects_nonfinite_external_field()
+{
+    const double equilibrium[] = {0.0, 0.0, 1.0};
+    fd::TangentFrameNode node{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 1, &node, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "Zeeman non-finite field test frame build succeeds");
+
+    const double h_ext_a_per_m[] = {0.0, 0.0, std::numeric_limits<double>::infinity()};
+    fd::TangentOperatorLocalBlock block{};
+    fd::ZeemanTangentOperatorDiagnostics diagnostics{};
+
+    const fd::FrequencyDomainStatus status =
+        fd::build_zeeman_tangent_blocks(&node, h_ext_a_per_m, 1, &block, &diagnostics);
+
+    check(
+        status == fd::FrequencyDomainStatus::validation_error,
+        "Zeeman tangent block rejects non-finite external field");
+    check(contains(diagnostics.error_message, "finite"), "Zeeman non-finite field rejection explains finite field requirement");
+}
+
+void uniaxial_anisotropy_tangent_blocks_project_axis_into_tangent_space()
+{
+    const double equilibrium[] = {0.0, 0.0, 1.0};
+    fd::TangentFrameNode node{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 1, &node, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "uniaxial anisotropy test frame succeeds");
+
+    const double axis[] = {1.0, 1.0, 0.0};
+    fd::TangentOperatorLocalBlock block{};
+    fd::UniaxialAnisotropyTangentOperatorDiagnostics diagnostics{};
+    const fd::FrequencyDomainStatus status = fd::build_uniaxial_anisotropy_tangent_blocks(
+        &node,
+        axis,
+        4.0,
+        1,
+        &block,
+        &diagnostics);
+
+    check(status == fd::FrequencyDomainStatus::ok, "uniaxial anisotropy tangent block succeeds");
+    check(
+        block.kind == fd::FrequencyDomainOperatorTermKind::local_anisotropy,
+        "uniaxial anisotropy block kind");
+    check(std::abs(block.a00 - 2.0) < 1.0e-12, "uniaxial anisotropy block a00");
+    check(std::abs(block.a01 - 2.0) < 1.0e-12, "uniaxial anisotropy block a01");
+    check(std::abs(block.a10 - 2.0) < 1.0e-12, "uniaxial anisotropy block a10");
+    check(std::abs(block.a11 - 2.0) < 1.0e-12, "uniaxial anisotropy block a11");
+    check(
+        std::abs(diagnostics.max_abs_block_coeff - 2.0) < 1.0e-12,
+        "uniaxial anisotropy diagnostics report max coeff");
+}
+
 void exchange_edge_operator_applies_tangent_graph_laplacian()
 {
     const fd::TangentWorkspaceShape shape = fd::tangent_workspace_shape(2);
@@ -765,6 +1146,28 @@ void exchange_edge_operator_rejects_out_of_range_nodes()
     check(status == fd::FrequencyDomainStatus::validation_error, "exchange edge rejects invalid node");
     check(diagnostics.invalid_edge_count == 1, "exchange diagnostics count invalid edge");
     check(contains(diagnostics.error_message, "node"), "exchange diagnostics explain invalid node");
+}
+
+void exchange_edge_operator_rejects_nonfinite_stiffness()
+{
+    const fd::TangentWorkspaceShape shape = fd::tangent_workspace_shape(2);
+    const fd::TangentOperatorEdgeBlock edge{
+        fd::FrequencyDomainOperatorTermKind::exchange,
+        0,
+        1,
+        std::numeric_limits<double>::infinity(),
+    };
+    const double tangent_in[] = {1.0, 0.0, 0.0, 1.0};
+    double tangent_out[4]{};
+    fd::TangentEdgeOperatorDiagnostics diagnostics{};
+
+    const fd::FrequencyDomainStatus status =
+        fd::apply_tangent_edge_operator(&edge, 1, tangent_in, shape, tangent_out, &diagnostics);
+
+    check(status == fd::FrequencyDomainStatus::validation_error, "exchange edge rejects non-finite stiffness");
+    check(contains(diagnostics.error_message, "finite"), "exchange diagnostics explain finite stiffness requirement");
+    check(tangent_out[0] == 0.0 && tangent_out[1] == 0.0, "exchange non-finite stiffness leaves first node output untouched");
+    check(tangent_out[2] == 0.0 && tangent_out[3] == 0.0, "exchange non-finite stiffness leaves second node output untouched");
 }
 
 void tangent_operator_applies_combined_nodewise_and_edge_terms()
@@ -818,6 +1221,118 @@ void tangent_operator_applies_combined_nodewise_and_edge_terms()
     check(std::abs(tangent_out[1] - 2.0) < 1.0e-12, "combined output node0 e2");
     check(std::abs(tangent_out[2] + 17.0) < 1.0e-12, "combined output node1 e1");
     check(std::abs(tangent_out[3] - 16.0) < 1.0e-12, "combined output node1 e2");
+}
+
+void tangent_operator_rejects_nonfinite_combined_edge_stiffness()
+{
+    const fd::TangentWorkspaceShape shape = fd::tangent_workspace_shape(2);
+    const fd::TangentOperatorLocalBlock node_blocks[] = {
+        {
+            fd::FrequencyDomainOperatorTermKind::zeeman,
+            1.0,
+            0.0,
+            0.0,
+            1.0,
+        },
+        {
+            fd::FrequencyDomainOperatorTermKind::zeeman,
+            1.0,
+            0.0,
+            0.0,
+            1.0,
+        },
+    };
+    const fd::TangentOperatorEdgeBlock edge{
+        fd::FrequencyDomainOperatorTermKind::exchange,
+        0,
+        1,
+        std::numeric_limits<double>::infinity(),
+    };
+    const double tangent_in[] = {1.0, 2.0, 3.0, 4.0};
+    double tangent_out[4]{};
+    fd::TangentCombinedOperatorDiagnostics diagnostics{};
+
+    const fd::FrequencyDomainStatus status = fd::apply_tangent_combined_operator(
+        node_blocks,
+        &edge,
+        1,
+        tangent_in,
+        shape,
+        tangent_out,
+        &diagnostics);
+
+    check(
+        status == fd::FrequencyDomainStatus::validation_error,
+        "combined tangent operator rejects non-finite edge stiffness");
+    check(
+        contains(diagnostics.error_message, "finite"),
+        "combined tangent operator explains finite edge stiffness requirement");
+    check(
+        tangent_out[0] == 0.0 && tangent_out[1] == 0.0 &&
+            tangent_out[2] == 0.0 && tangent_out[3] == 0.0,
+        "combined non-finite edge stiffness leaves output untouched");
+}
+
+void tangent_nodewise_operator_rejects_nonfinite_local_block_coefficients()
+{
+    const fd::TangentWorkspaceShape shape = fd::tangent_workspace_shape(1);
+    const fd::TangentOperatorLocalBlock node_block{
+        fd::FrequencyDomainOperatorTermKind::local_anisotropy,
+        1.0,
+        0.0,
+        std::numeric_limits<double>::infinity(),
+        1.0,
+    };
+    const double tangent_in[] = {1.0, 2.0};
+    double tangent_out[2]{};
+    fd::TangentOperatorDiagnostics diagnostics{};
+
+    const fd::FrequencyDomainStatus status = fd::apply_tangent_nodewise_operator(
+        &node_block,
+        tangent_in,
+        shape,
+        tangent_out,
+        &diagnostics);
+
+    check(
+        status == fd::FrequencyDomainStatus::validation_error,
+        "nodewise tangent operator rejects non-finite block coefficients");
+    check(
+        contains(diagnostics.error_message, "finite"),
+        "nodewise tangent operator explains finite block coefficient requirement");
+    check(tangent_out[0] == 0.0 && tangent_out[1] == 0.0, "nodewise non-finite block leaves output untouched");
+}
+
+void tangent_combined_operator_rejects_nonfinite_local_block_coefficients()
+{
+    const fd::TangentWorkspaceShape shape = fd::tangent_workspace_shape(1);
+    const fd::TangentOperatorLocalBlock node_block{
+        fd::FrequencyDomainOperatorTermKind::zeeman,
+        1.0,
+        std::numeric_limits<double>::quiet_NaN(),
+        0.0,
+        1.0,
+    };
+    const double tangent_in[] = {1.0, 2.0};
+    double tangent_out[2]{};
+    fd::TangentCombinedOperatorDiagnostics diagnostics{};
+
+    const fd::FrequencyDomainStatus status = fd::apply_tangent_combined_operator(
+        &node_block,
+        nullptr,
+        0,
+        tangent_in,
+        shape,
+        tangent_out,
+        &diagnostics);
+
+    check(
+        status == fd::FrequencyDomainStatus::validation_error,
+        "combined tangent operator rejects non-finite local block coefficients");
+    check(
+        contains(diagnostics.error_message, "finite"),
+        "combined tangent operator explains finite local block coefficient requirement");
+    check(tangent_out[0] == 0.0 && tangent_out[1] == 0.0, "combined non-finite local block leaves output untouched");
 }
 
 void tangent_precession_operator_rotates_effective_field_variation()
@@ -901,6 +1416,7 @@ void tangent_frequency_mass_operator_combines_identity_and_damping_rotation()
         tangent_delta,
         fd::tangent_workspace_shape(1),
         0.1,
+        nullptr,
         mass_tangent,
         &diagnostics);
 
@@ -911,6 +1427,44 @@ void tangent_frequency_mass_operator_combines_identity_and_damping_rotation()
     check(std::abs(diagnostics.max_abs_output - 3.2) < 1.0e-12, "frequency mass diagnostics report max output");
     check(std::abs(mass_tangent[0] - 1.7) < 1.0e-12, "frequency mass output e1");
     check(std::abs(mass_tangent[1] + 3.2) < 1.0e-12, "frequency mass output e2");
+}
+
+void tangent_frequency_mass_operator_uses_nodewise_alpha()
+{
+    const double equilibrium[] = {
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+    };
+    fd::TangentFrameNode nodes[2]{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 2, nodes, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "nodewise frequency mass test frame build succeeds");
+
+    const double tangent_delta[] = {2.0, -3.0, 4.0, 5.0};
+    const double alpha_per_node[] = {0.1, 0.3};
+    double mass_tangent[4]{};
+    fd::TangentFrequencyMassDiagnostics diagnostics{};
+
+    const fd::FrequencyDomainStatus status = fd::apply_tangent_frequency_mass_operator(
+        nodes,
+        tangent_delta,
+        fd::tangent_workspace_shape(2),
+        0.0,
+        alpha_per_node,
+        mass_tangent,
+        &diagnostics);
+
+    check(status == fd::FrequencyDomainStatus::ok, "nodewise tangent frequency mass operator succeeds");
+    check(diagnostics.node_count == 2, "nodewise frequency mass diagnostics keep node count");
+    check(diagnostics.tangent_dof_count == 4, "nodewise frequency mass diagnostics keep tangent DOFs");
+    check(diagnostics.alpha == 0.0, "nodewise frequency mass diagnostics keep uniform alpha");
+    check(std::abs(diagnostics.max_alpha - 0.3) < 1.0e-12, "nodewise frequency mass diagnostics report max alpha");
+    check(std::abs(mass_tangent[0] - 1.7) < 1.0e-12, "nodewise frequency mass output node0 e1");
+    check(std::abs(mass_tangent[1] + 3.2) < 1.0e-12, "nodewise frequency mass output node0 e2");
+    check(std::abs(mass_tangent[2] - 5.5) < 1.0e-12, "nodewise frequency mass output node1 e1");
+    check(std::abs(mass_tangent[3] - 3.8) < 1.0e-12, "nodewise frequency mass output node1 e2");
 }
 
 void operator_contract_validates_driven_and_modal_requests_separately()
@@ -1035,9 +1589,12 @@ void driven_response_solver_boundary_returns_structured_unavailable_result()
     check(contains(result.error_message, "driven"), "driven solve unavailable reason names solver");
     check(result.diagnostics_json != nullptr, "driven solve result has diagnostics JSON");
     check(
-        contains(result.diagnostics_json, "frequency_domain_driven_response_result.v1"),
+        contains(result.diagnostics_json, "frequency_domain_response_diagnostics.v1"),
         "driven solve diagnostics JSON reports schema");
     check(result.result_json != nullptr, "driven solve result has result JSON");
+    check(
+        contains(result.result_json, "frequency_domain_driven_response_result.v1"),
+        "driven solve result JSON reports result schema");
     check(contains(result.result_json, "unavailable"), "driven solve result JSON reports status");
     check(result.artifact_manifest_path != nullptr, "driven solve result has manifest path pointer");
     check(
@@ -1090,28 +1647,54 @@ void driven_response_solver_writes_failure_artifacts_for_unavailable_run()
     check(contains(manifest.c_str(), "\"schema_version\":\"frequency_domain_manifest.v1\""), "failure manifest schema is written");
     check(contains(manifest.c_str(), "\"stage_kind\":\"frequency_response\""), "failure manifest records response stage");
     check(contains(manifest.c_str(), "\"status\":\"unavailable\""), "failure manifest records unavailable status");
+    check(contains(manifest.c_str(), "\"complete\":false"), "failure manifest records incomplete state");
     check(contains(manifest.c_str(), "\"production_solver_available\":false"), "failure manifest records production solver unavailable");
     check(
-        contains(manifest.c_str(), "\"failure_diagnostics_path\":\"frequency_domain/diagnostics.v1.json\""),
-        "failure manifest links diagnostics artifact");
+        contains(manifest.c_str(), "\"response_diagnostics_v1_path\":\"response/diagnostics.v1.json\""),
+        "failure manifest links response diagnostics artifact");
+    check(
+        contains(manifest.c_str(), "\"response_progress_v1_path\":\"response/progress.v1.json\""),
+        "failure manifest links response progress artifact");
+    check(
+        contains(manifest.c_str(), "\"frequency_point_paths\":[]"),
+        "failure manifest records no frequency point artifacts");
 
     char diagnostics_path[256]{};
     std::snprintf(
         diagnostics_path,
         sizeof(diagnostics_path),
-        "%s/frequency_domain/diagnostics.v1.json",
+        "%s/response/diagnostics.v1.json",
         output_directory);
     const std::string diagnostics = read_text_file(diagnostics_path);
     check(
-        contains(diagnostics.c_str(), "\"schema_version\":\"frequency_domain_diagnostics.v1\""),
+        contains(diagnostics.c_str(), "\"schema_version\":\"frequency_domain_response_diagnostics.v1\""),
         "failure diagnostics schema is written");
     check(contains(diagnostics.c_str(), "\"status\":\"unavailable\""), "failure diagnostics reports unavailable status");
+    check(contains(diagnostics.c_str(), "\"complete\":false"), "failure diagnostics records incomplete state");
     check(
         contains(diagnostics.c_str(), "\"solver_kind\":\"production_unavailable\""),
         "failure diagnostics records unavailable solver kind");
     check(
+        contains(diagnostics.c_str(), "\"completed_frequency_point_count\":0"),
+        "failure diagnostics records completed frequency point count");
+    check(
         contains(diagnostics.c_str(), "native FEM driven frequency-response solver is not implemented"),
         "failure diagnostics records unavailable reason");
+
+    char progress_path[256]{};
+    std::snprintf(
+        progress_path,
+        sizeof(progress_path),
+        "%s/response/progress.v1.json",
+        output_directory);
+    const std::string progress = read_text_file(progress_path);
+    check(
+        contains(progress.c_str(), "\"schema_version\":\"frequency_domain_sweep_progress.v1\""),
+        "failure progress schema is written");
+    check(contains(progress.c_str(), "\"state\":\"unavailable\""), "failure progress records unavailable state");
+    check(
+        contains(progress.c_str(), "\"partial_artifacts_available\":false"),
+        "failure progress reports no partial artifacts");
 
     char response_path[256]{};
     std::snprintf(
@@ -1124,6 +1707,76 @@ void driven_response_solver_writes_failure_artifacts_for_unavailable_run()
     if (response != nullptr) {
         std::fclose(response);
     }
+
+    fd::release_driven_frequency_response_result(&result);
+}
+
+void production_gpu_unavailable_artifact_reports_gpu_lane()
+{
+    const double frequencies_hz[] = {1.0e9};
+    char output_directory[192]{};
+    std::snprintf(
+        output_directory,
+        sizeof(output_directory),
+        "/tmp/fullmag-frequency-domain-gpu-unavailable-%llu",
+        static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&frequencies_hz)));
+
+    fd::DrivenFrequencyResponseSolveRequest request{};
+    request.solve_request.operator_request.node_count = 1;
+    request.solve_request.operator_request.tangent_dof_count = 2;
+    request.solve_request.operator_request.alpha = 0.01;
+    request.solve_request.operator_request.gamma0 = 2.211e5;
+    request.solve_request.frequencies_hz = frequencies_hz;
+    request.solve_request.frequency_count = 1;
+    request.execution_lane = fd::DrivenFrequencyResponseExecutionLane::production_gpu;
+    request.output_directory = output_directory;
+    request.write_partial_artifacts = true;
+
+    fd::DrivenFrequencyResponseSolveResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_driven_frequency_response(request, &result);
+
+    check(status == fd::FrequencyDomainStatus::unavailable, "GPU unavailable artifact run reports unavailable");
+    check(contains(result.error_message, "production GPU"), "GPU unavailable artifact names GPU lane");
+    check(
+        contains(result.artifact_manifest_path, "frequency_domain/manifest.v1.json"),
+        "GPU unavailable artifact run reports manifest path");
+
+    const std::string manifest = read_text_file(result.artifact_manifest_path);
+    check(
+        contains(manifest.c_str(), "\"requested_execution_lane\":\"production_gpu\""),
+        "GPU unavailable manifest records requested lane");
+    check(
+        contains(manifest.c_str(), "\"lane_classification\":\"fem_gpu_production\""),
+        "GPU unavailable manifest records GPU lane classification");
+    check(
+        !contains(manifest.c_str(), "\"lane_classification\":\"fem_cpu_production\""),
+        "GPU unavailable manifest must not report CPU lane classification");
+
+    char diagnostics_path[256]{};
+    std::snprintf(
+        diagnostics_path,
+        sizeof(diagnostics_path),
+        "%s/response/diagnostics.v1.json",
+        output_directory);
+    const std::string diagnostics = read_text_file(diagnostics_path);
+    check(
+        contains(diagnostics.c_str(), "\"requested_execution_lane\":\"production_gpu\""),
+        "GPU unavailable diagnostics record requested lane");
+    check(
+        contains(diagnostics.c_str(), "\"validation_fallback_used\":false"),
+        "GPU unavailable diagnostics record that validation fallback was not used");
+    check(
+        !contains(diagnostics.c_str(), "\"validation_fallback_used\":true"),
+        "GPU unavailable diagnostics must not report validation fallback");
+    char progress_path[256]{};
+    std::snprintf(
+        progress_path,
+        sizeof(progress_path),
+        "%s/response/progress.v1.json",
+        output_directory);
+    const std::string progress = read_text_file(progress_path);
+    check(contains(progress.c_str(), "\"state\":\"unavailable\""), "GPU unavailable progress records unavailable state");
 
     fd::release_driven_frequency_response_result(&result);
 }
@@ -1188,7 +1841,8 @@ void driven_response_solver_boundary_validates_request_before_unavailable_solve(
     check(status == fd::FrequencyDomainStatus::validation_error, "driven solve validates frequency sweep");
     check(result.status == fd::FrequencyDomainStatus::validation_error, "driven solve result stores validation status");
     check(contains(result.error_message, "frequency"), "driven solve validation error names frequency");
-    check(contains(result.diagnostics_json, "frequency_domain_driven_response_result.v1"), "validation diagnostics has schema");
+    check(contains(result.diagnostics_json, "frequency_domain_response_diagnostics.v1"), "validation diagnostics has schema");
+    check(contains(result.result_json, "frequency_domain_driven_response_result.v1"), "validation result has result schema");
     fd::release_driven_frequency_response_result(&result);
 }
 
@@ -1268,6 +1922,617 @@ void driven_response_solver_runs_tiny_dense_validation_problem()
     fd::release_driven_frequency_response_result(&result);
 }
 
+void driven_response_solver_preserves_tiny_dense_solve_error_status()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double stiffness_diagonal[] = {0.0, 0.0};
+    const double mass_diagonal[] = {0.0, 0.0};
+    const double drive_real[] = {1.0, 0.0};
+
+    fd::DrivenFrequencyResponseSolveRequest request{};
+    request.solve_request.operator_request.node_count = 1;
+    request.solve_request.operator_request.tangent_dof_count = 2;
+    request.solve_request.operator_request.alpha = 0.01;
+    request.solve_request.operator_request.gamma0 = 2.211e5;
+    request.solve_request.frequencies_hz = frequencies_hz;
+    request.solve_request.frequency_count = 1;
+    request.tiny_validation_problem.enabled = true;
+    request.tiny_validation_problem.tangent_dof_count = 2;
+    request.tiny_validation_problem.stiffness_diagonal = stiffness_diagonal;
+    request.tiny_validation_problem.mass_diagonal = mass_diagonal;
+    request.tiny_validation_problem.drive_real = drive_real;
+
+    fd::DrivenFrequencyResponseSolveResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_driven_frequency_response(request, &result);
+
+    check(status == fd::FrequencyDomainStatus::solve_error, "tiny dense singular solve reports solve_error");
+    check(result.status == fd::FrequencyDomainStatus::solve_error, "tiny dense singular result stores solve_error");
+    check(contains(result.error_message, "singular"), "tiny dense singular solve explains singular matrix");
+    check(contains(result.result_json, "\"status\":\"solve_error\""), "tiny dense singular result JSON preserves solve_error");
+    check(
+        contains(result.diagnostics_json, "\"schema_version\":\"frequency_domain_response_diagnostics.v1\""),
+        "tiny dense singular diagnostics JSON uses diagnostics schema");
+    check(contains(result.diagnostics_json, "\"status\":\"solve_error\""), "tiny dense singular diagnostics JSON preserves solve_error");
+    check(!contains(result.result_json, "\"status\":\"artifact_error\""), "tiny dense singular result JSON must not become artifact_error");
+    check(!contains(result.diagnostics_json, "\"status\":\"artifact_error\""), "tiny dense singular diagnostics JSON must not become artifact_error");
+    fd::release_driven_frequency_response_result(&result);
+}
+
+void production_cpu_matrix_free_solver_solves_diagonal_harmonic_response()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double stiffness[] = {2.0, 4.0};
+    const double mass[] = {1.0, 2.0};
+    const double drive_real[] = {1.0, 2.0};
+    double response_real[2]{};
+    double response_imag[2]{};
+    double residual_l2[1]{};
+    double relative_residual_l2[1]{};
+    DiagonalProductionOperator op{stiffness, mass, 2};
+
+    fd::ProductionCpuDrivenResponseResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_production_cpu_driven_response(
+            fd::ProductionCpuDrivenResponseProblem{
+                2,
+                frequencies_hz,
+                1,
+                drive_real,
+                apply_diagonal_stiffness,
+                apply_diagonal_mass,
+                &op,
+                1.0e-12,
+                16,
+                4,
+                response_real,
+                response_imag,
+                2,
+                residual_l2,
+                relative_residual_l2,
+                1,
+                nullptr,
+                nullptr,
+            },
+            &result);
+
+    check(status == fd::FrequencyDomainStatus::ok, "production CPU matrix-free solve succeeds");
+    check(result.completed_frequency_count == 1, "production CPU matrix-free solve completes one frequency");
+    check(result.total_iteration_count > 0, "production CPU matrix-free solve reports iterations");
+    check(result.max_iterations_for_frequency <= 4, "diagonal production solve converges inside one restart");
+    check(relative_residual_l2[0] < 1.0e-12, "production CPU matrix-free residual is small");
+    check(result.relative_residual_l2_norm < 1.0e-12, "production CPU result reports small residual");
+    check(std::abs(response_real[0] - 0.4) < 1.0e-12, "production CPU response real[0]");
+    check(std::abs(response_imag[0] - 0.2) < 1.0e-12, "production CPU response imag[0]");
+    check(std::abs(response_real[1] - 0.4) < 1.0e-12, "production CPU response real[1]");
+    check(std::abs(response_imag[1] - 0.2) < 1.0e-12, "production CPU response imag[1]");
+}
+
+void production_cpu_matrix_free_solver_solves_complex_drive()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double stiffness[] = {2.0, 4.0};
+    const double mass[] = {1.0, 2.0};
+    const double drive_real[] = {1.0, 2.0};
+    const double drive_imag[] = {3.0, -1.0};
+    double response_real[2]{};
+    double response_imag[2]{};
+    double residual_l2[1]{};
+    double relative_residual_l2[1]{};
+    DiagonalProductionOperator op{stiffness, mass, 2};
+
+    fd::ProductionCpuDrivenResponseResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_production_cpu_driven_response(
+            fd::ProductionCpuDrivenResponseProblem{
+                2,
+                frequencies_hz,
+                1,
+                drive_real,
+                apply_diagonal_stiffness,
+                apply_diagonal_mass,
+                &op,
+                1.0e-12,
+                16,
+                4,
+                response_real,
+                response_imag,
+                2,
+                residual_l2,
+                relative_residual_l2,
+                1,
+                nullptr,
+                nullptr,
+                nullptr,
+                nullptr,
+                drive_imag,
+            },
+            &result);
+
+    check(status == fd::FrequencyDomainStatus::ok, "production CPU complex-drive solve succeeds");
+    check(result.completed_frequency_count == 1, "production CPU complex-drive solve completes one frequency");
+    check(relative_residual_l2[0] < 1.0e-12, "production CPU complex-drive residual is small");
+    check(std::abs(response_real[0] + 0.2) < 1.0e-12, "production CPU complex-drive response real[0]");
+    check(std::abs(response_imag[0] - 1.4) < 1.0e-12, "production CPU complex-drive response imag[0]");
+    check(std::abs(response_real[1] - 0.5) < 1.0e-12, "production CPU complex-drive response real[1]");
+    check(std::abs(response_imag[1]) < 1.0e-12, "production CPU complex-drive response imag[1]");
+}
+
+void production_cpu_matrix_free_solver_respects_temporal_phase_convention_sign()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double stiffness[] = {2.0};
+    const double mass[] = {1.0};
+    const double drive_real[] = {1.0};
+    double response_real[1]{};
+    double response_imag[1]{};
+    double residual_l2[1]{};
+    double relative_residual_l2[1]{};
+    DiagonalProductionOperator op{stiffness, mass, 1};
+
+    fd::ProductionCpuDrivenResponseResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_production_cpu_driven_response(
+            fd::ProductionCpuDrivenResponseProblem{
+                1,
+                frequencies_hz,
+                1,
+                drive_real,
+                apply_diagonal_stiffness,
+                apply_diagonal_mass,
+                &op,
+                1.0e-12,
+                16,
+                4,
+                response_real,
+                response_imag,
+                1,
+                residual_l2,
+                relative_residual_l2,
+                1,
+                nullptr,
+                nullptr,
+                nullptr,
+                nullptr,
+                nullptr,
+                -1.0,
+            },
+            &result);
+
+    check(status == fd::FrequencyDomainStatus::ok, "production CPU phase-convention solve succeeds");
+    check(result.completed_frequency_count == 1, "production CPU phase-convention solve completes one frequency");
+    check(relative_residual_l2[0] < 1.0e-12, "production CPU phase-convention residual is small");
+    check(std::abs(response_real[0] - 0.4) < 1.0e-12, "production CPU exp(-i omega t) response real");
+    check(std::abs(response_imag[0] + 0.2) < 1.0e-12, "production CPU exp(-i omega t) response imag sign");
+}
+
+void production_cpu_matrix_free_solver_rejects_invalid_phase_convention_sign()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double stiffness[] = {2.0};
+    const double mass[] = {1.0};
+    const double drive_real[] = {1.0};
+    double response_real[1]{};
+    double response_imag[1]{};
+    DiagonalProductionOperator op{stiffness, mass, 1};
+
+    fd::ProductionCpuDrivenResponseResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_production_cpu_driven_response(
+            fd::ProductionCpuDrivenResponseProblem{
+                1,
+                frequencies_hz,
+                1,
+                drive_real,
+                apply_diagonal_stiffness,
+                apply_diagonal_mass,
+                &op,
+                1.0e-12,
+                16,
+                4,
+                response_real,
+                response_imag,
+                1,
+                nullptr,
+                nullptr,
+                0,
+                nullptr,
+                nullptr,
+                nullptr,
+                nullptr,
+                nullptr,
+                0.0,
+            },
+            &result);
+
+    check(status == fd::FrequencyDomainStatus::validation_error, "production CPU rejects invalid phase sign");
+    check(contains(result.error_message, "phasor convention sign"), "production CPU invalid phase sign explains error");
+}
+
+void production_cpu_matrix_free_solver_reports_progress()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz, one_over_two_pi_hz * 2.0};
+    const double stiffness[] = {2.0, 4.0};
+    const double mass[] = {1.0, 2.0};
+    const double drive_real[] = {1.0, 2.0};
+    double response_real[4]{};
+    double response_imag[4]{};
+    double residual_l2[2]{};
+    double relative_residual_l2[2]{};
+    DiagonalProductionOperator op{stiffness, mass, 2};
+    ProductionProgressRecorder recorder{};
+
+    fd::ProductionCpuDrivenResponseResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_production_cpu_driven_response(
+            fd::ProductionCpuDrivenResponseProblem{
+                2,
+                frequencies_hz,
+                2,
+                drive_real,
+                apply_diagonal_stiffness,
+                apply_diagonal_mass,
+                &op,
+                1.0e-12,
+                16,
+                4,
+                response_real,
+                response_imag,
+                4,
+                residual_l2,
+                relative_residual_l2,
+                2,
+                nullptr,
+                nullptr,
+                record_production_progress,
+                &recorder,
+            },
+            &result);
+
+    check(status == fd::FrequencyDomainStatus::ok, "production CPU matrix-free progress solve succeeds");
+    check(result.completed_frequency_count == 2, "production CPU progress solve completes two frequencies");
+    check(recorder.event_count >= 2, "production CPU progress emits events");
+    check(recorder.last_frequency_index == 1, "production CPU progress reports last frequency index");
+    check(recorder.last_completed_frequency_count == 2, "production CPU progress reports completed count");
+    check(recorder.last_total_frequency_count == 2, "production CPU progress reports total count");
+    check(recorder.last_iteration_count > 0, "production CPU progress reports Krylov iteration");
+    check(std::abs(recorder.last_frequency_hz - frequencies_hz[1]) < 1.0e-12, "production CPU progress reports frequency");
+    check(recorder.last_relative_residual_l2_norm < 1.0e-12, "production CPU progress reports final residual");
+    check(recorder.saw_converged, "production CPU progress reports convergence");
+}
+
+void production_cpu_matrix_free_solver_reuses_previous_frequency_solution_as_warm_start()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double single_frequency_hz[] = {one_over_two_pi_hz};
+    const double repeated_frequencies_hz[] = {one_over_two_pi_hz, one_over_two_pi_hz};
+    const double stiffness[] = {2.0, 4.0};
+    const double mass[] = {1.0, 2.0};
+    const double drive_real[] = {1.0, 2.0};
+    double single_response_real[2]{};
+    double single_response_imag[2]{};
+    double single_residual_l2[1]{};
+    double single_relative_residual_l2[1]{};
+    DiagonalProductionOperator single_op{stiffness, mass, 2};
+
+    fd::ProductionCpuDrivenResponseResult single_result{};
+    const fd::FrequencyDomainStatus single_status =
+        fd::solve_production_cpu_driven_response(
+            fd::ProductionCpuDrivenResponseProblem{
+                2,
+                single_frequency_hz,
+                1,
+                drive_real,
+                apply_diagonal_stiffness,
+                apply_diagonal_mass,
+                &single_op,
+                1.0e-12,
+                16,
+                4,
+                single_response_real,
+                single_response_imag,
+                2,
+                single_residual_l2,
+                single_relative_residual_l2,
+                1,
+            },
+            &single_result);
+
+    double repeated_response_real[4]{};
+    double repeated_response_imag[4]{};
+    double repeated_residual_l2[2]{};
+    double repeated_relative_residual_l2[2]{};
+    DiagonalProductionOperator repeated_op{stiffness, mass, 2};
+
+    fd::ProductionCpuDrivenResponseResult repeated_result{};
+    const fd::FrequencyDomainStatus repeated_status =
+        fd::solve_production_cpu_driven_response(
+            fd::ProductionCpuDrivenResponseProblem{
+                2,
+                repeated_frequencies_hz,
+                2,
+                drive_real,
+                apply_diagonal_stiffness,
+                apply_diagonal_mass,
+                &repeated_op,
+                1.0e-12,
+                16,
+                4,
+                repeated_response_real,
+                repeated_response_imag,
+                4,
+                repeated_residual_l2,
+                repeated_relative_residual_l2,
+                2,
+            },
+            &repeated_result);
+
+    check(single_status == fd::FrequencyDomainStatus::ok, "single-frequency warm-start baseline succeeds");
+    check(repeated_status == fd::FrequencyDomainStatus::ok, "repeated-frequency warm-start solve succeeds");
+    check(single_result.total_iteration_count > 0, "single-frequency baseline performs Krylov work");
+    check(
+        repeated_result.total_iteration_count == single_result.total_iteration_count,
+        "repeated identical frequency should reuse previous solution without extra Krylov iterations");
+    check(repeated_relative_residual_l2[1] < 1.0e-12, "warm-started repeated frequency residual is small");
+    check(
+        std::abs(repeated_response_real[2] - repeated_response_real[0]) < 1.0e-12 &&
+            std::abs(repeated_response_imag[2] - repeated_response_imag[0]) < 1.0e-12,
+        "warm-started repeated frequency response matches first point");
+}
+
+void production_cpu_matrix_free_solver_honors_pre_start_cancel_without_operator_work()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double stiffness[] = {2.0, 4.0};
+    const double mass[] = {1.0, 2.0};
+    const double drive_real[] = {1.0, 2.0};
+    double response_real[2]{};
+    double response_imag[2]{};
+    double residual_l2[1]{};
+    double relative_residual_l2[1]{};
+    DiagonalProductionOperator op{stiffness, mass, 2};
+
+    fd::ProductionCpuDrivenResponseResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_production_cpu_driven_response(
+            fd::ProductionCpuDrivenResponseProblem{
+                2,
+                frequencies_hz,
+                1,
+                drive_real,
+                apply_diagonal_stiffness,
+                apply_diagonal_mass,
+                &op,
+                1.0e-12,
+                16,
+                4,
+                response_real,
+                response_imag,
+                2,
+                residual_l2,
+                relative_residual_l2,
+                1,
+                cancel_immediately,
+                nullptr,
+            },
+            &result);
+
+    check(status == fd::FrequencyDomainStatus::interrupted, "production CPU pre-start cancel reports interrupted");
+    check(result.completed_frequency_count == 0, "production CPU pre-start cancel completes no frequencies");
+    check(op.stiffness_call_count == 0, "production CPU pre-start cancel performs no stiffness work");
+    check(op.mass_call_count == 0, "production CPU pre-start cancel performs no mass work");
+    check(response_real[0] == 0.0 && response_real[1] == 0.0, "production CPU pre-start cancel leaves real response untouched");
+    check(response_imag[0] == 0.0 && response_imag[1] == 0.0, "production CPU pre-start cancel leaves imaginary response untouched");
+    check(result.error_message[0] != '\0', "production CPU pre-start cancel reports an interruption reason");
+}
+
+void production_cpu_matrix_free_solver_honors_mid_frequency_cancel_without_completion()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double stiffness[] = {2.0, 5.0};
+    const double mass[] = {1.0, 3.0};
+    const double drive_real[] = {1.0, 1.0};
+    double response_real[2]{};
+    double response_imag[2]{};
+    double residual_l2[1]{};
+    double relative_residual_l2[1]{};
+    DiagonalProductionOperator op{stiffness, mass, 2};
+    CancelAfterFirstPoll cancel_state{};
+
+    fd::ProductionCpuDrivenResponseResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_production_cpu_driven_response(
+            fd::ProductionCpuDrivenResponseProblem{
+                2,
+                frequencies_hz,
+                1,
+                drive_real,
+                apply_diagonal_stiffness,
+                apply_diagonal_mass,
+                &op,
+                1.0e-16,
+                8,
+                1,
+                response_real,
+                response_imag,
+                2,
+                residual_l2,
+                relative_residual_l2,
+                1,
+                cancel_after_first_poll,
+                &cancel_state,
+            },
+            &result);
+
+    check(status == fd::FrequencyDomainStatus::interrupted, "production CPU mid-frequency cancel reports interrupted");
+    check(result.completed_frequency_count == 0, "production CPU mid-frequency cancel completes no frequency");
+    check(op.stiffness_call_count > 0, "production CPU mid-frequency cancel occurs after stiffness work starts");
+    check(op.mass_call_count > 0, "production CPU mid-frequency cancel occurs after mass work starts");
+    check(response_real[0] == 0.0 && response_real[1] == 0.0, "production CPU mid-frequency cancel leaves real response unpublished");
+    check(response_imag[0] == 0.0 && response_imag[1] == 0.0, "production CPU mid-frequency cancel leaves imaginary response unpublished");
+    check(result.error_message[0] != '\0', "production CPU mid-frequency cancel reports an interruption reason");
+}
+
+void production_cpu_matrix_free_solver_rejects_overflowing_problem_size()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz, one_over_two_pi_hz * 2.0};
+    const double drive_real[] = {1.0};
+    const double stiffness[] = {2.0};
+    const double mass[] = {1.0};
+    DiagonalProductionOperator op{stiffness, mass, 1};
+
+    fd::ProductionCpuDrivenResponseResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_production_cpu_driven_response(
+            fd::ProductionCpuDrivenResponseProblem{
+                std::numeric_limits<std::uint64_t>::max(),
+                frequencies_hz,
+                2,
+                drive_real,
+                apply_diagonal_stiffness,
+                apply_diagonal_mass,
+                &op,
+                1.0e-12,
+                16,
+                4,
+            },
+            &result);
+
+    check(
+        status == fd::FrequencyDomainStatus::validation_error,
+        "production CPU rejects overflowing problem size");
+    check(
+        contains(result.error_message, "overflows"),
+        "production CPU overflow rejection explains problem size overflow");
+    check(result.completed_frequency_count == 0, "overflowing production CPU solve completes no frequencies");
+    check(op.stiffness_call_count == 0, "overflowing production CPU solve performs no stiffness work");
+    check(op.mass_call_count == 0, "overflowing production CPU solve performs no mass work");
+}
+
+void production_cpu_matrix_free_solver_rejects_nonfinite_operator_output()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double stiffness[] = {std::numeric_limits<double>::infinity(), 4.0};
+    const double mass[] = {1.0, 2.0};
+    const double drive_real[] = {1.0, 2.0};
+    double response_real[2]{};
+    double response_imag[2]{};
+    double residual_l2[1]{};
+    double relative_residual_l2[1]{};
+    DiagonalProductionOperator op{stiffness, mass, 2};
+
+    fd::ProductionCpuDrivenResponseResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_production_cpu_driven_response(
+            fd::ProductionCpuDrivenResponseProblem{
+                2,
+                frequencies_hz,
+                1,
+                drive_real,
+                apply_diagonal_stiffness,
+                apply_diagonal_mass,
+                &op,
+                1.0e-12,
+                16,
+                4,
+                response_real,
+                response_imag,
+                2,
+                residual_l2,
+                relative_residual_l2,
+                1,
+            },
+            &result);
+
+    check(
+        status == fd::FrequencyDomainStatus::operator_error,
+        "production CPU rejects non-finite matrix-free operator output");
+    check(result.completed_frequency_count == 0, "non-finite operator output completes no frequencies");
+    check(contains(result.error_message, "non-finite"), "non-finite operator output explains failure");
+    check(response_real[0] == 0.0 && response_real[1] == 0.0, "non-finite operator output leaves real response unpublished");
+    check(response_imag[0] == 0.0 && response_imag[1] == 0.0, "non-finite operator output leaves imaginary response unpublished");
+}
+
+void production_cpu_lane_does_not_fallback_to_tiny_validation_solver()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double stiffness_diagonal[] = {2.0, 4.0};
+    const double mass_diagonal[] = {1.0, 2.0};
+    const double drive_real[] = {1.0, 2.0};
+
+    fd::DrivenFrequencyResponseSolveRequest request{};
+    request.solve_request.operator_request.node_count = 1;
+    request.solve_request.operator_request.tangent_dof_count = 2;
+    request.solve_request.operator_request.alpha = 0.01;
+    request.solve_request.operator_request.gamma0 = 2.211e5;
+    request.solve_request.frequencies_hz = frequencies_hz;
+    request.solve_request.frequency_count = 1;
+    request.execution_lane = fd::DrivenFrequencyResponseExecutionLane::production_cpu;
+    request.tiny_validation_problem.enabled = true;
+    request.tiny_validation_problem.tangent_dof_count = 2;
+    request.tiny_validation_problem.stiffness_diagonal = stiffness_diagonal;
+    request.tiny_validation_problem.mass_diagonal = mass_diagonal;
+    request.tiny_validation_problem.drive_real = drive_real;
+
+    fd::DrivenFrequencyResponseSolveResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_driven_frequency_response(request, &result);
+
+    check(
+        status == fd::FrequencyDomainStatus::unavailable,
+        "production CPU lane without MFEM operator payload reports unavailable");
+    check(result.completed_frequency_count == 0, "production CPU lane does not solve validation frequencies");
+    check(contains(result.error_message, "production CPU"), "production CPU lane names missing operator payload");
+    check(
+        contains(result.diagnostics_json, "\"requested_execution_lane\":\"production_cpu\""),
+        "production CPU diagnostics report lane");
+    check(
+        contains(result.diagnostics_json, "\"completed_frequency_point_count\":0"),
+        "production CPU unavailable diagnostics report completed frequency point count");
+    check(
+        contains(result.diagnostics_json, "\"validation_fallback_used\":false"),
+        "production CPU lane rejects validation fallback");
+    check(
+        !contains(result.diagnostics_json, "\"tiny_validation_solver\":true"),
+        "production CPU lane does not run tiny validation solver");
+    fd::release_driven_frequency_response_result(&result);
+
+    request.execution_lane = fd::DrivenFrequencyResponseExecutionLane::production_gpu;
+    fd::DrivenFrequencyResponseSolveResult gpu_result{};
+    const fd::FrequencyDomainStatus gpu_status =
+        fd::solve_driven_frequency_response(request, &gpu_result);
+
+    check(
+        gpu_status == fd::FrequencyDomainStatus::unavailable,
+        "production GPU lane reports unavailable until a GPU frequency-domain solver exists");
+    check(gpu_result.completed_frequency_count == 0, "production GPU lane does not solve validation frequencies");
+    check(contains(gpu_result.error_message, "production GPU"), "production GPU lane names missing solver");
+    check(
+        contains(gpu_result.diagnostics_json, "\"requested_execution_lane\":\"production_gpu\""),
+        "production GPU diagnostics report lane");
+    check(
+        contains(gpu_result.diagnostics_json, "\"completed_frequency_point_count\":0"),
+        "production GPU unavailable diagnostics report completed frequency point count");
+    check(
+        contains(gpu_result.diagnostics_json, "\"validation_fallback_used\":false"),
+        "production GPU lane rejects validation fallback");
+    check(
+        !contains(gpu_result.diagnostics_json, "\"tiny_validation_solver\":true"),
+        "production GPU lane does not run tiny validation solver");
+    fd::release_driven_frequency_response_result(&gpu_result);
+}
+
 void driven_response_solver_runs_assembled_mfem_validation_problem()
 {
     constexpr double one_over_two_pi_hz = 0.15915494309189535;
@@ -1322,6 +2587,710 @@ void driven_response_solver_runs_assembled_mfem_validation_problem()
     check(
         contains(result.diagnostics_json, "\"assembled_mfem_operator_solver\":true"),
         "boundary assembled MFEM validation diagnostics reports assembled operator solver");
+    fd::release_driven_frequency_response_result(&result);
+}
+
+void driven_response_solver_runs_assembled_mfem_dmi_validation_problem()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    constexpr double volume = 1.0 / 6.0;
+    constexpr double lumped_mass = volume * 0.25;
+    constexpr double ms = 800000.0;
+    constexpr double d = 2.0e-3;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double equilibrium[] = {
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+    };
+    fd::TangentFrameNode nodes[4]{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 4, nodes, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "assembled MFEM DMI validation frame succeeds");
+
+    fd::MfemOperatorContextDescriptor descriptor{};
+    descriptor.node_count = 4;
+    descriptor.element_count = 1;
+    descriptor.element_node_count = 4;
+    descriptor.full_dof_count = 12;
+    descriptor.tangent_dof_count = 8;
+    descriptor.dmi_enabled = true;
+    descriptor.mfem_mesh_available = true;
+    fd::MfemTangentSpaceLayout layout{};
+    layout.node_count = 4;
+    layout.full_dof_count = 12;
+    layout.tangent_dof_count = 8;
+    layout.tangent_components_per_node = 2;
+    layout.tangent_stride = 2;
+    fd::MfemDmiElementTangentData dmi_element{};
+    fill_bulk_dmi_tetra_element(dmi_element, d, volume);
+    const double lumped_mass_per_node[] = {lumped_mass, lumped_mass, lumped_mass, lumped_mass};
+    const double drive_real[] = {1.0, 0.0, 0.5, 0.0, -0.25, 0.0, 0.125, 0.0};
+
+    fd::DrivenFrequencyResponseSolveRequest request{};
+    request.solve_request.operator_request.node_count = 4;
+    request.solve_request.operator_request.tangent_dof_count = 8;
+    request.solve_request.operator_request.alpha = 0.01;
+    request.solve_request.operator_request.gamma0 = 1.0;
+    request.solve_request.frequencies_hz = frequencies_hz;
+    request.solve_request.frequency_count = 1;
+    request.mfem_validation_problem.enabled = true;
+    request.mfem_validation_problem.descriptor = descriptor;
+    request.mfem_validation_problem.layout = layout;
+    request.mfem_validation_problem.nodes = nodes;
+    request.mfem_validation_problem.dmi_elements = &dmi_element;
+    request.mfem_validation_problem.dmi_element_count = 1;
+    request.mfem_validation_problem.dmi_lumped_mass = lumped_mass_per_node;
+    request.mfem_validation_problem.dmi_uniform_ms = ms;
+    request.mfem_validation_problem.drive_real = drive_real;
+
+    fd::DrivenFrequencyResponseSolveResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_driven_frequency_response(request, &result);
+
+    check(status == fd::FrequencyDomainStatus::ok, "assembled MFEM DMI validation solve succeeds");
+    check(result.completed_frequency_count == 1, "assembled MFEM DMI validation completes frequency");
+    check(
+        contains(result.diagnostics_json, "\"assembled_mfem_operator_solver\":true"),
+        "assembled MFEM DMI validation diagnostics reports assembled solver");
+    check(
+        contains(result.result_json, "\"max_abs_response\""),
+        "assembled MFEM DMI validation result reports response");
+    fd::release_driven_frequency_response_result(&result);
+}
+
+void production_cpu_lane_runs_mfem_matrix_free_response_problem()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double equilibrium[] = {0.0, 0.0, 1.0};
+    fd::TangentFrameNode node{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 1, &node, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "production CPU MFEM frame succeeds");
+
+    fd::MfemOperatorContextDescriptor descriptor{};
+    descriptor.node_count = 1;
+    descriptor.full_dof_count = 3;
+    descriptor.tangent_dof_count = 2;
+    descriptor.zeeman_enabled = true;
+    descriptor.mfem_mesh_available = true;
+    fd::MfemTangentSpaceLayout layout{};
+    layout.node_count = 1;
+    layout.full_dof_count = 3;
+    layout.tangent_dof_count = 2;
+    layout.tangent_components_per_node = 2;
+    layout.tangent_stride = 2;
+    const double h_ext_a_per_m[] = {0.0, 0.0, 2.0};
+    const double drive_real[] = {1.0, 0.0};
+
+    fd::DrivenFrequencyResponseSolveRequest request{};
+    request.solve_request.operator_request.node_count = 1;
+    request.solve_request.operator_request.tangent_dof_count = 2;
+    request.solve_request.operator_request.alpha = 0.0;
+    request.solve_request.operator_request.gamma0 = 1.0;
+    request.solve_request.operator_request.include_zeeman = true;
+    request.solve_request.frequencies_hz = frequencies_hz;
+    request.solve_request.frequency_count = 1;
+    request.execution_lane = fd::DrivenFrequencyResponseExecutionLane::production_cpu;
+    request.mfem_validation_problem.enabled = true;
+    request.mfem_validation_problem.descriptor = descriptor;
+    request.mfem_validation_problem.layout = layout;
+    request.mfem_validation_problem.nodes = &node;
+    request.mfem_validation_problem.h_ext_a_per_m = h_ext_a_per_m;
+    request.mfem_validation_problem.drive_real = drive_real;
+
+    fd::DrivenFrequencyResponseSolveResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_driven_frequency_response(request, &result);
+
+    check(status == fd::FrequencyDomainStatus::ok, "production CPU MFEM matrix-free solve succeeds");
+    check(result.completed_frequency_count == 1, "production CPU MFEM matrix-free solve completes frequency");
+    check(
+        contains(result.result_json, "\"requested_execution_lane\":\"production_cpu\""),
+        "production CPU MFEM result reports lane");
+    check(
+        contains(result.result_json, "\"max_abs_response\":0.666666666666666"),
+        "production CPU MFEM result reports operator response");
+    check(
+        contains(result.diagnostics_json, "\"matrix_free_solver\":true"),
+        "production CPU MFEM diagnostics report matrix-free solver");
+    check(
+        contains(result.diagnostics_json, "\"krylov_solver\":\"gmres\""),
+        "production CPU MFEM diagnostics report GMRES");
+    check(
+        contains(result.diagnostics_json, "\"completed_frequency_point_count\":1"),
+        "production CPU MFEM diagnostics report completed frequency point count");
+    check(
+        contains(result.diagnostics_json, "\"validation_fallback_used\":false"),
+        "production CPU MFEM diagnostics reject validation fallback");
+    check(
+        contains(result.diagnostics_json, "\"assembled_mfem_operator_solver\":false"),
+        "production CPU MFEM diagnostics reject dense assembly path");
+    fd::release_driven_frequency_response_result(&result);
+}
+
+void production_cpu_lane_rejects_nonfinite_zeeman_field_before_matrix_free_solve()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double equilibrium[] = {0.0, 0.0, 1.0};
+    fd::TangentFrameNode node{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 1, &node, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "production CPU non-finite Zeeman field frame succeeds");
+
+    fd::MfemOperatorContextDescriptor descriptor{};
+    descriptor.node_count = 1;
+    descriptor.full_dof_count = 3;
+    descriptor.tangent_dof_count = 2;
+    descriptor.zeeman_enabled = true;
+    descriptor.mfem_mesh_available = true;
+    fd::MfemTangentSpaceLayout layout{};
+    layout.node_count = 1;
+    layout.full_dof_count = 3;
+    layout.tangent_dof_count = 2;
+    layout.tangent_components_per_node = 2;
+    layout.tangent_stride = 2;
+    const double h_ext_a_per_m[] = {0.0, 0.0, std::numeric_limits<double>::infinity()};
+    const double drive_real[] = {1.0, 0.0};
+
+    fd::DrivenFrequencyResponseSolveRequest request{};
+    request.solve_request.operator_request.node_count = 1;
+    request.solve_request.operator_request.tangent_dof_count = 2;
+    request.solve_request.operator_request.alpha = 0.0;
+    request.solve_request.operator_request.gamma0 = 1.0;
+    request.solve_request.operator_request.include_zeeman = true;
+    request.solve_request.frequencies_hz = frequencies_hz;
+    request.solve_request.frequency_count = 1;
+    request.execution_lane = fd::DrivenFrequencyResponseExecutionLane::production_cpu;
+    request.mfem_validation_problem.enabled = true;
+    request.mfem_validation_problem.descriptor = descriptor;
+    request.mfem_validation_problem.layout = layout;
+    request.mfem_validation_problem.nodes = &node;
+    request.mfem_validation_problem.h_ext_a_per_m = h_ext_a_per_m;
+    request.mfem_validation_problem.drive_real = drive_real;
+
+    fd::DrivenFrequencyResponseSolveResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_driven_frequency_response(request, &result);
+
+    check(status == fd::FrequencyDomainStatus::validation_error, "production CPU MFEM non-finite Zeeman field reports validation_error");
+    check(result.completed_frequency_count == 0, "production CPU MFEM non-finite Zeeman field completes no frequencies");
+    check(contains(result.error_message, "finite"), "production CPU MFEM non-finite Zeeman field explains finite field requirement");
+    check(
+        contains(result.result_json, "\"status\":\"validation_error\""),
+        "production CPU MFEM non-finite Zeeman field result JSON reports status");
+    check(
+        contains(result.result_json, "\"requested_execution_lane\":\"production_cpu\""),
+        "production CPU MFEM non-finite Zeeman field result JSON reports lane");
+    check(
+        contains(result.diagnostics_json, "\"status\":\"validation_error\""),
+        "production CPU MFEM non-finite Zeeman field diagnostics reports status");
+    check(
+        contains(result.diagnostics_json, "\"production_solver_available\":true"),
+        "production CPU MFEM non-finite Zeeman field diagnostics keeps solver availability");
+    check(
+        contains(result.diagnostics_json, "\"matrix_free_solver\":true"),
+        "production CPU MFEM non-finite Zeeman field diagnostics keeps matrix-free solver provenance");
+    check(
+        contains(result.diagnostics_json, "\"validation_fallback_used\":false"),
+        "production CPU MFEM non-finite Zeeman field diagnostics rejects validation fallback");
+    check(
+        contains(result.diagnostics_json, "\"completed_frequency_point_count\":0"),
+        "production CPU MFEM non-finite Zeeman field diagnostics reports completed count");
+    fd::release_driven_frequency_response_result(&result);
+}
+
+void production_cpu_lane_runs_mfem_matrix_free_dmi_response_problem()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    constexpr double volume = 1.0 / 6.0;
+    constexpr double lumped_mass = volume * 0.25;
+    constexpr double ms = 800000.0;
+    constexpr double d = 2.0e-3;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double equilibrium[] = {
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+    };
+    fd::TangentFrameNode nodes[4]{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 4, nodes, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "production CPU MFEM DMI frame succeeds");
+
+    fd::MfemOperatorContextDescriptor descriptor{};
+    descriptor.node_count = 4;
+    descriptor.element_count = 1;
+    descriptor.element_node_count = 4;
+    descriptor.full_dof_count = 12;
+    descriptor.tangent_dof_count = 8;
+    descriptor.dmi_enabled = true;
+    descriptor.mfem_mesh_available = true;
+    fd::MfemTangentSpaceLayout layout{};
+    layout.node_count = 4;
+    layout.full_dof_count = 12;
+    layout.tangent_dof_count = 8;
+    layout.tangent_components_per_node = 2;
+    layout.tangent_stride = 2;
+    fd::MfemDmiElementTangentData dmi_element{};
+    fill_bulk_dmi_tetra_element(dmi_element, d, volume);
+    const double lumped_mass_per_node[] = {lumped_mass, lumped_mass, lumped_mass, lumped_mass};
+    const double drive_real[] = {1.0, 0.0, 0.5, 0.0, -0.25, 0.0, 0.125, 0.0};
+
+    fd::DrivenFrequencyResponseSolveRequest request{};
+    request.solve_request.operator_request.node_count = 4;
+    request.solve_request.operator_request.tangent_dof_count = 8;
+    request.solve_request.operator_request.alpha = 0.01;
+    request.solve_request.operator_request.gamma0 = 1.0;
+    request.solve_request.frequencies_hz = frequencies_hz;
+    request.solve_request.frequency_count = 1;
+    request.execution_lane = fd::DrivenFrequencyResponseExecutionLane::production_cpu;
+    request.mfem_validation_problem.enabled = true;
+    request.mfem_validation_problem.descriptor = descriptor;
+    request.mfem_validation_problem.layout = layout;
+    request.mfem_validation_problem.nodes = nodes;
+    request.mfem_validation_problem.dmi_elements = &dmi_element;
+    request.mfem_validation_problem.dmi_element_count = 1;
+    request.mfem_validation_problem.dmi_lumped_mass = lumped_mass_per_node;
+    request.mfem_validation_problem.dmi_uniform_ms = ms;
+    request.mfem_validation_problem.drive_real = drive_real;
+
+    fd::DrivenFrequencyResponseSolveResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_driven_frequency_response(request, &result);
+
+    check(status == fd::FrequencyDomainStatus::ok, "production CPU MFEM DMI matrix-free solve succeeds");
+    check(result.completed_frequency_count == 1, "production CPU MFEM DMI matrix-free solve completes frequency");
+    check(
+        contains(result.diagnostics_json, "\"matrix_free_solver\":true"),
+        "production CPU MFEM DMI diagnostics report matrix-free solver");
+    check(
+        contains(result.diagnostics_json, "\"validation_fallback_used\":false"),
+        "production CPU MFEM DMI diagnostics reject validation fallback");
+    check(
+        contains(result.result_json, "\"requested_execution_lane\":\"production_cpu\""),
+        "production CPU MFEM DMI result reports lane");
+    fd::release_driven_frequency_response_result(&result);
+}
+
+void production_cpu_lane_accepts_more_than_sixteen_frequency_points()
+{
+    double frequencies_hz[17]{};
+    for (std::uint64_t index = 0; index < 17; ++index) {
+        frequencies_hz[index] = 0.1 + static_cast<double>(index) * 0.01;
+    }
+    const double equilibrium[] = {0.0, 0.0, 1.0};
+    fd::TangentFrameNode node{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 1, &node, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "production CPU multi-frequency frame succeeds");
+
+    fd::MfemOperatorContextDescriptor descriptor{};
+    descriptor.node_count = 1;
+    descriptor.full_dof_count = 3;
+    descriptor.tangent_dof_count = 2;
+    descriptor.zeeman_enabled = true;
+    descriptor.mfem_mesh_available = true;
+    fd::MfemTangentSpaceLayout layout{};
+    layout.node_count = 1;
+    layout.full_dof_count = 3;
+    layout.tangent_dof_count = 2;
+    layout.tangent_components_per_node = 2;
+    layout.tangent_stride = 2;
+    const double h_ext_a_per_m[] = {0.0, 0.0, 2.0};
+    const double drive_real[] = {1.0, 0.0};
+
+    fd::DrivenFrequencyResponseSolveRequest request{};
+    request.solve_request.operator_request.node_count = 1;
+    request.solve_request.operator_request.tangent_dof_count = 2;
+    request.solve_request.operator_request.alpha = 0.0;
+    request.solve_request.operator_request.gamma0 = 1.0;
+    request.solve_request.operator_request.include_zeeman = true;
+    request.solve_request.frequencies_hz = frequencies_hz;
+    request.solve_request.frequency_count = 17;
+    request.execution_lane = fd::DrivenFrequencyResponseExecutionLane::production_cpu;
+    request.mfem_validation_problem.enabled = true;
+    request.mfem_validation_problem.descriptor = descriptor;
+    request.mfem_validation_problem.layout = layout;
+    request.mfem_validation_problem.nodes = &node;
+    request.mfem_validation_problem.h_ext_a_per_m = h_ext_a_per_m;
+    request.mfem_validation_problem.drive_real = drive_real;
+
+    fd::DrivenFrequencyResponseSolveResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_driven_frequency_response(request, &result);
+
+    check(status == fd::FrequencyDomainStatus::ok, "production CPU multi-frequency solve succeeds");
+    check(result.completed_frequency_count == 17, "production CPU completes more than sixteen frequencies");
+    check(
+        contains(result.result_json, "\"completed_frequency_count\":17"),
+        "production CPU multi-frequency result reports all points");
+    fd::release_driven_frequency_response_result(&result);
+}
+
+void production_cpu_lane_writes_matrix_free_response_artifacts()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double equilibrium[] = {0.0, 0.0, 1.0};
+    fd::TangentFrameNode node{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 1, &node, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "production CPU artifact frame succeeds");
+
+    fd::MfemOperatorContextDescriptor descriptor{};
+    descriptor.node_count = 1;
+    descriptor.full_dof_count = 3;
+    descriptor.tangent_dof_count = 2;
+    descriptor.zeeman_enabled = true;
+    descriptor.mfem_mesh_available = true;
+    fd::MfemTangentSpaceLayout layout{};
+    layout.node_count = 1;
+    layout.full_dof_count = 3;
+    layout.tangent_dof_count = 2;
+    layout.tangent_components_per_node = 2;
+    layout.tangent_stride = 2;
+    const double h_ext_a_per_m[] = {0.0, 0.0, 2.0};
+    const double drive_real[] = {1.0, 0.0};
+
+    char output_directory[192]{};
+    std::snprintf(
+        output_directory,
+        sizeof(output_directory),
+        "/tmp/fullmag-frequency-domain-production-cpu-artifact-%llu",
+        static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&node)));
+
+    fd::DrivenFrequencyResponseSolveRequest request{};
+    request.solve_request.operator_request.node_count = 1;
+    request.solve_request.operator_request.tangent_dof_count = 2;
+    request.solve_request.operator_request.alpha = 0.0;
+    request.solve_request.operator_request.gamma0 = 1.0;
+    request.solve_request.operator_request.include_zeeman = true;
+    request.solve_request.frequencies_hz = frequencies_hz;
+    request.solve_request.frequency_count = 1;
+    request.solve_request.write_response_fields = true;
+    request.output_directory = output_directory;
+    request.write_partial_artifacts = true;
+    request.execution_lane = fd::DrivenFrequencyResponseExecutionLane::production_cpu;
+    request.mfem_validation_problem.enabled = true;
+    request.mfem_validation_problem.descriptor = descriptor;
+    request.mfem_validation_problem.layout = layout;
+    request.mfem_validation_problem.nodes = &node;
+    request.mfem_validation_problem.h_ext_a_per_m = h_ext_a_per_m;
+    request.mfem_validation_problem.drive_real = drive_real;
+
+    fd::DrivenFrequencyResponseSolveResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_driven_frequency_response(request, &result);
+
+    check(status == fd::FrequencyDomainStatus::ok, "production CPU artifact solve succeeds");
+    check(result.written_frequency_point_artifacts == 1, "production CPU artifact solve records durable point");
+    check(contains(result.artifact_manifest_path, "frequency_domain/manifest.v1.json"), "production CPU reports manifest path");
+    check(contains(result.result_json, "\"artifact_manifest_path\":\"/tmp/"), "production CPU result reports manifest path");
+
+    const std::string manifest = read_text_file(result.artifact_manifest_path);
+    check(
+        contains(manifest.c_str(), "\"revision\":\"production-cpu-matrix-free-v1\""),
+        "production CPU manifest reports production revision");
+    check(
+        contains(manifest.c_str(), "\"reference_or_production\":\"production\""),
+        "production CPU manifest reports production classification");
+    check(
+        contains(manifest.c_str(), "\"solver_model\":\"matrix_free_gmres\""),
+        "production CPU manifest reports GMRES model");
+    check(
+        contains(manifest.c_str(), "\"production_native_solver_available\":true"),
+        "production CPU manifest reports native production availability");
+    check(
+        contains(manifest.c_str(), "\"validation_artifact\":false"),
+        "production CPU manifest is not marked validation artifact");
+
+    char sweep_v2_path[256]{};
+    char sweep_v1_path[256]{};
+    char payload_path[256]{};
+    std::snprintf(
+        sweep_v1_path,
+        sizeof(sweep_v1_path),
+        "%s/response/magnetic_response_sweep.v1.json",
+        output_directory);
+    std::snprintf(
+        sweep_v2_path,
+        sizeof(sweep_v2_path),
+        "%s/response/magnetic_response_sweep.v2.json",
+        output_directory);
+    std::snprintf(
+        payload_path,
+        sizeof(payload_path),
+        "%s/response/field_payloads/frequency_0000/vector_xyz.bin",
+        output_directory);
+    const std::string sweep_v1 = read_text_file(sweep_v1_path);
+    check(
+        contains(sweep_v1.c_str(), "\"solver_model\":\"matrix_free_gmres\""),
+        "production CPU v1 response sweep reports GMRES solver model");
+    check(
+        contains(sweep_v1.c_str(), "\"lane_classification\":\"fem_cpu_production\""),
+        "production CPU v1 response sweep reports production lane");
+    check(
+        contains(sweep_v1.c_str(), "\"matrix_layout\":\"matrix_free_block_real\""),
+        "production CPU v1 response sweep reports matrix-free layout");
+    check(
+        contains(sweep_v1.c_str(), "\"residual_source\":\"matrix_free_gmres\""),
+        "production CPU v1 response sweep reports matrix-free residual source");
+    check(
+        contains(sweep_v1.c_str(), "\"excitation_provenance\":{\"kind\":\"field\",\"phase_rad\":0"),
+        "production CPU v1 response sweep reports field excitation phase provenance");
+    check(
+        contains(sweep_v1.c_str(), "\"sweep_reuse\":{\"operator_template_reused\":true"),
+        "production CPU v1 response sweep reports sweep reuse provenance");
+    const std::string sweep_v2 = read_text_file(sweep_v2_path);
+    check(
+        contains(sweep_v2.c_str(), "\"response_field_payload_path\":\"response/field_payloads/frequency_0000/vector_xyz.bin\""),
+        "production CPU sweep links spatial field payload");
+    check(
+        contains(sweep_v2.c_str(), "\"response_tangent_field_payload_path\":\"response/field_payloads/frequency_0000/vector.bin\""),
+        "production CPU sweep keeps tangent field payload link");
+    check(file_exists(payload_path), "production CPU writes field payload");
+
+    char point_path[256]{};
+    std::snprintf(
+        point_path,
+        sizeof(point_path),
+        "%s/response/frequency_points/frequency_0000.json",
+        output_directory);
+    const std::string point = read_text_file(point_path);
+    check(
+        contains(point.c_str(), "\"field_payload_path\":\"response/field_payloads/frequency_0000/vector_xyz.bin\""),
+        "production CPU point metadata links spatial payload");
+    check(
+        contains(point.c_str(), "\"tangent_field_payload_path\":\"response/field_payloads/frequency_0000/vector.bin\""),
+        "production CPU point metadata links tangent payload");
+    check(
+        contains(point.c_str(), "\"value_kind\":\"complex_spatial_vector\""),
+        "production CPU point metadata records spatial value kind");
+    check(
+        contains(point.c_str(), "\"component_basis\":\"global_xyz\""),
+        "production CPU point metadata records spatial basis");
+    check(
+        contains(point.c_str(), "\"component_count\":3"),
+        "production CPU point metadata records xyz component count");
+    check(
+        contains(point.c_str(), "\"binary_layout\":\"complex_f64_pairs_little_endian\""),
+        "production CPU point metadata records complex binary layout");
+    check(
+        contains(point.c_str(), "\"available_views\":[\"complex\",\"real\",\"imag\",\"abs\",\"amplitude\",\"phase\",\"phase_rotated_real\"]"),
+        "production CPU point metadata records all complex field views");
+    check(
+        contains(point.c_str(), "\"default_view\":\"phase_rotated_real\""),
+        "production CPU point metadata records animated phase view as default");
+    check(
+        contains(point.c_str(), "\"default_phase_rad\":0.0"),
+        "production CPU point metadata records default phase angle");
+
+    fd::release_driven_frequency_response_result(&result);
+}
+
+void production_cpu_lane_writes_large_matrix_free_field_payload()
+{
+    constexpr std::uint64_t node_count = 9;
+    constexpr std::uint64_t tangent_dof_count = node_count * 2;
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    double equilibrium[node_count * 3]{};
+    for (std::uint64_t node_index = 0; node_index < node_count; ++node_index) {
+        equilibrium[node_index * 3 + 2] = 1.0;
+    }
+    fd::TangentFrameNode nodes[node_count]{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, node_count, nodes, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "large production CPU artifact frame succeeds");
+
+    fd::MfemOperatorContextDescriptor descriptor{};
+    descriptor.node_count = node_count;
+    descriptor.full_dof_count = node_count * 3;
+    descriptor.tangent_dof_count = tangent_dof_count;
+    descriptor.zeeman_enabled = true;
+    descriptor.mfem_mesh_available = true;
+    fd::MfemTangentSpaceLayout layout{};
+    layout.node_count = node_count;
+    layout.full_dof_count = node_count * 3;
+    layout.tangent_dof_count = tangent_dof_count;
+    layout.tangent_components_per_node = 2;
+    layout.tangent_stride = 2;
+    const double h_ext_a_per_m[] = {0.0, 0.0, 2.0};
+    double drive_real[tangent_dof_count]{};
+    for (std::uint64_t dof = 0; dof < tangent_dof_count; ++dof) {
+        drive_real[dof] = dof % 2 == 0 ? 1.0 : 0.25;
+    }
+
+    char output_directory[192]{};
+    std::snprintf(
+        output_directory,
+        sizeof(output_directory),
+        "/tmp/fullmag-frequency-domain-production-cpu-large-artifact-%llu",
+        static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&nodes)));
+
+    fd::DrivenFrequencyResponseSolveRequest request{};
+    request.solve_request.operator_request.node_count = node_count;
+    request.solve_request.operator_request.tangent_dof_count = tangent_dof_count;
+    request.solve_request.operator_request.alpha = 0.0;
+    request.solve_request.operator_request.gamma0 = 1.0;
+    request.solve_request.operator_request.include_zeeman = true;
+    request.solve_request.frequencies_hz = frequencies_hz;
+    request.solve_request.frequency_count = 1;
+    request.solve_request.write_response_fields = true;
+    request.output_directory = output_directory;
+    request.write_partial_artifacts = true;
+    request.execution_lane = fd::DrivenFrequencyResponseExecutionLane::production_cpu;
+    request.mfem_validation_problem.enabled = true;
+    request.mfem_validation_problem.descriptor = descriptor;
+    request.mfem_validation_problem.layout = layout;
+    request.mfem_validation_problem.nodes = nodes;
+    request.mfem_validation_problem.h_ext_a_per_m = h_ext_a_per_m;
+    request.mfem_validation_problem.drive_real = drive_real;
+
+    fd::DrivenFrequencyResponseSolveResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_driven_frequency_response(request, &result);
+
+    if (status != fd::FrequencyDomainStatus::ok) {
+        std::fprintf(
+            stderr,
+            "large production CPU artifact solve status=%s error=%s diagnostics=%s\n",
+            fd::status_to_string(status),
+            result.error_message != nullptr ? result.error_message : "",
+            result.diagnostics_json != nullptr ? result.diagnostics_json : "");
+    }
+    check(status == fd::FrequencyDomainStatus::ok, "large production CPU artifact solve succeeds");
+    check(result.written_frequency_point_artifacts == 1, "large production CPU artifact solve records durable point");
+
+    char payload_path[256]{};
+    std::snprintf(
+        payload_path,
+        sizeof(payload_path),
+        "%s/response/field_payloads/frequency_0000/vector_xyz.bin",
+        output_directory);
+    check(file_exists(payload_path), "large production CPU writes spatial field payload");
+    check(
+        file_size_bytes(payload_path) == static_cast<long>(node_count * 3 * 2 * sizeof(double)),
+        "large production CPU field payload keeps all complex xyz components");
+
+    char tangent_payload_path[256]{};
+    std::snprintf(
+        tangent_payload_path,
+        sizeof(tangent_payload_path),
+        "%s/response/field_payloads/frequency_0000/vector.bin",
+        output_directory);
+    check(file_exists(tangent_payload_path), "large production CPU keeps tangent field payload");
+    check(
+        file_size_bytes(tangent_payload_path) == static_cast<long>(tangent_dof_count * 2 * sizeof(double)),
+        "large production CPU tangent payload keeps all complex tangent components");
+
+    fd::release_driven_frequency_response_result(&result);
+}
+
+void production_cpu_lane_writes_multi_point_matrix_free_response_artifacts()
+{
+    constexpr std::uint64_t frequency_count = 24;
+    double frequencies_hz[frequency_count]{};
+    for (std::uint64_t index = 0; index < frequency_count; ++index) {
+        frequencies_hz[index] = 0.1 + static_cast<double>(index) * 0.01;
+    }
+    const double equilibrium[] = {0.0, 0.0, 1.0};
+    fd::TangentFrameNode node{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 1, &node, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "multi-point production CPU artifact frame succeeds");
+
+    fd::MfemOperatorContextDescriptor descriptor{};
+    descriptor.node_count = 1;
+    descriptor.full_dof_count = 3;
+    descriptor.tangent_dof_count = 2;
+    descriptor.zeeman_enabled = true;
+    descriptor.mfem_mesh_available = true;
+    fd::MfemTangentSpaceLayout layout{};
+    layout.node_count = 1;
+    layout.full_dof_count = 3;
+    layout.tangent_dof_count = 2;
+    layout.tangent_components_per_node = 2;
+    layout.tangent_stride = 2;
+    const double h_ext_a_per_m[] = {0.0, 0.0, 2.0};
+    const double drive_real[] = {1.0, 0.0};
+
+    char output_directory[192]{};
+    std::snprintf(
+        output_directory,
+        sizeof(output_directory),
+        "/tmp/fullmag-frequency-domain-production-cpu-multipoint-artifact-%llu",
+        static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&node)));
+
+    fd::DrivenFrequencyResponseSolveRequest request{};
+    request.solve_request.operator_request.node_count = 1;
+    request.solve_request.operator_request.tangent_dof_count = 2;
+    request.solve_request.operator_request.alpha = 0.0;
+    request.solve_request.operator_request.gamma0 = 1.0;
+    request.solve_request.operator_request.include_zeeman = true;
+    request.solve_request.frequencies_hz = frequencies_hz;
+    request.solve_request.frequency_count = frequency_count;
+    request.solve_request.write_response_fields = false;
+    request.output_directory = output_directory;
+    request.write_partial_artifacts = true;
+    request.execution_lane = fd::DrivenFrequencyResponseExecutionLane::production_cpu;
+    request.mfem_validation_problem.enabled = true;
+    request.mfem_validation_problem.descriptor = descriptor;
+    request.mfem_validation_problem.layout = layout;
+    request.mfem_validation_problem.nodes = &node;
+    request.mfem_validation_problem.h_ext_a_per_m = h_ext_a_per_m;
+    request.mfem_validation_problem.drive_real = drive_real;
+
+    fd::DrivenFrequencyResponseSolveResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_driven_frequency_response(request, &result);
+
+    if (status != fd::FrequencyDomainStatus::ok) {
+        std::fprintf(
+            stderr,
+            "multi-point production CPU artifact solve status=%s error=%s diagnostics=%s\n",
+            fd::status_to_string(status),
+            result.error_message != nullptr ? result.error_message : "",
+            result.diagnostics_json != nullptr ? result.diagnostics_json : "");
+    }
+    check(status == fd::FrequencyDomainStatus::ok, "multi-point production CPU artifact solve succeeds");
+    check(result.written_frequency_point_artifacts == frequency_count, "multi-point production CPU writes all point artifacts");
+
+    char sweep_v2_path[256]{};
+    std::snprintf(
+        sweep_v2_path,
+        sizeof(sweep_v2_path),
+        "%s/response/magnetic_response_sweep.v2.json",
+        output_directory);
+    const std::string sweep_v2 = read_text_file(sweep_v2_path);
+    check(
+        contains(sweep_v2.c_str(), "\"completed_frequency_point_count\":24"),
+        "multi-point production CPU sweep v2 records completed point count");
+    check(
+        contains(sweep_v2.c_str(), "response/frequency_points/frequency_0023.json"),
+        "multi-point production CPU sweep v2 links final point artifact");
+
     fd::release_driven_frequency_response_result(&result);
 }
 
@@ -1391,7 +3360,7 @@ void driven_response_solver_writes_minimal_assembled_validation_artifacts()
     check(contains(manifest.c_str(), "\"stage_kind\":\"frequency_response\""), "manifest records response stage");
     check(contains(manifest.c_str(), "response/magnetic_response_sweep.v1.json"), "manifest links response sweep");
     check(contains(manifest.c_str(), "\"point_count\":2"), "manifest records response point count");
-    check(contains(manifest.c_str(), "\"completed_frequency_count\":2"), "manifest records completed frequency count");
+    check(contains(manifest.c_str(), "\"completed_frequency_point_count\":2"), "manifest records completed frequency point count");
     check(
         contains(manifest.c_str(), "\"response_sweep_resource_key\":\"/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep\""),
         "manifest records response sweep resource key");
@@ -1406,7 +3375,13 @@ void driven_response_solver_writes_minimal_assembled_validation_artifacts()
     check(contains(manifest.c_str(), "\"frequency_point_paths\""), "manifest links frequency-point metadata");
     check(contains(manifest.c_str(), "response/frequency_points/frequency_0001.json"), "manifest links second frequency-point metadata");
     check(contains(manifest.c_str(), "\"response_field_resources\""), "manifest links response field payload resources");
-    check(contains(manifest.c_str(), "response/field_payloads/frequency_0001/vector.bin"), "manifest links second field payload resource");
+    check(
+        contains(manifest.c_str(), "\"field_resource_id\":\"analysis:frequency-response:frequency-0001\""),
+        "manifest response field resources include data-plane field id");
+    check(
+        contains(manifest.c_str(), "\"payload_path\":\"response/field_payloads/frequency_0001/vector_xyz.bin\""),
+        "manifest response field resources include payload path");
+    check(contains(manifest.c_str(), "response/field_payloads/frequency_0001/vector_xyz.bin"), "manifest links second spatial field payload resource");
 
     char sweep_path[256]{};
     std::snprintf(
@@ -1421,12 +3396,40 @@ void driven_response_solver_writes_minimal_assembled_validation_artifacts()
     check(contains(sweep.c_str(), "\"frequency_hz\":0.079577471545947"), "response sweep records second frequency point");
     check(contains(sweep.c_str(), "\"response_amplitude\":0.666666666666666"), "response sweep records amplitude");
     check(contains(sweep.c_str(), "\"response_phase\":3.141592653589793"), "response sweep records phase of max component");
+    check(contains(sweep.c_str(), "\"phase_rad\":3.141592653589793"), "response sweep records scalar chart phase");
     check(contains(sweep.c_str(), "\"m_complex\":[[0,-0.333333333333333"), "response sweep records first complex tangent component");
     check(contains(sweep.c_str(), "[-0.666666666666666"), "response sweep records second complex tangent component");
     check(contains(sweep.c_str(), "\"component_response_amplitude\":[0.333333333333333"), "response sweep records component amplitudes");
     check(contains(sweep.c_str(), "\"component_response_phase\":[-1.570796326794896"), "response sweep records first component phase");
     check(contains(sweep.c_str(), "\"residual_source\":\"dense_block_real\""), "response sweep records residual source");
+    check(
+        contains(sweep.c_str(), "\"excitation_provenance\":{\"kind\":\"field\",\"phase_rad\":0"),
+        "response sweep records field excitation phase provenance");
+    check(
+        contains(sweep.c_str(), "\"sweep_reuse\":{\"operator_template_reused\":true"),
+        "response sweep records sweep reuse provenance");
+    check(
+        contains(sweep.c_str(), "\"kind\":\"previous_frequency_response\""),
+        "response sweep records previous-frequency warm-start provenance");
     check(!contains(sweep.c_str(), "\"residual_l2_norm\":0.0"), "response sweep does not hardcode zero residual");
+    check(
+        contains(sweep.c_str(), "\"susceptibility_tensor\":[["),
+        "response sweep records non-empty drive-projected susceptibility");
+    check(
+        !contains(sweep.c_str(), "\"susceptibility_tensor\":[]"),
+        "response sweep does not emit an empty susceptibility placeholder");
+    check(
+        contains(sweep.c_str(), "\"susceptibility_tensor_provenance\":{\"kind\":\"drive_projected_scalar\""),
+        "response sweep records susceptibility provenance");
+    check(
+        contains(sweep.c_str(), "\"absorbed_power_density_provenance\":{\"kind\":\"drive_projected_absorption_proxy\""),
+        "response sweep records absorbed power provenance");
+    check(
+        contains(sweep.c_str(), "\"tangent_leakage\":{\"status\":\"evaluated\""),
+        "response sweep records evaluated tangent leakage");
+    check(
+        !contains(sweep.c_str(), "\"tangent_leakage\":{\"status\":\"not_evaluated\""),
+        "response sweep does not emit unevaluated tangent leakage placeholder");
 
     char sweep_v2_path[256]{};
     std::snprintf(
@@ -1441,8 +3444,15 @@ void driven_response_solver_writes_minimal_assembled_validation_artifacts()
     check(
         contains(sweep_v2.c_str(), "\"completed_frequency_point_count\":2"),
         "response sweep v2 records completed point count");
+    check(contains(sweep_v2.c_str(), "\"frequency_index\":1"), "response sweep v2 records per-point frequency index");
+    check(
+        contains(sweep_v2.c_str(), "\"frequency_point_artifact_path\":\"response/frequency_points/frequency_0001.json\""),
+        "response sweep v2 records per-point metadata path");
+    check(
+        contains(sweep_v2.c_str(), "\"response_field_payload_path\":\"response/field_payloads/frequency_0001/vector_xyz.bin\""),
+        "response sweep v2 records per-point spatial field payload path");
     check(contains(sweep_v2.c_str(), "response/frequency_points/frequency_0001.json"), "response sweep v2 links second point");
-    check(contains(sweep_v2.c_str(), "response/field_payloads/frequency_0001/vector.bin"), "response sweep v2 links second payload");
+    check(contains(sweep_v2.c_str(), "response/field_payloads/frequency_0001/vector_xyz.bin"), "response sweep v2 links second spatial payload");
 
     char diagnostics_path[256]{};
     std::snprintf(
@@ -1451,8 +3461,29 @@ void driven_response_solver_writes_minimal_assembled_validation_artifacts()
         "%s/response/diagnostics.v1.json",
         output_directory);
     const std::string diagnostics = read_text_file(diagnostics_path);
+    check(
+        contains(diagnostics.c_str(), "\"schema_version\":\"frequency_domain_response_diagnostics.v1\""),
+        "response diagnostics records schema");
     check(contains(diagnostics.c_str(), "\"status\":\"ready\""), "response diagnostics records ready status");
     check(contains(diagnostics.c_str(), "\"complete\":true"), "response diagnostics records completion");
+    check(
+        contains(diagnostics.c_str(), "\"assembled_mfem_operator_solver\":true"),
+        "response diagnostics records assembled validation solver");
+    check(
+        contains(diagnostics.c_str(), "\"dense_block_real_solver\":true"),
+        "response diagnostics records dense validation solver");
+    check(
+        contains(diagnostics.c_str(), "\"matrix_free_solver\":false"),
+        "response diagnostics records matrix-free solver disabled for validation lane");
+    check(
+        contains(diagnostics.c_str(), "\"krylov_solver\":\"none\""),
+        "response diagnostics records no Krylov solver for validation lane");
+    check(
+        contains(diagnostics.c_str(), "\"completed_frequency_point_count\":2"),
+        "response diagnostics records completed point count");
+    check(
+        contains(diagnostics.c_str(), "\"relative_residual_l2_norm\""),
+        "response diagnostics records relative residual");
 
     char progress_path[256]{};
     std::snprintf(
@@ -1461,14 +3492,27 @@ void driven_response_solver_writes_minimal_assembled_validation_artifacts()
         "%s/response/progress.v1.json",
         output_directory);
     const std::string progress = read_text_file(progress_path);
+    check(
+        contains(progress.c_str(), "\"schema_version\":\"frequency_domain_sweep_progress.v1\""),
+        "response progress records schema");
     check(contains(progress.c_str(), "\"status\":\"ready\""), "response progress records ready status");
     check(contains(progress.c_str(), "\"complete\":true"), "response progress records completion");
+    check(contains(progress.c_str(), "\"state\":\"completed\""), "response progress records completed state");
+    check(
+        contains(progress.c_str(), "\"total_frequency_points\":2"),
+        "response progress records total points");
     check(
         contains(progress.c_str(), "\"completed_frequency_points\":2"),
         "response progress records completed points");
     check(
         contains(progress.c_str(), "\"written_frequency_point_artifacts\":2"),
         "response progress records written points");
+    check(
+        contains(progress.c_str(), "\"partial_artifacts_available\":true"),
+        "response progress records available completed artifacts");
+    check(
+        contains(progress.c_str(), "\"latest_artifact_manifest_path\":\"frequency_domain/manifest.v1.json\""),
+        "response progress records latest manifest path");
 
     char point_path[256]{};
     std::snprintf(
@@ -1482,21 +3526,90 @@ void driven_response_solver_writes_minimal_assembled_validation_artifacts()
         "frequency point metadata schema is written");
     check(contains(point.c_str(), "\"frequency_index\":0"), "frequency point metadata records index");
     check(
-        contains(point.c_str(), "\"field_payload_path\":\"response/field_payloads/frequency_0000/vector.bin\""),
-        "frequency point metadata links field payload");
+        contains(point.c_str(), "\"field_payload_path\":\"response/field_payloads/frequency_0000/vector_xyz.bin\""),
+        "frequency point metadata links spatial field payload");
+    check(
+        contains(point.c_str(), "\"angular_frequency_rad_per_s\":1"),
+        "frequency point metadata records angular frequency");
+    check(
+        contains(point.c_str(), "\"m_complex\":[[0,-0.333333333333333"),
+        "frequency point metadata records complex tangent response");
+    check(
+        contains(point.c_str(), "\"response_amplitude\":0.666666666666666"),
+        "frequency point metadata records scalar response amplitude");
+    check(
+        contains(point.c_str(), "\"response_phase\":3.141592653589793"),
+        "frequency point metadata records scalar response phase");
+    check(
+        contains(point.c_str(), "\"component_response_amplitude\":[0.333333333333333"),
+        "frequency point metadata records component response amplitudes");
+    check(
+        contains(point.c_str(), "\"component_response_phase\":[-1.570796326794896"),
+        "frequency point metadata records component response phases");
+    check(
+        contains(point.c_str(), "\"tangent_field_payload_path\":\"response/field_payloads/frequency_0000/vector.bin\""),
+        "frequency point metadata links tangent field payload");
     check(
         contains(point.c_str(), "\"binary_layout\":\"complex_f64_pairs_little_endian\""),
         "frequency point metadata records binary layout");
+    check(
+        contains(point.c_str(), "\"value_kind\":\"complex_spatial_vector\""),
+        "frequency point metadata records spatial value kind");
+    check(
+        contains(point.c_str(), "\"component_basis\":\"global_xyz\""),
+        "frequency point metadata records global xyz basis");
+    check(
+        contains(point.c_str(), "\"component_count\":3"),
+        "frequency point metadata records xyz component count");
+    check(
+        contains(point.c_str(), "\"components\":[\"x\",\"y\",\"z\"]"),
+        "frequency point metadata records xyz component labels");
+    check(
+        contains(point.c_str(), "\"complex_pair_count\":3"),
+        "frequency point metadata records complex pair count");
+    check(
+        contains(point.c_str(), "\"payload_value_count\":6"),
+        "frequency point metadata records payload scalar count");
+    check(
+        contains(point.c_str(), "\"default_view\":\"phase_rotated_real\""),
+        "frequency point metadata records default vector view");
+    check(
+        contains(point.c_str(), "\"available_views\":[\"complex\",\"real\",\"imag\",\"abs\",\"amplitude\",\"phase\",\"phase_rotated_real\"]"),
+        "frequency point metadata records all supported complex field views");
+    check(
+        contains(point.c_str(), "\"default_phase_rad\":0.0"),
+        "frequency point metadata records default phase angle for animated overlays");
+    check(
+        contains(point.c_str(), "\"susceptibility_tensor\":[["),
+        "frequency point metadata records non-empty susceptibility summary");
+    check(
+        contains(point.c_str(), "\"susceptibility_tensor_provenance\":{\"kind\":\"drive_projected_scalar\""),
+        "frequency point metadata records susceptibility provenance");
+    check(
+        contains(point.c_str(), "\"absorbed_power_density_provenance\":{\"kind\":\"drive_projected_absorption_proxy\""),
+        "frequency point metadata records absorbed power provenance");
+    check(
+        contains(point.c_str(), "\"residual_l2_norm\":"),
+        "frequency point metadata records residual norm");
+    check(
+        contains(point.c_str(), "\"relative_residual_l2_norm\":"),
+        "frequency point metadata records relative residual norm");
+    check(
+        contains(point.c_str(), "\"residual_source\":\"dense_block_real\""),
+        "frequency point metadata records residual source");
+    check(
+        contains(point.c_str(), "\"tangent_leakage\":{\"status\":\"evaluated\""),
+        "frequency point metadata records evaluated tangent leakage");
 
     char payload_path[256]{};
     std::snprintf(
         payload_path,
         sizeof(payload_path),
-        "%s/response/field_payloads/frequency_0000/vector.bin",
+        "%s/response/field_payloads/frequency_0000/vector_xyz.bin",
         output_directory);
     std::ifstream payload(payload_path, std::ios::binary | std::ios::ate);
-    check(payload.good(), "response field payload is readable");
-    check(payload.tellg() > 0, "response field payload is non-empty");
+    check(payload.good(), "response spatial field payload is readable");
+    check(payload.tellg() > 0, "response spatial field payload is non-empty");
 
     char point_1_path[256]{};
     std::snprintf(
@@ -1507,18 +3620,24 @@ void driven_response_solver_writes_minimal_assembled_validation_artifacts()
     const std::string point_1 = read_text_file(point_1_path);
     check(contains(point_1.c_str(), "\"frequency_index\":1"), "second frequency point metadata records index");
     check(
-        contains(point_1.c_str(), "\"field_payload_path\":\"response/field_payloads/frequency_0001/vector.bin\""),
-        "second frequency point metadata links field payload");
+        contains(point_1.c_str(), "\"field_payload_path\":\"response/field_payloads/frequency_0001/vector_xyz.bin\""),
+        "second frequency point metadata links spatial field payload");
+    check(
+        contains(point_1.c_str(), "\"available_views\":[\"complex\",\"real\",\"imag\",\"abs\",\"amplitude\",\"phase\",\"phase_rotated_real\"]"),
+        "second frequency point metadata records all supported complex field views");
+    check(
+        contains(point_1.c_str(), "\"default_view\":\"phase_rotated_real\""),
+        "second frequency point metadata records animated phase view as default");
 
     char payload_1_path[256]{};
     std::snprintf(
         payload_1_path,
         sizeof(payload_1_path),
-        "%s/response/field_payloads/frequency_0001/vector.bin",
+        "%s/response/field_payloads/frequency_0001/vector_xyz.bin",
         output_directory);
     std::ifstream payload_1(payload_1_path, std::ios::binary | std::ios::ate);
-    check(payload_1.good(), "second response field payload is readable");
-    check(payload_1.tellg() == payload.tellg(), "second response field payload has consistent binary size");
+    check(payload_1.good(), "second response spatial field payload is readable");
+    check(payload_1.tellg() == payload.tellg(), "second response spatial field payload has consistent binary size");
 
     fd::release_driven_frequency_response_result(&result);
 }
@@ -1598,6 +3717,9 @@ void driven_response_solver_respects_disabled_response_field_payloads()
         output_directory);
     const std::string sweep_v2 = read_text_file(sweep_v2_path);
     check(
+        contains(sweep_v2.c_str(), "\"response_field_payload_path\":null"),
+        "disabled response field sweep v2 records null per-point payload path");
+    check(
         !contains(sweep_v2.c_str(), "response/field_payloads/frequency_0000/vector.bin"),
         "disabled response field sweep v2 does not link field payload");
 
@@ -1620,6 +3742,122 @@ void driven_response_solver_respects_disabled_response_field_payloads()
         "%s/response/field_payloads/frequency_0000/vector.bin",
         output_directory);
     check(!file_exists(payload_path), "disabled response field solve does not write field payload");
+
+    fd::release_driven_frequency_response_result(&result);
+}
+
+void production_cpu_lane_interruption_preserves_partial_artifacts()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz, one_over_two_pi_hz};
+    const double equilibrium[] = {0.0, 0.0, 1.0};
+    fd::TangentFrameNode node{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 1, &node, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "production CPU interrupted artifact frame succeeds");
+
+    fd::MfemOperatorContextDescriptor descriptor{};
+    descriptor.node_count = 1;
+    descriptor.full_dof_count = 3;
+    descriptor.tangent_dof_count = 2;
+    descriptor.zeeman_enabled = true;
+    descriptor.mfem_mesh_available = true;
+    fd::MfemTangentSpaceLayout layout{};
+    layout.node_count = 1;
+    layout.full_dof_count = 3;
+    layout.tangent_dof_count = 2;
+    layout.tangent_components_per_node = 2;
+    layout.tangent_stride = 2;
+    const double h_ext_a_per_m[] = {0.0, 0.0, 2.0};
+    const double drive_real[] = {1.0, 0.0};
+
+    char output_directory[192]{};
+    std::snprintf(
+        output_directory,
+        sizeof(output_directory),
+        "/tmp/fullmag-frequency-domain-production-cpu-interrupted-%llu",
+        static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&node)));
+    CancelAfterCompletedProductionPoint cancel_state{};
+
+    fd::DrivenFrequencyResponseSolveRequest request{};
+    request.solve_request.operator_request.node_count = 1;
+    request.solve_request.operator_request.tangent_dof_count = 2;
+    request.solve_request.operator_request.alpha = 0.0;
+    request.solve_request.operator_request.gamma0 = 1.0;
+    request.solve_request.operator_request.include_zeeman = true;
+    request.solve_request.frequencies_hz = frequencies_hz;
+    request.solve_request.frequency_count = 2;
+    request.solve_request.write_response_fields = true;
+    request.execution_lane = fd::DrivenFrequencyResponseExecutionLane::production_cpu;
+    request.output_directory = output_directory;
+    request.write_partial_artifacts = true;
+    request.cancel_requested = cancel_after_completed_production_point;
+    request.cancel_user_data = &cancel_state;
+    request.progress_callback = request_cancel_after_completed_production_point;
+    request.progress_user_data = &cancel_state;
+    request.mfem_validation_problem.enabled = true;
+    request.mfem_validation_problem.descriptor = descriptor;
+    request.mfem_validation_problem.layout = layout;
+    request.mfem_validation_problem.nodes = &node;
+    request.mfem_validation_problem.h_ext_a_per_m = h_ext_a_per_m;
+    request.mfem_validation_problem.drive_real = drive_real;
+
+    fd::DrivenFrequencyResponseSolveResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_driven_frequency_response(request, &result);
+
+    check(status == fd::FrequencyDomainStatus::interrupted, "cancelled production CPU sweep reports interrupted");
+    check(result.completed_frequency_count == 1, "cancelled production CPU sweep preserves one completed point");
+    check(result.written_frequency_point_artifacts == 1, "cancelled production CPU sweep records one durable point");
+    check(contains(result.result_json, "\"status\":\"interrupted\""), "cancelled production CPU result JSON reports interrupted");
+    check(contains(result.result_json, "frequency_domain/manifest.v1.json"), "cancelled production CPU result JSON reports manifest");
+    check(
+        contains(result.diagnostics_json, "\"requested_execution_lane\":\"production_cpu\""),
+        "cancelled production CPU diagnostics report lane");
+    check(
+        contains(result.diagnostics_json, "\"matrix_free_solver\":true"),
+        "cancelled production CPU diagnostics report matrix-free solver");
+    check(
+        contains(result.diagnostics_json, "\"completed_frequency_point_count\":1"),
+        "cancelled production CPU diagnostics report completed frequency point count");
+    check(
+        contains(result.diagnostics_json, "\"validation_fallback_used\":false"),
+        "cancelled production CPU diagnostics reject validation fallback");
+
+    const std::string manifest = read_text_file(result.artifact_manifest_path);
+    check(contains(manifest.c_str(), "\"status\":\"interrupted\""), "production CPU interrupted manifest records interrupted status");
+    check(contains(manifest.c_str(), "\"complete\":false"), "production CPU interrupted manifest marks partial result incomplete");
+    check(contains(manifest.c_str(), "\"completed_frequency_point_count\":1"), "production CPU interrupted manifest records completed point count");
+    check(contains(manifest.c_str(), "\"written_frequency_point_artifacts\":1"), "production CPU interrupted manifest records written count");
+    check(contains(manifest.c_str(), "response/frequency_points/frequency_0000.json"), "production CPU interrupted manifest links completed point");
+    check(!contains(manifest.c_str(), "response/frequency_points/frequency_0001.json"), "production CPU interrupted manifest does not link incomplete point");
+    check(contains(manifest.c_str(), "response/field_payloads/frequency_0000/vector_xyz.bin"), "production CPU interrupted manifest links completed spatial payload");
+    check(!contains(manifest.c_str(), "response/field_payloads/frequency_0001/vector_xyz.bin"), "production CPU interrupted manifest does not link incomplete spatial payload");
+
+    char progress_path[256]{};
+    std::snprintf(progress_path, sizeof(progress_path), "%s/response/progress.v1.json", output_directory);
+    const std::string progress = read_text_file(progress_path);
+    check(
+        contains(progress.c_str(), "\"schema_version\":\"frequency_domain_sweep_progress.v1\""),
+        "production CPU interrupted progress artifact records schema");
+    check(contains(progress.c_str(), "\"status\":\"interrupted\""), "production CPU interrupted progress records interrupted status");
+    check(contains(progress.c_str(), "\"state\":\"interrupted\""), "production CPU interrupted progress artifact reports interrupted state");
+    check(contains(progress.c_str(), "\"partial_artifacts_available\":true"), "production CPU interrupted progress exposes partial artifacts");
+    check(contains(progress.c_str(), "\"complete\":false"), "production CPU interrupted progress records incomplete state");
+    check(
+        contains(progress.c_str(), "\"total_frequency_points\":2"),
+        "production CPU interrupted progress records total points");
+    check(
+        contains(progress.c_str(), "\"completed_frequency_points\":1"),
+        "production CPU interrupted progress records completed point count");
+    check(
+        contains(progress.c_str(), "\"written_frequency_point_artifacts\":1"),
+        "production CPU interrupted progress records durable point count");
+    check(
+        contains(progress.c_str(), "\"latest_artifact_manifest_path\":\"frequency_domain/manifest.v1.json\""),
+        "production CPU interrupted progress records latest manifest path");
 
     fd::release_driven_frequency_response_result(&result);
 }
@@ -1693,12 +3931,12 @@ void driven_response_solver_interruption_preserves_partial_validation_artifacts(
     const std::string manifest = read_text_file(result.artifact_manifest_path);
     check(contains(manifest.c_str(), "\"status\":\"interrupted\""), "interrupted manifest records interrupted status");
     check(contains(manifest.c_str(), "\"complete\":false"), "interrupted manifest marks partial result incomplete");
-    check(contains(manifest.c_str(), "\"completed_frequency_count\":1"), "interrupted manifest records completed count");
+    check(contains(manifest.c_str(), "\"completed_frequency_point_count\":1"), "interrupted manifest records completed point count");
     check(contains(manifest.c_str(), "\"written_frequency_point_artifacts\":1"), "interrupted manifest records written count");
     check(contains(manifest.c_str(), "response/frequency_points/frequency_0000.json"), "interrupted manifest links completed point");
     check(!contains(manifest.c_str(), "response/frequency_points/frequency_0001.json"), "interrupted manifest does not link incomplete point");
-    check(contains(manifest.c_str(), "response/field_payloads/frequency_0000/vector.bin"), "interrupted manifest links completed payload");
-    check(!contains(manifest.c_str(), "response/field_payloads/frequency_0001/vector.bin"), "interrupted manifest does not link incomplete payload");
+    check(contains(manifest.c_str(), "response/field_payloads/frequency_0000/vector_xyz.bin"), "interrupted manifest links completed spatial payload");
+    check(!contains(manifest.c_str(), "response/field_payloads/frequency_0001/vector_xyz.bin"), "interrupted manifest does not link incomplete spatial payload");
     check(
         contains(manifest.c_str(), "\"response_progress_v1_path\":\"response/progress.v1.json\""),
         "interrupted manifest links progress artifact");
@@ -1706,12 +3944,22 @@ void driven_response_solver_interruption_preserves_partial_validation_artifacts(
     char progress_path[256]{};
     std::snprintf(progress_path, sizeof(progress_path), "%s/response/progress.v1.json", output_directory);
     const std::string progress = read_text_file(progress_path);
+    check(
+        contains(progress.c_str(), "\"schema_version\":\"frequency_domain_sweep_progress.v1\""),
+        "interrupted progress artifact records schema");
+    check(contains(progress.c_str(), "\"status\":\"interrupted\""), "interrupted progress records interrupted status");
     check(contains(progress.c_str(), "\"state\":\"interrupted\""), "interrupted progress artifact reports interrupted state");
     check(contains(progress.c_str(), "\"partial_artifacts_available\":true"), "interrupted progress exposes partial artifacts");
     check(contains(progress.c_str(), "\"complete\":false"), "interrupted progress records incomplete state");
     check(
+        contains(progress.c_str(), "\"total_frequency_points\":2"),
+        "interrupted progress records total points");
+    check(
         contains(progress.c_str(), "\"completed_frequency_points\":1"),
         "interrupted progress records completed point count");
+    check(
+        contains(progress.c_str(), "\"written_frequency_point_artifacts\":1"),
+        "interrupted progress records durable point count");
 
     char completed_point_path[256]{};
     std::snprintf(
@@ -1762,8 +4010,11 @@ void c_abi_driven_response_solve_reports_structured_unavailable_result()
     check(result.error_message != nullptr, "C ABI driven solve returns error message");
     check(contains(result.error_message, "driven"), "C ABI driven solve reason names solver");
     check(
-        contains(result.diagnostics_json, "frequency_domain_driven_response_result.v1"),
+        contains(result.diagnostics_json, "frequency_domain_response_diagnostics.v1"),
         "C ABI driven solve diagnostics JSON reports schema");
+    check(
+        contains(result.diagnostics_json, "\"complete\":false"),
+        "C ABI driven solve diagnostics JSON reports incomplete status");
     check(contains(result.result_json, "unavailable"), "C ABI driven solve result JSON reports status");
     check(std::strcmp(result.artifact_manifest_path, "") == 0, "C ABI driven solve reports no manifest");
 
@@ -1772,6 +4023,150 @@ void c_abi_driven_response_solve_reports_structured_unavailable_result()
     check(result.diagnostics_json == nullptr, "C ABI driven solve cleanup clears diagnostics JSON");
     check(result.result_json == nullptr, "C ABI driven solve cleanup clears result JSON");
     check(result.artifact_manifest_path == nullptr, "C ABI driven solve cleanup clears manifest path");
+    fullmag_fem_frequency_domain_solve_result_release(&result);
+}
+
+void c_abi_driven_response_solve_rejects_floquet_metadata()
+{
+    const double frequencies_hz[] = {3.0e9};
+    fullmag_fem_frequency_domain_floquet_periodic_pair floquet_pair{};
+    floquet_pair.pair_id = "x_faces";
+    floquet_pair.node_a = 0;
+    floquet_pair.node_b = 1;
+    floquet_pair.has_translation = 1;
+    floquet_pair.translation_m[0] = 1.0e-6;
+    floquet_pair.has_phase = 1;
+    floquet_pair.phase_rad = 0.25;
+
+    fullmag_fem_frequency_domain_driven_response_request request{};
+    request.node_count = 2;
+    request.tangent_dof_count = 4;
+    request.alpha = 0.02;
+    request.gamma0 = 2.211e5;
+    request.frequencies_hz = frequencies_hz;
+    request.frequency_count = 1;
+    request.has_floquet_k_vector = 1;
+    request.floquet_k_vector_rad_per_m[0] = 1.0e6;
+    request.phase_convention = FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_I_OMEGA_T;
+    request.mfem_floquet_periodic_pairs = &floquet_pair;
+    request.mfem_floquet_periodic_pair_count = 1;
+
+    fullmag_fem_frequency_domain_solve_result result{};
+    const int status =
+        fullmag_fem_frequency_domain_solve_driven_response(&request, &result);
+
+    check(status == FULLMAG_FEM_OK, "C ABI Floquet solve boundary call succeeds");
+    check(
+        result.status == FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_UNAVAILABLE,
+        "C ABI Floquet solve result reports unavailable");
+    check(result.completed_frequency_count == 0, "C ABI Floquet solve completes no frequencies");
+    check(result.error_message != nullptr, "C ABI Floquet solve returns error message");
+    check(contains(result.error_message, "Floquet/Bloch"), "C ABI Floquet solve reason names Floquet/Bloch");
+    check(contains(result.error_message, "nonzero-k"), "C ABI Floquet solve reason names nonzero-k");
+
+    fullmag_fem_frequency_domain_solve_result_release(&result);
+}
+
+void c_abi_driven_response_solve_rejects_unknown_execution_lane()
+{
+    const double frequencies_hz[] = {3.0e9};
+    const double stiffness_diagonal[] = {2.0, 4.0};
+    const double mass_diagonal[] = {1.0, 2.0};
+    const double drive_real[] = {1.0, 2.0};
+
+    fullmag_fem_frequency_domain_driven_response_request request{};
+    request.node_count = 1;
+    request.tangent_dof_count = 2;
+    request.alpha = 0.01;
+    request.gamma0 = 2.211e5;
+    request.requested_execution_lane =
+        static_cast<fullmag_fem_frequency_domain_execution_lane>(99);
+    request.frequencies_hz = frequencies_hz;
+    request.frequency_count = 1;
+    request.tiny_validation_enabled = 1;
+    request.tiny_validation_tangent_dof_count = 2;
+    request.tiny_validation_stiffness_diagonal = stiffness_diagonal;
+    request.tiny_validation_mass_diagonal = mass_diagonal;
+    request.tiny_validation_drive_real = drive_real;
+
+    fullmag_fem_frequency_domain_solve_result result{};
+    const int status =
+        fullmag_fem_frequency_domain_solve_driven_response(&request, &result);
+
+    check(status == FULLMAG_FEM_OK, "C ABI unknown execution lane returns owned result");
+    check(
+        result.status == FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_VALIDATION_ERROR,
+        "C ABI unknown execution lane reports validation error");
+    check(result.total_frequency_count == 1, "C ABI unknown execution lane keeps total count");
+    check(result.completed_frequency_count == 0, "C ABI unknown execution lane solves no frequencies");
+    check(
+        contains(result.error_message, "execution lane"),
+        "C ABI unknown execution lane error names execution lane");
+    check(
+        contains(result.diagnostics_json, "\"status\":\"validation_error\""),
+        "C ABI unknown execution lane diagnostics report validation status");
+    check(
+        contains(result.diagnostics_json, "\"schema_version\":\"frequency_domain_response_diagnostics.v1\""),
+        "C ABI unknown execution lane diagnostics report schema version");
+    check(
+        contains(result.result_json, "\"schema_version\":\"frequency_domain_driven_response_result.v1\""),
+        "C ABI unknown execution lane result reports schema version");
+    check(
+        !contains(result.diagnostics_json, "\"tiny_validation_solver\":true"),
+        "C ABI unknown execution lane does not fall back to tiny validation");
+
+    fullmag_fem_frequency_domain_solve_result_release(&result);
+}
+
+void c_abi_driven_response_solve_rejects_unknown_phase_convention()
+{
+    const double frequencies_hz[] = {3.0e9};
+    const double stiffness_diagonal[] = {2.0, 4.0};
+    const double mass_diagonal[] = {1.0, 2.0};
+    const double drive_real[] = {1.0, 2.0};
+
+    fullmag_fem_frequency_domain_driven_response_request request{};
+    request.node_count = 1;
+    request.tangent_dof_count = 2;
+    request.alpha = 0.01;
+    request.gamma0 = 2.211e5;
+    request.requested_execution_lane = FULLMAG_FEM_FREQUENCY_DOMAIN_EXECUTION_VALIDATION;
+    request.frequencies_hz = frequencies_hz;
+    request.frequency_count = 1;
+    request.phase_convention =
+        static_cast<fullmag_fem_frequency_domain_phase_convention>(99);
+    request.tiny_validation_enabled = 1;
+    request.tiny_validation_tangent_dof_count = 2;
+    request.tiny_validation_stiffness_diagonal = stiffness_diagonal;
+    request.tiny_validation_mass_diagonal = mass_diagonal;
+    request.tiny_validation_drive_real = drive_real;
+
+    fullmag_fem_frequency_domain_solve_result result{};
+    const int status =
+        fullmag_fem_frequency_domain_solve_driven_response(&request, &result);
+
+    check(status == FULLMAG_FEM_OK, "C ABI unknown phase convention returns owned result");
+    check(
+        result.status == FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_VALIDATION_ERROR,
+        "C ABI unknown phase convention reports validation error");
+    check(result.total_frequency_count == 1, "C ABI unknown phase convention keeps total count");
+    check(result.completed_frequency_count == 0, "C ABI unknown phase convention solves no frequencies");
+    check(
+        contains(result.error_message, "phase convention"),
+        "C ABI unknown phase convention error names phase convention");
+    check(
+        contains(result.diagnostics_json, "\"status\":\"validation_error\""),
+        "C ABI unknown phase convention diagnostics report validation status");
+    check(
+        contains(result.diagnostics_json, "\"schema_version\":\"frequency_domain_response_diagnostics.v1\""),
+        "C ABI unknown phase convention diagnostics report schema version");
+    check(
+        contains(result.result_json, "\"schema_version\":\"frequency_domain_driven_response_result.v1\""),
+        "C ABI unknown phase convention result reports schema version");
+    check(
+        !contains(result.diagnostics_json, "\"tiny_validation_solver\":true"),
+        "C ABI unknown phase convention does not fall back to tiny validation");
+
     fullmag_fem_frequency_domain_solve_result_release(&result);
 }
 
@@ -1813,6 +4208,686 @@ void c_abi_driven_response_solve_runs_tiny_validation_problem()
     check(
         contains(result.result_json, "\"max_abs_response\""),
         "C ABI tiny validation result reports response magnitude");
+
+    fullmag_fem_frequency_domain_solve_result_release(&result);
+}
+
+void c_abi_driven_response_solve_runs_complex_tiny_validation_problem()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double stiffness_diagonal[] = {2.0, 4.0};
+    const double mass_diagonal[] = {1.0, 2.0};
+    const double drive_real[] = {1.0, 0.0};
+    const double drive_imag[] = {3.0, 0.0};
+
+    fullmag_fem_frequency_domain_driven_response_request request{};
+    request.node_count = 1;
+    request.tangent_dof_count = 2;
+    request.alpha = 0.01;
+    request.gamma0 = 2.211e5;
+    request.frequencies_hz = frequencies_hz;
+    request.frequency_count = 1;
+    request.tiny_validation_enabled = 1;
+    request.tiny_validation_tangent_dof_count = 2;
+    request.tiny_validation_stiffness_diagonal = stiffness_diagonal;
+    request.tiny_validation_mass_diagonal = mass_diagonal;
+    request.tiny_validation_drive_real = drive_real;
+    request.tiny_validation_drive_imag = drive_imag;
+
+    fullmag_fem_frequency_domain_solve_result result{};
+    const int status =
+        fullmag_fem_frequency_domain_solve_driven_response(&request, &result);
+
+    check(status == FULLMAG_FEM_OK, "C ABI complex tiny validation boundary call succeeds");
+    check(
+        result.status == FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OK,
+        "C ABI complex tiny validation reports ok");
+    check(result.completed_frequency_count == 1, "C ABI complex tiny validation completes frequency");
+    check(
+        contains(result.result_json, "\"max_abs_response\":1.41421356237309"),
+        "C ABI complex tiny validation result uses imaginary drive");
+
+    fullmag_fem_frequency_domain_solve_result_release(&result);
+}
+
+void c_abi_driven_response_manifest_preserves_temporal_phase_convention()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double equilibrium_m[] = {0.0, 0.0, 1.0};
+    const double h_ext_a_per_m[] = {0.0, 0.0, 2.0};
+    const double drive_real[] = {1.0, 0.0};
+
+    char output_directory[192]{};
+    std::snprintf(
+        output_directory,
+        sizeof(output_directory),
+        "/tmp/fullmag-frequency-domain-cabi-phase-convention-%llu",
+        static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&frequencies_hz)));
+
+    fullmag_fem_frequency_domain_driven_response_request request{};
+    request.node_count = 1;
+    request.tangent_dof_count = 2;
+    request.alpha = 0.01;
+    request.gamma0 = 2.211e5;
+    request.frequencies_hz = frequencies_hz;
+    request.frequency_count = 1;
+    request.output_directory = output_directory;
+    request.write_partial_artifacts = 1;
+    request.phase_convention = FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_MINUS_I_OMEGA_T;
+    request.mfem_operator_enabled = 1;
+    request.mfem_include_zeeman = 1;
+    request.mfem_equilibrium_m = equilibrium_m;
+    request.mfem_h_ext_a_per_m = h_ext_a_per_m;
+    request.mfem_drive_real = drive_real;
+
+    fullmag_fem_frequency_domain_solve_result result{};
+    const int status =
+        fullmag_fem_frequency_domain_solve_driven_response(&request, &result);
+
+    check(status == FULLMAG_FEM_OK, "C ABI phase convention artifact solve boundary call succeeds");
+    check(
+        result.status == FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OK,
+        "C ABI phase convention artifact solve reports ok");
+    check(
+        contains(result.artifact_manifest_path, "frequency_domain/manifest.v1.json"),
+        "C ABI phase convention artifact solve reports manifest path");
+    const std::string manifest = read_text_file(result.artifact_manifest_path);
+    check(
+        contains(manifest.c_str(), "\"phase_convention\":\"exp_minus_i_omega_t\""),
+        "C ABI manifest preserves requested temporal phase convention");
+
+    fullmag_fem_frequency_domain_solve_result_release(&result);
+}
+
+void c_abi_production_cpu_lane_runs_mfem_matrix_free_response_problem()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double equilibrium_m[] = {
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+    };
+    const double h_ext_a_per_m[] = {0.0, 0.0, 2.0};
+    const double drive_real[] = {1.0, 0.0, 1.0, 0.0};
+    const fullmag_fem_frequency_domain_exchange_edge exchange_edge{
+        0,
+        1,
+        2.0,
+    };
+    const fullmag_fem_frequency_domain_periodic_node_pair periodic_pair{
+        0,
+        1,
+    };
+    CAbiProgressRecorder progress_recorder{};
+    char output_directory[192]{};
+    std::snprintf(
+        output_directory,
+        sizeof(output_directory),
+        "/tmp/fullmag-frequency-domain-cabi-static-periodic-%llu",
+        static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&periodic_pair)));
+
+    fullmag_fem_frequency_domain_driven_response_request request{};
+    request.node_count = 2;
+    request.tangent_dof_count = 4;
+    request.alpha = 0.0;
+    request.gamma0 = 1.0;
+    request.requested_execution_lane = FULLMAG_FEM_FREQUENCY_DOMAIN_EXECUTION_PRODUCTION_CPU;
+    request.frequencies_hz = frequencies_hz;
+    request.frequency_count = 1;
+    request.mfem_operator_enabled = 1;
+    request.mfem_include_zeeman = 1;
+    request.mfem_equilibrium_m = equilibrium_m;
+    request.mfem_h_ext_a_per_m = h_ext_a_per_m;
+    const double anisotropy_axis[] = {1.0, 0.0, 0.0};
+    request.mfem_uniaxial_anisotropy_axis = anisotropy_axis;
+    request.mfem_uniaxial_anisotropy_field_a_per_m = 1.0;
+    request.mfem_drive_real = drive_real;
+    request.mfem_exchange_edges = &exchange_edge;
+    request.mfem_exchange_edge_count = 1;
+    request.mfem_static_periodic_node_pairs = &periodic_pair;
+    request.mfem_static_periodic_node_pair_count = 1;
+    request.progress_callback = c_abi_record_progress;
+    request.progress_user_data = &progress_recorder;
+    request.output_directory = output_directory;
+    request.write_partial_artifacts = 1;
+
+    fullmag_fem_frequency_domain_solve_result result{};
+    const int status =
+        fullmag_fem_frequency_domain_solve_driven_response(&request, &result);
+
+    check(status == FULLMAG_FEM_OK, "C ABI production CPU MFEM solve boundary call succeeds");
+    check(
+        result.status == FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OK,
+        "C ABI production CPU MFEM solve reports ok");
+    check(result.completed_frequency_count == 1, "C ABI production CPU MFEM solve completes frequency");
+    check(
+        contains(result.diagnostics_json, "\"requested_execution_lane\":\"production_cpu\""),
+        "C ABI production CPU MFEM diagnostics report lane");
+    check(
+        contains(result.diagnostics_json, "\"matrix_free_solver\":true"),
+        "C ABI production CPU MFEM diagnostics report matrix-free solver");
+    check(
+        contains(result.diagnostics_json, "\"completed_frequency_point_count\":1"),
+        "C ABI production CPU MFEM diagnostics report completed frequency point count");
+    check(
+        contains(result.diagnostics_json, "\"validation_fallback_used\":false"),
+        "C ABI production CPU MFEM diagnostics reject validation fallback");
+    check(
+        contains(result.diagnostics_json, "\"static_periodic_projection\":true"),
+        "C ABI production CPU MFEM diagnostics report static-periodic projection");
+    check(
+        contains(result.diagnostics_json, "\"static_periodic_node_pair_count\":1"),
+        "C ABI production CPU MFEM diagnostics report static-periodic pair count");
+    check(
+        contains(result.diagnostics_json, "\"static_periodic_frame_max_mismatch\":0"),
+        "C ABI production CPU MFEM diagnostics report static-periodic frame mismatch");
+    check(
+        contains(result.diagnostics_json, "\"static_periodic_drive_max_mismatch\":0"),
+        "C ABI production CPU MFEM diagnostics report static-periodic drive mismatch");
+    check(progress_recorder.event_count > 0, "C ABI production CPU progress emits events");
+    check(progress_recorder.last_frequency_index == 0, "C ABI production CPU progress reports frequency index");
+    check(progress_recorder.last_completed_frequency_count == 1, "C ABI production CPU progress reports completed count");
+    check(progress_recorder.last_total_frequency_count == 1, "C ABI production CPU progress reports total count");
+    check(progress_recorder.last_iteration_count > 0, "C ABI production CPU progress reports iterations");
+    check(
+        std::abs(progress_recorder.last_frequency_hz - one_over_two_pi_hz) < 1.0e-12,
+        "C ABI production CPU progress reports frequency");
+    check(
+        progress_recorder.last_relative_residual_l2_norm < 1.0e-10,
+        "C ABI production CPU progress reports final residual");
+    check(progress_recorder.saw_converged, "C ABI production CPU progress reports convergence");
+    check(
+        !contains(result.diagnostics_json, "\"tiny_validation_solver\":true"),
+        "C ABI production CPU MFEM solve does not run tiny validation solver");
+    check(contains(result.result_json, "\"status\":\"ok\""), "C ABI production CPU MFEM result reports ok");
+    check(
+        contains(result.result_json, "\"max_abs_response\""),
+        "C ABI production CPU MFEM result reports response magnitude");
+    char periodic_pairs_path[256]{};
+    std::snprintf(
+        periodic_pairs_path,
+        sizeof(periodic_pairs_path),
+        "%s/mesh/periodic_pairs.v1.json",
+        output_directory);
+    const std::string periodic_pairs = read_text_file(periodic_pairs_path);
+    check(
+        contains(periodic_pairs.c_str(), "\"schema_version\":\"periodic_pairs.v1\""),
+        "C ABI static-periodic artifact records periodic_pairs schema");
+    check(
+        contains(periodic_pairs.c_str(), "\"validation_status\":\"ok\""),
+        "C ABI static-periodic artifact records validation status");
+    check(
+        contains(periodic_pairs.c_str(), "\"paired_node_count\":2"),
+        "C ABI static-periodic artifact records paired node count");
+    check(
+        contains(periodic_pairs.c_str(), "\"unpaired_source_count\":0"),
+        "C ABI static-periodic artifact records no unpaired source nodes");
+    check(
+        contains(periodic_pairs.c_str(), "\"unpaired_destination_count\":0"),
+        "C ABI static-periodic artifact records no unpaired destination nodes");
+    check(
+        contains(periodic_pairs.c_str(), "\"source_marker\":\"node:0\""),
+        "C ABI static-periodic artifact records source marker");
+    check(
+        contains(periodic_pairs.c_str(), "\"destination_marker\":\"node:1\""),
+        "C ABI static-periodic artifact records destination marker");
+    check(
+        contains(periodic_pairs.c_str(), "\"residual_diagnostics\""),
+        "C ABI static-periodic artifact records residual diagnostics");
+
+    fullmag_fem_frequency_domain_solve_result_release(&result);
+}
+
+void c_abi_production_cpu_lane_rejects_invalid_static_periodic_requests()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double equilibrium_z[] = {
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+    };
+    const double mismatched_equilibrium[] = {
+        0.0, 0.0, 1.0,
+        1.0, 0.0, 0.0,
+    };
+    const double periodic_drive[] = {1.0, 0.0, 1.0, 0.0};
+    const double nonperiodic_drive[] = {1.0, 0.0, 0.0, 0.0};
+    const fullmag_fem_frequency_domain_periodic_node_pair periodic_pair{
+        0,
+        1,
+    };
+    const fullmag_fem_frequency_domain_periodic_node_pair self_pair{
+        0,
+        0,
+    };
+    const fullmag_fem_frequency_domain_periodic_node_pair out_of_range_pair{
+        0,
+        3,
+    };
+
+    auto base_request = [&]() {
+        fullmag_fem_frequency_domain_driven_response_request request{};
+        request.node_count = 2;
+        request.tangent_dof_count = 4;
+        request.alpha = 0.0;
+        request.gamma0 = 1.0;
+        request.requested_execution_lane =
+            FULLMAG_FEM_FREQUENCY_DOMAIN_EXECUTION_PRODUCTION_CPU;
+        request.frequencies_hz = frequencies_hz;
+        request.frequency_count = 1;
+        request.mfem_operator_enabled = 1;
+        request.mfem_equilibrium_m = equilibrium_z;
+        request.mfem_drive_real = periodic_drive;
+        request.mfem_static_periodic_node_pair_count = 1;
+        return request;
+    };
+
+    {
+        fullmag_fem_frequency_domain_driven_response_request request = base_request();
+        request.mfem_static_periodic_node_pairs = nullptr;
+        fullmag_fem_frequency_domain_solve_result result{};
+        const int status =
+            fullmag_fem_frequency_domain_solve_driven_response(&request, &result);
+        check(status == FULLMAG_FEM_OK, "C ABI null static-periodic pair request returns owned result");
+        check(
+            result.status == FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_VALIDATION_ERROR,
+            "C ABI null static-periodic pair request is validation error");
+        check(
+            contains(result.error_message, "node pair buffer"),
+            "C ABI null static-periodic pair request reports pair buffer error");
+        fullmag_fem_frequency_domain_solve_result_release(&result);
+    }
+
+    {
+        fullmag_fem_frequency_domain_driven_response_request request = base_request();
+        request.mfem_static_periodic_node_pairs = &self_pair;
+        fullmag_fem_frequency_domain_solve_result result{};
+        const int status =
+            fullmag_fem_frequency_domain_solve_driven_response(&request, &result);
+        check(status == FULLMAG_FEM_OK, "C ABI static-periodic self-pair request returns owned result");
+        check(
+            result.status == FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_VALIDATION_ERROR,
+            "C ABI static-periodic self-pair request is validation error");
+        check(
+            contains(result.error_message, "invalid node pair"),
+            "C ABI static-periodic self-pair request reports invalid pair error");
+        fullmag_fem_frequency_domain_solve_result_release(&result);
+    }
+
+    {
+        fullmag_fem_frequency_domain_driven_response_request request = base_request();
+        request.mfem_static_periodic_node_pairs = &out_of_range_pair;
+        fullmag_fem_frequency_domain_solve_result result{};
+        const int status =
+            fullmag_fem_frequency_domain_solve_driven_response(&request, &result);
+        check(status == FULLMAG_FEM_OK, "C ABI static-periodic out-of-range pair request returns owned result");
+        check(
+            result.status == FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_VALIDATION_ERROR,
+            "C ABI static-periodic out-of-range pair request is validation error");
+        check(
+            contains(result.error_message, "invalid node pair"),
+            "C ABI static-periodic out-of-range pair request reports invalid pair error");
+        fullmag_fem_frequency_domain_solve_result_release(&result);
+    }
+
+    {
+        fullmag_fem_frequency_domain_driven_response_request request = base_request();
+        request.mfem_static_periodic_node_pairs = &periodic_pair;
+        request.mfem_equilibrium_m = mismatched_equilibrium;
+        fullmag_fem_frequency_domain_solve_result result{};
+        const int status =
+            fullmag_fem_frequency_domain_solve_driven_response(&request, &result);
+        check(status == FULLMAG_FEM_OK, "C ABI mismatched static-periodic frame request returns owned result");
+        check(
+            result.status == FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_VALIDATION_ERROR,
+            "C ABI mismatched static-periodic frame request is validation error");
+        check(
+            contains(result.error_message, "tangent frames"),
+            "C ABI mismatched static-periodic frame request reports tangent-frame error");
+        fullmag_fem_frequency_domain_solve_result_release(&result);
+    }
+
+    {
+        fullmag_fem_frequency_domain_driven_response_request request = base_request();
+        request.mfem_static_periodic_node_pairs = &periodic_pair;
+        request.mfem_drive_real = nonperiodic_drive;
+        fullmag_fem_frequency_domain_solve_result result{};
+        const int status =
+            fullmag_fem_frequency_domain_solve_driven_response(&request, &result);
+        check(status == FULLMAG_FEM_OK, "C ABI nonperiodic drive request returns owned result");
+        check(
+            result.status == FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_VALIDATION_ERROR,
+            "C ABI nonperiodic static-periodic drive request is validation error");
+        check(
+            contains(result.error_message, "periodic tangent drive"),
+            "C ABI nonperiodic static-periodic drive request reports drive error");
+        fullmag_fem_frequency_domain_solve_result_release(&result);
+    }
+}
+
+void c_abi_production_cpu_lane_interruption_preserves_partial_artifacts()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz, one_over_two_pi_hz};
+    const double equilibrium_m[] = {
+        0.0, 0.0, 1.0,
+    };
+    const double h_ext_a_per_m[] = {0.0, 0.0, 2.0};
+    const double drive_real[] = {1.0, 0.0};
+
+    char output_directory[192]{};
+    std::snprintf(
+        output_directory,
+        sizeof(output_directory),
+        "/tmp/fullmag-frequency-domain-cabi-production-cpu-interrupted-%llu",
+        static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&frequencies_hz)));
+    CAbiCancelAfterCompletedPoint cancel_state{};
+
+    fullmag_fem_frequency_domain_driven_response_request request{};
+    request.node_count = 1;
+    request.tangent_dof_count = 2;
+    request.alpha = 0.0;
+    request.gamma0 = 1.0;
+    request.requested_execution_lane = FULLMAG_FEM_FREQUENCY_DOMAIN_EXECUTION_PRODUCTION_CPU;
+    request.frequencies_hz = frequencies_hz;
+    request.frequency_count = 2;
+    request.output_directory = output_directory;
+    request.write_response_fields = 1;
+    request.write_partial_artifacts = 1;
+    request.cancel_requested = c_abi_cancel_after_completed_point;
+    request.cancel_user_data = &cancel_state;
+    request.progress_callback = c_abi_request_cancel_after_completed_point;
+    request.progress_user_data = &cancel_state;
+    request.mfem_operator_enabled = 1;
+    request.mfem_include_zeeman = 1;
+    request.mfem_equilibrium_m = equilibrium_m;
+    request.mfem_h_ext_a_per_m = h_ext_a_per_m;
+    request.mfem_drive_real = drive_real;
+
+    fullmag_fem_frequency_domain_solve_result result{};
+    const int status =
+        fullmag_fem_frequency_domain_solve_driven_response(&request, &result);
+
+    check(status == FULLMAG_FEM_OK, "C ABI production CPU interrupted boundary call succeeds");
+    check(
+        result.status == FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_INTERRUPTED,
+        "C ABI production CPU interrupted solve reports interrupted");
+    check(result.completed_frequency_count == 1, "C ABI production CPU interrupted solve preserves one completed point");
+    check(result.written_frequency_point_artifacts == 1, "C ABI production CPU interrupted solve records one durable point");
+    check(
+        contains(result.diagnostics_json, "\"requested_execution_lane\":\"production_cpu\""),
+        "C ABI production CPU interrupted diagnostics report lane");
+    check(
+        contains(result.diagnostics_json, "\"matrix_free_solver\":true"),
+        "C ABI production CPU interrupted diagnostics report matrix-free solver");
+    check(
+        contains(result.diagnostics_json, "\"completed_frequency_point_count\":1"),
+        "C ABI production CPU interrupted diagnostics report completed frequency point count");
+    check(
+        contains(result.diagnostics_json, "\"validation_fallback_used\":false"),
+        "C ABI production CPU interrupted diagnostics reject validation fallback");
+    check(
+        contains(result.result_json, "\"status\":\"interrupted\""),
+        "C ABI production CPU interrupted result reports status");
+    check(
+        contains(result.result_json, "\"partial_artifacts_available\":true"),
+        "C ABI production CPU interrupted result reports partial artifacts");
+
+    const std::string manifest = read_text_file(result.artifact_manifest_path);
+    check(contains(manifest.c_str(), "\"status\":\"interrupted\""), "C ABI production CPU interrupted manifest records status");
+    check(contains(manifest.c_str(), "\"complete\":false"), "C ABI production CPU interrupted manifest records incomplete state");
+    check(contains(manifest.c_str(), "\"completed_frequency_point_count\":1"), "C ABI production CPU interrupted manifest records completed point count");
+    check(contains(manifest.c_str(), "response/frequency_points/frequency_0000.json"), "C ABI production CPU interrupted manifest links completed point");
+    check(!contains(manifest.c_str(), "response/frequency_points/frequency_0001.json"), "C ABI production CPU interrupted manifest omits incomplete point");
+
+    char progress_path[256]{};
+    std::snprintf(progress_path, sizeof(progress_path), "%s/response/progress.v1.json", output_directory);
+    const std::string progress = read_text_file(progress_path);
+    check(contains(progress.c_str(), "\"state\":\"interrupted\""), "C ABI production CPU interrupted progress records state");
+    check(contains(progress.c_str(), "\"partial_artifacts_available\":true"), "C ABI production CPU interrupted progress records partial artifacts");
+
+    char sweep_v2_path[256]{};
+    std::snprintf(
+        sweep_v2_path,
+        sizeof(sweep_v2_path),
+        "%s/response/magnetic_response_sweep.v2.json",
+        output_directory);
+    const std::string sweep_v2 = read_text_file(sweep_v2_path);
+    check(contains(sweep_v2.c_str(), "\"completed_frequency_point_count\":1"), "C ABI production CPU interrupted v2 sweep records one completed point");
+    check(contains(sweep_v2.c_str(), "response/frequency_points/frequency_0000.json"), "C ABI production CPU interrupted v2 sweep links completed point");
+    check(!contains(sweep_v2.c_str(), "response/frequency_points/frequency_0001.json"), "C ABI production CPU interrupted v2 sweep omits incomplete point");
+
+    fullmag_fem_frequency_domain_solve_result_release(&result);
+}
+
+void c_abi_production_cpu_lane_does_not_fallback_to_tiny_validation_solver()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double stiffness_diagonal[] = {2.0, 4.0};
+    const double mass_diagonal[] = {1.0, 2.0};
+    const double drive_real[] = {1.0, 2.0};
+
+    fullmag_fem_frequency_domain_driven_response_request request{};
+    request.node_count = 1;
+    request.tangent_dof_count = 2;
+    request.alpha = 0.01;
+    request.gamma0 = 2.211e5;
+    request.requested_execution_lane = FULLMAG_FEM_FREQUENCY_DOMAIN_EXECUTION_PRODUCTION_CPU;
+    request.frequencies_hz = frequencies_hz;
+    request.frequency_count = 1;
+    request.tiny_validation_enabled = 1;
+    request.tiny_validation_tangent_dof_count = 2;
+    request.tiny_validation_stiffness_diagonal = stiffness_diagonal;
+    request.tiny_validation_mass_diagonal = mass_diagonal;
+    request.tiny_validation_drive_real = drive_real;
+
+    fullmag_fem_frequency_domain_solve_result result{};
+    const int status =
+        fullmag_fem_frequency_domain_solve_driven_response(&request, &result);
+
+    check(status == FULLMAG_FEM_OK, "C ABI production CPU solve boundary call succeeds");
+    check(
+        result.status == FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_UNAVAILABLE,
+        "C ABI production CPU lane without MFEM operator payload reports unavailable");
+    check(result.completed_frequency_count == 0, "C ABI production CPU lane does not solve validation frequency");
+    check(
+        contains(result.error_message, "production CPU"),
+        "C ABI production CPU lane names missing operator payload");
+    check(
+        contains(result.diagnostics_json, "\"requested_execution_lane\":\"production_cpu\""),
+        "C ABI production CPU diagnostics report lane");
+    check(
+        contains(result.diagnostics_json, "\"completed_frequency_point_count\":0"),
+        "C ABI production CPU unavailable diagnostics report completed frequency point count");
+    check(
+        contains(result.diagnostics_json, "\"validation_fallback_used\":false"),
+        "C ABI production CPU lane rejects validation fallback");
+    check(
+        !contains(result.diagnostics_json, "\"tiny_validation_solver\":true"),
+        "C ABI production CPU lane does not run tiny validation solver");
+
+    fullmag_fem_frequency_domain_solve_result_release(&result);
+
+    request.requested_execution_lane = FULLMAG_FEM_FREQUENCY_DOMAIN_EXECUTION_PRODUCTION_GPU;
+    fullmag_fem_frequency_domain_solve_result gpu_result{};
+    const int gpu_status =
+        fullmag_fem_frequency_domain_solve_driven_response(&request, &gpu_result);
+
+    check(gpu_status == FULLMAG_FEM_OK, "C ABI production GPU solve boundary call succeeds");
+    check(
+        gpu_result.status == FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_UNAVAILABLE,
+        "C ABI production GPU lane reports unavailable");
+    check(gpu_result.completed_frequency_count == 0, "C ABI production GPU lane does not solve validation frequency");
+    check(
+        contains(gpu_result.error_message, "production GPU"),
+        "C ABI production GPU lane names missing solver");
+    check(
+        contains(gpu_result.diagnostics_json, "\"requested_execution_lane\":\"production_gpu\""),
+        "C ABI production GPU diagnostics report lane");
+    check(
+        contains(gpu_result.diagnostics_json, "\"completed_frequency_point_count\":0"),
+        "C ABI production GPU unavailable diagnostics report completed frequency point count");
+    check(
+        contains(gpu_result.diagnostics_json, "\"validation_fallback_used\":false"),
+        "C ABI production GPU lane rejects validation fallback");
+    check(
+        !contains(gpu_result.diagnostics_json, "\"tiny_validation_solver\":true"),
+        "C ABI production GPU lane does not run tiny validation solver");
+
+    fullmag_fem_frequency_domain_solve_result_release(&gpu_result);
+}
+
+void c_abi_production_cpu_lane_runs_mfem_dmi_matrix_free_response_problem()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    constexpr double volume = 1.0 / 6.0;
+    constexpr double lumped_mass = volume * 0.25;
+    constexpr double ms = 800000.0;
+    constexpr double d = 2.0e-3;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double equilibrium[] = {
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+    };
+    const double drive_real[] = {1.0, 0.0, 0.5, 0.0, -0.25, 0.0, 0.125, 0.0};
+    const double lumped_mass_per_node[] = {lumped_mass, lumped_mass, lumped_mass, lumped_mass};
+    fullmag_fem_frequency_domain_dmi_element dmi_element{};
+    dmi_element.kind = FULLMAG_FEM_FREQUENCY_DOMAIN_DMI_BULK;
+    dmi_element.node_indices[0] = 0;
+    dmi_element.node_indices[1] = 1;
+    dmi_element.node_indices[2] = 2;
+    dmi_element.node_indices[3] = 3;
+    dmi_element.shape[0] = 0.25;
+    dmi_element.shape[1] = 0.25;
+    dmi_element.shape[2] = 0.25;
+    dmi_element.shape[3] = 0.25;
+    const double grad_shape[] = {
+        -1.0, -1.0, -1.0,
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+        0.0, 0.0, 1.0,
+    };
+    for (int index = 0; index < 12; ++index) {
+        dmi_element.grad_shape[index] = grad_shape[index];
+    }
+    dmi_element.weight = volume;
+    dmi_element.d = d;
+    dmi_element.normal[2] = 1.0;
+
+    fullmag_fem_frequency_domain_driven_response_request request{};
+    request.node_count = 4;
+    request.tangent_dof_count = 8;
+    request.alpha = 0.01;
+    request.gamma0 = 1.0;
+    request.requested_execution_lane = FULLMAG_FEM_FREQUENCY_DOMAIN_EXECUTION_PRODUCTION_CPU;
+    request.frequencies_hz = frequencies_hz;
+    request.frequency_count = 1;
+    request.mfem_operator_enabled = 1;
+    request.mfem_equilibrium_m = equilibrium;
+    request.mfem_drive_real = drive_real;
+    request.mfem_dmi_elements = &dmi_element;
+    request.mfem_dmi_element_count = 1;
+    request.mfem_dmi_lumped_mass = lumped_mass_per_node;
+    request.mfem_dmi_uniform_ms = ms;
+
+    fullmag_fem_frequency_domain_solve_result result{};
+    const int status =
+        fullmag_fem_frequency_domain_solve_driven_response(&request, &result);
+
+    check(status == FULLMAG_FEM_OK, "C ABI production CPU DMI solve boundary call succeeds");
+    check(
+        result.status == FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OK,
+        "C ABI production CPU DMI lane solves through MFEM payload");
+    check(result.completed_frequency_count == 1, "C ABI production CPU DMI lane completes frequency");
+    check(
+        contains(result.diagnostics_json, "\"matrix_free_solver\":true"),
+        "C ABI production CPU DMI diagnostics report matrix-free solver");
+    check(
+        contains(result.diagnostics_json, "\"validation_fallback_used\":false"),
+        "C ABI production CPU DMI diagnostics reject validation fallback");
+    check(
+        contains(result.result_json, "\"requested_execution_lane\":\"production_cpu\""),
+        "C ABI production CPU DMI result reports lane");
+
+    fullmag_fem_frequency_domain_solve_result_release(&result);
+}
+
+void c_abi_production_cpu_lane_rejects_unknown_dmi_kind()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    constexpr double volume = 1.0 / 6.0;
+    constexpr double lumped_mass = volume * 0.25;
+    constexpr double ms = 800000.0;
+    constexpr double d = 2.0e-3;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double equilibrium[] = {
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+    };
+    const double drive_real[] = {1.0, 0.0, 0.5, 0.0, -0.25, 0.0, 0.125, 0.0};
+    const double lumped_mass_per_node[] = {lumped_mass, lumped_mass, lumped_mass, lumped_mass};
+    fullmag_fem_frequency_domain_dmi_element dmi_element{};
+    dmi_element.kind = static_cast<fullmag_fem_frequency_domain_dmi_kind>(99);
+    dmi_element.node_indices[0] = 0;
+    dmi_element.node_indices[1] = 1;
+    dmi_element.node_indices[2] = 2;
+    dmi_element.node_indices[3] = 3;
+    dmi_element.shape[0] = 0.25;
+    dmi_element.shape[1] = 0.25;
+    dmi_element.shape[2] = 0.25;
+    dmi_element.shape[3] = 0.25;
+    const double grad_shape[] = {
+        -1.0, -1.0, -1.0,
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+        0.0, 0.0, 1.0,
+    };
+    for (int index = 0; index < 12; ++index) {
+        dmi_element.grad_shape[index] = grad_shape[index];
+    }
+    dmi_element.weight = volume;
+    dmi_element.d = d;
+    dmi_element.normal[2] = 1.0;
+
+    fullmag_fem_frequency_domain_driven_response_request request{};
+    request.node_count = 4;
+    request.tangent_dof_count = 8;
+    request.alpha = 0.01;
+    request.gamma0 = 1.0;
+    request.requested_execution_lane = FULLMAG_FEM_FREQUENCY_DOMAIN_EXECUTION_PRODUCTION_CPU;
+    request.frequencies_hz = frequencies_hz;
+    request.frequency_count = 1;
+    request.mfem_operator_enabled = 1;
+    request.mfem_equilibrium_m = equilibrium;
+    request.mfem_drive_real = drive_real;
+    request.mfem_dmi_elements = &dmi_element;
+    request.mfem_dmi_element_count = 1;
+    request.mfem_dmi_lumped_mass = lumped_mass_per_node;
+    request.mfem_dmi_uniform_ms = ms;
+
+    fullmag_fem_frequency_domain_solve_result result{};
+    const int status =
+        fullmag_fem_frequency_domain_solve_driven_response(&request, &result);
+
+    check(status == FULLMAG_FEM_OK, "C ABI unknown DMI kind solve boundary call succeeds");
+    check(
+        result.status == FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_VALIDATION_ERROR,
+        "C ABI unknown DMI kind reports validation error");
+    check(result.completed_frequency_count == 0, "C ABI unknown DMI kind completes no frequency");
+    check(contains(result.error_message, "kind"), "C ABI unknown DMI kind error names kind");
+    check(
+        contains(result.diagnostics_json, "\"requested_execution_lane\":\"production_cpu\""),
+        "C ABI unknown DMI kind diagnostics keep production CPU lane");
+    check(
+        contains(result.diagnostics_json, "\"validation_fallback_used\":false"),
+        "C ABI unknown DMI kind rejects validation fallback");
 
     fullmag_fem_frequency_domain_solve_result_release(&result);
 }
@@ -1859,19 +4934,27 @@ void c_abi_driven_response_solve_reports_unavailable_failure_artifacts()
     const std::string manifest = read_text_file(result.artifact_manifest_path);
     check(contains(manifest.c_str(), "\"status\":\"unavailable\""), "C ABI failure manifest records unavailable");
     check(
-        contains(manifest.c_str(), "\"failure_diagnostics_path\":\"frequency_domain/diagnostics.v1.json\""),
+        contains(manifest.c_str(), "\"response_diagnostics_v1_path\":\"response/diagnostics.v1.json\""),
         "C ABI failure manifest links diagnostics");
 
     char diagnostics_path[256]{};
     std::snprintf(
         diagnostics_path,
         sizeof(diagnostics_path),
-        "%s/frequency_domain/diagnostics.v1.json",
+        "%s/response/diagnostics.v1.json",
         output_directory);
     const std::string diagnostics = read_text_file(diagnostics_path);
     check(
         contains(diagnostics.c_str(), "\"solver_kind\":\"production_unavailable\""),
         "C ABI failure diagnostics records unavailable solver kind");
+    char progress_path[256]{};
+    std::snprintf(
+        progress_path,
+        sizeof(progress_path),
+        "%s/response/progress.v1.json",
+        output_directory);
+    const std::string progress = read_text_file(progress_path);
+    check(contains(progress.c_str(), "\"state\":\"unavailable\""), "C ABI failure progress records unavailable state");
 
     fullmag_fem_frequency_domain_solve_result_release(&result);
 }
@@ -2231,6 +5314,561 @@ void mfem_zeeman_operator_rejects_disabled_zeeman_descriptor()
     check(contains(diagnostics.error_message, "Zeeman"), "MFEM Zeeman disabled error names Zeeman");
 }
 
+void compute_tangent_gradients_for_tetra(
+    const double tangent[8],
+    const double grad_shape[4][3],
+    double out_q[3],
+    double out_grad[3][3])
+{
+    for (int comp = 0; comp < 3; ++comp) {
+        out_q[comp] = 0.0;
+        for (int dir = 0; dir < 3; ++dir) {
+            out_grad[comp][dir] = 0.0;
+        }
+    }
+    for (int node = 0; node < 4; ++node) {
+        const double value[3] = {
+            tangent[node * 2],
+            tangent[node * 2 + 1],
+            0.0,
+        };
+        for (int comp = 0; comp < 3; ++comp) {
+            out_q[comp] += 0.25 * value[comp];
+            for (int dir = 0; dir < 3; ++dir) {
+                out_grad[comp][dir] += value[comp] * grad_shape[node][dir];
+            }
+        }
+    }
+}
+
+double bulk_dmi_weak_action_for_tangent_tetra(
+    const double delta_tangent[8],
+    const double test_tangent[8],
+    const double grad_shape[4][3],
+    double d,
+    double volume)
+{
+    double delta_q[3]{};
+    double test_q[3]{};
+    double grad_delta[3][3]{};
+    double grad_test[3][3]{};
+    compute_tangent_gradients_for_tetra(delta_tangent, grad_shape, delta_q, grad_delta);
+    compute_tangent_gradients_for_tetra(test_tangent, grad_shape, test_q, grad_test);
+
+    const double curl_delta[3] = {
+        grad_delta[2][1] - grad_delta[1][2],
+        grad_delta[0][2] - grad_delta[2][0],
+        grad_delta[1][0] - grad_delta[0][1],
+    };
+    const double curl_test[3] = {
+        grad_test[2][1] - grad_test[1][2],
+        grad_test[0][2] - grad_test[2][0],
+        grad_test[1][0] - grad_test[0][1],
+    };
+    return d * volume * (
+        test_q[0] * curl_delta[0] +
+        test_q[1] * curl_delta[1] +
+        test_q[2] * curl_delta[2] +
+        delta_q[0] * curl_test[0] +
+        delta_q[1] * curl_test[1] +
+        delta_q[2] * curl_test[2]);
+}
+
+double interfacial_dmi_weak_action_for_tangent_tetra(
+    const double delta_tangent[8],
+    const double test_tangent[8],
+    const double grad_shape[4][3],
+    const double normal[3],
+    double d,
+    double volume)
+{
+    double delta_q[3]{};
+    double test_q[3]{};
+    double grad_delta[3][3]{};
+    double grad_test[3][3]{};
+    compute_tangent_gradients_for_tetra(delta_tangent, grad_shape, delta_q, grad_delta);
+    compute_tangent_gradients_for_tetra(test_tangent, grad_shape, test_q, grad_test);
+
+    const double div_delta = grad_delta[0][0] + grad_delta[1][1] + grad_delta[2][2];
+    const double delta_dot_n =
+        delta_q[0] * normal[0] + delta_q[1] * normal[1] + delta_q[2] * normal[2];
+    double value_action = 0.0;
+    double gradient_action = 0.0;
+    for (int comp = 0; comp < 3; ++comp) {
+        const double grad_delta_dot_n =
+            normal[0] * grad_delta[0][comp] +
+            normal[1] * grad_delta[1][comp] +
+            normal[2] * grad_delta[2][comp];
+        const double dw_dm = d * (normal[comp] * div_delta - grad_delta_dot_n);
+        value_action += dw_dm * test_q[comp];
+        for (int dir = 0; dir < 3; ++dir) {
+            const double delta = comp == dir ? 1.0 : 0.0;
+            const double dw_dg = d * (delta_dot_n * delta - normal[comp] * delta_q[dir]);
+            gradient_action += dw_dg * grad_test[comp][dir];
+        }
+    }
+    return volume * (value_action + gradient_action);
+}
+
+double tangent_dmi_virtual_action(
+    const double h_tangent[8],
+    const double test_tangent[8],
+    double lumped_mass,
+    double ms)
+{
+    constexpr double mu0 = 4.0e-7 * 3.14159265358979323846;
+    double action = 0.0;
+    for (int node = 0; node < 4; ++node) {
+        action -= mu0 * ms * lumped_mass *
+            (h_tangent[node * 2] * test_tangent[node * 2] +
+             h_tangent[node * 2 + 1] * test_tangent[node * 2 + 1]);
+    }
+    return action;
+}
+
+void check_relative_close(double actual, double expected, double tolerance, const char *msg)
+{
+    const double denom = std::fmax(std::fmax(std::abs(actual), std::abs(expected)), 1.0e-30);
+    check(std::abs(actual - expected) / denom <= tolerance, msg);
+}
+
+void fill_bulk_dmi_tetra_element(fd::MfemDmiElementTangentData &element, double d, double volume)
+{
+    const double grad_shape[4][3] = {
+        {-1.0, -1.0, -1.0},
+        {1.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0},
+        {0.0, 0.0, 1.0},
+    };
+    element = fd::MfemDmiElementTangentData{};
+    element.kind = fd::MfemDmiInteractionKind::bulk;
+    element.node_indices[0] = 0;
+    element.node_indices[1] = 1;
+    element.node_indices[2] = 2;
+    element.node_indices[3] = 3;
+    element.weight = volume;
+    element.d = d;
+    for (int node = 0; node < 4; ++node) {
+        element.shape[node] = 0.25;
+        for (int dir = 0; dir < 3; ++dir) {
+            element.grad_shape[node][dir] = grad_shape[node][dir];
+        }
+    }
+}
+
+void mfem_dmi_operator_applies_preassembled_tangent_blocks()
+{
+    fd::MfemOperatorContextDescriptor descriptor{};
+    descriptor.node_count = 1;
+    descriptor.full_dof_count = 3;
+    descriptor.tangent_dof_count = 2;
+    descriptor.dmi_enabled = true;
+    descriptor.mfem_mesh_available = true;
+
+    fd::MfemTangentSpaceLayout layout{};
+    layout.node_count = 1;
+    layout.full_dof_count = 3;
+    layout.tangent_dof_count = 2;
+    layout.tangent_components_per_node = 2;
+    layout.tangent_stride = 2;
+
+    fd::TangentOperatorLocalBlock dmi_block{
+        fd::FrequencyDomainOperatorTermKind::dmi,
+        2.0,
+        -1.0,
+        3.0,
+        4.0,
+    };
+    const double tangent_in[] = {5.0, 7.0};
+    double dmi_tangent[2]{};
+    fd::MfemDmiOperatorDiagnostics diagnostics{};
+
+    const fd::FrequencyDomainStatus status = fd::apply_mfem_dmi_operator(
+        descriptor,
+        layout,
+        &dmi_block,
+        tangent_in,
+        dmi_tangent,
+        &diagnostics);
+
+    check(status == fd::FrequencyDomainStatus::ok, "MFEM DMI operator accepts DMI tangent block");
+    check(diagnostics.node_count == 1, "MFEM DMI diagnostics keep node count");
+    check(diagnostics.tangent_dof_count == 2, "MFEM DMI diagnostics keep tangent DOFs");
+    check(std::abs(dmi_tangent[0] - 3.0) < 1.0e-12, "MFEM DMI output e1");
+    check(std::abs(dmi_tangent[1] - 43.0) < 1.0e-12, "MFEM DMI output e2");
+    check(std::abs(diagnostics.max_abs_output - 43.0) < 1.0e-12, "MFEM DMI diagnostics max output");
+}
+
+void mfem_dmi_operator_rejects_non_dmi_blocks()
+{
+    fd::MfemOperatorContextDescriptor descriptor{};
+    descriptor.node_count = 1;
+    descriptor.full_dof_count = 3;
+    descriptor.tangent_dof_count = 2;
+    descriptor.dmi_enabled = true;
+    descriptor.mfem_mesh_available = true;
+
+    fd::MfemTangentSpaceLayout layout{};
+    layout.node_count = 1;
+    layout.full_dof_count = 3;
+    layout.tangent_dof_count = 2;
+    layout.tangent_components_per_node = 2;
+    layout.tangent_stride = 2;
+
+    fd::TangentOperatorLocalBlock not_dmi_block{
+        fd::FrequencyDomainOperatorTermKind::zeeman,
+        1.0,
+        0.0,
+        0.0,
+        1.0,
+    };
+    const double tangent_in[] = {1.0, 2.0};
+    double dmi_tangent[2]{};
+    fd::MfemDmiOperatorDiagnostics diagnostics{};
+
+    const fd::FrequencyDomainStatus status = fd::apply_mfem_dmi_operator(
+        descriptor,
+        layout,
+        &not_dmi_block,
+        tangent_in,
+        dmi_tangent,
+        &diagnostics);
+
+    check(status == fd::FrequencyDomainStatus::validation_error, "MFEM DMI operator rejects non-DMI block");
+    check(contains(diagnostics.error_message, "DMI tangent blocks"), "MFEM DMI block error names DMI blocks");
+}
+
+void mfem_dmi_element_tangent_operator_matches_bulk_weak_action()
+{
+    const double equilibrium[] = {
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+    };
+    fd::TangentFrameNode nodes[4]{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 4, nodes, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "MFEM bulk DMI tangent frame succeeds");
+
+    fd::MfemOperatorContextDescriptor descriptor{};
+    descriptor.node_count = 4;
+    descriptor.element_count = 1;
+    descriptor.element_node_count = 4;
+    descriptor.full_dof_count = 12;
+    descriptor.tangent_dof_count = 8;
+    descriptor.dmi_enabled = true;
+    descriptor.mfem_mesh_available = true;
+
+    fd::MfemTangentSpaceLayout layout{};
+    layout.node_count = 4;
+    layout.full_dof_count = 12;
+    layout.tangent_dof_count = 8;
+    layout.tangent_components_per_node = 2;
+    layout.tangent_stride = 2;
+
+    constexpr double volume = 1.0 / 6.0;
+    constexpr double lumped_mass = volume * 0.25;
+    constexpr double ms = 800000.0;
+    constexpr double d = 2.0e-3;
+    const double grad_shape[4][3] = {
+        {-1.0, -1.0, -1.0},
+        {1.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0},
+        {0.0, 0.0, 1.0},
+    };
+    fd::MfemDmiElementTangentData element{};
+    element.kind = fd::MfemDmiInteractionKind::bulk;
+    element.node_indices[0] = 0;
+    element.node_indices[1] = 1;
+    element.node_indices[2] = 2;
+    element.node_indices[3] = 3;
+    element.weight = volume;
+    element.d = d;
+    for (int node = 0; node < 4; ++node) {
+        element.shape[node] = 0.25;
+        for (int dir = 0; dir < 3; ++dir) {
+            element.grad_shape[node][dir] = grad_shape[node][dir];
+        }
+    }
+
+    const double tangent_in[] = {0.03, 0.04, -0.08, 0.01, 0.06, -0.07, -0.01, 0.05};
+    const double test_tangent[] = {0.10, -0.03, -0.04, 0.08, 0.05, 0.02, -0.02, -0.06};
+    const double lumped_mass_per_node[] = {lumped_mass, lumped_mass, lumped_mass, lumped_mass};
+    double workspace_delta_xyz[12]{};
+    double workspace_residual_xyz[12]{};
+    double workspace_field_xyz[12]{};
+    double out_tangent[8]{};
+    fd::MfemDmiOperatorDiagnostics diagnostics{};
+
+    const fd::FrequencyDomainStatus status = fd::apply_mfem_dmi_element_tangent_operator(
+        descriptor,
+        layout,
+        nodes,
+        &element,
+        1,
+        lumped_mass_per_node,
+        nullptr,
+        ms,
+        tangent_in,
+        workspace_delta_xyz,
+        workspace_residual_xyz,
+        workspace_field_xyz,
+        out_tangent,
+        &diagnostics);
+
+    check(status == fd::FrequencyDomainStatus::ok, "MFEM bulk DMI element tangent operator succeeds");
+    check(diagnostics.element_count == 1, "MFEM bulk DMI diagnostics keep element count");
+    check(diagnostics.max_abs_output > 0.0, "MFEM bulk DMI diagnostics report nonzero tangent output");
+    const double actual = tangent_dmi_virtual_action(out_tangent, test_tangent, lumped_mass, ms);
+    const double expected =
+        bulk_dmi_weak_action_for_tangent_tetra(tangent_in, test_tangent, grad_shape, d, volume);
+    check_relative_close(actual, expected, 1.0e-12, "MFEM bulk DMI tangent action matches weak residual");
+}
+
+void mfem_dmi_element_tangent_operator_rejects_nonfinite_geometry()
+{
+    constexpr double volume = 1.0 / 6.0;
+    constexpr double lumped_mass = volume * 0.25;
+    constexpr double ms = 800000.0;
+    constexpr double d = 2.0e-3;
+    const double equilibrium[] = {
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+    };
+    fd::TangentFrameNode nodes[4]{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 4, nodes, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "MFEM DMI non-finite geometry frame succeeds");
+
+    fd::MfemOperatorContextDescriptor descriptor{};
+    descriptor.node_count = 4;
+    descriptor.element_count = 1;
+    descriptor.element_node_count = 4;
+    descriptor.full_dof_count = 12;
+    descriptor.tangent_dof_count = 8;
+    descriptor.dmi_enabled = true;
+    descriptor.mfem_mesh_available = true;
+    fd::MfemTangentSpaceLayout layout{};
+    layout.node_count = 4;
+    layout.full_dof_count = 12;
+    layout.tangent_dof_count = 8;
+    layout.tangent_components_per_node = 2;
+    layout.tangent_stride = 2;
+    fd::MfemDmiElementTangentData element{};
+    fill_bulk_dmi_tetra_element(element, d, volume);
+    element.grad_shape[0][0] = std::numeric_limits<double>::infinity();
+    const double lumped_mass_per_node[] = {lumped_mass, lumped_mass, lumped_mass, lumped_mass};
+    const double tangent_in[] = {1.0, 0.0, 0.5, 0.0, -0.25, 0.0, 0.125, 0.0};
+    double delta_xyz[12]{};
+    double residual_xyz[12]{};
+    double field_xyz[12]{};
+    double dmi_tangent[8]{};
+    fd::MfemDmiOperatorDiagnostics diagnostics{};
+
+    const fd::FrequencyDomainStatus status = fd::apply_mfem_dmi_element_tangent_operator(
+        descriptor,
+        layout,
+        nodes,
+        &element,
+        1,
+        lumped_mass_per_node,
+        nullptr,
+        ms,
+        tangent_in,
+        delta_xyz,
+        residual_xyz,
+        field_xyz,
+        dmi_tangent,
+        &diagnostics);
+
+    check(
+        status == fd::FrequencyDomainStatus::validation_error,
+        "MFEM DMI element tangent operator rejects non-finite geometry");
+    check(
+        contains(diagnostics.error_message, "finite"),
+        "MFEM DMI non-finite geometry rejection explains finite geometry requirement");
+    check(diagnostics.max_abs_output == 0.0, "MFEM DMI non-finite geometry publishes no output diagnostic");
+    for (double value : dmi_tangent) {
+        check(value == 0.0, "MFEM DMI non-finite geometry leaves tangent output untouched");
+    }
+}
+
+void mfem_dmi_element_tangent_operator_rejects_unknown_kind()
+{
+    constexpr double volume = 1.0 / 6.0;
+    constexpr double lumped_mass = volume * 0.25;
+    constexpr double ms = 800000.0;
+    constexpr double d = 2.0e-3;
+    const double equilibrium[] = {
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+    };
+    fd::TangentFrameNode nodes[4]{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 4, nodes, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "MFEM DMI unknown kind frame succeeds");
+
+    fd::MfemOperatorContextDescriptor descriptor{};
+    descriptor.node_count = 4;
+    descriptor.element_count = 1;
+    descriptor.element_node_count = 4;
+    descriptor.full_dof_count = 12;
+    descriptor.tangent_dof_count = 8;
+    descriptor.dmi_enabled = true;
+    descriptor.mfem_mesh_available = true;
+    fd::MfemTangentSpaceLayout layout{};
+    layout.node_count = 4;
+    layout.full_dof_count = 12;
+    layout.tangent_dof_count = 8;
+    layout.tangent_components_per_node = 2;
+    layout.tangent_stride = 2;
+    fd::MfemDmiElementTangentData element{};
+    fill_bulk_dmi_tetra_element(element, d, volume);
+    element.kind = static_cast<fd::MfemDmiInteractionKind>(99);
+    const double lumped_mass_per_node[] = {lumped_mass, lumped_mass, lumped_mass, lumped_mass};
+    const double tangent_in[] = {1.0, 0.0, 0.5, 0.0, -0.25, 0.0, 0.125, 0.0};
+    double delta_xyz[12]{};
+    double residual_xyz[12]{};
+    double field_xyz[12]{};
+    double dmi_tangent[8]{};
+    fd::MfemDmiOperatorDiagnostics diagnostics{};
+
+    const fd::FrequencyDomainStatus status = fd::apply_mfem_dmi_element_tangent_operator(
+        descriptor,
+        layout,
+        nodes,
+        &element,
+        1,
+        lumped_mass_per_node,
+        nullptr,
+        ms,
+        tangent_in,
+        delta_xyz,
+        residual_xyz,
+        field_xyz,
+        dmi_tangent,
+        &diagnostics);
+
+    check(
+        status == fd::FrequencyDomainStatus::validation_error,
+        "MFEM DMI element tangent operator rejects unknown interaction kind");
+    check(
+        contains(diagnostics.error_message, "kind"),
+        "MFEM DMI unknown interaction kind rejection names kind");
+    for (double value : dmi_tangent) {
+        check(value == 0.0, "MFEM DMI unknown kind leaves tangent output untouched");
+    }
+}
+
+void mfem_dmi_element_tangent_operator_matches_interfacial_weak_action()
+{
+    const double equilibrium[] = {
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+    };
+    fd::TangentFrameNode nodes[4]{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 4, nodes, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "MFEM interfacial DMI tangent frame succeeds");
+
+    fd::MfemOperatorContextDescriptor descriptor{};
+    descriptor.node_count = 4;
+    descriptor.element_count = 1;
+    descriptor.element_node_count = 4;
+    descriptor.full_dof_count = 12;
+    descriptor.tangent_dof_count = 8;
+    descriptor.dmi_enabled = true;
+    descriptor.mfem_mesh_available = true;
+
+    fd::MfemTangentSpaceLayout layout{};
+    layout.node_count = 4;
+    layout.full_dof_count = 12;
+    layout.tangent_dof_count = 8;
+    layout.tangent_components_per_node = 2;
+    layout.tangent_stride = 2;
+
+    constexpr double volume = 1.0 / 6.0;
+    constexpr double lumped_mass = volume * 0.25;
+    constexpr double ms = 800000.0;
+    constexpr double d = 3.0e-3;
+    const double grad_shape[4][3] = {
+        {-1.0, -1.0, -1.0},
+        {1.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0},
+        {0.0, 0.0, 1.0},
+    };
+    const double normal[3] = {0.0, 0.0, 1.0};
+    fd::MfemDmiElementTangentData element{};
+    element.kind = fd::MfemDmiInteractionKind::interfacial;
+    element.node_indices[0] = 0;
+    element.node_indices[1] = 1;
+    element.node_indices[2] = 2;
+    element.node_indices[3] = 3;
+    element.weight = volume;
+    element.d = d;
+    for (int node = 0; node < 4; ++node) {
+        element.shape[node] = 0.25;
+        for (int dir = 0; dir < 3; ++dir) {
+            element.grad_shape[node][dir] = grad_shape[node][dir];
+        }
+    }
+    for (int dir = 0; dir < 3; ++dir) {
+        element.normal[dir] = normal[dir];
+    }
+
+    const double tangent_in[] = {0.03, 0.04, -0.08, 0.01, 0.06, -0.07, -0.01, 0.05};
+    const double test_tangent[] = {0.10, -0.03, -0.04, 0.08, 0.05, 0.02, -0.02, -0.06};
+    const double lumped_mass_per_node[] = {lumped_mass, lumped_mass, lumped_mass, lumped_mass};
+    double workspace_delta_xyz[12]{};
+    double workspace_residual_xyz[12]{};
+    double workspace_field_xyz[12]{};
+    double out_tangent[8]{};
+    fd::MfemDmiOperatorDiagnostics diagnostics{};
+
+    const fd::FrequencyDomainStatus status = fd::apply_mfem_dmi_element_tangent_operator(
+        descriptor,
+        layout,
+        nodes,
+        &element,
+        1,
+        lumped_mass_per_node,
+        nullptr,
+        ms,
+        tangent_in,
+        workspace_delta_xyz,
+        workspace_residual_xyz,
+        workspace_field_xyz,
+        out_tangent,
+        &diagnostics);
+
+    check(status == fd::FrequencyDomainStatus::ok, "MFEM interfacial DMI element tangent operator succeeds");
+    check(diagnostics.max_abs_full_field > 0.0, "MFEM interfacial DMI diagnostics report nonzero field");
+    const double actual = tangent_dmi_virtual_action(out_tangent, test_tangent, lumped_mass, ms);
+    const double expected = interfacial_dmi_weak_action_for_tangent_tetra(
+        tangent_in,
+        test_tangent,
+        grad_shape,
+        normal,
+        d,
+        volume);
+    check_relative_close(actual, expected, 1.0e-12, "MFEM interfacial DMI tangent action matches weak residual");
+}
+
 void mfem_linearized_operator_combines_exchange_zeeman_precession_and_mass()
 {
     const double equilibrium[] = {
@@ -2271,13 +5909,17 @@ void mfem_linearized_operator_combines_exchange_zeeman_precession_and_mass()
     const double h_ext_a_per_m[] = {0.0, 0.0, 3.0};
     const double tangent_in[] = {1.0, 2.0, -3.0, 4.0};
     fd::TangentOperatorLocalBlock zeeman_blocks[2]{};
+    fd::TangentOperatorLocalBlock anisotropy_blocks[2]{};
     double exchange_workspace[4]{};
     double zeeman_workspace[4]{};
+    double anisotropy_workspace[4]{};
     double effective_field_workspace[4]{};
     fd::MfemLinearizedOperatorWorkspace workspace{
         zeeman_blocks,
+        anisotropy_blocks,
         exchange_workspace,
         zeeman_workspace,
+        anisotropy_workspace,
         effective_field_workspace,
     };
     double stiffness_rhs[4]{};
@@ -2291,6 +5933,9 @@ void mfem_linearized_operator_combines_exchange_zeeman_precession_and_mass()
         &exchange_edge,
         1,
         h_ext_a_per_m,
+        nullptr,
+        0.0,
+        nullptr,
         10.0,
         0.1,
         workspace,
@@ -2320,6 +5965,318 @@ void mfem_linearized_operator_combines_exchange_zeeman_precession_and_mass()
     check(std::abs(mass_rhs[3] - 4.3) < 1.0e-12, "MFEM linearized mass node1 e2");
 }
 
+void mfem_linearized_operator_adds_preassembled_dmi_field()
+{
+    const double equilibrium[] = {0.0, 0.0, 1.0};
+    fd::TangentFrameNode node{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 1, &node, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "MFEM DMI linearized frame succeeds");
+
+    fd::MfemOperatorContextDescriptor descriptor{};
+    descriptor.node_count = 1;
+    descriptor.full_dof_count = 3;
+    descriptor.tangent_dof_count = 2;
+    descriptor.dmi_enabled = true;
+    descriptor.mfem_mesh_available = true;
+
+    fd::MfemTangentSpaceLayout layout{};
+    layout.node_count = 1;
+    layout.full_dof_count = 3;
+    layout.tangent_dof_count = 2;
+    layout.tangent_components_per_node = 2;
+    layout.tangent_stride = 2;
+
+    fd::TangentOperatorLocalBlock dmi_block{
+        fd::FrequencyDomainOperatorTermKind::dmi,
+        2.0,
+        -1.0,
+        3.0,
+        4.0,
+    };
+    const double tangent_in[] = {5.0, 7.0};
+    double dmi_workspace[2]{};
+    double effective_field_workspace[2]{};
+    fd::MfemLinearizedOperatorWorkspace workspace{};
+    workspace.effective_field_tangent = effective_field_workspace;
+    workspace.dmi_blocks = &dmi_block;
+    workspace.dmi_tangent = dmi_workspace;
+    double stiffness_rhs[2]{};
+    double mass_rhs[2]{};
+    fd::MfemLinearizedOperatorDiagnostics diagnostics{};
+
+    const fd::FrequencyDomainStatus status = fd::apply_mfem_linearized_cpu_operator(
+        descriptor,
+        layout,
+        &node,
+        nullptr,
+        0,
+        nullptr,
+        nullptr,
+        0.0,
+        nullptr,
+        1.0,
+        0.0,
+        workspace,
+        tangent_in,
+        stiffness_rhs,
+        mass_rhs,
+        &diagnostics);
+
+    check(status == fd::FrequencyDomainStatus::ok, "MFEM DMI linearized operator succeeds");
+    check(std::abs(diagnostics.max_abs_dmi_field - 43.0) < 1.0e-12, "MFEM DMI linearized diagnostics");
+    check(std::abs(effective_field_workspace[0] - 3.0) < 1.0e-12, "MFEM DMI effective e1");
+    check(std::abs(effective_field_workspace[1] - 43.0) < 1.0e-12, "MFEM DMI effective e2");
+    check(std::abs(stiffness_rhs[0] + 43.0) < 1.0e-12, "MFEM DMI stiffness e1");
+    check(std::abs(stiffness_rhs[1] - 3.0) < 1.0e-12, "MFEM DMI stiffness e2");
+    check(std::abs(mass_rhs[0] - 5.0) < 1.0e-12, "MFEM DMI mass e1");
+    check(std::abs(mass_rhs[1] - 7.0) < 1.0e-12, "MFEM DMI mass e2");
+}
+
+void mfem_linearized_operator_adds_element_dmi_field()
+{
+    const double equilibrium[] = {
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+    };
+    fd::TangentFrameNode nodes[4]{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 4, nodes, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "MFEM linearized element DMI tangent frame succeeds");
+
+    fd::MfemOperatorContextDescriptor descriptor{};
+    descriptor.node_count = 4;
+    descriptor.element_count = 1;
+    descriptor.element_node_count = 4;
+    descriptor.full_dof_count = 12;
+    descriptor.tangent_dof_count = 8;
+    descriptor.dmi_enabled = true;
+    descriptor.mfem_mesh_available = true;
+
+    fd::MfemTangentSpaceLayout layout{};
+    layout.node_count = 4;
+    layout.full_dof_count = 12;
+    layout.tangent_dof_count = 8;
+    layout.tangent_components_per_node = 2;
+    layout.tangent_stride = 2;
+
+    constexpr double volume = 1.0 / 6.0;
+    constexpr double lumped_mass = volume * 0.25;
+    constexpr double ms = 800000.0;
+    constexpr double d = 2.0e-3;
+    const double grad_shape[4][3] = {
+        {-1.0, -1.0, -1.0},
+        {1.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0},
+        {0.0, 0.0, 1.0},
+    };
+    fd::MfemDmiElementTangentData element{};
+    element.kind = fd::MfemDmiInteractionKind::bulk;
+    element.node_indices[0] = 0;
+    element.node_indices[1] = 1;
+    element.node_indices[2] = 2;
+    element.node_indices[3] = 3;
+    element.weight = volume;
+    element.d = d;
+    for (int node = 0; node < 4; ++node) {
+        element.shape[node] = 0.25;
+        for (int dir = 0; dir < 3; ++dir) {
+            element.grad_shape[node][dir] = grad_shape[node][dir];
+        }
+    }
+
+    const double tangent_in[] = {0.03, 0.04, -0.08, 0.01, 0.06, -0.07, -0.01, 0.05};
+    const double test_tangent[] = {0.10, -0.03, -0.04, 0.08, 0.05, 0.02, -0.02, -0.06};
+    const double lumped_mass_per_node[] = {lumped_mass, lumped_mass, lumped_mass, lumped_mass};
+    double dmi_workspace[8]{};
+    double dmi_delta_xyz[12]{};
+    double dmi_residual_xyz[12]{};
+    double dmi_field_xyz[12]{};
+    double effective_field_workspace[8]{};
+    fd::MfemLinearizedOperatorWorkspace workspace{};
+    workspace.effective_field_tangent = effective_field_workspace;
+    workspace.dmi_tangent = dmi_workspace;
+    workspace.dmi_elements = &element;
+    workspace.dmi_element_count = 1;
+    workspace.dmi_lumped_mass = lumped_mass_per_node;
+    workspace.dmi_uniform_ms = ms;
+    workspace.dmi_delta_xyz = dmi_delta_xyz;
+    workspace.dmi_residual_xyz = dmi_residual_xyz;
+    workspace.dmi_field_xyz = dmi_field_xyz;
+    double stiffness_rhs[8]{};
+    double mass_rhs[8]{};
+    fd::MfemLinearizedOperatorDiagnostics diagnostics{};
+
+    const fd::FrequencyDomainStatus status = fd::apply_mfem_linearized_cpu_operator(
+        descriptor,
+        layout,
+        nodes,
+        nullptr,
+        0,
+        nullptr,
+        nullptr,
+        0.0,
+        nullptr,
+        1.0,
+        0.0,
+        workspace,
+        tangent_in,
+        stiffness_rhs,
+        mass_rhs,
+        &diagnostics);
+
+    check(status == fd::FrequencyDomainStatus::ok, "MFEM linearized element DMI operator succeeds");
+    check(diagnostics.max_abs_dmi_field > 0.0, "MFEM linearized element DMI diagnostics");
+    const double actual = tangent_dmi_virtual_action(effective_field_workspace, test_tangent, lumped_mass, ms);
+    const double expected =
+        bulk_dmi_weak_action_for_tangent_tetra(tangent_in, test_tangent, grad_shape, d, volume);
+    check_relative_close(actual, expected, 1.0e-12, "MFEM linearized element DMI action matches weak residual");
+}
+
+void mfem_linearized_operator_adds_uniaxial_anisotropy_field()
+{
+    const double equilibrium[] = {0.0, 0.0, 1.0};
+    fd::TangentFrameNode node{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 1, &node, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "MFEM uniaxial anisotropy linearized frame succeeds");
+
+    fd::MfemOperatorContextDescriptor descriptor{};
+    descriptor.node_count = 1;
+    descriptor.full_dof_count = 3;
+    descriptor.tangent_dof_count = 2;
+    descriptor.zeeman_enabled = true;
+    descriptor.uniaxial_anisotropy_enabled = true;
+    descriptor.mfem_mesh_available = true;
+
+    fd::MfemTangentSpaceLayout layout{};
+    layout.node_count = 1;
+    layout.full_dof_count = 3;
+    layout.tangent_dof_count = 2;
+    layout.tangent_components_per_node = 2;
+    layout.tangent_stride = 2;
+
+    const double h_ext_a_per_m[] = {0.0, 0.0, 2.0};
+    const double anisotropy_axis[] = {1.0, 0.0, 0.0};
+    const double tangent_in[] = {3.0, 5.0};
+    fd::TangentOperatorLocalBlock zeeman_block{};
+    fd::TangentOperatorLocalBlock anisotropy_block{};
+    double zeeman_workspace[2]{};
+    double anisotropy_workspace[2]{};
+    double effective_field_workspace[2]{};
+    fd::MfemLinearizedOperatorWorkspace workspace{};
+    workspace.zeeman_blocks = &zeeman_block;
+    workspace.uniaxial_anisotropy_blocks = &anisotropy_block;
+    workspace.zeeman_tangent = zeeman_workspace;
+    workspace.uniaxial_anisotropy_tangent = anisotropy_workspace;
+    workspace.effective_field_tangent = effective_field_workspace;
+    double stiffness_rhs[2]{};
+    double mass_rhs[2]{};
+    fd::MfemLinearizedOperatorDiagnostics diagnostics{};
+
+    const fd::FrequencyDomainStatus status = fd::apply_mfem_linearized_cpu_operator(
+        descriptor,
+        layout,
+        &node,
+        nullptr,
+        0,
+        h_ext_a_per_m,
+        anisotropy_axis,
+        4.0,
+        nullptr,
+        1.0,
+        0.0,
+        workspace,
+        tangent_in,
+        stiffness_rhs,
+        mass_rhs,
+        &diagnostics);
+
+    check(status == fd::FrequencyDomainStatus::ok, "MFEM uniaxial anisotropy linearized operator succeeds");
+    check(
+        std::abs(diagnostics.max_abs_uniaxial_anisotropy_field - 12.0) < 1.0e-12,
+        "MFEM uniaxial anisotropy diagnostics report anisotropy field");
+    check(std::abs(effective_field_workspace[0] - 18.0) < 1.0e-12, "MFEM uniaxial anisotropy effective e1");
+    check(std::abs(effective_field_workspace[1] - 10.0) < 1.0e-12, "MFEM uniaxial anisotropy effective e2");
+    check(std::abs(stiffness_rhs[0] + 10.0) < 1.0e-12, "MFEM uniaxial anisotropy stiffness e1");
+    check(std::abs(stiffness_rhs[1] - 18.0) < 1.0e-12, "MFEM uniaxial anisotropy stiffness e2");
+}
+
+void mfem_linearized_operator_uses_nodewise_alpha_mass()
+{
+    const double equilibrium[] = {
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+    };
+    fd::TangentFrameNode nodes[2]{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 2, nodes, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "MFEM nodewise alpha frame succeeds");
+
+    fd::MfemOperatorContextDescriptor descriptor{};
+    descriptor.node_count = 2;
+    descriptor.full_dof_count = 6;
+    descriptor.tangent_dof_count = 4;
+    descriptor.zeeman_enabled = true;
+    descriptor.mfem_mesh_available = true;
+
+    fd::MfemTangentSpaceLayout layout{};
+    layout.node_count = 2;
+    layout.full_dof_count = 6;
+    layout.tangent_dof_count = 4;
+    layout.tangent_components_per_node = 2;
+    layout.tangent_stride = 2;
+
+    const double h_ext_a_per_m[] = {0.0, 0.0, 2.0};
+    const double tangent_in[] = {2.0, -3.0, 4.0, 5.0};
+    const double alpha_per_node[] = {0.1, 0.3};
+    fd::TangentOperatorLocalBlock zeeman_blocks[2]{};
+    double zeeman_workspace[4]{};
+    double effective_field_workspace[4]{};
+    fd::MfemLinearizedOperatorWorkspace workspace{};
+    workspace.zeeman_blocks = zeeman_blocks;
+    workspace.zeeman_tangent = zeeman_workspace;
+    workspace.effective_field_tangent = effective_field_workspace;
+    double stiffness_rhs[4]{};
+    double mass_rhs[4]{};
+    fd::MfemLinearizedOperatorDiagnostics diagnostics{};
+
+    const fd::FrequencyDomainStatus status = fd::apply_mfem_linearized_cpu_operator(
+        descriptor,
+        layout,
+        nodes,
+        nullptr,
+        0,
+        h_ext_a_per_m,
+        nullptr,
+        0.0,
+        alpha_per_node,
+        1.0,
+        0.0,
+        workspace,
+        tangent_in,
+        stiffness_rhs,
+        mass_rhs,
+        &diagnostics);
+
+    check(status == fd::FrequencyDomainStatus::ok, "MFEM nodewise alpha operator succeeds");
+    check(std::abs(diagnostics.max_abs_mass_rhs - 5.5) < 1.0e-12, "MFEM nodewise alpha mass diagnostic");
+    check(std::abs(mass_rhs[0] - 1.7) < 1.0e-12, "MFEM nodewise alpha mass node0 e1");
+    check(std::abs(mass_rhs[1] + 3.2) < 1.0e-12, "MFEM nodewise alpha mass node0 e2");
+    check(std::abs(mass_rhs[2] - 5.5) < 1.0e-12, "MFEM nodewise alpha mass node1 e1");
+    check(std::abs(mass_rhs[3] - 3.8) < 1.0e-12, "MFEM nodewise alpha mass node1 e2");
+}
+
 void mfem_linearized_operator_rejects_missing_workspace()
 {
     fd::MfemOperatorContextDescriptor descriptor{};
@@ -2347,6 +6304,9 @@ void mfem_linearized_operator_rejects_missing_workspace()
         nullptr,
         0,
         h_ext_a_per_m,
+        nullptr,
+        0.0,
+        nullptr,
         1.0,
         0.0,
         workspace,
@@ -2410,6 +6370,9 @@ void mfem_linearized_operator_rejects_missing_exchange_workspace()
         &exchange_edge,
         1,
         nullptr,
+        nullptr,
+        0.0,
+        nullptr,
         1.0,
         0.0,
         workspace,
@@ -2464,6 +6427,9 @@ void mfem_linearized_operator_rejects_invalid_gamma()
         nullptr,
         0,
         h_ext_a_per_m,
+        nullptr,
+        0.0,
+        nullptr,
         0.0,
         0.0,
         workspace,
@@ -2518,6 +6484,9 @@ void mfem_linearized_operator_rejects_invalid_alpha()
         nullptr,
         0,
         h_ext_a_per_m,
+        nullptr,
+        0.0,
+        nullptr,
         1.0,
         -0.1,
         workspace,
@@ -2690,38 +6659,85 @@ int main()
     cancelling_sweep_progress_preserves_cancel_request_state();
     cancelling_sweep_progress_reports_no_partial_artifacts_before_first_point();
     completed_sweep_progress_preserves_completed_artifacts();
-    driven_response_is_explicitly_unavailable();
+    driven_response_cpu_slice_is_available();
+    static_periodic_driven_response_is_explicitly_available();
+    driven_response_floquet_boundary_is_explicitly_unavailable();
+    driven_response_floquet_k_metadata_is_explicitly_unavailable();
     modal_solver_is_explicitly_unavailable();
     floquet_dynamic_demag_k_is_blocked();
     strict_gpu_lane_is_blocked();
     c_abi_reports_frequency_domain_availability();
+    c_abi_reports_floquet_k_metadata_as_unavailable();
+    c_abi_frequency_domain_availability_rejects_unknown_study_kind();
+    c_abi_frequency_domain_availability_rejects_unknown_phase_convention();
     c_abi_rejects_null_arguments();
     c_abi_reports_frequency_domain_progress();
     tangent_frame_builds_orthonormal_basis_and_projects_vectors();
     tangent_frame_rejects_non_unit_equilibrium();
     tangent_operator_applies_local_blocks_and_reports_diagnostics();
     tangent_operator_rejects_unsupported_terms();
+    tangent_operator_rejects_nonfinite_local_block_coefficients();
     zeeman_tangent_block_uses_parallel_field_and_reports_transverse_residual();
+    zeeman_tangent_block_rejects_nonfinite_external_field();
+    uniaxial_anisotropy_tangent_blocks_project_axis_into_tangent_space();
     exchange_edge_operator_applies_tangent_graph_laplacian();
     exchange_edge_operator_rejects_out_of_range_nodes();
+    exchange_edge_operator_rejects_nonfinite_stiffness();
     tangent_operator_applies_combined_nodewise_and_edge_terms();
+    tangent_operator_rejects_nonfinite_combined_edge_stiffness();
+    tangent_nodewise_operator_rejects_nonfinite_local_block_coefficients();
+    tangent_combined_operator_rejects_nonfinite_local_block_coefficients();
     tangent_precession_operator_rotates_effective_field_variation();
     tangent_damping_operator_rotates_perturbation_by_alpha();
     tangent_frequency_mass_operator_combines_identity_and_damping_rotation();
+    tangent_frequency_mass_operator_uses_nodewise_alpha();
     operator_contract_validates_driven_and_modal_requests_separately();
     operator_contract_rejects_invalid_frequency_sweep();
     driven_response_solver_boundary_returns_structured_unavailable_result();
     driven_response_solver_writes_failure_artifacts_for_unavailable_run();
+    production_gpu_unavailable_artifact_reports_gpu_lane();
     driven_response_solver_respects_disabled_partial_failure_artifacts();
     driven_response_solver_boundary_validates_request_before_unavailable_solve();
     driven_response_solver_runs_tiny_diagonal_validation_problem();
     driven_response_solver_runs_tiny_dense_validation_problem();
+    driven_response_solver_preserves_tiny_dense_solve_error_status();
+    production_cpu_matrix_free_solver_solves_diagonal_harmonic_response();
+    production_cpu_matrix_free_solver_solves_complex_drive();
+    production_cpu_matrix_free_solver_respects_temporal_phase_convention_sign();
+    production_cpu_matrix_free_solver_rejects_invalid_phase_convention_sign();
+    production_cpu_matrix_free_solver_reports_progress();
+    production_cpu_matrix_free_solver_reuses_previous_frequency_solution_as_warm_start();
+    production_cpu_matrix_free_solver_honors_pre_start_cancel_without_operator_work();
+    production_cpu_matrix_free_solver_honors_mid_frequency_cancel_without_completion();
+    production_cpu_matrix_free_solver_rejects_overflowing_problem_size();
+    production_cpu_matrix_free_solver_rejects_nonfinite_operator_output();
+    production_cpu_lane_does_not_fallback_to_tiny_validation_solver();
     driven_response_solver_runs_assembled_mfem_validation_problem();
+    driven_response_solver_runs_assembled_mfem_dmi_validation_problem();
+    production_cpu_lane_runs_mfem_matrix_free_response_problem();
+    production_cpu_lane_rejects_nonfinite_zeeman_field_before_matrix_free_solve();
+    production_cpu_lane_runs_mfem_matrix_free_dmi_response_problem();
+    production_cpu_lane_accepts_more_than_sixteen_frequency_points();
+    production_cpu_lane_writes_matrix_free_response_artifacts();
+    production_cpu_lane_writes_large_matrix_free_field_payload();
+    production_cpu_lane_writes_multi_point_matrix_free_response_artifacts();
+    production_cpu_lane_interruption_preserves_partial_artifacts();
     driven_response_solver_writes_minimal_assembled_validation_artifacts();
     driven_response_solver_respects_disabled_response_field_payloads();
     driven_response_solver_interruption_preserves_partial_validation_artifacts();
     c_abi_driven_response_solve_reports_structured_unavailable_result();
+    c_abi_driven_response_solve_rejects_floquet_metadata();
+    c_abi_driven_response_solve_rejects_unknown_execution_lane();
+    c_abi_driven_response_solve_rejects_unknown_phase_convention();
     c_abi_driven_response_solve_runs_tiny_validation_problem();
+    c_abi_driven_response_solve_runs_complex_tiny_validation_problem();
+    c_abi_driven_response_manifest_preserves_temporal_phase_convention();
+    c_abi_production_cpu_lane_runs_mfem_matrix_free_response_problem();
+    c_abi_production_cpu_lane_rejects_invalid_static_periodic_requests();
+    c_abi_production_cpu_lane_interruption_preserves_partial_artifacts();
+    c_abi_production_cpu_lane_does_not_fallback_to_tiny_validation_solver();
+    c_abi_production_cpu_lane_runs_mfem_dmi_matrix_free_response_problem();
+    c_abi_production_cpu_lane_rejects_unknown_dmi_kind();
     c_abi_driven_response_solve_reports_unavailable_failure_artifacts();
     c_abi_driven_response_solve_interrupts_before_start();
     mfem_operator_context_descriptor_accepts_consistent_tetra_mesh();
@@ -2732,7 +6748,17 @@ int main()
     mfem_exchange_operator_rejects_disabled_exchange_descriptor();
     mfem_zeeman_operator_applies_parallel_field_blocks_in_tangent_layout();
     mfem_zeeman_operator_rejects_disabled_zeeman_descriptor();
+    mfem_dmi_operator_applies_preassembled_tangent_blocks();
+    mfem_dmi_operator_rejects_non_dmi_blocks();
+    mfem_dmi_element_tangent_operator_matches_bulk_weak_action();
+    mfem_dmi_element_tangent_operator_rejects_nonfinite_geometry();
+    mfem_dmi_element_tangent_operator_rejects_unknown_kind();
+    mfem_dmi_element_tangent_operator_matches_interfacial_weak_action();
     mfem_linearized_operator_combines_exchange_zeeman_precession_and_mass();
+    mfem_linearized_operator_adds_preassembled_dmi_field();
+    mfem_linearized_operator_adds_element_dmi_field();
+    mfem_linearized_operator_adds_uniaxial_anisotropy_field();
+    mfem_linearized_operator_uses_nodewise_alpha_mass();
     mfem_linearized_operator_rejects_missing_workspace();
     mfem_linearized_operator_rejects_missing_exchange_workspace();
     mfem_linearized_operator_rejects_invalid_gamma();

@@ -11,6 +11,9 @@ from typing import Any
 
 
 REQUIRED_VARIANTS = {"easy_axis", "theta45"}
+COMPUTED_VARIANT_STATUSES = {"computed_active_stage", "computed_variant_run"}
+HYSTERESIS_FAMILY_RESOURCE_PREFIX = "/v2/sessions/current/analysis/hysteresis-family/"
+EXPECTED_VARIANT_THETA_DEG = {"easy_axis": 30.0, "theta45": 45.0}
 
 
 def load_json(path: Path) -> Any:
@@ -35,6 +38,33 @@ def require_points(root: Path, variant: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(points, list) or len(points) < 8:
         raise SystemExit(f"variant {variant_id!r} must contain a resolved loop")
     return points
+
+
+def validate_variant_manifest_contract(variant: dict[str, Any], variant_id: str) -> None:
+    status = variant.get("data_status")
+    if status not in COMPUTED_VARIANT_STATUSES:
+        raise SystemExit(f"variant {variant_id!r} is not computed: {status!r}")
+    points_resource_ref = variant.get("points_resource_ref")
+    if not isinstance(points_resource_ref, str) or not points_resource_ref.startswith(
+        HYSTERESIS_FAMILY_RESOURCE_PREFIX
+    ):
+        raise SystemExit(
+            f"variant {variant_id!r} has invalid points_resource_ref: {points_resource_ref!r}"
+        )
+    orientation = variant.get("orientation")
+    if not isinstance(orientation, dict):
+        raise SystemExit(f"variant {variant_id!r} orientation must be present")
+    theta = require_number(orientation.get("theta"), f"variant {variant_id!r}.orientation.theta")
+    expected_theta = EXPECTED_VARIANT_THETA_DEG[variant_id]
+    if not math.isclose(theta, expected_theta, rel_tol=0.0, abs_tol=1e-9):
+        if variant_id == "easy_axis":
+            raise SystemExit(
+                "variant 'easy_axis' must be the documented near-easy perturbation "
+                f"theta={expected_theta:g} deg, not theta={theta:g} deg"
+            )
+        raise SystemExit(
+            f"variant {variant_id!r} must use theta={expected_theta:g} deg, got {theta:g}"
+        )
 
 
 def interpolated_coercive_fields(points: list[dict[str, Any]], label: str) -> list[float]:
@@ -92,9 +122,7 @@ def main() -> int:
     hc_by_variant: dict[str, float] = {}
     for variant_id in sorted(REQUIRED_VARIANTS):
         variant = variants_by_id[variant_id]
-        status = variant.get("data_status")
-        if not str(status).startswith("computed"):
-            raise SystemExit(f"variant {variant_id!r} is not computed: {status!r}")
+        validate_variant_manifest_contract(variant, variant_id)
         points = require_points(root, variant)
         hc_by_variant[variant_id] = validate_variant(points, variant_id)
 

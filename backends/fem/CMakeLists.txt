@@ -131,6 +131,8 @@ set(FEM_SOURCES
     cpu/mfem/runtime/step_metrics.cpp
     cpu/frequency_domain/dense_driven_response.cpp
     cpu/frequency_domain/mfem_driven_response_validation.cpp
+    cpu/frequency_domain/mfem_dmi_operator.cpp
+    cpu/frequency_domain/production_cpu_driven_response.cpp
     gpu/cuda/demag_poisson/hypre_device_solver.cpp
     gpu/cuda/demag_poisson/operators.cpp
     gpu/cuda/demag_poisson/poisson.cpp
@@ -140,6 +142,7 @@ set(FEM_SOURCES
     cpu/frequency_domain/mfem_operator_context.cpp
     cpu/frequency_domain/mfem_tangent_space.cpp
     cpu/frequency_domain/mfem_zeeman_operator.cpp
+    src/frequency_domain/anisotropy_operator.cpp
     src/frequency_domain/driven_response_solver.cpp
     src/frequency_domain/equilibrium_state.cpp
     src/frequency_domain/excitation.cpp

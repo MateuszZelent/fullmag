@@ -18,6 +18,7 @@ import {
   MESHING_SHARED_DOMAIN_QUALITY_PATH,
   MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH,
   MESHING_SHARED_DOMAIN_REPORT_PATH,
+  MESHING_SHARED_DOMAIN_TOPOLOGY_PATH,
   MESHING_OBJECT_QUALITY_PATH,
   MESHING_OBJECT_POLICY_PATH,
   MESHING_OBJECT_REPORT_PATH,
@@ -128,6 +129,8 @@ export const MESH_SHARED_DOMAIN_QUALITY_RESOURCE_KEY =
   MESHING_SHARED_DOMAIN_QUALITY_PATH;
 export const MESH_SHARED_DOMAIN_QUALITY_DATA_RESOURCE_KEY =
   MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH;
+export const MESH_SHARED_DOMAIN_TOPOLOGY_RESOURCE_KEY =
+  MESHING_SHARED_DOMAIN_TOPOLOGY_PATH;
 export const MESH_SHARED_DOMAIN_QUALITY_GATES_RESOURCE_KEY =
   MESHING_SHARED_DOMAIN_QUALITY_GATES_PATH;
 export const MESH_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_RESOURCE_KEY =
@@ -657,6 +660,26 @@ export function useMeshSharedDomainQualityDataResource(
     enabled: options.enabled,
     load,
     resourceKey: MESH_SHARED_DOMAIN_QUALITY_DATA_RESOURCE_KEY,
+  });
+}
+
+export function useMeshSharedDomainTopologyResource(
+  options: ResourceHookOptions = {},
+) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.meshing.sharedDomain.topology({ signal }).then((result) => {
+        if (result.status === "ready") return result.data;
+        return null;
+      }),
+    [api],
+  );
+
+  return useResource<DecodedTopology | null>({
+    enabled: options.enabled,
+    load,
+    resourceKey: MESH_SHARED_DOMAIN_TOPOLOGY_RESOURCE_KEY,
   });
 }
 

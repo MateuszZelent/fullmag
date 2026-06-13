@@ -28,8 +28,7 @@ const RELAX_MAX_STEPS: u64 = 4_000;
 /// DOF threshold above which LOBPCG sparse eigensolver is used instead of
 /// the dense O(n³) path. Below this, Cholesky + SymmetricEigen is used.
 const SPARSE_EIGEN_THRESHOLD: usize = 5_000;
-const FLOQUET_DYNAMIC_DEMAG_UNSUPPORTED: &str =
-    "dynamic demag for Floquet periodic FEM is not implemented yet. Disable demag or use k=0/free boundary.";
+const FLOQUET_DYNAMIC_DEMAG_UNSUPPORTED: &str = "dynamic demag for Floquet periodic FEM is not implemented yet. Disable demag or use k=0/free boundary.";
 
 /// Convert a dense nalgebra DMatrix to a sparse CsrMatrix, dropping entries
 /// below `drop_tol` in absolute value.

@@ -22,6 +22,7 @@ import {
   resolveExplorerKeyboardTargetRowId,
   sliceVisibleExplorerRows,
 } from "./ExplorerTreeView";
+import { explorerStatusClassName } from "./explorerStatusClass";
 
 describe("flattenVisibleExplorerRows", () => {
   it("keeps collapsed descendants out of the rendered row list", () => {
@@ -311,5 +312,22 @@ describe("flattenVisibleExplorerRows", () => {
     const css = readFileSync(fileURLToPath(explorerCssUrl), "utf8");
     expect(css).toContain('.fm-explorer-tree-row[data-status="completed"]');
     expect(css).toContain("var(--fm-success)");
+  });
+
+  it("maps explorer node statuses to explicit semantic CSS classes", () => {
+    expect(explorerStatusClassName("completed")).toBe("fm-explorer-node--done");
+    expect(explorerStatusClassName("running")).toBe("fm-explorer-node--active");
+    expect(explorerStatusClassName("queued")).toBe("fm-explorer-node--muted");
+    expect(explorerStatusClassName("skipped")).toBe("fm-explorer-node--muted");
+    expect(explorerStatusClassName("warning")).toBe("fm-explorer-node--warning");
+    expect(explorerStatusClassName("failed")).toBe("fm-explorer-node--failed");
+
+    const explorerCssUrl = new URL("../../design/styles/explorer.css", import.meta.url);
+    const css = readFileSync(fileURLToPath(explorerCssUrl), "utf8");
+    expect(css).toContain(".fm-explorer-node--done");
+    expect(css).toContain(".fm-explorer-node--active");
+    expect(css).toContain(".fm-explorer-node--muted");
+    expect(css).toContain(".fm-explorer-node--warning");
+    expect(css).toContain(".fm-explorer-node--failed");
   });
 });

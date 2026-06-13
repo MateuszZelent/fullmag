@@ -247,6 +247,7 @@ pub(crate) fn execute_direct_minimizer(
             &state.magnetization,
             &state.h_eff,
         );
+        accepted_stats.pseudo_time_s = Some(state.pseudo_time_s);
         ensure_single_object_scalars(&mut accepted_stats, "free");
 
         artifacts.record_scalar(&accepted_stats)?;

@@ -1,7 +1,7 @@
 # Frequency-Domain Solver Physics
 
 Status: physics contract for magnetic and magnetoelastic frequency-domain studies
-Last updated: 2026-05-20
+Last updated: 2026-06-12
 Related docs:
 - `docs/physics/0700-frequency-domain-linearized-llg.md`
 - `docs/physics/0700-shared-magnetoelastic-semantics.md`
@@ -54,10 +54,19 @@ i omega delta_m =
 After projection to a local tangent basis, the unknown has two components per
 magnetic degree of freedom. A backend may materialize three-component vectors
 for output, but the physical operator should be formulated on tangent variables.
+Gilbert damping may be uniform or nodal (`alpha(x)`). In both cases it enters
+the harmonic tangent-space mass operator as the local `i omega alpha *
+(m0 x delta_m)` term; it is not a time-integration parameter.
 
 Use magnetic-only response for magnetic susceptibility, mode maps, phase, or
 absorbed magnetic power under a harmonic magnetic or current-derived excitation
 when elastic feedback is negligible or intentionally absent.
+
+The harmonic drive is a complex phasor. A real field vector `h_drive` with
+phase `phi` enters the tangent-space right-hand side as
+`h_drive * exp(i phi)`. `phi = 0` is the legacy in-phase drive. Backends that
+materialize real block systems must preserve both real and imaginary right-hand
+side components rather than dropping the drive phase.
 
 ## Quasistatic Bidirectional Magnetoelasticity
 

@@ -12,6 +12,7 @@ pub enum RuntimeEngineId {
     FemEigenCpuBaseline,
     FemEigenNativeGpu,
     FemFrequencyResponseDenseValidation,
+    FemFrequencyResponseProductionCpu,
 }
 
 impl RuntimeEngineId {
@@ -24,6 +25,7 @@ impl RuntimeEngineId {
             Self::FemEigenCpuBaseline => "fem_eigen_cpu_baseline",
             Self::FemEigenNativeGpu => "fem_eigen_native_gpu",
             Self::FemFrequencyResponseDenseValidation => "fem_frequency_response_dense_validation",
+            Self::FemFrequencyResponseProductionCpu => "fem_frequency_response_production_cpu",
         }
     }
 }
@@ -304,7 +306,14 @@ pub(crate) fn capabilities_for_fem_frequency_response_validation_engine(
     engine: FemEngine,
 ) -> BackendCapabilities {
     let mut capabilities = capabilities_for_fem_engine(engine);
-    capabilities.engine_id = RuntimeEngineId::FemFrequencyResponseDenseValidation;
+    #[cfg(feature = "fem-gpu")]
+    {
+        capabilities.engine_id = RuntimeEngineId::FemFrequencyResponseProductionCpu;
+    }
+    #[cfg(not(feature = "fem-gpu"))]
+    {
+        capabilities.engine_id = RuntimeEngineId::FemFrequencyResponseDenseValidation;
+    }
     capabilities
 }
 
@@ -323,6 +332,12 @@ mod tests {
 
         assert_eq!(fem_cpu.engine_id.as_str(), "fem_cpu_native");
         assert_eq!(fem_eigen_cpu.engine_id.as_str(), "fem_eigen_cpu_baseline");
+        #[cfg(feature = "fem-gpu")]
+        assert_eq!(
+            fem_response_cpu.engine_id.as_str(),
+            "fem_frequency_response_production_cpu"
+        );
+        #[cfg(not(feature = "fem-gpu"))]
         assert_eq!(
             fem_response_cpu.engine_id.as_str(),
             "fem_frequency_response_dense_validation"

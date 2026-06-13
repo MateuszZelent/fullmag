@@ -1,7 +1,7 @@
 use crate::eigen::response_block_real::{
     build_field_driven_response_sweep_artifact, solve_field_driven_block_real_sweep,
     solve_field_driven_block_real_sweep_with_interrupt, BlockRealHarmonicTemplate,
-    FieldDrivenResponseSweepArtifact,
+    FieldDrivenResponseSweepArtifact, ResponseExcitationProvenanceArtifact,
 };
 use crate::eigen::types::{PathSolveResult, SingleKModeResult, SingleKSolveResult};
 use crate::native_fem::FrequencyDomainSweepProgress;
@@ -18,6 +18,8 @@ struct ModeSummaryArtifact {
     raw_mode_index: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     branch_id: Option<usize>,
+    mode_field_id: String,
+    mode_field_resource_key: String,
     frequency_real_hz: f64,
     frequency_imag_hz: f64,
     angular_frequency_rad_per_s: f64,
@@ -84,9 +86,23 @@ struct BranchesArtifact {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct ModeArtifact<'a> {
+struct ModeAmplitudeSummary {
+    sample_count: usize,
+    max: Option<f64>,
+    mean: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ModeComponentSummary {
+    real_sample_count: usize,
+    imag_sample_count: usize,
+    component_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ModeArtifact {
     schema_version: &'static str,
-    solver_model: &'a str,
+    solver_model: String,
     sample_index: usize,
     raw_mode_index: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -98,6 +114,8 @@ struct ModeArtifact<'a> {
     eigenvalue_imag: f64,
     normalization: &'static str,
     damping_policy: &'static str,
+    mode_field_id: String,
+    mode_field_resource_key: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     residual_norm: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -106,12 +124,11 @@ struct ModeArtifact<'a> {
     tangent_leakage_mean_abs: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tangent_leakage_max_abs: Option<f64>,
-    dominant_polarization: &'a str,
+    dominant_polarization: String,
     k_vector: [f64; 3],
-    real: &'a [[f64; 3]],
-    imag: &'a [[f64; 3]],
-    amplitude: &'a [f64],
-    phase: &'a [f64],
+    mode_field_sample_count: usize,
+    amplitude_summary: ModeAmplitudeSummary,
+    component_summary: ModeComponentSummary,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -147,6 +164,8 @@ struct ResponseSweepV2Artifact<'a> {
     matrix_layout: &'a str,
     excitation_kind: &'a str,
     si_units: &'a std::collections::BTreeMap<&'static str, &'static str>,
+    frequency_point_artifact_paths: Vec<String>,
+    response_field_payload_paths: Vec<String>,
     points: Vec<ResponseSweepV2PointArtifact>,
 }
 
@@ -159,9 +178,11 @@ struct ResponseSweepV2PointArtifact {
     frequency_point_artifact_path: String,
     response_field_binary_layout: &'static str,
     max_response_amplitude: Option<f64>,
+    phase_rad: Option<f64>,
     absorbed_power_density: f64,
     residual_l2_norm: f64,
     relative_residual_l2_norm: f64,
+    excitation_provenance: ResponseExcitationProvenanceArtifact,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -188,6 +209,7 @@ struct ResponseDiagnosticsArtifact<'a> {
 struct ResponseProgressArtifact<'a> {
     schema_version: &'static str,
     status: &'static str,
+    state: &'static str,
     complete: bool,
     total_frequency_points: u64,
     completed_frequency_points: u64,
@@ -302,6 +324,7 @@ struct FrequencyDomainDiagnostics {
     complete: bool,
     requested_frequency_point_count: usize,
     completed_frequency_point_count: usize,
+    written_frequency_point_artifacts: usize,
     interrupted: bool,
 }
 
@@ -320,15 +343,31 @@ struct ResponseFrequencyPointArtifact<'a> {
     frequency_hz: f64,
     angular_frequency_rad_per_s: f64,
     source_sweep_artifact: &'static str,
+    field_payload_path: String,
     response_field_payload_path: String,
+    value_kind: &'static str,
+    component_basis: &'static str,
+    component_count: usize,
+    components: [&'static str; 3],
+    payload_encoding: &'static str,
+    binary_layout: &'static str,
+    complex_pair_count: usize,
+    payload_value_count: usize,
+    available_views: [&'static str; 7],
+    default_view: &'static str,
+    default_phase_rad: f64,
     response_field_binary_layout: &'static str,
     point: &'a crate::eigen::response_block_real::FieldDrivenResponseSweepPointArtifact,
 }
 
 fn summarize_mode(sample: &SingleKSolveResult, mode: &SingleKModeResult) -> ModeSummaryArtifact {
+    let mode_field_id = eigen_mode_field_id(sample.sample.sample_index, mode.raw_mode_index);
+    let mode_field_resource_key = eigen_mode_field_resource_key(&mode_field_id);
     ModeSummaryArtifact {
         raw_mode_index: mode.raw_mode_index,
         branch_id: mode.branch_id,
+        mode_field_id,
+        mode_field_resource_key,
         frequency_real_hz: mode.frequency_real_hz,
         frequency_imag_hz: mode.frequency_imag_hz,
         angular_frequency_rad_per_s: mode.angular_frequency_rad_per_s,
@@ -342,6 +381,46 @@ fn summarize_mode(sample: &SingleKSolveResult, mode: &SingleKModeResult) -> Mode
         tangent_leakage_max_abs: mode.tangent_leakage_max_abs,
         dominant_polarization: mode.dominant_polarization.clone(),
         k_vector: sample.sample.k_vector,
+    }
+}
+
+fn eigen_mode_field_id(sample_index: usize, raw_mode_index: usize) -> String {
+    format!("analysis:eigen:sample-{sample_index:04}:mode-{raw_mode_index:04}")
+}
+
+fn eigen_mode_field_resource_key(mode_field_id: &str) -> String {
+    format!(
+        "/v2/sessions/current/data/fields/{mode_field_id}/samples/vector?view=phase_rotated_real&phase_rad=0"
+    )
+}
+
+fn mode_amplitude_summary(amplitude: &[f64]) -> ModeAmplitudeSummary {
+    let finite = amplitude
+        .iter()
+        .copied()
+        .filter(|value| value.is_finite())
+        .collect::<Vec<_>>();
+    let max = finite
+        .iter()
+        .copied()
+        .max_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal));
+    let mean = if finite.is_empty() {
+        None
+    } else {
+        Some(finite.iter().sum::<f64>() / finite.len() as f64)
+    };
+    ModeAmplitudeSummary {
+        sample_count: amplitude.len(),
+        max,
+        mean,
+    }
+}
+
+fn mode_component_summary(real: &[[f64; 3]], imag: &[[f64; 3]]) -> ModeComponentSummary {
+    ModeComponentSummary {
+        real_sample_count: real.len(),
+        imag_sample_count: imag.len(),
+        component_count: 3,
     }
 }
 
@@ -387,7 +466,27 @@ pub fn write_response_sweep_bundle_with_progress(
             frequency_hz: point.frequency_hz,
             angular_frequency_rad_per_s: point.angular_frequency_rad_per_s,
             source_sweep_artifact: "response/magnetic_response_sweep.v1.json",
+            field_payload_path: field_payload_path.clone(),
             response_field_payload_path: field_payload_path,
+            value_kind: "complex_spatial_vector",
+            component_basis: "global_xyz",
+            component_count: 3,
+            components: ["x", "y", "z"],
+            payload_encoding: "f64_interleaved_real_imag_xyz",
+            binary_layout: "complex_f64_pairs_little_endian",
+            complex_pair_count: point.m_complex.len(),
+            payload_value_count: point.m_complex.len() * 2,
+            available_views: [
+                "complex",
+                "real",
+                "imag",
+                "abs",
+                "amplitude",
+                "phase",
+                "phase_rotated_real",
+            ],
+            default_view: "phase_rotated_real",
+            default_phase_rad: 0.0,
             response_field_binary_layout: "complex_f64_pairs_little_endian",
             point,
         };
@@ -476,10 +575,20 @@ fn write_response_sweep_v2_artifact(
             ),
             response_field_binary_layout: "complex_f64_pairs_little_endian",
             max_response_amplitude: finite_max(&point.response_amplitude),
+            phase_rad: dominant_phase_rad(point),
             absorbed_power_density: point.absorbed_power_density,
             residual_l2_norm: point.residual_l2_norm,
             relative_residual_l2_norm: point.relative_residual_l2_norm,
+            excitation_provenance: point.excitation_provenance.clone(),
         })
+        .collect::<Vec<_>>();
+    let frequency_point_artifact_paths = points
+        .iter()
+        .map(|point| point.frequency_point_artifact_path.clone())
+        .collect::<Vec<_>>();
+    let response_field_payload_paths = points
+        .iter()
+        .map(|point| point.response_field_payload_path.clone())
         .collect::<Vec<_>>();
     let sweep = ResponseSweepV2Artifact {
         schema_version: "magnetic_response_sweep.v2",
@@ -497,12 +606,30 @@ fn write_response_sweep_v2_artifact(
         matrix_layout: artifact.matrix_layout,
         excitation_kind: artifact.excitation_kind,
         si_units: &artifact.si_units,
+        frequency_point_artifact_paths,
+        response_field_payload_paths,
         points,
     };
     fs::write(
         response_dir.join("magnetic_response_sweep.v2.json"),
         serde_json::to_vec_pretty(&sweep).unwrap(),
     )
+}
+
+fn dominant_phase_rad(
+    point: &crate::eigen::response_block_real::FieldDrivenResponseSweepPointArtifact,
+) -> Option<f64> {
+    point
+        .response_amplitude
+        .iter()
+        .zip(point.response_phase.iter())
+        .filter(|(_, phase)| phase.is_finite())
+        .max_by(|(left_amplitude, _), (right_amplitude, _)| {
+            left_amplitude
+                .partial_cmp(right_amplitude)
+                .unwrap_or(std::cmp::Ordering::Less)
+        })
+        .map(|(_, phase)| *phase)
 }
 
 fn write_response_progress_artifact(
@@ -538,6 +665,13 @@ fn write_response_progress_artifact(
         } else {
             status
         },
+        state: if interrupted {
+            "interrupted"
+        } else if complete {
+            "completed"
+        } else {
+            "not_started"
+        },
         complete,
         total_frequency_points: progress.total_frequency_points,
         completed_frequency_points: progress.completed_frequency_points,
@@ -571,6 +705,7 @@ fn write_response_cancel_requested_artifact(
     let progress_artifact = ResponseProgressArtifact {
         schema_version: "frequency_domain_sweep_progress.v1",
         status: "cancel_requested",
+        state: "cancel_requested",
         complete: false,
         total_frequency_points: progress.total_frequency_points,
         completed_frequency_points: progress.completed_frequency_points,
@@ -667,7 +802,7 @@ fn write_response_diagnostics_artifact(
         .map(|point| point.frequency_hz)
         .collect::<Vec<_>>();
     let diagnostics = ResponseDiagnosticsArtifact {
-        schema_version: "frequency_response_diagnostics.v1",
+        schema_version: "frequency_domain_response_diagnostics.v1",
         status,
         complete,
         interrupted,
@@ -845,6 +980,7 @@ fn write_frequency_domain_response_manifest(
             complete,
             requested_frequency_point_count,
             completed_frequency_point_count: artifact.points.len(),
+            written_frequency_point_artifacts: artifact.points.len(),
             interrupted,
         },
         capabilities: FrequencyDomainCapabilitySnapshot {
@@ -974,6 +1110,7 @@ pub fn write_frequency_domain_eigen_manifest(
             complete: true,
             requested_frequency_point_count: sample_count,
             completed_frequency_point_count: sample_count,
+            written_frequency_point_artifacts: 0,
             interrupted: false,
         },
         capabilities: FrequencyDomainCapabilitySnapshot {
@@ -1277,10 +1414,12 @@ pub fn write_mode_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
             let real = mode.lifted_real.as_deref().unwrap_or(&[]);
             let imag = mode.lifted_imag.as_deref().unwrap_or(&[]);
             let amplitude = mode.amplitude.as_deref().unwrap_or(&[]);
-            let phase = mode.phase.as_deref().unwrap_or(&[]);
+            let mode_field_id =
+                eigen_mode_field_id(sample.sample.sample_index, mode.raw_mode_index);
+            let mode_field_resource_key = eigen_mode_field_resource_key(&mode_field_id);
             let payload = ModeArtifact {
                 schema_version: "2",
-                solver_model: result.solver_model.as_str(),
+                solver_model: result.solver_model.as_str().to_string(),
                 sample_index: sample.sample.sample_index,
                 raw_mode_index: mode.raw_mode_index,
                 branch_id: mode.branch_id,
@@ -1291,16 +1430,17 @@ pub fn write_mode_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
                 eigenvalue_imag: mode.eigenvalue_imag,
                 normalization: "unit_l2",
                 damping_policy: "ignore",
+                mode_field_id,
+                mode_field_resource_key,
                 residual_norm: mode.residual_norm,
                 residual_linf: mode.residual_linf,
                 tangent_leakage_mean_abs: mode.tangent_leakage_mean_abs,
                 tangent_leakage_max_abs: mode.tangent_leakage_max_abs,
-                dominant_polarization: &mode.dominant_polarization,
+                dominant_polarization: mode.dominant_polarization.clone(),
                 k_vector: sample.sample.k_vector,
-                real,
-                imag,
-                amplitude,
-                phase,
+                mode_field_sample_count: real.len().max(imag.len()),
+                amplitude_summary: mode_amplitude_summary(amplitude),
+                component_summary: mode_component_summary(real, imag),
             };
             let mode_bytes = serde_json::to_vec_pretty(&payload).unwrap();
             fs::write(
@@ -1435,6 +1575,14 @@ mod tests {
         .expect("spectrum.v2.json should be valid JSON");
         assert_eq!(spectrum["schema_version"], "eigen_spectrum.v2");
         assert_eq!(spectrum["sample_count"], 1);
+        assert_eq!(
+            spectrum["samples"][0]["modes"][0]["mode_field_id"],
+            "analysis:eigen:sample-0000:mode-0000"
+        );
+        assert_eq!(
+            spectrum["samples"][0]["modes"][0]["mode_field_resource_key"],
+            "/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0000/samples/vector?view=phase_rotated_real&phase_rad=0"
+        );
 
         let branches: Value = serde_json::from_slice(
             &std::fs::read(eigen_dir.join("branches.v2.json"))
@@ -1448,7 +1596,9 @@ mod tests {
         let mut dispersion_lines = dispersion.lines();
         assert_eq!(
             dispersion_lines.next(),
-            Some("sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,line_width_hz,residual_norm,overlap_score")
+            Some(
+                "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,line_width_hz,residual_norm,overlap_score"
+            )
         );
         let dispersion_row = dispersion_lines
             .next()
@@ -1468,6 +1618,14 @@ mod tests {
         .expect("mode artifact should be valid JSON");
         assert_eq!(mode["sample_index"], 0);
         assert_eq!(mode["raw_mode_index"], 0);
+        assert_eq!(
+            mode["mode_field_id"],
+            "analysis:eigen:sample-0000:mode-0000"
+        );
+        assert_eq!(
+            mode["mode_field_resource_key"],
+            "/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0000/samples/vector?view=phase_rotated_real&phase_rad=0"
+        );
         for required in [
             "residual_norm",
             "residual_linf",
@@ -1479,11 +1637,33 @@ mod tests {
                 "mode artifact should include numeric {required}: {mode}"
             );
         }
+        assert_eq!(mode["mode_field_sample_count"], 1);
+        assert_eq!(mode["amplitude_summary"]["sample_count"], 1);
+        assert_eq!(mode["amplitude_summary"]["max"], 1.0);
+        assert_eq!(mode["component_summary"]["real_sample_count"], 1);
+        assert_eq!(mode["component_summary"]["imag_sample_count"], 1);
+        assert!(
+            mode.get("real").is_none()
+                && mode.get("imag").is_none()
+                && mode.get("amplitude").is_none()
+                && mode.get("phase").is_none(),
+            "mode metadata must not inline vector arrays: {mode}"
+        );
 
         assert!(eigen_dir.join("path.json").is_file());
         assert!(eigen_dir.join("branches.json").is_file());
         assert!(eigen_dir.join("branch_table.csv").is_file());
         assert!(eigen_dir.join("modes/sample_0000/mode_0000.json").is_file());
+        let nested_mode: Value = serde_json::from_slice(
+            &std::fs::read(eigen_dir.join("modes/sample_0000/mode_0000.json"))
+                .expect("nested mode artifact should be written"),
+        )
+        .expect("nested mode artifact should be valid JSON");
+        assert_eq!(nested_mode["mode_field_id"], mode["mode_field_id"]);
+        assert_eq!(
+            nested_mode["mode_field_resource_key"],
+            mode["mode_field_resource_key"]
+        );
         let mode_field =
             std::fs::read(eigen_dir.join("mode_fields/sample_0000/mode_0000/vector.bin"))
                 .expect("mode vector payload should be written");
@@ -1567,6 +1747,10 @@ mod tests {
             "not_evaluated_dense_validation",
         );
         assert_eq!(value["points"][0]["excitation_provenance"]["kind"], "field");
+        assert_eq!(
+            value["points"][0]["excitation_provenance"]["phase_rad"],
+            0.0
+        );
     }
 
     #[test]
@@ -1619,6 +1803,32 @@ mod tests {
             point["response_field_payload_path"],
             "response/field_payloads/frequency_0001/vector.bin"
         );
+        assert_eq!(
+            point["field_payload_path"],
+            "response/field_payloads/frequency_0001/vector.bin"
+        );
+        assert_eq!(point["payload_encoding"], "f64_interleaved_real_imag_xyz");
+        assert_eq!(point["binary_layout"], "complex_f64_pairs_little_endian");
+        assert_eq!(point["value_kind"], "complex_spatial_vector");
+        assert_eq!(point["component_basis"], "global_xyz");
+        assert_eq!(point["component_count"], 3);
+        assert_eq!(point["components"], serde_json::json!(["x", "y", "z"]));
+        assert_eq!(point["complex_pair_count"], 1);
+        assert_eq!(point["payload_value_count"], 2);
+        assert_eq!(
+            point["available_views"],
+            serde_json::json!([
+                "complex",
+                "real",
+                "imag",
+                "abs",
+                "amplitude",
+                "phase",
+                "phase_rotated_real"
+            ])
+        );
+        assert_eq!(point["default_view"], "phase_rotated_real");
+        assert_eq!(point["default_phase_rad"], 0.0);
         let payload = std::fs::read(response_dir.join("field_payloads/frequency_0001/vector.bin"))
             .expect("response field payload should be written");
         assert_eq!(payload.len(), 16);
@@ -1671,12 +1881,32 @@ mod tests {
         assert_eq!(response_v2["complete"], true);
         assert_eq!(response_v2["completed_frequency_point_count"], 2);
         assert_eq!(
+            response_v2["frequency_point_artifact_paths"][1],
+            "response/frequency_points/frequency_0001.json"
+        );
+        assert_eq!(
+            response_v2["response_field_payload_paths"][1],
+            "response/field_payloads/frequency_0001/vector.bin"
+        );
+        assert_eq!(
             response_v2["points"][1]["frequency_point_artifact_path"],
             "response/frequency_points/frequency_0001.json"
         );
         assert_eq!(
             response_v2["points"][1]["response_field_payload_path"],
             "response/field_payloads/frequency_0001/vector.bin"
+        );
+        assert_eq!(
+            response_v2["points"][1]["excitation_provenance"]["kind"],
+            "field"
+        );
+        assert_eq!(
+            response_v2["points"][1]["excitation_provenance"]["phase_rad"],
+            0.0
+        );
+        assert!(
+            response_v2["points"][1]["phase_rad"].is_number(),
+            "response v2 point should expose scalar phase for charting"
         );
         let family_manifest: Value = serde_json::from_slice(
             &std::fs::read(temp.path.join("frequency_domain/manifest.v1.json"))
@@ -1813,7 +2043,7 @@ mod tests {
         .expect("response diagnostics should be valid JSON");
         assert_eq!(
             diagnostics["schema_version"],
-            "frequency_response_diagnostics.v1"
+            "frequency_domain_response_diagnostics.v1"
         );
         assert_eq!(diagnostics["solve_kind"], "direct_harmonic_response");
         assert_eq!(diagnostics["status"], "interrupted");

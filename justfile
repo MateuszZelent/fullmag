@@ -87,6 +87,47 @@ verify-fem-frequency-domain-native-contract:
     docker compose --profile fem-gpu run --rm \
       fem-gpu bash -lc 'cd /workspace && cmake --build native/build --target fem_frequency_domain_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_frequency_domain_contract'
 
+verify-fem-frequency-domain-contract:
+    just verify-fem-frequency-domain-native-contract
+
+verify-fem-frequency-domain-gpu:
+    just verify-fem-frequency-domain-native-contract
+
+verify-fem-frequency-domain-runtime-suite:
+    just verify-fem-frequency-domain-runtime
+    just verify-fem-frequency-domain-static-periodic-runtime
+    just verify-fem-frequency-domain-eigen-runtime
+
+verify-fem-frequency-response-runtime:
+    just verify-fem-frequency-domain-runtime
+
+verify-fem-frequency-domain-eigen-runtime:
+    just ensure-managed-fem-runtime
+    rm -rf .fullmag/reports/frequency-domain-eigen-runtime
+    mkdir -p .fullmag/reports/frequency-domain-eigen-runtime
+    docker compose --profile fem-gpu run --rm \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_FDM_EXECUTION=cpu \
+      -e FULLMAG_FEM_EXECUTION=cpu \
+      -e FULLMAG_RELAX_DEVICE=cpu \
+      -e FULLMAG_CPU_THREADS="${FULLMAG_CPU_THREADS:-auto}" \
+      fem-gpu bash -lc 'cd /workspace && \
+        rm -rf .fullmag/reports/frequency-domain-eigen-runtime/artifacts && \
+        .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu \
+          examples/fem_eigenmodes.py \
+          --backend fem \
+          --headless \
+          --json \
+          --output-dir .fullmag/reports/frequency-domain-eigen-runtime/artifacts && \
+        test -f .fullmag/reports/frequency-domain-eigen-runtime/artifacts/eigen/spectrum.v2.json && \
+        test -f .fullmag/reports/frequency-domain-eigen-runtime/artifacts/eigen/branches.v2.json && \
+        test -f .fullmag/reports/frequency-domain-eigen-runtime/artifacts/eigen/dispersion.csv && \
+        test -f .fullmag/reports/frequency-domain-eigen-runtime/artifacts/eigen/modes/sample_0000/mode_0000.json && \
+        test -f .fullmag/reports/frequency-domain-eigen-runtime/artifacts/eigen/mode_fields/sample_0000/mode_0000/vector.bin && \
+        test -f .fullmag/reports/frequency-domain-eigen-runtime/artifacts/frequency_domain/manifest.v1.json && \
+        python3 scripts/verify_fem_frequency_domain_eigen_artifacts.py .fullmag/reports/frequency-domain-eigen-runtime/artifacts'
+
 verify-fem-frequency-domain-runtime:
     just ensure-managed-fem-runtime
     rm -rf .fullmag/reports/frequency-domain-runtime
@@ -111,9 +152,37 @@ verify-fem-frequency-domain-runtime:
         test -f .fullmag/reports/frequency-domain-runtime/artifacts/response/progress.v1.json && \
         test -f .fullmag/reports/frequency-domain-runtime/artifacts/response/diagnostics.v1.json && \
         test -f .fullmag/reports/frequency-domain-runtime/artifacts/response/frequency_points/frequency_0000.json && \
-        test -f .fullmag/reports/frequency-domain-runtime/artifacts/response/field_payloads/frequency_0000/vector.bin && \
+        test -f .fullmag/reports/frequency-domain-runtime/artifacts/response/field_payloads/frequency_0000/vector_xyz.bin && \
         test -f .fullmag/reports/frequency-domain-runtime/artifacts/frequency_domain/manifest.v1.json && \
         python3 scripts/verify_fem_frequency_domain_runtime_artifacts.py .fullmag/reports/frequency-domain-runtime/artifacts'
+
+verify-fem-frequency-domain-static-periodic-runtime:
+    just ensure-managed-fem-runtime
+    rm -rf .fullmag/reports/frequency-domain-static-periodic-runtime
+    mkdir -p .fullmag/reports/frequency-domain-static-periodic-runtime
+    docker compose --profile fem-gpu run --rm \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_FDM_EXECUTION=cpu \
+      -e FULLMAG_FEM_EXECUTION=cpu \
+      -e FULLMAG_RELAX_DEVICE=cpu \
+      -e FULLMAG_CPU_THREADS="${FULLMAG_CPU_THREADS:-auto}" \
+      fem-gpu bash -lc 'cd /workspace && \
+        rm -rf .fullmag/reports/frequency-domain-static-periodic-runtime/artifacts && \
+        .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu \
+          examples/fem_frequency_response_static_periodic_smoke.py \
+          --backend fem \
+          --headless \
+          --json \
+          --output-dir .fullmag/reports/frequency-domain-static-periodic-runtime/artifacts && \
+        test -f .fullmag/reports/frequency-domain-static-periodic-runtime/artifacts/response/magnetic_response_sweep.v1.json && \
+        test -f .fullmag/reports/frequency-domain-static-periodic-runtime/artifacts/response/magnetic_response_sweep.v2.json && \
+        test -f .fullmag/reports/frequency-domain-static-periodic-runtime/artifacts/response/progress.v1.json && \
+        test -f .fullmag/reports/frequency-domain-static-periodic-runtime/artifacts/response/diagnostics.v1.json && \
+        test -f .fullmag/reports/frequency-domain-static-periodic-runtime/artifacts/response/frequency_points/frequency_0000.json && \
+        test -f .fullmag/reports/frequency-domain-static-periodic-runtime/artifacts/response/field_payloads/frequency_0000/vector_xyz.bin && \
+        test -f .fullmag/reports/frequency-domain-static-periodic-runtime/artifacts/frequency_domain/manifest.v1.json && \
+        python3 scripts/verify_fem_frequency_domain_runtime_artifacts.py --require-static-periodic .fullmag/reports/frequency-domain-static-periodic-runtime/artifacts'
 
 verify-fem-relaxation-runtime:
     bash scripts/verify_fem_relaxation_runtime.sh
@@ -413,6 +482,58 @@ run-hysteresis-waveguide-gpu-playback-smoke:
 verify-hysteresis-playback-artifacts artifacts_dir:
     python3 scripts/verify_hysteresis_playback_artifacts.py "{{artifacts_dir}}"
 
+verify-hysteresis-points-chart-data artifacts_dir:
+    python3 scripts/verify_hysteresis_points_chart_data.py "{{artifacts_dir}}"
+
+verify-hysteresis-fdm-playback-runtime:
+    just ensure-python
+    just build fullmag
+    rm -rf .fullmag/reports/hysteresis-fdm-playback-runtime
+    mkdir -p .fullmag/reports/hysteresis-fdm-playback-runtime
+    FULLMAG_DISABLE_CHARTS=1 FULLMAG_DISABLE_PREVIEW_3D=1 \
+    PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" \
+    fullmag examples/fdm_hysteresis_snapshot_smoke.py \
+      --backend fdm \
+      --headless \
+      --json \
+      --output-dir .fullmag/reports/hysteresis-fdm-playback-runtime/artifacts
+    python3 scripts/verify_hysteresis_points_chart_data.py \
+      .fullmag/reports/hysteresis-fdm-playback-runtime/artifacts
+    python3 scripts/verify_hysteresis_playback_artifacts.py \
+      .fullmag/reports/hysteresis-fdm-playback-runtime/artifacts
+
+verify-hysteresis-waveguide-playback-runtime device="cpu":
+    just ensure-managed-fem-runtime
+    docker compose --profile fem-gpu run --rm \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_FDM_EXECUTION=cpu \
+      -e FULLMAG_FEM_EXECUTION="{{device}}" \
+      -e FULLMAG_RELAX_DEVICE="{{device}}" \
+      -e FULLMAG_DISABLE_CHARTS=1 \
+      -e FULLMAG_DISABLE_PREVIEW_3D=1 \
+      -e FULLMAG_HYSTERESIS_FIELD_VALUES_MT=50,0,-50 \
+      -e FULLMAG_HYSTERESIS_MAX_STEPS=1 \
+      -e FULLMAG_HYSTERESIS_MAGNETIZATION_STORAGE=every_step \
+      fem-gpu bash -lc 'cd /workspace && \
+        rm -rf .fullmag/reports/hysteresis-waveguide-playback-runtime && \
+        mkdir -p .fullmag/reports/hysteresis-waveguide-playback-runtime && \
+        .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu \
+          examples/hysteresis_waveguide_300x50x10nm.py \
+          --backend fem \
+          --headless \
+          --json \
+          --output-dir .fullmag/reports/hysteresis-waveguide-playback-runtime/artifacts && \
+        python3 scripts/verify_hysteresis_points_chart_data.py \
+          .fullmag/reports/hysteresis-waveguide-playback-runtime/artifacts && \
+        python3 scripts/verify_hysteresis_playback_artifacts.py \
+          .fullmag/reports/hysteresis-waveguide-playback-runtime/artifacts'
+
+verify-hysteresis-waveguide-playback-data-plane api_url="http://localhost:8081" artifact_dir=".fullmag/reports/hysteresis-waveguide-playback-runtime/artifacts":
+    python3 scripts/verify_hysteresis_points_chart_data.py "{{artifact_dir}}"
+    python3 scripts/verify_hysteresis_playback_artifacts.py "{{artifact_dir}}"
+    python3 scripts/verify_hysteresis_playback_data_plane.py "{{api_url}}" "{{artifact_dir}}"
+
 run-hysteresis-waveguide-angular-family-smoke device="cpu":
     FULLMAG_DISABLE_CHARTS=1 FULLMAG_DISABLE_PREVIEW_3D=1 \
     FULLMAG_HYSTERESIS_FIELD_VALUES_MT=50,0,-50 FULLMAG_HYSTERESIS_MAX_STEPS=25 \
@@ -468,11 +589,22 @@ run-hysteresis-fdm-macrospin-sw-smoke:
     just build fullmag
     FULLMAG_DISABLE_CHARTS=1 FULLMAG_DISABLE_PREVIEW_3D=1 \
     PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" \
-    FULLMAG_HYSTERESIS_MAX_STEPS=160 \
+    FULLMAG_HYSTERESIS_MAX_STEPS=2000 \
     fullmag examples/hysteresis_fdm_macrospin_stoner_wohlfarth.py --backend fdm --headless --json
 
 verify-hysteresis-fdm-macrospin-sw artifacts_dir:
     python3 scripts/verify_hysteresis_fdm_macrospin_sw_artifacts.py "{{artifacts_dir}}"
+
+run-hysteresis-fdm-thinfilm-oop-ip-smoke:
+    just ensure-python
+    just build fullmag
+    FULLMAG_DISABLE_CHARTS=1 FULLMAG_DISABLE_PREVIEW_3D=1 \
+    PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" \
+    FULLMAG_HYSTERESIS_MAX_STEPS=200 \
+    fullmag examples/hysteresis_fdm_thinfilm_oop_ip_validation.py --backend fdm --headless --json
+
+verify-hysteresis-fdm-thinfilm-oop-ip artifacts_dir:
+    python3 scripts/verify_hysteresis_fdm_thinfilm_oop_ip_artifacts.py "{{artifacts_dir}}"
 
 run-permalloy-box-relax-fdm web_port="3100":
     just run-permalloy-box-relax-fdm-interactive "{{web_port}}"

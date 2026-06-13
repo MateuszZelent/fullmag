@@ -17,6 +17,13 @@ void copy_error(char out[128], const char *message) noexcept
     out[127] = '\0';
 }
 
+bool vector3_is_finite(const double values[3]) noexcept
+{
+    return std::isfinite(values[0]) &&
+        std::isfinite(values[1]) &&
+        std::isfinite(values[2]);
+}
+
 } // namespace
 
 FrequencyDomainStatus build_zeeman_tangent_blocks(
@@ -33,6 +40,12 @@ FrequencyDomainStatus build_zeeman_tangent_blocks(
     if ((node_count > 0 && nodes == nullptr) || h_ext_a_per_m == nullptr || out_blocks == nullptr) {
         if (out_diagnostics != nullptr) {
             copy_error(out_diagnostics->error_message, "Zeeman tangent blocks require non-null buffers");
+        }
+        return FrequencyDomainStatus::validation_error;
+    }
+    if (!vector3_is_finite(h_ext_a_per_m)) {
+        if (out_diagnostics != nullptr) {
+            copy_error(out_diagnostics->error_message, "Zeeman tangent blocks require finite external field");
         }
         return FrequencyDomainStatus::validation_error;
     }

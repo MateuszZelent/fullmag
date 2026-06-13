@@ -308,6 +308,7 @@ describe("StudyInspectorPanel", () => {
               stageId: "stage-relax",
               status: "completed",
               stopReason: "torque",
+              timeBudgetKind: "physical",
               torqueTolerance: "80",
               torqueToleranceFormatted: "1.005e-4 T / 8.000e1 A/m",
               torqueToleranceShortFormatted: "1.005e-4 T",
@@ -377,6 +378,7 @@ describe("StudyInspectorPanel", () => {
                 stageId: "relax-1",
                 status: "queued",
                 stopReason: null,
+                timeBudgetKind: "physical",
                 torqueTolerance: "1e-6",
                 torqueToleranceFormatted: null,
                 torqueToleranceShortFormatted: null,
@@ -420,6 +422,31 @@ describe("StudyInspectorPanel", () => {
           fieldScheduleMode: "piecewise",
           saturationMode: "auto",
           settlePipelineMode: "tree",
+          settleSteps: JSON.stringify([
+            {
+              alpha: 1,
+              kind: "relax",
+              max_steps: 100,
+              method: "llg_overdamped",
+              on_non_convergence: "continue_with_warning",
+              torque_tolerance: 1e-6,
+            },
+            {
+              energy_tolerance: 1e-20,
+              kind: "minimize",
+              max_steps: 100,
+              method: "projected_gradient_bb",
+              on_non_convergence: "continue_with_warning",
+              torque_tolerance: 1e-6,
+            },
+            {
+              damping: 1,
+              kind: "dynamics_settle",
+              max_steps: 100,
+              method: "heun_dynamics_settle",
+              on_non_convergence: "continue_with_warning",
+            },
+          ]),
         }}
         index={0}
         validation={[]}
@@ -429,8 +456,10 @@ describe("StudyInspectorPanel", () => {
 
     expect(html).toContain("Protocol");
     expect(html).toContain("Virgin then major loop");
+    expect(html).toContain("Major with minor loops");
     expect(html).toContain("Initial state");
     expect(html).toContain("Positive saturation");
+    expect(html).toContain("Checkpoint");
     expect(html).toContain("Orientation mode");
     expect(html).toContain("OOP +z");
     expect(html).toContain("Measurement axis");
@@ -441,10 +470,43 @@ describe("StudyInspectorPanel", () => {
     expect(html).toContain("Max probe field");
     expect(html).toContain("Saturation thresholds");
     expect(html).toContain("Settle pipeline");
+    expect(html).toContain("Settle algorithms");
+    expect(html).toContain("Algorithm 1");
+    expect(html).toContain("Add relax");
+    expect(html).toContain("Add minimize");
+    expect(html).toContain("Add dynamics");
+    expect(html).toContain("Move algorithm up");
+    expect(html).toContain("Move algorithm down");
+    expect(html).toContain("Step ID");
+    expect(html).toContain("Applies to");
+    expect(html).toContain("Damping");
+    expect(html).toContain("Retry scale");
+    expect(html).toContain("Retry attempts");
+    expect(html).toContain("On non-convergence");
+    expect(html).toContain("Projected gradient BB");
     expect(html).toContain("Settle steps");
     expect(html).toContain("Settle branches");
     expect(html).toContain("Minor loops");
     expect(html).toContain("Storage policy");
+  });
+
+  it("renders checkpoint initial state ref when checkpoint start is selected", () => {
+    const draft = createDefaultStudyStageDraft("hysteresis", 0);
+    const html = renderToStaticMarkup(
+      <StudyStageDraftEditor
+        draft={{
+          ...draft,
+          initialStatePolicy: "checkpoint",
+          initialStateRef: "hysteresis_snapshots/hysteresis_point_003/m.json",
+        }}
+        index={0}
+        validation={[]}
+        onUpdate={() => undefined}
+      />,
+    );
+
+    expect(html).toContain("Initial state ref");
+    expect(html).toContain("hysteresis_snapshots/hysteresis_point_003/m.json");
   });
 
   it("keeps root pipeline validation visible when stage editor is hidden", () => {
@@ -495,6 +557,7 @@ describe("StudyInspectorPanel", () => {
                 stageId: "relax-1",
                 status: "queued",
                 stopReason: null,
+                timeBudgetKind: "physical",
                 torqueTolerance: "1e-6",
                 torqueToleranceFormatted: null,
                 torqueToleranceShortFormatted: null,

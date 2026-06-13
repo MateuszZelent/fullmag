@@ -2170,7 +2170,10 @@ pub(crate) fn execute_fem<'a>(
                 "info",
                 &format!(
                     "FEM static periodic constraints are executed by the Rust FEM reference path: {}",
-                    pbc_decision.reason.as_deref().unwrap_or("operator reduction required")
+                    pbc_decision
+                        .reason
+                        .as_deref()
+                        .unwrap_or("operator reduction required")
                 ),
             );
             return fem_baseline::execute_reference_fem(
@@ -3863,6 +3866,7 @@ mod tests {
                 dind_field: None,
                 dbulk_field: None,
             },
+            anisotropy_axis_field: None,
             ms_element_field: None,
             a_element_field: None,
             region_materials: Vec::new(),

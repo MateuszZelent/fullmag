@@ -278,18 +278,20 @@ fn region_coupling_is_executable_for_backend(
     }
 }
 
+pub(crate) struct PlannedStudyControls {
+    pub(crate) integrator: Option<IntegratorChoice>,
+    pub(crate) fixed_timestep: Option<f64>,
+    pub(crate) gyromagnetic_ratio: f64,
+    pub(crate) relaxation: Option<RelaxationControlIR>,
+    pub(crate) adaptive_timestep: Option<fullmag_ir::AdaptiveTimeStepIR>,
+    pub(crate) field_refresh: Option<FieldRefreshPolicyIR>,
+}
+
 pub(crate) fn planned_study_controls(
     problem: &ProblemIR,
     resolved_backend: BackendTarget,
     errors: &mut Vec<String>,
-) -> (
-    IntegratorChoice,
-    Option<f64>,
-    f64,
-    Option<RelaxationControlIR>,
-    Option<fullmag_ir::AdaptiveTimeStepIR>,
-    Option<FieldRefreshPolicyIR>,
-) {
+) -> PlannedStudyControls {
     let uses_time_integrator =
         !matches!(problem.study, fullmag_ir::StudyIR::FrequencyResponse { .. });
 
@@ -320,18 +322,21 @@ pub(crate) fn planned_study_controls(
     // Resolve "auto" to the physics-optimal default per study kind.
     // TimeEvolution → RK45 (mumax3's default: Dormand-Prince, 5th-order adaptive).
     // Relaxation    → algorithm.default_integrator() (e.g. LlgOverdamped→RK23).
-    let integrator = match user_integrator {
-        Some(choice) => choice,
-        None => match &problem.study {
-            fullmag_ir::StudyIR::TimeEvolution { .. } => IntegratorChoice::Rk45,
-            fullmag_ir::StudyIR::Relaxation { algorithm, .. } => algorithm.default_integrator(),
-            fullmag_ir::StudyIR::Eigenmodes { .. } => IntegratorChoice::Heun,
-            // Frequency response is a direct harmonic solve. The returned value is
-            // only a legacy tuple placeholder until time-integrator fields are
-            // removed from shared plan controls.
-            fullmag_ir::StudyIR::FrequencyResponse { .. } => IntegratorChoice::Heun,
-            fullmag_ir::StudyIR::Hysteresis { .. } => IntegratorChoice::Heun,
-        },
+    let integrator = if uses_time_integrator {
+        Some(match user_integrator {
+            Some(choice) => choice,
+            None => match &problem.study {
+                fullmag_ir::StudyIR::TimeEvolution { .. } => IntegratorChoice::Rk45,
+                fullmag_ir::StudyIR::Relaxation { algorithm, .. } => algorithm.default_integrator(),
+                fullmag_ir::StudyIR::Eigenmodes { .. } => IntegratorChoice::Heun,
+                fullmag_ir::StudyIR::FrequencyResponse { .. } => unreachable!(
+                    "frequency response is a direct harmonic solve and has no time integrator"
+                ),
+                fullmag_ir::StudyIR::Hysteresis { .. } => IntegratorChoice::Heun,
+            },
+        })
+    } else {
+        None
     };
 
     let fixed_timestep = match problem.study.dynamics() {
@@ -345,6 +350,14 @@ pub(crate) fn planned_study_controls(
     };
 
     let relaxation = problem.study.relaxation().map(|control| {
+        if is_direct_relaxation_minimizer(control.algorithm)
+            && control.stop.max_physical_time_s.is_some()
+        {
+            errors.push(format!(
+                "relaxation algorithm '{}' is a direct minimizer and does not advance physical time; max_physical_time_s is unsupported for this algorithm. Use max_pseudotime_s or algorithm='llg_overdamped' for physical-time relaxation.",
+                control.algorithm.as_str()
+            ));
+        }
         match resolved_backend {
             BackendTarget::Fem => {
                 if control.algorithm != RelaxationAlgorithmIR::LlgOverdamped
@@ -395,7 +408,10 @@ pub(crate) fn planned_study_controls(
     }
     if uses_time_integrator
         && adaptive_timestep.is_some()
-        && !matches!(integrator, IntegratorChoice::Rk23 | IntegratorChoice::Rk45)
+        && !matches!(
+            integrator,
+            Some(IntegratorChoice::Rk23 | IntegratorChoice::Rk45)
+        )
     {
         errors.push(format!(
             "adaptive_timestep requires an embedded-error integrator (rk23, rk45), got {:?}",
@@ -403,13 +419,22 @@ pub(crate) fn planned_study_controls(
         ));
     }
 
-    (
+    PlannedStudyControls {
         integrator,
         fixed_timestep,
         gyromagnetic_ratio,
         relaxation,
         adaptive_timestep,
         field_refresh,
+    }
+}
+
+fn is_direct_relaxation_minimizer(algorithm: RelaxationAlgorithmIR) -> bool {
+    matches!(
+        algorithm,
+        RelaxationAlgorithmIR::ProjectedGradientBb
+            | RelaxationAlgorithmIR::NonlinearCg
+            | RelaxationAlgorithmIR::TangentPlaneImplicit
     )
 }
 

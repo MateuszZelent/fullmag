@@ -23,6 +23,7 @@ struct DenseDrivenResponseValidationProblem {
     std::uint64_t residual_capacity = 0;
     bool (*cancel_requested)(void *user_data) = nullptr;
     void *cancel_user_data = nullptr;
+    const double *drive_imag = nullptr;
 };
 
 struct DenseDrivenResponseValidationResult {

@@ -8,6 +8,9 @@ import sys
 from pathlib import Path
 
 
+HYSTERESIS_FAMILY_RESOURCE_PREFIX = "/v2/sessions/current/analysis/hysteresis-family/"
+
+
 def load_json(path: Path):
     return json.loads(path.read_text())
 
@@ -24,6 +27,25 @@ def require_points(path: Path, label: str) -> list[dict]:
         if not isinstance(point.get("m_parallel"), (int, float)):
             raise SystemExit(f"{label} point is missing numeric m_parallel: {point!r}")
     return points
+
+
+def require_points_resource_ref(variant: dict, variant_id: str) -> None:
+    resource_ref = variant.get("points_resource_ref")
+    expected_suffix = f"/variants/{variant_id}/points"
+    if not isinstance(resource_ref, str) or not resource_ref:
+        raise SystemExit(
+            f"variant {variant_id!r} is missing public points_resource_ref"
+        )
+    if not resource_ref.startswith(HYSTERESIS_FAMILY_RESOURCE_PREFIX):
+        raise SystemExit(
+            f"variant {variant_id!r} points_resource_ref must use the public v2 "
+            f"hysteresis-family resource prefix, got {resource_ref!r}"
+        )
+    if not resource_ref.endswith(expected_suffix):
+        raise SystemExit(
+            f"variant {variant_id!r} points_resource_ref must end with "
+            f"{expected_suffix!r}, got {resource_ref!r}"
+        )
 
 
 def main() -> int:
@@ -63,6 +85,7 @@ def main() -> int:
         raise SystemExit(
             f"active variant must be computed_active_stage, got {active_variant.get('data_status')!r}"
         )
+    require_points_resource_ref(active_variant, str(active_id))
     if int(active_variant.get("point_count", -1)) != len(base_points):
         raise SystemExit(
             "active variant point_count must match hysteresis_points.json "
@@ -77,6 +100,9 @@ def main() -> int:
             continue
         if status != "computed_variant_run":
             raise SystemExit(f"variant {variant_id!r} has unexpected status {status!r}")
+        if not isinstance(variant_id, str) or not variant_id:
+            raise SystemExit(f"computed variant has invalid variant_id: {variant_id!r}")
+        require_points_resource_ref(variant, variant_id)
         points_path = variant.get("points_path")
         metrics_path = variant.get("metrics_path")
         if not isinstance(points_path, str) or not isinstance(metrics_path, str):

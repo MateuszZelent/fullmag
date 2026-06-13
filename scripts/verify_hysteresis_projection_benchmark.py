@@ -80,8 +80,25 @@ def require_points(root: Path, relative_path: str, variant_id: str) -> list[dict
     return points
 
 
+def validate_variant_manifest_contract(variant: dict[str, Any], variant_id: str) -> None:
+    status = variant.get("data_status")
+    if status not in ("computed_active_stage", "computed_variant_run"):
+        raise SystemExit(
+            f"required projection variant {variant_id!r} must be computed, got {status!r}"
+        )
+    resource_ref = variant.get("points_resource_ref")
+    if not isinstance(resource_ref, str) or not resource_ref.startswith(
+        "/v2/sessions/current/analysis/hysteresis-family/",
+    ):
+        raise SystemExit(
+            f"variant {variant_id!r} points_resource_ref must be a public v2 "
+            f"hysteresis-family resource, got {resource_ref!r}"
+        )
+
+
 def validate_variant(root: Path, variant: dict[str, Any]) -> int:
     variant_id = str(variant.get("variant_id"))
+    validate_variant_manifest_contract(variant, variant_id)
     orientation = variant.get("orientation")
     if not isinstance(orientation, dict):
         raise SystemExit(f"variant {variant_id} is missing orientation")

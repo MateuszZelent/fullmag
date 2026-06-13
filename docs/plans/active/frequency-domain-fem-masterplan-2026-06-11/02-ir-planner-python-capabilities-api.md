@@ -22,8 +22,8 @@ IR:
 Planner:
 
 - `crates/fullmag-plan/src/fem.rs` plans FEM eigenmodes.
-- `crates/fullmag-plan/src/lib.rs` rejects FDM frequency response explicitly and routes supported FEM response cases into `FemFrequencyResponsePlanIR` for the dense validation lane.
-- Planner tests cover many eigen cases, FEM dense validation frequency response, FDM response rejection, and time-integrator settings ignored by direct harmonic response.
+- `crates/fullmag-plan/src/lib.rs` rejects FDM frequency response explicitly and routes supported FEM response cases into `FemFrequencyResponsePlanIR`. Active rollout work executes the supported gamma/free-boundary magnetic slice through native MFEM production CPU when available and keeps dense validation as the reference/validation lane.
+- Planner tests cover many eigen cases, FEM frequency response planning, production-slice gating, FDM response rejection, and time-integrator settings ignored by direct harmonic response.
 
 Capability:
 
@@ -163,9 +163,9 @@ Verification:
 
 Current state:
 
-- `StudyIR::FrequencyResponse` can plan supported FEM dense validation response cases.
+- `StudyIR::FrequencyResponse` can plan supported FEM response cases.
 - FDM frequency response remains explicitly rejected.
-- The production native MFEM/hypre/libCEED response solver remains unavailable.
+- The native MFEM/hypre/libCEED response solver is partially executable on CPU for the gamma-point/free-boundary magnetic slice; GPU, demag, nonzero-k Floquet/Bloch, periodic/Floquet enforcement, and magnetoelastic response remain unavailable.
 
 Target state:
 
@@ -198,7 +198,7 @@ Instructions:
    - unsupported observables reject,
    - missing demag realization rejects when include demag is true,
    - Floquet dynamic demag rejects.
-8. Clean up the planner validation path where `StudyIR::FrequencyResponse` currently resolves the default integrator to `IntegratorChoice::Heun`. Frequency response is a direct harmonic solve, not a time integrator; integrator validation must be skipped or made non-applicable for this study kind.
+8. Keep the planner validation path explicit that `StudyIR::FrequencyResponse` has no time integrator. The shared planner control helper returns `integrator=None` for frequency response and still skips time-integrator alias, fixed/adaptive timestep, and adaptive-integrator compatibility validation for this study kind.
 
 Verification:
 

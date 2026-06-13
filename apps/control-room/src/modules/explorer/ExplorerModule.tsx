@@ -4,6 +4,8 @@ import { useEffect, useMemo } from "react";
 import { Search } from "lucide-react";
 
 import type { LiveStatusResource } from "@/kernel/api/apiTypes";
+import type { KernelEventMap } from "@/kernel/events/eventTypes";
+import type { EventBus } from "@/kernel/events/EventBus";
 import {
   useMeshBuildCurrent,
   useMeshBuildLatestSuccessful,
@@ -26,6 +28,7 @@ import {
   useFrequencyDomainEigenSpectrumResource,
   useFrequencyDomainManifestResource,
   useFrequencyDomainResponseSweepResource,
+  useHysteresisExecutionTreeResource,
   useStageExecutionResource,
 } from "@/kernel/resources/studyRuntimeResources";
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
@@ -46,6 +49,7 @@ import {
 } from "./builders/buildModelTree";
 import {
   modelTreeSnapshotFromScene,
+  modelTreeSnapshotWithHysteresisExecutionTree,
   modelTreeSnapshotWithStageExecution,
 } from "./builders/sceneModelTreeAdapter";
 import { ExplorerTabBar } from "./ExplorerTabBar";
@@ -63,10 +67,20 @@ import {
 import type { ModelTreeMeshSnapshot } from "./explorerTypes";
 import { ExplorerTreeView } from "./ExplorerTreeView";
 
+type TextureLoadNodeRequestedEvent =
+  KernelEventMap["explorer:texture-load-node-requested"];
+
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+function subscribeExplorerTextureLoadNodeRequested(
+  bus: EventBus<KernelEventMap>,
+  listener: (event: TextureLoadNodeRequestedEvent) => void,
+): () => void {
+  return bus.on("explorer:texture-load-node-requested", listener);
 }
 
 function stringValue(value: unknown): string | null {
@@ -203,6 +217,18 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
       sessionStatusData,
     ),
   });
+  const activeHysteresisStageId = useMemo(
+    () => activeHysteresisStageIdFromExecution(stageExecution.data),
+    [stageExecution.data],
+  );
+  const hysteresisExecutionTree = useHysteresisExecutionTreeResource(
+    activeHysteresisStageId,
+    {
+      after: 3,
+      before: 2,
+      enabled: modelTabActive && Boolean(activeHysteresisStageId),
+    },
+  );
   const frequencyDomainManifest = useFrequencyDomainManifestResource({
     enabled: frequencyDomainTabActive,
   });
@@ -220,13 +246,16 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   });
 
   const nodes = useMemo(() => {
-    const modelSnapshot = modelTreeSnapshotWithStageExecution(
-      modelTreeSnapshotFromScene(modelResource.data, {
-        couplings: modelCouplings.data,
-        materialFields: modelMaterialFields.data,
-        regions: modelRegions.data,
-      }),
-      stageExecution.data,
+    const modelSnapshot = modelTreeSnapshotWithHysteresisExecutionTree(
+      modelTreeSnapshotWithStageExecution(
+        modelTreeSnapshotFromScene(modelResource.data, {
+          couplings: modelCouplings.data,
+          materialFields: modelMaterialFields.data,
+          regions: modelRegions.data,
+        }),
+        stageExecution.data,
+      ),
+      hysteresisExecutionTree.data,
     );
     const activeBuildStatus = resolveMeshBuildStatusLabel(
       record(activeBuild.data?.active_build),
@@ -285,6 +314,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     modelMaterialFields.data,
     modelRegions.data,
     stageExecution.data,
+    hysteresisExecutionTree.data,
     textureLoadObjectIds,
     qualityGates.data,
     realizedSizeFields.data,
@@ -296,25 +326,29 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   ]);
 
   useEffect(() => {
-    return kernel.bus.on("explorer:texture-load-node-requested", (event) => {
-      activateTextureLoadNode(event.objectId);
-      kernel.selection.set(
-        {
-          kind: "object.magnetic-texture.load",
-          label: "Load texture",
-          nodeId: `model:object:${event.objectId}:magnetic-texture:load`,
-          objectId: event.objectId,
-          ref: {
+    const unsubscribe = subscribeExplorerTextureLoadNodeRequested(
+      kernel.bus,
+      (event) => {
+        activateTextureLoadNode(event.objectId);
+        kernel.selection.set(
+          {
             kind: "object.magnetic-texture.load",
+            label: "Load texture",
             nodeId: `model:object:${event.objectId}:magnetic-texture:load`,
             objectId: event.objectId,
-            type: "scene-object",
-            visualizationTargetId: `object:${event.objectId}`,
+            ref: {
+              kind: "object.magnetic-texture.load",
+              nodeId: `model:object:${event.objectId}:magnetic-texture:load`,
+              objectId: event.objectId,
+              type: "scene-object",
+              visualizationTargetId: `object:${event.objectId}`,
+            },
           },
-        },
-        event.source,
-      );
-    });
+          event.source,
+        );
+      },
+    );
+    return unsubscribe;
   }, [kernel.bus, kernel.selection]);
 
   useEffect(() => {
@@ -359,4 +393,15 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
       </section>
     </WorkspaceRenderProfiler>
   );
+}
+
+function activeHysteresisStageIdFromExecution(
+  stageExecution: ReturnType<typeof useStageExecutionResource>["data"],
+): string | null {
+  if (stageExecution?.active_stage_kind !== "hysteresis") return null;
+  const activeIndex = stageExecution.active_stage_index;
+  const activeStage = stageExecution.stages.find((stage) =>
+    typeof activeIndex === "number" ? stage.index === activeIndex : false,
+  ) ?? stageExecution.stages.find((stage) => stage.status === "running");
+  return typeof activeStage?.stage_id === "string" ? activeStage.stage_id : null;
 }

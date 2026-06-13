@@ -1,6 +1,6 @@
-"""Small FEM frequency-response validation smoke.
+"""Small FEM frequency-response production CPU smoke.
 
-This exercises the dense FEM validation lane for ``StudyIR::FrequencyResponse``.
+This exercises the native FEM/MFEM production CPU lane for ``StudyIR::FrequencyResponse``.
 It is intentionally exchange-only and uses a precomputed one-tetrahedron mesh so
 the managed runtime smoke verifies the response artifact contract without
 depending on production demag or meshing.

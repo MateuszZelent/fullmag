@@ -1,0 +1,67 @@
+{
+  "mesh_name": "box_40x20x10_xperiodic",
+  "nodes": [
+    [-2e-08, -1e-08, -5e-09],
+    [2e-08, -1e-08, -5e-09],
+    [2e-08, 1e-08, -5e-09],
+    [-2e-08, 1e-08, -5e-09],
+    [-2e-08, -1e-08, 5e-09],
+    [2e-08, -1e-08, 5e-09],
+    [2e-08, 1e-08, 5e-09],
+    [-2e-08, 1e-08, 5e-09]
+  ],
+  "elements": [
+    [0, 1, 2, 6],
+    [0, 2, 3, 6],
+    [0, 3, 7, 6],
+    [0, 7, 4, 6],
+    [0, 4, 5, 6],
+    [0, 5, 1, 6]
+  ],
+  "element_markers": [1, 1, 1, 1, 1, 1],
+  "boundary_faces": [
+    [0, 1, 2],
+    [0, 1, 5],
+    [1, 2, 6],
+    [0, 2, 3],
+    [2, 3, 6],
+    [0, 3, 7],
+    [3, 6, 7],
+    [0, 4, 7],
+    [4, 6, 7],
+    [0, 4, 5],
+    [4, 5, 6],
+    [1, 5, 6]
+  ],
+  "boundary_markers": [1, 1, 11, 1, 1, 10, 1, 10, 1, 1, 1, 11],
+  "periodic_boundary_pairs": [
+    {
+      "pair_id": "x_faces",
+      "marker_a": 10,
+      "marker_b": 11,
+      "translation": [4e-08, 0.0, 0.0]
+    }
+  ],
+  "periodic_node_pairs": [
+    {
+      "pair_id": "x_faces",
+      "node_a": 0,
+      "node_b": 1
+    },
+    {
+      "pair_id": "x_faces",
+      "node_a": 3,
+      "node_b": 2
+    },
+    {
+      "pair_id": "x_faces",
+      "node_a": 4,
+      "node_b": 5
+    },
+    {
+      "pair_id": "x_faces",
+      "node_a": 7,
+      "node_b": 6
+    }
+  ]
+}

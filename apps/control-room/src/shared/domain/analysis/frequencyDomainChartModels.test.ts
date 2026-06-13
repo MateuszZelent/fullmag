@@ -13,6 +13,7 @@ import {
   buildEigenSpectrumChartModel,
   buildFrequencyResponsePointSelectionRef,
   buildFrequencyResponseChartModel,
+  buildFmrPeakTableModel,
   routeFrequencyDomainCalculationMode,
   type FrequencyDomainJsonArtifactLike,
   type FrequencyDomainTextArtifactLike,
@@ -45,6 +46,8 @@ describe("frequencyDomainChartModels", () => {
             branch_id: "b0",
             frequency_hz: 2.5e9,
             mode_field_id: "field-0",
+            mode_field_resource_key:
+              "/v2/sessions/current/data/fields/field-0/samples/vector?view=phase_rotated_real&phase_rad=0",
             raw_mode_index: 3,
             residual_norm: 1e-7,
             sample_index: 2,
@@ -61,6 +64,8 @@ describe("frequencyDomainChartModels", () => {
         branchId: "b0",
         frequencyHz: 2.5e9,
         modeFieldId: "field-0",
+        modeFieldResourceKey:
+          "/v2/sessions/current/data/fields/field-0/samples/vector?view=phase_rotated_real&phase_rad=0",
         rawModeIndex: 3,
         sampleIndex: 2,
       }),
@@ -77,6 +82,8 @@ describe("frequencyDomainChartModels", () => {
             branch_id: "b0",
             frequency_hz: 2.5e9,
             mode_field_id: "field-0",
+            mode_field_resource_key:
+              "/v2/sessions/current/data/fields/field-0/samples/vector?view=phase_rotated_real&phase_rad=0",
             raw_mode_index: 3,
             sample_index: 2,
           },
@@ -99,6 +106,8 @@ describe("frequencyDomainChartModels", () => {
       kind: "results.eigen.mode",
       modeIndex: 3,
       nodeId: "results:eigen:sample:2:mode:3",
+      resourceRef:
+        "/v2/sessions/current/data/fields/field-0/samples/vector?view=phase_rotated_real&phase_rad=0",
       sampleIndex: 2,
       type: "frequency-domain",
     });
@@ -127,6 +136,27 @@ describe("frequencyDomainChartModels", () => {
     ]);
     expect(model.series[1]?.points).toEqual([
       { rowIndex: 1, x: 3.14e7, y: 2.4 },
+    ]);
+  });
+
+  it("accepts path_s_rad_per_m as the dispersion x-axis column", () => {
+    const model = buildEigenDispersionChartModel(
+      textResource(
+        [
+          "sample_index,raw_mode_index,branch_id,path_s_rad_per_m,frequency_hz",
+          "0,1,acoustic,78539816.33974482,1.2e9",
+        ].join("\n"),
+      ),
+    );
+
+    expect(model.droppedPointCount).toBe(0);
+    expect(model.points[0]).toEqual(
+      expect.objectContaining({
+        pathS: 78539816.33974482,
+      }),
+    );
+    expect(model.series[0]?.points).toEqual([
+      { rowIndex: 0, x: 78539816.33974482, y: 1.2 },
     ]);
   });
 
@@ -201,7 +231,7 @@ describe("frequencyDomainChartModels", () => {
     ]);
   });
 
-  it("builds driven response amplitude, phase, and absorbed-power series", () => {
+  it("builds driven response amplitude, phase, absorbed-power, and susceptibility series", () => {
     const model = buildFrequencyResponseChartModel(
       jsonResource({
         points: [
@@ -213,7 +243,7 @@ describe("frequencyDomainChartModels", () => {
             observable_id: "mx",
             phase_rad: 1.25,
             residual_norm: 1e-5,
-            susceptibility: [1, 2, 3],
+            susceptibility_tensor: [[1, 2], [3, 4]],
           },
           { amplitude: 3.0, frequency_hz: Number.NaN },
         ],
@@ -234,8 +264,10 @@ describe("frequencyDomainChartModels", () => {
       "amplitude",
       "phase",
       "absorbed-power-density",
+      "susceptibility-max-abs",
     ]);
     expect(model.series[0]?.points).toEqual([{ rowIndex: 0, x: 9.5, y: 2 }]);
+    expect(model.series[3]?.points).toEqual([{ rowIndex: 0, x: 9.5, y: 5 }]);
   });
 
   it("builds canonical frequency-domain selection refs for response frequency points", () => {
@@ -274,6 +306,53 @@ describe("frequencyDomainChartModels", () => {
     });
   });
 
+  it("prefers manifest response field resources for response point field ids", () => {
+    const model = buildFrequencyResponseChartModel(
+      jsonResource(
+        {
+          points: [
+            {
+              field_id: "response-field-from-sweep",
+              frequency_hz: 12.5e9,
+              frequency_index: 7,
+              max_response_amplitude: 0.75,
+              observable_id: "mx",
+            },
+          ],
+          schema_version: "magnetic_response_sweep.v2",
+        },
+        "response/magnetic_response_sweep.v2.json",
+      ),
+      {
+        resources: {
+          response_field_resources: [
+            {
+              field_resource_id: "analysis:frequency-response:frequency-0042",
+              frequency_index: 7,
+              payload_path:
+                "response/field_payloads/frequency_0007/vector_xyz.bin",
+            },
+          ],
+        },
+        schema_version: "frequency_domain_manifest.v1",
+      },
+    );
+
+    expect(model.points[0]).toEqual(
+      expect.objectContaining({
+        fieldId: "analysis:frequency-response:frequency-0042",
+        frequencyIndex: 7,
+      }),
+    );
+    expect(
+      buildFrequencyResponsePointSelectionRef(model.points[0]!),
+    ).toMatchObject({
+      fieldId: "analysis:frequency-response:frequency-0042",
+      frequencyIndex: 7,
+      kind: "results.frequency_response.frequency_point",
+    });
+  });
+
   it("builds driven response charts from v2 point summaries with provenance", () => {
     const model = buildFrequencyResponseChartModel(
       jsonResource(
@@ -284,6 +363,7 @@ describe("frequencyDomainChartModels", () => {
               frequency_hz: 12.5e9,
               frequency_index: 7,
               max_response_amplitude: 0.75,
+              phase_rad: 1.125,
               relative_residual_l2_norm: 2e-5,
               response_field_payload_path:
                 "response/field_payloads/frequency_0007/vector.bin",
@@ -306,6 +386,47 @@ describe("frequencyDomainChartModels", () => {
       }),
     );
     expect(model.series[0]?.points).toEqual([{ rowIndex: 0, x: 12.5, y: 0.75 }]);
+    expect(model.series.find((series) => series.quantity === "phase")?.points).toEqual([
+      { rowIndex: 0, x: 12.5, y: 1.125 },
+    ]);
+  });
+
+  it("derives response frequency identity from v2 row order when native artifacts omit per-point indices", () => {
+    const model = buildFrequencyResponseChartModel(
+      jsonResource(
+        {
+          points: [
+            {
+              frequency_hz: 9.5e9,
+              response_amplitude: 0.5,
+            },
+            {
+              frequency_hz: 10.5e9,
+              response_amplitude: 0.75,
+            },
+          ],
+          response_field_payload_paths: [
+            "response/field_payloads/frequency_0000/vector.bin",
+            "response/field_payloads/frequency_0001/vector.bin",
+          ],
+          schema_version: "magnetic_response_sweep.v2",
+        },
+        "response/magnetic_response_sweep.v2.json",
+      ),
+    );
+
+    expect(model.points[1]).toEqual(
+      expect.objectContaining({
+        fieldId: "analysis:frequency-response:frequency-0001",
+        frequencyIndex: 1,
+      }),
+    );
+    expect(buildFrequencyResponsePointSelectionRef(model.points[1]!)).toEqual(
+      expect.objectContaining({
+        fieldId: "analysis:frequency-response:frequency-0001",
+        frequencyIndex: 1,
+      }),
+    );
   });
 
   it("reports a visible diagnostic when a v2 response artifact has no readable points", () => {
@@ -323,6 +444,65 @@ describe("frequencyDomainChartModels", () => {
     expect(model.diagnostics).toContain(
       "response.v2 artifact is present but contains no readable points",
     );
+  });
+
+  it("builds FMR peak rows from modal resonances and driven response local maxima", () => {
+    const model = buildFmrPeakTableModel({
+      responseSweep: jsonResource(
+        {
+          points: [
+            {
+              frequency_hz: 9.5e9,
+              frequency_index: 0,
+              max_response_amplitude: 0.5,
+              observable_id: "mx",
+            },
+            {
+              frequency_hz: 10.5e9,
+              frequency_index: 1,
+              max_response_amplitude: 1.2,
+              observable_id: "mx",
+              phase_rad: 0.25,
+            },
+            {
+              frequency_hz: 11.5e9,
+              frequency_index: 2,
+              max_response_amplitude: 0.8,
+              observable_id: "mx",
+            },
+          ],
+          schema_version: "magnetic_response_sweep.v2",
+        },
+        "response/magnetic_response_sweep.v2.json",
+      ),
+      spectrum: jsonResource({
+        modes: [
+          {
+            frequency_hz: 8.0e9,
+            mode_field_id: "analysis:eigen:sample-0000:mode-0002",
+            raw_mode_index: 2,
+            sample_index: 0,
+          },
+        ],
+      }),
+    });
+
+    expect(model.diagnostics).toEqual([]);
+    expect(model.peaks).toEqual([
+      expect.objectContaining({
+        fieldId: "analysis:eigen:sample-0000:mode-0002",
+        frequencyHz: 8.0e9,
+        modeRef: { rawModeIndex: 2, sampleIndex: 0 },
+        source: "modal",
+      }),
+      expect.objectContaining({
+        amplitude: 1.2,
+        frequencyHz: 10.5e9,
+        frequencyPointIndex: 1,
+        phaseRad: 0.25,
+        source: "driven_response",
+      }),
+    ]);
   });
 
   it("routes fmr_response manifests to response sweep charts", () => {

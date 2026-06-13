@@ -180,6 +180,7 @@ export function resolveViewport3DFieldVectorResourceKey(
   if (query.scope_id) params.set("scope_id", query.scope_id);
   if (query.scope_kind) params.set("scope_kind", query.scope_kind);
   if (query.snapshot_id) params.set("snapshot_id", query.snapshot_id);
+  if (query.stage_id) params.set("stage_id", query.stage_id);
   if (query.view) params.set("view", query.view);
   if (query.phase_rad != null) params.set("phase_rad", String(query.phase_rad));
   const suffix = params.toString();
@@ -355,6 +356,7 @@ export function useViewport3DFieldVector(
   const scopeId = fieldQuery.scope_id ?? null;
   const scopeKind = fieldQuery.scope_kind ?? null;
   const snapshotId = fieldQuery.snapshot_id ?? null;
+  const stageId = fieldQuery.stage_id ?? null;
   const view = fieldQuery.view ?? null;
   const query = useMemo<FieldVectorQuery>(
     () => ({
@@ -364,9 +366,10 @@ export function useViewport3DFieldVector(
       scope_id: scopeId,
       scope_kind: scopeKind,
       snapshot_id: snapshotId,
+      stage_id: stageId,
       view,
     }),
-    [component, maxSamples, phaseRad, scopeId, scopeKind, snapshotId, view],
+    [component, maxSamples, phaseRad, scopeId, scopeKind, snapshotId, stageId, view],
   );
   const requestKey = useMemo(
     () => resolveViewport3DFieldVectorResourceKey(quantityId, query),

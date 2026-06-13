@@ -941,6 +941,7 @@ class ProblemApiTests(unittest.TestCase):
                 outputs=[fm.SaveResponse("susceptibility_tensor")],
                 frequencies_hz=[1.0e9, 2.0e9],
                 excitation_field_au_per_m=(0.0, 0.0, 2.5),
+                excitation_phase_rad=0.125,
                 include_demag=False,
                 k_sampling=fm.KPoint("Gamma", (0.0, 0.0, 0.0)),
                 damping_policy="include",
@@ -963,7 +964,7 @@ class ProblemApiTests(unittest.TestCase):
         )
         self.assertEqual(
             ir["study"]["excitation"],
-            {"field_au_per_m": [0.0, 0.0, 2.5]},
+            {"field_au_per_m": [0.0, 0.0, 2.5], "phase_rad": 0.125},
         )
         self.assertEqual(
             ir["study"]["frequencies_hz"],
@@ -979,6 +980,33 @@ class ProblemApiTests(unittest.TestCase):
             ],
         )
         self.assertEqual(runtime_cli._resolve_until_seconds(problem.study, None), 0.0)
+
+    def test_static_periodic_frequency_response_smoke_example_loads_contract(self) -> None:
+        example_path = (
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "fem_frequency_response_static_periodic_smoke.py"
+        )
+
+        loaded = fm.load_problem_from_script(example_path, lightweight_assets=True)
+
+        self.assertEqual(len(loaded.stages), 0)
+        self.assertIsNotNone(loaded.problem)
+        problem = loaded.problem
+        assert problem is not None
+        study = problem.study.to_ir()
+        self.assertEqual(study["kind"], "frequency_response")
+        self.assertEqual(study["operator"]["include_demag"], False)
+        self.assertEqual(study["spin_wave_bc"], {"kind": "periodic", "pair_ids": ["x_faces"]})
+
+        mesh_source = problem.to_ir()["geometry_assets"]["fem_mesh_assets"][0]["mesh_source"]
+        mesh_payload = json.loads(Path(mesh_source).read_text(encoding="utf-8"))
+        self.assertEqual(mesh_payload["periodic_boundary_pairs"][0]["pair_id"], "x_faces")
+        self.assertEqual(len(mesh_payload["periodic_node_pairs"]), 4)
+        self.assertEqual(
+            {pair["pair_id"] for pair in mesh_payload["periodic_node_pairs"]},
+            {"x_faces"},
+        )
 
     def test_frequency_response_rejects_invalid_eigen_options(self) -> None:
         with self.assertRaisesRegex(ValueError, "operator"):
@@ -998,6 +1026,12 @@ class ProblemApiTests(unittest.TestCase):
                 outputs=[fm.SaveSpectrum()],
                 frequencies_hz=[1.0e9],
                 excitation_field_au_per_m=(0.0, 1.0),
+            )
+        with self.assertRaisesRegex(ValueError, "excitation_phase_rad"):
+            fm.FrequencyResponse(
+                outputs=[fm.SaveSpectrum()],
+                frequencies_hz=[1.0e9],
+                excitation_phase_rad=float("nan"),
             )
 
     def test_interfacial_dmi_interface_normal_serializes_to_ir(self) -> None:
@@ -3750,9 +3784,11 @@ class ProblemApiTests(unittest.TestCase):
                 outputs=[fm.SaveResponse("susceptibility_tensor")],
                 frequencies_hz=[1.0e9, 2.0e9],
                 excitation_field_au_per_m=(0.0, 0.0, 2.5),
+                excitation_phase_rad=0.25,
                 include_demag=False,
                 k_vector=(0.0, 0.0, 0.0),
                 damping_policy="include",
+                spin_wave_bc=fm.PeriodicBC(["x_faces"]),
             ),
         )
 
@@ -3776,10 +3812,20 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(draft["study_pipeline"]["nodes"][0]["stage_kind"], "frequency_response")
         self.assertIn('fm.save_response("susceptibility_tensor")', rewritten)
         self.assertIn("fm.frequency_response(", rewritten)
+        self.assertIn("excitation_phase_rad=0.25", rewritten)
+        self.assertIn('bc=fm.PeriodicBC(["x_faces"])', rewritten)
         self.assertEqual(reloaded.stages[0].problem.study.to_ir()["kind"], "frequency_response")
         self.assertEqual(
             reloaded.stages[0].problem.study.to_ir()["frequencies_hz"],
             {"values_hz": [1.0e9, 2.0e9]},
+        )
+        self.assertEqual(
+            reloaded.stages[0].problem.study.to_ir()["excitation"]["phase_rad"],
+            0.25,
+        )
+        self.assertEqual(
+            reloaded.stages[0].problem.study.to_ir()["spin_wave_bc"],
+            {"kind": "periodic", "pair_ids": ["x_faces"]},
         )
 
     def test_study_builder_stage_authoring_captures_without_execution(self) -> None:
@@ -3862,7 +3908,9 @@ class ProblemApiTests(unittest.TestCase):
             loaded = fm.load_problem_from_script(path, lightweight_assets=True)
 
         self.assertEqual(len(loaded.stages), 1)
-        self.assertEqual(loaded.stages[0].problem.study.to_ir()["algorithm"], "nonlinear_cg")
+        study_ir = loaded.stages[0].problem.study.to_ir()
+        self.assertEqual(study_ir["algorithm"], "nonlinear_cg")
+        self.assertEqual(study_ir["stop"]["torque_tolerance_apm"], 1e-4)
 
     def test_study_stage_builder_add_hysteresis_branch_materializes_relax_stages(self) -> None:
         script = """
@@ -3949,6 +3997,17 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(ir["field_min_mT"], -100.0)
         self.assertEqual(ir["field_max_mT"], 100.0)
         self.assertEqual(ir["field_step_mT"], 5.0)
+        self.assertEqual(
+            ir["field_unit_provenance"],
+            {
+                "authored_quantity": "mu0_h",
+                "authored_unit": "mT",
+                "canonical_quantity": "h_ext",
+                "canonical_unit": "A/m",
+                "display_unit": "mT",
+                "mu0_h_per_m": 1.2566370614359172e-6,
+            },
+        )
         self.assertEqual(ir["orientation"], {"kind": "preset", "preset_name": "oop_positive"})
         self.assertEqual(ir["initial_protocol"], "positive_saturation")
         self.assertEqual(ir["branch_mode"], "major_loop")
@@ -3996,6 +4055,58 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(
             reloaded.stages[0].problem.study.to_ir()["settle_pipeline"]["steps"][0]["max_steps"],
             2000,
+        )
+        self.assertEqual(
+            reloaded.stages[0].problem.study.to_ir()["field_unit_provenance"],
+            ir["field_unit_provenance"],
+        )
+
+    def test_study_stage_builder_hysteresis_checkpoint_initial_state_ref_round_trip(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("stage_hysteresis_checkpoint")
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.m = fm.texture.uniform(1, 0, 0)
+        study.stages.add_hysteresis_sweep(
+            field_min_mT=-100.0,
+            field_max_mT=100.0,
+            field_step_mT=10.0,
+            orientation=fm.FieldOrientation.preset("oop_positive"),
+            initial_protocol="checkpoint",
+            initial_state_ref="hysteresis_snapshots/hysteresis_point_003/m.json",
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_builder_stage_hysteresis_checkpoint.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+
+        ir = loaded.stages[0].problem.study.to_ir()
+        self.assertEqual(ir["initial_protocol"], "checkpoint")
+        self.assertEqual(
+            ir["initial_state_ref"],
+            "hysteresis_snapshots/hysteresis_point_003/m.json",
+        )
+
+        rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+        self.assertIn('initial_protocol="checkpoint"', rewritten)
+        self.assertIn(
+            'initial_state_ref="hysteresis_snapshots/hysteresis_point_003/m.json"',
+            rewritten,
+        )
+
+        with TemporaryDirectory() as tmp_dir:
+            rewritten_path = Path(tmp_dir) / "rewritten_hysteresis_checkpoint.py"
+            rewritten_path.write_text(rewritten, encoding="utf-8")
+            reloaded = fm.load_problem_from_script(rewritten_path, lightweight_assets=True)
+
+        self.assertEqual(
+            reloaded.stages[0].problem.study.to_ir()["initial_state_ref"],
+            "hysteresis_snapshots/hysteresis_point_003/m.json",
         )
 
     def test_fdm_hysteresis_smoke_example_loads_canonical_stage(self) -> None:
@@ -4126,6 +4237,51 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(study["settle_pipeline"]["steps"][0]["max_steps"], 25)
         self.assertEqual(study["storage"]["magnetization"], "every_step")
         self.assertEqual(study["storage"]["every_n"], 1)
+
+    def test_hysteresis_fdm_thinfilm_oop_ip_example_loads_angular_family(self) -> None:
+        example_path = (
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "hysteresis_fdm_thinfilm_oop_ip_validation.py"
+        )
+
+        with patch.dict(
+            os.environ,
+            {
+                "FULLMAG_HYSTERESIS_FIELD_VALUES_MT": "150,0,-150",
+                "FULLMAG_HYSTERESIS_MAX_STEPS": "25",
+                "FULLMAG_HYSTERESIS_IN_PLANE_PHI_DEG": "7.5",
+            },
+        ):
+            loaded = fm.load_problem_from_script(example_path, lightweight_assets=True)
+
+        self.assertEqual(len(loaded.stages), 1)
+        stage = loaded.stages[0]
+        self.assertEqual(stage.entrypoint_kind, "flat_hysteresis")
+        study = stage.problem.study.to_ir()
+        self.assertEqual(study["kind"], "hysteresis")
+        self.assertEqual(study["field_values_mT"], [150.0, 0.0, -150.0])
+        self.assertEqual(
+            study["orientation"],
+            {"kind": "sample", "theta": 90.0, "phi": 7.5},
+        )
+        self.assertEqual(study["measurement_axis"], "field_axis")
+        self.assertEqual(study["settle_pipeline"]["steps"][0]["kind"], "minimize")
+        self.assertEqual(study["settle_pipeline"]["steps"][0]["max_steps"], 25)
+        family = study["angular_family"]
+        self.assertEqual(family["family_id"], "thinfilm_oop_ip")
+        self.assertEqual(
+            [variant["variant_id"] for variant in family["variants"]],
+            ["ip_near_x", "oop"],
+        )
+        self.assertEqual(
+            family["variants"][0]["orientation"],
+            {"kind": "sample", "theta": 90.0, "phi": 7.5},
+        )
+        self.assertEqual(
+            family["variants"][1]["orientation"],
+            {"kind": "preset", "preset_name": "oop_positive"},
+        )
 
     def test_study_stage_builder_hysteresis_piecewise_field_schedule(self) -> None:
         script = """

@@ -20,6 +20,7 @@ import {
   ANALYSIS_HYSTERESIS_POINTS_PATH,
   ANALYSIS_HYSTERESIS_METRICS_PATH,
   ANALYSIS_HYSTERESIS_SATURATION_PATH,
+  ANALYSIS_HYSTERESIS_ADAPTIVE_REFINEMENT_PATH,
   ANALYSIS_HYSTERESIS_BRANCHES_PATH,
   ANALYSIS_HYSTERESIS_FAMILY_PATH,
   ANALYSIS_HYSTERESIS_MINOR_LOOPS_PATH,
@@ -98,6 +99,7 @@ import type {
   TableRowsQuery,
   TableRowsResource,
   HysteresisAngularFamilyResource,
+  HysteresisAdaptiveRefinementSchema,
   HysteresisBranchSchema,
   HysteresisMinorLoopSchema,
   HysteresisPointSchema,
@@ -421,15 +423,31 @@ export function frequencyDomainManifestRevision(
     data.response.status,
     data.eigenmodes.status,
     progress
-      ? `progress:${progress.status}:${progress.completed_frequency_points}:${progress.total_frequency_points}:${progress.written_frequency_point_artifacts}`
+      ? `progress:${frequencyDomainSweepProgressRevision(progress)}`
       : "progress:null",
     cancelRequested
-      ? `cancel:${cancelRequested.status}:${cancelRequested.completed_frequency_points}:${cancelRequested.total_frequency_points}:${cancelRequested.written_frequency_point_artifacts}`
+      ? `cancel:${frequencyDomainSweepProgressRevision(cancelRequested)}`
       : "cancel:null",
     resultManifest
       ? `result:${resultManifest.status}:${resultManifest.artifact_path}:${resultManifest.resource_key}`
       : "result:null",
   ].join("|");
+}
+
+export function frequencyDomainSweepProgressRevision(
+  data: FrequencyDomainSweepProgressResource | null,
+): string | null {
+  return data
+    ? [
+        data.status,
+        data.complete,
+        data.completed_frequency_points,
+        data.total_frequency_points,
+        data.written_frequency_point_artifacts,
+        data.partial_artifacts_available,
+        data.latest_artifact_manifest_path,
+      ].join(":")
+    : null;
 }
 
 function hasPositiveRevision(revision: number | null | undefined): boolean {
@@ -995,10 +1013,7 @@ export function useFrequencyDomainResponseProgressResource({
   return useResource<FrequencyDomainSweepProgressResource | null>({
     enabled: shouldLoadFrequencyDomainManifest(enabled, sessionStatus),
     load,
-    resolveRevision: (data) =>
-      data
-        ? `${data.status}:${data.complete}:${data.completed_frequency_points}:${data.total_frequency_points}`
-        : null,
+    resolveRevision: frequencyDomainSweepProgressRevision,
     resourceKey: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
   });
 }
@@ -1021,10 +1036,7 @@ export function useFrequencyDomainResponseCancelRequestedResource({
   return useResource<FrequencyDomainSweepProgressResource | null>({
     enabled: shouldLoadFrequencyDomainManifest(enabled, sessionStatus),
     load,
-    resolveRevision: (data) =>
-      data
-        ? `${data.status}:${data.complete}:${data.completed_frequency_points}:${data.total_frequency_points}`
-        : null,
+    resolveRevision: frequencyDomainSweepProgressRevision,
     resourceKey: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
   });
 }
@@ -1261,6 +1273,36 @@ export function useHysteresisSaturationResource(
   return useResource<HysteresisSaturationResultSchema | null>({
     enabled: enabled && Boolean(stageId),
     load,
+    resourceKey,
+  });
+}
+
+export function useHysteresisAdaptiveRefinementResource(
+  stageId: string | null | undefined,
+  { enabled = true }: RuntimeResourceOptions = {},
+) {
+  const { api } = useKernel();
+  const resourceKey = stageId
+    ? ANALYSIS_HYSTERESIS_ADAPTIVE_REFINEMENT_PATH.replace("{stage_id}", stageId)
+    : `${ANALYSIS_HYSTERESIS_ADAPTIVE_REFINEMENT_PATH}:none`;
+
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      stageId
+        ? api.analysis.hysteresis
+            .adaptiveRefinement(stageId, { signal })
+            .catch(ignoreMissingResource<HysteresisAdaptiveRefinementSchema>)
+        : Promise.resolve(null),
+    [api, stageId],
+  );
+
+  return useResource<HysteresisAdaptiveRefinementSchema | null>({
+    enabled: enabled && Boolean(stageId),
+    load,
+    resolveRevision: (data) =>
+      data
+        ? `${data.status}:${data.candidates?.length ?? 0}:${data.points?.length ?? 0}`
+        : null,
     resourceKey,
   });
 }

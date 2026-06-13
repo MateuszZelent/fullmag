@@ -13,6 +13,7 @@ use fullmag_engine::{
 };
 use fullmag_ir::{
     ExecutionPrecision, FdmPlanIR, IntegratorChoice, OutputIR, RelaxationAlgorithmIR,
+    RelaxationControlIR, StageCompletionIR, StageStopReason,
 };
 
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
@@ -791,6 +792,7 @@ pub(crate) fn execute_reference_fdm(
     } else {
         None
     };
+    let mut direct_minimizer_completion: Option<StageCompletionIR> = None;
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
     let mut last_preview_revision: Option<u64> = None;
     let mut cancelled = false;
@@ -831,12 +833,22 @@ pub(crate) fn execute_reference_fdm(
             &state,
             Some(resolved_antenna_zeeman_field(plan, state.time_seconds)),
         )?;
-        steps.push(make_step_stats(
+        let mut final_stats = make_step_stats(
             step_count,
             state.time_seconds,
             result.pseudo_time_s,
             wall_elapsed,
             &observables,
+        );
+        final_stats.pseudo_time_s = Some(result.pseudo_time_s);
+        steps.push(final_stats);
+        direct_minimizer_completion = Some(infer_direct_minimizer_completion(
+            control,
+            result.converged,
+            result.steps_taken,
+            result.pseudo_time_s,
+            result.final_energy_plateau_range_j,
+            result.final_max_torque,
         ));
     } else {
         // LLG overdamped (or no relaxation): existing time-stepping loop
@@ -1162,14 +1174,16 @@ pub(crate) fn execute_reference_fdm(
     } else {
         RunStatus::Completed
     };
-    let completion = crate::relaxation::infer_stage_completion(
-        status,
-        plan.relaxation.as_ref(),
-        &steps,
-        plan.gyromagnetic_ratio,
-        plan.material.damping,
-        pure_damping_relax,
-    );
+    let completion = direct_minimizer_completion.unwrap_or_else(|| {
+        crate::relaxation::infer_stage_completion(
+            status,
+            plan.relaxation.as_ref(),
+            &steps,
+            plan.gyromagnetic_ratio,
+            plan.material.damping,
+            pure_damping_relax,
+        )
+    });
 
     Ok(ExecutedRun {
         result: RunResult {
@@ -1210,6 +1224,86 @@ fn step_reference_fdm_problem(
         Ok(report)
     } else {
         problem.step_with_buffers(state, dt_step, fft_workspace, integrator_bufs)
+    }
+}
+
+fn infer_direct_minimizer_completion(
+    control: &RelaxationControlIR,
+    converged: bool,
+    steps_taken: u64,
+    pseudo_time_s: f64,
+    final_energy_plateau_range_j: Option<f64>,
+    final_max_torque: f64,
+) -> StageCompletionIR {
+    if converged {
+        if let (Some(threshold), Some(metric_value)) = (
+            control.stop.energy_tolerance_j,
+            final_energy_plateau_range_j,
+        ) {
+            let torque_ok = control
+                .stop
+                .torque_tolerance_apm
+                .is_none_or(|torque_threshold| final_max_torque <= torque_threshold);
+            if torque_ok && metric_value <= threshold {
+                return StageCompletionIR {
+                    status: "completed".to_string(),
+                    reason: Some(StageStopReason::Energy),
+                    metric_name: Some("total_energy_plateau_range_J".to_string()),
+                    metric_value: Some(metric_value),
+                    threshold: Some(threshold),
+                };
+            }
+        }
+        if let Some(threshold) = control.stop.torque_tolerance_apm {
+            if final_max_torque <= threshold {
+                return StageCompletionIR {
+                    status: "completed".to_string(),
+                    reason: Some(StageStopReason::Torque),
+                    metric_name: Some("max_torque_apm".to_string()),
+                    metric_value: Some(final_max_torque),
+                    threshold: Some(threshold),
+                };
+            }
+        }
+        return StageCompletionIR {
+            status: "completed".to_string(),
+            reason: Some(StageStopReason::Gradient),
+            metric_name: Some("max_torque_apm".to_string()),
+            metric_value: Some(final_max_torque),
+            threshold: None,
+        };
+    }
+
+    if let Some(threshold) = control.stop.max_steps {
+        if steps_taken >= threshold {
+            return StageCompletionIR {
+                status: "completed".to_string(),
+                reason: Some(StageStopReason::MaxSteps),
+                metric_name: Some("steps".to_string()),
+                metric_value: Some(steps_taken as f64),
+                threshold: Some(threshold as f64),
+            };
+        }
+    }
+
+    if let Some(threshold) = control.stop.max_pseudotime_s {
+        if pseudo_time_s >= threshold {
+            return StageCompletionIR {
+                status: "completed".to_string(),
+                reason: Some(StageStopReason::MaxPseudotime),
+                metric_name: Some("pseudo_time_s".to_string()),
+                metric_value: Some(pseudo_time_s),
+                threshold: Some(threshold),
+            };
+        }
+    }
+
+    StageCompletionIR {
+        status: "completed".to_string(),
+        reason: Some(StageStopReason::BackendError),
+        metric_name: Some("direct_minimizer_failed_descent".to_string()),
+        metric_value: Some(1.0),
+        threshold: None,
     }
 }
 
@@ -1875,7 +1969,7 @@ mod tests {
     use super::*;
     use fullmag_ir::{
         ExchangeBoundaryCondition, ExecutionPrecision, FdmMaterialIR, GridDimensions,
-        IntegratorChoice, RelaxationAlgorithmIR, RelaxationControlIR,
+        IntegratorChoice, RelaxStopIR, RelaxationAlgorithmIR, RelaxationControlIR, StageStopReason,
     };
 
     fn make_test_plan() -> FdmPlanIR {
@@ -1936,6 +2030,112 @@ mod tests {
         LOCK.get_or_init(|| std::sync::Mutex::new(()))
             .lock()
             .expect("CPU FFT backend env lock should not be poisoned")
+    }
+
+    fn direct_minimizer_test_control() -> RelaxationControlIR {
+        RelaxationControlIR {
+            algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
+            stop: RelaxStopIR {
+                torque_tolerance_apm: Some(1.0e-3),
+                energy_tolerance_j: None,
+                max_steps: Some(10),
+                max_pseudotime_s: Some(1.0e-6),
+                max_physical_time_s: None,
+            },
+        }
+    }
+
+    #[test]
+    fn direct_minimizer_completion_reports_torque_convergence() {
+        let completion = infer_direct_minimizer_completion(
+            &direct_minimizer_test_control(),
+            true,
+            2,
+            2.0e-7,
+            None,
+            5.0e-4,
+        );
+
+        assert_eq!(completion.reason, Some(StageStopReason::Torque));
+        assert_eq!(completion.metric_name.as_deref(), Some("max_torque_apm"));
+        assert_eq!(completion.metric_value, Some(5.0e-4));
+        assert_eq!(completion.threshold, Some(1.0e-3));
+    }
+
+    #[test]
+    fn direct_minimizer_completion_reports_energy_convergence() {
+        let control = RelaxationControlIR {
+            stop: RelaxStopIR {
+                torque_tolerance_apm: None,
+                energy_tolerance_j: Some(1.0e-18),
+                max_steps: Some(10),
+                max_pseudotime_s: None,
+                max_physical_time_s: None,
+            },
+            ..direct_minimizer_test_control()
+        };
+        let completion =
+            infer_direct_minimizer_completion(&control, true, 8, 8.0e-7, Some(5.0e-19), 2.0);
+
+        assert_eq!(completion.reason, Some(StageStopReason::Energy));
+        assert_eq!(
+            completion.metric_name.as_deref(),
+            Some("total_energy_plateau_range_J")
+        );
+        assert_eq!(completion.metric_value, Some(5.0e-19));
+        assert_eq!(completion.threshold, Some(1.0e-18));
+    }
+
+    #[test]
+    fn direct_minimizer_completion_reports_gradient_when_torque_threshold_is_not_met() {
+        let completion = infer_direct_minimizer_completion(
+            &direct_minimizer_test_control(),
+            true,
+            2,
+            2.0e-7,
+            None,
+            2.0,
+        );
+
+        assert_eq!(completion.reason, Some(StageStopReason::Gradient));
+        assert_eq!(completion.metric_name.as_deref(), Some("max_torque_apm"));
+        assert_eq!(completion.metric_value, Some(2.0));
+        assert_eq!(completion.threshold, None);
+    }
+
+    #[test]
+    fn direct_minimizer_completion_reports_max_steps() {
+        let completion = infer_direct_minimizer_completion(
+            &direct_minimizer_test_control(),
+            false,
+            10,
+            2.0e-7,
+            None,
+            2.0,
+        );
+
+        assert_eq!(completion.reason, Some(StageStopReason::MaxSteps));
+        assert_eq!(completion.metric_name.as_deref(), Some("steps"));
+        assert_eq!(completion.metric_value, Some(10.0));
+        assert_eq!(completion.threshold, Some(10.0));
+    }
+
+    #[test]
+    fn direct_minimizer_completion_reports_failed_descent() {
+        let completion = infer_direct_minimizer_completion(
+            &direct_minimizer_test_control(),
+            false,
+            0,
+            0.0,
+            None,
+            2.0,
+        );
+
+        assert_eq!(completion.reason, Some(StageStopReason::BackendError));
+        assert_eq!(
+            completion.metric_name.as_deref(),
+            Some("direct_minimizer_failed_descent")
+        );
     }
 
     struct EnvVarGuard {

@@ -29,6 +29,50 @@ import type {
 } from "./StudyInspectorPanelModel";
 import { StudyProgressBar } from "./StudyProgressBar";
 
+type HysteresisSettleStepDraft = {
+  [key: string]: unknown;
+  step_id?: string;
+  kind?: string;
+  method?: string;
+  alpha?: number | string;
+  damping?: number | string;
+  torque_tolerance?: number | string;
+  energy_tolerance?: number | string;
+  max_steps?: number | string;
+  timestep_s?: number | string;
+  retry_timestep_scale?: number | string;
+  retry_max_attempts?: number | string;
+  applies_to?: unknown;
+  stop_criteria?: unknown;
+  on_non_convergence?: string;
+};
+
+const DEFAULT_RELAX_SETTLE_STEP: HysteresisSettleStepDraft = {
+  kind: "relax",
+  method: "llg_overdamped",
+  alpha: 1,
+  torque_tolerance: "1e-6",
+  max_steps: 10000,
+  on_non_convergence: "continue_with_warning",
+};
+
+const DEFAULT_MINIMIZE_SETTLE_STEP: HysteresisSettleStepDraft = {
+  kind: "minimize",
+  method: "projected_gradient_bb",
+  energy_tolerance: "1e-20",
+  max_steps: 200,
+  on_non_convergence: "continue_with_warning",
+};
+
+const DEFAULT_DYNAMICS_SETTLE_STEP: HysteresisSettleStepDraft = {
+  damping: 1,
+  kind: "dynamics_settle",
+  max_steps: 200,
+  method: "heun_dynamics_settle",
+  on_non_convergence: "continue_with_warning",
+  timestep_s: "1e-12",
+};
+
 type StudyCommandRunner = (commandId: string, input?: unknown) => void;
 type StudyCommandDisabledReason = (commandId: string) => string | null;
 
@@ -408,6 +452,7 @@ function HysteresisStageDraftFields({
         onChange={(event) => onUpdate({ protocolKind: event.target.value })}
       >
         <option value="major_loop">Major loop</option>
+        <option value="major_with_minor_loops">Major with minor loops</option>
         <option value="virgin_curve">Virgin curve</option>
         <option value="virgin_then_major_loop">Virgin then major loop</option>
       </FormField>
@@ -423,7 +468,17 @@ function HysteresisStageDraftFields({
         <option value="zero_field_relaxed">Zero-field relaxed</option>
         <option value="positive_saturation">Positive saturation</option>
         <option value="negative_saturation">Negative saturation</option>
+        <option value="checkpoint">Checkpoint</option>
       </FormField>
+      {draft.initialStatePolicy === "checkpoint" ? (
+        <FormField
+          label="Initial state ref"
+          value={draft.initialStateRef}
+          onChange={(event) =>
+            onUpdate({ initialStateRef: event.target.value })
+          }
+        />
+      ) : null}
       <FormField
         label="Orientation mode"
         type="select"
@@ -483,6 +538,15 @@ function HysteresisStageDraftFields({
         <option value="easy_axis">Easy axis</option>
         <option value="custom">Custom</option>
       </FormField>
+      {draft.measurementAxis === "custom" ? (
+        <FormField
+          label="Measurement vector"
+          value={draft.measurementAxisCustomVector}
+          onChange={(event) =>
+            onUpdate({ measurementAxisCustomVector: event.target.value })
+          }
+        />
+      ) : null}
       <FormField
         label="Schedule mode"
         type="select"
@@ -569,6 +633,7 @@ function HysteresisStageDraftFields({
         <option value="sequence">Sequence</option>
         <option value="tree">Tree</option>
       </FormField>
+      <HysteresisSettleAlgorithmsEditor draft={draft} onUpdate={onUpdate} />
       <FormField
         label="Settle steps"
         rows={5}
@@ -602,12 +667,376 @@ function HysteresisStageDraftFields({
         onChange={(event) => onUpdate({ storagePolicy: event.target.value })}
       />
       <FormField
+        checked={draft.storageEstimateAcknowledged}
+        label="Storage estimate acknowledged"
+        type="checkbox"
+        onChange={(event) =>
+          onUpdate({ storageEstimateAcknowledged: event.target.checked })
+        }
+      />
+      <FormField
         label="Torque tol"
         value={draft.torqueTolerance}
         onChange={(event) => onUpdate({ torqueTolerance: event.target.value })}
       />
     </>
   );
+}
+
+function HysteresisSettleAlgorithmsEditor({
+  draft,
+  onUpdate,
+}: {
+  draft: StudyStageDraft;
+  onUpdate: (patch: Partial<StudyStageDraft>) => void;
+}) {
+  const steps = parseHysteresisSettleSteps(draft.settleSteps);
+  const commitSteps = (nextSteps: HysteresisSettleStepDraft[]) => {
+    onUpdate({ settleSteps: JSON.stringify(nextSteps) });
+  };
+  const updateStep = (
+    index: number,
+    patch: Partial<HysteresisSettleStepDraft>,
+  ) => {
+    commitSteps(
+      steps.map((step, stepIndex) =>
+        stepIndex === index
+          ? normalizeHysteresisSettleStepPatch({ ...step, ...patch })
+          : step,
+      ),
+    );
+  };
+  const moveStep = (index: number, direction: -1 | 1) => {
+    const nextIndex = index + direction;
+    if (nextIndex < 0 || nextIndex >= steps.length) return;
+    const nextSteps = [...steps];
+    const [step] = nextSteps.splice(index, 1);
+    nextSteps.splice(nextIndex, 0, step);
+    commitSteps(nextSteps);
+  };
+
+  return (
+    <div className="fm-inspector-form-section">
+      <div className="fm-inspector-form-section__header">
+        <strong>Settle algorithms</strong>
+      </div>
+      {steps.map((step, index) => (
+        <div className="fm-inspector-form-section" key={index}>
+          <div className="fm-inspector-form-section__header">
+            <strong>Algorithm {index + 1}</strong>
+            <div className="fm-inspector-toolbar">
+              <Button
+                aria-label="Move algorithm up"
+                disabled={index === 0}
+                size="icon"
+                title="Move algorithm up"
+                type="button"
+                variant="ghost"
+                onClick={() => moveStep(index, -1)}
+              >
+                <ArrowUp size={14} aria-hidden="true" />
+              </Button>
+              <Button
+                aria-label="Move algorithm down"
+                disabled={index === steps.length - 1}
+                size="icon"
+                title="Move algorithm down"
+                type="button"
+                variant="ghost"
+                onClick={() => moveStep(index, 1)}
+              >
+                <ArrowDown size={14} aria-hidden="true" />
+              </Button>
+              <Button
+                size="sm"
+                type="button"
+                variant="ghost"
+                onClick={() =>
+                  commitSteps(
+                    steps.filter((_, stepIndex) => stepIndex !== index),
+                  )
+                }
+              >
+                Remove
+              </Button>
+            </div>
+          </div>
+          <FormField
+            label="Kind"
+            type="select"
+            value={step.kind ?? "relax"}
+            onChange={(event) => {
+              const kind = event.target.value;
+              updateStep(
+                index,
+                kind === "dynamics_settle"
+                  ? DEFAULT_DYNAMICS_SETTLE_STEP
+                  : kind === "minimize"
+                    ? DEFAULT_MINIMIZE_SETTLE_STEP
+                    : DEFAULT_RELAX_SETTLE_STEP,
+              );
+            }}
+          >
+            <option value="relax">Relax</option>
+            <option value="minimize">Minimize</option>
+            <option value="dynamics_settle">Dynamics settle</option>
+          </FormField>
+          <FormField
+            label="Step ID"
+            value={String(step.step_id ?? "")}
+            onChange={(event) =>
+              updateStep(index, { step_id: event.target.value })
+            }
+          />
+          <FormField
+            label="Applies to"
+            value={formatHysteresisSettleJsonishValue(step.applies_to)}
+            onChange={(event) =>
+              updateStep(index, {
+                applies_to: parseHysteresisSettleJsonishValue(
+                  event.target.value,
+                ),
+              })
+            }
+          />
+          <FormField
+            label="Method"
+            type="select"
+            value={step.method ?? defaultHysteresisSettleMethod(step.kind)}
+            onChange={(event) =>
+              updateStep(index, { method: event.target.value })
+            }
+          >
+            {hysteresisSettleMethodOptions(step.kind).map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </FormField>
+          <FormField
+            label="Torque tolerance"
+            value={String(step.torque_tolerance ?? "")}
+            onChange={(event) =>
+              updateStep(index, { torque_tolerance: event.target.value })
+            }
+          />
+          <FormField
+            label="Energy tolerance"
+            unit="J"
+            value={String(step.energy_tolerance ?? "")}
+            onChange={(event) =>
+              updateStep(index, { energy_tolerance: event.target.value })
+            }
+          />
+          <FormField
+            label="Max steps"
+            value={String(step.max_steps ?? "")}
+            onChange={(event) =>
+              updateStep(index, { max_steps: event.target.value })
+            }
+          />
+          {step.kind === "relax" ? (
+            <FormField
+              label="Alpha"
+              value={String(step.alpha ?? "")}
+              onChange={(event) =>
+                updateStep(index, { alpha: event.target.value })
+              }
+            />
+          ) : null}
+          {step.kind === "dynamics_settle" ? (
+            <FormField
+              label="Damping"
+              value={String(step.damping ?? "")}
+              onChange={(event) =>
+                updateStep(index, { damping: event.target.value })
+              }
+            />
+          ) : null}
+          <FormField
+            label="Timestep"
+            unit="s"
+            value={String(step.timestep_s ?? "")}
+            onChange={(event) =>
+              updateStep(index, { timestep_s: event.target.value })
+            }
+          />
+          <FormField
+            label="Stop criteria"
+            rows={3}
+            type="textarea"
+            value={formatHysteresisSettleJsonishValue(step.stop_criteria)}
+            onChange={(event) =>
+              updateStep(index, {
+                stop_criteria: parseHysteresisSettleJsonishValue(
+                  event.target.value,
+                ),
+              })
+            }
+          />
+          <FormField
+            label="On non-convergence"
+            type="select"
+            value={step.on_non_convergence ?? "continue_with_warning"}
+            onChange={(event) =>
+              updateStep(index, { on_non_convergence: event.target.value })
+            }
+          >
+            <option value="continue_with_warning">Continue with warning</option>
+            <option value="stop_stage">Stop stage</option>
+            <option value="run_next_algorithm">Run next algorithm</option>
+            <option value="retry_with_smaller_dt">Retry with smaller dt</option>
+          </FormField>
+          <FormField
+            label="Retry scale"
+            value={String(step.retry_timestep_scale ?? "")}
+            onChange={(event) =>
+              updateStep(index, { retry_timestep_scale: event.target.value })
+            }
+          />
+          <FormField
+            label="Retry attempts"
+            value={String(step.retry_max_attempts ?? "")}
+            onChange={(event) =>
+              updateStep(index, { retry_max_attempts: event.target.value })
+            }
+          />
+        </div>
+      ))}
+      <div className="fm-inspector-toolbar">
+        <Button
+          size="sm"
+          type="button"
+          onClick={() => commitSteps([...steps, DEFAULT_RELAX_SETTLE_STEP])}
+        >
+          Add relax
+        </Button>
+        <Button
+          size="sm"
+          type="button"
+          onClick={() => commitSteps([...steps, DEFAULT_MINIMIZE_SETTLE_STEP])}
+        >
+          Add minimize
+        </Button>
+        <Button
+          size="sm"
+          type="button"
+          onClick={() =>
+            commitSteps([...steps, DEFAULT_DYNAMICS_SETTLE_STEP])
+          }
+        >
+          Add dynamics
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function parseHysteresisSettleSteps(value: string): HysteresisSettleStepDraft[] {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return [DEFAULT_RELAX_SETTLE_STEP];
+    const steps = parsed
+      .filter((step): step is Record<string, unknown> => isRecord(step))
+      .map((step) => normalizeHysteresisSettleStepPatch(step));
+    return steps.length > 0 ? steps : [DEFAULT_RELAX_SETTLE_STEP];
+  } catch {
+    return [DEFAULT_RELAX_SETTLE_STEP];
+  }
+}
+
+function normalizeHysteresisSettleStepPatch(
+  step: Record<string, unknown>,
+): HysteresisSettleStepDraft {
+  const kind =
+    step.kind === "dynamics_settle"
+      ? "dynamics_settle"
+      : step.kind === "minimize"
+        ? "minimize"
+        : "relax";
+  const method =
+    typeof step.method === "string" && step.method
+      ? step.method
+      : defaultHysteresisSettleMethod(kind);
+  const normalized: HysteresisSettleStepDraft = { ...step, kind, method };
+  removeEmptySettleStepValue(normalized, "step_id");
+  copyDefinedSettleStepValue(step, normalized, "alpha");
+  copyDefinedSettleStepValue(step, normalized, "damping");
+  copyDefinedSettleStepValue(step, normalized, "torque_tolerance");
+  copyDefinedSettleStepValue(step, normalized, "energy_tolerance");
+  copyDefinedSettleStepValue(step, normalized, "max_steps");
+  copyDefinedSettleStepValue(step, normalized, "timestep_s");
+  copyDefinedSettleStepValue(step, normalized, "retry_timestep_scale");
+  copyDefinedSettleStepValue(step, normalized, "retry_max_attempts");
+  copyDefinedSettleStepValue(step, normalized, "on_non_convergence");
+  removeEmptySettleStepValue(normalized, "applies_to");
+  removeEmptySettleStepValue(normalized, "stop_criteria");
+  return normalized;
+}
+
+function copyDefinedSettleStepValue(
+  source: Record<string, unknown>,
+  target: HysteresisSettleStepDraft,
+  key: keyof HysteresisSettleStepDraft,
+) {
+  const value = source[key];
+  if (key === "kind" || key === "method" || key === "on_non_convergence") {
+    if (typeof value === "string") target[key] = value;
+    return;
+  }
+  if (typeof value === "string" || typeof value === "number") {
+    target[key] = value;
+  }
+}
+
+function removeEmptySettleStepValue(
+  target: HysteresisSettleStepDraft,
+  key: keyof HysteresisSettleStepDraft,
+) {
+  if (target[key] === "") delete target[key];
+}
+
+function defaultHysteresisSettleMethod(kind?: string): string {
+  if (kind === "dynamics_settle") return "heun_dynamics_settle";
+  return kind === "minimize" ? "projected_gradient_bb" : "llg_overdamped";
+}
+
+function hysteresisSettleMethodOptions(kind?: string) {
+  if (kind === "dynamics_settle") {
+    return [{ value: "heun_dynamics_settle", label: "Heun dynamics settle" }];
+  }
+  if (kind === "minimize") {
+    return [{ value: "projected_gradient_bb", label: "Projected gradient BB" }];
+  }
+  return [
+    { value: "llg_overdamped", label: "LLG overdamped" },
+    { value: "projected_gradient_bb", label: "Projected gradient BB" },
+    { value: "nonlinear_cg", label: "Nonlinear CG" },
+    { value: "tangent_plane_implicit", label: "Tangent-plane implicit" },
+  ];
+}
+
+function formatHysteresisSettleJsonishValue(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string" || typeof value === "number") {
+    return String(value);
+  }
+  return JSON.stringify(value);
+}
+
+function parseHysteresisSettleJsonishValue(value: string): unknown {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return trimmed;
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch {
+    return trimmed;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function RelaxStageDraftFields({
@@ -757,6 +1186,12 @@ function FrequencyResponseStageDraftFields({
         unit="A/m"
         value={draft.excitationField}
         onChange={(event) => onUpdate({ excitationField: event.target.value })}
+      />
+      <FormField
+        label="Excitation phase"
+        unit="rad"
+        value={draft.excitationPhaseRad}
+        onChange={(event) => onUpdate({ excitationPhaseRad: event.target.value })}
       />
       <FormField
         label="Observable"

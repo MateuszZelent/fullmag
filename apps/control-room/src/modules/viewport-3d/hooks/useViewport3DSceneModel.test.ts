@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_CAMERA_REGISTRY_STATE } from "@/kernel/visualization/CameraRegistryController";
+import { DATA_FIELD_VECTOR_PATH } from "@/kernel/api/apiPaths";
 import {
   ObjectVisualizationController,
 } from "@/kernel/visualization/ObjectVisualizationController";
@@ -18,6 +19,7 @@ import {
   resolveViewport3DPrimaryFieldVectorEnabled,
   resolveViewport3DPrimaryFieldQuery,
   resolveViewport3DSelectedSnapshotId,
+  resolveViewport3DSelectedSnapshotQuery,
   filterViewport3DMeshBackedRegionOverlays,
   resolveViewport3DMembershipRegionOverlays,
   resolveViewport3DMeshBackedRegionKeys,
@@ -33,12 +35,16 @@ import {
   resolveViewport3DScopedPartVectorFieldRequests,
   resolveViewport3DScopedVectorFieldQuery,
   resolveViewport3DTargetFieldQuery,
+  resolveViewport3DReplayFieldQuery,
+  resolveViewport3DFieldDataIssue,
   resolveViewport3DVisualizationQuantityId,
+  mergeViewport3DFieldQuery,
   sameViewport3DQuantityId,
 } from "./useViewport3DSceneModel";
 import {
   resolveHysteresisStepViewportTarget,
 } from "../model/viewport3DTargets";
+import { resolveViewport3DFieldVectorResourceKey } from "../viewport3dResources";
 import { viewport3DFieldRenderOptionsNeedFieldData } from "../viewport3dRenderModel";
 import {
   DEFAULT_VIEWPORT_3D_CAMERA_STATE,
@@ -50,6 +56,14 @@ const visualizationStateResourceSourceUrl = new URL(
   "../../../kernel/visualization/useVisualizationStateResource.ts",
   import.meta.url,
 );
+
+function fieldVectorResourceRef(
+  quantityId: string,
+  snapshotId: string,
+  stageId: string,
+): string {
+  return `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", quantityId)}?snapshot_id=${snapshotId}&stage_id=${stageId}`;
+}
 
 describe("useViewport3DSceneModel", () => {
   it("keeps the previously displayed live field value while camera field updates are held", () => {
@@ -213,6 +227,7 @@ describe("useViewport3DSceneModel", () => {
         reversal_index: null,
         snapshot_id: "hysteresis_point_008",
         snapshot_resource_ref: null,
+        snapshot_vector_resource_ref: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?snapshot_id=hysteresis_point_008&stage_id=hysteresis-1`,
         status: "Completed",
       },
       stageId: "hysteresis-1",
@@ -243,6 +258,7 @@ describe("useViewport3DSceneModel", () => {
       meshIdentity: "study_domain",
       pointId: 7,
       quantityId: "m",
+      resourceRef: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?snapshot_id=hysteresis_point_008&stage_id=hysteresis-1`,
       snapshotId: "hysteresis_point_008",
       stageId: "hysteresis-1",
       targetId: "hysteresis-step:hysteresis-1:7",
@@ -268,11 +284,204 @@ describe("useViewport3DSceneModel", () => {
           scalarColorsVisible: false,
         },
         snapshotId: selectedSnapshotId,
+        snapshotQuery: resolveViewport3DSelectedSnapshotQuery(selection),
       }),
     ).toEqual({
       component: "full",
       scope_kind: "full",
       snapshot_id: "hysteresis_point_008",
+      stage_id: "hysteresis-1",
+    });
+  });
+
+  it("routes explorer hysteresis snapshot selections to snapshot field queries", () => {
+    const selection: Selection = {
+      kind: "study.stage.action",
+      label: "Snapshot hysteresis_point_007",
+      moduleSource: "explorer",
+      nodeId: "model:study:stages:stage:hysteresis-1:field-point:7:snapshot:hysteresis_point_007",
+      objectId: null,
+      ref: {
+        kind: "study.stage.action",
+        nodeId:
+          "model:study:stages:stage:hysteresis-1:field-point:7:snapshot:hysteresis_point_007",
+        pointId: 7,
+        quantityId: "m",
+        resourceRef: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?snapshot_id=hysteresis_point_007&stage_id=hysteresis-1`,
+        snapshotId: "hysteresis_point_007",
+        stageId: "hysteresis-1",
+        stageIndex: 0,
+        targetId: "hysteresis-step:hysteresis-1:7",
+        type: "hysteresis-snapshot",
+      },
+    };
+
+    const target = resolveHysteresisStepViewportTarget(selection);
+    const selectedSnapshotId = resolveViewport3DSelectedSnapshotId(selection);
+
+    expect(target).toEqual({
+      fieldOrientation: null,
+      fieldRevision: null,
+      measurementAxis: null,
+      meshIdentity: null,
+      pointId: 7,
+      quantityId: "m",
+      resourceRef: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?snapshot_id=hysteresis_point_007&stage_id=hysteresis-1`,
+      snapshotId: "hysteresis_point_007",
+      stageId: "hysteresis-1",
+      targetId: "hysteresis-step:hysteresis-1:7",
+    });
+    expect(selectedSnapshotId).toBe("hysteresis_point_007");
+    expect(
+      resolveViewport3DActiveQuantityId({
+        selectedSnapshotId,
+        selection,
+        visualizationState: { active_quantity_id: "H_eff" } as never,
+      }),
+    ).toBe("m");
+    expect(
+      resolveViewport3DPrimaryFieldQuery({
+        fdmInstanceModelNeedsFieldVector: false,
+        fdmSurfaceColorMode: null,
+        fdmTopographyEnabled: false,
+        fdmVectorsVisible: false,
+        fieldRenderOptions: {
+          fullVectorBudget: 0,
+          partVectorBudgets: new Map(),
+          scalarColorModes: new Set(),
+          scalarColorsVisible: false,
+        },
+        snapshotId: selectedSnapshotId,
+        snapshotQuery: resolveViewport3DSelectedSnapshotQuery(selection),
+      }),
+    ).toEqual({
+      component: "full",
+      scope_kind: "full",
+      snapshot_id: "hysteresis_point_007",
+      stage_id: "hysteresis-1",
+    });
+  });
+
+  it("switches replay field resource keys between saved hysteresis snapshots", () => {
+    const buildSelection = (
+      stageId: string,
+      pointId: number,
+      snapshotId: string,
+    ): Selection => ({
+      kind: "study.stage.action",
+      label: `Snapshot ${snapshotId}`,
+      moduleSource: "explorer",
+      nodeId: `model:study:stages:stage:${stageId}:field-point:${pointId}:snapshot:${snapshotId}`,
+      objectId: null,
+      ref: {
+        kind: "study.stage.action",
+        nodeId: `model:study:stages:stage:${stageId}:field-point:${pointId}:snapshot:${snapshotId}`,
+        pointId,
+        quantityId: "m",
+        resourceRef: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?snapshot_id=${snapshotId}&stage_id=${stageId}`,
+        snapshotId,
+        stageId,
+        stageIndex: 0,
+        targetId: `hysteresis-step:${stageId}:${pointId}`,
+        type: "hysteresis-snapshot",
+      },
+    });
+    const fieldQueryForSelection = (selection: Selection) => {
+      const selectedSnapshotId = resolveViewport3DSelectedSnapshotId(selection);
+      return resolveViewport3DPrimaryFieldQuery({
+        fdmInstanceModelNeedsFieldVector: false,
+        fdmSurfaceColorMode: null,
+        fdmTopographyEnabled: false,
+        fdmVectorsVisible: false,
+        fieldRenderOptions: {
+          fullVectorBudget: 0,
+          partVectorBudgets: new Map(),
+          scalarColorModes: new Set(),
+          scalarColorsVisible: false,
+        },
+        snapshotId: selectedSnapshotId,
+        snapshotQuery: resolveViewport3DSelectedSnapshotQuery(selection),
+      });
+    };
+
+    const firstKey = resolveViewport3DFieldVectorResourceKey(
+      "m",
+      fieldQueryForSelection(buildSelection("hysteresis-1", 7, "hysteresis_point_007")),
+    );
+    const secondKey = resolveViewport3DFieldVectorResourceKey(
+      "m",
+      fieldQueryForSelection(buildSelection("hysteresis-2", 12, "hysteresis_point_012")),
+    );
+
+    expect(firstKey).toBe(
+      `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?component=full&scope_kind=full&snapshot_id=hysteresis_point_007&stage_id=hysteresis-1`,
+    );
+    expect(secondKey).toBe(
+      `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?component=full&scope_kind=full&snapshot_id=hysteresis_point_012&stage_id=hysteresis-2`,
+    );
+    expect(secondKey).not.toContain("hysteresis_point_007");
+    expect(secondKey).not.toContain("hysteresis-1");
+  });
+
+  it("applies hysteresis snapshot queries to target-specific quantity fields", () => {
+    expect(
+      resolveViewport3DReplayFieldQuery(
+        resolveViewport3DTargetFieldQuery({
+          surfaceColorMode: "magnitude",
+          vectorsVisible: false,
+        }),
+        {
+          snapshot_id: "hysteresis_point_007",
+          stage_id: "hysteresis-1",
+        },
+      ),
+    ).toEqual({
+      component: "magnitude",
+      scope_kind: "full",
+      snapshot_id: "hysteresis_point_007",
+      stage_id: "hysteresis-1",
+    });
+
+    expect(
+      resolveViewport3DReplayFieldQuery(
+        resolveViewport3DTargetFieldQuery({
+          surfaceColorMode: null,
+          vectorsVisible: true,
+        }),
+        {
+          snapshot_id: "hysteresis_point_007",
+          stage_id: "hysteresis-1",
+        },
+      ),
+    ).toEqual({
+      component: "full",
+      scope_kind: "full",
+      snapshot_id: "hysteresis_point_007",
+      stage_id: "hysteresis-1",
+    });
+  });
+
+  it("preserves hysteresis snapshot queries when target field requests merge to full vectors", () => {
+    expect(
+      mergeViewport3DFieldQuery(
+        {
+          component: "x",
+          scope_kind: "full",
+          snapshot_id: "hysteresis_point_007",
+          stage_id: "hysteresis-1",
+        },
+        {
+          component: "y",
+          scope_kind: "full",
+          snapshot_id: "hysteresis_point_007",
+          stage_id: "hysteresis-1",
+        },
+      ),
+    ).toEqual({
+      component: "full",
+      scope_kind: "full",
+      snapshot_id: "hysteresis_point_007",
+      stage_id: "hysteresis-1",
     });
   });
 
@@ -1025,6 +1234,48 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("fieldDataIssue");
     expect(source).toContain("fieldVectorEnabled && fieldVector.error");
     expect(source).toContain("resolveViewport3DFieldVectorResourceKey");
+  });
+
+  it("blocks hysteresis 3D replay field loads on mesh identity mismatch", () => {
+    const retry = () => undefined;
+
+    expect(
+      resolveViewport3DFieldDataIssue({
+        fieldVectorEnabled: false,
+        fieldVectorErrorMessage: null,
+        fieldVectorRefetch: retry,
+        fieldVectorResourceKey: fieldVectorResourceRef(
+          "m",
+          "hysteresis_point_005",
+          "hysteresis-1",
+        ),
+        fieldVectorRevision: null,
+        hysteresisReplayMeshCompatibility: {
+          actualMeshIdentity: "study_domain:rev-13",
+          reason:
+            "Snapshot was computed on mesh study_domain:rev-12, but the current 3D topology is study_domain:rev-13.",
+          requiredMeshIdentity: "study_domain:rev-12",
+          status: "mismatch",
+        },
+        primaryFieldQuantityId: "m",
+      }),
+    ).toEqual({
+      key:
+        `${fieldVectorResourceRef(
+          "m",
+          "hysteresis_point_005",
+          "hysteresis-1",
+        )}:mesh-mismatch:study_domain:rev-12:study_domain:rev-13`,
+      message:
+        "Snapshot was computed on mesh study_domain:rev-12, but the current 3D topology is study_domain:rev-13.",
+      quantityId: "m",
+      resourceKey: fieldVectorResourceRef(
+        "m",
+        "hysteresis_point_005",
+        "hysteresis-1",
+      ),
+      retry,
+    });
   });
 
   it("loads airbox field data through scoped airbox requests instead of full-domain target requests", () => {

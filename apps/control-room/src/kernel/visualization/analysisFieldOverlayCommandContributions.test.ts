@@ -53,9 +53,9 @@ describe("analysis field overlay commands", () => {
   it.each([
     ["real", "real"],
     ["imag", "imag"],
-    ["amplitude", "amplitude"],
-    ["abs", "amplitude"],
-    ["complex", "amplitude"],
+    ["abs", "abs"],
+    ["amplitude", "abs"],
+    ["complex", "abs"],
     ["phase", "phase"],
   ])(
     "plots complex analysis field view %s as %s",
@@ -79,6 +79,91 @@ describe("analysis field overlay commands", () => {
 
       expect(result.status).toBe("completed");
       expect(overlay.getSnapshot()?.query.view).toBe(expectedView);
+    },
+  );
+
+  it("plots selected eigen mode with a fixed context-menu view command", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    selection.set(
+      {
+        kind: "results.eigen.mode",
+        label: "Mode 2",
+        nodeId: "results:eigen:sample:0:mode:2",
+        objectId: null,
+        ref: {
+          fieldId: "analysis:eigen:sample-0000:mode-0002",
+          kind: "results.eigen.mode",
+          modeIndex: 2,
+          nodeId: "results:eigen:sample:0:mode:2",
+          sampleIndex: 0,
+          type: "frequency-domain",
+        },
+      },
+      "test",
+    );
+
+    const result = await commands.execute(
+      "analysis.eigen.plot-mode-3d-imag",
+      {
+        analysisFieldOverlay: overlay,
+        selection,
+        source: "test",
+      },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(overlay.getSnapshot()).toMatchObject({
+      fieldId: "analysis:eigen:sample-0000:mode-0002",
+      query: {
+        view: "imag",
+      },
+      source: "eigen-mode",
+    });
+  });
+
+  it.each([
+    ["analysis.eigen.plot-mode-3d-amplitude", "abs"],
+    ["analysis.eigen.plot-mode-3d-abs", "abs"],
+  ])(
+    "plots selected eigen mode complex magnitude with command %s",
+    async (commandId, expectedView) => {
+      const commands = commandRegistry();
+      const overlay = new AnalysisFieldOverlayController();
+      const selection = new SelectionController(new EventBus<KernelEventMap>());
+      selection.set(
+        {
+          kind: "results.eigen.mode",
+          label: "Mode 2",
+          nodeId: "results:eigen:sample:0:mode:2",
+          objectId: null,
+          ref: {
+            fieldId: "analysis:eigen:sample-0000:mode-0002",
+            kind: "results.eigen.mode",
+            modeIndex: 2,
+            nodeId: "results:eigen:sample:0:mode:2",
+            sampleIndex: 0,
+            type: "frequency-domain",
+          },
+        },
+        "test",
+      );
+
+      const result = await commands.execute(commandId, {
+        analysisFieldOverlay: overlay,
+        selection,
+        source: "test",
+      });
+
+      expect(result.status).toBe("completed");
+      expect(overlay.getSnapshot()).toMatchObject({
+        fieldId: "analysis:eigen:sample-0000:mode-0002",
+        query: {
+          view: expectedView,
+        },
+        source: "eigen-mode",
+      });
     },
   );
 
@@ -117,6 +202,121 @@ describe("analysis field overlay commands", () => {
       "analysis:frequency-response:frequency-0003",
     );
     expect(overlay.getSnapshot()?.source).toBe("frequency-response");
+  });
+
+  it("plots selected response field with a fixed context-menu view command", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    selection.set(
+      {
+        kind: "results.frequency_response.frequency_point",
+        label: "1.5 GHz",
+        nodeId: "results:frequency-response:stage-1:frequency:3",
+        objectId: null,
+        ref: {
+          fieldId: "analysis:frequency-response:frequency-0003",
+          frequencyIndex: 3,
+          kind: "results.frequency_response.frequency_point",
+          nodeId: "results:frequency-response:stage-1:frequency:3",
+          type: "frequency-domain",
+        },
+      },
+      "test",
+    );
+
+    const result = await commands.execute(
+      "analysis.frequency-response.plot-response-field-3d-phase",
+      {
+        analysisFieldOverlay: overlay,
+        selection,
+        source: "test",
+      },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(overlay.getSnapshot()).toMatchObject({
+      fieldId: "analysis:frequency-response:frequency-0003",
+      query: {
+        view: "phase",
+      },
+      source: "frequency-response",
+    });
+  });
+
+  it.each([
+    ["analysis.frequency-response.plot-response-field-3d-real", "real"],
+    ["analysis.frequency-response.plot-response-field-3d-imag", "imag"],
+    ["analysis.frequency-response.plot-response-field-3d-amplitude", "abs"],
+    ["analysis.frequency-response.plot-response-field-3d-abs", "abs"],
+    ["analysis.frequency-response.plot-response-field-3d-phase", "phase"],
+    [
+      "analysis.frequency-response.plot-response-field-3d-phase-rotated-real",
+      "phase_rotated_real",
+    ],
+  ])(
+    "plots selected response field with command %s as %s",
+    async (commandId, expectedView) => {
+      const commands = commandRegistry();
+      const overlay = new AnalysisFieldOverlayController();
+      const selection = new SelectionController(new EventBus<KernelEventMap>());
+      selection.set(
+        {
+          kind: "results.frequency_response.frequency_point",
+          label: "1.5 GHz",
+          nodeId: "results:frequency-response:stage-1:frequency:3",
+          objectId: null,
+          ref: {
+            fieldId: "analysis:frequency-response:frequency-0003",
+            frequencyIndex: 3,
+            kind: "results.frequency_response.frequency_point",
+            nodeId: "results:frequency-response:stage-1:frequency:3",
+            type: "frequency-domain",
+          },
+        },
+        "test",
+      );
+
+      const result = await commands.execute(commandId, {
+        analysisFieldOverlay: overlay,
+        selection,
+        source: "test",
+      });
+
+      expect(result.status).toBe("completed");
+      expect(overlay.getSnapshot()).toMatchObject({
+        fieldId: "analysis:frequency-response:frequency-0003",
+        query: {
+          view: expectedView,
+        },
+        source: "frequency-response",
+      });
+    },
+  );
+
+  it("rejects local tangent-space response payloads for 3D spatial overlays", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+
+    const result = await commands.execute(
+      "analysis.frequency-response.plot-response-field-3d",
+      {
+        analysisFieldOverlay: overlay,
+        source: "test",
+      },
+      {
+        componentBasis: "local_tangent_frame",
+        componentCount: 2,
+        fieldId: "analysis:frequency-response:frequency-0003",
+        label: "1.5 GHz",
+        source: "frequency-response",
+        valueKind: "complex_tangent_vector",
+      },
+    );
+
+    expect(result.status).toBe("failed");
+    expect(result.message).toContain("requires a spatial XYZ field");
+    expect(overlay.getSnapshot()).toBeNull();
   });
 
   it("gates eigen and response overlay commands by selected analysis field source", async () => {
@@ -236,7 +436,7 @@ describe("analysis field overlay commands", () => {
         component: "full",
         phase_rad: 0,
         scope_kind: "full",
-        view: "phase_rotated_real",
+        view: "phase",
       },
       source: "eigen-mode",
     });
@@ -260,7 +460,110 @@ describe("analysis field overlay commands", () => {
         animationRateHz: 2,
       },
       fieldId: "analysis:eigen:sample-0000:mode-0002",
+      query: {
+        view: "phase_rotated_real",
+      },
       source: "eigen-mode",
+    });
+  });
+
+  it("updates response field phase through the frequency-domain phase command", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+    overlay.set({
+      fieldId: "analysis:frequency-response:frequency-0001",
+      label: "1 GHz",
+      query: {
+        component: "full",
+        phase_rad: 0,
+        scope_kind: "full",
+        view: "abs",
+      },
+      source: "frequency-response",
+    });
+
+    const result = await commands.execute(
+      "analysis.frequency-domain.set-3d-phase",
+      {
+        analysisFieldOverlay: overlay,
+        source: "test",
+      },
+      {
+        phaseRad: 1.25,
+      },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(overlay.getSnapshot()).toMatchObject({
+      fieldId: "analysis:frequency-response:frequency-0001",
+      query: {
+        phase_rad: 1.25,
+        view: "abs",
+      },
+      source: "frequency-response",
+    });
+
+    const pauseResult = await commands.execute(
+      "analysis.frequency-domain.set-3d-animation",
+      {
+        analysisFieldOverlay: overlay,
+        source: "test",
+      },
+      {
+        animatePhase: false,
+        animationRateHz: 2,
+      },
+    );
+
+    expect(pauseResult.status).toBe("completed");
+    expect(overlay.getSnapshot()).toMatchObject({
+      animation: {
+        animatePhase: false,
+        animationRateHz: 2,
+      },
+      fieldId: "analysis:frequency-response:frequency-0001",
+      source: "frequency-response",
+    });
+  });
+
+  it("updates response field phase animation through the frequency-domain animation command", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+    overlay.set({
+      fieldId: "analysis:frequency-response:frequency-0001",
+      label: "1 GHz",
+      query: {
+        component: "full",
+        phase_rad: 0,
+        scope_kind: "full",
+        view: "phase",
+      },
+      source: "frequency-response",
+    });
+
+    const result = await commands.execute(
+      "analysis.frequency-domain.set-3d-animation",
+      {
+        analysisFieldOverlay: overlay,
+        source: "test",
+      },
+      {
+        animatePhase: true,
+        animationRateHz: 2,
+      },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(overlay.getSnapshot()).toMatchObject({
+      animation: {
+        animatePhase: true,
+        animationRateHz: 2,
+      },
+      fieldId: "analysis:frequency-response:frequency-0001",
+      query: {
+        view: "phase_rotated_real",
+      },
+      source: "frequency-response",
     });
   });
 

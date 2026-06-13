@@ -8,10 +8,23 @@ constexpr const char *kUnavailableDiagnosticsJson =
     "{\"schema_version\":\"frequency_domain_availability.v1\","
     "\"driven_response_available\":false,"
     "\"modal_solver_available\":false,"
+    "\"static_periodic_response_available\":false,"
     "\"floquet_modal_available\":false,"
     "\"floquet_response_available\":false,"
     "\"dynamic_demag_k_available\":false,"
     "\"gpu_available\":false}";
+
+constexpr const char *kCpuDrivenResponseDiagnosticsJson =
+    "{\"schema_version\":\"frequency_domain_availability.v1\","
+    "\"driven_response_available\":true,"
+    "\"modal_solver_available\":false,"
+    "\"static_periodic_response_available\":true,"
+    "\"floquet_modal_available\":false,"
+    "\"floquet_response_available\":false,"
+    "\"dynamic_demag_k_available\":false,"
+    "\"gpu_available\":false,"
+    "\"execution_lane\":\"native_fem_mfem_frequency_domain_cpu\","
+    "\"scope\":\"gamma_free_or_static_periodic_magnetic_response\"}";
 
 constexpr const char *kInitialProgressJson =
     "{\"schema_version\":\"frequency_domain_sweep_progress.v1\","
@@ -168,6 +181,12 @@ FrequencyDomainAvailabilityResult frequency_domain_availability(
         return result;
     }
 
+    if (request.has_floquet_k_vector) {
+        result.error_message =
+            "native FEM frequency-domain Floquet/Bloch nonzero-k metadata is ABI-visible but not implemented for driven response";
+        return result;
+    }
+
     if (request.requires_gpu && request.strict_device) {
         result.error_message = "native FEM frequency-domain GPU lane is not implemented";
         return result;
@@ -179,7 +198,17 @@ FrequencyDomainAvailabilityResult frequency_domain_availability(
         return result;
     }
 
-    result.error_message = "native FEM driven frequency-response solver is not implemented";
+    if (request.requires_floquet_boundary) {
+        result.error_message =
+            "native FEM frequency-domain Floquet/PBC enforcement is not implemented for driven response";
+        return result;
+    }
+
+    result.status = FrequencyDomainStatus::ok;
+    result.driven_response_available = true;
+    result.static_periodic_response_available = true;
+    result.error_message = "";
+    result.diagnostics_json = kCpuDrivenResponseDiagnosticsJson;
     return result;
 }
 

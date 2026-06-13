@@ -30,7 +30,7 @@ export function startAnalysisFieldOverlayPhaseAnimation(
 
   const tick = () => {
     const snapshot = controller.getSnapshot();
-    if (!isAnimatingEigenOverlay(snapshot)) {
+    if (!isAnimatingAnalysisOverlay(snapshot)) {
       stopInterval();
       return;
     }
@@ -49,7 +49,7 @@ export function startAnalysisFieldOverlayPhaseAnimation(
 
   const sync = () => {
     if (stopped) return;
-    if (!isAnimatingEigenOverlay(controller.getSnapshot())) {
+    if (!isAnimatingAnalysisOverlay(controller.getSnapshot())) {
       stopInterval();
       return;
     }
@@ -69,14 +69,13 @@ export function startAnalysisFieldOverlayPhaseAnimation(
   };
 }
 
-function isAnimatingEigenOverlay(
+function isAnimatingAnalysisOverlay(
   snapshot: AnalysisFieldOverlayState | null,
 ): snapshot is AnalysisFieldOverlayState & {
   animation: NonNullable<AnalysisFieldOverlayState["animation"]>;
 } {
   return Boolean(
-    snapshot?.source === "eigen-mode" &&
-      snapshot.animation?.animatePhase &&
+    snapshot?.animation?.animatePhase &&
       Number.isFinite(snapshot.animation.animationRateHz) &&
       snapshot.animation.animationRateHz > 0,
   );

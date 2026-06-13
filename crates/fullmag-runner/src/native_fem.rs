@@ -18,15 +18,22 @@ mod runtime_info;
 #[allow(unused_imports)]
 pub(crate) use availability::{
     is_cpu_available, is_gpu_available, native_availability, native_frequency_domain_availability,
-    FrequencyDomainAvailability, FrequencyDomainAvailabilityRequest, FrequencyDomainStudyKind,
-    FrequencyDomainSweepProgress, GpuAvailability,
+    FrequencyDomainAvailability, FrequencyDomainAvailabilityRequest,
+    FrequencyDomainPhaseConvention, FrequencyDomainStudyKind, FrequencyDomainSweepProgress,
+    GpuAvailability,
 };
 #[allow(unused_imports)]
 pub(crate) use eigen::{gpu_eigen_dense_solve, GpuEigenResult};
 #[allow(unused_imports)]
 pub(crate) use frequency_domain::{
-    solve_native_driven_frequency_response, NativeDrivenFrequencyResponseRequest,
+    solve_native_driven_frequency_response, NativeDrivenFrequencyResponseDmiElement,
+    NativeDrivenFrequencyResponseDmiKind, NativeDrivenFrequencyResponseExchangeEdge,
+    NativeDrivenFrequencyResponseFloquetPeriodicPair,
+    NativeDrivenFrequencyResponseMfemOperatorProblem,
+    NativeDrivenFrequencyResponsePeriodicNodePair, NativeDrivenFrequencyResponseRequest,
     NativeDrivenFrequencyResponseResult, NativeDrivenFrequencyResponseTinyValidationProblem,
+    NativeFrequencyDomainCancelCallback, NativeFrequencyDomainExecutionLane,
+    NativeFrequencyDomainProgress, NativeFrequencyDomainProgressCallback,
     NativeFrequencyDomainStatus,
 };
 #[allow(unused_imports)]
@@ -664,6 +671,21 @@ impl NativeFemBackend {
             damping: plan.material.damping,
             gyromagnetic_ratio: plan.gyromagnetic_ratio,
         };
+        let anisotropy_axis_x_field: Vec<f64> = plan
+            .anisotropy_axis_field
+            .as_ref()
+            .map(|axes| axes.iter().map(|axis| axis[0]).collect())
+            .unwrap_or_default();
+        let anisotropy_axis_y_field: Vec<f64> = plan
+            .anisotropy_axis_field
+            .as_ref()
+            .map(|axes| axes.iter().map(|axis| axis[1]).collect())
+            .unwrap_or_default();
+        let anisotropy_axis_z_field: Vec<f64> = plan
+            .anisotropy_axis_field
+            .as_ref()
+            .map(|axes| axes.iter().map(|axis| axis[2]).collect())
+            .unwrap_or_default();
         let resolved_demag_realization = if plan.enable_demag {
             plan.demag_realization.ok_or_else(|| RunError {
                 message: "native FEM backend requires a resolved Poisson demag realization when demag is enabled".to_string(),
@@ -962,6 +984,12 @@ impl NativeFemBackend {
                 .ku2_field
                 .as_ref()
                 .map_or(0, |v| v.len() as u64),
+            anisotropy_axis_x_field: optional_slice_ptr(&anisotropy_axis_x_field),
+            anisotropy_axis_x_field_len: anisotropy_axis_x_field.len() as u64,
+            anisotropy_axis_y_field: optional_slice_ptr(&anisotropy_axis_y_field),
+            anisotropy_axis_y_field_len: anisotropy_axis_y_field.len() as u64,
+            anisotropy_axis_z_field: optional_slice_ptr(&anisotropy_axis_z_field),
+            anisotropy_axis_z_field_len: anisotropy_axis_z_field.len() as u64,
             dind_field: plan
                 .dind_field
                 .as_deref()
@@ -1836,7 +1864,7 @@ impl NativeFemBackend {
                         "native FEM preview quantity '{}' is not supported",
                         other.as_str()
                     ),
-                })
+                });
             }
         };
         let active_mask = (crate::quantities::quantity_spatial_domain(&request.quantity)
@@ -2014,6 +2042,7 @@ mod tests {
                 dind_field: None,
                 dbulk_field: None,
             },
+            anisotropy_axis_field: None,
             ms_element_field: None,
             a_element_field: None,
             region_materials: Vec::new(),
@@ -2295,7 +2324,8 @@ mod tests {
             "native FEM FFI plan must lower llg_overdamped into the native precession flag"
         );
         assert!(
-            plan_desc_body.contains(".ms_element_field") && plan_desc_body.contains(".a_element_field"),
+            plan_desc_body.contains(".ms_element_field")
+                && plan_desc_body.contains(".a_element_field"),
             "native FEM FFI plan must pass FEM per-element material coefficient arrays through to the native ABI"
         );
     }
@@ -2505,9 +2535,7 @@ mod tests {
                 Ok(None) => panic!("{algorithm:?} forced-Hypre relaxation was interrupted"),
                 Err(error) => {
                     assert!(
-                        error
-                            .message
-                            .contains("OpenMPI singleton socket support"),
+                        error.message.contains("OpenMPI singleton socket support"),
                         "{algorithm:?} forced-Hypre must return a controlled OpenMPI preflight error, got: {}",
                         error.message
                     );
@@ -3341,6 +3369,7 @@ mod tests {
                 dind_field: None,
                 dbulk_field: None,
             },
+            anisotropy_axis_field: None,
             ms_element_field: None,
             a_element_field: None,
             region_materials: Vec::new(),

@@ -14,6 +14,14 @@ struct MfemDrivenResponseValidationProblem {
     const TangentOperatorEdgeBlock *exchange_edges = nullptr;
     std::uint64_t exchange_edge_count = 0;
     const double *h_ext_a_per_m = nullptr;
+    const double *uniaxial_anisotropy_axis = nullptr;
+    double uniaxial_anisotropy_field_a_per_m = 0.0;
+    const double *alpha_per_node = nullptr;
+    const MfemDmiElementTangentData *dmi_elements = nullptr;
+    std::uint64_t dmi_element_count = 0;
+    const double *dmi_lumped_mass = nullptr;
+    const double *dmi_ms_field = nullptr;
+    double dmi_uniform_ms = 0.0;
     double gamma0 = 0.0;
     double alpha = 0.0;
     const double *frequencies_hz = nullptr;
@@ -27,6 +35,7 @@ struct MfemDrivenResponseValidationProblem {
     std::uint64_t residual_capacity = 0;
     bool (*cancel_requested)(void *user_data) = nullptr;
     void *cancel_user_data = nullptr;
+    const double *drive_imag = nullptr;
 };
 
 struct MfemDrivenResponseValidationResult {

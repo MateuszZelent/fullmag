@@ -295,4 +295,54 @@ describe("StudyInspectorPanelModel", () => {
     expect(model.runtime.state).toBe("completed");
     expect(model.runtime.relaxTorqueStop?.status).toBe("93.8% of threshold");
   });
+
+  it("uses solver pseudotime for active relax stages with pseudotime budgets", () => {
+    const snapshot = studySnapshotFromScene({
+      study: {
+        stages: [
+          {
+            kind: "relax",
+            max_pseudotime_s: "1e-5",
+            relax_algorithm: "projected_gradient_bb",
+            stage_id: "stage-relax",
+          },
+        ],
+      },
+    } as never);
+
+    const model = resolveStudyInspectorModel({
+      commandQueue: null,
+      currentRun: null,
+      selectedNodeId: "model:study:stages:stage:stage-relax",
+      snapshot,
+      solverStatus: {
+        can_accept_commands: false,
+        is_busy: true,
+        pseudo_time_seconds: 8e-6,
+        revision: 14,
+        runtime_state: "running",
+        runtime_status_code: "running",
+        runtime_status_kind: "running",
+        session_status: "running",
+        sim_time_seconds: 0,
+        warnings: [],
+      } as never,
+      stageExecution: {
+        active_stage_index: 0,
+        active_stage_kind: "relax",
+        completed_stage_indexes: [],
+        revision: 15,
+        runtime_state: "running",
+        stage_statuses: ["running"],
+        stages: [{ stage_id: "stage-relax", status: "running" }],
+        total_stages: 1,
+      } as never,
+    });
+
+    expect(model.runtime.relaxTimeStop).toMatchObject({
+      budget: "1.000000e-5 s",
+      elapsed: "8.000000e-6 s",
+      status: "80.0% of budget",
+    });
+  });
 });

@@ -50,6 +50,9 @@ pub(crate) fn scalar_snapshot_from_step(stats: &StepStats) -> HashMap<String, f6
     scalars.insert("max_h_demag".to_string(), stats.max_h_demag);
     scalars.insert("max_torque_Apm".to_string(), stats.max_torque_Apm);
     scalars.insert("max_torque_T".to_string(), stats.max_torque_T);
+    if let Some(pseudo_time_s) = stats.pseudo_time_s {
+        scalars.insert("pseudo_time_s".to_string(), pseudo_time_s);
+    }
     scalars
 }
 

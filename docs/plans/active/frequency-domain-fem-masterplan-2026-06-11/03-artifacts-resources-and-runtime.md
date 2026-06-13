@@ -164,6 +164,18 @@ Required `artifacts` fields:
 - `mode_metadata_paths`
 - `frequency_point_paths`
 
+Required `diagnostics` additions for k = 0 static-periodic driven response:
+
+- `static_periodic_projection`
+- `static_periodic_node_pair_count`
+- `static_periodic_frame_max_mismatch`
+- `static_periodic_drive_max_mismatch`
+
+When `static_periodic_projection=true`, `static_periodic_node_pair_count` must
+be positive and both mismatch diagnostics must be finite and below the runtime
+artifact verifier tolerance. These fields describe zero-phase static periodic
+projection only; they do not imply nonzero-k Floquet/Bloch support.
+
 Required `resources` fields:
 
 - `spectrum_resource_key`

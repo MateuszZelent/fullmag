@@ -120,6 +120,26 @@
   color: var(--fm-stale);
 }
 
+.fm-explorer-node--warning {
+  color: var(--fm-warning);
+}
+
+.fm-explorer-node--failed {
+  color: var(--fm-danger);
+}
+
+.fm-explorer-node--active {
+  color: var(--fm-accent);
+}
+
+.fm-explorer-node--done {
+  color: var(--fm-success);
+}
+
+.fm-explorer-node--muted {
+  color: var(--fm-text-muted);
+}
+
 .fm-explorer-tree-row[data-status="failed"],
 .fm-explorer-tree-row[data-status="unsupported"] {
   color: var(--fm-danger);
@@ -134,9 +154,14 @@
 }
 
 .fm-explorer-tree-row[data-status="completed"],
-.fm-explorer-tree-row[data-status="skipped"],
 .fm-explorer-tree-row[data-status="mesh-ready"] {
   color: var(--fm-success);
+}
+
+.fm-explorer-tree-row[data-status="queued"],
+.fm-explorer-tree-row[data-status="skipped"],
+.fm-explorer-tree-row[data-status="cancelled"] {
+  color: var(--fm-text-muted);
 }
 
 .fm-explorer-tree-row[data-status="mesh-building"] {

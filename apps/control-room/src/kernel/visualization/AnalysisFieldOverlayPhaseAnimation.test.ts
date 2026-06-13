@@ -23,6 +23,24 @@ function setEigenOverlay(controller: AnalysisFieldOverlayController): void {
   });
 }
 
+function setResponseOverlay(controller: AnalysisFieldOverlayController): void {
+  controller.set({
+    animation: {
+      animatePhase: true,
+      animationRateHz: 1,
+    },
+    fieldId: "analysis:frequency-response:frequency-0001",
+    label: "1 GHz",
+    query: {
+      component: "full",
+      phase_rad: 0,
+      scope_kind: "full",
+      view: "phase_rotated_real",
+    },
+    source: "frequency-response",
+  });
+}
+
 describe("AnalysisFieldOverlayPhaseAnimation", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -70,5 +88,27 @@ describe("AnalysisFieldOverlayPhaseAnimation", () => {
 
     expect(clearIntervalSpy).toHaveBeenCalled();
     expect(controller.getSnapshot()).toBeNull();
+  });
+
+  it("advances response field phase while response animation is active", () => {
+    vi.useFakeTimers();
+    const controller = new AnalysisFieldOverlayController();
+    setResponseOverlay(controller);
+
+    const handle = startAnalysisFieldOverlayPhaseAnimation(controller, {
+      intervalMs: 100,
+    });
+
+    vi.advanceTimersByTime(100);
+
+    expect(controller.getSnapshot()).toMatchObject({
+      query: {
+        phase_rad: 0.2 * Math.PI,
+        view: "phase_rotated_real",
+      },
+      source: "frequency-response",
+    });
+
+    handle.stop();
   });
 });

@@ -7,6 +7,7 @@ import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_DIAGNOSTICS_V1_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FIELD_META_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
@@ -22,9 +23,29 @@ import {
   buildEigenDispersionChartModel,
   buildEigenSpectrumChartModel,
   buildFrequencyResponseChartModel,
+  buildFmrPeakTableModel,
+  responseFieldResourcesFromManifest,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 
 import type { ExplorerNode, ExplorerNodeStatus } from "../explorerTypes";
+
+const EIGEN_MODE_FIELD_3D_COMMANDS = [
+  "analysis.eigen.plot-mode-3d",
+  "analysis.eigen.plot-mode-3d-real",
+  "analysis.eigen.plot-mode-3d-imag",
+  "analysis.eigen.plot-mode-3d-amplitude",
+  "analysis.eigen.plot-mode-3d-phase",
+  "analysis.eigen.plot-mode-3d-phase-rotated-real",
+];
+
+const FREQUENCY_RESPONSE_FIELD_3D_COMMANDS = [
+  "analysis.frequency-response.plot-response-field-3d",
+  "analysis.frequency-response.plot-response-field-3d-real",
+  "analysis.frequency-response.plot-response-field-3d-imag",
+  "analysis.frequency-response.plot-response-field-3d-amplitude",
+  "analysis.frequency-response.plot-response-field-3d-phase",
+  "analysis.frequency-response.plot-response-field-3d-phase-rotated-real",
+];
 
 export interface ExplorerTreeResources {
   frequencyDomainBranches?: FrequencyDomainJsonArtifactResource | null;
@@ -61,7 +82,13 @@ export function buildFrequencyDomainResultNode(
         icon: "sparkles",
         status,
       },
-      buildFrequencyDomainFmrNode(manifest, parentId, status),
+      buildFrequencyDomainFmrNode({
+        manifest,
+        parentId,
+        responseSweep,
+        spectrum,
+        status,
+      }),
       {
         id: `${parentId}:dispersion`,
         kind: "results.frequency_domain.dispersion",
@@ -94,9 +121,13 @@ export function buildFrequencyDomainResultNode(
         kind: "results.frequency_domain.response_map",
         label: "Response Map",
         parentId,
-        badge: "future gated",
+        badge: manifest?.floquet_nonzero_k_response_supported
+          ? "Floquet response"
+          : "response-k blocked",
         icon: "database",
-        status: "unsupported",
+        status: manifest?.floquet_nonzero_k_response_supported
+          ? "stale"
+          : "unsupported",
       },
       buildEigenResultNode(manifest, parentId, branches, dispersion, spectrum),
       buildFrequencyResponseResultNode(manifest, parentId, responseSweep),
@@ -154,11 +185,21 @@ function buildEigenKPathNode({
   };
 }
 
-function buildFrequencyDomainFmrNode(
-  manifest: FrequencyDomainManifestResource | null | undefined,
-  parentId: string,
-  status: ExplorerNodeStatus,
-): ExplorerNode {
+function buildFrequencyDomainFmrNode({
+  manifest,
+  parentId,
+  responseSweep,
+  spectrum,
+  status,
+}: {
+  manifest: FrequencyDomainManifestResource | null | undefined;
+  parentId: string;
+  responseSweep: FrequencyDomainJsonArtifactResource | null | undefined;
+  spectrum: FrequencyDomainJsonArtifactResource | null | undefined;
+  status: ExplorerNodeStatus;
+}): ExplorerNode {
+  const fmrPeaks = buildFmrPeakTableModel({ responseSweep, spectrum });
+  const peakCount = fmrPeaks.peaks.length;
   return {
     id: `${parentId}:fmr`,
     kind: "results.frequency_domain.fmr",
@@ -187,13 +228,21 @@ function buildFrequencyDomainFmrNode(
         status: availabilityStatus(manifest?.response.driven_response_available),
       },
       {
+        artifactPath:
+          responseSweep?.artifact_path ?? spectrum?.artifact_path ?? undefined,
+        calculationMode: "fmr_response",
         id: `${parentId}:fmr:peaks`,
         kind: "results.frequency_domain.fmr_peaks",
         label: "FMR Peaks",
         parentId: `${parentId}:fmr`,
-        badge: "waiting for artifacts",
+        badge: peakCount > 0 ? `${peakCount} peak(s)` : "waiting for artifacts",
         icon: "gauge",
-        status: manifest ? "stale" : "unsupported",
+        resourceRef: responseSweep
+          ? ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH
+          : spectrum
+            ? ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH
+            : undefined,
+        status: peakCount > 0 ? "ready" : manifest ? "stale" : "unsupported",
       },
     ],
   };
@@ -367,7 +416,7 @@ function buildEigenModeNodes(
       parentId,
       badge: `${(point.frequencyHz / 1e9).toFixed(3)} GHz`,
       branchId: point.branchId ?? undefined,
-      contextCommands: ["analysis.eigen.plot-mode-3d"],
+      contextCommands: EIGEN_MODE_FIELD_3D_COMMANDS,
       fieldId:
         point.modeFieldId ??
         `analysis:eigen:sample-${String(sampleIndex).padStart(4, "0")}:mode-${String(modeIndex).padStart(4, "0")}`,
@@ -395,6 +444,7 @@ function buildFrequencyResponseResultNode(
   );
   const frequencyPointNodes = buildResponseFrequencyPointNodes(
     `${parentId}:frequency-points`,
+    manifest,
     responseSweep,
     progress?.completed_frequency_points ?? 0,
   );
@@ -541,10 +591,12 @@ function buildResponseObservableNodes(
 
 function buildResponseFrequencyPointNodes(
   parentId: string,
+  manifest: FrequencyDomainManifestResource | null | undefined,
   responseSweep: FrequencyDomainJsonArtifactResource | null | undefined,
   completedFrequencyPoints: number,
 ): ExplorerNode[] {
   const model = buildFrequencyResponseChartModel(responseSweep);
+  const fieldResources = responseFieldResourceMap(manifest);
   const frequencyPoints = new Map<
     number,
     { frequencyHz: number; observableCount: number }
@@ -566,8 +618,8 @@ function buildResponseFrequencyPointNodes(
       label: `Frequency ${frequencyIndex}`,
       parentId,
       badge: `${(point.frequencyHz / 1e9).toFixed(3)} GHz, ${point.observableCount} observable(s)`,
-      contextCommands: ["analysis.frequency-response.plot-response-field-3d"],
-      fieldId: `analysis:frequency-response:frequency-${String(frequencyIndex).padStart(4, "0")}`,
+      contextCommands: FREQUENCY_RESPONSE_FIELD_3D_COMMANDS,
+      fieldId: responseFieldId(fieldResources, frequencyIndex),
       frequencyIndex,
       icon: "wave",
       resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
@@ -582,8 +634,8 @@ function buildResponseFrequencyPointNodes(
     label: `Frequency ${frequencyIndex}`,
     parentId,
     badge: "field-ready",
-    contextCommands: ["analysis.frequency-response.plot-response-field-3d"],
-    fieldId: `analysis:frequency-response:frequency-${String(frequencyIndex).padStart(4, "0")}`,
+    contextCommands: FREQUENCY_RESPONSE_FIELD_3D_COMMANDS,
+    fieldId: responseFieldId(fieldResources, frequencyIndex),
     frequencyIndex,
     icon: "wave",
     resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
@@ -653,9 +705,13 @@ export function buildFrequencyDomainResourceNodes(
           kind: "resources.analysis.frequency_domain.response_map",
           label: "Response Map Resources",
           parentId,
-          badge: "future",
+          badge: manifest?.floquet_nonzero_k_response_supported
+            ? "Floquet response"
+            : "response-k blocked",
           icon: "database",
-          status: "unsupported",
+          status: manifest?.floquet_nonzero_k_response_supported
+            ? "stale"
+            : "unsupported",
         },
         {
           id: "resources:mesh:periodic-pairs",
@@ -838,6 +894,33 @@ function responseResourceNode(
   manifest: FrequencyDomainManifestResource | null | undefined,
 ): ExplorerNode {
   const suffix = key.replace("-", "_");
+  if (key === "field") {
+    const fieldResources = responseFieldResourcesFromManifest(
+      manifest?.result_manifest?.payload,
+    );
+    const firstFrequencyIndex = fieldResources[0]?.frequencyIndex;
+    return {
+      id: `resources:analysis:frequency-response:${key}`,
+      kind: `resources.analysis.frequency_response.${suffix}` as ExplorerNode["kind"],
+      label,
+      parentId,
+      badge:
+        fieldResources.length > 0
+          ? `${fieldResources.length} response fields`
+          : "waiting for artifacts",
+      icon,
+      status:
+        fieldResources.length > 0 ? "ready" : manifest ? "stale" : "unsupported",
+      artifactPath: fieldResources[0]?.payloadPath,
+      resourceRef:
+        firstFrequencyIndex === undefined
+          ? ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FIELD_META_PATH
+          : ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FIELD_META_PATH.replace(
+              "{frequency_index}",
+              String(firstFrequencyIndex),
+            ),
+    };
+  }
   const manifestRefs = responseManifestRefs(key);
   const resourceRef = manifestRefs
     ? manifestString(manifest, "resources", manifestRefs.resourceKey) ??
@@ -937,6 +1020,28 @@ function manifestStringArray(
   return Array.isArray(value)
     ? value.filter((entry): entry is string => typeof entry === "string")
     : [];
+}
+
+function responseFieldResourceMap(
+  manifest: FrequencyDomainManifestResource | null | undefined,
+): Map<number, string> {
+  const fieldResources = new Map<number, string>();
+  for (const entry of responseFieldResourcesFromManifest(
+    manifest?.result_manifest?.payload,
+  )) {
+    fieldResources.set(entry.frequencyIndex, entry.fieldResourceId);
+  }
+  return fieldResources;
+}
+
+function responseFieldId(
+  fieldResources: Map<number, string>,
+  frequencyIndex: number,
+): string {
+  return (
+    fieldResources.get(frequencyIndex) ??
+    `analysis:frequency-response:frequency-${String(frequencyIndex).padStart(4, "0")}`
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

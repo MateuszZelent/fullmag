@@ -24,10 +24,48 @@ def require_number(value: Any, field: str) -> float:
     return float(value)
 
 
+def require_vec3(value: Any, field: str) -> list[float]:
+    if not isinstance(value, list) or len(value) != 3:
+        raise SystemExit(f"{field} must be a 3-vector, got {value!r}")
+    return [require_number(component, f"{field}[{index}]") for index, component in enumerate(value)]
+
+
 def require_close(value: Any, expected: float, field: str) -> None:
     actual = require_number(value, field)
     if abs(actual - expected) > 1e-9:
         raise SystemExit(f"{field} mismatch: {actual} != {expected}")
+
+
+def require_point_provenance(point: dict[str, Any], field: str) -> None:
+    require_vec3(point.get("field_vector_A_per_m"), f"{field}.field_vector_A_per_m")
+    orientation = point.get("field_orientation")
+    if not isinstance(orientation, dict):
+        raise SystemExit(f"{field}.field_orientation must be an object, got {orientation!r}")
+    measurement_axis = point.get("measurement_axis")
+    if not (
+        measurement_axis == "field_axis"
+        or isinstance(measurement_axis, dict)
+    ):
+        raise SystemExit(f"{field}.measurement_axis must be present, got {measurement_axis!r}")
+    if point.get("field_display_unit") != "mT":
+        raise SystemExit(f"{field}.field_display_unit must be 'mT'")
+
+
+def require_return_point_snapshot(point: dict[str, Any], field: str) -> None:
+    snapshot_id = point.get("snapshot_id")
+    if not isinstance(snapshot_id, str) or not snapshot_id:
+        raise SystemExit(f"{field}.snapshot_id must identify the saved return-point texture")
+    vector_ref = point.get("snapshot_vector_resource_ref") or point.get("snapshot_resource_ref")
+    if not isinstance(vector_ref, str) or f"snapshot_id={snapshot_id}" not in vector_ref:
+        raise SystemExit(
+            f"{field}.snapshot_vector_resource_ref must reference snapshot_id={snapshot_id!r}"
+        )
+    if point.get("snapshot_zarr_store_ref") != "hysteresis.zarr":
+        raise SystemExit(f"{field}.snapshot_zarr_store_ref must be 'hysteresis.zarr'")
+    if point.get("snapshot_storage_format") != "zarr_v2_json_fallback":
+        raise SystemExit(
+            f"{field}.snapshot_storage_format must be 'zarr_v2_json_fallback'"
+        )
 
 
 def require_point(point: Any, field_value_mT: float, loop_id: str, field: str) -> None:
@@ -48,6 +86,17 @@ def require_point(point: Any, field_value_mT: float, loop_id: str, field: str) -
     require_number(point.get("m_parallel"), f"{field}.m_parallel")
     require_number(point.get("m_oop"), f"{field}.m_oop")
     require_number(point.get("m_ip"), f"{field}.m_ip")
+    require_point_provenance(point, field)
+
+
+def require_major_points_do_not_contain_minor_points(points: list[Any]) -> None:
+    for index, point in enumerate(points):
+        if not isinstance(point, dict):
+            raise SystemExit(f"major-loop point {index} must be an object")
+        if point.get("minor_loop_id") is not None or point.get("protocol_role") == "minor":
+            raise SystemExit(
+                f"major-loop point {index} must not contain minor-loop branch data"
+            )
 
 
 def main() -> int:
@@ -70,6 +119,7 @@ def main() -> int:
         raise SystemExit(f"expected one minor loop, got {loops!r}")
     if not isinstance(major_points, list) or len(major_points) < 3:
         raise SystemExit("major-loop artifact must contain at least 3 points")
+    require_major_points_do_not_contain_minor_points(major_points)
 
     loop = loops[0]
     if not isinstance(loop, dict):
@@ -95,6 +145,7 @@ def main() -> int:
         raise SystemExit(f"minor loop must contain two branch points, got {points!r}")
     require_point(points[0], EXPECTED_REVERSAL_MT, loop_id, "points[0]")
     require_point(points[1], EXPECTED_RETURN_MT, loop_id, "points[1]")
+    require_return_point_snapshot(points[1], "points[1]")
 
     settle_trace = loop.get("settle_trace")
     if not isinstance(settle_trace, list) or not settle_trace:

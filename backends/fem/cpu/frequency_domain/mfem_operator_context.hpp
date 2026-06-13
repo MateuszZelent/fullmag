@@ -33,6 +33,8 @@ struct MfemOperatorContextDescriptor {
     FrequencyDomainDemagKind demag_kind = FrequencyDomainDemagKind::none;
     bool exchange_enabled = false;
     bool zeeman_enabled = false;
+    bool uniaxial_anisotropy_enabled = false;
+    bool dmi_enabled = false;
     bool demag_enabled = false;
     bool mfem_mesh_available = false;
     bool periodic_reduced_mesh = false;

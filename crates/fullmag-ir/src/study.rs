@@ -766,6 +766,8 @@ pub enum StudyIR {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         field_values_mT: Option<Vec<f64>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        field_unit_provenance: Option<FieldUnitProvenanceIR>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         direction: Option<[f64; 3]>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         orientation: Option<FieldOrientationIR>,
@@ -775,6 +777,8 @@ pub enum StudyIR {
         angular_family: Option<HysteresisAngularFamilyIR>,
         #[serde(default = "default_initial_protocol")]
         initial_protocol: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        initial_state_ref: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         saturation: Option<SaturationProbeIR>,
         #[serde(default = "default_branch_mode")]
@@ -916,6 +920,16 @@ pub enum FieldOrientationIR {
     Preset { preset_name: String },
     Sample { theta: f64, phi: f64 },
     Global { vector: [f64; 3] },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FieldUnitProvenanceIR {
+    pub authored_quantity: String,
+    pub authored_unit: String,
+    pub canonical_quantity: String,
+    pub canonical_unit: String,
+    pub display_unit: String,
+    pub mu0_h_per_m: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

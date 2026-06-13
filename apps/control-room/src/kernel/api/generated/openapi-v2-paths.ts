@@ -31,6 +31,7 @@ export const openApiV2PathLiterals = [
   "/v2/sessions/current/analysis/frequency-response/magnetic-sweep.v1",
   "/v2/sessions/current/analysis/hysteresis-family/{stage_id}",
   "/v2/sessions/current/analysis/hysteresis-family/{stage_id}/variants/{variant_id}/points",
+  "/v2/sessions/current/analysis/hysteresis/{stage_id}/adaptive-refinement",
   "/v2/sessions/current/analysis/hysteresis/{stage_id}/branches",
   "/v2/sessions/current/analysis/hysteresis/{stage_id}/metrics",
   "/v2/sessions/current/analysis/hysteresis/{stage_id}/minor-loops",

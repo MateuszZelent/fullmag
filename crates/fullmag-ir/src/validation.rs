@@ -943,6 +943,21 @@ pub(crate) fn is_supported_llg_integrator(integrator: &str) -> bool {
 }
 
 pub(crate) fn validate_study_dynamics(dynamics: &DynamicsIR, errors: &mut Vec<String>) {
+    validate_study_dynamics_with_integrator_policy(dynamics, true, errors);
+}
+
+pub(crate) fn validate_frequency_response_dynamics(
+    dynamics: &DynamicsIR,
+    errors: &mut Vec<String>,
+) {
+    validate_study_dynamics_with_integrator_policy(dynamics, false, errors);
+}
+
+fn validate_study_dynamics_with_integrator_policy(
+    dynamics: &DynamicsIR,
+    validate_integrator: bool,
+    errors: &mut Vec<String>,
+) {
     match dynamics {
         DynamicsIR::Llg {
             gyromagnetic_ratio,
@@ -954,9 +969,9 @@ pub(crate) fn validate_study_dynamics(dynamics: &DynamicsIR, errors: &mut Vec<St
             if *gyromagnetic_ratio <= 0.0 {
                 errors.push("llg.gyromagnetic_ratio must be positive".to_string());
             }
-            if integrator.trim().is_empty() {
+            if validate_integrator && integrator.trim().is_empty() {
                 errors.push("llg.integrator must not be empty".to_string());
-            } else if !is_supported_llg_integrator(integrator.as_str()) {
+            } else if validate_integrator && !is_supported_llg_integrator(integrator.as_str()) {
                 errors.push(
                     "llg.integrator must be one of: heun, rk4, rk23, rk45, abm3, auto".to_string(),
                 );

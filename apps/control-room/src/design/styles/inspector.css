@@ -662,6 +662,26 @@
   flex: 1;
 }
 
+.fm-inspector-form-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--fm-space-2);
+  padding: var(--fm-space-2);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-sm);
+  background: var(--fm-bg-surface);
+}
+
+.fm-inspector-form-section__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--fm-space-2);
+  min-width: 0;
+  color: var(--fm-text-primary);
+  font-size: var(--fm-font-size-xs);
+}
+
 .fm-hysteresis-inspector-step-list {
   display: flex;
   flex-direction: column;
@@ -745,6 +765,17 @@
 
 .fm-hysteresis-inspector-table tr[data-status="warning"] {
   background: color-mix(in srgb, var(--fm-warning) 7%, transparent);
+}
+
+.fm-hysteresis-inspector-point-source {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid color-mix(in srgb, var(--fm-accent) 35%, var(--fm-border-subtle));
+  border-radius: var(--fm-radius-xs);
+  color: var(--fm-accent-strong);
+  font-size: 10px;
+  line-height: 1.4;
+  padding: 0 var(--fm-space-1);
 }
 
 .fm-hysteresis-inspector-table__actions-heading {

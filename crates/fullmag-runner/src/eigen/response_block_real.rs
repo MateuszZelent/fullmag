@@ -83,6 +83,7 @@ pub struct TangentLeakageDiagnosticArtifact {
 #[derive(Clone, Debug, Serialize)]
 pub struct ResponseExcitationProvenanceArtifact {
     pub kind: &'static str,
+    pub phase_rad: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -98,6 +99,7 @@ pub struct FieldDrivenBlockRealResponsePoint {
     pub block_dimension: usize,
     pub matrix_layout: &'static str,
     pub excitation_kind: &'static str,
+    pub excitation_phase_rad: f64,
     pub sweep_reuse: BlockRealSweepReuseProvenance,
 }
 
@@ -141,14 +143,15 @@ pub fn solve_field_driven_block_real_sweep_with_interrupt(
     let mut previous_solution: Option<BlockRealHarmonicSolution> = None;
     let mut response_points = Vec::with_capacity(frequencies_rad_per_s.len());
 
+    if should_interrupt_after_completed_points(0) {
+        return Ok(FieldDrivenBlockRealSweepOutcome {
+            points: response_points,
+            interrupted: true,
+            requested_point_count: frequencies_rad_per_s.len(),
+        });
+    }
+
     for frequency_rad_per_s in frequencies_rad_per_s {
-        if should_interrupt_after_completed_points(response_points.len()) {
-            return Ok(FieldDrivenBlockRealSweepOutcome {
-                points: response_points,
-                interrupted: true,
-                requested_point_count: frequencies_rad_per_s.len(),
-            });
-        }
         let system = BlockRealHarmonicSystem {
             stiffness: template.stiffness.clone(),
             mass: template.mass.clone(),
@@ -170,6 +173,13 @@ pub fn solve_field_driven_block_real_sweep_with_interrupt(
             solution,
             sweep_reuse,
         ));
+        if should_interrupt_after_completed_points(response_points.len()) {
+            return Ok(FieldDrivenBlockRealSweepOutcome {
+                points: response_points,
+                interrupted: true,
+                requested_point_count: frequencies_rad_per_s.len(),
+            });
+        }
     }
 
     Ok(FieldDrivenBlockRealSweepOutcome {
@@ -274,6 +284,7 @@ fn field_driven_response_sweep_point_artifact(
         },
         excitation_provenance: ResponseExcitationProvenanceArtifact {
             kind: point.excitation_kind,
+            phase_rad: point.excitation_phase_rad,
         },
         sweep_reuse: point.sweep_reuse.clone(),
     }
@@ -307,6 +318,7 @@ fn field_driven_response_point(
     solution: BlockRealHarmonicSolution,
     sweep_reuse: BlockRealSweepReuseProvenance,
 ) -> FieldDrivenBlockRealResponsePoint {
+    let excitation_phase_rad = field_excitation_global_phase(field_excitation);
     let amplitude = DVector::from_iterator(
         solution.response.len(),
         solution.response.iter().map(|value| value.norm()),
@@ -344,8 +356,17 @@ fn field_driven_response_point(
         block_dimension: solution.block_dimension,
         matrix_layout: solution.matrix_layout,
         excitation_kind: "field",
+        excitation_phase_rad,
         sweep_reuse,
     }
+}
+
+fn field_excitation_global_phase(field_excitation: &DVector<Complex64>) -> f64 {
+    field_excitation
+        .iter()
+        .find(|value| value.norm_sqr() > 0.0)
+        .map(|value| value.arg())
+        .unwrap_or(0.0)
 }
 
 fn warm_start_provenance(
@@ -512,7 +533,8 @@ mod tests {
             mass: DMatrix::from_element(1, 1, 1.0),
             damping: Some(DMatrix::from_element(1, 1, 0.5)),
         };
-        let field_excitation = DVector::from_element(1, Complex64::new(1.0, 0.0));
+        let field_excitation =
+            DVector::from_element(1, Complex64::from_polar(1.0, std::f64::consts::FRAC_PI_4));
         let sweep = solve_field_driven_block_real_sweep(&template, &[2.0], &field_excitation)
             .expect("field-driven sweep should solve");
 
@@ -537,14 +559,31 @@ mod tests {
             .expect("frequency_hz should be numeric");
         assert!((frequency_hz - 1.0 / std::f64::consts::PI).abs() < 1e-12);
         assert_eq!(value["points"][0]["angular_frequency_rad_per_s"], 2.0);
-        assert_eq!(
-            value["points"][0]["m_complex"][0],
-            serde_json::json!([0.0, -1.0])
+        let m_complex = value["points"][0]["m_complex"][0]
+            .as_array()
+            .expect("m_complex entry should be a pair");
+        assert!(
+            (m_complex[0].as_f64().expect("real part should be numeric")
+                - std::f64::consts::FRAC_1_SQRT_2)
+                .abs()
+                < 1e-12
+        );
+        assert!(
+            (m_complex[1]
+                .as_f64()
+                .expect("imaginary part should be numeric")
+                + std::f64::consts::FRAC_1_SQRT_2)
+                .abs()
+                < 1e-12
         );
         assert_eq!(value["points"][0]["response_amplitude"][0], 1.0);
-        assert_eq!(
-            value["points"][0]["response_phase"][0],
-            -std::f64::consts::FRAC_PI_2
+        assert!(
+            (value["points"][0]["response_phase"][0]
+                .as_f64()
+                .expect("response phase should be numeric")
+                + std::f64::consts::FRAC_PI_4)
+                .abs()
+                < 1e-12
         );
         assert_eq!(
             value["points"][0]["susceptibility_tensor"][0][0],
@@ -557,6 +596,10 @@ mod tests {
         );
         assert!(value["points"][0]["tangent_leakage"]["l2_norm"].is_null());
         assert_eq!(value["points"][0]["excitation_provenance"]["kind"], "field");
+        assert_eq!(
+            value["points"][0]["excitation_provenance"]["phase_rad"],
+            std::f64::consts::FRAC_PI_4
+        );
         assert_eq!(value["points"][0]["residual_l2_norm"], 0.0);
     }
 

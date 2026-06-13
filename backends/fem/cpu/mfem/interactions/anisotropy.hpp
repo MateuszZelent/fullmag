@@ -24,6 +24,9 @@ struct AnisotropyRuntimeState {
     double uniaxial_Ku = 0.0;
     double uniaxial_Ku2 = 0.0;
     std::array<double, 3> uniaxial_axis{0.0, 0.0, 1.0};
+    std::vector<double> uniaxial_axis_x_field;
+    std::vector<double> uniaxial_axis_y_field;
+    std::vector<double> uniaxial_axis_z_field;
     bool cubic_enabled = false;
     double cubic_Kc1 = 0.0;
     double cubic_Kc2 = 0.0;

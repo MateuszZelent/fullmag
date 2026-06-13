@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type {
   FrequencyDomainManifestResource,
+  HysteresisExecutionTreeResource,
   SceneResource,
 } from "@/kernel/api/apiTypes";
 import {
@@ -13,9 +14,12 @@ import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_DIAGNOSTICS_V1_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FIELD_META_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
+  ANALYSIS_HYSTERESIS_POINT_PATH,
+  DATA_FIELD_VECTOR_PATH,
 } from "@/kernel/api/apiPaths";
 
 import {
@@ -32,12 +36,23 @@ const TORQUE_TOLERANCE_FOR_1E_4_T = 1e-4 / (4 * Math.PI * 1e-7);
 
 const capability = (status: string, reason = "test fixture") => ({ status, reason });
 
+function snapshotVectorResourceKey(snapshotId: string): string {
+  return `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?component=full&scope_kind=full&snapshot_id=${snapshotId}`;
+}
+
+function hysteresisPointResourceKey(stageId: string, pointId: number): string {
+  return ANALYSIS_HYSTERESIS_POINT_PATH.replace("{stage_id}", stageId).replace(
+    "{point_id}",
+    String(pointId),
+  );
+}
+
 const frequencyDomainCapabilityFixture = {
   boundary: {
     floquet_modal: capability("semantic_only"),
     floquet_response: capability("unsupported"),
     periodic_pair_diagnostics: capability("reference_executable"),
-    static_periodic: capability("semantic_only"),
+    static_periodic: capability("partial_production_executable"),
   },
   demag: {
     floquet_dynamic_k: capability("unsupported"),
@@ -59,7 +74,7 @@ const frequencyDomainCapabilityFixture = {
   },
   response: {
     frequency_sweep: capability("reference_executable"),
-    magnetic_cpu: capability("reference_executable"),
+    magnetic_cpu: capability("partial_production_executable"),
     magnetic_gpu: capability("unsupported"),
     magnetoelastic_elastodynamic: capability("unsupported"),
     magnetoelastic_quasistatic: capability("unsupported"),
@@ -90,6 +105,7 @@ const FREQUENCY_DOMAIN_MANIFEST: FrequencyDomainManifestResource = {
     floquet_response_available: false,
     gpu_available: false,
     modal_solver_available: false,
+    static_periodic_response_available: false,
     reason: "production modal solver is not implemented",
     status: "unavailable",
     study_kind: "eigenmodes",
@@ -97,16 +113,19 @@ const FREQUENCY_DOMAIN_MANIFEST: FrequencyDomainManifestResource = {
   existing_frequency_response_namespace_preserved: true,
   family_namespace: "frequencyDomain",
   floquet_nonzero_k_demag_supported: false,
+  floquet_nonzero_k_response_supported: false,
   response: {
-    diagnostics_json: "{}",
-    driven_response_available: false,
+    diagnostics_json:
+      '{"schema_version":"frequency_domain_availability.v1","execution_lane":"native_fem_mfem_frequency_domain_cpu","scope":"gamma_free_or_static_periodic_magnetic_response"}',
+    driven_response_available: true,
     dynamic_demag_k_available: false,
     floquet_modal_available: false,
     floquet_response_available: false,
     gpu_available: false,
     modal_solver_available: false,
-    reason: "driven response solver is not implemented",
-    status: "unavailable",
+    static_periodic_response_available: true,
+    reason: "",
+    status: "ok",
     study_kind: "frequency_response",
   },
   response_cancel_requested: null,
@@ -924,6 +943,17 @@ describe("buildModelTree", () => {
     });
     expect(
       flattened.find(
+        (node) =>
+          node.id === "model:study:stages:stage:eigen-1:periodic-pairs",
+      ),
+    ).toMatchObject({
+      kind: "study.stage.eigenmodes.periodic_pairs",
+      label: "Periodic Pairs",
+      stageId: "eigen-1",
+      stageIndex: 4,
+    });
+    expect(
+      flattened.find(
         (node) => node.id === "model:study:stages:stage:freq-1",
       ),
     ).toMatchObject({
@@ -937,6 +967,27 @@ describe("buildModelTree", () => {
     ).toMatchObject({
       kind: "study.stage.frequency_response.excitation",
       label: "Excitation",
+      stageId: "freq-1",
+      stageIndex: 5,
+    });
+    expect(
+      flattened.find(
+        (node) =>
+          node.id === "model:study:stages:stage:freq-1:periodic-pairs",
+      ),
+    ).toMatchObject({
+      kind: "study.stage.frequency_response.periodic_pairs",
+      label: "Periodic Pairs",
+      stageId: "freq-1",
+      stageIndex: 5,
+    });
+    expect(
+      flattened.find(
+        (node) => node.id === "model:study:stages:stage:freq-1:k-grid",
+      ),
+    ).toMatchObject({
+      kind: "study.stage.frequency_response.k_grid",
+      label: "k/f Grid",
       stageId: "freq-1",
       stageIndex: 5,
     });
@@ -1044,11 +1095,46 @@ describe("buildModelTree", () => {
       status: "unsupported",
     });
     expect(
+      results.find(
+        (node) => node.id === "results:frequency-domain:response-map",
+      ),
+    ).toMatchObject({
+      badge: "response-k blocked",
+      kind: "results.frequency_domain.response_map",
+      status: "unsupported",
+    });
+    expect(
       results.find((node) => node.id === "results:eigen:k-path"),
     ).toMatchObject({
       badge: "2 k sample(s)",
       kind: "results.eigen.k_path",
       resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+      status: "ready",
+    });
+    expect(
+      results.find((node) => node.id === "results:frequency-domain:fmr:peaks"),
+    ).toMatchObject({
+      artifactPath: "response/magnetic_response_sweep.v2.json",
+      badge: "4 peak(s)",
+      calculationMode: "fmr_response",
+      kind: "results.frequency_domain.fmr_peaks",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+      status: "ready",
+    });
+    expect(
+      results.find(
+        (node) => node.id === "results:frequency-domain:fmr:response-sweep",
+      ),
+    ).toMatchObject({
+      badge: "available",
+      kind: "results.frequency_domain.fmr_response_sweep",
+      status: "ready",
+    });
+    expect(
+      results.find((node) => node.id === "results:frequency-response:sweep"),
+    ).toMatchObject({
+      badge: "available",
+      kind: "results.frequency_response.sweep",
       status: "ready",
     });
     expect(
@@ -1070,7 +1156,14 @@ describe("buildModelTree", () => {
     ).toMatchObject({
       badge: "12.500 GHz",
       branchId: "branch-0",
-      contextCommands: ["analysis.eigen.plot-mode-3d"],
+      contextCommands: [
+        "analysis.eigen.plot-mode-3d",
+        "analysis.eigen.plot-mode-3d-real",
+        "analysis.eigen.plot-mode-3d-imag",
+        "analysis.eigen.plot-mode-3d-amplitude",
+        "analysis.eigen.plot-mode-3d-phase",
+        "analysis.eigen.plot-mode-3d-phase-rotated-real",
+      ],
       fieldId: "analysis:eigen:sample-0000:mode-0002",
       kind: "results.eigen.mode",
       modeIndex: 2,
@@ -1111,7 +1204,14 @@ describe("buildModelTree", () => {
       ),
     ).toMatchObject({
       badge: "9.500 GHz, 2 observable(s)",
-      contextCommands: ["analysis.frequency-response.plot-response-field-3d"],
+      contextCommands: [
+        "analysis.frequency-response.plot-response-field-3d",
+        "analysis.frequency-response.plot-response-field-3d-real",
+        "analysis.frequency-response.plot-response-field-3d-imag",
+        "analysis.frequency-response.plot-response-field-3d-amplitude",
+        "analysis.frequency-response.plot-response-field-3d-phase",
+        "analysis.frequency-response.plot-response-field-3d-phase-rotated-real",
+      ],
       fieldId: "analysis:frequency-response:frequency-0000",
       frequencyIndex: 0,
       kind: "results.frequency_response.frequency_point",
@@ -1152,6 +1252,7 @@ describe("buildModelTree", () => {
             missing_reason: null,
             partial_artifacts_available: true,
             schema_version: "frequency_domain_sweep_progress.v1",
+            state: "running",
             status: "ready",
             total_frequency_points: 4,
             written_frequency_point_artifacts: 2,
@@ -1166,6 +1267,7 @@ describe("buildModelTree", () => {
             progress_json:
               '{"schema_version":"frequency_domain_sweep_progress.v1","state":"cancel_requested"}',
             schema_version: "frequency_domain_sweep_progress.v1",
+            state: "cancel_requested",
             status: "cancel_requested",
             total_frequency_points: 4,
             written_frequency_point_artifacts: 1,
@@ -1191,6 +1293,11 @@ describe("buildModelTree", () => {
         expect.objectContaining({
           contextCommands: [
             "analysis.frequency-response.plot-response-field-3d",
+            "analysis.frequency-response.plot-response-field-3d-real",
+            "analysis.frequency-response.plot-response-field-3d-imag",
+            "analysis.frequency-response.plot-response-field-3d-amplitude",
+            "analysis.frequency-response.plot-response-field-3d-phase",
+            "analysis.frequency-response.plot-response-field-3d-phase-rotated-real",
           ],
           fieldId: "analysis:frequency-response:frequency-0000",
           frequencyIndex: 0,
@@ -1245,6 +1352,22 @@ describe("buildModelTree", () => {
                   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
                 response_progress_resource_key:
                   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
+                response_field_resources: [
+                  {
+                    field_resource_id:
+                      "analysis:frequency-response:frequency-0000",
+                    frequency_index: 0,
+                    payload_path:
+                      "response/field_payloads/frequency_0000/vector_xyz.bin",
+                  },
+                  {
+                    field_resource_id:
+                      "analysis:frequency-response:frequency-0001",
+                    frequency_index: 1,
+                    payload_path:
+                      "response/field_payloads/frequency_0001/vector_xyz.bin",
+                  },
+                ],
                 response_sweep_resource_key:
                   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
                 spectrum_resource_key:
@@ -1305,6 +1428,19 @@ describe("buildModelTree", () => {
     ).toMatchObject({
       artifactPath: "response/diagnostics.v1.json",
       resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_DIAGNOSTICS_V1_PATH,
+    });
+    expect(
+      resources.find(
+        (node) => node.kind === "resources.analysis.frequency_response.field",
+      ),
+    ).toMatchObject({
+      artifactPath: "response/field_payloads/frequency_0000/vector_xyz.bin",
+      badge: "2 response fields",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FIELD_META_PATH.replace(
+        "{frequency_index}",
+        "0",
+      ),
+      status: "ready",
     });
     expect(
       resources.find((node) => node.kind === "resources.analysis.eigen.spectrum"),
@@ -1379,6 +1515,58 @@ describe("buildModelTree", () => {
         "diagnostics.frequency_domain.periodic_floquet",
       ]),
     );
+  });
+
+  it("uses manifest response field resources for frequency-domain response point field ids", () => {
+    const manifest = {
+      ...FREQUENCY_DOMAIN_MANIFEST,
+      result_manifest: {
+        artifact_path: "frequency_domain/manifest.v1.json",
+        missing_reason: null,
+        payload: {
+          resources: {
+            response_field_resources: [
+              {
+                field_resource_id:
+                  "analysis:frequency-response:frequency-0042",
+                frequency_index: 1,
+                payload_path:
+                  "response/field_payloads/frequency_0001/vector_xyz.bin",
+              },
+            ],
+          },
+        },
+        resource_key: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
+        schema_version: "frequency_domain_manifest.v1",
+        status: "ready",
+      },
+    } satisfies FrequencyDomainManifestResource;
+
+    const results = flattenExplorerNodes(
+      buildExplorerTree("results", {
+        frequencyDomainManifest: manifest,
+        frequencyDomainResponseSweep: FREQUENCY_DOMAIN_RESPONSE_SWEEP,
+      }),
+    );
+
+    expect(
+      results.find(
+        (node) => node.id === "results:frequency-response:frequency-points:0",
+      ),
+    ).toMatchObject({
+      fieldId: "analysis:frequency-response:frequency-0000",
+      frequencyIndex: 0,
+      kind: "results.frequency_response.frequency_point",
+    });
+    expect(
+      results.find(
+        (node) => node.id === "results:frequency-response:frequency-points:1",
+      ),
+    ).toMatchObject({
+      fieldId: "analysis:frequency-response:frequency-0042",
+      frequencyIndex: 1,
+      kind: "results.frequency_response.frequency_point",
+    });
   });
 
   it("renders hysteresis as one dynamic field node with settle algorithms", () => {
@@ -1483,6 +1671,307 @@ describe("buildModelTree", () => {
     });
   });
 
+  it("renders hysteresis active window from the backend execution tree", () => {
+    const snapshot = modelTreeSnapshotWithStageExecution(
+      modelTreeSnapshotFromScene({
+        objects: [],
+        study: {
+          stages: [
+            {
+              kind: "hysteresis",
+              stage_id: "hysteresis-1",
+              field_max_mT: 100,
+              field_min_mT: -100,
+              field_step_mT: 10,
+            },
+          ],
+        },
+      }),
+      {
+        active_stage_index: 0,
+        active_stage_kind: "hysteresis",
+        completed_stage_indexes: [],
+        revision: 21,
+        runtime_state: "running",
+        stage_statuses: ["running"],
+        stages: [
+          {
+            index: 0,
+            stage_id: "hysteresis-1",
+            status: "running",
+            current_field_mT: 30,
+            current_point_index: 7,
+            current_settle_step_index: 1,
+            current_settle_step_kind: "minimize",
+            current_settle_step_method: "projected_gradient_bb",
+          },
+        ],
+        total_stages: 1,
+      } as never,
+    );
+    const executionTree: HysteresisExecutionTreeResource = {
+      active_point_index: 7,
+      after: 2,
+      before: 2,
+      include_bookmarks: false,
+      include_snapshots: false,
+      include_warnings: true,
+      revision: 22,
+      stage_id: "hysteresis-1",
+      stage_index: 0,
+      total_points: 21,
+      window: "active",
+      nodes: [
+        {
+          kind: "summary",
+          label: "Completed points",
+          node_id: "completed",
+          stage_id: "hysteresis-1",
+          status: "done",
+          updated_revision: 22,
+        },
+        {
+          children: [
+            {
+              kind: "settle_algorithm",
+              label: "Relax",
+              node_id: "point-7:relax",
+              settle_step_id: "relax",
+              stage_id: "hysteresis-1",
+              status: "done",
+              updated_revision: 22,
+            },
+            {
+              kind: "settle_algorithm",
+              label: "Minimize",
+              node_id: "point-7:minimize",
+              settle_step_id: "minimize",
+              stage_id: "hysteresis-1",
+              status: "active",
+              updated_revision: 22,
+            },
+            {
+              kind: "settle_algorithm",
+              label: "Dynamics settle",
+              node_id: "point-7:dynamics",
+              settle_step_id: "dynamics",
+              stage_id: "hysteresis-1",
+              status: "queued",
+              updated_revision: 22,
+            },
+            {
+              kind: "snapshot",
+              label: "Snapshot hysteresis_point_007",
+              node_id: "point-7:snapshot:hysteresis_point_007",
+              point_id: 7,
+              resource_ref: snapshotVectorResourceKey("hysteresis_point_007_from_resource"),
+              selection_ref: "hysteresis-snapshot:hysteresis-1:7:hysteresis_point_007_from_selection",
+              stage_id: "hysteresis-1",
+              status: "done",
+              updated_revision: 22,
+            },
+            {
+              kind: "warning",
+              label: "2 warning(s)",
+              node_id: "point-7:warnings",
+              point_id: 7,
+              resource_ref: hysteresisPointResourceKey("hysteresis-1", 7),
+              selection_ref: "hysteresis-warning:hysteresis-1:7",
+              stage_id: "hysteresis-1",
+              status: "warning",
+              updated_revision: 22,
+            },
+          ],
+          kind: "field_point",
+          label: "Field +30 mT",
+          node_id: "point-7",
+          point_id: 7,
+          stage_id: "hysteresis-1",
+          status: "active",
+          updated_revision: 22,
+        },
+      ],
+    };
+    (snapshot.study!.stages[0] as { hysteresisExecutionTree?: HysteresisExecutionTreeResource })
+      .hysteresisExecutionTree = executionTree;
+
+    const flattened = flattenExplorerNodes(buildModelTree(snapshot));
+    const stageId = "model:study:stages:stage:hysteresis-1";
+
+    expect(flattened.find((node) => node.id === `${stageId}:points`)).toMatchObject({
+      badge: "8/21",
+      label: "Points",
+      status: "running",
+    });
+    expect(flattened.find((node) => node.id === `${stageId}:field-point:7`)).toMatchObject({
+      badge: "Field +30 mT",
+      label: "Field +30 mT",
+      status: "running",
+    });
+    expect(
+      flattened.find((node) => node.id === `${stageId}:field-point:7:algorithm:relax`),
+    ).toMatchObject({
+      label: "Relax",
+      status: "completed",
+    });
+    expect(
+      flattened.find((node) => node.id === `${stageId}:field-point:7:algorithm:minimize`),
+    ).toMatchObject({
+      label: "Minimize",
+      status: "running",
+    });
+    expect(
+      flattened.find((node) => node.id === `${stageId}:field-point:7:algorithm:dynamics`),
+    ).toMatchObject({
+      label: "Dynamics settle",
+      status: "queued",
+    });
+    expect(
+      flattened.find((node) => node.id === `${stageId}:field-point:7:snapshot:hysteresis_point_007`),
+    ).toMatchObject({
+      hysteresisSnapshotId: "hysteresis_point_007_from_selection",
+      resourceRef: snapshotVectorResourceKey("hysteresis_point_007_from_resource"),
+      label: "Snapshot hysteresis_point_007",
+      status: "completed",
+    });
+    expect(
+      flattened.find(
+        (node) => node.id === `${stageId}:points:bookmarks`,
+      ),
+    ).toMatchObject({
+      badge: "1 event",
+      label: "Bookmarks",
+      status: "ready",
+    });
+    expect(
+      flattened.find(
+        (node) =>
+          node.id === `${stageId}:points:bookmarks:snapshot:hysteresis_point_007`,
+      ),
+    ).toMatchObject({
+      hysteresisSnapshotId: "hysteresis_point_007_from_selection",
+      label: "Snapshot hysteresis_point_007",
+      resourceRef: snapshotVectorResourceKey("hysteresis_point_007_from_resource"),
+      status: "completed",
+    });
+    expect(
+      flattened.find((node) => node.id === `${stageId}:field-point:7:warning:point-7-warnings`),
+    ).toMatchObject({
+      hysteresisExecutionNodeId: "point-7:warnings",
+      hysteresisExecutionNodeKind: "warning",
+      hysteresisPointId: 7,
+      label: "2 warning(s)",
+      resourceRef: hysteresisPointResourceKey("hysteresis-1", 7),
+      status: "warning",
+    });
+  });
+
+  it("renders hysteresis branches from the backend execution tree", () => {
+    const snapshot = modelTreeSnapshotWithStageExecution(
+      modelTreeSnapshotFromScene({
+        objects: [],
+        study: {
+          stages: [
+            {
+              kind: "hysteresis",
+              stage_id: "hysteresis-1",
+              field_max_mT: 100,
+              field_min_mT: -100,
+              field_step_mT: 10,
+              branch_mode: "major_loop",
+            },
+          ],
+        },
+      }),
+      {
+        active_stage_index: 0,
+        active_stage_kind: "hysteresis",
+        completed_stage_indexes: [],
+        revision: 31,
+        runtime_state: "running",
+        stage_statuses: ["running"],
+        stages: [
+          {
+            index: 0,
+            stage_id: "hysteresis-1",
+            status: "running",
+            current_field_mT: -20,
+            current_point_index: 12,
+          },
+        ],
+        total_stages: 1,
+      } as never,
+    );
+    const executionTree: HysteresisExecutionTreeResource = {
+      active_point_index: 12,
+      after: 2,
+      before: 2,
+      include_bookmarks: false,
+      include_snapshots: false,
+      include_warnings: true,
+      revision: 32,
+      stage_id: "hysteresis-1",
+      stage_index: 0,
+      total_points: 41,
+      window: "active",
+      nodes: [
+        {
+          kind: "branch",
+          label: "Descending branch",
+          node_id: "branch:descending",
+          stage_id: "hysteresis-1",
+          status: "done",
+          updated_revision: 32,
+        },
+        {
+          kind: "branch",
+          label: "Ascending branch",
+          node_id: "branch:ascending",
+          stage_id: "hysteresis-1",
+          status: "active",
+          updated_revision: 32,
+        },
+        {
+          kind: "branch",
+          label: "Minor loop 001",
+          node_id: "branch:minor-loop-001",
+          stage_id: "hysteresis-1",
+          status: "queued",
+          updated_revision: 32,
+        },
+      ],
+    };
+    (snapshot.study!.stages[0] as { hysteresisExecutionTree?: HysteresisExecutionTreeResource })
+      .hysteresisExecutionTree = executionTree;
+
+    const flattened = flattenExplorerNodes(buildModelTree(snapshot));
+    const stageId = "model:study:stages:stage:hysteresis-1";
+
+    expect(
+      flattened
+        .filter((node) => node.parentId === `${stageId}:branches`)
+        .map((node) => node.id),
+    ).toEqual([
+      `${stageId}:branches:branch:descending`,
+      `${stageId}:branches:branch:ascending`,
+      `${stageId}:branches:branch:minor-loop-001`,
+    ]);
+    expect(
+      flattened.find((node) => node.id === `${stageId}:branches:branch:ascending`),
+    ).toMatchObject({
+      branchId: "branch:ascending",
+      hysteresisExecutionNodeId: "branch:ascending",
+      hysteresisExecutionNodeKind: "branch",
+      label: "Ascending branch",
+      status: "running",
+    });
+    expect(flattened.find((node) => node.id === `${stageId}:branches:forward`)).toBeUndefined();
+    expect(flattened.find((node) => node.id === `${stageId}:branches:return`)).toBeUndefined();
+    expect(
+      flattened.find((node) => node.id === `${stageId}:branches:minor-loops`),
+    ).toBeUndefined();
+  });
+
   it("renders hysteresis experiment structure without expanding every field point", () => {
     const snapshot = modelTreeSnapshotWithStageExecution(
       modelTreeSnapshotFromScene({
@@ -1552,13 +2041,18 @@ describe("buildModelTree", () => {
     ).toEqual(expect.arrayContaining([
       `${stageId}:plan`,
       `${stageId}:protocol`,
+      `${stageId}:orientation`,
       `${stageId}:saturation`,
+      `${stageId}:adaptive-refinement`,
+      `${stageId}:angular-family`,
+      `${stageId}:settle-pipeline`,
       `${stageId}:live-run`,
       `${stageId}:branches`,
       `${stageId}:points`,
       `${stageId}:metrics`,
       `${stageId}:snapshots`,
       `${stageId}:field-point:4`,
+      `${stageId}:transitions`,
     ]));
     expect(flattened.find((node) => node.id === `${stageId}:plan`)).toMatchObject({
       label: "Plan",
@@ -1568,6 +2062,32 @@ describe("buildModelTree", () => {
     expect(flattened.find((node) => node.id === `${stageId}:live-run`)).toMatchObject({
       label: "Live Run",
       badge: "25 mT / point 5",
+      status: "running",
+    });
+    expect(flattened.find((node) => node.id === `${stageId}:orientation`)).toMatchObject({
+      label: "Orientation",
+      badge: "field axis",
+      status: "running",
+    });
+    expect(
+      flattened.find((node) => node.id === `${stageId}:adaptive-refinement`),
+    ).toMatchObject({
+      label: "Adaptive Refinement",
+      badge: "runtime pass",
+      status: "running",
+    });
+    expect(
+      flattened.find((node) => node.id === `${stageId}:angular-family`),
+    ).toMatchObject({
+      label: "Angular Family",
+      badge: "variants",
+      status: "running",
+    });
+    expect(
+      flattened.find((node) => node.id === `${stageId}:settle-pipeline`),
+    ).toMatchObject({
+      badge: "2 steps",
+      label: "Settle Pipeline",
       status: "running",
     });
     expect(flattened.find((node) => node.id === `${stageId}:protocol`)).toMatchObject({
@@ -1591,6 +2111,11 @@ describe("buildModelTree", () => {
         (node) => node.id.includes(":point:") && !node.id.includes(":field-point:"),
       ),
     ).toHaveLength(0);
+    expect(flattened.find((node) => node.id === `${stageId}:transitions`)).toMatchObject({
+      badge: "after completion",
+      label: "Transitions",
+      status: "queued",
+    });
   });
 
   it("renders hysteresis protocol and saturation from the stage contract", () => {
@@ -1703,7 +2228,7 @@ describe("buildModelTree", () => {
           "model:study:stages:stage:hysteresis-1:points:completed",
       ),
     ).toMatchObject({
-      badge: "125 points",
+      badge: "+1000 mT ... -240 mT, 125 points",
       label: "Completed Points",
       status: "completed",
     });
@@ -1714,7 +2239,7 @@ describe("buildModelTree", () => {
           "model:study:stages:stage:hysteresis-1:points:queued",
       ),
     ).toMatchObject({
-      badge: "75 points",
+      badge: "-260 mT ... -1000 mT, 75 points",
       label: "Queued Points",
       status: "queued",
     });
@@ -1774,6 +2299,62 @@ describe("buildModelTree", () => {
       badge: "continues",
       parentId: "model:study:stages:stage:runtime-run",
       status: "ready",
+    });
+  });
+
+  it("gates response-map nodes with response Floquet support instead of demag-k support", () => {
+    const manifest = {
+      ...FREQUENCY_DOMAIN_MANIFEST,
+      floquet_nonzero_k_demag_supported: false,
+      floquet_nonzero_k_response_supported: true,
+    } satisfies FrequencyDomainManifestResource;
+
+    const results = flattenExplorerNodes(
+      buildExplorerTree("results", {
+        frequencyDomainManifest: manifest,
+      }),
+    );
+    expect(
+      results.find(
+        (node) => node.id === "results:frequency-domain:dispersion",
+      ),
+    ).toMatchObject({
+      badge: "demag-k blocked",
+      kind: "results.frequency_domain.dispersion",
+      status: "unsupported",
+    });
+    expect(
+      results.find(
+        (node) => node.id === "results:frequency-domain:response-map",
+      ),
+    ).toMatchObject({
+      badge: "Floquet response",
+      kind: "results.frequency_domain.response_map",
+      status: "stale",
+    });
+
+    const resources = flattenExplorerNodes(
+      buildExplorerTree("resources", {
+        frequencyDomainManifest: manifest,
+      }),
+    );
+    expect(
+      resources.find(
+        (node) =>
+          node.kind === "resources.analysis.frequency_domain.dispersion",
+      ),
+    ).toMatchObject({
+      badge: "demag-k blocked",
+      status: "unsupported",
+    });
+    expect(
+      resources.find(
+        (node) =>
+          node.kind === "resources.analysis.frequency_domain.response_map",
+      ),
+    ).toMatchObject({
+      badge: "Floquet response",
+      status: "stale",
     });
   });
 

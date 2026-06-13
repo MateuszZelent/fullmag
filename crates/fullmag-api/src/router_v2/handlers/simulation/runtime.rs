@@ -11,10 +11,15 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::error::ApiError;
+use crate::router_v2::handlers::analysis::hysteresis::{
+    read_hysteresis_minor_loops_if_available, read_hysteresis_points_if_available,
+};
 use crate::schemas::hysteresis::{
-    HysteresisExecutionTreeNode, HysteresisExecutionTreeResource, HysteresisOrientationSchema,
-    HysteresisProgressSchema, HysteresisProtocolSchema, HysteresisSettlePipelineSchema,
-    HysteresisStagePlanSchema, HysteresisStageSaturationSchema,
+    HysteresisExecutionTreeNode, HysteresisExecutionTreeResource,
+    HysteresisFieldUnitProvenanceSchema, HysteresisMinorLoopSchema, HysteresisOrientationSchema,
+    HysteresisPointSchema, HysteresisProgressSchema, HysteresisProtocolSchema,
+    HysteresisSettlePipelineSchema, HysteresisStagePlanSchema, HysteresisStageSaturationSchema,
+    HysteresisStorageEstimateSchema,
 };
 use crate::schemas::runtime::{
     CommandDetailResource, CommandDiagnosticReferenceResource, CommandExecutionReadbackResource,
@@ -227,6 +232,8 @@ pub async fn get_hysteresis_plan(
     Path(stage_id): Path<String>,
 ) -> Result<Json<HysteresisStagePlanSchema>, ApiError> {
     let stage = resolve_hysteresis_scene_stage(&state, &stage_id).await?;
+    let site_count = current_hysteresis_storage_site_count(&state).await;
+    let storage_estimate = estimate_hysteresis_storage(&stage.value, site_count);
     Ok(Json(HysteresisStagePlanSchema {
         revision: stage.revision,
         stage_id: stage.stage_id,
@@ -235,13 +242,155 @@ pub async fn get_hysteresis_plan(
         field_max_m_t: value_f64(stage.value.get("field_max_mT")),
         field_step_m_t: value_f64(stage.value.get("field_step_mT")),
         field_values_m_t: value_f64_array(stage.value.get("field_values_mT")),
+        field_unit_provenance: field_unit_provenance_schema(
+            stage.value.get("field_unit_provenance"),
+        ),
         field_schedule: stage.value.get("field_schedule").cloned(),
         schedule_refinements: stage.value.get("schedule_refinements").cloned(),
         angular_family: stage.value.get("angular_family").cloned(),
         adaptive_refinement: stage.value.get("adaptive_refinement").cloned(),
         minor_loops: stage.value.get("minor_loops").cloned(),
         branch_mode: value_string(stage.value.get("branch_mode")),
+        storage_estimate: Some(storage_estimate),
     }))
+}
+
+fn estimate_hysteresis_storage(
+    stage: &serde_json::Map<String, Value>,
+    site_count: Option<u64>,
+) -> HysteresisStorageEstimateSchema {
+    let point_count = Some(materialize_hysteresis_stage_field_values(stage).len() as u64);
+    let storage = stage.get("storage");
+    let (policy, snapshot_count, mut warnings) =
+        estimate_hysteresis_snapshot_count(storage, point_count);
+    let components_per_site = 3;
+    let bytes_per_component = 8;
+    let estimated_bytes = snapshot_count
+        .zip(site_count)
+        .and_then(|(snapshots, sites)| {
+            snapshots
+                .checked_mul(sites)
+                .and_then(|value| value.checked_mul(u64::from(components_per_site)))
+                .and_then(|value| value.checked_mul(u64::from(bytes_per_component)))
+        });
+
+    if point_count.is_none() {
+        warnings.push(
+            "Point count is unknown because the field schedule cannot be resolved yet.".to_string(),
+        );
+    }
+    if snapshot_count.unwrap_or(0) > 0 && site_count.is_none() {
+        warnings.push(
+            "Domain site count is unavailable before a realized mesh or field resource is loaded; byte estimate is pending."
+                .to_string(),
+        );
+    }
+
+    let status = if estimated_bytes.is_some() {
+        "estimated"
+    } else if point_count.is_some() || snapshot_count.is_some() {
+        "partial"
+    } else {
+        "unknown"
+    }
+    .to_string();
+
+    HysteresisStorageEstimateSchema {
+        policy,
+        point_count,
+        snapshot_count,
+        site_count,
+        components_per_site,
+        bytes_per_component,
+        estimated_bytes,
+        status,
+        warnings,
+    }
+}
+
+async fn current_hysteresis_storage_site_count(state: &Arc<AppState>) -> Option<u64> {
+    let guard = state.current_live_state.read().await;
+    let snapshot = guard.as_ref()?;
+    if let Some(mesh) = snapshot.fem_mesh.as_ref() {
+        return Some(mesh.nodes.len() as u64);
+    }
+    latest_field_site_count(snapshot.latest_fields.get("m"))
+}
+
+fn latest_field_site_count(value: Option<&Value>) -> Option<u64> {
+    let values = value?.as_array()?;
+    if values.is_empty() {
+        return None;
+    }
+    if values.iter().all(|entry| {
+        entry
+            .as_array()
+            .is_some_and(|components| components.len() == 3)
+    }) {
+        return Some(values.len() as u64);
+    }
+    if values.len() % 3 == 0 && values.iter().all(Value::is_number) {
+        return Some((values.len() / 3) as u64);
+    }
+    None
+}
+
+fn estimate_hysteresis_snapshot_count(
+    storage: Option<&Value>,
+    point_count: Option<u64>,
+) -> (String, Option<u64>, Vec<String>) {
+    let mut warnings = Vec::new();
+    let Some(storage) = storage else {
+        return ("average_only".to_string(), Some(0), warnings);
+    };
+    let magnetization = storage
+        .get("magnetization")
+        .and_then(Value::as_str)
+        .unwrap_or("none");
+    match magnetization {
+        "all" | "every_step" => {
+            if point_count.unwrap_or(0) > 100 {
+                warnings.push(
+                    "Every-step magnetization snapshots can create large artifacts for dense hysteresis schedules."
+                        .to_string(),
+                );
+            }
+            ("every_step".to_string(), point_count, warnings)
+        }
+        "selected" | "every_n" => {
+            let every_n = storage
+                .get("every_n")
+                .and_then(Value::as_u64)
+                .filter(|value| *value > 0);
+            let snapshot_count = point_count
+                .zip(every_n)
+                .map(|(points, every_n)| points.saturating_add(every_n - 1) / every_n);
+            if every_n.is_none() {
+                warnings.push(
+                    "Selected snapshot storage is missing a positive every_n value.".to_string(),
+                );
+            }
+            (
+                every_n
+                    .map(|value| format!("selected_every_{value}"))
+                    .unwrap_or_else(|| "selected".to_string()),
+                snapshot_count,
+                warnings,
+            )
+        }
+        "key_events" => {
+            warnings.push(
+                "Key-event snapshot count depends on the executed magnetization trajectory."
+                    .to_string(),
+            );
+            ("key_events".to_string(), None, warnings)
+        }
+        "none" => ("scalar_averages_only".to_string(), Some(0), warnings),
+        other => {
+            warnings.push(format!("Unknown magnetization storage policy '{other}'."));
+            (other.to_string(), None, warnings)
+        }
+    }
 }
 
 #[utoipa::path(
@@ -387,8 +536,14 @@ pub async fn get_hysteresis_execution_tree(
 ) -> Result<Json<HysteresisExecutionTreeResource>, ApiError> {
     let stage = resolve_hysteresis_scene_stage(&state, &stage_id).await?;
     let progress = resolve_hysteresis_stage_progress(&state, &stage.stage_id).await?;
+    let points = read_hysteresis_points_if_available(&state, &stage.stage_id).await?;
+    let minor_loops = read_hysteresis_minor_loops_if_available(&state, &stage.stage_id).await?;
     Ok(Json(build_hysteresis_execution_tree(
-        stage, progress, query,
+        stage,
+        progress,
+        query,
+        points,
+        minor_loops,
     )))
 }
 
@@ -630,6 +785,7 @@ pub async fn get_solver_status(
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
     let latest = snapshot.live_state.as_ref().map(|value| &value.latest_step);
+    let latest_scalar_row = snapshot.scalar_rows.last();
     let runtime_status = build_runtime_status_view(&effective_runtime_status_code(snapshot));
     let mut warnings = material_field_plan_warnings(snapshot.metadata.as_ref());
     for warning in snapshot
@@ -669,6 +825,12 @@ pub async fn get_solver_status(
         ),
         dt_seconds: latest.map(|value| value.dt),
         sim_time_seconds: latest.map(|value| value.time),
+        pseudo_time_seconds: latest_scalar_row
+            .and_then(|value| value.pseudo_time_s)
+            .or_else(|| latest.and_then(|value| value.pseudo_time_s)),
+        active_runtime_seconds: latest_scalar_row
+            .and_then(|value| value.active_runtime_s)
+            .or_else(|| latest.map(|value| value.wall_time_ns as f64 * 1.0e-9)),
         step_index: latest.map(|value| value.step),
         last_step_updated_at_unix_ms: snapshot
             .live_state
@@ -1195,6 +1357,8 @@ fn latest_energy_row(snapshot: &SessionStateResponse) -> Option<ScalarRow> {
             step: live_state.latest_step.step,
             time: live_state.latest_step.time,
             solver_dt: live_state.latest_step.dt,
+            pseudo_time_s: live_state.latest_step.pseudo_time_s,
+            active_runtime_s: Some(live_state.latest_step.wall_time_ns as f64 * 1.0e-9),
             mx: 0.0,
             my: 0.0,
             mz: 0.0,
@@ -1223,6 +1387,8 @@ fn latest_solver_sample(snapshot: &SessionStateResponse) -> Option<ScalarRow> {
             step: live_state.latest_step.step,
             time: live_state.latest_step.time,
             solver_dt: live_state.latest_step.dt,
+            pseudo_time_s: live_state.latest_step.pseudo_time_s,
+            active_runtime_s: Some(live_state.latest_step.wall_time_ns as f64 * 1.0e-9),
             mx: 0.0,
             my: 0.0,
             mz: 0.0,
@@ -1519,13 +1685,23 @@ fn build_hysteresis_execution_tree(
     stage: HysteresisSceneStage,
     progress: HysteresisProgressSchema,
     query: HysteresisExecutionTreeQuery,
+    points: Vec<HysteresisPointSchema>,
+    minor_loops: Vec<HysteresisMinorLoopSchema>,
 ) -> HysteresisExecutionTreeResource {
     let before = query.before.unwrap_or(2).min(50);
     let after = query.after.unwrap_or(3).min(50);
-    let window = query.window.unwrap_or_else(|| "active".to_string());
+    let window = query.window.clone().unwrap_or_else(|| "active".to_string());
     let values = materialize_hysteresis_stage_field_values(&stage.value);
     let total_points = values.len() as u32;
     let active_point_index = infer_hysteresis_active_point_index(&progress, &values);
+    let points_by_id: HashMap<u32, HysteresisPointSchema> = points
+        .into_iter()
+        .filter_map(|point| {
+            u32::try_from(point.point_id)
+                .ok()
+                .map(|point_id| (point_id, point))
+        })
+        .collect();
 
     let (start, end) = if total_points == 0 {
         (0, 0)
@@ -1555,6 +1731,8 @@ fn build_hysteresis_execution_tree(
             nodes.push(hysteresis_field_point_node(
                 &stage,
                 &progress,
+                &points_by_id,
+                &query,
                 idx,
                 field_value_m_t,
                 active_point_index,
@@ -1571,6 +1749,30 @@ fn build_hysteresis_execution_tree(
             stage.revision,
         ));
     }
+    nodes.extend(hysteresis_branch_nodes(
+        &stage,
+        &progress,
+        &points_by_id,
+        &query,
+        &values,
+        start,
+        end,
+        active_point_index,
+        progress.status == "completed",
+        stage.revision.max(progress.revision),
+    ));
+    nodes.extend(hysteresis_minor_loop_branch_nodes(
+        &stage,
+        &progress,
+        &points_by_id,
+        &query,
+        &minor_loops,
+        start,
+        end,
+        active_point_index,
+        progress.status == "completed",
+        stage.revision.max(progress.revision),
+    ));
 
     HysteresisExecutionTreeResource {
         revision: stage.revision.max(progress.revision),
@@ -1586,6 +1788,343 @@ fn build_hysteresis_execution_tree(
         active_point_index,
         nodes,
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct HysteresisBranchTreeSegment {
+    branch_index: u32,
+    direction: i32,
+    start_point_id: u32,
+    end_point_id: u32,
+}
+
+fn hysteresis_branch_nodes(
+    stage: &HysteresisSceneStage,
+    progress: &HysteresisProgressSchema,
+    points_by_id: &HashMap<u32, HysteresisPointSchema>,
+    query: &HysteresisExecutionTreeQuery,
+    values: &[f64],
+    window_start: u32,
+    window_end: u32,
+    active_point_index: Option<u32>,
+    stage_completed: bool,
+    revision: u64,
+) -> Vec<HysteresisExecutionTreeNode> {
+    let segments = infer_hysteresis_execution_branch_segments(values);
+    if segments.len() < 2 {
+        return Vec::new();
+    }
+    segments
+        .into_iter()
+        .map(|segment| {
+            hysteresis_branch_node(
+                stage,
+                progress,
+                points_by_id,
+                query,
+                values,
+                segment,
+                window_start,
+                window_end,
+                active_point_index,
+                stage_completed,
+                revision,
+            )
+        })
+        .collect()
+}
+
+fn hysteresis_branch_node(
+    stage: &HysteresisSceneStage,
+    progress: &HysteresisProgressSchema,
+    points_by_id: &HashMap<u32, HysteresisPointSchema>,
+    query: &HysteresisExecutionTreeQuery,
+    values: &[f64],
+    segment: HysteresisBranchTreeSegment,
+    window_start: u32,
+    window_end: u32,
+    active_point_index: Option<u32>,
+    stage_completed: bool,
+    revision: u64,
+) -> HysteresisExecutionTreeNode {
+    let branch_id = hysteresis_execution_branch_id(segment.direction, segment.branch_index);
+    let label = if segment.direction < 0 {
+        "Descending branch"
+    } else {
+        "Ascending branch"
+    };
+    let status = match active_point_index {
+        Some(active) if active < segment.start_point_id => "queued",
+        Some(active) if active <= segment.end_point_id => "active",
+        Some(_) => "done",
+        None if stage_completed => "done",
+        _ => "queued",
+    };
+    let mut children = vec![HysteresisExecutionTreeNode {
+        node_id: format!("{}:branch:{branch_id}:points", stage.stage_id),
+        kind: "summary".to_string(),
+        stage_id: stage.stage_id.clone(),
+        point_id: None,
+        settle_step_id: None,
+        status: status.to_string(),
+        label: format!("Points {}-{}", segment.start_point_id, segment.end_point_id),
+        resource_ref: Some(format!(
+            "/v2/sessions/current/analysis/hysteresis/{}/branches",
+            stage.stage_id
+        )),
+        selection_ref: Some(format!(
+            "hysteresis-branch-points:{}:{branch_id}",
+            stage.stage_id
+        )),
+        updated_revision: revision,
+        children: Vec::new(),
+    }];
+    let child_start = segment.start_point_id.max(window_start);
+    let child_end = segment.end_point_id.min(window_end);
+    if child_start <= child_end {
+        for point_id in child_start..=child_end {
+            if let Some(field_value_m_t) = values.get(point_id as usize).copied() {
+                children.push(hysteresis_field_point_node(
+                    stage,
+                    progress,
+                    points_by_id,
+                    query,
+                    point_id,
+                    field_value_m_t,
+                    active_point_index,
+                ));
+            }
+        }
+    }
+    HysteresisExecutionTreeNode {
+        node_id: format!("{}:branch:{branch_id}", stage.stage_id),
+        kind: "branch".to_string(),
+        stage_id: stage.stage_id.clone(),
+        point_id: None,
+        settle_step_id: None,
+        status: status.to_string(),
+        label: label.to_string(),
+        resource_ref: Some(format!(
+            "/v2/sessions/current/analysis/hysteresis/{}/branches",
+            stage.stage_id
+        )),
+        selection_ref: Some(format!("hysteresis-branch:{}:{branch_id}", stage.stage_id)),
+        updated_revision: revision,
+        children,
+    }
+}
+
+fn hysteresis_minor_loop_branch_nodes(
+    stage: &HysteresisSceneStage,
+    progress: &HysteresisProgressSchema,
+    points_by_id: &HashMap<u32, HysteresisPointSchema>,
+    query: &HysteresisExecutionTreeQuery,
+    minor_loops: &[HysteresisMinorLoopSchema],
+    window_start: u32,
+    window_end: u32,
+    active_point_index: Option<u32>,
+    stage_completed: bool,
+    revision: u64,
+) -> Vec<HysteresisExecutionTreeNode> {
+    minor_loops
+        .iter()
+        .filter_map(|minor_loop| {
+            hysteresis_minor_loop_branch_node(
+                stage,
+                progress,
+                points_by_id,
+                query,
+                minor_loop,
+                window_start,
+                window_end,
+                active_point_index,
+                stage_completed,
+                revision,
+            )
+        })
+        .collect()
+}
+
+fn hysteresis_minor_loop_branch_node(
+    stage: &HysteresisSceneStage,
+    progress: &HysteresisProgressSchema,
+    points_by_id: &HashMap<u32, HysteresisPointSchema>,
+    query: &HysteresisExecutionTreeQuery,
+    minor_loop: &HysteresisMinorLoopSchema,
+    window_start: u32,
+    window_end: u32,
+    active_point_index: Option<u32>,
+    stage_completed: bool,
+    revision: u64,
+) -> Option<HysteresisExecutionTreeNode> {
+    let start_point_id = minor_loop
+        .reversal_point_id
+        .or_else(|| minor_loop.points.first().map(|point| point.point_id))
+        .and_then(|point_id| u32::try_from(point_id).ok())?;
+    let end_point_id = minor_loop
+        .return_point_id
+        .or_else(|| minor_loop.points.last().map(|point| point.point_id))
+        .and_then(|point_id| u32::try_from(point_id).ok())?;
+    let branch_id = hysteresis_minor_loop_branch_id(&minor_loop.loop_id);
+    let status = match active_point_index {
+        Some(active) if active < start_point_id => "queued",
+        Some(active) if active <= end_point_id => "active",
+        Some(_) => "done",
+        None if stage_completed => "done",
+        _ => "queued",
+    };
+    let mut children = vec![HysteresisExecutionTreeNode {
+        node_id: format!("{}:branch:{branch_id}:points", stage.stage_id),
+        kind: "summary".to_string(),
+        stage_id: stage.stage_id.clone(),
+        point_id: None,
+        settle_step_id: None,
+        status: status.to_string(),
+        label: format!("Points {start_point_id}-{end_point_id}"),
+        resource_ref: Some(format!(
+            "/v2/sessions/current/analysis/hysteresis/{}/minor-loops",
+            stage.stage_id
+        )),
+        selection_ref: Some(format!(
+            "hysteresis-minor-loop-points:{}:{}",
+            stage.stage_id, minor_loop.loop_id
+        )),
+        updated_revision: revision,
+        children: Vec::new(),
+    }];
+    let child_start = start_point_id.max(window_start);
+    let child_end = end_point_id.min(window_end);
+    if child_start <= child_end {
+        for point_id in child_start..=child_end {
+            let field_value_m_t = minor_loop
+                .points
+                .iter()
+                .find(|point| u32::try_from(point.point_id).ok() == Some(point_id))
+                .map(|point| point.field_value_m_t)
+                .or_else(|| {
+                    points_by_id
+                        .get(&point_id)
+                        .map(|point| point.field_value_m_t)
+                });
+            if let Some(field_value_m_t) = field_value_m_t {
+                children.push(hysteresis_field_point_node(
+                    stage,
+                    progress,
+                    points_by_id,
+                    query,
+                    point_id,
+                    field_value_m_t,
+                    active_point_index,
+                ));
+            }
+        }
+    }
+    Some(HysteresisExecutionTreeNode {
+        node_id: format!("{}:branch:{branch_id}", stage.stage_id),
+        kind: "branch".to_string(),
+        stage_id: stage.stage_id.clone(),
+        point_id: None,
+        settle_step_id: None,
+        status: status.to_string(),
+        label: format!("Minor loop {}", minor_loop.loop_id),
+        resource_ref: Some(format!(
+            "/v2/sessions/current/analysis/hysteresis/{}/minor-loops",
+            stage.stage_id
+        )),
+        selection_ref: Some(format!(
+            "hysteresis-minor-loop:{}:{}",
+            stage.stage_id, minor_loop.loop_id
+        )),
+        updated_revision: revision,
+        children,
+    })
+}
+
+fn infer_hysteresis_execution_branch_segments(values: &[f64]) -> Vec<HysteresisBranchTreeSegment> {
+    if values.len() < 2 {
+        return Vec::new();
+    }
+
+    let mut segments = Vec::new();
+    let mut start_point_id = 0u32;
+    let mut current_direction = 0i32;
+
+    for idx in 1..values.len() {
+        let step_direction = hysteresis_step_direction(values[idx - 1], values[idx]);
+        if step_direction == 0 {
+            continue;
+        }
+        if current_direction == 0 {
+            current_direction = step_direction;
+            continue;
+        }
+        if step_direction != current_direction {
+            let end_point_id = (idx - 1) as u32;
+            if end_point_id > start_point_id {
+                segments.push(HysteresisBranchTreeSegment {
+                    branch_index: segments.len() as u32,
+                    direction: current_direction,
+                    start_point_id,
+                    end_point_id,
+                });
+            }
+            start_point_id = end_point_id;
+            current_direction = step_direction;
+        }
+    }
+
+    if current_direction != 0 {
+        let end_point_id = values.len().saturating_sub(1) as u32;
+        if end_point_id > start_point_id {
+            segments.push(HysteresisBranchTreeSegment {
+                branch_index: segments.len() as u32,
+                direction: current_direction,
+                start_point_id,
+                end_point_id,
+            });
+        }
+    }
+    segments
+}
+
+fn hysteresis_step_direction(previous: f64, next: f64) -> i32 {
+    let delta = next - previous;
+    if delta > 1e-12 {
+        1
+    } else if delta < -1e-12 {
+        -1
+    } else {
+        0
+    }
+}
+
+fn hysteresis_execution_branch_id(direction: i32, branch_index: u32) -> String {
+    let base = if direction < 0 {
+        "descending"
+    } else {
+        "ascending"
+    };
+    if branch_index < 2 {
+        base.to_string()
+    } else {
+        format!("{base}-{branch_index}")
+    }
+}
+
+fn hysteresis_minor_loop_branch_id(loop_id: &str) -> String {
+    sanitize_hysteresis_execution_id_segment(loop_id)
+}
+
+fn sanitize_hysteresis_execution_id_segment(value: &str) -> String {
+    let mut segment = String::new();
+    for character in value.chars() {
+        if character.is_ascii_alphanumeric() {
+            segment.push(character.to_ascii_lowercase());
+        } else if !segment.ends_with('-') {
+            segment.push('-');
+        }
+    }
+    segment.trim_matches('-').to_string()
 }
 
 fn hysteresis_summary_node(
@@ -1613,6 +2152,8 @@ fn hysteresis_summary_node(
 fn hysteresis_field_point_node(
     stage: &HysteresisSceneStage,
     progress: &HysteresisProgressSchema,
+    points_by_id: &HashMap<u32, HysteresisPointSchema>,
+    query: &HysteresisExecutionTreeQuery,
     point_id: u32,
     field_value_m_t: f64,
     active_point_index: Option<u32>,
@@ -1624,11 +2165,20 @@ fn hysteresis_field_point_node(
         None if progress.status == "completed" => "done",
         _ => "queued",
     };
-    let children = if status == "active" {
+    let mut children = if status == "active" {
         hysteresis_settle_algorithm_nodes(stage, progress, point_id)
     } else {
         Vec::new()
     };
+    if let Some(point) = points_by_id.get(&point_id) {
+        children.extend(hysteresis_point_observation_nodes(
+            stage,
+            point,
+            point_id,
+            query,
+            stage.revision.max(progress.revision),
+        ));
+    }
     HysteresisExecutionTreeNode {
         node_id: format!("{}:point:{point_id}", stage.stage_id),
         kind: "field_point".to_string(),
@@ -1645,6 +2195,67 @@ fn hysteresis_field_point_node(
         updated_revision: stage.revision.max(progress.revision),
         children,
     }
+}
+
+fn hysteresis_point_observation_nodes(
+    stage: &HysteresisSceneStage,
+    point: &HysteresisPointSchema,
+    point_id: u32,
+    query: &HysteresisExecutionTreeQuery,
+    revision: u64,
+) -> Vec<HysteresisExecutionTreeNode> {
+    let mut nodes = Vec::new();
+    if query.include_snapshots.unwrap_or(true) {
+        if let Some(snapshot_id) = point.snapshot_id.as_deref() {
+            let resource_ref = point
+                .snapshot_vector_resource_ref
+                .clone()
+                .or_else(|| point.snapshot_resource_ref.clone())
+                .unwrap_or_else(|| {
+                    format!(
+                        "/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full&snapshot_id={snapshot_id}&stage_id={}",
+                        stage.stage_id
+                    )
+                });
+            nodes.push(HysteresisExecutionTreeNode {
+                node_id: format!("{}:point:{point_id}:snapshot:{snapshot_id}", stage.stage_id),
+                kind: "snapshot".to_string(),
+                stage_id: stage.stage_id.clone(),
+                point_id: Some(point_id),
+                settle_step_id: None,
+                status: "done".to_string(),
+                label: format!("Snapshot {snapshot_id}"),
+                resource_ref: Some(resource_ref),
+                selection_ref: Some(format!(
+                    "hysteresis-snapshot:{}:{point_id}:{snapshot_id}",
+                    stage.stage_id
+                )),
+                updated_revision: revision,
+                children: Vec::new(),
+            });
+        }
+    }
+    if query.include_warnings.unwrap_or(true) {
+        if let Some(warning_count) = point.warning_count.filter(|count| *count > 0) {
+            nodes.push(HysteresisExecutionTreeNode {
+                node_id: format!("{}:point:{point_id}:warnings", stage.stage_id),
+                kind: "warning".to_string(),
+                stage_id: stage.stage_id.clone(),
+                point_id: Some(point_id),
+                settle_step_id: None,
+                status: "warning".to_string(),
+                label: format!("{warning_count} warning(s)"),
+                resource_ref: Some(format!(
+                    "/v2/sessions/current/analysis/hysteresis/{}/steps/{point_id}",
+                    stage.stage_id
+                )),
+                selection_ref: Some(format!("hysteresis-warning:{}:{point_id}", stage.stage_id)),
+                updated_revision: revision,
+                children: Vec::new(),
+            });
+        }
+    }
+    nodes
 }
 
 fn hysteresis_settle_algorithm_nodes(
@@ -1861,6 +2472,14 @@ fn value_f64_array(value: Option<&Value>) -> Option<Vec<f64>> {
             .filter_map(Value::as_f64)
             .collect::<Vec<f64>>()
     })
+}
+
+fn field_unit_provenance_schema(
+    value: Option<&Value>,
+) -> Option<HysteresisFieldUnitProvenanceSchema> {
+    value
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
 }
 
 fn value_string(value: Option<&Value>) -> Option<String> {

@@ -13,6 +13,57 @@ import {
 
 type JsonRecord = Record<string, unknown>;
 
+const SUPPORTED_FIELD_SEGMENT_ENDPOINT_POLICIES = new Set([
+  "include_stop",
+  "skip_start",
+  "include_both",
+]);
+const SUPPORTED_SETTLE_STEP_KINDS = new Set([
+  "relax",
+  "minimize",
+  "dynamics_settle",
+]);
+const SUPPORTED_SETTLE_METHODS_BY_KIND: Record<string, Set<string>> = {
+  dynamics_settle: new Set(["heun_dynamics_settle"]),
+  minimize: new Set([
+    "projected_gradient_bb",
+    "nonlinear_cg",
+    "tangent_plane_implicit",
+  ]),
+  relax: new Set([
+    "llg_overdamped",
+    "projected_gradient_bb",
+    "nonlinear_cg",
+    "tangent_plane_implicit",
+  ]),
+};
+const SUPPORTED_SETTLE_NON_CONVERGENCE_POLICIES = new Set([
+  "continue_with_warning",
+  "stop_stage",
+  "run_next_algorithm",
+  "retry_with_smaller_dt",
+]);
+const SUPPORTED_HYSTERESIS_STORAGE_MAGNETIZATION = new Set([
+  "none",
+  "selected",
+  "every_n",
+  "every_step",
+  "key_events",
+]);
+const SUPPORTED_HYSTERESIS_ORIENTATION_PRESETS = new Set([
+  "oop_positive",
+  "oop_negative",
+  "in_plane_x",
+  "in_plane_y",
+]);
+const SUPPORTED_HYSTERESIS_MEASUREMENT_AXES = new Set([
+  "field_axis",
+  "sample_normal",
+  "easy_axis",
+  "custom",
+]);
+const MAX_HYSTERESIS_AUTHORING_FIELD_POINTS = 10_000;
+
 export type StudyStageDraftKind =
   | "eigenmodes"
   | "frequency_response"
@@ -34,6 +85,7 @@ export interface StudyStageDraft {
   equilibriumArtifact: string;
   equilibriumSource: string;
   excitationField: string;
+  excitationPhaseRad: string;
   fieldEvery: string;
   fieldMaxMt: string;
   fieldMinMt: string;
@@ -63,11 +115,13 @@ export interface StudyStageDraft {
   // Hysteresis expansion fields
   protocolKind: string;
   initialStatePolicy: string;
+  initialStateRef: string;
   orientationMode: string;
   thetaDeg: string;
   phiDeg: string;
   customDirection: string;
   measurementAxis: string;
+  measurementAxisCustomVector: string;
   fieldScheduleMode: string;
   fieldSegments: string;
   denseWindows: string;
@@ -79,6 +133,7 @@ export interface StudyStageDraft {
   settleBranches: string;
   minorLoops: string;
   storagePolicy: string;
+  storageEstimateAcknowledged: boolean;
 }
 
 export interface StudyStageDraftValidation {
@@ -99,6 +154,7 @@ const DEFAULT_RELAX_STAGE_DRAFT: StudyStageDraft = {
   equilibriumArtifact: "",
   equilibriumSource: "relax",
   excitationField: "0, 0, 1",
+  excitationPhaseRad: "0",
   fieldEvery: "",
   fieldMaxMt: "",
   fieldMinMt: "",
@@ -127,11 +183,13 @@ const DEFAULT_RELAX_STAGE_DRAFT: StudyStageDraft = {
   untilSeconds: "",
   protocolKind: "",
   initialStatePolicy: "",
+  initialStateRef: "",
   orientationMode: "",
   thetaDeg: "",
   phiDeg: "",
   customDirection: "",
   measurementAxis: "",
+  measurementAxisCustomVector: "",
   fieldScheduleMode: "",
   fieldSegments: "",
   denseWindows: "",
@@ -143,6 +201,7 @@ const DEFAULT_RELAX_STAGE_DRAFT: StudyStageDraft = {
   settleBranches: "",
   minorLoops: "",
   storagePolicy: "",
+  storageEstimateAcknowledged: false,
 };
 
 const DEFAULT_RUN_STAGE_DRAFT: StudyStageDraft = {
@@ -158,6 +217,7 @@ const DEFAULT_RUN_STAGE_DRAFT: StudyStageDraft = {
   equilibriumArtifact: "",
   equilibriumSource: "relax",
   excitationField: "0, 0, 1",
+  excitationPhaseRad: "0",
   fieldEvery: "",
   fieldMaxMt: "",
   fieldMinMt: "",
@@ -186,11 +246,13 @@ const DEFAULT_RUN_STAGE_DRAFT: StudyStageDraft = {
   untilSeconds: "1e-9",
   protocolKind: "",
   initialStatePolicy: "",
+  initialStateRef: "",
   orientationMode: "",
   thetaDeg: "",
   phiDeg: "",
   customDirection: "",
   measurementAxis: "",
+  measurementAxisCustomVector: "",
   fieldScheduleMode: "",
   fieldSegments: "",
   denseWindows: "",
@@ -202,6 +264,7 @@ const DEFAULT_RUN_STAGE_DRAFT: StudyStageDraft = {
   settleBranches: "",
   minorLoops: "",
   storagePolicy: "",
+  storageEstimateAcknowledged: false,
 };
 
 const DEFAULT_EIGENMODES_STAGE_DRAFT: StudyStageDraft = {
@@ -243,11 +306,13 @@ const DEFAULT_HYSTERESIS_STAGE_DRAFT: StudyStageDraft = {
   stopField: "0, 0, 0.1",
   protocolKind: DEFAULT_HYSTERESIS_BRANCH_MODE,
   initialStatePolicy: DEFAULT_HYSTERESIS_INITIAL_PROTOCOL,
+  initialStateRef: "",
   orientationMode: "preset",
   thetaDeg: "0",
   phiDeg: "0",
   customDirection: DEFAULT_HYSTERESIS_ORIENTATION_PRESET,
   measurementAxis: DEFAULT_HYSTERESIS_MEASUREMENT_AXIS,
+  measurementAxisCustomVector: "",
   fieldScheduleMode: "simple",
   fieldSegments: "[]",
   denseWindows: "[]",
@@ -259,6 +324,7 @@ const DEFAULT_HYSTERESIS_STAGE_DRAFT: StudyStageDraft = {
   settleBranches: "[]",
   minorLoops: "[]",
   storagePolicy: JSON.stringify(DEFAULT_HYSTERESIS_STORAGE),
+  storageEstimateAcknowledged: false,
 };
 
 export function createStudyStageDraft(
@@ -285,9 +351,22 @@ export function createStudyStageDraft(
   if (kind === "frequency_response") {
     return {
       ...spectralDraft(DEFAULT_FREQUENCY_RESPONSE_STAGE_DRAFT, record, index),
-      excitationField: vectorText(record?.excitation_field_au_per_m, "0, 0, 1"),
-      frequenciesHz: listText(record?.frequencies_hz, DEFAULT_FREQUENCY_RESPONSE_STAGE_DRAFT.frequenciesHz),
-      observable: scalarText(record?.observable, DEFAULT_FREQUENCY_RESPONSE_STAGE_DRAFT.observable),
+      excitationField: vectorText(
+        record?.excitation_field_au_per_m ?? record?.frequency_excitation_field_au_per_m,
+        "0, 0, 1",
+      ),
+      excitationPhaseRad: scalarText(
+        record?.excitation_phase_rad ?? record?.frequency_excitation_phase_rad,
+        "0",
+      ),
+      frequenciesHz: listText(
+        record?.frequencies_hz ?? record?.frequency_values_hz,
+        DEFAULT_FREQUENCY_RESPONSE_STAGE_DRAFT.frequenciesHz,
+      ),
+      observable: scalarText(
+        record?.observable ?? record?.frequency_observable,
+        DEFAULT_FREQUENCY_RESPONSE_STAGE_DRAFT.observable,
+      ),
     };
   }
   if (kind === "save_state") {
@@ -323,6 +402,10 @@ export function createStudyStageDraft(
     } else if (record?.direction) {
       customDirection = Array.isArray(record.direction) ? record.direction.join(", ") : String(record.direction);
     }
+    const measurementAxisDraft = measurementAxisDraftFields(
+      record?.measurement_axis,
+      "field_axis",
+    );
 
     const saturation = asRecord(record?.saturation);
     let saturationMode = "none";
@@ -400,16 +483,28 @@ export function createStudyStageDraft(
           record?.torque_tolerance_apm,
         DEFAULT_HYSTERESIS_STAGE_DRAFT.torqueTolerance,
       ),
-      protocolKind: scalarText(record?.branch_mode ?? record?.protocol_kind, "major_loop"),
-      initialStatePolicy: scalarText(record?.initial_protocol ?? record?.initial_state_policy, "positive_saturation"),
+      protocolKind: scalarText(
+        record?.branch_mode ?? record?.protocol_kind,
+        "major_loop",
+      ),
+      initialStatePolicy: scalarText(
+        record?.initial_protocol ?? record?.initial_state_policy,
+        "positive_saturation",
+      ),
+      initialStateRef: scalarText(
+        record?.initial_state_ref ?? record?.initialStateRef,
+        "",
+      ),
       orientationMode,
       thetaDeg,
       phiDeg,
       customDirection,
-      measurementAxis: measurementAxisText(record?.measurement_axis, "field_axis"),
+      ...measurementAxisDraft,
       fieldScheduleMode,
       fieldSegments,
-      denseWindows: objectText(record?.schedule_refinements ?? record?.dense_windows),
+      denseWindows: objectText(
+        record?.schedule_refinements ?? record?.dense_windows,
+      ),
       saturationMode,
       maxProbeField,
       saturationThresholds,
@@ -417,7 +512,11 @@ export function createStudyStageDraft(
       settleSteps,
       settleBranches,
       minorLoops: objectText(record?.minor_loops),
-      storagePolicy: record?.storage ? JSON.stringify(record.storage) : DEFAULT_HYSTERESIS_STAGE_DRAFT.storagePolicy,
+      storagePolicy: record?.storage
+        ? JSON.stringify(record.storage)
+        : DEFAULT_HYSTERESIS_STAGE_DRAFT.storagePolicy,
+      storageEstimateAcknowledged:
+        DEFAULT_HYSTERESIS_STAGE_DRAFT.storageEstimateAcknowledged,
     };
   }
 
@@ -512,6 +611,11 @@ export function studyStageDraftToSceneStage(
     );
     stage.frequency_excitation_field_au_per_m =
       stage.excitation_field_au_per_m;
+    stage.excitation_phase_rad = requiredSignedNumber(
+      draft.excitationPhaseRad,
+      "excitation_phase_rad",
+    );
+    stage.frequency_excitation_phase_rad = stage.excitation_phase_rad;
     stage.observable = requiredText(draft.observable, "susceptibility_tensor");
     stage.frequency_observable = stage.observable;
     return stage;
@@ -538,18 +642,18 @@ export function studyStageDraftToSceneStage(
     if (draft.orientationMode === "preset") {
       orientation = {
         kind: "preset",
-        preset_name: draft.customDirection.trim() || "oop_positive",
+        preset_name: requiredHysteresisOrientationPreset(draft.customDirection),
       };
     } else if (draft.orientationMode === "sample") {
       orientation = {
         kind: "sample",
-        theta: Number(draft.thetaDeg.trim() || 0),
-        phi: Number(draft.phiDeg.trim() || 0),
+        theta: requiredSignedNumber(draft.thetaDeg, "theta"),
+        phi: requiredSignedNumber(draft.phiDeg, "phi"),
       };
     } else if (draft.orientationMode === "global") {
       orientation = {
         kind: "global",
-        vector: requiredVector3(draft.customDirection, "custom_direction"),
+        vector: requiredNonZeroVector3(draft.customDirection, "custom_direction"),
       };
     }
 
@@ -578,6 +682,10 @@ export function studyStageDraftToSceneStage(
         const branches = draft.settleBranches.trim() && draft.settleBranches.trim() !== "[]"
           ? parseJsonArrayValue(draft.settleBranches.trim())
           : [];
+        const alwaysBranches = steps.slice(1).map((step) => ({
+          when: "always",
+          run: step,
+        }));
         settle_pipeline = {
           kind: "tree",
           default: steps[0] || {
@@ -588,7 +696,7 @@ export function studyStageDraftToSceneStage(
             max_steps: 10000,
             on_non_convergence: "continue_with_warning",
           },
-          branches,
+          branches: [...alwaysBranches, ...branches],
         };
       }
     }
@@ -625,11 +733,14 @@ export function studyStageDraftToSceneStage(
       field_step_mT: requiredNumber(draft.fieldStepMt, "field_step_mT"),
       kind: "hysteresis",
       stage_id: requiredText(draft.stageId, "hysteresis"),
-      measurement_axis: parseMeasurementAxisDraft(draft.measurementAxis),
+      measurement_axis: parseMeasurementAxisDraft(draft),
       branch_mode: draft.protocolKind || "major_loop",
       initial_protocol: draft.initialStatePolicy || "positive_saturation",
     };
 
+    if (draft.initialStateRef.trim()) {
+      result.initial_state_ref = draft.initialStateRef.trim();
+    }
     if (orientation) result.orientation = orientation;
     if (saturation) result.saturation = saturation;
     if (settle_pipeline) result.settle_pipeline = settle_pipeline;
@@ -699,6 +810,7 @@ export function validateStudyStageDraft(
   if (draft.kind === "frequency_response") {
     validatePositiveNumberList(issues, draft.frequenciesHz, "Frequencies");
     validateRequiredVector3(issues, draft.excitationField, "Excitation field");
+    validateFiniteNumber(issues, draft.excitationPhaseRad, "Excitation phase", true);
     validateOptionalVector3(issues, draft.kVector, "k vector");
     validateOptionalJson(issues, draft.kSampling, "k sampling");
     validateJsonOrString(issues, draft.bc, "BC");
@@ -715,34 +827,43 @@ export function validateStudyStageDraft(
     validateSignedNumber(issues, draft.fieldMinMt, "Minimum field", true);
     validateSignedNumber(issues, draft.fieldMaxMt, "Maximum field", true);
     validatePositiveNumber(issues, draft.fieldStepMt, "Field step", true);
-
-    if (draft.orientationMode === "global") {
-      validateRequiredVector3(issues, draft.customDirection, "Orientation vector");
-    }
-    if (draft.orientationMode === "sample") {
-      validateFiniteNumber(issues, draft.thetaDeg, "Theta", false);
-      validateFiniteNumber(issues, draft.phiDeg, "Phi", false);
-    }
+    validateSimpleHysteresisFieldSchedule(issues, draft);
+    validateHysteresisInitialState(issues, draft);
+    validateHysteresisOrientation(issues, draft);
+    validateHysteresisMeasurementAxis(issues, draft);
     if (draft.saturationMode && draft.saturationMode !== "none") {
       validatePositiveNumber(issues, draft.maxProbeField, "Max probe field", true);
+      validateHysteresisSaturationProbe(issues, draft);
     }
     if (draft.settleSteps.trim() && draft.settleSteps.trim() !== "[]") {
-      validateJsonArray(issues, draft.settleSteps, "Settle steps");
+      validateJsonArray(issues, draft.settleSteps, "Settle steps", validateSettleStep);
+      validateSettlePipelineSemantics(issues, draft);
+      validateSettleAppliesToSemantics(issues, draft);
+    } else {
+      issues.push({
+        message: "Settle pipeline requires at least one step.",
+        severity: "error",
+      });
     }
     if (draft.settleBranches.trim() && draft.settleBranches.trim() !== "[]") {
-      validateJsonArray(issues, draft.settleBranches, "Settle branches");
+      validateJsonArray(issues, draft.settleBranches, "Settle branches", validateSettleBranch);
     }
     if (draft.fieldSegments.trim() && draft.fieldSegments.trim() !== "[]") {
       validateJsonArray(issues, draft.fieldSegments, "Field segments", validateFieldSegment);
+      validateFieldSegmentSchedule(issues, draft.fieldSegments);
     }
     if (draft.denseWindows.trim() && draft.denseWindows.trim() !== "[]") {
-      validateJsonArray(issues, draft.denseWindows, "Dense windows");
+      validateJsonArray(issues, draft.denseWindows, "Dense windows", validateDenseWindow);
+      validateDenseWindowOverlaps(issues, draft.denseWindows);
     }
     if (draft.minorLoops.trim() && draft.minorLoops.trim() !== "[]") {
-      validateJsonArray(issues, draft.minorLoops, "Minor loops");
+      validateJsonArray(issues, draft.minorLoops, "Minor loops", validateMinorLoop);
+      validateMinorLoopEnvelope(issues, draft);
     }
     if (draft.storagePolicy.trim()) {
       validateJsonObject(issues, draft.storagePolicy, "Storage policy");
+      validateHysteresisStoragePolicy(issues, draft.storagePolicy);
+      validateHysteresisStorageAcknowledgement(issues, draft);
     }
 
     return issues;
@@ -886,10 +1007,891 @@ function validateJsonObject(
   try {
     const parsed = JSON.parse(value) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      issues.push({ message: `${label} must be a valid JSON object.`, severity: "error" });
+      issues.push({
+        message: `${label} must be a valid JSON object.`,
+        severity: "error",
+      });
     }
   } catch {
-    issues.push({ message: `${label} must be a valid JSON object.`, severity: "error" });
+    issues.push({
+      message: `${label} must be a valid JSON object.`,
+      severity: "error",
+    });
+  }
+}
+
+function validateHysteresisStorageAcknowledgement(
+  issues: StudyStageDraftValidation[],
+  draft: StudyStageDraft,
+): void {
+  const storage = parseJsonObjectForValidation(draft.storagePolicy);
+  const magnetization =
+    typeof storage?.magnetization === "string" ? storage.magnetization : null;
+  if (
+    magnetization === "every_step" &&
+    !draft.storageEstimateAcknowledged
+  ) {
+    issues.push({
+      message: "Every-step magnetization storage requires storage estimate acknowledgement.",
+      severity: "error",
+    });
+  }
+}
+
+function validateHysteresisStoragePolicy(
+  issues: StudyStageDraftValidation[],
+  value: string,
+): void {
+  const storage = parseJsonObjectForValidation(value);
+  if (!storage) return;
+
+  const magnetization = stringObjectValue(storage.magnetization).trim();
+  if (!magnetization) {
+    issues.push({
+      message: "Storage policy magnetization is required.",
+      severity: "error",
+    });
+  } else if (!SUPPORTED_HYSTERESIS_STORAGE_MAGNETIZATION.has(magnetization)) {
+    issues.push({
+      message: "Storage policy magnetization must be none, selected, every_n, every_step, or key_events.",
+      severity: "error",
+    });
+  }
+
+  const everyN = finiteObjectNumber(storage.every_n ?? storage.everyN);
+  if (everyN !== null && (!Number.isInteger(everyN) || everyN < 0)) {
+    issues.push({
+      message: "Storage policy every_n must be a non-negative integer.",
+      severity: "error",
+    });
+  }
+  if (
+    (magnetization === "selected" || magnetization === "every_n") &&
+    (everyN === null || everyN <= 0)
+  ) {
+    issues.push({
+      message: "Storage policy every_n must be positive when magnetization is selected or every_n.",
+      severity: "error",
+    });
+  }
+
+  const threshold = finiteObjectNumber(
+    storage.key_event_threshold_dm ?? storage.keyEventThresholdDm,
+  );
+  if (threshold !== null && threshold <= 0) {
+    issues.push({
+      message: "Storage policy key_event_threshold_dm must be a positive finite number.",
+      severity: "error",
+    });
+  }
+}
+
+function validateHysteresisSaturationProbe(
+  issues: StudyStageDraftValidation[],
+  draft: StudyStageDraft,
+): void {
+  if (!draft.saturationMode.trim()) {
+    issues.push({
+      message: "Saturation mode is required.",
+      severity: "error",
+    });
+  }
+  const thresholds = strictFiniteNumberList(draft.saturationThresholds);
+  if (thresholds === null || thresholds.length !== 2) {
+    issues.push({
+      message: "Saturation thresholds must contain susceptibility and transverse thresholds.",
+      severity: "error",
+    });
+    return;
+  }
+  const [susceptibility, transverse] = thresholds;
+  if (susceptibility === undefined || susceptibility <= 0) {
+    issues.push({
+      message: "Saturation susceptibility threshold must be a positive finite number.",
+      severity: "error",
+    });
+  }
+  if (transverse === undefined || transverse <= 0) {
+    issues.push({
+      message: "Saturation transverse threshold must be a positive finite number.",
+      severity: "error",
+    });
+  }
+}
+
+function validateHysteresisOrientation(
+  issues: StudyStageDraftValidation[],
+  draft: StudyStageDraft,
+): void {
+  if (draft.orientationMode === "preset") {
+    const preset = draft.customDirection.trim();
+    if (!preset) {
+      issues.push({
+        message: "Orientation preset is required.",
+        severity: "error",
+      });
+      return;
+    }
+    if (!SUPPORTED_HYSTERESIS_ORIENTATION_PRESETS.has(preset)) {
+      issues.push({
+        message: `Orientation preset must be ${supportedSetMessage(SUPPORTED_HYSTERESIS_ORIENTATION_PRESETS)}.`,
+        severity: "error",
+      });
+    }
+    return;
+  }
+  if (draft.orientationMode === "sample") {
+    validateFiniteNumber(issues, draft.thetaDeg, "Theta", true);
+    validateFiniteNumber(issues, draft.phiDeg, "Phi", true);
+    return;
+  }
+  if (draft.orientationMode === "global") {
+    validateRequiredVector3(issues, draft.customDirection, "Orientation vector");
+    const vector = optionalVector3(draft.customDirection);
+    if (vector && isZeroVector3(vector)) {
+      issues.push({
+        message: "Orientation vector must not be the zero vector.",
+        severity: "error",
+      });
+    }
+    return;
+  }
+  issues.push({
+    message: "Orientation mode is required.",
+    severity: "error",
+  });
+}
+
+function validateHysteresisInitialState(
+  issues: StudyStageDraftValidation[],
+  draft: StudyStageDraft,
+): void {
+  if (draft.initialStatePolicy !== "checkpoint") return;
+  if (!draft.initialStateRef.trim()) {
+    issues.push({
+      message: "Initial state ref is required for checkpoint starts.",
+      severity: "error",
+    });
+  }
+}
+
+function validateHysteresisMeasurementAxis(
+  issues: StudyStageDraftValidation[],
+  draft: StudyStageDraft,
+): void {
+  const axis = draft.measurementAxis.trim();
+  if (!axis) {
+    issues.push({
+      message: "Measurement axis is required.",
+      severity: "error",
+    });
+    return;
+  }
+  if (!SUPPORTED_HYSTERESIS_MEASUREMENT_AXES.has(axis)) {
+    issues.push({
+      message: `Measurement axis must be ${supportedSetMessage(SUPPORTED_HYSTERESIS_MEASUREMENT_AXES)}.`,
+      severity: "error",
+    });
+    return;
+  }
+  if (axis !== "custom") return;
+
+  if (!draft.measurementAxisCustomVector.trim()) {
+    issues.push({
+      message: "Custom measurement axis vector is required.",
+      severity: "error",
+    });
+    return;
+  }
+  validateRequiredVector3(
+    issues,
+    draft.measurementAxisCustomVector,
+    "Custom measurement axis vector",
+  );
+  const vector = optionalVector3(draft.measurementAxisCustomVector);
+  if (vector && isZeroVector3(vector)) {
+    issues.push({
+      message: "Custom measurement axis vector must not be the zero vector.",
+      severity: "error",
+    });
+  }
+}
+
+function validateSimpleHysteresisFieldSchedule(
+  issues: StudyStageDraftValidation[],
+  draft: StudyStageDraft,
+): void {
+  if (draft.fieldScheduleMode === "piecewise") return;
+  const fieldMin = finiteObjectNumber(draft.fieldMinMt);
+  const fieldMax = finiteObjectNumber(draft.fieldMaxMt);
+  const fieldStep = finiteObjectNumber(draft.fieldStepMt);
+  if (fieldMin === null || fieldMax === null || fieldStep === null || fieldStep <= 0) {
+    return;
+  }
+  if (sameFieldValue(fieldMin, fieldMax)) {
+    issues.push({
+      message: "Minimum field and maximum field must differ.",
+      severity: "error",
+    });
+    return;
+  }
+  if (fieldMax < fieldMin) {
+    issues.push({
+      message: "Maximum field must be greater than minimum field.",
+      severity: "error",
+    });
+    return;
+  }
+
+  const pointCount = estimateSimpleHysteresisFieldPointCount(
+    fieldMin,
+    fieldMax,
+    fieldStep,
+    draft.protocolKind,
+  );
+  if (pointCount > MAX_HYSTERESIS_AUTHORING_FIELD_POINTS) {
+    issues.push({
+      message: `Simple field schedule has ${pointCount} points; reduce the range, increase the step, or use explicit piecewise segments.`,
+      severity: "error",
+    });
+  }
+}
+
+function estimateSimpleHysteresisFieldPointCount(
+  fieldMin: number,
+  fieldMax: number,
+  fieldStep: number,
+  protocolKind: string,
+): number {
+  const descending = estimateFieldSegmentPointCount(fieldMax, fieldMin, fieldStep);
+  const ascending = estimateFieldSegmentPointCount(fieldMin, fieldMax, fieldStep);
+  if (protocolKind === "virgin_curve") {
+    return estimateFieldSegmentPointCount(0, fieldMax, fieldStep);
+  }
+  if (protocolKind === "virgin_then_major_loop") {
+    return (
+      estimateFieldSegmentPointCount(0, fieldMax, fieldStep) +
+      Math.max(0, descending - 1) +
+      Math.max(0, ascending - 1)
+    );
+  }
+  if (protocolKind === "major_loop" || protocolKind === "major_with_minor_loops") {
+    return descending + Math.max(0, ascending - 1);
+  }
+  return ascending;
+}
+
+function estimateFieldSegmentPointCount(
+  start: number,
+  stop: number,
+  step: number,
+): number {
+  if (sameFieldValue(start, stop)) return 1;
+  const span = Math.abs(stop - start);
+  return Math.floor(Math.max(0, (span - 1e-9) / step)) + 2;
+}
+
+function parseJsonObjectForValidation(value: string): JsonRecord | null {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as JsonRecord)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function validateSettleStep(
+  issues: StudyStageDraftValidation[],
+  item: unknown,
+  index: number,
+): void {
+  const step = asRecord(item);
+  const label = `Settle step ${index + 1}`;
+  if (!step) {
+    issues.push({ message: `${label} must be a JSON object.`, severity: "error" });
+    return;
+  }
+
+  const kind = stringObjectValue(step.kind).trim();
+  const method = stringObjectValue(step.method).trim();
+  if (!kind) {
+    issues.push({ message: `${label} requires kind.`, severity: "error" });
+  } else if (!SUPPORTED_SETTLE_STEP_KINDS.has(kind)) {
+    issues.push({
+      message: `${label} kind must be relax, minimize, or dynamics_settle.`,
+      severity: "error",
+    });
+  }
+  if (!method) {
+    issues.push({ message: `${label} requires method.`, severity: "error" });
+  } else if (!SUPPORTED_SETTLE_METHODS_BY_KIND[kind]?.has(method)) {
+    issues.push({
+      message: `${label} method is not supported for ${kind || "this kind"}.`,
+      severity: "error",
+    });
+  }
+
+  const maxSteps = finiteObjectNumber(step.max_steps ?? step.maxSteps);
+  if (maxSteps === null || !Number.isInteger(maxSteps) || maxSteps <= 0) {
+    issues.push({
+      message: `${label} max_steps must be a positive integer.`,
+      severity: "error",
+    });
+  }
+
+  if (kind === "relax") {
+    validatePositiveObjectNumber(issues, step.alpha, `${label} alpha`);
+    validatePositiveObjectNumber(
+      issues,
+      step.torque_tolerance ?? step.torqueTolerance,
+      `${label} torque_tolerance`,
+    );
+  } else if (kind === "minimize") {
+    validatePositiveObjectNumber(
+      issues,
+      step.torque_tolerance ?? step.torqueTolerance,
+      `${label} torque_tolerance`,
+    );
+    validatePositiveObjectNumber(
+      issues,
+      step.energy_tolerance ?? step.energyTolerance,
+      `${label} energy_tolerance`,
+    );
+  } else if (kind === "dynamics_settle") {
+    validatePositiveObjectNumber(issues, step.damping, `${label} damping`);
+  }
+
+  const policy = stringObjectValue(
+    step.on_non_convergence ?? step.onNonConvergence,
+  ).trim();
+  if (!policy) {
+    issues.push({
+      message: `${label} requires on_non_convergence.`,
+      severity: "error",
+    });
+  } else if (!SUPPORTED_SETTLE_NON_CONVERGENCE_POLICIES.has(policy)) {
+    issues.push({
+      message: `${label} on_non_convergence must be continue_with_warning, stop_stage, run_next_algorithm, or retry_with_smaller_dt.`,
+      severity: "error",
+    });
+  }
+  validateSettleRetryPolicy(issues, step, label, policy);
+  validateSettleTimesteps(issues, step, label);
+}
+
+function validateSettleBranch(
+  issues: StudyStageDraftValidation[],
+  item: unknown,
+  index: number,
+): void {
+  const branch = asRecord(item);
+  const label = `Settle branch ${index + 1}`;
+  if (!branch) {
+    issues.push({ message: `${label} must be a JSON object.`, severity: "error" });
+    return;
+  }
+  if (!stringObjectValue(branch.when).trim()) {
+    issues.push({ message: `${label} requires when.`, severity: "error" });
+  }
+  validateSettleStep(issues, branch.run, index);
+}
+
+function validateSettlePipelineSemantics(
+  issues: StudyStageDraftValidation[],
+  draft: StudyStageDraft,
+): void {
+  const steps = parseSettleStepDrafts(draft.settleSteps);
+  if (steps.length === 0) return;
+  if (draft.settlePipelineMode === "sequence") {
+    steps.forEach((step, index) => {
+      if (
+        step.onNonConvergence === "run_next_algorithm" &&
+        index === steps.length - 1
+      ) {
+        issues.push({
+          message: `Settle step ${index + 1} run_next_algorithm requires a following step.`,
+          severity: "error",
+        });
+      }
+    });
+    return;
+  }
+
+  const defaultStep = steps[0];
+  if (
+    defaultStep?.onNonConvergence === "run_next_algorithm" &&
+    !settleBranchesContainFallback(draft.settleBranches)
+  ) {
+    issues.push({
+      message: "Settle tree run_next_algorithm requires a non_converged fallback branch.",
+      severity: "error",
+    });
+  }
+}
+
+function validateSettleAppliesToSemantics(
+  issues: StudyStageDraftValidation[],
+  draft: StudyStageDraft,
+): void {
+  const availableRoles = availableHysteresisAppliesToRoles(draft);
+  const availableBranchIds = availableHysteresisBranchIds(draft);
+  validateStepAppliesToList(
+    issues,
+    parseSettleStepRecords(draft.settleSteps),
+    "Settle step",
+    availableRoles,
+    availableBranchIds,
+  );
+  validateBranchAppliesToList(
+    issues,
+    draft.settleBranches,
+    availableRoles,
+    availableBranchIds,
+  );
+}
+
+function validateStepAppliesToList(
+  issues: StudyStageDraftValidation[],
+  steps: JsonRecord[],
+  labelPrefix: string,
+  availableRoles: Set<string>,
+  availableBranchIds: Set<string>,
+): void {
+  steps.forEach((step, index) => {
+    validateAppliesToValue(
+      issues,
+      step.applies_to ?? step.appliesTo,
+      `${labelPrefix} ${index + 1}`,
+      availableRoles,
+      availableBranchIds,
+    );
+  });
+}
+
+function validateBranchAppliesToList(
+  issues: StudyStageDraftValidation[],
+  value: string,
+  availableRoles: Set<string>,
+  availableBranchIds: Set<string>,
+): void {
+  try {
+    const parsed = JSON.parse(value || "[]") as unknown;
+    if (!Array.isArray(parsed)) return;
+    parsed.forEach((item, index) => {
+      const branch = asRecord(item);
+      const run = asRecord(branch?.run);
+      if (!run) return;
+      validateAppliesToValue(
+        issues,
+        run.applies_to ?? run.appliesTo,
+        `Settle branch ${index + 1} run`,
+        availableRoles,
+        availableBranchIds,
+      );
+    });
+  } catch {
+    // validateJsonArray owns malformed JSON errors.
+  }
+}
+
+function validateAppliesToValue(
+  issues: StudyStageDraftValidation[],
+  value: unknown,
+  label: string,
+  availableRoles: Set<string>,
+  availableBranchIds: Set<string>,
+): void {
+  if (value === null || value === undefined || value === "") return;
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      issues.push({
+        message: `${label} applies_to must not be empty.`,
+        severity: "error",
+      });
+      return;
+    }
+    value.forEach((item) =>
+      validateAppliesToValue(issues, item, label, availableRoles, availableBranchIds),
+    );
+    return;
+  }
+  if (typeof value === "string") {
+    validateAppliesToRole(issues, value, label, availableRoles);
+    return;
+  }
+  const selector = asRecord(value);
+  if (!selector) {
+    issues.push({
+      message: `${label} applies_to must be a role, selector object, or array.`,
+      severity: "error",
+    });
+    return;
+  }
+  const kind = stringObjectValue(selector.kind ?? selector.type).trim();
+  if (kind === "branch_id") {
+    const branchId = stringObjectValue(
+      selector.branch_id ?? selector.branchId,
+    ).trim();
+    if (!branchId) {
+      issues.push({
+        message: `${label} applies_to branch_id selector requires branch_id.`,
+        severity: "error",
+      });
+    } else if (!availableBranchIds.has(branchId)) {
+      issues.push({
+        message: `${label} applies_to branch_id '${branchId}' does not exist for this hysteresis protocol.`,
+        severity: "error",
+      });
+    }
+    return;
+  }
+  if (kind === "point_selector") {
+    if (!asRecord(selector.selector)) {
+      issues.push({
+        message: `${label} applies_to point_selector requires selector object.`,
+        severity: "error",
+      });
+    }
+    return;
+  }
+  if (kind === "role") {
+    validateAppliesToRole(
+      issues,
+      stringObjectValue(selector.role).trim(),
+      label,
+      availableRoles,
+    );
+    return;
+  }
+  issues.push({
+    message: `${label} applies_to selector kind must be branch_id, point_selector, or role.`,
+    severity: "error",
+  });
+}
+
+function validateAppliesToRole(
+  issues: StudyStageDraftValidation[],
+  role: string,
+  label: string,
+  availableRoles: Set<string>,
+): void {
+  const normalized = role.trim();
+  if (!normalized) {
+    issues.push({ message: `${label} applies_to role is required.`, severity: "error" });
+  } else if (normalized === "branch_id" || normalized === "point_selector") {
+    issues.push({
+      message: `${label} applies_to '${normalized}' requires a selector object.`,
+      severity: "error",
+    });
+  } else if (!availableRoles.has(normalized)) {
+    issues.push({
+      message: `${label} applies_to role '${normalized}' does not exist for this hysteresis protocol.`,
+      severity: "error",
+    });
+  }
+}
+
+function availableHysteresisAppliesToRoles(draft: StudyStageDraft): Set<string> {
+  const roles = new Set(["all_points", "key_events", "key_events_only"]);
+  if (draft.initialStatePolicy && draft.initialStatePolicy !== "as_authored") {
+    roles.add("preparation");
+  }
+  if (draft.saturationMode && draft.saturationMode !== "none") {
+    roles.add("saturation_probe");
+  }
+  if (
+    draft.protocolKind === "major_loop" ||
+    draft.protocolKind === "major_with_minor_loops" ||
+    draft.protocolKind === "virgin_then_major_loop"
+  ) {
+    roles.add("major");
+  }
+  if (
+    draft.protocolKind === "virgin_curve" ||
+    draft.protocolKind === "virgin_then_major_loop"
+  ) {
+    roles.add("virgin");
+  }
+  if (
+    draft.protocolKind === "major_with_minor_loops" &&
+    draft.minorLoops.trim() &&
+    draft.minorLoops.trim() !== "[]"
+  ) {
+    roles.add("minor");
+  }
+  return roles;
+}
+
+function availableHysteresisBranchIds(draft: StudyStageDraft): Set<string> {
+  const branchIds = new Set<string>();
+  if (
+    draft.protocolKind === "major_loop" ||
+    draft.protocolKind === "major_with_minor_loops" ||
+    draft.protocolKind === "virgin_then_major_loop"
+  ) {
+    branchIds.add("descending");
+    branchIds.add("ascending");
+  }
+  if (
+    draft.protocolKind === "virgin_curve" ||
+    draft.protocolKind === "virgin_then_major_loop"
+  ) {
+    branchIds.add("virgin");
+  }
+  return branchIds;
+}
+
+function validateSettleRetryPolicy(
+  issues: StudyStageDraftValidation[],
+  step: JsonRecord,
+  label: string,
+  policy: string,
+): void {
+  const retryScale = finiteObjectNumber(
+    step.retry_timestep_scale ?? step.retryTimestepScale,
+  );
+  const retryAttempts = finiteObjectNumber(
+    step.retry_max_attempts ?? step.retryMaxAttempts,
+  );
+  if (retryScale !== null && (retryScale <= 0 || retryScale >= 1)) {
+    issues.push({
+      message: `${label} retry_timestep_scale must be positive and smaller than 1.`,
+      severity: "error",
+    });
+  }
+  if (
+    retryAttempts !== null &&
+    (!Number.isInteger(retryAttempts) || retryAttempts <= 0)
+  ) {
+    issues.push({
+      message: `${label} retry_max_attempts must be a positive integer.`,
+      severity: "error",
+    });
+  }
+  if (policy === "retry_with_smaller_dt" && retryScale === null) {
+    issues.push({
+      message: `${label} retry_with_smaller_dt requires retry_timestep_scale.`,
+      severity: "error",
+    });
+  }
+}
+
+function validateSettleTimesteps(
+  issues: StudyStageDraftValidation[],
+  step: JsonRecord,
+  label: string,
+): void {
+  const timestep = finiteObjectNumber(
+    step.timestep_s ?? step.timestep ?? step.dt,
+  );
+  const minTimestep = finiteObjectNumber(
+    step.timestep_min_s ?? step.dt_min ?? step.dtMin,
+  );
+  if (timestep !== null && timestep <= 0) {
+    issues.push({
+      message: `${label} timestep_s must be a positive finite number.`,
+      severity: "error",
+    });
+  }
+  if (minTimestep !== null && minTimestep <= 0) {
+    issues.push({
+      message: `${label} dt_min must be a positive finite number.`,
+      severity: "error",
+    });
+  }
+  if (timestep !== null && minTimestep !== null && minTimestep > timestep) {
+    issues.push({
+      message: `${label} dt_min must be smaller than or equal to timestep_s.`,
+      severity: "error",
+    });
+  }
+  validatePositiveObjectNumber(
+    issues,
+    step.max_pseudotime_s ?? step.maxPseudotimeS,
+    `${label} max_pseudotime_s`,
+    false,
+  );
+  validatePositiveObjectNumber(
+    issues,
+    step.max_physical_time_s ?? step.maxPhysicalTimeS,
+    `${label} max_physical_time_s`,
+    false,
+  );
+}
+
+function validatePositiveObjectNumber(
+  issues: StudyStageDraftValidation[],
+  value: unknown,
+  label: string,
+  required = true,
+): void {
+  const parsed = finiteObjectNumber(value);
+  if (parsed === null) {
+    if (required) {
+      issues.push({ message: `${label} must be a positive finite number.`, severity: "error" });
+    }
+    return;
+  }
+  if (parsed <= 0) {
+    issues.push({ message: `${label} must be a positive finite number.`, severity: "error" });
+  }
+}
+
+interface SettleStepDraft {
+  onNonConvergence: string;
+}
+
+function parseSettleStepDrafts(value: string): SettleStepDraft[] {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item) => {
+        const step = asRecord(item);
+        if (!step) return null;
+        return {
+          onNonConvergence: stringObjectValue(
+            step.on_non_convergence ?? step.onNonConvergence,
+          ).trim(),
+        };
+      })
+      .filter((step): step is SettleStepDraft => Boolean(step));
+  } catch {
+    return [];
+  }
+}
+
+function parseSettleStepRecords(value: string): JsonRecord[] {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item) => asRecord(item))
+      .filter((step): step is JsonRecord => Boolean(step));
+  } catch {
+    return [];
+  }
+}
+
+function settleBranchesContainFallback(value: string): boolean {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return false;
+    return parsed.some((item) => {
+      const branch = asRecord(item);
+      const when = stringObjectValue(branch?.when).trim();
+      return (
+        when === "non_converged" ||
+        when === "fallback" ||
+        when === "run_next_algorithm"
+      );
+    });
+  } catch {
+    return false;
+  }
+}
+
+function stringObjectValue(value: unknown): string {
+  return typeof value === "string" || typeof value === "number"
+    ? String(value)
+    : "";
+}
+
+function validateMinorLoop(
+  issues: StudyStageDraftValidation[],
+  item: unknown,
+  index: number,
+): void {
+  const loop = asRecord(item);
+  const label = `Minor loop ${index + 1}`;
+  if (!loop) {
+    issues.push({ message: `${label} must be a JSON object.`, severity: "error" });
+    return;
+  }
+
+  const reversal = finiteObjectNumber(loop.reversal_mT ?? loop.reversalMt);
+  const returnField = finiteObjectNumber(loop.return_mT ?? loop.returnMt);
+  if (reversal === null) {
+    issues.push({
+      message: `${label} reversal_mT must be a finite number.`,
+      severity: "error",
+    });
+  }
+  if (returnField === null) {
+    issues.push({
+      message: `${label} return_mT must be a finite number.`,
+      severity: "error",
+    });
+  }
+  if (
+    reversal !== null &&
+    returnField !== null &&
+    sameFieldValue(reversal, returnField)
+  ) {
+    issues.push({
+      message: `${label} reversal_mT and return_mT must differ.`,
+      severity: "error",
+    });
+  }
+}
+
+function validateMinorLoopEnvelope(
+  issues: StudyStageDraftValidation[],
+  draft: StudyStageDraft,
+): void {
+  const loops = parseMinorLoopDrafts(draft.minorLoops);
+  if (loops.length === 0) return;
+  if (draft.protocolKind !== "major_with_minor_loops") {
+    issues.push({
+      message: "Minor loops require branch mode major_with_minor_loops.",
+      severity: "error",
+    });
+  }
+  const fieldMin = finiteObjectNumber(draft.fieldMinMt);
+  const fieldMax = finiteObjectNumber(draft.fieldMaxMt);
+  if (fieldMin === null || fieldMax === null) return;
+  const lower = Math.min(fieldMin, fieldMax);
+  const upper = Math.max(fieldMin, fieldMax);
+  for (const loop of loops) {
+    if (loop.reversal < lower || loop.reversal > upper) {
+      issues.push({
+        message: `Minor loop ${loop.index + 1} reversal_mT must be within the field range.`,
+        severity: "error",
+      });
+    }
+    if (loop.returnField < lower || loop.returnField > upper) {
+      issues.push({
+        message: `Minor loop ${loop.index + 1} return_mT must be within the field range.`,
+        severity: "error",
+      });
+    }
+  }
+}
+
+interface MinorLoopDraft {
+  index: number;
+  returnField: number;
+  reversal: number;
+}
+
+function parseMinorLoopDrafts(value: string): MinorLoopDraft[] {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item, index) => {
+        const loop = asRecord(item);
+        if (!loop) return null;
+        const reversal = finiteObjectNumber(loop.reversal_mT ?? loop.reversalMt);
+        const returnField = finiteObjectNumber(loop.return_mT ?? loop.returnMt);
+        if (reversal === null || returnField === null) return null;
+        return { index, returnField, reversal };
+      })
+      .filter((loop): loop is MinorLoopDraft => Boolean(loop));
+  } catch {
+    return [];
   }
 }
 
@@ -919,6 +1921,11 @@ function validateFieldSegment(
   }
   if (!endpointPolicy) {
     issues.push({ message: `${label} requires endpointPolicy.`, severity: "error" });
+  } else if (!SUPPORTED_FIELD_SEGMENT_ENDPOINT_POLICIES.has(endpointPolicy)) {
+    issues.push({
+      message: `${label} endpointPolicy must be include_stop, skip_start, or include_both.`,
+      severity: "error",
+    });
   }
   if (!Number.isFinite(startValue)) {
     issues.push({ message: `${label} startField must be a finite number.`, severity: "error" });
@@ -932,6 +1939,183 @@ function validateFieldSegment(
   if (Number.isFinite(startValue) && Number.isFinite(stopValue) && startValue === stopValue) {
     issues.push({ message: `${label} startField and stopField must differ.`, severity: "error" });
   }
+}
+
+function validateFieldSegmentSchedule(
+  issues: StudyStageDraftValidation[],
+  value: string,
+): void {
+  const segments = parseFieldSegmentDrafts(value);
+  if (segments.length < 2) return;
+
+  for (let index = 1; index < segments.length; index += 1) {
+    const previous = segments[index - 1];
+    const current = segments[index];
+    if (!previous || !current) continue;
+    if (!Number.isFinite(previous.stop) || !Number.isFinite(current.start)) {
+      continue;
+    }
+    if (sameFieldValue(previous.stop, current.start)) {
+      if (
+        current.endpointPolicy !== "skip_start" &&
+        current.endpointPolicy !== "include_both"
+      ) {
+        issues.push({
+          message: `Field segment ${index + 1} shares a boundary with segment ${index}; choose skip_start or include_both explicitly.`,
+          severity: "warning",
+        });
+      }
+    } else {
+      issues.push({
+        message: `Field segment ${index + 1} starts at ${current.start} mT, leaving a discontinuity after segment ${index} stops at ${previous.stop} mT.`,
+        severity: "warning",
+      });
+    }
+  }
+}
+
+function validateDenseWindow(
+  issues: StudyStageDraftValidation[],
+  item: unknown,
+  index: number,
+): void {
+  const window = asRecord(item);
+  const label = `Dense window ${index + 1}`;
+  if (!window) {
+    issues.push({ message: `${label} must be a JSON object.`, severity: "error" });
+    return;
+  }
+
+  const center = finiteObjectNumber(window.center_mT ?? window.centerMt);
+  const halfWidth = finiteObjectNumber(window.half_width_mT ?? window.halfWidthMt);
+  const step = finiteObjectNumber(window.step_mT ?? window.stepMt);
+  const priority = window.priority;
+
+  if (center === null) {
+    issues.push({ message: `${label} center_mT must be a finite number.`, severity: "error" });
+  }
+  if (halfWidth === null || halfWidth <= 0) {
+    issues.push({ message: `${label} half_width_mT must be a positive finite number.`, severity: "error" });
+  }
+  if (step === null || step <= 0) {
+    issues.push({ message: `${label} step_mT must be a positive finite number.`, severity: "error" });
+  }
+  if (
+    priority !== null &&
+    priority !== undefined &&
+    (!Number.isInteger(Number(priority)) || Number(priority) < 0)
+  ) {
+    issues.push({ message: `${label} priority must be a non-negative integer.`, severity: "error" });
+  }
+}
+
+function validateDenseWindowOverlaps(
+  issues: StudyStageDraftValidation[],
+  value: string,
+): void {
+  const windows = parseDenseWindowDrafts(value);
+  windows.sort((left, right) => left.start - right.start || left.end - right.end);
+
+  let previous: DenseWindowDraft | null = null;
+  for (const window of windows) {
+    if (previous && window.start < previous.end) {
+      if (window.priority === null || previous.priority === null) {
+        issues.push({
+          message: `Dense window ${window.index + 1} overlaps dense window ${previous.index + 1}; overlapping windows require explicit priority.`,
+          severity: "error",
+        });
+      } else if (window.priority === previous.priority) {
+        issues.push({
+          message: `Dense window ${window.index + 1} overlaps dense window ${previous.index + 1}; overlapping windows require distinct priority values.`,
+          severity: "error",
+        });
+      }
+    }
+    if (!previous || window.end > previous.end) {
+      previous = window;
+    }
+  }
+}
+
+interface FieldSegmentDraft {
+  endpointPolicy: string;
+  start: number;
+  stop: number;
+}
+
+function parseFieldSegmentDrafts(value: string): FieldSegmentDraft[] {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item) => {
+        const segment = asRecord(item);
+        if (!segment) return null;
+        const start = finiteObjectNumber(segment.startField ?? segment.start_field ?? segment.start);
+        const stop = finiteObjectNumber(segment.stopField ?? segment.stop_field ?? segment.stop);
+        const endpointPolicy = stringValue(
+          segment.endpointPolicy ?? segment.endpoint_policy,
+          "",
+        ).trim();
+        return start === null || stop === null
+          ? null
+          : { endpointPolicy, start, stop };
+      })
+      .filter((segment): segment is FieldSegmentDraft => Boolean(segment));
+  } catch {
+    return [];
+  }
+}
+
+interface DenseWindowDraft {
+  end: number;
+  index: number;
+  priority: number | null;
+  start: number;
+}
+
+function parseDenseWindowDrafts(value: string): DenseWindowDraft[] {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item, index) => {
+        const window = asRecord(item);
+        if (!window) return null;
+        const center = finiteObjectNumber(window.center_mT ?? window.centerMt);
+        const halfWidth = finiteObjectNumber(window.half_width_mT ?? window.halfWidthMt);
+        if (center === null || halfWidth === null || halfWidth <= 0) return null;
+        const rawPriority = window.priority;
+        const priority =
+          rawPriority === null || rawPriority === undefined
+            ? null
+            : Number(rawPriority);
+        const validPriority =
+          priority !== null && Number.isInteger(priority) && priority >= 0
+            ? priority
+            : null;
+        return {
+          end: center + halfWidth,
+          index,
+          priority: validPriority,
+          start: center - halfWidth,
+        };
+      })
+      .filter((window): window is DenseWindowDraft => Boolean(window));
+  } catch {
+    return [];
+  }
+}
+
+function finiteObjectNumber(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string" && !value.trim()) return null;
+  const parsed = typeof value === "number" ? value : Number(String(value).trim());
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function sameFieldValue(left: number, right: number): boolean {
+  return Math.abs(left - right) <= 1e-9;
 }
 
 function validatePositiveInteger(
@@ -1046,41 +2230,48 @@ function scalarText(value: unknown, fallback: string): string {
   return fallback;
 }
 
-function measurementAxisText(value: unknown, fallback: string): string {
+function measurementAxisDraftFields(
+  value: unknown,
+  fallback: string,
+): Pick<StudyStageDraft, "measurementAxis" | "measurementAxisCustomVector"> {
+  const axis = asRecord(value);
+  if (axis?.kind === "custom") {
+    return {
+      measurementAxis: "custom",
+      measurementAxisCustomVector: Array.isArray(axis.vector)
+        ? axis.vector.join(", ")
+        : "",
+    };
+  }
   if (typeof value === "number" || typeof value === "string") {
-    return String(value);
+    return {
+      measurementAxis: String(value),
+      measurementAxisCustomVector: "",
+    };
   }
-  return value === null || value === undefined ? fallback : JSON.stringify(value);
+  return {
+    measurementAxis: value === null || value === undefined ? fallback : JSON.stringify(value),
+    measurementAxisCustomVector: "",
+  };
 }
 
-function parseMeasurementAxisDraft(value: string): JsonValue {
-  const trimmed = value.trim();
-  if (!trimmed) return "field_axis";
-  if (!trimmed.startsWith("{")) return trimmed;
-  try {
-    const parsed = JSON.parse(trimmed);
-    return isJsonValue(parsed) ? parsed : trimmed;
-  } catch {
-    return trimmed;
+function parseMeasurementAxisDraft(draft: StudyStageDraft): JsonValue {
+  const axis = draft.measurementAxis.trim();
+  if (axis === "custom") {
+    return {
+      kind: "custom",
+      vector: requiredNonZeroVector3(
+        draft.measurementAxisCustomVector,
+        "measurement_axis.vector",
+      ),
+    };
   }
-}
-
-function isJsonValue(value: unknown): value is JsonValue {
-  if (
-    value === null ||
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean"
-  ) {
-    return true;
+  if (SUPPORTED_HYSTERESIS_MEASUREMENT_AXES.has(axis)) {
+    return axis || "field_axis";
   }
-  if (Array.isArray(value)) {
-    return value.every(isJsonValue);
-  }
-  if (typeof value === "object") {
-    return Object.values(value as Record<string, unknown>).every(isJsonValue);
-  }
-  return false;
+  throw new Error(
+    `measurement_axis must be ${supportedSetMessage(SUPPORTED_HYSTERESIS_MEASUREMENT_AXES)}.`,
+  );
 }
 
 function listText(value: unknown, fallback: string): string {
@@ -1246,9 +2437,34 @@ function requiredVector3(value: string, field: string): number[] {
   return vector;
 }
 
+function requiredNonZeroVector3(value: string, field: string): number[] {
+  const vector = requiredVector3(value, field);
+  if (isZeroVector3(vector)) {
+    throw new Error(`${field} must not be the zero vector.`);
+  }
+  return vector;
+}
+
+function requiredHysteresisOrientationPreset(value: string): string {
+  const preset = value.trim();
+  if (!preset) {
+    throw new Error("orientation.preset_name is required.");
+  }
+  if (!SUPPORTED_HYSTERESIS_ORIENTATION_PRESETS.has(preset)) {
+    throw new Error(
+      `orientation.preset_name must be ${supportedSetMessage(SUPPORTED_HYSTERESIS_ORIENTATION_PRESETS)}.`,
+    );
+  }
+  return preset;
+}
+
 function optionalVector3(value: string): number[] | null {
   const values = finiteNumberList(value);
   return values.length === 3 ? values : null;
+}
+
+function isZeroVector3(vector: readonly number[]): boolean {
+  return vector.every((component) => component === 0);
 }
 
 function finiteNumberList(value: string): number[] {
@@ -1260,6 +2476,22 @@ function finiteNumberList(value: string): number[] {
     if (Number.isFinite(parsed)) {
       values.push(parsed);
     }
+  }
+  return values;
+}
+
+function supportedSetMessage(values: ReadonlySet<string>): string {
+  return Array.from(values).join(", ");
+}
+
+function strictFiniteNumberList(value: string): number[] | null {
+  const values: number[] = [];
+  const tokens = value.split(/[,\s]+/).map((token) => token.trim()).filter(Boolean);
+  if (tokens.length === 0) return null;
+  for (const token of tokens) {
+    const parsed = Number(token);
+    if (!Number.isFinite(parsed)) return null;
+    values.push(parsed);
   }
   return values;
 }

@@ -196,7 +196,7 @@ Verification:
 - Existing `crates/fullmag-runner/tests/physics_validation.rs` eigen tests.
 - New native/reference modal parity tests.
 - Adapted TetraX-style dispersion reference tests where geometry/interactions match.
-- Managed recipe `just verify-fem-eigen-runtime`.
+- Managed recipe `just verify-fem-frequency-domain-eigen-runtime`.
 - API tests for generated modal artifacts.
 
 Runner test migration:
@@ -441,6 +441,9 @@ Commands:
 
 ```bash
 just verify-fem-frequency-domain-runtime
+just verify-fem-frequency-domain-static-periodic-runtime
+just verify-fem-frequency-domain-eigen-runtime
+just verify-fem-frequency-domain-runtime-suite
 pnpm --dir apps/control-room generate:api
 pnpm --dir apps/control-room typecheck
 pnpm --dir apps/control-room lint
@@ -529,6 +532,9 @@ Verification:
   reference modal oracle until the native solver has equivalent parity gates.
 - Native modal smoke tests pass in the managed FEM container through a
   repo-owned `just` recipe.
+- The aggregate managed runtime suite is `just verify-fem-frequency-domain-runtime-suite`;
+  it runs driven response, static-periodic response, and modal eigen artifact
+  gates.
 - Cross-lane parity test records reference versus native residuals and frequency deltas.
 
 ## Global Verification Matrix
@@ -587,6 +593,8 @@ Viewport:
 End-to-end:
 
 - managed FEM response run produces response artifacts,
+- managed FEM static-periodic response run produces response artifacts with
+  `static_periodic_*` diagnostics,
 - managed FEM modal run produces modal artifacts,
 - Control Room discovers manifest,
 - chart selection opens mode inspector,

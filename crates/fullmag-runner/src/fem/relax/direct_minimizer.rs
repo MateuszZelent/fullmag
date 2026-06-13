@@ -5,13 +5,15 @@
 //! backend owns the actual algorithm step, including tangent gradients, line
 //! search, field refresh, and magnetization updates.
 
-use fullmag_ir::{FemPlanIR, RelaxationControlIR};
+use fullmag_ir::{FemPlanIR, RelaxationControlIR, StageCompletionIR, StageStopReason};
 
 use crate::artifact_pipeline::ArtifactRecorder;
 use crate::dispatch::flatten_vectors;
 use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 use crate::native_fem::NativeFemBackend;
-use crate::relaxation::direct_minimizer::direct_minimizer_step_budget;
+use crate::relaxation::direct_minimizer::{
+    direct_minimizer_pseudotime_budget, direct_minimizer_step_budget,
+};
 use crate::types::{FemMeshPayload, LiveStepConsumer, RunError, StepAction, StepStats, StepUpdate};
 
 use super::preview::build_fem_cached_preview_fields;
@@ -36,12 +38,15 @@ pub(crate) fn execute_direct_minimizer(
     mut last_preview_revision: Option<u64>,
 ) -> Result<DirectMinimizerExecution, RunError> {
     let mut latest_stats: Option<StepStats> = None;
-    let mut backend_completion: Option<fullmag_ir::StageCompletionIR> = None;
+    let mut backend_completion: Option<StageCompletionIR> = None;
     let mut cancelled = false;
     let mut paused = false;
     let mut accepted_steps = 0u64;
+    let mut pseudotime_s = 0.0;
 
-    while accepted_steps < direct_minimizer_step_budget(control) {
+    while accepted_steps < direct_minimizer_step_budget(control)
+        && pseudotime_s < direct_minimizer_pseudotime_budget(control)
+    {
         if live
             .as_ref()
             .is_some_and(|consumer| consumer.initial_snapshot)
@@ -129,6 +134,8 @@ pub(crate) fn execute_direct_minimizer(
             break;
         };
         accepted_steps += 1;
+        pseudotime_s += direct_minimizer_step_pseudotime_s(accepted_stats.dt);
+        accepted_stats.pseudo_time_s = Some(pseudotime_s);
         ensure_fem_object_scalars(&mut accepted_stats, plan);
 
         artifacts.record_scalar(&accepted_stats)?;
@@ -186,7 +193,10 @@ pub(crate) fn execute_direct_minimizer(
                         .map(|fields| fields.len())
                         .unwrap_or(0),
                     preview_targets_global_scalar,
-                    magnetization.as_ref().map(|values| values.len()).unwrap_or(0),
+                    magnetization
+                        .as_ref()
+                        .map(|values| values.len())
+                        .unwrap_or(0),
                 );
             }
             let action = (live.on_step)(StepUpdate {
@@ -231,6 +241,10 @@ pub(crate) fn execute_direct_minimizer(
             backend_completion = Some(completion);
             break;
         }
+        if let Some(completion) = infer_runner_pseudotime_completion(control, pseudotime_s) {
+            backend_completion = Some(completion);
+            break;
+        }
     }
 
     Ok(DirectMinimizerExecution {
@@ -241,8 +255,35 @@ pub(crate) fn execute_direct_minimizer(
     })
 }
 
+fn direct_minimizer_step_pseudotime_s(dt: f64) -> f64 {
+    if dt.is_finite() && dt > 0.0 {
+        dt
+    } else {
+        0.0
+    }
+}
+
+fn infer_runner_pseudotime_completion(
+    control: &RelaxationControlIR,
+    pseudotime_s: f64,
+) -> Option<StageCompletionIR> {
+    let threshold = control.stop.max_pseudotime_s?;
+    if pseudotime_s < threshold {
+        return None;
+    }
+    Some(StageCompletionIR {
+        status: "completed".to_string(),
+        reason: Some(StageStopReason::MaxPseudotime),
+        metric_name: Some("pseudo_time_s".to_string()),
+        metric_value: Some(pseudotime_s),
+        threshold: Some(threshold),
+    })
+}
+
 #[cfg(test)]
 mod tests {
+    use fullmag_ir::{RelaxStopIR, RelaxationAlgorithmIR, RelaxationControlIR, StageStopReason};
+
     #[test]
     fn direct_minimizer_publishes_live_update_after_accepted_step() {
         let source = include_str!("direct_minimizer.rs");
@@ -252,5 +293,28 @@ mod tests {
                 && source.contains("let action = (live.on_step)(StepUpdate {\n                stats: current_stats.clone(),"),
             "FEM direct minimizer must publish live stats/magnetization after accepted steps, not only the initial snapshot"
         );
+    }
+
+    #[test]
+    fn direct_minimizer_runner_reports_max_pseudotime() {
+        let control = RelaxationControlIR {
+            algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
+            stop: RelaxStopIR {
+                torque_tolerance_apm: Some(1e-4),
+                energy_tolerance_j: None,
+                max_steps: Some(100),
+                max_pseudotime_s: Some(1e-6),
+                max_physical_time_s: None,
+            },
+        };
+
+        assert!(super::infer_runner_pseudotime_completion(&control, 9.0e-7).is_none());
+        let completion = super::infer_runner_pseudotime_completion(&control, 1.2e-6)
+            .expect("pseudotime threshold should complete the stage");
+
+        assert_eq!(completion.reason, Some(StageStopReason::MaxPseudotime));
+        assert_eq!(completion.metric_name.as_deref(), Some("pseudo_time_s"));
+        assert_eq!(completion.metric_value, Some(1.2e-6));
+        assert_eq!(completion.threshold, Some(1e-6));
     }
 }

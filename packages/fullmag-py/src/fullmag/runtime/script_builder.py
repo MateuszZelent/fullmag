@@ -487,8 +487,8 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
             "eigen_damping_policy": study.damping_policy,
             "eigen_k_vector": ",".join(str(component) for component in study.k_vector) if study.k_vector is not None else "",
             "eigen_k_path": "",
-            "eigen_spin_wave_bc": study.spin_wave_bc if isinstance(study.spin_wave_bc, str) else str(study.spin_wave_bc.get("kind", "")),
-            "eigen_spin_wave_bc_config": study.spin_wave_bc if isinstance(study.spin_wave_bc, dict) else None,
+            "eigen_spin_wave_bc": _spin_wave_bc_kind(study.spin_wave_bc),
+            "eigen_spin_wave_bc_config": _spin_wave_bc_config(study.spin_wave_bc),
         }
     if isinstance(study, FrequencyResponse):
         return {
@@ -503,14 +503,15 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
             "max_steps": "",
             "frequency_values_hz": ",".join(str(freq) for freq in study.frequencies_hz),
             "frequency_excitation_field_au_per_m": ",".join(str(component) for component in study.excitation_field_au_per_m),
+            "frequency_excitation_phase_rad": _text_number(study.excitation_phase_rad),
             "frequency_include_demag": study.include_demag,
             "frequency_equilibrium_source": study.equilibrium_source,
             "frequency_equilibrium_artifact": _text_value(study.equilibrium_artifact),
             "frequency_normalization": study.normalization,
             "frequency_damping_policy": study.damping_policy,
             "frequency_k_vector": ",".join(str(component) for component in study.k_vector) if study.k_vector is not None else "",
-            "frequency_spin_wave_bc": study.spin_wave_bc if isinstance(study.spin_wave_bc, str) else str(study.spin_wave_bc.get("kind", "")),
-            "frequency_spin_wave_bc_config": study.spin_wave_bc if isinstance(study.spin_wave_bc, dict) else None,
+            "frequency_spin_wave_bc": _spin_wave_bc_kind(study.spin_wave_bc),
+            "frequency_spin_wave_bc_config": _spin_wave_bc_config(study.spin_wave_bc),
         }
     return {
         "kind": "run",
@@ -2673,7 +2674,7 @@ def _render_stages(
                     or study.spin_wave_bc
                 )
             if spin_wave_bc != "free":
-                call_parts.append(f"bc={_py_repr(spin_wave_bc)}")  # type: ignore[arg-type]
+                call_parts.append(f"bc={_render_spin_wave_bc_expr(spin_wave_bc)}")
             k_vector_raw = _override_string(stage_override, "eigen_k_vector", None)
             k_path_expr = _render_stage_k_path_expr(
                 _override_string(stage_override, "eigen_k_path", None)
@@ -2701,6 +2702,8 @@ def _render_stages(
                 call_parts.append(
                     f"excitation_field_au_per_m={_py_tuple3(study.excitation_field_au_per_m)}"
                 )
+            if abs(study.excitation_phase_rad) > 1e-15:
+                call_parts.append(f"excitation_phase_rad={_py_number(study.excitation_phase_rad)}")
             call_parts.append(f"include_demag={study.include_demag!r}")
             if study.equilibrium_source != "provided":
                 call_parts.append(f"equilibrium_source={_py_repr(study.equilibrium_source)}")
@@ -2711,7 +2714,7 @@ def _render_stages(
             if study.damping_policy != "ignore":
                 call_parts.append(f"damping_policy={_py_repr(study.damping_policy)}")
             if study.spin_wave_bc != "free":
-                call_parts.append(f"bc={_py_repr(study.spin_wave_bc)}")  # type: ignore[arg-type]
+                call_parts.append(f"bc={_render_spin_wave_bc_expr(study.spin_wave_bc)}")
             if study.k_vector is not None:
                 call_parts.append(f"k_vector={study.k_vector!r}")
             if is_study_surface:
@@ -2847,6 +2850,8 @@ def _render_hysteresis_stage_args(study: Hysteresis) -> list[str]:
     if "angular_family" in payload:
         args.append(f"angular_family={_render_hysteresis_angular_family(payload['angular_family'])}")
     args.append(f"initial_protocol={_py_repr(str(payload['initial_protocol']))}")
+    if "initial_state_ref" in payload:
+        args.append(f"initial_state_ref={_py_repr(str(payload['initial_state_ref']))}")
     if "saturation" in payload:
         args.append(f"saturation={_render_hysteresis_saturation(payload['saturation'])}")
     args.append(f"branch_mode={_py_repr(str(payload['branch_mode']))}")
@@ -4798,6 +4803,46 @@ def _py_literal(value: object) -> str:
     if value is None:
         return "None"
     raise ValueError(f"unsupported literal for canonical rewrite: {type(value).__name__}")
+
+
+def _spin_wave_bc_payload(value: object) -> str | dict[str, object]:
+    if hasattr(value, "to_ir"):
+        value = value.to_ir()
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return dict(value)
+    raise ValueError(f"unsupported spin-wave boundary condition: {type(value).__name__}")
+
+
+def _spin_wave_bc_kind(value: object) -> str:
+    payload = _spin_wave_bc_payload(value)
+    if isinstance(payload, str):
+        return payload
+    return str(payload.get("kind", ""))
+
+
+def _spin_wave_bc_config(value: object) -> dict[str, object] | None:
+    payload = _spin_wave_bc_payload(value)
+    if isinstance(payload, dict):
+        return payload
+    return None
+
+
+def _render_spin_wave_bc_expr(value: object) -> str:
+    payload = _spin_wave_bc_payload(value)
+    if isinstance(payload, str):
+        return _py_repr(payload)
+    pair_ids = payload.get("pair_ids")
+    if payload.get("kind") == "periodic" and isinstance(pair_ids, list):
+        return f"fm.PeriodicBC({_py_literal(pair_ids)})"
+    if payload.get("kind") == "floquet" and isinstance(pair_ids, list):
+        args = [_py_literal(pair_ids)]
+        phase_convention = payload.get("phase_convention")
+        if phase_convention not in {None, "exp_minus_i_k_dot_delta_r"}:
+            args.append(f"phase_convention={_py_repr(str(phase_convention))}")
+        return f"fm.FloquetBC({', '.join(args)})"
+    return _py_literal(payload)
 
 
 _DEFAULT_TEXTURE_MAPPING = {

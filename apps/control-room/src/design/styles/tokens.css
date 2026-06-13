@@ -30,6 +30,7 @@
   --fm-font-size-sm: 12px;
   --fm-font-size-md: 13px;
   --fm-font-size-lg: 15px;
+  --fm-line-height-tight: 1.1;
 
   /* Effects */
   --fm-focus-ring: 0 0 0 2px var(--fm-bg-app), 0 0 0 4px var(--fm-accent);

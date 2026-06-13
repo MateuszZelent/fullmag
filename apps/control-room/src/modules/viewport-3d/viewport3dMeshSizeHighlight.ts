@@ -171,6 +171,18 @@ function resolveElementScope(
     return null;
   }
 
+  if (scope.kind === "region") {
+    const parts = scope.meshPartIds.flatMap((partId) => {
+      const part = femDomain.partsById.get(partId);
+      return part ? [part] : [];
+    });
+    const ranges = rangesForParts(parts, topology.elementCount);
+    if (ranges.length > 0) {
+      return { contains: (element) => elementInRanges(element, ranges) };
+    }
+    return null;
+  }
+
   const partIds = femDomain.objectPartIds.get(scope.objectId) ?? [];
   const parts = partIds.flatMap((partId) => {
     const part = femDomain.partsById.get(partId);

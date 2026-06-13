@@ -77,10 +77,14 @@ import {
 } from "./useViewport3DFieldRenderOptions";
 import {
   FULL_FIELD_QUERY,
+  buildHysteresisReplayGlyphModel,
+  resolveHysteresisReplayMeshCompatibility,
   resolveHysteresisStepViewportTarget,
   resolveViewport3DSelectionBounds,
   targetForFdmDomain,
   targetForMeshPart,
+  type HysteresisReplayGlyphModel,
+  type HysteresisReplayMeshCompatibility,
 } from "../model/viewport3DTargets";
 import {
   buildFdmCuboidInstanceModel,
@@ -597,6 +601,16 @@ export interface Viewport3DFieldDataIssue {
   retry: () => void;
 }
 
+export interface Viewport3DFieldDataIssueInput {
+  fieldVectorEnabled: boolean;
+  fieldVectorErrorMessage: string | null;
+  fieldVectorRefetch: () => void;
+  fieldVectorResourceKey: string;
+  fieldVectorRevision: ResourceRevision | null;
+  hysteresisReplayMeshCompatibility: HysteresisReplayMeshCompatibility;
+  primaryFieldQuantityId: string;
+}
+
 export interface Viewport3DPrimaryFieldQueryOptions {
   fdmInstanceModelNeedsFieldVector: boolean;
   fdmSurfaceColorMode: string | null;
@@ -618,6 +632,40 @@ export function resolveViewport3DVisualizationQuantityId(
   );
 }
 
+export function resolveViewport3DFieldDataIssue({
+  fieldVectorEnabled,
+  fieldVectorErrorMessage,
+  fieldVectorRefetch,
+  fieldVectorResourceKey,
+  fieldVectorRevision,
+  hysteresisReplayMeshCompatibility,
+  primaryFieldQuantityId,
+}: Viewport3DFieldDataIssueInput): Viewport3DFieldDataIssue | null {
+  if (hysteresisReplayMeshCompatibility.status === "mismatch") {
+    const message =
+      hysteresisReplayMeshCompatibility.reason ??
+      "Selected hysteresis snapshot was computed on a different mesh.";
+    return {
+      key: `${fieldVectorResourceKey}:mesh-mismatch:${hysteresisReplayMeshCompatibility.requiredMeshIdentity ?? "unknown"}:${hysteresisReplayMeshCompatibility.actualMeshIdentity ?? "unknown"}`,
+      message,
+      quantityId: primaryFieldQuantityId,
+      resourceKey: fieldVectorResourceKey,
+      retry: fieldVectorRefetch,
+    };
+  }
+
+  if (!(fieldVectorEnabled && fieldVectorErrorMessage)) return null;
+  const message =
+    fieldVectorErrorMessage.trim() || "Field vector resource failed to load.";
+  return {
+    key: `${fieldVectorResourceKey}:${fieldVectorRevision ?? "none"}:${message}`,
+    message,
+    quantityId: primaryFieldQuantityId,
+    resourceKey: fieldVectorResourceKey,
+    retry: fieldVectorRefetch,
+  };
+}
+
 export function resolveViewport3DSelectedSnapshotId(
   selection: Selection,
 ): string | null {
@@ -625,6 +673,30 @@ export function resolveViewport3DSelectedSnapshotId(
   if (hysteresisTarget) return hysteresisTarget.snapshotId;
   if (selection.ref?.type !== "analysis-chart-point") return null;
   return selection.ref.snapshotId ?? null;
+}
+
+export function resolveViewport3DSelectedSnapshotQuery(
+  selection: Selection,
+): FieldVectorQuery | null {
+  const hysteresisTarget = resolveHysteresisStepViewportTarget(selection);
+  if (!hysteresisTarget) {
+    const snapshotId =
+      selection.ref?.type === "analysis-chart-point"
+        ? selection.ref.snapshotId ?? null
+        : null;
+    return snapshotId ? { snapshot_id: snapshotId } : null;
+  }
+
+  const params = resourceRefSearchParams(hysteresisTarget.resourceRef);
+  return {
+    snapshot_id: params?.get("snapshot_id") ?? hysteresisTarget.snapshotId,
+    stage_id: params?.get("stage_id") ?? hysteresisTarget.stageId,
+  };
+}
+
+function resourceRefSearchParams(resourceRef: string | null): URLSearchParams | null {
+  const query = resourceRef?.split("?", 2)[1];
+  return query ? new URLSearchParams(query) : null;
 }
 
 export function resolveViewport3DActiveQuantityId({
@@ -636,13 +708,14 @@ export function resolveViewport3DActiveQuantityId({
   selection: Selection;
   visualizationState: VisualizationStateResource | null | undefined;
 }): string {
-  if (
-    selectedSnapshotId &&
-    selection.ref?.type === "analysis-chart-point" &&
-    selection.ref.quantity
-  ) {
+  if (selectedSnapshotId) {
     const hysteresisTarget = resolveHysteresisStepViewportTarget(selection);
-    return resolveCanonicalQuantityId(hysteresisTarget?.quantityId ?? selection.ref.quantity);
+    if (hysteresisTarget?.quantityId) {
+      return resolveCanonicalQuantityId(hysteresisTarget.quantityId);
+    }
+    if (selection.ref?.type === "analysis-chart-point" && selection.ref.quantity) {
+      return resolveCanonicalQuantityId(selection.ref.quantity);
+    }
   }
   return resolveViewport3DVisualizationQuantityId(visualizationState);
 }
@@ -687,15 +760,20 @@ export function resolveViewport3DPrimaryFieldQuery({
   fdmTopographyEnabled,
   fdmVectorsVisible,
   fieldRenderOptions,
+  snapshotQuery,
   snapshotId,
-}: Viewport3DPrimaryFieldQueryOptions & { snapshotId?: string | null }): FieldVectorQuery {
+}: Viewport3DPrimaryFieldQueryOptions & {
+  snapshotId?: string | null;
+  snapshotQuery?: FieldVectorQuery | null;
+}): FieldVectorQuery {
+  const snapshotParams = snapshotQuery ?? (snapshotId ? { snapshot_id: snapshotId } : {});
   if (
     fdmVectorsVisible ||
     fdmTopographyEnabled ||
     viewport3DFieldRenderOptionsNeedFullVectorData(fieldRenderOptions) ||
     (fdmSurfaceColorMode && !fieldColorModeScalarComponent(fdmSurfaceColorMode))
   ) {
-    return snapshotId ? { ...FULL_FIELD_QUERY, snapshot_id: snapshotId } : FULL_FIELD_QUERY;
+    return { ...FULL_FIELD_QUERY, ...snapshotParams };
   }
 
   const component =
@@ -709,9 +787,9 @@ export function resolveViewport3DPrimaryFieldQuery({
     ? {
         component,
         scope_kind: "full",
-        ...(snapshotId ? { snapshot_id: snapshotId } : {}),
+        ...snapshotParams,
       }
-    : (snapshotId ? { ...FULL_FIELD_QUERY, snapshot_id: snapshotId } : FULL_FIELD_QUERY);
+    : { ...FULL_FIELD_QUERY, ...snapshotParams };
 }
 
 export function resolveViewport3DResourceFrameState({
@@ -750,6 +828,13 @@ export function resolveViewport3DTargetFieldQuery({
         scope_kind: "full",
       }
     : FULL_FIELD_QUERY;
+}
+
+export function resolveViewport3DReplayFieldQuery(
+  query: FieldVectorQuery,
+  snapshotQuery: FieldVectorQuery | null | undefined,
+): FieldVectorQuery {
+  return snapshotQuery ? { ...query, ...snapshotQuery } : query;
 }
 
 export function resolveViewport3DScopedVectorFieldQuery({
@@ -935,15 +1020,23 @@ function fieldColorModeScalarComponent(mode: string | null | undefined): string 
   return VIEWPORT_3D_SCALAR_FIELD_COMPONENTS.has(mode) ? mode : null;
 }
 
-function mergeViewport3DFieldQuery(
+export function mergeViewport3DFieldQuery(
   current: FieldVectorQuery | undefined,
   next: FieldVectorQuery,
 ): FieldVectorQuery {
   if (!current) return next;
+  const replayQuery = {
+    snapshot_id: next.snapshot_id ?? current.snapshot_id,
+    stage_id: next.stage_id ?? current.stage_id,
+    view: next.view ?? current.view,
+    phase_rad: next.phase_rad ?? current.phase_rad,
+  };
   if (current.component === "full" || next.component === "full") {
-    return FULL_FIELD_QUERY;
+    return resolveViewport3DReplayFieldQuery(FULL_FIELD_QUERY, replayQuery);
   }
-  return current.component === next.component ? current : FULL_FIELD_QUERY;
+  return current.component === next.component
+    ? resolveViewport3DReplayFieldQuery(current, replayQuery)
+    : resolveViewport3DReplayFieldQuery(FULL_FIELD_QUERY, replayQuery);
 }
 
 function selectViewport3DComputeRunning(
@@ -1128,9 +1221,17 @@ export function useViewport3DSceneModel({
     () => resolveViewport3DSelectedSnapshotId(selection),
     [selection],
   );
+  const selectedSnapshotQuery = useMemo(
+    () => resolveViewport3DSelectedSnapshotQuery(selection),
+    [selection],
+  );
   const hysteresisReplayTarget = useMemo(
     () => resolveHysteresisStepViewportTarget(selection),
     [selection],
+  );
+  const hysteresisReplayGlyphModel = useMemo<HysteresisReplayGlyphModel | null>(
+    () => buildHysteresisReplayGlyphModel(hysteresisReplayTarget),
+    [hysteresisReplayTarget],
   );
   const quantityId = resolveViewport3DActiveQuantityId({
     selectedSnapshotId,
@@ -1676,12 +1777,15 @@ export function useViewport3DSceneModel({
       ) {
         setQuery(
           resolveCanonicalQuantityId(settings.activeQuantityId),
-          resolveViewport3DTargetFieldQuery({
-            surfaceColorMode: settings.shaderVisible
-              ? surfaceColorSourceToColorMode(settings.surfaceColorSource)
-              : null,
-            vectorsVisible: settings.vectorsVisible,
-          }),
+          resolveViewport3DReplayFieldQuery(
+            resolveViewport3DTargetFieldQuery({
+              surfaceColorMode: settings.shaderVisible
+                ? surfaceColorSourceToColorMode(settings.surfaceColorSource)
+                : null,
+              vectorsVisible: settings.vectorsVisible,
+            }),
+            selectedSnapshotQuery,
+          ),
         );
       }
     }
@@ -1692,10 +1796,13 @@ export function useViewport3DSceneModel({
     ) {
       setQuery(
         resolveCanonicalQuantityId(fdmSettings.activeQuantityId),
-        resolveViewport3DTargetFieldQuery({
-          surfaceColorMode: fdmSurfaceColorMode,
-          vectorsVisible: fdmSettings.vectorsVisible,
-        }),
+        resolveViewport3DReplayFieldQuery(
+          resolveViewport3DTargetFieldQuery({
+            surfaceColorMode: fdmSurfaceColorMode,
+            vectorsVisible: fdmSettings.vectorsVisible,
+          }),
+          selectedSnapshotQuery,
+        ),
       );
     }
     return new Map(Array.from(queries).toSorted(([left], [right]) =>
@@ -1711,6 +1818,7 @@ export function useViewport3DSceneModel({
     getPartSettings,
     magneticPartScopedVectorIds,
     primaryFieldQuantityId,
+    selectedSnapshotQuery,
   ]);
   const fieldUpdateHoldActive = useViewport3DFieldUpdateHoldActive();
   const magneticPartFieldVectors = useViewport3DPartFieldVectors(
@@ -1843,7 +1951,7 @@ export function useViewport3DSceneModel({
   );
   const fdmInstanceModelNeedsFieldVector =
     fdmVoxelMagnitudeThreshold > 0 || fdmTopographyEnabled;
-  const fieldVectorEnabled =
+  const primaryFieldVectorEnabled =
     Boolean(analysisOverlay) ||
     resolveViewport3DPrimaryFieldVectorEnabled({
       fdmInstanceModelNeedsFieldVector,
@@ -1864,6 +1972,7 @@ export function useViewport3DSceneModel({
         fdmVectorsVisible,
         fieldRenderOptions: primaryFieldRenderOptions,
         snapshotId: selectedSnapshotId,
+        snapshotQuery: selectedSnapshotQuery,
       });
     },
     [
@@ -1874,13 +1983,8 @@ export function useViewport3DSceneModel({
       fdmVectorsVisible,
       primaryFieldRenderOptions,
       selectedSnapshotId,
+      selectedSnapshotQuery,
     ],
-  );
-  const fieldVector = useViewport3DFieldVector(
-    primaryFieldQuantityId,
-    primaryFieldQuery,
-    fieldVectorEnabled,
-    { pauseLoad: fieldUpdateHoldActive },
   );
   const fieldVectorResourceKey = useMemo(
     () =>
@@ -1890,23 +1994,45 @@ export function useViewport3DSceneModel({
       ),
     [primaryFieldQuery, primaryFieldQuantityId],
   );
+  const hysteresisReplayMeshCompatibility = useMemo(
+    () =>
+      resolveHysteresisReplayMeshCompatibility(
+        hysteresisReplayTarget,
+        currentTopologyRenderModel,
+      ),
+    [
+      currentTopologyRenderModel,
+      hysteresisReplayTarget,
+    ],
+  );
+  const fieldVectorEnabled =
+    primaryFieldVectorEnabled &&
+    hysteresisReplayMeshCompatibility.status !== "mismatch";
+  const fieldVector = useViewport3DFieldVector(
+    primaryFieldQuantityId,
+    primaryFieldQuery,
+    fieldVectorEnabled,
+    { pauseLoad: fieldUpdateHoldActive },
+  );
   const fieldDataIssue = useMemo<Viewport3DFieldDataIssue | null>(() => {
-    if (!(fieldVectorEnabled && fieldVector.error)) return null;
-    const message =
-      fieldVector.error.message.trim() || "Field vector resource failed to load.";
-    return {
-      key: `${fieldVectorResourceKey}:${fieldVector.revision ?? "none"}:${message}`,
-      message,
-      quantityId: primaryFieldQuantityId,
-      resourceKey: fieldVectorResourceKey,
-      retry: fieldVector.refetch,
-    };
+    const fieldVectorErrorMessage =
+      fieldVectorEnabled && fieldVector.error ? fieldVector.error.message : null;
+    return resolveViewport3DFieldDataIssue({
+      fieldVectorEnabled,
+      fieldVectorErrorMessage,
+      fieldVectorRefetch: fieldVector.refetch,
+      fieldVectorResourceKey,
+      fieldVectorRevision: fieldVector.revision,
+      hysteresisReplayMeshCompatibility,
+      primaryFieldQuantityId,
+    });
   }, [
     fieldVector.error,
     fieldVector.refetch,
     fieldVector.revision,
     fieldVectorEnabled,
     fieldVectorResourceKey,
+    hysteresisReplayMeshCompatibility,
     primaryFieldQuantityId,
   ]);
   const fieldRefresh = useMemo<Viewport3DFieldRefreshState>(
@@ -2164,6 +2290,7 @@ export function useViewport3DSceneModel({
     getObjectSettings,
     getPartSettings,
     getRegionSettings,
+    hysteresisReplayGlyphModel,
     hslReferenceVisible,
     hysteresisReplayTarget,
     magnetizationTexturePreviews,

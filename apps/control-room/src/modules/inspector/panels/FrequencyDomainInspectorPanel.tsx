@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 
 import {
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FIELD_META_PATH,
   MESHING_PERIODIC_PAIRS_PATH,
 } from "@/kernel/api/apiPaths";
 import { createCommandContext } from "@/kernel/commands/commandContext";
@@ -27,10 +28,13 @@ import {
   buildEigenBranchesModel,
   buildEigenSpectrumChartModel,
   buildFrequencyResponseChartModel,
+  buildFmrPeakTableModel,
+  responseFieldResourcesFromManifest,
   routeFrequencyDomainCalculationMode,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
+import { resolveFrequencyDomainNodeDetail } from "./frequencyDomainNodeDetails";
 import { FieldRow } from "../primitives/FieldRow";
 import { InspectorSection } from "../primitives/InspectorSection";
 
@@ -39,7 +43,7 @@ const ANALYSIS_FIELD_VIEW_OPTIONS = [
   DEFAULT_ANALYSIS_FIELD_VIEW,
   "real",
   "imag",
-  "amplitude",
+  "abs",
   "phase",
 ] as const;
 
@@ -100,8 +104,53 @@ function arrayLength(value: unknown): string {
   return Array.isArray(value) ? String(value.length) : "not available";
 }
 
+function formatRecordField(
+  value: unknown,
+  key: string,
+  fallback = "not available",
+): string {
+  const item = record(value)?.[key];
+  if (typeof item === "string" && item.trim()) return item;
+  if (typeof item === "boolean") return formatBoolean(item);
+  const numeric = finiteNumber(item);
+  return numeric == null ? fallback : String(numeric);
+}
+
+function numberArray(value: unknown): number[] {
+  return Array.isArray(value)
+    ? value
+        .map((item) => finiteNumber(item))
+        .filter((item): item is number => item != null)
+    : [];
+}
+
+function susceptibilityPairCount(value: unknown): string {
+  if (!Array.isArray(value) || value.length === 0) return "not available";
+  return String(value.length);
+}
+
+function maxAbsComplexPairs(value: unknown): number | null {
+  if (!Array.isArray(value)) return null;
+  let maxValue: number | null = null;
+  for (const pair of value) {
+    if (!Array.isArray(pair)) continue;
+    const real = finiteNumber(pair[0]);
+    const imag = finiteNumber(pair[1]);
+    if (real == null || imag == null) continue;
+    const magnitude = Math.hypot(real, imag);
+    maxValue = maxValue == null ? magnitude : Math.max(maxValue, magnitude);
+  }
+  return maxValue;
+}
+
+function formatScalar(value: number | null | undefined, unit = ""): string {
+  if (value == null || !Number.isFinite(value)) return "not available";
+  const normalized = Math.abs(value) < 1e-12 ? 0 : value;
+  return `${normalized}${unit}`;
+}
+
 function normalizeAnalysisFieldView(value: string | null | undefined): string {
-  if (value === "abs" || value === "complex") return "amplitude";
+  if (value === "amplitude" || value === "complex") return "abs";
   return value && ANALYSIS_FIELD_VIEW_OPTIONS.includes(
     value as (typeof ANALYSIS_FIELD_VIEW_OPTIONS)[number],
   )
@@ -112,7 +161,7 @@ function normalizeAnalysisFieldView(value: string | null | undefined): string {
 function analysisFieldViewLabel(value: string): string {
   if (value === "real") return "Real";
   if (value === "imag") return "Imag";
-  if (value === "amplitude") return "Abs";
+  if (value === "abs") return "Complex (abs)";
   if (value === "phase") return "Phase";
   return "Phase-rotated real";
 }
@@ -126,10 +175,126 @@ function analysisFieldViewOptions(
   );
   const options = Array.from(new Set(normalized));
   const normalizedDefault = normalizeAnalysisFieldView(defaultView);
-  if (!options.includes(normalizedDefault)) {
-    options.unshift(normalizedDefault);
+  const orderedOptions = [
+    normalizedDefault,
+    ...options.filter((option) => option !== normalizedDefault),
+  ];
+  return orderedOptions.length > 0 ? orderedOptions : [DEFAULT_ANALYSIS_FIELD_VIEW];
+}
+
+function selectedField3DPlotStatus(
+  meta: {
+    component_basis?: string | null;
+    component_count?: number | null;
+    value_kind?: string | null;
+  } | null | undefined,
+): string {
+  if (!meta) return "metadata pending; command allowed by field id";
+  if (
+    meta.component_basis === "local_tangent_frame" ||
+    meta.value_kind === "complex_tangent_vector" ||
+    (meta.component_count != null && meta.component_count !== 3)
+  ) {
+    return "requires tangent-to-XYZ reconstruction artifact";
   }
-  return options.length > 0 ? options : [DEFAULT_ANALYSIS_FIELD_VIEW];
+  return "ready for spatial XYZ overlay";
+}
+
+function canPlotSelectedFieldIn3D(
+  meta: {
+    component_basis?: string | null;
+    component_count?: number | null;
+    value_kind?: string | null;
+  } | null | undefined,
+): boolean {
+  return selectedField3DPlotStatus(meta) !==
+    "requires tangent-to-XYZ reconstruction artifact";
+}
+
+function floquetKVectorFromManifest(manifestPayload: unknown): number[] {
+  const payload = record(manifestPayload);
+  const spinWaveBc = record(payload?.spin_wave_bc ?? payload?.spinWaveBc);
+  return numberArray(
+    spinWaveBc?.floquet_k_vector_rad_per_m ??
+      spinWaveBc?.k_vector_rad_per_m ??
+      spinWaveBc?.k_vector,
+  );
+}
+
+function firstPeriodicPair(pairs: readonly unknown[]): Record<string, unknown> | null {
+  return pairs.map(record).find((pair): pair is Record<string, unknown> => !!pair) ?? null;
+}
+
+function pairTranslation(pair: Record<string, unknown> | null): number[] {
+  return numberArray(
+    pair?.expected_translation_m ??
+      pair?.translation_m ??
+      pair?.delta_r_m ??
+      pair?.delta_r,
+  );
+}
+
+function dotProduct(left: readonly number[], right: readonly number[]): number | null {
+  if (left.length === 0 || right.length === 0) return null;
+  const length = Math.min(left.length, right.length);
+  let value = 0;
+  for (let index = 0; index < length; index += 1) {
+    value += left[index]! * right[index]!;
+  }
+  return value;
+}
+
+function invalidPeriodicPairCount(pairs: readonly unknown[]): number {
+  return pairs.filter((entry) => {
+    const pair = record(entry);
+    if (!pair) return true;
+    const status = String(pair.status ?? "").toLowerCase();
+    const unpairedSource = finiteNumber(pair.unpaired_source_node_count) ?? 0;
+    const unpairedDestination = finiteNumber(pair.unpaired_destination_node_count) ?? 0;
+    return status !== "ready" || unpairedSource > 0 || unpairedDestination > 0;
+  }).length;
+}
+
+function maxPeriodicPairResidual(pairs: readonly unknown[]): number | null {
+  const residuals = pairs
+    .map(record)
+    .flatMap((pair) => [
+      finiteNumber(pair?.max_residual_m),
+      finiteNumber(pair?.rms_residual_m),
+    ])
+    .filter((value): value is number => value != null);
+  return residuals.length > 0 ? Math.max(...residuals) : null;
+}
+
+function parseKPathSummary(csv: string | null | undefined): {
+  endpointLabels: string;
+  pathSRange: string;
+  sampleCount: number;
+} {
+  const lines = (csv ?? "").split(/\r?\n/).filter((line) => line.trim().length > 0);
+  if (lines.length < 2) {
+    return { endpointLabels: "not available", pathSRange: "not available", sampleCount: 0 };
+  }
+  const headers = lines[0]?.split(",").map((item) => item.trim()) ?? [];
+  const rows = lines.slice(1).map((line) => {
+    const columns = line.split(",").map((item) => item.trim());
+    return Object.fromEntries(headers.map((header, index) => [header, columns[index]]));
+  });
+  const pathValues = rows
+    .map((row) => finiteNumber(row.path_s_rad_per_m ?? row.path_s ?? row.pathS))
+    .filter((value): value is number => value != null);
+  const labels = rows
+    .map((row) => row.endpoint_label ?? row.k_label ?? row.label)
+    .filter((value): value is string => !!value);
+  return {
+    endpointLabels:
+      labels.length > 0 ? `${labels[0]} -> ${labels[labels.length - 1]}` : "not available",
+    pathSRange:
+      pathValues.length > 0
+        ? `${Math.min(...pathValues)}-${Math.max(...pathValues)} rad/m`
+        : "not available",
+    sampleCount: pathValues.length,
+  };
 }
 
 export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps) {
@@ -219,13 +384,23 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
     },
   );
   const data = manifest.data;
+  const manifestPayload = data?.result_manifest?.payload;
   const spectrumModel = buildEigenSpectrumChartModel(spectrum.data);
   const branchesModel = buildEigenBranchesModel(branches.data);
   const dispersionModel = buildEigenDispersionChartModel(dispersion.data);
   const responseModel = buildFrequencyResponseChartModel(responseSweep.data);
-  const chartRoute = routeFrequencyDomainCalculationMode(data?.result_manifest?.payload);
+  const responseFieldResources =
+    responseFieldResourcesFromManifest(manifestPayload);
+  const fmrPeakModel = buildFmrPeakTableModel({
+    responseSweep: responseSweep.data,
+    spectrum: spectrum.data,
+  });
+  const chartRoute = routeFrequencyDomainCalculationMode(manifestPayload);
   const selectedFieldMeta = responseFieldMeta.data ?? eigenModeFieldMeta.data;
   const selectedFieldId = selectedFieldMeta?.field_id ?? frequencyDomainRef?.fieldId ?? null;
+  const selectedField3DStatus = selectedField3DPlotStatus(selectedFieldMeta);
+  const selectedField3DReady =
+    Boolean(selectedFieldId) && canPlotSelectedFieldIn3D(selectedFieldMeta);
   const selectedFieldStatus =
     responseFieldMeta.status !== "idle"
       ? responseFieldMeta.status
@@ -238,6 +413,7 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
         : manifest.status;
   const responseFrequencyPointPayload = record(responseFrequencyPoint.data?.payload);
   const eigenModePayload = record(eigenMode.data);
+  const eigenModeComponentSummary = record(eigenModePayload?.component_summary);
   const selectedBranch = branchesModel.branches.find(
     (branch) => branch.branchId === frequencyDomainRef?.branchId,
   );
@@ -250,6 +426,19 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
   const selectedObservableAmplitudes = selectedObservablePoints
     .map((point) => point.amplitude)
     .filter((value): value is number => value != null);
+  const modalPeakCount = fmrPeakModel.peaks.filter(
+    (peak) => peak.source === "modal",
+  ).length;
+  const drivenPeakCount = fmrPeakModel.peaks.filter(
+    (peak) => peak.source === "driven_response",
+  ).length;
+  const firstFmrPeak = fmrPeakModel.peaks[0] ?? null;
+  const periodicPairRows = periodicPairs.data?.pairs ?? [];
+  const representativePeriodicPair = firstPeriodicPair(periodicPairRows);
+  const floquetKVector = floquetKVectorFromManifest(manifestPayload);
+  const floquetDeltaR = pairTranslation(representativePeriodicPair);
+  const floquetPhaseAngle = dotProduct(floquetKVector, floquetDeltaR);
+  const kPathSummary = parseKPathSummary(dispersion.data?.text);
   const selectedFieldViewOptions = analysisFieldViewOptions(
     selectedFieldMeta?.available_views,
     selectedFieldMeta?.default_view,
@@ -258,6 +447,7 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
   const defaultAnalysisFieldView = normalizeAnalysisFieldView(
     selectedFieldMeta?.default_view,
   );
+  const nodeDetail = resolveFrequencyDomainNodeDetail(selection);
 
   return (
     <div className="fm-inspector-panel">
@@ -282,6 +472,13 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
         ) : null}
       </InspectorSection>
 
+      <InspectorSection title={nodeDetail.title} badge="per-node">
+        <FieldRow label="Node focus" value={nodeDetail.focus} />
+        <FieldRow label="Node resource" value={nodeDetail.resource} />
+        <FieldRow label="Node artifact" value={nodeDetail.artifact} />
+        <FieldRow label="Visualization contract" value={nodeDetail.visualization} />
+      </InspectorSection>
+
       <InspectorSection title="Solver Family Contract" badge={data?.schema_version ?? "missing"}>
         <FieldRow
           label="Family namespace"
@@ -296,6 +493,10 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
           }
         />
         <FieldRow label="Modal namespace" value={data?.eigen_namespace ?? "eigen"} />
+        <FieldRow
+          label="Floquet nonzero-k response"
+          value={formatBoolean(data?.floquet_nonzero_k_response_supported)}
+        />
         <FieldRow
           label="Floquet nonzero-k demag"
           value={formatBoolean(data?.floquet_nonzero_k_demag_supported)}
@@ -325,6 +526,14 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
           value={
             periodicPairs.data ? String(periodicPairs.data.revision) : "not loaded"
           }
+        />
+        <FieldRow
+          label="Max residual"
+          value={formatScalar(maxPeriodicPairResidual(periodicPairRows), " m")}
+        />
+        <FieldRow
+          label="Invalid pairs"
+          value={periodicPairs.data ? String(invalidPeriodicPairCount(periodicPairRows)) : "not loaded"}
         />
         {periodicPairs.data?.pairs.slice(0, 3).map((pair) => (
           <FieldRow
@@ -363,6 +572,30 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
             "nonzero-k demag status not reported"
           }
         />
+        <FieldRow
+          label="Floquet phase preview"
+          value={
+            floquetPhaseAngle == null
+              ? "not available"
+              : "exp(-i k dot delta_r)"
+          }
+        />
+        <FieldRow
+          label="Phase angle"
+          value={formatScalar(floquetPhaseAngle, " rad")}
+        />
+        <FieldRow
+          label="Re(exp(-i k dot delta_r))"
+          value={formatScalar(
+            floquetPhaseAngle == null ? null : Math.cos(floquetPhaseAngle),
+          )}
+        />
+        <FieldRow
+          label="Im(exp(-i k dot delta_r))"
+          value={formatScalar(
+            floquetPhaseAngle == null ? null : -Math.sin(floquetPhaseAngle),
+          )}
+        />
         {periodicPairs.error ? (
           <FieldRow
             label="Periodic pairs error"
@@ -381,11 +614,48 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
           value={formatBoolean(data?.response.driven_response_available)}
         />
         <FieldRow
+          label="Static-periodic response"
+          value={formatBoolean(data?.response.static_periodic_response_available)}
+        />
+        <FieldRow
+          label="CPU response status"
+          value={data?.capabilities.response.magnetic_cpu.status ?? "unknown"}
+        />
+        <FieldRow
           label="Floquet response"
           value={formatBoolean(data?.response.floquet_response_available)}
         />
         <FieldRow label="GPU lane" value={formatBoolean(data?.response.gpu_available)} />
         <FieldRow label="Reason" value={data?.response.reason ?? "not reported"} />
+      </InspectorSection>
+
+      <InspectorSection
+        title="Response Field Resources"
+        badge={
+          responseFieldResources.length > 0
+            ? `${responseFieldResources.length} response field(s)`
+            : "not listed"
+        }
+      >
+        <FieldRow
+          label="Manifest entries"
+          value={String(responseFieldResources.length)}
+        />
+        <FieldRow
+          label="Meta resource pattern"
+          value={ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FIELD_META_PATH}
+        />
+        <FieldRow
+          label="Selected field resource"
+          value={frequencyDomainRef?.fieldId ?? "not selected"}
+        />
+        {responseFieldResources.slice(0, 6).map((entry) => (
+          <FieldRow
+            key={`${entry.frequencyIndex}:${entry.fieldResourceId}`}
+            label={`Frequency ${entry.frequencyIndex}`}
+            value={`${entry.fieldResourceId}; payload ${entry.payloadPath ?? "not available"}`}
+          />
+        ))}
       </InspectorSection>
 
       <InspectorSection
@@ -481,6 +751,25 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
         />
       </InspectorSection>
 
+      <InspectorSection title="k-Path Samples" badge={dispersion.status}>
+        <FieldRow
+          label="path_s range"
+          value={kPathSummary.pathSRange}
+        />
+        <FieldRow
+          label="Endpoint labels"
+          value={kPathSummary.endpointLabels}
+        />
+        <FieldRow
+          label="Sample count"
+          value={String(kPathSummary.sampleCount)}
+        />
+        <FieldRow
+          label="Dispersion x-axis"
+          value="path_s_rad_per_m"
+        />
+      </InspectorSection>
+
       <InspectorSection title="Selected Field Metadata" badge={selectedFieldStatus}>
         <FieldRow
           label="Field ID"
@@ -511,6 +800,66 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
           }
         />
         <FieldRow
+          label="Value kind"
+          value={selectedFieldMeta?.value_kind ?? "not available"}
+        />
+        <FieldRow
+          label="Component basis"
+          value={selectedFieldMeta?.component_basis ?? "not available"}
+        />
+        <FieldRow
+          label="Component count"
+          value={
+            selectedFieldMeta?.component_count != null
+              ? String(selectedFieldMeta.component_count)
+              : "not available"
+          }
+        />
+        <FieldRow
+          label="Components"
+          value={formatList(selectedFieldMeta?.components)}
+        />
+        <FieldRow
+          label="Payload encoding"
+          value={selectedFieldMeta?.payload_encoding ?? "not available"}
+        />
+        <FieldRow
+          label="Binary layout"
+          value={selectedFieldMeta?.binary_layout ?? "not available"}
+        />
+        <FieldRow
+          label="Complex pairs"
+          value={
+            selectedFieldMeta?.complex_pair_count != null
+              ? String(selectedFieldMeta.complex_pair_count)
+              : "not available"
+          }
+        />
+        <FieldRow
+          label="Payload scalar values"
+          value={
+            selectedFieldMeta?.payload_value_count != null
+              ? String(selectedFieldMeta.payload_value_count)
+              : "not available"
+          }
+        />
+        <FieldRow
+          label="Raw tangent payload"
+          value={selectedFieldMeta?.tangent_field_payload_path ?? "not available"}
+        />
+        <FieldRow
+          label="Raw tangent basis"
+          value={selectedFieldMeta?.tangent_component_basis ?? "not available"}
+        />
+        <FieldRow
+          label="Raw tangent components"
+          value={formatList(selectedFieldMeta?.tangent_components)}
+        />
+        <FieldRow
+          label="Raw tangent encoding"
+          value={selectedFieldMeta?.tangent_payload_encoding ?? "not available"}
+        />
+        <FieldRow
           label="Default 3D view"
           value={selectedFieldMeta?.default_view ?? "not available"}
         />
@@ -527,13 +876,17 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
           value={formatList(selectedFieldMeta?.available_views)}
         />
         <FieldRow
+          label="3D plot status"
+          value={selectedField3DStatus}
+        />
+        <FieldRow
           label="3D mode view"
           value={
             <select
               aria-label="Frequency-domain 3D field view"
               className="fm-inspector-select"
               defaultValue={defaultAnalysisFieldView}
-              disabled={!selectedFieldId}
+              disabled={!selectedField3DReady}
               key={`${selectedFieldId ?? "none"}:${selectedFieldViewOptionsKey}:${defaultAnalysisFieldView}`}
               ref={analysisFieldViewSelectRef}
             >
@@ -556,7 +909,7 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
               aria-label="Frequency-domain 3D phase"
               className="fm-inspector-input"
               defaultValue={String(selectedFieldMeta?.default_phase_rad ?? 0)}
-              disabled={!selectedFieldId}
+              disabled={!selectedField3DReady}
               key={`${selectedFieldId ?? "none"}:phase`}
               ref={analysisFieldPhaseInputRef}
               step="0.1"
@@ -571,7 +924,7 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
               aria-label="Frequency-domain mode animation rate"
               className="fm-inspector-input"
               defaultValue="1"
-              disabled={!selectedFieldId || !selection.kind?.includes("eigen")}
+              disabled={!selectedField3DReady}
               key={`${selectedFieldId ?? "none"}:animation-rate`}
               max="10"
               min="0.05"
@@ -583,7 +936,7 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
         />
         <button
           className="fm-inspector-action-button"
-          disabled={!selectedFieldId}
+          disabled={!selectedField3DReady}
           type="button"
           onClick={() => {
             const commandId = selection.kind?.includes("eigen")
@@ -598,10 +951,16 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
                 {
                   fieldId: selectedFieldId,
                   label: selection.label ?? selectedFieldId,
-                  phaseRad: selectedFieldMeta?.default_phase_rad ?? 0,
+                  phaseRad:
+                    finiteNumber(analysisFieldPhaseInputRef.current?.value) ??
+                    selectedFieldMeta?.default_phase_rad ??
+                    0,
+                  componentBasis: selectedFieldMeta?.component_basis ?? null,
+                  componentCount: selectedFieldMeta?.component_count ?? null,
                   source: selection.kind?.includes("eigen")
                     ? "eigen-mode"
                     : "frequency-response",
+                  valueKind: selectedFieldMeta?.value_kind ?? null,
                   view:
                     analysisFieldViewSelectRef.current?.value ??
                     defaultAnalysisFieldView,
@@ -616,12 +975,12 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
         </button>
         <button
           className="fm-inspector-action-button"
-          disabled={!selectedFieldId || !selection.kind?.includes("eigen")}
+          disabled={!selectedField3DReady}
           type="button"
           onClick={() => {
             void kernel.commands
               .execute(
-                "analysis.eigen.set-mode-3d-phase",
+                "analysis.frequency-domain.set-3d-phase",
                 createCommandContext("inspector", kernel, {
                   sourceDetail: selection.kind ?? "frequency-domain",
                 }),
@@ -640,12 +999,12 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
         </button>
         <button
           className="fm-inspector-action-button"
-          disabled={!selectedFieldId || !selection.kind?.includes("eigen")}
+          disabled={!selectedField3DReady}
           type="button"
           onClick={() => {
             void kernel.commands
               .execute(
-                "analysis.eigen.set-mode-3d-animation",
+                "analysis.frequency-domain.set-3d-animation",
                 createCommandContext("inspector", kernel, {
                   sourceDetail: selection.kind ?? "frequency-domain",
                 }),
@@ -662,16 +1021,16 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
               });
           }}
         >
-          Animate mode phase
+          Animate field phase
         </button>
         <button
           className="fm-inspector-action-button"
-          disabled={!selectedFieldId || !selection.kind?.includes("eigen")}
+          disabled={!selectedField3DReady}
           type="button"
           onClick={() => {
             void kernel.commands
               .execute(
-                "analysis.eigen.set-mode-3d-animation",
+                "analysis.frequency-domain.set-3d-animation",
                 createCommandContext("inspector", kernel, {
                   sourceDetail: selection.kind ?? "frequency-domain",
                 }),
@@ -688,7 +1047,7 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
               });
           }}
         >
-          Pause mode phase
+          Pause field phase
         </button>
         <button
           className="fm-inspector-action-button"
@@ -724,6 +1083,13 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
             frequencyDomainRef?.modeIndex != null
               ? `eigen/modes/sample_${String(frequencyDomainRef.sampleIndex).padStart(4, "0")}/mode_${String(frequencyDomainRef.modeIndex).padStart(4, "0")}.json`
               : "not selected"
+          }
+        />
+        <FieldRow
+          label="Mode field resource"
+          value={
+            frequencyDomainRef?.resourceRef ??
+            formatRecordField(eigenModePayload, "mode_field_resource_key", "not selected")
           }
         />
         <FieldRow
@@ -774,12 +1140,16 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
           }
         />
         <FieldRow
+          label="Mode field samples"
+          value={formatNumber(eigenModePayload?.mode_field_sample_count)}
+        />
+        <FieldRow
           label="Real samples"
-          value={arrayLength(eigenModePayload?.real)}
+          value={formatNumber(eigenModeComponentSummary?.real_sample_count)}
         />
         <FieldRow
           label="Imag samples"
-          value={arrayLength(eigenModePayload?.imag)}
+          value={formatNumber(eigenModeComponentSummary?.imag_sample_count)}
         />
         {eigenMode.error ? (
           <FieldRow
@@ -875,6 +1245,53 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
           )}
         />
         <FieldRow
+          label="Absorbed power provenance"
+          value={formatRecordField(
+            responseFrequencyPointPayload?.absorbed_power_density_provenance,
+            "kind",
+          )}
+        />
+        <FieldRow
+          label="Susceptibility pairs"
+          value={susceptibilityPairCount(
+            responseFrequencyPointPayload?.susceptibility_tensor,
+          )}
+        />
+        <FieldRow
+          label="Max susceptibility magnitude"
+          value={formatScalar(
+            maxAbsComplexPairs(responseFrequencyPointPayload?.susceptibility_tensor),
+          )}
+        />
+        <FieldRow
+          label="Susceptibility provenance"
+          value={formatRecordField(
+            responseFrequencyPointPayload?.susceptibility_tensor_provenance,
+            "kind",
+          )}
+        />
+        <FieldRow
+          label="Full susceptibility tensor"
+          value={formatRecordField(
+            responseFrequencyPointPayload?.susceptibility_tensor_provenance,
+            "full_tensor",
+          )}
+        />
+        <FieldRow
+          label="Tangent leakage status"
+          value={formatRecordField(
+            responseFrequencyPointPayload?.tangent_leakage,
+            "status",
+          )}
+        />
+        <FieldRow
+          label="Tangent leakage max"
+          value={formatNumber(
+            record(responseFrequencyPointPayload?.tangent_leakage)
+              ?.max_abs_m0_dot_delta_m,
+          )}
+        />
+        <FieldRow
           label="Residual"
           value={formatNumber(responseFrequencyPointPayload?.residual_l2_norm)}
         />
@@ -885,12 +1302,22 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
           )}
         />
         <FieldRow
+          label="Complex entries"
+          value={arrayLength(responseFrequencyPointPayload?.m_complex)}
+        />
+        <FieldRow
           label="Amplitude entries"
-          value={arrayLength(responseFrequencyPointPayload?.response_amplitude)}
+          value={arrayLength(
+            responseFrequencyPointPayload?.component_response_amplitude ??
+              responseFrequencyPointPayload?.response_amplitude,
+          )}
         />
         <FieldRow
           label="Phase entries"
-          value={arrayLength(responseFrequencyPointPayload?.response_phase)}
+          value={arrayLength(
+            responseFrequencyPointPayload?.component_response_phase ??
+              responseFrequencyPointPayload?.response_phase,
+          )}
         />
         {responseFrequencyPoint.error ? (
           <FieldRow
@@ -939,6 +1366,32 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
         />
       </InspectorSection>
 
+      <InspectorSection title="FMR Peaks" badge={fmrPeakModel.peaks.length > 0 ? "ready" : "missing"}>
+        <FieldRow label="Peak count" value={String(fmrPeakModel.peaks.length)} />
+        <FieldRow label="Modal peaks" value={String(modalPeakCount)} />
+        <FieldRow label="Driven peaks" value={String(drivenPeakCount)} />
+        <FieldRow
+          label="First peak source"
+          value={firstFmrPeak?.source ?? "not available"}
+        />
+        <FieldRow
+          label="First peak frequency"
+          value={formatNumber(firstFmrPeak?.frequencyHz, " Hz")}
+        />
+        <FieldRow
+          label="First peak field"
+          value={firstFmrPeak?.fieldId ?? "not available"}
+        />
+        <FieldRow
+          label="Peak diagnostics"
+          value={
+            fmrPeakModel.diagnostics.length > 0
+              ? fmrPeakModel.diagnostics.join("; ")
+              : "none"
+          }
+        />
+      </InspectorSection>
+
       <InspectorSection title="Chart Resources" badge="resource-driven">
         <FieldRow
           label="Primary chart"
@@ -981,12 +1434,31 @@ export function FrequencyDomainInspectorPanel({ selection }: InspectorPanelProps
           value={`${responseProgress.data?.completed_frequency_points ?? 0}/${responseProgress.data?.total_frequency_points ?? 0} frequency points`}
         />
         <FieldRow
+          label="Response progress status"
+          value={responseProgress.data?.status ?? responseProgress.status}
+        />
+        <FieldRow
+          label="Response progress state"
+          value={responseProgress.data?.state ?? "not available"}
+        />
+        <FieldRow
+          label="Response progress reason"
+          value={responseProgress.data?.missing_reason ?? "none"}
+        />
+        <FieldRow
           label="Response sweep complete"
           value={formatBoolean(responseProgress.data?.complete)}
         />
         <FieldRow
           label="Partial response artifacts"
           value={formatBoolean(responseProgress.data?.partial_artifacts_available)}
+        />
+        <FieldRow
+          label="Latest response manifest"
+          value={
+            responseProgress.data?.latest_artifact_manifest_path ??
+            "not available"
+          }
         />
         <FieldRow
           label="Spectrum resource"

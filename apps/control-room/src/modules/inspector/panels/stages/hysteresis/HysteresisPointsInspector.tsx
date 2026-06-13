@@ -1,18 +1,24 @@
 "use client";
 
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 
 import type { HysteresisPointSchema } from "@/kernel/api/apiTypes";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 
-import { HysteresisChart } from "@/shared/domain/study/HysteresisChart";
+import {
+  clearHysteresisPointSelectionForLive,
+  HysteresisChart,
+  hysteresisPointVectorResourceRef,
+  hysteresisPointTargetMetadata,
+} from "@/shared/domain/study/HysteresisChart";
 import { Button } from "@/shared/ui/Button";
 
 import { InspectorSection } from "../../../primitives/InspectorSection";
-import { hysteresisInitialStateActionPresentation } from "./HysteresisInspectorUtils";
 import type { HysteresisInspectorCommonProps } from "./HysteresisInspectorTypes";
+import { HysteresisPointTable } from "./HysteresisPointTable";
 
 export function HysteresisPointsInspector({
+  activeSnapshot,
   kernel,
   points,
   progress,
@@ -20,24 +26,42 @@ export function HysteresisPointsInspector({
   targetMetadata,
 }: Pick<
   HysteresisInspectorCommonProps,
-  "kernel" | "points" | "progress" | "stageId" | "targetMetadata"
+  | "activeSnapshot"
+  | "kernel"
+  | "points"
+  | "progress"
+  | "stageId"
+  | "targetMetadata"
 >) {
   const commandContext = useMemo(
     () => createCommandContext("inspector", kernel),
     [kernel],
   );
+  const returnToLive = useCallback(() => {
+    if (stageId) {
+      clearHysteresisPointSelectionForLive(kernel, stageId, "inspector");
+    }
+    kernel.commands.execute("hysteresis.return-to-live", commandContext, {
+      stageId: stageId ?? null,
+    });
+  }, [commandContext, kernel, stageId]);
+
   const loadPointIn3D = (pt: HysteresisPointSchema) => {
     if (!stageId) return;
+    const pointTargetMetadata = hysteresisPointTargetMetadata(pt, targetMetadata);
     kernel.commands.execute("hysteresis.load-point-in-3d", commandContext, {
       stageId,
       pointId: pt.point_id,
       fieldVal: pt.field_value_mT,
       mVal: pt.m_parallel,
       snapshotId: pt.snapshot_id ?? null,
-      meshIdentity: targetMetadata.meshIdentity ?? null,
-      fieldOrientation: targetMetadata.fieldOrientation ?? null,
-      measurementAxis: targetMetadata.measurementAxis ?? null,
-      fieldRevision: targetMetadata.fieldRevision ?? null,
+      snapshotResourceRef: hysteresisPointVectorResourceRef(pt),
+      snapshotStorageStatus: pt.snapshot_storage_status ?? null,
+      snapshotStorageReason: pt.snapshot_storage_reason ?? null,
+      meshIdentity: pointTargetMetadata.meshIdentity ?? null,
+      fieldOrientation: pointTargetMetadata.fieldOrientation ?? null,
+      measurementAxis: pointTargetMetadata.measurementAxis ?? null,
+      fieldRevision: pointTargetMetadata.fieldRevision ?? null,
     });
   };
 
@@ -46,9 +70,30 @@ export function HysteresisPointsInspector({
     kernel.commands.execute("hysteresis.use-point-as-initial-state", commandContext, {
       stageId,
       snapshotId: pt.snapshot_id,
+      snapshotArtifactRef: pt.snapshot_json_artifact_ref ?? null,
       snapshotResourceRef: pt.snapshot_resource_ref ?? null,
     });
   };
+  const runPointCommand = (
+    commandId:
+      | "hysteresis.bookmark-point"
+      | "hysteresis.compare-point"
+      | "hysteresis.export-point-csv",
+    pt: HysteresisPointSchema,
+  ) => {
+    if (!stageId) return;
+    kernel.commands.execute(commandId, commandContext, {
+      point: pt,
+      stageId,
+    });
+  };
+  const exportLoopCsv = useCallback(() => {
+    if (!stageId) return;
+    kernel.commands.execute("hysteresis.export-loop-csv", commandContext, {
+      points,
+      stageId,
+    });
+  }, [commandContext, kernel, points, stageId]);
   const completedPoints = progress?.completed_points ?? 0;
   const hasMissingHistory = points.length === 0 && completedPoints > 0;
 
@@ -61,34 +106,61 @@ export function HysteresisPointsInspector({
           ? `${points.length} / ${progress.total_points} done`
           : `${points.length} points`
       }
-    >
+      >
       {stageId ? (
         <HysteresisChart commandSource="inspector" kernel={kernel} stageId={stageId} />
       ) : null}
-      {points.length > 0 ? (
-        <div className="fm-hysteresis-inspector-table-wrap">
-          <table className="fm-hysteresis-inspector-table">
-            <thead>
-              <tr>
-                <th>Index</th>
-                <th>Field (mT)</th>
-                <th>M_parallel</th>
-                <th>Settle</th>
-                <th className="fm-hysteresis-inspector-table__actions-heading">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {points.map((pt) => (
-                <HysteresisPointRow
-                  key={pt.point_id}
-                  point={pt}
-                  onLoadPointIn3D={loadPointIn3D}
-                  onUsePointAsInitialState={usePointAsInitialState}
-                />
-              ))}
-            </tbody>
-          </table>
+      <div className="fm-hysteresis-inspector-actions">
+        <Button
+          size="sm"
+          variant="secondary"
+          disabled={points.length === 0}
+          onClick={exportLoopCsv}
+          title={
+            points.length > 0
+              ? "Export the calculated hysteresis points as CSV"
+              : "No hysteresis points are available to export"
+          }
+        >
+          Export loop CSV
+        </Button>
+      </div>
+      {activeSnapshot && (
+        <div className="fm-hysteresis-inspector-live-snapshot">
+          <div className="fm-hysteresis-inspector-live-snapshot__body">
+            <span className="fm-hysteresis-inspector-live-snapshot__label">
+              3D viewport state
+            </span>
+            <span>
+              Snapshot {activeSnapshot.snapshotId}
+              {activeSnapshot.pointId != null
+                ? ` | Point ${activeSnapshot.pointId}${
+                    activeSnapshot.fieldValueMt != null
+                      ? ` at ${activeSnapshot.fieldValueMt.toFixed(3)} mT`
+                      : ""
+                  }`
+                : ""}
+            </span>
+          </div>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={returnToLive}
+            title="Return the 3D viewport to the live magnetization field"
+          >
+            Return to live
+          </Button>
         </div>
+      )}
+      {points.length > 0 ? (
+        <HysteresisPointTable
+          onBookmarkPoint={(pt) => runPointCommand("hysteresis.bookmark-point", pt)}
+          onComparePoint={(pt) => runPointCommand("hysteresis.compare-point", pt)}
+          onExportPoint={(pt) => runPointCommand("hysteresis.export-point-csv", pt)}
+          onLoadPointIn3D={loadPointIn3D}
+          onUsePointAsInitialState={usePointAsInitialState}
+          points={points}
+        />
       ) : (
         <div className="fm-hysteresis-inspector-empty">
           {hasMissingHistory
@@ -105,52 +177,5 @@ export function HysteresisPointsInspector({
         </div>
       )}
     </InspectorSection>
-  );
-}
-
-function HysteresisPointRow({
-  onLoadPointIn3D,
-  onUsePointAsInitialState,
-  point,
-}: {
-  onLoadPointIn3D: (point: HysteresisPointSchema) => void;
-  onUsePointAsInitialState: (point: HysteresisPointSchema) => void;
-  point: HysteresisPointSchema;
-}) {
-  const initialStateAction = hysteresisInitialStateActionPresentation(point.snapshot_id);
-  const settleLabel = point.settle_status ?? point.status;
-  const warningLabel =
-    point.warning_count != null && point.warning_count > 0
-      ? `${point.warning_count} ${point.warning_count === 1 ? "warning" : "warnings"}`
-      : null;
-  return (
-    <tr data-status={point.status}>
-      <td>{point.point_id}</td>
-      <td>{point.field_value_mT.toFixed(2)}</td>
-      <td>{point.m_parallel.toFixed(5)}</td>
-      <td>{warningLabel ? `${settleLabel} (${warningLabel})` : settleLabel}</td>
-      <td className="fm-hysteresis-inspector-table__actions">
-        <Button
-          size="sm"
-          variant="secondary"
-          disabled={!point.snapshot_id}
-          onClick={() => onLoadPointIn3D(point)}
-          title={point.snapshot_id ? "Load point magnetization in 3D viewport" : "Snapshot not saved for this point"}
-          className="fm-hysteresis-inspector-action"
-        >
-          3D
-        </Button>
-        <Button
-          size="sm"
-          variant="secondary"
-          disabled={initialStateAction.disabled}
-          onClick={() => onUsePointAsInitialState(point)}
-          title={initialStateAction.title}
-          className="fm-hysteresis-inspector-action"
-        >
-          Init
-        </Button>
-      </td>
-    </tr>
   );
 }

@@ -164,11 +164,42 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
   }
 
   if (
+    node.kind === "study.stage.action" &&
+    node.stageId &&
+    node.stageIndex !== undefined &&
+    node.hysteresisSnapshotId &&
+    node.hysteresisPointId !== undefined
+  ) {
+    return {
+      kind: "study.stage.action",
+      nodeId: node.id,
+      pointId: node.hysteresisPointId,
+      quantityId: "m",
+      ...(node.resourceRef ? { resourceRef: node.resourceRef } : {}),
+      snapshotId: node.hysteresisSnapshotId,
+      stageId: node.stageId,
+      stageIndex: node.stageIndex,
+      targetId: `hysteresis-step:${node.stageId}:${node.hysteresisPointId}`,
+      type: "hysteresis-snapshot",
+    };
+  }
+
+  if (
     node.stageId &&
     node.stageIndex !== undefined &&
     isStudyStageSelectionKind(node.kind)
   ) {
     return {
+      ...(node.hysteresisExecutionNodeId
+        ? { hysteresisExecutionNodeId: node.hysteresisExecutionNodeId }
+        : {}),
+      ...(node.hysteresisExecutionNodeKind
+        ? { hysteresisExecutionNodeKind: node.hysteresisExecutionNodeKind }
+        : {}),
+      ...(node.hysteresisPointId !== undefined
+        ? { hysteresisPointId: node.hysteresisPointId }
+        : {}),
+      ...(node.resourceRef ? { resourceRef: node.resourceRef } : {}),
       kind: node.kind,
       nodeId: node.id,
       stageId: node.stageId,

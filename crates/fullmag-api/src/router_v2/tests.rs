@@ -701,6 +701,8 @@ fn sample_scalar_row(step: u64, time: f64, e_total: f64) -> ScalarRow {
         step,
         time,
         solver_dt: 1e-12,
+        pseudo_time_s: None,
+        active_runtime_s: None,
         mx: 0.1 * step as f64,
         my: 0.2 * step as f64,
         mz: 0.9,
@@ -787,6 +789,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 step: 42,
                 time: 2.5e-9,
                 dt: 1.0e-13,
+                pseudo_time_s: None,
                 e_ex: 1.0,
                 e_demag: 2.0,
                 e_ext: 3.0,
@@ -812,6 +815,8 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 step: 41,
                 time: 2.4e-9,
                 solver_dt: 1.0e-13,
+                pseudo_time_s: None,
+                active_runtime_s: Some(0.041),
                 mx: 0.0,
                 my: 0.0,
                 mz: 1.0,
@@ -831,6 +836,8 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 step: 42,
                 time: 2.5e-9,
                 solver_dt: 1.0e-13,
+                pseudo_time_s: None,
+                active_runtime_s: Some(0.042),
                 mx: 0.0,
                 my: 0.0,
                 mz: 1.0,
@@ -1256,6 +1263,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
                 step: 42,
                 time: 2.5e-9,
                 dt: 1.0e-13,
+                pseudo_time_s: None,
                 e_ex: 1.0,
                 e_demag: 2.0,
                 e_ext: 3.0,
@@ -1785,6 +1793,7 @@ async fn domain_meta_uses_fdm_physical_cell_size_for_grid_and_bounds() {
                 step: 7,
                 time: 2.5e-9,
                 dt: 1.0e-13,
+                pseudo_time_s: None,
                 e_ex: 0.0,
                 e_demag: 0.0,
                 e_ext: 0.0,
@@ -1979,6 +1988,7 @@ async fn domain_meta_accepts_planar_fdm_zero_spacing_axis() {
                 step: 7,
                 time: 2.5e-9,
                 dt: 1.0e-13,
+                pseudo_time_s: None,
                 e_ex: 0.0,
                 e_demag: 0.0,
                 e_ext: 0.0,
@@ -6425,6 +6435,39 @@ async fn frequency_domain_manifest_reports_solver_family_availability() {
     );
     assert_eq!(json["response"]["study_kind"], "frequency_response");
     assert_eq!(json["eigenmodes"]["study_kind"], "eigenmodes");
+    assert!(
+        matches!(
+            json["response"]["status"].as_str(),
+            Some("ok" | "unavailable")
+        ),
+        "response availability status must come from the runner/native probe"
+    );
+    assert_eq!(
+        json["response"]["driven_response_available"],
+        serde_json::Value::Bool(json["response"]["status"] == "ok")
+    );
+    assert_eq!(json["response"]["modal_solver_available"], false);
+    assert_eq!(
+        json["response"]["static_periodic_response_available"],
+        serde_json::Value::Bool(json["response"]["status"] == "ok")
+    );
+    assert_eq!(json["response"]["floquet_modal_available"], false);
+    assert_eq!(json["response"]["floquet_response_available"], false);
+    assert_eq!(json["response"]["dynamic_demag_k_available"], false);
+    assert_eq!(json["response"]["gpu_available"], false);
+    assert!(json["response"]["reason"].is_string());
+    assert!(json["response"]["diagnostics_json"].is_string());
+    assert_eq!(json["eigenmodes"]["modal_solver_available"], false);
+    assert_eq!(json["eigenmodes"]["driven_response_available"], false);
+    assert_eq!(
+        json["eigenmodes"]["static_periodic_response_available"],
+        false
+    );
+    assert_eq!(json["eigenmodes"]["floquet_modal_available"], false);
+    assert_eq!(json["eigenmodes"]["floquet_response_available"], false);
+    assert_eq!(json["eigenmodes"]["dynamic_demag_k_available"], false);
+    assert_eq!(json["eigenmodes"]["gpu_available"], false);
+    assert_eq!(json["floquet_nonzero_k_response_supported"], false);
     assert_eq!(json["floquet_nonzero_k_demag_supported"], false);
     assert_eq!(
         json["capabilities"]["schema_version"],
@@ -6432,8 +6475,12 @@ async fn frequency_domain_manifest_reports_solver_family_availability() {
     );
     assert_eq!(
         json["capabilities"]["response"]["magnetic_cpu"]["status"],
-        "reference_executable"
+        "partial_production_executable"
     );
+    assert!(json["capabilities"]["response"]["magnetic_cpu"]["reason"]
+        .as_str()
+        .expect("magnetic_cpu reason should be a string")
+        .contains("bulk-DMI"));
     assert_eq!(
         json["capabilities"]["response"]["magnetic_gpu"]["status"],
         "unsupported"
@@ -11203,6 +11250,7 @@ async fn commands_endpoint_keeps_compute_enabled_during_wait_for_compute_gate() 
                 step: 0,
                 time: 0.0,
                 dt: 0.0,
+                pseudo_time_s: None,
                 e_ex: 0.0,
                 e_demag: 0.0,
                 e_ext: 0.0,
@@ -12243,6 +12291,7 @@ async fn hysteresis_stage_requested_resources_return_authoring_payload() {
     let (app, state, _repo_root) = test_router_with_session_store_state().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.state_version = 12;
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload());
         snapshot.scene_document = Some(sample_scene_document_with_stage(serde_json::json!({
             "branch_mode": "major_loop",
             "entrypoint_kind": "flat_hysteresis",
@@ -12259,6 +12308,14 @@ async fn hysteresis_stage_requested_resources_return_authoring_payload() {
                     "step": 10.0,
                     "stop": -100.0
                 }]
+            },
+            "field_unit_provenance": {
+                "authored_quantity": "mu0_h",
+                "authored_unit": "mT",
+                "canonical_quantity": "h_ext",
+                "canonical_unit": "A/m",
+                "display_unit": "mT",
+                "mu0_h_per_m": 1.2566370614359172e-6
             },
             "kind": "hysteresis",
             "initial_protocol": "positive_saturation",
@@ -12314,10 +12371,24 @@ async fn hysteresis_stage_requested_resources_return_authoring_payload() {
     assert_eq!(plan["field_min_mT"], -100.0);
     assert_eq!(plan["field_max_mT"], 100.0);
     assert_eq!(plan["field_step_mT"], 10.0);
+    assert_eq!(plan["field_unit_provenance"]["canonical_unit"], "A/m");
+    assert_eq!(plan["field_unit_provenance"]["display_unit"], "mT");
     assert_eq!(
         plan["field_schedule"]["segments"][0]["segment_id"],
         "descending"
     );
+    assert_eq!(plan["storage_estimate"]["policy"], "selected_every_5");
+    assert_eq!(plan["storage_estimate"]["point_count"], 21);
+    assert_eq!(plan["storage_estimate"]["snapshot_count"], 5);
+    assert_eq!(plan["storage_estimate"]["site_count"], 4);
+    assert_eq!(plan["storage_estimate"]["components_per_site"], 3);
+    assert_eq!(plan["storage_estimate"]["bytes_per_component"], 8);
+    assert_eq!(plan["storage_estimate"]["estimated_bytes"], 480);
+    assert_eq!(plan["storage_estimate"]["status"], "estimated");
+    assert!(plan["storage_estimate"]["warnings"]
+        .as_array()
+        .unwrap()
+        .is_empty());
 
     let protocol = body_json(
         app.clone()
@@ -12664,7 +12735,27 @@ async fn hysteresis_progress_endpoint_projects_live_magnetization_for_sample_ang
 
 #[tokio::test]
 async fn hysteresis_execution_tree_returns_windowed_active_points() {
-    let (app, state, _repo_root) = test_router_with_session_store_state().await;
+    let (app, state, repo_root) = test_router_with_session_store_state().await;
+    let artifact_dir = repo_root.join("artifacts");
+    fs::create_dir_all(&artifact_dir).expect("artifact dir should be writable");
+    fs::write(
+        artifact_dir.join("hysteresis_points.json"),
+        serde_json::to_vec(&serde_json::json!([
+            {
+                "point_id": 4,
+                "field_value_mT": 20.0,
+                "m_parallel": 0.3,
+                "m_oop": 0.3,
+                "m_ip": 0.0,
+                "m_avg": [0.0, 0.0, 0.3],
+                "status": "running",
+                "warning_count": 2,
+                "snapshot_id": "hysteresis_point_004"
+            }
+        ]))
+        .expect("hysteresis points should serialize"),
+    )
+    .expect("hysteresis points should be writable");
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.state_version = 13;
         snapshot.scene_document = Some(sample_scene_document_with_stage(serde_json::json!({
@@ -12769,10 +12860,232 @@ async fn hysteresis_execution_tree_returns_windowed_active_points() {
         json["nodes"][2]["children"][1]["settle_step_id"],
         "settle_step_001_minimize"
     );
+    assert_eq!(json["nodes"][2]["children"][2]["kind"], "snapshot");
+    assert_eq!(json["nodes"][2]["children"][2]["status"], "done");
+    assert_eq!(
+        json["nodes"][2]["children"][2]["resource_ref"],
+        "/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full&snapshot_id=hysteresis_point_004&stage_id=hysteresis-1"
+    );
+    assert_eq!(json["nodes"][2]["children"][3]["kind"], "warning");
+    assert_eq!(json["nodes"][2]["children"][3]["status"], "warning");
+    assert_eq!(json["nodes"][2]["children"][3]["label"], "2 warning(s)");
+    assert_eq!(
+        json["nodes"][2]["children"][3]["resource_ref"],
+        "/v2/sessions/current/analysis/hysteresis/hysteresis-1/steps/4"
+    );
     assert_eq!(json["nodes"][3]["point_id"], 5);
     assert_eq!(json["nodes"][3]["status"], "queued");
     assert_eq!(json["nodes"][4]["kind"], "transition");
     assert_eq!(json["nodes"][4]["status"], "queued");
+}
+
+#[tokio::test]
+async fn hysteresis_execution_tree_exposes_runtime_branch_nodes() {
+    let (app, state, repo_root) = test_router_with_session_store_state().await;
+    let artifact_dir = repo_root.join("artifacts");
+    fs::create_dir_all(&artifact_dir).expect("artifact dir should be writable");
+    fs::write(
+        artifact_dir.join("hysteresis_points.json"),
+        serde_json::to_vec(&serde_json::json!([
+            {
+                "point_id": 0,
+                "field_value_mT": 100.0,
+                "m_parallel": 1.0,
+                "m_oop": 1.0,
+                "m_ip": 0.0,
+                "m_avg": [0.0, 0.0, 1.0],
+                "status": "converged"
+            },
+            {
+                "point_id": 1,
+                "field_value_mT": 0.0,
+                "m_parallel": 0.2,
+                "m_oop": 0.2,
+                "m_ip": 0.0,
+                "m_avg": [0.0, 0.0, 0.2],
+                "status": "converged"
+            },
+            {
+                "point_id": 2,
+                "field_value_mT": -100.0,
+                "m_parallel": -1.0,
+                "m_oop": -1.0,
+                "m_ip": 0.0,
+                "m_avg": [0.0, 0.0, -1.0],
+                "status": "running"
+            },
+            {
+                "point_id": 3,
+                "field_value_mT": 0.0,
+                "m_parallel": -0.1,
+                "m_oop": -0.1,
+                "m_ip": 0.0,
+                "m_avg": [0.0, 0.0, -0.1],
+                "status": "queued"
+            },
+            {
+                "point_id": 4,
+                "field_value_mT": 100.0,
+                "m_parallel": 1.0,
+                "m_oop": 1.0,
+                "m_ip": 0.0,
+                "m_avg": [0.0, 0.0, 1.0],
+                "status": "queued"
+            }
+        ]))
+        .expect("hysteresis points should serialize"),
+    )
+    .expect("hysteresis points should be writable");
+    fs::write(
+        artifact_dir.join("hysteresis_minor_loops.json"),
+        serde_json::to_vec(&serde_json::json!([
+            {
+                "loop_id": "minor_loop_001",
+                "reversal_field_mT": -100.0,
+                "return_field_mT": 0.0,
+                "parent_branch_id": "descending",
+                "reversal_point_id": 2,
+                "return_point_id": 3,
+                "policy": "configured_recoil",
+                "closure_status": "returned",
+                "points": [
+                    {
+                        "point_id": 2,
+                        "field_value_mT": -100.0,
+                        "m_parallel": -1.0,
+                        "m_oop": -1.0,
+                        "m_ip": 0.0,
+                        "m_avg": [0.0, 0.0, -1.0],
+                        "status": "running"
+                    },
+                    {
+                        "point_id": 3,
+                        "field_value_mT": 0.0,
+                        "m_parallel": -0.1,
+                        "m_oop": -0.1,
+                        "m_ip": 0.0,
+                        "m_avg": [0.0, 0.0, -0.1],
+                        "status": "queued"
+                    }
+                ]
+            }
+        ]))
+        .expect("hysteresis minor loops should serialize"),
+    )
+    .expect("hysteresis minor loops should be writable");
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 14;
+        snapshot.scene_document = Some(sample_scene_document_with_stage(serde_json::json!({
+            "branch_mode": "major_loop",
+            "entrypoint_kind": "flat_hysteresis",
+            "field_values_mT": [100.0, 0.0, -100.0, 0.0, 100.0],
+            "kind": "hysteresis",
+            "initial_protocol": "positive_saturation",
+            "stage_id": "hysteresis-branches"
+        })));
+        snapshot.stage_execution = Some(StageExecutionState {
+            total_stages: 1,
+            completed_stage_indexes: Vec::new(),
+            stages: vec![StageExecutionRecord {
+                stage_id: Some("hysteresis-branches".into()),
+                kind: Some("hysteresis".into()),
+                status: StageLifecycleState::Running,
+                command_id: Some("cmd-hyst".into()),
+                started_at_unix_ms: Some(1_700_000_002_000),
+                completed_at_unix_ms: None,
+                reason: None,
+                artifact_refs: Vec::new(),
+                checkpoint_ref: None,
+                loaded_state_ref: None,
+                resume_from_checkpoint_ref: None,
+                state_transition: None,
+                state_transition_kind: None,
+                state_transition_reason: None,
+                state_transfer_operator_kind: None,
+                state_transition_ui_presentation: None,
+                metric_name: None,
+                metric_value: None,
+                threshold: None,
+                current_field_m_t: Some(-100.0),
+                current_point_index: Some(2),
+                current_settle_step_index: None,
+                current_settle_step_kind: None,
+                current_settle_step_method: None,
+            }],
+            stage_statuses: vec![StageLifecycleState::Running],
+            active_stage_index: Some(0),
+            active_stage_kind: Some("hysteresis".into()),
+            runtime_state: RuntimeLifecycleState::Running,
+        });
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/stages/hysteresis-branches/hysteresis/execution-tree?window=active&before=1&after=1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    let nodes = json["nodes"]
+        .as_array()
+        .expect("execution tree nodes should be an array");
+    let branch_nodes: Vec<_> = nodes
+        .iter()
+        .filter(|node| node["kind"] == "branch")
+        .collect();
+    assert_eq!(branch_nodes.len(), 3);
+    assert_eq!(
+        branch_nodes[0]["node_id"],
+        "hysteresis-branches:branch:descending"
+    );
+    assert_eq!(branch_nodes[0]["label"], "Descending branch");
+    assert_eq!(branch_nodes[0]["status"], "active");
+    assert_eq!(
+        branch_nodes[0]["resource_ref"],
+        "/v2/sessions/current/analysis/hysteresis/hysteresis-branches/branches"
+    );
+    assert_eq!(branch_nodes[0]["children"][0]["label"], "Points 0-2");
+    let active_branch_point = branch_nodes[0]["children"]
+        .as_array()
+        .expect("branch children should be an array")
+        .iter()
+        .find(|child| child["kind"] == "field_point" && child["point_id"] == 2)
+        .expect("active field point should be present inside its branch");
+    assert_eq!(active_branch_point["status"], "active");
+    assert_eq!(
+        active_branch_point["resource_ref"],
+        "/v2/sessions/current/analysis/hysteresis/hysteresis-branches/steps/2"
+    );
+    assert_eq!(
+        branch_nodes[1]["node_id"],
+        "hysteresis-branches:branch:ascending"
+    );
+    assert_eq!(branch_nodes[1]["label"], "Ascending branch");
+    assert_eq!(branch_nodes[1]["status"], "active");
+    assert_eq!(
+        branch_nodes[2]["node_id"],
+        "hysteresis-branches:branch:minor-loop-001"
+    );
+    assert_eq!(branch_nodes[2]["label"], "Minor loop minor_loop_001");
+    assert_eq!(branch_nodes[2]["status"], "active");
+    assert_eq!(
+        branch_nodes[2]["resource_ref"],
+        "/v2/sessions/current/analysis/hysteresis/hysteresis-branches/minor-loops"
+    );
+    assert_eq!(branch_nodes[2]["children"][0]["label"], "Points 2-3");
+    let active_minor_point = branch_nodes[2]["children"]
+        .as_array()
+        .expect("minor-loop branch children should be an array")
+        .iter()
+        .find(|child| child["kind"] == "field_point" && child["point_id"] == 2)
+        .expect("active minor-loop field point should be present");
+    assert_eq!(active_minor_point["status"], "active");
 }
 
 #[tokio::test]
@@ -12895,6 +13208,7 @@ async fn solver_status_endpoint_prefers_waiting_for_compute_gate_over_stale_live
                 step: 0,
                 time: 0.0,
                 dt: 0.0,
+                pseudo_time_s: None,
                 e_ex: 0.0,
                 e_demag: 0.0,
                 e_ext: 0.0,
@@ -13022,6 +13336,7 @@ async fn object_metrics_endpoint_prefers_per_object_solver_scalars() {
                 step: 7,
                 time: 4.2e-12,
                 dt: 1.0e-13,
+                pseudo_time_s: None,
                 e_ex: 1.0,
                 e_demag: 2.0,
                 e_ext: 3.0,
@@ -13092,6 +13407,7 @@ async fn object_metrics_endpoint_uses_mesh_part_node_indices_for_shared_fem_node
                 step: 7,
                 time: 4.2e-12,
                 dt: 1.0e-13,
+                pseudo_time_s: None,
                 e_ex: 1.0,
                 e_demag: 2.0,
                 e_ext: 3.0,
@@ -15035,6 +15351,7 @@ async fn test_router_with_live_magnetization() -> axum::Router {
                 step: 7,
                 time: 1.0e-9,
                 dt: 1.0e-13,
+                pseudo_time_s: None,
                 e_ex: 0.0,
                 e_demag: 0.0,
                 e_ext: 0.0,
@@ -15194,7 +15511,45 @@ async fn hysteresis_analysis_endpoints_read_typed_artifacts() {
             "M_r_minus": -0.2,
             "loop_area": 42.0,
             "magnetization_average_weighting": "uniform_sample_average",
-            "saturation_status": "saturated"
+            "saturation_status": "saturated",
+            "metric_statuses": {
+                "H_c": {
+                    "status": "available",
+                    "reason": "Metric value is available."
+                },
+                "M_r_minus": {
+                    "status": "unavailable",
+                    "reason": "Metric requires negative branch zero-field interpolation, which is unavailable in this loop."
+                },
+                "loop_area": {
+                    "status": "warning",
+                    "reason": "Metric value exists, but loop closure is open."
+                }
+            },
+            "loop_closure_summary": {
+                "status": "open",
+                "field_gap_mT": -100.0,
+                "m_parallel_gap": -0.8,
+                "reason": "First and last points do not return to the same applied field."
+            },
+            "max_differential_susceptibility": 0.0125,
+            "switching_field_candidates": [
+                {
+                    "field_value_mT": -25.0,
+                    "susceptibility_per_mT": 0.006,
+                    "point_id_before": 1,
+                    "point_id_after": 2,
+                    "branch_id": "descending"
+                }
+            ],
+            "warnings": ["Negative remanence interpolation is unavailable."],
+            "convergence_quality_summary": {
+                "status": "warning",
+                "total_points": 4,
+                "converged_points": 3,
+                "warning_points": 1,
+                "non_converged_points": 0
+            }
         }))
         .expect("hysteresis metrics should serialize"),
     )
@@ -15327,6 +15682,29 @@ async fn hysteresis_analysis_endpoints_read_typed_artifacts() {
         .expect("hysteresis minor loops should serialize"),
     )
     .expect("hysteresis minor loops should be writable");
+    write_hysteresis_zarr_snapshot_fixture(&artifact_dir, "hysteresis_point_001");
+    let json_snapshot_dir = artifact_dir
+        .join("hysteresis_snapshots")
+        .join("hysteresis_point_002");
+    fs::create_dir_all(&json_snapshot_dir).expect("snapshot fallback dir should be writable");
+    fs::write(
+        json_snapshot_dir.join("m.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "quantity_id": "m",
+            "snapshot_id": "hysteresis_point_002",
+            "point_id": 1,
+            "field_value_mT": 0.0,
+            "layout": {
+                "grid_cells": [2, 1, 1]
+            },
+            "values": [
+                [0.2, 0.0, 0.0],
+                [0.1, 0.0, 0.0]
+            ]
+        }))
+        .expect("snapshot fallback should serialize"),
+    )
+    .expect("snapshot fallback should be writable");
 
     let points = body_json(
         app.clone()
@@ -15347,7 +15725,61 @@ async fn hysteresis_analysis_endpoints_read_typed_artifacts() {
     assert_eq!(points[0]["protocol_role"], "return");
     assert_eq!(
         points[0]["snapshot_resource_ref"],
-        "/v2/sessions/current/data/fields/m/samples/vector?snapshot_id=hysteresis_point_001"
+        "/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full&snapshot_id=hysteresis_point_001&stage_id=stage_0"
+    );
+    assert_eq!(
+        points[0]["snapshot_vector_resource_ref"],
+        "/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full&snapshot_id=hysteresis_point_001&stage_id=stage_0"
+    );
+    let zarr_snapshot_ref = points[0]["snapshot_vector_resource_ref"]
+        .as_str()
+        .expect("snapshot vector resource ref should be a string");
+    let zarr_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(zarr_snapshot_ref)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(zarr_response.status(), StatusCode::OK);
+    assert_eq!(
+        zarr_response
+            .headers()
+            .get("x-fullmag-snapshot-id")
+            .and_then(|value| value.to_str().ok()),
+        Some("hysteresis_point_001")
+    );
+    let zarr_values = decode_fmvp_payload_f64(&body_bytes(zarr_response).await);
+    assert_eq!(zarr_values, vec![9.0, 0.0, 0.0, 8.0, 0.0, 0.0]);
+    assert_eq!(
+        points[0]["snapshot_json_artifact_ref"],
+        "hysteresis_snapshots/hysteresis_point_001/m.json"
+    );
+    assert_eq!(points[0]["snapshot_zarr_store_ref"], "hysteresis.zarr");
+    assert_eq!(
+        points[0]["snapshot_storage_format"],
+        "zarr_v2_json_fallback"
+    );
+    assert_eq!(points[0]["snapshot_storage_status"], "available_zarr");
+    assert_eq!(
+        points[0]["snapshot_storage_reason"],
+        "snapshot found in hysteresis.zarr"
+    );
+    assert_eq!(
+        points[1]["snapshot_storage_status"],
+        "available_json_fallback"
+    );
+    assert_eq!(
+        points[1]["snapshot_storage_reason"],
+        "snapshot found in hysteresis_snapshots JSON fallback"
+    );
+    assert_eq!(points[2]["snapshot_storage_status"], "missing");
+    assert_eq!(
+        points[2]["snapshot_storage_reason"],
+        "snapshot payload not found in hysteresis.zarr or JSON fallback"
     );
     assert_eq!(points[2]["branch_id"], "descending");
     assert_eq!(points[2]["branch_ids"].as_array().map(Vec::len), Some(2));
@@ -15371,6 +15803,24 @@ async fn hysteresis_analysis_endpoints_read_typed_artifacts() {
     )
     .await;
     assert_eq!(metrics["H_c"], 11.5);
+    assert_eq!(metrics["metric_statuses"]["H_c"]["status"], "available");
+    assert_eq!(
+        metrics["metric_statuses"]["M_r_minus"]["status"],
+        "unavailable"
+    );
+    assert_eq!(metrics["metric_statuses"]["loop_area"]["status"], "warning");
+    assert_eq!(metrics["loop_closure_summary"]["status"], "open");
+    assert_eq!(metrics["loop_closure_summary"]["field_gap_mT"], -100.0);
+    assert_eq!(metrics["max_differential_susceptibility"], 0.0125);
+    assert_eq!(
+        metrics["switching_field_candidates"][0]["susceptibility_per_mT"],
+        0.006
+    );
+    assert_eq!(metrics["convergence_quality_summary"]["status"], "warning");
+    assert_eq!(
+        metrics["warnings"][0],
+        "Negative remanence interpolation is unavailable."
+    );
 
     let saturation = body_json(
         app.clone()
@@ -15459,8 +15909,18 @@ async fn hysteresis_analysis_endpoints_read_typed_artifacts() {
     assert_eq!(point["branch_ids"].as_array().map(Vec::len), Some(2));
     assert_eq!(
         point["snapshot_resource_ref"],
-        "/v2/sessions/current/data/fields/m/samples/vector?snapshot_id=hysteresis_point_003"
+        "/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full&snapshot_id=hysteresis_point_003&stage_id=stage_0"
     );
+    assert_eq!(
+        point["snapshot_vector_resource_ref"],
+        "/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full&snapshot_id=hysteresis_point_003&stage_id=stage_0"
+    );
+    assert_eq!(
+        point["snapshot_json_artifact_ref"],
+        "hysteresis_snapshots/hysteresis_point_003/m.json"
+    );
+    assert_eq!(point["snapshot_zarr_store_ref"], "hysteresis.zarr");
+    assert_eq!(point["snapshot_storage_format"], "zarr_v2_json_fallback");
 
     let minor_loops_response = app
         .clone()
@@ -15898,6 +16358,7 @@ async fn hysteresis_analysis_resolves_stage_directory_artifact_refs() {
         let mut guard = state.current_live_state.write().await;
         let snapshot = guard.as_mut().expect("test session should be active");
         snapshot.stage_execution = Some(StageExecutionState {
+            total_stages: 1,
             active_stage_index: None,
             active_stage_kind: None,
             completed_stage_indexes: vec![0],
@@ -15929,7 +16390,6 @@ async fn hysteresis_analysis_resolves_stage_directory_artifact_refs() {
                 current_settle_step_kind: None,
                 current_settle_step_method: None,
             }],
-            total_stages: 1,
         });
     }
 
@@ -15962,6 +16422,7 @@ async fn hysteresis_analysis_resolves_stage_directory_artifact_refs() {
     assert_eq!(alias_response.status(), StatusCode::OK);
 
     let index_response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/v2/sessions/current/analysis/hysteresis/0/points")
@@ -15974,6 +16435,37 @@ async fn hysteresis_analysis_resolves_stage_directory_artifact_refs() {
     let index_points = body_json(index_response).await;
     assert_eq!(index_points.as_array().map(Vec::len), Some(1));
     assert_eq!(index_points[0]["field_value_mT"], 15.0);
+
+    for stage_alias in ["stage-000", "stage_0", "0"] {
+        let point_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/v2/sessions/current/analysis/hysteresis/{stage_alias}/steps/0"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(point_response.status(), StatusCode::OK);
+        let point = body_json(point_response).await;
+        assert_eq!(point["point_id"], 0);
+        assert_eq!(point["field_value_mT"], 15.0);
+        assert_eq!(point["m_parallel"], 0.7);
+    }
+
+    let missing_point_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/analysis/hysteresis/stage-000/steps/99")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_point_response.status(), StatusCode::NOT_FOUND);
 
     let _ = fs::remove_dir_all(stage_dir);
     let _ = fs::remove_dir_all(artifact_dir);
@@ -16010,6 +16502,7 @@ async fn hysteresis_analysis_accepts_active_hysteresis_kind_when_record_kind_is_
         let mut guard = state.current_live_state.write().await;
         let snapshot = guard.as_mut().expect("test session should be active");
         snapshot.stage_execution = Some(StageExecutionState {
+            total_stages: 1,
             active_stage_index: Some(0),
             active_stage_kind: Some("flat_hysteresis".into()),
             completed_stage_indexes: vec![],
@@ -16041,7 +16534,6 @@ async fn hysteresis_analysis_accepts_active_hysteresis_kind_when_record_kind_is_
                 current_settle_step_kind: Some("relax".into()),
                 current_settle_step_method: Some("llg_overdamped".into()),
             }],
-            total_stages: 1,
         });
     }
 
@@ -16123,6 +16615,7 @@ async fn hysteresis_analysis_reads_flat_live_artifact_with_active_stage_executio
         let mut guard = state.current_live_state.write().await;
         let snapshot = guard.as_mut().expect("test session should be active");
         snapshot.stage_execution = Some(StageExecutionState {
+            total_stages: 1,
             active_stage_index: Some(0),
             active_stage_kind: Some("flat_hysteresis".into()),
             completed_stage_indexes: Vec::new(),
@@ -16154,7 +16647,6 @@ async fn hysteresis_analysis_reads_flat_live_artifact_with_active_stage_executio
                 current_settle_step_kind: Some("minimize".into()),
                 current_settle_step_method: Some("projected_gradient_bb".into()),
             }],
-            total_stages: 1,
         });
     }
 
@@ -16205,6 +16697,7 @@ async fn hysteresis_analysis_points_conflicts_when_progress_reports_completed_po
         let mut guard = state.current_live_state.write().await;
         let snapshot = guard.as_mut().expect("test session should be active");
         snapshot.stage_execution = Some(StageExecutionState {
+            total_stages: 1,
             active_stage_index: Some(0),
             active_stage_kind: Some("flat_hysteresis".into()),
             completed_stage_indexes: Vec::new(),
@@ -16236,7 +16729,6 @@ async fn hysteresis_analysis_points_conflicts_when_progress_reports_completed_po
                 current_settle_step_kind: Some("minimize".into()),
                 current_settle_step_method: Some("projected_gradient_bb".into()),
             }],
-            total_stages: 1,
         });
     }
 
@@ -16323,6 +16815,136 @@ async fn hysteresis_analysis_points_returns_empty_for_running_stage_before_first
     assert_eq!(points.as_array().map(Vec::len), Some(0));
 
     let _ = fs::remove_dir_all(stage_dir);
+    let _ = fs::remove_dir_all(artifact_dir);
+}
+
+#[tokio::test]
+async fn hysteresis_analysis_points_preserves_adaptive_refinement_provenance() {
+    let (app, _state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    fs::write(
+        artifact_dir.join("hysteresis_points.json"),
+        serde_json::to_vec(&serde_json::json!([
+            {
+                "point_id": 7,
+                "field_value_mT": 12.5,
+                "m_parallel": 0.125,
+                "m_oop": 0.0,
+                "m_ip": 0.125,
+                "m_avg": [0.125, 0.0, 0.0],
+                "status": "Completed",
+                "adaptive_inserted": true,
+                "refinement_reason": ["zero_crossing", "high_susceptibility"],
+                "refinement_parent_left_point_id": 3,
+                "refinement_parent_right_point_id": 4
+            }
+        ]))
+        .expect("hysteresis points should serialize"),
+    )
+    .expect("hysteresis points should be writable");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/analysis/hysteresis/stage_0/points")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let points = body_json(response).await;
+    assert_eq!(points.as_array().map(Vec::len), Some(1));
+    assert_eq!(points[0]["adaptive_inserted"], true);
+    assert_eq!(points[0]["refinement_reason"][0], "zero_crossing");
+    assert_eq!(points[0]["refinement_reason"][1], "high_susceptibility");
+    assert_eq!(points[0]["refinement_parent_left_point_id"], 3);
+    assert_eq!(points[0]["refinement_parent_right_point_id"], 4);
+
+    let _ = fs::remove_dir_all(artifact_dir);
+}
+
+#[tokio::test]
+async fn hysteresis_analysis_adaptive_refinement_returns_runtime_artifact() {
+    let (app, _state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    fs::write(
+        artifact_dir.join("hysteresis_adaptive_refinement.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "kind": "adaptive_refinement",
+            "status": "computed",
+            "enabled": true,
+            "source_point_count": 3,
+            "max_passes": 1,
+            "max_insertions_per_pass": 2,
+            "candidates": [
+                {
+                    "candidate_id": "adaptive_candidate_001",
+                    "pass_index": 1,
+                    "field_value_mT": 0.0,
+                    "parent_left_point_id": 1,
+                    "parent_right_point_id": 2,
+                    "parent_left_field_mT": -25.0,
+                    "parent_right_field_mT": 25.0,
+                    "dm_dh_per_mT": 0.012,
+                    "reasons": ["zero_crossing"],
+                    "status": "computed"
+                }
+            ],
+            "points": [
+                {
+                    "point_id": 7,
+                    "field_value_mT": 0.0,
+                    "m_parallel": 0.01,
+                    "m_oop": 0.0,
+                    "m_ip": 0.01,
+                    "m_avg": [0.01, 0.0, 0.0],
+                    "status": "Completed",
+                    "adaptive_inserted": true,
+                    "refinement_reason": ["zero_crossing"],
+                    "refinement_parent_left_point_id": 1,
+                    "refinement_parent_right_point_id": 2
+                }
+            ],
+            "settle_trace": [
+                {
+                    "point_id": 7,
+                    "field_value_mT": 0.0,
+                    "step_index": 0,
+                    "algorithm_id": "settle_step_000_minimize",
+                    "method": "projected_gradient_bb",
+                    "status": "converged",
+                    "fallback_reason": null,
+                    "retry_attempt": 0,
+                    "resolved_timestep_s": null,
+                    "torque": 0.001,
+                    "energy": -1e-18
+                }
+            ]
+        }))
+        .expect("adaptive refinement artifact should serialize"),
+    )
+    .expect("adaptive refinement artifact should be writable");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/analysis/hysteresis/stage_0/adaptive-refinement")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let resource = body_json(response).await;
+    assert_eq!(resource["kind"], "adaptive_refinement");
+    assert_eq!(resource["status"], "computed");
+    assert_eq!(resource["candidates"].as_array().map(Vec::len), Some(1));
+    assert_eq!(resource["candidates"][0]["reasons"][0], "zero_crossing");
+    assert_eq!(resource["points"].as_array().map(Vec::len), Some(1));
+    assert_eq!(resource["points"][0]["adaptive_inserted"], true);
+    assert_eq!(resource["settle_trace"].as_array().map(Vec::len), Some(1));
+
     let _ = fs::remove_dir_all(artifact_dir);
 }
 
@@ -16444,6 +17066,284 @@ async fn field_vector_snapshot_id_loads_hysteresis_zarr_container_frame() {
     );
     let values = decode_fmvp_payload_f64(&body_bytes(response).await);
     assert_eq!(values, vec![9.0, 0.0, 0.0, 8.0, 0.0, 0.0]);
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn field_vector_snapshot_id_loads_runtime_hysteresis_zarr_sample_index() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    write_runtime_hysteresis_zarr_snapshot_fixture(&artifact_dir, "hysteresis_point_002");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?snapshot_id=hysteresis_point_002")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-point-count")
+            .and_then(|value| value.to_str().ok()),
+        Some("2")
+    );
+    let values = decode_fmvp_payload_f64(&body_bytes(response).await);
+    assert_eq!(values, vec![9.0, 0.0, 0.0, 8.0, 0.0, 0.0]);
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn field_vector_snapshot_id_rejects_runtime_zarr_without_root_points_index() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    write_runtime_hysteresis_zarr_snapshot_fixture_without_root_points_index(
+        &artifact_dir,
+        "hysteresis_point_002",
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?snapshot_id=hysteresis_point_002")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let json = body_json(response).await;
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("points.csv"),
+        "{json:?}"
+    );
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn field_vector_snapshot_id_rejects_runtime_zarr_root_points_provenance_mismatch() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    write_runtime_hysteresis_zarr_snapshot_fixture(&artifact_dir, "hysteresis_point_002");
+    let points_path = artifact_dir.join("hysteresis.zarr").join("points.csv");
+    let points = fs::read_to_string(&points_path).expect("points.csv should exist");
+    fs::write(
+        &points_path,
+        points.replace(
+            ",descending,major_descending,",
+            ",ascending,major_descending,",
+        ),
+    )
+    .expect("points.csv should be writable");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?snapshot_id=hysteresis_point_002")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let json = body_json(response).await;
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("branch_id"),
+        "{json:?}"
+    );
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn field_vector_snapshot_id_loads_multiple_runtime_hysteresis_zarr_frames() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    write_runtime_hysteresis_zarr_multi_snapshot_fixture(
+        &artifact_dir,
+        &[
+            ("hysteresis_point_001", [[1.0, 0.0, 0.0], [2.0, 0.0, 0.0]]),
+            ("hysteresis_point_002", [[0.0, 3.0, 0.0], [0.0, 4.0, 0.0]]),
+            ("hysteresis_point_003", [[0.0, 0.0, 5.0], [0.0, 0.0, 6.0]]),
+        ],
+    );
+
+    for (snapshot_id, expected_values) in [
+        ("hysteresis_point_001", vec![1.0, 0.0, 0.0, 2.0, 0.0, 0.0]),
+        ("hysteresis_point_002", vec![0.0, 3.0, 0.0, 0.0, 4.0, 0.0]),
+        ("hysteresis_point_003", vec![0.0, 0.0, 5.0, 0.0, 0.0, 6.0]),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/v2/sessions/current/data/fields/m/samples/vector?snapshot_id={snapshot_id}"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-fullmag-snapshot-id")
+                .and_then(|value| value.to_str().ok()),
+            Some(snapshot_id)
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-fullmag-point-count")
+                .and_then(|value| value.to_str().ok()),
+            Some("2")
+        );
+        let values = decode_fmvp_payload_f64(&body_bytes(response).await);
+        assert_eq!(values, expected_values);
+    }
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn field_meta_snapshot_id_loads_multiple_runtime_hysteresis_zarr_frames() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    write_runtime_hysteresis_zarr_multi_snapshot_fixture(
+        &artifact_dir,
+        &[
+            ("hysteresis_point_001", [[1.0, 0.0, 0.0], [2.0, 0.0, 0.0]]),
+            ("hysteresis_point_002", [[0.0, 3.0, 0.0], [0.0, 4.0, 0.0]]),
+            ("hysteresis_point_003", [[0.0, 0.0, 5.0], [0.0, 0.0, 6.0]]),
+        ],
+    );
+
+    for (snapshot_id, component, expected_min, expected_max, expected_mean) in [
+        ("hysteresis_point_001", "x", 1.0, 2.0, 1.5),
+        ("hysteresis_point_002", "y", 3.0, 4.0, 3.5),
+        ("hysteresis_point_003", "z", 5.0, 6.0, 5.5),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/v2/sessions/current/data/fields/m/meta?component={component}&snapshot_id={snapshot_id}"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = body_json(response).await;
+        assert_eq!(json["quantity_id"], "m");
+        assert_eq!(json["components"], 3);
+        assert_eq!(json["stats"]["min"], expected_min);
+        assert_eq!(json["stats"]["max"], expected_max);
+        assert_eq!(json["stats"]["mean"], expected_mean);
+    }
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn field_vector_snapshot_id_validates_optional_hysteresis_stage_scope() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    write_runtime_hysteresis_zarr_snapshot_fixture(&artifact_dir, "hysteresis_point_002");
+    fs::write(
+        artifact_dir.join("hysteresis_points.json"),
+        serde_json::to_vec(&serde_json::json!([
+            {
+                "point_id": 1,
+                "field_value_mT": 25.0,
+                "m_parallel": 0.8,
+                "m_oop": 0.8,
+                "m_ip": 0.0,
+                "m_avg": [0.8, 0.0, 0.0],
+                "status": "completed",
+                "snapshot_id": "hysteresis_point_002"
+            }
+        ]))
+        .expect("hysteresis points should serialize"),
+    )
+    .expect("hysteresis points should be writable");
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("test session should be active");
+        snapshot.stage_execution = Some(StageExecutionState {
+            total_stages: 1,
+            active_stage_index: Some(0),
+            active_stage_kind: Some("flat_hysteresis".into()),
+            completed_stage_indexes: Vec::new(),
+            runtime_state: RuntimeLifecycleState::Running,
+            stage_statuses: vec![StageLifecycleState::Running],
+            stages: vec![StageExecutionRecord {
+                stage_id: Some("stage-000".into()),
+                kind: Some("flat_hysteresis".into()),
+                status: StageLifecycleState::Running,
+                command_id: Some("cmd-hyst".into()),
+                started_at_unix_ms: Some(1_700_000_002_000),
+                completed_at_unix_ms: None,
+                reason: None,
+                artifact_refs: Vec::new(),
+                checkpoint_ref: None,
+                loaded_state_ref: None,
+                resume_from_checkpoint_ref: None,
+                state_transition: None,
+                state_transition_kind: None,
+                state_transition_reason: None,
+                state_transfer_operator_kind: None,
+                state_transition_ui_presentation: None,
+                metric_name: None,
+                metric_value: None,
+                threshold: None,
+                current_field_m_t: Some(25.0),
+                current_point_index: Some(1),
+                current_settle_step_index: None,
+                current_settle_step_kind: None,
+                current_settle_step_method: None,
+            }],
+        });
+    }
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?snapshot_id=hysteresis_point_002&stage_id=stage-000")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?snapshot_id=hysteresis_point_002&stage_id=stage-999")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
     let _ = fs::remove_dir_all(&artifact_dir);
 }
@@ -16712,6 +17612,14 @@ fn write_hysteresis_zarr_snapshot_fixture_with_grid(
         ),
     )
     .expect("Zarr sample index should be writable");
+    fs::write(
+        artifact_dir.join("hysteresis.zarr").join("points.csv"),
+        format!(
+            "sample,snapshot_id,point_id,field_value_mT,quantity_id,chunk_key,dtype,scalar_bytes,cell_count,grid_x,grid_y,grid_z\n0,{snapshot_id},1,2.500000000000000e1,m,fields/m/0.0.0,<f8,8,{cell_count},{},{},{}\n",
+            grid[0], grid[1], grid[2]
+        ),
+    )
+    .expect("Zarr root point index should be writable");
     let mut chunk = Vec::new();
     for component in 0..3 {
         for value in values {
@@ -16719,6 +17627,115 @@ fn write_hysteresis_zarr_snapshot_fixture_with_grid(
         }
     }
     fs::write(field_dir.join("0.0.0"), chunk).expect("Zarr chunk should be writable");
+}
+
+fn write_runtime_hysteresis_zarr_snapshot_fixture(artifact_dir: &Path, snapshot_id: &str) {
+    write_runtime_hysteresis_zarr_multi_snapshot_fixture(
+        artifact_dir,
+        &[(snapshot_id, [[9.0, 0.0, 0.0], [8.0, 0.0, 0.0]])],
+    );
+}
+
+fn write_runtime_hysteresis_zarr_snapshot_fixture_without_root_points_index(
+    artifact_dir: &Path,
+    snapshot_id: &str,
+) {
+    let field_dir = artifact_dir
+        .join("hysteresis.zarr")
+        .join("fields")
+        .join("m");
+    fs::create_dir_all(&field_dir).expect("Zarr field dir should be writable");
+    fs::write(
+        field_dir.join(".zarray"),
+        serde_json::to_vec(&serde_json::json!({
+            "zarr_format": 2,
+            "shape": [1, 3, 2],
+            "chunks": [1, 3, 2],
+            "dtype": "<f8",
+            "compressor": null,
+            "fill_value": 0.0,
+            "order": "C",
+            "filters": null,
+            "dimension_separator": "."
+        }))
+        .expect("Zarr metadata should serialize"),
+    )
+    .expect("Zarr metadata should be writable");
+    fs::write(
+        field_dir.join("samples.csv"),
+        format!(
+            "sample_index,snapshot_id,point_id,field_value_mT,quantity_id,chunk_key,grid_x,grid_y,cell_count,grid_z,component_count,dtype\n0,{snapshot_id},1,2.500000000000000e1,m,0.0.0,2,1,2,1,3,<f8\n"
+        ),
+    )
+    .expect("Zarr sample index should be writable");
+    fs::write(
+        field_dir.join("0.0.0"),
+        [9.0_f64, 8.0, 0.0, 0.0, 0.0, 0.0]
+            .into_iter()
+            .flat_map(f64::to_le_bytes)
+            .collect::<Vec<u8>>(),
+    )
+    .expect("Zarr chunk should be writable");
+}
+
+fn write_runtime_hysteresis_zarr_multi_snapshot_fixture(
+    artifact_dir: &Path,
+    frames: &[(&str, [[f64; 3]; 2])],
+) {
+    let field_dir = artifact_dir
+        .join("hysteresis.zarr")
+        .join("fields")
+        .join("m");
+    fs::create_dir_all(&field_dir).expect("Zarr field dir should be writable");
+    fs::write(
+        field_dir.join(".zarray"),
+        serde_json::to_vec(&serde_json::json!({
+            "zarr_format": 2,
+            "shape": [frames.len(), 3, 2],
+            "chunks": [1, 3, 2],
+            "dtype": "<f8",
+            "compressor": null,
+            "fill_value": 0.0,
+            "order": "C",
+            "filters": null,
+            "dimension_separator": "."
+        }))
+        .expect("Zarr metadata should serialize"),
+    )
+    .expect("Zarr metadata should be writable");
+
+    let mut samples = String::from(
+        "sample_index,snapshot_id,point_id,field_value_mT,quantity_id,chunk_key,grid_x,grid_y,cell_count,grid_z,component_count,dtype,branch_id,protocol_role,mesh_identity,field_revision\n",
+    );
+    let mut point_index = String::from(
+        "sample_index,snapshot_id,point_id,field_value_mT,quantity_id,chunk_key,grid_x,grid_y,cell_count,grid_z,component_count,dtype,branch_id,protocol_role,mesh_identity,field_revision\n",
+    );
+    for (sample_index, (snapshot_id, values)) in frames.iter().enumerate() {
+        let chunk_key = format!("{sample_index}.0.0");
+        samples.push_str(&format!(
+            "{sample_index},{snapshot_id},{sample_index},2.500000000000000e1,m,{chunk_key},2,1,2,1,3,<f8,descending,major_descending,grid:2x1x1;cells:2,{}\n",
+            sample_index + 1,
+        ));
+        point_index.push_str(&format!(
+            "{sample_index},{snapshot_id},{sample_index},2.500000000000000e1,m,fields/m/{chunk_key},2,1,2,1,3,<f8,descending,major_descending,grid:2x1x1;cells:2,{}\n",
+            sample_index + 1,
+        ));
+        let chunk = (0..3)
+            .flat_map(|component| {
+                values
+                    .iter()
+                    .flat_map(move |value| value[component].to_le_bytes())
+            })
+            .collect::<Vec<u8>>();
+        fs::write(field_dir.join(chunk_key), chunk).expect("Zarr chunk should be writable");
+    }
+    fs::write(field_dir.join("samples.csv"), samples)
+        .expect("Zarr sample index should be writable");
+    fs::write(
+        artifact_dir.join("hysteresis.zarr").join("points.csv"),
+        point_index,
+    )
+    .expect("Zarr root point index should be writable");
 }
 
 #[tokio::test]
@@ -17012,6 +18029,7 @@ async fn v2_field_catalog_rejects_non_finite_live_magnetization() {
                 step: 7,
                 time: 1.0e-9,
                 dt: 1.0e-13,
+                pseudo_time_s: None,
                 e_ex: 0.0,
                 e_demag: 0.0,
                 e_ext: 0.0,
@@ -17082,6 +18100,7 @@ async fn v2_field_catalog_rejects_fem_live_magnetization_with_wrong_point_count(
                 step: 7,
                 time: 1.0e-9,
                 dt: 1.0e-13,
+                pseudo_time_s: None,
                 e_ex: 0.0,
                 e_demag: 0.0,
                 e_ext: 0.0,
@@ -17171,6 +18190,7 @@ async fn v2_field_vector_accepts_fem_live_magnetization_on_magnetic_nodes() {
                 step: 7,
                 time: 1.0e-9,
                 dt: 1.0e-13,
+                pseudo_time_s: None,
                 e_ex: 0.0,
                 e_demag: 0.0,
                 e_ext: 0.0,
@@ -17243,6 +18263,7 @@ async fn v2_field_vector_prefers_live_magnetization_over_stale_latest_field() {
                 step: 8,
                 time: 2.0e-9,
                 dt: 1.0e-13,
+                pseudo_time_s: None,
                 e_ex: 0.0,
                 e_demag: 0.0,
                 e_ext: 0.0,
@@ -17424,6 +18445,7 @@ async fn v2_field_vector_prefers_fresh_m_preview_cache_over_stale_latest_field()
                 step: 9,
                 time: 3.0e-9,
                 dt: 1.0e-13,
+                pseudo_time_s: None,
                 e_ex: 0.0,
                 e_demag: 0.0,
                 e_ext: 0.0,
@@ -19280,9 +20302,10 @@ fn openapi_contains_field_slice_contract() {
         .and_then(|description| description.as_str())
         .expect("FieldVectorQuery.view should document supported analysis views");
     assert!(
-        field_vector_view_description.contains("`abs`")
+        field_vector_view_description.contains("`complex`")
+            && field_vector_view_description.contains("`abs`")
             && field_vector_view_description.contains("`phase_rotated_real`"),
-        "FieldVectorQuery.view should document abs and phase-rotated frequency-domain views"
+        "FieldVectorQuery.view should document complex, abs, and phase-rotated frequency-domain views"
     );
 }
 
@@ -19958,6 +20981,7 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
         "frequency_domain_sweep_progress.v1"
     );
     assert_eq!(payload["status"], "ready");
+    assert_eq!(payload["state"], "completed");
     assert_eq!(payload["total_frequency_points"], 2);
     assert_eq!(payload["completed_frequency_points"], 2);
     assert_eq!(payload["written_frequency_point_artifacts"], 2);
@@ -19990,6 +21014,7 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
         payload["response_progress"]["completed_frequency_points"],
         2
     );
+    assert_eq!(payload["response_progress"]["state"], "completed");
     assert!(payload["response_progress"]["progress_json"]
         .as_str()
         .expect("manifest response_progress should include progress_json")
@@ -20162,6 +21187,28 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
         .oneshot(
             Request::builder()
                 .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/0/3/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_bytes(response).await;
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["status"], "ready");
+    assert_eq!(payload["value_kind"], "complex_spatial_vector");
+    assert_eq!(payload["component_basis"], "global_xyz");
+    assert_eq!(payload["component_count"], 3);
+    assert_eq!(payload["binary_layout"], "complex_f64_pairs_little_endian");
+    assert_eq!(payload["complex_pair_count"], 3);
+    assert_eq!(payload["payload_value_count"], 6);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
                 .uri("/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0003/samples/vector?view=phase_rotated_real&phase_rad=0")
                 .body(Body::empty())
                 .unwrap(),
@@ -20183,6 +21230,32 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
             .and_then(|value| value.to_str().ok()),
         Some("3")
     );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0003/samples/vector")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-n-comp")
+            .and_then(|value| value.to_str().ok()),
+        Some("3")
+    );
+    let body = body_bytes(response).await;
+    let values: Vec<f64> = body[48..]
+        .chunks_exact(8)
+        .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
+        .collect();
+    assert_eq!(values, vec![1.0, 0.0, 3.0]);
 
     let response = app
         .clone()
@@ -20211,6 +21284,7 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
     );
 
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("GET")
@@ -20235,6 +21309,72 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
             .and_then(|value| value.to_str().ok()),
         Some("3")
     );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/data/fields/analysis:frequency-response:frequency-0001/samples/vector?view=complex")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-point-count")
+            .and_then(|value| value.to_str().ok()),
+        Some("1")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-value-count")
+            .and_then(|value| value.to_str().ok()),
+        Some("6")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-n-comp")
+            .and_then(|value| value.to_str().ok()),
+        Some("6")
+    );
+    let body = body_bytes(response).await;
+    assert_eq!(body.len(), 48 + 6 * std::mem::size_of::<f64>());
+}
+
+#[tokio::test]
+async fn frequency_domain_eigen_mode_field_meta_rejects_invalid_complex_xyz_payload() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let mode_field_dir = artifact_dir
+        .join("eigen")
+        .join("mode_fields")
+        .join("sample_0000")
+        .join("mode_0003");
+    fs::create_dir_all(&mode_field_dir).expect("mode field directory should be created");
+    let mut mode_field_bytes = Vec::new();
+    for value in [1.0f64, 0.0] {
+        mode_field_bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    fs::write(mode_field_dir.join("vector.bin"), mode_field_bytes)
+        .expect("invalid mode field payload should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/0/3/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
 
 #[tokio::test]
@@ -20264,6 +21404,7 @@ async fn frequency_domain_progress_reports_interrupted_partial_response_bundle()
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
     assert_eq!(payload["status"], "interrupted");
+    assert_eq!(payload["state"], "interrupted");
     assert_eq!(payload["total_frequency_points"], 3);
     assert_eq!(payload["completed_frequency_points"], 1);
     assert_eq!(payload["written_frequency_point_artifacts"], 1);
@@ -20288,6 +21429,7 @@ async fn frequency_domain_progress_reports_interrupted_partial_response_bundle()
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
     assert_eq!(payload["status"], "cancel_requested");
+    assert_eq!(payload["state"], "cancel_requested");
     assert_eq!(payload["total_frequency_points"], 3);
     assert_eq!(payload["completed_frequency_points"], 1);
     assert_eq!(payload["written_frequency_point_artifacts"], 1);
@@ -20296,6 +21438,173 @@ async fn frequency_domain_progress_reports_interrupted_partial_response_bundle()
         .as_str()
         .expect("cancel-requested progress_json should be present")
         .contains("\"state\":\"cancel_requested\""));
+}
+
+#[tokio::test]
+async fn frequency_domain_progress_fallback_reads_nested_frequency_point_hz() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    write_response_sweep_bundle(&artifact_dir, &frequency_domain_response_sweep_fixture(2))
+        .expect("response sweep bundle should be written");
+    fs::remove_file(artifact_dir.join("response").join("progress.v1.json"))
+        .expect("progress artifact should be removed to exercise fallback");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/response/progress.v1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_bytes(response).await;
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(payload["completed_frequency_points"], 2);
+    assert_eq!(payload["state"], "completed");
+    assert_eq!(payload["current_frequency_hz"], 2.0e9);
+}
+
+#[tokio::test]
+async fn frequency_domain_progress_fallback_reports_unavailable_manifest() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    fs::create_dir_all(artifact_dir.join("frequency_domain"))
+        .expect("frequency-domain manifest directory should be created");
+    fs::write(
+        artifact_dir
+            .join("frequency_domain")
+            .join("manifest.v1.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "frequency_domain_manifest.v1",
+            "stage_kind": "frequency_response",
+            "status": "unavailable",
+            "complete": false,
+            "diagnostics": {
+                "requested_frequency_count": 2,
+                "completed_frequency_point_count": 0,
+                "written_frequency_point_artifacts": 0
+            },
+            "artifacts": {
+                "failure_diagnostics_path": "frequency_domain/diagnostics.v1.json"
+            }
+        }))
+        .expect("unavailable manifest fixture should serialize"),
+    )
+    .expect("unavailable manifest fixture should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/response/progress.v1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_bytes(response).await;
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(payload["status"], "unavailable");
+    assert_eq!(payload["state"], "unavailable");
+    assert_eq!(payload["complete"], false);
+    assert_eq!(payload["total_frequency_points"], 2);
+    assert_eq!(payload["completed_frequency_points"], 0);
+    assert_eq!(payload["written_frequency_point_artifacts"], 0);
+    assert_eq!(payload["partial_artifacts_available"], false);
+    assert_eq!(
+        payload["latest_artifact_manifest_path"],
+        "frequency_domain/manifest.v1.json"
+    );
+    assert_eq!(
+        payload["missing_reason"],
+        "frequency-domain response is unavailable"
+    );
+}
+
+#[tokio::test]
+async fn frequency_domain_progress_fallback_uses_v2_linked_frequency_point_paths() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    write_response_sweep_bundle(&artifact_dir, &frequency_domain_response_sweep_fixture(2))
+        .expect("response sweep bundle should be written");
+    let response_dir = artifact_dir.join("response");
+    fs::remove_file(response_dir.join("progress.v1.json"))
+        .expect("progress artifact should be removed to exercise fallback");
+    fs::remove_file(
+        response_dir
+            .join("frequency_points")
+            .join("frequency_0001.json"),
+    )
+    .expect("canonical second frequency point should be removed");
+    let linked_dir = response_dir.join("frequency_points").join("linked");
+    fs::create_dir_all(&linked_dir).expect("linked response point directory should be created");
+    fs::write(
+        linked_dir.join("frequency_0001.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "frequency_response_point.v1",
+            "frequency_index": 1,
+            "point": {
+                "frequency_hz": 4.2e9
+            },
+            "response_field_payload_path": "response/field_payloads/frequency_0001/vector.bin"
+        }))
+        .expect("linked response point fixture should serialize"),
+    )
+    .expect("linked response point fixture should be written");
+    fs::write(
+        response_dir.join("magnetic_response_sweep.v2.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "magnetic_response_sweep.v2",
+            "solve_kind": "direct_harmonic_response",
+            "complete": true,
+            "completed_frequency_point_count": 2,
+            "frequency_point_artifact_paths": [
+                "response/frequency_points/frequency_0000.json",
+                "response/frequency_points/linked/frequency_0001.json"
+            ],
+            "response_field_payload_paths": [
+                "response/field_payloads/frequency_0000/vector.bin",
+                "response/field_payloads/frequency_0001/vector.bin"
+            ],
+            "points": [
+                {
+                    "frequency_index": 0,
+                    "frequency_point_artifact_path": "response/frequency_points/frequency_0000.json",
+                    "response_field_payload_path": "response/field_payloads/frequency_0000/vector.bin",
+                    "frequency_hz": 1.0e9
+                },
+                {
+                    "frequency_index": 1,
+                    "frequency_point_artifact_path": "response/frequency_points/linked/frequency_0001.json",
+                    "response_field_payload_path": "response/field_payloads/frequency_0001/vector.bin",
+                    "frequency_hz": 4.2e9
+                }
+            ]
+        }))
+        .expect("response v2 fixture should serialize"),
+    )
+    .expect("response v2 fixture should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/response/progress.v1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_bytes(response).await;
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(payload["completed_frequency_points"], 2);
+    assert_eq!(payload["state"], "completed");
+    assert_eq!(payload["current_frequency_hz"], 4.2e9);
 }
 
 #[tokio::test]
@@ -20325,6 +21634,7 @@ async fn frequency_domain_progress_reports_pre_first_point_cancel_bundle() {
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
     assert_eq!(payload["status"], "interrupted");
+    assert_eq!(payload["state"], "interrupted");
     assert_eq!(payload["total_frequency_points"], 3);
     assert_eq!(payload["completed_frequency_points"], 0);
     assert_eq!(payload["written_frequency_point_artifacts"], 0);
@@ -20349,6 +21659,7 @@ async fn frequency_domain_progress_reports_pre_first_point_cancel_bundle() {
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
     assert_eq!(payload["status"], "cancel_requested");
+    assert_eq!(payload["state"], "cancel_requested");
     assert_eq!(payload["total_frequency_points"], 3);
     assert_eq!(payload["completed_frequency_points"], 0);
     assert_eq!(payload["written_frequency_point_artifacts"], 0);
@@ -20383,6 +21694,1741 @@ async fn frequency_domain_response_does_not_fallback_when_v2_is_invalid() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn frequency_domain_response_frequency_point_uses_v2_linked_artifact_path() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    write_response_sweep_bundle(&artifact_dir, &frequency_domain_response_sweep_fixture(2))
+        .expect("response sweep bundle should be written");
+    let response_dir = artifact_dir.join("response");
+    let linked_dir = response_dir.join("frequency_points").join("linked");
+    fs::create_dir_all(&linked_dir).expect("linked response point directory should be created");
+    fs::write(
+        linked_dir.join("frequency_0001.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "frequency_response_point.v1",
+            "frequency_index": 1,
+            "point": {
+                "frequency_hz": 4.2e9
+            },
+            "response_field_payload_path": "response/field_payloads/frequency_0001/vector.bin"
+        }))
+        .expect("linked response point fixture should serialize"),
+    )
+    .expect("linked response point fixture should be written");
+    fs::write(
+        response_dir.join("magnetic_response_sweep.v2.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "magnetic_response_sweep.v2",
+            "solve_kind": "direct_harmonic_response",
+            "complete": true,
+            "completed_frequency_point_count": 2,
+            "frequency_point_artifact_paths": [
+                "response/frequency_points/frequency_0000.json",
+                "response/frequency_points/linked/frequency_0001.json"
+            ],
+            "response_field_payload_paths": [
+                "response/field_payloads/frequency_0000/vector.bin",
+                "response/field_payloads/frequency_0001/vector.bin"
+            ],
+            "points": [
+                {
+                    "frequency_index": 0,
+                    "frequency_point_artifact_path": "response/frequency_points/frequency_0000.json",
+                    "response_field_payload_path": "response/field_payloads/frequency_0000/vector.bin",
+                    "frequency_hz": 1.0e9
+                },
+                {
+                    "frequency_index": 1,
+                    "frequency_point_artifact_path": "response/frequency_points/linked/frequency_0001.json",
+                    "response_field_payload_path": "response/field_payloads/frequency_0001/vector.bin",
+                    "frequency_hz": 4.2e9
+                }
+            ]
+        }))
+        .expect("response v2 fixture should serialize"),
+    )
+    .expect("response v2 fixture should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/response/frequency-points/1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = response.status();
+    let body = body_bytes(response).await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        payload["artifact_path"],
+        "response/frequency_points/linked/frequency_0001.json"
+    );
+    assert_eq!(payload["payload"]["point"]["frequency_hz"], 4.2e9);
+}
+
+#[tokio::test]
+async fn frequency_domain_response_field_meta_uses_v2_linked_payload_path() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    write_response_sweep_bundle(&artifact_dir, &frequency_domain_response_sweep_fixture(2))
+        .expect("response sweep bundle should be written");
+    let response_dir = artifact_dir.join("response");
+    let linked_payload_dir = response_dir.join("field_payloads").join("linked");
+    fs::create_dir_all(&linked_payload_dir).expect("linked payload directory should be created");
+    fs::write(
+        linked_payload_dir.join("frequency_0001_xyz.bin"),
+        [1_u8, 2, 3, 4],
+    )
+    .expect("linked payload should be written");
+    fs::write(
+        response_dir
+            .join("frequency_points")
+            .join("frequency_0001.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "frequency_response_point.v1",
+            "frequency_index": 1,
+            "frequency_hz": 2.0e9,
+            "field_payload_path": "response/field_payloads/linked/frequency_0001_xyz.bin",
+            "tangent_field_payload_path": "response/field_payloads/linked/frequency_0001_tangent.bin",
+            "payload_encoding": "f64_interleaved_real_imag_xyz",
+            "tangent_payload_encoding": "f64_interleaved_real_imag_tangent",
+            "binary_layout": "complex_f64_pairs_little_endian",
+            "value_kind": "complex_spatial_vector",
+            "component_basis": "global_xyz",
+            "component_count": 3,
+            "components": ["x", "y", "z"],
+            "complex_pair_count": 6,
+            "payload_value_count": 12,
+            "tangent_value_kind": "complex_tangent_vector",
+            "tangent_component_basis": "local_tangent_frame",
+            "tangent_component_count": 2,
+            "tangent_components": ["tangent_e1", "tangent_e2"],
+            "tangent_complex_pair_count": 4,
+            "tangent_payload_value_count": 8,
+            "available_views": ["complex", "real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"],
+            "default_view": "abs",
+            "default_phase_rad": 1.25
+        }))
+        .expect("response point metadata fixture should serialize"),
+    )
+    .expect("response point metadata fixture should be written");
+    fs::write(
+        response_dir.join("magnetic_response_sweep.v2.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "magnetic_response_sweep.v2",
+            "solve_kind": "direct_harmonic_response",
+            "complete": true,
+            "completed_frequency_point_count": 2,
+            "frequency_point_artifact_paths": [
+                "response/frequency_points/frequency_0000.json",
+                "response/frequency_points/frequency_0001.json"
+            ],
+            "response_field_payload_paths": [
+                "response/field_payloads/frequency_0000/vector.bin",
+                "response/field_payloads/linked/frequency_0001_xyz.bin"
+            ],
+            "points": [
+                {
+                    "frequency_index": 0,
+                    "frequency_point_artifact_path": "response/frequency_points/frequency_0000.json",
+                    "response_field_payload_path": "response/field_payloads/frequency_0000/vector.bin",
+                    "frequency_hz": 1.0e9
+                },
+                {
+                    "frequency_index": 1,
+                    "frequency_point_artifact_path": "response/frequency_points/frequency_0001.json",
+                    "response_field_payload_path": "response/field_payloads/linked/frequency_0001_xyz.bin",
+                    "response_tangent_field_payload_path": "response/field_payloads/linked/frequency_0001_tangent.bin",
+                    "frequency_hz": 2.0e9
+                }
+            ]
+        }))
+        .expect("response v2 fixture should serialize"),
+    )
+    .expect("response v2 fixture should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/response/field/1/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_bytes(response).await;
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["status"], "ready");
+    assert_eq!(
+        payload["artifact_path"],
+        "response/field_payloads/linked/frequency_0001_xyz.bin"
+    );
+    assert_eq!(payload["value_kind"], "complex_spatial_vector");
+    assert_eq!(payload["component_basis"], "global_xyz");
+    assert_eq!(payload["component_count"], 3);
+    assert_eq!(payload["components"][0], "x");
+    assert_eq!(payload["components"][1], "y");
+    assert_eq!(payload["components"][2], "z");
+    assert_eq!(payload["payload_encoding"], "f64_interleaved_real_imag_xyz");
+    assert_eq!(payload["binary_layout"], "complex_f64_pairs_little_endian");
+    assert_eq!(payload["complex_pair_count"], 6);
+    assert_eq!(payload["payload_value_count"], 12);
+    assert_eq!(
+        payload["tangent_field_payload_path"],
+        "response/field_payloads/linked/frequency_0001_tangent.bin"
+    );
+    assert_eq!(
+        payload["tangent_payload_encoding"],
+        "f64_interleaved_real_imag_tangent"
+    );
+    assert_eq!(payload["tangent_value_kind"], "complex_tangent_vector");
+    assert_eq!(payload["tangent_component_basis"], "local_tangent_frame");
+    assert_eq!(payload["tangent_component_count"], 2);
+    assert_eq!(payload["tangent_components"][0], "tangent_e1");
+    assert_eq!(payload["tangent_components"][1], "tangent_e2");
+    assert_eq!(payload["tangent_complex_pair_count"], 4);
+    assert_eq!(payload["tangent_payload_value_count"], 8);
+    assert!(payload["available_views"]
+        .as_array()
+        .expect("available views should be an array")
+        .iter()
+        .any(|view| view == "phase_rotated_real"));
+    assert_eq!(payload["default_view"], "abs");
+    assert_eq!(payload["default_phase_rad"], 1.25);
+    assert_eq!(
+        payload["resource_key"],
+        "/v2/sessions/current/data/fields/analysis:frequency-response:frequency-0001/samples/vector?view=abs&phase_rad=1.25"
+    );
+}
+
+#[tokio::test]
+async fn frequency_domain_response_field_fallback_uses_spatial_xyz_payload() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let response_dir = artifact_dir.join("response");
+    let frequency_points_dir = response_dir.join("frequency_points");
+    let field_payload_dir = response_dir.join("field_payloads").join("frequency_0001");
+    fs::create_dir_all(&frequency_points_dir).expect("frequency point directory should exist");
+    fs::create_dir_all(&field_payload_dir).expect("field payload directory should exist");
+    let mut spatial_payload = Vec::new();
+    for value in [
+        9.0f64, 0.0, 1.0, 0.0, 8.0, 0.0, 2.0, 0.0, 7.0, 0.0, 3.0, 0.0,
+    ] {
+        spatial_payload.extend_from_slice(&value.to_le_bytes());
+    }
+    fs::write(field_payload_dir.join("vector_xyz.bin"), spatial_payload)
+        .expect("spatial fallback payload should be written");
+    fs::write(
+        frequency_points_dir.join("frequency_0001.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "frequency_response_point.v1",
+            "frequency_index": 1,
+            "frequency_hz": 2.0e9,
+            "field_payload_path": "response/field_payloads/frequency_0001/vector_xyz.bin",
+            "payload_encoding": "f64_interleaved_real_imag_xyz",
+            "binary_layout": "complex_f64_pairs_little_endian",
+            "value_kind": "complex_spatial_vector",
+            "component_basis": "global_xyz",
+            "component_count": 3,
+            "components": ["x", "y", "z"],
+            "complex_pair_count": 6,
+            "payload_value_count": 12,
+            "available_views": ["complex", "real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"],
+            "default_view": "phase_rotated_real",
+            "default_phase_rad": 0.0
+        }))
+        .expect("response point metadata fixture should serialize"),
+    )
+    .expect("response point metadata fixture should be written");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/response/field/1/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_bytes(response).await;
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["status"], "ready");
+    assert_eq!(
+        payload["artifact_path"],
+        "response/field_payloads/frequency_0001/vector_xyz.bin"
+    );
+    assert_eq!(payload["value_kind"], "complex_spatial_vector");
+    assert_eq!(payload["component_basis"], "global_xyz");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/data/fields/analysis:frequency-response:frequency-0001/samples/vector?view=phase_rotated_real&phase_rad=0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-point-count")
+            .and_then(|value| value.to_str().ok()),
+        Some("2")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-n-comp")
+            .and_then(|value| value.to_str().ok()),
+        Some("3")
+    );
+}
+
+#[tokio::test]
+async fn frequency_domain_response_field_uses_point_artifact_payload_path_without_v2_sweep() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let response_dir = artifact_dir.join("response");
+    let frequency_points_dir = response_dir.join("frequency_points");
+    let field_payload_dir = response_dir.join("field_payloads").join("custom");
+    fs::create_dir_all(&frequency_points_dir).expect("frequency point directory should exist");
+    fs::create_dir_all(&field_payload_dir).expect("field payload directory should exist");
+    let custom_payload_path = "response/field_payloads/custom/frequency_0001_xyz.bin";
+    let mut spatial_payload = Vec::new();
+    for value in [
+        9.0f64, 0.0, 1.0, 0.0, 8.0, 0.0, 2.0, 0.0, 7.0, 0.0, 3.0, 0.0,
+    ] {
+        spatial_payload.extend_from_slice(&value.to_le_bytes());
+    }
+    fs::write(
+        field_payload_dir.join("frequency_0001_xyz.bin"),
+        spatial_payload,
+    )
+    .expect("custom spatial payload should be written");
+    fs::write(
+        frequency_points_dir.join("frequency_0001.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "frequency_response_point.v1",
+            "frequency_index": 1,
+            "frequency_hz": 2.0e9,
+            "field_payload_path": custom_payload_path,
+            "payload_encoding": "f64_interleaved_real_imag_xyz",
+            "binary_layout": "complex_f64_pairs_little_endian",
+            "value_kind": "complex_spatial_vector",
+            "component_basis": "global_xyz",
+            "component_count": 3,
+            "components": ["x", "y", "z"],
+            "complex_pair_count": 6,
+            "payload_value_count": 12,
+            "available_views": ["complex", "real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"],
+            "default_view": "phase_rotated_real",
+            "default_phase_rad": 0.0
+        }))
+        .expect("response point metadata fixture should serialize"),
+    )
+    .expect("response point metadata fixture should be written");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/response/field/1/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_bytes(response).await;
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["status"], "ready");
+    assert_eq!(payload["artifact_path"], custom_payload_path);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/data/fields/analysis:frequency-response:frequency-0001/samples/vector?view=phase_rotated_real&phase_rad=0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-point-count")
+            .and_then(|value| value.to_str().ok()),
+        Some("2")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-n-comp")
+            .and_then(|value| value.to_str().ok()),
+        Some("3")
+    );
+}
+
+#[tokio::test]
+async fn frequency_domain_response_field_prefers_manifest_field_resource_path() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    write_response_sweep_bundle(&artifact_dir, &frequency_domain_response_sweep_fixture(2))
+        .expect("response sweep bundle should be written");
+    let response_dir = artifact_dir.join("response");
+    let manifest_payload_dir = response_dir.join("field_payloads").join("manifest");
+    fs::create_dir_all(&manifest_payload_dir)
+        .expect("manifest payload directory should be created");
+    let manifest_payload_path = "response/field_payloads/manifest/frequency_0001_xyz.bin";
+    let mut manifest_payload = Vec::new();
+    for value in [
+        4.0f64, 0.0, 5.0, 0.0, 6.0, 0.0, 7.0, 0.0, 8.0, 0.0, 9.0, 0.0,
+    ] {
+        manifest_payload.extend_from_slice(&value.to_le_bytes());
+    }
+    fs::write(
+        manifest_payload_dir.join("frequency_0001_xyz.bin"),
+        manifest_payload,
+    )
+    .expect("manifest payload should be written");
+    fs::write(
+        response_dir
+            .join("frequency_points")
+            .join("frequency_0001.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "frequency_response_point.v1",
+            "frequency_index": 1,
+            "frequency_hz": 2.0e9,
+            "field_payload_path": "response/field_payloads/missing/frequency_0001_xyz.bin",
+            "payload_encoding": "f64_interleaved_real_imag_xyz",
+            "binary_layout": "complex_f64_pairs_little_endian",
+            "value_kind": "complex_spatial_vector",
+            "component_basis": "global_xyz",
+            "component_count": 3,
+            "components": ["x", "y", "z"],
+            "complex_pair_count": 6,
+            "payload_value_count": 12,
+            "available_views": ["complex", "real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"],
+            "default_view": "phase_rotated_real",
+            "default_phase_rad": 0.0
+        }))
+        .expect("response point metadata fixture should serialize"),
+    )
+    .expect("response point metadata fixture should be written");
+    fs::write(
+        response_dir.join("magnetic_response_sweep.v2.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "magnetic_response_sweep.v2",
+            "solve_kind": "direct_harmonic_response",
+            "complete": true,
+            "completed_frequency_point_count": 2,
+            "frequency_point_artifact_paths": [
+                "response/frequency_points/frequency_0000.json",
+                "response/frequency_points/frequency_0001.json"
+            ],
+            "response_field_payload_paths": [
+                "response/field_payloads/frequency_0000/vector.bin",
+                "response/field_payloads/missing/frequency_0001_xyz.bin"
+            ],
+            "points": [
+                {
+                    "frequency_index": 0,
+                    "frequency_point_artifact_path": "response/frequency_points/frequency_0000.json",
+                    "response_field_payload_path": "response/field_payloads/frequency_0000/vector.bin",
+                    "frequency_hz": 1.0e9
+                },
+                {
+                    "frequency_index": 1,
+                    "frequency_point_artifact_path": "response/frequency_points/frequency_0001.json",
+                    "response_field_payload_path": "response/field_payloads/missing/frequency_0001_xyz.bin",
+                    "frequency_hz": 2.0e9
+                }
+            ]
+        }))
+        .expect("response v2 fixture should serialize"),
+    )
+    .expect("response v2 fixture should be written");
+    fs::create_dir_all(artifact_dir.join("frequency_domain"))
+        .expect("frequency-domain manifest directory should be created");
+    fs::write(
+        artifact_dir
+            .join("frequency_domain")
+            .join("manifest.v1.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "frequency_domain_manifest.v1",
+            "stage_kind": "frequency_response",
+            "resources": {
+                "response_field_resources": [
+                    {
+                        "frequency_index": 1,
+                        "field_resource_id": "analysis:frequency-response:frequency-0001",
+                        "payload_path": manifest_payload_path
+                    }
+                ]
+            }
+        }))
+        .expect("frequency-domain manifest fixture should serialize"),
+    )
+    .expect("frequency-domain manifest fixture should be written");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/response/field/1/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = response.status();
+    let body = body_bytes(response).await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["status"], "ready");
+    assert_eq!(payload["artifact_path"], manifest_payload_path);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/data/fields/analysis:frequency-response:frequency-0001/samples/vector?view=phase_rotated_real&phase_rad=0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-point-count")
+            .and_then(|value| value.to_str().ok()),
+        Some("2")
+    );
+}
+
+#[tokio::test]
+async fn frequency_domain_response_field_rejects_missing_point_field_payload_path() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let response_dir = artifact_dir.join("response");
+    let frequency_points_dir = response_dir.join("frequency_points");
+    fs::create_dir_all(&frequency_points_dir).expect("frequency point directory should exist");
+    fs::write(
+        frequency_points_dir.join("frequency_0001.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "frequency_response_point.v1",
+            "frequency_index": 1,
+            "frequency_hz": 2.0e9,
+            "payload_encoding": "f64_interleaved_real_imag_xyz",
+            "binary_layout": "complex_f64_pairs_little_endian",
+            "value_kind": "complex_spatial_vector",
+            "component_basis": "global_xyz",
+            "component_count": 3,
+            "components": ["x", "y", "z"],
+            "complex_pair_count": 3,
+            "payload_value_count": 6,
+            "available_views": ["complex", "real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"],
+            "default_view": "phase_rotated_real",
+            "default_phase_rad": 0.0
+        }))
+        .expect("response point metadata fixture should serialize"),
+    )
+    .expect("response point metadata fixture should be written");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/response/field/1/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/data/fields/analysis:frequency-response:frequency-0001/samples/vector?view=phase_rotated_real&phase_rad=0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn frequency_domain_response_field_meta_rejects_payload_value_count_mismatch() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let response_dir = artifact_dir.join("response");
+    let frequency_points_dir = response_dir.join("frequency_points");
+    let field_payload_dir = response_dir.join("field_payloads").join("frequency_0001");
+    fs::create_dir_all(&frequency_points_dir).expect("frequency point directory should exist");
+    fs::create_dir_all(&field_payload_dir).expect("field payload directory should exist");
+    fs::write(field_payload_dir.join("vector_xyz.bin"), [])
+        .expect("spatial fallback payload should be written");
+    fs::write(
+        frequency_points_dir.join("frequency_0001.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "frequency_response_point.v1",
+            "frequency_index": 1,
+            "frequency_hz": 2.0e9,
+            "field_payload_path": "response/field_payloads/frequency_0001/vector_xyz.bin",
+            "payload_encoding": "f64_interleaved_real_imag_xyz",
+            "binary_layout": "complex_f64_pairs_little_endian",
+            "value_kind": "complex_spatial_vector",
+            "component_basis": "global_xyz",
+            "component_count": 3,
+            "components": ["x", "y", "z"],
+            "complex_pair_count": 6,
+            "payload_value_count": 10,
+            "available_views": ["complex", "real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"],
+            "default_view": "phase_rotated_real",
+            "default_phase_rad": 0.0
+        }))
+        .expect("response point metadata fixture should serialize"),
+    )
+    .expect("response point metadata fixture should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/response/field/1/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn frequency_domain_response_field_meta_rejects_complex_pair_count_overflow() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let response_dir = artifact_dir.join("response");
+    let frequency_points_dir = response_dir.join("frequency_points");
+    let field_payload_dir = response_dir.join("field_payloads").join("frequency_0001");
+    fs::create_dir_all(&frequency_points_dir).expect("frequency point directory should exist");
+    fs::create_dir_all(&field_payload_dir).expect("field payload directory should exist");
+    fs::write(field_payload_dir.join("vector_xyz.bin"), [])
+        .expect("spatial fallback payload should be written");
+    fs::write(
+        frequency_points_dir.join("frequency_0001.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "frequency_response_point.v1",
+            "frequency_index": 1,
+            "frequency_hz": 2.0e9,
+            "field_payload_path": "response/field_payloads/frequency_0001/vector_xyz.bin",
+            "payload_encoding": "f64_interleaved_real_imag_xyz",
+            "binary_layout": "complex_f64_pairs_little_endian",
+            "value_kind": "complex_spatial_vector",
+            "component_basis": "global_xyz",
+            "component_count": 3,
+            "components": ["x", "y", "z"],
+            "complex_pair_count": u64::MAX,
+            "payload_value_count": 0,
+            "available_views": ["complex", "real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"],
+            "default_view": "phase_rotated_real",
+            "default_phase_rad": 0.0
+        }))
+        .expect("response point metadata fixture should serialize"),
+    )
+    .expect("response point metadata fixture should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/response/field/1/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn frequency_domain_response_field_meta_rejects_missing_complex_available_view() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let response_dir = artifact_dir.join("response");
+    let frequency_points_dir = response_dir.join("frequency_points");
+    let field_payload_dir = response_dir.join("field_payloads").join("frequency_0001");
+    fs::create_dir_all(&frequency_points_dir).expect("frequency point directory should exist");
+    fs::create_dir_all(&field_payload_dir).expect("field payload directory should exist");
+    fs::write(field_payload_dir.join("vector_xyz.bin"), [])
+        .expect("spatial fallback payload should be written");
+    fs::write(
+        frequency_points_dir.join("frequency_0001.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "frequency_response_point.v1",
+            "frequency_index": 1,
+            "frequency_hz": 2.0e9,
+            "field_payload_path": "response/field_payloads/frequency_0001/vector_xyz.bin",
+            "payload_encoding": "f64_interleaved_real_imag_xyz",
+            "binary_layout": "complex_f64_pairs_little_endian",
+            "value_kind": "complex_spatial_vector",
+            "component_basis": "global_xyz",
+            "component_count": 3,
+            "components": ["x", "y", "z"],
+            "complex_pair_count": 3,
+            "payload_value_count": 6,
+            "available_views": ["real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"],
+            "default_view": "phase_rotated_real",
+            "default_phase_rad": 0.0
+        }))
+        .expect("response point metadata fixture should serialize"),
+    )
+    .expect("response point metadata fixture should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/response/field/1/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn frequency_domain_response_field_meta_rejects_non_string_available_view() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let response_dir = artifact_dir.join("response");
+    let frequency_points_dir = response_dir.join("frequency_points");
+    let field_payload_dir = response_dir.join("field_payloads").join("frequency_0001");
+    fs::create_dir_all(&frequency_points_dir).expect("frequency point directory should exist");
+    fs::create_dir_all(&field_payload_dir).expect("field payload directory should exist");
+    fs::write(field_payload_dir.join("vector_xyz.bin"), [])
+        .expect("spatial fallback payload should be written");
+    fs::write(
+        frequency_points_dir.join("frequency_0001.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "frequency_response_point.v1",
+            "frequency_index": 1,
+            "frequency_hz": 2.0e9,
+            "field_payload_path": "response/field_payloads/frequency_0001/vector_xyz.bin",
+            "payload_encoding": "f64_interleaved_real_imag_xyz",
+            "binary_layout": "complex_f64_pairs_little_endian",
+            "value_kind": "complex_spatial_vector",
+            "component_basis": "global_xyz",
+            "component_count": 3,
+            "components": ["x", "y", "z"],
+            "complex_pair_count": 3,
+            "payload_value_count": 6,
+            "available_views": ["complex", "real", "imag", "abs", 7, "phase", "phase_rotated_real"],
+            "default_view": "phase_rotated_real",
+            "default_phase_rad": 0.0
+        }))
+        .expect("response point metadata fixture should serialize"),
+    )
+    .expect("response point metadata fixture should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/response/field/1/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn frequency_domain_response_field_meta_rejects_default_view_outside_available_views() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let response_dir = artifact_dir.join("response");
+    let frequency_points_dir = response_dir.join("frequency_points");
+    let field_payload_dir = response_dir.join("field_payloads").join("frequency_0001");
+    fs::create_dir_all(&frequency_points_dir).expect("frequency point directory should exist");
+    fs::create_dir_all(&field_payload_dir).expect("field payload directory should exist");
+    fs::write(field_payload_dir.join("vector_xyz.bin"), [])
+        .expect("spatial fallback payload should be written");
+    fs::write(
+        frequency_points_dir.join("frequency_0001.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "frequency_response_point.v1",
+            "frequency_index": 1,
+            "frequency_hz": 2.0e9,
+            "field_payload_path": "response/field_payloads/frequency_0001/vector_xyz.bin",
+            "payload_encoding": "f64_interleaved_real_imag_xyz",
+            "binary_layout": "complex_f64_pairs_little_endian",
+            "value_kind": "complex_spatial_vector",
+            "component_basis": "global_xyz",
+            "component_count": 3,
+            "components": ["x", "y", "z"],
+            "complex_pair_count": 3,
+            "payload_value_count": 6,
+            "available_views": ["complex", "real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"],
+            "default_view": "unsupported_default",
+            "default_phase_rad": 0.0
+        }))
+        .expect("response point metadata fixture should serialize"),
+    )
+    .expect("response point metadata fixture should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/response/field/1/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn frequency_domain_response_field_meta_rejects_nonfinite_default_phase() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let response_dir = artifact_dir.join("response");
+    let frequency_points_dir = response_dir.join("frequency_points");
+    let field_payload_dir = response_dir.join("field_payloads").join("frequency_0001");
+    fs::create_dir_all(&frequency_points_dir).expect("frequency point directory should exist");
+    fs::create_dir_all(&field_payload_dir).expect("field payload directory should exist");
+    fs::write(field_payload_dir.join("vector_xyz.bin"), [])
+        .expect("spatial fallback payload should be written");
+    fs::write(
+        frequency_points_dir.join("frequency_0001.json"),
+        r#"{
+            "schema_version": "frequency_response_point.v1",
+            "frequency_index": 1,
+            "frequency_hz": 2.0e9,
+            "field_payload_path": "response/field_payloads/frequency_0001/vector_xyz.bin",
+            "payload_encoding": "f64_interleaved_real_imag_xyz",
+            "binary_layout": "complex_f64_pairs_little_endian",
+            "value_kind": "complex_spatial_vector",
+            "component_basis": "global_xyz",
+            "component_count": 3,
+            "components": ["x", "y", "z"],
+            "complex_pair_count": 3,
+            "payload_value_count": 6,
+            "available_views": ["complex", "real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"],
+            "default_view": "phase_rotated_real",
+            "default_phase_rad": 1e309
+        }"#,
+    )
+    .expect("response point metadata fixture should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/response/field/1/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn frequency_domain_response_field_meta_rejects_missing_component_count_metadata() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let response_dir = artifact_dir.join("response");
+    let frequency_points_dir = response_dir.join("frequency_points");
+    let field_payload_dir = response_dir.join("field_payloads").join("frequency_0001");
+    fs::create_dir_all(&frequency_points_dir).expect("frequency point directory should exist");
+    fs::create_dir_all(&field_payload_dir).expect("field payload directory should exist");
+    fs::write(field_payload_dir.join("vector_xyz.bin"), [])
+        .expect("spatial fallback payload should be written");
+    fs::write(
+        frequency_points_dir.join("frequency_0001.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "frequency_response_point.v1",
+            "frequency_index": 1,
+            "frequency_hz": 2.0e9,
+            "field_payload_path": "response/field_payloads/frequency_0001/vector_xyz.bin",
+            "payload_encoding": "f64_interleaved_real_imag_xyz",
+            "binary_layout": "complex_f64_pairs_little_endian",
+            "value_kind": "complex_spatial_vector",
+            "component_basis": "global_xyz",
+            "components": ["x", "y", "z"],
+            "complex_pair_count": 3,
+            "payload_value_count": 6,
+            "available_views": ["complex", "real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"],
+            "default_view": "phase_rotated_real",
+            "default_phase_rad": 0.0
+        }))
+        .expect("response point metadata fixture should serialize"),
+    )
+    .expect("response point metadata fixture should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/response/field/1/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn frequency_domain_response_field_rejects_missing_complex_pair_count_metadata() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let response_dir = artifact_dir.join("response");
+    let frequency_points_dir = response_dir.join("frequency_points");
+    let field_payload_dir = response_dir.join("field_payloads").join("frequency_0001");
+    fs::create_dir_all(&frequency_points_dir).expect("frequency point directory should exist");
+    fs::create_dir_all(&field_payload_dir).expect("field payload directory should exist");
+    fs::write(field_payload_dir.join("vector_xyz.bin"), [])
+        .expect("spatial fallback payload should be written");
+    fs::write(
+        frequency_points_dir.join("frequency_0001.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "frequency_response_point.v1",
+            "frequency_index": 1,
+            "frequency_hz": 2.0e9,
+            "field_payload_path": "response/field_payloads/frequency_0001/vector_xyz.bin",
+            "payload_encoding": "f64_interleaved_real_imag_xyz",
+            "binary_layout": "complex_f64_pairs_little_endian",
+            "value_kind": "complex_spatial_vector",
+            "component_basis": "global_xyz",
+            "component_count": 3,
+            "components": ["x", "y", "z"],
+            "payload_value_count": 6,
+            "available_views": ["complex", "real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"],
+            "default_view": "phase_rotated_real",
+            "default_phase_rad": 0.0
+        }))
+        .expect("response point metadata fixture should serialize"),
+    )
+    .expect("response point metadata fixture should be written");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/response/field/1/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/data/fields/analysis:frequency-response:frequency-0001/samples/vector?view=phase_rotated_real&phase_rad=0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn frequency_domain_response_field_rejects_missing_payload_value_count_metadata() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let response_dir = artifact_dir.join("response");
+    let frequency_points_dir = response_dir.join("frequency_points");
+    let field_payload_dir = response_dir.join("field_payloads").join("frequency_0001");
+    fs::create_dir_all(&frequency_points_dir).expect("frequency point directory should exist");
+    fs::create_dir_all(&field_payload_dir).expect("field payload directory should exist");
+    fs::write(field_payload_dir.join("vector_xyz.bin"), [])
+        .expect("spatial fallback payload should be written");
+    fs::write(
+        frequency_points_dir.join("frequency_0001.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "frequency_response_point.v1",
+            "frequency_index": 1,
+            "frequency_hz": 2.0e9,
+            "field_payload_path": "response/field_payloads/frequency_0001/vector_xyz.bin",
+            "payload_encoding": "f64_interleaved_real_imag_xyz",
+            "binary_layout": "complex_f64_pairs_little_endian",
+            "value_kind": "complex_spatial_vector",
+            "component_basis": "global_xyz",
+            "component_count": 3,
+            "components": ["x", "y", "z"],
+            "complex_pair_count": 3,
+            "available_views": ["complex", "real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"],
+            "default_view": "phase_rotated_real",
+            "default_phase_rad": 0.0
+        }))
+        .expect("response point metadata fixture should serialize"),
+    )
+    .expect("response point metadata fixture should be written");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/response/field/1/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/data/fields/analysis:frequency-response:frequency-0001/samples/vector?view=phase_rotated_real&phase_rad=0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn frequency_domain_response_field_meta_rejects_incomplete_tangent_metadata() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let response_dir = artifact_dir.join("response");
+    let frequency_points_dir = response_dir.join("frequency_points");
+    let field_payload_dir = response_dir.join("field_payloads").join("frequency_0001");
+    fs::create_dir_all(&frequency_points_dir).expect("frequency point directory should exist");
+    fs::create_dir_all(&field_payload_dir).expect("field payload directory should exist");
+    fs::write(field_payload_dir.join("vector_xyz.bin"), [])
+        .expect("spatial fallback payload should be written");
+    fs::write(
+        frequency_points_dir.join("frequency_0001.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "frequency_response_point.v1",
+            "frequency_index": 1,
+            "frequency_hz": 2.0e9,
+            "field_payload_path": "response/field_payloads/frequency_0001/vector_xyz.bin",
+            "tangent_field_payload_path": "response/field_payloads/frequency_0001/vector_tangent.bin",
+            "payload_encoding": "f64_interleaved_real_imag_xyz",
+            "tangent_payload_encoding": "f64_interleaved_real_imag_tangent",
+            "binary_layout": "complex_f64_pairs_little_endian",
+            "value_kind": "complex_spatial_vector",
+            "component_basis": "global_xyz",
+            "component_count": 3,
+            "components": ["x", "y", "z"],
+            "complex_pair_count": 3,
+            "payload_value_count": 6,
+            "available_views": ["complex", "real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"],
+            "default_view": "phase_rotated_real",
+            "default_phase_rad": 0.0
+        }))
+        .expect("response point metadata fixture should serialize"),
+    )
+    .expect("response point metadata fixture should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/response/field/1/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn frequency_domain_response_data_plane_defaults_to_spatial_xyz_without_point_metadata() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let field_payload_dir = artifact_dir
+        .join("response")
+        .join("field_payloads")
+        .join("frequency_0001");
+    fs::create_dir_all(&field_payload_dir).expect("field payload directory should exist");
+    let mut spatial_payload = Vec::new();
+    for value in [
+        9.0f64, 0.0, 1.0, 0.0, 8.0, 0.0, 2.0, 0.0, 7.0, 0.0, 3.0, 0.0,
+    ] {
+        spatial_payload.extend_from_slice(&value.to_le_bytes());
+    }
+    fs::write(field_payload_dir.join("vector_xyz.bin"), spatial_payload)
+        .expect("spatial fallback payload should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/data/fields/analysis:frequency-response:frequency-0001/samples/vector?view=phase_rotated_real&phase_rad=0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-point-count")
+            .and_then(|value| value.to_str().ok()),
+        Some("2")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-value-count")
+            .and_then(|value| value.to_str().ok()),
+        Some("6")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-n-comp")
+            .and_then(|value| value.to_str().ok()),
+        Some("3")
+    );
+}
+
+#[tokio::test]
+async fn frequency_domain_response_data_plane_rejects_missing_component_count_metadata() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let response_dir = artifact_dir.join("response");
+    let frequency_points_dir = response_dir.join("frequency_points");
+    let field_payload_dir = response_dir.join("field_payloads").join("frequency_0001");
+    fs::create_dir_all(&frequency_points_dir).expect("frequency point directory should exist");
+    fs::create_dir_all(&field_payload_dir).expect("field payload directory should exist");
+    let mut spatial_payload = Vec::new();
+    for value in [9.0f64, 0.0, 1.0, 0.0, 8.0, 0.0] {
+        spatial_payload.extend_from_slice(&value.to_le_bytes());
+    }
+    fs::write(field_payload_dir.join("vector_xyz.bin"), spatial_payload)
+        .expect("spatial fallback payload should be written");
+    fs::write(
+        frequency_points_dir.join("frequency_0001.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "frequency_response_point.v1",
+            "frequency_index": 1,
+            "frequency_hz": 2.0e9,
+            "field_payload_path": "response/field_payloads/frequency_0001/vector_xyz.bin",
+            "payload_encoding": "f64_interleaved_real_imag_xyz",
+            "binary_layout": "complex_f64_pairs_little_endian",
+            "value_kind": "complex_spatial_vector",
+            "component_basis": "global_xyz",
+            "components": ["x", "y", "z"],
+            "complex_pair_count": 3,
+            "payload_value_count": 6,
+            "available_views": ["complex", "real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"],
+            "default_view": "phase_rotated_real",
+            "default_phase_rad": 0.0
+        }))
+        .expect("response point metadata fixture should serialize"),
+    )
+    .expect("response point metadata fixture should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/data/fields/analysis:frequency-response:frequency-0001/samples/vector?view=phase_rotated_real&phase_rad=0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn frequency_domain_response_data_plane_rejects_missing_complex_available_view() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let response_dir = artifact_dir.join("response");
+    let frequency_points_dir = response_dir.join("frequency_points");
+    let field_payload_dir = response_dir.join("field_payloads").join("frequency_0001");
+    fs::create_dir_all(&frequency_points_dir).expect("frequency point directory should exist");
+    fs::create_dir_all(&field_payload_dir).expect("field payload directory should exist");
+    let mut spatial_payload = Vec::new();
+    for value in [9.0f64, 0.0, 1.0, 0.0, 8.0, 0.0] {
+        spatial_payload.extend_from_slice(&value.to_le_bytes());
+    }
+    fs::write(field_payload_dir.join("vector_xyz.bin"), spatial_payload)
+        .expect("spatial fallback payload should be written");
+    fs::write(
+        frequency_points_dir.join("frequency_0001.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "frequency_response_point.v1",
+            "frequency_index": 1,
+            "frequency_hz": 2.0e9,
+            "field_payload_path": "response/field_payloads/frequency_0001/vector_xyz.bin",
+            "payload_encoding": "f64_interleaved_real_imag_xyz",
+            "binary_layout": "complex_f64_pairs_little_endian",
+            "value_kind": "complex_spatial_vector",
+            "component_basis": "global_xyz",
+            "component_count": 3,
+            "components": ["x", "y", "z"],
+            "complex_pair_count": 3,
+            "payload_value_count": 6,
+            "available_views": ["real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"],
+            "default_view": "phase_rotated_real",
+            "default_phase_rad": 0.0
+        }))
+        .expect("response point metadata fixture should serialize"),
+    )
+    .expect("response point metadata fixture should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/data/fields/analysis:frequency-response:frequency-0001/samples/vector?view=phase_rotated_real&phase_rad=0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn frequency_domain_response_data_plane_rejects_non_string_available_view() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let response_dir = artifact_dir.join("response");
+    let frequency_points_dir = response_dir.join("frequency_points");
+    let field_payload_dir = response_dir.join("field_payloads").join("frequency_0001");
+    fs::create_dir_all(&frequency_points_dir).expect("frequency point directory should exist");
+    fs::create_dir_all(&field_payload_dir).expect("field payload directory should exist");
+    let mut spatial_payload = Vec::new();
+    for value in [9.0f64, 0.0, 1.0, 0.0, 8.0, 0.0] {
+        spatial_payload.extend_from_slice(&value.to_le_bytes());
+    }
+    fs::write(field_payload_dir.join("vector_xyz.bin"), spatial_payload)
+        .expect("spatial fallback payload should be written");
+    fs::write(
+        frequency_points_dir.join("frequency_0001.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "frequency_response_point.v1",
+            "frequency_index": 1,
+            "frequency_hz": 2.0e9,
+            "field_payload_path": "response/field_payloads/frequency_0001/vector_xyz.bin",
+            "payload_encoding": "f64_interleaved_real_imag_xyz",
+            "binary_layout": "complex_f64_pairs_little_endian",
+            "value_kind": "complex_spatial_vector",
+            "component_basis": "global_xyz",
+            "component_count": 3,
+            "components": ["x", "y", "z"],
+            "complex_pair_count": 3,
+            "payload_value_count": 6,
+            "available_views": ["complex", "real", "imag", "abs", "amplitude", false, "phase", "phase_rotated_real"],
+            "default_view": "phase_rotated_real",
+            "default_phase_rad": 0.0
+        }))
+        .expect("response point metadata fixture should serialize"),
+    )
+    .expect("response point metadata fixture should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/data/fields/analysis:frequency-response:frequency-0001/samples/vector?view=phase_rotated_real&phase_rad=0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn frequency_domain_response_data_plane_rejects_default_view_outside_available_views() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let response_dir = artifact_dir.join("response");
+    let frequency_points_dir = response_dir.join("frequency_points");
+    let field_payload_dir = response_dir.join("field_payloads").join("frequency_0001");
+    fs::create_dir_all(&frequency_points_dir).expect("frequency point directory should exist");
+    fs::create_dir_all(&field_payload_dir).expect("field payload directory should exist");
+    let mut spatial_payload = Vec::new();
+    for value in [9.0f64, 0.0, 1.0, 0.0, 8.0, 0.0] {
+        spatial_payload.extend_from_slice(&value.to_le_bytes());
+    }
+    fs::write(field_payload_dir.join("vector_xyz.bin"), spatial_payload)
+        .expect("spatial fallback payload should be written");
+    fs::write(
+        frequency_points_dir.join("frequency_0001.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "frequency_response_point.v1",
+            "frequency_index": 1,
+            "frequency_hz": 2.0e9,
+            "field_payload_path": "response/field_payloads/frequency_0001/vector_xyz.bin",
+            "payload_encoding": "f64_interleaved_real_imag_xyz",
+            "binary_layout": "complex_f64_pairs_little_endian",
+            "value_kind": "complex_spatial_vector",
+            "component_basis": "global_xyz",
+            "component_count": 3,
+            "components": ["x", "y", "z"],
+            "complex_pair_count": 3,
+            "payload_value_count": 6,
+            "available_views": ["complex", "real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"],
+            "default_view": "unsupported_default",
+            "default_phase_rad": 0.0
+        }))
+        .expect("response point metadata fixture should serialize"),
+    )
+    .expect("response point metadata fixture should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/data/fields/analysis:frequency-response:frequency-0001/samples/vector?view=phase_rotated_real&phase_rad=0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn frequency_domain_response_data_plane_uses_point_default_view_and_phase() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let response_dir = artifact_dir.join("response");
+    let frequency_points_dir = response_dir.join("frequency_points");
+    let field_payload_dir = response_dir.join("field_payloads").join("frequency_0001");
+    fs::create_dir_all(&frequency_points_dir).expect("frequency point directory should exist");
+    fs::create_dir_all(&field_payload_dir).expect("field payload directory should exist");
+    let mut spatial_payload = Vec::new();
+    for value in [1.0f64, 0.0, 0.0, 1.0, -1.0, 0.0] {
+        spatial_payload.extend_from_slice(&value.to_le_bytes());
+    }
+    fs::write(field_payload_dir.join("vector_xyz.bin"), spatial_payload)
+        .expect("spatial fallback payload should be written");
+    fs::write(
+        frequency_points_dir.join("frequency_0001.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "frequency_response_point.v1",
+            "frequency_index": 1,
+            "frequency_hz": 2.0e9,
+            "field_payload_path": "response/field_payloads/frequency_0001/vector_xyz.bin",
+            "payload_encoding": "f64_interleaved_real_imag_xyz",
+            "binary_layout": "complex_f64_pairs_little_endian",
+            "value_kind": "complex_spatial_vector",
+            "component_basis": "global_xyz",
+            "component_count": 3,
+            "components": ["x", "y", "z"],
+            "complex_pair_count": 3,
+            "payload_value_count": 6,
+            "available_views": ["complex", "real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"],
+            "default_view": "phase_rotated_real",
+            "default_phase_rad": std::f64::consts::FRAC_PI_2
+        }))
+        .expect("response point metadata fixture should serialize"),
+    )
+    .expect("response point metadata fixture should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/data/fields/analysis:frequency-response:frequency-0001/samples/vector")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-n-comp")
+            .and_then(|value| value.to_str().ok()),
+        Some("3")
+    );
+    let body = body_bytes(response).await;
+    let values: Vec<f64> = body[48..]
+        .chunks_exact(8)
+        .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
+        .collect();
+    assert!(values[0].abs() < 1.0e-12);
+    assert!((values[1] + 1.0).abs() < 1.0e-12);
+    assert!(values[2].abs() < 1.0e-12);
+}
+
+#[tokio::test]
+async fn frequency_domain_response_data_plane_accepts_abs_amplitude_available_view_alias() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let response_dir = artifact_dir.join("response");
+    let frequency_points_dir = response_dir.join("frequency_points");
+    let field_payload_dir = response_dir.join("field_payloads").join("frequency_0001");
+    fs::create_dir_all(&frequency_points_dir).expect("frequency point directory should exist");
+    fs::create_dir_all(&field_payload_dir).expect("field payload directory should exist");
+    let mut spatial_payload = Vec::new();
+    for value in [3.0f64, 4.0, 1.0, 0.0, 0.0, -2.0] {
+        spatial_payload.extend_from_slice(&value.to_le_bytes());
+    }
+    fs::write(field_payload_dir.join("vector_xyz.bin"), spatial_payload)
+        .expect("spatial fallback payload should be written");
+    fs::write(
+        frequency_points_dir.join("frequency_0001.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "frequency_response_point.v1",
+            "frequency_index": 1,
+            "frequency_hz": 2.0e9,
+            "field_payload_path": "response/field_payloads/frequency_0001/vector_xyz.bin",
+            "payload_encoding": "f64_interleaved_real_imag_xyz",
+            "binary_layout": "complex_f64_pairs_little_endian",
+            "value_kind": "complex_spatial_vector",
+            "component_basis": "global_xyz",
+            "component_count": 3,
+            "components": ["x", "y", "z"],
+            "complex_pair_count": 3,
+            "payload_value_count": 6,
+            "available_views": ["complex", "real", "imag", "amplitude", "phase", "phase_rotated_real"],
+            "default_view": "phase_rotated_real",
+            "default_phase_rad": 0.0
+        }))
+        .expect("response point metadata fixture should serialize"),
+    )
+    .expect("response point metadata fixture should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/data/fields/analysis:frequency-response:frequency-0001/samples/vector?view=abs")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-n-comp")
+            .and_then(|value| value.to_str().ok()),
+        Some("3")
+    );
+}
+
+#[tokio::test]
+async fn frequency_domain_response_data_plane_rejects_requested_view_outside_available_views() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let response_dir = artifact_dir.join("response");
+    let frequency_points_dir = response_dir.join("frequency_points");
+    let field_payload_dir = response_dir.join("field_payloads").join("frequency_0001");
+    fs::create_dir_all(&frequency_points_dir).expect("frequency point directory should exist");
+    fs::create_dir_all(&field_payload_dir).expect("field payload directory should exist");
+    let mut spatial_payload = Vec::new();
+    for value in [9.0f64, 0.0, 1.0, 0.0, 8.0, 0.0] {
+        spatial_payload.extend_from_slice(&value.to_le_bytes());
+    }
+    fs::write(field_payload_dir.join("vector_xyz.bin"), spatial_payload)
+        .expect("spatial fallback payload should be written");
+    fs::write(
+        frequency_points_dir.join("frequency_0001.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "frequency_response_point.v1",
+            "frequency_index": 1,
+            "frequency_hz": 2.0e9,
+            "field_payload_path": "response/field_payloads/frequency_0001/vector_xyz.bin",
+            "payload_encoding": "f64_interleaved_real_imag_xyz",
+            "binary_layout": "complex_f64_pairs_little_endian",
+            "value_kind": "complex_spatial_vector",
+            "component_basis": "global_xyz",
+            "component_count": 3,
+            "components": ["x", "y", "z"],
+            "complex_pair_count": 3,
+            "payload_value_count": 6,
+            "available_views": ["complex", "real", "imag", "abs", "phase", "phase_rotated_real"],
+            "default_view": "phase_rotated_real",
+            "default_phase_rad": 0.0
+        }))
+        .expect("response point metadata fixture should serialize"),
+    )
+    .expect("response point metadata fixture should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/data/fields/analysis:frequency-response:frequency-0001/samples/vector?view=unsupported_projection")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn frequency_domain_response_data_plane_rejects_payload_value_count_size_mismatch() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let response_dir = artifact_dir.join("response");
+    let frequency_points_dir = response_dir.join("frequency_points");
+    let field_payload_dir = response_dir.join("field_payloads").join("frequency_0001");
+    fs::create_dir_all(&frequency_points_dir).expect("frequency point directory should exist");
+    fs::create_dir_all(&field_payload_dir).expect("field payload directory should exist");
+    let mut spatial_payload = Vec::new();
+    for value in [9.0f64, 0.0, 1.0, 0.0, 8.0, 0.0] {
+        spatial_payload.extend_from_slice(&value.to_le_bytes());
+    }
+    fs::write(field_payload_dir.join("vector_xyz.bin"), spatial_payload)
+        .expect("spatial fallback payload should be written");
+    fs::write(
+        frequency_points_dir.join("frequency_0001.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "frequency_response_point.v1",
+            "frequency_index": 1,
+            "frequency_hz": 2.0e9,
+            "field_payload_path": "response/field_payloads/frequency_0001/vector_xyz.bin",
+            "payload_encoding": "f64_interleaved_real_imag_xyz",
+            "binary_layout": "complex_f64_pairs_little_endian",
+            "value_kind": "complex_spatial_vector",
+            "component_basis": "global_xyz",
+            "component_count": 3,
+            "components": ["x", "y", "z"],
+            "complex_pair_count": 6,
+            "payload_value_count": 12,
+            "available_views": ["complex", "real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"],
+            "default_view": "phase_rotated_real",
+            "default_phase_rad": 0.0
+        }))
+        .expect("response point metadata fixture should serialize"),
+    )
+    .expect("response point metadata fixture should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/data/fields/analysis:frequency-response:frequency-0001/samples/vector?view=phase_rotated_real&phase_rad=0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn frequency_domain_response_data_plane_rejects_complex_pair_count_overflow() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let response_dir = artifact_dir.join("response");
+    let frequency_points_dir = response_dir.join("frequency_points");
+    let field_payload_dir = response_dir.join("field_payloads").join("frequency_0001");
+    fs::create_dir_all(&frequency_points_dir).expect("frequency point directory should exist");
+    fs::create_dir_all(&field_payload_dir).expect("field payload directory should exist");
+    fs::write(field_payload_dir.join("vector_xyz.bin"), [])
+        .expect("spatial fallback payload should be written");
+    fs::write(
+        frequency_points_dir.join("frequency_0001.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "frequency_response_point.v1",
+            "frequency_index": 1,
+            "frequency_hz": 2.0e9,
+            "field_payload_path": "response/field_payloads/frequency_0001/vector_xyz.bin",
+            "payload_encoding": "f64_interleaved_real_imag_xyz",
+            "binary_layout": "complex_f64_pairs_little_endian",
+            "value_kind": "complex_spatial_vector",
+            "component_basis": "global_xyz",
+            "component_count": 3,
+            "components": ["x", "y", "z"],
+            "complex_pair_count": u64::MAX,
+            "payload_value_count": 0,
+            "available_views": ["complex", "real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"],
+            "default_view": "phase_rotated_real",
+            "default_phase_rad": 0.0
+        }))
+        .expect("response point metadata fixture should serialize"),
+    )
+    .expect("response point metadata fixture should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/data/fields/analysis:frequency-response:frequency-0001/samples/vector?view=phase_rotated_real&phase_rad=0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn frequency_domain_response_data_plane_uses_v2_linked_payload_path() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    write_response_sweep_bundle(&artifact_dir, &frequency_domain_response_sweep_fixture(2))
+        .expect("response sweep bundle should be written");
+    let response_dir = artifact_dir.join("response");
+    let linked_payload_dir = response_dir.join("field_payloads").join("linked");
+    fs::create_dir_all(&linked_payload_dir).expect("linked payload directory should be created");
+    let mut linked_payload = Vec::new();
+    for value in [
+        9.0f64, 0.0, 1.0, 0.0, 8.0, 0.0, 2.0, 0.0, 7.0, 0.0, 3.0, 0.0,
+    ] {
+        linked_payload.extend_from_slice(&value.to_le_bytes());
+    }
+    fs::write(
+        linked_payload_dir.join("frequency_0001_xyz.bin"),
+        linked_payload,
+    )
+    .expect("linked payload should be written");
+    fs::write(
+        response_dir
+            .join("frequency_points")
+            .join("frequency_0001.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "frequency_response_point.v1",
+            "frequency_index": 1,
+            "frequency_hz": 2.0e9,
+            "field_payload_path": "response/field_payloads/linked/frequency_0001_xyz.bin",
+            "tangent_field_payload_path": "response/field_payloads/linked/frequency_0001_tangent.bin",
+            "payload_encoding": "f64_interleaved_real_imag_xyz",
+            "tangent_payload_encoding": "f64_interleaved_real_imag_tangent",
+            "binary_layout": "complex_f64_pairs_little_endian",
+            "value_kind": "complex_spatial_vector",
+            "component_basis": "global_xyz",
+            "component_count": 3,
+            "components": ["x", "y", "z"],
+            "complex_pair_count": 6,
+            "payload_value_count": 12,
+            "tangent_value_kind": "complex_tangent_vector",
+            "tangent_component_basis": "local_tangent_frame",
+            "tangent_component_count": 2,
+            "tangent_components": ["tangent_e1", "tangent_e2"],
+            "tangent_complex_pair_count": 4,
+            "tangent_payload_value_count": 8,
+            "available_views": ["complex", "real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"],
+            "default_view": "phase_rotated_real",
+            "default_phase_rad": 0.0
+        }))
+        .expect("response point metadata fixture should serialize"),
+    )
+    .expect("response point metadata fixture should be written");
+    fs::write(
+        response_dir.join("magnetic_response_sweep.v2.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "magnetic_response_sweep.v2",
+            "solve_kind": "direct_harmonic_response",
+            "complete": true,
+            "completed_frequency_point_count": 2,
+            "frequency_point_artifact_paths": [
+                "response/frequency_points/frequency_0000.json",
+                "response/frequency_points/frequency_0001.json"
+            ],
+            "response_field_payload_paths": [
+                "response/field_payloads/frequency_0000/vector.bin",
+                "response/field_payloads/linked/frequency_0001_xyz.bin"
+            ],
+            "points": [
+                {
+                    "frequency_index": 0,
+                    "frequency_point_artifact_path": "response/frequency_points/frequency_0000.json",
+                    "response_field_payload_path": "response/field_payloads/frequency_0000/vector.bin",
+                    "frequency_hz": 1.0e9
+                },
+                {
+                    "frequency_index": 1,
+                    "frequency_point_artifact_path": "response/frequency_points/frequency_0001.json",
+                    "response_field_payload_path": "response/field_payloads/linked/frequency_0001_xyz.bin",
+                    "response_tangent_field_payload_path": "response/field_payloads/linked/frequency_0001_tangent.bin",
+                    "frequency_hz": 2.0e9
+                }
+            ]
+        }))
+        .expect("response v2 fixture should serialize"),
+    )
+    .expect("response v2 fixture should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/data/fields/analysis:frequency-response:frequency-0001/samples/vector?view=phase_rotated_real&phase_rad=0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-point-count")
+            .and_then(|value| value.to_str().ok()),
+        Some("2")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-value-count")
+            .and_then(|value| value.to_str().ok()),
+        Some("6")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-n-comp")
+            .and_then(|value| value.to_str().ok()),
+        Some("3")
+    );
 }
 
 fn frequency_domain_response_sweep_fixture(point_count: usize) -> FieldDrivenResponseSweepArtifact {
@@ -20428,7 +23474,10 @@ fn frequency_domain_response_sweep_fixture(point_count: usize) -> FieldDrivenRes
                         kind: "not_evaluated_dense_validation",
                         l2_norm: None,
                     },
-                    excitation_provenance: ResponseExcitationProvenanceArtifact { kind: "field" },
+                    excitation_provenance: ResponseExcitationProvenanceArtifact {
+                        kind: "field",
+                        phase_rad: 0.0,
+                    },
                     sweep_reuse: BlockRealSweepReuseProvenance {
                         operator_template_reused: true,
                         warm_start: None,

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  formatHysteresisReplayGlyphVector,
   formatHysteresisReplayLabel,
   notifyMeshTopologyRendered,
   resolveViewport3DColorbarLegend,
@@ -92,12 +93,22 @@ describe("formatHysteresisReplayLabel", () => {
         meshIdentity: "study_domain",
         pointId: 4,
         quantityId: "m",
+        resourceRef: null,
         snapshotId: "hysteresis_point_005",
         stageId: "hysteresis-1",
         targetId: "hysteresis-step:hysteresis-1:4",
       }),
     ).toBe("Replay Hysteresis point 4 · hysteresis_point_005");
     expect(formatHysteresisReplayLabel(null)).toBeNull();
+  });
+});
+
+describe("formatHysteresisReplayGlyphVector", () => {
+  it("serializes normalized replay glyph vectors for viewport frame diagnostics", () => {
+    expect(formatHysteresisReplayGlyphVector([0, 0.6, 0.8])).toBe(
+      "0.000000 0.600000 0.800000",
+    );
+    expect(formatHysteresisReplayGlyphVector(null)).toBe("");
   });
 });
 

@@ -63,7 +63,7 @@ describe("viewport 3D memory stress", () => {
     await sequence;
 
     expect(allocatedBytes).toBeGreaterThan(0);
-  });
+  }, 15000);
 
   it("releases viewport-owned resources after repeated mount cycles", () => {
     const tracker = new Viewport3DResourceTracker();

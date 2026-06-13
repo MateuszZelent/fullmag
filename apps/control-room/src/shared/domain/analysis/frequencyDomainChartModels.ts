@@ -75,6 +75,7 @@ export interface EigenSpectrumPoint {
   frequencyHz: number;
   imaginaryFrequencyHz: number | null;
   modeFieldId: string | null;
+  modeFieldResourceKey: string | null;
   rawModeIndex: number;
   residualNorm: number | null;
   sampleIndex: number;
@@ -124,6 +125,19 @@ export interface FrequencyResponsePoint {
   susceptibility: readonly number[] | null;
 }
 
+export interface FmrPeakPoint {
+  amplitude: number | null;
+  absorbedPowerDensity: number | null;
+  fieldId: string | null;
+  frequencyHz: number;
+  frequencyPointIndex: number | null;
+  linewidthHz: number | null;
+  modeRef: { rawModeIndex: number; sampleIndex: number } | null;
+  phaseRad: number | null;
+  source: "driven_response" | "modal";
+  validationStatus: "fail" | "pass" | "unavailable" | "warn";
+}
+
 export interface FrequencyDomainSelectionContext {
   analysisRunId?: string | null;
   analysisStageId?: string | null;
@@ -131,6 +145,12 @@ export interface FrequencyDomainSelectionContext {
   calculationMode?: FrequencyDomainCalculationMode | null;
   nodeId?: string | null;
   resourceRef?: string | null;
+}
+
+export interface FrequencyDomainResponseFieldResource {
+  fieldResourceId: string;
+  frequencyIndex: number;
+  payloadPath?: string;
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -148,6 +168,27 @@ function array(value: unknown): unknown[] {
 function finiteNumber(value: unknown): number | null {
   const parsed = typeof value === "number" ? value : Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function finiteNumberList(value: unknown): number[] {
+  return array(value)
+    .map(finiteNumber)
+    .filter((item): item is number => item != null);
+}
+
+function susceptibilityValues(value: unknown): number[] {
+  const direct = finiteNumberList(value);
+  if (direct.length > 0) return direct;
+  const values: number[] = [];
+  for (const pair of array(value)) {
+    const pairValues = finiteNumberList(pair);
+    if (pairValues.length >= 2) {
+      values.push(Math.hypot(pairValues[0] ?? 0, pairValues[1] ?? 0));
+    } else {
+      values.push(...pairValues);
+    }
+  }
+  return values;
 }
 
 function finiteInteger(value: unknown, fallback = 0): number {
@@ -208,6 +249,31 @@ export function routeFrequencyDomainCalculationMode(
   };
 }
 
+export function responseFieldResourcesFromManifest(
+  manifestPayload: unknown,
+): FrequencyDomainResponseFieldResource[] {
+  const manifest = record(manifestPayload);
+  const resources = record(manifest?.resources);
+  const entries = resources?.response_field_resources;
+  if (!Array.isArray(entries)) return [];
+
+  return entries.flatMap((entry): FrequencyDomainResponseFieldResource[] => {
+    const item = record(entry);
+    const frequencyIndex = finiteNumber(item?.frequency_index);
+    const fieldResourceId = stringValue(item?.field_resource_id);
+    const payloadPath = stringValue(item?.payload_path);
+    if (frequencyIndex == null || !Number.isInteger(frequencyIndex)) return [];
+    if (!fieldResourceId) return [];
+    return [
+      {
+        fieldResourceId,
+        frequencyIndex,
+        ...(payloadPath ? { payloadPath } : {}),
+      },
+    ];
+  });
+}
+
 function artifactStatus(
   resource: Pick<FrequencyDomainJsonArtifactLike, "status"> | null | undefined,
 ): ResourceStatus {
@@ -263,6 +329,9 @@ export function buildEigenSpectrumChartModel(
         item?.imag_frequency_hz ?? item?.imaginary_frequency_hz,
       ),
       modeFieldId: stringValue(item?.mode_field_id ?? item?.modeFieldId),
+      modeFieldResourceKey: stringValue(
+        item?.mode_field_resource_key ?? item?.modeFieldResourceKey,
+      ),
       rawModeIndex: finiteInteger(
         item?.raw_mode_index ?? item?.mode_index ?? item?.modeIndex,
         rowIndex,
@@ -317,7 +386,7 @@ export function buildEigenModeSelectionRef(
     kind: "results.eigen.mode",
     modeIndex: point.rawModeIndex,
     nodeId: context.nodeId ?? frequencyDomainModeNodeId(point),
-    resourceRef: context.resourceRef ?? undefined,
+    resourceRef: context.resourceRef ?? point.modeFieldResourceKey ?? undefined,
     sampleIndex: point.sampleIndex,
     type: "frequency-domain",
   });
@@ -459,9 +528,16 @@ export function buildEigenBranchesModel(
 
 export function buildFrequencyResponseChartModel(
   resource: FrequencyDomainJsonArtifactLike | null | undefined,
+  manifestPayload?: unknown,
 ): FrequencyDomainChartBuildResult<FrequencyResponsePoint> {
   const dataSourceVersion = responseDataSourceVersion(resource);
   const diagnostics: string[] = [];
+  const responseFieldResources = new Map(
+    responseFieldResourcesFromManifest(manifestPayload).map((entry) => [
+      entry.frequencyIndex,
+      entry.fieldResourceId,
+    ]),
+  );
   const rows = responseRows(resource?.payload);
   const points: FrequencyResponsePoint[] = [];
   let droppedPointCount = 0;
@@ -470,16 +546,19 @@ export function buildFrequencyResponseChartModel(
     diagnostics.push("response.v2 artifact is present but contains no readable points");
   }
 
-  rows.forEach((row) => {
+  rows.forEach((row, rowIndex) => {
     const item = record(row);
     const frequencyHz = finiteNumber(item?.frequency_hz ?? item?.frequencyHz);
     if (frequencyHz == null) {
       droppedPointCount += 1;
       return;
     }
-    const susceptibility = array(item?.susceptibility)
-      .map(finiteNumber)
-      .filter((value): value is number => value != null);
+    const frequencyIndex =
+      finiteNumber(item?.frequency_index ?? item?.frequencyIndex) ??
+      (dataSourceVersion === "response.v2" ? rowIndex : null);
+    const susceptibility = susceptibilityValues(
+      item?.susceptibility ?? item?.susceptibility_tensor ?? item?.susceptibilityTensor,
+    );
     points.push({
       absorbedPowerDensity: finiteNumber(
         item?.absorbed_power_density ?? item?.absorbedPowerDensity,
@@ -488,12 +567,15 @@ export function buildFrequencyResponseChartModel(
         item?.amplitude ?? item?.response_amplitude ?? item?.max_response_amplitude,
       ),
       fieldId:
+        (frequencyIndex == null
+          ? null
+          : responseFieldResources.get(frequencyIndex)) ??
         stringValue(item?.field_id ?? item?.fieldId) ??
-        responseFieldIdFromIndex(item?.frequency_index ?? item?.frequencyIndex),
-      frequencyIndex: finiteNumber(item?.frequency_index ?? item?.frequencyIndex),
+        responseFieldIdFromIndex(frequencyIndex),
+      frequencyIndex,
       frequencyHz,
       observableId: stringValue(item?.observable_id ?? item?.observableId) ?? "response",
-      phaseRad: finiteNumber(item?.phase_rad ?? item?.phaseRad),
+      phaseRad: finiteNumber(item?.phase_rad ?? item?.phaseRad ?? item?.response_phase),
       residualNorm: finiteNumber(item?.residual_norm ?? item?.relative_residual_norm),
       susceptibility: susceptibility.length ? susceptibility : null,
     });
@@ -516,6 +598,14 @@ export function buildFrequencyResponseChartModel(
         "Absorbed power density",
         "W/m^3",
         (point) => point.absorbedPowerDensity,
+      ),
+      responseSeries(
+        points,
+        resource,
+        "susceptibility-max-abs",
+        "Max |susceptibility|",
+        "a.u.",
+        (point) => maxAbsSusceptibility(point.susceptibility),
       ),
     ].filter((series) => series.points.length > 0),
   };
@@ -540,12 +630,102 @@ export function buildFrequencyResponsePointSelectionRef(
   });
 }
 
+export function buildFmrPeakTableModel({
+  responseSweep,
+  spectrum,
+}: {
+  responseSweep?: FrequencyDomainJsonArtifactLike | null;
+  spectrum?: FrequencyDomainJsonArtifactLike | null;
+}): {
+  diagnostics: string[];
+  peaks: FmrPeakPoint[];
+} {
+  const diagnostics: string[] = [];
+  const modal = buildEigenSpectrumChartModel(spectrum);
+  const response = buildFrequencyResponseChartModel(responseSweep);
+  const peaks: FmrPeakPoint[] = [
+    ...modal.points.map((point) => ({
+      absorbedPowerDensity: null,
+      amplitude: null,
+      fieldId: point.modeFieldId,
+      frequencyHz: point.frequencyHz,
+      frequencyPointIndex: null,
+      linewidthHz: null,
+      modeRef: {
+        rawModeIndex: point.rawModeIndex,
+        sampleIndex: point.sampleIndex,
+      },
+      phaseRad: null,
+      source: "modal" as const,
+      validationStatus: "unavailable" as const,
+    })),
+    ...localResponsePeaks(response.points).map((point) => ({
+      absorbedPowerDensity: point.absorbedPowerDensity,
+      amplitude: point.amplitude,
+      fieldId: point.fieldId,
+      frequencyHz: point.frequencyHz,
+      frequencyPointIndex: point.frequencyIndex,
+      linewidthHz: null,
+      modeRef: null,
+      phaseRad: point.phaseRad,
+      source: "driven_response" as const,
+      validationStatus: "unavailable" as const,
+    })),
+  ].sort((left, right) => left.frequencyHz - right.frequencyHz);
+
+  if (modal.droppedPointCount > 0) {
+    diagnostics.push(`${modal.droppedPointCount} modal point(s) dropped`);
+  }
+  if (response.droppedPointCount > 0) {
+    diagnostics.push(`${response.droppedPointCount} response point(s) dropped`);
+  }
+  diagnostics.push(...modal.diagnostics, ...response.diagnostics);
+
+  return { diagnostics, peaks };
+}
+
 function cleanFrequencyDomainSelectionRef(
   ref: Extract<SelectionRef, { type: "frequency-domain" }>,
 ): SelectionRef {
   return Object.fromEntries(
     Object.entries(ref).filter(([, value]) => value !== undefined),
   ) as SelectionRef;
+}
+
+function localResponsePeaks(
+  points: readonly FrequencyResponsePoint[],
+): FrequencyResponsePoint[] {
+  const byObservable = new Map<string, FrequencyResponsePoint[]>();
+  for (const point of points) {
+    if (point.amplitude == null && point.absorbedPowerDensity == null) continue;
+    const existing = byObservable.get(point.observableId) ?? [];
+    existing.push(point);
+    byObservable.set(point.observableId, existing);
+  }
+
+  const peaks: FrequencyResponsePoint[] = [];
+  for (const observablePoints of byObservable.values()) {
+    const sorted = [...observablePoints].sort(
+      (left, right) => left.frequencyHz - right.frequencyHz,
+    );
+    if (sorted.length === 1) {
+      peaks.push(sorted[0]!);
+      continue;
+    }
+    sorted.forEach((point, index) => {
+      const value = peakMetric(point);
+      const previous = sorted[index - 1] ? peakMetric(sorted[index - 1]!) : -Infinity;
+      const next = sorted[index + 1] ? peakMetric(sorted[index + 1]!) : -Infinity;
+      if (value >= previous && value >= next) {
+        peaks.push(point);
+      }
+    });
+  }
+  return peaks;
+}
+
+function peakMetric(point: FrequencyResponsePoint): number {
+  return point.amplitude ?? point.absorbedPowerDensity ?? -Infinity;
 }
 
 function frequencyDomainModeNodeId(point: EigenSpectrumPoint): string {
@@ -626,7 +806,9 @@ function parseDispersionCsv(csv: string): {
     const columns = line.split(",").map((item) => item.trim());
     const row = Object.fromEntries(headers.map((header, index) => [header, columns[index]]));
     const frequencyHz = finiteNumber(row.frequency_hz ?? row.frequencyHz);
-    const pathS = finiteNumber(row.path_s ?? row.pathS ?? row.k_path_s);
+    const pathS = finiteNumber(
+      row.path_s_rad_per_m ?? row.path_s ?? row.pathS ?? row.k_path_s,
+    );
     if (frequencyHz == null || pathS == null) {
       droppedPointCount += 1;
       continue;
@@ -670,4 +852,15 @@ function responseSeries(
     unit,
     xUnit: "GHz",
   };
+}
+
+function maxAbsSusceptibility(values: readonly number[] | null): number | null {
+  if (!values || values.length === 0) return null;
+  let maxValue: number | null = null;
+  for (const value of values) {
+    const absValue = Math.abs(value);
+    if (!Number.isFinite(absValue)) continue;
+    maxValue = maxValue == null ? absValue : Math.max(maxValue, absValue);
+  }
+  return maxValue;
 }

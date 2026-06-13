@@ -11462,6 +11462,49 @@ def test_relaxation_consistency_smoke_passes_benchmark_env_into_container():
     assert "--relax-algorithms \"${FULLMAG_BENCH_RELAX_ALGORITHMS:-llg_overdamped,projected_gradient_bb,nonlinear_cg,tangent_plane_implicit}\"" not in justfile_text
 
 
+def test_frequency_domain_eigen_runtime_recipe_runs_modal_artifact_verifier():
+    justfile_text = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
+    recipe = just_recipe_block(
+        justfile_text,
+        "verify-fem-frequency-domain-eigen-runtime",
+    )
+
+    assert "just ensure-managed-fem-runtime" in recipe
+    assert "examples/fem_eigenmodes.py" in recipe
+    assert "eigen/spectrum.v2.json" in recipe
+    assert "eigen/branches.v2.json" in recipe
+    assert "eigen/dispersion.csv" in recipe
+    assert "eigen/modes/sample_0000/mode_0000.json" in recipe
+    assert "eigen/mode_fields/sample_0000/mode_0000/vector.bin" in recipe
+    assert "frequency_domain/manifest.v1.json" in recipe
+    assert "scripts/verify_fem_frequency_domain_eigen_artifacts.py" in recipe
+
+
+def test_frequency_domain_runtime_suite_runs_response_static_periodic_and_eigen_gates():
+    justfile_text = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
+    recipe = just_recipe_block(
+        justfile_text,
+        "verify-fem-frequency-domain-runtime-suite",
+    )
+
+    assert "just verify-fem-frequency-domain-runtime" in recipe
+    assert "just verify-fem-frequency-domain-static-periodic-runtime" in recipe
+    assert "just verify-fem-frequency-domain-eigen-runtime" in recipe
+
+
+def test_frequency_domain_gpu_recipe_uses_native_contract_until_gpu_solver_lands():
+    justfile_text = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
+    recipe = just_recipe_block(justfile_text, "verify-fem-frequency-domain-gpu")
+    native_contract = (
+        REPO_ROOT / "backends/fem/tests/frequency_domain/frequency_domain_contract.cpp"
+    ).read_text(encoding="utf-8")
+
+    assert "just verify-fem-frequency-domain-native-contract" in recipe
+    assert "production_gpu" in native_contract
+    assert '\\"validation_fallback_used\\":false' in native_contract
+    assert "production GPU lane reports unavailable" in native_contract
+
+
 def test_fem_gpu_demag_performance_benchmark_is_a_larger_mesh_demag_gate():
     justfile_text = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
     demag_recipe = just_recipe_block(

@@ -21,7 +21,7 @@ pub(crate) fn select_state_observable_field(
                         "snapshot '{}': unsupported component '{}' (use x, y, or z)",
                         name, component
                     ),
-                })
+                });
             }
         };
         return Ok(full.iter().map(|value| [value[idx], 0.0, 0.0]).collect());

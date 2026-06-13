@@ -3,7 +3,11 @@ import type { AnalysisTableState } from "@/kernel/workspace/analysisPlotsWorkspa
 
 import { DEFAULT_TABLE_CHART_COLUMNS } from "./chartTableModel";
 
-export const ANALYSIS_SCALAR_COLUMNS = DEFAULT_TABLE_CHART_COLUMNS;
+export const ANALYSIS_SCALAR_COLUMNS = Object.freeze([
+  ...DEFAULT_TABLE_CHART_COLUMNS,
+  "pseudo_time_s",
+  "active_runtime_s",
+] as const);
 
 const MAX_VISIBLE_TABLE_ROWS = 5_000;
 

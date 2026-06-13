@@ -204,6 +204,9 @@ typedef struct {
     const double *alpha_field;        uint64_t alpha_field_len;
     const double *ku_field;           uint64_t ku_field_len;
     const double *ku2_field;          uint64_t ku2_field_len;
+    const double *anisotropy_axis_x_field; uint64_t anisotropy_axis_x_field_len;
+    const double *anisotropy_axis_y_field; uint64_t anisotropy_axis_y_field_len;
+    const double *anisotropy_axis_z_field; uint64_t anisotropy_axis_z_field_len;
     const double *dind_field;         uint64_t dind_field_len;
     const double *dbulk_field;        uint64_t dbulk_field_len;
     const double *kc1_field;          uint64_t kc1_field_len;
@@ -371,20 +374,36 @@ typedef enum {
     FULLMAG_FEM_FREQUENCY_DOMAIN_STUDY_EIGENMODES = 2,
 } fullmag_fem_frequency_domain_study_kind;
 
+typedef enum {
+    FULLMAG_FEM_FREQUENCY_DOMAIN_EXECUTION_VALIDATION = 0,
+    FULLMAG_FEM_FREQUENCY_DOMAIN_EXECUTION_PRODUCTION_CPU = 1,
+    FULLMAG_FEM_FREQUENCY_DOMAIN_EXECUTION_PRODUCTION_GPU = 2,
+} fullmag_fem_frequency_domain_execution_lane;
+
+typedef enum {
+    FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_I_OMEGA_T = 0,
+    FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_MINUS_I_OMEGA_T = 1,
+} fullmag_fem_frequency_domain_phase_convention;
+
 typedef struct {
     fullmag_fem_frequency_domain_study_kind study_kind;
     int requires_driven_solver;
     int requires_modal_solver;
+    int requires_static_periodic_boundary;
     int requires_floquet_boundary;
     int requires_nonzero_k_dynamic_demag;
     int requires_gpu;
     int strict_device;
+    int has_floquet_k_vector;
+    double floquet_k_vector_rad_per_m[3];
+    fullmag_fem_frequency_domain_phase_convention phase_convention;
 } fullmag_fem_frequency_domain_availability_request;
 
 typedef struct {
     fullmag_fem_frequency_domain_status status;
     int driven_response_available;
     int modal_solver_available;
+    int static_periodic_response_available;
     int floquet_modal_available;
     int floquet_response_available;
     int dynamic_demag_k_available;
@@ -406,10 +425,58 @@ typedef struct {
 } fullmag_fem_frequency_domain_sweep_progress;
 
 typedef struct {
+    uint64_t frequency_index;
+    uint64_t completed_frequency_count;
+    uint64_t total_frequency_count;
+    uint64_t iteration_count;
+    double frequency_hz;
+    double residual_l2_norm;
+    double relative_residual_l2_norm;
+    int converged;
+} fullmag_fem_frequency_domain_progress;
+
+typedef struct {
+    uint64_t node_i;
+    uint64_t node_j;
+    double stiffness;
+} fullmag_fem_frequency_domain_exchange_edge;
+
+typedef struct {
+    uint64_t node_a;
+    uint64_t node_b;
+} fullmag_fem_frequency_domain_periodic_node_pair;
+
+typedef struct {
+    const char *pair_id;
+    uint64_t node_a;
+    uint64_t node_b;
+    int has_translation;
+    double translation_m[3];
+    int has_phase;
+    double phase_rad;
+} fullmag_fem_frequency_domain_floquet_periodic_pair;
+
+typedef enum {
+    FULLMAG_FEM_FREQUENCY_DOMAIN_DMI_INTERFACIAL = 0,
+    FULLMAG_FEM_FREQUENCY_DOMAIN_DMI_BULK = 1,
+} fullmag_fem_frequency_domain_dmi_kind;
+
+typedef struct {
+    fullmag_fem_frequency_domain_dmi_kind kind;
+    uint32_t node_indices[4];
+    double shape[4];
+    double grad_shape[12]; /* flat [local_node][xyz] */
+    double weight;
+    double d;
+    double normal[3];
+} fullmag_fem_frequency_domain_dmi_element;
+
+typedef struct {
     uint64_t node_count;
     uint64_t tangent_dof_count;
     double alpha;
     double gamma0;
+    fullmag_fem_frequency_domain_execution_lane requested_execution_lane;
     const double *frequencies_hz;
     uint64_t frequency_count;
     const char *output_directory;
@@ -417,6 +484,8 @@ typedef struct {
     int write_partial_artifacts;
     int (*cancel_requested)(void *user_data);
     void *cancel_user_data;
+    void (*progress_callback)(void *user_data, const fullmag_fem_frequency_domain_progress *progress);
+    void *progress_user_data;
     int tiny_validation_enabled;
     uint64_t tiny_validation_tangent_dof_count;
     const double *tiny_validation_stiffness_matrix_row_major;
@@ -424,6 +493,30 @@ typedef struct {
     const double *tiny_validation_stiffness_diagonal;
     const double *tiny_validation_mass_diagonal;
     const double *tiny_validation_drive_real;
+    int mfem_operator_enabled;
+    int mfem_include_zeeman;
+    const double *mfem_equilibrium_m;
+    const double *mfem_h_ext_a_per_m;
+    const double *mfem_uniaxial_anisotropy_axis;
+    double mfem_uniaxial_anisotropy_field_a_per_m;
+    const double *mfem_alpha_per_node;
+    const double *mfem_drive_real;
+    const fullmag_fem_frequency_domain_exchange_edge *mfem_exchange_edges;
+    uint64_t mfem_exchange_edge_count;
+    const fullmag_fem_frequency_domain_dmi_element *mfem_dmi_elements;
+    uint64_t mfem_dmi_element_count;
+    const double *mfem_dmi_lumped_mass;
+    const double *mfem_dmi_ms_field;
+    double mfem_dmi_uniform_ms;
+    const double *tiny_validation_drive_imag;
+    const double *mfem_drive_imag;
+    const fullmag_fem_frequency_domain_periodic_node_pair *mfem_static_periodic_node_pairs;
+    uint64_t mfem_static_periodic_node_pair_count;
+    int has_floquet_k_vector;
+    double floquet_k_vector_rad_per_m[3];
+    fullmag_fem_frequency_domain_phase_convention phase_convention;
+    const fullmag_fem_frequency_domain_floquet_periodic_pair *mfem_floquet_periodic_pairs;
+    uint64_t mfem_floquet_periodic_pair_count;
 } fullmag_fem_frequency_domain_driven_response_request;
 
 typedef struct {
@@ -436,6 +529,33 @@ typedef struct {
     char *result_json;
     char *artifact_manifest_path;
 } fullmag_fem_frequency_domain_solve_result;
+
+typedef struct {
+    uint64_t availability_request_size;
+    uint64_t availability_request_phase_convention_offset;
+    uint64_t availability_info_size;
+    uint64_t availability_info_diagnostics_json_offset;
+    uint64_t sweep_progress_size;
+    uint64_t sweep_progress_progress_json_offset;
+    uint64_t progress_size;
+    uint64_t progress_converged_offset;
+    uint64_t exchange_edge_size;
+    uint64_t exchange_edge_stiffness_offset;
+    uint64_t periodic_node_pair_size;
+    uint64_t periodic_node_pair_node_b_offset;
+    uint64_t floquet_periodic_pair_size;
+    uint64_t floquet_periodic_pair_phase_rad_offset;
+    uint64_t dmi_element_size;
+    uint64_t dmi_element_normal_offset;
+    uint64_t driven_response_request_size;
+    uint64_t driven_response_request_requested_execution_lane_offset;
+    uint64_t driven_response_request_progress_callback_offset;
+    uint64_t driven_response_request_tiny_validation_drive_imag_offset;
+    uint64_t driven_response_request_phase_convention_offset;
+    uint64_t driven_response_request_mfem_floquet_periodic_pair_count_offset;
+    uint64_t solve_result_size;
+    uint64_t solve_result_artifact_manifest_path_offset;
+} fullmag_fem_frequency_domain_abi_layout;
 
 typedef struct {
     uint64_t h2d_bytes;
@@ -503,6 +623,9 @@ int fullmag_fem_get_availability_info(fullmag_fem_availability_info *out_info);
 int fullmag_fem_get_frequency_domain_availability_info(
     const fullmag_fem_frequency_domain_availability_request *request,
     fullmag_fem_frequency_domain_availability_info *out_info
+);
+int fullmag_fem_get_frequency_domain_abi_layout(
+    fullmag_fem_frequency_domain_abi_layout *out_layout
 );
 int fullmag_fem_frequency_domain_initial_sweep_progress(
     uint64_t total_frequency_points,

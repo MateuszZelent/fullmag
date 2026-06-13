@@ -16,6 +16,7 @@ use super::field_resolution::{
     flatten_json_field_values, json_field_grid, live_magnetization_available,
     live_magnetization_values,
 };
+use crate::artifacts::{read_json_artifact_value, try_resolve_artifact_path};
 use crate::error::ApiError;
 use crate::fem_slice::{fem_tetra_linear_slice, fem_tetra_slab_slice, SlabAggregation};
 use crate::fem_slice_overlay::{
@@ -42,6 +43,7 @@ use crate::preview::{quantity_spatial_domain, quantity_unit};
 use crate::quantity_data_plane::{
     projection_empty_mask_cache_key, scalar_projection_cache_key, slice_cache_key,
 };
+use crate::router_v2::handlers::analysis::hysteresis::read_hysteresis_points_if_available;
 use crate::router_v2::handlers::sessions::status::{
     domain_generation_id, field_catalog_revision as current_field_catalog_revision,
     field_quantity_revision,
@@ -70,6 +72,14 @@ const HYSTERESIS_ZARR_M_FIELD: &str = "fields/m";
 
 #[derive(Debug)]
 struct HysteresisZarrSampleRef {
+    sample_index: Option<String>,
+    point_id: Option<String>,
+    field_value_m_t: Option<String>,
+    quantity_id: Option<String>,
+    branch_id: Option<String>,
+    protocol_role: Option<String>,
+    mesh_identity: Option<String>,
+    field_revision: Option<String>,
     chunk_key: String,
     cell_count: usize,
     grid: [u32; 3],
@@ -133,6 +143,31 @@ fn persisted_hysteresis_magnetization_values(
     Ok((values, grid))
 }
 
+async fn validate_hysteresis_snapshot_stage_scope(
+    state: &Arc<AppState>,
+    stage_id: Option<&str>,
+    snapshot_id: &str,
+) -> Result<(), ApiError> {
+    let Some(stage_id) = stage_id.map(str::trim).filter(|id| !id.is_empty()) else {
+        return Ok(());
+    };
+    if stage_id.contains('/') || stage_id.contains('\\') || stage_id == "." || stage_id == ".." {
+        return Err(ApiError::bad_request(
+            "stage_id must be a single path segment",
+        ));
+    }
+    let points = read_hysteresis_points_if_available(state, stage_id).await?;
+    if points
+        .iter()
+        .any(|point| point.snapshot_id.as_deref() == Some(snapshot_id))
+    {
+        return Ok(());
+    }
+    Err(ApiError::not_found(format!(
+        "hysteresis snapshot '{snapshot_id}' is not registered for stage '{stage_id}'"
+    )))
+}
+
 fn validate_persisted_hysteresis_snapshot_domain(
     snapshot: &SessionStateResponse,
     snapshot_id: &str,
@@ -173,6 +208,11 @@ fn persisted_hysteresis_zarr_magnetization_values(
     else {
         return Ok(None);
     };
+    validate_hysteresis_zarr_root_point_index(
+        &artifact_dir.join(HYSTERESIS_ZARR_STORE).join("points.csv"),
+        snapshot_id,
+        &sample_ref,
+    )?;
     let chunk_path = field_dir.join(&sample_ref.chunk_key);
     let mut raw = Vec::new();
     std::fs::File::open(&chunk_path)
@@ -226,7 +266,47 @@ fn find_hysteresis_zarr_sample(
             error
         ))
     })?;
-    for line in BufReader::new(file).lines().skip(1) {
+    let mut lines = BufReader::new(file).lines();
+    let Some(header_line) = lines.next().transpose().map_err(|error| {
+        ApiError::internal(format!(
+            "failed to read hysteresis Zarr sample index '{}': {}",
+            samples_path.display(),
+            error
+        ))
+    })?
+    else {
+        return Ok(None);
+    };
+    let headers: Vec<&str> = header_line.split(',').collect();
+    let column_index = |name: &str| {
+        headers
+            .iter()
+            .position(|header| header.trim() == name)
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "hysteresis Zarr sample index '{}' is missing '{}' column",
+                    samples_path.display(),
+                    name
+                ))
+            })
+    };
+    let snapshot_col = column_index("snapshot_id")?;
+    let chunk_col = column_index("chunk_key")?;
+    let cell_count_col = column_index("cell_count")?;
+    let grid_x_col = column_index("grid_x")?;
+    let grid_y_col = column_index("grid_y")?;
+    let grid_z_col = column_index("grid_z")?;
+    let optional_column = |name: &str| headers.iter().position(|header| header.trim() == name);
+    let sample_index_col = optional_column("sample_index").or_else(|| optional_column("sample"));
+    let point_id_col = optional_column("point_id");
+    let field_value_col = optional_column("field_value_mT");
+    let quantity_col = optional_column("quantity_id");
+    let branch_col = optional_column("branch_id");
+    let protocol_role_col = optional_column("protocol_role");
+    let mesh_identity_col = optional_column("mesh_identity");
+    let field_revision_col = optional_column("field_revision");
+
+    for line in lines {
         let line = line.map_err(|error| {
             ApiError::internal(format!(
                 "failed to read hysteresis Zarr sample index '{}': {}",
@@ -235,38 +315,217 @@ fn find_hysteresis_zarr_sample(
             ))
         })?;
         let columns: Vec<&str> = line.split(',').collect();
-        if columns.len() < 12 || columns[1] != snapshot_id {
+        if columns
+            .get(snapshot_col)
+            .is_none_or(|candidate| *candidate != snapshot_id)
+        {
             continue;
         }
-        let cell_count = columns[8].parse::<usize>().map_err(|error| {
-            ApiError::internal(format!(
-                "invalid hysteresis Zarr cell_count for snapshot '{snapshot_id}': {error}"
-            ))
-        })?;
+        let parse_column = |index: usize, name: &str| -> Result<&str, ApiError> {
+            columns.get(index).copied().ok_or_else(|| {
+                ApiError::internal(format!(
+                    "hysteresis Zarr sample row for snapshot '{snapshot_id}' is missing '{}' column",
+                    name
+                ))
+            })
+        };
+        let cell_count = parse_column(cell_count_col, "cell_count")?
+            .parse::<usize>()
+            .map_err(|error| {
+                ApiError::internal(format!(
+                    "invalid hysteresis Zarr cell_count for snapshot '{snapshot_id}': {error}"
+                ))
+            })?;
         let grid = [
-            columns[9].parse::<u32>().map_err(|error| {
-                ApiError::internal(format!(
-                    "invalid hysteresis Zarr grid_x for snapshot '{snapshot_id}': {error}"
-                ))
-            })?,
-            columns[10].parse::<u32>().map_err(|error| {
-                ApiError::internal(format!(
-                    "invalid hysteresis Zarr grid_y for snapshot '{snapshot_id}': {error}"
-                ))
-            })?,
-            columns[11].parse::<u32>().map_err(|error| {
-                ApiError::internal(format!(
-                    "invalid hysteresis Zarr grid_z for snapshot '{snapshot_id}': {error}"
-                ))
-            })?,
+            parse_column(grid_x_col, "grid_x")?
+                .parse::<u32>()
+                .map_err(|error| {
+                    ApiError::internal(format!(
+                        "invalid hysteresis Zarr grid_x for snapshot '{snapshot_id}': {error}"
+                    ))
+                })?,
+            parse_column(grid_y_col, "grid_y")?
+                .parse::<u32>()
+                .map_err(|error| {
+                    ApiError::internal(format!(
+                        "invalid hysteresis Zarr grid_y for snapshot '{snapshot_id}': {error}"
+                    ))
+                })?,
+            parse_column(grid_z_col, "grid_z")?
+                .parse::<u32>()
+                .map_err(|error| {
+                    ApiError::internal(format!(
+                        "invalid hysteresis Zarr grid_z for snapshot '{snapshot_id}': {error}"
+                    ))
+                })?,
         ];
+        let optional_value =
+            |index: Option<usize>| index.and_then(|column| columns.get(column).copied());
         return Ok(Some(HysteresisZarrSampleRef {
-            chunk_key: columns[5].to_string(),
+            sample_index: optional_value(sample_index_col).map(str::to_string),
+            point_id: optional_value(point_id_col).map(str::to_string),
+            field_value_m_t: optional_value(field_value_col).map(str::to_string),
+            quantity_id: optional_value(quantity_col).map(str::to_string),
+            branch_id: optional_value(branch_col).map(str::to_string),
+            protocol_role: optional_value(protocol_role_col).map(str::to_string),
+            mesh_identity: optional_value(mesh_identity_col).map(str::to_string),
+            field_revision: optional_value(field_revision_col).map(str::to_string),
+            chunk_key: parse_column(chunk_col, "chunk_key")?.to_string(),
             cell_count,
             grid,
         }));
     }
     Ok(None)
+}
+
+fn validate_hysteresis_zarr_root_point_index(
+    points_path: &std::path::Path,
+    snapshot_id: &str,
+    sample_ref: &HysteresisZarrSampleRef,
+) -> Result<(), ApiError> {
+    let file = std::fs::File::open(points_path).map_err(|error| {
+        ApiError::internal(format!(
+            "failed to open hysteresis Zarr root point index '{}': {}",
+            points_path.display(),
+            error
+        ))
+    })?;
+    let mut lines = BufReader::new(file).lines();
+    let Some(header_line) = lines.next().transpose().map_err(|error| {
+        ApiError::internal(format!(
+            "failed to read hysteresis Zarr root point index '{}': {}",
+            points_path.display(),
+            error
+        ))
+    })?
+    else {
+        return Err(ApiError::internal(format!(
+            "hysteresis Zarr root point index '{}' is empty",
+            points_path.display()
+        )));
+    };
+    let headers: Vec<&str> = header_line.split(',').collect();
+    let column_index = |name: &str| {
+        headers
+            .iter()
+            .position(|header| header.trim() == name)
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "hysteresis Zarr root point index '{}' is missing '{}' column",
+                    points_path.display(),
+                    name
+                ))
+            })
+    };
+    let snapshot_col = column_index("snapshot_id")?;
+    let chunk_col = column_index("chunk_key")?;
+    let cell_count_col = column_index("cell_count")?;
+    let grid_x_col = column_index("grid_x")?;
+    let grid_y_col = column_index("grid_y")?;
+    let grid_z_col = column_index("grid_z")?;
+    let optional_column = |name: &str| headers.iter().position(|header| header.trim() == name);
+    let sample_index_col = optional_column("sample_index").or_else(|| optional_column("sample"));
+    let point_id_col = optional_column("point_id");
+    let field_value_col = optional_column("field_value_mT");
+    let quantity_col = optional_column("quantity_id");
+    let branch_col = optional_column("branch_id");
+    let protocol_role_col = optional_column("protocol_role");
+    let mesh_identity_col = optional_column("mesh_identity");
+    let field_revision_col = optional_column("field_revision");
+
+    for line in lines {
+        let line = line.map_err(|error| {
+            ApiError::internal(format!(
+                "failed to read hysteresis Zarr root point index '{}': {}",
+                points_path.display(),
+                error
+            ))
+        })?;
+        let columns: Vec<&str> = line.split(',').collect();
+        if columns
+            .get(snapshot_col)
+            .is_none_or(|candidate| *candidate != snapshot_id)
+        {
+            continue;
+        }
+        let parse_column = |index: usize, name: &str| -> Result<&str, ApiError> {
+            columns.get(index).copied().ok_or_else(|| {
+                ApiError::internal(format!(
+                    "hysteresis Zarr root point row for snapshot '{snapshot_id}' is missing '{}' column",
+                    name
+                ))
+            })
+        };
+        let require_optional_match = |column: Option<usize>,
+                                      expected: &Option<String>,
+                                      name: &str|
+         -> Result<(), ApiError> {
+            if let (Some(column), Some(expected)) = (column, expected) {
+                let actual = parse_column(column, name)?;
+                if actual != expected {
+                    return Err(ApiError::internal(format!(
+                            "hysteresis Zarr root point index {name} mismatch for snapshot '{snapshot_id}': got {actual:?}, expected {expected:?}"
+                        )));
+                }
+            }
+            Ok(())
+        };
+        require_optional_match(sample_index_col, &sample_ref.sample_index, "sample_index")?;
+        require_optional_match(point_id_col, &sample_ref.point_id, "point_id")?;
+        require_optional_match(
+            field_value_col,
+            &sample_ref.field_value_m_t,
+            "field_value_mT",
+        )?;
+        require_optional_match(quantity_col, &sample_ref.quantity_id, "quantity_id")?;
+        require_optional_match(branch_col, &sample_ref.branch_id, "branch_id")?;
+        require_optional_match(
+            protocol_role_col,
+            &sample_ref.protocol_role,
+            "protocol_role",
+        )?;
+        require_optional_match(
+            mesh_identity_col,
+            &sample_ref.mesh_identity,
+            "mesh_identity",
+        )?;
+        require_optional_match(
+            field_revision_col,
+            &sample_ref.field_revision,
+            "field_revision",
+        )?;
+        let expected_chunk_key = format!("{HYSTERESIS_ZARR_M_FIELD}/{}", sample_ref.chunk_key);
+        let actual_chunk_key = parse_column(chunk_col, "chunk_key")?;
+        if actual_chunk_key != expected_chunk_key {
+            return Err(ApiError::internal(format!(
+                "hysteresis Zarr root point index chunk_key mismatch for snapshot '{snapshot_id}': got {actual_chunk_key:?}, expected {expected_chunk_key:?}"
+            )));
+        }
+        let parse_usize = |index: usize, name: &str| -> Result<usize, ApiError> {
+            parse_column(index, name)?.parse::<usize>().map_err(|error| {
+                ApiError::internal(format!(
+                    "invalid hysteresis Zarr root point index {name} for snapshot '{snapshot_id}': {error}"
+                ))
+            })
+        };
+        let cell_count = parse_usize(cell_count_col, "cell_count")?;
+        let grid = [
+            parse_usize(grid_x_col, "grid_x")? as u32,
+            parse_usize(grid_y_col, "grid_y")? as u32,
+            parse_usize(grid_z_col, "grid_z")? as u32,
+        ];
+        if cell_count != sample_ref.cell_count || grid != sample_ref.grid {
+            return Err(ApiError::internal(format!(
+                "hysteresis Zarr root point index grid/cell mismatch for snapshot '{snapshot_id}'"
+            )));
+        }
+        return Ok(());
+    }
+    Err(ApiError::internal(format!(
+        "hysteresis Zarr root point index '{}' has no row for snapshot '{}'",
+        points_path.display(),
+        snapshot_id
+    )))
 }
 
 fn insert_field_headers(
@@ -493,6 +752,8 @@ pub async fn get_field_meta(
                 "persisted hysteresis snapshot '{snapshot_id}' is only available for magnetization"
             )));
         }
+        validate_hysteresis_snapshot_stage_scope(&state, query.stage_id.as_deref(), snapshot_id)
+            .await?;
         let (values, _) = persisted_hysteresis_magnetization_values(snapshot, snapshot_id)?;
         return Ok(Json(FieldMeta {
             quantity_id: quantity_id.to_string(),
@@ -589,6 +850,8 @@ pub struct FieldMetaQuery {
     /// Optional persisted analysis snapshot id, for example a saved
     /// hysteresis-point magnetization state.
     pub snapshot_id: Option<String>,
+    /// Optional hysteresis stage id that owns `snapshot_id`.
+    pub stage_id: Option<String>,
 }
 
 fn projected_field_stats(
@@ -1105,24 +1368,27 @@ pub async fn get_field_vector(
             None
         }
     };
-    let raw_values_opt: Option<(Vec<f64>, [u32; 3])> =
-        if let Some(snapshot_id) = requested_snapshot_id {
-            if quantity_id != "m" {
-                return Err(ApiError::bad_request(format!(
+    let raw_values_opt: Option<(Vec<f64>, [u32; 3])> = if let Some(snapshot_id) =
+        requested_snapshot_id
+    {
+        if quantity_id != "m" {
+            return Err(ApiError::bad_request(format!(
                 "persisted hysteresis snapshot '{snapshot_id}' is only available for magnetization"
             )));
-            }
-            Some(persisted_hysteresis_magnetization_values(
-                snapshot,
-                snapshot_id,
-            )?)
-        } else if quantity_id == "m" {
-            live_magnetization_values(snapshot)
-                .or_else(preview_field_values)
-                .or_else(latest_field_values)
-        } else {
-            latest_field_values().or_else(preview_field_values)
-        };
+        }
+        validate_hysteresis_snapshot_stage_scope(&state, query.stage_id.as_deref(), snapshot_id)
+            .await?;
+        Some(persisted_hysteresis_magnetization_values(
+            snapshot,
+            snapshot_id,
+        )?)
+    } else if quantity_id == "m" {
+        live_magnetization_values(snapshot)
+            .or_else(preview_field_values)
+            .or_else(latest_field_values)
+    } else {
+        latest_field_values().or_else(preview_field_values)
+    };
     let has_field_source = snapshot.latest_fields.get(quantity_id).is_some()
         || snapshot.preview_cache.get(quantity_id).is_some()
         || (quantity_id == "m"
@@ -1290,9 +1556,27 @@ fn analysis_frequency_response_vector_response(
     };
     let artifact_dir = current_artifact_dir(snapshot)
         .ok_or_else(|| ApiError::not_found("no artifact directory for analysis field payload"))?;
-    let relative_path =
-        format!("response/field_payloads/frequency_{frequency_index:04}/vector.bin");
-    let path = artifact_dir.join(&relative_path);
+    let frequency_point_path = response_frequency_point_path(&artifact_dir, frequency_index)?;
+    let relative_path = if let Some(path) =
+        response_field_payload_path_from_manifest(&artifact_dir, frequency_index)?
+    {
+        path
+    } else if let Some(path) =
+        response_field_payload_path_from_sweep(&artifact_dir, frequency_index)?
+    {
+        path
+    } else if let Some(path) =
+        response_field_payload_path_from_point_artifact(&artifact_dir, &frequency_point_path)?
+    {
+        path
+    } else {
+        format!("response/field_payloads/frequency_{frequency_index:04}/vector_xyz.bin")
+    };
+    let Some(path) = try_resolve_artifact_path(&artifact_dir, &relative_path)? else {
+        return Err(ApiError::not_found(format!(
+            "analysis frequency-response field payload is missing: {relative_path}"
+        )));
+    };
     let bytes = std::fs::read(&path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             ApiError::not_found(format!(
@@ -1305,9 +1589,49 @@ fn analysis_frequency_response_vector_response(
             ))
         }
     })?;
+    let metadata = response_field_data_plane_metadata_from_point_artifact(
+        &artifact_dir,
+        &frequency_point_path,
+    )?;
+    let effective_view = query.view.as_deref().unwrap_or(&metadata.default_view);
+    let effective_phase_rad = query.phase_rad.unwrap_or(metadata.default_phase_rad);
+    validate_response_field_requested_view(
+        &frequency_point_path,
+        &metadata.available_views,
+        Some(effective_view),
+    )?;
+    if let Some(payload_value_count) = metadata.payload_value_count {
+        let expected_size = payload_value_count.checked_mul(8).ok_or_else(|| {
+            ApiError::internal(format!(
+                "frequency response field payload_value_count overflows byte size in '{}'",
+                frequency_point_path
+            ))
+        })?;
+        if bytes.len() as u64 != expected_size {
+            return Err(ApiError::internal(format!(
+                "analysis frequency-response field payload '{}' has {} bytes, expected {}",
+                relative_path,
+                bytes.len(),
+                expected_size
+            )));
+        }
+    }
     let values = decode_complex_f64_pairs_little_endian(&bytes)?;
     let (raw_values, n_comp, default_component) =
-        analysis_frequency_response_view_values(&values, query.view.as_deref(), query.phase_rad)?;
+        if let Some(component_count) = metadata.component_count {
+            analysis_complex_component_view_values(
+                &values,
+                component_count,
+                Some(effective_view),
+                Some(effective_phase_rad),
+            )?
+        } else {
+            analysis_frequency_response_view_values(
+                &values,
+                Some(effective_view),
+                Some(effective_phase_rad),
+            )?
+        };
     let component = parse_component(query.component.as_deref().or(default_component), n_comp)?;
     let (out_n_comp, projected) = project_values(&raw_values, n_comp, &component)?;
     let point_count = raw_values.len() / n_comp;
@@ -1317,12 +1641,12 @@ fn analysis_frequency_response_vector_response(
     let revision = analysis_payload_revision(snapshot, &relative_path, bytes.len());
     let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
         "{field_id}:{revision}:{}:{}:{}",
-        query.view.as_deref().unwrap_or("complex"),
+        effective_view,
         query
             .component
             .as_deref()
             .unwrap_or(default_component.unwrap_or("full")),
-        query.phase_rad.unwrap_or(0.0)
+        effective_phase_rad
     ));
     let mut resp =
         crate::router_v2::handlers::shared::conditional_binary_response(headers, &etag, binary);
@@ -1336,6 +1660,346 @@ fn analysis_frequency_response_vector_response(
         projected.len(),
     );
     Ok(Some(resp))
+}
+
+fn response_field_payload_path_from_manifest(
+    artifact_dir: &std::path::Path,
+    frequency_index: u32,
+) -> Result<Option<String>, ApiError> {
+    if try_resolve_artifact_path(artifact_dir, "frequency_domain/manifest.v1.json")?.is_none() {
+        return Ok(None);
+    }
+    let manifest = read_json_artifact_value(artifact_dir, "frequency_domain/manifest.v1.json")?;
+    Ok(manifest
+        .get("resources")
+        .and_then(|resources| resources.get("response_field_resources"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|resources| {
+            resources.iter().find_map(|resource| {
+                let resource = resource.as_object()?;
+                let index = resource.get("frequency_index")?.as_u64()?;
+                if index == u64::from(frequency_index) {
+                    resource
+                        .get("payload_path")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string)
+                } else {
+                    None
+                }
+            })
+        }))
+}
+
+fn response_field_payload_path_from_sweep(
+    artifact_dir: &std::path::Path,
+    frequency_index: u32,
+) -> Result<Option<String>, ApiError> {
+    response_sweep_linked_path(
+        artifact_dir,
+        frequency_index,
+        "response_field_payload_path",
+        "response_field_payload_paths",
+    )
+}
+
+fn response_frequency_point_path_from_sweep(
+    artifact_dir: &std::path::Path,
+    frequency_index: u32,
+) -> Result<Option<String>, ApiError> {
+    response_sweep_linked_path(
+        artifact_dir,
+        frequency_index,
+        "frequency_point_artifact_path",
+        "frequency_point_artifact_paths",
+    )
+}
+
+fn response_frequency_point_path(
+    artifact_dir: &std::path::Path,
+    frequency_index: u32,
+) -> Result<String, ApiError> {
+    Ok(
+        response_frequency_point_path_from_sweep(artifact_dir, frequency_index)?.unwrap_or_else(
+            || format!("response/frequency_points/frequency_{frequency_index:04}.json"),
+        ),
+    )
+}
+
+fn response_field_payload_path_from_point_artifact(
+    artifact_dir: &std::path::Path,
+    frequency_point_artifact_path: &str,
+) -> Result<Option<String>, ApiError> {
+    if try_resolve_artifact_path(artifact_dir, frequency_point_artifact_path)?.is_none() {
+        return Ok(None);
+    }
+    let point = read_json_artifact_value(artifact_dir, frequency_point_artifact_path)?;
+    point
+        .get("field_payload_path")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .map(Some)
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "missing required frequency response field_payload_path in '{}'",
+                frequency_point_artifact_path
+            ))
+        })
+}
+
+struct ResponseFieldDataPlaneMetadata {
+    component_count: Option<usize>,
+    payload_value_count: Option<u64>,
+    available_views: Vec<String>,
+    default_view: String,
+    default_phase_rad: f64,
+}
+
+fn default_frequency_domain_field_views() -> Vec<String> {
+    vec![
+        "complex".to_string(),
+        "real".to_string(),
+        "imag".to_string(),
+        "abs".to_string(),
+        "amplitude".to_string(),
+        "phase".to_string(),
+        "phase_rotated_real".to_string(),
+    ]
+}
+
+fn response_sweep_linked_path(
+    artifact_dir: &std::path::Path,
+    frequency_index: u32,
+    point_field: &str,
+    list_field: &str,
+) -> Result<Option<String>, ApiError> {
+    if try_resolve_artifact_path(artifact_dir, "response/magnetic_response_sweep.v2.json")?
+        .is_none()
+    {
+        return Ok(None);
+    }
+    let sweep = read_json_artifact_value(artifact_dir, "response/magnetic_response_sweep.v2.json")?;
+    if let Some(path) = sweep
+        .get("points")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|points| {
+            points.iter().find_map(|point| {
+                let point = point.as_object()?;
+                let index = point.get("frequency_index")?.as_u64()?;
+                if index == u64::from(frequency_index) {
+                    point
+                        .get(point_field)
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string)
+                } else {
+                    None
+                }
+            })
+        })
+    {
+        return Ok(Some(path));
+    }
+    Ok(sweep
+        .get(list_field)
+        .and_then(serde_json::Value::as_array)
+        .and_then(|paths| paths.get(frequency_index as usize))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string))
+}
+
+fn response_field_data_plane_metadata_from_point_artifact(
+    artifact_dir: &std::path::Path,
+    relative_path: &str,
+) -> Result<ResponseFieldDataPlaneMetadata, ApiError> {
+    if try_resolve_artifact_path(artifact_dir, relative_path)?.is_none() {
+        return Ok(ResponseFieldDataPlaneMetadata {
+            component_count: Some(3),
+            payload_value_count: None,
+            available_views: default_frequency_domain_field_views(),
+            default_view: "complex".to_string(),
+            default_phase_rad: 0.0,
+        });
+    }
+    let point = read_json_artifact_value(artifact_dir, relative_path)?;
+    let Some(component_count) = point
+        .get("component_count")
+        .and_then(serde_json::Value::as_u64)
+    else {
+        return Err(ApiError::internal(format!(
+            "missing required frequency response field component_count in '{}'",
+            relative_path
+        )));
+    };
+    if component_count == 0 || component_count > 64 {
+        return Err(ApiError::internal(format!(
+            "invalid frequency response field component_count in '{}'",
+            relative_path
+        )));
+    }
+    let Some(complex_pair_count) = point
+        .get("complex_pair_count")
+        .and_then(serde_json::Value::as_u64)
+    else {
+        return Err(ApiError::internal(format!(
+            "missing required frequency response field complex_pair_count in '{}'",
+            relative_path
+        )));
+    };
+    let Some(payload_value_count) = point
+        .get("payload_value_count")
+        .and_then(serde_json::Value::as_u64)
+    else {
+        return Err(ApiError::internal(format!(
+            "missing required frequency response field payload_value_count in '{}'",
+            relative_path
+        )));
+    };
+    let Some(expected_payload_value_count) = complex_pair_count.checked_mul(2) else {
+        return Err(ApiError::internal(format!(
+            "frequency response field complex_pair_count overflows payload_value_count in '{}'",
+            relative_path
+        )));
+    };
+    if payload_value_count != expected_payload_value_count {
+        return Err(ApiError::internal(format!(
+            "invalid frequency response field payload_value_count in '{}'",
+            relative_path
+        )));
+    }
+    let available_views = validate_response_field_available_views(&point, relative_path)?;
+    let default_view = validate_response_field_default_view(&point, relative_path)?;
+    let default_phase_rad = validate_response_field_default_phase_rad(&point, relative_path)?;
+    Ok(ResponseFieldDataPlaneMetadata {
+        component_count: Some(component_count as usize),
+        payload_value_count: Some(payload_value_count),
+        available_views,
+        default_view,
+        default_phase_rad,
+    })
+}
+
+fn validate_response_field_available_views(
+    point: &serde_json::Value,
+    relative_path: &str,
+) -> Result<Vec<String>, ApiError> {
+    let Some(available_views) = point
+        .get("available_views")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Err(ApiError::internal(format!(
+            "missing required frequency response field available_views in '{}'",
+            relative_path
+        )));
+    };
+    if available_views.is_empty() || available_views.iter().any(|view| !view.is_string()) {
+        return Err(ApiError::internal(format!(
+            "invalid frequency response field available_views in '{}'",
+            relative_path
+        )));
+    }
+    for required_view in ["complex", "real", "imag", "phase", "phase_rotated_real"] {
+        if !available_views
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .any(|view| view == required_view)
+        {
+            return Err(ApiError::internal(format!(
+                "missing required frequency response field available view '{required_view}' in '{}'",
+                relative_path
+            )));
+        }
+    }
+    if !available_views
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .any(|view| view == "abs" || view == "amplitude")
+    {
+        return Err(ApiError::internal(format!(
+            "missing required frequency response field available view 'abs' or 'amplitude' in '{}'",
+            relative_path
+        )));
+    }
+    Ok(available_views
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::to_string)
+        .collect())
+}
+
+fn validate_response_field_requested_view(
+    relative_path: &str,
+    available_views: &[String],
+    requested_view: Option<&str>,
+) -> Result<(), ApiError> {
+    let requested_view = requested_view.unwrap_or("complex");
+    let is_available = match requested_view {
+        "complex" | "full" => available_views
+            .iter()
+            .any(|view| view == "complex" || view == "full"),
+        "abs" | "amplitude" => available_views
+            .iter()
+            .any(|view| view == "abs" || view == "amplitude"),
+        other => available_views.iter().any(|view| view == other),
+    };
+    if is_available {
+        return Ok(());
+    }
+    Err(ApiError::bad_request(format!(
+        "frequency-domain field view '{requested_view}' is not listed in available_views in '{}'",
+        relative_path
+    )))
+}
+
+fn validate_response_field_default_view(
+    point: &serde_json::Value,
+    relative_path: &str,
+) -> Result<String, ApiError> {
+    let Some(default_view) = point
+        .get("default_view")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return Err(ApiError::internal(format!(
+            "missing required frequency response field default_view in '{}'",
+            relative_path
+        )));
+    };
+    let default_is_available = point
+        .get("available_views")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|views| {
+            views
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .any(|view| view == default_view)
+        });
+    if !default_is_available {
+        return Err(ApiError::internal(format!(
+            "invalid frequency response field default_view '{default_view}' is not listed in available_views in '{}'",
+            relative_path
+        )));
+    }
+    Ok(default_view.to_string())
+}
+
+fn validate_response_field_default_phase_rad(
+    point: &serde_json::Value,
+    relative_path: &str,
+) -> Result<f64, ApiError> {
+    let Some(default_phase_rad) = point
+        .get("default_phase_rad")
+        .and_then(serde_json::Value::as_f64)
+    else {
+        return Err(ApiError::internal(format!(
+            "missing required frequency response field default_phase_rad in '{}'",
+            relative_path
+        )));
+    };
+    if !default_phase_rad.is_finite() {
+        return Err(ApiError::internal(format!(
+            "invalid frequency response field default_phase_rad in '{}'",
+            relative_path
+        )));
+    }
+    Ok(default_phase_rad)
 }
 
 fn analysis_eigen_mode_vector_response(
@@ -1365,8 +2029,15 @@ fn analysis_eigen_mode_vector_response(
         }
     })?;
     let values = decode_complex_f64_pairs_little_endian(&bytes)?;
-    let (raw_values, n_comp, default_component) =
-        analysis_complex_vector_view_values(&values, query.view.as_deref(), query.phase_rad)?;
+    let available_views = default_frequency_domain_field_views();
+    let effective_view = query.view.as_deref().unwrap_or("phase_rotated_real");
+    let effective_phase_rad = query.phase_rad.unwrap_or(0.0);
+    validate_response_field_requested_view(&relative_path, &available_views, Some(effective_view))?;
+    let (raw_values, n_comp, default_component) = analysis_complex_vector_view_values(
+        &values,
+        Some(effective_view),
+        Some(effective_phase_rad),
+    )?;
     let component = parse_component(query.component.as_deref().or(default_component), n_comp)?;
     let (out_n_comp, projected) = project_values(&raw_values, n_comp, &component)?;
     let point_count = raw_values.len() / n_comp;
@@ -1376,12 +2047,12 @@ fn analysis_eigen_mode_vector_response(
     let revision = analysis_payload_revision(snapshot, &relative_path, bytes.len());
     let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
         "{field_id}:{revision}:{}:{}:{}",
-        query.view.as_deref().unwrap_or("complex"),
+        effective_view,
         query
             .component
             .as_deref()
             .unwrap_or(default_component.unwrap_or("full")),
-        query.phase_rad.unwrap_or(0.0)
+        effective_phase_rad
     ));
     let mut resp =
         crate::router_v2::handlers::shared::conditional_binary_response(headers, &etag, binary);
@@ -1437,6 +2108,58 @@ fn analysis_frequency_response_view_values(
             Ok((
                 complex_pair_scalar_view(values, |real, imag| real * cos_phase - imag * sin_phase),
                 1,
+                Some("full"),
+            ))
+        }
+        other => Err(ApiError::bad_request(format!(
+            "unsupported frequency-domain field view '{other}'"
+        ))),
+    }
+}
+
+fn analysis_complex_component_view_values(
+    values: &[f64],
+    component_count: usize,
+    view: Option<&str>,
+    phase_rad: Option<f64>,
+) -> Result<(Vec<f64>, usize, Option<&'static str>), ApiError> {
+    if component_count == 0 || values.len() % (component_count * 2) != 0 {
+        return Err(ApiError::internal(
+            "analysis frequency-response payload does not match declared complex component count",
+        ));
+    }
+    match view.unwrap_or("complex") {
+        "complex" | "full" => Ok((values.to_vec(), component_count * 2, None)),
+        "real" => Ok((
+            complex_vector_view(values, |real, _imag| real),
+            component_count,
+            Some("full"),
+        )),
+        "imag" => Ok((
+            complex_vector_view(values, |_real, imag| imag),
+            component_count,
+            Some("full"),
+        )),
+        "abs" | "amplitude" => Ok((
+            complex_vector_view(values, |real, imag| real.hypot(imag)),
+            component_count,
+            Some("full"),
+        )),
+        "phase" => Ok((
+            complex_vector_view(values, |real, imag| imag.atan2(real)),
+            component_count,
+            Some("full"),
+        )),
+        "phase_rotated_real" => {
+            let phase = phase_rad.unwrap_or(0.0);
+            if !phase.is_finite() {
+                return Err(ApiError::bad_request("phase_rad must be finite"));
+            }
+            let cos_phase = phase.cos();
+            let sin_phase = phase.sin();
+            Ok((
+                complex_vector_view(values, |real, imag| real * cos_phase - imag * sin_phase),
+                component_count,
                 Some("full"),
             ))
         }
@@ -1610,6 +2333,7 @@ fn is_fem_runtime(snapshot: &crate::types::SessionStateResponse) -> bool {
                 | RuntimeEngineId::FemEigenCpuBaseline
                 | RuntimeEngineId::FemEigenNativeGpu
                 | RuntimeEngineId::FemFrequencyResponseDenseValidation
+                | RuntimeEngineId::FemFrequencyResponseProductionCpu
         )
     ) || snapshot.fem_mesh.is_some()
 }
@@ -3533,9 +4257,12 @@ fn urlencoding(s: &str) -> String {
 mod tests {
     use super::{
         analysis_complex_vector_view_values, analysis_frequency_response_view_values,
-        decode_complex_f64_pairs_little_endian, parse_analysis_eigen_mode_field_id,
+        decode_complex_f64_pairs_little_endian, is_fem_runtime, parse_analysis_eigen_mode_field_id,
         parse_analysis_frequency_response_field_id,
     };
+    use crate::session::default_current_live_state;
+    use crate::types::CurrentLiveSnapshotRequest;
+    use fullmag_runner::{BackendCapabilities, RuntimeEngineId};
 
     #[test]
     fn parses_frequency_response_analysis_field_id() {
@@ -3608,6 +4335,84 @@ mod tests {
     }
 
     #[test]
+    fn frequency_response_view_real_returns_scalar_values_for_single_component_payload() {
+        let (values, n_comp, default_component) =
+            analysis_frequency_response_view_values(&[3.0, 4.0, -2.0, 7.0], Some("real"), None)
+                .expect("real view should resolve");
+
+        assert_eq!(values, vec![3.0, -2.0]);
+        assert_eq!(n_comp, 1);
+        assert_eq!(default_component, Some("full"));
+    }
+
+    #[test]
+    fn frequency_response_view_imag_returns_scalar_values_for_single_component_payload() {
+        let (values, n_comp, default_component) =
+            analysis_frequency_response_view_values(&[3.0, 4.0, -2.0, 7.0], Some("imag"), None)
+                .expect("imag view should resolve");
+
+        assert_eq!(values, vec![4.0, 7.0]);
+        assert_eq!(n_comp, 1);
+        assert_eq!(default_component, Some("full"));
+    }
+
+    #[test]
+    fn frequency_response_view_phase_returns_scalar_values_for_single_component_payload() {
+        let (values, n_comp, default_component) =
+            analysis_frequency_response_view_values(&[1.0, 0.0, 0.0, 1.0], Some("phase"), None)
+                .expect("phase view should resolve");
+
+        assert!((values[0]).abs() < 1.0e-12);
+        assert!((values[1] - std::f64::consts::FRAC_PI_2).abs() < 1.0e-12);
+        assert_eq!(n_comp, 1);
+        assert_eq!(default_component, Some("full"));
+    }
+
+    #[test]
+    fn frequency_response_view_real_returns_xyz_values_for_vector_payload() {
+        let (values, n_comp, default_component) = analysis_frequency_response_view_values(
+            &[1.0, 2.0, 3.0, 4.0, -5.0, 6.0],
+            Some("real"),
+            None,
+        )
+        .expect("real vector response view should resolve");
+
+        assert_eq!(values, vec![1.0, 3.0, -5.0]);
+        assert_eq!(n_comp, 3);
+        assert_eq!(default_component, Some("full"));
+    }
+
+    #[test]
+    fn frequency_response_view_imag_returns_xyz_values_for_vector_payload() {
+        let (values, n_comp, default_component) = analysis_frequency_response_view_values(
+            &[1.0, 2.0, 3.0, 4.0, -5.0, 6.0],
+            Some("imag"),
+            None,
+        )
+        .expect("imag vector response view should resolve");
+
+        assert_eq!(values, vec![2.0, 4.0, 6.0]);
+        assert_eq!(n_comp, 3);
+        assert_eq!(default_component, Some("full"));
+    }
+
+    #[test]
+    fn frequency_response_view_phase_returns_xyz_values_for_vector_payload() {
+        let (values, n_comp, default_component) = analysis_frequency_response_view_values(
+            &[1.0, 0.0, 0.0, 1.0, -1.0, 0.0],
+            Some("phase"),
+            None,
+        )
+        .expect("phase vector response view should resolve");
+
+        assert!((values[0]).abs() < 1.0e-12);
+        assert!((values[1] - std::f64::consts::FRAC_PI_2).abs() < 1.0e-12);
+        assert!((values[2] - std::f64::consts::PI).abs() < 1.0e-12);
+        assert_eq!(n_comp, 3);
+        assert_eq!(default_component, Some("full"));
+    }
+
+    #[test]
     fn frequency_response_view_phase_rotated_real_returns_xyz_values_for_vector_payload() {
         let (values, n_comp, default_component) = analysis_frequency_response_view_values(
             &[1.0, 0.0, 0.0, 1.0, 3.0, 4.0],
@@ -3632,6 +4437,45 @@ mod tests {
 
         assert!((values[0]).abs() < 1.0e-12);
         assert_eq!(n_comp, 1);
+    }
+
+    #[test]
+    fn production_cpu_frequency_response_runtime_is_fem_runtime() {
+        let mut snapshot = default_current_live_state(&CurrentLiveSnapshotRequest {
+            session_id: "frequency-response-production-cpu".to_string(),
+            session: None,
+            session_status: None,
+            metadata: None,
+            mesh_workspace: None,
+            stage_execution: None,
+            run: None,
+            live_state: None,
+            latest_scalar_row: None,
+            latest_fields: None,
+            preview_fields: None,
+            clear_preview_cache: false,
+            engine_log: None,
+            solver_profile: None,
+            fem_mesh: None,
+        });
+        snapshot.capabilities = Some(BackendCapabilities {
+            engine_id: RuntimeEngineId::FemFrequencyResponseProductionCpu,
+            capability_profile_version: "test".to_string(),
+            supported_terms: Vec::new(),
+            supported_demag_realizations: Vec::new(),
+            preview_quantities: Vec::new(),
+            snapshot_quantities: Vec::new(),
+            scalar_outputs: Vec::new(),
+            approximate_operators: Vec::new(),
+            supports_frequency_response: false,
+            supports_coupled_magnetoelastic_quasistatic: false,
+            supports_coupled_magnetoelastic_elastodynamic: false,
+            supports_frequency_domain_elastodynamics: false,
+            supports_coupled_eigenmodes: false,
+            supports_lossy_fallback_override: false,
+        });
+
+        assert!(is_fem_runtime(&snapshot));
     }
 
     #[test]

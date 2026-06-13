@@ -396,6 +396,10 @@ pub(crate) struct ScalarRow {
     pub step: u64,
     pub time: f64,
     pub solver_dt: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pseudo_time_s: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_runtime_s: Option<f64>,
     pub mx: f64,
     pub my: f64,
     pub mz: f64,
@@ -442,6 +446,8 @@ pub(crate) struct StepUpdateView {
     pub step: u64,
     pub time: f64,
     pub dt: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pseudo_time_s: Option<f64>,
     pub e_ex: f64,
     pub e_demag: f64,
     pub e_ext: f64,
@@ -1455,6 +1461,7 @@ mod tests {
             step: 12,
             time: 1.25,
             dt: 1.0e-12,
+            pseudo_time_s: None,
             e_ex: 0.0,
             e_demag: 0.0,
             e_ext: 0.0,

@@ -14,6 +14,17 @@ export interface MeshBuildLogConsoleFilters {
 
 type MeshBuildLogCopyStatus = "copied" | "failed" | "idle";
 
+function meshBuildLogRowKey(entry: MeshJobsLogRow): string {
+  return [
+    entry.time,
+    entry.level,
+    entry.source ?? "",
+    entry.phaseId ?? "",
+    entry.commandId ?? "",
+    entry.message,
+  ].join(":");
+}
+
 const DEFAULT_FILTERS: MeshBuildLogConsoleFilters = {
   level: "all",
   query: "",
@@ -193,11 +204,11 @@ export function MeshBuildLogConsoleView({
           role="table"
           onScroll={(event) => onLogScroll?.(event.currentTarget)}
         >
-          {rows.map((entry, index) => (
+          {rows.map((entry) => (
             <div
               className="fm-footer-diagnostics__log-row"
               role="row"
-              key={`${entry.time}:${entry.level}:${entry.message}:${index}`}
+              key={meshBuildLogRowKey(entry)}
             >
               <time role="cell">{entry.time}</time>
               <span role="cell" data-level={entry.level}>

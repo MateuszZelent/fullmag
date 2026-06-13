@@ -1,13 +1,15 @@
 //! Hysteresis endpoints — points, metrics, branches, and minor loops.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::{BufRead, BufReader};
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 
 use crate::schemas::hysteresis::{
-    HysteresisAngularFamilyResource, HysteresisAngularFamilySeriesSchema, HysteresisBranchSchema,
-    HysteresisMetricsSchema, HysteresisMinorLoopSchema, HysteresisPointSchema,
-    HysteresisSaturationResultSchema, HysteresisSettleTraceEntrySchema,
+    HysteresisAdaptiveRefinementSchema, HysteresisAngularFamilyResource,
+    HysteresisAngularFamilySeriesSchema, HysteresisBranchSchema, HysteresisMetricsSchema,
+    HysteresisMinorLoopSchema, HysteresisPointSchema, HysteresisSaturationResultSchema,
+    HysteresisSettleTraceEntrySchema,
 };
 use axum::extract::{Path, State};
 use axum::Json;
@@ -17,6 +19,9 @@ use crate::artifacts::require_current_live_artifact_dir;
 use crate::error::ApiError;
 use crate::router_v2::handlers::simulation::runtime::resolve_hysteresis_scene_stage;
 use crate::types::AppState;
+
+const HYSTERESIS_ZARR_STORE: &str = "hysteresis.zarr";
+const HYSTERESIS_STORAGE_FORMAT: &str = "zarr_v2_json_fallback";
 
 #[derive(Debug, serde::Deserialize)]
 struct HysteresisAngularFamilyArtifact {
@@ -247,6 +252,8 @@ async fn read_hysteresis_family_variant_points(
         if let Some(points_path) = variant.points_path.as_deref() {
             return Ok(annotate_hysteresis_points(
                 read_typed_hysteresis_artifact_relative_to(manifest_base_dir, points_path)?,
+                manifest_base_dir,
+                Some(&stage.stage_id),
             ));
         }
         if active_variant_id.is_some_and(|active| active == variant_id) {
@@ -310,18 +317,59 @@ pub(crate) async fn read_hysteresis_saturation_result(
     read_typed_stage_artifact(state, stage_id, "hysteresis_saturation.json").await
 }
 
-async fn read_hysteresis_points(
+pub(crate) async fn read_hysteresis_adaptive_refinement(
+    state: &Arc<AppState>,
+    stage_id: &str,
+) -> Result<HysteresisAdaptiveRefinementSchema, ApiError> {
+    read_typed_stage_artifact(state, stage_id, "hysteresis_adaptive_refinement.json").await
+}
+
+pub(crate) async fn read_hysteresis_points_if_available(
     state: &Arc<AppState>,
     stage_id: &str,
 ) -> Result<Vec<HysteresisPointSchema>, ApiError> {
-    let points: Vec<HysteresisPointSchema> = match read_typed_stage_artifact(
+    match read_optional_typed_stage_artifact_with_path::<Vec<HysteresisPointSchema>>(
         state,
         stage_id,
         "hysteresis_points.json",
     )
+    .await?
+    {
+        Some((path, points)) => Ok(annotate_hysteresis_points(
+            points,
+            path.parent().unwrap_or_else(|| FsPath::new("")),
+            Some(stage_id),
+        )),
+        None => Ok(Vec::new()),
+    }
+}
+
+pub(crate) async fn read_hysteresis_minor_loops_if_available(
+    state: &Arc<AppState>,
+    stage_id: &str,
+) -> Result<Vec<HysteresisMinorLoopSchema>, ApiError> {
+    match read_optional_typed_stage_artifact_with_path::<Vec<HysteresisMinorLoopSchema>>(
+        state,
+        stage_id,
+        "hysteresis_minor_loops.json",
+    )
+    .await?
+    {
+        Some((_path, minor_loops)) => Ok(minor_loops),
+        None => Ok(Vec::new()),
+    }
+}
+
+async fn read_hysteresis_points(
+    state: &Arc<AppState>,
+    stage_id: &str,
+) -> Result<Vec<HysteresisPointSchema>, ApiError> {
+    let points_artifact = match read_optional_typed_stage_artifact_with_path::<
+        Vec<HysteresisPointSchema>,
+    >(state, stage_id, "hysteresis_points.json")
     .await
     {
-        Ok(points) => points,
+        Ok(artifact) => artifact,
         Err(error) if is_missing_stage_artifact(&error, "hysteresis_points.json") => {
             if stage_reports_completed_hysteresis_points(state, stage_id).await {
                 return Err(ApiError::conflict(format!(
@@ -329,11 +377,24 @@ async fn read_hysteresis_points(
                         stage_id
                     )));
             }
-            Vec::new()
+            None
         }
         Err(error) => return Err(error),
     };
-    Ok(annotate_hysteresis_points(points))
+    let Some((path, points)) = points_artifact else {
+        if stage_reports_completed_hysteresis_points(state, stage_id).await {
+            return Err(ApiError::conflict(format!(
+                "stage {} reports completed hysteresis points but hysteresis_points.json is missing",
+                stage_id
+            )));
+        }
+        return Ok(Vec::new());
+    };
+    Ok(annotate_hysteresis_points(
+        points,
+        path.parent().unwrap_or_else(|| FsPath::new("")),
+        Some(stage_id),
+    ))
 }
 
 async fn stage_reports_completed_hysteresis_points(state: &Arc<AppState>, stage_id: &str) -> bool {
@@ -382,6 +443,8 @@ fn is_missing_stage_artifact(error: &ApiError, filename: &str) -> bool {
 
 fn annotate_hysteresis_points(
     mut points: Vec<HysteresisPointSchema>,
+    artifact_base_dir: &FsPath,
+    stage_id: Option<&str>,
 ) -> Vec<HysteresisPointSchema> {
     let branch_segments = infer_hysteresis_branch_segments(&points);
     let mut branch_ids_by_point: BTreeMap<usize, BTreeSet<String>> = BTreeMap::new();
@@ -425,15 +488,95 @@ fn annotate_hysteresis_points(
                 point.branch_index = Some(*branch_index);
             }
         }
-        if point.snapshot_resource_ref.is_none() {
-            if let Some(snapshot_id) = point.snapshot_id.as_deref() {
-                point.snapshot_resource_ref = Some(format!(
-                    "/v2/sessions/current/data/fields/m/samples/vector?snapshot_id={snapshot_id}"
-                ));
-            }
+        if let Some(snapshot_id) = point.snapshot_id.clone() {
+            annotate_hysteresis_snapshot_refs(point, &snapshot_id, artifact_base_dir, stage_id);
         }
     }
     points
+}
+
+fn annotate_hysteresis_snapshot_refs(
+    point: &mut HysteresisPointSchema,
+    snapshot_id: &str,
+    artifact_base_dir: &FsPath,
+    stage_id: Option<&str>,
+) {
+    let stage_param = stage_id
+        .filter(|stage_id| !stage_id.trim().is_empty())
+        .map(|stage_id| format!("&stage_id={stage_id}"))
+        .unwrap_or_default();
+    let vector_resource_ref = format!(
+        "/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full&snapshot_id={snapshot_id}{stage_param}"
+    );
+    point.snapshot_resource_ref = Some(vector_resource_ref.clone());
+    point.snapshot_vector_resource_ref = Some(vector_resource_ref);
+    if point.snapshot_json_artifact_ref.is_none() {
+        point.snapshot_json_artifact_ref =
+            Some(format!("hysteresis_snapshots/{snapshot_id}/m.json"));
+    }
+    if point.snapshot_zarr_store_ref.is_none() {
+        point.snapshot_zarr_store_ref = Some(HYSTERESIS_ZARR_STORE.to_string());
+    }
+    if point.snapshot_storage_format.is_none() {
+        point.snapshot_storage_format = Some(HYSTERESIS_STORAGE_FORMAT.to_string());
+    }
+    if point.snapshot_storage_status.is_none() || point.snapshot_storage_reason.is_none() {
+        let (status, reason) = hysteresis_snapshot_storage_status(artifact_base_dir, snapshot_id);
+        point.snapshot_storage_status.get_or_insert(status);
+        point.snapshot_storage_reason.get_or_insert(reason);
+    }
+}
+
+fn hysteresis_snapshot_storage_status(
+    artifact_base_dir: &FsPath,
+    snapshot_id: &str,
+) -> (String, String) {
+    if artifact_base_dir.as_os_str().is_empty() {
+        return (
+            "unknown".to_string(),
+            "artifact directory is unavailable for snapshot storage verification".to_string(),
+        );
+    }
+    if hysteresis_zarr_sample_exists(artifact_base_dir, snapshot_id) {
+        return (
+            "available_zarr".to_string(),
+            "snapshot found in hysteresis.zarr".to_string(),
+        );
+    }
+    if artifact_base_dir
+        .join("hysteresis_snapshots")
+        .join(snapshot_id)
+        .join("m.json")
+        .is_file()
+    {
+        return (
+            "available_json_fallback".to_string(),
+            "snapshot found in hysteresis_snapshots JSON fallback".to_string(),
+        );
+    }
+    (
+        "missing".to_string(),
+        "snapshot payload not found in hysteresis.zarr or JSON fallback".to_string(),
+    )
+}
+
+fn hysteresis_zarr_sample_exists(artifact_base_dir: &FsPath, snapshot_id: &str) -> bool {
+    let samples_path = artifact_base_dir
+        .join(HYSTERESIS_ZARR_STORE)
+        .join("fields")
+        .join("m")
+        .join("samples.csv");
+    let Ok(file) = std::fs::File::open(samples_path) else {
+        return false;
+    };
+    BufReader::new(file).lines().skip(1).any(|line| {
+        let Ok(line) = line else {
+            return false;
+        };
+        line.split(',')
+            .nth(1)
+            .is_some_and(|candidate| candidate == snapshot_id)
+    })
 }
 
 #[utoipa::path(
@@ -498,6 +641,26 @@ pub async fn get_saturation(
 
 #[utoipa::path(
     get,
+    path = "/v2/sessions/current/analysis/hysteresis/{stage_id}/adaptive-refinement",
+    params(
+        ("stage_id" = String, Path, description = "Hysteresis stage index or stage identifier"),
+    ),
+    responses(
+        (status = 200, description = "Executed hysteresis adaptive refinement candidates and inserted points", body = HysteresisAdaptiveRefinementSchema),
+        (status = 404, description = "Hysteresis adaptive refinement artifact not found"),
+    ),
+    tag = "analysis"
+)]
+pub async fn get_adaptive_refinement(
+    State(state): State<Arc<AppState>>,
+    Path(stage_id): Path<String>,
+) -> Result<Json<HysteresisAdaptiveRefinementSchema>, ApiError> {
+    let adaptive_refinement = read_hysteresis_adaptive_refinement(&state, &stage_id).await?;
+    Ok(Json(adaptive_refinement))
+}
+
+#[utoipa::path(
+    get,
     path = "/v2/sessions/current/analysis/hysteresis/{stage_id}/branches",
     params(
         ("stage_id" = String, Path, description = "Hysteresis stage index or stage identifier"),
@@ -519,7 +682,12 @@ pub async fn get_branches(
 
     let mut branches = Vec::new();
     for (branch_index, direction, branch_points) in infer_hysteresis_branch_segments(&points) {
-        branches.push(build_branch_schema(branch_index, direction, branch_points));
+        branches.push(build_branch_schema(
+            branch_index,
+            direction,
+            branch_points,
+            Some(&stage_id),
+        ));
     }
     Ok(Json(branches))
 }
@@ -569,10 +737,11 @@ pub async fn get_angular_family(
                 .as_deref()
                 .is_some_and(|active| active == variant.variant_id);
             let variant_points = if let Some(points_path) = variant.points_path.as_deref() {
-                annotate_hysteresis_points(read_typed_hysteresis_artifact_relative_to(
+                annotate_hysteresis_points(
+                    read_typed_hysteresis_artifact_relative_to(manifest_base_dir, points_path)?,
                     manifest_base_dir,
-                    points_path,
-                )?)
+                    Some(&stage.stage_id),
+                )
             } else if is_active_variant {
                 points.clone()
             } else {
@@ -755,11 +924,23 @@ pub async fn get_minor_loops(
     State(state): State<Arc<AppState>>,
     Path(stage_id): Path<String>,
 ) -> Result<Json<Vec<HysteresisMinorLoopSchema>>, ApiError> {
-    match read_typed_stage_artifact(&state, &stage_id, "hysteresis_minor_loops.json").await {
-        Ok(minor_loops) => {
+    match read_optional_typed_stage_artifact_with_path::<Vec<HysteresisMinorLoopSchema>>(
+        &state,
+        &stage_id,
+        "hysteresis_minor_loops.json",
+    )
+    .await
+    {
+        Ok(Some((path, minor_loops))) => {
             let stage_points = read_hysteresis_points(&state, &stage_id).await?;
-            Ok(Json(annotate_minor_loops(minor_loops, &stage_points)))
+            Ok(Json(annotate_minor_loops(
+                minor_loops,
+                &stage_points,
+                path.parent().unwrap_or_else(|| FsPath::new("")),
+                Some(&stage_id),
+            )))
         }
+        Ok(None) => Ok(Json(Vec::new())),
         Err(error) if error.status == axum::http::StatusCode::NOT_FOUND => Ok(Json(Vec::new())),
         Err(error) => Err(error),
     }
@@ -889,6 +1070,7 @@ fn build_branch_schema(
     branch_index: u32,
     direction: i32,
     mut points: Vec<HysteresisPointSchema>,
+    stage_id: Option<&str>,
 ) -> HysteresisBranchSchema {
     let branch_id = branch_id_for_direction(direction).to_string();
     let branch_role = branch_role_for_direction(direction).to_string();
@@ -899,12 +1081,8 @@ fn build_branch_schema(
         if point.branch_ids.is_none() {
             point.branch_ids = Some(vec![branch_id.clone()]);
         }
-        if point.snapshot_resource_ref.is_none() {
-            if let Some(snapshot_id) = point.snapshot_id.as_deref() {
-                point.snapshot_resource_ref = Some(format!(
-                    "/v2/sessions/current/data/fields/m/samples/vector?snapshot_id={snapshot_id}"
-                ));
-            }
+        if let Some(snapshot_id) = point.snapshot_id.clone() {
+            annotate_hysteresis_snapshot_refs(point, &snapshot_id, FsPath::new(""), stage_id);
         }
     }
     let first = points.first();
@@ -938,12 +1116,15 @@ fn branch_role_for_direction(direction: i32) -> &'static str {
 fn annotate_minor_loops(
     minor_loops: Vec<HysteresisMinorLoopSchema>,
     stage_points: &[HysteresisPointSchema],
+    artifact_base_dir: &FsPath,
+    stage_id: Option<&str>,
 ) -> Vec<HysteresisMinorLoopSchema> {
     minor_loops
         .into_iter()
         .map(|mut loop_result| {
             let loop_id = loop_result.loop_id.clone();
-            let mut points = annotate_hysteresis_points(loop_result.points);
+            let mut points =
+                annotate_hysteresis_points(loop_result.points, artifact_base_dir, stage_id);
             for point in &mut points {
                 point.minor_loop_id = Some(loop_id.clone());
                 point.protocol_role = Some("minor".to_string());

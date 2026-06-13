@@ -28,9 +28,13 @@ void compute_uniaxial_anisotropy_field(
         return;
     }
 
-    const double ux = ctx.anisotropy.uniaxial_axis[0];
-    const double uy = ctx.anisotropy.uniaxial_axis[1];
-    const double uz = ctx.anisotropy.uniaxial_axis[2];
+    const bool use_axis_field =
+        !ctx.anisotropy.uniaxial_axis_x_field.empty() &&
+        !ctx.anisotropy.uniaxial_axis_y_field.empty() &&
+        !ctx.anisotropy.uniaxial_axis_z_field.empty();
+    const double uniform_ux = ctx.anisotropy.uniaxial_axis[0];
+    const double uniform_uy = ctx.anisotropy.uniaxial_axis[1];
+    const double uniform_uz = ctx.anisotropy.uniaxial_axis[2];
     const double uniform_Ms = ctx.material_fields.material.saturation_magnetisation;
     const double uniform_Ku = ctx.anisotropy.uniaxial_Ku;
     const double uniform_Ku2 = ctx.anisotropy.uniaxial_Ku2;
@@ -43,6 +47,9 @@ void compute_uniaxial_anisotropy_field(
         const double Ms_i = ctx.material_fields.Ms_field.empty() ? uniform_Ms : ctx.material_fields.Ms_field[i];
         const double Ku_i = ctx.material_fields.Ku_field.empty() ? uniform_Ku : ctx.material_fields.Ku_field[i];
         const double Ku2_i = ctx.material_fields.Ku2_field.empty() ? uniform_Ku2 : ctx.material_fields.Ku2_field[i];
+        const double ux = use_axis_field ? ctx.anisotropy.uniaxial_axis_x_field[i] : uniform_ux;
+        const double uy = use_axis_field ? ctx.anisotropy.uniaxial_axis_y_field[i] : uniform_uy;
+        const double uz = use_axis_field ? ctx.anisotropy.uniaxial_axis_z_field[i] : uniform_uz;
         const double prefactor = 2.0 * Ku_i / (kMu0 * Ms_i);
         const double prefactor2 = (Ku2_i != 0.0) ? 4.0 * Ku2_i / (kMu0 * Ms_i) : 0.0;
         const size_t base = i * 3u;

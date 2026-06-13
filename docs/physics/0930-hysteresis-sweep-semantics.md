@@ -31,15 +31,40 @@ $$\langle\mathbf{m}\rangle = \frac{\int M_s(\mathbf{r}) \mathbf{m}(\mathbf{r}) d
 We define the following scalar observables:
 - Parallel Magnetization: $m_{\parallel} = \langle\mathbf{m}\rangle \cdot \mathbf{u}_H$
 - Out-of-Plane (OOP) Magnetization: $m_{\text{oop}} = \langle\mathbf{m}\rangle \cdot \mathbf{n}_{\text{sample}}$
-- In-Plane (IP) Magnetization: $m_{\text{ip}} = \sqrt{(\langle\mathbf{m}\rangle \cdot \mathbf{u}_x)^2 + (\langle\mathbf{m}\rangle \cdot \mathbf{u}_y)^2}$
+- In-Plane (IP) Magnetization: $m_{\text{ip}} = |\langle\mathbf{m}\rangle - m_{\text{oop}}\mathbf{n}_{\text{sample}}|$
 - Transverse component: $\mathbf{m}_{\text{transverse}} = \langle\mathbf{m}\rangle - m_{\parallel} \mathbf{u}_H$
 
 #### Metrics
 - Remanence $M_{r\pm}$: Interpolated value of $m_{\parallel}$ at $H_{\text{ext}} = 0$.
 - Coercivity $H_{c\pm}$: Interpolated value of $H_{\text{ext}}$ where $m_{\parallel} = 0$.
+- Differential susceptibility diagnostic:
+  $\chi_{\Delta,i}=\Delta m_{\parallel}/\Delta H_{\text{mT}}$ between adjacent
+  settled points. Fullmag reports the maximum absolute finite value in
+  `max_differential_susceptibility` with units $1/\text{mT}$.
+- Switching field candidates: adjacent point pairs with the largest finite
+  $|\chi_{\Delta}|$ are reported as candidate switching intervals. They are
+  derivative-based diagnostics, not confirmed coercive fields. A candidate may
+  correspond to nucleation, domain-wall motion, reversal, or a numerical
+  under-resolved jump depending on the problem and field spacing.
 - Loop Area (Energy Dissipation):
   
   $$W = \mu_0 \oint \mathbf{M} \cdot d\mathbf{H}_{\text{ext}}$$
+  Fullmag also reports `loop_closure_summary` with the first/last field gap
+  and $m_{\parallel}$ gap. `loop_area` remains numeric for compatibility, but
+  its metric status is `warning` unless the sampled path returns to the initial
+  field and closes within the configured magnetization tolerance.
+
+Metric warnings are part of the scientific result. Missing positive/negative
+coercive crossings, missing remanence interpolation, too few points, unverified
+saturation, and non-converged field points must be exposed as warnings rather
+than silently represented by zero-valued metrics.
+
+Every reported metric has an explicit status in `metric_statuses`:
+`available` means the numeric value is physically supported by the current
+loop data, `unavailable` means the value is absent because the required
+crossing, interpolation, or data support is missing, and `warning` means the
+numeric value exists but interpretation is limited by saturation, convergence,
+or loop-completeness diagnostics.
 
 ### 2.2 Symbols and SI Units
 
@@ -53,8 +78,18 @@ We define the following scalar observables:
 | $m_{\parallel}$ | Parallel projection of averaged magnetization | $1$ |
 | $\hat{\mathbf{u}}_H$ | Unit vector of the applied hysteresis field | $1$ |
 | $\hat{\mathbf{u}}_{\text{meas}}$ | Unit vector used for reported loop projection | $1$ |
+| $\chi_{\Delta}$ | Finite-difference differential susceptibility of $m_{\parallel}$ versus field amplitude | $1/\text{mT}$ |
 | $W$ | Hysteresis loop energy loss per unit volume | $\text{J/m}^3$ |
 | $\theta, \phi$ | Field orientation angles | $\text{rad}$ (in UI: $\text{deg}$) |
+
+Public hysteresis authoring fields named `*_mT` represent the magnetic flux
+density equivalent $\mu_0 H$ in millitesla, matching common micromagnetics UI
+and mumax-style sweep notation. The canonical physical field remains
+$\mathbf{H}_{\text{ext}}$ in $\text{A/m}$; lowering therefore records
+`field_unit_provenance` with `authored_quantity="mu0_h"`,
+`authored_unit="mT"`, `canonical_quantity="h_ext"`,
+`canonical_unit="A/m"`, `display_unit="mT"`, and
+`mu0_h_per_m=1.2566370614359172e-6`.
 
 ### 2.3 Assumptions and Approximations
 - **Quasistatic limit:** The sweep rate $dH/dt$ is assumed to be slow enough that magnetization relaxes fully to a steady state at each step.
@@ -64,6 +99,12 @@ We define the following scalar observables:
   `sample_normal` reports projection onto the sample $+z$ normal, independent
   of the applied field direction. This keeps in-plane sweeps and OOP readouts
   scientifically distinguishable.
+- **OOP/IP decomposition:** `m_oop` and `m_ip` are sample-frame observables,
+  not aliases for whichever axis is used by `measurement_axis`.
+  `m_oop = <m> . n_sample` and
+  `m_ip = |<m> - m_oop n_sample|`. The current default sample frame uses
+  `n_sample = +z`; future object/sample-frame extensions must resolve and
+  record their `n_sample` instead of silently falling back to global axes.
 
 ## 3. Numerical Interpretation
 
@@ -125,6 +166,11 @@ We define the following scalar observables:
   `saturation_preparation_field_mT` when such a field was used.
 - `as_authored` and `zero_field_relaxed` runs report saturation status
   `not_requested`.
+- A checkpoint-started hysteresis run is requested as
+  `initial_protocol="checkpoint"` plus a non-empty `initial_state_ref` that
+  identifies the field-state artifact or hysteresis magnetization snapshot to
+  load. The reference is part of the public experiment intent and must survive
+  Python DSL, ProblemIR, UI authoring, and provenance round trips.
 
 ### 3.5 Magnetization Snapshot Storage
 - `magnetization="every_step"` stores a full vector magnetization snapshot for
@@ -139,6 +185,13 @@ We define the following scalar observables:
   hysteresis history by `snapshot_id`; visualization consumers must load the
   corresponding vector magnetization from that snapshot instead of inferring it
   from averaged loop data.
+- Snapshot containers must preserve the averaging provenance used for
+  `m_avg`, `m_parallel`, `m_oop`, and `m_ip`. When the reported
+  `magnetization_average_weighting` is not `uniform_sample_average`, the
+  container must include the per-sample averaging weights or an equivalent
+  reproducible weighting reference. A verifier must not compare weighted FEM or
+  multi-material FDM loop points against the unweighted full-snapshot mean,
+  because `scope=full` may include airbox or zero-weight samples.
 - Production storage for full hysteresis field playback is a data container,
   not a large JSON array. The preferred native container for per-point sampled
   magnetization is Zarr; HDF5 is the portable/export container. Small JSON
@@ -146,6 +199,11 @@ We define the following scalar observables:
   metadata, but full `m` playback frames should be referenced from the
   container by `snapshot_id`, point id, branch id, quantity id, mesh identity,
   and field revision.
+- The playback container must record the resolved magnetization snapshot
+  policy as `magnetization_storage_policy` in both `hysteresis.zarr/.zattrs`
+  and `hysteresis.zarr/fields/m/.zattrs`. This policy is the provenance for
+  whether the container represents `every_step`, `every_n`/`selected`, or
+  `key_events` capture and must match the stage's resolved storage intent.
 - Optional auxiliary field snapshots such as `H_demag` and `H_eff` are useful
   for debugging, diagnostics, and publication figures, but they are not part of
   the mandatory baseline hysteresis workflow and must not be treated as an MVP
@@ -182,7 +240,8 @@ We define the following scalar observables:
 - The physical target for hysteresis observables is the moment-weighted average
   $\langle\mathbf{m}\rangle = \int M_s \mathbf{m} dV / \int M_s dV$.
 - The runtime reports `magnetization_average_weighting` in
-  `hysteresis_metrics.json` and the v2 metrics resource.
+  `hysteresis_metrics.json`, the v2 metrics resource, and stored snapshot
+  container metadata.
 - FDM hysteresis metrics use `moment_weighted_fdm_ms_volume` when the resolved
   plan has usable per-cell weights: $M_s$ from `ms_field` or uniform material
   $M_s$, active-mask exclusion, and boundary volume fraction where available.
@@ -197,6 +256,11 @@ We define the following scalar observables:
   material, uniform-sampling cases where all active samples represent the same
   magnetic moment. Consumers must inspect the reported weighting before using
   coercivity, remanence, or loop-area metrics for multi-material comparisons.
+- Stored Zarr playback for weighted averages records the one-dimensional
+  `average_weights` array alongside `fields/m`. The array length matches the
+  `spatial_sample` axis, zero weights exclude airbox or inactive samples, and
+  the weighted point average is
+  `sum_i average_weights[i] * m_i / sum_i average_weights[i]`.
 
 ## 4. API, IR, and Planner Impact
 
@@ -221,15 +285,29 @@ The planner expands the piecewise segments and refinements into a sequence of co
 ## 5. Validation Strategy
 
 ### 5.1 Analytical Checks
-- Stoner-Wohlfarth coherent rotation loops for various angles $\theta$.
+- Stoner-Wohlfarth coherent rotation loops for various angles $\theta$. The
+  fast FDM macrospin regression uses a near-easy-axis variant at
+  $\theta=30^\circ$ rather than the exactly collinear $\theta=0^\circ$ case,
+  because ideal easy-axis switching is a torque-free saddle in deterministic
+  local minimization and needs an explicit perturbation/noise policy.
+- Thin-film demagnetizing contrast for OOP versus in-plane applied fields. The
+  fast FDM CPU regression uses a tiny strip with demag enabled and verifies that
+  the in-plane high-field projection remains much larger than the OOP
+  high-field projection while both branches show a measurable hysteresis
+  response.
 - Projection-axis regression: an in-plane applied field with
   `measurement_axis="sample_normal"` must not report the in-plane component as
   $m_{\parallel}$.
 - Runtime artifact projection benchmark: the small FEM waveguide projection
   smoke computes `ip_x`, `oop`, and `custom_theta45_phi30` angular-family
   variants and verifies that each stored point satisfies
-  `m_parallel = <m> . u_meas`, `m_oop = <m>_z`, and
-  `m_ip = sqrt(<m>_x^2 + <m>_y^2)`.
+  `m_parallel = <m> . u_meas`, `m_oop = <m> . n_sample`, and
+  `m_ip = |<m> - m_oop n_sample|`.
+- Playback artifact validation must verify `m_avg` directly from stored `m`
+  snapshots. For `uniform_sample_average`, the verifier uses the unweighted
+  mean. For weighted FDM/FEM cases, the verifier uses the stored
+  `average_weights` array and must fail if the weights are missing or
+  inconsistent with the snapshot sample axis.
 
 ### 5.2 Cross-Backend Checks
 - Matching coercivity and remanence between FDM and FEM solver references.

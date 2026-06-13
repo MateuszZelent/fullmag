@@ -18,6 +18,9 @@ struct FemGpuMaterialDeviceState {
     double *alpha = nullptr;
     double *ku = nullptr;
     double *ku2 = nullptr;
+    double *anisotropy_axis_x = nullptr;
+    double *anisotropy_axis_y = nullptr;
+    double *anisotropy_axis_z = nullptr;
     double *dind = nullptr;
     double *dbulk = nullptr;
     double *kc1 = nullptr;

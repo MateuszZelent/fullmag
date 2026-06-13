@@ -90,13 +90,21 @@ fn bootstrap_example_validates() {
 }
 
 #[test]
-fn hysteresis_validation_rejects_invalid_piecewise_schedule() {
+fn hysteresis_validation_accepts_field_unit_provenance() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.study = StudyIR::Hysteresis {
-        field_min_mT: None,
-        field_max_mT: None,
-        field_step_mT: None,
+        field_min_mT: Some(-100.0),
+        field_max_mT: Some(100.0),
+        field_step_mT: Some(10.0),
         field_values_mT: None,
+        field_unit_provenance: Some(FieldUnitProvenanceIR {
+            authored_quantity: "mu0_h".to_string(),
+            authored_unit: "mT".to_string(),
+            canonical_quantity: "h_ext".to_string(),
+            canonical_unit: "A/m".to_string(),
+            display_unit: "mT".to_string(),
+            mu0_h_per_m: 1.256_637_061_435_917_2e-6,
+        }),
         direction: None,
         orientation: Some(FieldOrientationIR::Preset {
             preset_name: "oop_positive".to_string(),
@@ -104,6 +112,105 @@ fn hysteresis_validation_rejects_invalid_piecewise_schedule() {
         measurement_axis: MeasurementAxisIR::field_axis(),
         angular_family: None,
         initial_protocol: "positive_saturation".to_string(),
+        initial_state_ref: None,
+        saturation: None,
+        branch_mode: "major_loop".to_string(),
+        settle_pipeline: None,
+        storage: None,
+        field_schedule: None,
+        schedule_refinements: None,
+        adaptive_refinement: None,
+        minor_loops: None,
+        sampling: SamplingIR {
+            outputs: vec![OutputIR::Scalar {
+                name: "mz".to_string(),
+                every_seconds: 1.0e-12,
+            }],
+            table_autosave: None,
+        },
+    };
+
+    ir.validate()
+        .expect("canonical hysteresis field unit provenance should validate");
+}
+
+#[test]
+fn hysteresis_validation_rejects_invalid_field_unit_provenance() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study = StudyIR::Hysteresis {
+        field_min_mT: Some(-100.0),
+        field_max_mT: Some(100.0),
+        field_step_mT: Some(10.0),
+        field_values_mT: None,
+        field_unit_provenance: Some(FieldUnitProvenanceIR {
+            authored_quantity: "b_ext".to_string(),
+            authored_unit: "T".to_string(),
+            canonical_quantity: "b_ext".to_string(),
+            canonical_unit: "T".to_string(),
+            display_unit: "T".to_string(),
+            mu0_h_per_m: 1.0,
+        }),
+        direction: None,
+        orientation: Some(FieldOrientationIR::Preset {
+            preset_name: "oop_positive".to_string(),
+        }),
+        measurement_axis: MeasurementAxisIR::field_axis(),
+        angular_family: None,
+        initial_protocol: "positive_saturation".to_string(),
+        initial_state_ref: None,
+        saturation: None,
+        branch_mode: "major_loop".to_string(),
+        settle_pipeline: None,
+        storage: None,
+        field_schedule: None,
+        schedule_refinements: None,
+        adaptive_refinement: None,
+        minor_loops: None,
+        sampling: SamplingIR {
+            outputs: vec![OutputIR::Scalar {
+                name: "mz".to_string(),
+                every_seconds: 1.0e-12,
+            }],
+            table_autosave: None,
+        },
+    };
+
+    let errors = ir
+        .validate()
+        .expect_err("invalid hysteresis field unit provenance must fail validation");
+
+    for expected in [
+        "field_unit_provenance.authored_quantity is unsupported",
+        "field_unit_provenance.authored_unit is unsupported",
+        "field_unit_provenance.canonical_quantity is unsupported",
+        "field_unit_provenance.canonical_unit is unsupported",
+        "field_unit_provenance.display_unit is unsupported",
+        "field_unit_provenance.mu0_h_per_m must match vacuum permeability",
+    ] {
+        assert!(
+            errors.iter().any(|error| error.contains(expected)),
+            "missing validation error containing {expected:?}; errors: {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn hysteresis_validation_rejects_invalid_piecewise_schedule() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study = StudyIR::Hysteresis {
+        field_min_mT: None,
+        field_max_mT: None,
+        field_step_mT: None,
+        field_values_mT: None,
+        field_unit_provenance: None,
+        direction: None,
+        orientation: Some(FieldOrientationIR::Preset {
+            preset_name: "oop_positive".to_string(),
+        }),
+        measurement_axis: MeasurementAxisIR::field_axis(),
+        angular_family: None,
+        initial_protocol: "positive_saturation".to_string(),
+        initial_state_ref: None,
         saturation: None,
         branch_mode: "major_loop".to_string(),
         settle_pipeline: None,
@@ -147,6 +254,7 @@ fn hysteresis_validation_rejects_overlapping_dense_windows_without_priority() {
         field_max_mT: Some(100.0),
         field_step_mT: Some(10.0),
         field_values_mT: None,
+        field_unit_provenance: None,
         direction: None,
         orientation: Some(FieldOrientationIR::Preset {
             preset_name: "oop_positive".to_string(),
@@ -154,6 +262,7 @@ fn hysteresis_validation_rejects_overlapping_dense_windows_without_priority() {
         measurement_axis: MeasurementAxisIR::field_axis(),
         angular_family: None,
         initial_protocol: "positive_saturation".to_string(),
+        initial_state_ref: None,
         saturation: None,
         branch_mode: "major_loop".to_string(),
         settle_pipeline: None,
@@ -202,6 +311,7 @@ fn hysteresis_validation_accepts_major_with_minor_loops_branch_mode() {
         field_max_mT: Some(100.0),
         field_step_mT: Some(10.0),
         field_values_mT: None,
+        field_unit_provenance: None,
         direction: None,
         orientation: Some(FieldOrientationIR::Preset {
             preset_name: "oop_positive".to_string(),
@@ -209,6 +319,7 @@ fn hysteresis_validation_accepts_major_with_minor_loops_branch_mode() {
         measurement_axis: MeasurementAxisIR::field_axis(),
         angular_family: None,
         initial_protocol: "positive_saturation".to_string(),
+        initial_state_ref: None,
         saturation: None,
         branch_mode: "major_with_minor_loops".to_string(),
         settle_pipeline: None,
@@ -242,6 +353,7 @@ fn hysteresis_validation_rejects_run_next_algorithm_without_next_step() {
         field_max_mT: Some(100.0),
         field_step_mT: Some(10.0),
         field_values_mT: None,
+        field_unit_provenance: None,
         direction: None,
         orientation: Some(FieldOrientationIR::Preset {
             preset_name: "oop_positive".to_string(),
@@ -249,6 +361,7 @@ fn hysteresis_validation_rejects_run_next_algorithm_without_next_step() {
         measurement_axis: MeasurementAxisIR::field_axis(),
         angular_family: None,
         initial_protocol: "positive_saturation".to_string(),
+        initial_state_ref: None,
         saturation: None,
         branch_mode: "major_loop".to_string(),
         settle_pipeline: Some(SettlePipelineIR::Sequence {
@@ -295,6 +408,7 @@ fn hysteresis_validation_rejects_run_next_algorithm_tree_without_fallback_branch
         field_max_mT: Some(100.0),
         field_step_mT: Some(10.0),
         field_values_mT: None,
+        field_unit_provenance: None,
         direction: None,
         orientation: Some(FieldOrientationIR::Preset {
             preset_name: "oop_positive".to_string(),
@@ -302,6 +416,7 @@ fn hysteresis_validation_rejects_run_next_algorithm_tree_without_fallback_branch
         measurement_axis: MeasurementAxisIR::field_axis(),
         angular_family: None,
         initial_protocol: "positive_saturation".to_string(),
+        initial_state_ref: None,
         saturation: None,
         branch_mode: "major_loop".to_string(),
         settle_pipeline: Some(SettlePipelineIR::Tree {
@@ -325,7 +440,10 @@ fn hysteresis_validation_rejects_run_next_algorithm_tree_without_fallback_branch
         adaptive_refinement: None,
         minor_loops: None,
         sampling: SamplingIR {
-            outputs: vec![],
+            outputs: vec![OutputIR::Scalar {
+                name: "mz".to_string(),
+                every_seconds: 1.0e-12,
+            }],
             table_autosave: None,
         },
     };
@@ -349,6 +467,7 @@ fn hysteresis_validation_rejects_retry_with_smaller_dt_without_scale() {
         field_max_mT: Some(100.0),
         field_step_mT: Some(10.0),
         field_values_mT: None,
+        field_unit_provenance: None,
         direction: None,
         orientation: Some(FieldOrientationIR::Preset {
             preset_name: "oop_positive".to_string(),
@@ -356,6 +475,7 @@ fn hysteresis_validation_rejects_retry_with_smaller_dt_without_scale() {
         measurement_axis: MeasurementAxisIR::field_axis(),
         angular_family: None,
         initial_protocol: "positive_saturation".to_string(),
+        initial_state_ref: None,
         saturation: None,
         branch_mode: "major_loop".to_string(),
         settle_pipeline: Some(SettlePipelineIR::Sequence {
@@ -378,7 +498,10 @@ fn hysteresis_validation_rejects_retry_with_smaller_dt_without_scale() {
         adaptive_refinement: None,
         minor_loops: None,
         sampling: SamplingIR {
-            outputs: vec![],
+            outputs: vec![OutputIR::Scalar {
+                name: "mz".to_string(),
+                every_seconds: 1.0e-12,
+            }],
             table_autosave: None,
         },
     };
@@ -399,6 +522,7 @@ fn hysteresis_validation_rejects_invalid_public_contract_values() {
         field_max_mT: Some(100.0),
         field_step_mT: Some(10.0),
         field_values_mT: Some(vec![0.0, f64::INFINITY]),
+        field_unit_provenance: None,
         direction: Some([0.0, f64::NAN, 1.0]),
         orientation: Some(FieldOrientationIR::Global {
             vector: [0.0, 0.0, 0.0],
@@ -406,6 +530,7 @@ fn hysteresis_validation_rejects_invalid_public_contract_values() {
         measurement_axis: MeasurementAxisIR::Named("sideways".to_string()),
         angular_family: None,
         initial_protocol: "mystery".to_string(),
+        initial_state_ref: None,
         saturation: Some(SaturationProbeIR {
             mode: "".to_string(),
             max_field_mT: f64::NAN,
@@ -442,7 +567,10 @@ fn hysteresis_validation_rejects_invalid_public_contract_values() {
             return_mT: 10.0,
         }]),
         sampling: SamplingIR {
-            outputs: vec![],
+            outputs: vec![OutputIR::Scalar {
+                name: "mz".to_string(),
+                every_seconds: 1.0e-12,
+            }],
             table_autosave: None,
         },
     };
@@ -484,6 +612,7 @@ fn hysteresis_validation_accepts_custom_measurement_axis_vector() {
         field_max_mT: Some(100.0),
         field_step_mT: Some(10.0),
         field_values_mT: None,
+        field_unit_provenance: None,
         direction: None,
         orientation: Some(FieldOrientationIR::Sample {
             theta: 90.0,
@@ -495,6 +624,7 @@ fn hysteresis_validation_accepts_custom_measurement_axis_vector() {
         },
         angular_family: None,
         initial_protocol: "positive_saturation".to_string(),
+        initial_state_ref: None,
         saturation: None,
         branch_mode: "major_loop".to_string(),
         settle_pipeline: None,
@@ -517,6 +647,85 @@ fn hysteresis_validation_accepts_custom_measurement_axis_vector() {
 }
 
 #[test]
+fn hysteresis_validation_accepts_checkpoint_with_initial_state_ref() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study = StudyIR::Hysteresis {
+        field_min_mT: Some(-100.0),
+        field_max_mT: Some(100.0),
+        field_step_mT: Some(10.0),
+        field_values_mT: None,
+        field_unit_provenance: None,
+        direction: None,
+        orientation: Some(FieldOrientationIR::Sample {
+            theta: 0.0,
+            phi: 0.0,
+        }),
+        measurement_axis: MeasurementAxisIR::field_axis(),
+        angular_family: None,
+        initial_protocol: "checkpoint".to_string(),
+        initial_state_ref: Some("hysteresis_snapshots/hysteresis_point_003/m.json".to_string()),
+        saturation: None,
+        branch_mode: "major_loop".to_string(),
+        settle_pipeline: None,
+        storage: None,
+        field_schedule: None,
+        schedule_refinements: None,
+        adaptive_refinement: None,
+        minor_loops: None,
+        sampling: SamplingIR {
+            outputs: vec![OutputIR::Scalar {
+                name: "mz".to_string(),
+                every_seconds: 1.0e-12,
+            }],
+            table_autosave: None,
+        },
+    };
+
+    ir.validate()
+        .expect("checkpoint hysteresis start with initial_state_ref should validate");
+}
+
+#[test]
+fn hysteresis_validation_rejects_checkpoint_without_initial_state_ref() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study = StudyIR::Hysteresis {
+        field_min_mT: Some(-100.0),
+        field_max_mT: Some(100.0),
+        field_step_mT: Some(10.0),
+        field_values_mT: None,
+        field_unit_provenance: None,
+        direction: None,
+        orientation: Some(FieldOrientationIR::Sample {
+            theta: 0.0,
+            phi: 0.0,
+        }),
+        measurement_axis: MeasurementAxisIR::field_axis(),
+        angular_family: None,
+        initial_protocol: "checkpoint".to_string(),
+        initial_state_ref: None,
+        saturation: None,
+        branch_mode: "major_loop".to_string(),
+        settle_pipeline: None,
+        storage: None,
+        field_schedule: None,
+        schedule_refinements: None,
+        adaptive_refinement: None,
+        minor_loops: None,
+        sampling: SamplingIR {
+            outputs: vec![],
+            table_autosave: None,
+        },
+    };
+
+    let errors = ir
+        .validate()
+        .expect_err("checkpoint hysteresis start without initial_state_ref must fail");
+    assert!(errors.iter().any(|error| {
+        error.contains("initial_state_ref is required when initial_protocol is checkpoint")
+    }));
+}
+
+#[test]
 fn hysteresis_validation_rejects_zero_custom_measurement_axis_vector() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.study = StudyIR::Hysteresis {
@@ -524,6 +733,7 @@ fn hysteresis_validation_rejects_zero_custom_measurement_axis_vector() {
         field_max_mT: Some(100.0),
         field_step_mT: Some(10.0),
         field_values_mT: None,
+        field_unit_provenance: None,
         direction: None,
         orientation: Some(FieldOrientationIR::Sample {
             theta: 90.0,
@@ -535,6 +745,7 @@ fn hysteresis_validation_rejects_zero_custom_measurement_axis_vector() {
         },
         angular_family: None,
         initial_protocol: "positive_saturation".to_string(),
+        initial_state_ref: None,
         saturation: None,
         branch_mode: "major_loop".to_string(),
         settle_pipeline: None,
@@ -1745,6 +1956,7 @@ fn frequency_response_round_trips_as_first_class_study() {
         spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
         excitation: FrequencyExcitationIR {
             field_au_per_m: [0.0, 0.0, 1.0],
+            phase_rad: 0.0,
         },
         frequencies_hz: FrequencySweepIR {
             values_hz: vec![1.0e9, 2.0e9],
@@ -1777,6 +1989,87 @@ fn frequency_response_round_trips_as_first_class_study() {
 }
 
 #[test]
+fn frequency_response_does_not_validate_time_integrator_alias() {
+    let mut ir = ProblemIR::bootstrap_example();
+    let mut dynamics = ir.study.dynamics().clone();
+    let DynamicsIR::Llg { integrator, .. } = &mut dynamics;
+    *integrator = "not-used-by-direct-frequency-response".to_string();
+    ir.study = StudyIR::FrequencyResponse {
+        dynamics,
+        operator: EigenOperatorConfigIR {
+            kind: EigenOperatorIR::LinearizedLlg,
+            include_demag: true,
+        },
+        equilibrium: EquilibriumSourceIR::Provided,
+        k_sampling: Some(KSamplingIR::Single {
+            k_vector: [0.0, 0.0, 0.0],
+        }),
+        normalization: FrequencyResponseNormalizationIR::UnitL2,
+        damping_policy: EigenDampingPolicyIR::Include,
+        spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
+        excitation: FrequencyExcitationIR {
+            field_au_per_m: [0.0, 0.0, 1.0],
+            phase_rad: 0.0,
+        },
+        frequencies_hz: FrequencySweepIR {
+            values_hz: vec![1.0e9],
+        },
+        sampling: SamplingIR {
+            table_autosave: None,
+            outputs: vec![OutputIR::FrequencyResponseOutput {
+                observable: FrequencyResponseOutputIR::SusceptibilityTensor,
+            }],
+        },
+    };
+
+    ir.validate().expect(
+        "frequency_response is a direct harmonic solve and must not validate time-integrator aliases",
+    );
+}
+
+#[test]
+fn frequency_response_rejects_non_finite_excitation_phase() {
+    let mut ir = ProblemIR::bootstrap_example();
+    let dynamics = ir.study.dynamics().clone();
+    ir.study = StudyIR::FrequencyResponse {
+        dynamics,
+        operator: EigenOperatorConfigIR {
+            kind: EigenOperatorIR::LinearizedLlg,
+            include_demag: true,
+        },
+        equilibrium: EquilibriumSourceIR::Provided,
+        k_sampling: Some(KSamplingIR::Single {
+            k_vector: [0.0, 0.0, 0.0],
+        }),
+        normalization: FrequencyResponseNormalizationIR::UnitL2,
+        damping_policy: EigenDampingPolicyIR::Include,
+        spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
+        excitation: FrequencyExcitationIR {
+            field_au_per_m: [0.0, 0.0, 1.0],
+            phase_rad: f64::NAN,
+        },
+        frequencies_hz: FrequencySweepIR {
+            values_hz: vec![1.0e9],
+        },
+        sampling: SamplingIR {
+            table_autosave: None,
+            outputs: vec![OutputIR::FrequencyResponseOutput {
+                observable: FrequencyResponseOutputIR::SusceptibilityTensor,
+            }],
+        },
+    };
+
+    let err = ir
+        .validate()
+        .expect_err("non-finite frequency response phase should be rejected");
+    assert!(
+        err.iter()
+            .any(|message| message.contains("frequency_response.excitation.phase_rad")),
+        "expected phase diagnostic, got {err:?}"
+    );
+}
+
+#[test]
 fn frequency_response_output_is_first_class_sampling_request() {
     let mut ir = ProblemIR::bootstrap_example();
     let dynamics = ir.study.dynamics().clone();
@@ -1793,6 +2086,7 @@ fn frequency_response_output_is_first_class_sampling_request() {
         spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
         excitation: FrequencyExcitationIR {
             field_au_per_m: [0.0, 0.0, 1.0],
+            phase_rad: 0.0,
         },
         frequencies_hz: FrequencySweepIR {
             values_hz: vec![1.0e9],
@@ -1858,13 +2152,14 @@ fn frequency_response_uses_distinct_public_contract_types() {
 fn frequency_response_contract_has_own_public_module() {
     let excitation = fullmag_ir::frequency_response_contract::FrequencyExcitationIR {
         field_au_per_m: [0.0, 1.0, 2.0],
+        phase_rad: 0.25,
     };
     let sweep = fullmag_ir::frequency_response_contract::FrequencySweepIR {
         values_hz: vec![1.0e9],
     };
     assert_eq!(
         serde_json::to_value(excitation).expect("excitation should serialize"),
-        serde_json::json!({"field_au_per_m": [0.0, 1.0, 2.0]})
+        serde_json::json!({"field_au_per_m": [0.0, 1.0, 2.0], "phase_rad": 0.25})
     );
     assert_eq!(
         serde_json::to_value(sweep).expect("sweep should serialize"),

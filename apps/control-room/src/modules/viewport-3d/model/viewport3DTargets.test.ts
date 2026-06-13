@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { DATA_FIELD_VECTOR_PATH } from "@/kernel/api/apiPaths";
 import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 
@@ -8,10 +9,20 @@ import {
   resolveGlobalObjectVisualizationSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import {
+  buildHysteresisReplayGlyphModel,
+  resolveHysteresisReplayMeshCompatibility,
   resolveHysteresisStepViewportTarget,
   resolveViewport3DSelectionBounds,
   targetForFdmDomain,
 } from "./viewport3DTargets";
+
+function fieldVectorResourceRef(
+  quantityId: string,
+  snapshotId: string,
+  stageId: string,
+): string {
+  return `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", quantityId)}?snapshot_id=${snapshotId}&stage_id=${stageId}`;
+}
 
 describe("viewport3DTargets", () => {
   it("maps the FDM structured domain to a stable object visualization target", () => {
@@ -39,6 +50,11 @@ describe("viewport3DTargets", () => {
         nodeId: "analysis:hysteresis:hysteresis-1:point:4",
         pointId: 4,
         quantity: "m",
+        resourceRef: fieldVectorResourceRef(
+          "m",
+          "hysteresis_point_005",
+          "hysteresis-1",
+        ),
         rowIndex: 4,
         seriesId: "hysteresis:hysteresis-1:m",
         snapshotId: "hysteresis_point_005",
@@ -48,7 +64,7 @@ describe("viewport3DTargets", () => {
         targetKind: "hysteresis-step",
         type: "analysis-chart-point",
         x: 25,
-      y: 0.8,
+        y: 0.8,
       },
     };
 
@@ -59,9 +75,158 @@ describe("viewport3DTargets", () => {
       meshIdentity: null,
       pointId: 4,
       quantityId: "m",
+      resourceRef: fieldVectorResourceRef(
+        "m",
+        "hysteresis_point_005",
+        "hysteresis-1",
+      ),
       snapshotId: "hysteresis_point_005",
       stageId: "hysteresis-1",
       targetId: "hysteresis-step:hysteresis-1:4",
+    });
+  });
+
+  it("detects hysteresis replay mesh identity mismatches without remapping", () => {
+    expect(
+      resolveHysteresisReplayMeshCompatibility(
+        {
+          fieldOrientation: null,
+          fieldRevision: null,
+          measurementAxis: null,
+          meshIdentity: "study_domain:rev-12",
+          pointId: 4,
+          quantityId: "m",
+          resourceRef: null,
+          snapshotId: "hysteresis_point_005",
+          stageId: "hysteresis-1",
+          targetId: "hysteresis-step:hysteresis-1:4",
+        },
+        { meshGenerationId: "study_domain:rev-12", meshRevision: 12 },
+      ),
+    ).toEqual({
+      actualMeshIdentity: "study_domain:rev-12",
+      reason: null,
+      requiredMeshIdentity: "study_domain:rev-12",
+      status: "compatible",
+    });
+
+    expect(
+      resolveHysteresisReplayMeshCompatibility(
+        {
+          fieldOrientation: null,
+          fieldRevision: null,
+          measurementAxis: null,
+          meshIdentity: "study_domain:rev-12",
+          pointId: 4,
+          quantityId: "m",
+          resourceRef: null,
+          snapshotId: "hysteresis_point_005",
+          stageId: "hysteresis-1",
+          targetId: "hysteresis-step:hysteresis-1:4",
+        },
+        { meshGenerationId: "study_domain:rev-13", meshRevision: 13 },
+      ),
+    ).toEqual({
+      actualMeshIdentity: "study_domain:rev-13",
+      reason:
+        "Snapshot was computed on mesh study_domain:rev-12, but the current 3D topology is study_domain:rev-13.",
+      requiredMeshIdentity: "study_domain:rev-12",
+      status: "mismatch",
+    });
+
+    expect(
+      resolveHysteresisReplayMeshCompatibility(
+        {
+          fieldOrientation: null,
+          fieldRevision: null,
+          measurementAxis: null,
+          meshIdentity: null,
+          pointId: 4,
+          quantityId: "m",
+          resourceRef: null,
+          snapshotId: "hysteresis_point_005",
+          stageId: "hysteresis-1",
+          targetId: "hysteresis-step:hysteresis-1:4",
+        },
+        { meshGenerationId: "study_domain:rev-13", meshRevision: 13 },
+      ),
+    ).toMatchObject({
+      reason: "Snapshot mesh identity is unavailable.",
+      status: "unknown",
+    });
+  });
+
+  it("builds a domain-neutral glyph model for hysteresis replay field and measurement axes", () => {
+    expect(
+      buildHysteresisReplayGlyphModel({
+        fieldOrientation: JSON.stringify({
+          kind: "custom",
+          vector: [0, 0, 2],
+        }),
+        fieldRevision: 12,
+        measurementAxis: JSON.stringify({
+          kind: "custom",
+          vector: [3, 4, 0],
+        }),
+        meshIdentity: "study_domain:rev-12",
+        pointId: 4,
+        quantityId: "m",
+        resourceRef: null,
+        snapshotId: "hysteresis_point_005",
+        stageId: "hysteresis-1",
+        targetId: "hysteresis-step:hysteresis-1:4",
+      }),
+    ).toEqual({
+      fieldDirection: {
+        label: "H field",
+        source: "custom",
+        vector: [0, 0, 1],
+      },
+      measurementAxis: {
+        label: "Measurement axis",
+        source: "custom",
+        vector: [0.6, 0.8, 0],
+      },
+      pointId: 4,
+      sampleNormal: {
+        label: "Sample normal",
+        source: "derived_oop",
+        vector: [0, 0, 1],
+      },
+      stageId: "hysteresis-1",
+      targetId: "hysteresis-step:hysteresis-1:4",
+    });
+  });
+
+  it("builds preset OOP and in-plane hysteresis replay glyph axes", () => {
+    expect(
+      buildHysteresisReplayGlyphModel({
+        fieldOrientation: JSON.stringify({
+          kind: "preset",
+          preset_name: "oop",
+        }),
+        fieldRevision: null,
+        measurementAxis: JSON.stringify({
+          kind: "preset",
+          preset_name: "in_plane_y",
+        }),
+        meshIdentity: null,
+        pointId: 6,
+        quantityId: "m",
+        resourceRef: null,
+        snapshotId: "hysteresis_point_007",
+        stageId: "hysteresis-1",
+        targetId: "hysteresis-step:hysteresis-1:6",
+      }),
+    ).toMatchObject({
+      fieldDirection: {
+        source: "oop",
+        vector: [0, 0, 1],
+      },
+      measurementAxis: {
+        source: "in_plane_y",
+        vector: [0, 1, 0],
+      },
     });
   });
 

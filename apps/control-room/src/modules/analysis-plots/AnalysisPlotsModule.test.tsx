@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
   ANALYSIS_HYSTERESIS_POINTS_PATH,
+  DATA_FIELD_VECTOR_PATH,
   DATA_TABLE_ROWS_PATH,
   SIMULATION_SOLVER_ENERGIES_HISTORY_PATH,
 } from "../../kernel/api/apiPaths";
@@ -15,7 +16,11 @@ import {
   resolveAnalysisPlotsYAxisIds,
   shouldFetchAnalysisTableRows,
 } from "./analysisPlotsModel";
-import { frequencyDomainSelectionFromPoint } from "./useAnalysisPlotsController";
+import {
+  frequencyDomainChartRouteOverrideFromSelection,
+  frequencyDomainSelectionFromPoint,
+  selectedHysteresisStageIdFromSelection,
+} from "./useAnalysisPlotsController";
 import { buildScalarChartSeries } from "./chartTableModel";
 import { buildSolverEnergyHistoryChartSeries } from "./energyHistoryAdapter";
 import { AnalysisPlotsView } from "./AnalysisPlotsModule";
@@ -26,14 +31,20 @@ import { SelectionController } from "@/kernel/selection/SelectionController";
 import type { KernelApi } from "@/kernel/types";
 import {
   adjacentHysteresisPointIndex,
+  buildHysteresisAdaptivePointMarkerModel,
   buildHysteresisAngularFamilyLineSeriesModel,
   buildHysteresisChartLineSeriesModel,
+  buildHysteresisMetricMarkerModel,
   buildHysteresisChartPointSelection,
+  buildHysteresisLoadPointIn3DInput,
   clearHysteresisPointSelectionForLive,
   getProgressYValue,
   HYSTERESIS_CHART_VALUE_AXIS_SCALE,
+  hysteresisChartReplayActionPresentation,
   hysteresisTargetMetadataFromOrientation,
   nextHysteresisPlaybackIndex,
+  resolveHysteresisKeyboardNavigationIndex,
+  resolveHysteresisScrubberPointIndex,
   resolveHysteresisNavigationIndex,
   selectedHysteresisPointId,
 } from "@/shared/domain/study/HysteresisChart";
@@ -45,6 +56,10 @@ import {
 
 function tableRowsResourceKey(tableId: string): string {
   return DATA_TABLE_ROWS_PATH.replace("{table_id}", encodeURIComponent(tableId));
+}
+
+function snapshotVectorResourceKey(snapshotId: string): string {
+  return `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?component=full&scope_kind=full&snapshot_id=${snapshotId}`;
 }
 
 const mockKernel = {
@@ -228,6 +243,84 @@ describe("AnalysisPlotsView", () => {
     ]);
   });
 
+  it("builds dedicated adaptive refinement point markers for visible hysteresis points", () => {
+    const points = [
+      {
+        adaptive_inserted: false,
+        field_value_mT: 20,
+        m_avg: [0.1, 0.2, 0.3],
+        m_ip: 0.224,
+        m_oop: 0.3,
+        m_parallel: 0.2,
+        point_id: 0,
+        snapshot_id: null,
+        status: "Completed",
+      },
+      {
+        adaptive_inserted: true,
+        field_value_mT: 0,
+        m_avg: [0.0, 0.0, 0.01],
+        m_ip: 0,
+        m_oop: 0.01,
+        m_parallel: 0.01,
+        point_id: 7,
+        refinement_reason: ["zero_crossing"],
+        snapshot_id: "hysteresis_adaptive_001",
+        status: "Completed",
+      },
+    ];
+
+    const markers = buildHysteresisAdaptivePointMarkerModel(
+      points,
+      [],
+      [],
+      "full",
+      "m_parallel",
+    );
+
+    expect(markers).toEqual([[0, 0.01, 7]]);
+  });
+
+  it("builds adaptive refinement markers from branch resources when points are not loaded", () => {
+    const branches = [
+      {
+        branch_id: "descending",
+        branch_index: 0,
+        branch_role: "return",
+        direction: -1,
+        end_field_mT: 0,
+        end_point_id: 2,
+        minor_loop_id: null,
+        parent_branch_id: null,
+        point_count: 2,
+        points: [
+          {
+            adaptive_inserted: true,
+            field_value_mT: -5,
+            m_avg: [0.1, 0.0, 0.0],
+            m_ip: 0.1,
+            m_oop: 0,
+            m_parallel: 0.1,
+            point_id: 3,
+            status: "Completed",
+          },
+        ],
+        start_field_mT: 20,
+        start_point_id: 1,
+      },
+    ];
+
+    const markers = buildHysteresisAdaptivePointMarkerModel(
+      [],
+      branches,
+      [],
+      "return",
+      "m_parallel",
+    );
+
+    expect(markers).toEqual([[-5, 0.1, 3]]);
+  });
+
   it("builds RGB component overlay series from averaged magnetization vectors", () => {
     const points = [
       {
@@ -339,6 +432,139 @@ describe("AnalysisPlotsView", () => {
     ]);
   });
 
+  it("builds source-linked hysteresis metric markers for chart tooltips", () => {
+    const points = [
+      {
+        adaptive_inserted: true,
+        field_value_mT: 12,
+        has_non_converged_steps: false,
+        is_reversal_field: false,
+        m_avg: [0.1, 0.2, 0.3],
+        m_ip: 0.224,
+        m_oop: 0.3,
+        m_parallel: 0.4,
+        point_id: 1,
+        snapshot_id: null,
+        status: "Completed",
+      },
+      {
+        adaptive_inserted: false,
+        field_value_mT: -18,
+        has_non_converged_steps: true,
+        is_reversal_field: true,
+        m_avg: [0.1, 0.2, -0.3],
+        m_ip: 0.224,
+        m_oop: -0.3,
+        m_parallel: -0.4,
+        point_id: 2,
+        snapshot_id: null,
+        status: "Warning",
+      },
+    ];
+
+    expect(
+      buildHysteresisMetricMarkerModel({
+        formatXValue: (fieldValueMt) => fieldValueMt / 1000,
+        metrics: {
+          H_c: null,
+          H_c_minus: -21,
+          H_c_plus: 19,
+          H_eb: null,
+          M_r_minus: -0.72,
+          M_r_plus: 0.68,
+          loop_area: 0.1,
+          saturation_preparation_field_mT: 250,
+          saturation_status: "saturated",
+          switching_field_candidates: [
+            {
+              branch_id: "descending",
+              field_value_mT: -18,
+              point_id_after: 2,
+              point_id_before: 1,
+              susceptibility_per_mT: 0.8,
+            },
+          ],
+          warnings: ["minor loop is not closed"],
+        },
+        points,
+        yAxisKey: "m_parallel",
+      }),
+    ).toEqual([
+      {
+        fieldValueMt: 19,
+        kind: "coercivity",
+        label: "Hc+",
+        pointId: null,
+        value: 0,
+        x: 0.019,
+      },
+      {
+        fieldValueMt: -21,
+        kind: "coercivity",
+        label: "Hc-",
+        pointId: null,
+        value: 0,
+        x: -0.021,
+      },
+      {
+        fieldValueMt: 0,
+        kind: "remanence",
+        label: "Mr+",
+        pointId: null,
+        value: 0.68,
+        x: 0,
+      },
+      {
+        fieldValueMt: 0,
+        kind: "remanence",
+        label: "Mr-",
+        pointId: null,
+        value: -0.72,
+        x: 0,
+      },
+      {
+        fieldValueMt: 250,
+        kind: "saturation",
+        label: "Hsat",
+        pointId: null,
+        value: null,
+        x: 0.25,
+      },
+      {
+        fieldValueMt: -18,
+        kind: "switching-candidate",
+        label: "Switch candidate",
+        pointId: 2,
+        value: -0.4,
+        x: -0.018,
+      },
+      {
+        fieldValueMt: -18,
+        kind: "reversal",
+        label: "Reversal",
+        pointId: 2,
+        value: -0.4,
+        x: -0.018,
+      },
+      {
+        fieldValueMt: 12,
+        kind: "adaptive",
+        label: "Adaptive",
+        pointId: 1,
+        value: 0.4,
+        x: 0.012,
+      },
+      {
+        fieldValueMt: -18,
+        kind: "warning",
+        label: "Warning",
+        pointId: 2,
+        value: -0.4,
+        x: -0.018,
+      },
+    ]);
+  });
+
   it("builds the virgin segment from a virgin-then-major hysteresis schedule", () => {
     const points = [
       {
@@ -411,7 +637,12 @@ describe("AnalysisPlotsView", () => {
         m_oop: 0.3,
         m_parallel: 0.8,
         point_id: 4,
+        field_orientation: { kind: "preset", preset_name: "in_plane_x" },
+        measurement_axis: { kind: "custom", vector: [1, 0, 0] },
         snapshot_id: "hysteresis_point_005",
+        snapshot_storage_reason: "snapshot found in hysteresis.zarr",
+        snapshot_storage_status: "available",
+        snapshot_vector_resource_ref: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?snapshot_id=hysteresis_point_005&stage_id=hysteresis-1`,
         status: "Completed",
       },
       stageId: "hysteresis-1",
@@ -436,18 +667,75 @@ describe("AnalysisPlotsView", () => {
         pointId: 4,
         quantity: "m_parallel",
         quantityId: "m",
+        resourceRef: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?snapshot_id=hysteresis_point_005&stage_id=hysteresis-1`,
         snapshotId: "hysteresis_point_005",
         stageId: "hysteresis-1",
         tableId: "hysteresis:hysteresis-1",
         targetId: "hysteresis-step:hysteresis-1:4",
         targetKind: "hysteresis-step",
         type: "analysis-chart-point",
-        fieldOrientation: "{\"kind\":\"preset\",\"preset_name\":\"in_plane_y\"}",
+        fieldOrientation: "{\"kind\":\"preset\",\"preset_name\":\"in_plane_x\"}",
         fieldRevision: 12,
-        measurementAxis: "field_axis",
+        measurementAxis: "{\"kind\":\"custom\",\"vector\":[1,0,0]}",
         x: 25,
         y: 0.8,
       },
+    });
+  });
+
+  it("builds 3D replay command input from point-level hysteresis metadata", () => {
+    const input = buildHysteresisLoadPointIn3DInput({
+      point: {
+        field_value_mT: 25,
+        m_avg: [0.1, 0.2, 0.3],
+        m_ip: 0.224,
+        m_oop: 0.3,
+        m_parallel: 0.8,
+        point_id: 4,
+        field_orientation: { kind: "preset", preset_name: "in_plane_x" },
+        measurement_axis: { kind: "custom", vector: [1, 0, 0] },
+        snapshot_id: "hysteresis_point_005",
+        snapshot_storage_reason: "snapshot found in hysteresis.zarr",
+        snapshot_storage_status: "available",
+        snapshot_vector_resource_ref: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?snapshot_id=hysteresis_point_005&stage_id=hysteresis-1`,
+        status: "Completed",
+      },
+      stageId: "hysteresis-1",
+      targetMetadata: hysteresisTargetMetadataFromOrientation({
+        direction: null,
+        measurement_axis: "field_axis",
+        orientation: { kind: "preset", preset_name: "in_plane_y" },
+        revision: 12,
+        stage_id: "hysteresis-1",
+        stage_index: 0,
+      }),
+      yAxisKey: "m_parallel",
+    });
+
+    expect(input).toMatchObject({
+      fieldOrientation: "{\"kind\":\"preset\",\"preset_name\":\"in_plane_x\"}",
+      fieldRevision: 12,
+      fieldVal: 25,
+      mVal: 0.8,
+      measurementAxis: "{\"kind\":\"custom\",\"vector\":[1,0,0]}",
+      pointId: 4,
+      snapshotId: "hysteresis_point_005",
+      snapshotResourceRef: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?snapshot_id=hysteresis_point_005&stage_id=hysteresis-1`,
+      snapshotStorageReason: "snapshot found in hysteresis.zarr",
+      snapshotStorageStatus: "available",
+      stageId: "hysteresis-1",
+    });
+  });
+
+  it("disables the hysteresis chart 3D replay action when the snapshot payload is missing", () => {
+    expect(hysteresisChartReplayActionPresentation(
+      "hysteresis_point_005",
+      "missing",
+      "snapshot payload not found in hysteresis.zarr or JSON fallback",
+    )).toEqual({
+      disabled: true,
+      title:
+        "Snapshot payload is missing for this point: snapshot payload not found in hysteresis.zarr or JSON fallback",
     });
   });
 
@@ -457,6 +745,24 @@ describe("AnalysisPlotsView", () => {
     expect(adjacentHysteresisPointIndex(-1, 4, 10, -1)).toBe(3);
     expect(nextHysteresisPlaybackIndex(-1, 4, 10)).toBe(5);
     expect(nextHysteresisPlaybackIndex(9, 4, 10)).toBe(0);
+  });
+
+  it("resolves hysteresis keyboard navigation only for local arrow keys", () => {
+    expect(resolveHysteresisKeyboardNavigationIndex("ArrowRight", -1, 4, 10)).toBe(5);
+    expect(resolveHysteresisKeyboardNavigationIndex("ArrowLeft", -1, 4, 10)).toBe(3);
+    expect(resolveHysteresisKeyboardNavigationIndex("ArrowRight", 9, 4, 10)).toBe(9);
+    expect(resolveHysteresisKeyboardNavigationIndex("ArrowLeft", 0, 4, 10)).toBe(0);
+    expect(resolveHysteresisKeyboardNavigationIndex("Enter", 4, 4, 10)).toBeNull();
+    expect(resolveHysteresisKeyboardNavigationIndex("ArrowRight", -1, null, 0)).toBeNull();
+  });
+
+  it("resolves scrubber input values to safe hysteresis point indices", () => {
+    expect(resolveHysteresisScrubberPointIndex("2", 5)).toBe(2);
+    expect(resolveHysteresisScrubberPointIndex("2.8", 5)).toBe(3);
+    expect(resolveHysteresisScrubberPointIndex("-4", 5)).toBe(0);
+    expect(resolveHysteresisScrubberPointIndex("99", 5)).toBe(4);
+    expect(resolveHysteresisScrubberPointIndex("not-a-number", 5)).toBeNull();
+    expect(resolveHysteresisScrubberPointIndex("0", 0)).toBeNull();
   });
 
   it("uses live hysteresis progress magnetization for the active in-flight point", () => {
@@ -511,6 +817,97 @@ describe("AnalysisPlotsView", () => {
     }, "hysteresis-1")).toBeNull();
   });
 
+  it("keeps the hysteresis plot active for root, child, and snapshot selections", () => {
+    expect(selectedHysteresisStageIdFromSelection({
+      kind: "study.stage.hysteresis",
+      label: "Hysteresis 1",
+      moduleSource: "explorer",
+      nodeId: "model:study:stages:stage:hysteresis-1",
+      objectId: null,
+      ref: {
+        kind: "study.stage.hysteresis",
+        nodeId: "model:study:stages:stage:hysteresis-1",
+        stageId: "hysteresis-1",
+        stageIndex: 0,
+        type: "study-stage",
+      },
+    })).toBe("hysteresis-1");
+
+    expect(selectedHysteresisStageIdFromSelection({
+      kind: "study.stage.action",
+      label: "Live Run",
+      moduleSource: "explorer",
+      nodeId: "model:study:stages:stage:hysteresis-1:live-run",
+      objectId: null,
+      ref: {
+        kind: "study.stage.action",
+        nodeId: "model:study:stages:stage:hysteresis-1:live-run",
+        stageId: "hysteresis-1",
+        stageIndex: 0,
+        type: "study-stage",
+      },
+    })).toBe("hysteresis-1");
+
+    for (const nodeSuffix of [
+      "orientation",
+      "adaptive-refinement",
+      "angular-family",
+      "settle-pipeline",
+      "points",
+      "snapshots",
+      "field-current",
+    ]) {
+      expect(selectedHysteresisStageIdFromSelection({
+        kind: "study.stage.action",
+        label: nodeSuffix,
+        moduleSource: "explorer",
+        nodeId: `model:study:stages:stage:hysteresis-1:${nodeSuffix}`,
+        objectId: null,
+        ref: {
+          kind: "study.stage.action",
+          nodeId: `model:study:stages:stage:hysteresis-1:${nodeSuffix}`,
+          stageId: "hysteresis-1",
+          stageIndex: 0,
+          type: "study-stage",
+        },
+      })).toBe("hysteresis-1");
+    }
+
+    expect(selectedHysteresisStageIdFromSelection({
+      kind: "study.stage.action",
+      label: "Snapshot hysteresis_point_005",
+      moduleSource: "explorer",
+      nodeId: "model:study:stages:stage:hysteresis-1:field-point:4:snapshot:hysteresis_point_005",
+      objectId: null,
+      ref: {
+        kind: "study.stage.action",
+        nodeId: "model:study:stages:stage:hysteresis-1:field-point:4:snapshot:hysteresis_point_005",
+        pointId: 4,
+        quantityId: "m",
+        snapshotId: "hysteresis_point_005",
+        stageId: "hysteresis-1",
+        stageIndex: 0,
+        targetId: "hysteresis-step:hysteresis-1:4",
+        type: "hysteresis-snapshot",
+      },
+    })).toBe("hysteresis-1");
+
+    expect(selectedHysteresisStageIdFromSelection({
+      kind: "study.stage.relax",
+      label: "Relax",
+      moduleSource: "explorer",
+      nodeId: "model:study:stages:stage:relax-1",
+      objectId: null,
+      ref: {
+        kind: "study.stage.relax",
+        nodeId: "model:study:stages:stage:relax-1",
+        stageId: "relax-1",
+        stageIndex: 1,
+        type: "study-stage",
+      },
+    })).toBeNull();
+  });
+
   it("clears only the selected hysteresis point for the active stage when returning to live", () => {
     const selection = new SelectionController(new EventBus<KernelEventMap>());
     const kernel = { selection } as Pick<KernelApi, "selection">;
@@ -543,6 +940,55 @@ describe("AnalysisPlotsView", () => {
       "analysis-plots",
     )).toBe(true);
     expect(selectedHysteresisPointId(selection.get(), "hysteresis-1")).toBeNull();
+  });
+
+  it("clears a hysteresis snapshot explorer selection for the active stage when returning to live", () => {
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    const kernel = { selection } as Pick<KernelApi, "selection">;
+
+    selection.set({
+      kind: "study.stage.action",
+      label: "Snapshot hysteresis_point_005",
+      nodeId: "study:stage:0:field-point:4:snapshot:hysteresis_point_005",
+      objectId: null,
+      ref: {
+        kind: "study.stage.action",
+        nodeId: "study:stage:0:field-point:4:snapshot:hysteresis_point_005",
+        pointId: 4,
+        quantityId: "m",
+        resourceRef: snapshotVectorResourceKey("hysteresis_point_005"),
+        snapshotId: "hysteresis_point_005",
+        stageId: "hysteresis-1",
+        stageIndex: 0,
+        targetId: "hysteresis-step:hysteresis-1:4",
+        type: "hysteresis-snapshot",
+      },
+    }, "explorer");
+
+    expect(clearHysteresisPointSelectionForLive(
+      kernel,
+      "hysteresis-2",
+      "analysis-plots",
+    )).toBe(false);
+    expect(selection.get().ref).toMatchObject({
+      snapshotId: "hysteresis_point_005",
+      stageId: "hysteresis-1",
+      type: "hysteresis-snapshot",
+    });
+
+    expect(clearHysteresisPointSelectionForLive(
+      kernel,
+      "hysteresis-1",
+      "analysis-plots",
+    )).toBe(true);
+    expect(selection.get()).toEqual({
+      kind: null,
+      label: null,
+      moduleSource: "analysis-plots",
+      nodeId: null,
+      objectId: null,
+      ref: null,
+    });
   });
 
   it("renders chart and axis column controls in the analysis surface", () => {
@@ -670,22 +1116,37 @@ describe("AnalysisPlotsView", () => {
   });
 
   it("maps frequency-domain chart clicks to frequency-domain selections", () => {
-    const responseModel = buildFrequencyResponseChartModel({
-      artifact_path: "response/magnetic_response_sweep.v2.json",
-      payload: {
-        points: [
-          {
-            field_id: "response-field-7",
-            frequency_hz: 12.5e9,
-            frequency_index: 7,
-            max_response_amplitude: 0.75,
-            observable_id: "mx",
-          },
-        ],
-        schema_version: "magnetic_response_sweep.v2",
+    const responseModel = buildFrequencyResponseChartModel(
+      {
+        artifact_path: "response/magnetic_response_sweep.v2.json",
+        payload: {
+          points: [
+            {
+              field_id: "response-field-7",
+              frequency_hz: 12.5e9,
+              frequency_index: 7,
+              max_response_amplitude: 0.75,
+              observable_id: "mx",
+            },
+          ],
+          schema_version: "magnetic_response_sweep.v2",
+        },
+        status: "ready",
       },
-      status: "ready",
-    });
+      {
+        resources: {
+          response_field_resources: [
+            {
+              field_resource_id: "analysis:frequency-response:frequency-0042",
+              frequency_index: 7,
+              payload_path:
+                "response/field_payloads/frequency_0007/vector_xyz.bin",
+            },
+          ],
+        },
+        schema_version: "frequency_domain_manifest.v1",
+      },
+    );
 
     const selection = frequencyDomainSelectionFromPoint({
       dispersionModel: buildEigenDispersionChartModel({ status: "idle" }),
@@ -715,7 +1176,7 @@ describe("AnalysisPlotsView", () => {
       objectId: null,
       ref: {
         calculationMode: "fmr_response",
-        fieldId: "response-field-7",
+        fieldId: "analysis:frequency-response:frequency-0042",
         frequencyIndex: 7,
         kind: "results.frequency_response.frequency_point",
         nodeId:
@@ -725,6 +1186,51 @@ describe("AnalysisPlotsView", () => {
         type: "frequency-domain",
       },
     });
+  });
+
+  it("routes frequency-domain explorer selections to matching chart surfaces", () => {
+    expect(
+      frequencyDomainChartRouteOverrideFromSelection({
+        kind: "results.eigen.spectrum",
+        label: "Spectrum",
+        moduleSource: "explorer",
+        nodeId: "results:eigen:spectrum",
+        objectId: null,
+        ref: {
+          kind: "results.eigen.spectrum",
+          nodeId: "results:eigen:spectrum",
+          type: "frequency-domain",
+        },
+      }),
+    ).toEqual({ mode: "free_modes", primaryChart: "modal-spectrum" });
+    expect(
+      frequencyDomainChartRouteOverrideFromSelection({
+        kind: "results.eigen.dispersion",
+        label: "Dispersion",
+        moduleSource: "explorer",
+        nodeId: "results:eigen:dispersion",
+        objectId: null,
+        ref: {
+          kind: "results.eigen.dispersion",
+          nodeId: "results:eigen:dispersion",
+          type: "frequency-domain",
+        },
+      }),
+    ).toEqual({ mode: "dispersion_modal", primaryChart: "dispersion" });
+    expect(
+      frequencyDomainChartRouteOverrideFromSelection({
+        kind: "results.frequency_response.sweep",
+        label: "Response sweep",
+        moduleSource: "explorer",
+        nodeId: "results:frequency-response:sweep",
+        objectId: null,
+        ref: {
+          kind: "results.frequency_response.sweep",
+          nodeId: "results:frequency-response:sweep",
+          type: "frequency-domain",
+        },
+      }),
+    ).toEqual({ mode: "fmr_response", primaryChart: "response-sweep" });
   });
 
   it("renders active zoom range with a clear action", () => {

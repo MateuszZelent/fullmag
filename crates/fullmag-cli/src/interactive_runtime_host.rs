@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use fullmag_ir::{BackendPlanIR, ExecutionPlanIR, FemDomainMeshModeIR};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::control_room::*;
 use crate::live_workspace::*;
@@ -917,6 +917,7 @@ fn apply_step_stats_to_idle_live_state(
     state.live_state.latest_step.step = step_stats.step;
     state.live_state.latest_step.time = step_stats.time;
     state.live_state.latest_step.dt = step_stats.dt;
+    state.live_state.latest_step.pseudo_time_s = step_stats.pseudo_time_s;
     state.live_state.latest_step.e_ex = step_stats.e_ex;
     state.live_state.latest_step.e_demag = step_stats.e_demag;
     state.live_state.latest_step.e_ext = step_stats.e_ext;
@@ -935,10 +936,10 @@ fn apply_step_stats_to_idle_live_state(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_step_stats_to_idle_live_state, CurrentLiveControlState,
-        CurrentLiveDisplaySelectionHandle,
+        CurrentLiveControlState, CurrentLiveDisplaySelectionHandle,
+        apply_step_stats_to_idle_live_state,
     };
-    use crate::live_workspace::{bootstrap_live_state, LocalLiveWorkspaceState};
+    use crate::live_workspace::{LocalLiveWorkspaceState, bootstrap_live_state};
     use crate::types::{
         CurrentLiveLatestFields, CurrentLivePreviewFieldCache, RunManifest, SessionCommand,
         SessionManifest,

@@ -500,6 +500,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/analysis/hysteresis/{stage_id}/adaptive-refinement": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_hysteresis_stage_id_adaptive_refinement"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/analysis/hysteresis/{stage_id}/branches": {
         parameters: {
             query?: never;
@@ -3866,10 +3882,18 @@ export interface components {
              */
             snapshot_id?: string | null;
             /**
+             * @description Optional hysteresis stage id that owns `snapshot_id`.
+             *
+             *     When present, the data-plane reader validates that the requested
+             *     snapshot appears in that stage's hysteresis point history before
+             *     loading persisted magnetization data.
+             */
+            stage_id?: string | null;
+            /**
              * @description Optional complex analysis view for frequency-domain fields.
              *
-             *     Accepted values for analysis fields: `real`, `imag`, `abs`, `amplitude`,
-             *     `phase`, `phase_rotated_real`.
+             *     Accepted values for analysis fields: `complex`, `full`, `real`, `imag`,
+             *     `abs`, `amplitude`, `phase`, `phase_rotated_real`.
              */
             view?: string | null;
         };
@@ -3882,6 +3906,7 @@ export interface components {
             gpu_available: boolean;
             modal_solver_available: boolean;
             reason: string;
+            static_periodic_response_available: boolean;
             status: string;
             study_kind: string;
         };
@@ -3916,17 +3941,37 @@ export interface components {
         FrequencyDomainFieldResource: {
             artifact_path: string;
             available_views: string[];
+            binary_layout?: string | null;
+            /** Format: int64 */
+            complex_pair_count?: number | null;
+            component_basis?: string | null;
+            /** Format: int64 */
+            component_count?: number | null;
             components: string[];
             /** Format: double */
             default_phase_rad?: number | null;
             default_view: string;
             field_id: string;
             missing_reason?: string | null;
+            payload_encoding?: string | null;
+            /** Format: int64 */
+            payload_value_count?: number | null;
             quantity: string;
             resource_key: string;
             schema_version: string;
             source_family: string;
             status: string;
+            /** Format: int64 */
+            tangent_complex_pair_count?: number | null;
+            tangent_component_basis?: string | null;
+            /** Format: int64 */
+            tangent_component_count?: number | null;
+            tangent_components?: string[] | null;
+            tangent_field_payload_path?: string | null;
+            tangent_payload_encoding?: string | null;
+            /** Format: int64 */
+            tangent_payload_value_count?: number | null;
+            tangent_value_kind?: string | null;
             value_kind: string;
         };
         FrequencyDomainJsonArtifactResource: {
@@ -3944,6 +3989,7 @@ export interface components {
             existing_frequency_response_namespace_preserved: boolean;
             family_namespace: string;
             floquet_nonzero_k_demag_supported: boolean;
+            floquet_nonzero_k_response_supported: boolean;
             response: components["schemas"]["FrequencyDomainAvailabilitySummaryResource"];
             response_cancel_requested?: null | components["schemas"]["FrequencyDomainSweepProgressResource"];
             response_progress?: null | components["schemas"]["FrequencyDomainSweepProgressResource"];
@@ -3979,6 +4025,7 @@ export interface components {
             partial_artifacts_available: boolean;
             progress_json?: string | null;
             schema_version: string;
+            state: string;
             status: string;
             /** Format: int64 */
             total_frequency_points: number;
@@ -4116,6 +4163,36 @@ export interface components {
             status_reason?: string | null;
             worker: string;
         };
+        HysteresisAdaptiveRefinementCandidateSchema: {
+            candidate_id: string;
+            /** Format: double */
+            dm_dh_per_mT: number;
+            /** Format: double */
+            field_value_mT: number;
+            /** Format: double */
+            parent_left_field_mT: number;
+            parent_left_point_id: number;
+            /** Format: double */
+            parent_right_field_mT: number;
+            parent_right_point_id: number;
+            /** Format: int32 */
+            pass_index: number;
+            reasons: string[];
+            status: string;
+        };
+        HysteresisAdaptiveRefinementSchema: {
+            candidates?: components["schemas"]["HysteresisAdaptiveRefinementCandidateSchema"][];
+            enabled: boolean;
+            kind: string;
+            /** Format: int32 */
+            max_insertions_per_pass: number;
+            /** Format: int32 */
+            max_passes: number;
+            points?: components["schemas"]["HysteresisPointSchema"][];
+            settle_trace?: components["schemas"]["HysteresisSettleTraceEntrySchema"][];
+            source_point_count: number;
+            status: string;
+        };
         HysteresisAngularFamilyResource: {
             active_variant_id?: string | null;
             family_id: string;
@@ -4158,6 +4235,13 @@ export interface components {
             start_field_mT: number;
             start_point_id: number;
         };
+        HysteresisConvergenceQualitySummarySchema: {
+            converged_points: number;
+            non_converged_points: number;
+            status: string;
+            total_points: number;
+            warning_points: number;
+        };
         HysteresisExecutionTreeNode: {
             children?: components["schemas"]["HysteresisExecutionTreeNode"][];
             kind: string;
@@ -4193,6 +4277,27 @@ export interface components {
             total_points: number;
             window: string;
         };
+        HysteresisFieldUnitProvenanceSchema: {
+            authored_quantity: string;
+            authored_unit: string;
+            canonical_quantity: string;
+            canonical_unit: string;
+            display_unit: string;
+            /** Format: double */
+            mu0_h_per_m: number;
+        };
+        HysteresisLoopClosureSummarySchema: {
+            /** Format: double */
+            field_gap_mT: number;
+            /** Format: double */
+            m_parallel_gap: number;
+            reason: string;
+            status: string;
+        };
+        HysteresisMetricStatusSchema: {
+            reason: string;
+            status: string;
+        };
         HysteresisMetricsSchema: {
             /** Format: double */
             H_c?: number | null;
@@ -4206,12 +4311,21 @@ export interface components {
             M_r_minus?: number | null;
             /** Format: double */
             M_r_plus?: number | null;
+            convergence_quality_summary?: null | components["schemas"]["HysteresisConvergenceQualitySummarySchema"];
             /** Format: double */
             loop_area: number;
+            loop_closure_summary?: null | components["schemas"]["HysteresisLoopClosureSummarySchema"];
             magnetization_average_weighting?: string;
+            /** Format: double */
+            max_differential_susceptibility?: number | null;
+            metric_statuses?: {
+                [key: string]: components["schemas"]["HysteresisMetricStatusSchema"];
+            };
             /** Format: double */
             saturation_preparation_field_mT?: number | null;
             saturation_status: string;
+            switching_field_candidates?: components["schemas"]["HysteresisSwitchingFieldCandidateSchema"][];
+            warnings?: string[];
         };
         HysteresisMinorLoopSchema: {
             /** Format: double */
@@ -4244,12 +4358,16 @@ export interface components {
             stage_index: number;
         };
         HysteresisPointSchema: {
+            adaptive_inserted?: boolean | null;
             branch_id?: string | null;
             branch_ids?: string[] | null;
             /** Format: int32 */
             branch_index?: number | null;
+            field_display_unit?: string | null;
+            field_orientation?: unknown;
             /** Format: double */
             field_value_mT: number;
+            field_vector_A_per_m?: number[] | null;
             has_non_converged_steps?: boolean | null;
             is_reversal_field?: boolean | null;
             m_avg: number[];
@@ -4259,17 +4377,27 @@ export interface components {
             m_oop: number;
             /** Format: double */
             m_parallel: number;
+            measurement_axis?: unknown;
             minor_loop_id?: string | null;
             parent_branch_id?: string | null;
             point_id: number;
             protocol_role?: string | null;
             recoil_start_point_id?: number | null;
+            refinement_parent_left_point_id?: number | null;
+            refinement_parent_right_point_id?: number | null;
+            refinement_reason?: string[] | null;
             /** Format: int32 */
             reversal_index?: number | null;
             run_status?: string | null;
             settle_status?: string | null;
             snapshot_id?: string | null;
+            snapshot_json_artifact_ref?: string | null;
             snapshot_resource_ref?: string | null;
+            snapshot_storage_format?: string | null;
+            snapshot_storage_reason?: string | null;
+            snapshot_storage_status?: string | null;
+            snapshot_vector_resource_ref?: string | null;
+            snapshot_zarr_store_ref?: string | null;
             status: string;
             terminal_settle_reason?: string | null;
             /** Format: int32 */
@@ -4379,6 +4507,7 @@ export interface components {
             field_schedule?: unknown;
             /** Format: double */
             field_step_mT?: number | null;
+            field_unit_provenance?: null | components["schemas"]["HysteresisFieldUnitProvenanceSchema"];
             field_values_mT?: number[] | null;
             minor_loops?: unknown;
             /** Format: int64 */
@@ -4387,6 +4516,7 @@ export interface components {
             stage_id: string;
             /** Format: int32 */
             stage_index: number;
+            storage_estimate?: null | components["schemas"]["HysteresisStorageEstimateSchema"];
         };
         HysteresisStageSaturationSchema: {
             analysis_resource_ref: string;
@@ -4398,6 +4528,32 @@ export interface components {
             stage_id: string;
             /** Format: int32 */
             stage_index: number;
+        };
+        HysteresisStorageEstimateSchema: {
+            /** Format: int32 */
+            bytes_per_component: number;
+            /** Format: int32 */
+            components_per_site: number;
+            /** Format: int64 */
+            estimated_bytes?: number | null;
+            /** Format: int64 */
+            point_count?: number | null;
+            policy: string;
+            /** Format: int64 */
+            site_count?: number | null;
+            /** Format: int64 */
+            snapshot_count?: number | null;
+            status: string;
+            warnings: string[];
+        };
+        HysteresisSwitchingFieldCandidateSchema: {
+            branch_id?: string | null;
+            /** Format: double */
+            field_value_mT: number;
+            point_id_after: number;
+            point_id_before: number;
+            /** Format: double */
+            susceptibility_per_mT: number;
         };
         ImportSessionAssetRequest: {
             content_base64: string;
@@ -6178,6 +6334,8 @@ export interface components {
             thread_mode: string;
         };
         SolverStatusResource: {
+            /** Format: double */
+            active_runtime_seconds?: number | null;
             algorithm?: string | null;
             can_accept_commands: boolean;
             converged?: boolean | null;
@@ -6194,6 +6352,8 @@ export interface components {
             max_torque_Apm?: number | null;
             /** Format: double */
             max_torque_T?: number | null;
+            /** Format: double */
+            pseudo_time_seconds?: number | null;
             /** Format: int64 */
             revision: number;
             run_id?: string | null;
@@ -7632,6 +7792,36 @@ export interface operations {
             };
         };
     };
+    analysis_get_sessions_current_analysis_hysteresis_stage_id_adaptive_refinement: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Hysteresis stage index or stage identifier */
+                stage_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Executed hysteresis adaptive refinement candidates and inserted points */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HysteresisAdaptiveRefinementSchema"];
+                };
+            };
+            /** @description Hysteresis adaptive refinement artifact not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     analysis_get_sessions_current_analysis_hysteresis_stage_id_branches: {
         parameters: {
             query?: never;
@@ -8095,6 +8285,8 @@ export interface operations {
                  *     hysteresis-point magnetization state.
                  */
                 snapshot_id?: string | null;
+                /** @description Optional hysteresis stage id that owns `snapshot_id`. */
+                stage_id?: string | null;
             };
             header?: never;
             path: {
@@ -8940,10 +9132,18 @@ export interface operations {
                  */
                 snapshot_id?: string | null;
                 /**
+                 * @description Optional hysteresis stage id that owns `snapshot_id`.
+                 *
+                 *     When present, the data-plane reader validates that the requested
+                 *     snapshot appears in that stage's hysteresis point history before
+                 *     loading persisted magnetization data.
+                 */
+                stage_id?: string | null;
+                /**
                  * @description Optional complex analysis view for frequency-domain fields.
                  *
-                 *     Accepted values for analysis fields: `real`, `imag`, `abs`, `amplitude`,
-                 *     `phase`, `phase_rotated_real`.
+                 *     Accepted values for analysis fields: `complex`, `full`, `real`, `imag`,
+                 *     `abs`, `amplitude`, `phase`, `phase_rotated_real`.
                  */
                 view?: string | null;
                 /** @description Phase angle in radians for `view=phase_rotated_real`. */

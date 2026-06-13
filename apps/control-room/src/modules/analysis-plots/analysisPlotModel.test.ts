@@ -12,6 +12,8 @@ describe("analysis plot scalar selection", () => {
       "mz",
       "e_total",
       "max_torque",
+      "pseudo_time_s",
+      "active_runtime_s",
     ]);
     expect(Object.isFrozen(__analysisTableRowsAdapterTestUtils.analysisScalarColumns)).toBe(
       true,
@@ -140,17 +142,49 @@ describe("analysis plot scalar selection", () => {
             unit: "A/m",
             value_type: "float",
           },
+          {
+            column_id: "pseudo_time_s",
+            component: null,
+            dimension: "time",
+            label: "pseudo time",
+            quantity_id: "pseudo_time_s",
+            reduction: null,
+            unit: "s",
+            value_type: "float",
+          },
+          {
+            column_id: "active_runtime_s",
+            component: null,
+            dimension: "time",
+            label: "active runtime",
+            quantity_id: "active_runtime_s",
+            reduction: null,
+            unit: "s",
+            value_type: "float",
+          },
         ],
-        queryColumns: ["step", "t", "max_torque"],
+        queryColumns: [
+          "step",
+          "t",
+          "max_torque",
+          "pseudo_time_s",
+          "active_runtime_s",
+        ],
         sample: {
           revision: 9,
-          row: { max_torque_Apm: 0.4, step: 7, time: 0.2 },
+          row: {
+            active_runtime_s: 0.15,
+            max_torque_Apm: 0.4,
+            pseudo_time_s: 0.5,
+            step: 7,
+            time: 0.2,
+          },
         },
         tableId: "default",
       });
 
     expect(resource?.cursor_end).toBe(9);
-    expect(resource?.rows).toEqual([[7, 0.2, 0.4]]);
+    expect(resource?.rows).toEqual([[7, 0.2, 0.4, 0.5, 0.15]]);
   });
 
   it("adapts decoded binary table rows into the chart table resource shape", () => {

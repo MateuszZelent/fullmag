@@ -1949,6 +1949,7 @@ mod tests {
                     dind_field: None,
                     dbulk_field: None,
                 },
+                anisotropy_axis_field: None,
                 ms_element_field: None,
                 a_element_field: None,
                 region_materials: Vec::new(),
@@ -3138,6 +3139,147 @@ mod tests {
         assert_eq!(artifact["pairs"][0]["unpaired_source_node_count"], 0);
         assert_eq!(artifact["pairs"][0]["unpaired_destination_node_count"], 0);
         assert_eq!(artifact["pairs"][0]["max_residual_m"], 0.0);
+        assert_eq!(artifact["pairs"][0]["status"], "valid");
+
+        fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
+    }
+
+    #[test]
+    fn periodic_pairs_artifact_supports_fem_frequency_response_plan() {
+        let mut base_plan = test_fem_execution_plan();
+        let BackendPlanIR::Fem(fem) = &mut base_plan.backend_plan else {
+            panic!("test plan must be FEM");
+        };
+        fem.mesh.nodes = vec![
+            [0.0, 0.0, 0.0],
+            [40.0e-9, 0.0, 0.0],
+            [40.0e-9, 20.0e-9, 0.0],
+            [0.0, 20.0e-9, 0.0],
+            [0.0, 0.0, 10.0e-9],
+            [40.0e-9, 0.0, 10.0e-9],
+            [40.0e-9, 20.0e-9, 10.0e-9],
+            [0.0, 20.0e-9, 10.0e-9],
+        ];
+        fem.mesh.boundary_faces = vec![[0, 3, 7], [1, 5, 6]];
+        fem.mesh.boundary_markers = vec![10, 11];
+        fem.mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
+            pair_id: "x_faces".to_string(),
+            source_marker: Some("x_min".to_string()),
+            destination_marker: Some("x_max".to_string()),
+            marker_a: 10,
+            marker_b: 11,
+            translation: Some([40.0e-9, 0.0, 0.0]),
+            tolerance: Some(1.0e-12),
+            axis_hint: Some("x".to_string()),
+            orientation: Some("same".to_string()),
+            pairing_policy: Some("explicit_node_pairs".to_string()),
+        }];
+        fem.mesh.periodic_node_pairs = vec![
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "x_faces".to_string(),
+                node_a: 0,
+                node_b: 1,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "x_faces".to_string(),
+                node_a: 3,
+                node_b: 2,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "x_faces".to_string(),
+                node_a: 4,
+                node_b: 5,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "x_faces".to_string(),
+                node_a: 7,
+                node_b: 6,
+            },
+        ];
+
+        let common = base_plan.common;
+        let output_plan = base_plan.output_plan;
+        let provenance = base_plan.provenance;
+        let BackendPlanIR::Fem(fem) = base_plan.backend_plan else {
+            panic!("test plan must be FEM");
+        };
+        let plan = ExecutionPlanIR {
+            common,
+            backend_plan: BackendPlanIR::FemFrequencyResponse(
+                fullmag_ir::FemFrequencyResponsePlanIR {
+                    mesh_name: fem.mesh_name,
+                    mesh_source: fem.mesh_source,
+                    mesh: fem.mesh,
+                    object_segments: fem.object_segments,
+                    mesh_parts: fem.mesh_parts,
+                    domain_mesh_mode: fem.domain_mesh_mode,
+                    domain_frame: fem.domain_frame,
+                    fe_order: fem.fe_order,
+                    hmax: fem.hmax,
+                    equilibrium_magnetization: fem.initial_magnetization,
+                    material: fem.material,
+                    operator: fullmag_ir::EigenOperatorConfigIR {
+                        kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+                        include_demag: false,
+                    },
+                    equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
+                    k_sampling: None,
+                    normalization: fullmag_ir::FrequencyResponseNormalizationIR::UnitMaxAmplitude,
+                    damping_policy: fullmag_ir::EigenDampingPolicyIR::Include,
+                    spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::Config(
+                        fullmag_ir::SpinWaveBoundaryConfigIR {
+                            kind: fullmag_ir::SpinWaveBoundaryKindIR::Periodic,
+                            boundary_pair_id: Some("x_faces".to_string()),
+                            pair_ids: Vec::new(),
+                            phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                            surface_anisotropy_ks: None,
+                            surface_anisotropy_axis: None,
+                        },
+                    ),
+                    excitation: fullmag_ir::FrequencyExcitationIR {
+                        field_au_per_m: [0.0, 0.0, 1.0],
+                        phase_rad: 0.0,
+                    },
+                    frequencies_hz: fullmag_ir::FrequencySweepIR {
+                        values_hz: vec![1.0e9, 2.0e9],
+                    },
+                    enable_exchange: fem.enable_exchange,
+                    enable_demag: fem.enable_demag,
+                    interfacial_dmi: fem.interfacial_dmi,
+                    dmi_interface_normal: fem.dmi_interface_normal,
+                    bulk_dmi: fem.bulk_dmi,
+                    external_field: fem.external_field,
+                    gyromagnetic_ratio: fem.gyromagnetic_ratio,
+                    precision: fem.precision,
+                    exchange_bc: fem.exchange_bc,
+                    demag_realization: fem.demag_realization,
+                },
+            ),
+            output_plan,
+            provenance,
+        };
+
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-artifacts-frequency-response-periodic-pairs-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+
+        write_periodic_pairs_artifact(&output_dir, &plan)
+            .expect("frequency-response periodic pairs artifact should be written");
+
+        let artifact: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("mesh/periodic_pairs.v1.json"))
+                .expect("periodic pairs artifact should exist"),
+        )
+        .expect("periodic pairs artifact should parse");
+        assert_eq!(artifact["schema_version"], "periodic_pairs.v1");
+        assert_eq!(artifact["pairs"][0]["pair_id"], "x_faces");
+        assert_eq!(artifact["pairs"][0]["paired_node_count"], 4);
         assert_eq!(artifact["pairs"][0]["status"], "valid");
 
         fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");

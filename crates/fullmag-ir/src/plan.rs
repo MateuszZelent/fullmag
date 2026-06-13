@@ -518,6 +518,10 @@ pub struct FemPlanIR {
     pub hmax: f64,
     pub initial_magnetization: Vec<[f64; 3]>,
     pub material: MaterialIR,
+    /// FEM-only realized nodal uniaxial anisotropy axes. Empty means use
+    /// `material.anisotropy_axis` as a uniform axis.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anisotropy_axis_field: Option<Vec<[f64; 3]>>,
     /// FEM-only discontinuous per-element saturation magnetization coefficients [A/m].
     /// Used for conformal authored regions that share one magnetization field but need
     /// sharp material jumps across domain markers.

@@ -516,11 +516,6 @@ fn heterogeneous_fem_material_shape_supported(
     candidate: &fullmag_ir::MaterialIR,
 ) -> bool {
     compatible_axis_for_region_material_field(
-        reference.anisotropy_axis,
-        candidate.anisotropy_axis,
-        has_active_uniaxial_anisotropy(reference),
-        has_active_uniaxial_anisotropy(candidate),
-    ) && compatible_axis_for_region_material_field(
         reference.cubic_anisotropy_axis1,
         candidate.cubic_anisotropy_axis1,
         has_active_cubic_anisotropy(reference),
@@ -582,6 +577,14 @@ fn values_differ(values: &[f64], reference: f64) -> bool {
     values
         .iter()
         .any(|value| (*value - reference).abs() > 1e-18)
+}
+
+fn axes_differ(values: &[[f64; 3]], reference: [f64; 3]) -> bool {
+    values.iter().any(|value| {
+        (value[0] - reference[0]).abs() > 1e-18
+            || (value[1] - reference[1]).abs() > 1e-18
+            || (value[2] - reference[2]).abs() > 1e-18
+    })
 }
 
 fn has_cubic_anisotropy(material: &fullmag_ir::MaterialIR) -> bool {
@@ -678,6 +681,17 @@ fn validate_cubic_anisotropy_axes(material: &fullmag_ir::MaterialIR) -> Option<S
     None
 }
 
+fn validate_uniaxial_anisotropy_axis(material: &fullmag_ir::MaterialIR) -> Option<String> {
+    if !has_active_uniaxial_anisotropy(material) {
+        return None;
+    }
+    let axis = material.anisotropy_axis.unwrap_or([0.0, 0.0, 1.0]);
+    match normalize_nonzero_vector3(axis, "anisotropy_axis") {
+        Ok(_) => None,
+        Err(reason) => Some(format!("material '{}' {}", material.name, reason)),
+    }
+}
+
 fn normalize_nonzero_vector3(value: [f64; 3], field_name: &str) -> Result<[f64; 3], String> {
     if value.iter().any(|component| !component.is_finite()) {
         return Err(format!("{field_name} must contain finite values"));
@@ -710,18 +724,24 @@ fn build_region_material_fields(
     object_segments: &[fullmag_ir::FemObjectSegmentIR],
     mesh_parts: &[fullmag_ir::FemMeshPartIR],
     magnet_materials: &BTreeMap<String, fullmag_ir::MaterialIR>,
-) -> Result<fullmag_ir::MaterialIR, PlanError> {
+) -> Result<(fullmag_ir::MaterialIR, Option<Vec<[f64; 3]>>), PlanError> {
     let node_count = mesh.nodes.len();
     if node_count == 0 {
-        return Ok(base_material.clone());
+        return Ok((base_material.clone(), None));
     }
 
     let mut material = base_material.clone();
+    let base_axis = normalize_nonzero_vector3(
+        base_material.anisotropy_axis.unwrap_or([0.0, 0.0, 1.0]),
+        "anisotropy_axis",
+    )
+    .map_err(|e| PlanError { reasons: vec![e] })?;
     let mut ms_values = vec![base_material.saturation_magnetisation; node_count];
     let mut a_values = vec![base_material.exchange_stiffness; node_count];
     let mut alpha_values = vec![base_material.damping; node_count];
     let mut ku_values = vec![base_material.uniaxial_anisotropy.unwrap_or(0.0); node_count];
     let mut ku2_values = vec![base_material.uniaxial_anisotropy_k2.unwrap_or(0.0); node_count];
+    let mut anisotropy_axis_values = vec![base_axis; node_count];
     let mut kc1_values = vec![base_material.cubic_anisotropy_kc1.unwrap_or(0.0); node_count];
     let mut kc2_values = vec![base_material.cubic_anisotropy_kc2.unwrap_or(0.0); node_count];
     let mut kc3_values = vec![base_material.cubic_anisotropy_kc3.unwrap_or(0.0); node_count];
@@ -739,6 +759,13 @@ fn build_region_material_fields(
         if node_indices.is_empty() {
             continue;
         }
+        let region_axis = normalize_nonzero_vector3(
+            region_material.anisotropy_axis.unwrap_or([0.0, 0.0, 1.0]),
+            "anisotropy_axis",
+        )
+        .map_err(|e| PlanError {
+            reasons: vec![format!("material '{}' {}", region_material.name, e)],
+        })?;
 
         let points: Vec<[f64; 3]> = node_indices.iter().map(|&idx| mesh.nodes[idx]).collect();
         let object_translation = crate::material::object_translation(problem, &segment.object_id);
@@ -779,6 +806,7 @@ fn build_region_material_fields(
             alpha_values[index] = alpha_resolved[i];
             ku_values[index] = region_material.uniaxial_anisotropy.unwrap_or(0.0);
             ku2_values[index] = region_material.uniaxial_anisotropy_k2.unwrap_or(0.0);
+            anisotropy_axis_values[index] = region_axis;
             kc1_values[index] = region_material.cubic_anisotropy_kc1.unwrap_or(0.0);
             kc2_values[index] = region_material.cubic_anisotropy_kc2.unwrap_or(0.0);
             kc3_values[index] = region_material.cubic_anisotropy_kc3.unwrap_or(0.0);
@@ -819,7 +847,9 @@ fn build_region_material_fields(
         .then_some(dind_values);
     material.dbulk_field =
         values_differ(&dbulk_values, base_material.bulk_dmi.unwrap_or(0.0)).then_some(dbulk_values);
-    Ok(material)
+    let anisotropy_axis_field =
+        axes_differ(&anisotropy_axis_values, base_axis).then_some(anisotropy_axis_values);
+    Ok((material, anisotropy_axis_field))
 }
 
 fn material_field_constant_value(field: &fullmag_ir::MaterialParameterFieldIR) -> Option<f64> {
@@ -1226,6 +1256,9 @@ pub(crate) fn plan_fem(
         if let Some(reason) = validate_cubic_anisotropy_axes(&material) {
             errors.push(reason);
         }
+        if let Some(reason) = validate_uniaxial_anisotropy_axis(&material) {
+            errors.push(reason);
+        }
         if let Some(reference_material) = selected_material.as_ref() {
             if !compatible_fem_material(reference_material, &material) {
                 if !heterogeneous_fem_material_shape_supported(reference_material, &material) {
@@ -1431,14 +1464,15 @@ pub(crate) fn plan_fem(
         ));
     }
 
-    let (
-        integrator,
-        fixed_timestep,
-        gyromagnetic_ratio,
-        relaxation,
-        adaptive_timestep,
-        field_refresh,
-    ) = planned_study_controls(problem, resolved_backend, &mut errors);
+    let controls = planned_study_controls(problem, resolved_backend, &mut errors);
+    let integrator = controls
+        .integrator
+        .expect("FEM time-domain plan requires a time integrator");
+    let fixed_timestep = controls.fixed_timestep;
+    let gyromagnetic_ratio = controls.gyromagnetic_ratio;
+    let relaxation = controls.relaxation;
+    let adaptive_timestep = controls.adaptive_timestep;
+    let field_refresh = controls.field_refresh;
 
     let requested_static_pbc = problem
         .pbc
@@ -1589,7 +1623,7 @@ pub(crate) fn plan_fem(
         Vec::new()
     };
 
-    let mut material = build_region_material_fields(
+    let (mut material, anisotropy_axis_field) = build_region_material_fields(
         problem,
         &base_material,
         &mesh,
@@ -1721,6 +1755,7 @@ pub(crate) fn plan_fem(
         hmax: fem_hints.hmax,
         initial_magnetization,
         material,
+        anisotropy_axis_field,
         ms_element_field,
         a_element_field,
         region_materials,
@@ -2653,6 +2688,14 @@ pub(crate) fn plan_fem_frequency_response(
         demag_realization: eigen.demag_realization,
     };
 
+    if let Some(reason) = fem_frequency_response_production_slice_rejection_reason(&response_plan) {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "FEM frequency response is currently executable only for the native MFEM production CPU gamma/free-boundary magnetic slice: {reason}"
+            )],
+        });
+    }
+
     let mut provenance_notes = eigen_plan.provenance.notes;
     provenance_notes.push(format!(
         "study: frequency_response operator={:?} frequencies={} normalization={:?} damping_policy={:?}",
@@ -2682,4 +2725,39 @@ pub(crate) fn plan_fem_frequency_response(
             notes: provenance_notes,
         },
     })
+}
+
+fn fem_frequency_response_production_slice_rejection_reason(
+    plan: &FemFrequencyResponsePlanIR,
+) -> Option<&'static str> {
+    if plan.domain_mesh_mode != fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh {
+        return Some("shared-domain airbox meshes are not supported by the driven frequency-response operator");
+    }
+    if plan.enable_demag || plan.demag_realization.is_some() {
+        return Some("dynamic demag is not implemented for driven frequency response");
+    }
+    if !plan
+        .k_sampling
+        .as_ref()
+        .is_none_or(fullmag_ir::KSamplingIR::is_single_gamma)
+    {
+        return Some("nonzero-k Floquet/Bloch driven response is not implemented");
+    }
+    match plan.spin_wave_bc.kind() {
+        fullmag_ir::SpinWaveBoundaryKindIR::Free => {}
+        fullmag_ir::SpinWaveBoundaryKindIR::Periodic => {
+            if plan.mesh.periodic_node_pairs.is_empty() {
+                return Some(
+                    "static periodic driven response requires mesh.periodic_node_pairs metadata",
+                );
+            }
+        }
+        fullmag_ir::SpinWaveBoundaryKindIR::Floquet => {
+            return Some("nonzero-k Floquet/Bloch driven response is not implemented");
+        }
+        _ => {
+            return Some("the requested spin-wave boundary condition is not enforced by the driven response operator");
+        }
+    }
+    None
 }

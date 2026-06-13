@@ -47,9 +47,43 @@ describe("viewport3dResources", () => {
         component: "full",
         scope_kind: "full",
         snapshot_id: "hysteresis-stage-1-point-4",
+        stage_id: "hysteresis-1",
       }),
     ).toBe(
-      `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?component=full&scope_kind=full&snapshot_id=hysteresis-stage-1-point-4`,
+      `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?component=full&scope_kind=full&snapshot_id=hysteresis-stage-1-point-4&stage_id=hysteresis-1`,
+    );
+  });
+
+  it("includes hysteresis snapshot ids in target quantity field vector requests", () => {
+    expect(
+      resolveViewport3DQuantityFieldVectorResourceRequests(
+        new Map([
+          [
+            "h_eff",
+            {
+              component: "full",
+              scope_kind: "full",
+              snapshot_id: "hysteresis_point_007",
+              stage_id: "hysteresis-1",
+            },
+          ],
+        ]),
+      ),
+    ).toEqual(
+      new Map([
+        [
+          "H_eff",
+          {
+            key: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_eff")}?component=full&scope_kind=full&snapshot_id=hysteresis_point_007&stage_id=hysteresis-1`,
+            query: {
+              component: "full",
+              scope_kind: "full",
+              snapshot_id: "hysteresis_point_007",
+              stage_id: "hysteresis-1",
+            },
+          },
+        ],
+      ]),
     );
   });
 
@@ -75,8 +109,10 @@ describe("viewport3dResources", () => {
     const source = readFileSync(viewport3dResourcesSourceUrl, "utf8");
 
     expect(source).toContain("const phaseRad = fieldQuery.phase_rad ?? null;");
+    expect(source).toContain("const stageId = fieldQuery.stage_id ?? null;");
     expect(source).toContain("const view = fieldQuery.view ?? null;");
     expect(source).toContain("phase_rad: phaseRad,");
+    expect(source).toContain("stage_id: stageId,");
     expect(source).toContain("view,");
   });
 

@@ -46,9 +46,12 @@ bool gpu_rk_compute_anisotropy_field_contributions(
     auto &gpu = ctx.gpu_state.device;
     if (ctx.anisotropy.uniaxial_enabled) {
         if (gpu.materials.ms == nullptr || gpu.materials.ku == nullptr || gpu.materials.ku2 == nullptr ||
+            gpu.materials.anisotropy_axis_x == nullptr ||
+            gpu.materials.anisotropy_axis_y == nullptr ||
+            gpu.materials.anisotropy_axis_z == nullptr ||
             gpu.mesh_metrics.lumped_mass == nullptr ||
             gpu.fields.h_ani.x == nullptr || gpu.fields.h_ani.y == nullptr || gpu.fields.h_ani.z == nullptr) {
-            reason = "GPU RK uniaxial anisotropy requires device-resident Ms, Ku, Ku2, lumped mass, and H_ani buffers";
+            reason = "GPU RK uniaxial anisotropy requires device-resident Ms, Ku, Ku2, anisotropy axis, lumped mass, and H_ani buffers";
             return false;
         }
         fullmag_cuda_uniaxial_anisotropy_field_energy_blocks(
@@ -58,6 +61,9 @@ bool gpu_rk_compute_anisotropy_field_contributions(
             gpu.materials.ms,
             gpu.materials.ku,
             gpu.materials.ku2,
+            gpu.materials.anisotropy_axis_x,
+            gpu.materials.anisotropy_axis_y,
+            gpu.materials.anisotropy_axis_z,
             gpu.mesh_metrics.lumped_mass,
             gpu.mesh_regions.magnetic_node_mask,
             gpu.fields.h_ani.x,
@@ -71,6 +77,7 @@ bool gpu_rk_compute_anisotropy_field_contributions(
             ctx.anisotropy.uniaxial_axis[2],
             !ctx.material_fields.Ku_field.empty(),
             !ctx.material_fields.Ku2_field.empty(),
+            !ctx.anisotropy.uniaxial_axis_x_field.empty(),
             n,
             stream);
         if (!cuda_launch_ok("launch GPU RK uniaxial anisotropy field", reason)) {

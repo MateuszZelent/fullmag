@@ -333,7 +333,10 @@ pub(crate) fn execute_llg_overdamped(
                         .map(|fields| fields.len())
                         .unwrap_or(0),
                     preview_targets_global_scalar,
-                    magnetization.as_ref().map(|values| values.len()).unwrap_or(0),
+                    magnetization
+                        .as_ref()
+                        .map(|values| values.len())
+                        .unwrap_or(0),
                 );
             }
             let action = (live.on_step)(StepUpdate {

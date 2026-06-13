@@ -67,7 +67,10 @@ import { Viewport3DSettingsDialog } from "./components/Viewport3DSettingsDialog"
 import {
   type Viewport3DPartSelection,
 } from "./viewport3dDomainAdapter";
-import type { HysteresisStepViewportTarget } from "./model/viewport3DTargets";
+import type {
+  HysteresisReplayGlyphModel,
+  HysteresisStepViewportTarget,
+} from "./model/viewport3DTargets";
 import {
   useViewport3DResourceCounts,
   useViewport3DResourceTracker,
@@ -210,6 +213,12 @@ export function formatHysteresisReplayLabel(
   return `Replay Hysteresis point ${target.pointId} · ${target.snapshotId}`;
 }
 
+export function formatHysteresisReplayGlyphVector(
+  vector: readonly [number, number, number] | null | undefined,
+): string {
+  return vector?.map((component) => component.toFixed(6)).join(" ") ?? "";
+}
+
 function completePendingViewport3DCapture(
   canvasRef: { current: HTMLCanvasElement | null },
   pendingCaptureRevisionRef: { current: number | null },
@@ -266,6 +275,7 @@ interface Viewport3DFrameProps
   domainSummary: string;
   fieldDataIssue: Viewport3DFieldDataIssue | null;
   fieldRefresh: Viewport3DFieldRefreshState;
+  hysteresisReplayGlyphModel: HysteresisReplayGlyphModel | null;
   hysteresisReplayTarget: HysteresisStepViewportTarget | null;
   inspectRevision: number;
   kernel: ModuleProps["kernel"];
@@ -475,6 +485,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   domainSummary,
   fieldDataIssue,
   fieldRefresh,
+  hysteresisReplayGlyphModel,
   hysteresisReplayTarget,
   inspectRevision,
   kernel,
@@ -717,6 +728,12 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       data-primitive-object-ids={primitiveObjectIds}
       data-hysteresis-replay-snapshot-id={hysteresisReplayTarget?.snapshotId ?? ""}
       data-hysteresis-replay-stage-id={hysteresisReplayTarget?.stageId ?? ""}
+      data-hysteresis-replay-field-direction={formatHysteresisReplayGlyphVector(
+        hysteresisReplayGlyphModel?.fieldDirection?.vector,
+      )}
+      data-hysteresis-replay-measurement-axis={formatHysteresisReplayGlyphVector(
+        hysteresisReplayGlyphModel?.measurementAxis?.vector,
+      )}
       data-topology-freshness={sceneProps.topologyFreshness}
       data-visual-profile-id={sceneProps.visualProfileId}
       onPointerCancelCapture={releaseFieldUpdatePointerHold}
@@ -812,6 +829,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           <Viewport3DScene
             {...sceneProps}
             colors={colors}
+            hysteresisReplayGlyphModel={hysteresisReplayGlyphModel}
             orbitDebugAngles={orbitDebugAngles}
             orbitDebugCommitRevision={orbitDebugCommitRevision}
             orbitDebugRevision={orbitDebugRevision}

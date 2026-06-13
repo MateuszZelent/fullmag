@@ -32,6 +32,14 @@ bool is_local_term(FrequencyDomainOperatorTermKind kind) noexcept
     return false;
 }
 
+bool local_block_coefficients_are_finite(const TangentOperatorLocalBlock &block) noexcept
+{
+    return std::isfinite(block.a00) &&
+        std::isfinite(block.a01) &&
+        std::isfinite(block.a10) &&
+        std::isfinite(block.a11);
+}
+
 } // namespace
 
 const char *operator_term_kind_to_string(FrequencyDomainOperatorTermKind kind) noexcept
@@ -80,9 +88,13 @@ FrequencyDomainStatus apply_tangent_local_operator(
     }
 
     std::uint64_t unsupported = 0;
+    std::uint64_t nonfinite = 0;
     for (std::uint64_t term_index = 0; term_index < term_count; ++term_index) {
         if (!is_local_term(terms[term_index].kind)) {
             ++unsupported;
+        }
+        if (!local_block_coefficients_are_finite(terms[term_index])) {
+            ++nonfinite;
         }
     }
     if (unsupported > 0) {
@@ -91,6 +103,12 @@ FrequencyDomainStatus apply_tangent_local_operator(
             copy_error(out_diagnostics->error_message, "unsupported nonlocal tangent operator term");
         }
         return FrequencyDomainStatus::operator_error;
+    }
+    if (nonfinite > 0) {
+        if (out_diagnostics != nullptr) {
+            copy_error(out_diagnostics->error_message, "tangent operator requires finite local block coefficients");
+        }
+        return FrequencyDomainStatus::validation_error;
     }
 
     std::fill(out_tangent, out_tangent + shape.tangent_dof_count, 0.0);
@@ -146,9 +164,13 @@ FrequencyDomainStatus apply_tangent_nodewise_operator(
     }
 
     std::uint64_t unsupported = 0;
+    std::uint64_t nonfinite = 0;
     for (std::uint64_t node_index = 0; node_index < shape.node_count; ++node_index) {
         if (!is_local_term(node_blocks[node_index].kind)) {
             ++unsupported;
+        }
+        if (!local_block_coefficients_are_finite(node_blocks[node_index])) {
+            ++nonfinite;
         }
     }
     if (unsupported > 0) {
@@ -157,6 +179,12 @@ FrequencyDomainStatus apply_tangent_nodewise_operator(
             copy_error(out_diagnostics->error_message, "unsupported nodewise tangent operator term");
         }
         return FrequencyDomainStatus::operator_error;
+    }
+    if (nonfinite > 0) {
+        if (out_diagnostics != nullptr) {
+            copy_error(out_diagnostics->error_message, "nodewise tangent operator requires finite local block coefficients");
+        }
+        return FrequencyDomainStatus::validation_error;
     }
 
     double max_abs_output = 0.0;
@@ -207,6 +235,7 @@ FrequencyDomainStatus apply_tangent_edge_operator(
     }
 
     std::uint64_t invalid_edges = 0;
+    std::uint64_t nonfinite_edges = 0;
     std::uint64_t unsupported_edges = 0;
     for (std::uint64_t edge_index = 0; edge_index < edge_count; ++edge_index) {
         const TangentOperatorEdgeBlock &edge = edges[edge_index];
@@ -217,6 +246,9 @@ FrequencyDomainStatus apply_tangent_edge_operator(
             edge.node_j >= shape.node_count ||
             edge.node_i == edge.node_j) {
             ++invalid_edges;
+        }
+        if (!std::isfinite(edge.stiffness)) {
+            ++nonfinite_edges;
         }
     }
     if (unsupported_edges > 0) {
@@ -230,6 +262,12 @@ FrequencyDomainStatus apply_tangent_edge_operator(
         if (out_diagnostics != nullptr) {
             out_diagnostics->invalid_edge_count = invalid_edges;
             copy_error(out_diagnostics->error_message, "invalid tangent edge node index");
+        }
+        return FrequencyDomainStatus::validation_error;
+    }
+    if (nonfinite_edges > 0) {
+        if (out_diagnostics != nullptr) {
+            copy_error(out_diagnostics->error_message, "tangent edge operator requires finite edge stiffness");
         }
         return FrequencyDomainStatus::validation_error;
     }
@@ -288,9 +326,13 @@ FrequencyDomainStatus apply_tangent_combined_operator(
     }
 
     std::uint64_t unsupported_terms = 0;
+    std::uint64_t nonfinite_node_blocks = 0;
     for (std::uint64_t node_index = 0; node_index < shape.node_count; ++node_index) {
         if (!is_local_term(node_blocks[node_index].kind)) {
             ++unsupported_terms;
+        }
+        if (!local_block_coefficients_are_finite(node_blocks[node_index])) {
+            ++nonfinite_node_blocks;
         }
     }
     for (std::uint64_t edge_index = 0; edge_index < edge_count; ++edge_index) {
@@ -305,8 +347,15 @@ FrequencyDomainStatus apply_tangent_combined_operator(
         }
         return FrequencyDomainStatus::operator_error;
     }
+    if (nonfinite_node_blocks > 0) {
+        if (out_diagnostics != nullptr) {
+            copy_error(out_diagnostics->error_message, "combined tangent operator requires finite local block coefficients");
+        }
+        return FrequencyDomainStatus::validation_error;
+    }
 
     std::uint64_t invalid_edges = 0;
+    std::uint64_t nonfinite_edges = 0;
     for (std::uint64_t edge_index = 0; edge_index < edge_count; ++edge_index) {
         const TangentOperatorEdgeBlock &edge = edges[edge_index];
         if (edge.node_i >= shape.node_count ||
@@ -314,11 +363,20 @@ FrequencyDomainStatus apply_tangent_combined_operator(
             edge.node_i == edge.node_j) {
             ++invalid_edges;
         }
+        if (!std::isfinite(edge.stiffness)) {
+            ++nonfinite_edges;
+        }
     }
     if (invalid_edges > 0) {
         if (out_diagnostics != nullptr) {
             out_diagnostics->invalid_edge_count = invalid_edges;
             copy_error(out_diagnostics->error_message, "invalid combined tangent edge node index");
+        }
+        return FrequencyDomainStatus::validation_error;
+    }
+    if (nonfinite_edges > 0) {
+        if (out_diagnostics != nullptr) {
+            copy_error(out_diagnostics->error_message, "combined tangent edge operator requires finite edge stiffness");
         }
         return FrequencyDomainStatus::validation_error;
     }
@@ -466,6 +524,7 @@ FrequencyDomainStatus apply_tangent_frequency_mass_operator(
     const double *tangent_delta,
     TangentWorkspaceShape shape,
     double alpha,
+    const double *alpha_per_node,
     double *out_mass_tangent,
     TangentFrequencyMassDiagnostics *out_diagnostics) noexcept
 {
@@ -474,6 +533,7 @@ FrequencyDomainStatus apply_tangent_frequency_mass_operator(
         out_diagnostics->node_count = shape.node_count;
         out_diagnostics->tangent_dof_count = shape.tangent_dof_count;
         out_diagnostics->alpha = alpha;
+        out_diagnostics->max_alpha = alpha;
     }
     if ((shape.node_count > 0 && nodes == nullptr) ||
         tangent_delta == nullptr ||
@@ -495,20 +555,34 @@ FrequencyDomainStatus apply_tangent_frequency_mass_operator(
         }
         return FrequencyDomainStatus::validation_error;
     }
+    if (alpha_per_node != nullptr) {
+        for (std::uint64_t node_index = 0; node_index < shape.node_count; ++node_index) {
+            if (!(alpha_per_node[node_index] >= 0.0) || !std::isfinite(alpha_per_node[node_index])) {
+                if (out_diagnostics != nullptr) {
+                    copy_error(out_diagnostics->error_message, "nodewise alpha must be finite and non-negative");
+                }
+                return FrequencyDomainStatus::validation_error;
+            }
+        }
+    }
 
     double max_abs_output = 0.0;
+    double max_alpha = alpha;
     for (std::uint64_t node_index = 0; node_index < shape.node_count; ++node_index) {
+        const double node_alpha = alpha_per_node != nullptr ? alpha_per_node[node_index] : alpha;
         const double q1 = tangent_delta[node_index * 2];
         const double q2 = tangent_delta[node_index * 2 + 1];
-        const double y1 = q1 + alpha * q2;
-        const double y2 = q2 - alpha * q1;
+        const double y1 = q1 + node_alpha * q2;
+        const double y2 = q2 - node_alpha * q1;
         out_mass_tangent[node_index * 2] = y1;
         out_mass_tangent[node_index * 2 + 1] = y2;
+        max_alpha = std::max(max_alpha, node_alpha);
         max_abs_output = std::max(max_abs_output, std::abs(y1));
         max_abs_output = std::max(max_abs_output, std::abs(y2));
     }
 
     if (out_diagnostics != nullptr) {
+        out_diagnostics->max_alpha = max_alpha;
         out_diagnostics->max_abs_output = max_abs_output;
     }
     return FrequencyDomainStatus::ok;

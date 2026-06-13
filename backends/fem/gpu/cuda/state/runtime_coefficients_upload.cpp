@@ -52,6 +52,15 @@ bool gpu_runtime_coefficients_upload(
     uint64_t ku_field_len,
     const double *ku2_field,
     uint64_t ku2_field_len,
+    const double *anisotropy_axis_x_field,
+    uint64_t anisotropy_axis_x_field_len,
+    double uniform_anisotropy_axis_x,
+    const double *anisotropy_axis_y_field,
+    uint64_t anisotropy_axis_y_field_len,
+    double uniform_anisotropy_axis_y,
+    const double *anisotropy_axis_z_field,
+    uint64_t anisotropy_axis_z_field_len,
+    double uniform_anisotropy_axis_z,
     const double *dind_field,
     uint64_t dind_field_len,
     const double *dbulk_field,
@@ -95,6 +104,12 @@ bool gpu_runtime_coefficients_upload(
     const auto alpha_values = scalar_values(alpha_field, alpha_field_len, uniform_alpha);
     const auto ku_values = scalar_values(ku_field, ku_field_len, 0.0);
     const auto ku2_values = scalar_values(ku2_field, ku2_field_len, 0.0);
+    const auto anisotropy_axis_x_values =
+        scalar_values(anisotropy_axis_x_field, anisotropy_axis_x_field_len, uniform_anisotropy_axis_x);
+    const auto anisotropy_axis_y_values =
+        scalar_values(anisotropy_axis_y_field, anisotropy_axis_y_field_len, uniform_anisotropy_axis_y);
+    const auto anisotropy_axis_z_values =
+        scalar_values(anisotropy_axis_z_field, anisotropy_axis_z_field_len, uniform_anisotropy_axis_z);
     const auto dind_values = scalar_values(dind_field, dind_field_len, 0.0);
     const auto dbulk_values = scalar_values(dbulk_field, dbulk_field_len, 0.0);
     const auto kc1_values = scalar_values(kc1_field, kc1_field_len, 0.0);
@@ -139,6 +154,12 @@ bool gpu_runtime_coefficients_upload(
             "cudaMemcpy FemGpuState ku host->device", error) ||
         !cuda_ok(cudaMemcpy(materials.ku2, ku2_values.data(), double_bytes, cudaMemcpyHostToDevice),
             "cudaMemcpy FemGpuState ku2 host->device", error) ||
+        !cuda_ok(cudaMemcpy(materials.anisotropy_axis_x, anisotropy_axis_x_values.data(), double_bytes, cudaMemcpyHostToDevice),
+            "cudaMemcpy FemGpuState anisotropy_axis_x host->device", error) ||
+        !cuda_ok(cudaMemcpy(materials.anisotropy_axis_y, anisotropy_axis_y_values.data(), double_bytes, cudaMemcpyHostToDevice),
+            "cudaMemcpy FemGpuState anisotropy_axis_y host->device", error) ||
+        !cuda_ok(cudaMemcpy(materials.anisotropy_axis_z, anisotropy_axis_z_values.data(), double_bytes, cudaMemcpyHostToDevice),
+            "cudaMemcpy FemGpuState anisotropy_axis_z host->device", error) ||
         !cuda_ok(cudaMemcpy(materials.dind, dind_values.data(), double_bytes, cudaMemcpyHostToDevice),
             "cudaMemcpy FemGpuState dind host->device", error) ||
         !cuda_ok(cudaMemcpy(materials.dbulk, dbulk_values.data(), double_bytes, cudaMemcpyHostToDevice),
@@ -159,7 +180,7 @@ bool gpu_runtime_coefficients_upload(
     }
     record_host_to_device(
         audit,
-        static_cast<uint64_t>(double_bytes) * 11ull +
+        static_cast<uint64_t>(double_bytes) * 14ull +
             static_cast<uint64_t>(u8_bytes) +
             static_cast<uint64_t>(u32_bytes) * 2ull);
     mesh_metrics.node_count = static_cast<uint64_t>(node_count);
@@ -183,6 +204,15 @@ bool gpu_runtime_coefficients_upload(
     (void)ku_field_len;
     (void)ku2_field;
     (void)ku2_field_len;
+    (void)anisotropy_axis_x_field;
+    (void)anisotropy_axis_x_field_len;
+    (void)uniform_anisotropy_axis_x;
+    (void)anisotropy_axis_y_field;
+    (void)anisotropy_axis_y_field_len;
+    (void)uniform_anisotropy_axis_y;
+    (void)anisotropy_axis_z_field;
+    (void)anisotropy_axis_z_field_len;
+    (void)uniform_anisotropy_axis_z;
     (void)dind_field;
     (void)dind_field_len;
     (void)dbulk_field;

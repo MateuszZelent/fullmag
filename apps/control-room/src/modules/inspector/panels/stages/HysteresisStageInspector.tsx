@@ -6,10 +6,12 @@ import { useKernel } from "@/kernel/KernelContext";
 import {
   useHysteresisBranchesResource,
   useHysteresisExecutionTreeResource,
+  useHysteresisFamilyResource,
   useHysteresisMetricsResource,
   useHysteresisMinorLoopsResource,
   useHysteresisOrientationResource,
   useHysteresisPointsResource,
+  useHysteresisAdaptiveRefinementResource,
   useHysteresisProgressResource,
   useHysteresisProtocolResource,
   useHysteresisReversalFieldsResource,
@@ -23,20 +25,33 @@ import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import { hysteresisTargetMetadataFromOrientation } from "@/shared/domain/study/HysteresisChart";
 
 import { StageInspectorFrame, type StageInspectorFrameProps } from "./StageInspectorFrame";
+import { HysteresisAngularFamilyInspector } from "./hysteresis/HysteresisAngularFamilyInspector";
+import { HysteresisBookmarksInspector } from "./hysteresis/HysteresisBookmarksInspector";
+import { HysteresisAdaptiveRefinementInspector } from "./hysteresis/HysteresisAdaptiveRefinementInspector";
+import { HysteresisBranchDetailInspector } from "./hysteresis/HysteresisBranchDetailInspector";
 import { HysteresisBranchesInspector } from "./hysteresis/HysteresisBranchesInspector";
 import { HysteresisCurrentFieldInspector } from "./hysteresis/HysteresisCurrentFieldInspector";
+import { HysteresisExecutionNodeInspector } from "./hysteresis/HysteresisExecutionNodeInspector";
 import { HysteresisLiveProgressInspector } from "./hysteresis/HysteresisLiveProgressInspector";
 import { HysteresisMetricsInspector } from "./hysteresis/HysteresisMetricsInspector";
+import { HysteresisOrientationInspector } from "./hysteresis/HysteresisOrientationInspector";
 import { HysteresisPlanInspector } from "./hysteresis/HysteresisPlanInspector";
+import { HysteresisPointBucketInspector } from "./hysteresis/HysteresisPointBucketInspector";
+import { HysteresisPointDetailInspector } from "./hysteresis/HysteresisPointDetailInspector";
 import { HysteresisPointsInspector } from "./hysteresis/HysteresisPointsInspector";
 import { HysteresisProtocolInspector } from "./hysteresis/HysteresisProtocolInspector";
 import { HysteresisSaturationInspector } from "./hysteresis/HysteresisSaturationInspector";
 import { HysteresisSettlePipelineInspector } from "./hysteresis/HysteresisSettlePipelineInspector";
 import { HysteresisSettleTraceInspector } from "./hysteresis/HysteresisSettleTraceInspector";
 import { HysteresisSnapshotsInspector } from "./hysteresis/HysteresisSnapshotsInspector";
+import { HysteresisTransitionsInspector } from "./hysteresis/HysteresisTransitionsInspector";
 import {
   activeHysteresisPointSelection,
   activeHysteresisPointSelectionEquals,
+  activeHysteresisBranchSelection,
+  activeHysteresisBranchSelectionEquals,
+  activeHysteresisExecutionNodeSelection,
+  activeHysteresisExecutionNodeSelectionEquals,
   activeHysteresisSnapshotSelection,
   activeHysteresisSnapshotSelectionEquals,
   type HysteresisInspectorView,
@@ -61,6 +76,14 @@ export function HysteresisStageInspector(props: HysteresisStageInspectorProps) {
     (selection) => activeHysteresisPointSelection(selection, stageId),
     { isEqual: activeHysteresisPointSelectionEquals },
   );
+  const activeBranch = useSelectionSelector(
+    (selection) => activeHysteresisBranchSelection(selection, stageId),
+    { isEqual: activeHysteresisBranchSelectionEquals },
+  );
+  const activeExecutionNode = useSelectionSelector(
+    (selection) => activeHysteresisExecutionNodeSelection(selection, stageId),
+    { isEqual: activeHysteresisExecutionNodeSelectionEquals },
+  );
 
   const pointsRes = useHysteresisPointsResource(stageId);
   const stagePlanRes = useHysteresisStagePlanResource(stageId);
@@ -70,6 +93,7 @@ export function HysteresisStageInspector(props: HysteresisStageInspectorProps) {
     after: 1,
     before: 1,
   });
+  const angularFamilyRes = useHysteresisFamilyResource(stageId);
   const metricsRes = useHysteresisMetricsResource(stageId);
   const branchesRes = useHysteresisBranchesResource(stageId);
   const minorLoopsRes = useHysteresisMinorLoopsResource(stageId);
@@ -79,6 +103,7 @@ export function HysteresisStageInspector(props: HysteresisStageInspectorProps) {
   const saturationRes = useHysteresisSaturationResource(stageId, {
     enabled: stageSaturationRes.data?.result_status === "available",
   });
+  const adaptiveRefinementRes = useHysteresisAdaptiveRefinementResource(stageId);
   const orientationRes = useHysteresisOrientationResource(stageId);
   const settleTraceRes = useHysteresisSettleTraceResource(
     stageId,
@@ -91,6 +116,7 @@ export function HysteresisStageInspector(props: HysteresisStageInspectorProps) {
   const protocol = protocolRes.data;
   const settlePipeline = settlePipelineRes.data;
   const executionTree = executionTreeRes.data;
+  const angularFamily = angularFamilyRes.data;
   const branches = Array.isArray(branchesRes.data) ? branchesRes.data : [];
   const minorLoops = Array.isArray(minorLoopsRes.data) ? minorLoopsRes.data : [];
   const reversalFields = Array.isArray(reversalFieldsRes.data) ? reversalFieldsRes.data : [];
@@ -98,6 +124,7 @@ export function HysteresisStageInspector(props: HysteresisStageInspectorProps) {
   const progress = progressRes.data;
   const stageSaturation = stageSaturationRes.data;
   const saturation = stageSaturation?.result ?? saturationRes.data;
+  const adaptiveRefinement = adaptiveRefinementRes.data;
   const saturationPoints = Array.isArray(saturation?.points) ? saturation.points : [];
   const settleTrace = Array.isArray(settleTraceRes.data) ? settleTraceRes.data : [];
   const targetMetadata = hysteresisTargetMetadataFromOrientation(orientationRes.data);
@@ -110,7 +137,38 @@ export function HysteresisStageInspector(props: HysteresisStageInspectorProps) {
         minorLoops={minorLoops}
       />
     ),
+    "branch-detail": (
+      <HysteresisBranchDetailInspector
+        activeBranch={activeBranch}
+        branches={branches}
+        minorLoops={minorLoops}
+      />
+    ),
     "current-field": <HysteresisCurrentFieldInspector progress={progress} />,
+    "adaptive-refinement": (
+      <HysteresisAdaptiveRefinementInspector
+        adaptiveRefinement={adaptiveRefinement}
+      />
+    ),
+    "angular-family": (
+      <HysteresisAngularFamilyInspector angularFamily={angularFamily} />
+    ),
+    "execution-node": (
+      <HysteresisExecutionNodeInspector
+        activeExecutionNode={activeExecutionNode}
+        executionTree={executionTree}
+      />
+    ),
+    "point-detail": (
+      <HysteresisPointDetailInspector
+        activePoint={activePoint}
+        kernel={kernel}
+        points={points}
+        progress={progress}
+        stageId={stageId}
+        targetMetadata={targetMetadata}
+      />
+    ),
     "live-run": (
       <HysteresisLiveProgressInspector
         activeSnapshot={activeSnapshot}
@@ -126,15 +184,62 @@ export function HysteresisStageInspector(props: HysteresisStageInspectorProps) {
         reversalFields={reversalFields}
       />
     ),
-    plan: <HysteresisPlanInspector draft={props.draft} stagePlan={stagePlan} />,
+    plan: (
+      <HysteresisPlanInspector
+        adaptiveRefinement={adaptiveRefinement}
+        draft={props.draft}
+        stagePlan={stagePlan}
+      />
+    ),
+    orientation: (
+      <HysteresisOrientationInspector
+        draft={props.draft}
+        orientation={orientationRes.data}
+        targetMetadata={targetMetadata}
+      />
+    ),
     points: (
       <HysteresisPointsInspector
+        activeSnapshot={activeSnapshot}
         kernel={kernel}
         points={points}
         progress={progress}
         stageId={stageId}
         targetMetadata={targetMetadata}
       />
+    ),
+    "points-completed": (
+      <HysteresisPointBucketInspector
+        bucket="completed"
+        kernel={kernel}
+        points={points}
+        progress={progress}
+        stageId={stageId}
+        targetMetadata={targetMetadata}
+      />
+    ),
+    "points-queued": (
+      <HysteresisPointBucketInspector
+        bucket="queued"
+        kernel={kernel}
+        points={points}
+        progress={progress}
+        stageId={stageId}
+        targetMetadata={targetMetadata}
+      />
+    ),
+    "points-planned": (
+      <HysteresisPointBucketInspector
+        bucket="planned"
+        kernel={kernel}
+        points={points}
+        progress={progress}
+        stageId={stageId}
+        targetMetadata={targetMetadata}
+      />
+    ),
+    "points-bookmarks": (
+      <HysteresisBookmarksInspector executionTree={executionTree} />
     ),
     protocol: (
       <HysteresisProtocolInspector
@@ -150,12 +255,37 @@ export function HysteresisStageInspector(props: HysteresisStageInspectorProps) {
         saturationPoints={saturationPoints}
       />
     ),
-    snapshots: <HysteresisSnapshotsInspector draft={props.draft} points={points} />,
+    "settle-pipeline": (
+      <HysteresisSettlePipelineInspector
+        draft={props.draft}
+        executionTree={executionTree}
+        settlePipeline={settlePipeline}
+      />
+    ),
+    snapshots: (
+      <HysteresisSnapshotsInspector
+        activeSnapshot={activeSnapshot}
+        draft={props.draft}
+        kernel={kernel}
+        points={points}
+        stageId={stageId}
+        targetMetadata={targetMetadata}
+      />
+    ),
     "settle-trace": (
       <HysteresisSettleTraceInspector
         activePoint={activePoint}
         settleTrace={settleTrace}
         settleTraceStatus={settleTraceRes.status}
+      />
+    ),
+    transitions: (
+      <HysteresisTransitionsInspector
+        activePoint={activePoint}
+        kernel={kernel}
+        points={points}
+        progress={progress}
+        stageId={stageId}
       />
     ),
   } satisfies Record<Exclude<HysteresisInspectorView, "overview">, ReactElement>;
@@ -182,12 +312,11 @@ export function HysteresisStageInspector(props: HysteresisStageInspectorProps) {
       />
       {panels.plan}
       {panels.protocol}
+      {panels.orientation}
       {panels.saturation}
-      <HysteresisSettlePipelineInspector
-        draft={props.draft}
-        executionTree={executionTree}
-        settlePipeline={settlePipeline}
-      />
+      {panels["adaptive-refinement"]}
+      {panels["angular-family"]}
+      {panels["settle-pipeline"]}
       <HysteresisSettleTraceInspector
         activePoint={activePoint}
         settleTrace={settleTrace}
@@ -198,6 +327,7 @@ export function HysteresisStageInspector(props: HysteresisStageInspectorProps) {
       {panels.metrics}
       {panels.points}
       {panels.snapshots}
+      {panels.transitions}
     </>
   );
 }

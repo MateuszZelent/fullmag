@@ -21,11 +21,39 @@ export interface HysteresisStepViewportTarget {
   stageId: string;
   pointId: number;
   snapshotId: string;
+  resourceRef: string | null;
   quantityId: string;
   meshIdentity: string | null;
   fieldOrientation: string | null;
   measurementAxis: string | null;
   fieldRevision: string | number | null;
+}
+
+export type HysteresisReplayMeshCompatibilityStatus =
+  | "compatible"
+  | "mismatch"
+  | "unknown";
+
+export interface HysteresisReplayMeshCompatibility {
+  actualMeshIdentity: string | null;
+  reason: string | null;
+  requiredMeshIdentity: string | null;
+  status: HysteresisReplayMeshCompatibilityStatus;
+}
+
+export interface HysteresisReplayGlyphAxis {
+  label: string;
+  source: string;
+  vector: [number, number, number];
+}
+
+export interface HysteresisReplayGlyphModel {
+  fieldDirection: HysteresisReplayGlyphAxis | null;
+  measurementAxis: HysteresisReplayGlyphAxis | null;
+  pointId: number;
+  sampleNormal: HysteresisReplayGlyphAxis | null;
+  stageId: string;
+  targetId: string;
 }
 
 export function targetForFdmDomain(
@@ -61,6 +89,20 @@ export function resolveHysteresisStepViewportTarget(
   selection: Selection,
 ): HysteresisStepViewportTarget | null {
   const ref = selection.ref;
+  if (ref?.type === "hysteresis-snapshot") {
+    return {
+      targetId: ref.targetId,
+      stageId: ref.stageId,
+      pointId: ref.pointId,
+      snapshotId: ref.snapshotId,
+      resourceRef: ref.resourceRef ?? null,
+      quantityId: ref.quantityId,
+      meshIdentity: null,
+      fieldOrientation: null,
+      measurementAxis: null,
+      fieldRevision: null,
+    };
+  }
   if (
     ref?.type !== "analysis-chart-point" ||
     ref.targetKind !== "hysteresis-step" ||
@@ -77,12 +119,169 @@ export function resolveHysteresisStepViewportTarget(
     stageId: ref.stageId,
     pointId: ref.pointId,
     snapshotId: ref.snapshotId,
+    resourceRef: ref.resourceRef ?? null,
     quantityId: ref.quantityId ?? ref.quantity,
     meshIdentity: ref.meshIdentity ?? null,
     fieldOrientation: ref.fieldOrientation ?? null,
     measurementAxis: ref.measurementAxis ?? null,
     fieldRevision: ref.fieldRevision ?? null,
   };
+}
+
+export function resolveHysteresisReplayMeshCompatibility(
+  target: HysteresisStepViewportTarget | null,
+  currentTopology: {
+    meshGenerationId?: string | null;
+    meshRevision?: number | string | null;
+  } | null | undefined,
+): HysteresisReplayMeshCompatibility {
+  const requiredMeshIdentity = normalizeMeshIdentity(target?.meshIdentity);
+  const actualMeshIdentity = normalizeMeshIdentity(
+    currentTopology?.meshGenerationId ?? currentTopology?.meshRevision ?? null,
+  );
+
+  if (!target) {
+    return {
+      actualMeshIdentity,
+      reason: "No hysteresis replay target is selected.",
+      requiredMeshIdentity,
+      status: "unknown",
+    };
+  }
+  if (!requiredMeshIdentity) {
+    return {
+      actualMeshIdentity,
+      reason: "Snapshot mesh identity is unavailable.",
+      requiredMeshIdentity,
+      status: "unknown",
+    };
+  }
+  if (!actualMeshIdentity) {
+    return {
+      actualMeshIdentity,
+      reason: "Current 3D topology mesh identity is unavailable.",
+      requiredMeshIdentity,
+      status: "unknown",
+    };
+  }
+  if (requiredMeshIdentity !== actualMeshIdentity) {
+    return {
+      actualMeshIdentity,
+      reason: `Snapshot was computed on mesh ${requiredMeshIdentity}, but the current 3D topology is ${actualMeshIdentity}.`,
+      requiredMeshIdentity,
+      status: "mismatch",
+    };
+  }
+  return {
+    actualMeshIdentity,
+    reason: null,
+    requiredMeshIdentity,
+    status: "compatible",
+  };
+}
+
+export function buildHysteresisReplayGlyphModel(
+  target: HysteresisStepViewportTarget | null,
+): HysteresisReplayGlyphModel | null {
+  if (!target) return null;
+  return {
+    fieldDirection: parseHysteresisReplayGlyphAxis(
+      target.fieldOrientation,
+      "H field",
+    ),
+    measurementAxis: parseHysteresisReplayGlyphAxis(
+      target.measurementAxis,
+      "Measurement axis",
+    ),
+    pointId: target.pointId,
+    sampleNormal: {
+      label: "Sample normal",
+      source: "derived_oop",
+      vector: [0, 0, 1],
+    },
+    stageId: target.stageId,
+    targetId: target.targetId,
+  };
+}
+
+function parseHysteresisReplayGlyphAxis(
+  encoded: string | null,
+  label: string,
+): HysteresisReplayGlyphAxis | null {
+  if (!encoded) return null;
+  const parsed = parseJsonRecord(encoded);
+  const preset = typeof parsed?.preset_name === "string"
+    ? parsed.preset_name
+    : typeof parsed?.preset === "string"
+      ? parsed.preset
+      : typeof parsed?.kind === "string" && parsed.kind !== "custom"
+        ? parsed.kind
+        : null;
+  const presetVector = vectorForHysteresisPreset(preset);
+  if (presetVector) {
+    return {
+      label,
+      source: preset ?? "preset",
+      vector: presetVector,
+    };
+  }
+  const vector = normalizeVector3(parsed?.vector);
+  if (!vector) return null;
+  return {
+    label,
+    source: "custom",
+    vector,
+  };
+}
+
+function parseJsonRecord(value: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function vectorForHysteresisPreset(
+  preset: string | null,
+): [number, number, number] | null {
+  switch (preset) {
+    case "oop":
+    case "out_of_plane":
+    case "out_of_plane_z":
+      return [0, 0, 1];
+    case "in_plane_x":
+    case "ip_x":
+      return [1, 0, 0];
+    case "in_plane_y":
+    case "ip_y":
+      return [0, 1, 0];
+    default:
+      return null;
+  }
+}
+
+function normalizeVector3(value: unknown): [number, number, number] | null {
+  if (!Array.isArray(value) || value.length !== 3) return null;
+  const vector = value.map((component) =>
+    typeof component === "number" ? component : Number.NaN,
+  );
+  if (!vector.every(Number.isFinite)) return null;
+  const length = Math.hypot(vector[0], vector[1], vector[2]);
+  if (!Number.isFinite(length) || length <= 0) return null;
+  return [
+    vector[0] / length,
+    vector[1] / length,
+    vector[2] / length,
+  ];
+}
+
+function normalizeMeshIdentity(value: string | number | null | undefined): string | null {
+  if (value === null || value === undefined || value === "") return null;
+  return String(value);
 }
 
 export function resolveViewport3DSelectionBounds(

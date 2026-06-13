@@ -3703,7 +3703,7 @@ fn select_output_field_values_from_observables(
                         "unsupported interactive output snapshot component '{}' in '{}'",
                         other, name
                     ),
-                })
+                });
             }
         };
         return Ok(full.iter().map(|value| [value[idx], 0.0, 0.0]).collect());
@@ -3726,7 +3726,7 @@ fn select_output_base_field_from_observables(
         other => {
             return Err(RunError {
                 message: format!("unsupported interactive output field snapshot '{}'", other),
-            })
+            });
         }
     })
 }
@@ -3863,7 +3863,7 @@ fn copy_native_fem_field_values(
                         "unsupported interactive FEM snapshot component '{}' in '{}'",
                         other, name
                     ),
-                })
+                });
             }
         };
         return Ok(full.iter().map(|value| [value[idx], 0.0, 0.0]).collect());
@@ -4026,7 +4026,7 @@ fn copy_cuda_field_values(
                         "unsupported interactive CUDA snapshot component '{}' in '{}'",
                         other, name
                     ),
-                })
+                });
             }
         };
         return Ok(full.iter().map(|value| [value[idx], 0.0, 0.0]).collect());
