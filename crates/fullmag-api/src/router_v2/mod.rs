@@ -616,6 +616,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::analysis::get_frequency_domain_response_cancel_requested_v1),
         )
         .route(
+            "/v2/sessions/current/analysis/frequency-domain/response/diagnostics/solver.v1",
+            get(handlers::analysis::get_frequency_domain_response_solver_diagnostics_v1),
+        )
+        .route(
             "/v2/sessions/current/analysis/frequency-domain/response/diagnostics.v1",
             get(handlers::analysis::get_frequency_domain_response_diagnostics_v1),
         )

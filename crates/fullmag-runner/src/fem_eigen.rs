@@ -3021,6 +3021,10 @@ fn write_eigen_v2_bundle(
     } else {
         ""
     };
+    let solver_model = summary_payload
+        .get("solver_kind")
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown");
 
     let spectrum_modes: Vec<serde_json::Value> = modes
         .iter()
@@ -3303,9 +3307,25 @@ fn write_eigen_v2_bundle(
     }
 
     auxiliary_artifacts.push(json_artifact(
+        "eigen/diagnostics/solver.v1.json",
+        &serde_json::json!({
+            "schema_version": "frequency_domain_modal_solver_diagnostics.v1",
+            "study_product": "modal_eigen",
+            "status": "ready",
+            "complete": true,
+            "solver_model": solver_model,
+            "sample_count": 1,
+            "mode_count": modes.len(),
+            "normalization": normalization_label(plan.normalization),
+        }),
+    )?);
+
+    auxiliary_artifacts.push(json_artifact(
         "frequency_domain/manifest.v1.json",
         &serde_json::json!({
             "schema_version": "frequency_domain_manifest.v1",
+            "analysis_family": "magnetic_frequency_domain",
+            "study_product": "modal_eigen",
             "stage_kind": "eigenmodes",
             "status": "ready",
             "complete": true,
@@ -3320,6 +3340,7 @@ fn write_eigen_v2_bundle(
                 "spectrum_v2_path": "eigen/spectrum.v2.json",
                 "branches_v2_path": "eigen/branches.v2.json",
                 "dispersion_csv_path": "eigen/dispersion.csv",
+                "solver_diagnostics_path": "eigen/diagnostics/solver.v1.json",
                 "mode_field_zarr_store_path": mode_zarr_store_path(),
                 "mode_field_storage_format": "zarr",
                 "mode_metadata_paths": mode_metadata_paths,

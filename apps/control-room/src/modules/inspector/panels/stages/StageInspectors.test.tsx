@@ -836,7 +836,9 @@ describe("Study stage inspectors", () => {
     expect(html).toContain("Response field payload");
     expect(html).toContain("complex vector payload for selected frequency 3D overlay");
     expect(html).toContain("Diagnostics output");
-    expect(html).toContain("response/diagnostics.v1.json plus progress/cancel resources");
+    expect(html).toContain(
+      "response/diagnostics/solver.v1.json plus progress/cancel resources",
+    );
     expect(html).not.toContain("Modal Outputs Contract");
   });
 
@@ -915,7 +917,7 @@ describe("Study stage inspectors", () => {
     expect(html).toContain("Response progress resource");
     expect(html).toContain("response/progress.v1.json and response/cancel_requested.v1.json");
     expect(html).toContain("Diagnostics artifact");
-    expect(html).toContain("response/diagnostics.v1.json");
+    expect(html).toContain("response/diagnostics/solver.v1.json");
     expect(html).toContain("Static periodic diagnostics");
     expect(html).toContain("shared periodic pair resource when static-periodic response is selected");
     expect(html).not.toContain("Modal Diagnostics Contract");

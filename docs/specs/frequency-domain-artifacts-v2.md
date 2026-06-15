@@ -417,11 +417,16 @@ component at the frequency point. `response_phase` is the scalar phase paired
 with the dominant or maximum-amplitude component. Full per-component phases
 must be carried by `component_response_phase[]` and the complex field payloads.
 
-## response/diagnostics.v1.json
+## response solver diagnostics fields
 
 This artifact records driven-response solver diagnostics. Native FEM production
 writers must include the matrix-free/GMRES diagnostics used to distinguish the
 production CPU slice from dense validation artifacts.
+
+`response/diagnostics.v1.json` is a compatibility export only. New manifests
+must reference `response/diagnostics/solver.v1.json` through
+`artifacts.solver_diagnostics_path`, and clients must treat the nested solver
+diagnostics path as canonical.
 
 Required fields for native FEM production response diagnostics:
 

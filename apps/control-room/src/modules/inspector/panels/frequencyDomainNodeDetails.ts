@@ -131,7 +131,7 @@ const FREQUENCY_DOMAIN_STAGE_NODE_DETAILS: Record<
     visualization: "frequency grid, partial progress, response curves, and FMR peaks",
   },
   "study.stage.frequency_response.solver": {
-    artifact: "response/diagnostics.v1.json",
+    artifact: "response/diagnostics/solver.v1.json",
     focus: "frequency-response solver",
     resource: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_DIAGNOSTICS_V1_PATH,
     title: "Frequency Response Solver",
@@ -145,7 +145,7 @@ const FREQUENCY_DOMAIN_STAGE_NODE_DETAILS: Record<
     visualization: "sweep table, field payloads, phase views, and export artifacts",
   },
   "study.stage.frequency_response.diagnostics": {
-    artifact: "response/diagnostics.v1.json",
+    artifact: "response/diagnostics/solver.v1.json",
     focus: "frequency-response diagnostics",
     resource: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_DIAGNOSTICS_V1_PATH,
     title: "Frequency Response Diagnostics",
@@ -361,7 +361,7 @@ const FREQUENCY_DOMAIN_RESULT_NODE_DETAILS: Record<
     visualization: "observable tables, FMR curves, and absorbed power traces",
   },
   "results.frequency_response.diagnostics": {
-    artifact: "response/diagnostics.v1.json",
+    artifact: "response/diagnostics/solver.v1.json",
     focus: "response diagnostics",
     resource: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_DIAGNOSTICS_V1_PATH,
     title: "Frequency Response Diagnostics",
@@ -507,7 +507,7 @@ const FREQUENCY_DOMAIN_RESOURCE_NODE_DETAILS: Record<
     visualization: "observable response curves, phase traces, susceptibility, and absorbed power",
   },
   "resources.analysis.frequency_response.diagnostics": {
-    artifact: "response/diagnostics.v1.json",
+    artifact: "response/diagnostics/solver.v1.json",
     focus: "response diagnostics resource",
     resource: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_DIAGNOSTICS_V1_PATH,
     title: "Response Diagnostics Resource Detail",
@@ -596,7 +596,7 @@ const FREQUENCY_DOMAIN_DIAGNOSTIC_NODE_DETAILS: Record<
     visualization: "operator terms, tangent-space checks, and boundary policy",
   },
   "diagnostics.frequency_domain.solver": {
-    artifact: "response/diagnostics.v1.json",
+    artifact: "response/diagnostics/solver.v1.json",
     focus: "solver diagnostics",
     resource: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_DIAGNOSTICS_V1_PATH,
     title: "Solver Diagnostic Detail",

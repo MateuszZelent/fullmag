@@ -42,8 +42,11 @@ function textResource(text: string): FrequencyDomainTextArtifactLike {
   };
 }
 
-function fieldVectorResourceKey(fieldId: string): string {
-  return `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", fieldId)}?view=phase_rotated_real&phase_rad=0`;
+function fieldVectorResourceKey(
+  fieldId: string,
+  query = "view=phase_rotated_real&phase_rad=0",
+): string {
+  return `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", fieldId)}?${query}`;
 }
 
 describe("frequencyDomainChartModels", () => {
@@ -336,8 +339,10 @@ describe("frequencyDomainChartModels", () => {
               {
                 frequency_imag_hz: -1.5e6,
                 frequency_real_hz: 1.5e9,
-                mode_field_resource_key:
-                  "/v2/sessions/current/data/fields/analysis:eigen:sample-0001:mode-0002/samples/vector?component=full&scope_kind=full",
+                mode_field_resource_key: fieldVectorResourceKey(
+                  "analysis:eigen:sample-0001:mode-0002",
+                  "component=full&scope_kind=full",
+                ),
                 overlap_prev: 0.93,
                 raw_mode_index: 2,
                 residual_norm: 2e-7,
@@ -366,8 +371,10 @@ describe("frequencyDomainChartModels", () => {
           }),
           expect.objectContaining({
             modeFieldId: null,
-            modeFieldResourceKey:
-              "/v2/sessions/current/data/fields/analysis:eigen:sample-0001:mode-0002/samples/vector?component=full&scope_kind=full",
+            modeFieldResourceKey: fieldVectorResourceKey(
+              "analysis:eigen:sample-0001:mode-0002",
+              "component=full&scope_kind=full",
+            ),
             residualNorm: 2e-7,
           }),
         ],
@@ -475,8 +482,9 @@ describe("frequencyDomainChartModels", () => {
       kind: "results.eigen.mode",
       modeIndex: 2,
       nodeId: "results:eigen:sample:0:mode:2",
-      resourceRef:
-        "/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0002/samples/vector?view=phase_rotated_real&phase_rad=0",
+      resourceRef: fieldVectorResourceKey(
+        "analysis:eigen:sample-0000:mode-0002",
+      ),
       sampleIndex: 0,
       type: "frequency-domain",
     });

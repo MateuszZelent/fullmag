@@ -21477,27 +21477,30 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
         .expect("frequency-domain manifest directory should be created");
     fs::write(
         artifact_dir.join("frequency_domain").join("manifest.v1.json"),
-        serde_json::to_vec(&serde_json::json!({
-            "schema_version": "frequency_domain_manifest.v1",
-            "stage_kind": "combined",
-            "physics": {
+	        serde_json::to_vec(&serde_json::json!({
+	            "schema_version": "frequency_domain_manifest.v1",
+	            "analysis_family": "magnetic_frequency_domain",
+	            "study_product": "driven_response",
+	            "stage_kind": "frequency_response",
+	            "physics": {
                 "analysis_family": "magnetic_frequency_domain",
                 "phase_convention": "exp_minus_i_omega_t",
                 "frequency_units": "Hz",
                 "field_units": "dimensionless_delta_m",
                 "normalization": "unit_l2"
             },
-            "artifacts": {
-                "spectrum_v2_path": "eigen/spectrum.v2.json",
+	            "artifacts": {
+	                "solver_diagnostics_path": "response/diagnostics/solver.v1.json",
+	                "spectrum_v2_path": "eigen/spectrum.v2.json",
                 "branches_v2_path": "eigen/branches.v2.json",
                 "dispersion_csv_path": "eigen/dispersion.csv",
                 "mode_metadata_paths": ["eigen/modes/sample_0000/mode_0003.json"],
                 "response_sweep_v2_path": "response/magnetic_response_sweep.v2.json",
                 "response_cancel_requested_v1_path": null
             },
-            "resources": {
-                "eigen_diagnostics_resource_key": "/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2",
-                "response_diagnostics_resource_key": "/v2/sessions/current/analysis/frequency-domain/response/diagnostics.v1",
+	            "resources": {
+	                "eigen_diagnostics_resource_key": "/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2",
+	                "response_diagnostics_resource_key": "/v2/sessions/current/analysis/frequency-domain/response/diagnostics/solver.v1",
                 "response_cancel_requested_resource_key": null,
                 "mode_field_resources": ["/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/0/3/meta"]
             }
@@ -21593,7 +21596,7 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
     );
     assert_eq!(
         payload["result_manifest"]["payload"]["resources"]["response_diagnostics_resource_key"],
-        "/v2/sessions/current/analysis/frequency-domain/response/diagnostics.v1"
+        "/v2/sessions/current/analysis/frequency-domain/response/diagnostics/solver.v1"
     );
     assert_eq!(
         payload["result_manifest"]["payload"]["artifacts"]["spectrum_v2_path"],

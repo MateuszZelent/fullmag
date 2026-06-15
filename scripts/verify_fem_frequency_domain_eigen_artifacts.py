@@ -357,6 +357,16 @@ def require_mode_field_metadata(
 
 
 def validate_manifest_physics(manifest: dict) -> None:
+    require_equal(
+        manifest.get("analysis_family"),
+        "magnetic_frequency_domain",
+        "manifest.analysis_family",
+    )
+    require_equal(
+        manifest.get("study_product"),
+        "modal_eigen",
+        "manifest.study_product",
+    )
     physics = manifest.get("physics")
     if not isinstance(physics, dict):
         fail("manifest.physics must be an object")
@@ -725,6 +735,12 @@ def main() -> int:
     )
     require_equal(manifest.get("stage_kind"), "eigenmodes", "manifest.stage_kind")
     validate_manifest_physics(manifest)
+    require_equal(
+        manifest.get("artifacts", {}).get("solver_diagnostics_path"),
+        "eigen/diagnostics/solver.v1.json",
+        "manifest.artifacts.solver_diagnostics_path",
+    )
+    require_file(root / "eigen/diagnostics/solver.v1.json")
     require_equal(
         manifest.get("artifacts", {}).get("spectrum_v2_path"),
         "eigen/spectrum.v2.json",

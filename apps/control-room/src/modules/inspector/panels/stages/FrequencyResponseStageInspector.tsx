@@ -285,7 +285,7 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
           />
           <FieldRow
             label="Diagnostics output"
-            value="response/diagnostics.v1.json plus progress/cancel resources"
+            value="response/diagnostics/solver.v1.json plus progress/cancel resources"
           />
           <FieldRow
             label="Artifact bundle"
@@ -318,7 +318,7 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
           />
           <FieldRow
             label="Diagnostics artifact"
-            value="response/diagnostics.v1.json"
+            value="response/diagnostics/solver.v1.json"
           />
           <FieldRow
             label="Static periodic diagnostics"

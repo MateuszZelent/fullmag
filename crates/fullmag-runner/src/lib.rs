@@ -4316,7 +4316,7 @@ mod tests {
         assert_eq!(result.status, RunStatus::Completed);
         let sweep_path = output_dir.join("response/magnetic_response_sweep.v1.json");
         let manifest_path = output_dir.join("response/artifact_manifest.json");
-        let diagnostics_path = output_dir.join("response/diagnostics.v1.json");
+        let diagnostics_path = output_dir.join("response/diagnostics/solver.v1.json");
         let family_manifest_path = output_dir.join("frequency_domain/manifest.v1.json");
         assert!(sweep_path.is_file());
         assert!(manifest_path.is_file());
@@ -4359,11 +4359,20 @@ mod tests {
             family_manifest["schema_version"],
             "frequency_domain_manifest.v1"
         );
+        assert_eq!(
+            family_manifest["analysis_family"],
+            "magnetic_frequency_domain"
+        );
+        assert_eq!(family_manifest["study_product"], "driven_response");
         assert_eq!(family_manifest["stage_kind"], "frequency_response");
         assert_eq!(family_manifest["diagnostics"]["complete"], true);
         assert_eq!(
+            family_manifest["artifacts"]["solver_diagnostics_path"],
+            "response/diagnostics/solver.v1.json"
+        );
+        assert_eq!(
             family_manifest["artifacts"]["response_diagnostics_v1_path"],
-            "response/diagnostics.v1.json"
+            "response/diagnostics/solver.v1.json"
         );
         assert_eq!(
             family_manifest["resources"]["response_sweep_resource_key"],
@@ -4770,7 +4779,7 @@ mod tests {
         )
         .expect("frequency-domain manifest should parse");
         let diagnostics: serde_json::Value = serde_json::from_str(
-            &fs::read_to_string(output_dir.join("response/diagnostics.v1.json"))
+            &fs::read_to_string(output_dir.join("response/diagnostics/solver.v1.json"))
                 .expect("response diagnostics should be readable"),
         )
         .expect("response diagnostics should parse");

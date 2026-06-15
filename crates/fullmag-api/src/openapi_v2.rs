@@ -169,7 +169,7 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::analysis::frequency_domain::get_frequency_domain_response_magnetic_sweep,
         crate::router_v2::handlers::analysis::frequency_domain::get_frequency_domain_response_progress_v1,
         crate::router_v2::handlers::analysis::frequency_domain::get_frequency_domain_response_cancel_requested_v1,
-        crate::router_v2::handlers::analysis::frequency_domain::get_frequency_domain_response_diagnostics_v1,
+        crate::router_v2::handlers::analysis::frequency_domain::get_frequency_domain_response_solver_diagnostics_v1,
         crate::router_v2::handlers::analysis::frequency_domain::get_frequency_domain_response_frequency_point,
         crate::router_v2::handlers::analysis::frequency_domain::get_frequency_domain_response_field_meta,
         crate::router_v2::handlers::analysis::response::get_magnetic_response_sweep_v1,

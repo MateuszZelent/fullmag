@@ -23,7 +23,7 @@ export const openApiV2PathLiterals = [
   "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2",
   "/v2/sessions/current/analysis/frequency-domain/manifest.v1",
   "/v2/sessions/current/analysis/frequency-domain/response/cancel-requested.v1",
-  "/v2/sessions/current/analysis/frequency-domain/response/diagnostics.v1",
+  "/v2/sessions/current/analysis/frequency-domain/response/diagnostics/solver.v1",
   "/v2/sessions/current/analysis/frequency-domain/response/field/{frequency_index}/meta",
   "/v2/sessions/current/analysis/frequency-domain/response/frequency-points/{frequency_index}",
   "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep",

@@ -3999,7 +3999,7 @@ describe("FrequencyDomainInspectorPanel", () => {
       nodeId: "diagnostics:frequency-domain:solver",
       objectId: null,
       ref: {
-        artifactPath: "response/diagnostics.v1.json",
+        artifactPath: "response/diagnostics/solver.v1.json",
         kind: "diagnostics.frequency_domain.solver",
         nodeId: "diagnostics:frequency-domain:solver",
         resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_DIAGNOSTICS_V1_PATH,
@@ -4013,7 +4013,7 @@ describe("FrequencyDomainInspectorPanel", () => {
 
     expect(html).toContain("Solver Diagnostic Detail");
     expect(html).toContain("Solver Diagnostics");
-    expect(html).toContain("response/diagnostics.v1.json");
+    expect(html).toContain("response/diagnostics/solver.v1.json");
     expect(html).toContain("GMRES status, residuals, and production provenance");
   });
 

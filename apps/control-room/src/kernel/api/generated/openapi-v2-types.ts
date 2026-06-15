@@ -372,14 +372,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v2/sessions/current/analysis/frequency-domain/response/diagnostics.v1": {
+    "/v2/sessions/current/analysis/frequency-domain/response/diagnostics/solver.v1": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get: operations["analysis_get_sessions_current_analysis_frequency_domain_response_diagnostics_v1"];
+        get: operations["analysis_get_sessions_current_analysis_frequency_domain_response_diagnostics_solver_v1"];
         put?: never;
         post?: never;
         delete?: never;
@@ -7731,7 +7731,7 @@ export interface operations {
             };
         };
     };
-    analysis_get_sessions_current_analysis_frequency_domain_response_diagnostics_v1: {
+    analysis_get_sessions_current_analysis_frequency_domain_response_diagnostics_solver_v1: {
         parameters: {
             query?: never;
             header?: never;

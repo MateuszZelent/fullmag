@@ -744,10 +744,22 @@ async fn response_progress_resource(
 
 #[utoipa::path(
     get,
-    path = "/v2/sessions/current/analysis/frequency-domain/response/diagnostics.v1",
+    path = "/v2/sessions/current/analysis/frequency-domain/response/diagnostics/solver.v1",
     responses((status = 200, description = "Frequency-domain response diagnostics resource", body = FrequencyDomainJsonArtifactResource)),
     tag = "analysis"
 )]
+pub async fn get_frequency_domain_response_solver_diagnostics_v1(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<FrequencyDomainJsonArtifactResource>, ApiError> {
+    json_artifact_resource(
+        &state,
+        "frequency_domain_response_diagnostics.v1",
+        "response/diagnostics/solver.v1.json",
+        "/v2/sessions/current/analysis/frequency-domain/response/diagnostics/solver.v1",
+    )
+    .await
+}
+
 pub async fn get_frequency_domain_response_diagnostics_v1(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<FrequencyDomainJsonArtifactResource>, ApiError> {

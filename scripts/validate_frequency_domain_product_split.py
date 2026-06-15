@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import sys
 
 
@@ -36,6 +37,30 @@ def require_separate_capability_rows(text: str) -> None:
     require_contains(text, "| FEM driven frequency response |", "capability matrix")
 
 
+def require_separate_capability_json_products() -> None:
+    matrix = json.loads(read_text(Path("docs/specs/capability-matrix-v0.json")))
+    features = matrix.get("features")
+    if not isinstance(features, list):
+        fail("capability matrix JSON is missing features[]")
+    by_id = {
+        feature.get("id"): feature
+        for feature in features
+        if isinstance(feature, dict)
+    }
+    required = {
+        "fem_modal_interior_window_eigensolve": "modal_eigen",
+        "fem_driven_frequency_response": "driven_response",
+    }
+    for feature_id, study_product in required.items():
+        feature = by_id.get(feature_id)
+        if not isinstance(feature, dict):
+            fail(f"capability matrix JSON is missing feature id: {feature_id}")
+        if feature.get("study_product") != study_product:
+            fail(
+                f"capability matrix JSON {feature_id}.study_product must be {study_product}"
+            )
+
+
 def require_modal_frequency_domain_wording(text: str, label: str) -> None:
     bad_phrase = "Eigenmodes is the frequency-domain solver"
     if bad_phrase in text:
@@ -54,6 +79,7 @@ def main() -> None:
     require_separate_capability_rows(capability_matrix)
     require_contains(capability_matrix, "modal_eigen", "capability matrix")
     require_contains(capability_matrix, "driven_response", "capability matrix")
+    require_separate_capability_json_products()
 
     llg_contract = read_text(Path("docs/physics/0700-frequency-domain-linearized-llg.md"))
     require_contains(llg_contract, "A q = lambda B q", "0700 linearized LLG contract")

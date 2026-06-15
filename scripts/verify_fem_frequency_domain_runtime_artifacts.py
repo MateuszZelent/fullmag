@@ -558,7 +558,7 @@ def main() -> int:
     )
     common_required = [
         root / "response/progress.v1.json",
-        root / "response/diagnostics.v1.json",
+        root / "response/diagnostics/solver.v1.json",
         root / "frequency_domain/manifest.v1.json",
     ]
     missing = [str(path) for path in common_required if not path.is_file()]
@@ -569,7 +569,7 @@ def main() -> int:
         )
 
     progress = load_json(root / "response/progress.v1.json")
-    diagnostics = load_json(root / "response/diagnostics.v1.json")
+    diagnostics = load_json(root / "response/diagnostics/solver.v1.json")
     manifest = load_json(root / "frequency_domain/manifest.v1.json")
     unavailable = manifest.get("status") == "unavailable"
     if unavailable:
@@ -584,6 +584,14 @@ def main() -> int:
                 "frequency_domain_manifest.v1",
             ),
             "manifest.stage_kind": (manifest.get("stage_kind"), "frequency_response"),
+            "manifest.analysis_family": (
+                manifest.get("analysis_family"),
+                "magnetic_frequency_domain",
+            ),
+            "manifest.study_product": (
+                manifest.get("study_product"),
+                "driven_response",
+            ),
             "manifest.complete": (manifest.get("complete"), False),
             "progress.schema_version": (
                 progress.get("schema_version"),
@@ -745,7 +753,11 @@ def main() -> int:
         unavailable_artifact_refs = {
             "manifest.artifacts.response_diagnostics_v1_path": (
                 manifest_artifacts.get("response_diagnostics_v1_path"),
-                "response/diagnostics.v1.json",
+                "response/diagnostics/solver.v1.json",
+            ),
+            "manifest.artifacts.solver_diagnostics_path": (
+                manifest_artifacts.get("solver_diagnostics_path"),
+                "response/diagnostics/solver.v1.json",
             ),
             "manifest.artifacts.response_progress_v1_path": (
                 manifest_artifacts.get("response_progress_v1_path"),
@@ -793,7 +805,7 @@ def main() -> int:
             ),
             "manifest.resources.response_diagnostics_resource_key": (
                 manifest_resources.get("response_diagnostics_resource_key"),
-                "/v2/sessions/current/analysis/frequency-domain/response/diagnostics.v1",
+                "/v2/sessions/current/analysis/frequency-domain/response/diagnostics/solver.v1",
             ),
             "manifest.resources.response_cancel_requested_resource_key": (
                 manifest_resources.get("response_cancel_requested_resource_key"),
@@ -1076,6 +1088,14 @@ def main() -> int:
             manifest.get("schema_version"),
             "frequency_domain_manifest.v1",
         ),
+        "manifest.analysis_family": (
+            manifest.get("analysis_family"),
+            "magnetic_frequency_domain",
+        ),
+        "manifest.study_product": (
+            manifest.get("study_product"),
+            "driven_response",
+        ),
         "manifest.stage_kind": (manifest.get("stage_kind"), "frequency_response"),
         "manifest.status": (manifest.get("status"), expected_status),
         "manifest.complete": (manifest.get("complete"), expected_complete),
@@ -1130,6 +1150,18 @@ def main() -> int:
         "manifest.artifacts.response_map_v2_path": (
             manifest.get("artifacts", {}).get("response_map_v2_path"),
             None,
+        ),
+        "manifest.artifacts.solver_diagnostics_path": (
+            manifest.get("artifacts", {}).get("solver_diagnostics_path"),
+            "response/diagnostics/solver.v1.json",
+        ),
+        "manifest.artifacts.response_diagnostics_v1_path": (
+            manifest.get("artifacts", {}).get("response_diagnostics_v1_path"),
+            "response/diagnostics/solver.v1.json",
+        ),
+        "manifest.resources.response_diagnostics_resource_key": (
+            manifest.get("resources", {}).get("response_diagnostics_resource_key"),
+            "/v2/sessions/current/analysis/frequency-domain/response/diagnostics/solver.v1",
         ),
         "manifest.resources.response_map_resource_key": (
             manifest.get("resources", {}).get("response_map_resource_key"),

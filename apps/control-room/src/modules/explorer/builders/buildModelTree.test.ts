@@ -1518,7 +1518,8 @@ describe("buildModelTree", () => {
                   "response/frequency_points/frequency_0000.json",
                   "response/frequency_points/frequency_0001.json",
                 ],
-                response_diagnostics_v1_path: "response/diagnostics.v1.json",
+                response_diagnostics_v1_path:
+                  "response/diagnostics/solver.v1.json",
                 response_cancel_requested_v1_path:
                   "response/cancel_requested.v1.json",
                 response_progress_v1_path: "response/progress.v1.json",
@@ -1633,7 +1634,7 @@ describe("buildModelTree", () => {
           node.kind === "resources.analysis.frequency_response.diagnostics",
       ),
     ).toMatchObject({
-      artifactPath: "response/diagnostics.v1.json",
+      artifactPath: "response/diagnostics/solver.v1.json",
       resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_DIAGNOSTICS_V1_PATH,
     });
     expect(

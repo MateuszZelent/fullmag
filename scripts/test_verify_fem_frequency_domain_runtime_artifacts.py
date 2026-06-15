@@ -457,6 +457,10 @@ def write_frequency_domain_fixture(
             diagnostics["static_periodic_node_pair_count"] = static_periodic_node_pair_count
         diagnostics["static_periodic_frame_max_mismatch"] = static_periodic_frame_max_mismatch
         diagnostics["static_periodic_drive_max_mismatch"] = static_periodic_drive_max_mismatch
+    (root / "response" / "diagnostics").mkdir(parents=True, exist_ok=True)
+    (root / "response" / "diagnostics" / "solver.v1.json").write_text(
+        json.dumps(diagnostics)
+    )
     (root / "response" / "diagnostics.v1.json").write_text(json.dumps(diagnostics))
     if include_static_periodic_diagnostics and not omit_static_periodic_mesh_artifact:
         (root / "mesh").mkdir(parents=True)
@@ -517,6 +521,8 @@ def write_frequency_domain_fixture(
     )
     manifest: dict[str, object] = {
         "schema_version": "frequency_domain_manifest.v1",
+        "analysis_family": "magnetic_frequency_domain",
+        "study_product": "driven_response",
         "created_at": "1970-01-01T00:00:00Z",
         "stage_kind": "frequency_response",
         "status": manifest_status,
@@ -536,6 +542,8 @@ def write_frequency_domain_fixture(
             "solve_kind": "direct_harmonic_response",
         },
         "artifacts": {
+            "solver_diagnostics_path": "response/diagnostics/solver.v1.json",
+            "response_diagnostics_v1_path": "response/diagnostics/solver.v1.json",
             "response_cancel_requested_v1_path": manifest_cancel_requested_artifact_path,
             "response_map_v1_path": None,
             "response_map_v2_path": None,
@@ -571,6 +579,7 @@ def write_frequency_domain_fixture(
             "response_sweep_resource_key": (
                 "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep"
             ),
+            "response_diagnostics_resource_key": "/v2/sessions/current/analysis/frequency-domain/response/diagnostics/solver.v1",
             "response_cancel_requested_resource_key": manifest_cancel_requested_resource_key,
             "response_map_resource_key": None,
             "response_field_resources": (
@@ -672,23 +681,28 @@ def write_unavailable_frequency_domain_fixture(root: Path) -> None:
             }
         )
     )
+    unavailable_diagnostics = {
+        "schema_version": "frequency_domain_response_diagnostics.v1",
+        "status": "unavailable",
+        "complete": False,
+        "solver_kind": "production_unavailable",
+        "requested_frequency_count": 2,
+        "completed_frequency_point_count": 0,
+        "written_frequency_point_artifacts": 0,
+    }
+    (root / "response" / "diagnostics").mkdir(parents=True, exist_ok=True)
+    (root / "response" / "diagnostics" / "solver.v1.json").write_text(
+        json.dumps(unavailable_diagnostics)
+    )
     (root / "response" / "diagnostics.v1.json").write_text(
-        json.dumps(
-            {
-                "schema_version": "frequency_domain_response_diagnostics.v1",
-                "status": "unavailable",
-                "complete": False,
-                "solver_kind": "production_unavailable",
-                "requested_frequency_count": 2,
-                "completed_frequency_point_count": 0,
-                "written_frequency_point_artifacts": 0,
-            }
-        )
+        json.dumps(unavailable_diagnostics)
     )
     (root / "frequency_domain" / "manifest.v1.json").write_text(
         json.dumps(
             {
                 "schema_version": "frequency_domain_manifest.v1",
+                "analysis_family": "magnetic_frequency_domain",
+                "study_product": "driven_response",
                 "revision": "unavailable-v1",
                 "created_at": "1970-01-01T00:00:00Z",
                 "session_id": "native-validation",
@@ -729,7 +743,8 @@ def write_unavailable_frequency_domain_fixture(root: Path) -> None:
                     "periodic_or_floquet": False,
                 },
                 "artifacts": {
-                    "response_diagnostics_v1_path": "response/diagnostics.v1.json",
+                    "solver_diagnostics_path": "response/diagnostics/solver.v1.json",
+                    "response_diagnostics_v1_path": "response/diagnostics/solver.v1.json",
                     "response_progress_v1_path": "response/progress.v1.json",
                     "response_cancel_requested_v1_path": None,
                     "response_map_v1_path": None,
@@ -738,7 +753,7 @@ def write_unavailable_frequency_domain_fixture(root: Path) -> None:
                 },
                 "resources": {
                     "response_progress_resource_key": "/v2/sessions/current/analysis/frequency-domain/response/progress.v1",
-                    "response_diagnostics_resource_key": "/v2/sessions/current/analysis/frequency-domain/response/diagnostics.v1",
+                    "response_diagnostics_resource_key": "/v2/sessions/current/analysis/frequency-domain/response/diagnostics/solver.v1",
                     "response_cancel_requested_resource_key": None,
                     "response_map_resource_key": None,
                     "response_field_resources": [],
@@ -886,7 +901,7 @@ def test_validator_rejects_unavailable_diagnostics_missing_requested_frequency_c
     tmp_path: Path,
 ) -> None:
     write_unavailable_frequency_domain_fixture(tmp_path)
-    diagnostics_path = tmp_path / "response" / "diagnostics.v1.json"
+    diagnostics_path = tmp_path / "response" / "diagnostics" / "solver.v1.json"
     diagnostics = json.loads(diagnostics_path.read_text())
     del diagnostics["requested_frequency_count"]
     diagnostics_path.write_text(json.dumps(diagnostics))

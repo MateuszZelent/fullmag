@@ -245,6 +245,8 @@ struct ResponseProgressArtifact<'a> {
 #[derive(Debug, Clone, Serialize)]
 struct FrequencyDomainArtifactManifest<'a> {
     schema_version: &'static str,
+    analysis_family: &'static str,
+    study_product: &'static str,
     revision: String,
     session_id: &'static str,
     run_id: &'static str,
@@ -311,6 +313,7 @@ struct FrequencyDomainPhysics<'a> {
 
 #[derive(Debug, Clone, Serialize)]
 struct FrequencyDomainArtifactIndex {
+    solver_diagnostics_path: Option<&'static str>,
     spectrum_v2_path: Option<&'static str>,
     branches_v2_path: Option<&'static str>,
     dispersion_csv_path: Option<&'static str>,
@@ -1004,11 +1007,46 @@ fn write_response_diagnostics_artifact(
         lane_classification: artifact.lane_classification.as_str(),
         solve_kind: "direct_harmonic_response",
     };
-    fs::write(
-        response_dir.join("diagnostics.v1.json"),
-        serde_json::to_vec_pretty(&diagnostics).unwrap(),
-    )?;
+    let diagnostics_bytes = serde_json::to_vec_pretty(&diagnostics).unwrap();
+    let solver_diagnostics_path = response_dir.join("diagnostics").join("solver.v1.json");
+    if let Some(parent) = solver_diagnostics_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&solver_diagnostics_path, &diagnostics_bytes)?;
+    fs::write(response_dir.join("diagnostics.v1.json"), diagnostics_bytes)?;
     Ok(())
+}
+
+fn write_eigen_solver_diagnostics_artifact(
+    base_dir: &Path,
+    result: &PathSolveResult,
+) -> std::io::Result<()> {
+    let diagnostics_path = base_dir
+        .join("eigen")
+        .join("diagnostics")
+        .join("solver.v1.json");
+    if let Some(parent) = diagnostics_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mode_count = result
+        .samples
+        .iter()
+        .map(|sample| sample.modes.len())
+        .sum::<usize>();
+    fs::write(
+        diagnostics_path,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schema_version": "frequency_domain_modal_solver_diagnostics.v1",
+            "study_product": "modal_eigen",
+            "status": "ready",
+            "complete": true,
+            "solver_model": result.solver_model.as_str(),
+            "sample_count": result.samples.len(),
+            "mode_count": mode_count,
+            "notes": result.notes,
+        }))
+        .unwrap(),
+    )
 }
 
 fn finite_min(values: &[f64]) -> Option<f64> {
@@ -1061,6 +1099,8 @@ fn write_frequency_domain_response_manifest(
         .collect::<Vec<_>>();
     let manifest = FrequencyDomainArtifactManifest {
         schema_version: "frequency_domain_manifest.v1",
+        analysis_family: "magnetic_frequency_domain",
+        study_product: "driven_response",
         revision: format!(
             "response:{}:{}:{}",
             status,
@@ -1116,6 +1156,7 @@ fn write_frequency_domain_response_manifest(
             response_map_axes: vec!["frequency_hz"],
         },
         artifacts: FrequencyDomainArtifactIndex {
+            solver_diagnostics_path: Some("response/diagnostics/solver.v1.json"),
             spectrum_v2_path: None,
             branches_v2_path: None,
             dispersion_csv_path: None,
@@ -1124,7 +1165,7 @@ fn write_frequency_domain_response_manifest(
             response_sweep_v2_path: Some("response/magnetic_response_sweep.v2.json"),
             response_map_v1_path: None,
             response_map_v2_path: None,
-            response_diagnostics_v1_path: Some("response/diagnostics.v1.json"),
+            response_diagnostics_v1_path: Some("response/diagnostics/solver.v1.json"),
             response_progress_v1_path: Some("response/progress.v1.json"),
             response_cancel_requested_v1_path: interrupted
                 .then_some("response/cancel_requested.v1.json"),
@@ -1142,7 +1183,7 @@ fn write_frequency_domain_response_manifest(
                 "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion",
             ),
             diagnostics_resource_key: Some(
-                "/v2/sessions/current/analysis/frequency-domain/response/diagnostics.v1",
+                "/v2/sessions/current/analysis/frequency-domain/response/diagnostics/solver.v1",
             ),
             eigen_diagnostics_resource_key: Some(
                 "/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2",
@@ -1158,7 +1199,7 @@ fn write_frequency_domain_response_manifest(
                 "/v2/sessions/current/analysis/frequency-domain/response/cancel-requested.v1",
             ),
             response_diagnostics_resource_key: Some(
-                "/v2/sessions/current/analysis/frequency-domain/response/diagnostics.v1",
+                "/v2/sessions/current/analysis/frequency-domain/response/diagnostics/solver.v1",
             ),
             mode_field_resources: Vec::new(),
             response_field_resources,
@@ -1189,6 +1230,7 @@ pub fn write_frequency_domain_eigen_manifest(
     base_dir: &Path,
     result: &PathSolveResult,
 ) -> std::io::Result<()> {
+    write_eigen_solver_diagnostics_artifact(base_dir, result)?;
     let manifest_dir = base_dir.join("frequency_domain");
     fs::create_dir_all(&manifest_dir)?;
     let created_at = SystemTime::now()
@@ -1201,6 +1243,8 @@ pub fn write_frequency_domain_eigen_manifest(
     let calculation_mode = eigen_calculation_mode(result);
     let manifest = FrequencyDomainArtifactManifest {
         schema_version: "frequency_domain_manifest.v1",
+        analysis_family: "magnetic_frequency_domain",
+        study_product: "modal_eigen",
         revision: format!(
             "eigen:{}:{}:{}",
             result.solver_model.as_str(),
@@ -1260,6 +1304,7 @@ pub fn write_frequency_domain_eigen_manifest(
             response_map_axes: Vec::new(),
         },
         artifacts: FrequencyDomainArtifactIndex {
+            solver_diagnostics_path: Some("eigen/diagnostics/solver.v1.json"),
             spectrum_v2_path: Some("eigen/spectrum.v2.json"),
             branches_v2_path: Some("eigen/branches.v2.json"),
             dispersion_csv_path: Some("eigen/dispersion.csv"),
@@ -1913,6 +1958,11 @@ mod tests {
             family_manifest["schema_version"],
             "frequency_domain_manifest.v1"
         );
+        assert_eq!(
+            family_manifest["analysis_family"],
+            "magnetic_frequency_domain"
+        );
+        assert_eq!(family_manifest["study_product"], "modal_eigen");
         assert_eq!(family_manifest["stage_kind"], "eigenmodes");
         assert_eq!(
             family_manifest["requested_execution"]["calculation_mode"],
@@ -1936,6 +1986,11 @@ mod tests {
             family_manifest["artifacts"]["spectrum_v2_path"],
             "eigen/spectrum.v2.json"
         );
+        assert_eq!(
+            family_manifest["artifacts"]["solver_diagnostics_path"],
+            "eigen/diagnostics/solver.v1.json"
+        );
+        assert!(temp.path.join("eigen/diagnostics/solver.v1.json").is_file());
         assert_eq!(
             family_manifest["artifacts"]["mode_metadata_paths"][0],
             "eigen/modes/sample_0000/mode_0000.json"
@@ -2301,6 +2356,11 @@ mod tests {
             family_manifest["schema_version"],
             "frequency_domain_manifest.v1"
         );
+        assert_eq!(
+            family_manifest["analysis_family"],
+            "magnetic_frequency_domain"
+        );
+        assert_eq!(family_manifest["study_product"], "driven_response");
         assert_eq!(family_manifest["stage_kind"], "frequency_response");
         assert_eq!(family_manifest["diagnostics"]["status"], "interrupted");
         assert_eq!(family_manifest["diagnostics"]["complete"], false);
@@ -2309,8 +2369,12 @@ mod tests {
             "response/magnetic_response_sweep.v1.json"
         );
         assert_eq!(
+            family_manifest["artifacts"]["solver_diagnostics_path"],
+            "response/diagnostics/solver.v1.json"
+        );
+        assert_eq!(
             family_manifest["artifacts"]["response_diagnostics_v1_path"],
-            "response/diagnostics.v1.json"
+            "response/diagnostics/solver.v1.json"
         );
         assert_eq!(
             family_manifest["artifacts"]["response_progress_v1_path"],
@@ -2342,10 +2406,10 @@ mod tests {
         );
         assert_eq!(
             family_manifest["resources"]["response_diagnostics_resource_key"],
-            "/v2/sessions/current/analysis/frequency-domain/response/diagnostics.v1"
+            "/v2/sessions/current/analysis/frequency-domain/response/diagnostics/solver.v1"
         );
         let diagnostics: Value = serde_json::from_slice(
-            &std::fs::read(temp.path.join("response/diagnostics.v1.json"))
+            &std::fs::read(temp.path.join("response/diagnostics/solver.v1.json"))
                 .expect("response diagnostics should be written"),
         )
         .expect("response diagnostics should be valid JSON");

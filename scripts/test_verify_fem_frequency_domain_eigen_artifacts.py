@@ -385,10 +385,13 @@ def write_eigen_fixture(
 
     manifest = {
         "schema_version": "frequency_domain_manifest.v1",
+        "analysis_family": "magnetic_frequency_domain",
+        "study_product": "modal_eigen",
         "stage_kind": "eigenmodes",
         "status": "ready",
         "complete": True,
         "artifacts": {
+            "solver_diagnostics_path": "eigen/diagnostics/solver.v1.json",
             "spectrum_v2_path": "eigen/spectrum.v2.json",
             "branches_v2_path": "eigen/branches.v2.json",
             "dispersion_csv_path": "eigen/dispersion.csv",
@@ -416,6 +419,20 @@ def write_eigen_fixture(
         ),
     }
     (root / "frequency_domain" / "manifest.v1.json").write_text(json.dumps(manifest))
+    (root / "eigen" / "diagnostics").mkdir(parents=True, exist_ok=True)
+    (root / "eigen" / "diagnostics" / "solver.v1.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "frequency_domain_modal_solver_diagnostics.v1",
+                "study_product": "modal_eigen",
+                "status": "ready",
+                "complete": True,
+                "solver_model": "dense_reference_oracle",
+                "sample_count": 1,
+                "mode_count": 1,
+            }
+        )
+    )
 
 
 def run_validator(root: Path) -> subprocess.CompletedProcess[str]:

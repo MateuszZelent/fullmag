@@ -91,7 +91,7 @@ export const ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH =
 
 export const ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_DIAGNOSTICS_V1_PATH =
   openApiV2Path(
-    "/v2/sessions/current/analysis/frequency-domain/response/diagnostics.v1",
+    "/v2/sessions/current/analysis/frequency-domain/response/diagnostics/solver.v1",
   );
 
 export const ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FREQUENCY_POINT_PATH =

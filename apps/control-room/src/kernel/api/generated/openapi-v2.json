@@ -18228,9 +18228,9 @@
         ]
       }
     },
-    "/v2/sessions/current/analysis/frequency-domain/response/diagnostics.v1": {
+    "/v2/sessions/current/analysis/frequency-domain/response/diagnostics/solver.v1": {
       "get": {
-        "operationId": "analysis_get_sessions_current_analysis_frequency_domain_response_diagnostics_v1",
+        "operationId": "analysis_get_sessions_current_analysis_frequency_domain_response_diagnostics_solver_v1",
         "responses": {
           "200": {
             "content": {
