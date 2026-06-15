@@ -8,6 +8,7 @@
 
 #include "context.hpp"
 #include "cpu/mfem/interactions/exchange_mass_projection.hpp"
+#include "cpu/mfem/runtime/mfem_device.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>
@@ -28,6 +29,7 @@ bool initialize_exchange_operator_mfem(
     mfem::Coefficient &ms_coeff,
     std::string &error)
 {
+    const bool use_device = mfem::Device::IsEnabled();
     auto exchange_form = std::make_unique<mfem::BilinearForm>(&fes);
     auto mass_form = std::make_unique<mfem::BilinearForm>(&fes);
     auto volume_mass_form = std::make_unique<mfem::BilinearForm>(&fes);
@@ -36,11 +38,11 @@ bool initialize_exchange_operator_mfem(
     auto inv_lumped_mass = std::make_unique<mfem::Vector>(fes.GetNDofs());
     auto exchange_tmp_vec = std::make_unique<mfem::Vector>(fes.GetNDofs());
     auto exchange_out_vec = std::make_unique<mfem::Vector>(fes.GetNDofs());
-    mass_ones->UseDevice(true);
-    mass_lumped->UseDevice(true);
-    inv_lumped_mass->UseDevice(true);
-    exchange_tmp_vec->UseDevice(true);
-    exchange_out_vec->UseDevice(true);
+    mass_ones->UseDevice(use_device);
+    mass_lumped->UseDevice(use_device);
+    inv_lumped_mass->UseDevice(use_device);
+    exchange_tmp_vec->UseDevice(use_device);
+    exchange_out_vec->UseDevice(use_device);
 
     const int max_attr = mesh.attributes.Max();
     mfem::Array<int> magnetic_attr_marker(max_attr);
@@ -104,7 +106,8 @@ bool initialize_exchange_operator_mfem(
         *mass_ones,
         *mass_lumped,
         *inv_lumped_mass,
-        ctx.integration_weights.mfem_lumped_mass);
+        ctx.integration_weights.mfem_lumped_mass,
+        use_device);
     ctx.gpu_state.legacy_exchange.lumped_mass_ready =
         ctx.integration_weights.mfem_lumped_mass.size() == static_cast<size_t>(fes.GetNDofs());
 

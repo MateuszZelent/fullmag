@@ -5,7 +5,78 @@ import { AntennaObjectPanel } from "./panels/AntennaObjectPanel";
 import { ChartInspectorPanel } from "./panels/ChartInspectorPanel";
 import { CouplingInspectorPanel } from "./panels/CouplingInspectorPanel";
 import { CrossSectionInspectorPanel } from "./panels/CrossSectionInspectorPanel";
-import { FrequencyDomainInspectorPanel } from "./panels/FrequencyDomainInspectorPanel";
+import {
+  EigenBranchInspectorPanel,
+  EigenBranchesInspectorPanel,
+  EigenDiagnosticsInspectorPanel,
+  EigenDispersionInspectorPanel,
+  FrequencyDomainApiResourcesDiagnosticInspectorPanel,
+  FrequencyDomainArtifactsDiagnosticInspectorPanel,
+  FrequencyDomainCapabilitiesDiagnosticInspectorPanel,
+  FrequencyDomainDiagnosticsOverviewInspectorPanel,
+  FrequencyDomainEquilibriumDiagnosticInspectorPanel,
+  FrequencyDomainResourceFamilyInspectorPanel,
+  FrequencyDomainManifestResourceInspectorPanel,
+  FrequencyDomainCalculationModesResourceInspectorPanel,
+  FrequencyDomainFmrResourceInspectorPanel,
+  FrequencyDomainDispersionResourceInspectorPanel,
+  FrequencyDomainResponseMapResourceInspectorPanel,
+  EigenSpectrumResourceInspectorPanel,
+  EigenBranchesResourceInspectorPanel,
+  EigenDispersionResourceInspectorPanel,
+  EigenDiagnosticsResourceInspectorPanel,
+  EigenModeMetadataResourceInspectorPanel,
+  EigenModeFieldResourceInspectorPanel,
+  FrequencyResponseSweepResourceInspectorPanel,
+  FrequencyResponseProgressResourceInspectorPanel,
+  FrequencyResponseCancelRequestedResourceInspectorPanel,
+  FrequencyResponseFrequencyPointResourceInspectorPanel,
+  FrequencyResponseFieldResourceInspectorPanel,
+  FrequencyResponseObservablesResourceInspectorPanel,
+  FrequencyResponseDiagnosticsResourceInspectorPanel,
+  FrequencyDomainOperatorDiagnosticInspectorPanel,
+  FrequencyDomainPeriodicFloquetDiagnosticInspectorPanel,
+  FrequencyDomainPeriodicPairsResourceInspectorPanel,
+  FrequencyDomainSolverDiagnosticInspectorPanel,
+  FrequencyDomainVisualizationDiagnosticInspectorPanel,
+  EigenKPathInspectorPanel,
+  EigenModeInspectorPanel,
+  EigenModesInspectorPanel,
+  EigenModesVisualizationInspectorPanel,
+  EigenOverviewInspectorPanel,
+  EigenProvenanceInspectorPanel,
+  EigenSampleJobInspectorPanel,
+  EigenSpectrumInspectorPanel,
+  EigenStudyInspectorPanel,
+  FrequencyDomainArtifactExportJobInspectorPanel,
+  FrequencyDomainCalculationModesInspectorPanel,
+  FrequencyDomainDispersionInspectorPanel,
+  FrequencyDomainExportsInspectorPanel,
+  FrequencyDomainJobsOverviewInspectorPanel,
+  FrequencyDomainOverviewInspectorPanel,
+  FrequencyDomainResponseMapInspectorPanel,
+  FrequencyDomainRunInspectorPanel,
+  FrequencyDomainStageRunJobInspectorPanel,
+  FrequencyResponseCancelRequestedInspectorPanel,
+  FrequencyResponseDiagnosticsInspectorPanel,
+  FrequencyResponseFrequencyJobInspectorPanel,
+  FrequencyResponseObservablesInspectorPanel,
+  FrequencyResponseOverviewInspectorPanel,
+  FrequencyResponseObservableInspectorPanel,
+  FrequencyResponseFrequencyPointsInspectorPanel,
+  FrequencyResponsePointInspectorPanel,
+  FrequencyResponseProvenanceInspectorPanel,
+  FrequencyResponseProgressJobInspectorPanel,
+  FrequencyResponseProgressInspectorPanel,
+  FrequencyResponseStudyInspectorPanel,
+  FrequencyResponseSweepInspectorPanel,
+  FmrComparisonInspectorPanel,
+  FmrModalSpectrumInspectorPanel,
+  FmrOverviewInspectorPanel,
+  FmrPeakInspectorPanel,
+  FmrPeaksInspectorPanel,
+  FmrResponseSweepInspectorPanel,
+} from "./panels/frequency-domain/FrequencyDomainResultInspectors";
 import { GeometryObjectPanel } from "./panels/GeometryObjectPanel";
 import { MeshDetailsPanel } from "./panels/MeshDetailsPanel";
 import { ObjectGeneralPanel } from "./panels/ObjectGeneralPanel";
@@ -27,10 +98,38 @@ import { PhysicsInteractionPanel } from "./panels/PhysicsInteractionPanel";
 import { PlaceholderPanel } from "./panels/PlaceholderPanel";
 import { RegionsListPanel } from "./panels/RegionsListPanel";
 import { StudyInspectorPanel } from "./panels/StudyInspectorPanel";
-import { StudyStageInspectorRouter } from "./panels/StudyStageInspectorRouter";
+import {
+  EigenmodesBoundaryStageInspectorPanel,
+  EigenmodesCalculationModeStageInspectorPanel,
+  EigenmodesDiagnosticsStageInspectorPanel,
+  EigenmodesEquilibriumStageInspectorPanel,
+  EigenmodesKPathStageInspectorPanel,
+  EigenmodesOperatorStageInspectorPanel,
+  EigenmodesOutputsStageInspectorPanel,
+  EigenmodesPeriodicPairsStageInspectorPanel,
+  EigenmodesSetupStageInspectorPanel,
+  EigenmodesSolverStageInspectorPanel,
+  EigenmodesStageOverviewInspectorPanel,
+  FrequencyResponseBoundaryStageInspectorPanel,
+  FrequencyResponseCalculationModeStageInspectorPanel,
+  FrequencyResponseDiagnosticsStageInspectorPanel,
+  FrequencyResponseEquilibriumStageInspectorPanel,
+  FrequencyResponseExcitationStageInspectorPanel,
+  FrequencyResponseKGridStageInspectorPanel,
+  FrequencyResponseOperatorStageInspectorPanel,
+  FrequencyResponseOutputsStageInspectorPanel,
+  FrequencyResponsePeriodicPairsStageInspectorPanel,
+  FrequencyResponseSetupStageInspectorPanel,
+  FrequencyResponseSolverStageInspectorPanel,
+  FrequencyResponseStageOverviewInspectorPanel,
+  FrequencyResponseSweepStageInspectorPanel,
+  StudyStageInspectorRouter,
+} from "./panels/StudyStageInspectorRouter";
+import { resolveFrequencyDomainNodeDetail } from "./panels/frequencyDomainNodeDetails";
 import type { InspectorPanelContribution } from "./inspectorTypes";
 
 const FREQUENCY_DOMAIN_STAGE_SELECTION_KINDS = [
+  "study.stage.eigenmodes",
   "study.stage.eigenmodes.setup",
   "study.stage.eigenmodes.calculation_mode",
   "study.stage.eigenmodes.equilibrium",
@@ -38,6 +137,7 @@ const FREQUENCY_DOMAIN_STAGE_SELECTION_KINDS = [
   "study.stage.eigenmodes.solver",
   "study.stage.eigenmodes.outputs",
   "study.stage.eigenmodes.diagnostics",
+  "study.stage.frequency_response",
   "study.stage.frequency_response.setup",
   "study.stage.frequency_response.calculation_mode",
   "study.stage.frequency_response.equilibrium",
@@ -68,12 +168,14 @@ export const FREQUENCY_DOMAIN_INSPECTOR_SELECTION_KINDS = [
   "results.frequency_domain.fmr_modal_spectrum",
   "results.frequency_domain.fmr_response_sweep",
   "results.frequency_domain.fmr_peaks",
+  "results.frequency_domain.fmr_peak",
   "results.frequency_domain.dispersion",
   "results.frequency_domain.response_map",
   "results.eigen.root",
   "results.eigen.study",
   "results.eigen.spectrum",
   "results.eigen.modes",
+  "results.eigen.modes.visualization",
   "results.eigen.mode",
   "results.eigen.dispersion",
   "results.eigen.k_path",
@@ -130,6 +232,201 @@ export const FREQUENCY_DOMAIN_INSPECTOR_SELECTION_KINDS = [
   "diagnostics.frequency_domain.visualization",
   "diagnostics.frequency_domain.periodic_floquet",
 ] as const;
+
+type FrequencyDomainInspectorKind =
+  (typeof FREQUENCY_DOMAIN_INSPECTOR_SELECTION_KINDS)[number];
+
+const FREQUENCY_DOMAIN_NAMED_PANELS: Partial<
+  Record<FrequencyDomainInspectorKind, InspectorPanelContribution["component"]>
+> = {
+  "study.stage.eigenmodes": EigenmodesStageOverviewInspectorPanel,
+  "study.stage.eigenmodes.setup": EigenmodesSetupStageInspectorPanel,
+  "study.stage.eigenmodes.calculation_mode":
+    EigenmodesCalculationModeStageInspectorPanel,
+  "study.stage.eigenmodes.equilibrium":
+    EigenmodesEquilibriumStageInspectorPanel,
+  "study.stage.eigenmodes.operator": EigenmodesOperatorStageInspectorPanel,
+  "study.stage.eigenmodes.boundary": EigenmodesBoundaryStageInspectorPanel,
+  "study.stage.eigenmodes.periodic_pairs":
+    EigenmodesPeriodicPairsStageInspectorPanel,
+  "study.stage.eigenmodes.k_path": EigenmodesKPathStageInspectorPanel,
+  "study.stage.eigenmodes.solver": EigenmodesSolverStageInspectorPanel,
+  "study.stage.eigenmodes.outputs": EigenmodesOutputsStageInspectorPanel,
+  "study.stage.eigenmodes.diagnostics":
+    EigenmodesDiagnosticsStageInspectorPanel,
+  "study.stage.frequency_response":
+    FrequencyResponseStageOverviewInspectorPanel,
+  "study.stage.frequency_response.setup":
+    FrequencyResponseSetupStageInspectorPanel,
+  "study.stage.frequency_response.calculation_mode":
+    FrequencyResponseCalculationModeStageInspectorPanel,
+  "study.stage.frequency_response.equilibrium":
+    FrequencyResponseEquilibriumStageInspectorPanel,
+  "study.stage.frequency_response.operator":
+    FrequencyResponseOperatorStageInspectorPanel,
+  "study.stage.frequency_response.boundary":
+    FrequencyResponseBoundaryStageInspectorPanel,
+  "study.stage.frequency_response.periodic_pairs":
+    FrequencyResponsePeriodicPairsStageInspectorPanel,
+  "study.stage.frequency_response.k_grid":
+    FrequencyResponseKGridStageInspectorPanel,
+  "study.stage.frequency_response.excitation":
+    FrequencyResponseExcitationStageInspectorPanel,
+  "study.stage.frequency_response.sweep":
+    FrequencyResponseSweepStageInspectorPanel,
+  "study.stage.frequency_response.solver":
+    FrequencyResponseSolverStageInspectorPanel,
+  "study.stage.frequency_response.outputs":
+    FrequencyResponseOutputsStageInspectorPanel,
+  "study.stage.frequency_response.diagnostics":
+    FrequencyResponseDiagnosticsStageInspectorPanel,
+  "results.frequency_domain.run": FrequencyDomainRunInspectorPanel,
+  "results.frequency_domain.root": FrequencyDomainOverviewInspectorPanel,
+  "results.frequency_domain.calculation_modes":
+    FrequencyDomainCalculationModesInspectorPanel,
+  "results.frequency_domain.dispersion": FrequencyDomainDispersionInspectorPanel,
+  "results.frequency_domain.fmr": FmrOverviewInspectorPanel,
+  "results.frequency_domain.response_map": FrequencyDomainResponseMapInspectorPanel,
+  "results.eigen.branch": EigenBranchInspectorPanel,
+  "results.eigen.branches": EigenBranchesInspectorPanel,
+  "results.eigen.root": EigenOverviewInspectorPanel,
+  "results.eigen.study": EigenStudyInspectorPanel,
+  "results.eigen.mode": EigenModeInspectorPanel,
+  "results.eigen.modes": EigenModesInspectorPanel,
+  "results.eigen.modes.visualization": EigenModesVisualizationInspectorPanel,
+  "results.eigen.provenance": EigenProvenanceInspectorPanel,
+  "results.eigen.spectrum": EigenSpectrumInspectorPanel,
+  "results.eigen.dispersion": EigenDispersionInspectorPanel,
+  "results.eigen.k_path": EigenKPathInspectorPanel,
+  "results.eigen.diagnostics": EigenDiagnosticsInspectorPanel,
+  "results.frequency_domain.fmr_modal_spectrum":
+    FmrModalSpectrumInspectorPanel,
+  "results.frequency_domain.fmr_peaks": FmrPeaksInspectorPanel,
+  "results.frequency_domain.fmr_peak": FmrPeakInspectorPanel,
+  "results.frequency_domain.fmr_response_sweep": FmrResponseSweepInspectorPanel,
+  "results.frequency_domain.comparison": FmrComparisonInspectorPanel,
+  "results.frequency_domain.exports": FrequencyDomainExportsInspectorPanel,
+  "results.frequency_response.frequency_points":
+    FrequencyResponseFrequencyPointsInspectorPanel,
+  "results.frequency_response.root": FrequencyResponseOverviewInspectorPanel,
+  "results.frequency_response.study": FrequencyResponseStudyInspectorPanel,
+  "results.frequency_response.frequency_point":
+    FrequencyResponsePointInspectorPanel,
+  "results.frequency_response.observable":
+    FrequencyResponseObservableInspectorPanel,
+  "results.frequency_response.observables":
+    FrequencyResponseObservablesInspectorPanel,
+  "results.frequency_response.progress": FrequencyResponseProgressInspectorPanel,
+  "results.frequency_response.cancel_requested":
+    FrequencyResponseCancelRequestedInspectorPanel,
+  "results.frequency_response.provenance":
+    FrequencyResponseProvenanceInspectorPanel,
+  "results.frequency_response.sweep": FrequencyResponseSweepInspectorPanel,
+  "results.frequency_response.diagnostics":
+    FrequencyResponseDiagnosticsInspectorPanel,
+  "jobs.frequency_domain.root": FrequencyDomainJobsOverviewInspectorPanel,
+  "jobs.frequency_domain.stage_run": FrequencyDomainStageRunJobInspectorPanel,
+  "jobs.frequency_domain.eigen_sample": EigenSampleJobInspectorPanel,
+  "jobs.frequency_domain.response_frequency":
+    FrequencyResponseFrequencyJobInspectorPanel,
+  "jobs.frequency_domain.response_progress":
+    FrequencyResponseProgressJobInspectorPanel,
+  "jobs.frequency_domain.artifact_export":
+    FrequencyDomainArtifactExportJobInspectorPanel,
+  "diagnostics.frequency_domain.root":
+    FrequencyDomainDiagnosticsOverviewInspectorPanel,
+  "diagnostics.frequency_domain.capabilities":
+    FrequencyDomainCapabilitiesDiagnosticInspectorPanel,
+  "diagnostics.frequency_domain.equilibrium":
+    FrequencyDomainEquilibriumDiagnosticInspectorPanel,
+  "diagnostics.frequency_domain.operator":
+    FrequencyDomainOperatorDiagnosticInspectorPanel,
+  "diagnostics.frequency_domain.solver":
+    FrequencyDomainSolverDiagnosticInspectorPanel,
+  "diagnostics.frequency_domain.artifacts":
+    FrequencyDomainArtifactsDiagnosticInspectorPanel,
+  "diagnostics.frequency_domain.api_resources":
+    FrequencyDomainApiResourcesDiagnosticInspectorPanel,
+  "diagnostics.frequency_domain.visualization":
+    FrequencyDomainVisualizationDiagnosticInspectorPanel,
+  "diagnostics.frequency_domain.periodic_floquet":
+    FrequencyDomainPeriodicFloquetDiagnosticInspectorPanel,
+  "resources.analysis.frequency_domain": FrequencyDomainResourceFamilyInspectorPanel,
+  "resources.analysis.frequency_domain.manifest":
+    FrequencyDomainManifestResourceInspectorPanel,
+  "resources.analysis.frequency_domain.calculation_modes":
+    FrequencyDomainCalculationModesResourceInspectorPanel,
+  "resources.analysis.frequency_domain.fmr":
+    FrequencyDomainFmrResourceInspectorPanel,
+  "resources.analysis.frequency_domain.dispersion":
+    FrequencyDomainDispersionResourceInspectorPanel,
+  "resources.analysis.frequency_domain.response_map":
+    FrequencyDomainResponseMapResourceInspectorPanel,
+  "resources.mesh.periodic_pairs":
+    FrequencyDomainPeriodicPairsResourceInspectorPanel,
+  "resources.analysis.eigen.spectrum": EigenSpectrumResourceInspectorPanel,
+  "resources.analysis.eigen.branches": EigenBranchesResourceInspectorPanel,
+  "resources.analysis.eigen.dispersion": EigenDispersionResourceInspectorPanel,
+  "resources.analysis.eigen.diagnostics": EigenDiagnosticsResourceInspectorPanel,
+  "resources.analysis.eigen.mode_metadata": EigenModeMetadataResourceInspectorPanel,
+  "resources.analysis.eigen.mode_field": EigenModeFieldResourceInspectorPanel,
+  "resources.analysis.frequency_response.sweep":
+    FrequencyResponseSweepResourceInspectorPanel,
+  "resources.analysis.frequency_response.progress":
+    FrequencyResponseProgressResourceInspectorPanel,
+  "resources.analysis.frequency_response.cancel_requested":
+    FrequencyResponseCancelRequestedResourceInspectorPanel,
+  "resources.analysis.frequency_response.frequency_point":
+    FrequencyResponseFrequencyPointResourceInspectorPanel,
+  "resources.analysis.frequency_response.field":
+    FrequencyResponseFieldResourceInspectorPanel,
+  "resources.analysis.frequency_response.observables":
+    FrequencyResponseObservablesResourceInspectorPanel,
+  "resources.analysis.frequency_response.diagnostics":
+    FrequencyResponseDiagnosticsResourceInspectorPanel,
+};
+
+const FREQUENCY_DOMAIN_DEDICATED_PANELS = Object.fromEntries(
+  FREQUENCY_DOMAIN_INSPECTOR_SELECTION_KINDS.map((kind) => [
+    kind,
+    requireFrequencyDomainNamedPanel(kind),
+  ]),
+) as Partial<
+  Record<FrequencyDomainInspectorKind, InspectorPanelContribution["component"]>
+>;
+
+function requireFrequencyDomainNamedPanel(
+  kind: FrequencyDomainInspectorKind,
+): InspectorPanelContribution["component"] {
+  const component = FREQUENCY_DOMAIN_NAMED_PANELS[kind];
+  if (!component) {
+    throw new Error(`Missing dedicated frequency-domain inspector for ${kind}`);
+  }
+  return component;
+}
+
+function frequencyDomainPanelId(kind: FrequencyDomainInspectorKind): string {
+  return `frequency-domain-${kind.replace(/[.:]/g, "-")}`;
+}
+
+function frequencyDomainPanelTitle(kind: FrequencyDomainInspectorKind): string {
+  return resolveFrequencyDomainNodeDetail({
+    kind,
+    label: null,
+    moduleSource: "inspector",
+    nodeId: null,
+    objectId: null,
+    ref: { kind, nodeId: `detail:${kind}`, type: "frequency-domain" },
+  }).title;
+}
+
+const frequencyDomainPanels: InspectorPanelContribution[] =
+  FREQUENCY_DOMAIN_INSPECTOR_SELECTION_KINDS.map((kind) => ({
+    id: frequencyDomainPanelId(kind),
+    title: frequencyDomainPanelTitle(kind),
+    selectionKinds: [kind],
+    component: FREQUENCY_DOMAIN_DEDICATED_PANELS[kind] ?? requireFrequencyDomainNamedPanel(kind),
+  }));
 
 const PANELS: InspectorPanelContribution[] = [
   {
@@ -306,21 +603,15 @@ const PANELS: InspectorPanelContribution[] = [
     title: "Study Stage",
     selectionKinds: [
       "study.stage.action",
-      "study.stage.eigenmodes",
-      "study.stage.frequency_response",
       "study.stage.hysteresis",
       "study.stage.relax",
       "study.stage.run",
+      "study.stage.change_device",
       "study.stage.save_state",
     ],
     component: StudyStageInspectorRouter,
   },
-  {
-    id: "frequency-domain",
-    title: "Frequency Domain",
-    selectionKinds: [...FREQUENCY_DOMAIN_INSPECTOR_SELECTION_KINDS],
-    component: FrequencyDomainInspectorPanel,
-  },
+  ...frequencyDomainPanels,
   {
     id: "placeholder",
     title: "Selection",

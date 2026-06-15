@@ -156,12 +156,16 @@ function manifestCoversVisibleSceneObjects(
     return false;
   }
 
-  const visibleSceneObjectIds = scene.objects
-    .map(asRecord)
-    .filter((object): object is JsonRecord => Boolean(object))
-    .filter((object) => object.visible !== false)
-    .map((object) => object.id)
-    .filter((objectId): objectId is string => typeof objectId === "string" && objectId.length > 0);
+  const visibleSceneObjectIds = scene.objects.flatMap((item) => {
+    const object = asRecord(item);
+    const objectId = object?.id;
+    return object &&
+      object.visible !== false &&
+      typeof objectId === "string" &&
+      objectId.length > 0
+      ? [objectId]
+      : [];
+  });
 
   if (visibleSceneObjectIds.length === 0) {
     return false;

@@ -27,6 +27,8 @@ import {
   useFrequencyDomainEigenDispersionResource,
   useFrequencyDomainEigenSpectrumResource,
   useFrequencyDomainManifestResource,
+  useFrequencyDomainResponseCancelRequestedResource,
+  useFrequencyDomainResponseProgressResource,
   useFrequencyDomainResponseSweepResource,
   useHysteresisExecutionTreeResource,
   useStageExecutionResource,
@@ -244,6 +246,14 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   const frequencyDomainResponseSweep = useFrequencyDomainResponseSweepResource({
     enabled: activeTab === "results",
   });
+  const frequencyDomainResponseProgress =
+    useFrequencyDomainResponseProgressResource({
+      enabled: frequencyDomainTabActive,
+    });
+  const frequencyDomainCancelRequested =
+    useFrequencyDomainResponseCancelRequestedResource({
+      enabled: frequencyDomainTabActive,
+    });
 
   const nodes = useMemo(() => {
     const modelSnapshot = modelTreeSnapshotWithHysteresisExecutionTree(
@@ -295,8 +305,10 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
         ? buildModelTree({ ...modelSnapshot, crossSections, mesh, objects })
         : buildExplorerTree(activeTab, {
             frequencyDomainBranches: frequencyDomainBranches.data,
+            frequencyDomainCancelRequested: frequencyDomainCancelRequested.data,
             frequencyDomainDispersion: frequencyDomainDispersion.data,
             frequencyDomainManifest: frequencyDomainManifest.data,
+            frequencyDomainResponseProgress: frequencyDomainResponseProgress.data,
             frequencyDomainResponseSweep: frequencyDomainResponseSweep.data,
             frequencyDomainSpectrum: frequencyDomainSpectrum.data,
           });
@@ -319,8 +331,10 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     qualityGates.data,
     realizedSizeFields.data,
     frequencyDomainBranches.data,
+    frequencyDomainCancelRequested.data,
     frequencyDomainDispersion.data,
     frequencyDomainManifest.data,
+    frequencyDomainResponseProgress.data,
     frequencyDomainResponseSweep.data,
     frequencyDomainSpectrum.data,
   ]);

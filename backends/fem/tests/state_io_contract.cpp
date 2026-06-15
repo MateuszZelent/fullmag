@@ -195,6 +195,29 @@ void upload_rejects_zero_active_magnetization() {
         "zero active upload error string");
 }
 
+void torque_observable_is_computed_in_native_state_io() {
+    fullmag::fem::Context ctx;
+    constexpr double mu0 = 1.2566370614359172953850573533118e-6;
+    ctx.mesh.n_nodes = 1;
+    ctx.state.m_xyz = {1.0, 0.0, 0.0};
+    ctx.effective_field.h_xyz = {0.0, 1.0 / mu0, 0.0};
+    ctx.material_fields.material.damping = 0.5;
+
+    double out[3] = {};
+    std::string error;
+    check(
+        fullmag::fem::context_copy_field_f64(
+            ctx,
+            FULLMAG_FEM_OBSERVABLE_TORQUE,
+            out,
+            3,
+            error) == FULLMAG_FEM_OK,
+        "native torque observable copy should succeed");
+    check(std::abs(out[0]) < 1e-12, "torque x component");
+    check(std::abs(out[1] - 0.4) < 1e-12, "torque y component");
+    check(std::abs(out[2] + 0.8) < 1e-12, "torque z component");
+}
+
 } // namespace
 
 int main() {
@@ -202,5 +225,6 @@ int main() {
     observable_copy_prefers_visual_demag_and_effective_fields();
     upload_magnetization_updates_host_state_and_invalidates_runtime_caches();
     upload_rejects_zero_active_magnetization();
+    torque_observable_is_computed_in_native_state_io();
     return 0;
 }

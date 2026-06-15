@@ -744,7 +744,7 @@ impl InteractiveFemPreviewRuntime {
         {
             let effective_plan = match engine {
                 FemEngine::CpuNative => fem_plan_for_cpu_native(plan),
-                FemEngine::NativeGpu => plan.clone(),
+                FemEngine::NativeGpu => fem_plan_for_native_gpu(plan),
             };
             let mesh = crate::types::FemMeshPayload::from(&effective_plan);
             let backend = NativeFemBackend::create(&effective_plan)?;
@@ -767,11 +767,16 @@ impl InteractiveFemPreviewRuntime {
     }
 
     pub fn matches_plan(&self, plan: &FemPlanIR) -> bool {
-        let normalized = normalize_fem_plan_signature(plan);
         match &self.inner {
-            InteractiveFemPreviewRuntimeInner::Cpu(runtime) => runtime.plan_signature == normalized,
+            InteractiveFemPreviewRuntimeInner::Cpu(runtime) => {
+                runtime.plan_signature
+                    == normalize_fem_plan_signature(&fem_plan_for_cpu_native(plan))
+            }
             #[cfg(feature = "fem-gpu")]
-            InteractiveFemPreviewRuntimeInner::Gpu(runtime) => runtime.plan_signature == normalized,
+            InteractiveFemPreviewRuntimeInner::Gpu(runtime) => {
+                runtime.plan_signature
+                    == normalize_fem_plan_signature(&fem_plan_for_native_gpu(plan))
+            }
         }
     }
 
@@ -2430,7 +2435,12 @@ impl CpuInteractiveFemPreviewRuntime {
         interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
         on_step: &mut dyn FnMut(StepUpdate) -> StepAction,
     ) -> Result<RunResult, RunError> {
-        if !self.plan_signature.eq(&normalize_fem_plan_signature(plan)) {
+        if !self
+            .plan_signature
+            .eq(&normalize_fem_plan_signature(&fem_plan_for_cpu_native(
+                plan,
+            )))
+        {
             return Err(RunError {
                 message:
                     "interactive FEM CPU runtime plan mismatch; caller must rebuild runtime before executing"
@@ -2709,7 +2719,12 @@ impl CpuInteractiveFemPreviewRuntime {
         interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
         on_step: &mut dyn FnMut(StepUpdate) -> StepAction,
     ) -> Result<ExecutedRun, RunError> {
-        if !self.plan_signature.eq(&normalize_fem_plan_signature(plan)) {
+        if !self
+            .plan_signature
+            .eq(&normalize_fem_plan_signature(&fem_plan_for_cpu_native(
+                plan,
+            )))
+        {
             return Err(RunError {
                 message:
                     "interactive FEM CPU runtime plan mismatch; caller must rebuild runtime before executing"
@@ -3110,7 +3125,12 @@ impl GpuInteractiveFemPreviewRuntime {
         interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
         on_step: &mut dyn FnMut(StepUpdate) -> StepAction,
     ) -> Result<RunResult, RunError> {
-        if !self.plan_signature.eq(&normalize_fem_plan_signature(plan)) {
+        if !self
+            .plan_signature
+            .eq(&normalize_fem_plan_signature(&fem_plan_for_native_gpu(
+                plan,
+            )))
+        {
             return Err(RunError {
                 message:
                     "interactive FEM GPU runtime plan mismatch; caller must rebuild runtime before executing"
@@ -3341,7 +3361,12 @@ impl GpuInteractiveFemPreviewRuntime {
         interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
         on_step: &mut dyn FnMut(StepUpdate) -> StepAction,
     ) -> Result<ExecutedRun, RunError> {
-        if !self.plan_signature.eq(&normalize_fem_plan_signature(plan)) {
+        if !self
+            .plan_signature
+            .eq(&normalize_fem_plan_signature(&fem_plan_for_native_gpu(
+                plan,
+            )))
+        {
             return Err(RunError {
                 message:
                     "interactive FEM GPU runtime plan mismatch; caller must rebuild runtime before executing"
@@ -3579,11 +3604,24 @@ fn normalize_fem_plan_signature(plan: &FemPlanIR) -> FemPlanIR {
     normalized
 }
 
-#[cfg(feature = "fem-gpu")]
 fn fem_plan_for_cpu_native(plan: &FemPlanIR) -> FemPlanIR {
     let mut native = plan.clone();
     if native.mfem_device_string.is_none() {
         native.mfem_device_string = Some("cpu".to_string());
+    }
+    native
+}
+
+#[cfg(feature = "fem-gpu")]
+fn fem_plan_for_native_gpu(plan: &FemPlanIR) -> FemPlanIR {
+    let mut native = plan.clone();
+    if native.mfem_device_string.is_none() {
+        let mfem_device = std::env::var("FULLMAG_FEM_MFEM_DEVICE")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| crate::native_fem::native_fem_mfem_device_string_requests_gpu(value))
+            .unwrap_or_else(|| "cuda".to_string());
+        native.mfem_device_string = Some(mfem_device);
     }
     native
 }

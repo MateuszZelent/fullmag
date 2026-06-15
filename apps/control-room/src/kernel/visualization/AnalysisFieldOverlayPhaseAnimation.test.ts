@@ -57,7 +57,8 @@ describe("AnalysisFieldOverlayPhaseAnimation", () => {
 
     vi.advanceTimersByTime(100);
 
-    expect(controller.getSnapshot()?.query.phase_rad).toBeCloseTo(
+    expect(controller.getSnapshot()?.query.phase_rad).toBe(0);
+    expect(controller.getSnapshot()?.visualizationPhaseRad).toBeCloseTo(
       0.2 * Math.PI,
     );
 
@@ -69,7 +70,8 @@ describe("AnalysisFieldOverlayPhaseAnimation", () => {
     });
     vi.advanceTimersByTime(500);
 
-    expect(controller.getSnapshot()?.query.phase_rad).toBeCloseTo(
+    expect(controller.getSnapshot()?.query.phase_rad).toBe(0);
+    expect(controller.getSnapshot()?.visualizationPhaseRad).toBeCloseTo(
       0.2 * Math.PI,
     );
 
@@ -103,11 +105,32 @@ describe("AnalysisFieldOverlayPhaseAnimation", () => {
 
     expect(controller.getSnapshot()).toMatchObject({
       query: {
-        phase_rad: 0.2 * Math.PI,
+        phase_rad: 0,
         view: "phase_rotated_real",
       },
       source: "frequency-response",
+      visualizationPhaseRad: 0.2 * Math.PI,
     });
+
+    handle.stop();
+  });
+
+  it("uses bounded default cadence for backend-backed phase animation", () => {
+    vi.useFakeTimers();
+    const controller = new AnalysisFieldOverlayController();
+    setEigenOverlay(controller);
+
+    const handle = startAnalysisFieldOverlayPhaseAnimation(controller);
+
+    vi.advanceTimersByTime(100);
+    expect(controller.getSnapshot()?.query.phase_rad).toBe(0);
+    expect(controller.getSnapshot()?.visualizationPhaseRad).toBeUndefined();
+
+    vi.advanceTimersByTime(150);
+    expect(controller.getSnapshot()?.query.phase_rad).toBe(0);
+    expect(controller.getSnapshot()?.visualizationPhaseRad).toBeCloseTo(
+      0.5 * Math.PI,
+    );
 
     handle.stop();
   });

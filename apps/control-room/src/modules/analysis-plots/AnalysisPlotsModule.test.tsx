@@ -20,6 +20,7 @@ import {
 } from "./analysisPlotsModel";
 import {
   frequencyDomainChartRouteOverrideFromSelection,
+  frequencyDomainChartTitle,
   frequencyDomainSelectionFromPoint,
   selectedHysteresisStageIdFromSelection,
 } from "./useAnalysisPlotsController";
@@ -1066,6 +1067,106 @@ describe("AnalysisPlotsView", () => {
     expect(html).toContain(ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH);
   });
 
+  it("renders FMR workflow context for modal spectrum charts", () => {
+    const html = renderToStaticMarkup(
+      <AnalysisPlotsView
+        kernel={mockKernel}
+        frequencyDomainSeries={[
+          {
+            id: "analysis.frequency-domain:eigen:spectrum:frequency",
+            label: "Eigen frequency",
+            points: [{ rowIndex: 0, x: 1, y: 9.5 }],
+            quantity: "frequency",
+            source: {
+              kind: "analysis.frequency_domain",
+              resourceKey: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+              tableId: "frequency-domain:eigen-spectrum",
+            },
+            status: "ready",
+            unit: "GHz",
+            xUnit: "mode index",
+          },
+        ]}
+        frequencyDomainStatus="ready"
+        frequencyDomainTitle="FMR modal spectrum"
+        onClearRange={() => undefined}
+        onPointSelect={() => undefined}
+        onRangeChange={() => undefined}
+        onSeriesSelect={() => undefined}
+        range={null}
+        selectedPoint={null}
+        solverEnergySeries={[]}
+        solverEnergyStatus="idle"
+        tableRowsStatus="idle"
+        visibleTable={null}
+        xAxisId="step"
+        yAxisIds={["mx"]}
+      />,
+    );
+
+    expect(html).toContain("Frequency-domain workflow");
+    expect(html).toContain("Workflow");
+    expect(html).toContain("FMR modal");
+    expect(html).toContain("Next");
+    expect(html).toContain("select mode to 3D overlay");
+    expect(html).toContain("Mode fields");
+    expect(html).toContain("mode inspector");
+    expect(html).toContain("Frequency-domain workbench");
+    expect(html).toContain("FMR modal spectrum");
+    expect(html).toContain("1 point");
+    expect(html).toContain("9.5 GHz");
+    expect(html).toContain("select mode -&gt; FMR 3D overlay");
+  });
+
+  it("renders FMR workflow context for driven response charts", () => {
+    const html = renderToStaticMarkup(
+      <AnalysisPlotsView
+        kernel={mockKernel}
+        frequencyDomainSeries={[
+          {
+            id: "analysis.frequency-domain:response:amplitude",
+            label: "Amplitude",
+            points: [{ rowIndex: 0, x: 9.5, y: 2 }],
+            quantity: "amplitude",
+            source: {
+              kind: "analysis.frequency_domain",
+              resourceKey: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+              tableId: "frequency-domain:response-sweep",
+            },
+            status: "ready",
+            unit: "a.u.",
+            xUnit: "GHz",
+          },
+        ]}
+        frequencyDomainStatus="ready"
+        frequencyDomainTitle="FMR response sweep"
+        onClearRange={() => undefined}
+        onPointSelect={() => undefined}
+        onRangeChange={() => undefined}
+        onSeriesSelect={() => undefined}
+        range={null}
+        selectedPoint={null}
+        solverEnergySeries={[]}
+        solverEnergyStatus="idle"
+        tableRowsStatus="idle"
+        visibleTable={null}
+        xAxisId="step"
+        yAxisIds={["mx"]}
+      />,
+    );
+
+    expect(html).toContain("Frequency-domain workflow");
+    expect(html).toContain("FMR driven");
+    expect(html).toContain("select frequency to response overlay");
+    expect(html).toContain("Response fields");
+    expect(html).toContain("response point inspector");
+    expect(html).toContain("Frequency-domain workbench");
+    expect(html).toContain("FMR driven sweep");
+    expect(html).toContain("1 point");
+    expect(html).toContain("9.5 GHz");
+    expect(html).toContain("select frequency -&gt; FMR response overlay");
+  });
+
   it("renders selected frequency-domain point context for inspector follow-up", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
@@ -1123,6 +1224,114 @@ describe("AnalysisPlotsView", () => {
     expect(html).toContain("frequency");
     expect(html).toContain("9.5 GHz");
     expect(html).toContain("Mode inspector and 3D mode controls");
+  });
+
+  it("renders selected FMR modal point context as a 3D overlay workflow", () => {
+    const html = renderToStaticMarkup(
+      <AnalysisPlotsView
+        kernel={mockKernel}
+        frequencyDomainSeries={[
+          {
+            id: "analysis.frequency-domain:eigen:spectrum:frequency",
+            label: "Eigen frequency",
+            points: [{ rowIndex: 0, x: 1, y: 9.5 }],
+            quantity: "frequency",
+            source: {
+              kind: "analysis.frequency_domain",
+              resourceKey: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+              tableId: "frequency-domain:eigen-spectrum",
+            },
+            status: "ready",
+            unit: "GHz",
+            xUnit: "mode index",
+          },
+        ]}
+        frequencyDomainStatus="ready"
+        frequencyDomainTitle="FMR modal spectrum"
+        onClearRange={() => undefined}
+        onPointSelect={() => undefined}
+        onRangeChange={() => undefined}
+        onSeriesSelect={() => undefined}
+        range={null}
+        selectedPoint={{
+          label: "Eigen frequency",
+          point: { rowIndex: 0, x: 1, y: 9.5 },
+          quantity: "frequency",
+          seriesId: "analysis.frequency-domain:eigen:spectrum:frequency",
+          source: {
+            kind: "analysis.frequency_domain",
+            resourceKey: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+            tableId: "frequency-domain:eigen-spectrum",
+          },
+          unit: "GHz",
+          xUnit: "mode index",
+        }}
+        solverEnergySeries={[]}
+        solverEnergyStatus="idle"
+        tableRowsStatus="idle"
+        visibleTable={null}
+        xAxisId="step"
+        yAxisIds={["mx"]}
+      />,
+    );
+
+    expect(html).toContain("FMR mode");
+    expect(html).toContain("FMR mode inspector and 3D overlay controls");
+  });
+
+  it("renders selected FMR response point context as a response-field overlay workflow", () => {
+    const html = renderToStaticMarkup(
+      <AnalysisPlotsView
+        kernel={mockKernel}
+        frequencyDomainSeries={[
+          {
+            id: "analysis.frequency-domain:response:amplitude",
+            label: "Amplitude",
+            points: [{ rowIndex: 0, x: 9.5, y: 2 }],
+            quantity: "amplitude",
+            source: {
+              kind: "analysis.frequency_domain",
+              resourceKey: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+              tableId: "frequency-domain:response-sweep",
+            },
+            status: "ready",
+            unit: "a.u.",
+            xUnit: "GHz",
+          },
+        ]}
+        frequencyDomainStatus="ready"
+        frequencyDomainTitle="FMR response sweep"
+        onClearRange={() => undefined}
+        onPointSelect={() => undefined}
+        onRangeChange={() => undefined}
+        onSeriesSelect={() => undefined}
+        range={null}
+        selectedPoint={{
+          label: "Amplitude",
+          point: { rowIndex: 0, x: 9.5, y: 2 },
+          quantity: "amplitude",
+          seriesId: "analysis.frequency-domain:response:amplitude",
+          source: {
+            kind: "analysis.frequency_domain",
+            resourceKey: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+            tableId: "frequency-domain:response-sweep",
+          },
+          unit: "a.u.",
+          xUnit: "GHz",
+        }}
+        solverEnergySeries={[]}
+        solverEnergyStatus="idle"
+        tableRowsStatus="idle"
+        visibleTable={null}
+        xAxisId="step"
+        yAxisIds={["mx"]}
+      />,
+    );
+
+    expect(html).toContain("FMR response point");
+    expect(html).toContain(
+      "FMR response point inspector and 3D response overlay",
+    );
   });
 
   it("hides uncomputed frequency-domain results instead of rendering a stale placeholder subchart", () => {
@@ -1422,6 +1631,20 @@ describe("AnalysisPlotsView", () => {
   it("routes frequency-domain explorer selections to matching chart surfaces", () => {
     expect(
       frequencyDomainChartRouteOverrideFromSelection({
+        kind: "results.frequency_domain.fmr_modal_spectrum",
+        label: "FMR Modal Spectrum",
+        moduleSource: "explorer",
+        nodeId: "results:frequency-domain:fmr:modal-spectrum",
+        objectId: null,
+        ref: {
+          kind: "results.frequency_domain.fmr_modal_spectrum",
+          nodeId: "results:frequency-domain:fmr:modal-spectrum",
+          type: "frequency-domain",
+        },
+      }),
+    ).toEqual({ mode: "fmr_modal", primaryChart: "modal-spectrum" });
+    expect(
+      frequencyDomainChartRouteOverrideFromSelection({
         kind: "results.eigen.spectrum",
         label: "Spectrum",
         moduleSource: "explorer",
@@ -1462,6 +1685,21 @@ describe("AnalysisPlotsView", () => {
         },
       }),
     ).toEqual({ mode: "fmr_response", primaryChart: "response-sweep" });
+  });
+
+  it("labels frequency-domain chart surfaces by calculation mode", () => {
+    expect(frequencyDomainChartTitle("modal-spectrum", "fmr_modal")).toBe(
+      "FMR modal spectrum",
+    );
+    expect(frequencyDomainChartTitle("modal-spectrum", "free_modes")).toBe(
+      "Frequency-domain modal spectrum",
+    );
+    expect(frequencyDomainChartTitle("response-sweep", "fmr_response")).toBe(
+      "FMR response sweep",
+    );
+    expect(frequencyDomainChartTitle("dispersion", "dispersion_modal")).toBe(
+      "Frequency-domain dispersion",
+    );
   });
 
   it("renders active zoom range with a clear action", () => {
@@ -1593,6 +1831,7 @@ describe("AnalysisPlotsView", () => {
     expect(html).toContain('class="fm-analysis-plots__legend"');
     expect(html).toContain('<button');
     expect(html).toContain('type="button"');
+    expect(html).toContain("fm-button fm-button--secondary fm-button--sm");
     expect(html).toContain('aria-label="Series mx unit 1 latest 0.2"');
     expect(html).toContain('class="fm-analysis-plots__legend-swatch fm-analysis-plots__legend-swatch--0"');
     expect(html).toContain('class="fm-analysis-plots__legend-latest"');

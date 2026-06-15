@@ -7,7 +7,7 @@
 use fullmag_ir::FemPlanIR;
 
 use crate::artifact_pipeline::ArtifactRecorder;
-use crate::dispatch::{apply_native_fem_runtime_contract, fem_poisson_demag_provenance};
+use crate::dispatch::{apply_native_fem_runtime_contract, fem_poisson_demag_provenance, FemEngine};
 use crate::native_fem::NativeFemBackend;
 use crate::relaxation::{infer_stage_completion, llg_overdamped_uses_pure_damping};
 use crate::schedules::OutputSchedule;
@@ -35,7 +35,7 @@ pub(crate) fn finalize_native_fem_relaxation(
     mut field_schedules: Vec<OutputSchedule>,
     mut live: Option<&mut LiveStepConsumer<'_>>,
     artifacts: ArtifactRecorder,
-    steps: Vec<StepStats>,
+    mut steps: Vec<StepStats>,
     finalization: NativeFemRelaxationFinalization,
 ) -> Result<ExecutedRun, RunError> {
     let mut artifacts = artifacts;
@@ -55,16 +55,30 @@ pub(crate) fn finalize_native_fem_relaxation(
         ..StepStats::default()
     });
     ensure_fem_object_scalars(&mut final_stats, plan);
+    let finalization_start = std::time::Instant::now();
+    let mut finalization_field_copy_wall_time_ns = 0_u64;
+    let mut finalization_field_copy_bytes = 0_u64;
 
     // Flush a final cached-preview update so H_demag/H_eff land in preview_cache
     // regardless of whether the last loop iteration had preview_due = true.
     if let Some(live) = live.as_mut() {
         if let Some(display_selection) = live.display_selection.map(|get| get()) {
-            if let Some(cached) =
-                build_fem_cached_preview_fields(backend, &display_selection, plan, node_count)
-            {
+            let cached_start = std::time::Instant::now();
+            if let Some(cached) = build_fem_cached_preview_fields(
+                backend,
+                FemEngine::CpuNative,
+                &display_selection,
+                plan,
+                node_count,
+            ) {
+                let cached_preview_wall_time_ns = cached_start.elapsed().as_nanos() as u64;
+                let mut live_stats = final_stats.clone();
+                live_stats.cached_preview_wall_time_ns = cached_preview_wall_time_ns;
+                live_stats.wall_time_ns = live_stats
+                    .wall_time_ns
+                    .saturating_add(cached_preview_wall_time_ns);
                 let _ = (live.on_step)(StepUpdate {
-                    stats: final_stats.clone(),
+                    stats: live_stats,
                     grid: live.grid,
                     fem_mesh: None,
                     magnetization: None,
@@ -83,18 +97,57 @@ pub(crate) fn finalize_native_fem_relaxation(
     }
 
     for schedule in &mut field_schedules {
-        let values = copy_native_fem_field_snapshot(backend, &schedule.name, node_count)?;
-        artifacts.record_field_snapshot(FieldSnapshot {
-            name: schedule.name.clone(),
-            step: final_stats.step,
-            time: final_stats.time,
-            solver_dt: final_stats.dt,
-            values,
-        })?;
+        let copy_start = std::time::Instant::now();
+        if artifacts.is_streaming() {
+            let snapshot = backend.begin_field_snapshot(
+                &schedule.name,
+                final_stats.step,
+                final_stats.time,
+                final_stats.dt,
+            )?;
+            artifacts.record_native_fem_field_snapshot(snapshot)?;
+            finalization_field_copy_wall_time_ns =
+                finalization_field_copy_wall_time_ns.saturating_add(elapsed_ns(copy_start));
+            finalization_field_copy_bytes =
+                finalization_field_copy_bytes.saturating_add(vector3_f64_bytes(node_count));
+        } else {
+            let values = copy_native_fem_field_snapshot(backend, &schedule.name, node_count)?;
+            finalization_field_copy_wall_time_ns =
+                finalization_field_copy_wall_time_ns.saturating_add(elapsed_ns(copy_start));
+            finalization_field_copy_bytes =
+                finalization_field_copy_bytes.saturating_add(vector3_f64_bytes(values.len()));
+            artifacts.record_field_snapshot(FieldSnapshot {
+                name: schedule.name.clone(),
+                step: final_stats.step,
+                time: final_stats.time,
+                solver_dt: final_stats.dt,
+                values,
+            })?;
+        }
     }
 
-    let final_magnetization = backend.copy_m(node_count)?;
+    let copy_start = std::time::Instant::now();
+    let final_magnetization = copy_native_fem_field_snapshot(backend, "m", node_count)?;
+    finalization_field_copy_wall_time_ns =
+        finalization_field_copy_wall_time_ns.saturating_add(elapsed_ns(copy_start));
+    finalization_field_copy_bytes =
+        finalization_field_copy_bytes.saturating_add(vector3_f64_bytes(final_magnetization.len()));
     let (field_snapshots, field_snapshot_count, mut provenance) = artifacts.finish();
+    let finalization_wall_time_ns = elapsed_ns(finalization_start);
+    final_stats.finalization_wall_time_ns = finalization_wall_time_ns;
+    final_stats.finalization_field_copy_wall_time_ns = finalization_field_copy_wall_time_ns;
+    final_stats.finalization_field_copy_bytes = finalization_field_copy_bytes;
+    final_stats.wall_time_ns = final_stats
+        .wall_time_ns
+        .saturating_add(finalization_wall_time_ns);
+    if let Some(last_step) = steps.last_mut() {
+        last_step.finalization_wall_time_ns = finalization_wall_time_ns;
+        last_step.finalization_field_copy_wall_time_ns = finalization_field_copy_wall_time_ns;
+        last_step.finalization_field_copy_bytes = finalization_field_copy_bytes;
+        last_step.wall_time_ns = last_step
+            .wall_time_ns
+            .saturating_add(finalization_wall_time_ns);
+    }
     provenance.fem_poisson_demag = fem_poisson_demag_provenance(plan, Some(&final_stats));
     let gpu_state_info = backend.gpu_state_info()?;
     let gpu_rk_plan_info = backend.gpu_rk_plan_info()?;
@@ -145,4 +198,15 @@ pub(crate) fn finalize_native_fem_relaxation(
         auxiliary_artifacts: Vec::new(),
         provenance,
     })
+}
+
+fn elapsed_ns(start: std::time::Instant) -> u64 {
+    start.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64
+}
+
+fn vector3_f64_bytes(len: usize) -> u64 {
+    let bytes = len
+        .saturating_mul(3)
+        .saturating_mul(std::mem::size_of::<f64>());
+    bytes.min(u64::MAX as usize) as u64
 }

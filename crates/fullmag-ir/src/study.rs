@@ -633,7 +633,13 @@ pub struct EigenOperatorConfigIR {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EigenTargetIR {
     Lowest,
-    Nearest { frequency_hz: f64 },
+    Nearest {
+        frequency_hz: f64,
+    },
+    FrequencyWindow {
+        frequency_min_hz: f64,
+        frequency_max_hz: f64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

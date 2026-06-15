@@ -346,13 +346,17 @@ export function buildHysteresisAdaptivePointMarkerModel(
 ): ChartDataPoint[] {
   return uniqueHysteresisPointsById(
     visibleHysteresisChartPoints(points, branches, minorLoops, viewMode, branchMode),
-  )
-    .filter((point) => point.adaptive_inserted === true)
-    .map((point) => [
-      formatXValue(point.field_value_mT),
-      getPointYValue(point, yAxisKey),
-      point.point_id,
-    ]);
+  ).flatMap((point) =>
+    point.adaptive_inserted === true
+      ? [
+          [
+            formatXValue(point.field_value_mT),
+            getPointYValue(point, yAxisKey),
+            point.point_id,
+          ],
+        ]
+      : [],
+  );
 }
 
 export function buildHysteresisMetricMarkerModel({
@@ -399,10 +403,11 @@ export function buildHysteresisMetricMarkerModel({
       null,
       null,
     );
+    const pointById = new Map(points.map((point) => [point.point_id, point]));
     for (const candidate of metrics.switching_field_candidates ?? []) {
       const point =
-        points.find((entry) => entry.point_id === candidate.point_id_after) ??
-        points.find((entry) => entry.point_id === candidate.point_id_before) ??
+        pointById.get(candidate.point_id_after) ??
+        pointById.get(candidate.point_id_before) ??
         null;
       pushFieldMarker(
         "switching-candidate",
@@ -575,9 +580,10 @@ export function buildHysteresisAngularFamilyLineSeriesModel(
   formatXValue: (fieldValmT: number) => number = (fieldValmT) => fieldValmT,
 ): HysteresisChartLineSeriesModel[] {
   const series = Array.isArray(family?.series) ? family.series : [];
-  return series
-    .filter((entry) => Array.isArray(entry.points) && entry.points.length > 0)
-    .map((entry) => ({
+  return series.flatMap((entry) =>
+    Array.isArray(entry.points) && entry.points.length > 0
+      ? [
+          {
       branchId: `angular-family:${entry.variant_id}`,
       data: entry.points.map((p) => [
         formatXValue(p.field_value_mT),
@@ -585,7 +591,10 @@ export function buildHysteresisAngularFamilyLineSeriesModel(
         p.point_id,
       ]),
       name: entry.label ? `${entry.label} (${entry.variant_id})` : entry.variant_id,
-    }));
+          },
+        ]
+      : [],
+  );
 }
 
 export function getProgressYValue(
@@ -859,7 +868,11 @@ function hysteresisMetricMarkerColor(
   }
 }
 
-export function HysteresisChart({
+export function HysteresisChart(props: HysteresisChartProps) {
+  return useHysteresisChartView(props);
+}
+
+function useHysteresisChartView({
   commandSource = "analysis-plots",
   kernel,
   stageId,

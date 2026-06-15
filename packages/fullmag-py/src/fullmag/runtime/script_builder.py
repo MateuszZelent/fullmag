@@ -379,7 +379,7 @@ def _export_study_pipeline_node(stage: LoadedStage, *, index: int) -> dict[str, 
 
 def _infer_pipeline_stage_kind(stage_draft: dict[str, object]) -> str:
     kind = str(stage_draft.get("kind") or "").strip().lower()
-    if kind in {"save_state", "load_state", "export"}:
+    if kind in {"save_state", "load_state", "export", "change_device"}:
         return kind
     entrypoint = str(stage_draft.get("entrypoint_kind") or "").strip().lower()
     if entrypoint == "relax" or "relax" in kind:
@@ -438,6 +438,12 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
                 "format": _text_value(action.get("format")) or "json",
                 "dataset": _text_value(action.get("dataset")),
             }
+        if action_kind == "change_device":
+            return {
+                "kind": "change_device",
+                "entrypoint_kind": stage.entrypoint_kind,
+                "device": _text_value(action.get("device")) or "auto",
+            }
 
     study = stage.problem.study
     if study is None:
@@ -481,6 +487,8 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
             "eigen_count": str(study.count),
             "eigen_target": study.target,
             "eigen_target_frequency": _text_number(study.target_frequency),
+            "eigen_frequency_min": _text_number(study.frequency_min),
+            "eigen_frequency_max": _text_number(study.frequency_max),
             "eigen_include_demag": study.include_demag,
             "eigen_equilibrium_source": study.equilibrium_source,
             "eigen_normalization": study.normalization,
@@ -2610,6 +2618,11 @@ def _render_stages(
                 if is_study_surface:
                     lines.append(f"study.stages.add_save_state({', '.join(call_parts)})")
                 continue
+            if action_kind == "change_device":
+                action_device = _text_value(stage.action.get("device")) or "auto"
+                if is_study_surface:
+                    lines.append(f"study.stages.change_device({_py_repr(action_device)})")
+                continue
             continue
         study = stage.problem.study
         stage_override = _stage_override_for(stage_overrides, index=index, stage=stage)
@@ -2652,6 +2665,12 @@ def _render_stages(
             target_frequency = _override_number(stage_override, "eigen_target_frequency", study.target_frequency)
             if target_frequency is not None:
                 call_parts.append(f"target_frequency={_py_number(target_frequency)}")
+            frequency_min = _override_number(stage_override, "eigen_frequency_min", study.frequency_min)
+            if frequency_min is not None:
+                call_parts.append(f"frequency_min={_py_number(frequency_min)}")
+            frequency_max = _override_number(stage_override, "eigen_frequency_max", study.frequency_max)
+            if frequency_max is not None:
+                call_parts.append(f"frequency_max={_py_number(frequency_max)}")
             call_parts.append(f"include_demag={include_demag!r}")
             call_parts.append(f"equilibrium_source={_py_repr(equilibrium_source)}")
             if study.equilibrium_artifact is not None:
@@ -5025,14 +5044,15 @@ def _render_preset_texture_expr(
 
 
 def _validate_stage_compatibility(stages: Sequence[LoadedStage]) -> None:
-    if len(stages) <= 1:
+    solver_stages = [stage for stage in stages if stage.action is None]
+    if len(solver_stages) <= 1:
         return
-    baseline = _stage_signature(stages[0].problem)
-    for stage in stages[1:]:
+    baseline = _stage_signature(solver_stages[0].problem)
+    for stage in solver_stages[1:]:
         signature = _stage_signature(stage.problem)
         if signature != baseline:
             raise ValueError(
-                "canonical rewrite does not yet support stage-local geometry, material, or output mutations"
+                "canonical rewrite does not yet support stage-local geometry or material mutations"
             )
 
 
@@ -5061,8 +5081,6 @@ def _stage_signature(problem: Problem) -> dict[str, object]:
         if problem.excitation_analysis is not None
         else None,
         "discretization": problem.discretization.to_ir() if problem.discretization else None,
-        "outputs": [output.to_ir() for output in _study_outputs(problem.study)],
-        "table_autosave": _export_table_autosave(problem),
         "mesh_workflow": runtime_metadata.get("mesh_workflow"),
         "interactive": runtime_metadata.get("interactive_session_requested"),
         "wait_for_solve": runtime_metadata.get("wait_for_solve"),

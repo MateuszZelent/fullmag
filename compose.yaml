@@ -37,6 +37,7 @@ services:
       - pnpm-store:/pnpm/store
     environment:
       RUST_LOG: ${RUST_LOG:-info}
+      FULLMAG_PYTHON: /usr/bin/python3
       FULLMAG_USE_MFEM_STACK: "ON"
       FULLMAG_FEM_REQUIRE_CEED: "1"
       FULLMAG_FEM_GPU_MIN_NODES: "0"

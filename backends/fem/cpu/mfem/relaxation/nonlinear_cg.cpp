@@ -13,6 +13,7 @@
 #include "cpu/mfem/runtime/snapshot.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
 #include "cpu/mfem/runtime/state_io.hpp"
+#include "fem_common.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -100,6 +101,7 @@ bool retry_nonlinear_cg_line_search_with_restart(
     std::vector<double> &direction,
     double &p_dot_g,
     double &trial_step,
+    fullmag_fem_step_stats &profile_stats,
     fullmag_fem_step_stats &trial_stats,
     std::vector<double> &trial_m,
     uint32_t &backtracks,
@@ -130,7 +132,10 @@ bool retry_nonlinear_cg_line_search_with_restart(
         trial_step = restart_step;
 
         while (true) {
-            trial_m = relaxation::retracted_step(ctx, previous_m, direction, trial_step);
+            {
+                ScopedPhaseTimer timer(&profile_stats.relaxation_retraction_wall_time_ns);
+                trial_m = relaxation::retracted_step(ctx, previous_m, direction, trial_step);
+            }
             const int status = relaxation::upload_and_snapshot(
                 ctx,
                 trial_m,
@@ -150,10 +155,15 @@ bool retry_nonlinear_cg_line_search_with_restart(
                     error);
                 return false;
             }
-            const bool armijo =
-                trial_stats.total_energy_joules <=
-                current_stats.total_energy_joules +
-                    relaxation::kArmijoCoefficient * trial_step * p_dot_g;
+            relaxation::accumulate_relaxation_profile_sample(profile_stats, trial_stats);
+            bool armijo = false;
+            {
+                ScopedPhaseTimer timer(&profile_stats.relaxation_line_search_wall_time_ns);
+                armijo =
+                    trial_stats.total_energy_joules <=
+                    current_stats.total_energy_joules +
+                        relaxation::kArmijoCoefficient * trial_step * p_dot_g;
+            }
             if (armijo) {
                 return true;
             }
@@ -178,6 +188,7 @@ bool retry_nonlinear_cg_line_search_with_raw_gradient_restart(
     std::vector<double> &direction,
     double &p_dot_g,
     double &trial_step,
+    fullmag_fem_step_stats &profile_stats,
     fullmag_fem_step_stats &trial_stats,
     std::vector<double> &trial_m,
     uint32_t &backtracks,
@@ -185,11 +196,17 @@ bool retry_nonlinear_cg_line_search_with_raw_gradient_restart(
     std::string &error)
 {
     ctx.relaxation.nonlinear_cg_direction.clear();
-    direction = relaxation::project_tangent(
-        ctx,
-        previous_m,
-        relaxation::negative_field(previous_gradient));
-    p_dot_g = relaxation::metric_dot_fields(ctx, direction, previous_gradient);
+    {
+        ScopedPhaseTimer timer(&profile_stats.relaxation_gradient_wall_time_ns);
+        direction = relaxation::project_tangent(
+            ctx,
+            previous_m,
+            relaxation::negative_field(previous_gradient));
+    }
+    {
+        ScopedPhaseTimer timer(&profile_stats.relaxation_metric_wall_time_ns);
+        p_dot_g = relaxation::metric_dot_fields(ctx, direction, previous_gradient);
+    }
     if (!std::isfinite(p_dot_g) || p_dot_g >= 0.0) {
         error =
             "nonlinear-CG relaxation raw-gradient recovery produced a non-finite or non-descent direction";
@@ -203,7 +220,10 @@ bool retry_nonlinear_cg_line_search_with_raw_gradient_restart(
     trial_step = restart_step;
 
     while (true) {
-        trial_m = relaxation::retracted_step(ctx, previous_m, direction, trial_step);
+        {
+            ScopedPhaseTimer timer(&profile_stats.relaxation_retraction_wall_time_ns);
+            trial_m = relaxation::retracted_step(ctx, previous_m, direction, trial_step);
+        }
         const int status = relaxation::upload_and_snapshot(
             ctx,
             trial_m,
@@ -223,10 +243,15 @@ bool retry_nonlinear_cg_line_search_with_raw_gradient_restart(
                 error);
             return false;
         }
-        const bool armijo =
-            trial_stats.total_energy_joules <=
-            current_stats.total_energy_joules +
-                relaxation::kArmijoCoefficient * trial_step * p_dot_g;
+        relaxation::accumulate_relaxation_profile_sample(profile_stats, trial_stats);
+        bool armijo = false;
+        {
+            ScopedPhaseTimer timer(&profile_stats.relaxation_line_search_wall_time_ns);
+            armijo =
+                trial_stats.total_energy_joules <=
+                current_stats.total_energy_joules +
+                    relaxation::kArmijoCoefficient * trial_step * p_dot_g;
+        }
         if (armijo) {
             return true;
         }
@@ -308,7 +333,8 @@ int run_nonlinear_cg_step(
     }
 
     fullmag_fem_step_stats current_stats{};
-    if (!context_snapshot_stats_mfem(ctx, current_stats, error)) {
+    if (!relaxation::take_cached_current_stats(ctx, current_stats) &&
+        !context_snapshot_stats_mfem(ctx, current_stats, error)) {
         return FULLMAG_FEM_ERR_UNAVAILABLE;
     }
     if (!relaxation::validate_relaxation_state_fields(
@@ -324,27 +350,38 @@ int run_nonlinear_cg_step(
             error)) {
         return FULLMAG_FEM_ERR_INTERNAL;
     }
+    fullmag_fem_step_stats profile_stats{};
+    relaxation::accumulate_relaxation_profile_sample(profile_stats, current_stats);
     if (complete_stage_from_current_stats(ctx, current_stats)) {
         out_stats = current_stats;
         out_stats.dt_seconds = 0.0;
         return FULLMAG_FEM_OK;
     }
 
-    const std::vector<double> previous_m = ctx.state.m_xyz;
+    std::vector<double> previous_m;
+    {
+        ScopedPhaseTimer timer(&profile_stats.relaxation_state_copy_wall_time_ns);
+        previous_m = ctx.state.m_xyz;
+    }
     std::vector<double> previous_gradient;
-    relaxation::tangent_gradient_from_field(
-        ctx,
-        previous_m,
-        ctx.effective_field.h_xyz,
-        previous_gradient);
     double g_norm_sq = 0.0;
-    if (!relaxation::validate_tangent_gradient_field(
+    bool current_gradient_valid = false;
+    {
+        ScopedPhaseTimer timer(&profile_stats.relaxation_gradient_wall_time_ns);
+        relaxation::tangent_gradient_from_field(
+            ctx,
+            previous_m,
+            ctx.effective_field.h_xyz,
+            previous_gradient);
+        current_gradient_valid = relaxation::validate_tangent_gradient_field(
             ctx,
             previous_gradient,
             "nonlinear-CG",
             "current",
             g_norm_sq,
-            error)) {
+            error);
+    }
+    if (!current_gradient_valid) {
         return FULLMAG_FEM_ERR_INTERNAL;
     }
     if (g_norm_sq <= relaxation::kGradientFloor) {
@@ -365,18 +402,26 @@ int run_nonlinear_cg_step(
             previous_gradient,
             trial_step,
             previous_preconditioned_gradient,
-            error)) {
+            error,
+            &profile_stats.relaxation_preconditioner_wall_time_ns,
+            &profile_stats.relaxation_preconditioner_cache_hits,
+            &profile_stats.relaxation_preconditioner_cache_misses)) {
         return FULLMAG_FEM_ERR_INTERNAL;
     }
     std::vector<double> direction = ctx.relaxation.nonlinear_cg_direction;
     double p_dot_g = 0.0;
-    if (!ensure_descent_direction(
+    bool descent_ok = false;
+    {
+        ScopedPhaseTimer timer(&profile_stats.relaxation_metric_wall_time_ns);
+        descent_ok = ensure_descent_direction(
             ctx,
             previous_m,
             previous_gradient,
             previous_preconditioned_gradient,
             direction,
-            p_dot_g)) {
+            p_dot_g);
+    }
+    if (!descent_ok) {
         error =
             "nonlinear-CG relaxation produced a non-finite or non-descent direction";
         return FULLMAG_FEM_ERR_INTERNAL;
@@ -394,7 +439,10 @@ int run_nonlinear_cg_step(
     uint32_t backtracks = 0;
     bool line_search_accepted = false;
     while (true) {
-        trial_m = relaxation::retracted_step(ctx, previous_m, direction, trial_step);
+        {
+            ScopedPhaseTimer timer(&profile_stats.relaxation_retraction_wall_time_ns);
+            trial_m = relaxation::retracted_step(ctx, previous_m, direction, trial_step);
+        }
         status = relaxation::upload_and_snapshot(
             ctx,
             trial_m,
@@ -413,10 +461,15 @@ int run_nonlinear_cg_step(
                 trial_error,
                 error);
         }
-        const bool armijo =
-            trial_stats.total_energy_joules <=
-            current_stats.total_energy_joules +
-                relaxation::kArmijoCoefficient * trial_step * p_dot_g;
+        relaxation::accumulate_relaxation_profile_sample(profile_stats, trial_stats);
+        bool armijo = false;
+        {
+            ScopedPhaseTimer timer(&profile_stats.relaxation_line_search_wall_time_ns);
+            armijo =
+                trial_stats.total_energy_joules <=
+                current_stats.total_energy_joules +
+                    relaxation::kArmijoCoefficient * trial_step * p_dot_g;
+        }
         if (armijo) {
             line_search_accepted = true;
             break;
@@ -437,6 +490,7 @@ int run_nonlinear_cg_step(
                 direction,
                 p_dot_g,
                 trial_step,
+                profile_stats,
                 trial_stats,
                 trial_m,
                 backtracks,
@@ -454,6 +508,7 @@ int run_nonlinear_cg_step(
                 direction,
                 p_dot_g,
                 trial_step,
+                profile_stats,
                 trial_stats,
                 trial_m,
                 backtracks,
@@ -488,19 +543,24 @@ int run_nonlinear_cg_step(
     }
 
     std::vector<double> trial_gradient;
-    relaxation::tangent_gradient_from_field(
-        ctx,
-        trial_m,
-        ctx.effective_field.h_xyz,
-        trial_gradient);
     double trial_g_norm_sq = 0.0;
-    if (!relaxation::validate_tangent_gradient_field(
+    bool accepted_gradient_valid = false;
+    {
+        ScopedPhaseTimer timer(&profile_stats.relaxation_gradient_wall_time_ns);
+        relaxation::tangent_gradient_from_field(
+            ctx,
+            trial_m,
+            ctx.effective_field.h_xyz,
+            trial_gradient);
+        accepted_gradient_valid = relaxation::validate_tangent_gradient_field(
             ctx,
             trial_gradient,
             "nonlinear-CG",
             "accepted",
             trial_g_norm_sq,
-            error)) {
+            error);
+    }
+    if (!accepted_gradient_valid) {
         const std::string gradient_error = error;
         return relaxation::restore_previous_relaxation_state(
             ctx,
@@ -519,7 +579,10 @@ int run_nonlinear_cg_step(
             trial_gradient,
             trial_step,
             trial_preconditioned_gradient,
-            trial_preconditioner_error)) {
+            trial_preconditioner_error,
+            &profile_stats.relaxation_preconditioner_wall_time_ns,
+            &profile_stats.relaxation_preconditioner_cache_hits,
+            &profile_stats.relaxation_preconditioner_cache_misses)) {
         return relaxation::restore_previous_relaxation_state(
             ctx,
             previous_m,
@@ -530,21 +593,25 @@ int run_nonlinear_cg_step(
             error);
     }
     const uint64_t accepted_step = ctx.relaxation.accepted_steps + 1u;
-    ctx.relaxation.nonlinear_cg_direction = next_direction_pr_plus(
-        ctx,
-        trial_m,
-        previous_gradient,
-        trial_gradient,
-        previous_preconditioned_gradient,
-        trial_preconditioned_gradient,
-        direction,
-        accepted_step);
-    ctx.relaxation.step_size =
-        std::clamp(trial_step, relaxation::kMinStepSize, relaxation::kMaxStepSize);
+    {
+        ScopedPhaseTimer timer(&profile_stats.relaxation_update_wall_time_ns);
+        ctx.relaxation.nonlinear_cg_direction = next_direction_pr_plus(
+            ctx,
+            trial_m,
+            previous_gradient,
+            trial_gradient,
+            previous_preconditioned_gradient,
+            trial_preconditioned_gradient,
+            direction,
+            accepted_step);
+        ctx.relaxation.step_size =
+            std::clamp(trial_step, relaxation::kMinStepSize, relaxation::kMaxStepSize);
+    }
 
     relaxation::finish_accepted_relaxation_step(
         ctx,
         trial_stats,
+        profile_stats,
         out_stats,
         trial_step);
     relaxation::publish_accepted_gradient_completion(ctx, trial_g_norm_sq);

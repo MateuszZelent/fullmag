@@ -294,6 +294,10 @@ pub struct StepStats {
     pub demag_solver_apply_wall_time_ns: u64,
     #[serde(default)]
     pub demag_solver_setup_reused: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demag_solver: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demag_preconditioner: Option<String>,
     #[serde(default)]
     pub demag_recover_wall_time_ns: u64,
     #[serde(default)]
@@ -304,12 +308,80 @@ pub struct StepStats {
     pub extra_energy_wall_time_ns: u64,
     #[serde(default)]
     pub snapshot_wall_time_ns: u64,
+    #[serde(default)]
+    pub relaxation_preconditioner_wall_time_ns: u64,
+    #[serde(default)]
+    pub relaxation_state_copy_wall_time_ns: u64,
+    #[serde(default)]
+    pub relaxation_state_upload_wall_time_ns: u64,
+    #[serde(default)]
+    pub relaxation_retraction_wall_time_ns: u64,
+    #[serde(default)]
+    pub relaxation_gradient_wall_time_ns: u64,
+    #[serde(default)]
+    pub relaxation_metric_wall_time_ns: u64,
+    #[serde(default)]
+    pub relaxation_line_search_wall_time_ns: u64,
+    #[serde(default)]
+    pub relaxation_update_wall_time_ns: u64,
+    #[serde(default)]
+    pub relaxation_preconditioner_cache_hits: u32,
+    #[serde(default)]
+    pub relaxation_preconditioner_cache_misses: u32,
+    /// Native FFI wall time not attributed by the backend phase profiler.
+    #[serde(default)]
+    pub native_ffi_overhead_wall_time_ns: u64,
     /// Wall-clock time spent on active preview field extraction (ns).
     #[serde(default)]
     pub preview_wall_time_ns: u64,
     /// Wall-clock time spent on cached (non-active) preview field copies (ns).
     #[serde(default)]
     pub cached_preview_wall_time_ns: u64,
+    /// Wall-clock time spent in synchronous runner/CLI live callback orchestration (ns).
+    #[serde(default)]
+    pub orchestration_wall_time_ns: u64,
+    /// Wall-clock time spent copying full field payloads for live/artifact handoff (ns).
+    #[serde(default)]
+    pub field_copy_wall_time_ns: u64,
+    /// Full field payload bytes copied for live/artifact handoff.
+    #[serde(default)]
+    pub field_copy_bytes: u64,
+    /// Wall-clock time spent waiting to enqueue artifact writer jobs (ns).
+    #[serde(default)]
+    pub artifact_enqueue_block_wall_time_ns: u64,
+    /// Estimated artifact payload bytes enqueued from this step.
+    #[serde(default)]
+    pub artifact_enqueue_bytes: u64,
+    /// Maximum observed artifact writer queue depth after enqueue.
+    #[serde(default)]
+    pub artifact_queue_depth_max: u64,
+    /// Current artifact writer queue depth observed by the live diagnostics snapshot.
+    #[serde(default)]
+    pub artifact_queue_depth_current: u64,
+    /// Completed artifact writer jobs observed by the live diagnostics snapshot.
+    #[serde(default)]
+    pub artifact_writer_jobs_completed: u64,
+    /// Total writer-thread artifact job wall time observed by the live diagnostics snapshot.
+    #[serde(default)]
+    pub artifact_writer_job_wall_time_ns: u64,
+    /// Writer-thread scalar row wall time observed by the live diagnostics snapshot.
+    #[serde(default)]
+    pub artifact_scalar_row_writer_wall_time_ns: u64,
+    /// Writer-thread field snapshot wall time observed by the live diagnostics snapshot.
+    #[serde(default)]
+    pub artifact_field_snapshot_writer_wall_time_ns: u64,
+    /// Writer-thread native field snapshot wall time observed by the live diagnostics snapshot.
+    #[serde(default)]
+    pub artifact_native_field_snapshot_writer_wall_time_ns: u64,
+    /// End-of-stage finalization wall time spent building final field outputs.
+    #[serde(default)]
+    pub finalization_wall_time_ns: u64,
+    /// End-of-stage finalization wall time spent copying full field outputs.
+    #[serde(default)]
+    pub finalization_field_copy_wall_time_ns: u64,
+    /// End-of-stage finalization full-field output bytes copied.
+    #[serde(default)]
+    pub finalization_field_copy_bytes: u64,
     // --- adaptive time-stepping diagnostics (PR1) ---
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_estimate: Option<f64>,
@@ -338,6 +410,9 @@ pub struct StepStats {
     /// FEM effective OMP thread count (after auto-capping, constant per run).
     #[serde(default)]
     pub effective_fem_omp_threads: i32,
+    /// Native FEM CPU thread-cap reason code.
+    #[serde(default)]
+    pub fem_cpu_thread_cap_reason: i32,
     /// Cumulative H2D bytes observed inside the native FEM hot loop.
     #[serde(default)]
     pub hot_loop_h2d_bytes: u64,
@@ -410,13 +485,41 @@ impl Default for StepStats {
             demag_solver_setup_wall_time_ns: 0,
             demag_solver_apply_wall_time_ns: 0,
             demag_solver_setup_reused: false,
+            demag_solver: None,
+            demag_preconditioner: None,
             demag_recover_wall_time_ns: 0,
             demag_energy_wall_time_ns: 0,
             rhs_wall_time_ns: 0,
             extra_energy_wall_time_ns: 0,
             snapshot_wall_time_ns: 0,
+            relaxation_preconditioner_wall_time_ns: 0,
+            relaxation_state_copy_wall_time_ns: 0,
+            relaxation_state_upload_wall_time_ns: 0,
+            relaxation_retraction_wall_time_ns: 0,
+            relaxation_gradient_wall_time_ns: 0,
+            relaxation_metric_wall_time_ns: 0,
+            relaxation_line_search_wall_time_ns: 0,
+            relaxation_update_wall_time_ns: 0,
+            relaxation_preconditioner_cache_hits: 0,
+            relaxation_preconditioner_cache_misses: 0,
+            native_ffi_overhead_wall_time_ns: 0,
             preview_wall_time_ns: 0,
             cached_preview_wall_time_ns: 0,
+            orchestration_wall_time_ns: 0,
+            field_copy_wall_time_ns: 0,
+            field_copy_bytes: 0,
+            artifact_enqueue_block_wall_time_ns: 0,
+            artifact_enqueue_bytes: 0,
+            artifact_queue_depth_max: 0,
+            artifact_queue_depth_current: 0,
+            artifact_writer_jobs_completed: 0,
+            artifact_writer_job_wall_time_ns: 0,
+            artifact_scalar_row_writer_wall_time_ns: 0,
+            artifact_field_snapshot_writer_wall_time_ns: 0,
+            artifact_native_field_snapshot_writer_wall_time_ns: 0,
+            finalization_wall_time_ns: 0,
+            finalization_field_copy_wall_time_ns: 0,
+            finalization_field_copy_bytes: 0,
             error_estimate: None,
             dt_suggested: None,
             rejected_attempts: 0,
@@ -428,6 +531,7 @@ impl Default for StepStats {
             demag_refreshed: false,
             requested_fem_omp_threads: 0,
             effective_fem_omp_threads: 0,
+            fem_cpu_thread_cap_reason: 0,
             hot_loop_h2d_bytes: 0,
             hot_loop_d2h_bytes: 0,
             hot_loop_host_read_count: 0,
@@ -499,6 +603,7 @@ mod all_in_gpu_fem_transfer_audit_tests {
         assert_eq!(diagnostics.demag_recover_wall_time_ns, 7);
         assert_eq!(diagnostics.demag_energy_wall_time_ns, 11);
         assert_eq!(diagnostics.extra_energy_wall_time_ns, 29);
+        assert_eq!(diagnostics.relaxation_preconditioner_wall_time_ns, 0);
     }
 
     #[test]
@@ -525,13 +630,36 @@ mod all_in_gpu_fem_transfer_audit_tests {
                 demag_energy_wall_time_ns: 10,
                 extra_energy_wall_time_ns: 50,
                 snapshot_wall_time_ns: 25,
+                relaxation_preconditioner_wall_time_ns: 60,
+                relaxation_state_copy_wall_time_ns: 10,
+                relaxation_state_upload_wall_time_ns: 15,
+                relaxation_retraction_wall_time_ns: 20,
+                relaxation_gradient_wall_time_ns: 30,
+                relaxation_metric_wall_time_ns: 40,
+                relaxation_line_search_wall_time_ns: 50,
+                relaxation_update_wall_time_ns: 60,
+                relaxation_preconditioner_cache_hits: 2,
+                relaxation_preconditioner_cache_misses: 1,
+                native_ffi_overhead_wall_time_ns: 80,
+                field_copy_wall_time_ns: 30,
+                artifact_enqueue_block_wall_time_ns: 20,
+                artifact_enqueue_bytes: 4096,
+                artifact_queue_depth_max: 3,
+                artifact_queue_depth_current: 1,
+                artifact_writer_jobs_completed: 2,
+                artifact_writer_job_wall_time_ns: 80,
+                artifact_scalar_row_writer_wall_time_ns: 30,
+                artifact_field_snapshot_writer_wall_time_ns: 50,
                 rhs_evals: 3,
                 rejected_attempts: 1,
                 demag_solves: 2,
+                demag_solver: Some("CG".to_string()),
+                demag_preconditioner: Some("JACOBI".to_string()),
                 poisson_iterations: 9,
                 poisson_final_residual: 1.5e-8,
                 requested_fem_omp_threads: 8,
                 effective_fem_omp_threads: 4,
+                fem_cpu_thread_cap_reason: 2,
                 ..StepStats::default()
             });
         }
@@ -541,13 +669,99 @@ mod all_in_gpu_fem_transfer_audit_tests {
         assert_eq!(snapshot.latest_samples.len(), 2);
         assert_eq!(snapshot.latest_samples[0].step, 2);
         assert_eq!(snapshot.latest_samples[1].step, 3);
-        assert_eq!(snapshot.latest_samples[1].phase_sum_ns, 425);
-        assert_eq!(snapshot.latest_samples[1].missing_ns, 575);
+        assert!(snapshot.latest_samples[1].sample_time_unix_ms > 0);
+        assert!(snapshot.latest_samples[1].delta_wall_time_ns.is_some());
+        assert_eq!(snapshot.latest_samples[1].phase_sum_ns, 840);
+        assert_eq!(snapshot.latest_samples[1].missing_ns, 160);
+        assert_eq!(snapshot.latest_samples[1].artifact_enqueue_bytes, 4096);
+        assert_eq!(snapshot.latest_samples[1].artifact_queue_depth_max, 3);
+        assert_eq!(snapshot.latest_samples[1].artifact_queue_depth_current, 1);
+        assert_eq!(snapshot.latest_samples[1].artifact_writer_jobs_completed, 2);
+        assert_eq!(
+            snapshot.latest_samples[1].artifact_writer_job_wall_time_ns,
+            80
+        );
+        assert_eq!(
+            snapshot.latest_samples[1].artifact_scalar_row_writer_wall_time_ns,
+            30
+        );
+        assert_eq!(
+            snapshot.latest_samples[1].artifact_field_snapshot_writer_wall_time_ns,
+            50
+        );
+        assert_eq!(
+            snapshot.latest_samples[1].relaxation_preconditioner_cache_hits,
+            2
+        );
+        assert_eq!(
+            snapshot.latest_samples[1].relaxation_preconditioner_cache_misses,
+            1
+        );
         assert_eq!(
             snapshot.latest_samples[1].threading.effective_omp_threads,
             4
         );
+        assert_eq!(
+            snapshot.latest_samples[1].threading.cap_reason,
+            "auto-small-mesh-cap"
+        );
+        assert_eq!(
+            snapshot.latest_samples[1].demag_solver.as_deref(),
+            Some("CG")
+        );
+        assert_eq!(
+            snapshot.latest_samples[1].demag_preconditioner.as_deref(),
+            Some("JACOBI")
+        );
         assert_eq!(snapshot.aggregates.sample_count, 2);
+    }
+
+    #[test]
+    fn solver_profile_force_record_keeps_completion_finalization_visible() {
+        let mut profile = crate::SolverProfileState::new(crate::SolverProfileConfig {
+            enabled: true,
+            sample_every: 1,
+            sample_interval_wall_ms: 60_000,
+            max_samples: 4,
+            emit_engine_log: false,
+            persist_artifact: false,
+        });
+
+        assert!(profile
+            .record_step(&StepStats {
+                step: 1,
+                wall_time_ns: 1_000,
+                ..StepStats::default()
+            })
+            .is_some());
+        assert!(profile
+            .record_step(&StepStats {
+                step: 2,
+                wall_time_ns: 2_000,
+                ..StepStats::default()
+            })
+            .is_none());
+
+        let forced = profile
+            .force_record_step(&StepStats {
+                step: 2,
+                wall_time_ns: 3_000,
+                finalization_wall_time_ns: 700,
+                finalization_field_copy_wall_time_ns: 500,
+                finalization_field_copy_bytes: 24_000,
+                ..StepStats::default()
+            })
+            .expect("forced completion sample should bypass wall-clock sampling");
+        let finalization_phase = forced
+            .phases
+            .iter()
+            .find(|phase| phase.id == "finalization")
+            .expect("missing finalization phase");
+
+        assert_eq!(finalization_phase.wall_time_ns, 700);
+        assert_eq!(forced.finalization_field_copy_wall_time_ns, 500);
+        assert_eq!(forced.finalization_field_copy_bytes, 24_000);
+        assert_eq!(profile.snapshot().latest_samples.len(), 2);
     }
 
     #[test]
@@ -589,6 +803,7 @@ mod all_in_gpu_fem_transfer_audit_tests {
 
         assert_eq!(sample.demag_subphase_sum_ns, 250);
         assert_eq!(demag_total, sample.demag_subphase_sum_ns);
+        assert_eq!(sample.delta_wall_time_ns, None);
     }
 
     #[test]
@@ -653,6 +868,19 @@ impl StepStats {
             rhs_wall_time_ns: self.rhs_wall_time_ns,
             extra_energy_wall_time_ns: self.extra_energy_wall_time_ns,
             snapshot_wall_time_ns: self.snapshot_wall_time_ns,
+            relaxation_preconditioner_wall_time_ns: self.relaxation_preconditioner_wall_time_ns,
+            relaxation_state_copy_wall_time_ns: self.relaxation_state_copy_wall_time_ns,
+            relaxation_state_upload_wall_time_ns: self.relaxation_state_upload_wall_time_ns,
+            relaxation_retraction_wall_time_ns: self.relaxation_retraction_wall_time_ns,
+            relaxation_gradient_wall_time_ns: self.relaxation_gradient_wall_time_ns,
+            relaxation_metric_wall_time_ns: self.relaxation_metric_wall_time_ns,
+            relaxation_line_search_wall_time_ns: self.relaxation_line_search_wall_time_ns,
+            relaxation_update_wall_time_ns: self.relaxation_update_wall_time_ns,
+            relaxation_preconditioner_cache_hits: self.relaxation_preconditioner_cache_hits,
+            relaxation_preconditioner_cache_misses: self.relaxation_preconditioner_cache_misses,
+            finalization_wall_time_ns: self.finalization_wall_time_ns,
+            finalization_field_copy_wall_time_ns: self.finalization_field_copy_wall_time_ns,
+            finalization_field_copy_bytes: self.finalization_field_copy_bytes,
             error_estimate: self.error_estimate,
             dt_suggested: self.dt_suggested,
             rejected_attempts: self.rejected_attempts,

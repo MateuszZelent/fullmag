@@ -435,6 +435,20 @@ Target state:
 
 - Mode field resources are rendered through the same vector-field pipeline as other field resources.
 - Complex mode visualization is controlled by visualization state and resource query parameters.
+- Mode field visualization exposes the same user-facing display controls as
+  ordinary 3D field visualization, with the quantity selector replaced by the
+  complex-mode view selector (`real`, `imag`, `abs`, `phase`,
+  `phase_rotated_real`).
+- Mode visualization settings are shared for the whole modes collection.
+  Selecting another eigenmode changes the active field payload and mode
+  identity, but must preserve the shader, color, vector, scope, and phase
+  control state so users do not have to copy styling from mode to mode.
+- Future volume-inspection controls must support render-only clipping/cutaway
+  of mode fields, including half/quarter geometry cuts and shader
+  transparency. This is needed because eigenmodes can differ throughout the
+  volume, not only on the exterior surface; users need to inspect interior
+  gradients with a translucent surface or clipped-away section. These controls
+  must not change the solver domain, mesh, artifacts, or mode normalization.
 
 Visualization state extension:
 
@@ -456,6 +470,8 @@ type AnalysisModeOverlayState = {
   glyphDensity: number;
   normalizeGlyphs: boolean;
   colorBy: "amplitude" | "phase" | "component" | "none";
+  clipMode: "off" | "plane" | "quarter_cut" | "box_cut";
+  surfaceOpacityPercent: number;
 };
 ```
 

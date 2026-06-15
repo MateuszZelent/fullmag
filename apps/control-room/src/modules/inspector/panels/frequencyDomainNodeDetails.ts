@@ -25,116 +25,130 @@ const FREQUENCY_DOMAIN_STAGE_NODE_DETAILS: Record<
   string,
   Omit<FrequencyDomainNodeDetail, "focus"> & { focus: string }
 > = {
+  "study.stage.eigenmodes": {
+    artifact: "frequency_domain/manifest.v1.json",
+    focus: "modal FMR, free modes, and dispersion eigenmode workflow",
+    resource: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
+    title: "Eigenmodes Stage",
+    visualization: "stage summary, modal solver readiness, spectrum, and mode-field workflow",
+  },
   "study.stage.eigenmodes.setup": {
     artifact: "eigen/study.v2.json",
     focus: "eigenmodes setup",
     resource: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
-    title: "Eigenmodes Setup Node Detail",
+    title: "Eigenmodes Setup",
     visualization: "modal intent, target modes, normalization, and execution lane",
   },
   "study.stage.eigenmodes.calculation_mode": {
     artifact: "frequency_domain/manifest.v1.json",
     focus: "eigenmodes calculation mode",
     resource: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
-    title: "Eigenmodes Calculation Mode Node Detail",
+    title: "Eigenmodes Calculation Mode",
     visualization: "FMR modal spectrum and dispersion mode routing",
   },
   "study.stage.eigenmodes.equilibrium": {
     artifact: "frequency_domain/equilibrium_diagnostics.v1.json",
     focus: "eigenmodes equilibrium",
     resource: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
-    title: "Eigenmodes Equilibrium Node Detail",
+    title: "Eigenmodes Equilibrium",
     visualization: "linearization source, tangent residual, and equilibrium artifact",
   },
   "study.stage.eigenmodes.operator": {
     artifact: "frequency_domain/operator_diagnostics.v1.json",
     focus: "eigenmodes operator",
     resource: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
-    title: "Eigenmodes Operator Node Detail",
+    title: "Eigenmodes Operator",
     visualization: "linearized LLG operator, tangent projection, and physics terms",
   },
   "study.stage.eigenmodes.solver": {
     artifact: "eigen/diagnostics.v2.json",
     focus: "eigenmodes solver",
     resource: "eigen diagnostics resource",
-    title: "Eigenmodes Solver Node Detail",
+    title: "Eigenmodes Solver",
     visualization: "modal eigensolver status, residuals, and convergence gates",
   },
   "study.stage.eigenmodes.outputs": {
     artifact: "eigen/spectrum.v2.json",
     focus: "eigenmodes outputs",
     resource: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
-    title: "Eigenmodes Outputs Node Detail",
+    title: "Eigenmodes Outputs",
     visualization: "spectrum, branches, mode fields, and export artifacts",
   },
   "study.stage.eigenmodes.diagnostics": {
     artifact: "eigen/diagnostics.v2.json",
     focus: "eigenmodes diagnostics",
     resource: "eigen diagnostics resource",
-    title: "Eigenmodes Diagnostics Node Detail",
+    title: "Eigenmodes Diagnostics",
     visualization: "modal residuals, orthogonality, tangent leakage, and provenance",
+  },
+  "study.stage.frequency_response": {
+    artifact: "frequency_domain/manifest.v1.json",
+    focus: "driven FMR sweep workflow",
+    resource: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
+    title: "Frequency Response Stage",
+    visualization: "stage summary, response solver readiness, sweep progress, and field workflow",
   },
   "study.stage.frequency_response.setup": {
     artifact: "response/study.v1.json",
     focus: "frequency-response setup",
     resource: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
-    title: "Frequency Response Setup Node Detail",
+    title: "Frequency Response Setup",
     visualization: "driven response intent, sweep setup, and execution lane",
   },
   "study.stage.frequency_response.calculation_mode": {
     artifact: "frequency_domain/manifest.v1.json",
     focus: "frequency-response calculation mode",
     resource: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
-    title: "Frequency Response Calculation Mode Node Detail",
+    title: "Frequency Response Calculation Mode",
     visualization: "driven FMR, response sweep, and future response-map routing",
   },
   "study.stage.frequency_response.equilibrium": {
     artifact: "frequency_domain/equilibrium_diagnostics.v1.json",
     focus: "frequency-response equilibrium",
     resource: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
-    title: "Frequency Response Equilibrium Node Detail",
+    title: "Frequency Response Equilibrium",
     visualization: "linearization source, tangent residual, and equilibrium artifact",
   },
   "study.stage.frequency_response.operator": {
     artifact: "frequency_domain/operator_diagnostics.v1.json",
     focus: "frequency-response operator",
     resource: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
-    title: "Frequency Response Operator Node Detail",
+    title: "Frequency Response Operator",
     visualization: "harmonic LLG operator, damping, tangent projection, and physics terms",
   },
   "study.stage.frequency_response.excitation": {
     artifact: "response/study.v1.json",
     focus: "frequency-response excitation",
     resource: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
-    title: "Frequency Response Excitation Node Detail",
+    title: "Frequency Response Excitation",
     visualization: "drive field amplitude, phase, direction, and coupling policy",
   },
   "study.stage.frequency_response.sweep": {
     artifact: "response/magnetic_response_sweep.v2.json",
     focus: "frequency-response sweep",
     resource: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
-    title: "Frequency Response Sweep Setup Node Detail",
+    title: "Frequency Response Sweep Setup",
     visualization: "frequency grid, partial progress, response curves, and FMR peaks",
   },
   "study.stage.frequency_response.solver": {
     artifact: "response/diagnostics.v1.json",
     focus: "frequency-response solver",
     resource: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_DIAGNOSTICS_V1_PATH,
-    title: "Frequency Response Solver Node Detail",
+    title: "Frequency Response Solver",
     visualization: "GMRES status, residual history, matrix-free lane, and stop reason",
   },
   "study.stage.frequency_response.outputs": {
     artifact: "response/magnetic_response_sweep.v2.json",
     focus: "frequency-response outputs",
     resource: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
-    title: "Frequency Response Outputs Node Detail",
+    title: "Frequency Response Outputs",
     visualization: "sweep table, field payloads, phase views, and export artifacts",
   },
   "study.stage.frequency_response.diagnostics": {
     artifact: "response/diagnostics.v1.json",
     focus: "frequency-response diagnostics",
     resource: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_DIAGNOSTICS_V1_PATH,
-    title: "Frequency Response Diagnostics Node Detail",
+    title: "Frequency Response Diagnostics",
     visualization: "solver diagnostics, artifact consistency, capability gates, and provenance",
   },
 };
@@ -161,63 +175,70 @@ const FREQUENCY_DOMAIN_RESULT_NODE_DETAILS: Record<
     artifact: "frequency_domain/manifest.v1.json",
     focus: "calculation modes",
     resource: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
-    title: "Calculation Modes Node Detail",
+    title: "Calculation Modes",
     visualization: "FMR modal, driven FMR, dispersion, response map",
   },
   "results.frequency_domain.fmr": {
     artifact: "frequency_domain/manifest.v1.json",
     focus: "FMR",
     resource: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
-    title: "FMR Result Node Detail",
+    title: "FMR Result",
     visualization: "modal and driven FMR comparison",
   },
   "results.frequency_domain.fmr_modal_spectrum": {
     artifact: "eigen/spectrum.v2.json",
     focus: "modal FMR spectrum",
     resource: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
-    title: "FMR Modal Spectrum Node Detail",
+    title: "FMR Modal Spectrum",
     visualization: "modal resonance spectrum and mode overlay",
   },
   "results.frequency_domain.fmr_response_sweep": {
     artifact: "response/magnetic_response_sweep.v2.json",
     focus: "driven FMR sweep",
     resource: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
-    title: "FMR Response Sweep Node Detail",
+    title: "FMR Response Sweep",
     visualization: "driven response sweep, phase, absorbed power",
   },
   "results.frequency_domain.fmr_peaks": {
     artifact: "eigen/spectrum.v2.json + response/magnetic_response_sweep.v2.json",
     focus: "FMR peaks",
     resource: "modal spectrum and driven response resources",
-    title: "FMR Peaks Node Detail",
+    title: "FMR Peaks",
     visualization: "modal resonance table and driven peak table",
+  },
+  "results.frequency_domain.fmr_peak": {
+    artifact: "eigen/spectrum.v2.json or response/magnetic_response_sweep.v2.json",
+    focus: "single FMR peak",
+    resource: "modal mode field or driven response field",
+    title: "FMR Peak",
+    visualization: "peak provenance, frequency, validation, and 3D field target",
   },
   "results.frequency_domain.dispersion": {
     artifact: "eigen/dispersion.csv",
     focus: "dispersion",
     resource: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
-    title: "Dispersion Result Node Detail",
+    title: "Dispersion Result",
     visualization: "Floquet/Bloch dispersion chart and k-path table",
   },
   "results.frequency_domain.response_map": {
     artifact: "response/response_map.v1.json",
     focus: "response map",
     resource: "response map resource gated",
-    title: "Response Map Node Detail",
+    title: "Response Map",
     visualization: "future k/f intensity map",
   },
   "results.frequency_domain.comparison": {
     artifact: "eigen/spectrum.v2.json + response/magnetic_response_sweep.v2.json",
     focus: "modal-driven comparison",
     resource: "modal spectrum and driven response resources",
-    title: "Modal vs Driven Comparison Node Detail",
+    title: "Modal vs Driven Comparison",
     visualization: "modal-driven resonance comparison",
   },
   "results.frequency_domain.exports": {
     artifact: "frequency_domain/artifact_manifest.json",
     focus: "exports",
     resource: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
-    title: "Frequency-Domain Exports Node Detail",
+    title: "Frequency-Domain Exports",
     visualization: "artifact export and provenance bundle",
   },
   "results.eigen.root": {
@@ -238,21 +259,28 @@ const FREQUENCY_DOMAIN_RESULT_NODE_DETAILS: Record<
     artifact: "eigen/spectrum.v2.json",
     focus: "eigen spectrum",
     resource: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
-    title: "Eigen Spectrum Node Detail",
+    title: "Eigen Spectrum",
     visualization: "mode frequency table and spectrum chart",
   },
   "results.eigen.modes": {
     artifact: "eigen/modes",
     focus: "eigen modes",
     resource: "mode metadata resources",
-    title: "Eigen Modes Node Detail",
+    title: "Eigen Modes",
     visualization: "mode table and selectable 3D mode overlays",
+  },
+  "results.eigen.modes.visualization": {
+    artifact: "eigen/modes",
+    focus: "shared eigen mode visualization",
+    resource: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+    title: "Eigen Modes Visualization",
+    visualization: "shared mode shader, color, vector, scope, and phase controls",
   },
   "results.eigen.dispersion": {
     artifact: "eigen/dispersion.csv",
     focus: "eigen dispersion",
     resource: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
-    title: "Eigen Dispersion Node Detail",
+    title: "Eigen Dispersion",
     visualization: "dispersion curve and k-path samples",
   },
   "results.eigen.k_path": {
@@ -266,21 +294,21 @@ const FREQUENCY_DOMAIN_RESULT_NODE_DETAILS: Record<
     artifact: "eigen/branches.v2.json",
     focus: "eigen branches",
     resource: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
-    title: "Eigen Branches Node Detail",
+    title: "Eigen Branches",
     visualization: "branch table and dispersion overlays",
   },
   "results.eigen.diagnostics": {
     artifact: "eigen/diagnostics.v2.json",
     focus: "eigen diagnostics",
     resource: "eigen diagnostics resource",
-    title: "Eigen Diagnostics Node Detail",
+    title: "Eigen Diagnostics",
     visualization: "modal convergence, residuals, tangent leakage, and orthogonality",
   },
   "results.eigen.provenance": {
     artifact: "eigen/provenance.v2.json",
     focus: "eigen provenance",
     resource: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
-    title: "Eigen Provenance Node Detail",
+    title: "Eigen Provenance",
     visualization: "requested modal intent and resolved solver lane",
   },
   "results.frequency_response.root": {
@@ -301,49 +329,49 @@ const FREQUENCY_DOMAIN_RESULT_NODE_DETAILS: Record<
     artifact: "response/magnetic_response_sweep.v2.json",
     focus: "response sweep",
     resource: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
-    title: "Frequency Response Sweep Node Detail",
+    title: "Frequency Response Sweep",
     visualization: "amplitude, phase, susceptibility, and absorbed power charts",
   },
   "results.frequency_response.progress": {
     artifact: "response/progress.v1.json",
     focus: "response progress",
     resource: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
-    title: "Frequency Response Progress Node Detail",
+    title: "Frequency Response Progress",
     visualization: "completed frequencies, partial artifacts, and current solve state",
   },
   "results.frequency_response.cancel_requested": {
     artifact: "response/cancel_requested.v1.json",
     focus: "response cancellation",
     resource: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
-    title: "Frequency Response Cancellation Node Detail",
+    title: "Frequency Response Cancellation",
     visualization: "cancel request state and preserved partial artifacts",
   },
   "results.frequency_response.frequency_points": {
     artifact: "response/frequency_points",
     focus: "response frequency points",
     resource: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
-    title: "Response Frequency Points Node Detail",
+    title: "Response Frequency Points",
     visualization: "per-frequency point table and 3D response field selection",
   },
   "results.frequency_response.observables": {
     artifact: "response/magnetic_response_sweep.v2.json",
     focus: "response observables",
     resource: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
-    title: "Response Observables Node Detail",
+    title: "Response Observables",
     visualization: "observable tables, FMR curves, and absorbed power traces",
   },
   "results.frequency_response.diagnostics": {
     artifact: "response/diagnostics.v1.json",
     focus: "response diagnostics",
     resource: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_DIAGNOSTICS_V1_PATH,
-    title: "Frequency Response Diagnostics Node Detail",
+    title: "Frequency Response Diagnostics",
     visualization: "GMRES residuals, matrix-free status, and production provenance",
   },
   "results.frequency_response.provenance": {
     artifact: "response/provenance.v1.json",
     focus: "response provenance",
     resource: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
-    title: "Frequency Response Provenance Node Detail",
+    title: "Frequency Response Provenance",
     visualization: "requested driven response intent and resolved execution lane",
   },
 };
@@ -660,7 +688,7 @@ export function resolveFrequencyDomainNodeDetail(
           ? `sample ${sample}, mode ${mode}`
           : "mode not selected",
       resource: ref?.fieldId ?? "mode field not selected",
-      title: "Eigen Mode Node Detail",
+      title: "Eigen Mode",
       visualization: "real, imag, complex abs, phase, animated phase",
     };
   }
@@ -669,7 +697,7 @@ export function resolveFrequencyDomainNodeDetail(
       artifact: "eigen/branches.v2.json",
       focus: ref?.branchId ?? "branch not selected",
       resource: ref?.resourceRef ?? "branch resource",
-      title: "Eigen Branch Node Detail",
+      title: "Eigen Branch",
       visualization: "dispersion branch chart and selected-mode overlay",
     };
   }
@@ -685,7 +713,7 @@ export function resolveFrequencyDomainNodeDetail(
           ? `frequency index ${frequencyIndex}`
           : "frequency not selected",
       resource: ref?.fieldId ?? "response field not selected",
-      title: "Response Frequency Node Detail",
+      title: "Response Frequency",
       visualization: "real, imag, complex abs, phase, animated phase",
     };
   }
@@ -694,7 +722,7 @@ export function resolveFrequencyDomainNodeDetail(
       artifact: "response/magnetic_response_sweep.v2.json",
       focus: ref?.observableId ?? "observable not selected",
       resource: ref?.resourceRef ?? "response sweep resource",
-      title: "Response Observable Node Detail",
+      title: "Response Observable",
       visualization: "FMR sweep chart and observable table",
     };
   }
@@ -703,7 +731,7 @@ export function resolveFrequencyDomainNodeDetail(
       artifact: "eigen/spectrum.v2.json + response/magnetic_response_sweep.v2.json",
       focus: selection.label ?? "FMR peaks",
       resource: ref?.resourceRef ?? "modal spectrum and driven response resources",
-      title: "FMR Peaks Node Detail",
+      title: "FMR Peaks",
       visualization: "modal resonance table and driven peak table",
     };
   }
@@ -712,7 +740,7 @@ export function resolveFrequencyDomainNodeDetail(
       artifact: ref?.artifactPath ?? "frequency_domain/manifest.v1.json",
       focus: selection.label ?? "calculation modes",
       resource: ref?.resourceRef ?? ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
-      title: "Calculation Modes Node Detail",
+      title: "Calculation Modes",
       visualization: "FMR modal, driven FMR, dispersion, response map",
     };
   }
@@ -721,7 +749,7 @@ export function resolveFrequencyDomainNodeDetail(
       artifact: ref?.artifactPath ?? "frequency_domain/manifest.v1.json",
       focus: selection.label ?? "FMR",
       resource: ref?.resourceRef ?? ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
-      title: "FMR Result Node Detail",
+      title: "FMR Result",
       visualization: "modal and driven FMR comparison",
     };
   }
@@ -730,7 +758,7 @@ export function resolveFrequencyDomainNodeDetail(
       artifact: ref?.artifactPath ?? "eigen/spectrum.v2.json",
       focus: selection.label ?? "modal FMR spectrum",
       resource: ref?.resourceRef ?? ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
-      title: "FMR Modal Spectrum Node Detail",
+      title: "FMR Modal Spectrum",
       visualization: "modal resonance spectrum and mode overlay",
     };
   }
@@ -740,7 +768,7 @@ export function resolveFrequencyDomainNodeDetail(
       focus: selection.label ?? "driven FMR sweep",
       resource:
         ref?.resourceRef ?? ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
-      title: "FMR Response Sweep Node Detail",
+      title: "FMR Response Sweep",
       visualization: "driven response sweep, phase, absorbed power",
     };
   }
@@ -749,7 +777,7 @@ export function resolveFrequencyDomainNodeDetail(
       artifact: ref?.artifactPath ?? "response/response_map.v1.json",
       focus: selection.label ?? "response map",
       resource: ref?.resourceRef ?? "response map resource gated",
-      title: "Response Map Node Detail",
+      title: "Response Map",
       visualization: "future k/f intensity map",
     };
   }
@@ -760,7 +788,7 @@ export function resolveFrequencyDomainNodeDetail(
         "eigen/spectrum.v2.json + response/magnetic_response_sweep.v2.json",
       focus: selection.label ?? "modal-driven comparison",
       resource: ref?.resourceRef ?? "modal spectrum and driven response resources",
-      title: "Modal vs Driven Comparison Node Detail",
+      title: "Modal vs Driven Comparison",
       visualization: "modal-driven resonance comparison",
     };
   }
@@ -769,7 +797,7 @@ export function resolveFrequencyDomainNodeDetail(
       artifact: ref?.artifactPath ?? "eigen/dispersion.csv",
       focus: selection.label ?? "dispersion",
       resource: ref?.resourceRef ?? ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
-      title: "Dispersion Result Node Detail",
+      title: "Dispersion Result",
       visualization: "Floquet/Bloch dispersion chart and k-path table",
     };
   }
@@ -778,7 +806,7 @@ export function resolveFrequencyDomainNodeDetail(
       artifact: ref?.artifactPath ?? "frequency_domain/artifact_manifest.json",
       focus: selection.label ?? "exports",
       resource: ref?.resourceRef ?? ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
-      title: "Frequency-Domain Exports Node Detail",
+      title: "Frequency-Domain Exports",
       visualization: "artifact export and provenance bundle",
     };
   }
@@ -787,7 +815,7 @@ export function resolveFrequencyDomainNodeDetail(
       artifact: ref?.artifactPath ?? "frequency_domain/boundary_conditions.v1.json",
       focus: selection.label ?? "eigenmodes boundary",
       resource: ref?.resourceRef ?? MESHING_PERIODIC_PAIRS_PATH,
-      title: "Eigenmodes Boundary Node Detail",
+      title: "Eigenmodes Boundary",
       visualization: "open, periodic, and Floquet modal boundary conditions",
     };
   }
@@ -796,7 +824,7 @@ export function resolveFrequencyDomainNodeDetail(
       artifact: ref?.artifactPath ?? "mesh/periodic_pairs.v1.json",
       focus: selection.label ?? "eigenmodes periodic pairs",
       resource: ref?.resourceRef ?? MESHING_PERIODIC_PAIRS_PATH,
-      title: "Eigenmodes Periodic Pairs Node Detail",
+      title: "Eigenmodes Periodic Pairs",
       visualization: "periodic pair selector and mesh pairing diagnostics",
     };
   }
@@ -805,7 +833,7 @@ export function resolveFrequencyDomainNodeDetail(
       artifact: ref?.artifactPath ?? "eigen/k_path.v1.json",
       focus: selection.label ?? "eigenmodes k-path",
       resource: ref?.resourceRef ?? ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
-      title: "Eigenmodes k-Path Node Detail",
+      title: "Eigenmodes k-Path",
       visualization: "Bloch k-path samples and modal dispersion setup",
     };
   }
@@ -814,7 +842,7 @@ export function resolveFrequencyDomainNodeDetail(
       artifact: ref?.artifactPath ?? "frequency_domain/response_boundary_conditions.v1.json",
       focus: selection.label ?? "frequency-response boundary",
       resource: ref?.resourceRef ?? MESHING_PERIODIC_PAIRS_PATH,
-      title: "Frequency Response Boundary Node Detail",
+      title: "Frequency Response Boundary",
       visualization: "open, periodic, and driven Floquet boundary conditions",
     };
   }
@@ -823,7 +851,7 @@ export function resolveFrequencyDomainNodeDetail(
       artifact: ref?.artifactPath ?? "mesh/periodic_pairs.v1.json",
       focus: selection.label ?? "frequency-response periodic pairs",
       resource: ref?.resourceRef ?? MESHING_PERIODIC_PAIRS_PATH,
-      title: "Frequency Response Periodic Pairs Node Detail",
+      title: "Frequency Response Periodic Pairs",
       visualization: "periodic pair selector and driven-response Floquet gates",
     };
   }
@@ -832,7 +860,7 @@ export function resolveFrequencyDomainNodeDetail(
       artifact: ref?.artifactPath ?? "response/k_frequency_grid.v1.json",
       focus: selection.label ?? "frequency-response k/f grid",
       resource: ref?.resourceRef ?? ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
-      title: "Frequency Response k/f Grid Node Detail",
+      title: "Frequency Response k/f Grid",
       visualization: "future k/f response-map sampling grid",
     };
   }
@@ -841,7 +869,7 @@ export function resolveFrequencyDomainNodeDetail(
       artifact: ref?.artifactPath ?? "frequency_domain/periodic_floquet_diagnostics.v1.json",
       focus: selection.label ?? "periodic/Floquet diagnostics",
       resource: ref?.resourceRef ?? MESHING_PERIODIC_PAIRS_PATH,
-      title: "Periodic/Floquet Diagnostic Node Detail",
+      title: "Periodic/Floquet Diagnostic",
       visualization: "periodic pairing, Bloch phase, and demag-k diagnostics",
     };
   }
@@ -850,7 +878,7 @@ export function resolveFrequencyDomainNodeDetail(
       artifact: ref?.artifactPath ?? "periodic-pairs resource",
       focus: selection.label ?? "periodic pairs",
       resource: ref?.resourceRef ?? MESHING_PERIODIC_PAIRS_PATH,
-      title: "Periodic/Floquet Node Detail",
+      title: "Periodic/Floquet",
       visualization: "periodic pair table and Floquet capability gates",
     };
   }
@@ -858,7 +886,7 @@ export function resolveFrequencyDomainNodeDetail(
     artifact: ref?.artifactPath ?? "not selected",
     focus: selection.label ?? "unknown frequency-domain node",
     resource: ref?.resourceRef ?? "not selected",
-    title: "Unknown Frequency-Domain Node Detail",
+    title: "Unknown Frequency-Domain",
     visualization: "unknown node kind; add an exact inspector detail",
   };
 }

@@ -435,6 +435,10 @@ typedef struct {
     double   max_torque_Apm;                 /* max |m × H_eff|  (A/m) */
     double   suggested_next_dt;               /* adaptive optimal dt for next call */
     uint64_t wall_time_ns;
+    uint64_t hot_loop_d2h_bytes;
+    uint64_t hot_loop_host_sync_count;
+    uint64_t hot_loop_control_scalar_d2h_bytes;
+    uint64_t hot_loop_control_scalar_host_sync_count;
 } fullmag_fdm_step_stats;
 
 /* ── Device info ── */

@@ -631,6 +631,7 @@ def test_runtime_gate_and_physics_note_promote_cpu_tpi_without_gpu_claim() -> No
     assert "verify-fem-relaxation-cpu-gpu-consistency-smoke:" in justfile
     assert "verify-fem-relaxation-production-benchmark:" in justfile
     assert "verify-fem-gpu-demag-performance-benchmark:" in justfile
+    assert "bench-fem-gpu-demag-amg-profile-sweep:" in justfile
     consistency_recipe = just_recipe_source(
         justfile,
         "verify-fem-relaxation-cpu-gpu-consistency-smoke",
@@ -642,6 +643,10 @@ def test_runtime_gate_and_physics_note_promote_cpu_tpi_without_gpu_claim() -> No
     demag_performance_recipe = just_recipe_source(
         justfile,
         "verify-fem-gpu-demag-performance-benchmark",
+    )
+    amg_profile_sweep_recipe = just_recipe_source(
+        justfile,
+        "bench-fem-gpu-demag-amg-profile-sweep",
     )
     for recipe in [consistency_recipe, production_recipe, demag_performance_recipe]:
         assert "docker compose --profile fem-gpu run --rm" in recipe
@@ -669,6 +674,72 @@ def test_runtime_gate_and_physics_note_promote_cpu_tpi_without_gpu_claim() -> No
     assert "--require-cpu-gpu-consistency" in justfile
     assert "--require-gpu-phase-timings" in demag_performance_recipe
     assert "--require-min-solver-nodes" in demag_performance_recipe
+    assert "--demag-convergence-max-iterations" in production_recipe
+    assert "--demag-convergence-max-iterations" in demag_performance_recipe
+    assert "--require-demag-setup-reused" in production_recipe
+    assert "--require-demag-setup-reused" in demag_performance_recipe
+    assert "--max-demag-solver-apply-ms" in production_recipe
+    assert "--max-demag-solver-apply-ms" in demag_performance_recipe
+    assert "FULLMAG_BENCH_DEMAG_CONVERGENCE_MAX_ITERATIONS" in production_recipe
+    assert "FULLMAG_BENCH_DEMAG_CONVERGENCE_MAX_ITERATIONS" in demag_performance_recipe
+    assert "FULLMAG_BENCH_MAX_DEMAG_SOLVER_APPLY_MS" in production_recipe
+    assert "FULLMAG_BENCH_MAX_DEMAG_SOLVER_APPLY_MS" in demag_performance_recipe
+    assert "FULLMAG_BENCH_BEST_DEMAG_POLICY_METRIC" in production_recipe
+    assert "FULLMAG_BENCH_BEST_DEMAG_POLICY_METRIC" in demag_performance_recipe
+    assert "--best-demag-policy-metric" in production_recipe
+    assert "--best-demag-policy-metric" in demag_performance_recipe
+    for env_name, cli_flag in [
+        ("FULLMAG_BENCH_DEMAG_AMG_RELAX_TYPES", "--demag-amg-relax-types"),
+        ("FULLMAG_BENCH_DEMAG_AMG_COARSENINGS", "--demag-amg-coarsenings"),
+        ("FULLMAG_BENCH_DEMAG_AMG_INTERPOLATIONS", "--demag-amg-interpolations"),
+        (
+            "FULLMAG_BENCH_DEMAG_AMG_AGGRESSIVE_COARSENINGS",
+            "--demag-amg-aggressive-coarsenings",
+        ),
+        (
+            "FULLMAG_BENCH_DEMAG_AMG_STRENGTH_THRESHOLDS",
+            "--demag-amg-strength-thresholds",
+        ),
+        ("FULLMAG_BENCH_DEMAG_AMG_MAX_LEVELS", "--demag-amg-max-levels"),
+    ]:
+        assert env_name in production_recipe
+        assert env_name in demag_performance_recipe
+        assert cli_flag in production_recipe
+        assert cli_flag in demag_performance_recipe
+        assert env_name in amg_profile_sweep_recipe
+        assert cli_flag in amg_profile_sweep_recipe
+    assert "docker compose --profile fem-gpu run --rm" in amg_profile_sweep_recipe
+    assert "python3 scripts/analysis/fem_gpu_benchmark.py" in amg_profile_sweep_recipe
+    assert "FULLMAG_BENCH_DEMAG_AMG_RELAX_TYPES:-18,6" in amg_profile_sweep_recipe
+    assert "--emit-best-demag-policy" in amg_profile_sweep_recipe
+    assert "--best-demag-policy-metric" in amg_profile_sweep_recipe
+    assert "--human-report-output" in amg_profile_sweep_recipe
+    assert "--require-best-demag-policy" not in amg_profile_sweep_recipe
+    assert "--require-demag-converged" not in amg_profile_sweep_recipe
+    assert "--require-demag-setup-reused" not in amg_profile_sweep_recipe
+    assert "--require-cpu-gpu-consistency" not in amg_profile_sweep_recipe
+    assert "--max-demag-solver-apply-ms" not in amg_profile_sweep_recipe
+    assert "FULLMAG_BENCH_DEMAG_RTOLS" in demag_performance_recipe
+    assert "--demag-rtols" in demag_performance_recipe
+    assert "FULLMAG_BENCH_MESHES" in demag_performance_recipe
+    assert "FULLMAG_BENCH_MESHES" in amg_profile_sweep_recipe
+    assert '--meshes "$FULLMAG_BENCH_MESHES"' in demag_performance_recipe
+    assert '--meshes "$FULLMAG_BENCH_MESHES"' in amg_profile_sweep_recipe
+    assert "--reuse-generated-domain-mesh" in production_recipe
+    assert "--reuse-generated-domain-mesh" in demag_performance_recipe
+    assert "--reuse-generated-domain-mesh" in amg_profile_sweep_recipe
+    assert "FULLMAG_BENCH_DOMAIN_MESH_CACHE_DIR" in production_recipe
+    assert "FULLMAG_BENCH_DOMAIN_MESH_CACHE_DIR" in demag_performance_recipe
+    assert "FULLMAG_BENCH_DOMAIN_MESH_CACHE_DIR" in amg_profile_sweep_recipe
+    assert "--generated-domain-mesh-cache-dir" in production_recipe
+    assert "--generated-domain-mesh-cache-dir" in demag_performance_recipe
+    assert "--generated-domain-mesh-cache-dir" in amg_profile_sweep_recipe
+    assert (
+        'FULLMAG_BENCH_RELAX_ALGORITHMS:-llg_overdamped,projected_gradient_bb,nonlinear_cg'
+        in demag_performance_recipe
+    )
+    assert "FULLMAG_BENCH_GPU_PGBB_CONTROL_READBACK_PER_STEP" in demag_performance_recipe
+    assert "--gpu-pgbb-control-readback-per-step" in demag_performance_recipe
     assert "--max-performance-regression-percent" in demag_performance_recipe
     assert "--relax-algorithms" in justfile
     assert (
@@ -844,6 +915,565 @@ def test_cpu_gpu_consistency_coverage_is_per_relaxation_algorithm() -> None:
     assert "nonlinear_cg has no completed fem_gpu row" in " ".join(
         by_algorithm["nonlinear_cg"]["failures"]
     )
+
+
+def test_demag_apply_budget_gate_flags_slow_single_solve_rows() -> None:
+    benchmark = load_benchmark_module()
+    rows = [
+        {
+            "backend": "fem_gpu",
+            "scenario": "box500_airbox_exchange_demag",
+            "status": "ok",
+            "demag_solver_apply_wall_time_ms": 20_370.0,
+        },
+        {
+            "backend": "fem_gpu",
+            "scenario": "box500_airbox_exchange_only",
+            "status": "ok",
+            "demag_solver_apply_wall_time_ms": 99_000.0,
+        },
+    ]
+
+    failures = benchmark.demag_solver_apply_budget_failures(
+        rows,
+        max_apply_ms=5_000.0,
+    )
+
+    assert len(failures) == 1
+    assert "demag_solver_apply_wall_time_ms=20370" in failures[0]
+    assert "exceeds 5000" in failures[0]
+
+
+def test_demag_setup_reuse_gate_flags_multi_step_rebuilds() -> None:
+    benchmark = load_benchmark_module()
+    rows = [
+        {
+            "backend": "fem_gpu",
+            "scenario": "box500_airbox_exchange_demag",
+            "status": "ok",
+            "steps": 2,
+            "executed_steps": 2,
+            "demag_solver_setup_reused": False,
+        },
+        {
+            "backend": "fem_gpu",
+            "scenario": "box500_airbox_exchange_demag",
+            "status": "ok",
+            "steps": 1,
+            "executed_steps": 1,
+            "demag_solver_setup_reused": False,
+        },
+        {
+            "backend": "fem_gpu",
+            "scenario": "box500_airbox_exchange_only",
+            "status": "ok",
+            "steps": 2,
+            "executed_steps": 2,
+            "demag_solver_setup_reused": False,
+        },
+    ]
+
+    failures = benchmark.demag_setup_reuse_failures(rows)
+
+    assert len(failures) == 1
+    assert "demag_solver_setup_reused is not true" in failures[0]
+
+
+def test_demag_setup_reuse_gate_requires_telemetry_for_multi_step_demag() -> None:
+    benchmark = load_benchmark_module()
+    rows = [
+        {
+            "backend": "fem_gpu",
+            "scenario": "box500_airbox_exchange_demag",
+            "status": "ok",
+            "steps": 2,
+            "executed_steps": 2,
+        }
+    ]
+
+    failures = benchmark.demag_setup_reuse_failures(rows)
+
+    assert len(failures) == 1
+    assert "missing demag_solver_setup_reused" in failures[0]
+
+
+def test_demag_policy_selection_key_separates_relaxation_algorithms() -> None:
+    benchmark = load_benchmark_module()
+    base_row = {
+        "backend": "fem_gpu",
+        "mesh_path": "mesh.json",
+        "scenario": "box500_airbox_exchange_demag",
+        "integrator": "heun",
+        "timestep_policy": "fixed",
+        "dt_s": 1e-13,
+        "steps": 4,
+        "requested_cpu_thread_spec": "auto",
+        "requested_demag_relative_tolerance": 1e-8,
+        "requested_demag_absolute_tolerance": None,
+        "requested_demag_max_iterations": 500,
+        "requested_demag_print_level": 0,
+    }
+
+    pgbb_key = benchmark.demag_policy_selection_case_key(
+        {**base_row, "relaxation_algorithm": "projected_gradient_bb"}
+    )
+    ncg_key = benchmark.demag_policy_selection_case_key(
+        {**base_row, "relaxation_algorithm": "nonlinear_cg"}
+    )
+
+    assert pgbb_key != ncg_key
+
+
+def test_benchmark_shared_domain_reuse_classifies_demag_scenarios() -> None:
+    benchmark = load_benchmark_module()
+
+    assert benchmark.benchmark_scenario_requires_shared_domain(
+        "box500_airbox_exchange_demag"
+    )
+    assert benchmark.benchmark_scenario_requires_shared_domain("exchange_demag")
+    assert not benchmark.benchmark_scenario_requires_shared_domain("exchange_only")
+
+
+def test_demag_rtol_sweep_parser_preserves_unique_positive_tolerances() -> None:
+    benchmark = load_benchmark_module()
+
+    assert benchmark.resolve_demag_rtols("1e-8,1e-6,1e-6", 1e-8) == [
+        1e-8,
+        1e-6,
+    ]
+    assert benchmark.resolve_demag_rtols(None, 1e-7) == [1e-7]
+
+
+def test_demag_amg_profile_sweep_parser_and_policy_identity() -> None:
+    benchmark = load_benchmark_module()
+
+    profiles = [
+        (relax_type, 8, 6, 1, None, None)
+        for relax_type in benchmark.resolve_nonnegative_ints("18,18,6", 18)
+    ]
+
+    assert profiles == [(18, 8, 6, 1, None, None), (6, 8, 6, 1, None, None)]
+    assert benchmark.demag_amg_profiles_for_preconditioner("AMG", profiles) == profiles
+    assert benchmark.demag_amg_profiles_for_preconditioner("OMIT", profiles) == profiles
+    assert benchmark.demag_amg_profiles_for_preconditioner("JACOBI", profiles) == [
+        (
+            benchmark.DEFAULT_DEMAG_AMG_RELAX_TYPE,
+            benchmark.DEFAULT_DEMAG_AMG_COARSENING,
+            benchmark.DEFAULT_DEMAG_AMG_INTERPOLATION,
+            benchmark.DEFAULT_DEMAG_AMG_AGGRESSIVE_COARSENING,
+            benchmark.DEFAULT_DEMAG_AMG_STRENGTH_THRESHOLD,
+            benchmark.DEFAULT_DEMAG_AMG_MAX_LEVELS,
+        )
+    ]
+
+    first = {
+        "requested_demag_solver": "CG",
+        "requested_demag_preconditioner": "AMG",
+        "requested_demag_amg_relax_type": "18",
+        "requested_demag_amg_coarsening": "8",
+        "requested_demag_amg_interpolation": "6",
+        "requested_demag_amg_aggressive_coarsening": "1",
+        "requested_demag_amg_strength_threshold": "",
+        "requested_demag_amg_max_levels": "",
+    }
+    second = {**first, "requested_demag_amg_relax_type": "6"}
+    third = {**first, "requested_demag_amg_strength_threshold": "0.25"}
+
+    assert benchmark.demag_policy_identity(first) != benchmark.demag_policy_identity(second)
+    assert benchmark.demag_policy_identity(first) != benchmark.demag_policy_identity(third)
+
+
+def test_optional_demag_amg_profile_parser_preserves_defaults_and_overrides() -> None:
+    benchmark = load_benchmark_module()
+
+    assert benchmark.resolve_optional_nonnegative_floats(None) == [None]
+    assert benchmark.resolve_optional_nonnegative_floats("default,0.25") == [
+        None,
+        0.25,
+    ]
+    assert benchmark.resolve_optional_nonnegative_ints(None) == [None]
+    assert benchmark.resolve_optional_nonnegative_ints("none,25") == [None, 25]
+
+
+def test_demag_convergence_gate_uses_row_requested_rtol_by_default() -> None:
+    benchmark = load_benchmark_module()
+    rows = [
+        {
+            "backend": "fem_gpu",
+            "scenario": "box500_airbox_exchange_demag",
+            "status": "ok",
+            "requested_demag_relative_tolerance": 1e-6,
+            "demag_final_residual_norm": 8e-7,
+            "demag_actual_iterations": 12,
+        },
+        {
+            "backend": "fem_gpu",
+            "scenario": "box500_airbox_exchange_demag",
+            "status": "ok",
+            "requested_demag_relative_tolerance": 1e-8,
+            "demag_final_residual_norm": 8e-7,
+            "demag_actual_iterations": 12,
+        },
+    ]
+
+    failures = benchmark.demag_convergence_failures(
+        rows,
+        max_residual=None,
+        max_iterations=100,
+    )
+
+    assert len(failures) == 1
+    assert "exceeds 1e-08" in failures[0]
+
+
+def test_demag_rtol_sweep_does_not_install_global_default_residual_gate() -> None:
+    benchmark = load_benchmark_module()
+    args = benchmark.parse_args(["--demag-rtols", "1e-8,1e-6"])
+
+    assert args.demag_convergence_residual is None
+    assert benchmark.resolve_demag_rtols(args.demag_rtols, args.demag_rtol) == [
+        1e-8,
+        1e-6,
+    ]
+
+
+def test_best_demag_policy_uses_row_requested_rtol_by_default() -> None:
+    benchmark = load_benchmark_module()
+    base_row = {
+        "backend": "fem_gpu",
+        "mesh_path": "mesh.json",
+        "scenario": "box500_airbox_exchange_demag",
+        "integrator": "heun",
+        "relaxation_algorithm": "projected_gradient_bb",
+        "timestep_policy": "fixed",
+        "dt_s": 1e-13,
+        "steps": 2,
+        "requested_cpu_thread_spec": "auto",
+        "requested_demag_relative_tolerance": 1e-6,
+        "requested_demag_absolute_tolerance": None,
+        "requested_demag_max_iterations": 500,
+        "requested_demag_print_level": 0,
+        "status": "ok",
+        "demag_actual_iterations": 10,
+        "demag_final_residual_norm": 8e-7,
+    }
+    rows = [
+        {
+            **base_row,
+            "requested_demag_solver": "CG",
+            "requested_demag_preconditioner": "AMG",
+            "demag_wall_time_ms": 20.0,
+        },
+        {
+            **base_row,
+            "requested_demag_solver": "CG",
+            "requested_demag_preconditioner": "JACOBI",
+            "demag_wall_time_ms": 10.0,
+        },
+    ]
+
+    summaries = benchmark.best_demag_policy_rows(
+        rows,
+        max_residual=None,
+        max_iterations=100,
+    )
+
+    assert len(summaries) == 1
+    assert summaries[0]["demag_preconditioner"] == "JACOBI"
+    assert summaries[0]["converged_policy_count"] == 2
+
+
+def test_best_demag_policy_can_select_by_solver_apply_time() -> None:
+    benchmark = load_benchmark_module()
+    base_row = {
+        "backend": "fem_gpu",
+        "mesh_path": "mesh.json",
+        "scenario": "box500_airbox_exchange_demag",
+        "integrator": "heun",
+        "relaxation_algorithm": "projected_gradient_bb",
+        "timestep_policy": "fixed",
+        "dt_s": 1e-13,
+        "steps": 2,
+        "requested_cpu_thread_spec": "auto",
+        "requested_demag_relative_tolerance": 1e-8,
+        "requested_demag_absolute_tolerance": None,
+        "requested_demag_max_iterations": 500,
+        "requested_demag_print_level": 0,
+        "status": "ok",
+        "demag_actual_iterations": 20,
+        "demag_final_residual_norm": 8e-9,
+    }
+    rows = [
+        {
+            **base_row,
+            "requested_demag_solver": "CG",
+            "requested_demag_preconditioner": "AMG",
+            "demag_wall_time_ms": 100.0,
+            "demag_solver_apply_wall_time_ms": 20.0,
+        },
+        {
+            **base_row,
+            "requested_demag_solver": "CG",
+            "requested_demag_preconditioner": "JACOBI",
+            "demag_wall_time_ms": 50.0,
+            "demag_solver_apply_wall_time_ms": 30.0,
+        },
+    ]
+
+    summaries = benchmark.best_demag_policy_rows(
+        rows,
+        max_residual=None,
+        max_iterations=100,
+        selection_metric="demag_solver_apply_wall_time_ms",
+    )
+
+    assert len(summaries) == 1
+    assert summaries[0]["selection_timing_field"] == "demag_solver_apply_wall_time_ms"
+    assert summaries[0]["demag_preconditioner"] == "AMG"
+
+
+def test_best_demag_policy_rejects_unstable_solver_mesh() -> None:
+    benchmark = load_benchmark_module()
+    base_row = {
+        "backend": "fem_gpu",
+        "mesh_path": "mesh.json",
+        "scenario": "box500_airbox_exchange_demag",
+        "integrator": "heun",
+        "relaxation_algorithm": "projected_gradient_bb",
+        "timestep_policy": "fixed",
+        "dt_s": 1e-13,
+        "steps": 2,
+        "requested_cpu_thread_spec": "auto",
+        "requested_demag_relative_tolerance": 1e-8,
+        "requested_demag_absolute_tolerance": None,
+        "requested_demag_max_iterations": 500,
+        "requested_demag_print_level": 0,
+        "status": "ok",
+        "demag_actual_iterations": 20,
+        "demag_final_residual_norm": 8e-9,
+    }
+    rows = [
+        {
+            **base_row,
+            "solver_mesh_signature": "mesh-a",
+            "requested_demag_solver": "CG",
+            "requested_demag_preconditioner": "AMG",
+            "demag_solver_apply_wall_time_ms": 20.0,
+        },
+        {
+            **base_row,
+            "solver_mesh_signature": "mesh-b",
+            "requested_demag_solver": "CG",
+            "requested_demag_preconditioner": "JACOBI",
+            "demag_solver_apply_wall_time_ms": 10.0,
+        },
+    ]
+
+    summaries = benchmark.best_demag_policy_rows(
+        rows,
+        max_residual=None,
+        max_iterations=100,
+        selection_metric="demag_solver_apply_wall_time_ms",
+    )
+    failures = benchmark.best_demag_policy_failures(
+        rows,
+        max_residual=None,
+        max_iterations=100,
+        selection_metric="demag_solver_apply_wall_time_ms",
+    )
+
+    assert summaries == []
+    assert len(failures) == 1
+    assert "cannot select a best demag policy" in failures[0]
+    assert "2 solver_mesh_signature values" in failures[0]
+
+
+def test_benchmark_report_renders_best_demag_policy_table() -> None:
+    benchmark = load_benchmark_module()
+
+    report = benchmark.render_cpu_gpu_benchmark_report(
+        {
+            "status": "pass",
+            "row_count": 2,
+            "ok_count": 2,
+            "failed_count": 0,
+            "failure_count": 0,
+            "case_coverage": [],
+            "pairs": [],
+            "completed_pair_case_count": 0,
+            "required_case_count": 0,
+            "best_demag_policy": [
+                {
+                    "case_key": ["fem_gpu", "mesh.json"],
+                    "demag_solver": "CG",
+                    "demag_preconditioner": "JACOBI",
+                    "solver_mesh_signature": "mesh-a",
+                    "average_demag_solver_apply_wall_time_ms": 3.5,
+                    "average_demag_wall_time_ms": 5.0,
+                    "max_demag_final_residual_norm": 8e-9,
+                    "max_demag_actual_iterations": 70,
+                }
+            ],
+        },
+        {
+            "status": "pass",
+            "gate_failure_count": 0,
+            "group_failure_count": 0,
+            "solver_mesh_groups": [],
+            "failures": [],
+        },
+    )
+
+    assert "## Best Demag Policy" in report
+    assert "CG/JACOBI" in report
+    assert "mesh-a" in report
+
+
+def test_generated_domain_mesh_env_reuses_persistent_cache(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    benchmark = load_benchmark_module()
+    calls: list[Path] = []
+
+    def fake_export_generated_domain_mesh(**kwargs):
+        output_path = kwargs["output_path"]
+        calls.append(output_path)
+        output_path.write_text('{"mesh": true}\n', encoding="utf-8")
+        return output_path
+
+    monkeypatch.setattr(
+        benchmark,
+        "export_generated_domain_mesh",
+        fake_export_generated_domain_mesh,
+    )
+    thread_spec = benchmark.ThreadCountSpec(label="auto", env_value="auto")
+    common = {
+        "cache_dir": tmp_path,
+        "mesh_path": Path("mesh.json"),
+        "scenario": "box500_airbox_exchange_demag",
+        "integrator": "heun",
+        "steps": 2,
+        "dt": 1e-13,
+        "timestep_policy": "fixed",
+        "thread_spec": thread_spec,
+        "extra_env": {
+            "FULLMAG_BENCH_DOMAIN_HMAX": "50e-9",
+            "FULLMAG_BENCH_AIRBOX_HMAX": "100e-9",
+        },
+        "timeout_s": 10.0,
+    }
+
+    first = benchmark.generated_domain_mesh_env(cache={}, **common)
+    second = benchmark.generated_domain_mesh_env(cache={}, **common)
+
+    assert first == second
+    assert Path(first["FULLMAG_BENCH_DOMAIN_MESH"]).is_file()
+    assert len(calls) == 1
+
+
+def test_performance_regression_case_key_normalizes_csv_values() -> None:
+    benchmark = load_benchmark_module()
+    baseline_row = {
+        "solver_mesh_signature": "mesh-a",
+        "backend": "fem_gpu",
+        "mesh_path": "mesh.json",
+        "scenario": "box500_airbox_exchange_demag",
+        "integrator": "heun",
+        "relaxation_algorithm": "projected_gradient_bb",
+        "timestep_policy": "fixed",
+        "requested_cpu_thread_spec": "auto",
+        "requested_demag_solver": "CG",
+        "requested_demag_preconditioner": "AMG",
+        "requested_demag_relative_tolerance": "1e-08",
+        "requested_demag_absolute_tolerance": "",
+        "requested_demag_max_iterations": "500",
+        "requested_demag_print_level": "0",
+        "requested_demag_amg_relax_type": "18",
+        "requested_demag_amg_coarsening": "8",
+        "requested_demag_amg_interpolation": "6",
+        "requested_demag_amg_aggressive_coarsening": "1",
+        "requested_demag_amg_strength_threshold": "",
+        "requested_demag_amg_max_levels": "",
+        "status": "ok",
+        "wall_time_ms": "10.0",
+    }
+    current_row = {
+        **baseline_row,
+        "requested_demag_relative_tolerance": 1e-8,
+        "requested_demag_absolute_tolerance": None,
+        "requested_demag_max_iterations": 500,
+        "requested_demag_print_level": 0,
+        "requested_demag_amg_relax_type": 18,
+        "requested_demag_amg_coarsening": 8,
+        "requested_demag_amg_interpolation": 6,
+        "requested_demag_amg_aggressive_coarsening": 1,
+        "requested_demag_amg_strength_threshold": None,
+        "requested_demag_amg_max_levels": None,
+        "wall_time_ms": 9.0,
+    }
+
+    assert benchmark.performance_regression_case_key(current_row) == (
+        benchmark.performance_regression_case_key(baseline_row)
+    )
+    assert benchmark.comparable_baseline_case_count(
+        [current_row],
+        [baseline_row],
+    ) == 1
+
+
+def test_pass_fail_summary_uses_row_requested_rtol_by_default() -> None:
+    benchmark = load_benchmark_module()
+    rows = [
+        {
+            "backend": "fem_gpu",
+            "solver_mesh_signature": "mesh-a",
+            "scenario": "box500_airbox_exchange_demag",
+            "status": "ok",
+            "requested_demag_relative_tolerance": 1e-6,
+            "demag_final_residual_norm": 8e-7,
+            "demag_actual_iterations": 12,
+        }
+    ]
+
+    summary = benchmark.benchmark_pass_fail_summary(
+        rows,
+        gate_failures=[],
+        max_residual=None,
+        max_iterations=100,
+    )
+
+    assert summary["status"] == "pass"
+    assert summary["solver_mesh_groups"][0]["status"] == "pass"
+    assert summary["failures"] == []
+
+
+def test_pass_fail_summary_includes_gate_and_group_failure_reasons() -> None:
+    benchmark = load_benchmark_module()
+    rows = [
+        {
+            "backend": "fem_gpu",
+            "solver_mesh_signature": "mesh-a",
+            "scenario": "box500_airbox_exchange_demag",
+            "status": "ok",
+            "requested_demag_relative_tolerance": 1e-8,
+            "demag_final_residual_norm": 8e-7,
+            "demag_actual_iterations": 12,
+        }
+    ]
+
+    summary = benchmark.benchmark_pass_fail_summary(
+        rows,
+        gate_failures=["case=mesh-a demag_solver_setup_reused is not true"],
+        max_residual=None,
+        max_iterations=100,
+    )
+
+    assert summary["status"] == "fail"
+    assert summary["gate_failure_count"] == 1
+    assert summary["group_failure_count"] == 1
+    assert "demag_solver_setup_reused is not true" in summary["failures"][0]
+    assert "solver_mesh_signature=mesh-a failed 1 benchmark checks" in summary["failures"][1]
 
 
 def test_stt_oersted_consistency_cases_exclude_direct_minimizers() -> None:

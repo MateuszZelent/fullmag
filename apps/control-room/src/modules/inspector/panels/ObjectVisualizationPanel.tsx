@@ -967,6 +967,7 @@ function useObjectVisualizationPanelState(
       requested: fieldCatalogRequested,
       surfaceColorSource: settings?.surfaceColorSource,
       targetActive: Boolean(target),
+      vectorsVisible: Boolean(settings?.vectorsVisible),
     }),
   });
   const airboxPartIds =

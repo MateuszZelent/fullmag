@@ -81,6 +81,20 @@
   white-space: nowrap;
 }
 
+.fm-analysis-plots__workbench {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--fm-space-2);
+  min-width: 0;
+  padding: var(--fm-space-2) var(--fm-space-3);
+  border-bottom: 1px solid var(--fm-border-subtle);
+  background: var(--fm-bg-surface);
+}
+
+.fm-analysis-plots__workbench .fm-analysis-plots__status-pill {
+  background: var(--fm-bg-panel);
+}
+
 .fm-analysis-plots__legend {
   display: flex;
   flex-wrap: wrap;

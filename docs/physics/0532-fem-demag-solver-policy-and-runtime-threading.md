@@ -75,10 +75,13 @@ When omitted, the canonical default remains:
 - `print_level = 0`
 
 For strict native FEM GPU Poisson demag, an omitted solver policy is resolved at
-runtime to `CG/JACOBI` while preserving the same tolerance and iteration
-defaults. This is a runtime policy selection, not a public authoring default:
-explicit user-provided `FemLinearSolverPolicy` values are not rewritten, and
-CPU native FEM continues to resolve the omitted policy to `CG/AMG`.
+runtime while preserving the same tolerance and iteration defaults. The general
+strict GPU fallback remains `CG/JACOBI`, but `projected_gradient_bb` resolves to
+`CG/AMG` because the current PGBB demag-policy smoke shows materially lower
+strict-GPU apply time for the AMG row than for the Jacobi row. This is a runtime
+policy selection, not a public authoring default: explicit user-provided
+`FemLinearSolverPolicy` values are not rewritten, and CPU native FEM continues
+to resolve the omitted policy to `CG/AMG`.
 
 ### 3.3 Hybrid
 
@@ -223,11 +226,13 @@ Poisson policy settings.
 Update 2026-05-15/2026-06-05 policy selection: the benchmark harness can emit a
 best-policy summary for each logical demag case, selecting the fastest completed
 row that satisfies the configured convergence residual and iteration gates.
-Selection uses full `demag_wall_time_ms` first, with solve/apply timing only as
-a fallback for older rows that lack full demag timing. The summary also reports
-`average_demag_solver_apply_wall_time_ms`, but that is diagnostic; runtime
-policy changes must be made explicitly in the runner and reflected in
-provenance.
+Selection uses an explicit metric configured by
+`--best-demag-policy-metric` / `FULLMAG_BENCH_BEST_DEMAG_POLICY_METRIC`; the
+managed production and demag-performance recipes default it to
+`demag_solver_apply_wall_time_ms` because the current runtime bottleneck is the
+single Hypre apply. Broader `demag_wall_time_ms` remains available for total
+demag-policy comparisons. Runtime policy changes must still be made explicitly
+in the runner and reflected in provenance.
 
 Update 2026-06-05 GPU control-readback budget: the production FEM relaxation
 benchmark now gates FEM GPU hot-loop control-scalar readbacks separately from
@@ -379,6 +384,40 @@ standard production relaxation benchmark remains the broader correctness and
 contract smoke; this demag recipe is the preferred gate before claiming GPU
 Poisson demag performance progress.
 
+Update 2026-06-14 setup-reuse gate: the production and demag-performance
+benchmark recipes now pass `--require-demag-setup-reused`. Multi-step demag rows
+must report `demag_solver_setup_reused=true`; missing telemetry or repeated
+setup is a benchmark failure. This is a runtime performance contract only. It
+does not change the demag weak form, solver residual tolerance, boundary model,
+or accepted physical observables.
+
+Update 2026-06-14 BoomerAMG profile sweeps: native CPU and strict GPU Poisson
+demag setup now read benchmark/runtime environment overrides for the Hypre
+BoomerAMG profile:
+`FULLMAG_FEM_DEMAG_AMG_RELAX_TYPE`,
+`FULLMAG_FEM_DEMAG_AMG_COARSENING`,
+`FULLMAG_FEM_DEMAG_AMG_INTERPOLATION`, and
+`FULLMAG_FEM_DEMAG_AMG_AGGRESSIVE_COARSENING`. Optional expert overrides
+`FULLMAG_FEM_DEMAG_AMG_STRENGTH_THRESHOLD` and
+`FULLMAG_FEM_DEMAG_AMG_MAX_LEVELS` are applied only when set; otherwise MFEM /
+Hypre defaults are preserved. When unset, the core profile remains the current
+`18/8/6/1` configuration. The benchmark harness exposes comma-list sweeps
+through `FULLMAG_BENCH_DEMAG_AMG_RELAX_TYPES`,
+`FULLMAG_BENCH_DEMAG_AMG_COARSENINGS`,
+`FULLMAG_BENCH_DEMAG_AMG_INTERPOLATIONS`, and
+`FULLMAG_BENCH_DEMAG_AMG_AGGRESSIVE_COARSENINGS`, plus optional
+`FULLMAG_BENCH_DEMAG_AMG_STRENGTH_THRESHOLDS` and
+`FULLMAG_BENCH_DEMAG_AMG_MAX_LEVELS`; best-policy grouping includes these
+profile fields so tuning cannot merge different AMG configurations. This
+changes only the linear-solver preconditioner profile used to reach the same
+configured residual tolerance.
+`just bench-fem-gpu-demag-amg-profile-sweep` is the exploratory managed-runtime
+entrypoint for these BoomerAMG profile sweeps. It emits CSV, JSON, Markdown, and
+best-policy rows without requiring every candidate profile to pass the
+production convergence/best-policy gates. Use the stricter
+`just verify-fem-gpu-demag-performance-benchmark` before claiming a production
+demag performance improvement.
+
 Update 2026-06-05 strict GPU resolved default: the runner now resolves an
 omitted strict native FEM GPU Poisson demag solver policy to `CG/JACOBI`.
 Managed demag performance qualification on the 258-node Box500 airbox smoke
@@ -390,6 +429,17 @@ resolved policy actually used by the native solver.
 The dedicated demag performance recipe now includes an `OMIT` policy sentinel
 alongside explicit `AMG` and `JACOBI` rows, so the benchmark protects the
 runtime-resolved default path instead of only explicit solver-policy authoring.
+
+Update 2026-06-14 PGBB strict GPU resolved default: the runner now resolves an
+omitted strict native FEM GPU Poisson demag solver policy to `CG/AMG` when the
+active relaxation algorithm is `projected_gradient_bb`. A managed PGBB
+demag-policy smoke on the Box500 airbox case completed `CG/AMG` and
+`CG/JACOBI` rows and showed strict GPU `CG/AMG` with lower apply time and fewer
+iterations for that direct-minimizer path. This does not change explicit user
+policies and does not change the non-PGBB strict GPU fallback documented above.
+The managed `OMIT` smoke after rebuilding the runtime bundle confirms that an
+omitted PGBB demag policy now reports resolved `AMG` in runtime metadata for
+both CPU and strict GPU rows.
 
 Update 2026-05-15 recovery scratch: non-PBC Poisson demag recovery now keeps
 serial and per-thread element scratch buffers in the context-owned recovery

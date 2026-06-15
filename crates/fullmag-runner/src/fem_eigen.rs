@@ -1,6 +1,6 @@
 use crate::eigen::assembly_scalar::AssembledScalarOperator;
 use fullmag_engine::fem::{FemLlgProblem, MeshTopology};
-use fullmag_engine::fem_sparse::{lobpcg_generalized, CsrMatrix};
+use fullmag_engine::fem_sparse::{lobpcg_generalized_with_progress, CsrMatrix};
 use fullmag_engine::periodic::constraints::PeriodicDofMap;
 use fullmag_engine::{
     sub, EffectiveFieldObservables, EffectiveFieldTerms, LlgConfig, MaterialParameters,
@@ -16,7 +16,9 @@ use num_complex::Complex64;
 
 use crate::native_fem;
 use crate::relaxation::{relaxation_converged, RelaxationEnergyPlateauWindow};
-use crate::types::{AuxiliaryArtifact, ExecutedRun, RunError, RunResult, RunStatus, StepStats};
+use crate::types::{
+    AuxiliaryArtifact, ExecutedRun, RunError, RunResult, RunStatus, StepAction, StepStats,
+};
 use crate::ExecutionProvenance;
 
 /// Internal relaxation timestep for equilibrium preparation in eigen analysis.
@@ -27,8 +29,46 @@ const RELAX_MAX_STEPS: u64 = 4_000;
 
 /// DOF threshold above which LOBPCG sparse eigensolver is used instead of
 /// the dense O(n³) path. Below this, Cholesky + SymmetricEigen is used.
-const SPARSE_EIGEN_THRESHOLD: usize = 5_000;
+const SPARSE_EIGEN_THRESHOLD: usize = 3_000;
 const FLOQUET_DYNAMIC_DEMAG_UNSUPPORTED: &str = "dynamic demag for Floquet periodic FEM is not implemented yet. Disable demag or use k=0/free boundary.";
+
+#[derive(Debug, Clone)]
+pub(crate) struct FemEigenProgress {
+    pub phase: &'static str,
+    pub phase_index: u32,
+    pub phase_count: u32,
+    pub percent: f64,
+    pub solver_kind: &'static str,
+    pub active_nodes: usize,
+    pub effective_dof: usize,
+    pub requested_modes: usize,
+    pub candidate_modes: usize,
+    pub computed_modes: usize,
+    pub iteration: Option<u32>,
+    pub max_iterations: Option<u32>,
+    pub residual: Option<f64>,
+    pub warning: Option<&'static str>,
+}
+
+pub(crate) type FemEigenProgressCallback<'a> =
+    dyn FnMut(FemEigenProgress) -> StepAction + Send + 'a;
+
+fn emit_fem_eigen_progress(
+    progress: &mut Option<&mut FemEigenProgressCallback<'_>>,
+    event: FemEigenProgress,
+) -> Result<(), RunError> {
+    if let Some(callback) = progress.as_deref_mut() {
+        match callback(event) {
+            StepAction::Continue => {}
+            StepAction::Stop | StepAction::Pause => {
+                return Err(RunError {
+                    message: "FEM eigen solve was interrupted by runtime control".to_string(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
 
 /// Convert a dense nalgebra DMatrix to a sparse CsrMatrix, dropping entries
 /// below `drop_tol` in absolute value.
@@ -83,8 +123,10 @@ struct ReductionMap {
 struct RealEigenpair {
     eigenvalue_real: f64,
     eigenvalue_imag: f64,
-    residual_norm: f64,
+    residual_absolute_l2: f64,
+    residual_relative_l2: f64,
     residual_linf: f64,
+    mass_norm: f64,
     vector: DVector<f64>,
 }
 
@@ -92,9 +134,17 @@ struct RealEigenpair {
 struct ComplexEigenpair {
     eigenvalue_real: f64,
     eigenvalue_imag: f64,
-    residual_norm: f64,
+    residual_absolute_l2: f64,
+    residual_relative_l2: f64,
     residual_linf: f64,
+    mass_norm: f64,
     vector: Vec<Complex64>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TangentLeakageSummary {
+    mean_abs: f64,
+    max_abs: f64,
 }
 
 // ---------------------------------------------------------------------------
@@ -133,13 +183,15 @@ fn gpu_solve_real_symmetric_eigenpairs(
             let vector = DVector::from_column_slice(col_slice);
             // cuSolverDn Dsygvd returns M-orthonormal vectors; apply plan normalization.
             let normalized = normalize_real_mode(vector, mass, &plan.normalization);
-            let (residual_norm, residual_linf) =
+            let (residual_absolute_l2, residual_relative_l2, residual_linf) =
                 generalized_residual_norms(stiffness, mass, val, &normalized);
             Some(RealEigenpair {
                 eigenvalue_real: val,
                 eigenvalue_imag: 0.0,
-                residual_norm,
+                residual_absolute_l2,
+                residual_relative_l2,
                 residual_linf,
+                mass_norm: generalized_mass_norm(mass, &normalized),
                 vector: normalized,
             })
         })
@@ -153,7 +205,15 @@ pub(crate) fn execute_baseline_fem_eigen(
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
 ) -> Result<ExecutedRun, RunError> {
-    execute_fem_eigen_inner(plan, outputs, false)
+    execute_fem_eigen_inner(plan, outputs, false, None)
+}
+
+pub(crate) fn execute_baseline_fem_eigen_with_progress(
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    progress: &mut FemEigenProgressCallback<'_>,
+) -> Result<ExecutedRun, RunError> {
+    execute_fem_eigen_inner(plan, outputs, false, Some(progress))
 }
 
 /// GPU-accelerated FEM eigensolver (Etap A4) — TRANSITIONAL dense path.
@@ -170,13 +230,114 @@ pub(crate) fn execute_gpu_fem_eigen(
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
 ) -> Result<ExecutedRun, RunError> {
-    execute_fem_eigen_inner(plan, outputs, true)
+    let _ = outputs;
+    let native_result = native_fem::solve_native_modal_eigen(native_fem::NativeModalEigenRequest {
+        mesh_asset_id: &plan.mesh_name,
+        equilibrium_source_kind: native_modal_equilibrium_source_kind(&plan.equilibrium),
+        gamma_rad_s_t: plan.gyromagnetic_ratio / MU0,
+        mu0_t_m_a: MU0,
+        alpha: plan.material.damping,
+        include_exchange: plan.enable_exchange,
+        include_demag: plan.enable_demag,
+        demag_realization: resolved_demag_realization(plan).map(|value| value.provenance_name()),
+        damping_policy: native_modal_damping_policy(plan.damping_policy),
+        spin_wave_bc_kind: native_modal_spin_wave_bc_kind(&plan.spin_wave_bc),
+        k_vector_rad_m: native_modal_k_vector(plan.k_sampling.as_ref()),
+        operator_diagnostics_json: None,
+        requested_mode_count: plan.count as i32,
+        target_kind: native_modal_target_kind(&plan.target),
+        target_frequency_hz: native_modal_target_frequency_hz(&plan.target),
+        frequency_min_hz: native_modal_frequency_min_hz(&plan.target),
+        frequency_max_hz: native_modal_frequency_max_hz(&plan.target),
+        residual_tolerance: 1.0e-8,
+        max_outer_iterations: 300,
+        max_linear_iterations: 1000,
+        output_directory: None,
+        write_partial_artifacts: false,
+        completeness_policy: 0,
+        eigensolver_family: 0,
+        spectral_transform_kind: 0,
+    })
+    .map_err(|message| RunError { message })?;
+
+    Err(RunError {
+        message: format!(
+            "native FEM modal_eigen production path is unavailable: {} (diagnostics_json={})",
+            native_result.error_message, native_result.diagnostics_json
+        ),
+    })
+}
+
+fn native_modal_equilibrium_source_kind(equilibrium: &EquilibriumSourceIR) -> &'static str {
+    match equilibrium {
+        EquilibriumSourceIR::Provided => "provided",
+        EquilibriumSourceIR::RelaxedInitialState => "relax",
+        EquilibriumSourceIR::Artifact { .. } => "artifact",
+    }
+}
+
+fn native_modal_spin_wave_bc_kind(spin_wave_bc: &SpinWaveBoundaryConditionIR) -> &'static str {
+    match spin_wave_bc.kind() {
+        SpinWaveBoundaryKindIR::Free => "free",
+        SpinWaveBoundaryKindIR::Pinned => "pinned",
+        SpinWaveBoundaryKindIR::Periodic => "periodic",
+        SpinWaveBoundaryKindIR::Floquet => "floquet",
+        SpinWaveBoundaryKindIR::SurfaceAnisotropy => "surface_anisotropy",
+    }
+}
+
+fn native_modal_damping_policy(damping_policy: EigenDampingPolicyIR) -> &'static str {
+    match damping_policy {
+        EigenDampingPolicyIR::Ignore => "ignore",
+        EigenDampingPolicyIR::Include => "include",
+    }
+}
+
+fn native_modal_target_kind(target: &fullmag_ir::EigenTargetIR) -> &'static str {
+    match target {
+        fullmag_ir::EigenTargetIR::Lowest => "lowest",
+        fullmag_ir::EigenTargetIR::Nearest { .. } => "nearest_frequency",
+        fullmag_ir::EigenTargetIR::FrequencyWindow { .. } => "frequency_window",
+    }
+}
+
+fn native_modal_target_frequency_hz(target: &fullmag_ir::EigenTargetIR) -> f64 {
+    match target {
+        fullmag_ir::EigenTargetIR::Nearest { frequency_hz } => *frequency_hz,
+        _ => 0.0,
+    }
+}
+
+fn native_modal_frequency_min_hz(target: &fullmag_ir::EigenTargetIR) -> f64 {
+    match target {
+        fullmag_ir::EigenTargetIR::FrequencyWindow {
+            frequency_min_hz, ..
+        } => *frequency_min_hz,
+        _ => 0.0,
+    }
+}
+
+fn native_modal_frequency_max_hz(target: &fullmag_ir::EigenTargetIR) -> f64 {
+    match target {
+        fullmag_ir::EigenTargetIR::FrequencyWindow {
+            frequency_max_hz, ..
+        } => *frequency_max_hz,
+        _ => 0.0,
+    }
+}
+
+fn native_modal_k_vector(k_sampling: Option<&KSamplingIR>) -> Option<&[f64]> {
+    match k_sampling {
+        Some(KSamplingIR::Single { k_vector }) => Some(&k_vector[..]),
+        _ => None,
+    }
 }
 
 fn execute_fem_eigen_inner(
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
     try_gpu: bool,
+    mut progress: Option<&mut FemEigenProgressCallback<'_>>,
 ) -> Result<ExecutedRun, RunError> {
     if plan.precision != fullmag_ir::ExecutionPrecision::Double {
         return Err(RunError {
@@ -189,6 +350,27 @@ fn execute_fem_eigen_inner(
         });
     }
     reject_unsupported_floquet_dynamic_demag(&plan.spin_wave_bc, plan.operator.include_demag)?;
+    let num_modes = plan.count as usize;
+
+    emit_fem_eigen_progress(
+        &mut progress,
+        FemEigenProgress {
+            phase: "materializing_equilibrium",
+            phase_index: 1,
+            phase_count: 5,
+            percent: 5.0,
+            solver_kind: solver_kind_label(plan),
+            active_nodes: 0,
+            effective_dof: 0,
+            requested_modes: num_modes,
+            candidate_modes: num_modes,
+            computed_modes: 0,
+            iteration: None,
+            max_iterations: None,
+            residual: None,
+            warning: None,
+        },
+    )?;
 
     let initial_magnetization = plan.equilibrium_magnetization.clone();
     let (problem, equilibrium, relaxation_steps, observables) =
@@ -226,8 +408,35 @@ fn execute_fem_eigen_inner(
         );
     }
 
+    let progress_solver_kind = if use_sparse {
+        "cpu_sparse_lobpcg"
+    } else {
+        solver_kind_label(plan)
+    };
+    let dense_warning = (effective_dof > 3000 && !use_sparse)
+        .then_some("dense_o_n3_eigensolve_without_iteration_progress");
+    emit_fem_eigen_progress(
+        &mut progress,
+        FemEigenProgress {
+            phase: "assembling_operator",
+            phase_index: 2,
+            phase_count: 5,
+            percent: 20.0,
+            solver_kind: progress_solver_kind,
+            active_nodes: active_n,
+            effective_dof,
+            requested_modes: num_modes,
+            candidate_modes: num_modes,
+            computed_modes: 0,
+            iteration: None,
+            max_iterations: None,
+            residual: None,
+            warning: dense_warning,
+        },
+    )?;
+
     let bases = tangent_bases(&equilibrium);
-    let num_modes = plan.count as usize;
+    let mut dense_orthogonality = None;
 
     let real_eigenpairs = if complex_reduction {
         Vec::new()
@@ -241,9 +450,61 @@ fn execute_fem_eigen_inner(
             &bases,
         );
         if use_sparse {
-            solve_real_symmetric_eigenpairs_sparse(plan, stiffness, mass, num_modes)?
+            emit_fem_eigen_progress(
+                &mut progress,
+                FemEigenProgress {
+                    phase: "solving_sparse_lobpcg",
+                    phase_index: 3,
+                    phase_count: 5,
+                    percent: 35.0,
+                    solver_kind: progress_solver_kind,
+                    active_nodes: active_n,
+                    effective_dof,
+                    requested_modes: num_modes,
+                    candidate_modes: sparse_lobpcg_candidate_count(
+                        &plan.target,
+                        num_modes,
+                        effective_dof,
+                    ),
+                    computed_modes: 0,
+                    iteration: Some(0),
+                    max_iterations: None,
+                    residual: None,
+                    warning: None,
+                },
+            )?;
+            solve_real_symmetric_eigenpairs_sparse(
+                plan,
+                &stiffness,
+                &mass,
+                num_modes,
+                progress.as_deref_mut(),
+                active_n,
+                effective_dof,
+            )?
         } else {
-            solve_real_symmetric_eigenpairs(plan, stiffness, mass)?
+            emit_fem_eigen_progress(
+                &mut progress,
+                FemEigenProgress {
+                    phase: "solving_dense",
+                    phase_index: 3,
+                    phase_count: 5,
+                    percent: 35.0,
+                    solver_kind: progress_solver_kind,
+                    active_nodes: active_n,
+                    effective_dof,
+                    requested_modes: num_modes,
+                    candidate_modes: num_modes,
+                    computed_modes: 0,
+                    iteration: None,
+                    max_iterations: None,
+                    residual: None,
+                    warning: dense_warning,
+                },
+            )?;
+            let eigenpairs = solve_real_symmetric_eigenpairs(plan, &stiffness, &mass)?;
+            dense_orthogonality = Some(orthogonality_rows_json(&mass, &eigenpairs));
+            eigenpairs
         }
     } else {
         let operator = assemble_projected_scalar_operator_real(
@@ -267,6 +528,7 @@ fn execute_fem_eigen_inner(
                         "info: FEM eigen GPU solve succeeded ({} modes)",
                         pairs.len()
                     );
+                    dense_orthogonality = Some(orthogonality_rows_json(&operator.mass, &pairs));
                     pairs
                 }
                 Err(reason) => {
@@ -284,14 +546,62 @@ fn execute_fem_eigen_inner(
                 }
             }
         } else if use_sparse {
+            emit_fem_eigen_progress(
+                &mut progress,
+                FemEigenProgress {
+                    phase: "solving_sparse_lobpcg",
+                    phase_index: 3,
+                    phase_count: 5,
+                    percent: 35.0,
+                    solver_kind: progress_solver_kind,
+                    active_nodes: active_n,
+                    effective_dof,
+                    requested_modes: num_modes,
+                    candidate_modes: sparse_lobpcg_candidate_count(
+                        &plan.target,
+                        num_modes,
+                        effective_dof,
+                    ),
+                    computed_modes: 0,
+                    iteration: Some(0),
+                    max_iterations: None,
+                    residual: None,
+                    warning: None,
+                },
+            )?;
             solve_real_symmetric_eigenpairs_sparse(
                 plan,
-                operator.stiffness,
-                operator.mass,
+                &operator.stiffness,
+                &operator.mass,
                 num_modes,
+                progress.as_deref_mut(),
+                active_n,
+                effective_dof,
             )?
         } else {
-            solve_real_symmetric_eigenpairs(plan, operator.stiffness, operator.mass)?
+            emit_fem_eigen_progress(
+                &mut progress,
+                FemEigenProgress {
+                    phase: "solving_dense",
+                    phase_index: 3,
+                    phase_count: 5,
+                    percent: 35.0,
+                    solver_kind: progress_solver_kind,
+                    active_nodes: active_n,
+                    effective_dof,
+                    requested_modes: num_modes,
+                    candidate_modes: num_modes,
+                    computed_modes: 0,
+                    iteration: None,
+                    max_iterations: None,
+                    residual: None,
+                    warning: dense_warning,
+                },
+            )?;
+            let eigenpairs =
+                solve_real_symmetric_eigenpairs(plan, &operator.stiffness, &operator.mass)?;
+            dense_orthogonality = Some(orthogonality_rows_json(&operator.mass, &eigenpairs));
+            eigenpairs
         }
     };
     if use_sparse {
@@ -326,13 +636,37 @@ fn execute_fem_eigen_inner(
     };
     let mut modes_summary = Vec::with_capacity(total_modes);
     let damping_factor = damping_imaginary_factor(plan.material.damping, plan.damping_policy);
+    let gamma_rad_s_t = plan.gyromagnetic_ratio / MU0;
+    let gamma0_rad_s_per_a_m = plan.gyromagnetic_ratio;
+    let mu0_t_m_per_a = MU0;
+    emit_fem_eigen_progress(
+        &mut progress,
+        FemEigenProgress {
+            phase: "writing_artifacts",
+            phase_index: 4,
+            phase_count: 5,
+            percent: 85.0,
+            solver_kind: progress_solver_kind,
+            active_nodes: active_n,
+            effective_dof,
+            requested_modes: num_modes,
+            candidate_modes: num_modes,
+            computed_modes: total_modes,
+            iteration: None,
+            max_iterations: None,
+            residual: None,
+            warning: None,
+        },
+    )?;
 
     for mode_index in 0..total_modes {
         let (
             eigenvalue_real,
             eigenvalue_imag,
-            residual_norm,
+            residual_absolute_l2,
+            residual_relative_l2,
             residual_linf,
+            mass_norm,
             real,
             imag,
             amplitude,
@@ -357,8 +691,10 @@ fn execute_fem_eigen_inner(
             (
                 pair.eigenvalue_real,
                 pair.eigenvalue_imag,
-                pair.residual_norm,
+                pair.residual_absolute_l2,
+                pair.residual_relative_l2,
                 pair.residual_linf,
+                pair.mass_norm,
                 real,
                 imag,
                 amplitude,
@@ -378,8 +714,10 @@ fn execute_fem_eigen_inner(
             (
                 pair.eigenvalue_real,
                 pair.eigenvalue_imag,
-                pair.residual_norm,
+                pair.residual_absolute_l2,
+                pair.residual_relative_l2,
                 pair.residual_linf,
+                pair.mass_norm,
                 real,
                 imag,
                 amplitude,
@@ -399,8 +737,10 @@ fn execute_fem_eigen_inner(
             (
                 pair.eigenvalue_real,
                 pair.eigenvalue_imag,
-                pair.residual_norm,
+                pair.residual_absolute_l2,
+                pair.residual_relative_l2,
                 pair.residual_linf,
+                pair.mass_norm,
                 real,
                 imag,
                 amplitude,
@@ -432,16 +772,23 @@ fn execute_fem_eigen_inner(
             "frequency_real_hz": frequency_hz,
             "frequency_imag_hz": frequency_imag_hz,
             "angular_frequency_rad_per_s": angular_frequency_real,
+            "omega_rad_s": angular_frequency_real,
             "angular_frequency_imag_rad_per_s": angular_frequency_imag,
             "eigenvalue_field_au_per_m": eigenvalue_real.max(0.0),
             "eigenvalue_real": eigenvalue_real,
             "eigenvalue_imag": eigenvalue_imag,
             "norm": norm,
             "max_amplitude": max_amplitude,
-            "residual_norm": residual_norm,
+            "residual_norm": residual_absolute_l2,
+            "residual_absolute_l2": residual_absolute_l2,
+            "residual_relative_l2": residual_relative_l2,
             "residual_linf": residual_linf,
+            "mass_norm": mass_norm,
             "tangent_leakage_mean_abs": tangent_leakage_mean_abs,
             "tangent_leakage_max_abs": tangent_leakage_max_abs,
+            "gamma_rad_s_T": gamma_rad_s_t,
+            "gamma0_rad_s_per_A_m": gamma0_rad_s_per_a_m,
+            "mu0_T_m_per_A": mu0_t_m_per_a,
             "dominant_polarization": dominant_polarization,
             "k_vector": k_vector_json(plan.k_sampling.as_ref()),
         });
@@ -454,14 +801,21 @@ fn execute_fem_eigen_inner(
                 "frequency_real_hz": frequency_hz,
                 "frequency_imag_hz": frequency_imag_hz,
                 "angular_frequency_rad_per_s": angular_frequency_real,
+                "omega_rad_s": angular_frequency_real,
                 "angular_frequency_imag_rad_per_s": angular_frequency_imag,
                 "eigenvalue_real": eigenvalue_real,
                 "eigenvalue_imag": eigenvalue_imag,
                 "max_amplitude": max_amplitude,
-                "residual_norm": residual_norm,
+                "residual_norm": residual_absolute_l2,
+                "residual_absolute_l2": residual_absolute_l2,
+                "residual_relative_l2": residual_relative_l2,
                 "residual_linf": residual_linf,
+                "mass_norm": mass_norm,
                 "tangent_leakage_mean_abs": tangent_leakage_mean_abs,
                 "tangent_leakage_max_abs": tangent_leakage_max_abs,
+                "gamma_rad_s_T": gamma_rad_s_t,
+                "gamma0_rad_s_per_A_m": gamma0_rad_s_per_a_m,
+                "mu0_T_m_per_A": mu0_t_m_per_a,
                 "normalization": normalization_label(plan.normalization),
                 "damping_policy": damping_policy_label(plan.damping_policy),
                 "solver_backend": "cpu_baseline_fem_eigen",
@@ -508,6 +862,17 @@ fn execute_fem_eigen_inner(
         "operator": {
             "kind": format!("{:?}", plan.operator.kind).to_lowercase(),
             "include_demag": plan.operator.include_demag,
+        },
+        "solver_diagnostics": {
+            "dense_reference_oracle": !use_sparse && !complex_reduction,
+            "residual_definition": "relative_residual = ||K u - lambda M u||_2 / (||K u||_2 + |lambda| * ||M u||_2)",
+            "tangent_leakage_definition": "abs(m0 dot delta_m) over reconstructed real and imaginary mode vectors",
+            "constants": {
+                "gamma_rad_s_T": gamma_rad_s_t,
+                "gamma0_rad_s_per_A_m": gamma0_rad_s_per_a_m,
+                "mu0_T_m_per_A": mu0_t_m_per_a,
+            },
+            "orthogonality": dense_orthogonality,
         },
         "k_sampling": k_vector_json(plan.k_sampling.as_ref()),
         "relaxation_steps": relaxation_steps,
@@ -572,6 +937,26 @@ fn execute_fem_eigen_inner(
         max_h_demag: observables.max_demag_field_amplitude,
         ..StepStats::default()
     };
+
+    emit_fem_eigen_progress(
+        &mut progress,
+        FemEigenProgress {
+            phase: "completed",
+            phase_index: 5,
+            phase_count: 5,
+            percent: 100.0,
+            solver_kind: progress_solver_kind,
+            active_nodes: active_n,
+            effective_dof,
+            requested_modes: num_modes,
+            candidate_modes: num_modes,
+            computed_modes: total_modes,
+            iteration: None,
+            max_iterations: None,
+            residual: None,
+            warning: None,
+        },
+    )?;
 
     Ok(ExecutedRun {
         result: RunResult {
@@ -1437,10 +1822,10 @@ fn regularize_periodic_mass_if_needed(
 
 fn solve_real_symmetric_eigenpairs(
     plan: &FemEigenPlanIR,
-    stiffness: DMatrix<f64>,
-    mass: DMatrix<f64>,
+    stiffness: &DMatrix<f64>,
+    mass: &DMatrix<f64>,
 ) -> Result<Vec<RealEigenpair>, RunError> {
-    let mass = regularize_periodic_mass_if_needed(mass, &plan.spin_wave_bc);
+    let mass = regularize_periodic_mass_if_needed(mass.clone(), &plan.spin_wave_bc);
     let cholesky = mass.clone().cholesky().ok_or_else(|| RunError {
         message: "FEM eigen mass matrix is singular; ensure the magnetic mesh has active volume"
             .to_string(),
@@ -1449,7 +1834,7 @@ fn solve_real_symmetric_eigenpairs(
     let l_inv = l.clone().try_inverse().ok_or_else(|| RunError {
         message: "failed to invert FEM eigen mass Cholesky factor".to_string(),
     })?;
-    let transformed = &l_inv * &stiffness * l_inv.transpose();
+    let transformed = &l_inv * stiffness * l_inv.transpose();
     let spectrum = SymmetricEigen::new(transformed);
     let mut eigenpairs = spectrum
         .eigenvalues
@@ -1461,13 +1846,15 @@ fn solve_real_symmetric_eigenpairs(
             }
             let lifted = l_inv.transpose() * spectrum.eigenvectors.column(index).into_owned();
             let normalized = normalize_real_mode(lifted, &mass, &plan.normalization);
-            let (residual_norm, residual_linf) =
-                generalized_residual_norms(&stiffness, &mass, *value, &normalized);
+            let (residual_absolute_l2, residual_relative_l2, residual_linf) =
+                generalized_residual_norms(stiffness, &mass, *value, &normalized);
             Some(RealEigenpair {
                 eigenvalue_real: *value,
                 eigenvalue_imag: 0.0,
-                residual_norm,
+                residual_absolute_l2,
+                residual_relative_l2,
                 residual_linf,
+                mass_norm: generalized_mass_norm(&mass, &normalized),
                 vector: normalized,
             })
         })
@@ -1483,11 +1870,14 @@ fn solve_real_symmetric_eigenpairs(
 /// instead of the O(n³) dense path.
 fn solve_real_symmetric_eigenpairs_sparse(
     plan: &FemEigenPlanIR,
-    stiffness: DMatrix<f64>,
-    mass: DMatrix<f64>,
+    stiffness: &DMatrix<f64>,
+    mass: &DMatrix<f64>,
     num_modes: usize,
+    progress: Option<&mut FemEigenProgressCallback<'_>>,
+    active_nodes: usize,
+    effective_dof: usize,
 ) -> Result<Vec<RealEigenpair>, RunError> {
-    let mass = regularize_periodic_mass_if_needed(mass, &plan.spin_wave_bc);
+    let mass = regularize_periodic_mass_if_needed(mass.clone(), &plan.spin_wave_bc);
     let n = stiffness.nrows();
 
     // Convert to CSR (drop entries < 1e-15 to preserve sparsity)
@@ -1497,13 +1887,71 @@ fn solve_real_symmetric_eigenpairs_sparse(
     // LOBPCG: find num_modes smallest eigenpairs
     let tol = 1e-8;
     let max_iter = (n * 2).max(500).min(5000) as u32;
-    let (sparse_pairs, report) = lobpcg_generalized(&k_csr, &m_csr, num_modes, tol, max_iter)
-        .map_err(|e| RunError {
-            message: format!("sparse LOBPCG eigensolver failed: {}", e.message),
-        })?;
+    let solver_modes = sparse_lobpcg_candidate_count(&plan.target, num_modes, n);
+    if solver_modes > num_modes {
+        eprintln!(
+            "warning: FEM eigen frequency_window uses oversampled lowest-mode sparse LOBPCG candidates \
+             (requested={}, candidates={}); production interior-window eigensolve requires shift-invert/FEAST/SLEPc",
+            num_modes, solver_modes
+        );
+    }
+    let mut interrupted: Option<RunError> = None;
+    let mut progress = progress;
+    let mut progress_callback = |lobpcg: fullmag_engine::fem_sparse::LobpcgProgress| {
+        if interrupted.is_some() {
+            return;
+        }
+        let iter_fraction = if lobpcg.max_iterations > 0 {
+            f64::from(lobpcg.iteration) / f64::from(lobpcg.max_iterations)
+        } else {
+            0.0
+        };
+        let convergence_fraction = if lobpcg.requested_count > 0 {
+            lobpcg.converged_count as f64 / lobpcg.requested_count as f64
+        } else {
+            0.0
+        };
+        let percent = 35.0 + 45.0 * iter_fraction.max(convergence_fraction).min(1.0);
+        let result = emit_fem_eigen_progress(
+            &mut progress,
+            FemEigenProgress {
+                phase: "solving_sparse_lobpcg",
+                phase_index: 3,
+                phase_count: 5,
+                percent,
+                solver_kind: "cpu_sparse_lobpcg",
+                active_nodes,
+                effective_dof,
+                requested_modes: num_modes,
+                candidate_modes: solver_modes,
+                computed_modes: lobpcg.converged_count.min(num_modes),
+                iteration: Some(lobpcg.iteration),
+                max_iterations: Some(lobpcg.max_iterations),
+                residual: Some(lobpcg.max_residual),
+                warning: sparse_lobpcg_progress_warning(plan, solver_modes, num_modes),
+            },
+        );
+        if let Err(error) = result {
+            interrupted = Some(error);
+        }
+    };
+    let (sparse_pairs, report) = lobpcg_generalized_with_progress(
+        &k_csr,
+        &m_csr,
+        solver_modes,
+        tol,
+        max_iter,
+        Some(&mut progress_callback),
+    )
+    .map_err(|e| RunError {
+        message: format!("sparse LOBPCG eigensolver failed: {}", e.message),
+    })?;
+    if let Some(error) = interrupted {
+        return Err(error);
+    }
 
     eprintln!(
-        "info: sparse LOBPCG converged={} in {} iterations (max_residual={:.2e}, {} modes)",
+        "info: sparse LOBPCG converged={} in {} iterations (max_residual={:.2e}, {} candidates)",
         report.converged,
         report.iterations,
         report.max_residual,
@@ -1511,26 +1959,108 @@ fn solve_real_symmetric_eigenpairs_sparse(
     );
 
     // Convert SparseEigenpair to RealEigenpair
+    let finite_candidate_count = sparse_pairs
+        .iter()
+        .filter(|ep| ep.eigenvalue.is_finite())
+        .count();
     let mut eigenpairs: Vec<RealEigenpair> = sparse_pairs
         .into_iter()
         .filter(|ep| ep.eigenvalue.is_finite())
         .map(|ep| {
             let vec = DVector::from_vec(ep.vector);
             let normalized = normalize_real_mode(vec, &mass, &plan.normalization);
-            let (residual_norm, residual_linf) =
-                generalized_residual_norms(&stiffness, &mass, ep.eigenvalue, &normalized);
+            let (residual_absolute_l2, residual_relative_l2, residual_linf) =
+                generalized_residual_norms(stiffness, &mass, ep.eigenvalue, &normalized);
             RealEigenpair {
                 eigenvalue_real: ep.eigenvalue,
                 eigenvalue_imag: 0.0,
-                residual_norm,
+                residual_absolute_l2,
+                residual_relative_l2,
                 residual_linf,
+                mass_norm: generalized_mass_norm(&mass, &normalized),
                 vector: normalized,
             }
         })
         .collect();
 
     sort_and_truncate_real_modes(plan, &mut eigenpairs);
+    reject_empty_frequency_window_result(
+        &plan.target,
+        solver_modes,
+        finite_candidate_count,
+        eigenpairs.len(),
+    )?;
     Ok(eigenpairs)
+}
+
+fn sparse_lobpcg_candidate_count(
+    target: &fullmag_ir::EigenTargetIR,
+    requested_count: usize,
+    matrix_size: usize,
+) -> usize {
+    if requested_count == 0 || matrix_size == 0 {
+        return 0;
+    }
+    let requested_count = requested_count.min(matrix_size);
+    if !matches!(target, fullmag_ir::EigenTargetIR::FrequencyWindow { .. }) {
+        return requested_count;
+    }
+    let window_position_multiplier = match target {
+        fullmag_ir::EigenTargetIR::FrequencyWindow {
+            frequency_min_hz,
+            frequency_max_hz,
+        } if *frequency_min_hz > 0.0 && *frequency_max_hz > *frequency_min_hz => {
+            let relative_width =
+                ((*frequency_max_hz - *frequency_min_hz) / *frequency_min_hz).clamp(0.05, 10.0);
+            let lower_edge_multiplier = ((*frequency_max_hz / *frequency_min_hz).sqrt()).ceil();
+            let width_multiplier = (1.0 / relative_width).sqrt().ceil();
+            (lower_edge_multiplier + width_multiplier).max(2.0) as usize
+        }
+        _ => 2,
+    };
+    let min_extra = requested_count.max(8);
+    requested_count
+        .saturating_mul(window_position_multiplier)
+        .max(requested_count + min_extra)
+        .min(matrix_size)
+        .max(requested_count)
+}
+
+fn reject_empty_frequency_window_result(
+    target: &fullmag_ir::EigenTargetIR,
+    solver_modes: usize,
+    candidate_count: usize,
+    retained_count: usize,
+) -> Result<(), RunError> {
+    if retained_count > 0 || !matches!(target, fullmag_ir::EigenTargetIR::FrequencyWindow { .. }) {
+        return Ok(());
+    }
+    Err(RunError {
+        message: format!(
+            "FEM eigen frequency_window returned no modes in the requested interval after {} \
+             sparse LOBPCG candidates ({} finite candidates). The current reference solver \
+             oversamples lowest modes and cannot guarantee interior-window coverage; use a lower \
+             window, reduce the mesh for dense validation, or wait for the production shift-invert/FEAST/SLEPc backend.",
+            solver_modes, candidate_count
+        ),
+    })
+}
+
+fn sparse_lobpcg_progress_warning(
+    plan: &FemEigenPlanIR,
+    solver_modes: usize,
+    requested_modes: usize,
+) -> Option<&'static str> {
+    if solver_modes > requested_modes
+        && matches!(
+            plan.target,
+            fullmag_ir::EigenTargetIR::FrequencyWindow { .. }
+        )
+    {
+        Some("frequency_window_sparse_lobpcg_uses_oversampled_lowest_candidates")
+    } else {
+        None
+    }
 }
 
 fn solve_complex_hermitian_eigenpairs(
@@ -1560,13 +2090,15 @@ fn solve_complex_hermitian_eigenpairs(
         let complex = real_block_vector_to_complex(&lifted, active_count);
         let normalized = normalize_complex_mode(&complex, &mass, &plan.normalization);
         let normalized_block = complex_vector_to_real_block(&normalized);
-        let (residual_norm, residual_linf) =
+        let (residual_absolute_l2, residual_relative_l2, residual_linf) =
             generalized_residual_norms(&stiffness_block, &mass_block, *value, &normalized_block);
         eigenpairs.push(ComplexEigenpair {
             eigenvalue_real: *value,
             eigenvalue_imag: 0.0,
-            residual_norm,
+            residual_absolute_l2,
+            residual_relative_l2,
             residual_linf,
+            mass_norm: generalized_mass_norm(&mass_block, &normalized_block),
             vector: normalized,
         });
     }
@@ -1579,16 +2111,50 @@ fn generalized_residual_norms(
     mass: &DMatrix<f64>,
     eigenvalue: f64,
     vector: &DVector<f64>,
-) -> (f64, f64) {
+) -> (f64, f64, f64) {
     if stiffness.ncols() != vector.len() || mass.ncols() != vector.len() {
-        return (f64::NAN, f64::NAN);
+        return (f64::NAN, f64::NAN, f64::NAN);
     }
     let residual = stiffness * vector - mass * vector * eigenvalue;
-    let residual_l2 = residual.norm();
+    let residual_absolute_l2 = residual.norm();
+    let ku_norm = (stiffness * vector).norm();
+    let mu_norm = (mass * vector).norm();
+    let denominator = ku_norm + eigenvalue.abs() * mu_norm;
+    let residual_relative_l2 = if denominator > 0.0 {
+        residual_absolute_l2 / denominator
+    } else {
+        0.0
+    };
     let residual_linf = residual
         .iter()
         .fold(0.0_f64, |acc, value| acc.max(value.abs()));
-    (residual_l2, residual_linf)
+    (residual_absolute_l2, residual_relative_l2, residual_linf)
+}
+
+fn generalized_mass_norm(mass: &DMatrix<f64>, vector: &DVector<f64>) -> f64 {
+    if mass.ncols() != vector.len() {
+        return f64::NAN;
+    }
+    vector.dot(&(mass * vector))
+}
+
+fn orthogonality_rows_json(
+    mass: &DMatrix<f64>,
+    eigenpairs: &[RealEigenpair],
+) -> Vec<serde_json::Value> {
+    eigenpairs
+        .iter()
+        .enumerate()
+        .flat_map(|(lhs_index, lhs)| {
+            eigenpairs.iter().enumerate().map(move |(rhs_index, rhs)| {
+                serde_json::json!({
+                    "lhs_mode_index": lhs_index,
+                    "rhs_mode_index": rhs_index,
+                    "mass_inner_product": lhs.vector.dot(&(mass * &rhs.vector)),
+                })
+            })
+        })
+        .collect()
 }
 
 fn complex_vector_to_real_block(vector: &[Complex64]) -> DVector<f64> {
@@ -1605,21 +2171,42 @@ fn mode_tangent_leakage(
     real: &[[f64; 3]],
     imag: &[[f64; 3]],
 ) -> (f64, f64) {
+    let real_summary = tangent_leakage_summary(equilibrium, real);
+    let imag_summary = tangent_leakage_summary(equilibrium, imag);
+    if real.is_empty() && imag.is_empty() {
+        return (0.0, 0.0);
+    }
+    let sample_count = real.len() + imag.len();
+    (
+        (real_summary.mean_abs * real.len() as f64 + imag_summary.mean_abs * imag.len() as f64)
+            / sample_count as f64,
+        real_summary.max_abs.max(imag_summary.max_abs),
+    )
+}
+
+fn tangent_leakage_summary(
+    equilibrium: &[[f64; 3]],
+    mode_vectors: &[[f64; 3]],
+) -> TangentLeakageSummary {
     let mut count = 0usize;
     let mut total = 0.0_f64;
     let mut max = 0.0_f64;
-    for ((m0, real_dm), imag_dm) in equilibrium.iter().zip(real.iter()).zip(imag.iter()) {
-        for dm in [real_dm, imag_dm] {
-            let leakage = (m0[0] * dm[0] + m0[1] * dm[1] + m0[2] * dm[2]).abs();
-            total += leakage;
-            max = max.max(leakage);
-            count += 1;
-        }
+    for (m0, delta_m) in equilibrium.iter().zip(mode_vectors.iter()) {
+        let leakage = (m0[0] * delta_m[0] + m0[1] * delta_m[1] + m0[2] * delta_m[2]).abs();
+        total += leakage;
+        max = max.max(leakage);
+        count += 1;
     }
     if count == 0 {
-        (0.0, 0.0)
+        TangentLeakageSummary {
+            mean_abs: 0.0,
+            max_abs: 0.0,
+        }
     } else {
-        (total / count as f64, max)
+        TangentLeakageSummary {
+            mean_abs: total / count as f64,
+            max_abs: max,
+        }
     }
 }
 
@@ -1716,6 +2303,25 @@ fn sort_and_truncate_real_modes(plan: &FemEigenPlanIR, eigenpairs: &mut Vec<Real
                 .partial_cmp(&(rhs_freq - *frequency_hz).abs())
                 .unwrap_or(std::cmp::Ordering::Equal)
         }),
+        fullmag_ir::EigenTargetIR::FrequencyWindow {
+            frequency_min_hz,
+            frequency_max_hz,
+        } => {
+            eigenpairs.retain(|pair| {
+                let frequency =
+                    frequency_from_eigenvalue(plan.gyromagnetic_ratio, pair.eigenvalue_real);
+                frequency >= *frequency_min_hz && frequency <= *frequency_max_hz
+            });
+            eigenpairs.sort_by(|lhs, rhs| {
+                let lhs_freq =
+                    frequency_from_eigenvalue(plan.gyromagnetic_ratio, lhs.eigenvalue_real);
+                let rhs_freq =
+                    frequency_from_eigenvalue(plan.gyromagnetic_ratio, rhs.eigenvalue_real);
+                lhs_freq
+                    .partial_cmp(&rhs_freq)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
     }
     let requested_count = usize::try_from(plan.count).unwrap_or(usize::MAX);
     eigenpairs.truncate(requested_count.min(eigenpairs.len()));
@@ -1736,6 +2342,25 @@ fn sort_and_truncate_complex_modes(plan: &FemEigenPlanIR, eigenpairs: &mut Vec<C
                 .partial_cmp(&(rhs_freq - *frequency_hz).abs())
                 .unwrap_or(std::cmp::Ordering::Equal)
         }),
+        fullmag_ir::EigenTargetIR::FrequencyWindow {
+            frequency_min_hz,
+            frequency_max_hz,
+        } => {
+            eigenpairs.retain(|pair| {
+                let frequency =
+                    frequency_from_eigenvalue(plan.gyromagnetic_ratio, pair.eigenvalue_real);
+                frequency >= *frequency_min_hz && frequency <= *frequency_max_hz
+            });
+            eigenpairs.sort_by(|lhs, rhs| {
+                let lhs_freq =
+                    frequency_from_eigenvalue(plan.gyromagnetic_ratio, lhs.eigenvalue_real);
+                let rhs_freq =
+                    frequency_from_eigenvalue(plan.gyromagnetic_ratio, rhs.eigenvalue_real);
+                lhs_freq
+                    .partial_cmp(&rhs_freq)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
     }
     let requested_count = usize::try_from(plan.count).unwrap_or(usize::MAX);
     eigenpairs.truncate(requested_count.min(eigenpairs.len()));
@@ -2528,9 +3153,18 @@ fn write_eigen_v2_bundle(
                 legacy_mode["residual_norm"].clone(),
             );
             object.insert(
+                "residual_absolute_l2".to_string(),
+                legacy_mode["residual_absolute_l2"].clone(),
+            );
+            object.insert(
+                "residual_relative_l2".to_string(),
+                legacy_mode["residual_relative_l2"].clone(),
+            );
+            object.insert(
                 "residual_linf".to_string(),
                 legacy_mode["residual_linf"].clone(),
             );
+            object.insert("mass_norm".to_string(), legacy_mode["mass_norm"].clone());
             object.insert(
                 "tangent_leakage_mean_abs".to_string(),
                 legacy_mode["tangent_leakage_mean_abs"].clone(),
@@ -2538,6 +3172,22 @@ fn write_eigen_v2_bundle(
             object.insert(
                 "tangent_leakage_max_abs".to_string(),
                 legacy_mode["tangent_leakage_max_abs"].clone(),
+            );
+            object.insert(
+                "omega_rad_s".to_string(),
+                legacy_mode["omega_rad_s"].clone(),
+            );
+            object.insert(
+                "gamma_rad_s_T".to_string(),
+                legacy_mode["gamma_rad_s_T"].clone(),
+            );
+            object.insert(
+                "gamma0_rad_s_per_A_m".to_string(),
+                legacy_mode["gamma0_rad_s_per_A_m"].clone(),
+            );
+            object.insert(
+                "mu0_T_m_per_A".to_string(),
+                legacy_mode["mu0_T_m_per_A"].clone(),
             );
             object.insert(
                 "dominant_polarization".to_string(),
@@ -2814,6 +3464,12 @@ fn solver_capabilities(
     if matches!(plan.damping_policy, EigenDampingPolicyIR::Include) {
         capabilities.push("damping_linewidth_metadata");
     }
+    if matches!(
+        plan.target,
+        fullmag_ir::EigenTargetIR::FrequencyWindow { .. }
+    ) {
+        capabilities.push("frequency_window_filter");
+    }
     if complex_reduction {
         capabilities.push("complex_mode_projection");
     }
@@ -2828,6 +3484,14 @@ fn solver_limitations(
     let mut limitations = Vec::new();
     if use_sparse {
         limitations.push("sparse_lobpcg_may_miss_modes_near_degeneracy");
+    }
+    if matches!(
+        plan.target,
+        fullmag_ir::EigenTargetIR::FrequencyWindow { .. }
+    ) {
+        limitations.push("frequency_window_is_filtered_after_reference_solve");
+        limitations.push("frequency_window_sparse_lobpcg_uses_oversampled_lowest_candidates");
+        limitations.push("no_shift_invert_or_feast_window_solver_yet");
     }
     if !matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2) {
         limitations.push("scalar_projection_only_accurate_for_uniform_equilibrium");
@@ -3029,6 +3693,144 @@ fn classify_polarization(
 mod tests {
     use super::*;
 
+    fn minimal_native_modal_plan() -> FemEigenPlanIR {
+        FemEigenPlanIR {
+            mesh_name: "native_modal_mesh".to_string(),
+            mesh_source: None,
+            mesh: fullmag_ir::MeshIR {
+                mesh_name: "native_modal_mesh".to_string(),
+                nodes: vec![
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                ],
+                elements: vec![[0, 1, 2, 3]],
+                element_markers: vec![1],
+                boundary_faces: vec![[0, 1, 2]],
+                boundary_markers: vec![1],
+                periodic_boundary_pairs: Vec::new(),
+                periodic_node_pairs: Vec::new(),
+                per_domain_quality: std::collections::HashMap::new(),
+            },
+            object_segments: Vec::new(),
+            mesh_parts: Vec::new(),
+            domain_mesh_mode: fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh,
+            domain_frame: None,
+            fe_order: 1,
+            hmax: 1.0,
+            equilibrium_magnetization: vec![
+                [1.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+            ],
+            material: fullmag_ir::MaterialIR {
+                name: "Py".to_string(),
+                saturation_magnetisation: 8.0e5,
+                exchange_stiffness: 1.3e-11,
+                damping: 0.01,
+                uniaxial_anisotropy: None,
+                uniaxial_anisotropy_k2: None,
+                anisotropy_axis: None,
+                cubic_anisotropy_kc1: None,
+                cubic_anisotropy_kc2: None,
+                cubic_anisotropy_kc3: None,
+                cubic_anisotropy_axis1: None,
+                cubic_anisotropy_axis2: None,
+                ms_field: None,
+                a_field: None,
+                alpha_field: None,
+                ku_field: None,
+                ku2_field: None,
+                kc1_field: None,
+                kc2_field: None,
+                kc3_field: None,
+                interfacial_dmi: None,
+                bulk_dmi: None,
+                dind_field: None,
+                dbulk_field: None,
+            },
+            operator: fullmag_ir::EigenOperatorConfigIR {
+                kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+                include_demag: false,
+            },
+            count: 6,
+            target: fullmag_ir::EigenTargetIR::FrequencyWindow {
+                frequency_min_hz: 1.0e8,
+                frequency_max_hz: 5.0e9,
+            },
+            equilibrium: EquilibriumSourceIR::RelaxedInitialState,
+            k_sampling: Some(KSamplingIR::Single {
+                k_vector: [0.0, 0.0, 0.0],
+            }),
+            normalization: EigenNormalizationIR::UnitL2,
+            damping_policy: EigenDampingPolicyIR::Include,
+            enable_exchange: true,
+            enable_demag: false,
+            interfacial_dmi: None,
+            dmi_interface_normal: None,
+            bulk_dmi: None,
+            external_field: None,
+            gyromagnetic_ratio: 2.211e5,
+            precision: fullmag_ir::ExecutionPrecision::Double,
+            exchange_bc: fullmag_ir::ExchangeBoundaryCondition::Neumann,
+            spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
+            demag_realization: None,
+            mode_tracking: None,
+        }
+    }
+
+    #[test]
+    fn sparse_eigen_threshold_covers_mid_sized_full_2x2_smoke_meshes() {
+        assert!(
+            SPARSE_EIGEN_THRESHOLD <= 3_000,
+            "mid-sized full 2x2 FEM eigensolve smoke meshes must use sparse LOBPCG instead of dense O(n^3) diagonalization"
+        );
+    }
+
+    #[test]
+    fn frequency_window_sparse_lobpcg_oversamples_candidates() {
+        let target = fullmag_ir::EigenTargetIR::FrequencyWindow {
+            frequency_min_hz: 1.0,
+            frequency_max_hz: 2.0,
+        };
+
+        assert_eq!(sparse_lobpcg_candidate_count(&target, 20, 10), 10);
+        assert_eq!(sparse_lobpcg_candidate_count(&target, 20, 50), 50);
+        assert!(sparse_lobpcg_candidate_count(&target, 20, 200) > 20);
+        assert!(sparse_lobpcg_candidate_count(&target, 40, 10_000) > 40);
+    }
+
+    #[test]
+    fn non_window_sparse_lobpcg_keeps_requested_count() {
+        let target = fullmag_ir::EigenTargetIR::Lowest;
+
+        assert_eq!(sparse_lobpcg_candidate_count(&target, 20, 200), 20);
+    }
+
+    #[test]
+    fn sparse_frequency_window_without_retained_modes_fails_clearly() {
+        let target = fullmag_ir::EigenTargetIR::FrequencyWindow {
+            frequency_min_hz: 1.0,
+            frequency_max_hz: 2.0,
+        };
+
+        let error = reject_empty_frequency_window_result(&target, 60, 60, 0)
+            .expect_err("empty sparse frequency-window results must not look successful");
+        assert!(error
+            .message
+            .contains("cannot guarantee interior-window coverage"));
+    }
+
+    #[test]
+    fn sparse_lowest_without_retained_modes_does_not_raise_window_error() {
+        let target = fullmag_ir::EigenTargetIR::Lowest;
+
+        reject_empty_frequency_window_result(&target, 20, 0, 0)
+            .expect("lowest target does not use the frequency-window coverage diagnostic");
+    }
+
     #[test]
     fn runner_rejects_floquet_dynamic_demag_gate() {
         let bc = SpinWaveBoundaryConditionIR::Config(fullmag_ir::SpinWaveBoundaryConfigIR {
@@ -3124,5 +3926,34 @@ mod tests {
             (phase.im + 1.0).abs() < 1e-12,
             "expected exp(-i*pi/2) from boundary translation, got {phase:?}"
         );
+    }
+
+    #[test]
+    fn native_frequency_domain_unavailable_modal_is_not_treated_as_dense_fallback() {
+        let err = execute_gpu_fem_eigen(&minimal_native_modal_plan(), &[])
+            .expect_err("explicit native modal path must not fall back to dense reference solve");
+        assert!(
+            err.message
+                .contains("native FEM modal_eigen production path is unavailable")
+                || err
+                    .message
+                    .contains("native FEM modal eigen solve requires the fem-gpu feature"),
+            "unexpected native modal error: {}",
+            err.message
+        );
+        assert!(
+            !err.message.contains("FEM eigen GPU solve succeeded"),
+            "explicit native modal path must not report dense GPU success"
+        );
+        assert!(
+            !err.message.contains("cuSolverDN"),
+            "explicit native modal path must not expose dense GPU fallback details"
+        );
+        if err.message.contains("diagnostics_json=") {
+            assert!(
+                err.message.contains("modal_eigen"),
+                "missing modal diagnostics"
+            );
+        }
     }
 }

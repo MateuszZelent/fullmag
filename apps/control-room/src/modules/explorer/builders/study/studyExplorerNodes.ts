@@ -4,6 +4,7 @@ import type {
   ModelTreeStudyStageSnapshot,
 } from "../../explorerTypes";
 import { buildActionStageNode } from "./actionStageNode";
+import { buildChangeDeviceStageNode } from "./changeDeviceStageNode";
 import { buildEigenmodesStageNode } from "./eigenmodesStageNode";
 import { buildFrequencyResponseStageNode } from "./frequencyResponseStageNode";
 import { buildHysteresisStageNode } from "./hysteresisStageNode";
@@ -108,6 +109,7 @@ function buildStudyStageNode(stage: ModelTreeStudyStageSnapshot): ExplorerNode {
   const normalized = stage.kind.toLowerCase();
   if (normalized === "relax") return buildRelaxStageNode(stage);
   if (normalized === "run") return buildRunStageNode(stage);
+  if (normalized === "change_device") return buildChangeDeviceStageNode(stage);
   if (normalized === "hysteresis") return buildHysteresisStageNode(stage);
   if (normalized === "eigenmodes") return buildEigenmodesStageNode(stage);
   if (normalized === "frequency_response") {

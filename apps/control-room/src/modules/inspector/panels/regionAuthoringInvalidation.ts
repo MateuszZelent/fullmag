@@ -24,15 +24,6 @@ export function regionAuthoringInvalidationKeys(): string[] {
   ];
 }
 
-export function invalidateRegionAuthoringResources(
-  resources: ResourceInvalidationController,
-  revision: number,
-): void {
-  for (const key of regionAuthoringInvalidationKeys()) {
-    resources.invalidate(key, revision);
-  }
-}
-
 export function publishRegionAuthoringScene(
   resources: ResourceInvalidationController,
   scene: SceneResource,

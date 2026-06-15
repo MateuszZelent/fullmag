@@ -3,20 +3,32 @@ import type { CommandContext, CommandContribution } from "../commands/commandTyp
 import type { SelectionRef } from "../selection/selectionTypes";
 
 import type {
+  AnalysisFieldOverlayAppearanceState,
   AnalysisFieldOverlaySource,
   AnalysisFieldOverlayState,
 } from "./AnalysisFieldOverlayController";
+import type {
+  SurfaceColorSource,
+  VisualizationGeometryScope,
+} from "./ObjectVisualizationController";
 
 interface AnalysisFieldOverlayCommandInput {
   animatePhase?: boolean | null;
   animationRateHz?: number | null;
+  colorSource?: string | null;
+  colormap?: string | null;
   componentBasis?: string | null;
   componentCount?: number | null;
   fieldId?: string | null;
+  geometryScope?: string | null;
   label?: string | null;
   phaseRad?: number | null;
+  shaderVisible?: boolean | null;
   source?: AnalysisFieldOverlaySource | null;
+  solidColor?: string | null;
   valueKind?: string | null;
+  vectorBudget?: number | null;
+  vectorsVisible?: boolean | null;
   view?: string | null;
 }
 
@@ -65,6 +77,59 @@ function normalizeAnalysisFieldView(value: string | null): string {
   return value && ANALYSIS_FIELD_VIEWS.has(value)
     ? value
     : DEFAULT_ANALYSIS_FIELD_VIEW;
+}
+
+function normalizeSurfaceColorSource(value: string | null): SurfaceColorSource | null {
+  if (
+    value === "solid" ||
+    value === "orientation" ||
+    value === "component_x" ||
+    value === "component_y" ||
+    value === "component_z" ||
+    value === "magnitude" ||
+    value === "colormap"
+  ) {
+    return value;
+  }
+  return null;
+}
+
+function normalizeGeometryScope(value: string | null): VisualizationGeometryScope | null {
+  return value === "surface" || value === "full" ? value : null;
+}
+
+function overlayAppearanceFromInput(
+  input: AnalysisFieldOverlayCommandInput,
+): AnalysisFieldOverlayAppearanceState | undefined {
+  const surfaceColorSource = normalizeSurfaceColorSource(
+    stringValue(input.colorSource),
+  );
+  const geometryScope = normalizeGeometryScope(stringValue(input.geometryScope));
+  const scalarColorPalette = stringValue(input.colormap);
+  const shaderMonoColor = stringValue(input.solidColor);
+  const shaderVisible = booleanValue(input.shaderVisible);
+  const vectorBudget = numberValue(input.vectorBudget);
+  const vectorsVisible = booleanValue(input.vectorsVisible);
+  if (
+    !surfaceColorSource &&
+    !geometryScope &&
+    !scalarColorPalette &&
+    !shaderMonoColor &&
+    shaderVisible === null &&
+    vectorBudget === null &&
+    vectorsVisible === null
+  ) {
+    return undefined;
+  }
+  return {
+    ...(geometryScope ? { geometryScope } : {}),
+    ...(scalarColorPalette ? { scalarColorPalette } : {}),
+    ...(shaderMonoColor ? { shaderMonoColor } : {}),
+    ...(shaderVisible === null ? {} : { shaderVisible }),
+    ...(surfaceColorSource ? { surfaceColorSource } : {}),
+    ...(vectorBudget === null ? {} : { vectorBudget: Math.max(0, Math.floor(vectorBudget)) }),
+    ...(vectorsVisible === null ? {} : { vectorsVisible }),
+  };
 }
 
 function selectedFrequencyDomainRef(context: CommandContext): Extract<
@@ -153,11 +218,14 @@ function overlayLabelFromContext(
   return source === "eigen-mode" ? "Eigen mode field" : "Response field";
 }
 
-function overlayQueryFromContext(context: CommandContext): FieldVectorQuery {
+function overlayQueryFromContext(
+  context: CommandContext,
+  phaseRad: number,
+): FieldVectorQuery {
   const input = overlayCommandInput(context);
   return {
     component: "full",
-    phase_rad: numberValue(input.phaseRad) ?? 0,
+    phase_rad: phaseRad,
     scope_kind: "full",
     view: normalizeAnalysisFieldView(stringValue(input.view)),
   };
@@ -166,11 +234,12 @@ function overlayQueryFromContext(context: CommandContext): FieldVectorQuery {
 function overlayQueryWithDefaultViewFromContext(
   context: CommandContext,
   defaultView: string | null,
+  phaseRad: number,
 ): FieldVectorQuery {
   const input = overlayCommandInput(context);
   return {
     component: "full",
-    phase_rad: numberValue(input.phaseRad) ?? 0,
+    phase_rad: phaseRad,
     scope_kind: "full",
     view: normalizeAnalysisFieldView(stringValue(input.view) ?? defaultView),
   };
@@ -183,14 +252,79 @@ function overlayStateFromContext(
 ): AnalysisFieldOverlayState | null {
   const fieldId = fieldIdFromContext(context);
   if (!fieldId) return null;
+  const activeOverlay = context.analysisFieldOverlay?.getSnapshot() ?? null;
   const resolvedSource = overlaySourceFromContext(context, source);
+  const input = overlayCommandInput(context);
+  const appearancePatch = overlayAppearanceFromInput(input);
+  const appearance = appearancePatch ?? activeOverlay?.appearance;
+  const phaseRad =
+    numberValue(input.phaseRad) ??
+    activeOverlay?.visualizationPhaseRad ??
+    activeOverlay?.query.phase_rad ??
+    0;
   return {
+    ...(appearance ? { appearance } : {}),
     fieldId,
     label: overlayLabelFromContext(context, resolvedSource),
     query: defaultView == null
-      ? overlayQueryFromContext(context)
-      : overlayQueryWithDefaultViewFromContext(context, defaultView),
+      ? overlayQueryFromContext(context, phaseRad)
+      : overlayQueryWithDefaultViewFromContext(context, defaultView, phaseRad),
     source: resolvedSource,
+    visualizationPhaseRad: phaseRad,
+  };
+}
+
+function setOverlayAppearanceCommand(options: {
+  activeOverlay: (context: CommandContext) => AnalysisFieldOverlayState | null;
+  id: string;
+  missingMessage: string;
+  title: string;
+}): CommandContribution {
+  return {
+    id: options.id,
+    title: options.title,
+    category: "analysis",
+    disabledReason: (context) => {
+      if (!context.analysisFieldOverlay) {
+        return "Analysis field overlay controller is unavailable.";
+      }
+      return options.activeOverlay(context)
+        ? null
+        : options.missingMessage;
+    },
+    group: "analysis.frequency-domain",
+    isEnabled: (context) =>
+      Boolean(context.analysisFieldOverlay && options.activeOverlay(context)),
+    run: (context) => {
+      const overlay = options.activeOverlay(context);
+      const controller = context.analysisFieldOverlay;
+      if (!overlay || !controller) {
+        return {
+          status: "failed",
+          message: options.missingMessage,
+        };
+      }
+      const appearancePatch = overlayAppearanceFromInput(
+        overlayCommandInput(context),
+      );
+      if (!appearancePatch) {
+        return {
+          status: "completed",
+          message: "Frequency-domain 3D overlay appearance unchanged.",
+        };
+      }
+      controller.update({
+        appearance: {
+          ...(overlay.appearance ?? {}),
+          ...appearancePatch,
+        },
+      });
+      return {
+        status: "completed",
+        message: "Frequency-domain 3D overlay appearance updated.",
+      };
+    },
+    scope: "viewport",
   };
 }
 
@@ -235,10 +369,7 @@ function setOverlayPhaseCommand(options: {
       }
       const phaseRad = numberValue(overlayCommandInput(context).phaseRad) ?? 0;
       controller.update({
-        query: {
-          ...overlay.query,
-          phase_rad: phaseRad,
-        },
+        visualizationPhaseRad: phaseRad,
       });
       return {
         status: "completed",
@@ -296,12 +427,18 @@ function setOverlayAnimationCommand(options: {
       const input = overlayCommandInput(context);
       const animatePhase = booleanValue(input.animatePhase) ?? true;
       const animationRateHz = clampAnimationRateHz(numberValue(input.animationRateHz));
+      const visualizationPhaseRad =
+        numberValue(input.phaseRad) ??
+        overlay.visualizationPhaseRad ??
+        overlay.query.phase_rad ??
+        0;
       const nextOverlay = {
         ...overlay,
         animation: {
           animatePhase,
           animationRateHz,
         },
+        visualizationPhaseRad,
         query: animatePhase
           ? {
               ...overlay.query,
@@ -446,6 +583,12 @@ export const ANALYSIS_FIELD_OVERLAY_COMMANDS: CommandContribution[] = [
     id: "analysis.frequency-domain.set-3d-animation",
     missingMessage: "No frequency-domain field overlay is active.",
     title: "Animate frequency-domain phase",
+  }),
+  setOverlayAppearanceCommand({
+    activeOverlay: activeAnalysisOverlay,
+    id: "analysis.frequency-domain.set-3d-appearance",
+    missingMessage: "No frequency-domain field overlay is active.",
+    title: "Set frequency-domain 3D appearance",
   }),
   plotCommand(
     "analysis.frequency-response.plot-response-field-3d",

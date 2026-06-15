@@ -166,14 +166,16 @@ bool apply_mass_to_field(
     mfem::Vector component_out(nodes);
     mass_field_xyz.assign(field_xyz.size(), 0.0);
     for (int component = 0; component < 3; ++component) {
+        double *in_data = audited_host_write(component_in);
         for (int node = 0; node < nodes; ++node) {
-            component_in[node] =
+            in_data[node] =
                 field_xyz[static_cast<size_t>(node) * 3u + static_cast<size_t>(component)];
         }
         mass.Mult(component_in, component_out);
+        const double *out_data = audited_host_read(component_out);
         for (int node = 0; node < nodes; ++node) {
             mass_field_xyz[static_cast<size_t>(node) * 3u +
-                static_cast<size_t>(component)] = component_out[node];
+                static_cast<size_t>(component)] = out_data[node];
         }
     }
     return all_finite(mass_field_xyz);
@@ -184,6 +186,7 @@ void expand_tangent_solution_to_field(
     const mfem::Vector &q,
     std::vector<double> &field_xyz)
 {
+    const double *q_data = audited_host_read(q);
     field_xyz.assign(frames.size() * 3u, 0.0);
     for (size_t node = 0; node < frames.size(); ++node) {
         const TangentFrame &frame = frames[node];
@@ -194,8 +197,8 @@ void expand_tangent_solution_to_field(
         const int q_base = static_cast<int>(node * 2u);
         for (size_t component = 0; component < 3u; ++component) {
             field_xyz[base + component] =
-                q[q_base + 0] * frame.e1[component] +
-                q[q_base + 1] * frame.e2[component];
+                q_data[q_base + 0] * frame.e1[component] +
+                q_data[q_base + 1] * frame.e2[component];
         }
     }
 }
@@ -604,9 +607,9 @@ public:
             if (ctx_.dmi.interfacial_enabled) {
                 if (!compute_interfacial_dmi_field(
                         ctx_, delta_m_xyz_, interfacial_delta_xyz_, nullptr, local_error)) {
-                    failed_ = true;
-                    error_ = local_error;
-                    return;
+                     failed_ = true;
+                     error_ = local_error;
+                     return;
                 }
                 for (size_t i = 0; i < dmi_delta_xyz_.size(); ++i) {
                     dmi_delta_xyz_[i] += interfacial_delta_xyz_[i];
@@ -615,9 +618,9 @@ public:
             if (ctx_.dmi.bulk_enabled) {
                 if (!compute_bulk_dmi_field(
                         ctx_, delta_m_xyz_, bulk_delta_xyz_, nullptr, local_error)) {
-                    failed_ = true;
-                    error_ = local_error;
-                    return;
+                     failed_ = true;
+                     error_ = local_error;
+                     return;
                 }
                 for (size_t i = 0; i < dmi_delta_xyz_.size(); ++i) {
                     dmi_delta_xyz_[i] += bulk_delta_xyz_[i];
@@ -641,6 +644,8 @@ public:
             }
         }
 
+        const double *x_data = audited_host_read(x);
+        double *y_data = audited_host_read_write(y);
         for (size_t node = 0; node < frames_.size(); ++node) {
             const TangentFrame &frame = frames_[node];
             if (!frame.active || node >= ctx_.integration_weights.mfem_lumped_mass.size()) {
@@ -685,10 +690,10 @@ public:
             }
             const double mdoth = dot_array3(m, h_current);
             const int q_base = static_cast<int>(node * 2u);
-            y[q_base + 0] += implicit_weight_ * mass *
-                (mdoth * x[q_base + 0] - dot_array3(frame.e1, h_delta));
-            y[q_base + 1] += implicit_weight_ * mass *
-                (mdoth * x[q_base + 1] - dot_array3(frame.e2, h_delta));
+            y_data[q_base + 0] += implicit_weight_ * mass *
+                (mdoth * x_data[q_base + 0] - dot_array3(frame.e1, h_delta));
+            y_data[q_base + 1] += implicit_weight_ * mass *
+                (mdoth * x_data[q_base + 1] - dot_array3(frame.e2, h_delta));
         }
     }
 
@@ -1140,8 +1145,9 @@ bool solve_tangent_plane_linear_system(
             implicit_weight,
             has_local_indefinite_terms);
     mfem::Vector rhs_vector(static_cast<int>(rhs.size()));
+    double *rhs_vector_data = audited_host_write(rhs_vector);
     for (int i = 0; i < rhs_vector.Size(); ++i) {
-        rhs_vector[i] = rhs[static_cast<size_t>(i)];
+        rhs_vector_data[i] = rhs[static_cast<size_t>(i)];
     }
     mfem::Vector solution;
     if (has_matrix_free_terms) {
@@ -1191,7 +1197,8 @@ int run_tangent_plane_implicit_step(
     }
 
     fullmag_fem_step_stats current_stats{};
-    if (!context_snapshot_stats_mfem(ctx, current_stats, error)) {
+    if (!relaxation::take_cached_current_stats(ctx, current_stats) &&
+        !context_snapshot_stats_mfem(ctx, current_stats, error)) {
         return FULLMAG_FEM_ERR_UNAVAILABLE;
     }
     if (!relaxation::validate_relaxation_state_fields(
@@ -1207,27 +1214,38 @@ int run_tangent_plane_implicit_step(
             error)) {
         return FULLMAG_FEM_ERR_INTERNAL;
     }
+    fullmag_fem_step_stats profile_stats{};
+    relaxation::accumulate_relaxation_profile_sample(profile_stats, current_stats);
     if (complete_stage_from_current_stats(ctx, current_stats)) {
         out_stats = current_stats;
         out_stats.dt_seconds = 0.0;
         return FULLMAG_FEM_OK;
     }
 
-    const std::vector<double> previous_m = ctx.state.m_xyz;
+    std::vector<double> previous_m;
+    {
+        ScopedPhaseTimer timer(&profile_stats.relaxation_state_copy_wall_time_ns);
+        previous_m = ctx.state.m_xyz;
+    }
     std::vector<double> gradient;
-    relaxation::tangent_gradient_from_field(
-        ctx,
-        previous_m,
-        ctx.effective_field.h_xyz,
-        gradient);
     double g_norm_sq = 0.0;
-    if (!relaxation::validate_tangent_gradient_field(
+    bool current_gradient_valid = false;
+    {
+        ScopedPhaseTimer timer(&profile_stats.relaxation_gradient_wall_time_ns);
+        relaxation::tangent_gradient_from_field(
+            ctx,
+            previous_m,
+            ctx.effective_field.h_xyz,
+            gradient);
+        current_gradient_valid = relaxation::validate_tangent_gradient_field(
             ctx,
             gradient,
             "tangent-plane implicit",
             "current",
             g_norm_sq,
-            error)) {
+            error);
+    }
+    if (!current_gradient_valid) {
         return FULLMAG_FEM_ERR_INTERNAL;
     }
     if (g_norm_sq <= relaxation::kGradientFloor) {
@@ -1258,8 +1276,11 @@ int run_tangent_plane_implicit_step(
                 error)) {
             return FULLMAG_FEM_ERR_INTERNAL;
         }
-        direction_dot_gradient =
-            relaxation::metric_dot_fields(ctx, direction, gradient);
+        {
+            ScopedPhaseTimer timer(&profile_stats.relaxation_metric_wall_time_ns);
+            direction_dot_gradient =
+                relaxation::metric_dot_fields(ctx, direction, gradient);
+        }
         if (!std::isfinite(direction_dot_gradient) ||
             direction_dot_gradient >= 0.0) {
             error =
@@ -1267,7 +1288,10 @@ int run_tangent_plane_implicit_step(
             return FULLMAG_FEM_ERR_INTERNAL;
         }
 
-        trial_m = relaxation::retracted_step(ctx, previous_m, direction, trial_step);
+        {
+            ScopedPhaseTimer timer(&profile_stats.relaxation_retraction_wall_time_ns);
+            trial_m = relaxation::retracted_step(ctx, previous_m, direction, trial_step);
+        }
         status = relaxation::upload_and_snapshot(
             ctx,
             trial_m,
@@ -1286,10 +1310,15 @@ int run_tangent_plane_implicit_step(
                 trial_error,
                 error);
         }
-        const bool armijo =
-            trial_stats.total_energy_joules <=
-            current_stats.total_energy_joules +
-                relaxation::kArmijoCoefficient * trial_step * direction_dot_gradient;
+        relaxation::accumulate_relaxation_profile_sample(profile_stats, trial_stats);
+        bool armijo = false;
+        {
+            ScopedPhaseTimer timer(&profile_stats.relaxation_line_search_wall_time_ns);
+            armijo =
+                trial_stats.total_energy_joules <=
+                current_stats.total_energy_joules +
+                    relaxation::kArmijoCoefficient * trial_step * direction_dot_gradient;
+        }
         if (armijo) {
             line_search_accepted = true;
             break;
@@ -1321,19 +1350,24 @@ int run_tangent_plane_implicit_step(
     }
 
     std::vector<double> trial_gradient;
-    relaxation::tangent_gradient_from_field(
-        ctx,
-        trial_m,
-        ctx.effective_field.h_xyz,
-        trial_gradient);
     double trial_g_norm_sq = 0.0;
-    if (!relaxation::validate_tangent_gradient_field(
+    bool accepted_gradient_valid = false;
+    {
+        ScopedPhaseTimer timer(&profile_stats.relaxation_gradient_wall_time_ns);
+        relaxation::tangent_gradient_from_field(
+            ctx,
+            trial_m,
+            ctx.effective_field.h_xyz,
+            trial_gradient);
+        accepted_gradient_valid = relaxation::validate_tangent_gradient_field(
             ctx,
             trial_gradient,
             "tangent-plane implicit",
             "accepted",
             trial_g_norm_sq,
-            error)) {
+            error);
+    }
+    if (!accepted_gradient_valid) {
         const std::string gradient_error = error;
         return relaxation::restore_previous_relaxation_state(
             ctx,
@@ -1345,10 +1379,14 @@ int run_tangent_plane_implicit_step(
             error);
     }
 
-    update_implicit_step_size(ctx.relaxation, trial_step, backtracks);
+    {
+        ScopedPhaseTimer timer(&profile_stats.relaxation_update_wall_time_ns);
+        update_implicit_step_size(ctx.relaxation, trial_step, backtracks);
+    }
     relaxation::finish_accepted_relaxation_step(
         ctx,
         trial_stats,
+        profile_stats,
         out_stats,
         trial_step);
     relaxation::publish_accepted_gradient_completion(ctx, trial_g_norm_sq);

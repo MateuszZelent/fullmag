@@ -42,8 +42,7 @@ copy_runtime_binary() {
   local src="$1"
   local dest="$2"
   rm -f "$dest"
-  cp "$src" "$dest"
-  chmod 755 "$dest"
+  install -m 755 "$src" "$dest"
 }
 copy_runtime_binary target/release/fullmag .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu-bin
 copy_runtime_binary target/release/fullmag-api .fullmag/runtimes/fem-gpu-host/bin/fullmag-api
@@ -94,6 +93,7 @@ done
 echo "[export_fem_gpu_runtime] bundling MFEM/libCEED/Hypre host headers"
 cp -a /opt/fullmag-deps/include/. .fullmag/runtimes/fem-gpu-host/include/
 echo "[export_fem_gpu_runtime] bundling OpenMPI headers referenced by MFEM"
+rm -rf .fullmag/runtimes/fem-gpu-host/include/openmpi
 mkdir -p .fullmag/runtimes/fem-gpu-host/include/openmpi
 cp -a /usr/lib/x86_64-linux-gnu/openmpi/include/. .fullmag/runtimes/fem-gpu-host/include/openmpi/
 echo "[export_fem_gpu_runtime] bundling CUDA headers included by MFEM"

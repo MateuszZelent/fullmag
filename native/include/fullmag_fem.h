@@ -52,6 +52,7 @@ typedef enum {
     FULLMAG_FEM_OBSERVABLE_H_DMI_BULK = 10,
     FULLMAG_FEM_OBSERVABLE_H_OE = 11,
     FULLMAG_FEM_OBSERVABLE_H_THERM = 12,
+    FULLMAG_FEM_OBSERVABLE_TORQUE = 13,
 } fullmag_fem_observable;
 
 typedef enum {
@@ -314,6 +315,16 @@ typedef struct {
     uint64_t rhs_wall_time_ns;
     uint64_t extra_energy_wall_time_ns;
     uint64_t snapshot_wall_time_ns;
+    uint64_t relaxation_preconditioner_wall_time_ns;
+    uint64_t relaxation_state_copy_wall_time_ns;
+    uint64_t relaxation_state_upload_wall_time_ns;
+    uint64_t relaxation_retraction_wall_time_ns;
+    uint64_t relaxation_gradient_wall_time_ns;
+    uint64_t relaxation_metric_wall_time_ns;
+    uint64_t relaxation_line_search_wall_time_ns;
+    uint64_t relaxation_update_wall_time_ns;
+    uint32_t relaxation_preconditioner_cache_hits;
+    uint32_t relaxation_preconditioner_cache_misses;
     double error_estimate;
     uint32_t rejected_attempts;
     double dt_suggested;
@@ -322,6 +333,7 @@ typedef struct {
     /* Thread provenance (filled from context each step) */
     int32_t requested_omp_threads;
     int32_t effective_omp_threads;
+    int32_t cpu_thread_cap_reason;
 } fullmag_fem_step_stats;
 
 typedef struct {
@@ -530,6 +542,84 @@ typedef struct {
     char *artifact_manifest_path;
 } fullmag_fem_frequency_domain_solve_result;
 
+#define FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION 1u
+
+typedef enum {
+    FULLMAG_FEM_FD_OK = 0,
+    FULLMAG_FEM_FD_UNAVAILABLE = 1,
+    FULLMAG_FEM_FD_VALIDATION_ERROR = 2,
+    FULLMAG_FEM_FD_OPERATOR_ERROR = 3,
+    FULLMAG_FEM_FD_SOLVE_ERROR = 4,
+    FULLMAG_FEM_FD_ARTIFACT_ERROR = 5,
+    FULLMAG_FEM_FD_INTERRUPTED = 6,
+} FullmagFemFrequencyDomainStatus;
+
+typedef struct {
+    uint32_t abi_version;
+    const char *mesh_asset_id;
+    const char *equilibrium_source_kind;
+    double gamma_rad_s_T;
+    double mu0_T_m_A;
+    double alpha;
+    int include_exchange;
+    int include_demag;
+    const char *demag_realization;
+    const char *damping_policy;
+    const char *spin_wave_bc_kind;
+    const double *k_vector_rad_m;
+    int k_vector_len;
+    const char *operator_diagnostics_json;
+} FullmagFemLinearizedOperatorRequest;
+
+typedef struct {
+    uint32_t abi_version;
+    FullmagFemLinearizedOperatorRequest operator_request;
+    int requested_mode_count;
+    const char *target_kind;
+    double target_frequency_hz;
+    double frequency_min_hz;
+    double frequency_max_hz;
+    double residual_tolerance;
+    int max_outer_iterations;
+    int max_linear_iterations;
+    const char *output_directory;
+    int write_partial_artifacts;
+    int completeness_policy;
+    int eigensolver_family;
+    int spectral_transform_kind;
+    void *cancel_user_data;
+    int (*cancel_requested)(void *user_data);
+    void *progress_user_data;
+    void (*progress_callback)(void *user_data, const char *progress_json);
+} FullmagFemModalEigenRequest;
+
+typedef struct {
+    uint32_t abi_version;
+    FullmagFemLinearizedOperatorRequest operator_request;
+    const double *frequencies_hz;
+    int frequency_count;
+    const double *excitation_field_A_m;
+    int excitation_field_len;
+    double excitation_phase_rad;
+    double residual_tolerance;
+    int max_linear_iterations;
+    const char *output_directory;
+    int write_partial_artifacts;
+    void *cancel_user_data;
+    int (*cancel_requested)(void *user_data);
+    void *progress_user_data;
+    void (*progress_callback)(void *user_data, const char *progress_json);
+} FullmagFemDrivenResponseRequest;
+
+typedef struct {
+    uint32_t abi_version;
+    FullmagFemFrequencyDomainStatus status;
+    char *error_message;
+    char *diagnostics_json;
+    char *result_json;
+    char *artifact_manifest_path;
+} FullmagFemFrequencyDomainResult;
+
 typedef struct {
     uint64_t availability_request_size;
     uint64_t availability_request_phase_convention_offset;
@@ -617,6 +707,19 @@ typedef struct {
 } fullmag_fem_gpu_rk_plan_info;
 
 typedef struct fullmag_fem_backend fullmag_fem_backend;
+typedef struct fullmag_fem_field_snapshot fullmag_fem_field_snapshot;
+typedef struct fullmag_fem_preview_snapshot fullmag_fem_preview_snapshot;
+
+typedef enum {
+    FULLMAG_FEM_SNAPSHOT_SCALAR_F64 = 2,
+} fullmag_fem_snapshot_scalar_type;
+
+typedef struct {
+    uint64_t node_count;
+    uint32_t component_count;
+    uint32_t scalar_bytes;
+    fullmag_fem_snapshot_scalar_type scalar_type;
+} fullmag_fem_snapshot_desc;
 
 int fullmag_fem_is_available(void);
 int fullmag_fem_get_availability_info(fullmag_fem_availability_info *out_info);
@@ -662,6 +765,15 @@ int fullmag_fem_frequency_domain_solve_driven_response(
 void fullmag_fem_frequency_domain_solve_result_release(
     fullmag_fem_frequency_domain_solve_result *result
 );
+FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve(
+    const FullmagFemModalEigenRequest *request
+);
+FullmagFemFrequencyDomainResult fullmag_fem_driven_response_solve(
+    const FullmagFemDrivenResponseRequest *request
+);
+void fullmag_fem_frequency_domain_result_destroy(
+    FullmagFemFrequencyDomainResult *result
+);
 
 fullmag_fem_backend *fullmag_fem_backend_create(
     const fullmag_fem_plan_desc *plan
@@ -696,6 +808,78 @@ int fullmag_fem_backend_copy_field_f64(
     double *out_xyz,
     uint64_t out_len
 );
+
+int fullmag_fem_backend_average_m_for_nodes_f64(
+    fullmag_fem_backend *handle,
+    const uint32_t *node_indices,
+    uint64_t node_count,
+    double *out_xyz,
+    uint64_t out_len
+);
+
+/*
+ * Begin a native FEM field snapshot.
+ *
+ * GPU-backed observables are staged through private device buffers and pinned
+ * host memory on a snapshot stream before `wait` exposes an AoS f64 payload:
+ *   [x0,y0,z0, x1,y1,z1, ...]
+ *
+ * CPU-only or host-only observables fall back to the synchronous host field
+ * copy path while preserving the same payload layout.
+ */
+fullmag_fem_field_snapshot *fullmag_fem_backend_begin_field_snapshot(
+    fullmag_fem_backend *handle,
+    fullmag_fem_observable observable
+);
+
+/*
+ * Begin a native FEM preview snapshot.
+ *
+ * FEM previews currently expose the full mesh-node vector payload in the same
+ * AoS f64 layout as field snapshots. GPU-backed observables use the same
+ * private staging/pinned-host path as field snapshots.
+ */
+fullmag_fem_preview_snapshot *fullmag_fem_backend_begin_preview_snapshot(
+    fullmag_fem_backend *handle,
+    fullmag_fem_observable observable
+);
+
+/*
+ * Wait for a native FEM field snapshot and expose the owned payload pointer.
+ * The returned pointer remains valid until the snapshot handle is destroyed.
+ */
+int fullmag_fem_field_snapshot_wait(
+    fullmag_fem_field_snapshot *snapshot,
+    const void **out_data,
+    uint64_t *out_len_bytes,
+    fullmag_fem_snapshot_desc *out_desc
+);
+
+/*
+ * Wait for a native FEM preview snapshot and expose the owned payload pointer.
+ * The returned pointer remains valid until the snapshot handle is destroyed.
+ */
+int fullmag_fem_preview_snapshot_wait(
+    fullmag_fem_preview_snapshot *snapshot,
+    const void **out_data,
+    uint64_t *out_len_bytes,
+    fullmag_fem_snapshot_desc *out_desc
+);
+
+/*
+ * Return nonzero when a native FEM preview snapshot can be consumed without
+ * blocking in `fullmag_fem_preview_snapshot_wait`.
+ */
+int fullmag_fem_preview_snapshot_ready(fullmag_fem_preview_snapshot *snapshot);
+
+/*
+ * Return nonzero when a native FEM field snapshot can be consumed without
+ * blocking in `fullmag_fem_field_snapshot_wait`.
+ */
+int fullmag_fem_field_snapshot_ready(fullmag_fem_field_snapshot *snapshot);
+
+void fullmag_fem_field_snapshot_destroy(fullmag_fem_field_snapshot *snapshot);
+void fullmag_fem_preview_snapshot_destroy(fullmag_fem_preview_snapshot *snapshot);
 
 int fullmag_fem_backend_upload_magnetization_f64(
     fullmag_fem_backend *handle,

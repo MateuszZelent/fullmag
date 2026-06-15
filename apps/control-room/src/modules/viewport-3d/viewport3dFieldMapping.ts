@@ -17,6 +17,9 @@ export interface ScalarColorBuffer {
   colors: Float32Array;
   colorMode?: string;
   colorPalette?: string;
+  complexImagValues?: Float32Array;
+  complexPhaseRad?: number;
+  complexRealValues?: Float32Array;
   range: ScalarRange;
   scalarValues?: Float32Array;
   vectorValues?: Float32Array;

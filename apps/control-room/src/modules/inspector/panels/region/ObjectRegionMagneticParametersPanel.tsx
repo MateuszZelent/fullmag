@@ -103,7 +103,11 @@ function getParentParamInfo(
   };
 }
 
-export function ObjectRegionMagneticParametersPanel({
+export function ObjectRegionMagneticParametersPanel(props: RegionSubPanelProps) {
+  return useObjectRegionMagneticParametersPanelView(props);
+}
+
+function useObjectRegionMagneticParametersPanelView({
   model,
   draft,
   pending,
@@ -142,9 +146,10 @@ export function ObjectRegionMagneticParametersPanel({
   const fieldDraftKey = materialFieldDraftKey(editableRegionAssignments);
   const baseFieldDrafts = useMemo(
     () =>
-      editableRegionAssignments
-        .map(materialFieldDraftFromAssignment)
-        .filter((field): field is MaterialFieldDraft => field !== null),
+      editableRegionAssignments.flatMap((assignment) => {
+        const field = materialFieldDraftFromAssignment(assignment);
+        return field === null ? [] : [field];
+      }),
     [editableRegionAssignments],
   );
   const [fieldDraftState, setFieldDraftState] = useState<MaterialFieldDraftState>({

@@ -88,7 +88,7 @@ function RegionOverlayShape({
     event.stopPropagation();
     onSelectRegion?.({ objectId: model.objectId, regionId: model.regionId });
   };
-  const handleClick = (event: ThreeEvent<MouseEvent>) => {
+  const selectRegionFromClick = (event: ThreeEvent<MouseEvent>) => {
     event.stopPropagation();
     onSelectRegion?.({ objectId: model.objectId, regionId: model.regionId });
   };
@@ -122,7 +122,7 @@ function RegionOverlayShape({
       >
         {model.style.fillVisible ? (
           <mesh
-            onClick={handleClick}
+            onClick={selectRegionFromClick}
             onPointerDown={handlePointerDown}
             renderOrder={42}
           >
@@ -138,7 +138,7 @@ function RegionOverlayShape({
         ) : null}
         {model.style.wireframeVisible ? (
           <mesh
-            onClick={handleClick}
+            onClick={selectRegionFromClick}
             onPointerDown={handlePointerDown}
             renderOrder={43}
             scale={[wireframeScale, wireframeScale, wireframeScale]}

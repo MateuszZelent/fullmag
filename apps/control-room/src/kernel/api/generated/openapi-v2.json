@@ -7202,6 +7202,139 @@
         ],
         "type": "object"
       },
+      "LivePublisherDiagnosticsResource": {
+        "properties": {
+          "coalesced_wake_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "disconnected_wake_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last_clone_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last_merge_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last_payload_estimated_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last_publish_lag_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last_publish_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last_replace_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_clone_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_merge_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_payload_estimated_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_publish_lag_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_publish_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_replace_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "publish_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "replace_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total_clone_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total_merge_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total_publish_lag_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total_publish_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total_replace_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "replace_count",
+          "publish_count",
+          "coalesced_wake_count",
+          "disconnected_wake_count",
+          "last_payload_estimated_bytes",
+          "max_payload_estimated_bytes",
+          "last_replace_wall_time_ns",
+          "max_replace_wall_time_ns",
+          "total_replace_wall_time_ns",
+          "last_merge_wall_time_ns",
+          "max_merge_wall_time_ns",
+          "total_merge_wall_time_ns",
+          "last_clone_wall_time_ns",
+          "max_clone_wall_time_ns",
+          "total_clone_wall_time_ns",
+          "last_publish_wall_time_ns",
+          "max_publish_wall_time_ns",
+          "total_publish_wall_time_ns",
+          "last_publish_lag_wall_time_ns",
+          "max_publish_lag_wall_time_ns",
+          "total_publish_lag_wall_time_ns"
+        ],
+        "type": "object"
+      },
       "LiveStatus": {
         "properties": {
           "api_contract_version": {
@@ -14131,6 +14264,19 @@
             },
             "type": "array"
           },
+          "live_publisher": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LivePublisherDiagnosticsResource"
+              }
+            ]
+          },
+          "preview_3d_disabled": {
+            "type": "boolean"
+          },
           "revision": {
             "format": "int64",
             "minimum": 0,
@@ -14162,6 +14308,69 @@
       },
       "SolverProfileStepSampleResource": {
         "properties": {
+          "artifact_enqueue_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "artifact_field_snapshot_writer_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "artifact_native_field_snapshot_writer_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "artifact_queue_depth_current": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "artifact_queue_depth_max": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "artifact_scalar_row_writer_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "artifact_writer_job_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "artifact_writer_jobs_completed": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "delta_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "demag_preconditioner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "demag_solver": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "demag_solver_setup_reused": {
+            "type": "boolean"
+          },
           "demag_solves": {
             "format": "int32",
             "minimum": 0,
@@ -14182,7 +14391,57 @@
             "format": "double",
             "type": "number"
           },
+          "field_copy_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "finalization_field_copy_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "finalization_field_copy_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "finalization_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "hot_loop_control_scalar_d2h_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "hot_loop_control_scalar_host_sync_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "hot_loop_d2h_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "hot_loop_h2d_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "hot_loop_host_sync_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "missing_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "native_ffi_overhead_wall_time_ns": {
             "format": "int64",
             "minimum": 0,
             "type": "integer"
@@ -14212,8 +14471,58 @@
             "minimum": 0,
             "type": "integer"
           },
+          "relaxation_gradient_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "relaxation_line_search_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "relaxation_metric_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "relaxation_preconditioner_cache_hits": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "relaxation_preconditioner_cache_misses": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "relaxation_retraction_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "relaxation_state_copy_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "relaxation_state_upload_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "relaxation_update_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "rhs_evaluations": {
             "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sample_time_unix_ms": {
+            "format": "int64",
             "minimum": 0,
             "type": "integer"
           },
@@ -14233,6 +14542,14 @@
             "format": "int64",
             "minimum": 0,
             "type": "integer"
+          },
+          "unprofiled_gap_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
@@ -14256,6 +14573,9 @@
       },
       "SolverProfileThreadingResource": {
         "properties": {
+          "cap_reason": {
+            "type": "string"
+          },
           "effective_omp_threads": {
             "format": "int32",
             "type": "integer"
@@ -14576,6 +14896,14 @@
               "null"
             ]
           },
+          "last_progress_unix_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "loaded_state_ref": {
             "type": [
               "string",
@@ -14589,6 +14917,25 @@
             ]
           },
           "metric_value": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "progress_detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "progress_label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "progress_percent": {
             "format": "double",
             "type": [
               "number",

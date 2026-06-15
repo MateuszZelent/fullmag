@@ -699,6 +699,26 @@ impl ProblemIR {
                             );
                         }
                     }
+                    EigenTargetIR::FrequencyWindow {
+                        frequency_min_hz,
+                        frequency_max_hz,
+                    } => {
+                        if *frequency_min_hz <= 0.0 {
+                            errors.push(
+                                "eigenmodes.target.frequency_min_hz must be positive".to_string(),
+                            );
+                        }
+                        if *frequency_max_hz <= 0.0 {
+                            errors.push(
+                                "eigenmodes.target.frequency_max_hz must be positive".to_string(),
+                            );
+                        }
+                        if frequency_min_hz >= frequency_max_hz {
+                            errors.push(
+                                "eigenmodes.target.frequency_min_hz must be less than frequency_max_hz".to_string(),
+                            );
+                        }
+                    }
                 }
                 if let EquilibriumSourceIR::Artifact { path } = equilibrium {
                     if path.trim().is_empty() {

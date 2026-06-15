@@ -28,7 +28,7 @@ export interface TransportTrafficSummary {
   windowMs: number;
 }
 
-export interface TransportEndpointSummary {
+interface TransportEndpointSummary {
   byteLength: number;
   count: number;
   label: string;
@@ -180,8 +180,8 @@ export function buildTransportTrafficSummary(
     httpCount,
     performanceCount,
     rxCount,
-    topEndpoints: [...endpoints.values()]
-      .sort(
+    topEndpoints: Array.from(endpoints.values())
+      .toSorted(
         (left, right) =>
           right.count - left.count ||
           right.byteLength - left.byteLength ||

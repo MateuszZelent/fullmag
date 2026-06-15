@@ -467,4 +467,34 @@ hole_refinement.mesh(minimum_element_size=0.5e-9, maximum_element_size=1e-9, ord
             "study pipeline should deserialize frequency_response primitive stage"
         );
     }
+
+    #[test]
+    fn load_scene_document_state_accepts_change_device_stage() {
+        let root = repo_root();
+        let script_path = root.join("examples/fem_fmr_periodic_k0_smoke.py");
+        let scene = load_scene_document_state(&root, &root, &script_path)
+            .expect("change-device script should export a scene document");
+
+        let pipeline = scene
+            .study
+            .study_pipeline
+            .as_ref()
+            .expect("change-device scene should include a study pipeline");
+        assert!(
+            pipeline.nodes.iter().any(|node| {
+                matches!(
+                    node,
+                    fullmag_authoring::StudyPipelineNode::Primitive(stage)
+                        if stage.stage_kind
+                            == fullmag_authoring::StudyPrimitiveStageKind::ChangeDevice
+                            && stage
+                                .payload
+                                .get("device")
+                                .and_then(|value| value.as_str())
+                                == Some("cpu")
+                )
+            }),
+            "study pipeline should deserialize change_device primitive stage"
+        );
+    }
 }

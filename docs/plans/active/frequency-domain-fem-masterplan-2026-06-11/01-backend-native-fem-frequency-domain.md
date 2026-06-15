@@ -4,6 +4,10 @@
 
 Fullmag has a working semantic and transitional execution path for FEM eigenmodes. That path is not the professional production frequency-domain solver. The production frequency-domain solver is the driven harmonic response solve for `StudyIR::FrequencyResponse`; eigenmodes are the modal companion product used for normal modes, dispersion, mode profiles, linewidths, modal absorption, and validation.
 
+Product-split contract names are `modal_eigen` for `Eigenmodes` and
+`driven_response` for `Frequency Response`; the shared linearized operator
+must not collapse those products into one status line.
+
 Current implemented pieces:
 
 - `docs/physics/0700-frequency-domain-linearized-llg.md` defines the canonical magnetic linearized-LLG frequency-domain physics note.

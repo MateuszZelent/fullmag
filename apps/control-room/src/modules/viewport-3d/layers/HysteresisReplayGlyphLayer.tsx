@@ -11,14 +11,14 @@ import type {
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import type { Viewport3DBounds } from "../viewport3dRenderModel";
 
-export interface HysteresisReplayGlyphLayerAxisModel {
+interface HysteresisReplayGlyphLayerAxisModel {
   color: string;
   key: "fieldDirection" | "measurementAxis" | "sampleNormal";
   label: string;
   positions: [number, number, number, number, number, number];
 }
 
-export interface HysteresisReplayGlyphLayerLabelModel {
+interface HysteresisReplayGlyphLayerLabelModel {
   key: HysteresisReplayGlyphLayerAxisModel["key"];
   label: string;
   position: [number, number, number];

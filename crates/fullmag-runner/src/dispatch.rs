@@ -2245,6 +2245,24 @@ pub(crate) fn execute_fem_eigen(
     }
 }
 
+pub(crate) fn execute_fem_eigen_with_progress(
+    engine: FemEngine,
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    progress: &mut fem_eigen::FemEigenProgressCallback<'_>,
+) -> Result<ExecutedRun, RunError> {
+    if matches!(plan.k_sampling, Some(fullmag_ir::KSamplingIR::Path { .. })) {
+        return execute_fem_eigen_path(engine, plan, outputs);
+    }
+
+    match engine {
+        FemEngine::CpuNative => {
+            fem_eigen::execute_baseline_fem_eigen_with_progress(plan, outputs, progress)
+        }
+        FemEngine::NativeGpu => fem_eigen::execute_gpu_fem_eigen(plan, outputs),
+    }
+}
+
 /// Multi-k orchestrator path: iterate over samples in a `KSamplingIR::Path`,
 /// solve each point with the existing single-k solver, track branches, and
 /// produce V2 path/branch/mode artifacts alongside legacy-compatible ones.

@@ -11,9 +11,6 @@ export const CANONICAL_MESH_BUILD_PHASES = [
   { id: "viewport_delivery", label: "Viewport Delivery" },
 ] as const;
 
-export type CanonicalMeshBuildPhaseId =
-  (typeof CANONICAL_MESH_BUILD_PHASES)[number]["id"];
-
 export type MeshBuildTerminalStatus =
   | "cancelled"
   | "completed"
@@ -110,9 +107,10 @@ export function normalizeMeshBuildPhases(
   value: unknown,
 ): NormalizedMeshBuildPhase[] {
   const backendPhases = Array.isArray(value)
-    ? value
-        .map((entry, index) => phaseFromRecord(entry, `phase-${index + 1}`))
-        .filter((phase): phase is NormalizedMeshBuildPhase => phase !== null)
+    ? value.flatMap((entry, index) => {
+        const phase = phaseFromRecord(entry, `phase-${index + 1}`);
+        return phase === null ? [] : [phase];
+      })
     : [];
   const byId = new Map(backendPhases.map((phase) => [phase.id, phase]));
   const phases: NormalizedMeshBuildPhase[] = [];

@@ -933,6 +933,38 @@ class ProblemApiTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Eigenmodes outputs"):
             fm.Eigenmodes(outputs=[fm.SaveResponse("susceptibility_tensor")])
 
+    def test_eigenmodes_serializes_frequency_window_target(self) -> None:
+        problem = replace(
+            self._build_problem(),
+            energy=[fm.Exchange()],
+            study=fm.Eigenmodes(
+                outputs=[fm.SaveSpectrum()],
+                count=20,
+                target="frequency_window",
+                frequency_min=100e6,
+                frequency_max=5e9,
+            ),
+        )
+        ir = problem.to_ir()
+
+        self.assertEqual(
+            ir["study"]["target"],
+            {
+                "kind": "frequency_window",
+                "frequency_min_hz": 100e6,
+                "frequency_max_hz": 5e9,
+            },
+        )
+
+    def test_eigenmodes_rejects_invalid_frequency_window(self) -> None:
+        with self.assertRaisesRegex(ValueError, "frequency_min must be less"):
+            fm.Eigenmodes(
+                outputs=[fm.SaveSpectrum()],
+                target="frequency_window",
+                frequency_min=5e9,
+                frequency_max=100e6,
+            )
+
     def test_frequency_response_lowers_to_first_class_study_ir(self) -> None:
         problem = replace(
             self._build_problem(),
@@ -3906,6 +3938,38 @@ class ProblemApiTests(unittest.TestCase):
         self.assertIn("tol=1e-05", rewritten)
         self.assertIn("max_steps=25", rewritten)
         self.assertIn("study.stages.add_run(4e-12)", rewritten)
+
+    def test_study_stage_builder_change_device_roundtrips_as_pipeline_action(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("stage_change_device")
+        study.engine("fem")
+        study.device("gpu", precision="double")
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.texture.uniform(1, 0, 0)
+        study.stages.add_relax(max_steps=25)
+        study.stages.change_device("cpu")
+        study.stages.add_eigenmodes(count=4)
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_builder_study_stage_change_device.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+
+        draft = export_builder_draft(loaded)
+        self.assertEqual(len(draft["stages"]), 3)
+        self.assertEqual(draft["stages"][1]["kind"], "change_device")
+        self.assertEqual(draft["stages"][1]["device"], "cpu")
+        self.assertEqual(draft["study_pipeline"]["nodes"][1]["stage_kind"], "change_device")
+        self.assertEqual(draft["study_pipeline"]["nodes"][1]["payload"]["device"], "cpu")
+
+        rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+        self.assertIn('study.stages.change_device("cpu")', rewritten)
 
     def test_study_builder_relax_stage_roundtrips_solver_and_dt(self) -> None:
         script = """

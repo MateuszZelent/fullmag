@@ -231,6 +231,17 @@ describe("ObjectVisualizationPanelModel", () => {
     ).toBe(false);
   });
 
+  it("loads the field catalog for airbox vectors even when surface coloring is solid", () => {
+    expect(
+      shouldLoadObjectVisualizationFieldCatalog({
+        requested: true,
+        surfaceColorSource: "solid",
+        targetActive: true,
+        vectorsVisible: true,
+      }),
+    ).toBe(true);
+  });
+
   it("keeps color picker input compatible with CSS token defaults", () => {
     expect(colorPickerInputValue("#00ffaa")).toBe("#00ffaa");
     expect(colorPickerInputValue("#00FFAA")).toBe("#00FFAA");
@@ -702,7 +713,7 @@ describe("ObjectVisualizationPanelModel", () => {
         {
           label: "Expected resource",
           value:
-            `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_eff")}?component=full&scope_kind=airbox&max_samples=1200`,
+            `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_eff")}?component=full&max_samples=1200&scope_kind=airbox`,
         },
         { label: "Catalog quantity", value: "available r3 full_domain" },
       ]),

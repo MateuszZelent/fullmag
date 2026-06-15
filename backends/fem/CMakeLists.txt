@@ -132,6 +132,7 @@ set(FEM_SOURCES
     cpu/frequency_domain/dense_driven_response.cpp
     cpu/frequency_domain/mfem_driven_response_validation.cpp
     cpu/frequency_domain/mfem_dmi_operator.cpp
+    cpu/frequency_domain/production_cpu_modal_eigen.cpp
     cpu/frequency_domain/production_cpu_driven_response.cpp
     gpu/cuda/demag_poisson/hypre_device_solver.cpp
     gpu/cuda/demag_poisson/operators.cpp
@@ -147,8 +148,10 @@ set(FEM_SOURCES
     src/frequency_domain/equilibrium_state.cpp
     src/frequency_domain/excitation.cpp
     src/frequency_domain/frequency_domain_contract.cpp
+    src/frequency_domain/modal_eigen_solver.cpp
     src/frequency_domain/operator_contract.cpp
     src/frequency_domain/operator_terms.cpp
+    src/frequency_domain/solver_progress.cpp
     src/frequency_domain/tangent_frame.cpp
     src/frequency_domain/zeeman_operator.cpp
     src/api.cpp
@@ -339,6 +342,14 @@ add_fem_source_facade_contract(
 add_fem_source_facade_contract(
     fem_frequency_domain_contract
     tests/frequency_domain/frequency_domain_contract.cpp
+)
+add_fem_source_facade_contract(
+    fem_modal_eigen_contract
+    tests/frequency_domain/modal_eigen_contract_test.cpp
+)
+add_fem_source_facade_contract(
+    fem_driven_response_contract
+    tests/frequency_domain/driven_response_contract_test.cpp
 )
 
 add_executable(fem_dmi_weak_residual tests/dmi_weak_residual.cpp)

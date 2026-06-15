@@ -71,6 +71,8 @@ void c_abi_exposes_native_relaxation_step() {
         read_text_file(root / "cpu" / "mfem" / "relaxation" / "relaxation_math.cpp");
     const std::string tangent_plane =
         read_text_file(root / "cpu" / "mfem" / "relaxation" / "tangent_plane_implicit.cpp");
+    const std::string mfem_context =
+        read_text_file(root / "cpu" / "mfem" / "runtime" / "mfem_context.cpp");
     const std::string demag =
         read_text_file(root / "cpu" / "mfem" / "interactions" / "demag.cpp");
     const auto upload_snapshot_start =
@@ -191,9 +193,17 @@ void c_abi_exposes_native_relaxation_step() {
                 std::string::npos &&
             relaxation_math.find("assemble_exchange_mass_preconditioner(") !=
                 std::string::npos &&
+            relaxation_math.find("cached_exchange_mass_preconditioner(") !=
+                std::string::npos &&
+            relaxation_math.find("exchange_mass_preconditioner_weight == exchange_weight") !=
+                std::string::npos &&
             relaxation_math.find("HypreBoomerAMG") != std::string::npos &&
             relaxation_math.find("HyprePCG") != std::string::npos,
-        "native FEM direct minimizers must share an exchange-plus-mass Hypre-capable preconditioner");
+        "native FEM direct minimizers must share a cached exchange-plus-mass Hypre-capable preconditioner");
+    check(
+        mfem_context.find("relaxation::destroy_exchange_mass_preconditioner_cache(ctx)") !=
+            std::string::npos,
+        "native FEM MFEM context teardown must destroy the direct-minimizer exchange-plus-mass preconditioner cache");
     check(
         relaxation_math.find("solver.GetConverged()") != std::string::npos &&
             relaxation_math.find("solver.GetFinalNorm()") != std::string::npos &&
@@ -324,11 +334,11 @@ void c_abi_exposes_native_relaxation_step() {
                 std::string::npos &&
             relaxation_math.find("magnetization contains non-finite values") !=
                 std::string::npos &&
-            relaxation_math.find("context_upload_magnetization_f64(") !=
+            upload_and_snapshot.find("set_relaxation_magnetization_state(") !=
                 std::string::npos &&
-            relaxation_math.find("!all_finite(m_xyz)") <
-                relaxation_math.find("context_upload_magnetization_f64("),
-        "native FEM CPU direct minimizers must reject invalid trial magnetization before uploading it to native state");
+            upload_and_snapshot.find("!all_finite(m_xyz)") <
+                upload_and_snapshot.find("set_relaxation_magnetization_state("),
+        "native FEM CPU direct minimizers must reject invalid trial magnetization before setting trial state");
     check(
         relaxation_math.find("sanitized_relaxation_step_size(") !=
                 std::string::npos &&
@@ -389,17 +399,40 @@ void c_abi_exposes_native_relaxation_step() {
                 std::string::npos,
         "all native FEM CPU direct minimizers must publish gradient convergence instead of returning an unclassified no-op step");
     check(
+        relaxation_math.find("bool take_cached_current_stats(") !=
+                std::string::npos &&
+            relaxation_math.find("ctx.relaxation.cached_current_stats_valid = false") !=
+                std::string::npos &&
+            relaxation_math.find("ctx.relaxation.cached_current_stats = trial_stats") !=
+                std::string::npos &&
+            relaxation_math.find("ctx.relaxation.cached_current_stats.wall_time_ns = 0") !=
+                std::string::npos &&
+            relaxation_math.find("ctx.relaxation.cached_current_stats.demag_solve_count = 0") !=
+                std::string::npos,
+        "native FEM CPU direct minimizers must cache accepted current stats without carrying old solve timings into the next step");
+    check(
+        projected_gradient.find("relaxation::take_cached_current_stats(ctx, current_stats)") !=
+                std::string::npos &&
+            nonlinear_cg.find("relaxation::take_cached_current_stats(ctx, current_stats)") !=
+                std::string::npos &&
+            tangent_plane.find("relaxation::take_cached_current_stats(ctx, current_stats)") !=
+                std::string::npos,
+        "all native FEM CPU direct minimizers must reuse accepted current stats before recomputing a fresh current snapshot");
+    check(
         projected_gradient.find("validate_tangent_gradient_field(") !=
                 std::string::npos &&
             projected_gradient.find("validate_tangent_gradient_field(") <
                 projected_gradient.find("g_norm_sq <= relaxation::kGradientFloor"),
         "native FEM projected-gradient BB must reject invalid tangent-gradient vectors before gradient-completion classification");
+    const auto pgbb_accepted_gradient_failure =
+        projected_gradient.find("accepted-gradient validation failure");
+    const auto pgbb_update_bb =
+        projected_gradient.rfind("update_bb_step_size(");
     check(
         projected_gradient.find("\"accepted\"") != std::string::npos &&
-            projected_gradient.find("update_bb_step_size(\n        ctx") !=
-                std::string::npos &&
-            projected_gradient.rfind("validate_tangent_gradient_field(") <
-                projected_gradient.find("update_bb_step_size(\n        ctx") &&
+            pgbb_accepted_gradient_failure != std::string::npos &&
+            pgbb_update_bb != std::string::npos &&
+            pgbb_accepted_gradient_failure < pgbb_update_bb &&
             projected_gradient.find("restore_previous_relaxation_state(") !=
                 std::string::npos,
         "native FEM projected-gradient BB must validate accepted-step tangent gradients before BB state updates and restore on failure");

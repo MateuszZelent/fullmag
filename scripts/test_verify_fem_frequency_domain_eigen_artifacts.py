@@ -29,11 +29,16 @@ def write_eigen_fixture(
     zarr_root_preferred_container_override: str | None = None,
     payload_size: int = 48,
     manifest_mode_resources_override: list[str] | None = None,
+    omit_mode_residual_relative_l2: bool = False,
+    omit_mode_omega_rad_s: bool = False,
+    omit_mode_tangent_leakage: bool = False,
+    gamma_rad_s_t_override: float | None = None,
 ) -> None:
     (root / "eigen" / "modes" / "sample_0000").mkdir(parents=True)
     (root / "eigen" / "mode_fields" / "sample_0000" / "mode_0000").mkdir(
         parents=True
     )
+    (root / "eigen" / "metadata").mkdir(parents=True)
     zarr_array_dir = (
         root
         / "eigen"
@@ -69,11 +74,22 @@ def write_eigen_fixture(
         "norm": 1.0,
         "max_amplitude": 1.0,
         "residual_norm": 1.0e-9,
+        "residual_absolute_l2": 1.0e-9,
+        "residual_relative_l2": 1.0e-12,
         "residual_linf": 1.0e-10,
+        "mass_norm": 1.0,
         "tangent_leakage_mean_abs": 0.0,
         "tangent_leakage_max_abs": 0.0,
         "dominant_polarization": "linear",
         "k_vector": [0.0, 0.0, 0.0],
+        "omega_rad_s": 6.283185307179586e9,
+        "gamma_rad_s_T": (
+            gamma_rad_s_t_override
+            if gamma_rad_s_t_override is not None
+            else 1.759457895880903e11
+        ),
+        "gamma0_rad_s_per_A_m": 2.211e5,
+        "mu0_T_m_per_A": 1.2566370614359173e-6,
     }
     if omit_spectrum_mode_field_resource_key:
         del mode_summary["mode_field_resource_key"]
@@ -152,11 +168,22 @@ def write_eigen_fixture(
         "mode_field_id": field_id,
         "mode_field_resource_key": field_resource,
         "residual_norm": 1.0e-9,
+        "residual_absolute_l2": 1.0e-9,
+        "residual_relative_l2": 1.0e-12,
         "residual_linf": 1.0e-10,
+        "mass_norm": 1.0,
         "tangent_leakage_mean_abs": 0.0,
         "tangent_leakage_max_abs": 0.0,
         "dominant_polarization": "linear",
         "k_vector": [0.0, 0.0, 0.0],
+        "omega_rad_s": 6.283185307179586e9,
+        "gamma_rad_s_T": (
+            gamma_rad_s_t_override
+            if gamma_rad_s_t_override is not None
+            else 1.759457895880903e11
+        ),
+        "gamma0_rad_s_per_A_m": 2.211e5,
+        "mu0_T_m_per_A": 1.2566370614359173e-6,
         "value_kind": "complex_spatial_vector",
         "component_basis": "global_xyz",
         "component_count": 3,
@@ -205,6 +232,12 @@ def write_eigen_fixture(
             "component_count": 3,
         },
     }
+    if omit_mode_residual_relative_l2:
+        del mode["residual_relative_l2"]
+    if omit_mode_omega_rad_s:
+        del mode["omega_rad_s"]
+    if omit_mode_tangent_leakage:
+        del mode["tangent_leakage_mean_abs"]
     if omit_mode_payload_encoding:
         del mode["payload_encoding"]
     if inline_mode_vectors:
@@ -215,6 +248,71 @@ def write_eigen_fixture(
     (root / "eigen" / "modes" / "sample_0000" / "mode_0000.json").write_text(
         json.dumps(mode)
     )
+    summary = {
+        "study_kind": "eigenmodes",
+        "solver_backend": "cpu_baseline_fem_eigen",
+        "solver_kind": "cpu_reference_symmetric",
+        "mode_count": 1,
+        "normalization": "unit_l2",
+        "damping_policy": "ignore",
+        "solver_diagnostics": {
+            "dense_reference_oracle": True,
+            "residual_definition": (
+                "relative_residual = ||K u - lambda M u||_2 / "
+                "(||K u||_2 + |lambda| * ||M u||_2)"
+            ),
+            "tangent_leakage_definition": (
+                "abs(m0 dot delta_m) over reconstructed real and imaginary mode vectors"
+            ),
+            "constants": {
+                "gamma_rad_s_T": (
+                    gamma_rad_s_t_override
+                    if gamma_rad_s_t_override is not None
+                    else 1.759457895880903e11
+                ),
+                "gamma0_rad_s_per_A_m": 2.211e5,
+                "mu0_T_m_per_A": 1.2566370614359173e-6,
+            },
+            "orthogonality": [
+                {
+                    "lhs_mode_index": 0,
+                    "rhs_mode_index": 0,
+                    "mass_inner_product": 1.0,
+                }
+            ],
+        },
+        "modes": [
+            {
+                "index": 0,
+                "frequency_hz": 1.0e9,
+                "frequency_real_hz": 1.0e9,
+                "frequency_imag_hz": 0.0,
+                "angular_frequency_rad_per_s": 6.283185307179586e9,
+                "omega_rad_s": 6.283185307179586e9,
+                "eigenvalue_real": 0.0,
+                "eigenvalue_imag": 6.283185307179586e9,
+                "norm": 1.0,
+                "max_amplitude": 1.0,
+                "residual_norm": 1.0e-9,
+                "residual_absolute_l2": 1.0e-9,
+                "residual_relative_l2": 1.0e-12,
+                "residual_linf": 1.0e-10,
+                "mass_norm": 1.0,
+                "tangent_leakage_mean_abs": 0.0,
+                "tangent_leakage_max_abs": 0.0,
+                "gamma_rad_s_T": (
+                    gamma_rad_s_t_override
+                    if gamma_rad_s_t_override is not None
+                    else 1.759457895880903e11
+                ),
+                "gamma0_rad_s_per_A_m": 2.211e5,
+                "mu0_T_m_per_A": 1.2566370614359173e-6,
+                "dominant_polarization": "linear",
+                "k_vector": [0.0, 0.0, 0.0],
+            }
+        ],
+    }
+    (root / "eigen" / "metadata" / "eigen_summary.json").write_text(json.dumps(summary))
     (root / "eigen" / "mode_fields.zarr" / ".zgroup").write_text(
         json.dumps({"zarr_format": 2})
     )
@@ -465,6 +563,42 @@ def test_validator_rejects_mode_payload_byte_count_mismatch(tmp_path: Path) -> N
 
     assert result.returncode != 0
     assert "payload_value_count" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_missing_residual_relative_l2(tmp_path: Path) -> None:
+    write_eigen_fixture(tmp_path, omit_mode_residual_relative_l2=True)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "residual_relative_l2" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_missing_omega_rad_s(tmp_path: Path) -> None:
+    write_eigen_fixture(tmp_path, omit_mode_omega_rad_s=True)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "omega_rad_s" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_missing_tangent_leakage(tmp_path: Path) -> None:
+    write_eigen_fixture(tmp_path, omit_mode_tangent_leakage=True)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "tangent_leakage_mean_abs" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_gamma_constant_unit_drift(tmp_path: Path) -> None:
+    write_eigen_fixture(tmp_path, gamma_rad_s_t_override=2.778981146586646e-1)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "gamma0_rad_s_per_A_m" in (result.stderr + result.stdout)
 
 
 def test_validator_accepts_exp_i_omega_t_phase_convention(tmp_path: Path) -> None:

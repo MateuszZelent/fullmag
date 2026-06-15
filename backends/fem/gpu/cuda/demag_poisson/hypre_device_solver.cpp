@@ -21,6 +21,8 @@
 #include <HYPRE_utilities.h>
 #endif
 
+#include <climits>
+#include <cstdlib>
 #include <memory>
 #include <string>
 
@@ -29,6 +31,68 @@ namespace fullmag::fem {
 namespace {
 
 #if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+int demag_amg_int_env(const char *name, int default_value)
+{
+    const char *raw = std::getenv(name);
+    if (raw == nullptr || raw[0] == '\0') {
+        return default_value;
+    }
+    char *end = nullptr;
+    const long parsed = std::strtol(raw, &end, 10);
+    if (end == raw || *end != '\0' || parsed < 0 || parsed > INT_MAX) {
+        return default_value;
+    }
+    return static_cast<int>(parsed);
+}
+
+bool demag_amg_optional_int_env(const char *name, int &value)
+{
+    const char *raw = std::getenv(name);
+    if (raw == nullptr || raw[0] == '\0') {
+        return false;
+    }
+    char *end = nullptr;
+    const long parsed = std::strtol(raw, &end, 10);
+    if (end == raw || *end != '\0' || parsed < 0 || parsed > INT_MAX) {
+        return false;
+    }
+    value = static_cast<int>(parsed);
+    return true;
+}
+
+bool demag_amg_real_env(const char *name, mfem::real_t &value)
+{
+    const char *raw = std::getenv(name);
+    if (raw == nullptr || raw[0] == '\0') {
+        return false;
+    }
+    char *end = nullptr;
+    const double parsed = std::strtod(raw, &end);
+    if (end == raw || *end != '\0' || parsed < 0.0) {
+        return false;
+    }
+    value = static_cast<mfem::real_t>(parsed);
+    return true;
+}
+
+void configure_demag_amg(mfem::HypreBoomerAMG &amg, const Context &ctx)
+{
+    amg.SetPrintLevel(static_cast<int>(ctx.demag.solver.print_level));
+    amg.SetRelaxType(demag_amg_int_env("FULLMAG_FEM_DEMAG_AMG_RELAX_TYPE", 18));
+    amg.SetCoarsening(demag_amg_int_env("FULLMAG_FEM_DEMAG_AMG_COARSENING", 8));
+    amg.SetInterpolation(demag_amg_int_env("FULLMAG_FEM_DEMAG_AMG_INTERPOLATION", 6));
+    amg.SetAggressiveCoarsening(
+        demag_amg_int_env("FULLMAG_FEM_DEMAG_AMG_AGGRESSIVE_COARSENING", 1));
+    mfem::real_t strength_threshold = 0.0;
+    if (demag_amg_real_env("FULLMAG_FEM_DEMAG_AMG_STRENGTH_THRESHOLD", strength_threshold)) {
+        amg.SetStrengthThresh(strength_threshold);
+    }
+    int max_levels = 0;
+    if (demag_amg_optional_int_env("FULLMAG_FEM_DEMAG_AMG_MAX_LEVELS", max_levels)) {
+        amg.SetMaxLevels(max_levels);
+    }
+}
+
 void configure_hypre_device_vendor_kernels()
 {
 #if defined(HYPRE_USING_CUDA) || defined(HYPRE_USING_GPU) || defined(HYPRE_USING_HIP) || defined(HYPRE_USING_DEVICE_OPENMP)
@@ -82,11 +146,7 @@ bool initialize_demag_poisson_hypre_device_solver(
     switch (ctx.demag.solver.preconditioner) {
     case FULLMAG_FEM_PRECONDITIONER_AMG: {
         auto amg = std::make_unique<mfem::HypreBoomerAMG>(*workspace.A_par);
-        amg->SetPrintLevel(static_cast<int>(ctx.demag.solver.print_level));
-        amg->SetRelaxType(18);
-        amg->SetCoarsening(8);
-        amg->SetInterpolation(6);
-        amg->SetAggressiveCoarsening(1);
+        configure_demag_amg(*amg, ctx);
         workspace.preconditioner = std::move(amg);
         break;
     }

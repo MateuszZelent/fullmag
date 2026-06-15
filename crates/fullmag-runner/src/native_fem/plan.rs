@@ -58,7 +58,17 @@ pub(crate) fn resolved_native_fem_demag_solver_policy(
 
     let mut policy = fullmag_ir::FemLinearSolverPolicy::default();
     if plan.enable_demag && native_fem_plan_requests_gpu_mfem_device(plan) {
-        policy.preconditioner = "JACOBI".to_string();
+        policy.preconditioner = if plan.relaxation.as_ref().is_some_and(|control| {
+            matches!(
+                control.algorithm,
+                fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
+            )
+        }) {
+            "AMG"
+        } else {
+            "JACOBI"
+        }
+        .to_string();
     }
     policy
 }

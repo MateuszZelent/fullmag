@@ -312,6 +312,7 @@ describe("StudyInspectorPanel", () => {
               torqueTolerance: "80",
               torqueToleranceFormatted: "1.005e-4 T / 8.000e1 A/m",
               torqueToleranceShortFormatted: "1.005e-4 T",
+              transition: null,
               untilSeconds: null,
               algorithm: null,
             },
@@ -328,6 +329,133 @@ describe("StudyInspectorPanel", () => {
     expect(html).toContain("max_torque_apm");
     expect(html).toContain("simulation/stages/execution@13");
     expect(html).toContain("runs/run-1/stages/stage-relax");
+  });
+
+  it("renders selected stage transition metadata", () => {
+    const html = renderToStaticMarkup(
+      <Accordion type="multiple" defaultValue={["selected-stage"]}>
+        <StudySelectedStageSection
+          stageExecutionRevision={16}
+          model={{
+            boundary: testBoundary(),
+            requested: testRequested(),
+            runtime: {
+              activeStageLabel: "Run 2",
+              commandBadge: "running",
+              commandError: null,
+              commandId: "cmd-run",
+              commandLabel: "Run running",
+              maxTorque: "unavailable",
+              progressPercent: 0,
+              relaxEnergyStop: null,
+              relaxTimeStop: null,
+              relaxTorqueStop: null,
+              runId: "run-2",
+              state: "running",
+            },
+            selectedStage: {
+              algorithm: null,
+              artifactRefs: [],
+              checkpointRef: null,
+              commandId: "cmd-run",
+              completedAtIso: null,
+              completedAtUnixMs: null,
+              energyTolerance: null,
+              index: 1,
+              kind: "run",
+              label: "Run 2",
+              maxSteps: null,
+              progressPercent: 0,
+              runtimeMetric: null,
+              stageId: "stage-run",
+              status: "running",
+              stopReason: null,
+              timeBudgetKind: "physical",
+              torqueTolerance: null,
+              torqueToleranceFormatted: null,
+              torqueToleranceShortFormatted: null,
+              transition: {
+                kind: "backend_transfer",
+                label: "Change device",
+                reason: "backend_change",
+                transferOperator: "identity_copy",
+                uiPresentation: "boundary_bar",
+              },
+              untilSeconds: null,
+            },
+            stages: [],
+          }}
+        />
+      </Accordion>,
+    );
+
+    expect(html).toContain("State transition");
+    expect(html).toContain("Change device");
+    expect(html).toContain("backend_transfer");
+    expect(html).toContain("identity_copy");
+    expect(html).toContain("simulation/stages/execution@16");
+  });
+
+  it("renders indeterminate progress for active eigenmode solves", () => {
+    const html = renderToStaticMarkup(
+      <Accordion type="multiple" defaultValue={["selected-stage"]}>
+        <StudySelectedStageSection
+          stageExecutionRevision={17}
+          model={{
+            boundary: testBoundary(),
+            requested: testRequested(),
+            runtime: {
+              activeStageLabel: "Eigenmodes 2",
+              commandBadge: "running",
+              commandError: null,
+              commandId: "cmd-eigen",
+              commandLabel: "Run running",
+              maxTorque: "unavailable",
+              progressPercent: 0,
+              relaxEnergyStop: null,
+              relaxTimeStop: null,
+              relaxTorqueStop: null,
+              runId: "run-eigen",
+              state: "running",
+            },
+            selectedStage: {
+              algorithm: null,
+              artifactRefs: [],
+              checkpointRef: null,
+              commandId: "cmd-eigen",
+              completedAtIso: null,
+              completedAtUnixMs: null,
+              energyTolerance: null,
+              index: 1,
+              kind: "eigenmodes",
+              label: "Eigenmodes 2",
+              lastProgressUnixMs: 1_781_445_105_275,
+              maxSteps: null,
+              progressDetail: "heartbeat 8.5s since last solver update",
+              progressLabel: "solving",
+              progressPercent: 35,
+              runtimeMetric: null,
+              stageId: "stage-eigen",
+              status: "running",
+              stopReason: null,
+              timeBudgetKind: "physical",
+              torqueTolerance: null,
+              torqueToleranceFormatted: null,
+              torqueToleranceShortFormatted: null,
+              transition: null,
+              untilSeconds: null,
+            },
+            stages: [],
+          }}
+        />
+      </Accordion>,
+    );
+
+    expect(html).toContain("Eigenmode solve progress");
+    expect(html).toContain("solving");
+    expect(html).toContain("heartbeat 8.5s since last solver update");
+    expect(html).not.toContain("fm-study-progress--indeterminate");
+    expect(html).toContain("aria-valuenow=\"35\"");
   });
 
   it("renders editable stage pipeline controls for relaxation authoring", () => {
@@ -382,6 +510,7 @@ describe("StudyInspectorPanel", () => {
                 torqueTolerance: "1e-6",
                 torqueToleranceFormatted: null,
                 torqueToleranceShortFormatted: null,
+                transition: null,
                 untilSeconds: null,
               },
             ],
@@ -411,6 +540,25 @@ describe("StudyInspectorPanel", () => {
     expect(html).toContain("RK45");
     expect(html).toContain("Nonlinear CG");
     expect(html).toContain("Tangent-plane implicit");
+  });
+
+  it("renders spectral authoring selects with Python DSL option values", () => {
+    const draft = createDefaultStudyStageDraft("eigenmodes", 0);
+    const html = renderToStaticMarkup(
+      <StudyStageDraftEditor
+        draft={draft}
+        index={0}
+        validation={[]}
+        onUpdate={() => undefined}
+      />,
+    );
+
+    expect(html).toContain('value="unit_max_amplitude"');
+    expect(html).toContain('value="include"');
+    expect(html).toContain('value="artifact"');
+    expect(html).not.toContain('value="max_component"');
+    expect(html).not.toContain('value="linearized"');
+    expect(html).not.toContain('value="current_state"');
   });
 
   it("renders expanded hysteresis authoring controls", () => {
@@ -698,6 +846,7 @@ describe("StudyInspectorPanel", () => {
                 torqueTolerance: "1e-6",
                 torqueToleranceFormatted: null,
                 torqueToleranceShortFormatted: null,
+                transition: null,
                 untilSeconds: null,
               },
             ],
@@ -850,5 +999,89 @@ describe("StudyInspectorPanel", () => {
     expect(html).toContain("Include demag");
     expect(html).toContain("k sampling");
     expect(html).toContain("BC");
+  });
+
+  it("shows auto-scaled frequency previews while storing spectral draft values in Hz", () => {
+    const responseDraft = {
+      ...createDefaultStudyStageDraft("frequency_response", 0),
+      frequenciesHz: "9500000000 12000000000",
+    };
+    const eigenDraft = {
+      ...createDefaultStudyStageDraft("eigenmodes", 0),
+      target: "near_frequency",
+      targetFrequency: "750000000",
+    };
+
+    const responseHtml = renderToStaticMarkup(
+      <StudyStageDraftEditor
+        draft={responseDraft}
+        index={0}
+        validation={[]}
+        onUpdate={() => undefined}
+      />,
+    );
+    const eigenHtml = renderToStaticMarkup(
+      <StudyStageDraftEditor
+        draft={eigenDraft}
+        index={0}
+        validation={[]}
+        onUpdate={() => undefined}
+      />,
+    );
+
+    expect(responseHtml).toContain("Stored as Hz; preview 9.5 GHz, 12 GHz");
+    expect(responseHtml).toContain('value="9500000000 12000000000"');
+    expect(eigenHtml).toContain("Stored as Hz; preview 750 MHz");
+    expect(eigenHtml).toContain('value="750000000"');
+  });
+
+  it("renders change-device stage authoring controls", () => {
+    const draft = createDefaultStudyStageDraft("change_device", 0);
+    const html = renderToStaticMarkup(
+      <Accordion type="multiple" defaultValue={["pipeline"]}>
+        <StudyPipelineSection
+          activeStageIndex={0}
+          authoringBusy={false}
+          authoringFeedback={null}
+          commandDisabledReason={() => null}
+          draft={draft}
+          draftIndex={0}
+          drafts={[draft]}
+          model={{
+            boundary: testBoundary(),
+            requested: testRequested(),
+            runtime: {
+              activeStageLabel: "Change Device 1",
+              commandBadge: "idle",
+              commandError: null,
+              commandId: null,
+              commandLabel: "No queued commands",
+              maxTorque: "unavailable",
+              progressPercent: 0,
+              relaxEnergyStop: null,
+              relaxTimeStop: null,
+              relaxTorqueStop: null,
+              runId: "none",
+              state: "idle",
+            },
+            selectedStage: null,
+            stages: [],
+          }}
+          onAddStage={() => undefined}
+          onCommit={() => undefined}
+          onDuplicateStage={() => undefined}
+          onMoveStage={() => undefined}
+          onRemoveStage={() => undefined}
+          onSelectDraft={() => undefined}
+          onUpdateDraft={() => undefined}
+          runCommand={() => undefined}
+        />
+      </Accordion>,
+    );
+
+    expect(html).toContain("Change Device");
+    expect(html).toContain("Device");
+    expect(html).toContain("CPU");
+    expect(html).toContain("CUDA");
   });
 });

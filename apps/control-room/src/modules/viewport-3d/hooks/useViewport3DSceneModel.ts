@@ -19,7 +19,10 @@ import type {
   ResourceRevision,
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
-import type { DecodedFieldVector } from "@/kernel/api/codecs";
+import {
+  asDecodedComplexFieldVector,
+  type DecodedFieldVector,
+} from "@/kernel/api/codecs";
 import type { MeshSizeHistogramHighlight } from "@/kernel/events/eventTypes";
 import {
   isMagneticOnlyQuantityId,
@@ -61,7 +64,10 @@ import {
 } from "@/kernel/visualization/ObjectVisualizationController";
 import { useObjectVisualizationSelector } from "@/kernel/visualization/useObjectVisualization";
 import { useCameraRegistryCamera } from "@/kernel/visualization/useCameraRegistry";
-import { useAnalysisFieldOverlay } from "@/kernel/visualization/AnalysisFieldOverlayController";
+import {
+  useAnalysisFieldOverlay,
+  type AnalysisFieldOverlayAppearanceState,
+} from "@/kernel/visualization/AnalysisFieldOverlayController";
 import { startAnalysisFieldOverlayPhaseAnimation } from "@/kernel/visualization/AnalysisFieldOverlayPhaseAnimation";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 import { resolveVisualizationEffectiveRenderMode } from "@/kernel/visualization/useVisualizationClientAck";
@@ -374,9 +380,10 @@ export function resolveViewport3DMeshBackedRegionOverlays({
   const seen = new Set<string>();
   for (const manifestRegion of manifestRegions ?? []) {
     const regionId = asNonEmptyString(manifestRegion.source_region_candidate_id);
-    const meshPartIds = (manifestRegion.mesh_part_ids ?? [])
-      .map(asNonEmptyString)
-      .filter((entry): entry is string => Boolean(entry));
+    const meshPartIds = (manifestRegion.mesh_part_ids ?? []).flatMap((entry) => {
+      const meshPartId = asNonEmptyString(entry);
+      return meshPartId ? [meshPartId] : [];
+    });
     if (!regionId || meshPartIds.length === 0) continue;
 
     for (const sourceObjectId of manifestRegion.source_object_ids ?? []) {
@@ -466,9 +473,11 @@ export function resolveViewport3DRegionTargetByPartId(
     if (!regionId || !region.mesh_part_ids || region.mesh_part_ids.length === 0) {
       continue;
     }
-    const objectId = (region.source_object_ids ?? [])
-      .map(asNonEmptyString)
-      .find((entry): entry is string => Boolean(entry));
+    let objectId: string | null = null;
+    for (const sourceObjectId of region.source_object_ids ?? []) {
+      objectId = asNonEmptyString(sourceObjectId);
+      if (objectId) break;
+    }
     if (!objectId) continue;
     const target: VisualizationTargetRef = {
       id: visualizationTargetIdForSceneObject(objectId, regionId),
@@ -864,6 +873,8 @@ export function resolveViewport3DScopedVectorFieldQuery({
 }
 
 export function resolveViewport3DPrimaryFieldRenderOptions({
+  analysisOverlayAppearance,
+  analysisOverlayActive = false,
   fieldRenderOptions,
   getPartSettings,
   magneticParts,
@@ -871,6 +882,8 @@ export function resolveViewport3DPrimaryFieldRenderOptions({
   vectorDomain,
   scopedVectorOnlyPartIds,
 }: {
+  analysisOverlayAppearance?: AnalysisFieldOverlayAppearanceState | null;
+  analysisOverlayActive?: boolean;
   fieldRenderOptions: Viewport3DFieldRenderOptions;
   getPartSettings: (part: Viewport3DMeshPart) => {
     activeQuantityId: string;
@@ -896,14 +909,16 @@ export function resolveViewport3DPrimaryFieldRenderOptions({
   for (const partModel of magneticParts) {
     const settings = getPartSettings(partModel.part);
     if (
-      !sameViewport3DQuantityId(settings.activeQuantityId, quantityId) ||
+      (!analysisOverlayActive &&
+        !sameViewport3DQuantityId(settings.activeQuantityId, quantityId)) ||
       !settings.visible
     ) {
       continue;
     }
-    if (settings.shaderVisible) {
+    if (analysisOverlayAppearance?.shaderVisible ?? settings.shaderVisible) {
       const scalarColorMode = surfaceColorSourceToColorMode(
-        settings.surfaceColorSource,
+        analysisOverlayAppearance?.surfaceColorSource ??
+          settings.surfaceColorSource,
       );
       if (scalarColorMode) {
         scalarColorModes.add(scalarColorMode);
@@ -911,11 +926,14 @@ export function resolveViewport3DPrimaryFieldRenderOptions({
     }
     if (
       magneticVectorsAllowed &&
-      settings.vectorsVisible &&
-      settings.vectorBudget > 0 &&
+      (analysisOverlayAppearance?.vectorsVisible ?? settings.vectorsVisible) &&
+      (analysisOverlayAppearance?.vectorBudget ?? settings.vectorBudget) > 0 &&
       !scopedVectorOnlyPartIds?.has(partModel.part.id)
     ) {
-      partVectorBudgets.set(partModel.part.id, settings.vectorBudget);
+      partVectorBudgets.set(
+        partModel.part.id,
+        analysisOverlayAppearance?.vectorBudget ?? settings.vectorBudget,
+      );
     }
   }
 
@@ -923,8 +941,46 @@ export function resolveViewport3DPrimaryFieldRenderOptions({
     ...fieldRenderOptions,
     fullVectorBudget: 0,
     partVectorBudgets,
+    scalarColorPalette:
+      analysisOverlayAppearance?.scalarColorPalette ??
+      fieldRenderOptions.scalarColorPalette,
     scalarColorModes,
     scalarColorsVisible: scalarColorModes.size > 0,
+  };
+}
+
+function applyAnalysisOverlayAppearance(
+  settings: VisualizationTargetSettings,
+  appearance: AnalysisFieldOverlayAppearanceState | null | undefined,
+): VisualizationTargetSettings {
+  if (!appearance) return settings;
+  const surfaceColorSource =
+    appearance.surfaceColorSource ?? settings.surfaceColorSource;
+  const shaderColorMode =
+    surfaceColorSource === "solid"
+      ? "monochrome"
+      : surfaceColorSourceToColorMode(surfaceColorSource) ??
+        settings.shaderColorMode;
+  return {
+    ...settings,
+    ...(appearance.scalarColorPalette
+      ? { scalarColorPalette: appearance.scalarColorPalette }
+      : {}),
+    ...(appearance.shaderMonoColor
+      ? { shaderMonoColor: appearance.shaderMonoColor }
+      : {}),
+    ...(appearance.shaderVisible === undefined
+      ? {}
+      : { shaderVisible: appearance.shaderVisible }),
+    shaderColorMode,
+    surfaceColorSource,
+    ...(appearance.geometryScope ? { geometryScope: appearance.geometryScope } : {}),
+    ...(appearance.vectorBudget === undefined
+      ? {}
+      : { vectorBudget: appearance.vectorBudget }),
+    ...(appearance.vectorsVisible === undefined
+      ? {}
+      : { vectorsVisible: appearance.vectorsVisible }),
   };
 }
 
@@ -1037,6 +1093,18 @@ export function mergeViewport3DFieldQuery(
   return current.component === next.component
     ? resolveViewport3DReplayFieldQuery(current, replayQuery)
     : resolveViewport3DReplayFieldQuery(FULL_FIELD_QUERY, replayQuery);
+}
+
+export function resolveViewport3DAnalysisComplexFieldQuery(
+  query: FieldVectorQuery,
+): FieldVectorQuery {
+  const next = { ...query };
+  delete next.phase_rad;
+  return {
+    ...next,
+    component: "full",
+    view: "complex",
+  };
 }
 
 function selectViewport3DComputeRunning(
@@ -1657,13 +1725,21 @@ export function useViewport3DSceneModel({
   );
   const getPartSettings = useCallback(
     (part: Viewport3DMeshPart) =>
-      resolveViewport3DPartVisualizationSettings({
-        objectVisualizationSnapshot,
-        part,
-        regionTarget: regionTargetByPartId.get(part.id),
-        renderingState,
-      }),
-    [objectVisualizationSnapshot, regionTargetByPartId, renderingState],
+      applyAnalysisOverlayAppearance(
+        resolveViewport3DPartVisualizationSettings({
+          objectVisualizationSnapshot,
+          part,
+          regionTarget: regionTargetByPartId.get(part.id),
+          renderingState,
+        }),
+        analysisOverlay?.appearance,
+      ),
+    [
+      analysisOverlay?.appearance,
+      objectVisualizationSnapshot,
+      regionTargetByPartId,
+      renderingState,
+    ],
   );
   const getObjectSettings = useCallback(
     (object: Viewport3DPrimitiveObject) =>
@@ -1853,8 +1929,10 @@ export function useViewport3DSceneModel({
     vectorDomain,
   });
   const primaryFieldRenderOptions = useMemo(
-    () =>
-      resolveViewport3DPrimaryFieldRenderOptions({
+    () => ({
+      ...resolveViewport3DPrimaryFieldRenderOptions({
+        analysisOverlayAppearance: analysisOverlay?.appearance,
+        analysisOverlayActive: Boolean(analysisOverlay),
         fieldRenderOptions,
         getPartSettings,
         magneticParts: currentTopologyRenderModel?.magneticParts ?? [],
@@ -1862,7 +1940,13 @@ export function useViewport3DSceneModel({
         scopedVectorOnlyPartIds: magneticPartScopedVectorIds,
         vectorDomain,
       }),
+      visualizationPhaseRad:
+        analysisOverlay?.visualizationPhaseRad ??
+        analysisOverlay?.query.phase_rad ??
+        null,
+    }),
     [
+      analysisOverlay,
       currentTopologyRenderModel?.magneticParts,
       fieldRenderOptions,
       getPartSettings,
@@ -1907,19 +1991,19 @@ export function useViewport3DSceneModel({
       }
       return partFieldVectors.size > 0
         ? {
-            ...fieldRenderOptions,
+            ...primaryFieldRenderOptions,
             partFieldVectors,
           }
-        : fieldRenderOptions;
+        : primaryFieldRenderOptions;
     },
     [
       airboxFieldVectors.data,
       airboxSettings.activeQuantityId,
       airboxQuantityCompatible,
       currentTopologyRenderModel,
-      fieldRenderOptions,
       getPartSettings,
       magneticPartFieldVectors.data,
+      primaryFieldRenderOptions,
       targetQuantityFieldVectors.data,
     ],
   );
@@ -2018,6 +2102,19 @@ export function useViewport3DSceneModel({
     fieldVectorEnabled,
     { pauseLoad: fieldUpdateHoldActive },
   );
+  const analysisComplexFieldQuery = useMemo(
+    () =>
+      analysisOverlay
+        ? resolveViewport3DAnalysisComplexFieldQuery(analysisOverlay.query)
+        : {},
+    [analysisOverlay],
+  );
+  const analysisComplexFieldVector = useViewport3DFieldVector(
+    primaryFieldQuantityId,
+    analysisComplexFieldQuery,
+    Boolean(analysisOverlay) && fieldVectorEnabled,
+    { pauseLoad: fieldUpdateHoldActive },
+  );
   const fieldDataIssue = useMemo<Viewport3DFieldDataIssue | null>(() => {
     const fieldVectorErrorMessage =
       fieldVectorEnabled && fieldVector.error ? fieldVector.error.message : null;
@@ -2057,6 +2154,10 @@ export function useViewport3DSceneModel({
     ],
   );
   const committedFieldVector = fieldVector.data ?? null;
+  const analysisComplexField = useMemo(
+    () => asDecodedComplexFieldVector(analysisComplexFieldVector.data),
+    [analysisComplexFieldVector.data],
+  );
   const fdmFieldVector =
     sameViewport3DQuantityId(fdmSettings.activeQuantityId, primaryFieldQuantityId)
       ? committedFieldVector
@@ -2103,9 +2204,10 @@ export function useViewport3DSceneModel({
     scalarColorPalette,
   ]);
   const chunkedScalarColors = useViewport3DChunkedScalarColors({
-    colorModes: fieldRenderOptions.scalarColorModes,
-    colorPalette: scalarColorPalette,
-    enabled: fieldRenderOptions.scalarColorsVisible !== false,
+    colorModes: primaryFieldRenderOptions.scalarColorModes,
+    colorPalette:
+      primaryFieldRenderOptions.scalarColorPalette ?? scalarColorPalette,
+    enabled: primaryFieldRenderOptions.scalarColorsVisible !== false,
     fieldVector: committedFieldVector,
     topology: currentTopologyRenderModel,
   });
@@ -2117,7 +2219,10 @@ export function useViewport3DSceneModel({
           currentTopologyRenderModel,
           committedFieldVector,
           vectorScale,
-          resolvedFieldRenderOptions,
+          {
+            ...resolvedFieldRenderOptions,
+            complexFieldVector: analysisComplexField,
+          },
         ),
     );
     return mergeViewport3DFieldScalarColors(
@@ -2129,6 +2234,7 @@ export function useViewport3DSceneModel({
     chunkedScalarColors.colors,
     committedFieldVector,
     currentTopologyRenderModel,
+    analysisComplexField,
     resolvedFieldRenderOptions,
     vectorColorMode,
     vectorScale,

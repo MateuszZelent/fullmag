@@ -87,6 +87,7 @@ type ExplorerNodeKind =
   | "study.stage.hysteresis"
   | "study.stage.relax"
   | "study.stage.run"
+  | "study.stage.change_device"
   | "study.stage.save_state"
   | "results.root"
   | "results.frequency_domain.root"
@@ -96,12 +97,14 @@ type ExplorerNodeKind =
   | "results.frequency_domain.fmr_modal_spectrum"
   | "results.frequency_domain.fmr_response_sweep"
   | "results.frequency_domain.fmr_peaks"
+  | "results.frequency_domain.fmr_peak"
   | "results.frequency_domain.dispersion"
   | "results.frequency_domain.response_map"
   | "results.eigen.root"
   | "results.eigen.study"
   | "results.eigen.spectrum"
   | "results.eigen.modes"
+  | "results.eigen.modes.visualization"
   | "results.eigen.mode"
   | "results.eigen.dispersion"
   | "results.eigen.k_path"
@@ -166,7 +169,7 @@ type ExplorerNodeKind =
   | "diagnostics.frequency_domain.periodic_floquet"
   | "diagnostics.resource";
 
-export type FrequencyDomainCalculationMode =
+type FrequencyDomainCalculationMode =
   | "fmr_modal"
   | "fmr_response"
   | "free_modes"
@@ -230,6 +233,7 @@ export interface ExplorerNode {
   fieldId?: string;
   fieldOrientation?: string;
   fieldRevision?: number | string;
+  fmrPeakIndex?: number;
   frequencyIndex?: number;
   icon?: ExplorerIconToken;
   hysteresisExecutionNodeId?: string;
@@ -379,6 +383,7 @@ interface ModelTreeStudySnapshot {
 
 export interface ModelTreeStudyStageSnapshot {
   artifactName?: string | null;
+  device?: string | null;
   energyTolerance?: string | number | null;
   index: number;
   kind: string;

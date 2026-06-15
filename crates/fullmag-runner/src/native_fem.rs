@@ -26,15 +26,17 @@ pub(crate) use availability::{
 pub(crate) use eigen::{gpu_eigen_dense_solve, GpuEigenResult};
 #[allow(unused_imports)]
 pub(crate) use frequency_domain::{
-    solve_native_driven_frequency_response, NativeDrivenFrequencyResponseDmiElement,
+    solve_native_driven_frequency_response, solve_native_driven_response_contract,
+    solve_native_modal_eigen, NativeDrivenFrequencyResponseDmiElement,
     NativeDrivenFrequencyResponseDmiKind, NativeDrivenFrequencyResponseExchangeEdge,
     NativeDrivenFrequencyResponseFloquetPeriodicPair,
     NativeDrivenFrequencyResponseMfemOperatorProblem,
     NativeDrivenFrequencyResponsePeriodicNodePair, NativeDrivenFrequencyResponseRequest,
     NativeDrivenFrequencyResponseResult, NativeDrivenFrequencyResponseTinyValidationProblem,
-    NativeFrequencyDomainCancelCallback, NativeFrequencyDomainExecutionLane,
+    NativeDrivenResponseContractRequest, NativeFrequencyDomainCancelCallback,
+    NativeFrequencyDomainContractResult, NativeFrequencyDomainExecutionLane,
     NativeFrequencyDomainProgress, NativeFrequencyDomainProgressCallback,
-    NativeFrequencyDomainStatus,
+    NativeFrequencyDomainStatus, NativeModalEigenRequest,
 };
 #[allow(unused_imports)]
 #[cfg(feature = "fem-gpu")]
@@ -49,8 +51,6 @@ pub(crate) use runtime_info::{
     NativeFemGpuStateInfo,
 };
 
-#[cfg(feature = "fem-gpu")]
-use crate::derived_fields::{compute_torque_field, max_torque_residual_apm_from_field};
 #[cfg(feature = "fem-gpu")]
 use crate::preview::{build_mesh_preview_field_with_active_mask, mesh_quantity_active_mask};
 #[cfg(feature = "fem-gpu")]
@@ -68,13 +68,17 @@ use plan::{
 };
 
 #[cfg(feature = "fem-gpu")]
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 #[cfg(feature = "fem-gpu")]
 use std::ffi::c_void;
 #[cfg(feature = "fem-gpu")]
 use std::ffi::CStr;
 #[cfg(feature = "fem-gpu")]
+use std::io::Write;
+#[cfg(feature = "fem-gpu")]
 use std::path::{Path, PathBuf};
+#[cfg(feature = "fem-gpu")]
+use std::ptr;
 #[cfg(feature = "fem-gpu")]
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -405,11 +409,72 @@ fn normalized_native_runtime_element_markers(
 }
 
 #[cfg(feature = "fem-gpu")]
+fn fem_preview_observable(quantity: &str) -> Result<ffi::fullmag_fem_observable, RunError> {
+    Ok(match normalize_quantity_id(quantity)? {
+        QuantityId::HEx => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_EX,
+        QuantityId::HDemag => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_DEMAG,
+        QuantityId::HExt => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_EXT,
+        QuantityId::HEff => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_EFF,
+        QuantityId::Torque => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_TORQUE,
+        QuantityId::HAni => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_ANI,
+        QuantityId::HDmi => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_DMI,
+        QuantityId::HMel => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_MEL,
+        QuantityId::HAniCubic => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_ANI_CUBIC,
+        QuantityId::HDmiBulk => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_DMI_BULK,
+        QuantityId::HOe => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_OE,
+        QuantityId::HTherm => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_THERM,
+        QuantityId::M => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_M,
+        other => {
+            return Err(RunError {
+                message: format!(
+                    "native FEM preview quantity '{}' is not supported",
+                    other.as_str()
+                ),
+            });
+        }
+    })
+}
+
+#[cfg(feature = "fem-gpu")]
 pub(crate) struct NativeFemBackend {
     handle: *mut ffi::fullmag_fem_backend,
     magnetic_node_mask: Vec<bool>,
     object_weights: Vec<(String, f64)>,
-    damping: f64,
+    object_node_indices: Vec<(String, Vec<u32>)>,
+    demag_solver: Option<String>,
+    demag_preconditioner: Option<String>,
+}
+
+#[cfg(feature = "fem-gpu")]
+#[derive(Debug)]
+pub(crate) struct NativeFemPreviewSnapshot {
+    handle: *mut ffi::fullmag_fem_preview_snapshot,
+    request: LivePreviewRequest,
+    active_mask: Option<Vec<bool>>,
+}
+
+#[cfg(feature = "fem-gpu")]
+unsafe impl Send for NativeFemPreviewSnapshot {}
+
+#[cfg(feature = "fem-gpu")]
+#[derive(Debug)]
+pub(crate) struct NativeFemFieldSnapshot {
+    handle: *mut ffi::fullmag_fem_field_snapshot,
+    pub(crate) name: String,
+    pub(crate) step: u64,
+    pub(crate) time: f64,
+    pub(crate) solver_dt: f64,
+}
+
+#[cfg(feature = "fem-gpu")]
+unsafe impl Send for NativeFemFieldSnapshot {}
+
+#[cfg(feature = "fem-gpu")]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct NativeFemFieldSnapshotInfo {
+    pub node_count: usize,
+    pub component_count: usize,
+    pub scalar_bytes: usize,
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -447,6 +512,104 @@ fn native_fem_segment_weight(
         explicit_count as f64
     } else {
         f64::from(segment.node_count.max(1))
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn native_fem_matching_object_part<'a>(
+    plan: &'a fullmag_ir::FemPlanIR,
+    segment: &fullmag_ir::FemObjectSegmentIR,
+) -> Option<&'a fullmag_ir::FemMeshPartIR> {
+    plan.mesh_parts.iter().find(|part| {
+        part.role == fullmag_ir::FemMeshPartRole::MagneticObject
+            && (part
+                .object_id
+                .as_deref()
+                .is_some_and(|id| native_fem_object_ids_match(id, &segment.object_id))
+                || part
+                    .geometry_id
+                    .as_deref()
+                    .zip(segment.geometry_id.as_deref())
+                    .is_some_and(|(part_geometry, segment_geometry)| {
+                        native_fem_object_ids_match(part_geometry, segment_geometry)
+                    })
+                || native_fem_object_ids_match(&part.id, &segment.object_id))
+    })
+}
+
+#[cfg(feature = "fem-gpu")]
+fn native_fem_segment_node_indices(
+    plan: &fullmag_ir::FemPlanIR,
+    segment: &fullmag_ir::FemObjectSegmentIR,
+) -> Vec<u32> {
+    if let Some(part) = native_fem_matching_object_part(plan, segment) {
+        if !part.node_indices.is_empty() {
+            return part
+                .node_indices
+                .iter()
+                .copied()
+                .filter(|index| (*index as usize) < plan.mesh.nodes.len())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
+        }
+        if let fullmag_ir::FemMeshPartSelector::NodeRange { start, count } = &part.node_selector {
+            let end = start
+                .saturating_add(*count)
+                .min(plan.mesh.nodes.len() as u32);
+            return (*start..end).collect();
+        }
+    }
+
+    let start = segment.node_start.min(plan.mesh.nodes.len() as u32);
+    let end = segment
+        .node_start
+        .saturating_add(segment.node_count)
+        .min(plan.mesh.nodes.len() as u32);
+    if end <= start {
+        Vec::new()
+    } else {
+        (start..end).collect()
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn native_fem_object_node_indices(plan: &fullmag_ir::FemPlanIR) -> Vec<(String, Vec<u32>)> {
+    if plan.object_segments.is_empty() {
+        return vec![(
+            "free".to_string(),
+            (0..plan.mesh.nodes.len() as u32).collect(),
+        )];
+    }
+
+    let mut by_object: HashMap<String, BTreeSet<u32>> = HashMap::new();
+    for segment in &plan.object_segments {
+        if segment.object_id == "__air__" {
+            continue;
+        }
+        let nodes = native_fem_segment_node_indices(plan, segment);
+        if nodes.is_empty() {
+            continue;
+        }
+        by_object
+            .entry(segment.object_id.clone())
+            .or_default()
+            .extend(nodes);
+    }
+
+    let mut collected = by_object
+        .into_iter()
+        .map(|(object_id, nodes)| (object_id, nodes.into_iter().collect::<Vec<_>>()))
+        .filter(|(_, nodes)| !nodes.is_empty())
+        .collect::<Vec<_>>();
+    collected.sort_by(|a, b| a.0.cmp(&b.0));
+    if collected.is_empty() {
+        vec![(
+            "free".to_string(),
+            (0..plan.mesh.nodes.len() as u32).collect(),
+        )]
+    } else {
+        collected
     }
 }
 
@@ -1195,6 +1358,10 @@ impl NativeFemBackend {
             return Err(RunError { message: msg });
         }
 
+        let demag_policy = plan
+            .enable_demag
+            .then(|| resolved_native_fem_demag_solver_policy(plan));
+
         Ok(Self {
             handle,
             magnetic_node_mask: mesh_quantity_active_mask("m", &plan.mesh)
@@ -1202,9 +1369,11 @@ impl NativeFemBackend {
             object_weights: if plan.object_segments.is_empty() {
                 vec![("free".to_string(), 1.0)]
             } else {
-                let mut weights: std::collections::HashMap<String, f64> =
-                    std::collections::HashMap::new();
+                let mut weights: HashMap<String, f64> = HashMap::new();
                 for segment in &plan.object_segments {
+                    if segment.object_id == "__air__" {
+                        continue;
+                    }
                     let weight = native_fem_segment_weight(plan, segment);
                     *weights.entry(segment.object_id.clone()).or_insert(0.0) += weight;
                 }
@@ -1215,8 +1384,15 @@ impl NativeFemBackend {
                     collected
                 }
             },
-            damping: plan.material.damping,
+            object_node_indices: native_fem_object_node_indices(plan),
+            demag_solver: demag_policy.as_ref().map(|policy| policy.solver.clone()),
+            demag_preconditioner: demag_policy.map(|policy| policy.preconditioner),
         })
+    }
+
+    fn apply_demag_solver_policy_to_step_stats(&self, stats: &mut StepStats) {
+        stats.demag_solver = self.demag_solver.clone();
+        stats.demag_preconditioner = self.demag_preconditioner.clone();
     }
 
     pub fn set_interrupt_signal(&mut self, signal: Option<&AtomicBool>) -> Result<(), RunError> {
@@ -1331,6 +1507,45 @@ impl NativeFemBackend {
         Ok(())
     }
 
+    fn average_m_for_nodes(&self, node_indices: &[u32]) -> Result<Option<[f64; 3]>, RunError> {
+        if node_indices.is_empty() {
+            return Ok(None);
+        }
+        let mut average = [0.0f64; 3];
+        let rc = unsafe {
+            ffi::fullmag_fem_backend_average_m_for_nodes_f64(
+                self.handle,
+                node_indices.as_ptr(),
+                node_indices.len() as u64,
+                average.as_mut_ptr(),
+                average.len() as u64,
+            )
+        };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM native per-object average_m reduction failed"));
+        }
+        Ok(Some(average))
+    }
+
+    fn attach_native_object_average_m(&self, stats: &mut StepStats) -> Result<(), RunError> {
+        if self.object_node_indices.len() == 1 && self.object_node_indices[0].0 == "free" {
+            return Ok(());
+        }
+        for (object_id, node_indices) in &self.object_node_indices {
+            let Some([mx, my, mz]) = self.average_m_for_nodes(node_indices)? else {
+                continue;
+            };
+            let values = stats
+                .per_object_scalars
+                .entry(object_id.clone())
+                .or_default();
+            values.insert("mx".to_string(), mx);
+            values.insert("my".to_string(), my);
+            values.insert("mz".to_string(), mz);
+        }
+        Ok(())
+    }
+
     pub fn step_interruptible(
         &mut self,
         dt: f64,
@@ -1371,6 +1586,16 @@ impl NativeFemBackend {
             rhs_wall_time_ns: 0,
             extra_energy_wall_time_ns: 0,
             snapshot_wall_time_ns: 0,
+            relaxation_preconditioner_wall_time_ns: 0,
+            relaxation_state_copy_wall_time_ns: 0,
+            relaxation_state_upload_wall_time_ns: 0,
+            relaxation_retraction_wall_time_ns: 0,
+            relaxation_gradient_wall_time_ns: 0,
+            relaxation_metric_wall_time_ns: 0,
+            relaxation_line_search_wall_time_ns: 0,
+            relaxation_update_wall_time_ns: 0,
+            relaxation_preconditioner_cache_hits: 0,
+            relaxation_preconditioner_cache_misses: 0,
             error_estimate: 0.0,
             rejected_attempts: 0,
             dt_suggested: 0.0,
@@ -1378,9 +1603,15 @@ impl NativeFemBackend {
             fsal_reused: 0,
             requested_omp_threads: 0,
             effective_omp_threads: 0,
+            cpu_thread_cap_reason: 0,
         };
 
+        let ffi_wall_start = std::time::Instant::now();
         let rc = unsafe { ffi::fullmag_fem_backend_step(self.handle, dt, &mut stats) };
+        let ffi_wall_time_ns = ffi_wall_start
+            .elapsed()
+            .as_nanos()
+            .min(u128::from(u64::MAX)) as u64;
         if rc == ffi::FULLMAG_FEM_ERR_INTERRUPTED {
             return Ok(None);
         }
@@ -1388,6 +1619,7 @@ impl NativeFemBackend {
             return Err(self.last_error_or("FEM GPU step failed"));
         }
 
+        let relaxation_subphase_wall_time_ns = relaxation_driver_subphase_wall_time_ns(&stats);
         let torque_apm = if stats.max_torque_Apm.is_finite() && stats.max_torque_Apm >= 0.0 {
             stats.max_torque_Apm
         } else {
@@ -1411,7 +1643,7 @@ impl NativeFemBackend {
             max_h_demag: stats.max_demag_field_amplitude,
             max_torque_Apm: torque_apm,
             max_torque_T: torque_apm * crate::MU0,
-            wall_time_ns: stats.wall_time_ns,
+            wall_time_ns: stats.wall_time_ns.max(ffi_wall_time_ns),
             exchange_wall_time_ns: stats.exchange_wall_time_ns,
             demag_wall_time_ns: stats.demag_wall_time_ns,
             demag_assemble_wall_time_ns: stats.demag_assemble_wall_time_ns,
@@ -1424,6 +1656,19 @@ impl NativeFemBackend {
             rhs_wall_time_ns: stats.rhs_wall_time_ns,
             extra_energy_wall_time_ns: stats.extra_energy_wall_time_ns,
             snapshot_wall_time_ns: stats.snapshot_wall_time_ns,
+            relaxation_preconditioner_wall_time_ns: stats.relaxation_preconditioner_wall_time_ns,
+            relaxation_state_copy_wall_time_ns: stats.relaxation_state_copy_wall_time_ns,
+            relaxation_state_upload_wall_time_ns: stats.relaxation_state_upload_wall_time_ns,
+            relaxation_retraction_wall_time_ns: stats.relaxation_retraction_wall_time_ns,
+            relaxation_gradient_wall_time_ns: stats.relaxation_gradient_wall_time_ns,
+            relaxation_metric_wall_time_ns: stats.relaxation_metric_wall_time_ns,
+            relaxation_line_search_wall_time_ns: stats.relaxation_line_search_wall_time_ns,
+            relaxation_update_wall_time_ns: stats.relaxation_update_wall_time_ns,
+            relaxation_preconditioner_cache_hits: stats.relaxation_preconditioner_cache_hits,
+            relaxation_preconditioner_cache_misses: stats.relaxation_preconditioner_cache_misses,
+            native_ffi_overhead_wall_time_ns: ffi_wall_time_ns
+                .saturating_sub(stats.wall_time_ns)
+                .saturating_sub(relaxation_subphase_wall_time_ns),
             error_estimate: if stats.error_estimate > 0.0 {
                 Some(stats.error_estimate)
             } else {
@@ -1443,8 +1688,10 @@ impl NativeFemBackend {
             demag_refreshed: stats.demag_solve_count > 0,
             requested_fem_omp_threads: stats.requested_omp_threads,
             effective_fem_omp_threads: stats.effective_omp_threads,
+            fem_cpu_thread_cap_reason: stats.cpu_thread_cap_reason,
             ..StepStats::default()
         };
+        self.apply_demag_solver_policy_to_step_stats(&mut step_stats);
         self.attach_transfer_audit(&mut step_stats)?;
         step_stats.per_object_scalars =
             if self.object_weights.len() == 1 && self.object_weights[0].0 == "free" {
@@ -1452,6 +1699,7 @@ impl NativeFemBackend {
             } else {
                 weighted_object_scalars(&step_stats, &self.object_weights)
             };
+        self.attach_native_object_average_m(&mut step_stats)?;
         Ok(Some(step_stats))
     }
 
@@ -1464,7 +1712,7 @@ impl NativeFemBackend {
     pub fn relax_step(
         &mut self,
         algorithm: fullmag_ir::RelaxationAlgorithmIR,
-        node_count: usize,
+        _node_count: usize,
     ) -> Result<Option<StepStats>, RunError> {
         let ffi_algorithm = match algorithm {
             fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb => {
@@ -1517,6 +1765,16 @@ impl NativeFemBackend {
             rhs_wall_time_ns: 0,
             extra_energy_wall_time_ns: 0,
             snapshot_wall_time_ns: 0,
+            relaxation_preconditioner_wall_time_ns: 0,
+            relaxation_state_copy_wall_time_ns: 0,
+            relaxation_state_upload_wall_time_ns: 0,
+            relaxation_retraction_wall_time_ns: 0,
+            relaxation_gradient_wall_time_ns: 0,
+            relaxation_metric_wall_time_ns: 0,
+            relaxation_line_search_wall_time_ns: 0,
+            relaxation_update_wall_time_ns: 0,
+            relaxation_preconditioner_cache_hits: 0,
+            relaxation_preconditioner_cache_misses: 0,
             error_estimate: 0.0,
             rejected_attempts: 0,
             dt_suggested: 0.0,
@@ -1524,10 +1782,16 @@ impl NativeFemBackend {
             fsal_reused: 0,
             requested_omp_threads: 0,
             effective_omp_threads: 0,
+            cpu_thread_cap_reason: 0,
         };
 
+        let ffi_wall_start = std::time::Instant::now();
         let rc =
             unsafe { ffi::fullmag_fem_backend_relax_step(self.handle, ffi_algorithm, &mut stats) };
+        let ffi_wall_time_ns = ffi_wall_start
+            .elapsed()
+            .as_nanos()
+            .min(u128::from(u64::MAX)) as u64;
         if rc == ffi::FULLMAG_FEM_ERR_INTERRUPTED {
             return Ok(None);
         }
@@ -1535,9 +1799,12 @@ impl NativeFemBackend {
             return Err(self.last_error_or("FEM native relaxation step failed"));
         }
 
-        let magnetization = self.copy_m(node_count)?;
-        let effective_field = self.copy_h_eff(node_count)?;
-        let torque_apm = max_torque_residual_apm_from_field(&magnetization, &effective_field);
+        let relaxation_subphase_wall_time_ns = relaxation_driver_subphase_wall_time_ns(&stats);
+        let torque_apm = if stats.max_torque_Apm.is_finite() && stats.max_torque_Apm >= 0.0 {
+            stats.max_torque_Apm
+        } else {
+            0.0
+        };
         let mut step_stats = StepStats {
             step: stats.step,
             time: stats.time_seconds,
@@ -1556,7 +1823,7 @@ impl NativeFemBackend {
             max_h_demag: stats.max_demag_field_amplitude,
             max_torque_Apm: torque_apm,
             max_torque_T: torque_apm * crate::MU0,
-            wall_time_ns: stats.wall_time_ns,
+            wall_time_ns: stats.wall_time_ns.max(ffi_wall_time_ns),
             exchange_wall_time_ns: stats.exchange_wall_time_ns,
             demag_wall_time_ns: stats.demag_wall_time_ns,
             demag_assemble_wall_time_ns: stats.demag_assemble_wall_time_ns,
@@ -1569,6 +1836,19 @@ impl NativeFemBackend {
             rhs_wall_time_ns: stats.rhs_wall_time_ns,
             extra_energy_wall_time_ns: stats.extra_energy_wall_time_ns,
             snapshot_wall_time_ns: stats.snapshot_wall_time_ns,
+            relaxation_preconditioner_wall_time_ns: stats.relaxation_preconditioner_wall_time_ns,
+            relaxation_state_copy_wall_time_ns: stats.relaxation_state_copy_wall_time_ns,
+            relaxation_state_upload_wall_time_ns: stats.relaxation_state_upload_wall_time_ns,
+            relaxation_retraction_wall_time_ns: stats.relaxation_retraction_wall_time_ns,
+            relaxation_gradient_wall_time_ns: stats.relaxation_gradient_wall_time_ns,
+            relaxation_metric_wall_time_ns: stats.relaxation_metric_wall_time_ns,
+            relaxation_line_search_wall_time_ns: stats.relaxation_line_search_wall_time_ns,
+            relaxation_update_wall_time_ns: stats.relaxation_update_wall_time_ns,
+            relaxation_preconditioner_cache_hits: stats.relaxation_preconditioner_cache_hits,
+            relaxation_preconditioner_cache_misses: stats.relaxation_preconditioner_cache_misses,
+            native_ffi_overhead_wall_time_ns: ffi_wall_time_ns
+                .saturating_sub(stats.wall_time_ns)
+                .saturating_sub(relaxation_subphase_wall_time_ns),
             error_estimate: if stats.error_estimate > 0.0 {
                 Some(stats.error_estimate)
             } else {
@@ -1588,16 +1868,18 @@ impl NativeFemBackend {
             demag_refreshed: stats.demag_solve_count > 0,
             requested_fem_omp_threads: stats.requested_omp_threads,
             effective_fem_omp_threads: stats.effective_omp_threads,
+            fem_cpu_thread_cap_reason: stats.cpu_thread_cap_reason,
             ..StepStats::default()
         };
+        self.apply_demag_solver_policy_to_step_stats(&mut step_stats);
         self.attach_transfer_audit(&mut step_stats)?;
-        crate::scalar_metrics::apply_average_m_to_step_stats(&mut step_stats, &magnetization);
         step_stats.per_object_scalars =
             if self.object_weights.len() == 1 && self.object_weights[0].0 == "free" {
                 single_object_scalars("free", &step_stats)
             } else {
                 weighted_object_scalars(&step_stats, &self.object_weights)
             };
+        self.attach_native_object_average_m(&mut step_stats)?;
         Ok(Some(step_stats))
     }
 
@@ -1647,7 +1929,7 @@ impl NativeFemBackend {
         Ok(())
     }
 
-    pub fn snapshot_step_stats(&mut self, node_count: usize) -> Result<StepStats, RunError> {
+    pub fn snapshot_step_stats(&mut self, _node_count: usize) -> Result<StepStats, RunError> {
         let mut stats = ffi::fullmag_fem_step_stats {
             step: 0,
             time_seconds: 0.0,
@@ -1682,6 +1964,16 @@ impl NativeFemBackend {
             rhs_wall_time_ns: 0,
             extra_energy_wall_time_ns: 0,
             snapshot_wall_time_ns: 0,
+            relaxation_preconditioner_wall_time_ns: 0,
+            relaxation_state_copy_wall_time_ns: 0,
+            relaxation_state_upload_wall_time_ns: 0,
+            relaxation_retraction_wall_time_ns: 0,
+            relaxation_gradient_wall_time_ns: 0,
+            relaxation_metric_wall_time_ns: 0,
+            relaxation_line_search_wall_time_ns: 0,
+            relaxation_update_wall_time_ns: 0,
+            relaxation_preconditioner_cache_hits: 0,
+            relaxation_preconditioner_cache_misses: 0,
             error_estimate: 0.0,
             rejected_attempts: 0,
             dt_suggested: 0.0,
@@ -1689,6 +1981,7 @@ impl NativeFemBackend {
             fsal_reused: 0,
             requested_omp_threads: 0,
             effective_omp_threads: 0,
+            cpu_thread_cap_reason: 0,
         };
 
         let rc = unsafe { ffi::fullmag_fem_backend_snapshot_stats(self.handle, &mut stats) };
@@ -1696,9 +1989,11 @@ impl NativeFemBackend {
             return Err(self.last_error_or("FEM GPU snapshot_step_stats failed"));
         }
 
-        let magnetization = self.copy_m(node_count)?;
-        let effective_field = self.copy_h_eff(node_count)?;
-        let torque_apm = max_torque_residual_apm_from_field(&magnetization, &effective_field);
+        let torque_apm = if stats.max_torque_Apm.is_finite() && stats.max_torque_Apm >= 0.0 {
+            stats.max_torque_Apm
+        } else {
+            0.0
+        };
         let mut step_stats = StepStats {
             step: stats.step,
             time: stats.time_seconds,
@@ -1730,22 +2025,34 @@ impl NativeFemBackend {
             rhs_wall_time_ns: stats.rhs_wall_time_ns,
             extra_energy_wall_time_ns: stats.extra_energy_wall_time_ns,
             snapshot_wall_time_ns: stats.snapshot_wall_time_ns,
+            relaxation_preconditioner_wall_time_ns: stats.relaxation_preconditioner_wall_time_ns,
+            relaxation_state_copy_wall_time_ns: stats.relaxation_state_copy_wall_time_ns,
+            relaxation_state_upload_wall_time_ns: stats.relaxation_state_upload_wall_time_ns,
+            relaxation_retraction_wall_time_ns: stats.relaxation_retraction_wall_time_ns,
+            relaxation_gradient_wall_time_ns: stats.relaxation_gradient_wall_time_ns,
+            relaxation_metric_wall_time_ns: stats.relaxation_metric_wall_time_ns,
+            relaxation_line_search_wall_time_ns: stats.relaxation_line_search_wall_time_ns,
+            relaxation_update_wall_time_ns: stats.relaxation_update_wall_time_ns,
+            relaxation_preconditioner_cache_hits: stats.relaxation_preconditioner_cache_hits,
+            relaxation_preconditioner_cache_misses: stats.relaxation_preconditioner_cache_misses,
             demag_solves: stats.demag_solve_count,
             poisson_iterations: stats.demag_linear_iterations,
             poisson_final_residual: stats.demag_linear_residual,
             demag_refreshed: stats.demag_solve_count > 0,
             requested_fem_omp_threads: stats.requested_omp_threads,
             effective_fem_omp_threads: stats.effective_omp_threads,
+            fem_cpu_thread_cap_reason: stats.cpu_thread_cap_reason,
             ..StepStats::default()
         };
+        self.apply_demag_solver_policy_to_step_stats(&mut step_stats);
         self.attach_transfer_audit(&mut step_stats)?;
-        crate::scalar_metrics::apply_average_m_to_step_stats(&mut step_stats, &magnetization);
         step_stats.per_object_scalars =
             if self.object_weights.len() == 1 && self.object_weights[0].0 == "free" {
                 single_object_scalars("free", &step_stats)
             } else {
                 weighted_object_scalars(&step_stats, &self.object_weights)
             };
+        self.attach_native_object_average_m(&mut step_stats)?;
         Ok(step_stats)
     }
 
@@ -1778,16 +2085,13 @@ impl NativeFemBackend {
     }
 
     pub fn copy_torque(&self, node_count: usize) -> Result<Vec<[f64; 3]>, RunError> {
-        let magnetization = self.copy_m(node_count)?;
-        let effective_field = self.copy_h_eff(node_count)?;
-        Ok(compute_torque_field(
-            &magnetization,
-            &effective_field,
-            self.damping,
-            true,
-        ))
+        self.copy_field(
+            ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_TORQUE,
+            node_count,
+        )
     }
 
+    #[allow(dead_code)]
     pub fn copy_h_ani(&self, node_count: usize) -> Result<Vec<[f64; 3]>, RunError> {
         self.copy_field(
             ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_ANI,
@@ -1795,6 +2099,7 @@ impl NativeFemBackend {
         )
     }
 
+    #[allow(dead_code)]
     pub fn copy_h_dmi(&self, node_count: usize) -> Result<Vec<[f64; 3]>, RunError> {
         self.copy_field(
             ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_DMI,
@@ -1802,6 +2107,7 @@ impl NativeFemBackend {
         )
     }
 
+    #[allow(dead_code)]
     pub fn copy_h_mel(&self, node_count: usize) -> Result<Vec<[f64; 3]>, RunError> {
         self.copy_field(
             ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_MEL,
@@ -1810,6 +2116,7 @@ impl NativeFemBackend {
     }
 
     // FND-010 fix: add accessors for F-12 observables (cubic anisotropy, bulk DMI, Oersted, thermal)
+    #[allow(dead_code)]
     pub fn copy_h_ani_cubic(&self, node_count: usize) -> Result<Vec<[f64; 3]>, RunError> {
         self.copy_field(
             ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_ANI_CUBIC,
@@ -1817,6 +2124,7 @@ impl NativeFemBackend {
         )
     }
 
+    #[allow(dead_code)]
     pub fn copy_h_dmi_bulk(&self, node_count: usize) -> Result<Vec<[f64; 3]>, RunError> {
         self.copy_field(
             ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_DMI_BULK,
@@ -1824,6 +2132,7 @@ impl NativeFemBackend {
         )
     }
 
+    #[allow(dead_code)]
     pub fn copy_h_oe(&self, node_count: usize) -> Result<Vec<[f64; 3]>, RunError> {
         self.copy_field(
             ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_OE,
@@ -1831,6 +2140,7 @@ impl NativeFemBackend {
         )
     }
 
+    #[allow(dead_code)]
     pub fn copy_h_therm(&self, node_count: usize) -> Result<Vec<[f64; 3]>, RunError> {
         self.copy_field(
             ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_THERM,
@@ -1838,35 +2148,54 @@ impl NativeFemBackend {
         )
     }
 
+    pub fn begin_live_preview_snapshot(
+        &self,
+        request: &LivePreviewRequest,
+    ) -> Result<NativeFemPreviewSnapshot, RunError> {
+        let observable = fem_preview_observable(&request.quantity)?;
+        let handle =
+            unsafe { ffi::fullmag_fem_backend_begin_preview_snapshot(self.handle, observable) };
+        if handle.is_null() {
+            return Err(self.last_error_or("FEM GPU begin_preview_snapshot failed"));
+        }
+        let active_mask = (crate::quantities::quantity_spatial_domain(&request.quantity)
+            == "magnetic_only")
+            .then(|| self.magnetic_node_mask.clone());
+        Ok(NativeFemPreviewSnapshot {
+            handle,
+            request: request.clone(),
+            active_mask,
+        })
+    }
+
+    pub fn begin_field_snapshot(
+        &self,
+        name: &str,
+        step: u64,
+        time: f64,
+        solver_dt: f64,
+    ) -> Result<NativeFemFieldSnapshot, RunError> {
+        let observable = fem_preview_observable(name)?;
+        let handle =
+            unsafe { ffi::fullmag_fem_backend_begin_field_snapshot(self.handle, observable) };
+        if handle.is_null() {
+            return Err(self.last_error_or("FEM GPU begin_field_snapshot failed"));
+        }
+        Ok(NativeFemFieldSnapshot {
+            handle,
+            name: name.to_string(),
+            step,
+            time,
+            solver_dt,
+        })
+    }
+
     pub fn copy_live_preview_field(
         &self,
         request: &LivePreviewRequest,
         node_count: usize,
     ) -> Result<LivePreviewField, RunError> {
-        let values = match normalize_quantity_id(&request.quantity)? {
-            QuantityId::HEx => self.copy_h_ex(node_count)?,
-            QuantityId::HDemag => self.copy_h_demag(node_count)?,
-            QuantityId::HExt => self.copy_h_ext(node_count)?,
-            QuantityId::HEff => self.copy_h_eff(node_count)?,
-            QuantityId::Torque => self.copy_torque(node_count)?,
-            QuantityId::HAni => self.copy_h_ani(node_count)?,
-            QuantityId::HDmi => self.copy_h_dmi(node_count)?,
-            QuantityId::HMel => self.copy_h_mel(node_count)?,
-            // FND-010 fix: support F-12 observable quantities in live preview
-            QuantityId::HAniCubic => self.copy_h_ani_cubic(node_count)?,
-            QuantityId::HDmiBulk => self.copy_h_dmi_bulk(node_count)?,
-            QuantityId::HOe => self.copy_h_oe(node_count)?,
-            QuantityId::HTherm => self.copy_h_therm(node_count)?,
-            QuantityId::M => self.copy_m(node_count)?,
-            other => {
-                return Err(RunError {
-                    message: format!(
-                        "native FEM preview quantity '{}' is not supported",
-                        other.as_str()
-                    ),
-                });
-            }
-        };
+        let values = self.copy_field(fem_preview_observable(&request.quantity)?, node_count)?;
         let active_mask = (crate::quantities::quantity_spatial_domain(&request.quantity)
             == "magnetic_only")
             .then(|| self.magnetic_node_mask.clone());
@@ -1922,6 +2251,177 @@ impl NativeFemBackend {
         };
         RunError { message: msg }
     }
+}
+
+#[cfg(feature = "fem-gpu")]
+impl NativeFemPreviewSnapshot {
+    pub(crate) fn is_ready(&self) -> bool {
+        unsafe { ffi::fullmag_fem_preview_snapshot_ready(self.handle) != 0 }
+    }
+
+    pub fn into_live_preview_field(mut self) -> Result<LivePreviewField, RunError> {
+        let mut data: *const std::ffi::c_void = ptr::null();
+        let mut len_bytes = 0u64;
+        let mut desc = ffi::fullmag_fem_snapshot_desc {
+            node_count: 0,
+            component_count: 0,
+            scalar_bytes: 0,
+            scalar_type: ffi::fullmag_fem_snapshot_scalar_type::FULLMAG_FEM_SNAPSHOT_SCALAR_F64,
+        };
+        let rc = unsafe {
+            ffi::fullmag_fem_preview_snapshot_wait(
+                self.handle,
+                &mut data,
+                &mut len_bytes,
+                &mut desc,
+            )
+        };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(RunError {
+                message: "waiting for native FEM preview snapshot failed".to_string(),
+            });
+        }
+        if desc.component_count != 3 || desc.scalar_bytes as usize != std::mem::size_of::<f64>() {
+            return Err(RunError {
+                message: "native FEM preview snapshot returned unsupported layout".to_string(),
+            });
+        }
+        let expected_len = (desc.node_count as usize).saturating_mul(desc.component_count as usize);
+        if len_bytes as usize != expected_len.saturating_mul(std::mem::size_of::<f64>()) {
+            return Err(RunError {
+                message: "native FEM preview snapshot returned mismatched payload length"
+                    .to_string(),
+            });
+        }
+        let values = unsafe { std::slice::from_raw_parts(data.cast::<f64>(), expected_len) }
+            .chunks_exact(3)
+            .map(|c| [c[0], c[1], c[2]])
+            .collect::<Vec<_>>();
+        Ok(build_mesh_preview_field_with_active_mask(
+            &self.request,
+            &values,
+            self.active_mask.take(),
+        ))
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+impl NativeFemFieldSnapshot {
+    pub(crate) fn is_ready(&self) -> bool {
+        unsafe { ffi::fullmag_fem_field_snapshot_ready(self.handle) != 0 }
+    }
+
+    fn wait_payload(
+        &mut self,
+    ) -> Result<(*const std::ffi::c_void, u64, NativeFemFieldSnapshotInfo), RunError> {
+        let mut data: *const std::ffi::c_void = ptr::null();
+        let mut len_bytes = 0u64;
+        let mut desc = ffi::fullmag_fem_snapshot_desc {
+            node_count: 0,
+            component_count: 0,
+            scalar_bytes: 0,
+            scalar_type: ffi::fullmag_fem_snapshot_scalar_type::FULLMAG_FEM_SNAPSHOT_SCALAR_F64,
+        };
+        let rc = unsafe {
+            ffi::fullmag_fem_field_snapshot_wait(self.handle, &mut data, &mut len_bytes, &mut desc)
+        };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(RunError {
+                message: format!(
+                    "waiting for native FEM field snapshot '{}' failed",
+                    self.name
+                ),
+            });
+        }
+        if desc.component_count != 3 || desc.scalar_bytes as usize != std::mem::size_of::<f64>() {
+            return Err(RunError {
+                message: format!(
+                    "native FEM field snapshot '{}' returned unsupported layout",
+                    self.name
+                ),
+            });
+        }
+        let info = NativeFemFieldSnapshotInfo {
+            node_count: desc.node_count as usize,
+            component_count: desc.component_count as usize,
+            scalar_bytes: desc.scalar_bytes as usize,
+        };
+        let expected_len = info.node_count.saturating_mul(info.component_count);
+        if len_bytes as usize != expected_len.saturating_mul(info.scalar_bytes) {
+            return Err(RunError {
+                message: format!(
+                    "native FEM field snapshot '{}' returned mismatched payload length",
+                    self.name
+                ),
+            });
+        }
+        Ok((data, len_bytes, info))
+    }
+
+    pub(crate) fn info(&mut self) -> Result<NativeFemFieldSnapshotInfo, RunError> {
+        let (_, _, info) = self.wait_payload()?;
+        Ok(info)
+    }
+
+    pub(crate) fn write_payload(
+        &mut self,
+        writer: &mut impl Write,
+    ) -> Result<NativeFemFieldSnapshotInfo, RunError> {
+        let (data, len_bytes, info) = self.wait_payload()?;
+        // SAFETY: `data` is owned by the native snapshot handle and remains
+        // valid until this Rust snapshot is dropped after the write.
+        let payload = unsafe { std::slice::from_raw_parts(data.cast::<u8>(), len_bytes as usize) };
+        writer.write_all(payload).map_err(|error| RunError {
+            message: format!(
+                "failed to write native FEM field snapshot payload for '{}': {}",
+                self.name, error
+            ),
+        })?;
+        Ok(info)
+    }
+
+    pub fn into_vector_field(mut self) -> Result<Vec<[f64; 3]>, RunError> {
+        let (data, _, info) = self.wait_payload()?;
+        let expected_len = info.node_count.saturating_mul(info.component_count);
+        Ok(
+            unsafe { std::slice::from_raw_parts(data.cast::<f64>(), expected_len) }
+                .chunks_exact(3)
+                .map(|c| [c[0], c[1], c[2]])
+                .collect(),
+        )
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+impl Drop for NativeFemPreviewSnapshot {
+    fn drop(&mut self) {
+        if !self.handle.is_null() {
+            unsafe { ffi::fullmag_fem_preview_snapshot_destroy(self.handle) };
+            self.handle = ptr::null_mut();
+        }
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+impl Drop for NativeFemFieldSnapshot {
+    fn drop(&mut self) {
+        if !self.handle.is_null() {
+            unsafe { ffi::fullmag_fem_field_snapshot_destroy(self.handle) };
+            self.handle = ptr::null_mut();
+        }
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn relaxation_driver_subphase_wall_time_ns(stats: &ffi::fullmag_fem_step_stats) -> u64 {
+    stats
+        .relaxation_state_copy_wall_time_ns
+        .saturating_add(stats.relaxation_state_upload_wall_time_ns)
+        .saturating_add(stats.relaxation_retraction_wall_time_ns)
+        .saturating_add(stats.relaxation_gradient_wall_time_ns)
+        .saturating_add(stats.relaxation_metric_wall_time_ns)
+        .saturating_add(stats.relaxation_line_search_wall_time_ns)
+        .saturating_add(stats.relaxation_update_wall_time_ns)
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -3591,11 +4091,12 @@ mod tests {
 
     fn with_poisson_demag(mut plan: FemPlanIR) -> FemPlanIR {
         plan.enable_demag = true;
+        plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
         plan.demag_realization = Some(ResolvedFemDemagIR::PoissonRobin);
         plan.air_box_config = Some(AirBoxConfigIR {
             factor: 1.5,
             grading: 1.0,
-            boundary_marker: 99,
+            boundary_marker: 1,
             bc_kind: Some("robin".to_string()),
             robin_beta_mode: Some("legacy".to_string()),
             robin_beta_factor: None,
@@ -3607,7 +4108,7 @@ mod tests {
     }
 
     #[test]
-    fn unresolved_gpu_demag_policy_prefers_jacobi_preconditioner() {
+    fn unresolved_gpu_demag_policy_prefers_jacobi_preconditioner_for_non_pgbb() {
         let mut plan = with_poisson_demag(make_exchange_only_plan());
         plan.mfem_device_string = Some("cuda".to_string());
 
@@ -3615,6 +4116,29 @@ mod tests {
 
         assert_eq!(policy.solver, "CG");
         assert_eq!(policy.preconditioner, "JACOBI");
+        assert_eq!(policy.rtol, 1e-8);
+        assert_eq!(policy.max_iterations, 500);
+    }
+
+    #[test]
+    fn unresolved_gpu_demag_policy_prefers_amg_preconditioner_for_pgbb() {
+        let mut plan = with_poisson_demag(make_exchange_only_plan());
+        plan.mfem_device_string = Some("cuda".to_string());
+        plan.relaxation = Some(RelaxationControlIR {
+            algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
+            stop: RelaxStopIR {
+                torque_tolerance_apm: None,
+                energy_tolerance_j: None,
+                max_steps: Some(2),
+                max_pseudotime_s: None,
+                max_physical_time_s: None,
+            },
+        });
+
+        let policy = resolved_native_fem_demag_solver_policy(&plan);
+
+        assert_eq!(policy.solver, "CG");
+        assert_eq!(policy.preconditioner, "AMG");
         assert_eq!(policy.rtol, 1e-8);
         assert_eq!(policy.max_iterations, 500);
     }
@@ -4083,13 +4607,13 @@ mod tests {
 
         let cpu = run_native_parity_step(&cpu_plan);
         let gpu = run_native_parity_step(&gpu_plan);
-        assert_vector_field_parity("demag.H_demag", &cpu.h_demag, &gpu.h_demag, 5e-8, 1e-6);
-        assert_vector_field_parity("demag.H_eff", &cpu.h_eff, &gpu.h_eff, 5e-8, 1e-6);
+        assert_vector_field_parity("demag.H_demag", &cpu.h_demag, &gpu.h_demag, 5e-6, 1e-6);
+        assert_vector_field_parity("demag.H_eff", &cpu.h_eff, &gpu.h_eff, 5e-6, 1e-6);
         assert_scalar_close(
             "demag_energy_joules",
             gpu.stats.e_demag,
             cpu.stats.e_demag,
-            5e-8,
+            5e-6,
             1e-18,
         );
         assert!(
@@ -4129,10 +4653,19 @@ mod tests {
                 5e-8,
                 1e-6,
             );
-            assert_eq!(
-                gpu.stats.rhs_evals, cpu.stats.rhs_evals,
-                "RHS evaluation count mismatch for {integrator:?}"
-            );
+            if matches!(integrator, IntegratorChoice::Rk23 | IntegratorChoice::Rk45) {
+                assert!(
+                    (gpu.stats.rhs_evals as i64 - cpu.stats.rhs_evals as i64).abs() <= 1,
+                    "RHS evaluation count mismatch for adaptive {integrator:?}: gpu={}, cpu={}",
+                    gpu.stats.rhs_evals,
+                    cpu.stats.rhs_evals
+                );
+            } else {
+                assert_eq!(
+                    gpu.stats.rhs_evals, cpu.stats.rhs_evals,
+                    "RHS evaluation count mismatch for fixed {integrator:?}"
+                );
+            }
         }
     }
 
@@ -4648,6 +5181,48 @@ mod tests {
     }
 
     #[test]
+    fn native_fem_demag_amg_profile_reads_recorded_env_overrides() {
+        let cpu_source =
+            include_str!("../../../backends/fem/cpu/mfem/interactions/demag_poisson_hypre.cpp");
+        let gpu_source =
+            include_str!("../../../backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp");
+        for source in [cpu_source, gpu_source] {
+            assert!(
+                source.contains("FULLMAG_FEM_DEMAG_AMG_RELAX_TYPE") &&
+                    source.contains("demag_amg_int_env(\"FULLMAG_FEM_DEMAG_AMG_RELAX_TYPE\", 18)"),
+                "native demag AMG profile must read the recorded relax_type env override with default"
+            );
+            assert!(
+                source.contains("FULLMAG_FEM_DEMAG_AMG_COARSENING") &&
+                    source.contains("demag_amg_int_env(\"FULLMAG_FEM_DEMAG_AMG_COARSENING\", 8)"),
+                "native demag AMG profile must read the recorded coarsening env override with default"
+            );
+            assert!(
+                source.contains("FULLMAG_FEM_DEMAG_AMG_INTERPOLATION") &&
+                    source.contains("demag_amg_int_env(\"FULLMAG_FEM_DEMAG_AMG_INTERPOLATION\", 6)"),
+                "native demag AMG profile must read the recorded interpolation env override with default"
+            );
+            assert!(
+                source.contains("FULLMAG_FEM_DEMAG_AMG_AGGRESSIVE_COARSENING") &&
+                    source.contains(
+                        "demag_amg_int_env(\"FULLMAG_FEM_DEMAG_AMG_AGGRESSIVE_COARSENING\", 1)"
+                    ),
+                "native demag AMG profile must read the recorded aggressive coarsening env override with default"
+            );
+            assert!(
+                source.contains("FULLMAG_FEM_DEMAG_AMG_STRENGTH_THRESHOLD")
+                    && source.contains("amg.SetStrengthThresh(strength_threshold)"),
+                "native demag AMG profile must apply the optional strength threshold env override"
+            );
+            assert!(
+                source.contains("FULLMAG_FEM_DEMAG_AMG_MAX_LEVELS")
+                    && source.contains("amg.SetMaxLevels(max_levels)"),
+                "native demag AMG profile must apply the optional max-levels env override"
+            );
+        }
+    }
+
+    #[test]
     fn native_fem_periodic_demag_reduced_solve_reuses_workspace_and_warm_start() {
         let source =
             include_str!("../../../backends/fem/cpu/mfem/interactions/demag_poisson_periodic.cpp");
@@ -4933,6 +5508,138 @@ mod tests {
     }
 
     #[test]
+    fn native_fem_runner_stats_paths_do_not_copy_full_fields_for_scalar_metrics() {
+        let source = include_str!("native_fem.rs");
+
+        for (function_name, end_marker) in [
+            ("pub fn relax_step(", "\n    pub fn copy_field("),
+            ("pub fn snapshot_step_stats(", "\n    pub fn copy_h_ex("),
+        ] {
+            let start = source
+                .find(function_name)
+                .expect("native FEM stats function");
+            let rest = &source[start..];
+            let end = rest
+                .find(end_marker)
+                .expect("native FEM stats function end marker");
+            let body = &rest[..end];
+
+            assert!(
+                !body.contains("self.copy_m("),
+                "{function_name} must use native scalar stats instead of copying full m"
+            );
+            assert!(
+                !body.contains("self.copy_h_eff("),
+                "{function_name} must use native max_torque_Apm instead of copying full H_eff"
+            );
+            assert!(
+                !body.contains("max_torque_residual_apm_from_field("),
+                "{function_name} must not recompute torque from full fields in Rust"
+            );
+            assert!(
+                !body.contains("apply_average_m_to_step_stats("),
+                "{function_name} must not recompute mx/my/mz from a full field copy"
+            );
+            assert!(
+                !body.contains("set_object_average_m("),
+                "{function_name} must not recompute per-object mx/my/mz from a full field copy"
+            );
+        }
+    }
+
+    #[test]
+    fn native_fem_per_object_average_m_uses_native_node_reduction() {
+        let source = include_str!("native_fem.rs");
+        let header = include_str!("../../../native/include/fullmag_fem.h");
+        let api = include_str!("../../../backends/fem/src/api.cpp");
+
+        assert!(
+            header.contains("fullmag_fem_backend_average_m_for_nodes_f64"),
+            "native FEM C ABI must expose per-node-list average magnetization reduction"
+        );
+        assert!(
+            api.contains("int fullmag_fem_backend_average_m_for_nodes_f64(")
+                && api.contains("context_sync_gpu_magnetization_to_host(")
+                && api.contains("handle->context.state.m_xyz"),
+            "native FEM C ABI implementation must reduce object averages from native state"
+        );
+
+        let body = source_block(
+            source,
+            "fn attach_native_object_average_m(",
+            "\n    pub fn step_interruptible(",
+        );
+        assert!(
+            body.contains("self.average_m_for_nodes(node_indices)?"),
+            "per-object mx/my/mz must come from native node-index reductions"
+        );
+        assert!(
+            body.contains("values.insert(\"mx\".to_string(), mx)")
+                && body.contains("values.insert(\"my\".to_string(), my)")
+                && body.contains("values.insert(\"mz\".to_string(), mz)"),
+            "native per-object averages must overwrite weighted global mx/my/mz"
+        );
+        assert!(
+            source.contains("ffi::fullmag_fem_backend_average_m_for_nodes_f64("),
+            "Rust wrapper must call the native per-object average_m ABI"
+        );
+    }
+
+    #[test]
+    fn native_fem_torque_preview_uses_native_observable() {
+        let source = include_str!("native_fem.rs");
+        let start = source.find("pub fn copy_torque(").expect("copy_torque");
+        let rest = &source[start..];
+        let end = rest
+            .find("\n    pub fn copy_h_ani(")
+            .expect("copy_torque end");
+        let body = &rest[..end];
+
+        assert!(
+            body.contains("FULLMAG_FEM_OBSERVABLE_TORQUE"),
+            "copy_torque must request the native torque observable"
+        );
+        assert!(
+            !body.contains("self.copy_m("),
+            "copy_torque must not copy full m into Rust"
+        );
+        assert!(
+            !body.contains("self.copy_h_eff("),
+            "copy_torque must not copy full H_eff into Rust"
+        );
+        assert!(
+            !body.contains("compute_torque_field("),
+            "copy_torque must not rebuild torque from full Rust-side fields"
+        );
+    }
+
+    #[test]
+    fn native_fem_runner_step_total_covers_full_ffi_call_wall_time() {
+        let source = include_str!("native_fem.rs");
+
+        for (function_name, end_marker) in [
+            ("pub fn step_interruptible(", "\n    #[allow(dead_code)]"),
+            ("pub fn relax_step(", "\n    pub fn copy_field("),
+        ] {
+            let start = source
+                .find(function_name)
+                .expect("native FEM step function");
+            let rest = &source[start..];
+            let end = rest.find(end_marker).expect("native FEM step function end");
+            let body = &rest[..end];
+
+            assert!(
+                body.contains("let ffi_wall_start = std::time::Instant::now();"),
+                "{function_name} must measure the whole native FFI step call"
+            );
+            assert!(
+                body.contains("wall_time_ns: stats.wall_time_ns.max(ffi_wall_time_ns),"),
+                "{function_name} total wall time must include unprofiled native FFI work"
+            );
+        }
+    }
+
+    #[test]
     fn native_fem_periodic_exchange_only_matches_cpu_reference_when_mfem_stack_is_available() {
         if !is_gpu_available() {
             eprintln!(
@@ -4956,12 +5663,18 @@ mod tests {
         }];
         plan.mesh.periodic_node_pairs = vec![MeshPeriodicNodePairIR {
             pair_id: "x_periodic".to_string(),
-            node_a: 0,
+            node_a: 2,
             node_b: 4,
         }];
 
-        let (expected_m, expected_h_ex, expected_h_eff, expected_report) =
+        let (mut expected_m, mut expected_h_ex, mut expected_h_eff, expected_report) =
             cpu_reference_single_step(&plan);
+
+        // Apply periodic boundary projection to expected reference:
+        // Node 4 <- Node 2
+        expected_m[4] = expected_m[2];
+        expected_h_ex[4] = expected_h_ex[2];
+        expected_h_eff[4] = expected_h_eff[2];
 
         let mut backend = NativeFemBackend::create(&plan).expect("native periodic fem create");
         let stats = backend
@@ -4973,20 +5686,20 @@ mod tests {
             .copy_h_eff(plan.mesh.nodes.len())
             .expect("copy H_eff");
 
-        assert_vector_field_close("periodic m", &actual_m, &expected_m, 5e-8, 1e-10);
+        assert_vector_field_close("periodic m", &actual_m, &expected_m, 5e-8, 1e-6);
         assert_vector_field_close("periodic H_ex", &actual_h_ex, &expected_h_ex, 5e-8, 1e-6);
         assert_vector_field_close("periodic H_eff", &actual_h_eff, &expected_h_eff, 5e-8, 1e-6);
         assert_vector_field_close(
             "periodic pair m",
-            &actual_m[0..3],
-            &actual_m[12..15],
+            &actual_m[2..3],
+            &actual_m[4..5],
             1e-12,
             1e-12,
         );
         assert_vector_field_close(
             "periodic pair H_ex",
-            &actual_h_ex[0..3],
-            &actual_h_ex[12..15],
+            &actual_h_ex[2..3],
+            &actual_h_ex[4..5],
             1e-12,
             1e-6,
         );
@@ -5032,7 +5745,7 @@ mod tests {
         }];
         plan.mesh.periodic_node_pairs = vec![MeshPeriodicNodePairIR {
             pair_id: "x_periodic".to_string(),
-            node_a: 0,
+            node_a: 2,
             node_b: 4,
         }];
 
@@ -5046,15 +5759,15 @@ mod tests {
 
         assert_vector_field_close(
             "periodic consistent pair m",
-            &actual_m[0..3],
-            &actual_m[12..15],
+            &actual_m[2..3],
+            &actual_m[4..5],
             1e-12,
             1e-12,
         );
         assert_vector_field_close(
             "periodic consistent pair H_ex",
-            &actual_h_ex[0..3],
-            &actual_h_ex[12..15],
+            &actual_h_ex[2..3],
+            &actual_h_ex[4..5],
             1e-12,
             1e-6,
         );

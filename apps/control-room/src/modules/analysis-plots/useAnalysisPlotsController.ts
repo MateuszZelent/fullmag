@@ -372,7 +372,10 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
         : frequencyDomainManifest.status === "ready"
           ? "stale"
           : frequencyDomainManifest.status,
-    frequencyDomainTitle: frequencyDomainChartTitle(frequencyDomainRoute.primaryChart),
+    frequencyDomainTitle: frequencyDomainChartTitle(
+      frequencyDomainRoute.primaryChart,
+      frequencyDomainRoute.mode,
+    ),
     frequencyDomainUnavailableReason:
       frequencyDomainRoute.primaryChart === "response-map"
         ? "response-map chart adapter is not available yet"
@@ -401,6 +404,9 @@ export function frequencyDomainChartRouteOverrideFromSelection(
     ? state.ref.kind
     : state.kind;
   if (!kind) return null;
+  if (kind === "results.frequency_domain.fmr_modal_spectrum") {
+    return { mode: "fmr_modal", primaryChart: "modal-spectrum" };
+  }
   if (
     kind.startsWith("results.frequency_response") ||
     kind.startsWith("resources.analysis.frequency_response") ||
@@ -427,7 +433,6 @@ export function frequencyDomainChartRouteOverrideFromSelection(
   if (
     kind.startsWith("results.eigen") ||
     kind.startsWith("resources.analysis.eigen") ||
-    kind === "results.frequency_domain.fmr_modal_spectrum" ||
     kind === "study.stage.eigenmodes.outputs"
   ) {
     return { mode: "free_modes", primaryChart: "modal-spectrum" };
@@ -494,13 +499,18 @@ export function frequencyDomainSelectionFromPoint({
   return null;
 }
 
-function frequencyDomainChartTitle(primaryChart: string): string {
+export function frequencyDomainChartTitle(
+  primaryChart: string,
+  mode: string,
+): string {
   switch (primaryChart) {
     case "dispersion":
       return "Frequency-domain dispersion";
     case "modal-spectrum":
+      if (mode === "fmr_modal") return "FMR modal spectrum";
       return "Frequency-domain modal spectrum";
     case "response-sweep":
+      if (mode === "fmr_response") return "FMR response sweep";
       return "Frequency-domain response sweep";
     case "response-map":
       return "Frequency-domain response map";
@@ -513,8 +523,9 @@ function firstFrequencyDomainDiagnostic(
   diagnosticGroups: readonly (readonly string[])[],
 ): string | null {
   for (const diagnostics of diagnosticGroups) {
-    const first = diagnostics.find((entry) => entry.length > 0);
-    if (first) return first;
+    for (const diagnostic of diagnostics) {
+      if (diagnostic.length > 0) return diagnostic;
+    }
   }
   return null;
 }

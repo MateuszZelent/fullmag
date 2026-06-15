@@ -317,15 +317,17 @@ describe("study runtime command contributions", () => {
       ["study.add-save-state-stage", "save_state"],
     ] as const;
 
-    for (const [commandId] of commands) {
-      await registry.execute(commandId, {
-        api: {
-          model: { scene, commitTransaction },
-        } as never,
-        resources,
-        source: "test",
-      });
-    }
+    await Promise.all(
+      commands.map(([commandId]) =>
+        registry.execute(commandId, {
+          api: {
+            model: { scene, commitTransaction },
+          } as never,
+          resources,
+          source: "test",
+        }),
+      ),
+    );
 
     const calls = commitTransaction.mock.calls as unknown as Array<
       [{ merge_patch: { study: { stages: Array<Record<string, unknown>> } } }]
@@ -1141,7 +1143,7 @@ describe("study runtime command contributions", () => {
         emit_engine_log: false,
         enabled: true,
         max_samples: 128,
-        persist_artifact: false,
+        persist_artifact: true,
         sample_every: 1,
         sample_interval_wall_ms: 5000,
       },

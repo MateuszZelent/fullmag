@@ -1,6 +1,6 @@
 export { decodeCrossSection } from "./crossSectionCodec";
 export { decodeCrossSectionQuality } from "./crossSectionQualityCodec";
-export { decodeFieldVector } from "./fieldVectorCodec";
+export { asDecodedComplexFieldVector, decodeFieldVector } from "./fieldVectorCodec";
 export { decodeMeshQualityData } from "./meshQualityDataCodec";
 export { decodeTableRows } from "./tableRowsCodec";
 export {
@@ -16,6 +16,7 @@ export {
 export type {
   DecodedCrossSection,
   DecodedCrossSectionQuality,
+  DecodedComplexFieldVector,
   DecodedFieldVector,
   DecodedMeshQualityData,
   DecodedTableRows,

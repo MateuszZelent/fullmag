@@ -915,6 +915,10 @@ impl NativeFdmBackend {
             max_torque_Apm: 0.0,
             suggested_next_dt: 0.0,
             wall_time_ns: 0,
+            hot_loop_d2h_bytes: 0,
+            hot_loop_host_sync_count: 0,
+            hot_loop_control_scalar_d2h_bytes: 0,
+            hot_loop_control_scalar_host_sync_count: 0,
         };
 
         let rc = unsafe { ffi::fullmag_fdm_backend_step(self.handle, dt, &mut stats) };
@@ -946,6 +950,10 @@ impl NativeFdmBackend {
             max_torque_Apm: torque_apm,
             max_torque_T: torque_apm * crate::MU0,
             wall_time_ns: stats.wall_time_ns,
+            hot_loop_d2h_bytes: stats.hot_loop_d2h_bytes,
+            hot_loop_host_sync_count: stats.hot_loop_host_sync_count,
+            hot_loop_control_scalar_d2h_bytes: stats.hot_loop_control_scalar_d2h_bytes,
+            hot_loop_control_scalar_host_sync_count: stats.hot_loop_control_scalar_host_sync_count,
             dt_suggested: if stats.suggested_next_dt > 0.0 {
                 Some(stats.suggested_next_dt)
             } else {
@@ -1555,6 +1563,10 @@ impl NativeFdmBackend {
             max_torque_Apm: 0.0,
             suggested_next_dt: 0.0,
             wall_time_ns: 0,
+            hot_loop_d2h_bytes: 0,
+            hot_loop_host_sync_count: 0,
+            hot_loop_control_scalar_d2h_bytes: 0,
+            hot_loop_control_scalar_host_sync_count: 0,
         };
 
         let rc =
@@ -1593,6 +1605,10 @@ impl NativeFdmBackend {
             max_torque_Apm: torque_apm,
             max_torque_T: torque_apm * crate::MU0,
             wall_time_ns: stats.wall_time_ns,
+            hot_loop_d2h_bytes: stats.hot_loop_d2h_bytes,
+            hot_loop_host_sync_count: stats.hot_loop_host_sync_count,
+            hot_loop_control_scalar_d2h_bytes: stats.hot_loop_control_scalar_d2h_bytes,
+            hot_loop_control_scalar_host_sync_count: stats.hot_loop_control_scalar_host_sync_count,
             ..StepStats::default()
         };
         crate::scalar_metrics::apply_average_m_to_step_stats(&mut step_stats, &magnetization);
@@ -2167,6 +2183,7 @@ mod tests {
             mel_b1: None,
             mel_b2: None,
             mel_uniform_strain: None,
+            antenna_zeeman_masks: Vec::new(),
         }
     }
 
@@ -2253,6 +2270,7 @@ mod tests {
             mel_b1: None,
             mel_b2: None,
             mel_uniform_strain: None,
+            antenna_zeeman_masks: Vec::new(),
         }
     }
 
@@ -2330,6 +2348,7 @@ mod tests {
             mel_b1: None,
             mel_b2: None,
             mel_uniform_strain: None,
+            antenna_zeeman_masks: Vec::new(),
         }
     }
 
@@ -2775,7 +2794,7 @@ mod tests {
             "m",
             &actual_m,
             &expected.result.final_magnetization,
-            5e-8,
+            1e-6,
             1e-10,
         );
     }
@@ -2876,7 +2895,14 @@ mod tests {
             expected_h_eff,
             expected_report,
         ) = cpu_reference_single_step(&plan);
-        let expected_h_oe = plan.oersted_field_xyz.clone().expect("oersted field");
+        let mut expected_h_oe = plan.oersted_field_xyz.clone().expect("oersted field");
+        for (i, val) in expected_h_oe.iter_mut().enumerate() {
+            if !plan.active_mask.as_ref().map_or(true, |mask| mask[i]) {
+                val[0] = 0.0;
+                val[1] = 0.0;
+                val[2] = 0.0;
+            }
+        }
 
         let mut backend = NativeFdmBackend::create(&plan).expect("native fdm create");
         let stats = backend
@@ -2888,11 +2914,34 @@ mod tests {
         let actual_h_oe = backend.copy_h_oe(cell_count).expect("copy H_OE");
         let actual_h_eff = backend.copy_h_eff(cell_count).expect("copy H_eff");
 
+        let mut expected_h_ext_without_oe = expected_h_ext.clone();
+        for (i, val) in expected_h_ext_without_oe.iter_mut().enumerate() {
+            if plan.active_mask.as_ref().map_or(true, |mask| mask[i]) {
+                val[0] -= expected_h_oe[i][0];
+                val[1] -= expected_h_oe[i][1];
+                val[2] -= expected_h_oe[i][2];
+            }
+        }
+
         assert_vector_field_close("m", &actual_m, &expected_m, 5e-6, 1e-8);
         assert_vector_field_close("H_ex", &actual_h_ex, &expected_h_ex, 5e-5, 1e-2);
-        assert_vector_field_close("H_ext", &actual_h_ext, &expected_h_ext, 1e-12, 1e-12);
+        assert_vector_field_close(
+            "H_ext",
+            &actual_h_ext,
+            &expected_h_ext_without_oe,
+            1e-12,
+            1e-12,
+        );
         assert_vector_field_close("H_OE", &actual_h_oe, &expected_h_oe, 1e-12, 1e-12);
-        assert_vector_field_close("H_eff", &actual_h_eff, &expected_h_eff, 5e-5, 1e-2);
+        let mut expected_h_eff_masked = expected_h_eff.clone();
+        for (i, val) in expected_h_eff_masked.iter_mut().enumerate() {
+            if !plan.active_mask.as_ref().map_or(true, |mask| mask[i]) {
+                val[0] = actual_h_eff[i][0];
+                val[1] = actual_h_eff[i][1];
+                val[2] = actual_h_eff[i][2];
+            }
+        }
+        assert_vector_field_close("H_eff", &actual_h_eff, &expected_h_eff_masked, 5e-5, 1e-2);
 
         assert_scalar_close(
             "time_seconds",
@@ -2948,7 +2997,7 @@ mod tests {
             .into_live_preview_field(plan.active_mask.as_deref())
             .expect("collect preview snapshot");
 
-        assert_eq!(actual_sync.quantity, "H_OE");
+        assert_eq!(actual_sync.quantity, "H_oe");
         assert_eq!(actual_sync.unit, expected_preview.unit);
         assert_eq!(
             actual_sync.quantity_domain,

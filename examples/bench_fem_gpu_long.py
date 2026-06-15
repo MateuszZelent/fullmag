@@ -177,6 +177,20 @@ def env_demag_print_level() -> int:
     return max(env_int("FULLMAG_BENCH_DEMAG_PRINT_LEVEL", DEFAULT_DEMAG_PRINT_LEVEL), 0)
 
 
+def env_domain_mesh_source() -> str | None:
+    raw = os.environ.get("FULLMAG_BENCH_DOMAIN_MESH")
+    if raw is None or not raw.strip():
+        return None
+    return raw.strip()
+
+
+def env_export_domain_mesh_path() -> Path | None:
+    raw = os.environ.get("FULLMAG_BENCH_EXPORT_DOMAIN_MESH")
+    if raw is None or not raw.strip():
+        return None
+    return Path(raw)
+
+
 def benchmark_config() -> tuple[Path, int, float, str, str, str]:
     mesh_path = Path(os.environ.get("FULLMAG_BENCH_MESH", str(DEFAULT_MESH_PATH)))
     steps = env_int("FULLMAG_BENCH_STEPS", DEFAULT_STEPS)
@@ -347,6 +361,21 @@ def build(
     requires_shared_domain = scenario_requires_shared_domain(scenario)
     runtime_metadata = {}
     if requires_shared_domain:
+        domain_mesh_source = env_domain_mesh_source()
+        mesh_workflow = {
+            "build_target": "domain",
+            "domain_mesh_mode": "generated_shared_domain_mesh",
+        }
+        if domain_mesh_source is not None:
+            mesh_workflow.update(
+                {
+                    "domain_mesh_mode": "explicit_shared_domain_mesh",
+                    "domain_mesh_source": domain_mesh_source,
+                    "domain_region_markers": [
+                        {"geometry_name": "body", "marker": 1},
+                    ],
+                }
+            )
         runtime_metadata = {
             "study_universe": {
                 "mode": "manual",
@@ -358,10 +387,7 @@ def build(
                 "airbox_growth_rate": None,
                 "airbox_grading": None,
             },
-            "mesh_workflow": {
-                "build_target": "domain",
-                "domain_mesh_mode": "generated_shared_domain_mesh",
-            },
+            "mesh_workflow": mesh_workflow,
         }
 
     study = (
@@ -504,8 +530,45 @@ def emit_summary(
     print(f"BENCHMARK_RESULT={json.dumps(summary, sort_keys=True)}")
 
 
+def export_domain_mesh(
+    mesh_path: Path,
+    steps: int,
+    dt: float,
+    scenario: str,
+    integrator: str,
+    timestep_policy: str,
+    output_path: Path,
+) -> None:
+    problem = build(mesh_path, dt, steps, scenario, integrator, timestep_policy)
+    problem_ir = problem.to_ir(include_geometry_assets=True)
+    geometry_assets = problem_ir.get("geometry_assets")
+    if not isinstance(geometry_assets, dict):
+        raise RuntimeError("benchmark problem did not produce geometry_assets")
+    domain_asset = geometry_assets.get("fem_domain_mesh_asset")
+    if not isinstance(domain_asset, dict):
+        raise RuntimeError("benchmark problem did not produce a fem_domain_mesh_asset")
+    mesh = domain_asset.get("mesh")
+    if not isinstance(mesh, dict):
+        raise RuntimeError("benchmark fem_domain_mesh_asset did not inline a mesh")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(mesh, sort_keys=True), encoding="utf-8")
+    print(f"BENCHMARK_DOMAIN_MESH={output_path}")
+
+
 if __name__ == "__main__":
     mesh_path, steps, dt, scenario, integrator, timestep_policy = benchmark_config()
+    export_path = env_export_domain_mesh_path()
+    if export_path is not None:
+        export_domain_mesh(
+            mesh_path,
+            steps,
+            dt,
+            scenario,
+            integrator,
+            timestep_policy,
+            export_path,
+        )
+        raise SystemExit(0)
     problem = build(mesh_path, dt, steps, scenario, integrator, timestep_policy)
     result = fm.Simulation(problem, backend="fem").run(until=steps * dt)
     emit_summary(result, mesh_path, steps, dt, scenario, integrator, timestep_policy)

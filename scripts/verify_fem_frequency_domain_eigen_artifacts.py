@@ -387,6 +387,89 @@ def validate_manifest_physics(manifest: dict) -> None:
     )
 
 
+def validate_mode_diagnostics_fields(
+    payload: dict,
+    payload_path: str,
+    frequency_hz: float,
+) -> None:
+    residual_absolute_l2 = require_finite_number(
+        payload.get("residual_absolute_l2"),
+        f"{payload_path}.residual_absolute_l2",
+    )
+    residual_relative_l2 = require_finite_number(
+        payload.get("residual_relative_l2"),
+        f"{payload_path}.residual_relative_l2",
+    )
+    residual_linf = require_finite_number(
+        payload.get("residual_linf"),
+        f"{payload_path}.residual_linf",
+    )
+    mass_norm = require_finite_number(
+        payload.get("mass_norm"),
+        f"{payload_path}.mass_norm",
+    )
+    omega_rad_s = require_finite_number(
+        payload.get("omega_rad_s"),
+        f"{payload_path}.omega_rad_s",
+    )
+    gamma_rad_s_t = require_finite_number(
+        payload.get("gamma_rad_s_T"),
+        f"{payload_path}.gamma_rad_s_T",
+    )
+    gamma0_rad_s_per_a_m = require_finite_number(
+        payload.get("gamma0_rad_s_per_A_m"),
+        f"{payload_path}.gamma0_rad_s_per_A_m",
+    )
+    mu0_t_m_per_a = require_finite_number(
+        payload.get("mu0_T_m_per_A"),
+        f"{payload_path}.mu0_T_m_per_A",
+    )
+    tangent_leakage_mean_abs = require_finite_number(
+        payload.get("tangent_leakage_mean_abs"),
+        f"{payload_path}.tangent_leakage_mean_abs",
+    )
+    tangent_leakage_max_abs = require_finite_number(
+        payload.get("tangent_leakage_max_abs"),
+        f"{payload_path}.tangent_leakage_max_abs",
+    )
+    if residual_absolute_l2 < 0.0:
+        fail(f"{payload_path}.residual_absolute_l2 must be non-negative")
+    if residual_relative_l2 < 0.0:
+        fail(f"{payload_path}.residual_relative_l2 must be non-negative")
+    if residual_linf < 0.0:
+        fail(f"{payload_path}.residual_linf must be non-negative")
+    if mass_norm <= 0.0:
+        fail(f"{payload_path}.mass_norm must be positive")
+    if gamma_rad_s_t <= 0.0:
+        fail(f"{payload_path}.gamma_rad_s_T must be positive")
+    if gamma0_rad_s_per_a_m <= 0.0:
+        fail(f"{payload_path}.gamma0_rad_s_per_A_m must be positive")
+    if mu0_t_m_per_a <= 0.0:
+        fail(f"{payload_path}.mu0_T_m_per_A must be positive")
+    require_close(
+        gamma0_rad_s_per_a_m,
+        mu0_t_m_per_a * gamma_rad_s_t,
+        f"{payload_path}.gamma0_rad_s_per_A_m",
+        relative_tolerance=1.0e-12,
+        absolute_tolerance=1.0e-9,
+    )
+    if tangent_leakage_mean_abs < 0.0:
+        fail(f"{payload_path}.tangent_leakage_mean_abs must be non-negative")
+    if tangent_leakage_max_abs < 0.0:
+        fail(f"{payload_path}.tangent_leakage_max_abs must be non-negative")
+    if tangent_leakage_mean_abs > tangent_leakage_max_abs:
+        fail(
+            f"{payload_path}.tangent_leakage_mean_abs must be <= "
+            f"{payload_path}.tangent_leakage_max_abs"
+        )
+    require_close(
+        omega_rad_s,
+        TWO_PI * frequency_hz,
+        f"{payload_path}.omega_rad_s",
+        absolute_tolerance=1.0e-3,
+    )
+
+
 def validate_mode_summary(
     root: Path,
     mode: dict,
@@ -417,6 +500,7 @@ def validate_mode_summary(
         "mode.angular_frequency_rad_per_s",
         absolute_tolerance=1.0e-3,
     )
+    validate_mode_diagnostics_fields(mode, "mode", frequency_hz)
     require_non_empty_string(mode.get("dominant_polarization"), "mode.dominant_polarization")
 
     metadata_path = nested_mode_path(sample_index, raw_mode_index)
@@ -459,6 +543,7 @@ def validate_mode_summary(
         f"{metadata_path}.angular_frequency_rad_per_s",
         absolute_tolerance=1.0e-3,
     )
+    validate_mode_diagnostics_fields(metadata, metadata_path, frequency_hz)
     require_mode_metadata_summaries(metadata, metadata_path)
     require_mode_field_metadata(metadata, metadata_path, sample_index, raw_mode_index)
 
@@ -506,6 +591,55 @@ def validate_mode_summary(
         frequency_real_hz,
         angular_frequency_rad_per_s,
     )
+
+
+def validate_eigen_summary(
+    summary: dict,
+    known_modes: dict[tuple[int, int], tuple[float, float, float]],
+) -> None:
+    diagnostics = summary.get("solver_diagnostics")
+    if not isinstance(diagnostics, dict):
+        fail("eigen_summary.solver_diagnostics must be an object")
+    constants = diagnostics.get("constants")
+    if not isinstance(constants, dict):
+        fail("eigen_summary.solver_diagnostics.constants must be an object")
+    gamma_rad_s_t = require_finite_number(
+        constants.get("gamma_rad_s_T"),
+        "eigen_summary.solver_diagnostics.constants.gamma_rad_s_T",
+    )
+    gamma0_rad_s_per_a_m = require_finite_number(
+        constants.get("gamma0_rad_s_per_A_m"),
+        "eigen_summary.solver_diagnostics.constants.gamma0_rad_s_per_A_m",
+    )
+    mu0_t_m_per_a = require_finite_number(
+        constants.get("mu0_T_m_per_A"),
+        "eigen_summary.solver_diagnostics.constants.mu0_T_m_per_A",
+    )
+    require_close(
+        gamma0_rad_s_per_a_m,
+        mu0_t_m_per_a * gamma_rad_s_t,
+        "eigen_summary.solver_diagnostics.constants.gamma0_rad_s_per_A_m",
+        relative_tolerance=1.0e-12,
+        absolute_tolerance=1.0e-9,
+    )
+    if diagnostics.get("dense_reference_oracle") is True:
+        orthogonality = diagnostics.get("orthogonality")
+        if not isinstance(orthogonality, list) or not orthogonality:
+            fail("eigen_summary.solver_diagnostics.orthogonality must be a non-empty list")
+    summary_modes = require_object_list(summary.get("modes"), "eigen_summary.modes")
+    require_equal(summary.get("mode_count"), len(summary_modes), "eigen_summary.mode_count")
+    for mode in summary_modes:
+        sample_index = 0
+        raw_mode_index = require_non_negative_int(mode.get("index"), "eigen_summary mode.index")
+        mode_key = (sample_index, raw_mode_index)
+        if mode_key not in known_modes:
+            fail(f"eigen_summary references unknown mode {mode_key!r}")
+        frequency_hz = require_finite_number(mode.get("frequency_hz"), "eigen_summary mode.frequency_hz")
+        validate_mode_diagnostics_fields(
+            mode,
+            f"eigen_summary.modes[{raw_mode_index}]",
+            frequency_hz,
+        )
 
 
 def validate_dispersion(
@@ -572,12 +706,14 @@ def main() -> int:
         "eigen/spectrum.v2.json",
         "eigen/branches.v2.json",
         "eigen/dispersion.csv",
+        "eigen/metadata/eigen_summary.json",
         "frequency_domain/manifest.v1.json",
     ]:
         require_file(root / relative_path)
 
     spectrum = load_json(root / "eigen/spectrum.v2.json")
     branches = load_json(root / "eigen/branches.v2.json")
+    summary = load_json(root / "eigen/metadata/eigen_summary.json")
     manifest = load_json(root / "frequency_domain/manifest.v1.json")
 
     require_equal(spectrum.get("schema_version"), "eigen_spectrum.v2", "spectrum.schema_version")
@@ -700,6 +836,7 @@ def main() -> int:
     if unknown_branch_modes:
         fail(f"branches reference unknown modes: {sorted(unknown_branch_modes)!r}")
 
+    validate_eigen_summary(summary, known_modes)
     validate_dispersion(root, known_modes)
     return 0
 

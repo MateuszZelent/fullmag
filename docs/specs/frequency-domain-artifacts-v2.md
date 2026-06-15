@@ -12,11 +12,14 @@ guessing file layout or reconstructing physics from labels.
 The canonical artifact family is:
 
 ```text
+artifacts/frequency_domain/manifest.v1.json
+artifacts/eigen/diagnostics/solver.v1.json
 artifacts/eigen/spectrum.v2.json
 artifacts/eigen/branches.v2.json
 artifacts/eigen/dispersion.csv
 artifacts/eigen/modes/sample_XXXX/mode_YYYY.json
 artifacts/eigen/mode_fields.zarr/
+artifacts/response/diagnostics/solver.v1.json
 artifacts/response/magnetic_response_sweep.v1.json
 artifacts/response/magnetic_response_sweep.v2.json
 artifacts/response/field_payloads.zarr/
@@ -81,13 +84,20 @@ Each mode summary must include:
 - `frequency_real_hz`,
 - `frequency_imag_hz`,
 - `angular_frequency_rad_per_s`,
+- `omega_rad_s`,
 - eigenvalue real and imaginary components,
 - `norm`,
 - `max_amplitude`,
 - `residual_norm`,
+- `residual_absolute_l2`,
+- `residual_relative_l2`,
 - `residual_linf`,
+- `mass_norm`,
 - `tangent_leakage_mean_abs`,
 - `tangent_leakage_max_abs`,
+- `gamma_rad_s_T`,
+- `gamma0_rad_s_per_A_m`,
+- `mu0_T_m_per_A`,
 - `dominant_polarization`,
 - `k_vector`.
 
@@ -141,14 +151,21 @@ Required fields:
 - `frequency_real_hz`,
 - `frequency_imag_hz`,
 - `angular_frequency_rad_per_s`,
+- `omega_rad_s`,
 - `normalization`,
 - `damping_policy`,
 - `mode_field_id`,
 - `mode_field_resource_key`,
 - `residual_norm`,
+- `residual_absolute_l2`,
+- `residual_relative_l2`,
 - `residual_linf`,
+- `mass_norm`,
 - `tangent_leakage_mean_abs`,
 - `tangent_leakage_max_abs`,
+- `gamma_rad_s_T`,
+- `gamma0_rad_s_per_A_m`,
+- `mu0_T_m_per_A`,
 - `k_vector`,
 - `mode_field_sample_count`,
 - `amplitude_summary`,
@@ -176,11 +193,27 @@ qualified single-precision execution. The array must be compressed by the Zarr
 codec configured for the runtime. If a compatibility `vector.bin` file exists,
 it is a derived/export payload, not the authoritative production store.
 
-`residual_norm` and `residual_linf` are the generalized eigen residual norms
-reported by the producing solver for the exported mode. Tangent leakage
-diagnostics are the mean and max absolute `m0 dot dm` over the exported real
-and imaginary mode vectors, and must be emitted whenever the solver
-reconstructs physical mode vectors.
+`residual_norm` is the legacy alias for `residual_absolute_l2`. The dense
+oracle path must also emit:
+
+- `residual_relative_l2 = ||K u - lambda M u||_2 / (||K u||_2 + |lambda| ||M u||_2)`,
+- `mass_norm = u^T M u`,
+- `omega_rad_s = 2*pi*frequency_hz`,
+- SI constants `gamma_rad_s_T`, `gamma0_rad_s_per_A_m`, and `mu0_T_m_per_A`,
+  where `gamma0_rad_s_per_A_m = mu0_T_m_per_A * gamma_rad_s_T`.
+
+Tangent leakage diagnostics are the mean and max absolute `m0 dot dm` over the
+exported real and imaginary mode vectors, and must be emitted whenever the
+solver reconstructs physical mode vectors.
+
+## eigen/metadata/eigen_summary.json
+
+The dense reference oracle summary must include:
+
+- `solver_diagnostics.dense_reference_oracle`,
+- `solver_diagnostics.constants.{gamma_rad_s_T,gamma0_rad_s_per_A_m,mu0_T_m_per_A}`,
+- `solver_diagnostics.orthogonality[]` with
+  `lhs_mode_index`, `rhs_mode_index`, and `mass_inner_product`.
 
 ## frequency_domain/manifest.v1.json
 
@@ -188,6 +221,8 @@ The manifest is the entry point for UI and post-processing discovery. Modal
 eigen manifests must include:
 
 - `schema_version = "frequency_domain_manifest.v1"`,
+- `analysis_family = "magnetic_frequency_domain"`,
+- `study_product = "modal_eigen"`,
 - `stage_kind = "eigenmodes"`,
 - `physics.analysis_family = "magnetic_frequency_domain"`,
 - `physics.phase_convention` as either `exp_i_omega_t` or
@@ -198,12 +233,65 @@ eigen manifests must include:
 - `artifacts.spectrum_v2_path = "eigen/spectrum.v2.json"`,
 - `artifacts.branches_v2_path = "eigen/branches.v2.json"`,
 - `artifacts.dispersion_csv_path = "eigen/dispersion.csv"`,
+- `artifacts.solver_diagnostics_path = "eigen/diagnostics/solver.v1.json"`,
 - `artifacts.mode_metadata_paths[]`,
 - `resources.mode_field_resources[]`.
 
-Driven response manifests use the same temporal phase convention field, but
-their field units are `A_per_m` because the response payloads are dynamic
-magnetic-field-space vectors rather than normalized modal perturbations.
+Driven response manifests must include:
+
+- `schema_version = "frequency_domain_manifest.v1"`,
+- `analysis_family = "magnetic_frequency_domain"`,
+- `study_product = "driven_response"`,
+- `stage_kind = "frequency_response"`,
+- `physics.analysis_family = "magnetic_frequency_domain"`,
+- `physics.phase_convention`,
+- `physics.frequency_units = "Hz"`,
+- `physics.field_units = "dimensionless_delta_m"`,
+- `artifacts.solver_diagnostics_path = "response/diagnostics/solver.v1.json"`.
+
+The manifest must always distinguish the two study products with
+`study_product = "modal_eigen"` or `study_product = "driven_response"`.
+UI labels must use `Eigenmodes` for `modal_eigen` and `Frequency Response` for
+`driven_response`; clients must not collapse them into one generic
+"frequency-domain solver" label.
+
+Reference modal manifest:
+
+```json
+{
+  "schema_version": "frequency_domain_manifest.v1",
+  "analysis_family": "magnetic_frequency_domain",
+  "study_product": "modal_eigen",
+  "stage_kind": "eigenmodes",
+  "phase_convention": "exp_i_omega_t",
+  "frequency_units": "Hz",
+  "field_units": "dimensionless_delta_m"
+}
+```
+
+Reference driven manifest:
+
+```json
+{
+  "schema_version": "frequency_domain_manifest.v1",
+  "analysis_family": "magnetic_frequency_domain",
+  "study_product": "driven_response",
+  "stage_kind": "frequency_response",
+  "phase_convention": "exp_i_omega_t",
+  "frequency_units": "Hz",
+  "field_units": "dimensionless_delta_m"
+}
+```
+
+## eigen/diagnostics/solver.v1.json
+
+Modal solver diagnostics live at `eigen/diagnostics/solver.v1.json` and must
+describe the modal `modal_eigen` solve only.
+
+## response/diagnostics/solver.v1.json
+
+Driven solver diagnostics live at `response/diagnostics/solver.v1.json` and
+must describe the driven `driven_response` solve only.
 
 ## response/magnetic_response_sweep.v1.json
 

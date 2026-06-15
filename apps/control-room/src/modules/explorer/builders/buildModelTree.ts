@@ -12,6 +12,7 @@ import { buildCrossSectionNodes } from "./crossSectionExplorerNodes";
 import {
   buildFrequencyDomainDiagnosticsNode,
   buildFrequencyDomainJobsNode,
+  buildPeriodicPairsResourceNode,
   buildFrequencyDomainResourceNodes,
   buildFrequencyDomainResultNode,
   type ExplorerTreeResources,
@@ -320,9 +321,9 @@ function regionMaterialFieldNodes(
   object: ModelTreeObjectSnapshot,
   region: NonNullable<ModelTreeObjectSnapshot["regions"]>[number],
 ): ExplorerNode[] {
-  return (object.materialFields ?? [])
-    .filter((field) => field.regionId === region.id)
-    .map((field) => ({
+  return (object.materialFields ?? []).flatMap((field) =>
+    field.regionId === region.id
+      ? [{
       id: `${parentId}:magnetic-parameters:${field.id}`,
       kind: "object.region.magnetic-parameters" as const,
       label: field.label,
@@ -332,7 +333,9 @@ function regionMaterialFieldNodes(
       objectId: object.id,
       regionId: region.id,
       status: "ready" as const,
-    }));
+      }]
+      : [],
+  );
 }
 
 function magneticParametersNode(
@@ -752,6 +755,7 @@ export function buildExplorerTree(
             badge: "revision 0",
             icon: "mesh",
             status: "stale",
+            children: [buildPeriodicPairsResourceNode()],
           },
         ],
       },
@@ -787,7 +791,7 @@ export function buildExplorerTree(
       {
         ...branch("jobs:root", "Jobs", "jobs.root"),
         children: [
-          buildFrequencyDomainJobsNode(),
+          buildFrequencyDomainJobsNode(resources),
           {
             id: "jobs:command-queue",
             kind: "jobs.command",

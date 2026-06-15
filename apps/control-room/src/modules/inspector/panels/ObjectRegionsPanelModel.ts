@@ -595,20 +595,20 @@ function diagnosticsForRegion(
 ): ObjectRegionDiagnosticItem[] {
   if (!objectId || !regionId) return [];
   return (
-    regionDiagnostics?.diagnostics
-      .filter(
-        (diagnostic) =>
-          diagnostic.owner_object_id === objectId &&
-          diagnostic.region_id === regionId,
-      )
-      .map((diagnostic) => ({
-        capabilityGate: diagnostic.capability_gate ?? null,
-        code: diagnostic.code,
-        diagnosticId: diagnostic.diagnostic_id,
-        message: diagnostic.message,
-        realizationStatus: diagnostic.realization_status ?? null,
-        severity: diagnostic.severity,
-      })) ?? []
+    regionDiagnostics?.diagnostics.flatMap((diagnostic) =>
+      diagnostic.owner_object_id === objectId && diagnostic.region_id === regionId
+        ? [
+            {
+              capabilityGate: diagnostic.capability_gate ?? null,
+              code: diagnostic.code,
+              diagnosticId: diagnostic.diagnostic_id,
+              message: diagnostic.message,
+              realizationStatus: diagnostic.realization_status ?? null,
+              severity: diagnostic.severity,
+            },
+          ]
+        : [],
+    ) ?? []
   );
 }
 

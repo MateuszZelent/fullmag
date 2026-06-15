@@ -410,6 +410,16 @@ pub struct LobpcgReport {
     pub converged_count: usize,
 }
 
+/// Per-iteration progress emitted by the LOBPCG eigensolver.
+#[derive(Debug, Clone)]
+pub struct LobpcgProgress {
+    pub iteration: u32,
+    pub max_iterations: u32,
+    pub max_residual: f64,
+    pub converged_count: usize,
+    pub requested_count: usize,
+}
+
 /// A single real eigenpair from the sparse eigensolver.
 #[derive(Debug, Clone)]
 pub struct SparseEigenpair {
@@ -440,6 +450,17 @@ pub fn lobpcg_generalized(
     k: usize,
     tol: f64,
     max_iter: u32,
+) -> Result<(Vec<SparseEigenpair>, LobpcgReport), LinearSolveError> {
+    lobpcg_generalized_with_progress(a, b, k, tol, max_iter, None)
+}
+
+pub fn lobpcg_generalized_with_progress(
+    a: &CsrMatrix,
+    b: &CsrMatrix,
+    k: usize,
+    tol: f64,
+    max_iter: u32,
+    mut progress: Option<&mut dyn FnMut(LobpcgProgress)>,
 ) -> Result<(Vec<SparseEigenpair>, LobpcgReport), LinearSolveError> {
     let n = a.nrows;
     if n == 0 || k == 0 {
@@ -540,6 +561,15 @@ pub fn lobpcg_generalized(
         report.iterations = iter + 1;
         report.max_residual = max_res;
         report.converged_count = n_converged;
+        if let Some(callback) = progress.as_deref_mut() {
+            callback(LobpcgProgress {
+                iteration: iter + 1,
+                max_iterations: max_iter,
+                max_residual: max_res,
+                converged_count: n_converged,
+                requested_count: k,
+            });
+        }
 
         if n_converged >= k {
             report.converged = true;
@@ -1421,6 +1451,36 @@ mod tests {
                 eigenpairs[i].eigenvalue,
             );
         }
+    }
+
+    #[test]
+    fn lobpcg_generalized_reports_iteration_progress() {
+        let n = 16;
+        let a = tridiagonal_laplacian(n);
+        let b = identity_csr(n);
+        let mut progress = Vec::new();
+        let mut callback = |event: LobpcgProgress| {
+            progress.push((
+                event.iteration,
+                event.max_iterations,
+                event.max_residual,
+                event.converged_count,
+                event.requested_count,
+            ));
+        };
+
+        let (_eigenpairs, report) =
+            lobpcg_generalized_with_progress(&a, &b, 2, 1e-8, 200, Some(&mut callback))
+                .expect("LOBPCG should solve and report progress");
+
+        assert!(!progress.is_empty());
+        assert_eq!(progress[0].0, 1);
+        assert_eq!(progress[0].1, 200);
+        assert_eq!(progress[0].4, 2);
+        assert_eq!(
+            progress.last().map(|event| event.0),
+            Some(report.iterations)
+        );
     }
 
     #[test]

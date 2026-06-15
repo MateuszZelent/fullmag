@@ -519,6 +519,7 @@ pub(crate) fn materialize_script_stages(
             if stage.ir.geometry_assets.is_none() {
                 stage.ir.geometry_assets = shared_geometry_assets.clone();
             }
+            normalize_stage_sampling(&mut stage.ir);
             if let Some(action) = stage.action {
                 Ok(resolve_explicit_stage_action(
                     stage.ir,
@@ -565,6 +566,13 @@ fn classify_stage_transition(
     if let Some(action) = current.action.as_ref() {
         return classify_action_stage_transition(action);
     }
+    if requested_device(&previous.ir) != requested_device(&current.ir) {
+        return StageTransitionMetadata::boundary(
+            StageTransitionKind::BackendTransfer,
+            StageTransitionReason::DeviceChange,
+            Some(StateTransferOperatorKind::IdentityCopy),
+        );
+    }
     if previous.ir.backend_policy.requested_backend != current.ir.backend_policy.requested_backend {
         return StageTransitionMetadata::boundary(
             StageTransitionKind::BackendTransfer,
@@ -595,6 +603,11 @@ fn classify_action_stage_transition(action: &ResolvedScriptStageAction) -> Stage
             StageTransitionReason::UserExport,
             None,
         ),
+        ResolvedScriptStageAction::ChangeDevice { .. } => StageTransitionMetadata::boundary(
+            StageTransitionKind::BackendTransfer,
+            StageTransitionReason::DeviceChange,
+            Some(StateTransferOperatorKind::IdentityCopy),
+        ),
     }
 }
 
@@ -606,7 +619,7 @@ fn same_runtime_state_topology(previous: &ProblemIR, current: &ProblemIR) -> boo
         && previous.geometry == current.geometry
         && previous.geometry_assets == current.geometry_assets
         && previous.regions == current.regions
-        && previous.materials == current.materials
+        && same_material_topology(&previous.materials, &current.materials)
         && same_magnet_topology(&previous.magnets, &current.magnets)
         && previous.current_modules == current.current_modules
         && previous.spin_torque_modules == current.spin_torque_modules
@@ -618,6 +631,28 @@ fn same_runtime_state_topology(previous: &ProblemIR, current: &ProblemIR) -> boo
         && previous.air_box_policy == current.air_box_policy
         && previous.pbc == current.pbc
         && previous.mesh_semantics == current.mesh_semantics
+}
+
+fn requested_device(ir: &ProblemIR) -> String {
+    ir.problem_meta
+        .runtime_metadata
+        .get("runtime_selection")
+        .and_then(Value::as_object)
+        .and_then(|selection| selection.get("device"))
+        .and_then(Value::as_str)
+        .unwrap_or("auto")
+        .to_string()
+}
+
+fn same_material_topology(
+    previous: &[fullmag_ir::MaterialIR],
+    current: &[fullmag_ir::MaterialIR],
+) -> bool {
+    previous.len() == current.len()
+        && previous
+            .iter()
+            .zip(current.iter())
+            .all(|(p, c)| p.name == c.name)
 }
 
 fn same_magnet_topology(
@@ -682,6 +717,10 @@ fn resolve_explicit_stage_action(
                 format,
                 dataset,
             },
+        ),
+        ScriptExecutionStageAction::ChangeDevice { device } => (
+            "study_pipeline_change_device",
+            ResolvedScriptStageAction::ChangeDevice { device },
         ),
     };
     let entrypoint = if entrypoint_kind.trim().is_empty() {
@@ -803,6 +842,7 @@ fn materialize_pipeline_primitive(
         "save_state" => materialize_pipeline_save_state(current_ir, payload).map(Some),
         "load_state" => materialize_pipeline_load_state(current_ir, payload).map(Some),
         "export" => materialize_pipeline_export(current_ir, payload).map(Some),
+        "change_device" => materialize_pipeline_change_device(current_ir, payload).map(Some),
         other => bail!(
             "study pipeline primitive stage '{}' is not yet executable by the runtime; materialize it into explicit stages first",
             other
@@ -883,6 +923,115 @@ fn materialize_pipeline_macro(
     }
 }
 
+fn time_domain_sampling_from(base: &fullmag_ir::SamplingIR) -> fullmag_ir::SamplingIR {
+    let mut outputs: Vec<fullmag_ir::OutputIR> = base
+        .outputs
+        .iter()
+        .filter(|output| {
+            matches!(
+                output,
+                fullmag_ir::OutputIR::Field { .. }
+                    | fullmag_ir::OutputIR::Scalar { .. }
+                    | fullmag_ir::OutputIR::Snapshot { .. }
+            )
+        })
+        .cloned()
+        .collect();
+    if outputs.is_empty() {
+        outputs.push(fullmag_ir::OutputIR::Field {
+            name: "m".to_string(),
+            every_seconds: 1e-12,
+        });
+        outputs.push(fullmag_ir::OutputIR::Scalar {
+            name: "E_total".to_string(),
+            every_seconds: 1e-12,
+        });
+    }
+    fullmag_ir::SamplingIR {
+        table_autosave: base.table_autosave.clone(),
+        outputs,
+    }
+}
+
+fn eigen_sampling_from(base: &fullmag_ir::SamplingIR, mode_count: u32) -> fullmag_ir::SamplingIR {
+    let mut outputs: Vec<fullmag_ir::OutputIR> = base
+        .outputs
+        .iter()
+        .filter(|output| {
+            matches!(
+                output,
+                fullmag_ir::OutputIR::EigenSpectrum { .. }
+                    | fullmag_ir::OutputIR::EigenMode { .. }
+                    | fullmag_ir::OutputIR::DispersionCurve { .. }
+            )
+        })
+        .cloned()
+        .collect();
+    for output in &mut outputs {
+        if let fullmag_ir::OutputIR::EigenMode { indices, .. } = output {
+            indices.retain(|index| *index < mode_count);
+        }
+    }
+    outputs.retain(|output| {
+        !matches!(
+            output,
+            fullmag_ir::OutputIR::EigenMode { indices, .. } if indices.is_empty()
+        )
+    });
+    if !outputs.iter().any(|output| {
+        matches!(
+            output,
+            fullmag_ir::OutputIR::EigenSpectrum { .. } | fullmag_ir::OutputIR::EigenMode { .. }
+        )
+    }) {
+        outputs.push(fullmag_ir::OutputIR::EigenSpectrum {
+            quantity: "spectrum".to_string(),
+        });
+    }
+    fullmag_ir::SamplingIR {
+        table_autosave: base.table_autosave.clone(),
+        outputs,
+    }
+}
+
+fn frequency_response_sampling_from(base: &fullmag_ir::SamplingIR) -> fullmag_ir::SamplingIR {
+    fullmag_ir::SamplingIR {
+        table_autosave: base.table_autosave.clone(),
+        outputs: base
+            .outputs
+            .iter()
+            .filter(|output| {
+                matches!(
+                    output,
+                    fullmag_ir::OutputIR::FrequencyResponseOutput { .. }
+                        | fullmag_ir::OutputIR::EigenSpectrum { .. }
+                        | fullmag_ir::OutputIR::EigenMode { .. }
+                        | fullmag_ir::OutputIR::DispersionCurve { .. }
+                )
+            })
+            .cloned()
+            .collect(),
+    }
+}
+
+fn normalize_stage_sampling(ir: &mut ProblemIR) {
+    match &mut ir.study {
+        fullmag_ir::StudyIR::TimeEvolution { sampling, .. }
+        | fullmag_ir::StudyIR::Relaxation { sampling, .. }
+        | fullmag_ir::StudyIR::Hysteresis { sampling, .. } => {
+            *sampling = time_domain_sampling_from(sampling);
+        }
+        fullmag_ir::StudyIR::Eigenmodes {
+            sampling, count, ..
+        } => {
+            *sampling = eigen_sampling_from(sampling, *count);
+        }
+        fullmag_ir::StudyIR::FrequencyResponse { sampling, .. } => {
+            *sampling = frequency_response_sampling_from(sampling);
+        }
+    }
+}
+
 fn materialize_pipeline_run(
     base_ir: &ProblemIR,
     payload: &BTreeMap<String, Value>,
@@ -891,7 +1040,7 @@ fn materialize_pipeline_run(
     let mut ir = base_ir.clone();
     let mut dynamics = ir.study.dynamics().clone();
     apply_dynamics_overrides(&mut dynamics, payload)?;
-    let sampling = ir.study.sampling().clone();
+    let sampling = time_domain_sampling_from(ir.study.sampling());
     let entrypoint_kind = payload_string(payload, "entrypoint_kind")
         .unwrap_or_else(|| "study_pipeline_run".to_string());
     ir.problem_meta.entrypoint_kind = entrypoint_kind.clone();
@@ -917,7 +1066,7 @@ fn materialize_pipeline_relax(
     let mut ir = base_ir.clone();
     let mut dynamics = ir.study.dynamics().clone();
     apply_dynamics_overrides(&mut dynamics, payload)?;
-    let sampling = ir.study.sampling().clone();
+    let sampling = time_domain_sampling_from(ir.study.sampling());
     let entrypoint_kind = payload_string(payload, "entrypoint_kind")
         .unwrap_or_else(|| "study_pipeline_relax".to_string());
     ir.problem_meta.entrypoint_kind = entrypoint_kind.clone();
@@ -993,6 +1142,7 @@ fn materialize_pipeline_eigenmodes(
         .as_ref()
         .map(|current| current.7.clone())
         .unwrap_or_default();
+    let count = payload_u32(payload, "eigen_count")?.unwrap_or(default_count);
     let include_demag = payload_bool(payload, "eigen_include_demag")?.unwrap_or_else(|| {
         current_eigen
             .as_ref()
@@ -1007,7 +1157,7 @@ fn materialize_pipeline_eigenmodes(
             kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
             include_demag,
         },
-        count: payload_u32(payload, "eigen_count")?.unwrap_or(default_count),
+        count,
         target: payload_eigen_target(payload, default_target)?,
         equilibrium: payload_equilibrium_source(payload, default_equilibrium)?,
         k_sampling: payload_k_sampling(
@@ -1017,7 +1167,7 @@ fn materialize_pipeline_eigenmodes(
         normalization: payload_eigen_normalization(payload)?.unwrap_or(default_normalization),
         damping_policy: payload_eigen_damping_policy(payload)?.unwrap_or(default_damping_policy),
         spin_wave_bc: payload_spin_wave_bc(payload)?.unwrap_or(default_spin_wave_bc),
-        sampling,
+        sampling: eigen_sampling_from(&sampling, count),
         mode_tracking: None,
     };
 
@@ -1228,6 +1378,26 @@ fn materialize_pipeline_export(
             format: payload_string(payload, "format").unwrap_or_else(|| "json".to_string()),
             dataset: payload_string(payload, "dataset"),
         },
+    ))
+}
+
+fn materialize_pipeline_change_device(
+    current_ir: &mut ProblemIR,
+    payload: &BTreeMap<String, Value>,
+) -> Result<ResolvedScriptStage> {
+    let device = normalize_pipeline_device(
+        payload_string(payload, "device")
+            .unwrap_or_else(|| "auto".to_string())
+            .as_str(),
+    )?;
+    set_runtime_selection_device(current_ir, &device);
+    let entrypoint_kind = payload_string(payload, "entrypoint_kind")
+        .unwrap_or_else(|| "study_pipeline_change_device".to_string());
+    current_ir.problem_meta.entrypoint_kind = entrypoint_kind.clone();
+    Ok(ResolvedScriptStage::synthetic(
+        current_ir.clone(),
+        entrypoint_kind,
+        ResolvedScriptStageAction::ChangeDevice { device },
     ))
 }
 
@@ -1709,6 +1879,58 @@ fn payload_string(payload: &BTreeMap<String, Value>, key: &str) -> Option<String
     }
 }
 
+fn normalize_pipeline_device(device: &str) -> Result<String> {
+    let normalized = device.trim().to_ascii_lowercase();
+    if matches!(normalized.as_str(), "auto" | "cpu" | "gpu" | "cuda") {
+        return Ok(normalized);
+    }
+    if let Some(index) = normalized.strip_prefix("cuda:") {
+        if !index.is_empty() && index.chars().all(|ch| ch.is_ascii_digit()) {
+            return Ok(normalized);
+        }
+    }
+    bail!("change_device requires device 'auto', 'cpu', 'gpu', 'cuda', or 'cuda:<index>'");
+}
+
+fn set_runtime_selection_device(ir: &mut ProblemIR, device: &str) {
+    let mut runtime_selection = ir
+        .problem_meta
+        .runtime_metadata
+        .get("runtime_selection")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+
+    let (device_label, device_index) = if let Some(index) = device.strip_prefix("cuda:") {
+        (
+            "cuda".to_string(),
+            index.parse::<i64>().ok().map(Value::from),
+        )
+    } else {
+        (device.to_string(), None)
+    };
+
+    runtime_selection.insert("device".to_string(), Value::String(device_label.clone()));
+    runtime_selection.insert("explicit_selection".to_string(), Value::Bool(true));
+
+    if device_label == "cpu" || device_label == "auto" {
+        runtime_selection.insert("gpu_count".to_string(), Value::from(0));
+        runtime_selection.remove("device_index");
+    } else {
+        runtime_selection.insert("gpu_count".to_string(), Value::from(1));
+        if let Some(index) = device_index {
+            runtime_selection.insert("device_index".to_string(), index);
+        } else {
+            runtime_selection.remove("device_index");
+        }
+    }
+
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        Value::Object(runtime_selection),
+    );
+}
+
 fn payload_f64(payload: &BTreeMap<String, Value>, key: &str) -> Result<Option<f64>> {
     let Some(raw_value) = payload.get(key) else {
         return Ok(None);
@@ -1933,13 +2155,15 @@ fn payload_eigen_target(
         payload_string(payload, "eigen_target").unwrap_or_else(|| match default_target {
             fullmag_ir::EigenTargetIR::Lowest => "lowest".to_string(),
             fullmag_ir::EigenTargetIR::Nearest { .. } => "nearest".to_string(),
+            fullmag_ir::EigenTargetIR::FrequencyWindow { .. } => "frequency_window".to_string(),
         });
     match target_kind.as_str() {
         "lowest" => Ok(fullmag_ir::EigenTargetIR::Lowest),
         "nearest" => {
             let default_frequency = match default_target {
                 fullmag_ir::EigenTargetIR::Nearest { frequency_hz } => Some(frequency_hz),
-                fullmag_ir::EigenTargetIR::Lowest => None,
+                fullmag_ir::EigenTargetIR::Lowest
+                | fullmag_ir::EigenTargetIR::FrequencyWindow { .. } => None,
             };
             let frequency_hz = payload_f64(payload, "eigen_target_frequency")?
                 .or(default_frequency)
@@ -1949,6 +2173,35 @@ fn payload_eigen_target(
                     )
                 })?;
             Ok(fullmag_ir::EigenTargetIR::Nearest { frequency_hz })
+        }
+        "frequency_window" => {
+            let (default_min, default_max) = match default_target {
+                fullmag_ir::EigenTargetIR::FrequencyWindow {
+                    frequency_min_hz,
+                    frequency_max_hz,
+                } => (Some(frequency_min_hz), Some(frequency_max_hz)),
+                _ => (None, None),
+            };
+            let frequency_min_hz = payload_f64(payload, "eigen_frequency_min")?
+                .or(payload_f64(payload, "frequency_min")?)
+                .or(default_min)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "study pipeline eigenmodes stage with eigen_target='frequency_window' requires eigen_frequency_min"
+                    )
+                })?;
+            let frequency_max_hz = payload_f64(payload, "eigen_frequency_max")?
+                .or(payload_f64(payload, "frequency_max")?)
+                .or(default_max)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "study pipeline eigenmodes stage with eigen_target='frequency_window' requires eigen_frequency_max"
+                    )
+                })?;
+            Ok(fullmag_ir::EigenTargetIR::FrequencyWindow {
+                frequency_min_hz,
+                frequency_max_hz,
+            })
         }
         other => bail!("unsupported eigen_target value '{other}'"),
     }
@@ -3054,6 +3307,7 @@ mod tests {
         let dynamics = base.study.dynamics().clone();
         let sampling = base.study.sampling().clone();
         let mut relax_ir = base.clone();
+        relax_ir.materials[0].damping = 1.0;
         relax_ir.problem_meta.entrypoint_kind = "flat_relax".to_string();
         relax_ir.study = fullmag_ir::StudyIR::Relaxation {
             algorithm: fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped,
@@ -3672,6 +3926,80 @@ mod tests {
     }
 
     #[test]
+    fn materialize_script_stages_supports_change_device_action() {
+        let config = ScriptExecutionConfig {
+            ir: sample_problem_ir(),
+            shared_geometry_assets: None,
+            default_until_seconds: Some(3e-12),
+            study_pipeline: Some(StudyPipelineDocument {
+                version: "study_pipeline.v1".to_string(),
+                nodes: vec![
+                    StudyPipelineNode::Primitive {
+                        id: "stage_relax".to_string(),
+                        label: "Relax".to_string(),
+                        enabled: true,
+                        notes: None,
+                        source: Some("ui_authored".to_string()),
+                        stage_kind: "relax".to_string(),
+                        payload: serde_json::from_value(json!({
+                            "max_steps": 25
+                        }))
+                        .expect("payload"),
+                    },
+                    StudyPipelineNode::Primitive {
+                        id: "stage_change_device".to_string(),
+                        label: "Change device".to_string(),
+                        enabled: true,
+                        notes: None,
+                        source: Some("ui_authored".to_string()),
+                        stage_kind: "change_device".to_string(),
+                        payload: serde_json::from_value(json!({
+                            "device": "cpu"
+                        }))
+                        .expect("payload"),
+                    },
+                    StudyPipelineNode::Primitive {
+                        id: "stage_run".to_string(),
+                        label: "Run".to_string(),
+                        enabled: true,
+                        notes: None,
+                        source: Some("ui_authored".to_string()),
+                        stage_kind: "run".to_string(),
+                        payload: serde_json::from_value(json!({
+                            "until_seconds": 2e-12
+                        }))
+                        .expect("payload"),
+                    },
+                ],
+            }),
+            stages: vec![],
+        };
+
+        let stages = materialize_script_stages(config).expect("pipeline should materialize");
+        assert_eq!(stages.len(), 3);
+        assert!(matches!(
+            &stages[1].action,
+            Some(ResolvedScriptStageAction::ChangeDevice { device }) if device == "cpu"
+        ));
+        assert_eq!(requested_device(&stages[1].ir), "cpu");
+        assert_eq!(requested_device(&stages[2].ir), "cpu");
+        assert_eq!(
+            stages[1]
+                .incoming_transition
+                .as_ref()
+                .map(|transition| transition.reason),
+            Some(StageTransitionReason::DeviceChange)
+        );
+        assert_eq!(
+            stages[1]
+                .incoming_transition
+                .as_ref()
+                .and_then(|transition| transition.transfer_operator),
+            Some(StateTransferOperatorKind::IdentityCopy)
+        );
+    }
+
+    #[test]
     fn materialize_script_stages_supports_relax_run_macro() {
         let config = ScriptExecutionConfig {
             ir: sample_problem_ir(),
@@ -4174,5 +4502,189 @@ mod tests {
             result.is_none(),
             "FDM→FDM should return None (no resampling)"
         );
+    }
+
+    #[test]
+    fn materialize_pipeline_partitions_time_and_eigen_outputs() {
+        let mut ir = sample_problem_ir();
+        if let fullmag_ir::StudyIR::TimeEvolution { sampling, .. } = &mut ir.study {
+            sampling.outputs = vec![
+                fullmag_ir::OutputIR::Field {
+                    name: "m".to_string(),
+                    every_seconds: 1e-12,
+                },
+                fullmag_ir::OutputIR::EigenSpectrum {
+                    quantity: "spectrum".to_string(),
+                },
+                fullmag_ir::OutputIR::EigenMode {
+                    field: "mode".to_string(),
+                    indices: vec![0, 1, 7],
+                },
+            ];
+        }
+        let config = ScriptExecutionConfig {
+            ir,
+            shared_geometry_assets: None,
+            default_until_seconds: Some(3e-12),
+            study_pipeline: Some(StudyPipelineDocument {
+                version: "study_pipeline.v1".to_string(),
+                nodes: vec![
+                    StudyPipelineNode::Primitive {
+                        id: "stage_relax".to_string(),
+                        label: "Relax".to_string(),
+                        enabled: true,
+                        notes: None,
+                        source: Some("script_imported".to_string()),
+                        stage_kind: "relax".to_string(),
+                        payload: serde_json::from_value(json!({
+                            "kind": "relax",
+                            "max_steps": "25"
+                        }))
+                        .expect("payload"),
+                    },
+                    StudyPipelineNode::Primitive {
+                        id: "stage_change_device".to_string(),
+                        label: "Change device".to_string(),
+                        enabled: true,
+                        notes: None,
+                        source: Some("script_imported".to_string()),
+                        stage_kind: "change_device".to_string(),
+                        payload: serde_json::from_value(json!({
+                            "kind": "change_device",
+                            "device": "cpu"
+                        }))
+                        .expect("payload"),
+                    },
+                    StudyPipelineNode::Primitive {
+                        id: "stage_eigenmodes".to_string(),
+                        label: "Eigenmodes".to_string(),
+                        enabled: true,
+                        notes: None,
+                        source: Some("script_imported".to_string()),
+                        stage_kind: "eigenmodes".to_string(),
+                        payload: serde_json::from_value(json!({
+                            "kind": "eigenmodes",
+                            "eigen_count": "4"
+                        }))
+                        .expect("payload"),
+                    },
+                ],
+            }),
+            stages: vec![],
+        };
+
+        let stages = materialize_script_stages(config).expect("pipeline should materialize");
+        assert_eq!(stages.len(), 3);
+        stages[0]
+            .ir
+            .validate()
+            .expect("relax stage outputs should validate");
+        stages[2]
+            .ir
+            .validate()
+            .expect("eigen stage outputs should validate");
+        assert!(matches!(
+            &stages[0].ir.study,
+            fullmag_ir::StudyIR::Relaxation { sampling, .. }
+                if sampling.outputs.iter().all(|output| matches!(output, fullmag_ir::OutputIR::Field { .. }))
+        ));
+        assert!(matches!(
+            &stages[2].ir.study,
+            fullmag_ir::StudyIR::Eigenmodes { sampling, .. }
+                if sampling.outputs.iter().all(|output| matches!(
+                    output,
+                    fullmag_ir::OutputIR::EigenSpectrum { .. }
+                        | fullmag_ir::OutputIR::EigenMode { .. }
+                ))
+        ));
+        let fullmag_ir::StudyIR::Eigenmodes { sampling, .. } = &stages[2].ir.study else {
+            panic!("expected eigenmodes stage");
+        };
+        let mode_indices = sampling.outputs.iter().find_map(|output| match output {
+            fullmag_ir::OutputIR::EigenMode { indices, .. } => Some(indices),
+            _ => None,
+        });
+        assert_eq!(mode_indices, Some(&vec![0, 1]));
+    }
+
+    #[test]
+    fn materialize_explicit_stages_partitions_time_and_eigen_outputs() {
+        let mut base = sample_problem_ir();
+        let dynamics = base.study.dynamics().clone();
+        let mut sampling = base.study.sampling().clone();
+        sampling.outputs = vec![
+            fullmag_ir::OutputIR::EigenSpectrum {
+                quantity: "spectrum".to_string(),
+            },
+            fullmag_ir::OutputIR::EigenMode {
+                field: "mode".to_string(),
+                indices: vec![0, 1, 7],
+            },
+        ];
+        base.study = fullmag_ir::StudyIR::TimeEvolution {
+            dynamics: dynamics.clone(),
+            sampling: sampling.clone(),
+        };
+        let mut relax_ir = base.clone();
+        relax_ir.study = fullmag_ir::StudyIR::Relaxation {
+            algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+            dynamics: dynamics.clone(),
+            stop: fullmag_ir::RelaxStopIR {
+                torque_tolerance_apm: Some(1e-4),
+                energy_tolerance_j: None,
+                max_steps: Some(25),
+                max_pseudotime_s: None,
+                max_physical_time_s: None,
+            },
+            sampling: sampling.clone(),
+        };
+        let mut eigen_ir = base.clone();
+        eigen_ir.study = fullmag_ir::StudyIR::Eigenmodes {
+            dynamics,
+            operator: fullmag_ir::EigenOperatorConfigIR {
+                kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+                include_demag: true,
+            },
+            count: 4,
+            target: fullmag_ir::EigenTargetIR::Lowest,
+            equilibrium: fullmag_ir::EquilibriumSourceIR::RelaxedInitialState,
+            k_sampling: None,
+            normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
+            damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
+            spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+            sampling,
+            mode_tracking: None,
+        };
+        let stages = materialize_script_stages(ScriptExecutionConfig {
+            ir: base,
+            shared_geometry_assets: None,
+            default_until_seconds: Some(3e-12),
+            study_pipeline: None,
+            stages: vec![
+                ScriptExecutionStage {
+                    ir: relax_ir,
+                    default_until_seconds: None,
+                    entrypoint_kind: "flat_relax".to_string(),
+                    action: None,
+                },
+                ScriptExecutionStage {
+                    ir: eigen_ir,
+                    default_until_seconds: None,
+                    entrypoint_kind: "flat_eigenmodes".to_string(),
+                    action: None,
+                },
+            ],
+        })
+        .expect("explicit stages should materialize");
+
+        assert_eq!(stages.len(), 2);
+        stages[0]
+            .ir
+            .validate()
+            .expect("explicit relax outputs should validate");
+        stages[1]
+            .ir
+            .validate()
+            .expect("explicit eigen outputs should validate");
     }
 }

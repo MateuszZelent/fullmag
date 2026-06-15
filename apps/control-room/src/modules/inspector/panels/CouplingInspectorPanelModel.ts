@@ -5,7 +5,7 @@ interface JsonRecord {
   [key: string]: unknown;
 }
 
-export interface CouplingInspectorEndpoint {
+interface CouplingInspectorEndpoint {
   area: number | null;
   label: string;
   objectId: string;

@@ -7,13 +7,32 @@ import { Button } from "@/shared/ui/Button";
 import { FieldRow } from "../../primitives/FieldRow";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { InspectorSection } from "../../primitives/InspectorSection";
+import { StudyProgressBar } from "../StudyProgressBar";
 import {
   StudyStageDraftEditor,
 } from "../StudyPipelineSection";
 import type { StudyStageDraft } from "../StudyStageAuthoringModel";
 import type { StudyStageModel } from "../StudyInspectorPanelModel";
 
+export type FrequencyDomainAuthoringView =
+  | "calculation_mode"
+  | "overview"
+  | "setup"
+  | "equilibrium"
+  | "operator"
+  | "boundary"
+  | "periodic_pairs"
+  | "k_sampling"
+  | "k_path"
+  | "k_grid"
+  | "excitation"
+  | "sweep"
+  | "solver"
+  | "outputs"
+  | "diagnostics";
+
 export interface StageInspectorFrameProps {
+  authoringView?: FrequencyDomainAuthoringView;
   authoringBusy: boolean;
   authoringFeedback: {
     kind: "error" | "success" | "warning";
@@ -25,12 +44,15 @@ export interface StageInspectorFrameProps {
   kindLabel: string;
   onCommit: () => void;
   onUpdateDraft: (patch: Partial<StudyStageDraft>) => void;
+  runRuntimeCommand?: (commandId: string, input?: unknown) => void;
+  runtimeCommandDisabledReason?: (commandId: string) => string | null;
   stage: StudyStageModel | null;
   stageExecutionRevision: number | null;
   validation: readonly { message: string; severity: "error" | "warning" }[];
 }
 
 export function StageInspectorFrame({
+  authoringView = "overview",
   authoringBusy,
   authoringFeedback,
   draft,
@@ -45,6 +67,28 @@ export function StageInspectorFrame({
 }: StageInspectorFrameProps) {
   const hasDraftErrors = validation.some((issue) => issue.severity === "error");
   const isExpectedDraft = draft?.kind === expectedKind;
+  const eigenmodeSolving =
+    (stage?.kind ?? expectedKind).toLowerCase().includes("eigen") &&
+    ["accepted", "dispatched", "materializing", "pending", "queued", "running"].includes(
+      (stage?.status ?? "draft").toLowerCase(),
+    );
+  const hasStageProgress =
+    stage !== null &&
+    (stage.progressLabel != null ||
+      stage.progressDetail != null ||
+      stage.progressPercent > 0);
+  const stageProgressValue =
+    eigenmodeSolving && !hasStageProgress ? null : (stage?.progressPercent ?? null);
+  const stageProgressLabel =
+    stage?.progressLabel ??
+    (eigenmodeSolving ? "stage running; per-iteration modal telemetry pending" : undefined);
+  const eigenmodeActivity = eigenmodeSolving
+    ? summarizeEigenmodeActivity({
+        hasStageProgress,
+        stage,
+        stageExecutionRevision,
+      })
+    : null;
 
   return (
     <>
@@ -68,6 +112,7 @@ export function StageInspectorFrame({
           <StudyStageDraftEditor
             draft={draft}
             index={draftIndex}
+            view={authoringView}
             validation={validation}
             onUpdate={onUpdateDraft}
           />
@@ -101,7 +146,47 @@ export function StageInspectorFrame({
         title="Telemetry & Results"
         badge={stage?.runtimeMetric?.name ?? "stage"}
       >
-        <FieldRow label="Progress" value={`${stage?.progressPercent ?? 0}%`} />
+        {eigenmodeSolving ? (
+          <>
+            <FieldRow
+              label="Eigenmode solve progress"
+              value={stageProgressLabel}
+            />
+            <FieldRow
+              label="Solver activity"
+              value={eigenmodeActivity?.activity ?? "not available"}
+            />
+            <FieldRow
+              label="Progress source"
+              value={eigenmodeActivity?.source ?? "not available"}
+            />
+            <FieldRow
+              label="Stage started"
+              value={formatUnixMs(stage?.startedAtUnixMs)}
+            />
+            <FieldRow
+              label="Last solver update"
+              value={formatUnixMs(stage?.lastProgressUnixMs)}
+            />
+            <FieldRow
+              label="Command ID"
+              value={stage?.commandId ?? "not available"}
+            />
+          </>
+        ) : null}
+        <StudyProgressBar
+          indeterminate={eigenmodeSolving && !hasStageProgress}
+          label={
+            eigenmodeSolving
+              ? "Eigenmode solve progress"
+              : "Selected stage progress"
+          }
+          statusLabel={stage?.progressLabel ?? undefined}
+          value={stageProgressValue}
+        />
+        {stage?.progressDetail ? (
+          <FieldRow label="Progress detail" value={stage.progressDetail} />
+        ) : null}
         <FieldRow
           label="Metric"
           value={stage?.runtimeMetric?.value ?? "not available"}
@@ -124,4 +209,30 @@ export function StageInspectorFrame({
       </InspectorSection>
     </>
   );
+}
+
+function summarizeEigenmodeActivity({
+  hasStageProgress,
+  stage,
+  stageExecutionRevision,
+}: {
+  hasStageProgress: boolean;
+  stage: StudyStageModel | null;
+  stageExecutionRevision: number | null;
+}) {
+  const status = stage?.status ?? "draft";
+  const detail = stage?.progressDetail ?? stage?.progressLabel ?? null;
+  return {
+    activity: hasStageProgress
+      ? `${status}; ${detail ?? "solver progress telemetry published"}`
+      : `${status}; solver stage is active; no modal iteration counter published yet`,
+    source: `simulation/stages/execution@${stageExecutionRevision ?? "unknown"}; ${
+      hasStageProgress ? "progress telemetry observed" : "stage lifecycle observed"
+    }`,
+  };
+}
+
+function formatUnixMs(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "not published";
+  return new Date(value).toISOString();
 }

@@ -10,7 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::args::*;
 use crate::control_room::*;
@@ -428,6 +428,42 @@ fn drain_solver_profile_commands(
     }
 }
 
+fn record_solver_profile_step_with_orchestration(
+    live_workspace: &LocalLiveWorkspace,
+    stats: &fullmag_runner::StepStats,
+    callback_start: Instant,
+) {
+    let orchestration_wall_time_ns = callback_start.elapsed().as_nanos() as u64;
+    let mut profiled_stats = stats.clone();
+    profiled_stats.orchestration_wall_time_ns = orchestration_wall_time_ns;
+    profiled_stats.wall_time_ns = profiled_stats
+        .wall_time_ns
+        .saturating_add(orchestration_wall_time_ns);
+    live_workspace.record_solver_profile_step(&profiled_stats);
+}
+
+fn force_record_solver_profile_finalization(
+    live_workspace: &LocalLiveWorkspace,
+    result: &fullmag_runner::RunResult,
+    step_offset: u64,
+    time_offset: f64,
+) {
+    let Some(last) = result.steps.last() else {
+        return;
+    };
+    if last.finalization_wall_time_ns == 0
+        && last.finalization_field_copy_wall_time_ns == 0
+        && last.finalization_field_copy_bytes == 0
+    {
+        return;
+    }
+    let adjusted = offset_step_stats(std::slice::from_ref(last), step_offset, time_offset)
+        .into_iter()
+        .next()
+        .expect("single finalization step should offset");
+    live_workspace.force_record_solver_profile_step(&adjusted);
+}
+
 fn live_step_ingest_legacy_mag_len(update: &fullmag_runner::StepUpdate) -> usize {
     update
         .magnetization
@@ -502,9 +538,119 @@ fn apply_live_step_update_to_workspace_state(
     }
     merge_cached_preview_fields_from_update(state, update);
     apply_hysteresis_progress_to_stage_execution(state, update);
+    apply_fem_eigen_progress_to_stage_execution(state, update);
     if include_scalar_row {
         set_latest_scalar_row_if_due(state, update);
     }
+}
+
+fn apply_fem_eigen_progress_to_stage_execution(
+    state: &mut LocalLiveWorkspaceState,
+    update: &fullmag_runner::StepUpdate,
+) {
+    let Some(progress) = update.stats.per_object_scalars.get("fem_eigen_progress") else {
+        return;
+    };
+    let Some(stage_execution) = state.stage_execution.as_mut() else {
+        return;
+    };
+    let Some(active_index) = stage_execution.active_stage_index else {
+        return;
+    };
+    let Some(stage) = stage_execution.stages.get_mut(active_index) else {
+        return;
+    };
+
+    let phase = fem_eigen_progress_phase(progress);
+    let solver = if progress
+        .get("solver_cpu_sparse_lobpcg")
+        .is_some_and(|value| *value > 0.0)
+    {
+        "cpu_sparse_lobpcg"
+    } else {
+        "cpu_dense_symmetric_eigen"
+    };
+    let percent = progress
+        .get("percent")
+        .copied()
+        .filter(|value| value.is_finite())
+        .map(|value| value.clamp(0.0, 100.0));
+    if let Some(percent) = percent {
+        stage.progress_percent = Some(percent);
+    }
+    stage.progress_label = Some(phase.to_string());
+    stage.progress_detail = Some(fem_eigen_progress_detail(progress, phase, solver));
+    stage.last_progress_unix_ms = Some(current_unix_millis_u64());
+}
+
+fn fem_eigen_progress_phase(progress: &std::collections::HashMap<String, f64>) -> &'static str {
+    if progress
+        .get("phase_materializing_equilibrium")
+        .is_some_and(|value| *value > 0.0)
+    {
+        "materializing equilibrium"
+    } else if progress
+        .get("phase_assembling_operator")
+        .is_some_and(|value| *value > 0.0)
+    {
+        "assembling eigen operator"
+    } else if progress
+        .get("phase_solving_sparse_lobpcg")
+        .is_some_and(|value| *value > 0.0)
+    {
+        "solving sparse LOBPCG"
+    } else if progress
+        .get("phase_solving_dense")
+        .is_some_and(|value| *value > 0.0)
+    {
+        "solving dense eigenproblem"
+    } else if progress
+        .get("phase_writing_artifacts")
+        .is_some_and(|value| *value > 0.0)
+    {
+        "writing eigen artifacts"
+    } else if progress
+        .get("phase_completed")
+        .is_some_and(|value| *value > 0.0)
+    {
+        "completed"
+    } else {
+        "solving"
+    }
+}
+
+fn fem_eigen_progress_detail(
+    progress: &std::collections::HashMap<String, f64>,
+    phase: &str,
+    solver: &str,
+) -> String {
+    let active_nodes = progress.get("active_nodes").copied().unwrap_or(0.0) as u64;
+    let effective_dof = progress.get("effective_dof").copied().unwrap_or(0.0) as u64;
+    let requested_modes = progress.get("requested_modes").copied().unwrap_or(0.0) as u64;
+    let computed_modes = progress.get("computed_modes").copied().unwrap_or(0.0) as u64;
+    let mut detail = format!(
+        "{phase}; solver={solver}; active_nodes={active_nodes}; effective_dof={effective_dof}; requested_modes={requested_modes}; computed_modes={computed_modes}"
+    );
+    if let Some(iteration) = progress.get("iteration").copied() {
+        if let Some(max_iterations) = progress.get("max_iterations").copied() {
+            detail.push_str(&format!(
+                "; iteration={}/{}",
+                iteration as u64, max_iterations as u64
+            ));
+        } else {
+            detail.push_str(&format!("; iteration={}", iteration as u64));
+        }
+    }
+    if let Some(residual) = progress.get("residual").copied() {
+        detail.push_str(&format!("; residual={residual:.3e}"));
+    }
+    if progress
+        .get("warning_dense_o_n3")
+        .is_some_and(|value| *value > 0.0)
+    {
+        detail.push_str("; warning=dense O(n^3) path has no internal iteration telemetry");
+    }
+    detail
 }
 
 fn apply_hysteresis_progress_to_stage_execution(
@@ -550,6 +696,41 @@ fn saturating_nanos_u64(duration: Duration) -> u64 {
     duration.as_nanos().min(u128::from(u64::MAX)) as u64
 }
 
+fn current_unix_millis_u64() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64
+}
+
+fn stage_progress_detail_is_heartbeat(detail: &str) -> bool {
+    detail.starts_with("heartbeat ")
+}
+
+fn stage_has_solver_progress_detail(stage: &CurrentLiveStageExecutionRecord) -> bool {
+    stage
+        .progress_detail
+        .as_deref()
+        .is_some_and(|detail| !stage_progress_detail_is_heartbeat(detail))
+}
+
+fn apply_stage_heartbeat_progress(stage: &mut CurrentLiveStageExecutionRecord, idle_for: Duration) {
+    if stage_has_solver_progress_detail(stage) {
+        return;
+    }
+    stage.progress_percent = stage
+        .progress_percent
+        .map(|value| value.max(35.0))
+        .or(Some(35.0));
+    stage.progress_label = Some("solving".to_string());
+    stage.progress_detail = Some(format!(
+        "heartbeat {:.1}s since last solver update",
+        idle_for.as_secs_f64()
+    ));
+    stage.last_progress_unix_ms = Some(current_unix_millis_u64());
+}
+
 fn detailed_fem_step_profile_enabled() -> bool {
     std::env::var("FULLMAG_FEM_STEP_PROFILE")
         .ok()
@@ -570,9 +751,12 @@ fn append_detailed_fem_step_profile(line: &mut String, stats: &fullmag_runner::S
     let rhs_ms = stats.rhs_wall_time_ns as f64 / 1e6;
     let extra_ms = stats.extra_energy_wall_time_ns as f64 / 1e6;
     let snapshot_ms = stats.snapshot_wall_time_ns as f64 / 1e6;
+    let relax_preconditioner_ms = stats.relaxation_preconditioner_wall_time_ns as f64 / 1e6;
     let dt_next = stats.dt_suggested.unwrap_or(0.0);
     line.push_str(&format!(
-        "  phases[ex={exchange_ms:.0}ms demag={demag_ms:.0}ms rhs={rhs_ms:.0}ms extra={extra_ms:.0}ms snap={snapshot_ms:.0}ms]  rk[rhs_evals={} rejected={} fsal={}]  demag[solves={} lin_iters={} residual={:.3e}]  err={:.3e}  dt_next={:.3e}",
+        "  phases[ex={exchange_ms:.0}ms demag={demag_ms:.0}ms relax_prec={relax_preconditioner_ms:.0}ms rhs={rhs_ms:.0}ms extra={extra_ms:.0}ms snap={snapshot_ms:.0}ms]  relax_prec_cache={}/{}  rk[rhs_evals={} rejected={} fsal={}]  demag[solves={} lin_iters={} residual={:.3e}]  err={:.3e}  dt_next={:.3e}",
+        stats.relaxation_preconditioner_cache_hits,
+        stats.relaxation_preconditioner_cache_misses,
         stats.rhs_evals,
         stats.rejected_attempts,
         if stats.fsal_reused { 1 } else { 0 },
@@ -737,6 +921,13 @@ impl StageProgressHeartbeat {
                             &heartbeat_update,
                         );
                         state.live_state = live_state_manifest_from_update(&heartbeat_update);
+                        if let Some(stage_execution) = state.stage_execution.as_mut() {
+                            if let Some(active_index) = stage_execution.active_stage_index {
+                                if let Some(stage) = stage_execution.stages.get_mut(active_index) {
+                                    apply_stage_heartbeat_progress(stage, idle_for);
+                                }
+                            }
+                        }
                         upsert_engine_log_tail(
                             &mut state.engine_log,
                             "info",
@@ -1624,6 +1815,10 @@ fn scripted_stage_execution_state(
             metric_name: None,
             metric_value: None,
             threshold: None,
+            progress_percent: None,
+            progress_label: None,
+            progress_detail: None,
+            last_progress_unix_ms: None,
             current_field_m_t: None,
             current_point_index: None,
             current_settle_step_index: None,
@@ -1650,12 +1845,21 @@ fn scripted_stage_execution_state(
         apply_stage_transition_metadata(stage, incoming_transition);
     }
 
-    let active_stage_index = matches!(runtime_state, "running" | "paused").then_some(active_index);
+    let is_intermediate_completion =
+        runtime_state == "completed" && active_index + 1 < total_stages;
+    let published_runtime_state = if is_intermediate_completion {
+        "materializing"
+    } else {
+        runtime_state
+    };
+    let active_stage_index =
+        matches!(published_runtime_state, "running" | "paused").then_some(active_index);
+    let active_stage_kind = (!is_intermediate_completion).then_some(active_stage_kind);
     stage_execution_from_records(
         &stages,
         active_stage_index,
-        Some(active_stage_kind),
-        runtime_state,
+        active_stage_kind,
+        published_runtime_state,
     )
 }
 
@@ -1715,6 +1919,10 @@ fn stage_record(index: usize, kind: Option<&str>) -> CurrentLiveStageExecutionRe
         metric_name: None,
         metric_value: None,
         threshold: None,
+        progress_percent: None,
+        progress_label: None,
+        progress_detail: None,
+        last_progress_unix_ms: None,
         current_field_m_t: None,
         current_point_index: None,
         current_settle_step_index: None,
@@ -1770,6 +1978,10 @@ impl ActiveSequenceState {
         record.command_id = Some(command_id.to_string());
         record.started_at_unix_ms = Some(millis_to_u64(started_at_unix_ms));
         record.completed_at_unix_ms = None;
+        record.progress_percent = Some(5.0);
+        record.progress_label = Some("starting".to_string());
+        record.progress_detail = Some("stage accepted by runtime".to_string());
+        record.last_progress_unix_ms = Some(millis_to_u64(started_at_unix_ms));
         if let Some(artifact_ref) = artifact_ref {
             push_unique_artifact_ref(&mut record.artifact_refs, artifact_ref);
         }
@@ -1866,6 +2078,23 @@ impl ActiveSequenceState {
                 metric_name: completion.and_then(|value| value.metric_name.clone()),
                 metric_value: completion.and_then(|value| value.metric_value),
                 threshold: completion.and_then(|value| value.threshold),
+                progress_percent: match status {
+                    "completed" => Some(100.0),
+                    "failed" | "cancelled" | "skipped" | "stopped" => previous.progress_percent,
+                    _ => previous.progress_percent,
+                },
+                progress_label: match status {
+                    "completed" => Some("completed".to_string()),
+                    "failed" => Some("failed".to_string()),
+                    "cancelled" => Some("cancelled".to_string()),
+                    "skipped" => Some("skipped".to_string()),
+                    "stopped" => Some("stopped".to_string()),
+                    _ => previous.progress_label,
+                },
+                progress_detail: previous.progress_detail,
+                last_progress_unix_ms: completed_at_unix_ms
+                    .map(millis_to_u64)
+                    .or(previous.last_progress_unix_ms),
                 current_field_m_t: previous.current_field_m_t,
                 current_point_index: previous.current_point_index,
                 current_settle_step_index: previous.current_settle_step_index,
@@ -3930,6 +4159,22 @@ fn execute_synthetic_stage(
                 message: format!("Exported {} to {}", quantity.trim(), output_path.display()),
             })
         }
+        ResolvedScriptStageAction::ChangeDevice { device } => {
+            let vectors =
+                current_stage_magnetization_vectors(continuation_magnetization, backend_plan);
+            write_synthetic_stage_record(
+                current_stage_artifact_dir,
+                serde_json::json!({
+                    "kind": "change_device",
+                    "device": device,
+                    "vector_count": vectors.len(),
+                }),
+            )?;
+            Ok(SyntheticStageOutcome {
+                magnetization: vectors,
+                message: format!("Changed execution device to {}", device),
+            })
+        }
     }
 }
 
@@ -4030,7 +4275,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     // Keep FEM cadence aligned with interactive control-room expectations:
     // too-large step intervals make 3D magnetization look "stuck" even while
     // the run progresses in wall-clock time.
-    let field_every_n: u64 = if crate::live_workspace::feature_flags().disable_preview_3d {
+    let preview_3d_disabled = crate::live_workspace::feature_flags().disable_preview_3d;
+    let field_every_n: u64 = if preview_3d_disabled {
         u64::MAX
     } else if requested_backend_name == "fem" {
         10
@@ -5412,7 +5658,11 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         emit_initial_state_warnings(Some(&live_workspace), &execution_plan.backend_plan)?;
         let use_live_callback = matches!(
             &execution_plan.backend_plan,
-            BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) | BackendPlanIR::Fem(_)
+            BackendPlanIR::Fdm(_)
+                | BackendPlanIR::FdmMultilayer(_)
+                | BackendPlanIR::Fem(_)
+                | BackendPlanIR::FemEigen(_)
+                | BackendPlanIR::FemFrequencyResponse(_)
         );
         let is_final_stage = stage_index + 1 == stage_count;
         let is_session_final_stage = is_final_stage && !interactive_requested;
@@ -5561,6 +5811,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 &synthetic_outcome.magnetization,
                 is_session_final_stage,
             );
+            let synthetic_completed_at_unix_ms = unix_time_millis()?;
             live_workspace.update(|state| {
                 state.session.status = if final_update.finished {
                     "completed".to_string()
@@ -5574,6 +5825,18 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     &final_update,
                 );
                 state.live_state = live_state_manifest_from_update(&final_update);
+                state.stage_execution = Some(scripted_stage_execution_state(
+                    stage_count,
+                    stage_index,
+                    &stage.entrypoint_kind,
+                    "completed",
+                    start_solver_command_id.as_deref(),
+                    Some(stage_started_at_unix_ms),
+                    Some(synthetic_completed_at_unix_ms),
+                    Some(current_stage_artifact_dir.display().to_string()),
+                    None,
+                    stage.incoming_transition.as_ref(),
+                ));
                 set_latest_scalar_row_if_due(state, &final_update);
             });
 
@@ -5646,9 +5909,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     field_every_n,
                     &display_selection,
                     Some(interrupt_signal.as_ref()),
-                    !args.headless,
+                    !args.headless && !preview_3d_disabled,
                     Some(&current_stage_id),
                     |update| {
+                        let callback_start = Instant::now();
                         let adjusted = offset_step_update(
                             &update,
                             step_offset,
@@ -5672,12 +5936,21 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             }
                             if let Some(action) = display_selection_handle.process_running_control()
                             {
+                                record_solver_profile_step_with_orchestration(
+                                    &live_workspace,
+                                    &adjusted.stats,
+                                    callback_start,
+                                );
                                 return action;
                             }
+                            record_solver_profile_step_with_orchestration(
+                                &live_workspace,
+                                &adjusted.stats,
+                                callback_start,
+                            );
                             return fullmag_runner::StepAction::Continue;
                         }
                         let s = &adjusted.stats;
-                        live_workspace.record_solver_profile_step(s);
                         if live_cadence.should_log(s.step, adjusted.finished) {
                             eprintln!(
                                 "{}",
@@ -5702,8 +5975,18 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             );
                         }
                         if let Some(action) = display_selection_handle.process_running_control() {
+                            record_solver_profile_step_with_orchestration(
+                                &live_workspace,
+                                s,
+                                callback_start,
+                            );
                             return action;
                         }
+                        record_solver_profile_step_with_orchestration(
+                            &live_workspace,
+                            s,
+                            callback_start,
+                        );
                         fullmag_runner::StepAction::Continue
                     },
                 )
@@ -5717,6 +6000,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     field_every_n,
                     Some(&current_stage_id),
                     |update| {
+                        let callback_start = Instant::now();
                         let adjusted = offset_step_update(
                             &update,
                             step_offset,
@@ -5728,7 +6012,6 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             heartbeat.record(&adjusted);
                         }
                         drain_solver_profile_commands(&display_selection_handle, &live_workspace);
-                        live_workspace.record_solver_profile_step(s);
                         if live_cadence.should_log(s.step, adjusted.finished) {
                             eprintln!(
                                 "{}",
@@ -5759,6 +6042,11 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 set_latest_scalar_row_if_due(state, &adjusted);
                             });
                         }
+                        record_solver_profile_step_with_orchestration(
+                            &live_workspace,
+                            s,
+                            callback_start,
+                        );
                         fullmag_runner::StepAction::Continue
                     },
                 )
@@ -5849,6 +6137,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             execution_plan =
                 fullmag_plan::plan(&stage.ir).map_err(|error| anyhow!(error.to_string()))?;
         }
+        force_record_solver_profile_finalization(
+            &live_workspace,
+            &stage_result,
+            step_offset,
+            time_offset,
+        );
 
         if !use_live_callback {
             let grid = match &execution_plan.backend_plan {
@@ -6687,7 +6981,11 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             emit_initial_state_warnings(Some(&live_workspace), &execution_plan.backend_plan)?;
             let use_live_callback = matches!(
                 &execution_plan.backend_plan,
-                BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) | BackendPlanIR::Fem(_)
+                BackendPlanIR::Fdm(_)
+                    | BackendPlanIR::FdmMultilayer(_)
+                    | BackendPlanIR::Fem(_)
+                    | BackendPlanIR::FemEigen(_)
+                    | BackendPlanIR::FemFrequencyResponse(_)
             );
             let current_stage_artifact_dir = stage_artifact_dir(
                 &workspace_dir,
@@ -6768,6 +7066,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     let display_selection = || running_control.display_selection_snapshot();
                     let interrupt_signal = running_control.running_interrupt_signal();
                     let mut on_step = |update| {
+                        let callback_start = Instant::now();
                         let adjusted = offset_step_update(&update, step_offset, time_offset, false);
                         if let Some(heartbeat) = stage_heartbeat.as_mut() {
                             heartbeat.record(&adjusted);
@@ -6785,12 +7084,21 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 );
                             }
                             if let Some(action) = running_control.process_running_control() {
+                                record_solver_profile_step_with_orchestration(
+                                    &live_workspace,
+                                    &adjusted.stats,
+                                    callback_start,
+                                );
                                 return action;
                             }
+                            record_solver_profile_step_with_orchestration(
+                                &live_workspace,
+                                &adjusted.stats,
+                                callback_start,
+                            );
                             return fullmag_runner::StepAction::Continue;
                         }
                         let s = &adjusted.stats;
-                        live_workspace.record_solver_profile_step(s);
                         if live_cadence.should_log(s.step, adjusted.finished) {
                             eprintln!(
                                 "{}",
@@ -6816,8 +7124,18 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         }
 
                         if let Some(action) = running_control.process_running_control() {
+                            record_solver_profile_step_with_orchestration(
+                                &live_workspace,
+                                s,
+                                callback_start,
+                            );
                             return action;
                         }
+                        record_solver_profile_step_with_orchestration(
+                            &live_workspace,
+                            s,
+                            callback_start,
+                        );
                         fullmag_runner::StepAction::Continue
                     };
 
@@ -6854,7 +7172,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             field_every_n,
                             &display_selection,
                             Some(interrupt_signal.as_ref()),
-                            true,
+                            !preview_3d_disabled,
                             Some(&current_stage_id),
                             &mut on_step,
                         )
@@ -6879,7 +7197,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             field_every_n,
                             &display_selection,
                             Some(interrupt_signal.as_ref()),
-                            true,
+                            !preview_3d_disabled,
                             Some(&current_stage_id),
                             &mut on_step,
                         )
@@ -6894,6 +7212,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         field_every_n,
                         Some(&current_stage_id),
                         |update| {
+                            let callback_start = Instant::now();
                             let adjusted =
                                 offset_step_update(&update, step_offset, time_offset, false);
                             let s = &adjusted.stats;
@@ -6901,7 +7220,6 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 heartbeat.record(&adjusted);
                             }
                             drain_solver_profile_commands(&running_control, &live_workspace);
-                            live_workspace.record_solver_profile_step(s);
                             if live_cadence.should_log(s.step, adjusted.finished) {
                                 eprintln!(
                                     "{}",
@@ -6930,8 +7248,18 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             }
 
                             if let Some(action) = running_control.process_running_control() {
+                                record_solver_profile_step_with_orchestration(
+                                    &live_workspace,
+                                    s,
+                                    callback_start,
+                                );
                                 return action;
                             }
+                            record_solver_profile_step_with_orchestration(
+                                &live_workspace,
+                                s,
+                                callback_start,
+                            );
                             fullmag_runner::StepAction::Continue
                         },
                     )
@@ -7018,6 +7346,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             if let Some(mut heartbeat) = stage_heartbeat.take() {
                 heartbeat.finish();
             }
+            force_record_solver_profile_finalization(
+                &live_workspace,
+                &stage_result,
+                step_offset,
+                time_offset,
+            );
 
             // Handle mid-stage pause (first-class RunStatus::Paused from runner)
             if stage_result.status == fullmag_runner::RunStatus::Paused {
@@ -7600,6 +7934,15 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         snapshot_wall_time_ns: aggregated_steps
             .last()
             .map(|step| step.snapshot_wall_time_ns),
+        relaxation_preconditioner_wall_time_ns: aggregated_steps
+            .last()
+            .map(|step| step.relaxation_preconditioner_wall_time_ns),
+        relaxation_preconditioner_cache_hits: aggregated_steps
+            .last()
+            .map(|step| step.relaxation_preconditioner_cache_hits),
+        relaxation_preconditioner_cache_misses: aggregated_steps
+            .last()
+            .map(|step| step.relaxation_preconditioner_cache_misses),
         rhs_evals: aggregated_steps.last().map(|step| step.rhs_evals),
         demag_solves: aggregated_steps.last().map(|step| step.demag_solves),
         eigen_mode_count,
@@ -7778,18 +8121,18 @@ pub(crate) fn prepare_live_workspace_for_ui(
 mod tests {
     use super::{
         apply_current_fem_overrides, apply_live_step_update_to_workspace_state,
-        apply_remeshed_problem_snapshot_to_stages, classify_wait_for_solve_command,
-        default_domain_region_markers, discard_active_paused_stage_execution,
-        execute_synthetic_stage, fem_gpu_memory_preflight_message,
-        fem_interactive_dense_ram_estimate, fem_live_mesh_payload_and_initial_magnetization,
-        fem_mesh_payload_from_backend_plan, has_heavy_live_payload,
-        interactive_session_should_stay_alive, live_step_ingest_cached_m_preview_len,
-        live_step_ingest_legacy_mag_len, live_step_ingest_preview_len,
-        mesh_build_pipeline_status_json, scripted_stage_execution_state,
-        stage_allows_sampled_continuation_initial_state, user_cancelled_stage_completion,
-        wait_for_solve_prompt, wait_for_solve_should_block, wait_for_solve_supported,
-        ActiveSequenceState, LiveProgressCadence, SceneProblemPatch, WaitForSolveCommandAction,
-        LIVE_PROGRESS_PUBLISH_INTERVAL,
+        apply_remeshed_problem_snapshot_to_stages, apply_stage_heartbeat_progress,
+        classify_wait_for_solve_command, default_domain_region_markers,
+        discard_active_paused_stage_execution, execute_synthetic_stage,
+        fem_gpu_memory_preflight_message, fem_interactive_dense_ram_estimate,
+        fem_live_mesh_payload_and_initial_magnetization, fem_mesh_payload_from_backend_plan,
+        has_heavy_live_payload, interactive_session_should_stay_alive,
+        live_step_ingest_cached_m_preview_len, live_step_ingest_legacy_mag_len,
+        live_step_ingest_preview_len, mesh_build_pipeline_status_json,
+        scripted_stage_execution_state, stage_allows_sampled_continuation_initial_state,
+        user_cancelled_stage_completion, wait_for_solve_prompt, wait_for_solve_should_block,
+        wait_for_solve_supported, ActiveSequenceState, LiveProgressCadence, SceneProblemPatch,
+        WaitForSolveCommandAction, LIVE_PROGRESS_PUBLISH_INTERVAL,
     };
     use crate::live_workspace::bootstrap_live_state;
     use crate::types::{
@@ -7810,6 +8153,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::fs;
     use std::path::PathBuf;
+    use std::time::Duration;
     use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
     fn test_step_update(step: u64) -> StepUpdate {
@@ -7981,6 +8325,136 @@ mod tests {
     }
 
     #[test]
+    fn live_step_update_applies_fem_eigen_progress_to_active_stage() {
+        let mut state = test_workspace_state();
+        state.stage_execution = Some(CurrentLiveStageExecutionState {
+            total_stages: 1,
+            completed_stage_indexes: vec![],
+            stages: vec![CurrentLiveStageExecutionRecord {
+                status: "running".to_string(),
+                ..CurrentLiveStageExecutionRecord::default()
+            }],
+            stage_statuses: vec!["running".to_string()],
+            active_stage_index: Some(0),
+            active_stage_kind: Some("flat_eigenmodes".to_string()),
+            runtime_state: "running".to_string(),
+        });
+        let mut progress = std::collections::HashMap::new();
+        progress.insert("percent".to_string(), 48.0);
+        progress.insert("phase_solving_sparse_lobpcg".to_string(), 1.0);
+        progress.insert("solver_cpu_sparse_lobpcg".to_string(), 1.0);
+        progress.insert("active_nodes".to_string(), 1931.0);
+        progress.insert("effective_dof".to_string(), 3862.0);
+        progress.insert("requested_modes".to_string(), 20.0);
+        progress.insert("computed_modes".to_string(), 4.0);
+        progress.insert("iteration".to_string(), 37.0);
+        progress.insert("max_iterations".to_string(), 5000.0);
+        progress.insert("residual".to_string(), 1.2e-5);
+        let mut update = test_step_update(37);
+        update
+            .stats
+            .per_object_scalars
+            .insert("fem_eigen_progress".to_string(), progress);
+
+        apply_live_step_update_to_workspace_state(
+            &mut state,
+            "run-test",
+            "session-test",
+            PathBuf::from("/tmp/artifacts").as_path(),
+            &update,
+            false,
+        );
+
+        let stage = &state.stage_execution.as_ref().unwrap().stages[0];
+        assert_eq!(stage.progress_percent, Some(48.0));
+        assert_eq!(
+            stage.progress_label.as_deref(),
+            Some("solving sparse LOBPCG")
+        );
+        let detail = stage.progress_detail.as_deref().unwrap_or_default();
+        assert!(detail.contains("solver=cpu_sparse_lobpcg"));
+        assert!(detail.contains("effective_dof=3862"));
+        assert!(detail.contains("iteration=37/5000"));
+        assert!(detail.contains("residual=1.200e-5"));
+        assert!(stage.last_progress_unix_ms.is_some());
+    }
+
+    #[test]
+    fn stage_heartbeat_does_not_overwrite_solver_progress_detail() {
+        let mut stage = CurrentLiveStageExecutionRecord {
+            progress_percent: Some(48.0),
+            progress_label: Some("solving sparse LOBPCG".to_string()),
+            progress_detail: Some(
+                "solving sparse LOBPCG; solver=cpu_sparse_lobpcg; effective_dof=3862; iteration=37/5000; residual=1.200e-5"
+                    .to_string(),
+            ),
+            last_progress_unix_ms: Some(1_781_531_277_401),
+            ..CurrentLiveStageExecutionRecord::default()
+        };
+
+        apply_stage_heartbeat_progress(&mut stage, Duration::from_secs(396));
+
+        assert_eq!(stage.progress_percent, Some(48.0));
+        assert_eq!(
+            stage.progress_label.as_deref(),
+            Some("solving sparse LOBPCG")
+        );
+        assert!(stage
+            .progress_detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("iteration=37/5000")));
+        assert_eq!(stage.last_progress_unix_ms, Some(1_781_531_277_401));
+    }
+
+    #[test]
+    fn stage_heartbeat_initializes_progress_when_solver_has_not_reported() {
+        let mut stage = CurrentLiveStageExecutionRecord::default();
+
+        apply_stage_heartbeat_progress(&mut stage, Duration::from_millis(8_500));
+
+        assert_eq!(stage.progress_percent, Some(35.0));
+        assert_eq!(stage.progress_label.as_deref(), Some("solving"));
+        assert_eq!(
+            stage.progress_detail.as_deref(),
+            Some("heartbeat 8.5s since last solver update")
+        );
+        assert!(stage.last_progress_unix_ms.is_some());
+    }
+
+    #[test]
+    fn scripted_frequency_domain_stages_use_live_callback_heartbeat() {
+        let source = include_str!("orchestrator.rs");
+
+        let fem_eigen_live_callback_matches =
+            source.matches("| BackendPlanIR::FemEigen(_)").count();
+        let frequency_response_live_callback_matches = source
+            .matches("| BackendPlanIR::FemFrequencyResponse(_)")
+            .count();
+        assert!(
+            fem_eigen_live_callback_matches >= 2,
+            "FEM eigensolve scripted and interactive stages must stay on the live callback path so stage execution receives heartbeat progress while no step telemetry exists"
+        );
+        assert!(
+            frequency_response_live_callback_matches >= 2,
+            "FEM frequency-response scripted and interactive stages must stay on the live callback path so solver progress callbacks reach stage execution"
+        );
+    }
+
+    #[test]
+    fn synthetic_scripted_stages_publish_terminal_stage_execution() {
+        let source = include_str!("orchestrator.rs");
+
+        assert!(
+            source.contains("let synthetic_completed_at_unix_ms = unix_time_millis()?;"),
+            "synthetic stages must capture a completion timestamp before they skip the common solver-stage finalization path"
+        );
+        assert!(
+            source.contains("state.stage_execution = Some(scripted_stage_execution_state(\n                    stage_count,\n                    stage_index,\n                    &stage.entrypoint_kind,\n                    \"completed\","),
+            "synthetic stages must publish completed stage_execution before continuing to the next scripted stage"
+        );
+    }
+
+    #[test]
     fn hysteresis_study_uses_canonical_live_runner_not_persistent_runtime() {
         let source = include_str!("orchestrator.rs");
 
@@ -7997,6 +8471,27 @@ mod tests {
         assert!(
             source.contains("} else if let Some(runtime) = interactive_runtime_host.runtime_mut()"),
             "persistent interactive runtime must remain a non-hysteresis execution path"
+        );
+    }
+
+    #[test]
+    fn disable_preview_3d_disables_runner_preview_inputs() {
+        let source = include_str!("orchestrator.rs");
+
+        assert!(
+            source.contains(
+                "let preview_3d_disabled = crate::live_workspace::feature_flags().disable_preview_3d;"
+            ),
+            "orchestrator must resolve the preview-disabled benchmark flag once"
+        );
+        assert!(
+            source.contains("let field_every_n: u64 = if preview_3d_disabled {\n        u64::MAX"),
+            "preview-disabled benchmark mode must disable heavy payload cadence"
+        );
+        assert!(
+            source.contains("!args.headless && !preview_3d_disabled")
+                && source.contains("!preview_3d_disabled"),
+            "preview-disabled benchmark mode must also disable initial 3D preview snapshots"
         );
     }
 
@@ -8803,6 +9298,35 @@ mod tests {
         );
         assert_eq!(execution.stages[0].kind.as_deref(), Some("flat_hysteresis"));
         assert_eq!(execution.stages[0].status, "completed");
+    }
+
+    #[test]
+    fn scripted_stage_execution_does_not_mark_pipeline_completed_between_stages() {
+        let execution = scripted_stage_execution_state(
+            2,
+            0,
+            "flat_relax",
+            "completed",
+            Some("cmd-stage-0"),
+            Some(1_700_000_000_000),
+            Some(1_700_000_001_000),
+            Some("artifacts/stage-000".to_string()),
+            Some(fullmag_ir::StageStopReason::MaxSteps),
+            None,
+        );
+
+        assert_eq!(execution.runtime_state, "materializing");
+        assert_eq!(execution.active_stage_index, None);
+        assert_eq!(execution.active_stage_kind, None);
+        assert_eq!(execution.completed_stage_indexes, vec![0]);
+        assert_eq!(execution.stage_statuses, vec!["completed", "pending"]);
+        assert_eq!(execution.stages[0].kind.as_deref(), Some("flat_relax"));
+        assert_eq!(execution.stages[0].status, "completed");
+        assert_eq!(
+            execution.stages[0].reason,
+            Some(fullmag_ir::StageStopReason::MaxSteps)
+        );
+        assert_eq!(execution.stages[1].status, "pending");
     }
 
     #[test]

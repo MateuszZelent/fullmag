@@ -607,6 +607,25 @@ Data:
 - validation status,
 - linked mode or frequency point.
 
+### `results.frequency_domain.fmr_peak`
+
+Inspector: `FmrPeakInspector`
+
+Purpose:
+
+- Inspect one concrete FMR peak from the aggregate peak table.
+- Preserve whether the peak came from the modal eigen spectrum or the driven
+  frequency-response sweep.
+- Link the peak to its canonical mode row or response frequency point.
+
+Data:
+
+- peak index and source,
+- peak frequency,
+- modal `sampleIndex` / `modeIndex` or driven `frequencyIndex`,
+- field payload/resource key when a 3D overlay is available,
+- amplitude, absorbed power density, phase, linewidth, and validation status.
+
 ### `results.frequency_domain.dispersion`
 
 Inspector: `FrequencyDomainDispersionWorkflowInspector`

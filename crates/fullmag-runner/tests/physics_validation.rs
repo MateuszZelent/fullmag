@@ -1039,7 +1039,7 @@ fn fem_eigen_smoke_completes_without_errors() {
 /// ~7–8 GHz.  Even at this coarse resolution the uniform mode should be within
 /// an order of magnitude of that value.
 #[test]
-fn fem_eigen_lowest_mode_order_of_magnitude() {
+fn macrospin_kittel_frequency_order_of_magnitude() {
     let mesh = cube_mesh(20.0);
     let n_nodes = mesh.nodes.len();
     let m0: Vec<[f64; 3]> = vec![[1.0, 0.0, 0.0]; n_nodes];
@@ -1215,6 +1215,272 @@ fn fem_eigen_modes_are_non_trivial() {
             "mode 0 diagnostic {required} must be non-negative, got {value}"
         );
     }
+}
+
+#[test]
+fn dense_eigen_exports_relative_residuals() {
+    let mesh = cube_mesh(20.0);
+    let plan = FemEigenPlanIR {
+        mesh_name: "cube_20nm_dense_residuals".to_string(),
+        mesh_source: None,
+        mesh,
+        object_segments: Vec::new(),
+        mesh_parts: Vec::new(),
+        domain_mesh_mode: fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh,
+        domain_frame: None,
+        fe_order: 1,
+        hmax: 20e-9,
+        equilibrium_magnetization: vec![[1.0, 0.0, 0.0]; 8],
+        material: fem_permalloy(),
+        operator: EigenOperatorConfigIR {
+            kind: EigenOperatorIR::LinearizedLlg,
+            include_demag: false,
+        },
+        count: 3,
+        target: EigenTargetIR::Lowest,
+        equilibrium: EquilibriumSourceIR::Provided,
+        k_sampling: None,
+        normalization: EigenNormalizationIR::UnitL2,
+        damping_policy: EigenDampingPolicyIR::Ignore,
+        enable_exchange: true,
+        enable_demag: false,
+        interfacial_dmi: None,
+        bulk_dmi: None,
+        external_field: Some([39_789.0, 0.0, 0.0]),
+        gyromagnetic_ratio: 2.211e5,
+        precision: ExecutionPrecision::Double,
+        exchange_bc: ExchangeBoundaryCondition::Neumann,
+        spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+        demag_realization: None,
+        dmi_interface_normal: None,
+        mode_tracking: None,
+    };
+
+    let result = fullmag_runner::run_reference_fem_eigen(
+        &plan,
+        &[
+            OutputIR::EigenSpectrum {
+                quantity: "eigenfrequency".to_string(),
+            },
+            OutputIR::EigenMode {
+                field: "mode".to_string(),
+                indices: vec![0u32, 1u32],
+            },
+        ],
+    )
+    .expect("dense FEM eigen solve must succeed");
+
+    let mode_json: serde_json::Value = serde_json::from_slice(
+        result
+            .artifact_bytes("eigen/modes/mode_0000.json")
+            .expect("mode_0000.json must be present"),
+    )
+    .expect("mode_0000.json must be valid JSON");
+
+    for field in [
+        "residual_absolute_l2",
+        "residual_relative_l2",
+        "residual_linf",
+        "mass_norm",
+        "omega_rad_s",
+        "gamma_rad_s_T",
+        "gamma0_rad_s_per_A_m",
+        "mu0_T_m_per_A",
+    ] {
+        let value = mode_json[field]
+            .as_f64()
+            .unwrap_or_else(|| panic!("mode_0000.json must include numeric {field}: {mode_json}"));
+        assert!(
+            value.is_finite() && value >= 0.0,
+            "mode_0000 {field} must be finite and non-negative, got {value}"
+        );
+    }
+
+    let summary_json: serde_json::Value = serde_json::from_slice(
+        result
+            .artifact_bytes("eigen/metadata/eigen_summary.json")
+            .expect("eigen_summary.json must be present"),
+    )
+    .expect("eigen_summary.json must be valid JSON");
+    let diagnostics = summary_json["solver_diagnostics"]
+        .as_object()
+        .unwrap_or_else(|| {
+            panic!("eigen_summary.json must include solver_diagnostics: {summary_json}")
+        });
+    assert!(
+        diagnostics
+            .get("orthogonality")
+            .and_then(|value| value.as_array())
+            .is_some_and(|rows| !rows.is_empty()),
+        "dense eigen summary must include non-empty orthogonality table: {summary_json}"
+    );
+}
+
+#[test]
+fn dense_eigen_exports_tangent_leakage() {
+    let mesh = cube_mesh(20.0);
+    let plan = FemEigenPlanIR {
+        mesh_name: "cube_20nm_dense_leakage".to_string(),
+        mesh_source: None,
+        mesh,
+        object_segments: Vec::new(),
+        mesh_parts: Vec::new(),
+        domain_mesh_mode: fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh,
+        domain_frame: None,
+        fe_order: 1,
+        hmax: 20e-9,
+        equilibrium_magnetization: vec![[1.0, 0.0, 0.0]; 8],
+        material: fem_permalloy(),
+        operator: EigenOperatorConfigIR {
+            kind: EigenOperatorIR::LinearizedLlg,
+            include_demag: false,
+        },
+        count: 2,
+        target: EigenTargetIR::Lowest,
+        equilibrium: EquilibriumSourceIR::Provided,
+        k_sampling: None,
+        normalization: EigenNormalizationIR::UnitL2,
+        damping_policy: EigenDampingPolicyIR::Ignore,
+        enable_exchange: true,
+        enable_demag: false,
+        interfacial_dmi: None,
+        bulk_dmi: None,
+        external_field: Some([39_789.0, 0.0, 0.0]),
+        gyromagnetic_ratio: 2.211e5,
+        precision: ExecutionPrecision::Double,
+        exchange_bc: ExchangeBoundaryCondition::Neumann,
+        spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+        demag_realization: None,
+        dmi_interface_normal: None,
+        mode_tracking: None,
+    };
+
+    let result = fullmag_runner::run_reference_fem_eigen(
+        &plan,
+        &[
+            OutputIR::EigenSpectrum {
+                quantity: "eigenfrequency".to_string(),
+            },
+            OutputIR::EigenMode {
+                field: "mode".to_string(),
+                indices: vec![0u32],
+            },
+        ],
+    )
+    .expect("dense FEM eigen solve must succeed");
+
+    let mode_json: serde_json::Value = serde_json::from_slice(
+        result
+            .artifact_bytes("eigen/modes/mode_0000.json")
+            .expect("mode_0000.json must be present"),
+    )
+    .expect("mode_0000.json must be valid JSON");
+
+    for field in ["tangent_leakage_mean_abs", "tangent_leakage_max_abs"] {
+        let value = mode_json[field]
+            .as_f64()
+            .unwrap_or_else(|| panic!("mode_0000.json must include numeric {field}: {mode_json}"));
+        assert!(
+            value.is_finite() && value >= 0.0,
+            "mode_0000 {field} must be finite and non-negative, got {value}"
+        );
+    }
+}
+
+#[test]
+fn dense_eigen_frequency_units_are_hz_and_rad_s() {
+    let mesh = cube_mesh(20.0);
+    let gamma = 2.211e5_f64;
+    let plan = FemEigenPlanIR {
+        mesh_name: "cube_20nm_dense_units".to_string(),
+        mesh_source: None,
+        mesh,
+        object_segments: Vec::new(),
+        mesh_parts: Vec::new(),
+        domain_mesh_mode: fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh,
+        domain_frame: None,
+        fe_order: 1,
+        hmax: 20e-9,
+        equilibrium_magnetization: vec![[1.0, 0.0, 0.0]; 8],
+        material: fem_permalloy(),
+        operator: EigenOperatorConfigIR {
+            kind: EigenOperatorIR::LinearizedLlg,
+            include_demag: false,
+        },
+        count: 1,
+        target: EigenTargetIR::Lowest,
+        equilibrium: EquilibriumSourceIR::Provided,
+        k_sampling: None,
+        normalization: EigenNormalizationIR::UnitL2,
+        damping_policy: EigenDampingPolicyIR::Ignore,
+        enable_exchange: true,
+        enable_demag: false,
+        interfacial_dmi: None,
+        bulk_dmi: None,
+        external_field: Some([39_789.0, 0.0, 0.0]),
+        gyromagnetic_ratio: gamma,
+        precision: ExecutionPrecision::Double,
+        exchange_bc: ExchangeBoundaryCondition::Neumann,
+        spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+        demag_realization: None,
+        dmi_interface_normal: None,
+        mode_tracking: None,
+    };
+
+    let result = fullmag_runner::run_reference_fem_eigen(
+        &plan,
+        &[
+            OutputIR::EigenSpectrum {
+                quantity: "eigenfrequency".to_string(),
+            },
+            OutputIR::EigenMode {
+                field: "mode".to_string(),
+                indices: vec![0u32],
+            },
+        ],
+    )
+    .expect("dense FEM eigen solve must succeed");
+
+    let mode_json: serde_json::Value = serde_json::from_slice(
+        result
+            .artifact_bytes("eigen/modes/mode_0000.json")
+            .expect("mode_0000.json must be present"),
+    )
+    .expect("mode_0000.json must be valid JSON");
+
+    let frequency_hz = mode_json["frequency_hz"]
+        .as_f64()
+        .expect("mode_0000.json must include frequency_hz");
+    let omega_rad_s = mode_json["omega_rad_s"]
+        .as_f64()
+        .expect("mode_0000.json must include omega_rad_s");
+    let gamma_rad_s_t = mode_json["gamma_rad_s_T"]
+        .as_f64()
+        .expect("mode_0000.json must include gamma_rad_s_T");
+    let gamma0_rad_s_per_a_m = mode_json["gamma0_rad_s_per_A_m"]
+        .as_f64()
+        .expect("mode_0000.json must include gamma0_rad_s_per_A_m");
+    let mu0_t_m_per_a = mode_json["mu0_T_m_per_A"]
+        .as_f64()
+        .expect("mode_0000.json must include mu0_T_m_per_A");
+
+    assert!(
+        (omega_rad_s - 2.0 * std::f64::consts::PI * frequency_hz).abs() <= 1.0e-3,
+        "omega_rad_s must equal 2πf, got omega={omega_rad_s:.6e}, f={frequency_hz:.6e}"
+    );
+    assert!(
+        (gamma_rad_s_t - gamma / fullmag_engine::MU0).abs()
+            <= 1.0e-9 * (gamma / fullmag_engine::MU0).abs(),
+        "gamma_rad_s_T must equal gamma0/mu0, got gamma_rad_s_T={gamma_rad_s_t:.6e}"
+    );
+    assert!(
+        (gamma0_rad_s_per_a_m - gamma).abs() <= 1.0e-9,
+        "gamma0_rad_s_per_A_m must equal plan gyromagnetic ratio, got {gamma0_rad_s_per_a_m:.6e}"
+    );
+    assert!(
+        (mu0_t_m_per_a - fullmag_engine::MU0).abs() <= 1.0e-18,
+        "mu0_T_m_per_A must equal MU0, got {mu0_t_m_per_a:.6e}"
+    );
 }
 
 /// EIG-032 mesh-convergence hint: running on a finer mesh must not produce

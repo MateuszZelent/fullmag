@@ -68,6 +68,7 @@ pub enum fullmag_fem_observable {
     FULLMAG_FEM_OBSERVABLE_H_DMI_BULK = 10,
     FULLMAG_FEM_OBSERVABLE_H_OE = 11,
     FULLMAG_FEM_OBSERVABLE_H_THERM = 12,
+    FULLMAG_FEM_OBSERVABLE_TORQUE = 13,
 }
 
 #[repr(C)]
@@ -342,6 +343,16 @@ pub struct fullmag_fem_step_stats {
     pub rhs_wall_time_ns: u64,
     pub extra_energy_wall_time_ns: u64,
     pub snapshot_wall_time_ns: u64,
+    pub relaxation_preconditioner_wall_time_ns: u64,
+    pub relaxation_state_copy_wall_time_ns: u64,
+    pub relaxation_state_upload_wall_time_ns: u64,
+    pub relaxation_retraction_wall_time_ns: u64,
+    pub relaxation_gradient_wall_time_ns: u64,
+    pub relaxation_metric_wall_time_ns: u64,
+    pub relaxation_line_search_wall_time_ns: u64,
+    pub relaxation_update_wall_time_ns: u64,
+    pub relaxation_preconditioner_cache_hits: u32,
+    pub relaxation_preconditioner_cache_misses: u32,
     pub error_estimate: f64,
     pub rejected_attempts: u32,
     pub dt_suggested: f64,
@@ -351,6 +362,8 @@ pub struct fullmag_fem_step_stats {
     pub requested_omp_threads: i32,
     /// Effective OMP thread count (after auto-capping).
     pub effective_omp_threads: i32,
+    /// Native FEM CPU thread cap reason enum.
+    pub cpu_thread_cap_reason: i32,
 }
 
 #[repr(C)]
@@ -598,6 +611,96 @@ pub struct fullmag_fem_frequency_domain_solve_result {
     pub artifact_manifest_path: *mut c_char,
 }
 
+pub const FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION: u32 = 1;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FullmagFemFrequencyDomainStatus {
+    FULLMAG_FEM_FD_OK = 0,
+    FULLMAG_FEM_FD_UNAVAILABLE = 1,
+    FULLMAG_FEM_FD_VALIDATION_ERROR = 2,
+    FULLMAG_FEM_FD_OPERATOR_ERROR = 3,
+    FULLMAG_FEM_FD_SOLVE_ERROR = 4,
+    FULLMAG_FEM_FD_ARTIFACT_ERROR = 5,
+    FULLMAG_FEM_FD_INTERRUPTED = 6,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+#[allow(non_snake_case)]
+pub struct FullmagFemLinearizedOperatorRequest {
+    pub abi_version: u32,
+    pub mesh_asset_id: *const c_char,
+    pub equilibrium_source_kind: *const c_char,
+    pub gamma_rad_s_T: f64,
+    pub mu0_T_m_A: f64,
+    pub alpha: f64,
+    pub include_exchange: i32,
+    pub include_demag: i32,
+    pub demag_realization: *const c_char,
+    pub damping_policy: *const c_char,
+    pub spin_wave_bc_kind: *const c_char,
+    pub k_vector_rad_m: *const f64,
+    pub k_vector_len: i32,
+    pub operator_diagnostics_json: *const c_char,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct FullmagFemModalEigenRequest {
+    pub abi_version: u32,
+    pub operator_request: FullmagFemLinearizedOperatorRequest,
+    pub requested_mode_count: i32,
+    pub target_kind: *const c_char,
+    pub target_frequency_hz: f64,
+    pub frequency_min_hz: f64,
+    pub frequency_max_hz: f64,
+    pub residual_tolerance: f64,
+    pub max_outer_iterations: i32,
+    pub max_linear_iterations: i32,
+    pub output_directory: *const c_char,
+    pub write_partial_artifacts: i32,
+    pub completeness_policy: i32,
+    pub eigensolver_family: i32,
+    pub spectral_transform_kind: i32,
+    pub cancel_user_data: *mut c_void,
+    pub cancel_requested: Option<unsafe extern "C" fn(*mut c_void) -> i32>,
+    pub progress_user_data: *mut c_void,
+    pub progress_callback: Option<unsafe extern "C" fn(*mut c_void, *const c_char)>,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+#[allow(non_snake_case)]
+pub struct FullmagFemDrivenResponseRequest {
+    pub abi_version: u32,
+    pub operator_request: FullmagFemLinearizedOperatorRequest,
+    pub frequencies_hz: *const f64,
+    pub frequency_count: i32,
+    pub excitation_field_A_m: *const f64,
+    pub excitation_field_len: i32,
+    pub excitation_phase_rad: f64,
+    pub residual_tolerance: f64,
+    pub max_linear_iterations: i32,
+    pub output_directory: *const c_char,
+    pub write_partial_artifacts: i32,
+    pub cancel_user_data: *mut c_void,
+    pub cancel_requested: Option<unsafe extern "C" fn(*mut c_void) -> i32>,
+    pub progress_user_data: *mut c_void,
+    pub progress_callback: Option<unsafe extern "C" fn(*mut c_void, *const c_char)>,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct FullmagFemFrequencyDomainResult {
+    pub abi_version: u32,
+    pub status: FullmagFemFrequencyDomainStatus,
+    pub error_message: *mut c_char,
+    pub diagnostics_json: *mut c_char,
+    pub result_json: *mut c_char,
+    pub artifact_manifest_path: *mut c_char,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct fullmag_fem_frequency_domain_abi_layout {
@@ -700,6 +803,31 @@ pub struct fullmag_fem_backend {
     _private: [u8; 0],
 }
 
+#[repr(C)]
+pub struct fullmag_fem_field_snapshot {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct fullmag_fem_preview_snapshot {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fem_snapshot_scalar_type {
+    FULLMAG_FEM_SNAPSHOT_SCALAR_F64 = 2,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_snapshot_desc {
+    pub node_count: u64,
+    pub component_count: u32,
+    pub scalar_bytes: u32,
+    pub scalar_type: fullmag_fem_snapshot_scalar_type,
+}
+
 extern "C" {
     pub fn fullmag_fem_is_available() -> i32;
     pub fn fullmag_fem_get_availability_info(out_info: *mut fullmag_fem_availability_info) -> i32;
@@ -745,6 +873,15 @@ extern "C" {
     pub fn fullmag_fem_frequency_domain_solve_result_release(
         result: *mut fullmag_fem_frequency_domain_solve_result,
     );
+    pub fn fullmag_fem_modal_eigen_solve(
+        request: *const FullmagFemModalEigenRequest,
+    ) -> FullmagFemFrequencyDomainResult;
+    pub fn fullmag_fem_driven_response_solve(
+        request: *const FullmagFemDrivenResponseRequest,
+    ) -> FullmagFemFrequencyDomainResult;
+    pub fn fullmag_fem_frequency_domain_result_destroy(
+        result: *mut FullmagFemFrequencyDomainResult,
+    );
 
     pub fn fullmag_fem_backend_create(
         plan: *const fullmag_fem_plan_desc,
@@ -779,6 +916,46 @@ extern "C" {
         out_xyz: *mut f64,
         out_len: u64,
     ) -> i32;
+
+    pub fn fullmag_fem_backend_average_m_for_nodes_f64(
+        handle: *mut fullmag_fem_backend,
+        node_indices: *const u32,
+        node_count: u64,
+        out_xyz: *mut f64,
+        out_len: u64,
+    ) -> i32;
+
+    pub fn fullmag_fem_backend_begin_field_snapshot(
+        handle: *mut fullmag_fem_backend,
+        observable: fullmag_fem_observable,
+    ) -> *mut fullmag_fem_field_snapshot;
+
+    pub fn fullmag_fem_backend_begin_preview_snapshot(
+        handle: *mut fullmag_fem_backend,
+        observable: fullmag_fem_observable,
+    ) -> *mut fullmag_fem_preview_snapshot;
+
+    pub fn fullmag_fem_field_snapshot_wait(
+        snapshot: *mut fullmag_fem_field_snapshot,
+        out_data: *mut *const c_void,
+        out_len_bytes: *mut u64,
+        out_desc: *mut fullmag_fem_snapshot_desc,
+    ) -> i32;
+
+    pub fn fullmag_fem_preview_snapshot_wait(
+        snapshot: *mut fullmag_fem_preview_snapshot,
+        out_data: *mut *const c_void,
+        out_len_bytes: *mut u64,
+        out_desc: *mut fullmag_fem_snapshot_desc,
+    ) -> i32;
+
+    pub fn fullmag_fem_preview_snapshot_ready(snapshot: *mut fullmag_fem_preview_snapshot) -> i32;
+
+    pub fn fullmag_fem_field_snapshot_ready(snapshot: *mut fullmag_fem_field_snapshot) -> i32;
+
+    pub fn fullmag_fem_field_snapshot_destroy(snapshot: *mut fullmag_fem_field_snapshot);
+
+    pub fn fullmag_fem_preview_snapshot_destroy(snapshot: *mut fullmag_fem_preview_snapshot);
 
     pub fn fullmag_fem_backend_upload_magnetization_f64(
         handle: *mut fullmag_fem_backend,
@@ -868,9 +1045,9 @@ mod tests {
     use super::*;
 
     /// Verify the Rust observable enum has the expected number of variants
-    /// matching the C header (M=1 .. H_THERM=12 → 12 variants).
+    /// matching the C header (M=1 .. TORQUE=13 -> 13 variants).
     #[test]
-    fn observable_enum_has_12_variants() {
+    fn observable_enum_has_13_variants() {
         let variants = [
             fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_M,
             fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_EX,
@@ -884,9 +1061,10 @@ mod tests {
             fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_DMI_BULK,
             fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_OE,
             fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_THERM,
+            fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_TORQUE,
         ];
-        assert_eq!(variants.len(), 12);
-        // Verify sequential discriminants 1..=12
+        assert_eq!(variants.len(), 13);
+        // Verify sequential discriminants 1..=13
         for (i, v) in variants.iter().enumerate() {
             assert_eq!(
                 *v as i32,
@@ -1389,6 +1567,17 @@ mod tests {
         assert_eq!(stats.demag_recover_wall_time_ns, 0);
         assert_eq!(stats.demag_energy_wall_time_ns, 0);
         assert_eq!(stats.extra_energy_wall_time_ns, 0);
+        assert_eq!(stats.relaxation_preconditioner_wall_time_ns, 0);
+        assert_eq!(stats.relaxation_state_copy_wall_time_ns, 0);
+        assert_eq!(stats.relaxation_state_upload_wall_time_ns, 0);
+        assert_eq!(stats.relaxation_retraction_wall_time_ns, 0);
+        assert_eq!(stats.relaxation_gradient_wall_time_ns, 0);
+        assert_eq!(stats.relaxation_metric_wall_time_ns, 0);
+        assert_eq!(stats.relaxation_line_search_wall_time_ns, 0);
+        assert_eq!(stats.relaxation_update_wall_time_ns, 0);
+        assert_eq!(stats.relaxation_preconditioner_cache_hits, 0);
+        assert_eq!(stats.relaxation_preconditioner_cache_misses, 0);
+        assert_eq!(stats.cpu_thread_cap_reason, 0);
     }
 
     /// Verify Phase 1 exposes GPU state residency metadata through C ABI.

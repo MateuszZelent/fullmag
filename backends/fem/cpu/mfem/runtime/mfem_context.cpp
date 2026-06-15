@@ -16,6 +16,7 @@
 #include "cpu/mfem/interactions/demag_poisson_lifecycle.hpp"
 #include "cpu/mfem/interactions/dmi.hpp"
 #include "cpu/mfem/interactions/exchange.hpp"
+#include "cpu/mfem/relaxation/relaxation_math.hpp"
 #include "cpu/mfem/runtime/aos_field.hpp"
 #include "cpu/mfem/runtime/cpu_threads.hpp"
 #include "cpu/mfem/runtime/mfem_device.hpp"
@@ -88,6 +89,38 @@ private:
     double fallback_;
 };
 
+#if FULLMAG_HAS_CUDA_RUNTIME
+static const char *resolve_global_device_config(const Context &ctx)
+{
+    const char *device_config = configured_mfem_device_string(ctx);
+    if (is_gpu_device_string(device_config)) {
+        return device_config;
+    }
+    // If the context explicitly requested a non-GPU device (e.g. "cpu"),
+    // respect that intent — do not auto-promote to CUDA.
+    if (device_config != nullptr && device_config[0] != '\0') {
+        return device_config;
+    }
+    const char *env_device = std::getenv("FULLMAG_FEM_MFEM_DEVICE");
+    if (env_device != nullptr && env_device[0] != '\0' && is_gpu_device_string(env_device)) {
+        return env_device;
+    }
+    int device_count = 0;
+    if (cudaGetDeviceCount(&device_count) == cudaSuccess && device_count > 0) {
+        return "cuda";
+    }
+    return "cpu";
+}
+#endif
+
+static mfem::Device *global_device = nullptr;
+
+static void cleanup_global_device()
+{
+    delete global_device;
+    global_device = nullptr;
+}
+
 } // namespace
 
 bool context_initialize_mfem(Context &ctx, std::string &error)
@@ -97,7 +130,11 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
 #if FULLMAG_HAS_CUDA_RUNTIME
         const char *device_config = configured_mfem_device_string(ctx);
         const bool use_gpu_device = is_gpu_device_string(device_config);
-        if (use_gpu_device) {
+
+        const char *global_config = resolve_global_device_config(ctx);
+        const bool global_use_gpu = is_gpu_device_string(global_config);
+
+        if (global_use_gpu) {
             const int selected_device = (ctx.mfem_device.gpu_device_index >= 0)
                 ? ctx.mfem_device.gpu_device_index
                 : selected_cuda_device_from_env().value_or(0);
@@ -117,32 +154,58 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
                         cudaGetErrorString(cuda_err);
                 return false;
             }
-            ctx.mfem_context.device = new mfem::Device(device_config);
-            ctx.mfem_context.selected_device_index = selected_device;
 
-            int low_priority = 0;
-            int high_priority = 0;
-            cudaDeviceGetStreamPriorityRange(&low_priority, &high_priority);
-            cudaStream_t cs{};
-            cudaStream_t ios{};
-            cudaStreamCreateWithPriority(&cs, cudaStreamNonBlocking, high_priority);
-            cudaStreamCreateWithPriority(&ios, cudaStreamNonBlocking, low_priority);
-            ctx.gpu_state.cuda.compute_stream = reinterpret_cast<void *>(cs);
-            ctx.gpu_state.cuda.io_stream = reinterpret_cast<void *>(ios);
-            cudaEvent_t ev{};
-            cudaEventCreateWithFlags(&ev, cudaEventDisableTiming);
-            ctx.gpu_state.cuda.compute_event = reinterpret_cast<void *>(ev);
+            if (mfem::Device::IsConfigured()) {
+                ctx.mfem_context.device = nullptr;
+            } else {
+                global_device = new mfem::Device(global_config);
+                ctx.mfem_context.device = global_device;
+                std::atexit(cleanup_global_device);
+            }
+
+            if (use_gpu_device) {
+                ctx.mfem_context.selected_device_index = selected_device;
+                int low_priority = 0;
+                int high_priority = 0;
+                cudaDeviceGetStreamPriorityRange(&low_priority, &high_priority);
+                cudaStream_t cs{};
+                cudaStream_t ios{};
+                cudaStreamCreateWithPriority(&cs, cudaStreamNonBlocking, high_priority);
+                cudaStreamCreateWithPriority(&ios, cudaStreamNonBlocking, low_priority);
+                ctx.gpu_state.cuda.compute_stream = reinterpret_cast<void *>(cs);
+                ctx.gpu_state.cuda.io_stream = reinterpret_cast<void *>(ios);
+                cudaEvent_t ev{};
+                cudaEventCreateWithFlags(&ev, cudaEventDisableTiming);
+                ctx.gpu_state.cuda.compute_event = reinterpret_cast<void *>(ev);
+            } else {
+                configure_cpu_openmp_runtime(ctx);
+                ctx.mfem_context.selected_device_index = -1;
+                log_cpu_runtime_selection(ctx);
+            }
         } else {
             configure_cpu_openmp_runtime(ctx);
             const char *host_device = (device_config != nullptr && *device_config != '\0')
                 ? device_config : "cpu";
-            ctx.mfem_context.device = new mfem::Device(host_device);
+            if (mfem::Device::IsConfigured()) {
+                ctx.mfem_context.device = nullptr;
+            } else {
+                global_device = new mfem::Device(host_device);
+                ctx.mfem_context.device = global_device;
+                std::atexit(cleanup_global_device);
+            }
             ctx.mfem_context.selected_device_index = -1;
             log_cpu_runtime_selection(ctx);
         }
 #else
+        const bool use_gpu_device = false;
         configure_cpu_openmp_runtime(ctx);
-        ctx.mfem_context.device = new mfem::Device("cpu");
+        if (mfem::Device::IsConfigured()) {
+            ctx.mfem_context.device = nullptr;
+        } else {
+            global_device = new mfem::Device("cpu");
+            ctx.mfem_context.device = global_device;
+            std::atexit(cleanup_global_device);
+        }
         ctx.mfem_context.selected_device_index = -1;
         log_cpu_runtime_selection(ctx);
 #endif
@@ -207,11 +270,11 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
         auto *gf_mz = new mfem::GridFunction(fes);
         auto *gf_a = new mfem::GridFunction(fes);
         auto *gf_ms = new mfem::GridFunction(fes);
-        gf_mx->UseDevice(true);
-        gf_my->UseDevice(true);
-        gf_mz->UseDevice(true);
-        gf_a->UseDevice(true);
-        gf_ms->UseDevice(true);
+        gf_mx->UseDevice(mfem::Device::IsEnabled());
+        gf_my->UseDevice(mfem::Device::IsEnabled());
+        gf_mz->UseDevice(mfem::Device::IsEnabled());
+        gf_a->UseDevice(mfem::Device::IsEnabled());
+        gf_ms->UseDevice(mfem::Device::IsEnabled());
         double *mx_host = audited_host_write(*gf_mx);
         double *my_host = audited_host_write(*gf_my);
         double *mz_host = audited_host_write(*gf_mz);
@@ -317,6 +380,7 @@ bool context_upload_mfem_exchange_to_gpu_state(Context &ctx, std::string &error)
 
 void context_destroy_mfem(Context &ctx)
 {
+    relaxation::destroy_exchange_mass_preconditioner_cache(ctx);
     context_destroy_demag_fem_bem(ctx);
     context_destroy_poisson(ctx);
     destroy_dmi_workspace(ctx);
@@ -339,7 +403,9 @@ void context_destroy_mfem(Context &ctx)
     delete static_cast<mfem::FiniteElementSpace *>(ctx.mfem_context.fes);
     delete static_cast<mfem::FiniteElementCollection *>(ctx.mfem_context.fec);
     delete static_cast<mfem::Mesh *>(ctx.mfem_context.mesh);
-    delete ctx.mfem_context.device;
+    // Do not delete the global mfem::Device virtual singleton to prevent invalidating
+    // the MemoryManager device environment for subsequent context instances in this process.
+    // delete ctx.mfem_context.device;
     ctx.mfem_context.device = nullptr;
     ctx.exchange.mfem.mass_form = nullptr;
     ctx.exchange.mfem.exchange_form = nullptr;

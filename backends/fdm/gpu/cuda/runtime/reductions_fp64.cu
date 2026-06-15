@@ -724,12 +724,14 @@ double reduce_max_scalar_sqrt(Context &ctx, double *device_values, uint64_t n) {
         context_end_compute_stream_work(ctx, "reduce_max_scalar_sqrt");
         return 0.0;
     }
+    fullmag_fdm_record_control_scalar_d2h(ctx, sizeof(double));
     err = cudaStreamSynchronize(stream);
     if (err != cudaSuccess) {
         set_cuda_error(ctx, "cudaStreamSynchronize(reduce_max_scalar_sqrt)", err);
         context_end_compute_stream_work(ctx, "reduce_max_scalar_sqrt");
         return 0.0;
     }
+    fullmag_fdm_record_control_scalar_host_sync(ctx);
     if (!context_end_compute_stream_work(ctx, "reduce_max_scalar_sqrt")) {
         return 0.0;
     }
@@ -786,12 +788,14 @@ AdaptiveErrorPolicy reduce_adaptive_error_policy(
         context_end_compute_stream_work(ctx, "reduce_adaptive_error_policy");
         return policy;
     }
+    fullmag_fdm_record_control_scalar_d2h(ctx, 3 * sizeof(double));
     err = cudaStreamSynchronize(stream);
     if (err != cudaSuccess) {
         set_cuda_error(ctx, "cudaStreamSynchronize(reduce_adaptive_error_policy)", err);
         context_end_compute_stream_work(ctx, "reduce_adaptive_error_policy");
         return policy;
     }
+    fullmag_fdm_record_control_scalar_host_sync(ctx);
     if (!context_end_compute_stream_work(ctx, "reduce_adaptive_error_policy")) {
         return policy;
     }

@@ -6,6 +6,7 @@ import type { InspectorPanelProps } from "../inspectorTypes";
 
 import { validateStudyStageDraft } from "./StudyStageAuthoringModel";
 import { useStudyInspectorPanelController } from "./StudyInspectorPanel";
+import { ChangeDeviceStageInspector } from "./stages/ChangeDeviceStageInspector";
 import { EigenmodesStageInspector } from "./stages/EigenmodesStageInspector";
 import { FrequencyResponseStageInspector } from "./stages/FrequencyResponseStageInspector";
 import { HysteresisStageInspector } from "./stages/HysteresisStageInspector";
@@ -13,12 +14,15 @@ import { resolveHysteresisInspectorView } from "./stages/hysteresis/HysteresisIn
 import { RelaxStageInspector } from "./stages/RelaxStageInspector";
 import { RunStageInspector } from "./stages/RunStageInspector";
 import { SaveStateStageInspector } from "./stages/SaveStateStageInspector";
+import type { FrequencyDomainAuthoringView } from "./stages/StageInspectorFrame";
 
 export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
   const {
+    commandDisabledReason,
     commitStageDrafts,
     dispatch,
     model,
+    runCommand,
     scene,
     sceneHasPayload,
     sceneRevision,
@@ -31,6 +35,8 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
   const validation = draft ? validateStudyStageDraft(draft) : [];
   const selectedStageKind = model.selectedStage?.kind ?? draft?.kind ?? null;
   const inspectorKind = resolveStudyStageInspectorKind(selection.kind, selectedStageKind);
+  const frequencyDomainAuthoringView =
+    resolveFrequencyDomainAuthoringView(selection.kind);
   const hysteresisView =
     inspectorKind === "hysteresis"
       ? resolveHysteresisInspectorView(selection.nodeId)
@@ -44,6 +50,8 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
     onCommit: () => void commitStageDrafts(),
     onUpdateDraft: (patch: Partial<(typeof state.stageDrafts)[number]>) =>
       dispatch({ type: "updateStageDraft", index: selectedIndex, patch }),
+    runRuntimeCommand: runCommand,
+    runtimeCommandDisabledReason: commandDisabledReason,
     stage: model.selectedStage,
     stageExecutionRevision: stageExecution.data?.revision ?? null,
     validation,
@@ -62,6 +70,8 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
         "identity",
         "authoring",
         "telemetry",
+        "eigenmodes-command-center",
+        "frequency-response-command-center",
         "relax-results",
         "run-results",
         "hysteresis-results",
@@ -90,6 +100,12 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
           expectedKind="run"
           kindLabel="Run"
         />
+      ) : inspectorKind === "change_device" ? (
+        <ChangeDeviceStageInspector
+          {...commonProps}
+          expectedKind="change_device"
+          kindLabel="Change Device"
+        />
       ) : inspectorKind === "hysteresis" ? (
         <HysteresisStageInspector
           {...commonProps}
@@ -100,12 +116,14 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
       ) : inspectorKind === "eigenmodes" ? (
         <EigenmodesStageInspector
           {...commonProps}
+          authoringView={frequencyDomainAuthoringView}
           expectedKind="eigenmodes"
           kindLabel="Eigenmodes"
         />
       ) : inspectorKind === "frequency_response" ? (
         <FrequencyResponseStageInspector
           {...commonProps}
+          authoringView={frequencyDomainAuthoringView}
           expectedKind="frequency_response"
           kindLabel="Frequency Response"
         />
@@ -126,6 +144,68 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
   );
 }
 
+function makeFrequencyDomainStagePanel(displayName: string) {
+  function FrequencyDomainStagePanel(props: InspectorPanelProps) {
+    return <StudyStageInspectorRouter {...props} />;
+  }
+  FrequencyDomainStagePanel.displayName = displayName;
+  return FrequencyDomainStagePanel;
+}
+
+export const EigenmodesStageOverviewInspectorPanel =
+  makeFrequencyDomainStagePanel("EigenmodesStageOverviewInspectorPanel");
+export const EigenmodesSetupStageInspectorPanel =
+  makeFrequencyDomainStagePanel("EigenmodesSetupStageInspectorPanel");
+export const EigenmodesCalculationModeStageInspectorPanel =
+  makeFrequencyDomainStagePanel("EigenmodesCalculationModeStageInspectorPanel");
+export const EigenmodesEquilibriumStageInspectorPanel =
+  makeFrequencyDomainStagePanel("EigenmodesEquilibriumStageInspectorPanel");
+export const EigenmodesOperatorStageInspectorPanel =
+  makeFrequencyDomainStagePanel("EigenmodesOperatorStageInspectorPanel");
+export const EigenmodesBoundaryStageInspectorPanel =
+  makeFrequencyDomainStagePanel("EigenmodesBoundaryStageInspectorPanel");
+export const EigenmodesPeriodicPairsStageInspectorPanel =
+  makeFrequencyDomainStagePanel("EigenmodesPeriodicPairsStageInspectorPanel");
+export const EigenmodesKPathStageInspectorPanel =
+  makeFrequencyDomainStagePanel("EigenmodesKPathStageInspectorPanel");
+export const EigenmodesSolverStageInspectorPanel =
+  makeFrequencyDomainStagePanel("EigenmodesSolverStageInspectorPanel");
+export const EigenmodesOutputsStageInspectorPanel =
+  makeFrequencyDomainStagePanel("EigenmodesOutputsStageInspectorPanel");
+export const EigenmodesDiagnosticsStageInspectorPanel =
+  makeFrequencyDomainStagePanel("EigenmodesDiagnosticsStageInspectorPanel");
+
+export const FrequencyResponseStageOverviewInspectorPanel =
+  makeFrequencyDomainStagePanel("FrequencyResponseStageOverviewInspectorPanel");
+export const FrequencyResponseSetupStageInspectorPanel =
+  makeFrequencyDomainStagePanel("FrequencyResponseSetupStageInspectorPanel");
+export const FrequencyResponseCalculationModeStageInspectorPanel =
+  makeFrequencyDomainStagePanel(
+    "FrequencyResponseCalculationModeStageInspectorPanel",
+  );
+export const FrequencyResponseEquilibriumStageInspectorPanel =
+  makeFrequencyDomainStagePanel("FrequencyResponseEquilibriumStageInspectorPanel");
+export const FrequencyResponseOperatorStageInspectorPanel =
+  makeFrequencyDomainStagePanel("FrequencyResponseOperatorStageInspectorPanel");
+export const FrequencyResponseBoundaryStageInspectorPanel =
+  makeFrequencyDomainStagePanel("FrequencyResponseBoundaryStageInspectorPanel");
+export const FrequencyResponsePeriodicPairsStageInspectorPanel =
+  makeFrequencyDomainStagePanel(
+    "FrequencyResponsePeriodicPairsStageInspectorPanel",
+  );
+export const FrequencyResponseKGridStageInspectorPanel =
+  makeFrequencyDomainStagePanel("FrequencyResponseKGridStageInspectorPanel");
+export const FrequencyResponseExcitationStageInspectorPanel =
+  makeFrequencyDomainStagePanel("FrequencyResponseExcitationStageInspectorPanel");
+export const FrequencyResponseSweepStageInspectorPanel =
+  makeFrequencyDomainStagePanel("FrequencyResponseSweepStageInspectorPanel");
+export const FrequencyResponseSolverStageInspectorPanel =
+  makeFrequencyDomainStagePanel("FrequencyResponseSolverStageInspectorPanel");
+export const FrequencyResponseOutputsStageInspectorPanel =
+  makeFrequencyDomainStagePanel("FrequencyResponseOutputsStageInspectorPanel");
+export const FrequencyResponseDiagnosticsStageInspectorPanel =
+  makeFrequencyDomainStagePanel("FrequencyResponseDiagnosticsStageInspectorPanel");
+
 export function resolveStudyStageInspectorKind(
   selectionKind: InspectorPanelProps["selection"]["kind"],
   selectedStageKind: string | null | undefined,
@@ -134,6 +214,7 @@ export function resolveStudyStageInspectorKind(
     return selectedStageKind;
   }
   if (selectionKind === "study.stage.run") return "run";
+  if (selectionKind === "study.stage.change_device") return "change_device";
   if (selectionKind === "study.stage.hysteresis") return "hysteresis";
   if (selectionKind?.startsWith("study.stage.eigenmodes")) return "eigenmodes";
   if (selectionKind?.startsWith("study.stage.frequency_response")) {
@@ -141,4 +222,24 @@ export function resolveStudyStageInspectorKind(
   }
   if (selectionKind === "study.stage.save_state") return "save_state";
   return "relax";
+}
+
+export function resolveFrequencyDomainAuthoringView(
+  selectionKind: InspectorPanelProps["selection"]["kind"],
+): FrequencyDomainAuthoringView {
+  const detail = selectionKind?.split(".").at(-1);
+  if (detail === "calculation_mode") return "calculation_mode";
+  if (detail === "setup") return "setup";
+  if (detail === "equilibrium") return "equilibrium";
+  if (detail === "operator") return "operator";
+  if (detail === "boundary") return "boundary";
+  if (detail === "periodic_pairs") return "periodic_pairs";
+  if (detail === "k_path") return "k_path";
+  if (detail === "k_grid") return "k_grid";
+  if (detail === "excitation") return "excitation";
+  if (detail === "sweep") return "sweep";
+  if (detail === "solver") return "solver";
+  if (detail === "outputs") return "outputs";
+  if (detail === "diagnostics") return "diagnostics";
+  return "overview";
 }

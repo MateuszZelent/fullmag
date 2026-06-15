@@ -50,7 +50,7 @@ export function viewport3DFieldUpdateHoldActive(): boolean {
   return holdDepth > 0;
 }
 
-export function subscribeViewport3DFieldUpdateHold(listener: Listener): () => void {
+function subscribeViewport3DFieldUpdateHold(listener: Listener): () => void {
   listeners.add(listener);
   return () => {
     listeners.delete(listener);

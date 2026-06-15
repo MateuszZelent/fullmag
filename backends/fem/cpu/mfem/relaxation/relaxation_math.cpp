@@ -1,8 +1,10 @@
 #include "cpu/mfem/relaxation/relaxation_math.hpp"
 
 #include "context.hpp"
+#include "fem_common.hpp"
 #include "cpu/mfem/runtime/mfem_host_access.hpp"
 #include "cpu/mfem/runtime/mpi_init.hpp"
+#include "cpu/mfem/runtime/aos_field.hpp"
 #include "cpu/mfem/runtime/snapshot.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
 #include "cpu/mfem/runtime/state_io.hpp"
@@ -63,6 +65,31 @@ bool all_finite(const std::vector<double> &values)
         [](double value) { return std::isfinite(value); });
 }
 
+int set_relaxation_magnetization_state(
+    Context &ctx,
+    const std::vector<double> &m_xyz,
+    const std::string &prefix,
+    std::string &error)
+{
+    std::vector<double> uploaded_m(m_xyz.begin(), m_xyz.end());
+    project_static_periodic_aos(ctx, uploaded_m);
+    if (!normalize_active_magnetization_aos(ctx, uploaded_m, error)) {
+        error = prefix + ": " + error;
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    ctx.state.m_xyz = std::move(uploaded_m);
+    ctx.relaxation.cached_current_stats_valid = false;
+    ctx.stepper.workspace.fsal_valid = false;
+    ctx.adaptive_dt.prev_error_norm = 1.0;
+    ctx.demag.cache_valid = false;
+    ctx.demag.last_refresh_time = -1.0;
+    ctx.thermal_brown.sigma = 0.0;
+    std::fill(ctx.thermal_brown.h_xyz.begin(), ctx.thermal_brown.h_xyz.end(), 0.0);
+    ctx.thermal_brown.last_refresh_time = -1.0;
+    ctx.thermal_brown.last_refresh_dt = -1.0;
+    return FULLMAG_FEM_OK;
+}
+
 bool apply_sparse_operator_to_field(
     mfem::SparseMatrix &op,
     const std::vector<double> &field_xyz,
@@ -73,14 +100,16 @@ bool apply_sparse_operator_to_field(
     mfem::Vector component_out(nodes);
     operator_field_xyz.assign(field_xyz.size(), 0.0);
     for (int component = 0; component < 3; ++component) {
+        double *in_data = audited_host_write(component_in);
         for (int node = 0; node < nodes; ++node) {
-            component_in[node] =
+            in_data[node] =
                 field_xyz[static_cast<size_t>(node) * 3u + static_cast<size_t>(component)];
         }
         op.Mult(component_in, component_out);
+        const double *out_data = audited_host_read(component_out);
         for (int node = 0; node < nodes; ++node) {
             operator_field_xyz[static_cast<size_t>(node) * 3u +
-                static_cast<size_t>(component)] = component_out[node];
+                static_cast<size_t>(component)] = out_data[node];
         }
     }
     return all_finite(operator_field_xyz);
@@ -110,11 +139,55 @@ std::unique_ptr<mfem::SparseMatrix> assemble_exchange_mass_preconditioner(
 {
     auto op = std::make_unique<mfem::SparseMatrix>(mass.Height(), mass.Width());
     for (int row = 0; row < mass.Height(); ++row) {
-        add_sparse_matrix_row(*op, mass, row, 1.0);
-        add_sparse_matrix_row(*op, exchange, row, exchange_weight);
+        mfem::Array<int> cols;
+        mfem::Vector vals;
+        mass.GetRow(row, cols, vals);
+        if (cols.Size() == 0) {
+            op->Add(row, row, 1.0);
+        } else {
+            add_sparse_matrix_row(*op, mass, row, 1.0);
+            add_sparse_matrix_row(*op, exchange, row, exchange_weight);
+        }
     }
     op->Finalize();
     return op;
+}
+
+mfem::SparseMatrix &cached_exchange_mass_preconditioner(
+    Context &ctx,
+    mfem::SparseMatrix &mass,
+    mfem::SparseMatrix &exchange,
+    double exchange_weight,
+    uint32_t *cache_hits,
+    uint32_t *cache_misses)
+{
+    auto &cache = ctx.relaxation;
+    const bool reusable =
+        cache.exchange_mass_preconditioner != nullptr &&
+        cache.exchange_mass_preconditioner_mass == &mass &&
+        cache.exchange_mass_preconditioner_exchange == &exchange &&
+        cache.exchange_mass_preconditioner_weight == exchange_weight &&
+        cache.exchange_mass_preconditioner_height == mass.Height() &&
+        cache.exchange_mass_preconditioner_width == mass.Width();
+    if (reusable) {
+        if (cache_hits != nullptr) {
+            *cache_hits += 1u;
+        }
+        return *cache.exchange_mass_preconditioner;
+    }
+
+    if (cache_misses != nullptr) {
+        *cache_misses += 1u;
+    }
+    destroy_exchange_mass_preconditioner_cache(ctx);
+    cache.exchange_mass_preconditioner =
+        assemble_exchange_mass_preconditioner(mass, exchange, exchange_weight).release();
+    cache.exchange_mass_preconditioner_mass = &mass;
+    cache.exchange_mass_preconditioner_exchange = &exchange;
+    cache.exchange_mass_preconditioner_weight = exchange_weight;
+    cache.exchange_mass_preconditioner_height = mass.Height();
+    cache.exchange_mass_preconditioner_width = mass.Width();
+    return *cache.exchange_mass_preconditioner;
 }
 
 bool solve_scalar_mfem_cg_system(
@@ -467,9 +540,13 @@ bool exchange_mass_preconditioned_gradient(
     const std::vector<double> &gradient_xyz,
     double exchange_weight,
     std::vector<double> &preconditioned_gradient_xyz,
-    std::string &error)
+    std::string &error,
+    uint64_t *preconditioner_wall_time_ns,
+    uint32_t *preconditioner_cache_hits,
+    uint32_t *preconditioner_cache_misses)
 {
 #if FULLMAG_HAS_MFEM_STACK
+    ScopedPhaseTimer preconditioner_timer(preconditioner_wall_time_ns);
     auto *mass_form = static_cast<mfem::BilinearForm *>(ctx.exchange.mfem.mass_form);
     auto *exchange_form = static_cast<mfem::BilinearForm *>(ctx.exchange.mfem.exchange_form);
     if (mass_form == nullptr || exchange_form == nullptr) {
@@ -497,26 +574,30 @@ bool exchange_mass_preconditioned_gradient(
         exchange_weight,
         kDirectMinimizerPreconditionerFloor,
         kDirectMinimizerPreconditionerCeiling);
-    std::unique_ptr<mfem::SparseMatrix> op =
-        assemble_exchange_mass_preconditioner(
-            mass_form->SpMat(),
-            exchange_form->SpMat(),
-            weight);
+    mfem::SparseMatrix &op = cached_exchange_mass_preconditioner(
+        ctx,
+        mass_form->SpMat(),
+        exchange_form->SpMat(),
+        weight,
+        preconditioner_cache_hits,
+        preconditioner_cache_misses);
 
     preconditioned_gradient_xyz.assign(gradient_xyz.size(), 0.0);
     mfem::Vector rhs(static_cast<int>(nodes));
     mfem::Vector solution;
     for (int component = 0; component < 3; ++component) {
+        double *rhs_data = audited_host_write(rhs);
         for (size_t node = 0; node < nodes; ++node) {
-            rhs[static_cast<int>(node)] =
+            rhs_data[node] =
                 mass_gradient[node * 3u + static_cast<size_t>(component)];
         }
-        if (!solve_scalar_spd_system(ctx, *op, rhs, solution, error)) {
+        if (!solve_scalar_spd_system(ctx, op, rhs, solution, error)) {
             return false;
         }
+        const double *sol_data = audited_host_read(solution);
         for (size_t node = 0; node < nodes; ++node) {
             preconditioned_gradient_xyz[node * 3u + static_cast<size_t>(component)] =
-                solution[static_cast<int>(node)];
+                sol_data[node];
         }
     }
     preconditioned_gradient_xyz =
@@ -532,9 +613,25 @@ bool exchange_mass_preconditioned_gradient(
     (void)gradient_xyz;
     (void)exchange_weight;
     (void)preconditioned_gradient_xyz;
+    (void)preconditioner_wall_time_ns;
+    (void)preconditioner_cache_hits;
+    (void)preconditioner_cache_misses;
     error = "direct FEM relaxation preconditioner requires FULLMAG_USE_MFEM_STACK=ON";
     return false;
 #endif
+}
+
+void destroy_exchange_mass_preconditioner_cache(Context &ctx)
+{
+#if FULLMAG_HAS_MFEM_STACK
+    delete ctx.relaxation.exchange_mass_preconditioner;
+#endif
+    ctx.relaxation.exchange_mass_preconditioner = nullptr;
+    ctx.relaxation.exchange_mass_preconditioner_mass = nullptr;
+    ctx.relaxation.exchange_mass_preconditioner_exchange = nullptr;
+    ctx.relaxation.exchange_mass_preconditioner_weight = 0.0;
+    ctx.relaxation.exchange_mass_preconditioner_height = 0;
+    ctx.relaxation.exchange_mass_preconditioner_width = 0;
 }
 
 bool validate_relaxation_state_fields(
@@ -698,12 +795,26 @@ std::vector<double> retracted_step(
     const std::vector<double> &direction_xyz,
     double step_size)
 {
+    std::vector<double> trial;
+    retracted_step_into(ctx, m_xyz, direction_xyz, step_size, trial);
+    return trial;
+}
+
+void retracted_step_into(
+    const Context &ctx,
+    const std::vector<double> &m_xyz,
+    const std::vector<double> &direction_xyz,
+    double step_size,
+    std::vector<double> &trial_xyz)
+{
     if (m_xyz.size() != direction_xyz.size() || m_xyz.size() % 3u != 0u) {
-        return std::vector<double>(
+        trial_xyz.assign(
             m_xyz.size(),
             std::numeric_limits<double>::quiet_NaN());
+        return;
     }
-    std::vector<double> trial = m_xyz;
+    trial_xyz.resize(m_xyz.size());
+    std::copy(m_xyz.begin(), m_xyz.end(), trial_xyz.begin());
     const size_t nodes = m_xyz.size() / 3u;
     for (size_t node = 0; node < nodes; ++node) {
         if (!magnetic_node(ctx, node)) {
@@ -716,17 +827,16 @@ std::vector<double> retracted_step(
         const double norm = std::sqrt(x * x + y * y + z * z);
         if (!std::isfinite(norm) || norm <= 0.0) {
             const double invalid = std::numeric_limits<double>::quiet_NaN();
-            trial[base + 0] = invalid;
-            trial[base + 1] = invalid;
-            trial[base + 2] = invalid;
+            trial_xyz[base + 0] = invalid;
+            trial_xyz[base + 1] = invalid;
+            trial_xyz[base + 2] = invalid;
             continue;
         }
         const double inv = 1.0 / norm;
-        trial[base + 0] = x * inv;
-        trial[base + 1] = y * inv;
-        trial[base + 2] = z * inv;
+        trial_xyz[base + 0] = x * inv;
+        trial_xyz[base + 1] = y * inv;
+        trial_xyz[base + 2] = z * inv;
     }
-    return trial;
 }
 
 int ensure_cpu_mfem_relaxation_lane(
@@ -771,18 +881,23 @@ int upload_and_snapshot(
             std::to_string(m_xyz.size());
         return FULLMAG_FEM_ERR_INTERNAL;
     }
-    if (!all_finite(m_xyz)) {
-        error = prefix + " contains non-finite values";
-        return FULLMAG_FEM_ERR_INTERNAL;
+    uint64_t state_upload_wall_time_ns = 0;
+    {
+        ScopedPhaseTimer timer(&state_upload_wall_time_ns);
+        if (!all_finite(m_xyz)) {
+            error = prefix + " contains non-finite values";
+            return FULLMAG_FEM_ERR_INTERNAL;
+        }
+        const int upload_status = set_relaxation_magnetization_state(
+            ctx,
+            m_xyz,
+            prefix,
+            error);
+        if (upload_status != FULLMAG_FEM_OK) {
+            return upload_status;
+        }
     }
-    const int upload_status = context_upload_magnetization_f64(
-        ctx,
-        m_xyz.data(),
-        static_cast<uint64_t>(m_xyz.size()),
-        error);
-    if (upload_status != FULLMAG_FEM_OK) {
-        return upload_status;
-    }
+    stats.relaxation_state_upload_wall_time_ns += state_upload_wall_time_ns;
     if (!context_snapshot_stats_mfem(ctx, stats, error)) {
         return FULLMAG_FEM_ERR_UNAVAILABLE;
     }
@@ -805,6 +920,25 @@ int upload_and_snapshot(
     (void)snapshot_name;
     error = "native FEM relaxation snapshot requires FULLMAG_USE_MFEM_STACK=ON";
     return FULLMAG_FEM_ERR_UNAVAILABLE;
+#endif
+}
+
+bool take_cached_current_stats(
+    Context &ctx,
+    fullmag_fem_step_stats &stats)
+{
+#if FULLMAG_HAS_MFEM_STACK
+    if (!ctx.relaxation.cached_current_stats_valid ||
+        ctx.relaxation.cached_current_stats_step != ctx.state.step_count ||
+        ctx.relaxation.cached_current_stats_time != ctx.state.current_time) {
+        return false;
+    }
+    stats = ctx.relaxation.cached_current_stats;
+    return true;
+#else
+    (void)ctx;
+    (void)stats;
+    return false;
 #endif
 }
 
@@ -952,9 +1086,53 @@ int restore_previous_relaxation_state(
 #endif
 }
 
+void accumulate_relaxation_profile_sample(
+    fullmag_fem_step_stats &accumulated_stats,
+    const fullmag_fem_step_stats &sample_stats)
+{
+    accumulated_stats.wall_time_ns += sample_stats.wall_time_ns;
+    accumulated_stats.exchange_wall_time_ns += sample_stats.exchange_wall_time_ns;
+    accumulated_stats.demag_wall_time_ns += sample_stats.demag_wall_time_ns;
+    accumulated_stats.demag_assemble_wall_time_ns += sample_stats.demag_assemble_wall_time_ns;
+    accumulated_stats.demag_solve_wall_time_ns += sample_stats.demag_solve_wall_time_ns;
+    accumulated_stats.demag_solver_setup_wall_time_ns +=
+        sample_stats.demag_solver_setup_wall_time_ns;
+    accumulated_stats.demag_solver_apply_wall_time_ns +=
+        sample_stats.demag_solver_apply_wall_time_ns;
+    accumulated_stats.demag_recover_wall_time_ns += sample_stats.demag_recover_wall_time_ns;
+    accumulated_stats.demag_energy_wall_time_ns += sample_stats.demag_energy_wall_time_ns;
+    accumulated_stats.rhs_wall_time_ns += sample_stats.rhs_wall_time_ns;
+    accumulated_stats.extra_energy_wall_time_ns += sample_stats.extra_energy_wall_time_ns;
+    accumulated_stats.snapshot_wall_time_ns += sample_stats.snapshot_wall_time_ns;
+    accumulated_stats.relaxation_preconditioner_wall_time_ns +=
+        sample_stats.relaxation_preconditioner_wall_time_ns;
+    accumulated_stats.relaxation_state_copy_wall_time_ns +=
+        sample_stats.relaxation_state_copy_wall_time_ns;
+    accumulated_stats.relaxation_state_upload_wall_time_ns +=
+        sample_stats.relaxation_state_upload_wall_time_ns;
+    accumulated_stats.relaxation_retraction_wall_time_ns +=
+        sample_stats.relaxation_retraction_wall_time_ns;
+    accumulated_stats.relaxation_gradient_wall_time_ns +=
+        sample_stats.relaxation_gradient_wall_time_ns;
+    accumulated_stats.relaxation_metric_wall_time_ns +=
+        sample_stats.relaxation_metric_wall_time_ns;
+    accumulated_stats.relaxation_line_search_wall_time_ns +=
+        sample_stats.relaxation_line_search_wall_time_ns;
+    accumulated_stats.relaxation_update_wall_time_ns +=
+        sample_stats.relaxation_update_wall_time_ns;
+    accumulated_stats.relaxation_preconditioner_cache_hits +=
+        sample_stats.relaxation_preconditioner_cache_hits;
+    accumulated_stats.relaxation_preconditioner_cache_misses +=
+        sample_stats.relaxation_preconditioner_cache_misses;
+    accumulated_stats.demag_solve_count += sample_stats.demag_solve_count;
+    accumulated_stats.rhs_evaluations += sample_stats.rhs_evaluations;
+    accumulated_stats.rejected_attempts += sample_stats.rejected_attempts;
+}
+
 void finish_accepted_relaxation_step(
     Context &ctx,
     const fullmag_fem_step_stats &trial_stats,
+    const fullmag_fem_step_stats &accumulated_stats,
     fullmag_fem_step_stats &out_stats,
     double accepted_step_size)
 {
@@ -967,6 +1145,83 @@ void finish_accepted_relaxation_step(
     out_stats.time_seconds = 0.0;
     out_stats.dt_seconds = accepted_step_size;
     out_stats.max_rhs_amplitude = 0.0;
+    out_stats.wall_time_ns = accumulated_stats.wall_time_ns;
+    out_stats.exchange_wall_time_ns = accumulated_stats.exchange_wall_time_ns;
+    out_stats.demag_wall_time_ns = accumulated_stats.demag_wall_time_ns;
+    out_stats.demag_assemble_wall_time_ns = accumulated_stats.demag_assemble_wall_time_ns;
+    out_stats.demag_solve_wall_time_ns = accumulated_stats.demag_solve_wall_time_ns;
+    out_stats.demag_solver_setup_wall_time_ns =
+        accumulated_stats.demag_solver_setup_wall_time_ns;
+    out_stats.demag_solver_apply_wall_time_ns =
+        accumulated_stats.demag_solver_apply_wall_time_ns;
+    out_stats.demag_solver_setup_reused =
+        accumulated_stats.demag_solver_setup_wall_time_ns == 0 &&
+        accumulated_stats.demag_solve_count > 0;
+    out_stats.demag_recover_wall_time_ns = accumulated_stats.demag_recover_wall_time_ns;
+    out_stats.demag_energy_wall_time_ns = accumulated_stats.demag_energy_wall_time_ns;
+    out_stats.rhs_wall_time_ns = accumulated_stats.rhs_wall_time_ns;
+    out_stats.extra_energy_wall_time_ns = accumulated_stats.extra_energy_wall_time_ns;
+    out_stats.snapshot_wall_time_ns = accumulated_stats.snapshot_wall_time_ns;
+    out_stats.relaxation_preconditioner_wall_time_ns =
+        accumulated_stats.relaxation_preconditioner_wall_time_ns;
+    out_stats.relaxation_state_copy_wall_time_ns =
+        accumulated_stats.relaxation_state_copy_wall_time_ns;
+    out_stats.relaxation_state_upload_wall_time_ns =
+        accumulated_stats.relaxation_state_upload_wall_time_ns;
+    out_stats.relaxation_retraction_wall_time_ns =
+        accumulated_stats.relaxation_retraction_wall_time_ns;
+    out_stats.relaxation_gradient_wall_time_ns =
+        accumulated_stats.relaxation_gradient_wall_time_ns;
+    out_stats.relaxation_metric_wall_time_ns =
+        accumulated_stats.relaxation_metric_wall_time_ns;
+    out_stats.relaxation_line_search_wall_time_ns =
+        accumulated_stats.relaxation_line_search_wall_time_ns;
+    out_stats.relaxation_update_wall_time_ns =
+        accumulated_stats.relaxation_update_wall_time_ns;
+    out_stats.relaxation_preconditioner_cache_hits =
+        accumulated_stats.relaxation_preconditioner_cache_hits;
+    out_stats.relaxation_preconditioner_cache_misses =
+        accumulated_stats.relaxation_preconditioner_cache_misses;
+    out_stats.demag_solve_count = accumulated_stats.demag_solve_count;
+    out_stats.rhs_evaluations = accumulated_stats.rhs_evaluations;
+    out_stats.rejected_attempts = accumulated_stats.rejected_attempts;
+
+    ctx.relaxation.cached_current_stats = trial_stats;
+    ctx.relaxation.cached_current_stats.step = ctx.state.step_count;
+    ctx.relaxation.cached_current_stats.time_seconds = ctx.state.current_time;
+    ctx.relaxation.cached_current_stats.dt_seconds = 0.0;
+    ctx.relaxation.cached_current_stats.wall_time_ns = 0;
+    ctx.relaxation.cached_current_stats.exchange_wall_time_ns = 0;
+    ctx.relaxation.cached_current_stats.demag_wall_time_ns = 0;
+    ctx.relaxation.cached_current_stats.demag_assemble_wall_time_ns = 0;
+    ctx.relaxation.cached_current_stats.demag_solve_wall_time_ns = 0;
+    ctx.relaxation.cached_current_stats.demag_solver_setup_wall_time_ns = 0;
+    ctx.relaxation.cached_current_stats.demag_solver_apply_wall_time_ns = 0;
+    ctx.relaxation.cached_current_stats.demag_solver_setup_reused = 0;
+    ctx.relaxation.cached_current_stats.demag_recover_wall_time_ns = 0;
+    ctx.relaxation.cached_current_stats.demag_energy_wall_time_ns = 0;
+    ctx.relaxation.cached_current_stats.rhs_wall_time_ns = 0;
+    ctx.relaxation.cached_current_stats.extra_energy_wall_time_ns = 0;
+    ctx.relaxation.cached_current_stats.snapshot_wall_time_ns = 0;
+    ctx.relaxation.cached_current_stats.relaxation_preconditioner_wall_time_ns = 0;
+    ctx.relaxation.cached_current_stats.relaxation_state_copy_wall_time_ns = 0;
+    ctx.relaxation.cached_current_stats.relaxation_state_upload_wall_time_ns = 0;
+    ctx.relaxation.cached_current_stats.relaxation_retraction_wall_time_ns = 0;
+    ctx.relaxation.cached_current_stats.relaxation_gradient_wall_time_ns = 0;
+    ctx.relaxation.cached_current_stats.relaxation_metric_wall_time_ns = 0;
+    ctx.relaxation.cached_current_stats.relaxation_line_search_wall_time_ns = 0;
+    ctx.relaxation.cached_current_stats.relaxation_update_wall_time_ns = 0;
+    ctx.relaxation.cached_current_stats.relaxation_preconditioner_cache_hits = 0;
+    ctx.relaxation.cached_current_stats.relaxation_preconditioner_cache_misses = 0;
+    ctx.relaxation.cached_current_stats.demag_solve_count = 0;
+    ctx.relaxation.cached_current_stats.demag_linear_iterations = 0;
+    ctx.relaxation.cached_current_stats.demag_linear_residual = 0.0;
+    ctx.relaxation.cached_current_stats.rhs_evaluations = 0;
+    ctx.relaxation.cached_current_stats.rejected_attempts = 0;
+    ctx.relaxation.cached_current_stats.fsal_reused = 0;
+    ctx.relaxation.cached_current_stats_valid = true;
+    ctx.relaxation.cached_current_stats_step = ctx.state.step_count;
+    ctx.relaxation.cached_current_stats_time = ctx.state.current_time;
     update_stage_completion_from_stats(ctx, out_stats);
 }
 

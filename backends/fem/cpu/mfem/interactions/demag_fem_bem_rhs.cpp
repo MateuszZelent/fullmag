@@ -6,6 +6,7 @@
  */
 
 #include "cpu/mfem/interactions/demag_fem_bem_rhs.hpp"
+#include "cpu/mfem/runtime/mfem_host_access.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>
@@ -24,10 +25,12 @@ bool prepare_demag_fem_bem_neumann_rhs(
         return false;
     }
     neumann_rhs.SetSize(source_rhs.Size());
+    const double *src_data = audited_host_read(source_rhs);
+    double *neumann_data = audited_host_write(neumann_rhs);
     for (int i = 0; i < source_rhs.Size(); ++i) {
-        neumann_rhs(i) = source_rhs(i);
+        neumann_data[i] = src_data[i];
     }
-    neumann_rhs(0) = 0.0;
+    neumann_data[0] = 0.0;
     return true;
 }
 #endif

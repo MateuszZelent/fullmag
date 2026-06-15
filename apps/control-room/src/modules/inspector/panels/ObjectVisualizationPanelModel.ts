@@ -346,17 +346,20 @@ export function shouldLoadObjectVisualizationFieldCatalog({
   requested,
   surfaceColorSource,
   targetActive,
+  vectorsVisible = false,
 }: {
   requested: boolean;
   surfaceColorSource: SurfaceColorSource | null | undefined;
   targetActive: boolean;
+  vectorsVisible?: boolean;
 }): boolean {
   return Boolean(
     requested &&
       targetActive &&
-      surfaceColorSource !== undefined &&
-      surfaceColorSource !== null &&
-      surfaceColorSource !== "solid",
+      (vectorsVisible ||
+        (surfaceColorSource !== undefined &&
+          surfaceColorSource !== null &&
+          surfaceColorSource !== "solid")),
   );
 }
 
@@ -604,10 +607,10 @@ function buildAirboxFieldVectorResourceKey({
   );
   const params = new URLSearchParams();
   params.set("component", "full");
-  params.set("scope_kind", "airbox");
   if (sampleLimit !== null && sampleLimit > 0) {
     params.set("max_samples", String(sampleLimit));
   }
+  params.set("scope_kind", "airbox");
   return `${path}?${params.toString()}`;
 }
 

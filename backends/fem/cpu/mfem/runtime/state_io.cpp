@@ -33,6 +33,74 @@ bool strict_gpu_demag_upload_path(const Context &ctx)
 }
 #endif
 
+const std::vector<double> *effective_field_source(const Context &ctx, uint64_t expected_len)
+{
+    return (!ctx.effective_field.h_visual_xyz.empty() &&
+            ctx.effective_field.h_visual_xyz.size() == static_cast<size_t>(expected_len))
+               ? &ctx.effective_field.h_visual_xyz
+               : &ctx.effective_field.h_xyz;
+}
+
+int copy_torque_observable_f64(
+    const Context &ctx,
+    double *out_xyz,
+    uint64_t out_len,
+    std::string &error)
+{
+    const uint64_t expected_len = static_cast<uint64_t>(ctx.mesh.n_nodes) * 3ull;
+    if (ctx.state.m_xyz.size() != static_cast<size_t>(expected_len)) {
+        error = "magnetization field has not been computed yet";
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+
+    std::vector<double> gpu_h_eff;
+    const std::vector<double> *h_source = nullptr;
+    if (ctx.gpu_state.device.lifecycle.allocated) {
+        if (!gpu_state_download_component_aos(
+                const_cast<FemGpuState &>(ctx.gpu_state.device),
+                ctx.gpu_state.device.fields.h_eff,
+                gpu_h_eff,
+                const_cast<TransferAudit &>(ctx.transfer_audit.audit),
+                "H_eff",
+                error)) {
+            error = std::string("GPU component download failed: ") + error;
+            return FULLMAG_FEM_ERR_INTERNAL;
+        }
+        h_source = &gpu_h_eff;
+    } else {
+        h_source = effective_field_source(ctx, expected_len);
+    }
+
+    if (h_source == nullptr || h_source->size() != static_cast<size_t>(expected_len)) {
+        error = "effective field has not been computed yet";
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+
+    constexpr double kMu0 = 1.2566370614359172953850573533118e-6;
+    const double alpha = ctx.material_fields.material.damping;
+    const double scale = -1.0 / (1.0 + alpha * alpha);
+    for (uint64_t i = 0; i < ctx.mesh.n_nodes; ++i) {
+        const size_t base = static_cast<size_t>(3ull * i);
+        const double mx = ctx.state.m_xyz[base + 0];
+        const double my = ctx.state.m_xyz[base + 1];
+        const double mz = ctx.state.m_xyz[base + 2];
+        const double bx = kMu0 * (*h_source)[base + 0];
+        const double by = kMu0 * (*h_source)[base + 1];
+        const double bz = kMu0 * (*h_source)[base + 2];
+        const double mxbx = my * bz - mz * by;
+        const double mxby = mz * bx - mx * bz;
+        const double mxbz = mx * by - my * bx;
+        const double mxmxbx = my * mxbz - mz * mxby;
+        const double mxmxby = mz * mxbx - mx * mxbz;
+        const double mxmxbz = mx * mxby - my * mxbx;
+        out_xyz[base + 0] = scale * (mxbx + alpha * mxmxbx);
+        out_xyz[base + 1] = scale * (mxby + alpha * mxmxby);
+        out_xyz[base + 2] = scale * (mxbz + alpha * mxmxbz);
+    }
+    (void)out_len;
+    return FULLMAG_FEM_OK;
+}
+
 } // namespace
 
 bool context_sync_gpu_magnetization_to_host(Context &ctx, std::string &error)
@@ -71,6 +139,84 @@ int context_copy_field_f64(
         return FULLMAG_FEM_ERR_INVALID;
     }
 
+    if (observable == FULLMAG_FEM_OBSERVABLE_TORQUE) {
+        return copy_torque_observable_f64(ctx, out_xyz, out_len, error);
+    }
+
+    if (ctx.gpu_state.device.lifecycle.allocated) {
+
+        const FemGpuComponentField *gpu_field = nullptr;
+        const char *label = nullptr;
+        switch (observable) {
+            case FULLMAG_FEM_OBSERVABLE_H_EX:
+                gpu_field = &ctx.gpu_state.device.fields.h_ex;
+                label = "H_ex";
+                break;
+            case FULLMAG_FEM_OBSERVABLE_H_DEMAG:
+                gpu_field = &ctx.gpu_state.device.fields.h_demag;
+                label = "H_demag";
+                break;
+            case FULLMAG_FEM_OBSERVABLE_H_EXT:
+                gpu_field = &ctx.gpu_state.device.fields.h_ext;
+                label = "H_ext";
+                break;
+            case FULLMAG_FEM_OBSERVABLE_H_ANI:
+                gpu_field = &ctx.gpu_state.device.fields.h_ani;
+                label = "H_ani";
+                break;
+            case FULLMAG_FEM_OBSERVABLE_H_ANI_CUBIC:
+                gpu_field = &ctx.gpu_state.device.fields.h_cubic_ani;
+                label = "H_cubic_ani";
+                break;
+            case FULLMAG_FEM_OBSERVABLE_H_DMI:
+                gpu_field = &ctx.gpu_state.device.fields.h_dmi;
+                label = "H_dmi";
+                break;
+            case FULLMAG_FEM_OBSERVABLE_H_DMI_BULK:
+                gpu_field = &ctx.gpu_state.device.fields.h_bulk_dmi;
+                label = "H_bulk_dmi";
+                break;
+            case FULLMAG_FEM_OBSERVABLE_H_OE:
+                gpu_field = &ctx.gpu_state.device.fields.h_oe;
+                label = "H_oe";
+                break;
+            case FULLMAG_FEM_OBSERVABLE_H_THERM:
+                gpu_field = &ctx.gpu_state.device.fields.h_therm;
+                label = "H_therm";
+                break;
+            case FULLMAG_FEM_OBSERVABLE_H_MEL:
+                gpu_field = &ctx.gpu_state.device.fields.h_mel;
+                label = "H_mel";
+                break;
+            case FULLMAG_FEM_OBSERVABLE_H_EFF:
+                gpu_field = &ctx.gpu_state.device.fields.h_eff;
+                label = "H_eff";
+                break;
+            default:
+                break;
+        }
+
+        if (gpu_field != nullptr) {
+            std::vector<double> tmp;
+            if (!gpu_state_download_component_aos(
+                    const_cast<FemGpuState &>(ctx.gpu_state.device),
+                    *gpu_field,
+                    tmp,
+                    const_cast<TransferAudit &>(ctx.transfer_audit.audit),
+                    label,
+                    error)) {
+                error = std::string("GPU component download failed: ") + error;
+                return FULLMAG_FEM_ERR_INTERNAL;
+            }
+            if (tmp.size() != static_cast<size_t>(out_len)) {
+                error = "GPU component download returned mismatched length";
+                return FULLMAG_FEM_ERR_INTERNAL;
+            }
+            std::memcpy(out_xyz, tmp.data(), static_cast<size_t>(sizeof(double) * out_len));
+            return FULLMAG_FEM_OK;
+        }
+    }
+
     const std::vector<double> *source = nullptr;
     switch (observable) {
         case FULLMAG_FEM_OBSERVABLE_M:
@@ -93,10 +239,7 @@ int context_copy_field_f64(
         case FULLMAG_FEM_OBSERVABLE_H_EFF:
             // Prefer full-domain visual version (includes airbox stray field)
             // when available; fall back to LLG-zeroed version.
-            source = (!ctx.effective_field.h_visual_xyz.empty() &&
-                      ctx.effective_field.h_visual_xyz.size() == static_cast<size_t>(expected_len))
-                         ? &ctx.effective_field.h_visual_xyz
-                         : &ctx.effective_field.h_xyz;
+            source = effective_field_source(ctx, expected_len);
             break;
         case FULLMAG_FEM_OBSERVABLE_H_ANI:
             source = &ctx.anisotropy.h_uniaxial_xyz;
@@ -180,6 +323,7 @@ int context_upload_magnetization_f64(
         record_host_to_device(ctx.transfer_audit.audit, sizeof(double) * len);
     }
     ctx.state.m_xyz = std::move(uploaded_m);
+    ctx.relaxation.cached_current_stats_valid = false;
     ctx.stepper.workspace.fsal_valid = false;
     ctx.adaptive_dt.prev_error_norm = 1.0;
     ctx.demag.cache_valid = false;
@@ -198,7 +342,30 @@ int context_upload_magnetization_f64(
     // so that all terms (exchange, demag, external, anisotropy, cubic anisotropy,
     // interfacial DMI, bulk DMI, Oersted, magnetoelastic) are included after upload.
     // Thermal noise is intentionally excluded because it is refreshed in the RHS path.
-    {
+    if (!ctx.mfem_context.ready) {
+        if (ctx.exchange.enabled || ctx.demag.enabled || ctx.anisotropy.uniaxial_enabled ||
+            ctx.anisotropy.cubic_enabled || ctx.dmi.interfacial_enabled ||
+            ctx.dmi.bulk_enabled || ctx.oersted.has_cylinder || ctx.oersted.has_explicit_field ||
+            ctx.magnetoelastic.enabled || ctx.stt.zhang_li_enabled ||
+            ctx.stt.slonczewski_enabled || ctx.thermal_brown.temperature > 0.0) {
+            error = "upload_magnetization: MFEM context is not initialized for enabled field terms";
+            return FULLMAG_FEM_ERR_INTERNAL;
+        }
+        fill_zero_vector_field(ctx.exchange.h_xyz, ctx.mesh.n_nodes);
+        fill_zero_vector_field(ctx.demag.h_xyz, ctx.mesh.n_nodes);
+        if (ctx.zeeman.has_external_field) {
+            if (ctx.zeeman.h_ext_xyz.size() != ctx.state.m_xyz.size()) {
+                error = "upload_magnetization: external field size mismatch";
+                return FULLMAG_FEM_ERR_INTERNAL;
+            }
+            ctx.effective_field.h_xyz = ctx.zeeman.h_ext_xyz;
+        } else {
+            fill_zero_vector_field(ctx.effective_field.h_xyz, ctx.mesh.n_nodes);
+        }
+        if (!ctx.mesh.periodic_reduced_node.empty()) {
+            project_static_periodic_aos(ctx, ctx.effective_field.h_xyz);
+        }
+    } else {
         std::string heff_error;
         if (!compute_effective_fields_for_magnetization(
                 ctx,
@@ -242,30 +409,32 @@ int context_upload_magnetization_f64(
     ctx.thermal_brown.last_refresh_time = -1.0;
     ctx.thermal_brown.last_refresh_dt = -1.0;
 
-    if (!gpu_state_upload_effective_fields_aos(
-            ctx.gpu_state.device,
-            ctx.exchange.h_xyz.data(),
-            ctx.demag.h_xyz.data(),
-            ctx.zeeman.h_ext_xyz.data(),
-            ctx.effective_field.h_xyz.data(),
-            static_cast<uint64_t>(ctx.effective_field.h_xyz.size()),
-            ctx.transfer_audit.audit,
-            error)) {
-        return FULLMAG_FEM_ERR_INTERNAL;
-    }
-    if (!gpu_state_upload_local_vector_fields_aos(
-            ctx.gpu_state.device,
-            ctx.anisotropy.h_uniaxial_xyz.data(),
-            ctx.anisotropy.h_cubic_xyz.data(),
-            ctx.dmi.h_interfacial_xyz.data(),
-            ctx.dmi.h_bulk_xyz.data(),
-            ctx.oersted.h_xyz.data(),
-            ctx.thermal_brown.h_xyz.data(),
-            ctx.magnetoelastic.h_xyz.data(),
-            static_cast<uint64_t>(ctx.effective_field.h_xyz.size()),
-            ctx.transfer_audit.audit,
-            error)) {
-        return FULLMAG_FEM_ERR_INTERNAL;
+    if (ctx.gpu_state.device.lifecycle.allocated) {
+        if (!gpu_state_upload_effective_fields_aos(
+                ctx.gpu_state.device,
+                ctx.exchange.h_xyz.data(),
+                ctx.demag.h_xyz.data(),
+                ctx.zeeman.h_ext_xyz.data(),
+                ctx.effective_field.h_xyz.data(),
+                static_cast<uint64_t>(ctx.effective_field.h_xyz.size()),
+                ctx.transfer_audit.audit,
+                error)) {
+            return FULLMAG_FEM_ERR_INTERNAL;
+        }
+        if (!gpu_state_upload_local_vector_fields_aos(
+                ctx.gpu_state.device,
+                ctx.anisotropy.h_uniaxial_xyz.data(),
+                ctx.anisotropy.h_cubic_xyz.data(),
+                ctx.dmi.h_interfacial_xyz.data(),
+                ctx.dmi.h_bulk_xyz.data(),
+                ctx.oersted.h_xyz.data(),
+                ctx.thermal_brown.h_xyz.data(),
+                ctx.magnetoelastic.h_xyz.data(),
+                static_cast<uint64_t>(ctx.effective_field.h_xyz.size()),
+                ctx.transfer_audit.audit,
+                error)) {
+            return FULLMAG_FEM_ERR_INTERNAL;
+        }
     }
 
     return FULLMAG_FEM_OK;

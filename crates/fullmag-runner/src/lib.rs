@@ -85,8 +85,9 @@ pub use runtime_registry::{
     RuntimeRegistry,
 };
 pub use solver_profile::{
-    SolverProfileAggregates, SolverProfileConfig, SolverProfilePhaseSample, SolverProfileSnapshot,
-    SolverProfileState, SolverProfileStepSample, SolverProfileThreading,
+    LivePublisherDiagnostics, SolverProfileAggregates, SolverProfileConfig,
+    SolverProfilePhaseSample, SolverProfileSnapshot, SolverProfileState, SolverProfileStepSample,
+    SolverProfileThreading,
 };
 pub use types::{
     ExecutionProvenance, FemEigenRunResult, FemMeshObjectSegment, FemMeshPartPayload,
@@ -843,6 +844,92 @@ pub fn fem_observables_for_magnetization(
     fem_baseline::fem_observables_for_magnetization(plan, magnetization)
 }
 
+fn fem_eigen_progress_update(progress: fem_eigen::FemEigenProgress) -> StepUpdate {
+    let mut progress_scalars = std::collections::HashMap::new();
+    progress_scalars.insert("phase_code".to_string(), f64::from(progress.phase_index));
+    progress_scalars.insert("phase_count".to_string(), f64::from(progress.phase_count));
+    progress_scalars.insert("percent".to_string(), progress.percent);
+    progress_scalars.insert("active_nodes".to_string(), progress.active_nodes as f64);
+    progress_scalars.insert("effective_dof".to_string(), progress.effective_dof as f64);
+    progress_scalars.insert(
+        "requested_modes".to_string(),
+        progress.requested_modes as f64,
+    );
+    progress_scalars.insert(
+        "candidate_modes".to_string(),
+        progress.candidate_modes as f64,
+    );
+    progress_scalars.insert("computed_modes".to_string(), progress.computed_modes as f64);
+    if let Some(iteration) = progress.iteration {
+        progress_scalars.insert("iteration".to_string(), f64::from(iteration));
+    }
+    if let Some(max_iterations) = progress.max_iterations {
+        progress_scalars.insert("max_iterations".to_string(), f64::from(max_iterations));
+    }
+    if let Some(residual) = progress.residual {
+        progress_scalars.insert("residual".to_string(), residual);
+    }
+    progress_scalars.insert(
+        "phase_materializing_equilibrium".to_string(),
+        (progress.phase == "materializing_equilibrium") as u8 as f64,
+    );
+    progress_scalars.insert(
+        "phase_assembling_operator".to_string(),
+        (progress.phase == "assembling_operator") as u8 as f64,
+    );
+    progress_scalars.insert(
+        "phase_solving_dense".to_string(),
+        (progress.phase == "solving_dense") as u8 as f64,
+    );
+    progress_scalars.insert(
+        "phase_solving_sparse_lobpcg".to_string(),
+        (progress.phase == "solving_sparse_lobpcg") as u8 as f64,
+    );
+    progress_scalars.insert(
+        "phase_writing_artifacts".to_string(),
+        (progress.phase == "writing_artifacts") as u8 as f64,
+    );
+    progress_scalars.insert(
+        "phase_completed".to_string(),
+        (progress.phase == "completed") as u8 as f64,
+    );
+    progress_scalars.insert(
+        "solver_cpu_sparse_lobpcg".to_string(),
+        (progress.solver_kind == "cpu_sparse_lobpcg") as u8 as f64,
+    );
+    progress_scalars.insert(
+        "warning_dense_o_n3".to_string(),
+        (progress.warning == Some("dense_o_n3_eigensolve_without_iteration_progress")) as u8 as f64,
+    );
+
+    let mut per_object_scalars = std::collections::HashMap::new();
+    per_object_scalars.insert("fem_eigen_progress".to_string(), progress_scalars);
+
+    StepUpdate {
+        stats: StepStats {
+            step: progress
+                .iteration
+                .map(u64::from)
+                .unwrap_or(u64::from(progress.phase_index)),
+            max_h_eff: progress.residual.unwrap_or(0.0),
+            per_object_scalars,
+            ..StepStats::default()
+        },
+        grid: [0, 0, 0],
+        fem_mesh: None,
+        magnetization: None,
+        preview_field: None,
+        cached_preview_fields: None,
+        hysteresis_field_m_t: None,
+        hysteresis_point_index: None,
+        hysteresis_settle_step_index: None,
+        hysteresis_settle_step_kind: None,
+        hysteresis_settle_step_method: None,
+        scalar_row_due: false,
+        finished: progress.phase == "completed",
+    }
+}
+
 /// Run a problem with a per-step callback for live streaming.
 ///
 /// The callback receives a `StepUpdate` after each simulation step and returns
@@ -963,7 +1050,13 @@ pub fn run_planned_problem_with_callback(
         }
         BackendPlanIR::FemEigen(fem) => {
             let engine = dispatch::resolve_fem_engine(problem)?;
-            dispatch::execute_fem_eigen(engine, fem, &plan.output_plan.outputs)
+            let mut progress_callback = |progress| on_step(fem_eigen_progress_update(progress));
+            dispatch::execute_fem_eigen_with_progress(
+                engine,
+                fem,
+                &plan.output_plan.outputs,
+                &mut progress_callback,
+            )
         }
         BackendPlanIR::FemFrequencyResponse(response) => {
             frequency_response::execute_fem_frequency_response_validation(
@@ -1194,6 +1287,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
     let artifact_writer = Some(artifact_pipeline.sender());
 
     let cpu_threads = configured_cpu_threads(problem);
+    let live_display_selection = (field_every_n != u64::MAX).then_some(display_selection);
     let executed_result = with_cpu_parallelism(cpu_threads, || match &plan.backend_plan {
         BackendPlanIR::Fdm(fdm) => {
             let grid = fdm.grid.cells;
@@ -1207,7 +1301,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
                     grid,
                     field_every_n,
                     initial_snapshot,
-                    display_selection: Some(display_selection),
+                    display_selection: live_display_selection,
                     interrupt_requested,
                     on_step: &mut on_step,
                 }),
@@ -1239,7 +1333,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
                 grid: [0, 0, 0],
                 field_every_n,
                 initial_snapshot,
-                display_selection: Some(display_selection),
+                display_selection: live_display_selection,
                 interrupt_requested,
                 on_step: &mut on_step,
             });
@@ -1267,7 +1361,13 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         }
         BackendPlanIR::FemEigen(fem) => {
             let engine = dispatch::resolve_fem_engine(problem)?;
-            dispatch::execute_fem_eigen(engine, fem, &plan.output_plan.outputs)
+            let mut progress_callback = |progress| on_step(fem_eigen_progress_update(progress));
+            dispatch::execute_fem_eigen_with_progress(
+                engine,
+                fem,
+                &plan.output_plan.outputs,
+                &mut progress_callback,
+            )
         }
         BackendPlanIR::FemFrequencyResponse(response) => {
             frequency_response::execute_fem_frequency_response_validation(
@@ -2992,6 +3092,279 @@ mod tests {
     }
 
     #[test]
+    fn fem_live_preview_hot_path_has_no_debug_logging() {
+        for path in [
+            "/src/fem/relax/direct_minimizer.rs",
+            "/src/fem/relax/llg_overdamped.rs",
+        ] {
+            let source = fs::read_to_string(format!("{}{}", env!("CARGO_MANIFEST_DIR"), path))
+                .expect("read FEM relaxation source");
+            assert!(
+                !source.contains("native-fem live update"),
+                "{path} must not print per-preview live-update diagnostics in the solver hot path"
+            );
+        }
+    }
+
+    #[test]
+    fn fem_relaxation_preview_copy_is_centralized() {
+        for path in [
+            "/src/fem/relax/direct_minimizer.rs",
+            "/src/fem/relax/llg_overdamped.rs",
+        ] {
+            let source = fs::read_to_string(format!("{}{}", env!("CARGO_MANIFEST_DIR"), path))
+                .expect("read FEM relaxation source");
+            assert!(
+                !source.contains(".copy_live_preview_field("),
+                "{path} must use fem/relax/preview.rs as the only active-preview backend boundary"
+            );
+        }
+
+        let preview = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/fem/relax/preview.rs"
+        ))
+        .expect("read fem/relax/preview.rs");
+        assert!(
+            preview.contains("pub(crate) fn build_fem_live_preview_field("),
+            "fem/relax/preview.rs must own the native FEM live-preview boundary"
+        );
+        assert!(
+            preview.contains(".begin_live_preview_snapshot(request)?"),
+            "FEM live preview must use the native snapshot boundary"
+        );
+        assert!(
+            !preview.contains(".copy_live_preview_field("),
+            "FEM live preview helper must not use the synchronous copy boundary"
+        );
+    }
+
+    #[test]
+    fn fem_relaxation_magnetization_payloads_use_snapshot_boundary() {
+        for path in [
+            "/src/fem/relax/direct_minimizer.rs",
+            "/src/fem/relax/llg_overdamped.rs",
+            "/src/fem/relax/finalize.rs",
+        ] {
+            let source = fs::read_to_string(format!("{}{}", env!("CARGO_MANIFEST_DIR"), path))
+                .expect("read FEM relaxation source");
+            assert!(
+                !source.contains("backend.copy_m("),
+                "{path} must not use direct synchronous magnetization copies for heavy payloads"
+            );
+        }
+    }
+
+    #[test]
+    fn fem_streaming_field_snapshots_are_writer_owned() {
+        let finalize = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/fem/relax/finalize.rs"
+        ))
+        .expect("read fem/relax/finalize.rs");
+        assert!(
+            finalize.contains("if artifacts.is_streaming()"),
+            "native FEM finalization must branch streaming field snapshots away from in-memory materialization"
+        );
+        assert!(
+            finalize.contains(".record_native_fem_field_snapshot(snapshot)?"),
+            "streaming native FEM field snapshots must enqueue pending snapshot handles to the writer"
+        );
+        assert!(
+            finalize
+                .contains("copy_native_fem_field_snapshot(backend, &schedule.name, node_count)?"),
+            "in-memory native FEM field snapshots must keep the materialized fallback"
+        );
+    }
+
+    #[test]
+    fn native_fem_preview_snapshot_wrapper_uses_abi_begin_wait_destroy() {
+        let source = include_str!("native_fem.rs");
+        assert!(
+            source.contains("pub fn begin_live_preview_snapshot("),
+            "NativeFemBackend must expose a preview snapshot wrapper"
+        );
+        assert!(
+            source.contains("fullmag_fem_backend_begin_preview_snapshot"),
+            "preview snapshots must use the native FEM begin-preview ABI"
+        );
+        assert!(
+            source.contains("fullmag_fem_preview_snapshot_wait"),
+            "preview snapshots must use the native FEM wait ABI"
+        );
+        assert!(
+            source.contains("fullmag_fem_preview_snapshot_ready"),
+            "preview snapshots must expose a nonblocking readiness ABI for live handoff"
+        );
+        assert!(
+            source.contains("fullmag_fem_preview_snapshot_destroy"),
+            "preview snapshots must destroy native FEM snapshot handles"
+        );
+    }
+
+    #[test]
+    fn fem_live_preview_uses_nonblocking_last_good_handoff() {
+        for path in [
+            "/src/fem/relax/direct_minimizer.rs",
+            "/src/fem/relax/llg_overdamped.rs",
+        ] {
+            let source = fs::read_to_string(format!("{}{}", env!("CARGO_MANIFEST_DIR"), path))
+                .expect("read FEM relaxation source");
+            assert!(
+                source.contains("FemLivePreviewHandoff::default()"),
+                "{path} must keep live preview snapshot state across solver steps"
+            );
+            assert!(
+                source.contains("live_preview_handoff.poll_completed()?"),
+                "{path} must poll completed preview snapshots without blocking"
+            );
+            assert!(
+                source.contains("live_preview_handoff.request_preview(backend, &request)?"),
+                "{path} must request live preview through the handoff boundary"
+            );
+            assert!(
+                !source.contains("build_fem_live_preview_field(backend"),
+                "{path} must not synchronously wait for active live preview snapshots"
+            );
+        }
+
+        let preview = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/fem/relax/preview.rs"
+        ))
+        .expect("read fem/relax/preview.rs");
+        assert!(
+            preview.contains("struct FemLivePreviewHandoff"),
+            "fem/relax/preview.rs must own live preview handoff state"
+        );
+        assert!(
+            preview.contains("snapshot.is_ready()"),
+            "live preview handoff must use the nonblocking native readiness check"
+        );
+        assert!(
+            preview.contains("last_good"),
+            "live preview handoff must retain the last completed preview"
+        );
+    }
+
+    #[test]
+    fn preview_disabled_live_runner_does_not_pass_display_selection() {
+        for path in ["/src/lib.rs", "/src/hysteresis.rs"] {
+            let source = fs::read_to_string(format!("{}{}", env!("CARGO_MANIFEST_DIR"), path))
+                .expect("read runner source");
+            assert!(
+                source.contains(
+                    "let live_display_selection = (field_every_n != u64::MAX).then_some(display_selection);"
+                ),
+                "{path} must translate preview-disabled cadence into no display-selection callbacks"
+            );
+            assert!(
+                source.contains("display_selection: live_display_selection"),
+                "{path} must wire the gated display-selection option into LiveStepConsumer"
+            );
+        }
+    }
+
+    #[test]
+    fn native_fem_field_snapshot_wrapper_uses_abi_begin_wait_destroy() {
+        let source = include_str!("native_fem.rs");
+        assert!(
+            source.contains("pub fn begin_field_snapshot("),
+            "NativeFemBackend must expose a field snapshot wrapper"
+        );
+        assert!(
+            source.contains("fullmag_fem_backend_begin_field_snapshot"),
+            "field snapshots must use the native FEM begin-field ABI"
+        );
+        assert!(
+            source.contains("fullmag_fem_field_snapshot_wait"),
+            "field snapshots must use the native FEM wait ABI"
+        );
+        assert!(
+            source.contains("fullmag_fem_field_snapshot_ready"),
+            "field snapshots must expose a nonblocking readiness ABI for live handoff"
+        );
+        assert!(
+            source.contains("fullmag_fem_field_snapshot_destroy"),
+            "field snapshots must destroy native FEM snapshot handles"
+        );
+    }
+
+    #[test]
+    fn fem_live_magnetization_uses_nonblocking_snapshot_handoff() {
+        for path in [
+            "/src/fem/relax/direct_minimizer.rs",
+            "/src/fem/relax/llg_overdamped.rs",
+        ] {
+            let source = fs::read_to_string(format!("{}{}", env!("CARGO_MANIFEST_DIR"), path))
+                .expect("read FEM relaxation source");
+            assert!(
+                source.contains("FemLiveMagnetizationHandoff::default()"),
+                "{path} must keep live magnetization snapshot state across solver steps"
+            );
+            assert!(
+                source.contains("live_magnetization_handoff.request_magnetization"),
+                "{path} must start magnetization snapshots through the handoff boundary"
+            );
+            assert!(
+                source.contains("live_magnetization_handoff.poll_completed"),
+                "{path} must poll completed magnetization snapshots without blocking"
+            );
+            assert!(
+                !source.contains(
+                    "begin_field_snapshot(\"m\", 0, 0.0, 0.0)?\n        .into_vector_field()?"
+                ),
+                "{path} must not synchronously wait for live magnetization snapshots"
+            );
+        }
+
+        let preview = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/fem/relax/preview.rs"
+        ))
+        .expect("read fem/relax/preview.rs");
+        assert!(
+            preview.contains("struct FemLiveMagnetizationHandoff"),
+            "fem/relax/preview.rs must own live magnetization handoff state"
+        );
+        assert!(
+            preview.contains("snapshot.is_ready()"),
+            "live magnetization handoff must use the nonblocking native readiness check"
+        );
+    }
+
+    #[test]
+    fn native_fem_snapshot_abi_stages_gpu_payloads_async() {
+        let source = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../backends/fem/src/api.cpp"
+        ))
+        .expect("read native FEM api.cpp");
+        assert!(
+            source.contains("cudaHostAlloc(&snapshot.host_aos"),
+            "native FEM GPU snapshots must allocate pinned host storage"
+        );
+        assert!(
+            source.contains("cudaMemcpyAsync(\n        snapshot.staging.x"),
+            "native FEM GPU snapshots must stage x component device-to-device asynchronously"
+        );
+        assert!(
+            source.contains("cudaMemcpy2DAsync("),
+            "native FEM GPU snapshots must copy staged device data to AoS host payload asynchronously"
+        );
+        assert!(
+            source.contains(
+                "cudaEventSynchronize(reinterpret_cast<cudaEvent_t>(snapshot->done_event))"
+            ),
+            "native FEM GPU snapshot wait must synchronize on the scheduled done event"
+        );
+        assert!(
+            source.contains("destroy_snapshot_payload(*payload)"),
+            "native FEM snapshot destroy must release CUDA staging resources"
+        );
+    }
+
+    #[test]
     fn fem_relaxation_module_support_table_matches_native_algorithm_lanes() {
         let module =
             fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/fem/relax/mod.rs"))
@@ -3053,6 +3426,32 @@ mod tests {
             module.contains("pub(crate) fn build_fem_cached_preview_fields"),
             "fem/relax/preview.rs must own native FEM relaxation cached-preview helpers"
         );
+        assert!(
+            module.contains("struct FemCachedPreviewHandoff")
+                && module.contains("request_cached_previews(")
+                && module.contains("snapshot.is_ready()"),
+            "fem/relax/preview.rs must own nonblocking cached-preview handoff state"
+        );
+        for path in [
+            "/src/fem/relax/direct_minimizer.rs",
+            "/src/fem/relax/llg_overdamped.rs",
+        ] {
+            let source = fs::read_to_string(format!("{}{}", env!("CARGO_MANIFEST_DIR"), path))
+                .expect("read FEM relaxation source");
+            assert!(
+                source.contains("FemCachedPreviewHandoff::default()"),
+                "{path} must keep cached-preview snapshot state across solver steps"
+            );
+            assert!(
+                source.contains("cached_preview_handoff.request_cached_previews(")
+                    && source.contains("cached_preview_handoff.poll_completed()?"),
+                "{path} must use cached-preview handoff readiness instead of synchronous waits"
+            );
+            assert!(
+                !source.contains("build_fem_cached_preview_fields("),
+                "{path} must not synchronously warm cached preview fields in the hot loop"
+            );
+        }
     }
 
     #[test]
@@ -3072,6 +3471,18 @@ mod tests {
         assert!(
             module.contains("pub(crate) fn copy_native_fem_field_snapshot"),
             "fem/relax/snapshots.rs must own native FEM relaxation field snapshot helpers"
+        );
+        assert!(
+            module.contains(".begin_field_snapshot(quantity)?")
+                && module.contains(".into_vector_field()?"),
+            "native FEM relaxation field snapshots must use the native snapshot boundary"
+        );
+        assert!(
+            !module.contains("backend.copy_m(")
+                && !module.contains("backend.copy_h_ex(")
+                && !module.contains("backend.copy_h_demag(")
+                && !module.contains("backend.copy_h_eff("),
+            "native FEM relaxation field snapshots must not return to synchronous copy helpers"
         );
     }
 
@@ -3263,6 +3674,33 @@ mod tests {
                 "native_fem/runtime_info.rs must own native FEM runtime-info symbol {symbol}"
             );
         }
+    }
+
+    #[test]
+    fn interactive_fem_gpu_runtime_normalizes_native_gpu_plan() {
+        let interactive_runtime = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/interactive_runtime.rs"
+        ))
+        .expect("read interactive_runtime.rs");
+
+        assert!(
+            interactive_runtime.contains("fn fem_plan_for_native_gpu(plan: &FemPlanIR)"),
+            "interactive FEM runtime must own native GPU plan normalization"
+        );
+        assert!(
+            interactive_runtime.contains("FemEngine::NativeGpu => fem_plan_for_native_gpu(plan)"),
+            "interactive FEM GPU runtime must resolve mfem_device_string before backend creation"
+        );
+        assert!(
+            !interactive_runtime.contains("FemEngine::NativeGpu => plan.clone()"),
+            "interactive FEM GPU runtime must not create native backends from unresolved GPU plans"
+        );
+        assert!(
+            interactive_runtime
+                .contains("normalize_fem_plan_signature(&fem_plan_for_native_gpu(plan))"),
+            "interactive FEM GPU runtime plan matching must use the same normalized GPU plan"
+        );
     }
 
     #[test]
@@ -3765,8 +4203,8 @@ mod tests {
         assert!(output_dir.join("scalars.csv").is_file());
         assert!(output_dir.join("m_initial.json").is_file());
         assert!(output_dir.join("m_final.json").is_file());
-        assert!(output_dir.join("fields/m/step_000000.json").is_file());
-        assert!(output_dir.join("fields/H_ex/step_000000.json").is_file());
+        assert!(output_dir.join("fields/m.zarr").is_dir());
+        assert!(output_dir.join("fields/H_ex.zarr").is_dir());
 
         let metadata: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(output_dir.join("metadata.json"))

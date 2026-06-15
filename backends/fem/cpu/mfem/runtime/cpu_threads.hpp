@@ -27,6 +27,16 @@ struct CpuThreadRuntimeState {
     bool auto_requested = false;
     int requested_omp_threads = 1;
     int effective_omp_threads = 1;
+    int cap_reason = 0;
+};
+
+enum CpuThreadCapReason {
+    FULLMAG_FEM_CPU_THREAD_CAP_NONE = 0,
+    FULLMAG_FEM_CPU_THREAD_CAP_EXTERNAL_AUTO_RESOLVED = 1,
+    FULLMAG_FEM_CPU_THREAD_CAP_SMALL_MESH = 2,
+    FULLMAG_FEM_CPU_THREAD_CAP_MEDIUM_MESH = 3,
+    FULLMAG_FEM_CPU_THREAD_CAP_GPU_BYPASS = 4,
+    FULLMAG_FEM_CPU_THREAD_CAP_AUTO_UNCAPPED = 5,
 };
 
 /*
@@ -45,6 +55,7 @@ CpuThreadRequest requested_cpu_threads();
  * requested count. GPU MFEM device requests bypass this cap.
  */
 int auto_cpu_thread_cap_for_context(const Context &ctx, int requested_threads);
+int auto_cpu_thread_cap_reason_for_context(const Context &ctx, int requested_threads);
 
 /*
  * Apply the resolved CPU/OpenMP thread policy to the native FEM context.

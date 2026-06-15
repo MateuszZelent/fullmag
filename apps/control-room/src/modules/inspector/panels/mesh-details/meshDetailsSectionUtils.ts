@@ -2,7 +2,6 @@ import {
   asRecord,
   formatLength,
   formatValue,
-  recordField,
 } from "../MeshResourceView";
 
 export function meshDetailKey(
@@ -12,7 +11,7 @@ export function meshDetailKey(
   return fields.map((field) => formatValue(field)).join(":") || prefix;
 }
 
-export function formatSizeFieldParam(key: string, value: unknown): string {
+function formatSizeFieldParam(key: string, value: unknown): string {
   const normalizedKey = key.toLowerCase();
   const likelyLength =
     normalizedKey.includes("size") ||
@@ -53,8 +52,4 @@ export function sizeFieldParamSummary(params: unknown): string | null {
     .slice(0, 4)
     .map(([key, value]) => formatSizeFieldParam(key, value))
     .join(" / ");
-}
-
-export function recordValue(record: Record<string, unknown> | null, key: string): unknown {
-  return recordField(record, key);
 }

@@ -811,6 +811,7 @@ int fullmag_fdm_backend_step(
     if (!handle || !out_stats) return FULLMAG_FDM_ERR_INVALID;
     auto *ctx = reinterpret_cast<Context *>(handle);
     ctx->step_interrupted = false;
+    fullmag_fdm_reset_hot_loop_audit(*ctx);
     if (ctx->has_multilayer_plan_v2) {
         if (dt_seconds <= 0.0) {
             ctx->last_error = "v2 multilayer step requires dt_seconds > 0";
@@ -845,6 +846,7 @@ int fullmag_fdm_backend_step(
         if (!ctx->last_error.empty()) {
             return FULLMAG_FDM_ERR_CUDA;
         }
+        fullmag_fdm_publish_hot_loop_audit(*ctx, out_stats);
         return FULLMAG_FDM_OK;
     }
 
@@ -894,6 +896,7 @@ int fullmag_fdm_backend_step(
             return FULLMAG_FDM_ERR_CUDA;
         }
         out_stats->dt_seconds = 0.0;
+        fullmag_fdm_publish_hot_loop_audit(*ctx, out_stats);
         return FULLMAG_FDM_ERR_INTERRUPTED;
     }
 
@@ -904,6 +907,7 @@ int fullmag_fdm_backend_step(
         return FULLMAG_FDM_ERR_CUDA;
     }
 
+    fullmag_fdm_publish_hot_loop_audit(*ctx, out_stats);
     return FULLMAG_FDM_OK;
 #else
     (void)handle; (void)dt_seconds; (void)out_stats;

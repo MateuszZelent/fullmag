@@ -241,7 +241,7 @@ The CPU reference path:
    Assemble $K$ and $M$ from element stiffness arrays and the local shift
    $h_\parallel(i)$.
 
-4. **Cholesky generalised eigen solve**:
+4. **Reference Cholesky generalised eigen solve**:
    $K = L L^\top$ (Cholesky of $M$),
    $L^{-1} K L^{-\top} \tilde{\mathbf{u}} = \lambda \tilde{\mathbf{u}}$,
    solved by `nalgebra::SymmetricEigen` (dense, $O(N^3)$).
@@ -289,6 +289,24 @@ problem = fm.Problem(
 
 The `Eigenmodes` class serialises to `StudyIR::Eigenmodes` in the IR layer.
 
+For production-sized objects, the public API must support frequency-window
+selection rather than only `"lowest"` or `"nearest"`:
+
+```python
+study.stages.add_eigenmodes(
+    count=20,
+    target="frequency_window",
+    frequency_min=100e6,
+    frequency_max=5e9,
+)
+```
+
+`frequency_min` and `frequency_max` are SI frequencies in Hz.  `count` is the
+maximum number of modes to return from the requested interval.  This is the
+canonical user-facing model for large FEM eigenmode studies because users
+usually care about a measurement band, device band, or FMR band, not about a
+global dense ordering of every eigenpair.
+
 ### 4.2 ProblemIR representation
 
 `StudyIR::Eigenmodes` fields (defined in `fullmag-ir/src/lib.rs`):
@@ -298,7 +316,7 @@ The `Eigenmodes` class serialises to `StudyIR::Eigenmodes` in the IR layer.
 | `dynamics` | `DynamicsIR` | LLG parameters (gyromagnetic ratio, integrator for equilibrium) |
 | `operator` | `EigenOperatorConfigIR` | `kind=LinearizedLlg`, `include_demag` |
 | `count` | `u32` | Number of modes to compute |
-| `target` | `EigenTargetIR` | `Lowest` or `Nearest { frequency_hz }` |
+| `target` | `EigenTargetIR` | `Lowest`, `Nearest { frequency_hz }`, or production target `FrequencyWindow { frequency_min_hz, frequency_max_hz }` |
 | `equilibrium` | `EquilibriumSourceIR` | `Provided`, `RelaxedInitialState`, `Artifact { path }` |
 | `k_sampling` | `Option<KSamplingIR>` | For dispersion: `Single { k_vector: [f64; 3] }` |
 | `normalization` | `EigenNormalizationIR` | `UnitL2` or `UnitMaxAmplitude` |
@@ -316,6 +334,10 @@ The planner lowers this to `BackendPlanIR::FemEigen(FemEigenPlanIR)`.
   equilibrium magnetisation (when `RelaxedInitialState` is requested
   the planner embeds the initial guess; the runner performs the
   actual relaxation).
+- Production planning for `FrequencyWindow` must preserve the requested window,
+  mode cap, tolerance, and resolved backend policy in provenance.  It must not
+  silently degrade to `Lowest` or publish out-of-window guard modes as user
+  results.
 
 ---
 
@@ -393,9 +415,13 @@ For $k = 0$ this reduces to the Kittel formula.  The k-vector series
    supported.  When damping is included with the full 2×2 operator, the
    system becomes non-Hermitian and requires a general eigenvalue solver
    (`Dgeev`/`Zgeev`).  Complex eigenvalues encode mode linewidth.
-3. **GPU / ARPACK**: the dense `SymmetricEigen` path scales as $O(N^3)$
-   and is limited to meshes with $\lesssim 10^4$ DOF.  ARPACK / SLEPc
-   integration is needed for production-scale geometries.
+3. **Production sparse/window eigensolver**: the dense `SymmetricEigen` path
+   scales as $O(N^3)$ and is limited to small validation meshes.  Large objects
+   require PETSc/SLEPc-class sparse or matrix-free eigensolvers: Krylov-Schur,
+   Arnoldi, LOBPCG, Jacobi-Davidson, shift-invert, or FEAST/contour interval
+   solve depending on the requested target.  Frequency-window queries such as
+   100 MHz..5 GHz must be solved as spectral-window problems, not by computing
+   a large prefix of the global dense spectrum and filtering afterward.
 4. **k-vector sampling**: only `KSamplingIR::Single` is currently supported.
    Automatic BZ path generation for dispersion curves is deferred.
 5. **Multi-magnet**: only single-magnet geometries are supported.

@@ -62,9 +62,39 @@ const SUPPORTED_HYSTERESIS_MEASUREMENT_AXES = new Set([
   "easy_axis",
   "custom",
 ]);
+const SUPPORTED_SPECTRAL_NORMALIZATIONS = [
+  "unit_l2",
+  "unit_max_amplitude",
+] as const;
+const SUPPORTED_SPECTRAL_DAMPING_POLICIES = ["ignore", "include"] as const;
+const SUPPORTED_SPECTRAL_EQUILIBRIUM_SOURCES = [
+  "provided",
+  "relax",
+  "artifact",
+] as const;
+const SUPPORTED_EIGEN_CALCULATION_MODES = [
+  "fmr_modal",
+  "free_modes",
+  "dispersion_modal",
+] as const;
+const SUPPORTED_RESPONSE_CALCULATION_MODES = [
+  "fmr_response",
+  "response_map",
+] as const;
+const SPECTRAL_NORMALIZATION_ALIASES: Record<string, string> = {
+  max_component: "unit_max_amplitude",
+};
+const SPECTRAL_DAMPING_POLICY_ALIASES: Record<string, string> = {
+  full: "include",
+  linearized: "include",
+};
+const SPECTRAL_EQUILIBRIUM_SOURCE_ALIASES: Record<string, string> = {
+  current_state: "provided",
+};
 const MAX_HYSTERESIS_AUTHORING_FIELD_POINTS = 10_000;
 
 export type StudyStageDraftKind =
+  | "change_device"
   | "eigenmodes"
   | "frequency_response"
   | "hysteresis"
@@ -76,9 +106,11 @@ export interface StudyStageDraft {
   algorithm: string;
   artifactName: string;
   bc: string;
+  calculationMode: string;
   count: string;
   dampingPolicy: string;
   dataset: string;
+  deviceTarget: string;
   dt: string;
   dtMin: string;
   energyTolerance: string;
@@ -110,6 +142,8 @@ export interface StudyStageDraft {
   stopField: string;
   target: string;
   targetFrequency: string;
+  frequencyMin: string;
+  frequencyMax: string;
   torqueTolerance: string;
   untilSeconds: string;
   // Hysteresis expansion fields
@@ -145,9 +179,11 @@ const DEFAULT_RELAX_STAGE_DRAFT: StudyStageDraft = {
   algorithm: "llg_overdamped",
   artifactName: "state_snapshot",
   bc: "free",
+  calculationMode: "",
   count: "10",
   dampingPolicy: "ignore",
   dataset: "",
+  deviceTarget: "cpu",
   dt: "auto",
   dtMin: "",
   energyTolerance: "",
@@ -179,6 +215,8 @@ const DEFAULT_RELAX_STAGE_DRAFT: StudyStageDraft = {
   stopField: "0, 0, 0.1",
   target: "lowest",
   targetFrequency: "",
+  frequencyMin: "",
+  frequencyMax: "",
   torqueTolerance: "1e-6",
   untilSeconds: "",
   protocolKind: "",
@@ -208,9 +246,11 @@ const DEFAULT_RUN_STAGE_DRAFT: StudyStageDraft = {
   algorithm: "llg_overdamped",
   artifactName: "state_snapshot",
   bc: "free",
+  calculationMode: "",
   count: "10",
   dampingPolicy: "ignore",
   dataset: "",
+  deviceTarget: "cpu",
   dt: "auto",
   dtMin: "",
   energyTolerance: "",
@@ -242,6 +282,8 @@ const DEFAULT_RUN_STAGE_DRAFT: StudyStageDraft = {
   stopField: "0, 0, 0.1",
   target: "lowest",
   targetFrequency: "",
+  frequencyMin: "",
+  frequencyMax: "",
   torqueTolerance: "",
   untilSeconds: "1e-9",
   protocolKind: "",
@@ -270,6 +312,7 @@ const DEFAULT_RUN_STAGE_DRAFT: StudyStageDraft = {
 const DEFAULT_EIGENMODES_STAGE_DRAFT: StudyStageDraft = {
   ...DEFAULT_RELAX_STAGE_DRAFT,
   algorithm: "",
+  calculationMode: "fmr_modal",
   dt: "",
   kind: "eigenmodes",
   maxSteps: "",
@@ -280,6 +323,7 @@ const DEFAULT_EIGENMODES_STAGE_DRAFT: StudyStageDraft = {
 
 const DEFAULT_FREQUENCY_RESPONSE_STAGE_DRAFT: StudyStageDraft = {
   ...DEFAULT_EIGENMODES_STAGE_DRAFT,
+  calculationMode: "fmr_response",
   equilibriumSource: "provided",
   kind: "frequency_response",
 };
@@ -287,6 +331,13 @@ const DEFAULT_FREQUENCY_RESPONSE_STAGE_DRAFT: StudyStageDraft = {
 const DEFAULT_SAVE_STATE_STAGE_DRAFT: StudyStageDraft = {
   ...DEFAULT_RUN_STAGE_DRAFT,
   kind: "save_state",
+  untilSeconds: "",
+};
+
+const DEFAULT_CHANGE_DEVICE_STAGE_DRAFT: StudyStageDraft = {
+  ...DEFAULT_RUN_STAGE_DRAFT,
+  deviceTarget: "cpu",
+  kind: "change_device",
   untilSeconds: "",
 };
 
@@ -367,6 +418,16 @@ export function createStudyStageDraft(
         record?.observable ?? record?.frequency_observable,
         DEFAULT_FREQUENCY_RESPONSE_STAGE_DRAFT.observable,
       ),
+    };
+  }
+  if (kind === "change_device") {
+    return {
+      ...DEFAULT_CHANGE_DEVICE_STAGE_DRAFT,
+      deviceTarget: scalarText(
+        record?.device,
+        DEFAULT_CHANGE_DEVICE_STAGE_DRAFT.deviceTarget,
+      ),
+      stageId: stringValue(record?.stage_id ?? record?.id, `stage-${index + 1}`),
     };
   }
   if (kind === "save_state") {
@@ -572,7 +633,9 @@ export function createDefaultStudyStageDraft(
             ? DEFAULT_HYSTERESIS_STAGE_DRAFT
             : kind === "save_state"
               ? DEFAULT_SAVE_STATE_STAGE_DRAFT
-              : DEFAULT_RELAX_STAGE_DRAFT;
+              : kind === "change_device"
+                ? DEFAULT_CHANGE_DEVICE_STAGE_DRAFT
+                : DEFAULT_RELAX_STAGE_DRAFT;
   return {
     ...base,
     kind,
@@ -599,6 +662,10 @@ export function studyStageDraftToSceneStage(
     stage.eigen_target = stage.target;
     setOptionalNumber(stage, "target_frequency", draft.targetFrequency);
     setOptionalNumber(stage, "eigen_target_frequency", draft.targetFrequency);
+    setOptionalNumber(stage, "frequency_min", draft.frequencyMin);
+    setOptionalNumber(stage, "frequency_max", draft.frequencyMax);
+    setOptionalNumber(stage, "eigen_frequency_min", draft.frequencyMin);
+    setOptionalNumber(stage, "eigen_frequency_max", draft.frequencyMax);
     return stage;
   }
   if (draft.kind === "frequency_response") {
@@ -630,6 +697,14 @@ export function studyStageDraftToSceneStage(
     setOptionalText(stage, "format", draft.format);
     setOptionalText(stage, "dataset", draft.dataset);
     return stage;
+  }
+  if (draft.kind === "change_device") {
+    return {
+      device: requiredDeviceTarget(draft.deviceTarget),
+      entrypoint_kind: "flat_change_device",
+      kind: "change_device",
+      stage_id: requiredText(draft.stageId, "change-device"),
+    };
   }
   if (draft.kind === "hysteresis") {
     const torqueTolerance = requiredNumber(
@@ -800,14 +875,43 @@ export function validateStudyStageDraft(
     return issues;
   }
   if (draft.kind === "eigenmodes") {
+    validateSpectralOptions(issues, draft, SUPPORTED_EIGEN_CALCULATION_MODES);
     validatePositiveInteger(issues, draft.count, "Mode count", true);
-    validatePositiveNumber(issues, draft.targetFrequency, "Target frequency", false);
+    validatePositiveNumber(
+      issues,
+      draft.targetFrequency,
+      "Target frequency",
+      draft.target === "nearest",
+    );
+    validatePositiveNumber(
+      issues,
+      draft.frequencyMin,
+      "Frequency min",
+      draft.target === "frequency_window",
+    );
+    validatePositiveNumber(
+      issues,
+      draft.frequencyMax,
+      "Frequency max",
+      draft.target === "frequency_window",
+    );
+    if (draft.target === "frequency_window") {
+      const min = Number(draft.frequencyMin);
+      const max = Number(draft.frequencyMax);
+      if (Number.isFinite(min) && Number.isFinite(max) && min >= max) {
+        issues.push({
+          message: "Frequency min must be less than frequency max.",
+          severity: "error",
+        });
+      }
+    }
     validateOptionalVector3(issues, draft.kVector, "k vector");
     validateOptionalJson(issues, draft.kSampling, "k sampling");
     validateJsonOrString(issues, draft.bc, "BC");
     return issues;
   }
   if (draft.kind === "frequency_response") {
+    validateSpectralOptions(issues, draft, SUPPORTED_RESPONSE_CALCULATION_MODES);
     validatePositiveNumberList(issues, draft.frequenciesHz, "Frequencies");
     validateRequiredVector3(issues, draft.excitationField, "Excitation field");
     validateFiniteNumber(issues, draft.excitationPhaseRad, "Excitation phase", true);
@@ -820,6 +924,10 @@ export function validateStudyStageDraft(
     if (!draft.artifactName.trim()) {
       issues.push({ message: "Artifact name is required.", severity: "error" });
     }
+    return issues;
+  }
+  if (draft.kind === "change_device") {
+    validateDeviceTarget(issues, draft.deviceTarget);
     return issues;
   }
   if (draft.kind === "hysteresis") {
@@ -896,6 +1004,58 @@ export function validateStudyStageDraft(
     }
   }
   return issues;
+}
+
+function validateSpectralOptions(
+  issues: StudyStageDraftValidation[],
+  draft: StudyStageDraft,
+  calculationModes: readonly string[],
+): void {
+  validateSupportedText(
+    issues,
+    draft.calculationMode,
+    calculationModes,
+    "Calculation mode",
+  );
+  validateSupportedText(
+    issues,
+    draft.normalization,
+    SUPPORTED_SPECTRAL_NORMALIZATIONS,
+    "Normalization",
+  );
+  validateSupportedText(
+    issues,
+    draft.dampingPolicy,
+    SUPPORTED_SPECTRAL_DAMPING_POLICIES,
+    "Damping policy",
+  );
+  validateSupportedText(
+    issues,
+    draft.equilibriumSource,
+    SUPPORTED_SPECTRAL_EQUILIBRIUM_SOURCES,
+    "Equilibrium source",
+  );
+}
+
+function validateSupportedText(
+  issues: StudyStageDraftValidation[],
+  value: string,
+  supported: readonly string[],
+  label: string,
+): void {
+  if (supported.includes(value)) return;
+  issues.push({
+    message: `${label} must be ${joinOptions(supported)}.`,
+    severity: "error",
+  });
+}
+
+function joinOptions(options: readonly string[]): string {
+  if (options.length <= 1) return options[0] ?? "";
+  if (options.length === 2) return `${options[0]} or ${options[1]}`;
+  return `${options.slice(0, -1).join(", ")}, or ${
+    options[options.length - 1]
+  }`;
 }
 
 export function buildStudyStagesMergePatch(
@@ -975,6 +1135,26 @@ function validateFiniteNumber(
       severity: "error",
     });
   }
+}
+
+function validateDeviceTarget(
+  issues: StudyStageDraftValidation[],
+  value: string,
+): void {
+  if (!isSupportedDeviceTarget(value.trim().toLowerCase())) {
+    issues.push({
+      message: "Device must be cpu, gpu, cuda, cuda:<index>, or auto.",
+      severity: "error",
+    });
+  }
+}
+
+function isSupportedDeviceTarget(value: string): boolean {
+  if (value === "cpu" || value === "gpu" || value === "cuda" || value === "auto") {
+    return true;
+  }
+  const index = value.startsWith("cuda:") ? value.slice("cuda:".length) : "";
+  return index.length > 0 && /^[0-9]+$/.test(index);
 }
 
 function validateJsonArray(
@@ -1767,9 +1947,10 @@ function parseSettleStepRecords(value: string): JsonRecord[] {
   try {
     const parsed = JSON.parse(value) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed
-      .map((item) => asRecord(item))
-      .filter((step): step is JsonRecord => Boolean(step));
+    return parsed.flatMap((item) => {
+      const step = asRecord(item);
+      return step ? [step] : [];
+    });
   } catch {
     return [];
   }
@@ -2143,6 +2324,7 @@ function validatePositiveInteger(
 function stageKind(record: JsonRecord | null): StudyStageDraftKind {
   const kind = String(record?.kind ?? record?.entrypoint_kind ?? "relax");
   const normalized = kind.toLowerCase();
+  if (normalized.includes("change_device")) return "change_device";
   if (normalized.includes("frequency")) return "frequency_response";
   if (normalized.includes("eigen")) return "eigenmodes";
   if (normalized.includes("hysteresis")) return "hysteresis";
@@ -2159,17 +2341,32 @@ function spectralDraft(
   return {
     ...base,
     bc: scalarOrObjectText(record?.bc, base.bc),
+    calculationMode: scalarText(
+      record?.calculation_mode,
+      base.calculationMode,
+    ),
     count: scalarText(record?.count, base.count),
-    dampingPolicy: scalarText(record?.damping_policy, base.dampingPolicy),
+    dampingPolicy: canonicalSpectralOption(
+      scalarText(record?.damping_policy, base.dampingPolicy),
+      SPECTRAL_DAMPING_POLICY_ALIASES,
+    ),
     equilibriumArtifact: scalarText(record?.equilibrium_artifact, ""),
-    equilibriumSource: scalarText(record?.equilibrium_source, base.equilibriumSource),
+    equilibriumSource: canonicalSpectralOption(
+      scalarText(record?.equilibrium_source, base.equilibriumSource),
+      SPECTRAL_EQUILIBRIUM_SOURCE_ALIASES,
+    ),
     includeDemag: booleanValue(record?.include_demag, base.includeDemag),
     kSampling: objectText(record?.k_sampling),
     kVector: vectorText(record?.k_vector, ""),
-    normalization: scalarText(record?.normalization, base.normalization),
+    normalization: canonicalSpectralOption(
+      scalarText(record?.normalization, base.normalization),
+      SPECTRAL_NORMALIZATION_ALIASES,
+    ),
     stageId: stringValue(record?.stage_id ?? record?.id, `stage-${index + 1}`),
     target: scalarText(record?.target, base.target),
-    targetFrequency: scalarText(record?.target_frequency, ""),
+    targetFrequency: scalarText(record?.target_frequency ?? record?.eigen_target_frequency, ""),
+    frequencyMin: scalarText(record?.frequency_min ?? record?.eigen_frequency_min, ""),
+    frequencyMax: scalarText(record?.frequency_max ?? record?.eigen_frequency_max, ""),
   };
 }
 
@@ -2179,6 +2376,10 @@ function spectralSceneStage(
 ): JsonObject {
   const stage: JsonObject = {
     bc: parseJsonOrString(draft.bc, "free"),
+    calculation_mode: requiredText(
+      draft.calculationMode,
+      kind === "eigenmodes" ? "fmr_modal" : "fmr_response",
+    ),
     damping_policy: requiredText(draft.dampingPolicy, "ignore"),
     equilibrium_source: requiredText(
       draft.equilibriumSource,
@@ -2204,6 +2405,7 @@ function spectralSceneStage(
   const kSampling = optionalJsonObject(draft.kSampling);
   if (kSampling) stage.k_sampling = kSampling;
   if (kind === "eigenmodes") {
+    stage.eigen_calculation_mode = stage.calculation_mode;
     stage.eigen_include_demag = draft.includeDemag;
     stage.eigen_equilibrium_source = stage.equilibrium_source;
     stage.eigen_normalization = stage.normalization;
@@ -2212,6 +2414,7 @@ function spectralSceneStage(
     if (kSampling) stage.eigen_k_sampling = kSampling;
     stage.eigen_spin_wave_bc = stage.bc;
   } else {
+    stage.frequency_calculation_mode = stage.calculation_mode;
     stage.frequency_include_demag = draft.includeDemag;
     stage.frequency_equilibrium_source = stage.equilibrium_source;
     stage.frequency_normalization = stage.normalization;
@@ -2228,6 +2431,13 @@ function scalarText(value: unknown, fallback: string): string {
     return String(value);
   }
   return fallback;
+}
+
+function canonicalSpectralOption(
+  value: string,
+  aliases: Record<string, string>,
+): string {
+  return aliases[value] ?? value;
 }
 
 function measurementAxisDraftFields(
@@ -2397,6 +2607,12 @@ function requiredText(value: string, fallback: string): string {
   return value.trim() || fallback;
 }
 
+function requiredDeviceTarget(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  if (isSupportedDeviceTarget(normalized)) return normalized;
+  throw new Error("device must be cpu, gpu, cuda, cuda:<index>, or auto.");
+}
+
 function requiredNumber(value: string, field: string): number {
   const parsed = Number(value.trim());
   if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -2486,7 +2702,10 @@ function supportedSetMessage(values: ReadonlySet<string>): string {
 
 function strictFiniteNumberList(value: string): number[] | null {
   const values: number[] = [];
-  const tokens = value.split(/[,\s]+/).map((token) => token.trim()).filter(Boolean);
+  const tokens = value.split(/[,\s]+/).flatMap((token) => {
+    const trimmed = token.trim();
+    return trimmed ? [trimmed] : [];
+  });
   if (tokens.length === 0) return null;
   for (const token of tokens) {
     const parsed = Number(token);

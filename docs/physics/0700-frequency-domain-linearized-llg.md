@@ -28,6 +28,40 @@ with:
 m0 dot delta_m = 0
 ```
 
+## Product Split
+
+Frequency-domain authoring uses one linearized tangent-operator contract, but
+it produces two separate study products:
+
+- `modal_eigen` with UI label `Eigenmodes`,
+- `driven_response` with UI label `Frequency Response`.
+
+They are not interchangeable and neither product inherits execution status from
+the other.
+
+The modal product solves the generalized eigenproblem
+
+```text
+A q = lambda B q
+```
+
+with `lambda = i omega`.
+
+The driven product solves the forced harmonic system
+
+```text
+(i omega B - A) q = b
+```
+
+at user-requested frequencies.
+
+Both products use:
+
+- `gamma0 = mu0 * |gamma|`,
+- tangent variables `q`, not unconstrained three-component unknowns,
+- manifest `analysis_family = "magnetic_frequency_domain"`,
+- explicit `study_product = "modal_eigen"` or `study_product = "driven_response"`.
+
 ## COMSOL parity requirements
 
 `docs/comsol/Manual_for_Micromagnetics_Module.pdf` is not a Fullmag semantic

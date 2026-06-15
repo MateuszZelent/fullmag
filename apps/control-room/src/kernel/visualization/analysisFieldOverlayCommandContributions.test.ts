@@ -47,6 +47,7 @@ describe("analysis field overlay commands", () => {
         view: "phase_rotated_real",
       },
       source: "eigen-mode",
+      visualizationPhaseRad: 0.5,
     });
   });
 
@@ -120,6 +121,215 @@ describe("analysis field overlay commands", () => {
         view: "imag",
       },
       source: "eigen-mode",
+    });
+  });
+
+  it("stores mode appearance on the analysis overlay when plotting", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+
+    const result = await commands.execute(
+      "analysis.eigen.plot-mode-3d",
+      {
+        analysisFieldOverlay: overlay,
+        source: "test",
+      },
+      {
+        colorSource: "component_z",
+        colormap: "inferno",
+        fieldId: "analysis:eigen:sample-0000:mode-0002",
+        label: "Mode 2",
+        solidColor: "#44ccff",
+        source: "eigen-mode",
+      },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(overlay.getSnapshot()?.appearance).toEqual({
+      scalarColorPalette: "inferno",
+      shaderMonoColor: "#44ccff",
+      surfaceColorSource: "component_z",
+    });
+  });
+
+  it("reuses active mode-field appearance when switching analysis fields", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+    overlay.set({
+      appearance: {
+        geometryScope: "full",
+        scalarColorPalette: "viridis",
+        shaderMonoColor: "var(--fm-surface-magnetic)",
+        shaderVisible: true,
+        surfaceColorSource: "colormap",
+        vectorBudget: 900,
+        vectorsVisible: true,
+      },
+      fieldId: "analysis:eigen:sample-0000:mode-0001",
+      label: "Mode 1",
+      query: {
+        component: "full",
+        phase_rad: 0.75,
+        scope_kind: "full",
+        view: "phase_rotated_real",
+      },
+      source: "eigen-mode",
+      visualizationPhaseRad: 0.75,
+    });
+
+    const result = await commands.execute(
+      "analysis.eigen.plot-mode-3d",
+      {
+        analysisFieldOverlay: overlay,
+        source: "test",
+      },
+      {
+        fieldId: "analysis:eigen:sample-0000:mode-0002",
+        label: "Mode 2",
+        source: "eigen-mode",
+      },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(overlay.getSnapshot()).toMatchObject({
+      appearance: {
+        geometryScope: "full",
+        scalarColorPalette: "viridis",
+        shaderMonoColor: "var(--fm-surface-magnetic)",
+        shaderVisible: true,
+        surfaceColorSource: "colormap",
+        vectorBudget: 900,
+        vectorsVisible: true,
+      },
+      fieldId: "analysis:eigen:sample-0000:mode-0002",
+      query: {
+        phase_rad: 0.75,
+        view: "phase_rotated_real",
+      },
+      source: "eigen-mode",
+      visualizationPhaseRad: 0.75,
+    });
+  });
+
+  it("keeps shared appearance when switching from modal to driven field overlays", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+    overlay.set({
+      appearance: {
+        scalarColorPalette: "inferno",
+        surfaceColorSource: "component_z",
+        vectorBudget: 512,
+      },
+      fieldId: "analysis:eigen:sample-0000:mode-0002",
+      label: "Mode 2",
+      query: {
+        component: "full",
+        phase_rad: 0.25,
+        scope_kind: "full",
+        view: "phase_rotated_real",
+      },
+      source: "eigen-mode",
+      visualizationPhaseRad: 0.25,
+    });
+
+    const result = await commands.execute(
+      "analysis.frequency-response.plot-response-field-3d",
+      {
+        analysisFieldOverlay: overlay,
+        source: "test",
+      },
+      {
+        fieldId: "analysis:frequency-response:frequency-0001",
+        label: "1 GHz",
+        source: "frequency-response",
+      },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(overlay.getSnapshot()).toMatchObject({
+      appearance: {
+        scalarColorPalette: "inferno",
+        surfaceColorSource: "component_z",
+        vectorBudget: 512,
+      },
+      fieldId: "analysis:frequency-response:frequency-0001",
+      query: {
+        phase_rad: 0.25,
+      },
+      source: "frequency-response",
+      visualizationPhaseRad: 0.25,
+    });
+  });
+
+  it("updates the active frequency-domain overlay appearance", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+    overlay.set({
+      fieldId: "analysis:eigen:sample-0000:mode-0002",
+      label: "Mode 2",
+      query: {
+        component: "full",
+        phase_rad: 0,
+        scope_kind: "full",
+        view: "phase_rotated_real",
+      },
+      source: "eigen-mode",
+    });
+
+    const result = await commands.execute(
+      "analysis.frequency-domain.set-3d-appearance",
+      {
+        analysisFieldOverlay: overlay,
+        source: "test",
+      },
+      {
+        colorSource: "solid",
+        solidColor: "#ff3366",
+      },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(overlay.getSnapshot()?.appearance).toEqual({
+      shaderMonoColor: "#ff3366",
+      surfaceColorSource: "solid",
+    });
+  });
+
+  it("updates mode overlay display passes and vector scope appearance", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+    overlay.set({
+      fieldId: "analysis:eigen:sample-0000:mode-0002",
+      label: "Mode 2",
+      query: {
+        component: "full",
+        phase_rad: 0,
+        scope_kind: "full",
+        view: "phase_rotated_real",
+      },
+      source: "eigen-mode",
+    });
+
+    const result = await commands.execute(
+      "analysis.frequency-domain.set-3d-appearance",
+      {
+        analysisFieldOverlay: overlay,
+        source: "test",
+      },
+      {
+        geometryScope: "full",
+        shaderVisible: false,
+        vectorBudget: 512,
+        vectorsVisible: true,
+      },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(overlay.getSnapshot()?.appearance).toEqual({
+      geometryScope: "full",
+      shaderVisible: false,
+      vectorBudget: 512,
+      vectorsVisible: true,
     });
   });
 
@@ -501,6 +711,7 @@ describe("analysis field overlay commands", () => {
         view: "phase_rotated_real",
       },
       source: "eigen-mode",
+      visualizationPhaseRad: 0,
     });
   });
 
@@ -534,10 +745,11 @@ describe("analysis field overlay commands", () => {
     expect(overlay.getSnapshot()).toMatchObject({
       fieldId: "analysis:frequency-response:frequency-0001",
       query: {
-        phase_rad: 1.25,
+        phase_rad: 0,
         view: "abs",
       },
       source: "frequency-response",
+      visualizationPhaseRad: 1.25,
     });
 
     const pauseResult = await commands.execute(
@@ -601,6 +813,7 @@ describe("analysis field overlay commands", () => {
         view: "phase_rotated_real",
       },
       source: "frequency-response",
+      visualizationPhaseRad: 0,
     });
   });
 
@@ -638,6 +851,7 @@ describe("analysis field overlay commands", () => {
         view: "phase_rotated_real",
       },
       source: "frequency-response",
+      visualizationPhaseRad: 0.25,
     });
   });
 
@@ -675,6 +889,7 @@ describe("analysis field overlay commands", () => {
         view: "phase_rotated_real",
       },
       source: "eigen-mode",
+      visualizationPhaseRad: 0.5,
     });
   });
 

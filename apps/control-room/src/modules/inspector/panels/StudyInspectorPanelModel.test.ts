@@ -296,6 +296,63 @@ describe("StudyInspectorPanelModel", () => {
     expect(model.runtime.relaxTorqueStop?.status).toBe("93.8% of threshold");
   });
 
+  it("projects runtime state-transfer metadata for a selected stage transition", () => {
+    const snapshot = studySnapshotFromScene({
+      study: {
+        stages: [
+          { kind: "relax", stage_id: "stage-relax" },
+          { kind: "run", stage_id: "stage-run" },
+        ],
+      },
+    } as never);
+
+    const model = resolveStudyInspectorModel({
+      commandQueue: null,
+      currentRun: null,
+      selectedStageRef: {
+        nodeId: "model:study:stages:stage:stage-run:state-transition",
+        stageId: "stage-run",
+        stageIndex: 1,
+      },
+      snapshot,
+      solverStatus: null,
+      stageExecution: {
+        active_stage_index: 1,
+        active_stage_kind: "run",
+        completed_stage_indexes: [0],
+        revision: 16,
+        runtime_state: "running",
+        stage_statuses: ["completed", "running"],
+        stages: [
+          {
+            index: 0,
+            stage_id: "stage-relax",
+            status: "completed",
+          },
+          {
+            index: 1,
+            stage_id: "stage-run",
+            state_transfer_operator_kind: "identity_copy",
+            state_transition: "Change device",
+            state_transition_kind: "backend_transfer",
+            state_transition_reason: "backend_change",
+            state_transition_ui_presentation: "boundary_bar",
+            status: "running",
+          },
+        ],
+        total_stages: 2,
+      } as never,
+    });
+
+    expect(model.selectedStage?.transition).toEqual({
+      kind: "backend_transfer",
+      label: "Change device",
+      reason: "backend_change",
+      transferOperator: "identity_copy",
+      uiPresentation: "boundary_bar",
+    });
+  });
+
   it("uses solver pseudotime for active relax stages with pseudotime budgets", () => {
     const snapshot = studySnapshotFromScene({
       study: {

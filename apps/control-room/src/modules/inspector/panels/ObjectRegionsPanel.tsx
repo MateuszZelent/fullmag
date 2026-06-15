@@ -121,7 +121,11 @@ function revisionFromScene(scene: unknown): number {
   return Date.now();
 }
 
-export function ObjectRegionsPanel({ selection }: InspectorPanelProps) {
+export function ObjectRegionsPanel(props: InspectorPanelProps) {
+  return useObjectRegionsPanelView(props);
+}
+
+function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
   const { api, resources, selection: selectionController } = useKernel();
   const scene = useSceneResource();
   const regions = useModelRegionsResource();

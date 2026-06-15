@@ -212,7 +212,7 @@ pub fn normalize_quantity_id(requested: &str) -> Result<QuantityId, QuantityIdEr
         "sigma" => Ok(QuantityId::Sigma),
         "H_ani_cubic" | "h_ani_cubic" => Ok(QuantityId::HAniCubic),
         "H_dmi_bulk" | "h_dmi_bulk" => Ok(QuantityId::HDmiBulk),
-        "H_oe" | "h_oe" => Ok(QuantityId::HOe),
+        "H_oe" | "h_oe" | "H_OE" => Ok(QuantityId::HOe),
         "H_therm" | "h_therm" => Ok(QuantityId::HTherm),
         "E_ex" | "e_ex" => Ok(QuantityId::EEx),
         "E_demag" | "e_demag" => Ok(QuantityId::EDemag),

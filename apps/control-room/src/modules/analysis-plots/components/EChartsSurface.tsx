@@ -137,7 +137,7 @@ export function EChartsSurface({
             onRangeChangeRef.current?.(range);
           });
         };
-        const handleClick = (event: unknown) => {
+        const selectChartPoint = (event: unknown) => {
           const point = chartCursorPointFromEChartsClick(
             event,
             modelRef.current,
@@ -146,10 +146,10 @@ export function EChartsSurface({
           onPointSelectRef.current?.(point);
         };
         chart.on("dataZoom", handleDataZoom);
-        chart.on("click", handleClick);
+        chart.on("click", selectChartPoint);
         cleanupChartEvents = () => {
           chart.off("dataZoom", handleDataZoom);
-          chart.off("click", handleClick);
+          chart.off("click", selectChartPoint);
         };
         resizeObserver = new ResizeObserver(() => {
           resizeScheduler.schedule(() => {

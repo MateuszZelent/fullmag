@@ -3,6 +3,8 @@ const workspaceUrl =
 const timeoutMs = Number(
   process.env.CONTROL_ROOM_STUDY_AUTHORING_SMOKE_TIMEOUT_MS ?? 60_000,
 );
+const frequencyOnly =
+  process.env.CONTROL_ROOM_STUDY_AUTHORING_SMOKE_FREQUENCY_ONLY === "1";
 
 async function loadPlaywright() {
   try {
@@ -28,6 +30,8 @@ let sceneRevision = 1;
 const transactions = [];
 const scriptSyncs = [];
 const fixtureRequests = [];
+const fieldVectorRequests = [];
+const responseFieldVectorRequests = [];
 const failedResponses = [];
 const scene = {
   metadata: {
@@ -122,6 +126,26 @@ await page.route("**/v2/**", async (route) => {
   const url = new URL(request.url());
   const pathname = url.pathname;
   fixtureRequests.push(`${request.method()} ${pathname}`);
+
+  if (
+    request.method() === "GET" &&
+    pathname ===
+      "/v2/sessions/current/data/fields/analysis%3Aeigen%3Asample-0000%3Amode-0002/samples/vector"
+  ) {
+    fieldVectorRequests.push(url);
+    await fulfillBinary(route, makeEigenModeFieldVectorBuffer());
+    return;
+  }
+
+  if (
+    request.method() === "GET" &&
+    pathname ===
+      "/v2/sessions/current/data/fields/analysis%3Afrequency-response%3Afrequency-0001/samples/vector"
+  ) {
+    responseFieldVectorRequests.push(url);
+    await fulfillBinary(route, makeFrequencyResponseFieldVectorBuffer());
+    return;
+  }
 
   if (request.method() === "POST" && pathname === "/v2/sessions/current/model/transactions") {
     const transaction = request.postDataJSON();
@@ -255,8 +279,15 @@ try {
 
   assertGlobalTransaction(transactions[0]);
   assertStageTransaction(transactions[2]);
-  await addHysteresisFromRibbon();
-  await createObjectRegionAndAssertScriptSync();
+  if (frequencyOnly) {
+    await addFrequencyResponseAndEditExcitation(3);
+    await verifyFrequencyDomainModalResults();
+    await verifyFrequencyDomainResponseResults();
+  } else {
+    await addHysteresisFromRibbon();
+    await addFrequencyResponseAndEditExcitation(4);
+    await createObjectRegionAndAssertScriptSync();
+  }
 
   if (errors.length > 0) {
     throw new Error(`Browser errors:\n${errors.join("\n")}`);
@@ -271,6 +302,65 @@ try {
 
 function resourceForPath(pathname) {
   if (pathname === "/v2/sessions/current/status") return sessionStatus();
+  if (
+    pathname ===
+    "/v2/sessions/current/analysis/frequency-domain/manifest.v1"
+  ) {
+    return frequencyDomainManifest();
+  }
+  if (
+    pathname ===
+    "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2"
+  ) {
+    return frequencyDomainSpectrum();
+  }
+  if (
+    pathname ===
+    "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2"
+  ) {
+    return frequencyDomainBranches();
+  }
+  if (
+    pathname ===
+    "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion"
+  ) {
+    return frequencyDomainDispersion();
+  }
+  if (
+    pathname ===
+    "/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2"
+  ) {
+    return frequencyDomainDiagnostics();
+  }
+  if (
+    pathname ===
+    "/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/0/2/meta"
+  ) {
+    return frequencyDomainModeFieldMeta();
+  }
+  if (
+    pathname === "/v2/sessions/current/analysis/eigen/modes/0/2"
+  ) {
+    return frequencyDomainMode();
+  }
+  if (
+    pathname ===
+    "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep"
+  ) {
+    return frequencyDomainResponseSweep();
+  }
+  if (
+    pathname ===
+    "/v2/sessions/current/analysis/frequency-domain/response/frequency-points/1"
+  ) {
+    return frequencyDomainResponsePoint();
+  }
+  if (
+    pathname ===
+    "/v2/sessions/current/analysis/frequency-domain/response/field/1/meta"
+  ) {
+    return frequencyDomainResponseFieldMeta();
+  }
   if (pathname === "/v2/sessions/current/model/scene") return scene;
   if (pathname === "/v2/sessions/current/model/regions") {
     return modelRegions();
@@ -350,6 +440,446 @@ function resourceForPath(pathname) {
   return { revision: sceneRevision };
 }
 
+async function verifyFrequencyDomainModalResults() {
+  const resultsTab = page
+    .locator(".fm-explorer .fm-tabs-trigger")
+    .filter({ hasText: /^Results$/ });
+  await resultsTab.click();
+  await expandExplorerNode("results:root");
+  await expandExplorerNode("results:frequency-domain");
+  await expandExplorerNode("results:frequency-domain:fmr");
+
+  const modalSpectrumNode = page.locator(
+    '[data-node-id="results:frequency-domain:fmr:modal-spectrum"]',
+  );
+  await modalSpectrumNode.waitFor({ state: "visible", timeout: timeoutMs });
+  await clickExplorerRow(modalSpectrumNode);
+
+  const inspector = page.locator(".fm-inspector");
+  await inspector
+    .locator('[data-inspector-surface="fmr-modal-spectrum"]')
+    .waitFor({ state: "visible", timeout: timeoutMs });
+  await inspector.getByRole("heading", {
+    exact: true,
+    name: "Modal Spectrum",
+  }).waitFor({
+    state: "visible",
+    timeout: timeoutMs,
+  });
+  await inspector
+    .locator(".fm-frequency-domain-chart canvas")
+    .waitFor({ state: "visible", timeout: timeoutMs });
+
+  const modeButton = inspector.getByRole("button", {
+    name: "Select mode 2 at 12.5 GHz",
+  });
+  await modeButton.waitFor({ state: "visible", timeout: timeoutMs });
+  await modeButton.click();
+
+  await inspector
+    .locator('[data-inspector-surface="eigen-mode"]')
+    .waitFor({ state: "visible", timeout: timeoutMs });
+  await inspector.getByText("Selected Eigen Mode").waitFor({
+    state: "visible",
+    timeout: timeoutMs,
+  });
+  await inspector
+    .getByText("analysis:eigen:sample-0000:mode-0002", { exact: true })
+    .first()
+    .waitFor({
+      state: "visible",
+      timeout: timeoutMs,
+    });
+  const plotButton = inspector.getByRole("button", {
+    exact: true,
+    name: "Plot mode rotated",
+  });
+  await plotButton.waitFor({
+    state: "visible",
+    timeout: timeoutMs,
+  });
+  if (!(await plotButton.isEnabled())) {
+    throw new Error("Selected eigen mode 3D visualization button is disabled.");
+  }
+  const plotButtonClass = await plotButton.getAttribute("class");
+  if (!plotButtonClass?.split(/\s+/).includes("fm-button")) {
+    throw new Error(
+      `Selected eigen mode visualization is not a shared shadcn Button: ${plotButtonClass}`,
+    );
+  }
+  await plotButton.click();
+  await waitForEigenModeFieldVectorRequest();
+  await assertStableViewport3DCanvas();
+}
+
+async function verifyFrequencyDomainResponseResults() {
+  await expandExplorerNode("results:frequency-domain:fmr");
+  const responseSweepNode = page.locator(
+    '[data-node-id="results:frequency-domain:fmr:response-sweep"]',
+  );
+  await responseSweepNode.waitFor({ state: "visible", timeout: timeoutMs });
+  await clickExplorerRow(responseSweepNode);
+
+  const inspector = page.locator(".fm-inspector");
+  await inspector
+    .locator('[data-inspector-surface="fmr-response-sweep"]')
+    .waitFor({ state: "visible", timeout: timeoutMs });
+  await inspector.locator("h2", {
+    hasText: "FMR Response Sweep",
+  }).waitFor({ state: "visible", timeout: timeoutMs });
+  await inspector
+    .locator(".fm-frequency-domain-chart canvas")
+    .waitFor({ state: "visible", timeout: timeoutMs });
+
+  const plotButton = inspector
+    .locator('tr[data-status="ready"]')
+    .filter({ hasText: "12.55 GHz" })
+    .getByRole("button", { exact: true, name: "Plot rotated" });
+  await plotButton.waitFor({ state: "visible", timeout: timeoutMs });
+  if (!(await plotButton.isEnabled())) {
+    throw new Error("FMR response field 3D visualization button is disabled.");
+  }
+  const plotButtonClass = await plotButton.getAttribute("class");
+  if (!plotButtonClass?.split(/\s+/).includes("fm-button")) {
+    throw new Error(
+      `FMR response field visualization is not a shared shadcn Button: ${plotButtonClass}`,
+    );
+  }
+  await plotButton.click();
+  await waitForFrequencyResponseFieldVectorRequest();
+  await assertStableViewport3DCanvas();
+}
+
+async function expandExplorerNode(nodeId) {
+  const node = page.locator(`[data-node-id="${nodeId}"]`);
+  await node.waitFor({ state: "visible", timeout: timeoutMs });
+  if ((await node.getAttribute("aria-expanded")) === "false") {
+    await node.dblclick();
+  }
+}
+
+function frequencyDomainManifest() {
+  return {
+    capabilities: {
+      boundaries: {
+        floquet: frequencyDomainCapability("reference_executable"),
+        free: frequencyDomainCapability("production_executable"),
+        static_periodic: frequencyDomainCapability(
+          "partial_production_executable",
+        ),
+      },
+      demag: {
+        floquet_dynamic_k: frequencyDomainCapability("unsupported"),
+        static_periodic_pbc: frequencyDomainCapability("semantic_only"),
+      },
+      dispersion: {
+        branch_tracking: frequencyDomainCapability("reference_executable"),
+        k_path: frequencyDomainCapability("reference_executable"),
+      },
+      modal: {
+        absorption_from_modes: frequencyDomainCapability("unsupported"),
+        k_path: frequencyDomainCapability("reference_executable"),
+        linewidths: frequencyDomainCapability("reference_executable"),
+        mode_field_payload: frequencyDomainCapability("reference_executable"),
+        mode_tracking: frequencyDomainCapability("reference_executable"),
+        production_cpu: frequencyDomainCapability("unsupported"),
+        production_gpu: frequencyDomainCapability("unsupported"),
+        reference_cpu: frequencyDomainCapability("reference_executable"),
+      },
+      response: {
+        frequency_sweep: frequencyDomainCapability("reference_executable"),
+        magnetic_cpu: frequencyDomainCapability(
+          "partial_production_executable",
+        ),
+        magnetic_gpu: frequencyDomainCapability("unsupported"),
+        magnetoelastic_elastodynamic:
+          frequencyDomainCapability("unsupported"),
+        magnetoelastic_quasistatic: frequencyDomainCapability("unsupported"),
+        mode_projected: frequencyDomainCapability("unsupported"),
+      },
+      schema_version: "frequency_domain_capabilities.v1",
+      validation: {
+        fmr_k0: frequencyDomainCapability("source_visible"),
+      },
+      visualization: {
+        modal_dispersion_chart:
+          frequencyDomainCapability("reference_executable"),
+        modal_spectrum_chart:
+          frequencyDomainCapability("reference_executable"),
+        mode_3d_overlay: frequencyDomainCapability("reference_executable"),
+        mode_table: frequencyDomainCapability("reference_executable"),
+        response_field_3d_overlay:
+          frequencyDomainCapability("reference_executable"),
+        response_sweep_chart:
+          frequencyDomainCapability("reference_executable"),
+      },
+    },
+    eigen_namespace: "eigen",
+    eigenmodes: {
+      diagnostics_json: "{}",
+      driven_response_available: false,
+      dynamic_demag_k_available: false,
+      floquet_modal_available: true,
+      floquet_response_available: false,
+      gpu_available: false,
+      modal_solver_available: true,
+      static_periodic_response_available: false,
+      reason: "",
+      status: "ok",
+      study_kind: "eigenmodes",
+    },
+    existing_frequency_response_namespace_preserved: true,
+    family_namespace: "frequencyDomain",
+    floquet_nonzero_k_demag_supported: false,
+    floquet_nonzero_k_response_supported: false,
+    response: {
+      diagnostics_json: "{}",
+      driven_response_available: true,
+      dynamic_demag_k_available: false,
+      floquet_modal_available: false,
+      floquet_response_available: false,
+      gpu_available: false,
+      modal_solver_available: false,
+      static_periodic_response_available: true,
+      reason: "",
+      status: "ok",
+      study_kind: "frequency_response",
+    },
+    response_cancel_requested: null,
+    response_progress: {
+      completed_frequency_points: 2,
+      current_frequency_hz: null,
+      latest_artifact_manifest_path: "frequency_domain/manifest.v1.json",
+      partial_artifacts_available: true,
+      progress_json:
+        '{"schema_version":"frequency_domain_sweep_progress.v1","state":"completed"}',
+      schema_version: "frequency_domain_sweep_progress.v1",
+      state: "completed",
+      total_frequency_points: 2,
+      written_frequency_point_artifacts: 2,
+    },
+    resources: {
+      response_field_resources: [
+        {
+          field_resource_id: "analysis:frequency-response:frequency-0001",
+          frequency_index: 1,
+          payload_path:
+            "response/field_payloads.zarr/frequency_0001/vector_xyz_complex/0.0.0",
+        },
+      ],
+    },
+    requested_execution: {
+      calculation_mode: "fmr_response",
+    },
+    artifacts: {
+      branches_v2_path: "eigen/branches.v2.json",
+      dispersion_csv_path: "eigen/dispersion.csv",
+      eigen_diagnostics_v2_path: "eigen/diagnostics.v2.json",
+      response_sweep_v1_path: "response/magnetic_response_sweep.v1.json",
+      response_sweep_v2_path: "response/magnetic_response_sweep.v2.json",
+      spectrum_v2_path: "eigen/spectrum.v2.json",
+    },
+    schema_version: "frequency_domain_manifest.v1",
+  };
+}
+
+function frequencyDomainCapability(status) {
+  return { reason: "", status };
+}
+
+function frequencyDomainSpectrum() {
+  return {
+    artifact_path: "eigen/spectrum.v2.json",
+    missing_reason: null,
+    payload: {
+      modes: [
+        {
+          branch_id: "branch-0",
+          damping_rate_hz: 12e6,
+          frequency_hz: 12.5e9,
+          mode_field_id: "analysis:eigen:sample-0000:mode-0002",
+          mode_field_resource_key:
+            "/v2/sessions/current/data/fields/analysis%3Aeigen%3Asample-0000%3Amode-0002/samples/vector?view=phase_rotated_real&phase_rad=0",
+          raw_mode_index: 2,
+          residual_norm: 1e-8,
+          sample_index: 0,
+          tangent_leakage_max: 2e-9,
+        },
+        {
+          frequency_hz: 14.25e9,
+          raw_mode_index: 3,
+          residual_norm: 2e-8,
+          sample_index: 0,
+        },
+      ],
+      schema_version: "eigen_spectrum.v2",
+    },
+    resource_key:
+      "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2",
+    schema_version: "frequency_domain_eigen_spectrum.v2",
+    status: "ready",
+  };
+}
+
+function frequencyDomainBranches() {
+  return {
+    artifact_path: "eigen/branches.v2.json",
+    missing_reason: null,
+    payload: {
+      branches: [],
+      schema_version: "eigen_branches.v2",
+      solver_model: "linearized_llg_reference",
+    },
+    resource_key:
+      "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2",
+    schema_version: "frequency_domain_eigen_branches.v2",
+    status: "ready",
+  };
+}
+
+function frequencyDomainDispersion() {
+  return {
+    artifact_path: "eigen/dispersion.csv",
+    content_type: "text/csv",
+    missing_reason: null,
+    resource_key:
+      "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion",
+    schema_version: "frequency_domain_eigen_dispersion.csv",
+    status: "ready",
+    text: "sample_index,raw_mode_index,branch_id,path_s_rad_per_m,frequency_hz\n0,2,branch-0,0,12.5e9",
+  };
+}
+
+function frequencyDomainDiagnostics() {
+  return {
+    artifact_path: "eigen/diagnostics.v2.json",
+    missing_reason: null,
+    payload: { schema_version: "eigen_diagnostics.v2" },
+    resource_key:
+      "/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2",
+    schema_version: "frequency_domain_eigen_diagnostics.v2",
+    status: "ready",
+  };
+}
+
+function frequencyDomainModeFieldMeta() {
+  return {
+    artifact_path:
+      "eigen/mode_fields.zarr/sample_0000/mode_0002/vector_xyz_complex",
+    available_views: ["phase_rotated_real", "real", "imag", "abs", "phase"],
+    binary_layout: "zarr_v2_aos_xyz_complex_pairs",
+    complex_pair_count: 3,
+    component_basis: "global_xyz",
+    component_count: 3,
+    components: ["x", "y", "z"],
+    default_phase_rad: 0,
+    default_view: "phase_rotated_real",
+    field_id: "analysis:eigen:sample-0000:mode-0002",
+    missing_reason: null,
+    payload_encoding: "f64_interleaved_real_imag_xyz",
+    payload_value_count: 18,
+    quantity: "delta_m",
+    resource_key:
+      "/v2/sessions/current/data/fields/analysis%3Aeigen%3Asample-0000%3Amode-0002/samples/vector?view=phase_rotated_real&phase_rad=0",
+    schema_version: "frequency_domain_eigen_field.v1",
+    source_family: "analysis/eigen",
+    status: "ready",
+    value_kind: "complex_spatial_vector",
+  };
+}
+
+function frequencyDomainMode() {
+  return {
+    angular_frequency_rad_per_s: 78.5398163397e9,
+    branch_id: "branch-0",
+    frequency_hz: 12.5e9,
+    phasor_convention: "exp(-i omega t)",
+    raw_mode_index: 2,
+    residual_norm: 1e-8,
+    sample_index: 0,
+    tangent_leakage_max: 2e-9,
+  };
+}
+
+function frequencyDomainResponseSweep() {
+  return {
+    artifact_path: "response/magnetic_response_sweep.v2.json",
+    missing_reason: null,
+    payload: {
+      points: [
+        {
+          absorbed_power_density: 1.2e3,
+          amplitude: 0.2,
+          field_id: "analysis:frequency-response:frequency-0000",
+          frequency_hz: 11.5e9,
+          frequency_index: 0,
+          observable_id: "mx",
+          phase_rad: -0.4,
+          residual_norm: 2e-7,
+        },
+        {
+          absorbed_power_density: 8.4e3,
+          amplitude: 1.8,
+          field_id: "analysis:frequency-response:frequency-0001",
+          frequency_hz: 12.55e9,
+          frequency_index: 1,
+          observable_id: "mx",
+          phase_rad: 0.08,
+          residual_norm: 9e-8,
+          susceptibility: [1.7, 0.2, 0.05],
+        },
+      ],
+      schema_version: "magnetic_response_sweep.v2",
+    },
+    resource_key:
+      "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep",
+    schema_version: "frequency_domain_response_sweep.v2",
+    status: "ready",
+  };
+}
+
+function frequencyDomainResponsePoint() {
+  return {
+    artifact_path: "response/frequency_points/frequency_0001.json",
+    missing_reason: null,
+    payload: {
+      field_payload_path:
+        "response/field_payloads.zarr/frequency_0001/vector_xyz_complex/0.0.0",
+      frequency_hz: 12.55e9,
+      frequency_index: 1,
+      schema_version: "frequency_domain_response_point.v1",
+    },
+    resource_key:
+      "/v2/sessions/current/analysis/frequency-domain/response/frequency-points/1",
+    schema_version: "frequency_domain_response_point.v1",
+    status: "ready",
+  };
+}
+
+function frequencyDomainResponseFieldMeta() {
+  return {
+    artifact_path:
+      "response/field_payloads.zarr/frequency_0001/vector_xyz_complex",
+    available_views: ["phase_rotated_real", "real", "imag", "abs", "phase"],
+    binary_layout: "zarr_v2_aos_xyz_complex_pairs",
+    component_basis: "global_xyz",
+    component_count: 3,
+    components: ["x", "y", "z"],
+    default_phase_rad: 0,
+    default_view: "phase_rotated_real",
+    field_id: "analysis:frequency-response:frequency-0001",
+    missing_reason: null,
+    payload_encoding: "f64_interleaved_real_imag_xyz",
+    quantity: "delta_m_response",
+    resource_key:
+      "/v2/sessions/current/data/fields/analysis%3Afrequency-response%3Afrequency-0001/samples/vector?view=phase_rotated_real&phase_rad=0",
+    schema_version: "frequency_domain_response_field.v1",
+    source_family: "analysis/frequency-response",
+    status: "ready",
+    value_kind: "complex_spatial_vector",
+  };
+}
+
 async function createObjectRegionAndAssertScriptSync() {
   const regionsNode = page.locator('[data-node-id="model:object:film:regions"]');
   if (!(await regionsNode.isVisible().catch(() => false))) {
@@ -414,6 +944,82 @@ async function addHysteresisFromRibbon() {
     .locator('[data-node-id="model:study:stages:stage:hysteresis-3"]')
     .waitFor({ state: "visible", timeout: timeoutMs });
   await assertHysteresisChildInspectors("hysteresis-3");
+}
+
+async function addFrequencyResponseAndEditExcitation(stageNumber) {
+  const transactionBeforeAdd = transactions.length;
+  const studyTab = page.locator(".fm-ribbon__tab").filter({ hasText: /^Study$/i });
+  await studyTab.click();
+  const frequencyButton = page.locator(
+    '.fm-ribbon [data-action-id="study.add-frequency-response-stage"]',
+  );
+  await frequencyButton.waitFor({ state: "visible", timeout: timeoutMs });
+  await frequencyButton.click();
+  await waitForTransactionCount(transactionBeforeAdd + 1);
+
+  const stages =
+    transactions[transactionBeforeAdd]?.merge_patch?.study?.stages;
+  const response = Array.isArray(stages) ? stages[stageNumber - 1] : null;
+  const stageId = `frequency-response-${stageNumber}`;
+  if (
+    response?.kind !== "frequency_response" ||
+    response?.stage_id !== stageId
+  ) {
+    throw new Error(
+      `Ribbon Frequency Response serialized an invalid stage: ${JSON.stringify(response)}`,
+    );
+  }
+
+  const stageNode = page.locator(
+    `[data-node-id="model:study:stages:stage:${stageId}"]`,
+  );
+  await stageNode.waitFor({ state: "visible", timeout: timeoutMs });
+  if ((await stageNode.getAttribute("aria-expanded")) === "false") {
+    await stageNode.dblclick();
+  }
+
+  const excitationNode = page.locator(
+    `[data-node-id="model:study:stages:stage:${stageId}:excitation"]`,
+  );
+  await excitationNode.waitFor({ state: "visible", timeout: timeoutMs });
+  await clickExplorerRow(excitationNode);
+
+  const inspector = page.locator(".fm-inspector");
+  await inspector.getByLabel("Excitation", { exact: true }).waitFor({
+    state: "visible",
+    timeout: timeoutMs,
+  });
+  await inspector.getByLabel("Excitation phase", { exact: true }).waitFor({
+    state: "visible",
+    timeout: timeoutMs,
+  });
+  if (await inspector.getByLabel("Frequencies").isVisible().catch(() => false)) {
+    throw new Error("Excitation inspector leaked frequency-sweep controls.");
+  }
+  if (await inspector.getByLabel("k sampling").isVisible().catch(() => false)) {
+    throw new Error("Excitation inspector leaked k-sampling controls.");
+  }
+
+  await inspector.getByLabel("Excitation", { exact: true }).fill("1, 2, 3");
+  await inspector
+    .getByLabel("Excitation phase", { exact: true })
+    .fill("0.25");
+  await inspector.getByRole("button", { name: /Save stage/i }).click();
+  await waitForTransactionCount(transactionBeforeAdd + 2);
+
+  const savedStages =
+    transactions[transactionBeforeAdd + 1]?.merge_patch?.study?.stages;
+  const savedResponse = Array.isArray(savedStages)
+    ? savedStages[stageNumber - 1]
+    : null;
+  if (
+    JSON.stringify(savedResponse?.excitation_field_au_per_m) !== "[1,2,3]" ||
+    savedResponse?.excitation_phase_rad !== 0.25
+  ) {
+    throw new Error(
+      `Frequency Response excitation did not round-trip: ${JSON.stringify(savedResponse)}`,
+    );
+  }
 }
 
 async function assertHysteresisChildInspectors(stageId) {
@@ -554,12 +1160,176 @@ async function fulfillJson(route, body, status = 200) {
   });
 }
 
+async function fulfillBinary(route, body, status = 200) {
+  await route.fulfill({
+    body: Buffer.from(body),
+    contentType: "application/octet-stream",
+    headers: {
+      etag: `"study-authoring-eigen-mode-${sceneRevision}"`,
+      "x-api-contract-version": "1.0.0",
+    },
+    status,
+  });
+}
+
+function makeEigenModeFieldVectorBuffer() {
+  const grid = [8, 4, 1];
+  const pointCount = grid[0] * grid[1] * grid[2];
+  const valueCount = pointCount * 3;
+  const buffer = new ArrayBuffer(
+    48 + valueCount * Float64Array.BYTES_PER_ELEMENT,
+  );
+  const view = new DataView(buffer);
+  for (const [index, code] of [..."FMVP"].entries()) {
+    view.setUint8(index, code.charCodeAt(0));
+  }
+  view.setUint8(4, 2);
+  view.setUint8(5, 1);
+  view.setUint8(6, 3);
+  view.setUint32(12, valueCount, true);
+  view.setUint32(16, grid[0], true);
+  view.setUint32(20, grid[1], true);
+  view.setUint32(24, grid[2], true);
+  new TextEncoder().encodeInto(
+    "analysis:eigen:sample-0000:mode-0002",
+    new Uint8Array(buffer, 28, 16),
+  );
+
+  const values = new Float64Array(buffer, 48);
+  let offset = 0;
+  for (let y = 0; y < grid[1]; y += 1) {
+    for (let x = 0; x < grid[0]; x += 1) {
+      const phase = (x / grid[0]) * Math.PI * 2;
+      const envelope = Math.sin(((y + 1) / (grid[1] + 1)) * Math.PI);
+      values[offset++] = Math.cos(phase) * envelope;
+      values[offset++] = Math.sin(phase) * envelope;
+      values[offset++] = 0.2 * Math.cos(phase * 2) * envelope;
+    }
+  }
+  return buffer;
+}
+
+function makeFrequencyResponseFieldVectorBuffer() {
+  const grid = [8, 4, 1];
+  const pointCount = grid[0] * grid[1] * grid[2];
+  const valueCount = pointCount * 3;
+  const buffer = new ArrayBuffer(
+    48 + valueCount * Float64Array.BYTES_PER_ELEMENT,
+  );
+  const view = new DataView(buffer);
+  for (const [index, code] of [..."FMVP"].entries()) {
+    view.setUint8(index, code.charCodeAt(0));
+  }
+  view.setUint8(4, 2);
+  view.setUint8(5, 1);
+  view.setUint8(6, 3);
+  view.setUint32(12, valueCount, true);
+  view.setUint32(16, grid[0], true);
+  view.setUint32(20, grid[1], true);
+  view.setUint32(24, grid[2], true);
+  new TextEncoder().encodeInto(
+    "analysis:frequency-response:frequency-0001",
+    new Uint8Array(buffer, 28, 16),
+  );
+
+  const values = new Float64Array(buffer, 48);
+  let offset = 0;
+  for (let y = 0; y < grid[1]; y += 1) {
+    for (let x = 0; x < grid[0]; x += 1) {
+      const normalizedX = x / Math.max(grid[0] - 1, 1);
+      const normalizedY = y / Math.max(grid[1] - 1, 1);
+      values[offset++] = 0.25 + normalizedX;
+      values[offset++] = Math.sin(normalizedX * Math.PI) * 0.7;
+      values[offset++] = Math.cos(normalizedY * Math.PI) * 0.3;
+    }
+  }
+  return buffer;
+}
+
+async function waitForEigenModeFieldVectorRequest() {
+  const deadline = Date.now() + timeoutMs;
+  while (fieldVectorRequests.length === 0 && Date.now() < deadline) {
+    await page.waitForTimeout(50);
+  }
+  const request = fieldVectorRequests.at(-1);
+  if (!request) {
+    throw new Error("Plot mode rotated did not request the eigen-mode field.");
+  }
+  const expectedQuery = "view=phase_rotated_real";
+  if (
+    request.searchParams.get("component") !== "full" ||
+    request.searchParams.get("scope_kind") !== "full" ||
+    request.searchParams.get("view") !== "phase_rotated_real" ||
+    request.searchParams.get("phase_rad") !== "0"
+  ) {
+    throw new Error(
+      `Eigen-mode field request is missing ${expectedQuery}: ${request.href}`,
+    );
+  }
+}
+
+async function waitForFrequencyResponseFieldVectorRequest() {
+  const deadline = Date.now() + timeoutMs;
+  while (responseFieldVectorRequests.length === 0 && Date.now() < deadline) {
+    await page.waitForTimeout(50);
+  }
+  const request = responseFieldVectorRequests.at(-1);
+  if (!request) {
+    throw new Error(
+      "Plot rotated did not request the driven FMR response field.",
+    );
+  }
+  const expectedQuery = "view=phase_rotated_real";
+  if (
+    request.searchParams.get("component") !== "full" ||
+    request.searchParams.get("scope_kind") !== "full" ||
+    request.searchParams.get("view") !== "phase_rotated_real" ||
+    request.searchParams.get("phase_rad") !== "0.08"
+  ) {
+    throw new Error(
+      `Driven FMR response field request is missing ${expectedQuery}: ${request.href}`,
+    );
+  }
+}
+
+async function assertStableViewport3DCanvas() {
+  const canvas = page.locator(".fm-viewport-3d canvas");
+  await canvas.waitFor({ state: "visible", timeout: timeoutMs });
+  const state = await canvas.evaluate((node) => {
+    if (!(node instanceof HTMLCanvasElement)) {
+      return {
+        drawingBufferHeight: 0,
+        drawingBufferWidth: 0,
+        hasContext: false,
+        isContextLost: true,
+      };
+    }
+    const context = node.getContext("webgl2") ?? node.getContext("webgl");
+    return {
+      drawingBufferHeight: context?.drawingBufferHeight ?? 0,
+      drawingBufferWidth: context?.drawingBufferWidth ?? 0,
+      hasContext: Boolean(context),
+      isContextLost: context?.isContextLost() ?? true,
+    };
+  });
+  if (
+    !state.hasContext ||
+    state.isContextLost ||
+    state.drawingBufferWidth <= 0 ||
+    state.drawingBufferHeight <= 0
+  ) {
+    throw new Error(
+      `Eigen-mode overlay left an invalid viewport canvas: ${JSON.stringify(state)}`,
+    );
+  }
+}
+
 function sessionStatus() {
   return {
     api_contract_version: "1.0.0",
     capabilities: {
       algorithms_available: [],
-      binary_fields: false,
+      binary_fields: true,
       cell_fields: true,
       eigen_modes: true,
       explicit_topology: false,

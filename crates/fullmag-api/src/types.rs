@@ -943,7 +943,7 @@ pub(crate) struct CurrentLiveFieldFrameRequest {
     pub clear_preview_cache: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) struct StageExecutionRecord {
     #[serde(default)]
     pub stage_id: Option<String>,
@@ -982,6 +982,14 @@ pub(crate) struct StageExecutionRecord {
     pub metric_value: Option<f64>,
     #[serde(default)]
     pub threshold: Option<f64>,
+    #[serde(default)]
+    pub progress_percent: Option<f64>,
+    #[serde(default)]
+    pub progress_label: Option<String>,
+    #[serde(default)]
+    pub progress_detail: Option<String>,
+    #[serde(default)]
+    pub last_progress_unix_ms: Option<u64>,
     #[serde(default)]
     pub current_field_m_t: Option<f64>,
     #[serde(default)]
@@ -1067,7 +1075,7 @@ impl StageLifecycleState {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) struct StageExecutionState {
     pub total_stages: usize,
     #[serde(default)]

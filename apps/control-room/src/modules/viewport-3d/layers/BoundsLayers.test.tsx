@@ -273,11 +273,13 @@ describe("AirboxLayer", () => {
       range: { max: 1, min: -1 },
     };
     const fieldModel = {
+      complexFieldVector: null,
       fullVectorSegments: null,
       partVectorSegments: new Map(),
       scalarColors: null,
       scalarColorsByPartAndMode: new Map(),
       scalarColorsByMode: new Map([["x", colorsByComponent]]),
+      visualizationPhaseRad: null,
     } satisfies Viewport3DFieldRenderModel;
 
     expect(

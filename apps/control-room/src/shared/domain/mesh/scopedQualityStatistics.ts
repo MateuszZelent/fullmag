@@ -218,14 +218,20 @@ function buildWorstElements({
   volumes: readonly number[];
 }): MeshWorstElement[] {
   const ranked = elements
-    .map((element, index) => ({
-      element,
-      gamma: gamma?.[element] ?? null,
-      index,
-      score: metric === "sicn" ? sicn?.[element] : gamma?.[element],
-      sicn: sicn?.[element] ?? null,
-    }))
-    .filter((entry) => finite(entry.score))
+    .flatMap((element, index) => {
+      const score = metric === "sicn" ? sicn?.[element] : gamma?.[element];
+      return finite(score)
+        ? [
+            {
+              element,
+              gamma: gamma?.[element] ?? null,
+              index,
+              score,
+              sicn: sicn?.[element] ?? null,
+            },
+          ]
+        : [];
+    })
     .sort((left, right) => (left.score ?? 0) - (right.score ?? 0))
     .slice(0, 10);
   return ranked.map((entry) => ({
@@ -372,7 +378,7 @@ function ratio(values: readonly number[]): number | null {
 
 function percentile(values: readonly number[], fraction: number): number | null {
   if (values.length === 0) return null;
-  const sorted = [...values].sort((left, right) => left - right);
+  const sorted = values.toSorted((left, right) => left - right);
   const index = Math.max(
     0,
     Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * fraction)),

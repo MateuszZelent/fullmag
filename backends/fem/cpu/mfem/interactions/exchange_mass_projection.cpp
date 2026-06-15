@@ -10,6 +10,7 @@
 #include "context.hpp"
 #include "cpu/mfem/runtime/interrupt.hpp"
 #include "cpu/mfem/runtime/mfem_host_access.hpp"
+#include "cpu/mfem/runtime/mfem_device.hpp"
 #include "fem_common.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
@@ -63,12 +64,13 @@ bool apply_periodic_consistent_mass_component(
         rhs_reduced[static_cast<size_t>(reduced)] += rhs_host[i];
     }
 
+    const bool use_device = mfem::Device::IsEnabled();
     auto multiply_reduced_mass =
         [&](const std::vector<double> &x_reduced, std::vector<double> &out_reduced) {
             mfem::Vector full_x(ndofs);
             mfem::Vector full_y(ndofs);
-            full_x.UseDevice(true);
-            full_y.UseDevice(true);
+            full_x.UseDevice(use_device);
+            full_y.UseDevice(use_device);
             double *x_host = audited_host_write(full_x);
             for (int i = 0; i < ndofs; ++i) {
                 const uint32_t reduced = ctx.mesh.periodic_reduced_node[static_cast<size_t>(i)];
@@ -143,15 +145,16 @@ void prepare_exchange_mass_lumping(
     mfem::Vector &ones,
     mfem::Vector &lumped,
     mfem::Vector &inv_lumped,
-    std::vector<double> &host_lumped)
+    std::vector<double> &host_lumped,
+    bool use_device)
 {
     const int ndofs = mass_form.FESpace()->GetNDofs();
     ones.SetSize(ndofs);
     lumped.SetSize(ndofs);
     inv_lumped.SetSize(ndofs);
-    ones.UseDevice(true);
-    lumped.UseDevice(true);
-    inv_lumped.UseDevice(true);
+    ones.UseDevice(use_device);
+    lumped.UseDevice(use_device);
+    inv_lumped.UseDevice(use_device);
     ones = 1.0;
     mass_form.Mult(ones, lumped);
     const double *lumped_host = audited_host_read(lumped);

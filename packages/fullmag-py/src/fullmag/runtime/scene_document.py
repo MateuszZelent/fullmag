@@ -508,6 +508,8 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
                 "eigen_equilibrium_source": stage.get("eigen_equilibrium_source") or None,
                 "eigen_normalization": stage.get("eigen_normalization") or None,
                 "eigen_target_frequency": _number_or_none(stage.get("eigen_target_frequency")),
+                "eigen_frequency_min": _number_or_none(stage.get("eigen_frequency_min")),
+                "eigen_frequency_max": _number_or_none(stage.get("eigen_frequency_max")),
                 "eigen_damping_policy": stage.get("eigen_damping_policy") or None,
                 "eigen_k_vector": stage.get("eigen_k_vector") or None,
                 "eigen_spin_wave_bc": stage.get("eigen_spin_wave_bc") or None,

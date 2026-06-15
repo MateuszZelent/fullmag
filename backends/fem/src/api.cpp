@@ -3,7 +3,8 @@
  *
  * This source owns the exported fullmag_fem_* ABI entrypoints, handle/global
  * error propagation, high-level backend lifetime calls, step/observe/state C
- * wrappers, and ABI-level unavailable-path errors. It does not own Context construction internals, MFEM runtime lifecycle, interaction physics, integrator stages, or transfer-audit policy.
+ * wrappers, ABI snapshot handle scheduling/destruction, and ABI-level
+ * unavailable-path errors. It does not own Context construction internals, MFEM runtime lifecycle, interaction physics, integrator stages, or transfer-audit policy.
  */
 
 #include "fullmag_fem.h"
@@ -22,6 +23,7 @@
 #include "cpu/mfem/runtime/state_io.hpp"
 #include "frequency_domain/driven_response_solver.hpp"
 #include "frequency_domain/frequency_domain_contract.hpp"
+#include "frequency_domain/modal_eigen_solver.hpp"
 #include "frequency_domain/operator_terms.hpp"
 #include "frequency_domain/tangent_frame.hpp"
 #include "gpu/cuda/integrators/rk/rk.hpp"
@@ -29,6 +31,11 @@
 #include "gpu/cuda/state/gpu_state.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
 
+#if FULLMAG_HAS_CUDA_RUNTIME
+#include <cuda_runtime.h>
+#endif
+
+#include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
@@ -45,6 +52,339 @@ namespace {
 
 constexpr const char *kUnavailableMessage =
     "fullmag_fem native backend was built without the MFEM stack; rebuild with FULLMAG_USE_MFEM_STACK=ON and an installed MFEM toolchain";
+
+struct FemSnapshotPayload {
+    std::vector<double> data;
+    void *host_aos = nullptr;
+    size_t host_aos_len_bytes = 0;
+    fullmag::fem::FemGpuComponentField staging{};
+    void *stream = nullptr;
+    void *ready_event = nullptr;
+    void *staging_done_event = nullptr;
+    void *done_event = nullptr;
+    bool needs_wait = false;
+    fullmag_fem_snapshot_desc desc{};
+};
+
+void destroy_snapshot_payload(FemSnapshotPayload &snapshot)
+{
+#if FULLMAG_HAS_CUDA_RUNTIME
+    if (snapshot.done_event != nullptr) {
+        cudaEventDestroy(reinterpret_cast<cudaEvent_t>(snapshot.done_event));
+        snapshot.done_event = nullptr;
+    }
+    if (snapshot.staging_done_event != nullptr) {
+        cudaEventDestroy(reinterpret_cast<cudaEvent_t>(snapshot.staging_done_event));
+        snapshot.staging_done_event = nullptr;
+    }
+    if (snapshot.ready_event != nullptr) {
+        cudaEventDestroy(reinterpret_cast<cudaEvent_t>(snapshot.ready_event));
+        snapshot.ready_event = nullptr;
+    }
+    if (snapshot.stream != nullptr) {
+        cudaStreamDestroy(reinterpret_cast<cudaStream_t>(snapshot.stream));
+        snapshot.stream = nullptr;
+    }
+    if (snapshot.host_aos != nullptr) {
+        cudaFreeHost(snapshot.host_aos);
+        snapshot.host_aos = nullptr;
+    }
+    if (snapshot.staging.x != nullptr) {
+        cudaFree(snapshot.staging.x);
+        snapshot.staging.x = nullptr;
+    }
+    if (snapshot.staging.y != nullptr) {
+        cudaFree(snapshot.staging.y);
+        snapshot.staging.y = nullptr;
+    }
+    if (snapshot.staging.z != nullptr) {
+        cudaFree(snapshot.staging.z);
+        snapshot.staging.z = nullptr;
+    }
+#else
+    (void)snapshot;
+#endif
+}
+
+const fullmag::fem::FemGpuComponentField *gpu_snapshot_source_field(
+    fullmag::fem::Context &context,
+    fullmag_fem_observable observable)
+{
+    if (!context.gpu_state.device.lifecycle.allocated) {
+        return nullptr;
+    }
+    switch (observable) {
+    case FULLMAG_FEM_OBSERVABLE_M:
+        return &context.gpu_state.device.magnetization.m;
+    case FULLMAG_FEM_OBSERVABLE_H_EX:
+        return &context.gpu_state.device.fields.h_ex;
+    case FULLMAG_FEM_OBSERVABLE_H_DEMAG:
+        return &context.gpu_state.device.fields.h_demag;
+    case FULLMAG_FEM_OBSERVABLE_H_EXT:
+        return &context.gpu_state.device.fields.h_ext;
+    case FULLMAG_FEM_OBSERVABLE_H_ANI:
+        return &context.gpu_state.device.fields.h_ani;
+    case FULLMAG_FEM_OBSERVABLE_H_ANI_CUBIC:
+        return &context.gpu_state.device.fields.h_cubic_ani;
+    case FULLMAG_FEM_OBSERVABLE_H_DMI:
+        return &context.gpu_state.device.fields.h_dmi;
+    case FULLMAG_FEM_OBSERVABLE_H_DMI_BULK:
+        return &context.gpu_state.device.fields.h_bulk_dmi;
+    case FULLMAG_FEM_OBSERVABLE_H_OE:
+        return &context.gpu_state.device.fields.h_oe;
+    case FULLMAG_FEM_OBSERVABLE_H_THERM:
+        return &context.gpu_state.device.fields.h_therm;
+    case FULLMAG_FEM_OBSERVABLE_H_MEL:
+        return &context.gpu_state.device.fields.h_mel;
+    case FULLMAG_FEM_OBSERVABLE_H_EFF:
+        return &context.gpu_state.device.fields.h_eff;
+    default:
+        return nullptr;
+    }
+}
+
+#if FULLMAG_HAS_CUDA_RUNTIME
+bool schedule_gpu_snapshot_payload(
+    fullmag_fem_backend &handle,
+    fullmag_fem_observable observable,
+    FemSnapshotPayload &snapshot)
+{
+    auto &context = handle.context;
+    const auto *source = gpu_snapshot_source_field(context, observable);
+    if (source == nullptr) {
+        return false;
+    }
+    if (source->x == nullptr || source->y == nullptr || source->z == nullptr) {
+        handle.last_error = "FEM GPU snapshot requires allocated source component buffers";
+        return false;
+    }
+
+    const uint64_t node_count = context.gpu_state.device.lifecycle.node_count;
+    if (node_count == 0 || node_count != context.mesh.n_nodes) {
+        handle.last_error = "FEM GPU snapshot node count mismatch";
+        return false;
+    }
+    const size_t component_bytes = static_cast<size_t>(node_count) * sizeof(double);
+    snapshot.host_aos_len_bytes = component_bytes * 3u;
+
+    auto fail = [&](const char *label, cudaError_t err) -> bool {
+        handle.last_error = std::string(label) + ": " + cudaGetErrorString(err);
+        destroy_snapshot_payload(snapshot);
+        return false;
+    };
+
+    cudaError_t err = cudaMalloc(&snapshot.staging.x, component_bytes);
+    if (err != cudaSuccess) return fail("cudaMalloc(FEM snapshot.x)", err);
+    err = cudaMalloc(&snapshot.staging.y, component_bytes);
+    if (err != cudaSuccess) return fail("cudaMalloc(FEM snapshot.y)", err);
+    err = cudaMalloc(&snapshot.staging.z, component_bytes);
+    if (err != cudaSuccess) return fail("cudaMalloc(FEM snapshot.z)", err);
+
+    err = cudaHostAlloc(&snapshot.host_aos, snapshot.host_aos_len_bytes, cudaHostAllocDefault);
+    if (err != cudaSuccess) return fail("cudaHostAlloc(FEM snapshot.host_aos)", err);
+
+    cudaStream_t io_stream{};
+    err = cudaStreamCreateWithFlags(&io_stream, cudaStreamNonBlocking);
+    if (err != cudaSuccess) return fail("cudaStreamCreate(FEM snapshot.io_stream)", err);
+    snapshot.stream = reinterpret_cast<void *>(io_stream);
+
+    cudaEvent_t ready_event{};
+    err = cudaEventCreateWithFlags(&ready_event, cudaEventDisableTiming);
+    if (err != cudaSuccess) return fail("cudaEventCreate(FEM snapshot.ready_event)", err);
+    snapshot.ready_event = reinterpret_cast<void *>(ready_event);
+
+    cudaEvent_t staging_done_event{};
+    err = cudaEventCreateWithFlags(&staging_done_event, cudaEventDisableTiming);
+    if (err != cudaSuccess) return fail("cudaEventCreate(FEM snapshot.staging_done_event)", err);
+    snapshot.staging_done_event = reinterpret_cast<void *>(staging_done_event);
+
+    cudaEvent_t done_event{};
+    err = cudaEventCreateWithFlags(&done_event, cudaEventDisableTiming);
+    if (err != cudaSuccess) return fail("cudaEventCreate(FEM snapshot.done_event)", err);
+    snapshot.done_event = reinterpret_cast<void *>(done_event);
+
+    cudaStream_t compute_stream =
+        reinterpret_cast<cudaStream_t>(context.gpu_state.cuda.compute_stream);
+    err = cudaEventRecord(ready_event, compute_stream);
+    if (err != cudaSuccess) return fail("cudaEventRecord(FEM snapshot.ready_event)", err);
+    err = cudaStreamWaitEvent(io_stream, ready_event, 0);
+    if (err != cudaSuccess) return fail("cudaStreamWaitEvent(FEM snapshot.ready_event)", err);
+
+    err = cudaMemcpyAsync(
+        snapshot.staging.x, source->x, component_bytes, cudaMemcpyDeviceToDevice, io_stream);
+    if (err != cudaSuccess) return fail("cudaMemcpyAsync(FEM snapshot.x)", err);
+    err = cudaMemcpyAsync(
+        snapshot.staging.y, source->y, component_bytes, cudaMemcpyDeviceToDevice, io_stream);
+    if (err != cudaSuccess) return fail("cudaMemcpyAsync(FEM snapshot.y)", err);
+    err = cudaMemcpyAsync(
+        snapshot.staging.z, source->z, component_bytes, cudaMemcpyDeviceToDevice, io_stream);
+    if (err != cudaSuccess) return fail("cudaMemcpyAsync(FEM snapshot.z)", err);
+
+    err = cudaEventRecord(staging_done_event, io_stream);
+    if (err != cudaSuccess) return fail("cudaEventRecord(FEM snapshot.staging_done_event)", err);
+
+    auto *host = static_cast<double *>(snapshot.host_aos);
+    const size_t host_pitch = 3u * sizeof(double);
+    err = cudaMemcpy2DAsync(
+        host + 0u,
+        host_pitch,
+        snapshot.staging.x,
+        sizeof(double),
+        sizeof(double),
+        static_cast<size_t>(node_count),
+        cudaMemcpyDeviceToHost,
+        io_stream);
+    if (err != cudaSuccess) return fail("cudaMemcpy2DAsync(FEM snapshot.host_x)", err);
+    err = cudaMemcpy2DAsync(
+        host + 1u,
+        host_pitch,
+        snapshot.staging.y,
+        sizeof(double),
+        sizeof(double),
+        static_cast<size_t>(node_count),
+        cudaMemcpyDeviceToHost,
+        io_stream);
+    if (err != cudaSuccess) return fail("cudaMemcpy2DAsync(FEM snapshot.host_y)", err);
+    err = cudaMemcpy2DAsync(
+        host + 2u,
+        host_pitch,
+        snapshot.staging.z,
+        sizeof(double),
+        sizeof(double),
+        static_cast<size_t>(node_count),
+        cudaMemcpyDeviceToHost,
+        io_stream);
+    if (err != cudaSuccess) return fail("cudaMemcpy2DAsync(FEM snapshot.host_z)", err);
+
+    err = cudaEventRecord(done_event, io_stream);
+    if (err != cudaSuccess) return fail("cudaEventRecord(FEM snapshot.done_event)", err);
+
+    snapshot.needs_wait = true;
+    return true;
+}
+#endif
+
+FemSnapshotPayload *begin_snapshot_payload(
+    fullmag_fem_backend *handle,
+    fullmag_fem_observable observable)
+{
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error("fullmag_fem_backend_begin_snapshot received null handle");
+        return nullptr;
+    }
+    handle->last_error.clear();
+    if (observable == FULLMAG_FEM_OBSERVABLE_TORQUE &&
+        !fullmag::fem::context_sync_gpu_magnetization_to_host(
+            handle->context,
+            handle->last_error)) {
+        fullmag_fem_set_handle_error(handle, handle->last_error);
+        return nullptr;
+    }
+
+    const uint64_t len = static_cast<uint64_t>(handle->context.mesh.n_nodes) * 3ull;
+    auto *snapshot = new (std::nothrow) FemSnapshotPayload();
+    if (snapshot == nullptr) {
+        fullmag_fem_set_handle_error(handle, "failed to allocate FEM snapshot payload");
+        return nullptr;
+    }
+
+    snapshot->desc.node_count = handle->context.mesh.n_nodes;
+    snapshot->desc.component_count = 3;
+    snapshot->desc.scalar_bytes = sizeof(double);
+    snapshot->desc.scalar_type = FULLMAG_FEM_SNAPSHOT_SCALAR_F64;
+
+#if FULLMAG_HAS_CUDA_RUNTIME
+    if (schedule_gpu_snapshot_payload(*handle, observable, *snapshot)) {
+        return snapshot;
+    }
+    if (!handle->last_error.empty()) {
+        fullmag_fem_set_handle_error(handle, handle->last_error);
+        delete snapshot;
+        return nullptr;
+    }
+#endif
+
+    if (observable == FULLMAG_FEM_OBSERVABLE_M &&
+        !fullmag::fem::context_sync_gpu_magnetization_to_host(
+            handle->context,
+            handle->last_error)) {
+        fullmag_fem_set_handle_error(handle, handle->last_error);
+        delete snapshot;
+        return nullptr;
+    }
+
+    snapshot->data.assign(static_cast<size_t>(len), 0.0);
+    const int rc = fullmag::fem::context_copy_field_f64(
+        handle->context,
+        observable,
+        snapshot->data.data(),
+        len,
+        handle->last_error);
+    if (rc != FULLMAG_FEM_OK) {
+        fullmag_fem_set_handle_error(handle, handle->last_error);
+        delete snapshot;
+        return nullptr;
+    }
+    return snapshot;
+}
+
+int wait_snapshot_payload(
+    FemSnapshotPayload *snapshot,
+    const void **out_data,
+    uint64_t *out_len_bytes,
+    fullmag_fem_snapshot_desc *out_desc)
+{
+    if (snapshot == nullptr || out_data == nullptr || out_len_bytes == nullptr ||
+        out_desc == nullptr) {
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (snapshot->host_aos != nullptr) {
+#if FULLMAG_HAS_CUDA_RUNTIME
+        if (snapshot->needs_wait) {
+            cudaError_t err =
+                cudaEventSynchronize(reinterpret_cast<cudaEvent_t>(snapshot->done_event));
+            if (err != cudaSuccess) {
+                return FULLMAG_FEM_ERR_INTERNAL;
+            }
+            snapshot->needs_wait = false;
+        }
+        *out_data = snapshot->host_aos;
+        *out_len_bytes = static_cast<uint64_t>(snapshot->host_aos_len_bytes);
+        *out_desc = snapshot->desc;
+        return FULLMAG_FEM_OK;
+#else
+        return FULLMAG_FEM_ERR_INTERNAL;
+#endif
+    }
+    *out_data = snapshot->data.data();
+    *out_len_bytes =
+        static_cast<uint64_t>(snapshot->data.size() * sizeof(double));
+    *out_desc = snapshot->desc;
+    return FULLMAG_FEM_OK;
+}
+
+int snapshot_payload_ready(FemSnapshotPayload *snapshot)
+{
+    if (snapshot == nullptr) {
+        return 0;
+    }
+    if (!snapshot->needs_wait || snapshot->host_aos == nullptr) {
+        return 1;
+    }
+#if FULLMAG_HAS_CUDA_RUNTIME
+    cudaError_t err = cudaEventQuery(reinterpret_cast<cudaEvent_t>(snapshot->done_event));
+    if (err == cudaSuccess) {
+        snapshot->needs_wait = false;
+        return 1;
+    }
+    if (err == cudaErrorNotReady) {
+        return 0;
+    }
+    return 0;
+#else
+    return 0;
+#endif
+}
 
 fullmag_fem_frequency_domain_status to_abi_status(
     fullmag::fem::frequency_domain::FrequencyDomainStatus status)
@@ -67,6 +407,29 @@ fullmag_fem_frequency_domain_status to_abi_status(
         return FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_INTERRUPTED;
     }
     return FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_VALIDATION_ERROR;
+}
+
+FullmagFemFrequencyDomainStatus to_frequency_domain_contract_status(
+    fullmag::fem::frequency_domain::FrequencyDomainStatus status)
+{
+    namespace fd = fullmag::fem::frequency_domain;
+    switch (status) {
+    case fd::FrequencyDomainStatus::ok:
+        return FULLMAG_FEM_FD_OK;
+    case fd::FrequencyDomainStatus::unavailable:
+        return FULLMAG_FEM_FD_UNAVAILABLE;
+    case fd::FrequencyDomainStatus::validation_error:
+        return FULLMAG_FEM_FD_VALIDATION_ERROR;
+    case fd::FrequencyDomainStatus::operator_error:
+        return FULLMAG_FEM_FD_OPERATOR_ERROR;
+    case fd::FrequencyDomainStatus::solve_error:
+        return FULLMAG_FEM_FD_SOLVE_ERROR;
+    case fd::FrequencyDomainStatus::artifact_error:
+        return FULLMAG_FEM_FD_ARTIFACT_ERROR;
+    case fd::FrequencyDomainStatus::interrupted:
+        return FULLMAG_FEM_FD_INTERRUPTED;
+    }
+    return FULLMAG_FEM_FD_VALIDATION_ERROR;
 }
 
 bool from_abi_study_kind(
@@ -223,6 +586,42 @@ void copy_frequency_domain_solve_result(
     native_result.diagnostics_json = nullptr;
     native_result.result_json = nullptr;
     native_result.artifact_manifest_path = nullptr;
+}
+
+FullmagFemFrequencyDomainResult copy_frequency_domain_contract_result(
+    const fullmag::fem::frequency_domain::FrequencyDomainContractResult &native_result) noexcept
+{
+    FullmagFemFrequencyDomainResult result{};
+    result.abi_version = FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION;
+    result.status = to_frequency_domain_contract_status(native_result.status);
+    result.error_message = duplicate_c_string(native_result.error_message.c_str());
+    result.diagnostics_json = duplicate_c_string(native_result.diagnostics_json.c_str());
+    result.result_json = duplicate_c_string(native_result.result_json.c_str());
+    result.artifact_manifest_path =
+        duplicate_c_string(native_result.artifact_manifest_path.c_str());
+    if (result.error_message == nullptr ||
+        result.diagnostics_json == nullptr ||
+        result.result_json == nullptr ||
+        result.artifact_manifest_path == nullptr) {
+        delete[] result.error_message;
+        delete[] result.diagnostics_json;
+        delete[] result.result_json;
+        delete[] result.artifact_manifest_path;
+        result = {};
+        result.abi_version = FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION;
+        result.status = FULLMAG_FEM_FD_ARTIFACT_ERROR;
+        result.error_message =
+            duplicate_c_string("failed to allocate native FEM frequency-domain result strings");
+        result.diagnostics_json = duplicate_c_string(
+            "{\"schema_version\":\"frequency_domain_contract_diagnostics.v1\","
+            "\"status\":\"artifact_error\","
+            "\"complete\":false}");
+        result.result_json = duplicate_c_string(
+            "{\"schema_version\":\"frequency_domain_contract_result.v1\","
+            "\"status\":\"artifact_error\"}");
+        result.artifact_manifest_path = duplicate_c_string("");
+    }
+    return result;
 }
 
 bool frequency_domain_cancel_requested_from_c_abi(void *user_data) noexcept
@@ -793,6 +1192,138 @@ void fullmag_fem_frequency_domain_solve_result_release(
     *result = {};
 }
 
+FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve(
+    const FullmagFemModalEigenRequest *request
+)
+{
+    if (request == nullptr) {
+        return copy_frequency_domain_contract_result(
+            fullmag::fem::frequency_domain::solve_modal_eigen_contract({}));
+    }
+
+    namespace fd = fullmag::fem::frequency_domain;
+    fd::ModalEigenRequest native_request{};
+    native_request.abi_version = request->abi_version;
+    native_request.operator_request.abi_version =
+        request->operator_request.abi_version;
+    native_request.operator_request.mesh_asset_id =
+        request->operator_request.mesh_asset_id;
+    native_request.operator_request.equilibrium_source_kind =
+        request->operator_request.equilibrium_source_kind;
+    native_request.operator_request.gamma_rad_s_T =
+        request->operator_request.gamma_rad_s_T;
+    native_request.operator_request.mu0_T_m_A =
+        request->operator_request.mu0_T_m_A;
+    native_request.operator_request.alpha = request->operator_request.alpha;
+    native_request.operator_request.include_exchange =
+        request->operator_request.include_exchange;
+    native_request.operator_request.include_demag =
+        request->operator_request.include_demag;
+    native_request.operator_request.demag_realization =
+        request->operator_request.demag_realization;
+    native_request.operator_request.damping_policy =
+        request->operator_request.damping_policy;
+    native_request.operator_request.spin_wave_bc_kind =
+        request->operator_request.spin_wave_bc_kind;
+    native_request.operator_request.k_vector_rad_m =
+        request->operator_request.k_vector_rad_m;
+    native_request.operator_request.k_vector_len =
+        request->operator_request.k_vector_len;
+    native_request.operator_request.operator_diagnostics_json =
+        request->operator_request.operator_diagnostics_json;
+    native_request.requested_mode_count = request->requested_mode_count;
+    native_request.target_kind = request->target_kind;
+    native_request.target_frequency_hz = request->target_frequency_hz;
+    native_request.frequency_min_hz = request->frequency_min_hz;
+    native_request.frequency_max_hz = request->frequency_max_hz;
+    native_request.residual_tolerance = request->residual_tolerance;
+    native_request.max_outer_iterations = request->max_outer_iterations;
+    native_request.max_linear_iterations = request->max_linear_iterations;
+    native_request.output_directory = request->output_directory;
+    native_request.write_partial_artifacts = request->write_partial_artifacts;
+    native_request.completeness_policy = request->completeness_policy;
+    native_request.eigensolver_family = request->eigensolver_family;
+    native_request.spectral_transform_kind = request->spectral_transform_kind;
+    native_request.cancel_user_data = request->cancel_user_data;
+    native_request.cancel_requested = request->cancel_requested;
+    native_request.progress_user_data = request->progress_user_data;
+    native_request.progress_callback = request->progress_callback;
+
+    return copy_frequency_domain_contract_result(
+        fd::solve_modal_eigen_contract(native_request));
+}
+
+FullmagFemFrequencyDomainResult fullmag_fem_driven_response_solve(
+    const FullmagFemDrivenResponseRequest *request
+)
+{
+    if (request == nullptr) {
+        return copy_frequency_domain_contract_result(
+            fullmag::fem::frequency_domain::solve_driven_response_contract({}));
+    }
+
+    namespace fd = fullmag::fem::frequency_domain;
+    fd::DrivenResponseContractRequest native_request{};
+    native_request.abi_version = request->abi_version;
+    native_request.operator_request.abi_version =
+        request->operator_request.abi_version;
+    native_request.operator_request.mesh_asset_id =
+        request->operator_request.mesh_asset_id;
+    native_request.operator_request.equilibrium_source_kind =
+        request->operator_request.equilibrium_source_kind;
+    native_request.operator_request.gamma_rad_s_T =
+        request->operator_request.gamma_rad_s_T;
+    native_request.operator_request.mu0_T_m_A =
+        request->operator_request.mu0_T_m_A;
+    native_request.operator_request.alpha = request->operator_request.alpha;
+    native_request.operator_request.include_exchange =
+        request->operator_request.include_exchange;
+    native_request.operator_request.include_demag =
+        request->operator_request.include_demag;
+    native_request.operator_request.demag_realization =
+        request->operator_request.demag_realization;
+    native_request.operator_request.damping_policy =
+        request->operator_request.damping_policy;
+    native_request.operator_request.spin_wave_bc_kind =
+        request->operator_request.spin_wave_bc_kind;
+    native_request.operator_request.k_vector_rad_m =
+        request->operator_request.k_vector_rad_m;
+    native_request.operator_request.k_vector_len =
+        request->operator_request.k_vector_len;
+    native_request.operator_request.operator_diagnostics_json =
+        request->operator_request.operator_diagnostics_json;
+    native_request.frequencies_hz = request->frequencies_hz;
+    native_request.frequency_count = request->frequency_count;
+    native_request.excitation_field_A_m = request->excitation_field_A_m;
+    native_request.excitation_field_len = request->excitation_field_len;
+    native_request.excitation_phase_rad = request->excitation_phase_rad;
+    native_request.residual_tolerance = request->residual_tolerance;
+    native_request.max_linear_iterations = request->max_linear_iterations;
+    native_request.output_directory = request->output_directory;
+    native_request.write_partial_artifacts = request->write_partial_artifacts;
+    native_request.cancel_user_data = request->cancel_user_data;
+    native_request.cancel_requested = request->cancel_requested;
+    native_request.progress_user_data = request->progress_user_data;
+    native_request.progress_callback = request->progress_callback;
+
+    return copy_frequency_domain_contract_result(
+        fd::solve_driven_response_contract(native_request));
+}
+
+void fullmag_fem_frequency_domain_result_destroy(
+    FullmagFemFrequencyDomainResult *result
+)
+{
+    if (result == nullptr) {
+        return;
+    }
+    delete[] result->error_message;
+    delete[] result->diagnostics_json;
+    delete[] result->result_json;
+    delete[] result->artifact_manifest_path;
+    *result = {};
+}
+
 fullmag_fem_backend *fullmag_fem_backend_create(const fullmag_fem_plan_desc *plan) {
     if (plan == nullptr) {
         fullmag_fem_set_global_error("fullmag_fem_backend_create received null plan");
@@ -904,7 +1435,8 @@ int fullmag_fem_backend_copy_field_f64(
         return FULLMAG_FEM_ERR_INVALID;
     }
     handle->last_error.clear();
-    if (observable == FULLMAG_FEM_OBSERVABLE_M &&
+    if ((observable == FULLMAG_FEM_OBSERVABLE_M ||
+         observable == FULLMAG_FEM_OBSERVABLE_TORQUE) &&
         !fullmag::fem::context_sync_gpu_magnetization_to_host(
             handle->context,
             handle->last_error)) {
@@ -917,6 +1449,143 @@ int fullmag_fem_backend_copy_field_f64(
         out_xyz,
         out_len,
         handle->last_error);
+}
+
+int fullmag_fem_backend_average_m_for_nodes_f64(
+    fullmag_fem_backend *handle,
+    const uint32_t *node_indices,
+    uint64_t node_count,
+    double *out_xyz,
+    uint64_t out_len
+) {
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_average_m_for_nodes_f64 received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (out_xyz == nullptr || out_len < 3) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_average_m_for_nodes_f64 requires out_xyz[3]");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (node_count > 0 && node_indices == nullptr) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_average_m_for_nodes_f64 received null node_indices");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+
+    handle->last_error.clear();
+    if (!fullmag::fem::context_sync_gpu_magnetization_to_host(
+            handle->context,
+            handle->last_error)) {
+        fullmag_fem_set_handle_error(handle, handle->last_error);
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
+
+    double sum[3] = {0.0, 0.0, 0.0};
+    uint64_t accepted = 0;
+    const uint64_t available_nodes =
+        static_cast<uint64_t>(handle->context.state.m_xyz.size() / 3u);
+    for (uint64_t i = 0; i < node_count; ++i) {
+        const uint64_t node = static_cast<uint64_t>(node_indices[i]);
+        if (node >= available_nodes) {
+            fullmag_fem_set_handle_error(
+                handle,
+                "fullmag_fem_backend_average_m_for_nodes_f64 received node index out of range");
+            return FULLMAG_FEM_ERR_INVALID;
+        }
+        const uint64_t base = node * 3u;
+        const double mx = handle->context.state.m_xyz[static_cast<size_t>(base + 0u)];
+        const double my = handle->context.state.m_xyz[static_cast<size_t>(base + 1u)];
+        const double mz = handle->context.state.m_xyz[static_cast<size_t>(base + 2u)];
+        if (std::abs(mx) <= 1e-18 && std::abs(my) <= 1e-18 && std::abs(mz) <= 1e-18) {
+            continue;
+        }
+        sum[0] += mx;
+        sum[1] += my;
+        sum[2] += mz;
+        ++accepted;
+    }
+
+    if (accepted == 0) {
+        out_xyz[0] = 0.0;
+        out_xyz[1] = 0.0;
+        out_xyz[2] = 0.0;
+    } else {
+        const double inv = 1.0 / static_cast<double>(accepted);
+        out_xyz[0] = sum[0] * inv;
+        out_xyz[1] = sum[1] * inv;
+        out_xyz[2] = sum[2] * inv;
+    }
+    return FULLMAG_FEM_OK;
+}
+
+fullmag_fem_field_snapshot *fullmag_fem_backend_begin_field_snapshot(
+    fullmag_fem_backend *handle,
+    fullmag_fem_observable observable
+) {
+    return reinterpret_cast<fullmag_fem_field_snapshot *>(
+        begin_snapshot_payload(handle, observable));
+}
+
+fullmag_fem_preview_snapshot *fullmag_fem_backend_begin_preview_snapshot(
+    fullmag_fem_backend *handle,
+    fullmag_fem_observable observable
+) {
+    return reinterpret_cast<fullmag_fem_preview_snapshot *>(
+        begin_snapshot_payload(handle, observable));
+}
+
+int fullmag_fem_field_snapshot_wait(
+    fullmag_fem_field_snapshot *snapshot,
+    const void **out_data,
+    uint64_t *out_len_bytes,
+    fullmag_fem_snapshot_desc *out_desc
+) {
+    return wait_snapshot_payload(
+        reinterpret_cast<FemSnapshotPayload *>(snapshot),
+        out_data,
+        out_len_bytes,
+        out_desc);
+}
+
+int fullmag_fem_preview_snapshot_wait(
+    fullmag_fem_preview_snapshot *snapshot,
+    const void **out_data,
+    uint64_t *out_len_bytes,
+    fullmag_fem_snapshot_desc *out_desc
+) {
+    return wait_snapshot_payload(
+        reinterpret_cast<FemSnapshotPayload *>(snapshot),
+        out_data,
+        out_len_bytes,
+        out_desc);
+}
+
+int fullmag_fem_preview_snapshot_ready(fullmag_fem_preview_snapshot *snapshot) {
+    return snapshot_payload_ready(reinterpret_cast<FemSnapshotPayload *>(snapshot));
+}
+
+int fullmag_fem_field_snapshot_ready(fullmag_fem_field_snapshot *snapshot) {
+    return snapshot_payload_ready(reinterpret_cast<FemSnapshotPayload *>(snapshot));
+}
+
+void fullmag_fem_field_snapshot_destroy(fullmag_fem_field_snapshot *snapshot) {
+    auto *payload = reinterpret_cast<FemSnapshotPayload *>(snapshot);
+    if (payload != nullptr) {
+        destroy_snapshot_payload(*payload);
+        delete payload;
+    }
+}
+
+void fullmag_fem_preview_snapshot_destroy(fullmag_fem_preview_snapshot *snapshot) {
+    auto *payload = reinterpret_cast<FemSnapshotPayload *>(snapshot);
+    if (payload != nullptr) {
+        destroy_snapshot_payload(*payload);
+        delete payload;
+    }
 }
 
 int fullmag_fem_backend_upload_magnetization_f64(

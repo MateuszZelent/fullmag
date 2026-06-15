@@ -63,6 +63,9 @@ impl LocalLiveWorkspaceState {
             metadata = None;
         }
 
+        let mut solver_profile = self.solver_profile.snapshot();
+        solver_profile.preview_3d_disabled = feature_flags().disable_preview_3d;
+
         CurrentLiveSnapshotPayload {
             fem_mesh,
             session: Some(self.session.clone()),
@@ -78,7 +81,7 @@ impl LocalLiveWorkspaceState {
             preview_fields,
             clear_preview_cache,
             engine_log: Some(self.engine_log.clone()),
-            solver_profile: Some(self.solver_profile.snapshot()),
+            solver_profile: Some(solver_profile),
         }
     }
 
@@ -218,12 +221,25 @@ impl LocalLiveWorkspace {
     }
 
     pub fn record_solver_profile_step(&self, stats: &fullmag_runner::StepStats) {
+        self.record_solver_profile_step_inner(stats, false);
+    }
+
+    pub fn force_record_solver_profile_step(&self, stats: &fullmag_runner::StepStats) {
+        self.record_solver_profile_step_inner(stats, true);
+    }
+
+    fn record_solver_profile_step_inner(&self, stats: &fullmag_runner::StepStats, force: bool) {
         let mut artifact_line: Option<(String, String)> = None;
         let mut should_publish = false;
         if let Ok(mut state) = self.state.lock() {
             let persist_artifact = state.solver_profile.config().persist_artifact;
             let emit_engine_log = state.solver_profile.config().emit_engine_log;
-            if let Some(sample) = state.solver_profile.record_step(stats) {
+            let sample = if force {
+                state.solver_profile.force_record_step(stats)
+            } else {
+                state.solver_profile.record_step(stats)
+            };
+            if let Some(sample) = sample {
                 if emit_engine_log {
                     push_engine_log(&mut state.engine_log, "profile", sample.compact_log_line());
                 }
@@ -276,6 +292,109 @@ fn merge_preview_field_payloads(
         merged.insert(field.quantity.clone(), field);
     }
     (!merged.is_empty()).then(|| merged.into_values().collect())
+}
+
+fn elapsed_ns(start: Instant) -> u64 {
+    start.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64
+}
+
+fn estimate_live_preview_field_bytes(field: &fullmag_runner::LivePreviewField) -> u64 {
+    let vector_bytes = field
+        .vector_field_values
+        .len()
+        .saturating_mul(std::mem::size_of::<f64>());
+    let mask_bytes = field
+        .active_mask
+        .as_ref()
+        .map(|mask| mask.len())
+        .unwrap_or(0);
+    vector_bytes.saturating_add(mask_bytes) as u64
+}
+
+fn estimate_live_payload_bytes(payload: &CurrentLiveSnapshotPayload) -> u64 {
+    let mut bytes = 0u64;
+    if let Some(state) = &payload.live_state {
+        if let Some(magnetization) = &state.latest_step.magnetization {
+            bytes = bytes.saturating_add(
+                magnetization
+                    .len()
+                    .saturating_mul(std::mem::size_of::<f64>()) as u64,
+            );
+        }
+        if let Some(preview_field) = &state.latest_step.preview_field {
+            bytes = bytes.saturating_add(estimate_live_preview_field_bytes(preview_field));
+        }
+    }
+    if let Some(preview_fields) = &payload.preview_fields {
+        for field in preview_fields {
+            bytes = bytes.saturating_add(estimate_live_preview_field_bytes(field));
+        }
+    }
+    if let Some(mesh) = &payload.fem_mesh {
+        bytes = bytes
+            .saturating_add(
+                (mesh
+                    .nodes
+                    .len()
+                    .saturating_mul(3 * std::mem::size_of::<f64>())) as u64,
+            )
+            .saturating_add(
+                (mesh
+                    .elements
+                    .len()
+                    .saturating_mul(4 * std::mem::size_of::<u32>())) as u64,
+            )
+            .saturating_add(
+                (mesh
+                    .boundary_faces
+                    .len()
+                    .saturating_mul(3 * std::mem::size_of::<u32>())) as u64,
+            );
+    }
+    bytes
+}
+
+fn attach_live_publisher_diagnostics(
+    payload: &mut CurrentLiveSnapshotPayload,
+    diagnostics: &Arc<Mutex<fullmag_runner::LivePublisherDiagnostics>>,
+) {
+    let Ok(diagnostics) = diagnostics.lock().map(|value| value.clone()) else {
+        return;
+    };
+    if let Some(profile) = payload.solver_profile.as_mut() {
+        profile.live_publisher = Some(diagnostics);
+    }
+}
+
+fn record_live_publish_diagnostics(
+    diagnostics: &Arc<Mutex<fullmag_runner::LivePublisherDiagnostics>>,
+    clone_wall_time_ns: u64,
+    publish_wall_time_ns: u64,
+    publish_lag_wall_time_ns: u64,
+) {
+    if let Ok(mut diagnostics) = diagnostics.lock() {
+        diagnostics.publish_count = diagnostics.publish_count.saturating_add(1);
+        diagnostics.last_clone_wall_time_ns = clone_wall_time_ns;
+        diagnostics.max_clone_wall_time_ns =
+            diagnostics.max_clone_wall_time_ns.max(clone_wall_time_ns);
+        diagnostics.total_clone_wall_time_ns = diagnostics
+            .total_clone_wall_time_ns
+            .saturating_add(clone_wall_time_ns);
+        diagnostics.last_publish_wall_time_ns = publish_wall_time_ns;
+        diagnostics.max_publish_wall_time_ns = diagnostics
+            .max_publish_wall_time_ns
+            .max(publish_wall_time_ns);
+        diagnostics.total_publish_wall_time_ns = diagnostics
+            .total_publish_wall_time_ns
+            .saturating_add(publish_wall_time_ns);
+        diagnostics.last_publish_lag_wall_time_ns = publish_lag_wall_time_ns;
+        diagnostics.max_publish_lag_wall_time_ns = diagnostics
+            .max_publish_lag_wall_time_ns
+            .max(publish_lag_wall_time_ns);
+        diagnostics.total_publish_lag_wall_time_ns = diagnostics
+            .total_publish_lag_wall_time_ns
+            .saturating_add(publish_lag_wall_time_ns);
+    }
 }
 
 fn preserve_pending_live_step_payload(
@@ -491,6 +610,8 @@ pub(crate) struct CurrentLivePublisher {
     fast_mode: Arc<AtomicBool>,
     payload: Arc<Mutex<CurrentLiveSnapshotPayload>>,
     scalar_gate: Arc<Mutex<LiveTelemetryPublishGate>>,
+    diagnostics: Arc<Mutex<fullmag_runner::LivePublisherDiagnostics>>,
+    last_request_at: Arc<Mutex<Option<Instant>>>,
     wake_tx: mpsc::SyncSender<()>,
 }
 
@@ -540,10 +661,16 @@ impl CurrentLivePublisher {
         let fast_mode = Arc::new(AtomicBool::new(true));
         let payload = Arc::new(Mutex::new(CurrentLiveSnapshotPayload::default()));
         let scalar_gate = Arc::new(Mutex::new(LiveTelemetryPublishGate::default()));
+        let diagnostics = Arc::new(Mutex::new(
+            fullmag_runner::LivePublisherDiagnostics::default(),
+        ));
+        let last_request_at = Arc::new(Mutex::new(None));
         let worker_pending = Arc::clone(&pending);
         let worker_sending = Arc::clone(&sending);
         let worker_fast_mode = Arc::clone(&fast_mode);
         let worker_payload = Arc::clone(&payload);
+        let worker_diagnostics = Arc::clone(&diagnostics);
+        let worker_last_request_at = Arc::clone(&last_request_at);
         let worker_session_id = session_id.to_string();
         let thread_name = format!("fullmag-live-publisher-{session_id}");
         std::thread::Builder::new()
@@ -555,6 +682,8 @@ impl CurrentLivePublisher {
                     worker_sending,
                     worker_fast_mode,
                     worker_payload,
+                    worker_diagnostics,
+                    worker_last_request_at,
                     wake_rx,
                 )
             })
@@ -566,6 +695,8 @@ impl CurrentLivePublisher {
             fast_mode,
             payload,
             scalar_gate,
+            diagnostics,
+            last_request_at,
             wake_tx,
         }
     }
@@ -576,22 +707,70 @@ impl CurrentLivePublisher {
 
     pub fn request_publish(&self) {
         self.pending.store(true, Ordering::Release);
+        if let Ok(mut requested_at) = self.last_request_at.lock() {
+            *requested_at = Some(Instant::now());
+        }
         match self.wake_tx.try_send(()) {
-            Ok(()) | Err(mpsc::TrySendError::Full(())) => {}
-            Err(mpsc::TrySendError::Disconnected(())) => {}
+            Ok(()) => {}
+            Err(mpsc::TrySendError::Full(())) => {
+                if let Ok(mut diagnostics) = self.diagnostics.lock() {
+                    diagnostics.coalesced_wake_count =
+                        diagnostics.coalesced_wake_count.saturating_add(1);
+                }
+            }
+            Err(mpsc::TrySendError::Disconnected(())) => {
+                if let Ok(mut diagnostics) = self.diagnostics.lock() {
+                    diagnostics.disconnected_wake_count =
+                        diagnostics.disconnected_wake_count.saturating_add(1);
+                }
+            }
         }
     }
 
     pub fn replace(&self, mut payload: CurrentLiveSnapshotPayload) {
+        let replace_start = Instant::now();
+        let payload_estimated_bytes = estimate_live_payload_bytes(&payload);
         if let Ok(mut gate) = self.scalar_gate.lock() {
             gate.filter_payload(&mut payload);
         }
+        let merge_start = Instant::now();
+        let mut merge_wall_time_ns = 0;
         if let Ok(mut slot) = self.payload.lock() {
             let should_merge_pending =
                 self.pending.load(Ordering::Acquire) || self.sending.load(Ordering::Acquire);
             merge_pending_publish_payload(&mut slot, payload, should_merge_pending);
+            merge_wall_time_ns = elapsed_ns(merge_start);
+        }
+        if let Ok(mut diagnostics) = self.diagnostics.lock() {
+            let replace_wall_time_ns = elapsed_ns(replace_start);
+            diagnostics.replace_count = diagnostics.replace_count.saturating_add(1);
+            diagnostics.last_payload_estimated_bytes = payload_estimated_bytes;
+            diagnostics.max_payload_estimated_bytes = diagnostics
+                .max_payload_estimated_bytes
+                .max(payload_estimated_bytes);
+            diagnostics.last_replace_wall_time_ns = replace_wall_time_ns;
+            diagnostics.max_replace_wall_time_ns = diagnostics
+                .max_replace_wall_time_ns
+                .max(replace_wall_time_ns);
+            diagnostics.total_replace_wall_time_ns = diagnostics
+                .total_replace_wall_time_ns
+                .saturating_add(replace_wall_time_ns);
+            diagnostics.last_merge_wall_time_ns = merge_wall_time_ns;
+            diagnostics.max_merge_wall_time_ns =
+                diagnostics.max_merge_wall_time_ns.max(merge_wall_time_ns);
+            diagnostics.total_merge_wall_time_ns = diagnostics
+                .total_merge_wall_time_ns
+                .saturating_add(merge_wall_time_ns);
         }
         self.request_publish();
+    }
+
+    #[cfg(test)]
+    fn diagnostics_snapshot(&self) -> fullmag_runner::LivePublisherDiagnostics {
+        self.diagnostics
+            .lock()
+            .map(|value| value.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -667,8 +846,35 @@ mod tests {
         }
     }
 
+    #[test]
+    fn live_publisher_records_replace_payload_and_coalesced_wake_diagnostics() {
+        let publisher = no_op_publisher();
+        let mut live_state = bootstrap_live_state("running");
+        live_state.latest_step.magnetization = Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+
+        publisher.replace(CurrentLiveSnapshotPayload {
+            live_state: Some(live_state.clone()),
+            solver_profile: Some(fullmag_runner::SolverProfileState::default().snapshot()),
+            ..CurrentLiveSnapshotPayload::default()
+        });
+        publisher.replace(CurrentLiveSnapshotPayload {
+            live_state: Some(live_state),
+            solver_profile: Some(fullmag_runner::SolverProfileState::default().snapshot()),
+            ..CurrentLiveSnapshotPayload::default()
+        });
+
+        let diagnostics = publisher.diagnostics_snapshot();
+        assert_eq!(diagnostics.replace_count, 2);
+        assert!(diagnostics.coalesced_wake_count >= 1);
+        assert_eq!(diagnostics.last_payload_estimated_bytes, 6 * 8);
+        assert_eq!(diagnostics.max_payload_estimated_bytes, 6 * 8);
+        assert!(diagnostics.last_replace_wall_time_ns > 0);
+        assert!(diagnostics.last_merge_wall_time_ns > 0);
+    }
+
     fn no_op_publisher() -> CurrentLivePublisher {
-        let (wake_tx, _wake_rx) = std::sync::mpsc::sync_channel(1);
+        let (wake_tx, wake_rx) = std::sync::mpsc::sync_channel(1);
+        std::mem::forget(wake_rx);
         CurrentLivePublisher {
             pending: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             sending: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -679,6 +885,10 @@ mod tests {
             scalar_gate: std::sync::Arc::new(std::sync::Mutex::new(
                 LiveTelemetryPublishGate::default(),
             )),
+            diagnostics: std::sync::Arc::new(std::sync::Mutex::new(
+                fullmag_runner::LivePublisherDiagnostics::default(),
+            )),
+            last_request_at: std::sync::Arc::new(std::sync::Mutex::new(None)),
             wake_tx,
         }
     }
@@ -1045,6 +1255,8 @@ fn current_live_publisher_loop(
     sending: Arc<AtomicBool>,
     fast_mode: Arc<AtomicBool>,
     payload: Arc<Mutex<CurrentLiveSnapshotPayload>>,
+    diagnostics: Arc<Mutex<fullmag_runner::LivePublisherDiagnostics>>,
+    last_request_at: Arc<Mutex<Option<Instant>>>,
     wake_rx: mpsc::Receiver<()>,
 ) {
     let mut last_publish_at: Option<Instant> = None;
@@ -1062,11 +1274,27 @@ fn current_live_publisher_loop(
                     std::thread::sleep(min_interval - elapsed);
                 }
             }
-            let snapshot = payload.lock().map(|slot| slot.clone()).unwrap_or_default();
+            let clone_start = Instant::now();
+            let mut snapshot = payload.lock().map(|slot| slot.clone()).unwrap_or_default();
+            let clone_wall_time_ns = elapsed_ns(clone_start);
+            let publish_lag_wall_time_ns = last_request_at
+                .lock()
+                .ok()
+                .and_then(|mut value| value.take())
+                .map(elapsed_ns)
+                .unwrap_or(0);
+            attach_live_publisher_diagnostics(&mut snapshot, &diagnostics);
             sending.store(true, Ordering::Release);
             let cycle_start = Instant::now();
             let publish_result = sync_current_live_delta(&session_id, &snapshot);
-            let cycle_ms = cycle_start.elapsed().as_millis();
+            let publish_wall_time_ns = elapsed_ns(cycle_start);
+            let cycle_ms = publish_wall_time_ns / 1_000_000;
+            record_live_publish_diagnostics(
+                &diagnostics,
+                clone_wall_time_ns,
+                publish_wall_time_ns,
+                publish_lag_wall_time_ns,
+            );
             sending.store(false, Ordering::Release);
             if cycle_ms > 100 {
                 slow_publish_count += 1;
@@ -1104,9 +1332,25 @@ fn current_live_publisher_loop(
     }
 
     if pending.swap(false, Ordering::AcqRel) {
-        let snapshot = payload.lock().map(|slot| slot.clone()).unwrap_or_default();
+        let clone_start = Instant::now();
+        let mut snapshot = payload.lock().map(|slot| slot.clone()).unwrap_or_default();
+        let clone_wall_time_ns = elapsed_ns(clone_start);
+        let publish_lag_wall_time_ns = last_request_at
+            .lock()
+            .ok()
+            .and_then(|mut value| value.take())
+            .map(elapsed_ns)
+            .unwrap_or(0);
+        attach_live_publisher_diagnostics(&mut snapshot, &diagnostics);
         sending.store(true, Ordering::Release);
+        let cycle_start = Instant::now();
         let publish_result = sync_current_live_delta(&session_id, &snapshot);
+        record_live_publish_diagnostics(
+            &diagnostics,
+            clone_wall_time_ns,
+            elapsed_ns(cycle_start),
+            publish_lag_wall_time_ns,
+        );
         sending.store(false, Ordering::Release);
         if let Err(error) = publish_result {
             if api_is_ready(api_port()) {

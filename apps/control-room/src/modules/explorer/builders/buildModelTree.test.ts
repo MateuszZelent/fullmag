@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type {
   FrequencyDomainManifestResource,
+  FrequencyDomainSweepProgressResource,
   HysteresisExecutionTreeResource,
   SceneResource,
 } from "@/kernel/api/apiTypes";
@@ -21,6 +22,7 @@ import {
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
   ANALYSIS_HYSTERESIS_POINT_PATH,
   DATA_FIELD_VECTOR_PATH,
+  MESHING_PERIODIC_PAIRS_PATH,
 } from "@/kernel/api/apiPaths";
 
 import {
@@ -249,6 +251,38 @@ const FREQUENCY_DOMAIN_RESPONSE_SWEEP = {
   schema_version: "frequency_domain_response_sweep_resource.v1",
   status: "ready",
 } as const;
+
+const FREQUENCY_DOMAIN_RESPONSE_PROGRESS: FrequencyDomainSweepProgressResource = {
+  complete: false,
+  completed_frequency_points: 3,
+  current_frequency_hz: 10.5e9,
+  latest_artifact_manifest_path: "frequency_domain/manifest.partial.v1.json",
+  missing_reason: null,
+  partial_artifacts_available: true,
+  progress_json:
+    '{"schema_version":"frequency_domain_sweep_progress.v1","state":"running"}',
+  schema_version: "frequency_domain_sweep_progress.v1",
+  state: "running",
+  status: "ok",
+  total_frequency_points: 10,
+  written_frequency_point_artifacts: 3,
+};
+
+const FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED: FrequencyDomainSweepProgressResource = {
+  complete: false,
+  completed_frequency_points: 4,
+  current_frequency_hz: null,
+  latest_artifact_manifest_path: "frequency_domain/manifest.cancelled.v1.json",
+  missing_reason: null,
+  partial_artifacts_available: true,
+  progress_json:
+    '{"schema_version":"frequency_domain_sweep_progress.v1","state":"cancel_requested"}',
+  schema_version: "frequency_domain_sweep_progress.v1",
+  state: "cancel_requested",
+  status: "ok",
+  total_frequency_points: 10,
+  written_frequency_point_artifacts: 4,
+};
 
 describe("buildModelTree", () => {
   it("builds a typed model tree from a scene snapshot without storing API data", () => {
@@ -847,6 +881,10 @@ describe("buildModelTree", () => {
             kind: "save_state",
           },
           {
+            device: "cpu",
+            kind: "change_device",
+          },
+          {
             field_steps: 11,
             kind: "hysteresis",
             stage_id: "hysteresis-1",
@@ -866,7 +904,7 @@ describe("buildModelTree", () => {
     const flattened = flattenExplorerNodes(buildModelTree(snapshot));
 
     expect(flattened.find((node) => node.id === "model:study")?.badge).toBe(
-      "6 stages",
+      "7 stages",
     );
     expect(flattened.find((node) => node.id === "model:study")).toMatchObject({
       children: expect.arrayContaining([
@@ -893,6 +931,7 @@ describe("buildModelTree", () => {
         "model:study:stages:stage:stage-relax",
         "model:study:stages:stage:1",
         "model:study:stages:stage:2",
+        "model:study:stages:stage:3",
         "model:study:stages:stage:hysteresis-1",
         "model:study:stages:stage:eigen-1",
         "model:study:stages:stage:freq-1",
@@ -925,11 +964,20 @@ describe("buildModelTree", () => {
     });
     expect(
       flattened.find(
+        (node) => node.id === "model:study:stages:stage:3",
+      ),
+    ).toMatchObject({
+      badge: "cpu",
+      kind: "study.stage.change_device",
+      label: "Change Device 4",
+    });
+    expect(
+      flattened.find(
         (node) => node.id === "model:study:stages:stage:hysteresis-1",
       ),
     ).toMatchObject({
       kind: "study.stage.hysteresis",
-      label: "Hysteresis 4",
+      label: "Hysteresis 5",
     });
     expect(
       flattened.find(
@@ -937,7 +985,7 @@ describe("buildModelTree", () => {
       ),
     ).toMatchObject({
       kind: "study.stage.eigenmodes",
-      label: "Eigenmodes 5",
+      label: "Eigenmodes 6",
     });
     expect(
       flattened.find(
@@ -947,7 +995,7 @@ describe("buildModelTree", () => {
       kind: "study.stage.eigenmodes.k_path",
       label: "k-Path",
       stageId: "eigen-1",
-      stageIndex: 4,
+      stageIndex: 5,
     });
     expect(
       flattened.find(
@@ -958,7 +1006,7 @@ describe("buildModelTree", () => {
       kind: "study.stage.eigenmodes.periodic_pairs",
       label: "Periodic Pairs",
       stageId: "eigen-1",
-      stageIndex: 4,
+      stageIndex: 5,
     });
     expect(
       flattened.find(
@@ -966,7 +1014,7 @@ describe("buildModelTree", () => {
       ),
     ).toMatchObject({
       kind: "study.stage.frequency_response",
-      label: "Frequency Response 6",
+      label: "Frequency Response 7",
     });
     expect(
       flattened.find(
@@ -976,7 +1024,7 @@ describe("buildModelTree", () => {
       kind: "study.stage.frequency_response.excitation",
       label: "Excitation",
       stageId: "freq-1",
-      stageIndex: 5,
+      stageIndex: 6,
     });
     expect(
       flattened.find(
@@ -987,7 +1035,7 @@ describe("buildModelTree", () => {
       kind: "study.stage.frequency_response.periodic_pairs",
       label: "Periodic Pairs",
       stageId: "freq-1",
-      stageIndex: 5,
+      stageIndex: 6,
     });
     expect(
       flattened.find(
@@ -997,7 +1045,7 @@ describe("buildModelTree", () => {
       kind: "study.stage.frequency_response.k_grid",
       label: "k/f Grid",
       stageId: "freq-1",
-      stageIndex: 5,
+      stageIndex: 6,
     });
     expect(flattened.map((node) => node.id)).not.toContain(
       "model:study:relax",
@@ -1128,6 +1176,7 @@ describe("buildModelTree", () => {
     ).toMatchObject({
       artifactPath: "response/magnetic_response_sweep.v2.json",
       badge: "4 peak(s)",
+      children: expect.any(Array),
       calculationMode: "fmr_response",
       kind: "results.frequency_domain.fmr_peaks",
       resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
@@ -1135,11 +1184,106 @@ describe("buildModelTree", () => {
     });
     expect(
       results.find(
+        (node) => node.id === "results:frequency-domain:fmr:peaks:peak:0",
+      ),
+    ).toMatchObject({
+      artifactPath: "response/magnetic_response_sweep.v2.json",
+      badge: "9.5 GHz",
+      calculationMode: "fmr_response",
+      fieldId: undefined,
+      fmrPeakIndex: 0,
+      frequencyIndex: 0,
+      kind: "results.frequency_domain.fmr_peak",
+      label: "Driven Peak 1",
+      parentId: "results:frequency-domain:fmr:peaks",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+      status: "ready",
+    });
+    expect(
+      results.find(
+        (node) => node.id === "results:frequency-domain:fmr:peaks:peak:2",
+      ),
+    ).toMatchObject({
+      artifactPath: "eigen/spectrum.v2.json",
+      badge: "12.5 GHz",
+      calculationMode: "fmr_modal",
+      contextCommands: [
+        "analysis.eigen.plot-mode-3d",
+        "analysis.eigen.plot-mode-3d-real",
+        "analysis.eigen.plot-mode-3d-imag",
+        "analysis.eigen.plot-mode-3d-amplitude",
+        "analysis.eigen.plot-mode-3d-abs",
+        "analysis.eigen.plot-mode-3d-phase",
+        "analysis.eigen.plot-mode-3d-phase-rotated-real",
+        "analysis.eigen.set-mode-3d-animation",
+      ],
+      fieldId: "analysis:eigen:sample-0000:mode-0002",
+      fmrPeakIndex: 2,
+      kind: "results.frequency_domain.fmr_peak",
+      label: "Modal Peak 3",
+      modeIndex: 2,
+      parentId: "results:frequency-domain:fmr:peaks",
+      resourceRef: analysisFieldVectorResourceKey(
+        "analysis:eigen:sample-0000:mode-0002",
+      ),
+      sampleIndex: 0,
+      status: "ready",
+    });
+    expect(
+      results.find(
+        (node) => node.id === "results:frequency-domain:fmr:modal-spectrum",
+      ),
+    ).toMatchObject({
+      artifactPath: "eigen/spectrum.v2.json",
+      badge: "2 mode(s)",
+      calculationMode: "fmr_modal",
+      kind: "results.frequency_domain.fmr_modal_spectrum",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+      status: "ready",
+    });
+    expect(
+      results.find(
+        (node) => node.id === "results:frequency-domain:calculation-modes",
+      ),
+    ).toMatchObject({
+      badge: "FMR + dispersion",
+      kind: "results.frequency_domain.calculation_modes",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
+      status: "ready",
+    });
+    expect(
+      results.find(
+        (node) =>
+          node.id === "results:frequency-domain:calculation-modes:fmr",
+      ),
+    ).toMatchObject({
+      badge: "modal + driven",
+      calculationMode: "fmr_response",
+      kind: "results.frequency_domain.fmr",
+      status: "ready",
+    });
+    expect(
+      results.find(
+        (node) =>
+          node.id ===
+          "results:frequency-domain:calculation-modes:response-map",
+      ),
+    ).toMatchObject({
+      badge: "unsupported",
+      calculationMode: "response_map",
+      kind: "results.frequency_domain.response_map",
+      status: "unsupported",
+    });
+    expect(
+      results.find(
         (node) => node.id === "results:frequency-domain:fmr:response-sweep",
       ),
     ).toMatchObject({
+      artifactPath: "response/magnetic_response_sweep.v2.json",
       badge: "3 point(s)",
+      calculationMode: "fmr_response",
       kind: "results.frequency_domain.fmr_response_sweep",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
       status: "ready",
     });
     expect(
@@ -1164,9 +1308,31 @@ describe("buildModelTree", () => {
       status: "ready",
     });
     expect(
+      results.find((node) => node.id === "results:eigen:modes:visualization"),
+    ).toMatchObject({
+      badge: "1 mode field(s)",
+      contextCommands: [
+        "analysis.eigen.plot-mode-3d",
+        "analysis.eigen.plot-mode-3d-real",
+        "analysis.eigen.plot-mode-3d-imag",
+        "analysis.eigen.plot-mode-3d-amplitude",
+        "analysis.eigen.plot-mode-3d-abs",
+        "analysis.eigen.plot-mode-3d-phase",
+        "analysis.eigen.plot-mode-3d-phase-rotated-real",
+        "analysis.eigen.set-mode-3d-animation",
+      ],
+      fieldId: "analysis:eigen:sample-0000:mode-0002",
+      kind: "results.eigen.modes.visualization",
+      parentId: "results:eigen:modes",
+      resourceRef: analysisFieldVectorResourceKey(
+        "analysis:eigen:sample-0000:mode-0002",
+      ),
+      status: "ready",
+    });
+    expect(
       results.find((node) => node.id === "results:eigen:sample:0:mode:2"),
     ).toMatchObject({
-      badge: "12.500 GHz",
+      badge: "12.5 GHz",
       branchId: "branch-0",
       contextCommands: [
         "analysis.eigen.plot-mode-3d",
@@ -1190,26 +1356,20 @@ describe("buildModelTree", () => {
     expect(
       results.find((node) => node.id === "results:eigen:sample:0:mode:3"),
     ).toMatchObject({
-      badge: "14.250 GHz",
-      contextCommands: [
-        "analysis.eigen.plot-mode-3d",
-        "analysis.eigen.plot-mode-3d-real",
-        "analysis.eigen.plot-mode-3d-imag",
-        "analysis.eigen.plot-mode-3d-amplitude",
-        "analysis.eigen.plot-mode-3d-abs",
-        "analysis.eigen.plot-mode-3d-phase",
-        "analysis.eigen.plot-mode-3d-phase-rotated-real",
-        "analysis.eigen.set-mode-3d-animation",
-      ],
-      fieldId: "analysis:eigen:sample-0000:mode-0003",
+      badge: "14.25 GHz",
+      contextCommands: undefined,
+      fieldId: undefined,
       kind: "results.eigen.mode",
       modeIndex: 3,
-      resourceRef: analysisFieldVectorResourceKey(
-        "analysis:eigen:sample-0000:mode-0003",
-      ),
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
       sampleIndex: 0,
-      status: "ready",
+      status: "stale",
     });
+    expect(
+      results.find(
+        (node) => node.id === "results:eigen:sample:0:mode:2:visualization",
+      ),
+    ).toBeUndefined();
     expect(
       results.find((node) => node.id === "results:eigen:branches"),
     ).toMatchObject({
@@ -1221,7 +1381,7 @@ describe("buildModelTree", () => {
     expect(
       results.find((node) => node.id === "results:eigen:branches:branch:branch-0"),
     ).toMatchObject({
-      badge: "12.500-13.100 GHz",
+      badge: "12.5 GHz-13.1 GHz",
       branchId: "branch-0",
       calculationMode: "dispersion_modal",
       kind: "results.eigen.branch",
@@ -1243,7 +1403,7 @@ describe("buildModelTree", () => {
         (node) => node.id === "results:frequency-response:frequency-points:0",
       ),
     ).toMatchObject({
-      badge: "9.500 GHz, 2 observable(s)",
+      badge: "9.5 GHz, 2 observable(s)",
       contextCommands: undefined,
       fieldId: undefined,
       frequencyIndex: 0,
@@ -1598,13 +1758,69 @@ describe("buildModelTree", () => {
       }),
     );
     expect(
-      emptyArtifactResources
-        .filter((node) => node.id.startsWith("resources:analysis:frequency-domain"))
-        .map((node) => node.kind),
+      emptyArtifactResources.flatMap((node) =>
+        node.id.startsWith("resources:analysis:frequency-domain")
+          ? [node.kind]
+          : [],
+      ),
     ).toEqual([
       "resources.analysis.frequency_domain",
       "resources.analysis.frequency_domain.manifest",
+      "resources.analysis.frequency_domain.calculation_modes",
+      "resources.analysis.frequency_domain.fmr",
+      "resources.analysis.frequency_domain.dispersion",
+      "resources.analysis.frequency_domain.response_map",
     ]);
+    expect(
+      emptyArtifactResources.find(
+        (node) =>
+          node.kind === "resources.analysis.frequency_domain.calculation_modes",
+      ),
+    ).toMatchObject({
+      badge: "workflow presets",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
+      status: "ready",
+    });
+    expect(
+      emptyArtifactResources.find(
+        (node) => node.kind === "resources.analysis.frequency_domain.fmr",
+      ),
+    ).toMatchObject({
+      badge: "driven",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
+      status: "ready",
+    });
+    expect(
+      emptyArtifactResources.find(
+        (node) =>
+          node.kind === "resources.analysis.frequency_domain.dispersion",
+      ),
+    ).toMatchObject({
+      badge: "demag-k rejected",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
+      status: "unsupported",
+    });
+    expect(
+      emptyArtifactResources.find(
+        (node) =>
+          node.kind === "resources.analysis.frequency_domain.response_map",
+      ),
+    ).toMatchObject({
+      badge: "unsupported",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
+      status: "unsupported",
+    });
+    expect(
+      emptyArtifactResources.find(
+        (node) => node.kind === "resources.mesh.periodic_pairs",
+      ),
+    ).toMatchObject({
+      id: "resources:mesh:periodic-pairs",
+      label: "Periodic Pairs",
+      parentId: "resources:mesh",
+      resourceRef: MESHING_PERIODIC_PAIRS_PATH,
+      status: "stale",
+    });
 
     const emptyArtifactResults = flattenExplorerNodes(
       buildExplorerTree("results", {
@@ -1612,12 +1828,13 @@ describe("buildModelTree", () => {
       }),
     );
     expect(
-      emptyArtifactResults
-        .filter((node) => node.id.startsWith("results:frequency-domain"))
-        .map((node) => node.kind),
+      emptyArtifactResults.flatMap((node) =>
+        node.id.startsWith("results:frequency-domain") ? [node.kind] : [],
+      ),
     ).toEqual([
       "results.frequency_domain.root",
       "results.frequency_domain.run",
+      "results.frequency_domain.calculation_modes",
     ]);
     expect(emptyArtifactResults.map((node) => node.id)).not.toContain(
       "results:eigen",
@@ -1687,6 +1904,63 @@ describe("buildModelTree", () => {
         "diagnostics.frequency_domain.periodic_floquet",
       ]),
     );
+  });
+
+  it("builds frequency-domain jobs from live progress resources", () => {
+    const jobs = flattenExplorerNodes(
+      buildExplorerTree("jobs", {
+        frequencyDomainCancelRequested: FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED,
+        frequencyDomainManifest: FREQUENCY_DOMAIN_MANIFEST,
+        frequencyDomainResponseProgress: FREQUENCY_DOMAIN_RESPONSE_PROGRESS,
+        frequencyDomainResponseSweep: FREQUENCY_DOMAIN_RESPONSE_SWEEP,
+        frequencyDomainSpectrum: FREQUENCY_DOMAIN_SPECTRUM,
+      }),
+    );
+
+    expect(
+      jobs.find((node) => node.id === "jobs:frequency-domain"),
+    ).toMatchObject({
+      badge: "3/10 running",
+      kind: "jobs.frequency_domain.root",
+      status: "cancelled",
+    });
+    expect(
+      jobs.find((node) => node.id === "jobs:frequency-domain:stage-run"),
+    ).toMatchObject({
+      badge: "frequency_domain_manifest.v1",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
+      status: "cancelled",
+    });
+    expect(
+      jobs.find((node) => node.id === "jobs:frequency-domain:eigen-sample"),
+    ).toMatchObject({
+      badge: "2 mode(s)",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+      status: "completed",
+    });
+    expect(
+      jobs.find(
+        (node) => node.id === "jobs:frequency-domain:response-frequency",
+      ),
+    ).toMatchObject({
+      badge: "3/10",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
+      status: "cancelled",
+    });
+    expect(
+      jobs.find((node) => node.id === "jobs:frequency-domain:response-progress"),
+    ).toMatchObject({
+      badge: "3/10 running",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
+      status: "cancelled",
+    });
+    expect(
+      jobs.find((node) => node.id === "jobs:frequency-domain:artifact-export"),
+    ).toMatchObject({
+      badge: "frequency_domain/manifest.partial.v1.json",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
+      status: "ready",
+    });
   });
 
   it("uses manifest response field resources for frequency-domain response point field ids", () => {
@@ -2170,9 +2444,9 @@ describe("buildModelTree", () => {
     const stageId = "model:study:stages:stage:hysteresis-1";
 
     expect(
-      flattened
-        .filter((node) => node.parentId === `${stageId}:branches`)
-        .map((node) => node.id),
+      flattened.flatMap((node) =>
+        node.parentId === `${stageId}:branches` ? [node.id] : [],
+      ),
     ).toEqual([
       `${stageId}:branches:branch:descending`,
       `${stageId}:branches:branch:ascending`,
@@ -2269,9 +2543,9 @@ describe("buildModelTree", () => {
     const stageId = "model:study:stages:stage:hysteresis-1";
 
     expect(
-      flattened
-        .filter((node) => node.parentId === stageId)
-        .map((node) => node.id),
+      flattened.flatMap((node) =>
+        node.parentId === stageId ? [node.id] : [],
+      ),
     ).toEqual(expect.arrayContaining([
       `${stageId}:plan`,
       `${stageId}:protocol`,
@@ -2332,9 +2606,9 @@ describe("buildModelTree", () => {
       status: "ready",
     });
     expect(
-      flattened
-        .filter((node) => node.parentId === `${stageId}:branches`)
-        .map((node) => node.id),
+      flattened.flatMap((node) =>
+        node.parentId === `${stageId}:branches` ? [node.id] : [],
+      ),
     ).toEqual(expect.arrayContaining([
       `${stageId}:branches:forward`,
       `${stageId}:branches:return`,
@@ -2659,13 +2933,19 @@ describe("buildModelTree", () => {
         (node) =>
           node.kind === "resources.analysis.frequency_domain.dispersion",
       ),
-    ).toBeUndefined();
+    ).toMatchObject({
+      badge: "demag-k rejected",
+      status: "unsupported",
+    });
     expect(
       resources.find(
         (node) =>
           node.kind === "resources.analysis.frequency_domain.response_map",
       ),
-    ).toBeUndefined();
+    ).toMatchObject({
+      badge: "available",
+      status: "ready",
+    });
   });
 
   it("exposes study runtime and recovery commands through explorer context menus", () => {

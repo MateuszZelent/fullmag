@@ -714,7 +714,8 @@ impl ExchangeLlgProblem {
     // ===================================================================
 
     pub(crate) fn exchange_field_add_into(&self, magnetization: &[Vector3], h_eff: &mut [Vector3]) {
-        let _grid = self.grid;
+        #[cfg(not(feature = "parallel"))]
+        let grid = self.grid;
         let dx2 = self.cell_size.dx * self.cell_size.dx;
         let dy2 = self.cell_size.dy * self.cell_size.dy;
         let dz2 = self.cell_size.dz * self.cell_size.dz;

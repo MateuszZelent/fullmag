@@ -12,6 +12,7 @@ use crate::types::{
 };
 
 use std::collections::{BTreeSet, HashMap};
+use std::env;
 use std::fs;
 use std::io::{Error, ErrorKind, Write};
 use std::path::Path;
@@ -49,6 +50,47 @@ fn provenance_with_runtime_threading(
     enriched
 }
 
+fn demag_amg_env_i64(name: &str, default_value: i64) -> i64 {
+    env::var(name)
+        .ok()
+        .and_then(|raw| raw.parse::<i64>().ok())
+        .filter(|value| *value >= 0)
+        .unwrap_or(default_value)
+}
+
+fn demag_amg_env_i64_optional(name: &str) -> serde_json::Value {
+    env::var(name)
+        .ok()
+        .and_then(|raw| raw.parse::<i64>().ok())
+        .filter(|value| *value >= 0)
+        .map(serde_json::Value::from)
+        .unwrap_or(serde_json::Value::Null)
+}
+
+fn demag_amg_env_f64_optional(name: &str) -> serde_json::Value {
+    env::var(name)
+        .ok()
+        .and_then(|raw| raw.parse::<f64>().ok())
+        .filter(|value| *value >= 0.0)
+        .map(serde_json::Value::from)
+        .unwrap_or(serde_json::Value::Null)
+}
+
+fn demag_amg_profile_metadata(preconditioner: &str) -> serde_json::Value {
+    if preconditioner != "AMG" {
+        return serde_json::Value::Null;
+    }
+    serde_json::json!({
+        "provider": "mfem_hypre_boomeramg",
+        "relax_type": demag_amg_env_i64("FULLMAG_FEM_DEMAG_AMG_RELAX_TYPE", 18),
+        "coarsening": demag_amg_env_i64("FULLMAG_FEM_DEMAG_AMG_COARSENING", 8),
+        "interpolation": demag_amg_env_i64("FULLMAG_FEM_DEMAG_AMG_INTERPOLATION", 6),
+        "aggressive_coarsening": demag_amg_env_i64("FULLMAG_FEM_DEMAG_AMG_AGGRESSIVE_COARSENING", 1),
+        "strength_threshold": demag_amg_env_f64_optional("FULLMAG_FEM_DEMAG_AMG_STRENGTH_THRESHOLD"),
+        "max_levels": demag_amg_env_i64_optional("FULLMAG_FEM_DEMAG_AMG_MAX_LEVELS"),
+    })
+}
+
 fn demag_runtime_metadata(
     plan: &fullmag_ir::ExecutionPlanIR,
     provenance: &crate::types::ExecutionProvenance,
@@ -60,8 +102,14 @@ fn demag_runtime_metadata(
                 return serde_json::Value::Null;
             }
 
-            let policy = fem.demag_solver_policy.clone().unwrap_or_default();
+            let requested_policy = fem.demag_solver_policy.as_ref();
+            let policy = requested_policy.cloned().unwrap_or_default();
             let resolved_policy = provenance.fem_poisson_demag.as_ref();
+            let policy_source = if requested_policy.is_some() {
+                "explicit"
+            } else {
+                "resolved_default"
+            };
             let resolved_demag = fem
                 .demag_realization
                 .unwrap_or(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
@@ -89,16 +137,25 @@ fn demag_runtime_metadata(
             let relative_tolerance = resolved_policy.map_or(policy.rtol, |entry| entry.rtol);
             let max_iterations =
                 resolved_policy.map_or(policy.max_iterations, |entry| entry.max_iterations);
+            let amg_profile = demag_amg_profile_metadata(&preconditioner);
 
             serde_json::json!({
                 "model": resolved_demag.model_name(),
                 "boundary_variant": boundary_variant,
                 "linear_solver": linear_solver,
                 "preconditioner": preconditioner,
+                "amg_profile": amg_profile,
                 "relative_tolerance": relative_tolerance,
                 "absolute_tolerance": policy.atol,
                 "max_iterations": max_iterations,
                 "print_level": policy.print_level,
+                "policy_source": policy_source,
+                "requested_linear_solver": requested_policy.map(|entry| entry.solver.clone()),
+                "requested_preconditioner": requested_policy.map(|entry| entry.preconditioner.clone()),
+                "requested_relative_tolerance": requested_policy.map(|entry| entry.rtol),
+                "requested_absolute_tolerance": requested_policy.and_then(|entry| entry.atol),
+                "requested_max_iterations": requested_policy.map(|entry| entry.max_iterations),
+                "requested_print_level": requested_policy.map(|entry| entry.print_level),
                 "actual_iterations": last.map(|entry| entry.poisson_iterations),
                 "final_residual_norm": last.map(|entry| entry.poisson_final_residual),
                 "solver_setup_reused": last.map(|entry| entry.demag_solver_setup_reused),
@@ -594,6 +651,15 @@ pub(crate) fn write_artifacts(
         "status": executed.result.status,
         "scalar_rows": executed.result.steps.len(),
         "field_snapshots": executed.field_snapshot_count,
+        "artifact_pipeline": streamed.map(|summary| serde_json::json!({
+            "scalar_rows_written": summary.scalar_rows_written,
+            "field_snapshots_written": summary.field_snapshots_written,
+            "writer_jobs_completed": summary.writer_jobs_completed,
+            "artifact_writer_job_wall_time_ns": summary.artifact_writer_job_wall_time_ns,
+            "scalar_row_writer_wall_time_ns": summary.scalar_row_writer_wall_time_ns,
+            "field_snapshot_writer_wall_time_ns": summary.field_snapshot_writer_wall_time_ns,
+            "native_field_snapshot_writer_wall_time_ns": summary.native_field_snapshot_writer_wall_time_ns,
+        })),
         "material_field_assets": material_field_assets,
     });
     let metadata_path = output_dir.join("metadata.json");
@@ -2066,6 +2132,65 @@ mod tests {
     }
 
     #[test]
+    fn metadata_persists_artifact_pipeline_writer_timing() {
+        let problem = fullmag_ir::ProblemIR::bootstrap_example();
+        let plan = test_fem_execution_plan();
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-artifacts-pipeline-summary-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+        let executed = ExecutedRun {
+            result: RunResult {
+                status: RunStatus::Completed,
+                steps: Vec::new(),
+                final_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+                completion: None,
+            },
+            initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+            field_snapshots: Vec::new(),
+            field_snapshot_count: 2,
+            auxiliary_artifacts: Vec::new(),
+            provenance: ExecutionProvenance {
+                execution_engine: "fem_cpu_native".to_string(),
+                precision: "double".to_string(),
+                ..ExecutionProvenance::default()
+            },
+        };
+        let streamed = ArtifactPipelineSummary {
+            scalar_rows_written: 3,
+            field_snapshots_written: 2,
+            writer_jobs_completed: 5,
+            artifact_writer_job_wall_time_ns: 110,
+            scalar_row_writer_wall_time_ns: 30,
+            field_snapshot_writer_wall_time_ns: 80,
+            native_field_snapshot_writer_wall_time_ns: 0,
+        };
+
+        write_artifacts(&output_dir, &problem, &plan, &executed, Some(&streamed))
+            .expect("artifact write should preserve pipeline timing");
+
+        let metadata: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("metadata.json")).expect("metadata should exist"),
+        )
+        .expect("metadata should parse");
+        let pipeline = &metadata["artifact_pipeline"];
+        assert_eq!(pipeline["scalar_rows_written"], 3);
+        assert_eq!(pipeline["field_snapshots_written"], 2);
+        assert_eq!(pipeline["writer_jobs_completed"], 5);
+        assert_eq!(pipeline["artifact_writer_job_wall_time_ns"], 110);
+        assert_eq!(pipeline["scalar_row_writer_wall_time_ns"], 30);
+        assert_eq!(pipeline["field_snapshot_writer_wall_time_ns"], 80);
+        assert_eq!(pipeline["native_field_snapshot_writer_wall_time_ns"], 0);
+
+        fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
+    }
+
+    #[test]
     fn write_artifacts_persists_fem_material_field_asset_files() {
         let problem = fullmag_ir::ProblemIR::bootstrap_example();
         let mut plan = test_fem_execution_plan();
@@ -2189,6 +2314,93 @@ mod tests {
         assert_eq!(metadata["absolute_tolerance"], serde_json::Value::Null);
         assert_eq!(metadata["max_iterations"], 500);
         assert_eq!(metadata["print_level"], 0);
+        assert_eq!(metadata["policy_source"], "resolved_default");
+        assert_eq!(metadata["amg_profile"]["provider"], "mfem_hypre_boomeramg");
+        assert_eq!(metadata["amg_profile"]["relax_type"], 18);
+        assert_eq!(metadata["amg_profile"]["coarsening"], 8);
+        assert_eq!(metadata["amg_profile"]["interpolation"], 6);
+        assert_eq!(metadata["amg_profile"]["aggressive_coarsening"], 1);
+        assert_eq!(
+            metadata["amg_profile"]["strength_threshold"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            metadata["amg_profile"]["max_levels"],
+            serde_json::Value::Null
+        );
+        assert_eq!(metadata["requested_linear_solver"], serde_json::Value::Null);
+        assert_eq!(
+            metadata["requested_preconditioner"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            metadata["requested_relative_tolerance"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            metadata["requested_absolute_tolerance"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            metadata["requested_max_iterations"],
+            serde_json::Value::Null
+        );
+        assert_eq!(metadata["requested_print_level"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn demag_profile_metadata_distinguishes_explicit_policy_from_resolved_policy() {
+        let mut plan = test_fem_execution_plan();
+        if let BackendPlanIR::Fem(fem) = &mut plan.backend_plan {
+            fem.enable_demag = true;
+            fem.demag_solver_policy = Some(fullmag_ir::FemLinearSolverPolicy {
+                solver: "GMRES".to_string(),
+                preconditioner: "JACOBI".to_string(),
+                rtol: 1.0e-6,
+                atol: Some(1.0e-20),
+                max_iterations: 77,
+                print_level: 2,
+            });
+        }
+        let mut provenance = ExecutionProvenance::default();
+        provenance.fem_poisson_demag = Some(crate::types::FemPoissonDemagProvenance {
+            linear_solver: "CG".to_string(),
+            preconditioner: "AMG".to_string(),
+            rtol: 1.0e-8,
+            max_iterations: 500,
+            ..Default::default()
+        });
+
+        let metadata = demag_runtime_metadata(&plan, &provenance, &[]);
+
+        assert_eq!(metadata["policy_source"], "explicit");
+        assert_eq!(metadata["requested_linear_solver"], "GMRES");
+        assert_eq!(metadata["requested_preconditioner"], "JACOBI");
+        assert_eq!(metadata["requested_relative_tolerance"], 1.0e-6);
+        assert_eq!(metadata["requested_absolute_tolerance"], 1.0e-20);
+        assert_eq!(metadata["requested_max_iterations"], 77);
+        assert_eq!(metadata["requested_print_level"], 2);
+        assert_eq!(metadata["linear_solver"], "CG");
+        assert_eq!(metadata["preconditioner"], "AMG");
+        assert_eq!(metadata["relative_tolerance"], 1.0e-8);
+        assert_eq!(metadata["max_iterations"], 500);
+    }
+
+    #[test]
+    fn demag_profile_metadata_omits_amg_profile_for_non_amg_policy() {
+        let mut plan = test_fem_execution_plan();
+        if let BackendPlanIR::Fem(fem) = &mut plan.backend_plan {
+            fem.enable_demag = true;
+            fem.demag_solver_policy = Some(fullmag_ir::FemLinearSolverPolicy {
+                preconditioner: "JACOBI".to_string(),
+                ..Default::default()
+            });
+        }
+
+        let metadata = demag_runtime_metadata(&plan, &ExecutionProvenance::default(), &[]);
+
+        assert_eq!(metadata["preconditioner"], "JACOBI");
+        assert_eq!(metadata["amg_profile"], serde_json::Value::Null);
     }
 
     #[test]

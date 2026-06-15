@@ -44,6 +44,14 @@ interface StudyStageRuntimeMetricModel {
   rawValue?: number | null;
 }
 
+interface StudyStageTransitionModel {
+  kind: string | null;
+  label: string | null;
+  reason: string | null;
+  transferOperator: string | null;
+  uiPresentation: string | null;
+}
+
 export type StudyStageModel = StudyStageSnapshot & {
   artifactRefs: readonly string[];
   checkpointRef: string | null;
@@ -51,9 +59,14 @@ export type StudyStageModel = StudyStageSnapshot & {
   completedAtIso: string | null;
   completedAtUnixMs: number | null;
   label: string;
+  lastProgressUnixMs?: number | null;
+  startedAtUnixMs?: number | null;
+  progressDetail?: string | null;
+  progressLabel?: string | null;
   progressPercent: number;
   runtimeMetric: StudyStageRuntimeMetricModel | null;
   stopReason: string | null;
+  transition: StudyStageTransitionModel | null;
 };
 
 export interface StudyInspectorSnapshot {
@@ -188,6 +201,11 @@ export function resolveStudyInspectorModel({
       stageExecution?.stage_statuses[stage.index] ??
       stage.status;
     const isCompleted = status.toLowerCase() === "completed";
+    const stageProgressPercent =
+      typeof runtimeRecord?.progress_percent === "number" &&
+      Number.isFinite(runtimeRecord.progress_percent)
+        ? Math.max(0, Math.min(100, runtimeRecord.progress_percent))
+        : null;
     return {
       ...stage,
       artifactRefs: runtimeRecord?.artifact_refs ?? [],
@@ -199,15 +217,20 @@ export function resolveStudyInspectorModel({
           : null,
       completedAtUnixMs: runtimeRecord?.completed_at_unix_ms ?? null,
       label: stageLabel(stage),
+      lastProgressUnixMs: runtimeRecord?.last_progress_unix_ms ?? null,
+      startedAtUnixMs: runtimeRecord?.started_at_unix_ms ?? null,
+      progressDetail: runtimeRecord?.progress_detail ?? null,
+      progressLabel: runtimeRecord?.progress_label ?? null,
       progressPercent: isCompleted
         ? 100
         : stage.index === activeStageIndex
-          ? progressPercent
+          ? (stageProgressPercent ?? progressPercent)
           : 0,
       runtimeMetric: runtimeMetricModel(runtimeRecord),
       stageId: runtimeRecord?.stage_id ?? stage.stageId,
       status,
       stopReason: runtimeRecord?.reason ?? null,
+      transition: stageTransitionModel(runtimeRecord),
     };
   });
   const selectedStage =
@@ -619,6 +642,36 @@ function runtimeMetricModel(
     value: metricValueText(record.metric_name, record.metric_value),
     threshold: metricValueText(record.metric_name, record.threshold),
     rawValue: record.metric_value ?? null,
+  };
+}
+
+function stageTransitionModel(
+  record: StageExecutionResource["stages"][number] | null,
+): StudyStageTransitionModel | null {
+  const runtimeRecord = record as
+    | (StageExecutionResource["stages"][number] & {
+        state_transfer_operator_kind?: string | null;
+        state_transition?: string | null;
+        state_transition_kind?: string | null;
+        state_transition_reason?: string | null;
+        state_transition_ui_presentation?: string | null;
+      })
+    | null;
+  if (
+    !runtimeRecord?.state_transition &&
+    !runtimeRecord?.state_transition_kind &&
+    !runtimeRecord?.state_transition_reason &&
+    !runtimeRecord?.state_transfer_operator_kind &&
+    !runtimeRecord?.state_transition_ui_presentation
+  ) {
+    return null;
+  }
+  return {
+    kind: runtimeRecord.state_transition_kind ?? null,
+    label: runtimeRecord.state_transition ?? null,
+    reason: runtimeRecord.state_transition_reason ?? null,
+    transferOperator: runtimeRecord.state_transfer_operator_kind ?? null,
+    uiPresentation: runtimeRecord.state_transition_ui_presentation ?? null,
   };
 }
 

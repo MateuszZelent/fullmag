@@ -6,7 +6,6 @@ import { buildSurfaceEdgeIndices } from "../viewport3dSurfaceEdges";
 import { buildTetraVolumeEdgeIndices } from "../viewport3dRenderModel";
 
 export type RegionOverlayTheme = "latte" | "mocha";
-export type RegionOverlayShapeKind = "box" | "cylinder" | "sphere";
 
 type NumericVector3 = readonly [number, number, number];
 type NumericQuaternion = readonly [number, number, number, number];
@@ -45,7 +44,7 @@ export interface RegionOverlayStyle {
   wireframeColor: string | null;
 }
 
-export interface RegionOverlayTransform {
+interface RegionOverlayTransform {
   position: NumericVector3;
   quaternion: NumericQuaternion;
   scale: NumericVector3;
@@ -65,13 +64,13 @@ interface RegionOverlayBaseModel {
   transform: RegionOverlayTransform;
 }
 
-export interface RegionOverlayBoxModel extends RegionOverlayBaseModel {
+interface RegionOverlayBoxModel extends RegionOverlayBaseModel {
   center: NumericVector3;
   kind: "box";
   size: NumericVector3;
 }
 
-export interface RegionOverlayCylinderModel extends RegionOverlayBaseModel {
+interface RegionOverlayCylinderModel extends RegionOverlayBaseModel {
   axis: NumericVector3;
   center: NumericVector3;
   height: number;
@@ -79,7 +78,7 @@ export interface RegionOverlayCylinderModel extends RegionOverlayBaseModel {
   radius: number;
 }
 
-export interface RegionOverlaySphereModel extends RegionOverlayBaseModel {
+interface RegionOverlaySphereModel extends RegionOverlayBaseModel {
   center: NumericVector3;
   kind: "sphere";
   radius: number;
@@ -453,7 +452,7 @@ function meshPartElementIndices(
     }
   }
 
-  return [...candidates].sort((left, right) => left - right);
+  return Array.from(candidates).toSorted((left, right) => left - right);
 }
 
 function ownerElementIndicesForRegion(
@@ -472,7 +471,7 @@ function ownerElementIndicesForRegion(
     }
   }
 
-  return [...candidates].sort((left, right) => left - right);
+  return Array.from(candidates).toSorted((left, right) => left - right);
 }
 
 function elementIndicesForPart(
@@ -487,7 +486,7 @@ function elementIndicesForPart(
         elements.add(index);
       }
     }
-    return [...elements].sort((left, right) => left - right);
+    return Array.from(elements).toSorted((left, right) => left - right);
   }
 
   const elementStart = Math.max(0, Math.floor(part.element_start ?? 0));
@@ -697,7 +696,7 @@ function pushBoundaryFaceCandidate(
   faces: Map<string, { count: number; face: [number, number, number] }>,
   face: [number, number, number],
 ): void {
-  const key = [...face].sort((left, right) => left - right).join(":");
+  const key = face.toSorted((left, right) => left - right).join(":");
   const current = faces.get(key);
   if (current) {
     current.count += 1;

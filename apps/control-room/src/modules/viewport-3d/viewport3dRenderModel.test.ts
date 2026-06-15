@@ -924,6 +924,108 @@ describe("viewport3dRenderModel", () => {
     expect(model?.scalarColorsByMode.has("monochrome")).toBe(false);
   });
 
+  it("carries analysis overlay visualization phase as render state", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [],
+      [],
+    );
+
+    const model = buildViewport3DFieldRenderModel(
+      topologyModel,
+      fieldVectorFixture(),
+      0.5,
+      {
+        complexFieldVector: {
+          componentCount: 3,
+          dtype: "complex128",
+          grid: [4, 1, 1],
+          pointCount: 4,
+          quantityId: "analysis:eigen:sample-0000:mode-0002",
+          valueCount: 24,
+          values: new Float64Array(24),
+        },
+        scalarColorModes: new Set(["magnitude"]),
+        visualizationPhaseRad: 1.25,
+      },
+    );
+
+    expect(model?.complexFieldVector).toMatchObject({
+      componentCount: 3,
+      dtype: "complex128",
+      quantityId: "analysis:eigen:sample-0000:mode-0002",
+    });
+    expect(model?.visualizationPhaseRad).toBe(1.25);
+  });
+
+  it("projects complex analysis fields locally using visualization phase", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [],
+      [],
+    );
+    const complexFieldVector = {
+      componentCount: 3,
+      dtype: "complex128" as const,
+      grid: [4, 1, 1] as [number, number, number],
+      pointCount: 4,
+      quantityId: "analysis:eigen:sample-0000:mode-0002",
+      valueCount: 24,
+      values: new Float64Array([
+        1, 2, 0, 0, 0, 0,
+        3, 4, 0, 0, 0, 0,
+        5, 6, 0, 0, 0, 0,
+        7, 8, 0, 0, 0, 0,
+      ]),
+    };
+
+    const phaseZero = buildViewport3DFieldRenderModel(topologyModel, null, 0.5, {
+      complexFieldVector,
+      scalarColorModes: new Set(["x"]),
+      visualizationPhaseRad: 0,
+    });
+    const phaseQuarter = buildViewport3DFieldRenderModel(
+      topologyModel,
+      null,
+      0.5,
+      {
+        complexFieldVector,
+        scalarColorModes: new Set(["x"]),
+        visualizationPhaseRad: Math.PI / 2,
+      },
+    );
+
+    expect(
+      Array.from(phaseZero?.scalarColorsByMode.get("x")?.scalarValues ?? []),
+    ).toEqual([1, 3, 5, 7]);
+    expect(
+      Array.from(phaseQuarter?.scalarColorsByMode.get("x")?.scalarValues ?? []),
+    ).toEqual([-2, -4, -6, -8]);
+    expect(
+      Array.from(
+        phaseQuarter?.scalarColorsByMode.get("x")?.complexRealValues ?? [],
+      ),
+    ).toEqual([
+      1, 0, 0,
+      3, 0, 0,
+      5, 0, 0,
+      7, 0, 0,
+    ]);
+    expect(
+      Array.from(
+        phaseQuarter?.scalarColorsByMode.get("x")?.complexImagValues ?? [],
+      ),
+    ).toEqual([
+      2, 0, 0,
+      4, 0, 0,
+      6, 0, 0,
+      8, 0, 0,
+    ]);
+    expect(phaseQuarter?.scalarColorsByMode.get("x")?.complexPhaseRad).toBe(
+      Math.PI / 2,
+    );
+  });
+
   it("rejects full-domain field buffers that do not match the active topology node count", () => {
     const topologyModel = buildViewport3DTopologyRenderModel(
       topologyFixture(),

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { ControlRoomApi } from "@/kernel/api/ControlRoomApi";
 import {
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
@@ -374,6 +375,56 @@ describe("selectExplorerNode", () => {
         kind: "results.eigen.branch",
         nodeId: "results:eigen:branches:branch:branch-0",
         resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
+        type: "frequency-domain",
+      },
+    });
+  });
+
+  it("preserves FMR spectrum and sweep metadata for chart and inspector routing", () => {
+    const kernel = makeKernel();
+    const modalNode: ExplorerNode = {
+      artifactPath: "eigen/spectrum.v2.json",
+      calculationMode: "fmr_modal",
+      id: "results:frequency-domain:fmr:modal-spectrum",
+      kind: "results.frequency_domain.fmr_modal_spectrum",
+      label: "Modal FMR Spectrum",
+      parentId: "results:frequency-domain:fmr",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+    };
+    const sweepNode: ExplorerNode = {
+      artifactPath: "response/magnetic_response_sweep.v2.json",
+      calculationMode: "fmr_response",
+      id: "results:frequency-domain:fmr:response-sweep",
+      kind: "results.frequency_domain.fmr_response_sweep",
+      label: "Driven FMR Sweep",
+      parentId: "results:frequency-domain:fmr",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+    };
+
+    selectExplorerNode(kernel, modalNode, "explorer");
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "results.frequency_domain.fmr_modal_spectrum",
+      nodeId: "results:frequency-domain:fmr:modal-spectrum",
+      ref: {
+        artifactPath: "eigen/spectrum.v2.json",
+        calculationMode: "fmr_modal",
+        kind: "results.frequency_domain.fmr_modal_spectrum",
+        nodeId: "results:frequency-domain:fmr:modal-spectrum",
+        resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+        type: "frequency-domain",
+      },
+    });
+
+    selectExplorerNode(kernel, sweepNode, "explorer");
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "results.frequency_domain.fmr_response_sweep",
+      nodeId: "results:frequency-domain:fmr:response-sweep",
+      ref: {
+        artifactPath: "response/magnetic_response_sweep.v2.json",
+        calculationMode: "fmr_response",
+        kind: "results.frequency_domain.fmr_response_sweep",
+        nodeId: "results:frequency-domain:fmr:response-sweep",
+        resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
         type: "frequency-domain",
       },
     });

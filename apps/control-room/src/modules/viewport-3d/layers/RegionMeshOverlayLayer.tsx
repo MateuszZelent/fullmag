@@ -138,7 +138,7 @@ function RegionMeshOverlayShape({
     event.stopPropagation();
     onSelectRegion?.({ objectId: model.objectId, regionId: model.regionId });
   };
-  const handleClick = (event: ThreeEvent<MouseEvent>) => {
+  const selectRegionFromClick = (event: ThreeEvent<MouseEvent>) => {
     event.stopPropagation();
     onSelectRegion?.({ objectId: model.objectId, regionId: model.regionId });
   };
@@ -150,7 +150,7 @@ function RegionMeshOverlayShape({
   return (
     <group
       name={`region-mesh-overlay:${model.regionId}`}
-      onClick={handleClick}
+      onClick={selectRegionFromClick}
       onPointerDown={handlePointerDown}
     >
       {surfaceGeometry ? (

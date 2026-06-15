@@ -24,11 +24,13 @@ describe("useViewport3DChunkedScalarColors", () => {
     const sync = colorBuffer(1);
     const asyncOrientation = colorBuffer(2);
     const base: Viewport3DFieldRenderModel = {
+      complexFieldVector: null,
       fullVectorSegments: null,
       partVectorSegments: new Map(),
       scalarColors: sync,
       scalarColorsByPartAndMode: new Map(),
       scalarColorsByMode: new Map([["orientation", sync]]),
+      visualizationPhaseRad: null,
     };
 
     const result = mergeViewport3DFieldScalarColors(

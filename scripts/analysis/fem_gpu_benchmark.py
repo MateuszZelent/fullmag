@@ -208,6 +208,19 @@ DEFAULT_GPU_LLG_CONTROL_READBACK_PER_STEP = 0
 DEFAULT_GPU_PGBB_CONTROL_READBACK_PER_STEP = 3
 DEFAULT_GPU_NCG_CONTROL_READBACK_PER_STEP = 2
 DEFAULT_GPU_CONTROL_READBACK_PER_REJECTED_ATTEMPT = 2
+DEFAULT_DEMAG_AMG_RELAX_TYPE = 18
+DEFAULT_DEMAG_AMG_COARSENING = 8
+DEFAULT_DEMAG_AMG_INTERPOLATION = 6
+DEFAULT_DEMAG_AMG_AGGRESSIVE_COARSENING = 1
+DEFAULT_DEMAG_AMG_STRENGTH_THRESHOLD = None
+DEFAULT_DEMAG_AMG_MAX_LEVELS = None
+DEFAULT_BEST_DEMAG_POLICY_METRIC = "demag_solver_apply_wall_time_ms"
+BEST_DEMAG_POLICY_METRICS = (
+    "demag_wall_time_ms",
+    "demag_solve_wall_time_ms",
+    "demag_solver_apply_wall_time_ms",
+    "wall_time_ms",
+)
 MU0 = 4.0 * math.pi * 1e-7
 RELAX_TORQUE_TOLERANCE_T = 1e-4
 RELAX_TORQUE_TOLERANCE_APM = RELAX_TORQUE_TOLERANCE_T / MU0
@@ -261,6 +274,13 @@ def positive_float_arg(value: str) -> float:
     parsed = float(value)
     if parsed <= 0.0:
         raise argparse.ArgumentTypeError("value must be > 0")
+    return parsed
+
+
+def nonnegative_float_arg(value: str) -> float:
+    parsed = float(value)
+    if parsed < 0.0:
+        raise argparse.ArgumentTypeError("value must be >= 0")
     return parsed
 
 
@@ -371,6 +391,74 @@ def resolve_demag_preconditioners(
     return list(dict.fromkeys(preconditioners))
 
 
+def resolve_demag_rtols(rtols_arg: str | None, default_rtol: float) -> list[float]:
+    raw = rtols_arg if rtols_arg is not None else repr(default_rtol)
+    rtols = [positive_float_arg(part.strip()) for part in raw.split(",") if part.strip()]
+    if not rtols:
+        raise ValueError("at least one demag rtol is required")
+    return list(dict.fromkeys(rtols))
+
+
+def resolve_nonnegative_ints(raw_arg: str | None, default_value: int) -> list[int]:
+    raw = raw_arg if raw_arg is not None else str(default_value)
+    values = [nonnegative_int_arg(part.strip()) for part in raw.split(",") if part.strip()]
+    if not values:
+        raise ValueError("at least one integer value is required")
+    return list(dict.fromkeys(values))
+
+
+def resolve_optional_nonnegative_ints(raw_arg: str | None) -> list[int | None]:
+    if raw_arg is None:
+        return [None]
+    values: list[int | None] = []
+    for part in raw_arg.split(","):
+        token = part.strip()
+        if not token:
+            continue
+        if token.lower() in {"default", "none", "null", "-"}:
+            values.append(None)
+        else:
+            values.append(nonnegative_int_arg(token))
+    if not values:
+        return [None]
+    return list(dict.fromkeys(values))
+
+
+def resolve_optional_nonnegative_floats(raw_arg: str | None) -> list[float | None]:
+    if raw_arg is None:
+        return [None]
+    values: list[float | None] = []
+    for part in raw_arg.split(","):
+        token = part.strip()
+        if not token:
+            continue
+        if token.lower() in {"default", "none", "null", "-"}:
+            values.append(None)
+        else:
+            values.append(nonnegative_float_arg(token))
+    if not values:
+        return [None]
+    return list(dict.fromkeys(values))
+
+
+def demag_amg_profiles_for_preconditioner(
+    preconditioner: str,
+    profiles: list[tuple[int, int, int, int, float | None, int | None]],
+) -> list[tuple[int, int, int, int, float | None, int | None]]:
+    if preconditioner in {"AMG", "OMIT"}:
+        return profiles
+    return [
+        (
+            DEFAULT_DEMAG_AMG_RELAX_TYPE,
+            DEFAULT_DEMAG_AMG_COARSENING,
+            DEFAULT_DEMAG_AMG_INTERPOLATION,
+            DEFAULT_DEMAG_AMG_AGGRESSIVE_COARSENING,
+            DEFAULT_DEMAG_AMG_STRENGTH_THRESHOLD,
+            DEFAULT_DEMAG_AMG_MAX_LEVELS,
+        )
+    ]
+
+
 def demag_policy_pairs_for_scenario(
     scenario: str,
     solvers: list[str],
@@ -388,15 +476,33 @@ def demag_policy_pairs_for_scenario(
 def demag_policy_env(
     demag_solver: str,
     demag_preconditioner: str,
+    demag_rtol: float,
+    demag_amg_profile: tuple[int, int, int, int, float | None, int | None],
     args: argparse.Namespace,
 ) -> dict[str, str]:
+    (
+        relax_type,
+        coarsening,
+        interpolation,
+        aggressive_coarsening,
+        strength_threshold,
+        max_levels,
+    ) = demag_amg_profile
     env = {
         "FULLMAG_BENCH_DEMAG_SOLVER": demag_solver,
         "FULLMAG_BENCH_DEMAG_PRECONDITIONER": demag_preconditioner,
-        "FULLMAG_BENCH_DEMAG_RTOL": repr(args.demag_rtol),
+        "FULLMAG_BENCH_DEMAG_RTOL": repr(demag_rtol),
         "FULLMAG_BENCH_DEMAG_MAX_ITERATIONS": str(args.demag_max_iterations),
         "FULLMAG_BENCH_DEMAG_PRINT_LEVEL": str(args.demag_print_level),
+        "FULLMAG_FEM_DEMAG_AMG_RELAX_TYPE": str(relax_type),
+        "FULLMAG_FEM_DEMAG_AMG_COARSENING": str(coarsening),
+        "FULLMAG_FEM_DEMAG_AMG_INTERPOLATION": str(interpolation),
+        "FULLMAG_FEM_DEMAG_AMG_AGGRESSIVE_COARSENING": str(aggressive_coarsening),
     }
+    if strength_threshold is not None:
+        env["FULLMAG_FEM_DEMAG_AMG_STRENGTH_THRESHOLD"] = repr(strength_threshold)
+    if max_levels is not None:
+        env["FULLMAG_FEM_DEMAG_AMG_MAX_LEVELS"] = str(max_levels)
     if args.demag_atol is not None:
         env["FULLMAG_BENCH_DEMAG_ATOL"] = repr(args.demag_atol)
     return env
@@ -510,6 +616,48 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Native FEM demag linear-solver relative tolerance",
     )
     parser.add_argument(
+        "--demag-rtols",
+        type=str,
+        default=None,
+        help="Comma-separated native FEM demag relative tolerances for policy sweeps",
+    )
+    parser.add_argument(
+        "--demag-amg-relax-types",
+        type=str,
+        default=None,
+        help="Comma-separated Hypre BoomerAMG relax_type values for AMG policy sweeps",
+    )
+    parser.add_argument(
+        "--demag-amg-coarsenings",
+        type=str,
+        default=None,
+        help="Comma-separated Hypre BoomerAMG coarsening values for AMG policy sweeps",
+    )
+    parser.add_argument(
+        "--demag-amg-interpolations",
+        type=str,
+        default=None,
+        help="Comma-separated Hypre BoomerAMG interpolation values for AMG policy sweeps",
+    )
+    parser.add_argument(
+        "--demag-amg-aggressive-coarsenings",
+        type=str,
+        default=None,
+        help="Comma-separated Hypre BoomerAMG aggressive coarsening values for AMG policy sweeps",
+    )
+    parser.add_argument(
+        "--demag-amg-strength-thresholds",
+        type=str,
+        default=None,
+        help="Comma-separated optional Hypre BoomerAMG strong-threshold overrides; use default/none for the MFEM/Hypre default",
+    )
+    parser.add_argument(
+        "--demag-amg-max-levels",
+        type=str,
+        default=None,
+        help="Comma-separated optional Hypre BoomerAMG max-level overrides; use default/none for the MFEM/Hypre default",
+    )
+    parser.add_argument(
         "--demag-atol",
         type=float,
         default=None,
@@ -531,6 +679,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--require-demag-converged",
         action="store_true",
         help="Fail if demag rows are missing convergence telemetry or exceed convergence thresholds",
+    )
+    parser.add_argument(
+        "--require-demag-setup-reused",
+        action="store_true",
+        help="Fail if multi-step demag rows do not report reused linear-solver setup",
     )
     parser.add_argument(
         "--require-fem-cpu-no-pbc-adaptive-ready",
@@ -671,9 +824,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Maximum accepted demag actual iterations when --require-demag-converged is set",
     )
     parser.add_argument(
+        "--max-demag-solver-apply-ms",
+        type=positive_float_arg,
+        default=None,
+        help="Maximum accepted demag_solver_apply_wall_time_ms for completed demag benchmark rows",
+    )
+    parser.add_argument(
         "--emit-best-demag-policy",
         action="store_true",
         help="Print FEM_BEST_DEMAG_POLICY JSON summaries for the fastest converged demag policy in each logical case",
+    )
+    parser.add_argument(
+        "--best-demag-policy-metric",
+        choices=BEST_DEMAG_POLICY_METRICS,
+        default=DEFAULT_BEST_DEMAG_POLICY_METRIC,
+        help="Timing field used to choose the fastest converged demag policy",
     )
     parser.add_argument(
         "--require-best-demag-policy",
@@ -782,6 +947,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--gpu-warmup",
         action="store_true",
         help="Run one unrecorded FEM GPU case before measured rows to remove CUDA/Hypre cold-start from policy timing",
+    )
+    parser.add_argument(
+        "--reuse-generated-domain-mesh",
+        action="store_true",
+        help="Materialize each generated shared-domain benchmark mesh once and reuse it as an explicit domain mesh across policy/backend rows",
+    )
+    parser.add_argument(
+        "--generated-domain-mesh-cache-dir",
+        type=Path,
+        default=None,
+        help="Optional persistent cache directory for generated shared-domain meshes used by --reuse-generated-domain-mesh",
     )
     return parser.parse_args(argv)
 
@@ -1447,6 +1623,11 @@ def input_mesh_summary(mesh_stats: Mapping[str, object]) -> str:
     )
 
 
+def benchmark_scenario_requires_shared_domain(scenario: str) -> bool:
+    canonical = BOX500_AIRBOX_SCENARIO_ALIASES.get(scenario, scenario)
+    return scenario in BOX500_AIRBOX_SCENARIO_ALIASES or "demag" in canonical
+
+
 def mesh_signature(mesh: Mapping[str, object]) -> str:
     payload = {
         key: mesh.get(key)
@@ -1641,6 +1822,114 @@ def load_metadata_from_payload(payload: Mapping[str, object] | None) -> dict[str
     return load_metadata_file(Path(artifact_dir) / "metadata.json")
 
 
+def export_generated_domain_mesh(
+    *,
+    mesh_path: Path,
+    scenario: str,
+    integrator: str,
+    steps: int,
+    dt: float,
+    timestep_policy: str,
+    thread_spec: ThreadCountSpec,
+    extra_env: dict[str, str],
+    output_path: Path,
+    timeout_s: float | None,
+) -> Path:
+    env = os.environ.copy()
+    env.update(extra_env)
+    apply_bundled_openmpi_runtime_env(env)
+    env["FULLMAG_BENCH_MESH"] = str(mesh_path)
+    env["FULLMAG_BENCH_SCENARIO"] = scenario
+    env["FULLMAG_BENCH_INTEGRATOR"] = integrator
+    env["FULLMAG_BENCH_TIMESTEP_POLICY"] = timestep_policy
+    env["FULLMAG_BENCH_STEPS"] = str(steps)
+    env["FULLMAG_BENCH_DT"] = repr(dt)
+    env["FULLMAG_CPU_THREADS"] = thread_spec.env_value
+    env["FULLMAG_BENCH_EXPORT_DOMAIN_MESH"] = str(output_path)
+    python = env_text(env, "FULLMAG_PYTHON") or sys.executable
+    run_kwargs = {
+        "cwd": REPO_ROOT,
+        "env": env,
+        "capture_output": True,
+        "text": True,
+        "check": False,
+    }
+    if timeout_s is not None:
+        run_kwargs["timeout"] = timeout_s
+    try:
+        completed = subprocess.run(
+            [python, str(BENCH_SCRIPT)],
+            **run_kwargs,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"domain mesh export timed out after {timeout_s} s for scenario={scenario}"
+        ) from exc
+    if completed.returncode != 0 or not output_path.is_file():
+        combined = "\n".join(
+            part for part in [completed.stdout, completed.stderr] if part.strip()
+        )
+        tail = "\n".join(combined.splitlines()[-20:])
+        raise RuntimeError(
+            f"domain mesh export failed for scenario={scenario} "
+            f"returncode={completed.returncode}: {tail}"
+        )
+    return output_path
+
+
+def generated_domain_mesh_env(
+    *,
+    cache: dict[tuple[str, ...], Path],
+    cache_dir: Path | None,
+    mesh_path: Path,
+    scenario: str,
+    integrator: str,
+    steps: int,
+    dt: float,
+    timestep_policy: str,
+    thread_spec: ThreadCountSpec,
+    extra_env: dict[str, str],
+    timeout_s: float | None,
+) -> dict[str, str]:
+    if cache_dir is None or not benchmark_scenario_requires_shared_domain(scenario):
+        return {}
+    key = (
+        str(mesh_path),
+        scenario,
+        extra_env.get("FULLMAG_BENCH_DOMAIN_HMAX", ""),
+        extra_env.get("FULLMAG_BENCH_AIRBOX_HMAX", ""),
+    )
+    cached = cache.get(key)
+    if cached is None:
+        digest = hashlib.sha256("|".join(key).encode("utf-8")).hexdigest()[:12]
+        output_path = cache_dir / f"{digest}.domain.mesh.json"
+        if output_path.is_file():
+            print(
+                f"    reuse cached shared-domain mesh scenario={scenario} source={output_path}",
+                flush=True,
+            )
+            cached = output_path
+        else:
+            print(
+                f"    materialize shared-domain mesh once scenario={scenario} output={output_path}",
+                flush=True,
+            )
+            cached = export_generated_domain_mesh(
+                mesh_path=mesh_path,
+                scenario=scenario,
+                integrator=integrator,
+                steps=steps,
+                dt=dt,
+                timestep_policy=timestep_policy,
+                thread_spec=thread_spec,
+                extra_env=extra_env,
+                output_path=output_path,
+                timeout_s=timeout_s,
+            )
+        cache[key] = cached
+    return {"FULLMAG_BENCH_DOMAIN_MESH": str(cached)}
+
+
 def run_backend(
     *,
     backend_label: str,
@@ -1706,6 +1995,30 @@ def run_backend(
     row["requested_demag_print_level"] = env_text(
         env,
         "FULLMAG_BENCH_DEMAG_PRINT_LEVEL",
+    )
+    row["requested_demag_amg_relax_type"] = env_text(
+        env,
+        "FULLMAG_FEM_DEMAG_AMG_RELAX_TYPE",
+    )
+    row["requested_demag_amg_coarsening"] = env_text(
+        env,
+        "FULLMAG_FEM_DEMAG_AMG_COARSENING",
+    )
+    row["requested_demag_amg_interpolation"] = env_text(
+        env,
+        "FULLMAG_FEM_DEMAG_AMG_INTERPOLATION",
+    )
+    row["requested_demag_amg_aggressive_coarsening"] = env_text(
+        env,
+        "FULLMAG_FEM_DEMAG_AMG_AGGRESSIVE_COARSENING",
+    )
+    row["requested_demag_amg_strength_threshold"] = env_text(
+        env,
+        "FULLMAG_FEM_DEMAG_AMG_STRENGTH_THRESHOLD",
+    )
+    row["requested_demag_amg_max_levels"] = env_text(
+        env,
+        "FULLMAG_FEM_DEMAG_AMG_MAX_LEVELS",
     )
     row["requested_relax_torque_tolerance_apm"] = env_text(
         env,
@@ -1812,6 +2125,9 @@ def run_backend(
     demag_runtime = metadata.get("demag_runtime", {}) if metadata else {}
     if not isinstance(demag_runtime, Mapping):
         demag_runtime = {}
+    demag_amg_profile = demag_runtime.get("amg_profile", {})
+    if not isinstance(demag_amg_profile, Mapping):
+        demag_amg_profile = {}
     qualification = metadata.get("fem_cpu_relaxation_qualification", {}) if metadata else {}
     if not isinstance(qualification, Mapping):
         qualification = {}
@@ -2013,10 +2329,40 @@ def run_backend(
                 "demag_robin_beta_mode": demag_runtime.get("robin_beta_mode"),
                 "demag_robin_beta_factor": demag_runtime.get("robin_beta_factor"),
                 "demag_preconditioner": demag_runtime.get("preconditioner"),
+                "demag_amg_profile_provider": demag_amg_profile.get("provider"),
+                "demag_amg_relax_type": demag_amg_profile.get("relax_type"),
+                "demag_amg_coarsening": demag_amg_profile.get("coarsening"),
+                "demag_amg_interpolation": demag_amg_profile.get("interpolation"),
+                "demag_amg_aggressive_coarsening": demag_amg_profile.get(
+                    "aggressive_coarsening"
+                ),
+                "demag_amg_strength_threshold": demag_amg_profile.get(
+                    "strength_threshold"
+                ),
+                "demag_amg_max_levels": demag_amg_profile.get("max_levels"),
                 "demag_relative_tolerance": demag_runtime.get("relative_tolerance"),
                 "demag_absolute_tolerance": demag_runtime.get("absolute_tolerance"),
                 "demag_max_iterations": demag_runtime.get("max_iterations"),
                 "demag_print_level": demag_runtime.get("print_level"),
+                "demag_policy_source": demag_runtime.get("policy_source"),
+                "demag_requested_linear_solver": demag_runtime.get(
+                    "requested_linear_solver"
+                ),
+                "demag_requested_preconditioner": demag_runtime.get(
+                    "requested_preconditioner"
+                ),
+                "demag_requested_relative_tolerance": demag_runtime.get(
+                    "requested_relative_tolerance"
+                ),
+                "demag_requested_absolute_tolerance": demag_runtime.get(
+                    "requested_absolute_tolerance"
+                ),
+                "demag_requested_max_iterations": demag_runtime.get(
+                    "requested_max_iterations"
+                ),
+                "demag_requested_print_level": demag_runtime.get(
+                    "requested_print_level"
+                ),
                 "demag_actual_iterations": demag_runtime.get("actual_iterations"),
                 "demag_final_residual_norm": demag_runtime.get("final_residual_norm"),
                 "rejected_attempts": payload.get("rejected_attempts"),
@@ -2299,6 +2645,12 @@ def repeated_case_key(row: Mapping[str, object]) -> tuple[object, ...]:
         row.get("requested_demag_absolute_tolerance"),
         row.get("requested_demag_max_iterations"),
         row.get("requested_demag_print_level"),
+        row.get("requested_demag_amg_relax_type"),
+        row.get("requested_demag_amg_coarsening"),
+        row.get("requested_demag_amg_interpolation"),
+        row.get("requested_demag_amg_aggressive_coarsening"),
+        row.get("requested_demag_amg_strength_threshold"),
+        row.get("requested_demag_amg_max_levels"),
         row.get("demag_relative_tolerance"),
         row.get("demag_absolute_tolerance"),
         row.get("demag_max_iterations"),
@@ -2322,25 +2674,40 @@ def unstable_solver_mesh_groups(results: list[dict[str, object]]) -> list[str]:
     return failures
 
 
-def performance_regression_case_key(row: Mapping[str, object]) -> tuple[object, ...] | None:
+def performance_regression_key_value(value: object) -> str:
+    if value is None:
+        return ""
+    return str(value)
+
+
+def performance_regression_case_key(row: Mapping[str, object]) -> tuple[str, ...] | None:
     signature = row.get("solver_mesh_signature")
     if not signature:
         return None
-    return (
-        signature,
-        row.get("backend"),
-        row.get("mesh_path"),
-        row.get("scenario"),
-        row.get("integrator"),
-        row.get("relaxation_algorithm"),
-        row.get("timestep_policy"),
-        row.get("requested_cpu_thread_spec"),
-        row.get("requested_demag_solver"),
-        row.get("requested_demag_preconditioner"),
-        row.get("requested_demag_relative_tolerance"),
-        row.get("requested_demag_absolute_tolerance"),
-        row.get("requested_demag_max_iterations"),
-        row.get("requested_demag_print_level"),
+    return tuple(
+        performance_regression_key_value(value)
+        for value in (
+            signature,
+            row.get("backend"),
+            row.get("mesh_path"),
+            row.get("scenario"),
+            row.get("integrator"),
+            row.get("relaxation_algorithm"),
+            row.get("timestep_policy"),
+            row.get("requested_cpu_thread_spec"),
+            row.get("requested_demag_solver"),
+            row.get("requested_demag_preconditioner"),
+            row.get("requested_demag_relative_tolerance"),
+            row.get("requested_demag_absolute_tolerance"),
+            row.get("requested_demag_max_iterations"),
+            row.get("requested_demag_print_level"),
+            row.get("requested_demag_amg_relax_type"),
+            row.get("requested_demag_amg_coarsening"),
+            row.get("requested_demag_amg_interpolation"),
+            row.get("requested_demag_amg_aggressive_coarsening"),
+            row.get("requested_demag_amg_strength_threshold"),
+            row.get("requested_demag_amg_max_levels"),
+        )
     )
 
 
@@ -3356,6 +3723,30 @@ def single_backend_case_key(row: Mapping[str, object]) -> tuple[object, ...]:
             row.get("requested_demag_preconditioner"),
             row.get("demag_preconditioner"),
         ),
+        first_present(
+            row.get("requested_demag_amg_relax_type"),
+            row.get("demag_amg_relax_type"),
+        ),
+        first_present(
+            row.get("requested_demag_amg_coarsening"),
+            row.get("demag_amg_coarsening"),
+        ),
+        first_present(
+            row.get("requested_demag_amg_interpolation"),
+            row.get("demag_amg_interpolation"),
+        ),
+        first_present(
+            row.get("requested_demag_amg_aggressive_coarsening"),
+            row.get("demag_amg_aggressive_coarsening"),
+        ),
+        first_present(
+            row.get("requested_demag_amg_strength_threshold"),
+            row.get("demag_amg_strength_threshold"),
+        ),
+        first_present(
+            row.get("requested_demag_amg_max_levels"),
+            row.get("demag_amg_max_levels"),
+        ),
     )
 
 
@@ -3370,6 +3761,16 @@ def single_backend_case_label(row: Mapping[str, object]) -> str:
     )
     if solver or preconditioner:
         parts.append(f"{solver or '-'}/{preconditioner or '-'}")
+    if preconditioner in {"AMG", "OMIT"}:
+        parts.append(
+            "amg="
+            f"{first_present(row.get('requested_demag_amg_relax_type'), row.get('demag_amg_relax_type')) or '-'}/"
+            f"{first_present(row.get('requested_demag_amg_coarsening'), row.get('demag_amg_coarsening')) or '-'}/"
+            f"{first_present(row.get('requested_demag_amg_interpolation'), row.get('demag_amg_interpolation')) or '-'}/"
+            f"{first_present(row.get('requested_demag_amg_aggressive_coarsening'), row.get('demag_amg_aggressive_coarsening')) or '-'}/"
+            f"{first_present(row.get('requested_demag_amg_strength_threshold'), row.get('demag_amg_strength_threshold')) or '-'}/"
+            f"{first_present(row.get('requested_demag_amg_max_levels'), row.get('demag_amg_max_levels')) or '-'}"
+        )
     return " ".join(parts)
 
 
@@ -3556,6 +3957,35 @@ def render_cpu_gpu_benchmark_report(
                         group.get("ok_count", "-"),
                         report_value(group.get("max_demag_final_residual_norm"), precision=4),
                         report_value(group.get("max_demag_actual_iterations")),
+                    ]
+                )
+                + " |"
+            )
+
+    best_policies = cpu_gpu_summary.get("best_demag_policy", [])
+    if best_policies:
+        lines.extend(["", "## Best Demag Policy", ""])
+        lines.append(
+            "| Backend | Demag policy | Solver mesh signature | Avg apply ms | Avg total ms | Max residual | Max iterations |"
+        )
+        lines.append("|---|---|---|---:|---:|---:|---:|")
+        for policy in best_policies:
+            if not isinstance(policy, Mapping):
+                continue
+            case_key = policy.get("case_key", [])
+            backend = case_key[0] if isinstance(case_key, list) and case_key else "-"
+            lines.append(
+                "| "
+                + " | ".join(
+                    markdown_cell(value)
+                    for value in [
+                        backend,
+                        f"{policy.get('demag_solver', '-')}/{policy.get('demag_preconditioner', '-')}",
+                        policy.get("solver_mesh_signature", "-"),
+                        report_ms(policy.get("average_demag_solver_apply_wall_time_ms")),
+                        report_ms(policy.get("average_demag_wall_time_ms")),
+                        report_value(policy.get("max_demag_final_residual_norm"), precision=4),
+                        report_value(policy.get("max_demag_actual_iterations")),
                     ]
                 )
                 + " |"
@@ -3910,7 +4340,7 @@ def cpu_gpu_consistency_failures(
 def solver_mesh_pass_fail_summary_rows(
     results: list[dict[str, object]],
     *,
-    max_residual: float,
+    max_residual: float | None,
     max_iterations: int | None,
 ) -> list[dict[str, object]]:
     groups: dict[str, dict[str, object]] = {}
@@ -3963,7 +4393,8 @@ def solver_mesh_pass_fail_summary_rows(
                 group["max_demag_final_residual_norm"] = (
                     residual if current is None else max(current, residual)
                 )
-                if residual > max_residual:
+                residual_limit = demag_row_residual_limit(row, max_residual)
+                if residual_limit is None or residual > residual_limit:
                     group["failure_count"] = int(group["failure_count"]) + 1
                     group["status"] = "fail"
             if iterations is None:
@@ -3993,7 +4424,7 @@ def benchmark_pass_fail_summary(
     results: list[dict[str, object]],
     *,
     gate_failures: list[str],
-    max_residual: float,
+    max_residual: float | None,
     max_iterations: int | None,
 ) -> dict[str, object]:
     groups = solver_mesh_pass_fail_summary_rows(
@@ -4002,6 +4433,12 @@ def benchmark_pass_fail_summary(
         max_iterations=max_iterations,
     )
     group_failures = sum(int(group["failure_count"]) for group in groups)
+    failures = list(gate_failures)
+    failures.extend(
+        f"solver_mesh_signature={group['solver_mesh_signature']} failed {group['failure_count']} benchmark checks"
+        for group in groups
+        if int(group["failure_count"]) > 0
+    )
     return {
         "status": "pass" if not gate_failures and group_failures == 0 else "fail",
         "row_count": len(results),
@@ -4009,6 +4446,7 @@ def benchmark_pass_fail_summary(
         "failed_count": sum(1 for row in results if row.get("status") != "ok"),
         "gate_failure_count": len(gate_failures),
         "group_failure_count": group_failures,
+        "failures": failures,
         "solver_mesh_groups": groups,
     }
 
@@ -4017,7 +4455,7 @@ def emit_pass_fail_summary(
     results: list[dict[str, object]],
     *,
     gate_failures: list[str],
-    max_residual: float,
+    max_residual: float | None,
     max_iterations: int | None,
 ) -> None:
     summary = benchmark_pass_fail_summary(
@@ -4034,10 +4472,21 @@ def row_requires_demag_convergence(row: Mapping[str, object]) -> bool:
     return "demag" in scenario
 
 
+def demag_row_residual_limit(
+    row: Mapping[str, object],
+    explicit_max_residual: float | None,
+) -> float | None:
+    if explicit_max_residual is not None:
+        return explicit_max_residual
+    if (requested := as_float(row.get("requested_demag_relative_tolerance"))) is not None:
+        return requested
+    return as_float(row.get("demag_relative_tolerance"))
+
+
 def demag_convergence_failures(
     results: list[dict[str, object]],
     *,
-    max_residual: float,
+    max_residual: float | None,
     max_iterations: int | None,
 ) -> list[str]:
     failures: list[str] = []
@@ -4051,14 +4500,17 @@ def demag_convergence_failures(
             )
             continue
         residual = as_float(row.get("demag_final_residual_norm"))
+        residual_limit = demag_row_residual_limit(row, max_residual)
         iterations = as_int(row.get("demag_actual_iterations"))
         if residual is None:
             failures.append(
                 f"case={repeated_case_key(row)} is missing demag_final_residual_norm"
             )
-        elif residual > max_residual:
+        elif residual_limit is None:
+            failures.append(f"case={repeated_case_key(row)} is missing demag rtol")
+        elif residual > residual_limit:
             failures.append(
-                f"case={repeated_case_key(row)} demag_final_residual_norm={residual} exceeds {max_residual}"
+                f"case={repeated_case_key(row)} demag_final_residual_norm={residual} exceeds {residual_limit}"
             )
         if iterations is None:
             failures.append(
@@ -4067,6 +4519,60 @@ def demag_convergence_failures(
         elif max_iterations is not None and iterations > max_iterations:
             failures.append(
                 f"case={repeated_case_key(row)} demag_actual_iterations={iterations} exceeds {max_iterations}"
+            )
+    return failures
+
+
+def demag_solver_apply_budget_failures(
+    results: list[dict[str, object]],
+    *,
+    max_apply_ms: float,
+) -> list[str]:
+    failures: list[str] = []
+    for row in results:
+        if not row_requires_demag_convergence(row):
+            continue
+        case = repeated_case_key(row)
+        if row.get("status") != "ok":
+            failures.append(
+                f"case={case} did not complete before demag solver apply budget check"
+                f"{runtime_error_suffix(row)}"
+            )
+            continue
+        apply_ms = as_float(row.get("demag_solver_apply_wall_time_ms"))
+        if apply_ms is None:
+            failures.append(
+                f"case={case} is missing demag_solver_apply_wall_time_ms"
+            )
+        elif apply_ms > max_apply_ms:
+            failures.append(
+                f"case={case} demag_solver_apply_wall_time_ms={apply_ms:.6g} exceeds {max_apply_ms:.6g}"
+            )
+    return failures
+
+
+def demag_setup_reuse_failures(results: list[dict[str, object]]) -> list[str]:
+    failures: list[str] = []
+    for row in results:
+        if not row_requires_demag_convergence(row):
+            continue
+        case = repeated_case_key(row)
+        if row.get("status") != "ok":
+            failures.append(
+                f"case={case} did not complete before demag setup-reuse check"
+                f"{runtime_error_suffix(row)}"
+            )
+            continue
+        requested_steps = as_int(row.get("steps")) or 0
+        executed_steps = as_int(row.get("executed_steps")) or 0
+        if max(requested_steps, executed_steps) <= 1:
+            continue
+        setup_reused = row.get("demag_solver_setup_reused")
+        if setup_reused is None:
+            failures.append(f"case={case} is missing demag_solver_setup_reused")
+        elif setup_reused is not True:
+            failures.append(
+                f"case={case} demag_solver_setup_reused is not true for a multi-step demag run"
             )
     return failures
 
@@ -4328,6 +4834,7 @@ def demag_policy_selection_case_key(row: Mapping[str, object]) -> tuple[object, 
         row.get("mesh_path"),
         row.get("scenario"),
         row.get("integrator"),
+        row.get("relaxation_algorithm"),
         row.get("timestep_policy"),
         row.get("dt_s"),
         row.get("steps"),
@@ -4346,21 +4853,46 @@ def demag_policy_identity(row: Mapping[str, object]) -> tuple[object, ...]:
             row.get("requested_demag_preconditioner"),
             row.get("demag_preconditioner"),
         ),
+        first_present(
+            row.get("requested_demag_amg_relax_type"),
+            row.get("demag_amg_relax_type"),
+        ),
+        first_present(
+            row.get("requested_demag_amg_coarsening"),
+            row.get("demag_amg_coarsening"),
+        ),
+        first_present(
+            row.get("requested_demag_amg_interpolation"),
+            row.get("demag_amg_interpolation"),
+        ),
+        first_present(
+            row.get("requested_demag_amg_aggressive_coarsening"),
+            row.get("demag_amg_aggressive_coarsening"),
+        ),
+        first_present(
+            row.get("requested_demag_amg_strength_threshold"),
+            row.get("demag_amg_strength_threshold"),
+        ),
+        first_present(
+            row.get("requested_demag_amg_max_levels"),
+            row.get("demag_amg_max_levels"),
+        ),
     )
 
 
-def demag_policy_timing_ms(row: Mapping[str, object]) -> float | None:
-    timing = demag_policy_timing(row)
+def demag_policy_timing_ms(
+    row: Mapping[str, object],
+    selection_metric: str = DEFAULT_BEST_DEMAG_POLICY_METRIC,
+) -> float | None:
+    timing = demag_policy_timing(row, selection_metric)
     return timing[0] if timing is not None else None
 
 
-def demag_policy_timing(row: Mapping[str, object]) -> tuple[float, str] | None:
-    for field in (
-        "demag_wall_time_ms",
-        "demag_solve_wall_time_ms",
-        "demag_solver_apply_wall_time_ms",
-        "wall_time_ms",
-    ):
+def demag_policy_timing(
+    row: Mapping[str, object],
+    selection_metric: str = DEFAULT_BEST_DEMAG_POLICY_METRIC,
+) -> tuple[float, str] | None:
+    for field in (selection_metric, *BEST_DEMAG_POLICY_METRICS):
         value = as_float(row.get(field))
         if value is not None:
             return value, field
@@ -4384,8 +4916,9 @@ def average_demag_policy_metric(
 def best_demag_policy_rows(
     results: list[dict[str, object]],
     *,
-    max_residual: float,
+    max_residual: float | None,
     max_iterations: int | None,
+    selection_metric: str = DEFAULT_BEST_DEMAG_POLICY_METRIC,
 ) -> list[dict[str, object]]:
     grouped: dict[tuple[object, ...], dict[tuple[object, ...], list[dict[str, object]]]] = {}
     for row in results:
@@ -4393,11 +4926,17 @@ def best_demag_policy_rows(
             continue
         residual = as_float(row.get("demag_final_residual_norm"))
         iterations = as_int(row.get("demag_actual_iterations"))
-        if residual is None or iterations is None or residual > max_residual:
+        residual_limit = demag_row_residual_limit(row, max_residual)
+        if (
+            residual is None
+            or residual_limit is None
+            or iterations is None
+            or residual > residual_limit
+        ):
             continue
         if max_iterations is not None and iterations > max_iterations:
             continue
-        if demag_policy_timing_ms(row) is None:
+        if demag_policy_timing_ms(row, selection_metric) is None:
             continue
         grouped.setdefault(demag_policy_selection_case_key(row), {}).setdefault(
             demag_policy_identity(row),
@@ -4406,13 +4945,16 @@ def best_demag_policy_rows(
 
     summaries: list[dict[str, object]] = []
     for case_key, rows_by_policy in grouped.items():
+        mesh_signatures = stable_demag_policy_case_mesh_signatures(rows_by_policy)
+        if len(mesh_signatures) > 1:
+            continue
         best_summary: dict[str, object] | None = None
         best_sort_key: tuple[float, float, int] | None = None
         for policy, rows in rows_by_policy.items():
             timing_pairs = [
                 timing
                 for row in rows
-                if (timing := demag_policy_timing(row)) is not None
+                if (timing := demag_policy_timing(row, selection_metric)) is not None
             ]
             timings = [timing for timing, _ in timing_pairs]
             residuals = [
@@ -4446,6 +4988,12 @@ def best_demag_policy_rows(
                 "case_key": list(case_key),
                 "demag_solver": policy[0],
                 "demag_preconditioner": policy[1],
+                "demag_amg_relax_type": policy[2],
+                "demag_amg_coarsening": policy[3],
+                "demag_amg_interpolation": policy[4],
+                "demag_amg_aggressive_coarsening": policy[5],
+                "demag_amg_strength_threshold": policy[6],
+                "demag_amg_max_levels": policy[7],
                 "row_count": len(rows),
                 "selection_timing_field": selection_timing_field,
                 "average_demag_timing_ms": round(average_timing, 6),
@@ -4465,15 +5013,57 @@ def best_demag_policy_rows(
                 best_summary = candidate
         if best_summary is not None:
             best_summary["converged_policy_count"] = len(rows_by_policy)
+            if len(mesh_signatures) == 1:
+                best_summary["solver_mesh_signature"] = mesh_signatures[0]
             summaries.append(best_summary)
     return summaries
+
+
+def stable_demag_policy_case_mesh_signatures(
+    rows_by_policy: Mapping[tuple[object, ...], list[dict[str, object]]],
+) -> list[str]:
+    signatures = {
+        str(signature)
+        for rows in rows_by_policy.values()
+        for row in rows
+        if (signature := row.get("solver_mesh_signature"))
+    }
+    return sorted(signatures)
+
+
+def demag_policy_unstable_solver_mesh_failures(
+    results: list[dict[str, object]],
+) -> list[str]:
+    grouped: dict[
+        tuple[object, ...],
+        dict[tuple[object, ...], list[dict[str, object]]],
+    ] = {}
+    for row in results:
+        if not row_requires_demag_convergence(row) or row.get("status") != "ok":
+            continue
+        grouped.setdefault(demag_policy_selection_case_key(row), {}).setdefault(
+            demag_policy_identity(row),
+            [],
+        ).append(row)
+
+    failures: list[str] = []
+    for case, rows_by_policy in grouped.items():
+        signatures = stable_demag_policy_case_mesh_signatures(rows_by_policy)
+        if len(signatures) <= 1:
+            continue
+        failures.append(
+            f"case={case} cannot select a best demag policy because policy rows "
+            f"used {len(signatures)} solver_mesh_signature values"
+        )
+    return failures
 
 
 def best_demag_policy_failures(
     results: list[dict[str, object]],
     *,
-    max_residual: float,
+    max_residual: float | None,
     max_iterations: int | None,
+    selection_metric: str = DEFAULT_BEST_DEMAG_POLICY_METRIC,
 ) -> list[str]:
     candidate_cases = {
         demag_policy_selection_case_key(row)
@@ -4499,10 +5089,16 @@ def best_demag_policy_failures(
             results,
             max_residual=max_residual,
             max_iterations=max_iterations,
+            selection_metric=selection_metric,
         )
     }
-    failures: list[str] = []
+    failures: list[str] = demag_policy_unstable_solver_mesh_failures(results)
     for case in sorted(candidate_cases, key=str):
+        if any(
+            f"case={case} cannot select a best demag policy" in failure
+            for failure in failures
+        ):
+            continue
         summary = selected_summaries.get(case)
         if summary is None:
             error_kinds = sorted(str(kind) for kind in error_kinds_by_case.get(case, set()))
@@ -4564,6 +5160,39 @@ def main() -> None:
         args.demag_preconditioners,
         args.demag_preconditioner,
     )
+    demag_rtols = resolve_demag_rtols(args.demag_rtols, args.demag_rtol)
+    demag_amg_profiles = [
+        (
+            relax_type,
+            coarsening,
+            interpolation,
+            aggressive_coarsening,
+            strength_threshold,
+            max_levels,
+        )
+        for relax_type in resolve_nonnegative_ints(
+            args.demag_amg_relax_types,
+            DEFAULT_DEMAG_AMG_RELAX_TYPE,
+        )
+        for coarsening in resolve_nonnegative_ints(
+            args.demag_amg_coarsenings,
+            DEFAULT_DEMAG_AMG_COARSENING,
+        )
+        for interpolation in resolve_nonnegative_ints(
+            args.demag_amg_interpolations,
+            DEFAULT_DEMAG_AMG_INTERPOLATION,
+        )
+        for aggressive_coarsening in resolve_nonnegative_ints(
+            args.demag_amg_aggressive_coarsenings,
+            DEFAULT_DEMAG_AMG_AGGRESSIVE_COARSENING,
+        )
+        for strength_threshold in resolve_optional_nonnegative_floats(
+            args.demag_amg_strength_thresholds,
+        )
+        for max_levels in resolve_optional_nonnegative_ints(
+            args.demag_amg_max_levels,
+        )
+    ]
     try:
         relax_torque_tolerance_apm = resolve_relax_torque_tolerance_apm(args)
     except ValueError as exc:
@@ -4589,9 +5218,23 @@ def main() -> None:
     )
     mesh_env = benchmark_mesh_env(args)
     results: list[dict[str, object]] = []
+    persistent_domain_mesh_cache_dir = args.generated_domain_mesh_cache_dir
+    if args.reuse_generated_domain_mesh and persistent_domain_mesh_cache_dir is not None:
+        persistent_domain_mesh_cache_dir.mkdir(parents=True, exist_ok=True)
+    domain_mesh_tmp = (
+        tempfile.TemporaryDirectory(prefix="fullmag_domain_mesh_cache_")
+        if args.reuse_generated_domain_mesh and persistent_domain_mesh_cache_dir is None
+        else None
+    )
+    domain_mesh_cache_dir = (
+        persistent_domain_mesh_cache_dir
+        if persistent_domain_mesh_cache_dir is not None
+        else Path(domain_mesh_tmp.name) if domain_mesh_tmp is not None else None
+    )
+    domain_mesh_cache: dict[tuple[str, ...], Path] = {}
 
     print(
-        f"FEM benchmark sweep: backends={','.join(backends)} meshes={len(meshes)} scenarios={len(scenarios)} integrators={len(integrators)} relaxation_algorithms={','.join(relaxation_algorithms)} timestep_policies={','.join(timestep_policies)} demag_solvers={','.join(demag_solvers)} demag_preconditioners={','.join(demag_preconditioners)} repeat={repeat_count} steps={args.steps} dt={args.dt:.3e} s"
+        f"FEM benchmark sweep: backends={','.join(backends)} meshes={len(meshes)} scenarios={len(scenarios)} integrators={len(integrators)} relaxation_algorithms={','.join(relaxation_algorithms)} timestep_policies={','.join(timestep_policies)} demag_solvers={','.join(demag_solvers)} demag_preconditioners={','.join(demag_preconditioners)} demag_rtols={','.join(repr(value) for value in demag_rtols)} demag_amg_profiles={len(demag_amg_profiles)} repeat={repeat_count} steps={args.steps} dt={args.dt:.3e} s"
     )
     if args.gpu_warmup and "fem_gpu" in backends:
         warmup_mesh = meshes[0]
@@ -4611,8 +5254,29 @@ def main() -> None:
                 demag_solvers,
                 demag_preconditioners,
             )[0]
+            warmup_rtol = demag_rtols[0]
+            warmup_amg_profile = demag_amg_profiles_for_preconditioner(
+                warmup_preconditioner,
+                demag_amg_profiles,
+            )[0]
+            warmup_domain_mesh_env = generated_domain_mesh_env(
+                cache=domain_mesh_cache,
+                cache_dir=domain_mesh_cache_dir,
+                mesh_path=warmup_mesh,
+                scenario=warmup_scenario,
+                integrator=integrators[0],
+                steps=args.steps,
+                dt=args.dt,
+                timestep_policy=timestep_policies[0],
+                thread_spec=thread_specs[0],
+                extra_env={
+                    **mesh_env,
+                    **relax_env,
+                },
+                timeout_s=args.case_timeout_s,
+            )
             print(
-                f"  gpu_warmup scenario={warmup_scenario} relaxation_algorithm={warmup_relaxation_algorithm or 'none'} demag_policy={warmup_solver}/{warmup_preconditioner}",
+                f"  gpu_warmup scenario={warmup_scenario} relaxation_algorithm={warmup_relaxation_algorithm or 'none'} demag_policy={warmup_solver}/{warmup_preconditioner} demag_rtol={warmup_rtol!r} demag_amg_profile={warmup_amg_profile}",
                 flush=True,
             )
             warmup_row = run_backend(
@@ -4630,7 +5294,14 @@ def main() -> None:
                 extra_env={
                     **mesh_env,
                     **relax_env,
-                    **demag_policy_env(warmup_solver, warmup_preconditioner, args),
+                    **warmup_domain_mesh_env,
+                    **demag_policy_env(
+                        warmup_solver,
+                        warmup_preconditioner,
+                        warmup_rtol,
+                        warmup_amg_profile,
+                        args,
+                    ),
                 },
             )
             if warmup_row.get("status") != "ok":
@@ -4652,77 +5323,111 @@ def main() -> None:
                 for integrator in integrators:
                     for timestep_policy in timestep_policies:
                         for thread_spec in thread_specs:
+                            domain_mesh_env = generated_domain_mesh_env(
+                                cache=domain_mesh_cache,
+                                cache_dir=domain_mesh_cache_dir,
+                                mesh_path=mesh_path,
+                                scenario=scenario,
+                                integrator=integrator,
+                                steps=args.steps,
+                                dt=args.dt,
+                                timestep_policy=timestep_policy,
+                                thread_spec=thread_spec,
+                                extra_env={
+                                    **mesh_env,
+                                    **relax_env,
+                                },
+                                timeout_s=args.case_timeout_s,
+                            )
                             demag_policy_pairs = demag_policy_pairs_for_scenario(
                                 scenario,
                                 demag_solvers,
                                 demag_preconditioners,
                             )
-                            for demag_solver, demag_preconditioner in demag_policy_pairs:
-                                relaxation_label = relaxation_algorithm or "none"
-                                print(
-                                    f"    scenario={scenario} relaxation_algorithm={relaxation_label} integrator={integrator} timestep_policy={timestep_policy} thread_count={thread_spec.label}:{thread_spec.env_value} demag_policy={demag_solver}/{demag_preconditioner}"
-                                )
-                                demag_env = demag_policy_env(
-                                    demag_solver,
-                                    demag_preconditioner,
-                                    args,
-                                )
-                                for repeat_index in range(repeat_count):
-                                    for backend in backends:
-                                        if not relaxation_algorithm_supported_on_backend(
-                                            relaxation_algorithm,
-                                            backend,
-                                        ):
-                                            print(
-                                                f"      skip backend={backend} relaxation_algorithm={relaxation_label}: unsupported lane"
-                                            )
-                                            continue
-                                        if backend == "fem_cpu":
-                                            row = run_backend(
-                                                backend_label="fem_cpu",
-                                                binary=FULLMAG_CPU,
-                                                mesh_path=mesh_path,
-                                                scenario=scenario,
-                                                integrator=integrator,
-                                                relaxation_algorithm=relaxation_algorithm,
-                                                steps=args.steps,
-                                                dt=args.dt,
-                                                timestep_policy=timestep_policy,
-                                                thread_spec=thread_spec,
-                                                timeout_s=args.case_timeout_s,
-                                                extra_env={
-                                                    "FULLMAG_FEM_EXECUTION": "cpu",
-                                                    **demag_env,
-                                                    **mesh_env,
-                                                    **relax_env,
-                                                },
-                                            )
-                                        elif backend == "fem_gpu":
-                                            row = run_backend(
-                                                backend_label="fem_gpu",
-                                                binary=FULLMAG_GPU,
-                                                mesh_path=mesh_path,
-                                                scenario=scenario,
-                                                integrator=integrator,
-                                                relaxation_algorithm=relaxation_algorithm,
-                                                steps=args.steps,
-                                                dt=args.dt,
-                                                timestep_policy=timestep_policy,
-                                                thread_spec=thread_spec,
-                                                timeout_s=args.case_timeout_s,
-                                                extra_env={
-                                                    "FULLMAG_FEM_GPU_INDEX": "0",
-                                                    **demag_env,
-                                                    **mesh_env,
-                                                    **relax_env,
-                                                },
-                                            )
-                                        else:
-                                            continue
-                                        row["repeat_index"] = repeat_index
-                                        results.append(row)
+                            for demag_rtol in demag_rtols:
+                                for demag_solver, demag_preconditioner in demag_policy_pairs:
+                                    for demag_amg_profile in demag_amg_profiles_for_preconditioner(
+                                        demag_preconditioner,
+                                        demag_amg_profiles,
+                                    ):
+                                        relaxation_label = relaxation_algorithm or "none"
+                                        print(
+                                            f"    scenario={scenario} relaxation_algorithm={relaxation_label} integrator={integrator} timestep_policy={timestep_policy} thread_count={thread_spec.label}:{thread_spec.env_value} demag_policy={demag_solver}/{demag_preconditioner} demag_rtol={demag_rtol!r} demag_amg_profile={demag_amg_profile}"
+                                        )
+                                        demag_env = demag_policy_env(
+                                            demag_solver,
+                                            demag_preconditioner,
+                                            demag_rtol,
+                                            demag_amg_profile,
+                                            args,
+                                        )
+                                        for repeat_index in range(repeat_count):
+                                            for backend in backends:
+                                                if not relaxation_algorithm_supported_on_backend(
+                                                    relaxation_algorithm,
+                                                    backend,
+                                                ):
+                                                    print(
+                                                        f"      skip backend={backend} relaxation_algorithm={relaxation_label}: unsupported lane"
+                                                    )
+                                                    continue
+                                                if backend == "fem_cpu":
+                                                    row = run_backend(
+                                                        backend_label="fem_cpu",
+                                                        binary=FULLMAG_CPU,
+                                                        mesh_path=mesh_path,
+                                                        scenario=scenario,
+                                                        integrator=integrator,
+                                                        relaxation_algorithm=relaxation_algorithm,
+                                                        steps=args.steps,
+                                                        dt=args.dt,
+                                                        timestep_policy=timestep_policy,
+                                                        thread_spec=thread_spec,
+                                                        timeout_s=args.case_timeout_s,
+                                                        extra_env={
+                                                            "FULLMAG_FEM_EXECUTION": "cpu",
+                                                            **demag_env,
+                                                            **mesh_env,
+                                                            **relax_env,
+                                                            **domain_mesh_env,
+                                                        },
+                                                    )
+                                                elif backend == "fem_gpu":
+                                                    row = run_backend(
+                                                        backend_label="fem_gpu",
+                                                        binary=FULLMAG_GPU,
+                                                        mesh_path=mesh_path,
+                                                        scenario=scenario,
+                                                        integrator=integrator,
+                                                        relaxation_algorithm=relaxation_algorithm,
+                                                        steps=args.steps,
+                                                        dt=args.dt,
+                                                        timestep_policy=timestep_policy,
+                                                        thread_spec=thread_spec,
+                                                        timeout_s=args.case_timeout_s,
+                                                        extra_env={
+                                                            "FULLMAG_FEM_GPU_INDEX": "0",
+                                                            **demag_env,
+                                                            **mesh_env,
+                                                            **relax_env,
+                                                            **domain_mesh_env,
+                                                        },
+                                                    )
+                                                else:
+                                                    continue
+                                                row["repeat_index"] = repeat_index
+                                                results.append(row)
 
     write_csv(results, args.output)
+    demag_residual_threshold = args.demag_convergence_residual
+    best_policy_rows: list[dict[str, object]] = []
+    if args.emit_best_demag_policy or args.require_best_demag_policy:
+        best_policy_rows = best_demag_policy_rows(
+            results,
+            max_residual=demag_residual_threshold,
+            max_iterations=args.demag_convergence_max_iterations,
+            selection_metric=args.best_demag_policy_metric,
+        )
     cpu_gpu_summary_for_report: dict[str, object] | None = None
     if args.cpu_gpu_summary_output:
         cpu_gpu_summary_for_report = write_cpu_gpu_consistency_summary(
@@ -4737,9 +5442,15 @@ def main() -> None:
             torque_atol_t=args.cpu_gpu_torque_atol_t,
             max_step_delta=args.cpu_gpu_max_step_delta,
         )
+        if best_policy_rows:
+            cpu_gpu_summary_for_report["best_demag_policy"] = best_policy_rows
+            summary_path = Path(args.cpu_gpu_summary_output)
+            summary_path.write_text(
+                json.dumps(cpu_gpu_summary_for_report, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
     gate_failures: list[str] = []
     gate_exit_code = 0
-    demag_residual_threshold = args.demag_convergence_residual or args.demag_rtol
     if args.require_stable_solver_mesh:
         failures = unstable_solver_mesh_groups(results)
         if failures:
@@ -4754,6 +5465,19 @@ def main() -> None:
         if failures:
             gate_failures.extend(failures)
             gate_exit_code = gate_exit_code or 4
+    if args.max_demag_solver_apply_ms is not None:
+        failures = demag_solver_apply_budget_failures(
+            results,
+            max_apply_ms=args.max_demag_solver_apply_ms,
+        )
+        if failures:
+            gate_failures.extend(failures)
+            gate_exit_code = gate_exit_code or 13
+    if args.require_demag_setup_reused:
+        failures = demag_setup_reuse_failures(results)
+        if failures:
+            gate_failures.extend(failures)
+            gate_exit_code = gate_exit_code or 14
     if args.require_fem_cpu_no_pbc_adaptive_ready:
         failures = fem_cpu_no_pbc_adaptive_readiness_failures(
             results,
@@ -4791,11 +5515,6 @@ def main() -> None:
             gate_failures.extend(failures)
             gate_exit_code = gate_exit_code or 8
     if args.emit_best_demag_policy:
-        best_policy_rows = best_demag_policy_rows(
-            results,
-            max_residual=demag_residual_threshold,
-            max_iterations=args.demag_convergence_max_iterations,
-        )
         for summary in best_policy_rows:
             print(f"FEM_BEST_DEMAG_POLICY={json.dumps(summary, sort_keys=True)}")
     if args.require_best_demag_policy:
@@ -4803,6 +5522,7 @@ def main() -> None:
             results,
             max_residual=demag_residual_threshold,
             max_iterations=args.demag_convergence_max_iterations,
+            selection_metric=args.best_demag_policy_metric,
         )
         if failures:
             gate_failures.extend(failures)
@@ -4923,6 +5643,8 @@ def main() -> None:
                 )
             else:
                 cpu_gpu_summary_for_report = cpu_gpu_not_requested_summary(results)
+        if best_policy_rows:
+            cpu_gpu_summary_for_report["best_demag_policy"] = best_policy_rows
         report_text = render_cpu_gpu_benchmark_report(
             cpu_gpu_summary_for_report,
             pass_fail_summary,

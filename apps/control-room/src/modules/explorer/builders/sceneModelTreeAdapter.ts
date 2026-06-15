@@ -454,7 +454,7 @@ function sortRegionMap(
   for (const [objectId, regions] of byObject) {
     byObject.set(
       objectId,
-      [...regions].sort((left, right) => {
+      regions.toSorted((left, right) => {
         const leftPriority = left.priority ?? 0;
         const rightPriority = right.priority ?? 0;
         if (leftPriority !== rightPriority) return rightPriority - leftPriority;
@@ -703,6 +703,7 @@ function sceneStudyStageSnapshot(
 
   return {
     artifactName: stringValue(stage.artifact_name),
+    device: stringValue(stage.device),
     energyTolerance: scalarText(stage.energy_tolerance),
     hysteresisBranchMode: stringValue(stage.branch_mode) ?? stringValue(stage.branchMode),
     hysteresisFieldMaxMt: scalarText(stage.field_max_mT),
@@ -742,9 +743,10 @@ function hysteresisSettleSteps(
         ? [
             pipeline.default,
             ...(Array.isArray(pipeline.branches)
-              ? pipeline.branches
-                  .map((branch) => recordValue(branch)?.run)
-                  .filter((step): step is unknown => step != null)
+              ? pipeline.branches.flatMap((branch) => {
+                  const step = recordValue(branch)?.run;
+                  return step == null ? [] : [step];
+                })
               : []),
           ]
         : [];

@@ -6,6 +6,7 @@
  */
 
 #include "cpu/mfem/interactions/demag_fem_bem_potential.hpp"
+#include "cpu/mfem/runtime/mfem_host_access.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>
@@ -21,13 +22,14 @@ bool extract_demag_fem_bem_boundary_trace(
     std::string &error)
 {
     boundary_trace.assign(boundary_nodes.size(), 0.0);
+    const double *potential_data = audited_host_read(potential);
     for (size_t i = 0; i < boundary_nodes.size(); ++i) {
         const int tdof = static_cast<int>(boundary_nodes[i]);
         if (tdof < 0 || tdof >= potential.Size()) {
             error = "FEM/BEM demag boundary trace references a potential DOF outside the vector";
             return false;
         }
-        boundary_trace[i] = potential(tdof);
+        boundary_trace[i] = potential_data[tdof];
     }
     return true;
 }
@@ -43,8 +45,11 @@ bool combine_demag_fem_bem_total_potential(
         return false;
     }
     total_potential.SetSize(u1.Size());
+    const double *u1_data = audited_host_read(u1);
+    const double *u2_data = audited_host_read(u2);
+    double *total_data = audited_host_write(total_potential);
     for (int i = 0; i < total_potential.Size(); ++i) {
-        total_potential(i) = u1(i) + u2(i);
+        total_data[i] = u1_data[i] + u2_data[i];
     }
     return true;
 }

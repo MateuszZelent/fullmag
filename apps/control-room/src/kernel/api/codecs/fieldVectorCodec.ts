@@ -1,4 +1,4 @@
-import type { DecodedFieldVector } from "./types";
+import type { DecodedComplexFieldVector, DecodedFieldVector } from "./types";
 
 const HEADER_LEN = 48;
 const KIND_F64 = 1;
@@ -82,5 +82,23 @@ export function decodeFieldVector(buffer: ArrayBuffer): DecodedFieldVector {
     quantityId: new TextDecoder().decode(idBytes.subarray(0, idEnd)),
     valueCount,
     values: new Float64Array(buffer, HEADER_LEN, valueCount),
+  };
+}
+
+export function asDecodedComplexFieldVector(
+  fieldVector: DecodedFieldVector | null | undefined,
+): DecodedComplexFieldVector | null {
+  if (!fieldVector || fieldVector.nComp < 2 || fieldVector.nComp % 2 !== 0) {
+    return null;
+  }
+  const componentCount = fieldVector.nComp / 2;
+  return {
+    componentCount,
+    dtype: "complex128",
+    grid: fieldVector.grid,
+    pointCount: fieldVector.pointCount,
+    quantityId: fieldVector.quantityId,
+    valueCount: fieldVector.valueCount,
+    values: fieldVector.values,
   };
 }

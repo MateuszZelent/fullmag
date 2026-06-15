@@ -92,6 +92,7 @@ Read in this order:
 7. `06-analysis-plots-and-3d-mode-visualization.md`
 8. `07-implementation-stages-and-verification.md`
 9. `08-periodic-floquet-bloch-boundary-conditions.md`
+10. `10-production-interior-window-eigensolver.md`
 
 ## Non-Negotiable Success Criteria
 

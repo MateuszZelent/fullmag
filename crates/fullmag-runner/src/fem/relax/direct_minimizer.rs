@@ -7,16 +7,18 @@
 
 use fullmag_ir::{FemPlanIR, RelaxationControlIR, StageCompletionIR, StageStopReason};
 
-use crate::artifact_pipeline::ArtifactRecorder;
-use crate::dispatch::flatten_vectors;
-use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
+use crate::artifact_pipeline::{apply_artifact_enqueue_metrics, ArtifactRecorder};
+use crate::dispatch::FemEngine;
+use crate::interactive_runtime::{
+    cached_display_refresh_due, display_is_global_scalar, display_refresh_due,
+};
 use crate::native_fem::NativeFemBackend;
 use crate::relaxation::direct_minimizer::{
     direct_minimizer_pseudotime_budget, direct_minimizer_step_budget,
 };
 use crate::types::{FemMeshPayload, LiveStepConsumer, RunError, StepAction, StepStats, StepUpdate};
 
-use super::preview::build_fem_cached_preview_fields;
+use super::preview::{FemCachedPreviewHandoff, FemLiveMagnetizationHandoff, FemLivePreviewHandoff};
 use super::scalars::ensure_fem_object_scalars;
 
 pub(crate) struct DirectMinimizerExecution {
@@ -43,6 +45,10 @@ pub(crate) fn execute_direct_minimizer(
     let mut paused = false;
     let mut accepted_steps = 0u64;
     let mut pseudotime_s = 0.0;
+    let mut last_cached_preview_revision = last_preview_revision;
+    let mut live_preview_handoff = FemLivePreviewHandoff::default();
+    let mut cached_preview_handoff = FemCachedPreviewHandoff::default();
+    let mut live_magnetization_handoff = FemLiveMagnetizationHandoff::default();
 
     while accepted_steps < direct_minimizer_step_budget(control)
         && pseudotime_s < direct_minimizer_pseudotime_budget(control)
@@ -60,43 +66,60 @@ pub(crate) fn execute_direct_minimizer(
                     );
                     let preview_targets_global_scalar =
                         display_is_global_scalar(&display_selection);
+                    let mut live_stats = current_stats.clone();
+                    let preview_start = std::time::Instant::now();
                     let preview_field = if preview_due && !preview_targets_global_scalar {
                         let request = display_selection.preview_request();
-                        Some(backend.copy_live_preview_field(&request, node_count)?)
+                        live_preview_handoff.request_preview(backend, &request)?
                     } else {
-                        None
+                        live_preview_handoff.poll_completed()?
                     };
-                    let cached_preview_fields = if preview_due {
-                        build_fem_cached_preview_fields(
+                    live_stats.preview_wall_time_ns = preview_start.elapsed().as_nanos() as u64;
+                    let cached_preview_due = cached_display_refresh_due(
+                        last_cached_preview_revision,
+                        &display_selection,
+                        current_stats.step,
+                        live.field_every_n,
+                    );
+                    let cached_start = std::time::Instant::now();
+                    let cached_preview_fields = if cached_preview_due {
+                        cached_preview_handoff.request_cached_previews(
                             backend,
+                            FemEngine::CpuNative,
                             &display_selection,
                             plan,
-                            node_count,
-                        )
+                        )?
                     } else {
-                        None
+                        cached_preview_handoff.poll_completed()?
                     };
-                    if current_stats.step <= 2 || preview_due {
-                        eprintln!(
-                            "[fullmag-runner] native-fem direct-minimizer live update step={} every_n={} preview_due={} preview_quantity={} preview_field={} cached_preview_fields={} global_scalar={} mag_len={}",
-                            current_stats.step,
-                            u64::from(display_selection.selection.every_n.max(1)),
-                            preview_due,
-                            display_selection.selection.quantity.as_str(),
-                            preview_field.is_some(),
-                            cached_preview_fields
-                                .as_ref()
-                                .map(|fields| fields.len())
-                                .unwrap_or(0),
-                            preview_targets_global_scalar,
-                            node_count.saturating_mul(3),
-                        );
-                    }
+                    live_stats.cached_preview_wall_time_ns =
+                        cached_start.elapsed().as_nanos() as u64;
+                    let live_preview_wall_time_ns = live_stats
+                        .preview_wall_time_ns
+                        .saturating_add(live_stats.cached_preview_wall_time_ns);
+                    let magnetization_payload =
+                        live_magnetization_handoff.request_magnetization(backend, node_count)?;
+                    let (magnetization, field_copy_wall_time_ns, field_copy_bytes) =
+                        match magnetization_payload {
+                            Some((payload, wall_time_ns, bytes)) => {
+                                (Some(payload), wall_time_ns, bytes)
+                            }
+                            None => (None, 0, 0),
+                        };
+                    live_stats.field_copy_wall_time_ns = live_stats
+                        .field_copy_wall_time_ns
+                        .saturating_add(field_copy_wall_time_ns);
+                    live_stats.field_copy_bytes =
+                        live_stats.field_copy_bytes.saturating_add(field_copy_bytes);
+                    live_stats.wall_time_ns = live_stats
+                        .wall_time_ns
+                        .saturating_add(live_preview_wall_time_ns)
+                        .saturating_add(field_copy_wall_time_ns);
                     let action = (live.on_step)(StepUpdate {
-                        stats: current_stats.clone(),
+                        stats: live_stats,
                         grid: live.grid,
                         fem_mesh: Some(FemMeshPayload::from(plan)),
-                        magnetization: Some(flatten_vectors(&backend.copy_m(node_count)?)),
+                        magnetization,
                         preview_field,
                         cached_preview_fields,
                         hysteresis_field_m_t: None,
@@ -109,6 +132,9 @@ pub(crate) fn execute_direct_minimizer(
                     });
                     if preview_due {
                         last_preview_revision = Some(display_selection.revision);
+                    }
+                    if cached_preview_due {
+                        last_cached_preview_revision = Some(display_selection.revision);
                     }
                     match action {
                         StepAction::Continue => {}
@@ -138,7 +164,8 @@ pub(crate) fn execute_direct_minimizer(
         accepted_stats.pseudo_time_s = Some(pseudotime_s);
         ensure_fem_object_scalars(&mut accepted_stats, plan);
 
-        artifacts.record_scalar(&accepted_stats)?;
+        let artifact_metrics = artifacts.record_scalar(&accepted_stats)?;
+        apply_artifact_enqueue_metrics(&mut accepted_stats, artifact_metrics);
         steps.push(accepted_stats.clone());
         latest_stats = Some(accepted_stats.clone());
         current_stats = accepted_stats;
@@ -155,52 +182,67 @@ pub(crate) fn execute_direct_minimizer(
             let preview_targets_global_scalar = display_selection
                 .as_ref()
                 .is_some_and(display_is_global_scalar);
+            let mut live_stats = current_stats.clone();
             let magnetization = if current_stats.step % heavy_payload_every == 0 {
-                Some(flatten_vectors(&backend.copy_m(node_count)?))
+                live_magnetization_handoff.request_magnetization(backend, node_count)?
             } else {
-                None
+                live_magnetization_handoff.poll_completed(node_count)?
             };
+            let magnetization =
+                if let Some((payload, field_copy_wall_time_ns, field_copy_bytes)) = magnetization {
+                    live_stats.field_copy_wall_time_ns = live_stats
+                        .field_copy_wall_time_ns
+                        .saturating_add(field_copy_wall_time_ns);
+                    live_stats.field_copy_bytes =
+                        live_stats.field_copy_bytes.saturating_add(field_copy_bytes);
+                    Some(payload)
+                } else {
+                    None
+                };
+            let preview_start = std::time::Instant::now();
             let preview_field = if preview_due && !preview_targets_global_scalar {
                 let selection = display_selection.as_ref().expect("checked preview_due");
                 let request = selection.preview_request();
-                Some(backend.copy_live_preview_field(&request, node_count)?)
+                live_preview_handoff.request_preview(backend, &request)?
             } else {
-                None
+                live_preview_handoff.poll_completed()?
             };
-            let cached_preview_fields = if preview_due {
-                display_selection.as_ref().and_then(|selection| {
-                    build_fem_cached_preview_fields(backend, selection, plan, node_count)
+            live_stats.preview_wall_time_ns = preview_start.elapsed().as_nanos() as u64;
+            let cached_preview_due = display_selection
+                .as_ref()
+                .map(|selection| {
+                    cached_display_refresh_due(
+                        last_cached_preview_revision,
+                        selection,
+                        current_stats.step,
+                        heavy_payload_every,
+                    )
                 })
+                .unwrap_or(false);
+            let cached_start = std::time::Instant::now();
+            let cached_preview_fields = if cached_preview_due {
+                match display_selection.as_ref() {
+                    Some(selection) => cached_preview_handoff.request_cached_previews(
+                        backend,
+                        FemEngine::CpuNative,
+                        selection,
+                        plan,
+                    )?,
+                    None => cached_preview_handoff.poll_completed()?,
+                }
             } else {
-                None
+                cached_preview_handoff.poll_completed()?
             };
-            if current_stats.step <= 2 || preview_due {
-                eprintln!(
-                    "[fullmag-runner] native-fem direct-minimizer live update step={} every_n={} preview_due={} preview_quantity={} preview_field={} cached_preview_fields={} global_scalar={} mag_len={}",
-                    current_stats.step,
-                    display_selection
-                        .as_ref()
-                        .map(|selection| u64::from(selection.selection.every_n.max(1)))
-                        .unwrap_or(0),
-                    preview_due,
-                    display_selection
-                        .as_ref()
-                        .map(|selection| selection.selection.quantity.as_str())
-                        .unwrap_or("-"),
-                    preview_field.is_some(),
-                    cached_preview_fields
-                        .as_ref()
-                        .map(|fields| fields.len())
-                        .unwrap_or(0),
-                    preview_targets_global_scalar,
-                    magnetization
-                        .as_ref()
-                        .map(|values| values.len())
-                        .unwrap_or(0),
-                );
-            }
+            live_stats.cached_preview_wall_time_ns = cached_start.elapsed().as_nanos() as u64;
+            let live_preview_wall_time_ns = live_stats
+                .preview_wall_time_ns
+                .saturating_add(live_stats.cached_preview_wall_time_ns);
+            live_stats.wall_time_ns = live_stats
+                .wall_time_ns
+                .saturating_add(live_preview_wall_time_ns)
+                .saturating_add(live_stats.field_copy_wall_time_ns);
             let action = (live.on_step)(StepUpdate {
-                stats: current_stats.clone(),
+                stats: live_stats,
                 grid: live.grid,
                 fem_mesh: Some(FemMeshPayload::from(plan)),
                 magnetization,
@@ -220,6 +262,14 @@ pub(crate) fn execute_direct_minimizer(
                         .as_ref()
                         .expect("checked preview_due")
                         .revision,
+                );
+            }
+            if cached_preview_due {
+                last_cached_preview_revision = Some(
+                    display_selection
+                        .as_ref()
+                        .map(|selection| selection.revision)
+                        .unwrap_or_default(),
                 );
             }
             match action {

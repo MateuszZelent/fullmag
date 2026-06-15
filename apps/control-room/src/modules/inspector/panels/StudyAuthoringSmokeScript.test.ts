@@ -32,5 +32,14 @@ describe("study authoring UI smoke script", () => {
     expect(smokeScript).toContain('entrypoint_kind !== "flat_run"');
     expect(smokeScript).toContain("requested_cpu_threads");
     expect(smokeScript).toContain("fem_demag_solver_policy");
+    expect(smokeScript).toContain("makeEigenModeFieldVectorBuffer");
+    expect(smokeScript).toContain("makeFrequencyResponseFieldVectorBuffer");
+    expect(smokeScript).toContain("assertStableViewport3DCanvas");
+    expect(smokeScript).toContain("view=phase_rotated_real");
+    expect(smokeScript).toContain("await plotButton.click()");
+    expect(smokeScript).toContain("waitForFrequencyResponseFieldVectorRequest");
+    expect(smokeScript).toContain(
+      '[data-inspector-surface="fmr-response-sweep"]',
+    );
   });
 });

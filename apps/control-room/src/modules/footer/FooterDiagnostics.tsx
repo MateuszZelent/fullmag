@@ -2,12 +2,15 @@
 
 import {
   AlertTriangle,
+  Clipboard,
+  ClipboardCheck,
   Cpu,
   FileText,
   HardDrive,
   Server,
   Timer,
 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 
 import type {
   CpuTelemetryResource,
@@ -19,6 +22,7 @@ import {
   useGpuTelemetryResource,
   useSolverProfileResource,
 } from "@/kernel/resources/studyRuntimeResources";
+import { Button } from "@/shared/ui/Button";
 
 interface SolverProfilePhaseBar {
   id: string;
@@ -26,24 +30,46 @@ interface SolverProfilePhaseBar {
   percent: number;
 }
 
-interface SolverProfileRow {
+export interface SolverProfileRow {
+  artifact: string;
+  cache: string;
+  clock: string;
   demag: string;
+  demagDetail: string;
+  demagSetup: string;
   exchange: string;
+  fieldCopy: string;
+  finalization: string;
+  gap: string;
+  gpuSync: string;
   id: string;
   missing: string;
+  nativeFfi: string;
+  orchestration: string;
   phases: SolverProfilePhaseBar[];
+  preview: string;
+  relaxPreconditioner: string;
   rhs: string;
   step: string;
   total: string;
+  wallDelta: string;
 }
 
 export interface SolverProfilePanelModel {
+  allRows: SolverProfileRow[];
   hasSingleThreadWarning: boolean;
+  livePublisherSummary: string;
+  previewModeSummary: string;
   rows: SolverProfileRow[];
   sampleCount: number;
   state: string;
   threadSummary: string;
 }
+
+type SolverProfileCopyStatus = "copied" | "failed" | "idle";
+type SolverProfileStepSampleResource =
+  SolverProfileResource["latest_samples"][number];
+type SolverProfilePhaseResource = SolverProfileStepSampleResource["phases"][number];
 
 interface CpuTelemetryRow {
   id: string;
@@ -68,6 +94,35 @@ export function FooterDiagnostics() {
   const gpuDevices = gpu.data?.devices ?? [];
   const gpuStatus = gpu.data?.status ?? "pending";
   const profileModel = buildSolverProfilePanelModel(solverProfile.data);
+  const [profileCopyStatus, setProfileCopyStatus] =
+    useState<SolverProfileCopyStatus>("idle");
+  const profileCopyResetTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (profileCopyResetTimerRef.current !== null) {
+        window.clearTimeout(profileCopyResetTimerRef.current);
+      }
+    };
+  }, []);
+
+  const copyProfileRows = async () => {
+    try {
+      await navigator.clipboard.writeText(
+        serializeSolverProfileRows(profileModel.allRows),
+      );
+      setProfileCopyStatus("copied");
+    } catch {
+      setProfileCopyStatus("failed");
+    }
+    if (profileCopyResetTimerRef.current !== null) {
+      window.clearTimeout(profileCopyResetTimerRef.current);
+    }
+    profileCopyResetTimerRef.current = window.setTimeout(() => {
+      setProfileCopyStatus("idle");
+      profileCopyResetTimerRef.current = null;
+    }, 2000);
+  };
 
   return (
     <div className="fm-footer-diagnostics">
@@ -116,13 +171,38 @@ export function FooterDiagnostics() {
           <span>Profiler</span>
           <span className="fm-footer-diagnostics__meta">
             {titleCase(profileModel.state)} | {profileModel.sampleCount} samples
+            {profileCopyStatus === "copied" ? " | copied" : ""}
+            {profileCopyStatus === "failed" ? " | copy failed" : ""}
           </span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label="Copy profiler table to clipboard"
+            title={`Copy ${profileModel.allRows.length} profiler rows to clipboard`}
+            disabled={profileModel.allRows.length === 0}
+            onClick={copyProfileRows}
+          >
+            {profileCopyStatus === "copied" ? (
+              <ClipboardCheck size={14} aria-hidden="true" />
+            ) : (
+              <Clipboard size={14} aria-hidden="true" />
+            )}
+          </Button>
         </div>
         {profileModel.rows.length > 0 ? (
           <div className="fm-footer-diagnostics__profile">
             <div className="fm-footer-diagnostics__threading">
               <Cpu size={13} aria-hidden="true" />
               <span>{profileModel.threadSummary}</span>
+            </div>
+            <div className="fm-footer-diagnostics__threading">
+              <Server size={13} aria-hidden="true" />
+              <span>{profileModel.livePublisherSummary}</span>
+            </div>
+            <div className="fm-footer-diagnostics__threading">
+              <Timer size={13} aria-hidden="true" />
+              <span>{profileModel.previewModeSummary}</span>
             </div>
             {profileModel.hasSingleThreadWarning ? (
               <div className="fm-footer-diagnostics__warning" role="status">
@@ -136,10 +216,24 @@ export function FooterDiagnostics() {
                 role="row"
               >
                 <span role="columnheader">Step</span>
+                <span role="columnheader">Clock</span>
+                <span role="columnheader">Delta wall</span>
+                <span role="columnheader">Gap</span>
                 <span role="columnheader">Total</span>
                 <span role="columnheader">Exchange</span>
                 <span role="columnheader">Demag</span>
+                <span role="columnheader">Demag detail</span>
+                <span role="columnheader">Setup</span>
+                <span role="columnheader">Relax prec.</span>
                 <span role="columnheader">RHS</span>
+                <span role="columnheader">Preview</span>
+                <span role="columnheader">Cache</span>
+                <span role="columnheader">Field copy</span>
+                <span role="columnheader">Artifact</span>
+                <span role="columnheader">Finalization</span>
+                <span role="columnheader">GPU sync</span>
+                <span role="columnheader">Native</span>
+                <span role="columnheader">Orchestr.</span>
                 <span role="columnheader">Missing</span>
               </div>
               {profileModel.rows.map((row) => (
@@ -149,10 +243,24 @@ export function FooterDiagnostics() {
                   key={row.id}
                 >
                   <span role="cell">{row.step}</span>
+                  <span role="cell">{row.clock}</span>
+                  <span role="cell">{row.wallDelta}</span>
+                  <span role="cell">{row.gap}</span>
                   <span role="cell">{row.total}</span>
                   <span role="cell">{row.exchange}</span>
                   <span role="cell">{row.demag}</span>
+                  <span role="cell">{row.demagDetail}</span>
+                  <span role="cell">{row.demagSetup}</span>
+                  <span role="cell">{row.relaxPreconditioner}</span>
                   <span role="cell">{row.rhs}</span>
+                  <span role="cell">{row.preview}</span>
+                  <span role="cell">{row.cache}</span>
+                  <span role="cell">{row.fieldCopy}</span>
+                  <span role="cell">{row.artifact}</span>
+                  <span role="cell">{row.finalization}</span>
+                  <span role="cell">{row.gpuSync}</span>
+                  <span role="cell">{row.nativeFfi}</span>
+                  <span role="cell">{row.orchestration}</span>
                   <span role="cell">{row.missing}</span>
                 </div>
               ))}
@@ -256,6 +364,58 @@ export function FooterDiagnostics() {
   );
 }
 
+export function serializeSolverProfileRows(
+  rows: readonly SolverProfileRow[],
+): string {
+  const headers = [
+    "Step",
+    "Clock",
+    "Delta wall",
+    "Gap",
+    "Total",
+    "Exchange",
+    "Demag",
+    "Demag detail",
+    "Setup",
+    "Relax prec.",
+    "RHS",
+    "Preview",
+    "Cache",
+    "Field copy",
+    "Artifact",
+    "Finalization",
+    "GPU sync",
+    "Native",
+    "Orchestr.",
+    "Missing",
+  ];
+  const body = rows.map((row) =>
+    [
+      row.step,
+      row.clock,
+      row.wallDelta,
+      row.gap,
+      row.total,
+      row.exchange,
+      row.demag,
+      row.demagDetail,
+      row.demagSetup,
+      row.relaxPreconditioner,
+      row.rhs,
+      row.preview,
+      row.cache,
+      row.fieldCopy,
+      row.artifact,
+      row.finalization,
+      row.gpuSync,
+      row.nativeFfi,
+      row.orchestration,
+      row.missing,
+    ].join("\t"),
+  );
+  return [headers.join("\t"), ...body].join("\n");
+}
+
 export function buildCpuTelemetryPanelModel(
   cpu: CpuTelemetryResource | null | undefined,
 ): CpuTelemetryPanelModel {
@@ -301,49 +461,139 @@ export function buildSolverProfilePanelModel(
   profile: SolverProfileResource | null | undefined,
 ): SolverProfilePanelModel {
   const latestSamples = profile?.latest_samples ?? [];
-  const visibleSamples = latestSamples
-    .slice(-5)
+  const allRows = latestSamples
     .map((sample, index, samples) => ({
       sample,
       sourceIndex: latestSamples.length - samples.length + index,
     }))
-    .reverse();
-  const rows = visibleSamples.map(({ sample, sourceIndex }) => {
-    const phaseById = new Map(sample.phases.map((phase) => [phase.id, phase]));
-    const phases = sample.phases.reduce<SolverProfilePhaseBar[]>((items, phase) => {
-      if (phase.wall_time_ns > 0) {
-        items.push({
-          id: phase.id,
-          label: phase.label,
-          percent: clampPercent(phase.percent_of_total),
-        });
-      }
-      return items;
-    }, []);
-    return {
-      demag: formatNs(phaseById.get("demag_total")?.wall_time_ns ?? 0),
-      exchange: formatNs(phaseById.get("exchange")?.wall_time_ns ?? 0),
-      id: `${sample.step}:${sample.time}:${sourceIndex}`,
-      missing: formatNs(sample.missing_ns),
-      phases,
-      rhs: formatNs(phaseById.get("rhs_total")?.wall_time_ns ?? 0),
-      step: String(sample.step),
-      total: formatNs(sample.total_ns),
-    };
-  });
+    .reverse()
+    .map(({ sample, sourceIndex }) => {
+      const previousSample = latestSamples[sourceIndex - 1] ?? null;
+      const phaseById = new Map(sample.phases.map((phase) => [phase.id, phase]));
+      const demagPhaseById = new Map(
+        sample.demag_subphases.map((phase) => [phase.id, phase]),
+      );
+      const phases = sample.phases.reduce<SolverProfilePhaseBar[]>((items, phase) => {
+        if (phase.wall_time_ns > 0) {
+          items.push({
+            id: phase.id,
+            label: phase.label,
+            percent: clampPercent(phase.percent_of_total),
+          });
+        }
+        return items;
+      }, []);
+      return {
+        artifact: formatArtifactCost(
+          phaseById.get("artifact_enqueue")?.wall_time_ns ?? 0,
+          sample.artifact_enqueue_bytes ?? 0,
+          sample.artifact_queue_depth_max ?? 0,
+          sample.artifact_writer_jobs_completed ?? 0,
+          sample.artifact_writer_job_wall_time_ns ?? 0,
+        ),
+        cache: formatNs(phaseById.get("cached_preview")?.wall_time_ns ?? 0),
+        clock: formatWallClockMs(sample.sample_time_unix_ms),
+        demag: formatNs(phaseById.get("demag_total")?.wall_time_ns ?? 0),
+        demagDetail: formatDemagDetail(sample, demagPhaseById),
+        demagSetup: formatDemagSetup(sample, phaseById),
+        exchange: formatNs(phaseById.get("exchange")?.wall_time_ns ?? 0),
+        fieldCopy: formatCopyCost(
+          phaseById.get("field_copy")?.wall_time_ns ?? 0,
+          sample.field_copy_bytes ?? 0,
+        ),
+        finalization: formatCopyCost(
+          phaseById.get("finalization")?.wall_time_ns ?? 0,
+          sample.finalization_field_copy_bytes ?? 0,
+        ),
+        gap: formatOptionalNs(sample.unprofiled_gap_wall_time_ns),
+        gpuSync: formatGpuSync(sample),
+        id: `${sample.step}:${sample.time}:${sample.sample_time_unix_ms}:${sourceIndex}`,
+        missing: formatNs(sample.missing_ns),
+        nativeFfi: formatNativeCost(phaseById),
+        orchestration: formatNs(phaseById.get("orchestration")?.wall_time_ns ?? 0),
+        phases,
+        preview: formatNs(phaseById.get("preview")?.wall_time_ns ?? 0),
+        relaxPreconditioner: formatNs(
+          phaseById.get("relax_preconditioner")?.wall_time_ns ?? 0,
+        ),
+        rhs: formatNs(phaseById.get("rhs_total")?.wall_time_ns ?? 0),
+        step: String(sample.step),
+        total: formatNs(sample.total_ns),
+        wallDelta: formatWallDelta(
+          sample.delta_wall_time_ns,
+          sample.sample_time_unix_ms,
+          previousSample?.sample_time_unix_ms,
+        ),
+      };
+    });
+  const rows = allRows.slice(0, 5);
   const threading =
     profile?.threading ??
     (rows.length > 0 ? profile?.latest_samples.at(-1)?.threading : null);
 
   return {
+    allRows,
     hasSingleThreadWarning: threading?.effective_omp_threads === 1,
+    livePublisherSummary: formatLivePublisherSummary(profile?.live_publisher),
+    previewModeSummary: formatPreviewModeSummary(profile),
     rows,
     sampleCount: profile?.aggregates.sample_count ?? 0,
     state: profile?.state ?? "pending",
-    threadSummary: threading
-      ? `OMP ${threading.requested_omp_threads}->${threading.effective_omp_threads} | ${threading.thread_mode}`
-      : "Threading pending",
+    threadSummary: threading ? formatThreadSummary(threading) : "Threading pending",
   };
+}
+
+function formatPreviewModeSummary(profile: SolverProfileResource | null | undefined) {
+  if (!profile) return "Preview mode pending";
+  return profile.preview_3d_disabled
+    ? "3D preview disabled for benchmark"
+    : "3D preview enabled";
+}
+
+function formatDemagSetup(
+  sample: SolverProfileStepSampleResource,
+  phaseById: Map<string, SolverProfilePhaseResource>,
+) {
+  const setupNs = phaseById.get("demag_solver_setup")?.wall_time_ns ?? 0;
+  if (sample.demag_solver_setup_reused) return "reused";
+  if (setupNs > 0) return "built";
+  return "n/a";
+}
+
+function formatDemagDetail(
+  sample: SolverProfileStepSampleResource,
+  phaseById: Map<string, SolverProfilePhaseResource>,
+) {
+  const parts: string[] = [];
+  if (sample.demag_solver || sample.demag_preconditioner) {
+    parts.push(
+      `${sample.demag_solver ?? "solver?"}/${sample.demag_preconditioner ?? "prec?"}`,
+    );
+  }
+  const solveCount = sample.demag_solves ?? 0;
+  const iterations = sample.poisson_iterations ?? 0;
+  const residual = sample.poisson_final_residual ?? 0;
+  const applyNs = phaseById.get("demag_solver_apply")?.wall_time_ns ?? 0;
+  if (solveCount > 0) parts.push(`${Math.round(solveCount)} solve`);
+  if (iterations > 0) parts.push(`${Math.round(iterations)} it`);
+  if (Number.isFinite(residual) && residual > 0) {
+    parts.push(`res ${residual.toExponential(1)}`);
+  }
+  if (applyNs > 0) parts.push(`apply ${formatNs(applyNs)}`);
+  return parts.length > 0 ? parts.join(" / ") : "n/a";
+}
+
+function formatThreadSummary(threading: {
+  cap_reason?: string | null;
+  effective_omp_threads: number;
+  requested_omp_threads: number;
+  thread_mode: string;
+}) {
+  const capReason =
+    threading.cap_reason && threading.cap_reason !== "none"
+      ? ` | ${threading.cap_reason}`
+      : "";
+  return `OMP ${threading.requested_omp_threads}->${threading.effective_omp_threads} | ${threading.thread_mode}${capReason}`;
 }
 
 function formatTime(value: number) {
@@ -352,6 +602,39 @@ function formatTime(value: number) {
     minute: "2-digit",
     second: "2-digit",
   });
+}
+
+function formatWallClockMs(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value) || value <= 0) return "not recorded";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "invalid";
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  const seconds = String(date.getSeconds()).padStart(2, "0");
+  const millis = String(date.getMilliseconds()).padStart(3, "0");
+  return `${hours}:${minutes}:${seconds}.${millis}`;
+}
+
+function formatWallDelta(
+  deltaWallTimeNs: number | null | undefined,
+  sampleTimeUnixMs: number | null | undefined,
+  previousSampleTimeUnixMs: number | null | undefined,
+) {
+  if (deltaWallTimeNs != null && Number.isFinite(deltaWallTimeNs)) {
+    if (deltaWallTimeNs <= 0) return "first sample";
+    return formatMs(deltaWallTimeNs / 1_000_000);
+  }
+  if (
+    sampleTimeUnixMs == null ||
+    previousSampleTimeUnixMs == null ||
+    !Number.isFinite(sampleTimeUnixMs) ||
+    !Number.isFinite(previousSampleTimeUnixMs) ||
+    sampleTimeUnixMs <= 0 ||
+    previousSampleTimeUnixMs <= 0
+  ) {
+    return "first sample";
+  }
+  return formatMs(Math.max(0, sampleTimeUnixMs - previousSampleTimeUnixMs));
 }
 
 function formatPercent(value: number) {
@@ -367,6 +650,112 @@ function formatNs(value: number) {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)} ms`;
   if (value >= 1_000) return `${(value / 1_000).toFixed(1)} us`;
   return `${Math.round(value)} ns`;
+}
+
+function formatCopyCost(wallTimeNs: number, bytes: number) {
+  const time = formatNs(wallTimeNs);
+  if (!Number.isFinite(bytes) || bytes <= 0) return time;
+  return `${time} / ${formatBytes(bytes)}`;
+}
+
+function formatOptionalNs(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return "n/a";
+  return formatNs(value);
+}
+
+function formatArtifactCost(
+  wallTimeNs: number,
+  bytes: number,
+  queueDepth: number,
+  writerJobsCompleted: number,
+  writerWallTimeNs: number,
+) {
+  const cost = formatCopyCost(wallTimeNs, bytes);
+  const parts = [cost];
+  if (Number.isFinite(queueDepth) && queueDepth > 0) {
+    parts.push(`q${Math.round(queueDepth)}`);
+  }
+  if (
+    Number.isFinite(writerJobsCompleted) &&
+    writerJobsCompleted > 0 &&
+    Number.isFinite(writerWallTimeNs) &&
+    writerWallTimeNs > 0
+  ) {
+    parts.push(`w${Math.round(writerJobsCompleted)} ${formatNs(writerWallTimeNs)}`);
+  }
+  return parts.join(" / ");
+}
+
+function formatNativeCost(phaseById: Map<string, SolverProfilePhaseResource>) {
+  const parts: string[] = [];
+  const residualNs = phaseById.get("native_ffi_overhead")?.wall_time_ns ?? 0;
+  if (residualNs > 0) parts.push(formatNs(residualNs));
+  const subphases = [
+    ["copy", "relax_state_copy"],
+    ["upload", "relax_state_upload"],
+    ["ret", "relax_retraction"],
+    ["grad", "relax_gradient"],
+    ["metric", "relax_metric"],
+    ["ls", "relax_line_search"],
+    ["upd", "relax_update"],
+  ] as const;
+  for (const [label, phaseId] of subphases) {
+    const wallTimeNs = phaseById.get(phaseId)?.wall_time_ns ?? 0;
+    if (wallTimeNs > 0) parts.push(`${label} ${formatNs(wallTimeNs)}`);
+  }
+  return parts.length > 0 ? parts.join(" / ") : "0 ns";
+}
+
+function formatLivePublisherSummary(
+  publisher: SolverProfileResource["live_publisher"] | undefined,
+) {
+  if (!publisher) return "Live publish: no structured samples";
+  return [
+    `Live publish ${Math.round(publisher.publish_count ?? 0)}`,
+    `replace ${formatNs(publisher.last_replace_wall_time_ns ?? 0)}`,
+    `merge ${formatNs(publisher.last_merge_wall_time_ns ?? 0)}`,
+    `clone ${formatNs(publisher.last_clone_wall_time_ns ?? 0)}`,
+    `sync ${formatNs(publisher.last_publish_wall_time_ns ?? 0)}`,
+    `lag ${formatNs(publisher.last_publish_lag_wall_time_ns ?? 0)}`,
+    `payload ${formatBytes(publisher.last_payload_estimated_bytes ?? 0)}`,
+    `coalesced ${Math.round(publisher.coalesced_wake_count ?? 0)}`,
+  ].join(" / ");
+}
+
+function formatGpuSync(sample: SolverProfileResource["latest_samples"][number]) {
+  const syncCount = sample.hot_loop_host_sync_count ?? 0;
+  const controlSyncCount = sample.hot_loop_control_scalar_host_sync_count ?? 0;
+  const controlBytes = sample.hot_loop_control_scalar_d2h_bytes ?? 0;
+  if (syncCount <= 0 && controlSyncCount <= 0 && controlBytes <= 0) return "0";
+  if (controlSyncCount > 0 || controlBytes > 0) {
+    return `${Math.round(syncCount)} sync / ctrl ${Math.round(controlSyncCount)} / ${formatBytes(controlBytes)}`;
+  }
+  const totalBytes = (sample.hot_loop_h2d_bytes ?? 0) + (sample.hot_loop_d2h_bytes ?? 0);
+  if (totalBytes > 0) return `${Math.round(syncCount)} sync / ${formatBytes(totalBytes)}`;
+  return `${Math.round(syncCount)} sync`;
+}
+
+function formatBytes(value: number) {
+  if (value >= 1_073_741_824) return `${(value / 1_073_741_824).toFixed(2)} GiB`;
+  if (value >= 1_048_576) return `${(value / 1_048_576).toFixed(1)} MiB`;
+  if (value >= 1024) return `${(value / 1024).toFixed(1)} KiB`;
+  return `${Math.round(value)} B`;
+}
+
+function formatMs(value: number) {
+  if (value >= 3_600_000) {
+    const hours = Math.floor(value / 3_600_000);
+    const minutes = Math.floor((value % 3_600_000) / 60_000);
+    const seconds = ((value % 60_000) / 1_000).toFixed(3).padStart(6, "0");
+    return `${hours}h ${String(minutes).padStart(2, "0")}m ${seconds}s`;
+  }
+  if (value >= 60_000) {
+    const minutes = Math.floor(value / 60_000);
+    const seconds = ((value % 60_000) / 1_000).toFixed(3).padStart(6, "0");
+    return `${minutes}m ${seconds}s`;
+  }
+  if (value >= 1_000) return `${(value / 1_000).toFixed(3)} s`;
+  return `${value.toFixed(0)} ms`;
 }
 
 function clampPercent(value: number) {

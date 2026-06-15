@@ -41,7 +41,7 @@ export interface Viewport3DBoxCylinderDifferencePreview {
   kind: "box-cylinder-difference";
 }
 
-export type Viewport3DPrimitiveCsgPreview =
+type Viewport3DPrimitiveCsgPreview =
   Viewport3DBoxCylinderDifferencePreview;
 
 export interface Viewport3DMagnetizationTexturePreview {

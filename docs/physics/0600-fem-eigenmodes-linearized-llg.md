@@ -3,6 +3,10 @@
 Status: MVP public reference path  
 Applies to: `StudyIR::Eigenmodes`, `BackendPlanIR::FemEigen`, CPU reference runner
 
+This note covers the `modal_eigen` study product only. Driven harmonic solves
+belong to the separate `driven_response` product and use `(i omega B - A) q = b`
+rather than the modal generalized eigensystem `A q = lambda B q`.
+
 ## Scope
 
 This note defines the first executable FEM eigenmode workflow in Fullmag.
@@ -12,6 +16,14 @@ It is intentionally narrower than the long-term MFEM/SLEPc target:
 - the eigenproblem is solved on the merged FEM magnetic mesh,
 - the current executable path exports spectrum, mode fields, and V2 dispersion artifacts,
 - the solver is CPU reference quality, not the final production eigensolver.
+
+The production target for large geometries is not the dense reference solver.
+Large FEM eigenmode studies must be formulated as sparse frequency-window
+queries: for example, "return up to 20 modes in 100 MHz..5 GHz".  The public
+authoring contract must therefore preserve both the requested mode count and
+the requested frequency interval in SI units.  The backend may use a wider
+internal search interval for robustness, but artifacts and provenance must
+report the user-requested window and the resolved numerical search policy.
 
 ## Physical model
 
@@ -77,13 +89,38 @@ followed by a frequency mapping:
 
 `f = omega / (2 pi)`
 
-The implementation uses a dense symmetric reduction:
+Fullmag's public `gamma` parameter is the internal LLG constant
+`gamma0 = mu0 * gamma_SI` with units `rad s^-1 (A/m)^-1`, historically also
+written as `m/(A s)`. Therefore frequency artifacts must report both constants:
+`gamma0_rad_s_per_A_m = gamma0` and `gamma_rad_s_T = gamma0 / mu0`. The
+frequency mapping above is equivalently `omega = gamma0 * max(lambda, 0)` when
+`lambda` is an effective-field eigenvalue in `A/m`.
+
+The small-reference implementation uses a dense symmetric reduction:
 
 1. Cholesky factorization of `M`
 2. transformed symmetric eigen solve
 3. back-lift to generalized eigenvectors
 
-This is appropriate for the small-to-medium reference cases used to validate semantics and artifacts, but it is not the final scalable eigensolver architecture.
+This is appropriate for the small reference cases used to validate semantics
+and artifacts, but it is not the scalable eigensolver architecture.  The
+transitional runner may use sparse LOBPCG for real-valued problems above the
+dense threshold, but LOBPCG remains a bridge.  The production FEM eigen backend
+must use PETSc/SLEPc-style sparse or matrix-free eigensolvers with spectral
+targeting:
+
+- Krylov-Schur, Arnoldi, LOBPCG, Jacobi-Davidson, or equivalent EPS methods for
+  exterior modes;
+- shift-invert or Cayley spectral transformations for interior modes near a
+  target frequency;
+- FEAST / contour-integral style interval solvers for frequency-window queries
+  when the user asks for modes in a band;
+- PETSc/hypre/MFEM linear solves and preconditioners for shifted systems;
+- matrix-free `y = A x` operator application whenever assembled matrices would
+  dominate memory.
+
+Dense diagonalization is allowed only as a reference/validation lane.  It must
+not be marketed as the route for COMSOL-class large-object eigenmode studies.
 
 ## Equilibrium handling
 
@@ -131,9 +168,68 @@ The V2 artifact contract is defined in
 the Analyze UI and by the v2 API resources under
 `/v2/sessions/current/analysis/eigen/*`.
 
+Production-scale artifacts must additionally record the spectral search
+contract:
+
+- requested frequency window in Hz (`frequency_min_hz`, `frequency_max_hz`);
+- requested mode cap (`count`);
+- resolved eigensolver family (`krylov_schur`, `lobpcg`, `jacobi_davidson`,
+  `feast`, `shift_invert`, or equivalent);
+- spectral transform and shift/window actually used;
+- linear solver and preconditioner used by shifted systems;
+- residual tolerance, maximum iterations, converged mode count, and final
+  residuals;
+- whether modes outside the requested window were computed only as internal
+  guard modes and filtered before publication.
+
+## Production large-object solver requirement
+
+For large structures, the correct user-level question is not "compute the first
+N eigenvectors of the full dense operator".  It is:
+
+```python
+study.stages.add_eigenmodes(
+    count=20,
+    target="frequency_window",
+    frequency_min=100e6,
+    frequency_max=5e9,
+    equilibrium_source="relax",
+)
+```
+
+The SI contract is:
+
+- `frequency_min` and `frequency_max` are in Hz;
+- both bounds must be finite and positive;
+- `frequency_min < frequency_max`;
+- `count` is a maximum number of accepted modes returned from that window;
+- if fewer modes exist in the interval, the solver returns fewer modes and
+  reports `stop_reason="window_exhausted"`;
+- if the iteration cap or tolerance stops the solve first, the solver reports a
+  partial result with residual diagnostics instead of pretending success.
+
+This is the route to COMSOL-class behavior: sparse operators, spectral targeting,
+preconditioned shifted solves, and clear diagnostics.  The UI must expose this
+as a first-class eigenmode target, not as an advanced hidden backend knob.
+
+## Live progress contract
+
+Production eigensolve progress is solver progress, not time-step telemetry.
+The control room should show:
+
+- assembly phase and DOF count;
+- requested frequency window and requested mode cap;
+- resolved eigensolver and spectral transform;
+- Krylov/FEAST outer iteration;
+- shifted linear-solve iterations where applicable;
+- residual norm and converged mode count;
+- last checkpoint or last emitted artifact;
+- clear dense-path warning when no internal iteration telemetry exists.
+
 ## Current limitations
 
-- CPU reference only (dense eigensolve, O(N³) scaling)
+- CPU reference path plus transitional sparse LOBPCG for selected real-valued
+  cases; no production SLEPc/FEAST lane yet
 - no residual / orthogonality / tangent leakage diagnostics exported yet
 - nonzero-k Floquet demag is explicitly rejected until dynamic demag-k exists
 - no native MFEM/libCEED/hypre/SLEPc eigen backend yet

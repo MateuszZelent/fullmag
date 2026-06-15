@@ -492,7 +492,7 @@
 
 .fm-footer-diagnostics__profile-row {
   display: grid;
-  grid-template-columns: 54px 72px 82px 82px 72px 82px;
+  grid-template-columns: 46px 96px 86px 74px 72px 82px 82px 58px 88px 72px 82px 72px 88px 88px 108px 82px 82px 82px;
   min-width: 0;
   align-items: center;
   gap: var(--fm-space-2);

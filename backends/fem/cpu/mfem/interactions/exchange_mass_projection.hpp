@@ -30,7 +30,8 @@ void prepare_exchange_mass_lumping(
     mfem::Vector &ones,
     mfem::Vector &lumped,
     mfem::Vector &inv_lumped,
-    std::vector<double> &host_lumped);
+    std::vector<double> &host_lumped,
+    bool use_device = true);
 
 bool apply_exchange_component_mass_projection(
     Context *ctx,

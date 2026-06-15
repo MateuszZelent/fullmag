@@ -259,6 +259,42 @@ fasadami ABI i orkiestracji. Można je dzielić dla utrzymania kodu, ale ich naz
 i dokumentacja muszą nadal mówić, że implementacja natywnego FEM żyje w
 `backends/fem`.
 
+## 7.1 Architektura FEM Frequency-Domain I Eigenmodes
+
+Produkcyjne eigenmodes dla dużych obiektów FEM nie mogą opierać się na pełnej
+dense diagonalizacji. Dense solver w Rust runnerze jest ścieżką referencyjną i
+walidacyjną dla małych przypadków, nie produkcyjnym odpowiednikiem COMSOL-a.
+
+Docelowy publiczny kontrakt dla dużych struktur to zapytanie spektralne:
+
+```text
+frequency_min_hz <= f <= frequency_max_hz
+count = maksymalna liczba modów do zwrócenia
+```
+
+Przykład użytkownika: "znajdź do 20 modów w zakresie 100 MHz..5 GHz". Ten
+kontrakt musi przechodzić przez Python DSL, ProblemIR, planner, runtime,
+artefakty, API i control room bez degradacji do `lowest`.
+
+Właścicielem produkcyjnej realizacji jest `backends/fem`:
+
+- PETSc/SLEPc-class sparse lub matrix-free eigensolver dla CPU;
+- Krylov-Schur/Arnoldi/LOBPCG/Jacobi-Davidson dla odpowiednich części widma;
+- shift-invert albo Cayley dla modów wewnętrznych koło częstotliwości celu;
+- FEAST/contour-like interval solve dla okien częstotliwości;
+- PETSc/hypre/MFEM linear solves i preconditionery dla shifted systems;
+- późniejsza osobna realizacja GPU po ustabilizowaniu kontraktu CPU.
+
+Runner może orkiestracyjnie przekazać deskryptor okna, odebrać spectrum/mode
+artifacts, mapować progress i publikować proweniencję. Runner nie może stać się
+produkcyjnym właścicielem solvera wielkoskalowego ani ukrywać fallbacku z
+frequency-window do dense `lowest`.
+
+Control room musi pokazywać realne solver telemetry dla eigen: DOF, zakres
+częstotliwości, count, solver family, spectral transform, Krylov/FEAST outer
+iteration, shifted linear-solve iterations, residual, converged-mode count,
+checkpoint/artifact status i stop reason.
+
 ## 8. Architektura FDM
 
 FDM ma dwie różne role, które muszą pozostać jawne:

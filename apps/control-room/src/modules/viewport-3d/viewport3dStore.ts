@@ -36,7 +36,7 @@ export type Viewport3DFdmTopographyComponent = "magnitude" | "x" | "y" | "z";
 export type Viewport3DRotationMode = "camera" | "object";
 export type Viewport3DScaleUnitMode = "auto" | "nm" | "um" | "mm" | "m";
 
-export interface Viewport3DScalarColorbarLegend {
+interface Viewport3DScalarColorbarLegend {
   label: string;
   maxLabel: string;
   minLabel: string;
@@ -471,14 +471,6 @@ export function useViewport3DCommandState(): Viewport3DCommandState {
     (onStoreChange) => viewport3dStore.subscribe(onStoreChange),
     () => viewport3dStore.getSnapshot(),
     () => viewport3dStore.getSnapshot(),
-  );
-}
-
-export function useViewport3DActiveScalarColorbarLegend(): Viewport3DScalarColorbarLegend | null {
-  return useSyncExternalStore(
-    (onStoreChange) => viewport3dStore.subscribe(onStoreChange),
-    () => viewport3dStore.getActiveScalarColorbarLegend(),
-    () => viewport3dStore.getActiveScalarColorbarLegend(),
   );
 }
 

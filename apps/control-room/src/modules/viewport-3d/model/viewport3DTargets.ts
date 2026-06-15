@@ -29,7 +29,7 @@ export interface HysteresisStepViewportTarget {
   fieldRevision: string | number | null;
 }
 
-export type HysteresisReplayMeshCompatibilityStatus =
+type HysteresisReplayMeshCompatibilityStatus =
   | "compatible"
   | "mismatch"
   | "unknown";

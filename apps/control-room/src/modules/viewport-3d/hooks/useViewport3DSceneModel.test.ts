@@ -14,6 +14,7 @@ import {
 
 import {
   resolveViewport3DActiveQuantityId,
+  resolveViewport3DAnalysisComplexFieldQuery,
   resolveViewport3DDisplayedLiveValue,
   resolveViewport3DPrimaryFieldRenderOptions,
   resolveViewport3DPrimaryFieldVectorEnabled,
@@ -93,7 +94,26 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("const primaryFieldQuantityId = analysisOverlay?.fieldId ?? quantityId;");
     expect(source).toContain("if (analysisOverlay) {");
     expect(source).toContain("return analysisOverlay.query;");
+    expect(source).toContain("visualizationPhaseRad:");
+    expect(source).toContain("analysisOverlay?.visualizationPhaseRad ??");
+    expect(source).toContain("resolveViewport3DAnalysisComplexFieldQuery");
+    expect(source).toContain("asDecodedComplexFieldVector");
     expect(source).toContain("Boolean(analysisOverlay) ||");
+  });
+
+  it("requests analysis complex field data without making phase part of the resource key", () => {
+    expect(
+      resolveViewport3DAnalysisComplexFieldQuery({
+        component: "full",
+        phase_rad: 1.25,
+        scope_kind: "full",
+        view: "phase_rotated_real",
+      }),
+    ).toEqual({
+      component: "full",
+      scope_kind: "full",
+      view: "complex",
+    });
   });
 
   it("does not fetch authored regions before a scene resource exists", () => {
@@ -137,6 +157,126 @@ describe("useViewport3DSceneModel", () => {
       component: "magnitude",
       scope_kind: "full",
     });
+  });
+
+  it("keeps magnetic part render options active for analysis eigen overlays", () => {
+    const options = resolveViewport3DPrimaryFieldRenderOptions({
+      analysisOverlayActive: true,
+      fieldRenderOptions: {
+        fullVectorBudget: 0,
+        partVectorBudgets: new Map(),
+        scalarColorModes: new Set(),
+        scalarColorsVisible: false,
+      },
+      getPartSettings: () => ({
+        activeQuantityId: "m",
+        shaderVisible: true,
+        surfaceColorSource: "magnitude",
+        vectorBudget: 96,
+        vectorsVisible: true,
+        visible: true,
+      }),
+      magneticParts: [{ part: { id: "film" } as never }],
+      quantityId: "analysis:eigen:sample-0000:mode-0002",
+      vectorDomain: "auto",
+    });
+
+    expect(options.scalarColorsVisible).toBe(true);
+    expect(options.scalarColorModes).toEqual(new Set(["magnitude"]));
+    expect(options.partVectorBudgets?.get("film")).toBe(96);
+  });
+
+  it("uses analysis overlay appearance for mode field surface coloring", () => {
+    const options = resolveViewport3DPrimaryFieldRenderOptions({
+      analysisOverlayActive: true,
+      analysisOverlayAppearance: {
+        scalarColorPalette: "inferno",
+        surfaceColorSource: "component_z",
+      },
+      fieldRenderOptions: {
+        fullVectorBudget: 0,
+        partVectorBudgets: new Map(),
+        scalarColorModes: new Set(),
+        scalarColorsVisible: false,
+      },
+      getPartSettings: () => ({
+        activeQuantityId: "m",
+        shaderVisible: true,
+        surfaceColorSource: "magnitude",
+        vectorBudget: 96,
+        vectorsVisible: false,
+        visible: true,
+      }),
+      magneticParts: [{ part: { id: "film" } as never }],
+      quantityId: "analysis:eigen:sample-0000:mode-0002",
+      vectorDomain: "auto",
+    });
+
+    expect(options.scalarColorPalette).toBe("inferno");
+    expect(options.scalarColorsVisible).toBe(true);
+    expect(options.scalarColorModes).toEqual(new Set(["z"]));
+  });
+
+  it("uses analysis overlay display pass appearance for mode field vectors", () => {
+    const options = resolveViewport3DPrimaryFieldRenderOptions({
+      analysisOverlayActive: true,
+      analysisOverlayAppearance: {
+        shaderVisible: false,
+        vectorBudget: 512,
+        vectorsVisible: true,
+      },
+      fieldRenderOptions: {
+        fullVectorBudget: 0,
+        partVectorBudgets: new Map(),
+        scalarColorModes: new Set(["magnitude"]),
+        scalarColorsVisible: true,
+      },
+      getPartSettings: () => ({
+        activeQuantityId: "m",
+        shaderVisible: true,
+        surfaceColorSource: "magnitude",
+        vectorBudget: 96,
+        vectorsVisible: false,
+        visible: true,
+      }),
+      magneticParts: [{ part: { id: "film" } as never }],
+      quantityId: "analysis:eigen:sample-0000:mode-0002",
+      vectorDomain: "auto",
+    });
+
+    expect(options.scalarColorsVisible).toBe(false);
+    expect(options.scalarColorModes).toEqual(new Set());
+    expect(options.partVectorBudgets?.get("film")).toBe(512);
+  });
+
+  it("treats solid analysis overlay coloring as material color, not scalar field coloring", () => {
+    const options = resolveViewport3DPrimaryFieldRenderOptions({
+      analysisOverlayActive: true,
+      analysisOverlayAppearance: {
+        shaderMonoColor: "#ff3366",
+        surfaceColorSource: "solid",
+      },
+      fieldRenderOptions: {
+        fullVectorBudget: 0,
+        partVectorBudgets: new Map(),
+        scalarColorModes: new Set(["magnitude"]),
+        scalarColorsVisible: true,
+      },
+      getPartSettings: () => ({
+        activeQuantityId: "m",
+        shaderVisible: true,
+        surfaceColorSource: "magnitude",
+        vectorBudget: 96,
+        vectorsVisible: false,
+        visible: true,
+      }),
+      magneticParts: [{ part: { id: "film" } as never }],
+      quantityId: "analysis:eigen:sample-0000:mode-0002",
+      vectorDomain: "auto",
+    });
+
+    expect(options.scalarColorsVisible).toBe(false);
+    expect(options.scalarColorModes).toEqual(new Set());
   });
 
   it("loads hysteresis point snapshots through the selected point quantity", () => {

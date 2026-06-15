@@ -31,7 +31,7 @@ SUPPORTED_RELAXATION_ALGORITHMS = {
     "tangent_plane_implicit",
 }
 SUPPORTED_EIGEN_OPERATORS = {"linearized_llg", "full_2x2"}
-SUPPORTED_EIGEN_TARGETS = {"lowest", "nearest"}
+SUPPORTED_EIGEN_TARGETS = {"lowest", "nearest", "frequency_window"}
 SUPPORTED_EQUILIBRIUM_SOURCES = {"provided", "relax", "artifact"}
 SUPPORTED_EIGEN_NORMALIZATIONS = {"unit_l2", "unit_max_amplitude"}
 SUPPORTED_EIGEN_DAMPING_POLICIES = {"ignore", "include"}
@@ -596,6 +596,8 @@ class Eigenmodes:
     count: int = 20
     target: str = "lowest"
     target_frequency: float | None = None
+    frequency_min: float | None = None
+    frequency_max: float | None = None
     operator: str = "linearized_llg"
     equilibrium_source: str = "provided"
     equilibrium_artifact: str | None = None
@@ -623,8 +625,24 @@ class Eigenmodes:
             raise ValueError(f"target must be one of: {supported}")
         if self.target == "nearest":
             require_positive(self.target_frequency, "target_frequency")
+            if self.frequency_min is not None or self.frequency_max is not None:
+                raise ValueError(
+                    "frequency_min/frequency_max require target='frequency_window'"
+                )
+        elif self.target == "frequency_window":
+            require_positive(self.frequency_min, "frequency_min")
+            require_positive(self.frequency_max, "frequency_max")
+            if self.frequency_min is not None and self.frequency_max is not None:
+                if self.frequency_min >= self.frequency_max:
+                    raise ValueError("frequency_min must be less than frequency_max")
+            if self.target_frequency is not None:
+                require_positive(self.target_frequency, "target_frequency")
         elif self.target_frequency is not None:
             require_positive(self.target_frequency, "target_frequency")
+        elif self.frequency_min is not None or self.frequency_max is not None:
+            raise ValueError(
+                "frequency_min/frequency_max require target='frequency_window'"
+            )
         object.__setattr__(
             self,
             "equilibrium_artifact",
@@ -644,6 +662,12 @@ class Eigenmodes:
         target: dict[str, object]
         if self.target == "nearest":
             target = {"kind": "nearest", "frequency_hz": self.target_frequency}
+        elif self.target == "frequency_window":
+            target = {
+                "kind": "frequency_window",
+                "frequency_min_hz": self.frequency_min,
+                "frequency_max_hz": self.frequency_max,
+            }
         else:
             target = {"kind": "lowest"}
 

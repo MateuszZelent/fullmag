@@ -7,6 +7,7 @@ import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
 import type { KernelApi } from "@/kernel/types";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
 import { HysteresisChart } from "@/shared/domain/study/HysteresisChart";
+import { Button } from "@/shared/ui/Button";
 
 import {
   buildScalarChartSeries,
@@ -19,7 +20,13 @@ import { frequencyDomainXAxisLabel } from "./frequencyDomainSeriesAdapter";
 
 const EMPTY_CHART_SERIES: readonly ChartSeries[] = [];
 
-export function AnalysisPlotsView({
+export function AnalysisPlotsView(
+  props: Parameters<typeof useAnalysisPlotsView>[0],
+) {
+  return useAnalysisPlotsView(props);
+}
+
+function useAnalysisPlotsView({
   kernel,
   frequencyDomainSeries = EMPTY_CHART_SERIES,
   frequencyDomainStatus = "idle",
@@ -84,9 +91,22 @@ export function AnalysisPlotsView({
   const seriesLegend = buildSeriesLegend(chartSeries);
   const energyLegend = buildSeriesLegend(solverEnergySeries);
   const frequencyDomainLegend = buildSeriesLegend(frequencyDomainSeries);
+  const frequencyDomainWorkflow = useMemo(
+    () => buildFrequencyDomainWorkflowSummary(frequencyDomainTitle),
+    [frequencyDomainTitle],
+  );
+  const frequencyDomainWorkbench = useMemo(
+    () =>
+      buildFrequencyDomainWorkbenchSummary(
+        frequencyDomainSeries,
+        frequencyDomainTitle,
+        frequencyDomainStatus,
+      ),
+    [frequencyDomainSeries, frequencyDomainStatus, frequencyDomainTitle],
+  );
   const selectedFrequencyDomainPoint = useMemo(
-    () => buildFrequencyDomainCursorSummary(selectedPoint),
-    [selectedPoint],
+    () => buildFrequencyDomainCursorSummary(selectedPoint, frequencyDomainTitle),
+    [frequencyDomainTitle, selectedPoint],
   );
   const xAxisLabel = formatXAxisLabel(chartSeries, xAxisId);
   const showFrequencyDomainPanel =
@@ -138,13 +158,15 @@ export function AnalysisPlotsView({
             {seriesLegend.length > 0 ? (
               <div className="fm-analysis-plots__legend" aria-label="Series legend">
                 {seriesLegend.map((series, index) => (
-                  <button
+                  <Button
                     aria-label={`Series ${series.label} unit ${series.unit} latest ${series.latest}`}
                     className="fm-analysis-plots__legend-item"
                     key={series.columnId}
                     onClick={() => onSeriesSelect(series.series)}
+                    size="sm"
                     title={`${series.label} [${series.unit}] latest ${series.latest} from ${series.source}`}
                     type="button"
+                    variant="secondary"
                   >
                     <span
                       aria-hidden="true"
@@ -159,7 +181,7 @@ export function AnalysisPlotsView({
                     <span className="fm-analysis-plots__legend-latest">
                       {series.latest}
                     </span>
-                  </button>
+                  </Button>
                 ))}
               </div>
             ) : null}
@@ -180,13 +202,15 @@ export function AnalysisPlotsView({
               </span>
               <span>{visibleTable ? `${visibleTable.rows.length} visible` : "0 visible"}</span>
               {range ? (
-                <button
+                <Button
                   className="fm-analysis-plots__range-clear"
+                  size="sm"
                   type="button"
+                  variant="secondary"
                   onClick={onClearRange}
                 >
                   Clear zoom
-                </button>
+                </Button>
               ) : null}
             </footer>
           </>
@@ -202,13 +226,15 @@ export function AnalysisPlotsView({
               aria-label="Energy series legend"
             >
               {energyLegend.map((series, index) => (
-                <button
+                <Button
                   aria-label={`Series ${series.label} unit ${series.unit} latest ${series.latest}`}
                   className="fm-analysis-plots__legend-item"
                   key={series.columnId}
                   onClick={() => onSeriesSelect(series.series)}
+                  size="sm"
                   title={`${series.label} [${series.unit}] latest ${series.latest} from ${series.source}`}
                   type="button"
+                  variant="secondary"
                 >
                   <span
                     aria-hidden="true"
@@ -223,7 +249,7 @@ export function AnalysisPlotsView({
                   <span className="fm-analysis-plots__legend-latest">
                     {series.latest}
                   </span>
-                </button>
+                </Button>
               ))}
             </div>
             <EChartsSurface
@@ -246,18 +272,68 @@ export function AnalysisPlotsView({
             </header>
             {frequencyDomainSeries.length > 0 ? (
               <>
+                {frequencyDomainWorkflow ? (
+                  <div
+                    aria-label="Frequency-domain workflow"
+                    className="fm-analysis-plots__status fm-analysis-plots__status--frequency-domain-workflow"
+                  >
+                    <StatusPill
+                      label="Workflow"
+                      value={frequencyDomainWorkflow.workflow}
+                    />
+                    <StatusPill
+                      label="Next"
+                      value={frequencyDomainWorkflow.next}
+                    />
+                    <StatusPill
+                      label="Artifacts"
+                      value={frequencyDomainWorkflow.artifacts}
+                    />
+                    <StatusPill
+                      label="Inspector"
+                      value={frequencyDomainWorkflow.inspector}
+                    />
+                  </div>
+                ) : null}
+                <div
+                  aria-label="Frequency-domain workbench"
+                  className="fm-analysis-plots__workbench"
+                >
+                  <StatusPill
+                    label="Chart"
+                    value={frequencyDomainWorkbench.chartKind}
+                  />
+                  <StatusPill
+                    label="Points"
+                    value={frequencyDomainWorkbench.pointCount}
+                  />
+                  <StatusPill
+                    label="Frequency"
+                    value={frequencyDomainWorkbench.frequencyRange}
+                  />
+                  <StatusPill
+                    label="3D handoff"
+                    value={frequencyDomainWorkbench.fieldHandoff}
+                  />
+                  <StatusPill
+                    label="Status"
+                    value={frequencyDomainWorkbench.status}
+                  />
+                </div>
                 <div
                   className="fm-analysis-plots__legend"
                   aria-label="Frequency-domain series legend"
                 >
                   {frequencyDomainLegend.map((series, index) => (
-                    <button
+                    <Button
                       aria-label={`Series ${series.label} unit ${series.unit} latest ${series.latest}`}
                       className="fm-analysis-plots__legend-item"
                       key={series.columnId}
                       onClick={() => onSeriesSelect(series.series)}
+                      size="sm"
                       title={`${series.label} [${series.unit}] latest ${series.latest} from ${series.source}`}
                       type="button"
+                      variant="secondary"
                     >
                       <span
                         aria-hidden="true"
@@ -272,7 +348,7 @@ export function AnalysisPlotsView({
                       <span className="fm-analysis-plots__legend-latest">
                         {series.latest}
                       </span>
-                    </button>
+                    </Button>
                   ))}
                 </div>
                 <EChartsSurface
@@ -383,8 +459,117 @@ function formatFrequencyDomainEmptyState(status: string): string {
   return "No frequency-domain series available";
 }
 
+function buildFrequencyDomainWorkflowSummary(chartTitle: string): {
+  artifacts: string;
+  inspector: string;
+  next: string;
+  workflow: string;
+} | null {
+  const normalizedTitle = chartTitle.toLowerCase();
+  if (normalizedTitle.startsWith("fmr modal")) {
+    return {
+      artifacts: "Mode fields",
+      inspector: "mode inspector",
+      next: "select mode to 3D overlay",
+      workflow: "FMR modal",
+    };
+  }
+  if (normalizedTitle.startsWith("fmr response")) {
+    return {
+      artifacts: "Response fields",
+      inspector: "response point inspector",
+      next: "select frequency to response overlay",
+      workflow: "FMR driven",
+    };
+  }
+  return null;
+}
+
+function buildFrequencyDomainWorkbenchSummary(
+  series: readonly ChartSeries[],
+  chartTitle: string,
+  status: string,
+): {
+  chartKind: string;
+  fieldHandoff: string;
+  frequencyRange: string;
+  pointCount: string;
+  status: string;
+} {
+  const first = series.find((entry) => entry.points.length > 0) ?? series[0];
+  const tableId = first?.source.tableId ?? "frequency-domain";
+  const points = series.flatMap((entry) => entry.points);
+  const finiteX: number[] = [];
+  const finiteY: number[] = [];
+  for (const point of points) {
+    if (Number.isFinite(point.x)) finiteX.push(point.x);
+    if (Number.isFinite(point.y)) finiteY.push(point.y);
+  }
+  const frequencyValues =
+    tableId === "frequency-domain:response-sweep"
+      ? finiteX
+      : tableId === "frequency-domain:eigen-spectrum" ||
+          tableId === "frequency-domain:eigen-dispersion"
+        ? finiteY
+        : [];
+  return {
+    chartKind: frequencyDomainChartKind(tableId, chartTitle),
+    fieldHandoff: frequencyDomainFieldHandoff(tableId, chartTitle),
+    frequencyRange: formatFrequencyDomainWorkbenchRange(frequencyValues, first),
+    pointCount: `${points.length} point${points.length === 1 ? "" : "s"}`,
+    status,
+  };
+}
+
+function frequencyDomainChartKind(tableId: string, chartTitle: string): string {
+  if (tableId === "frequency-domain:eigen-spectrum") {
+    return chartTitle.toLowerCase().startsWith("fmr")
+      ? "FMR modal spectrum"
+      : "modal spectrum";
+  }
+  if (tableId === "frequency-domain:eigen-dispersion") return "dispersion";
+  if (tableId === "frequency-domain:response-sweep") {
+    return chartTitle.toLowerCase().startsWith("fmr")
+      ? "FMR driven sweep"
+      : "response sweep";
+  }
+  return "frequency-domain";
+}
+
+function frequencyDomainFieldHandoff(tableId: string, chartTitle: string): string {
+  if (tableId === "frequency-domain:eigen-spectrum") {
+    return chartTitle.toLowerCase().startsWith("fmr")
+      ? "select mode -> FMR 3D overlay"
+      : "select mode -> 3D overlay";
+  }
+  if (tableId === "frequency-domain:eigen-dispersion") {
+    return "select branch point -> mode overlay";
+  }
+  if (tableId === "frequency-domain:response-sweep") {
+    return chartTitle.toLowerCase().startsWith("fmr")
+      ? "select frequency -> FMR response overlay"
+      : "select frequency -> response overlay";
+  }
+  return "select point -> inspector";
+}
+
+function formatFrequencyDomainWorkbenchRange(
+  values: readonly number[],
+  firstSeries: ChartSeries | undefined,
+): string {
+  if (!values.length) return "not available";
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const unit = firstSeries?.source.tableId === "frequency-domain:response-sweep"
+    ? firstSeries.xUnit
+    : firstSeries?.unit;
+  if (min === max) return formatPointValue(min, unit);
+  return `${formatPointValue(min, unit)}-${formatPointValue(max, unit)}`;
+}
+
 function buildFrequencyDomainCursorSummary(
   point: AnalysisChartCursorPoint | null,
+  chartTitle: string,
 ): {
   inspectorTarget: string;
   title: string;
@@ -398,6 +583,16 @@ function buildFrequencyDomainCursorSummary(
   const yValue = formatPointValue(point.point.y, point.unit);
   switch (point.source.tableId) {
     case "frequency-domain:eigen-spectrum":
+      if (chartTitle.toLowerCase().startsWith("fmr")) {
+        return {
+          inspectorTarget: "FMR mode inspector and 3D overlay controls",
+          title: "FMR mode",
+          xLabel: "mode",
+          xValue,
+          yLabel: point.quantity || "frequency",
+          yValue,
+        };
+      }
       return {
         inspectorTarget: "Mode inspector and 3D mode controls",
         title: "eigen mode",
@@ -416,6 +611,16 @@ function buildFrequencyDomainCursorSummary(
         yValue,
       };
     case "frequency-domain:response-sweep":
+      if (chartTitle.toLowerCase().startsWith("fmr")) {
+        return {
+          inspectorTarget: "FMR response point inspector and 3D response overlay",
+          title: "FMR response point",
+          xLabel: "frequency",
+          xValue,
+          yLabel: point.quantity || "response",
+          yValue,
+        };
+      }
       return {
         inspectorTarget: "Response point inspector and 3D response controls",
         title: "response point",

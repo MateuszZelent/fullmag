@@ -139,23 +139,48 @@ void fullmag_auto_mode_overrides_manual_omp() {
 
 void auto_thread_cap_scales_by_context_size() {
     fullmag::fem::Context ctx;
+    ctx.mfem_device.device_string_override = "cpu";
+    ctx.demag.enabled = false;
     ctx.mesh.n_nodes = 5000;
     ctx.mesh.n_elements = 1000;
     check(
         fullmag::fem::auto_cpu_thread_cap_for_context(ctx, 32) == 8,
         "small FEM contexts cap auto CPU threads at 8");
+    check(
+        fullmag::fem::auto_cpu_thread_cap_reason_for_context(ctx, 32) ==
+            fullmag::fem::FULLMAG_FEM_CPU_THREAD_CAP_SMALL_MESH,
+        "small FEM contexts report small-mesh auto CPU thread cap");
 
     ctx.mesh.n_nodes = 20000;
     ctx.mesh.n_elements = 100000;
     check(
         fullmag::fem::auto_cpu_thread_cap_for_context(ctx, 32) == 16,
         "medium FEM contexts cap auto CPU threads at 16");
+    check(
+        fullmag::fem::auto_cpu_thread_cap_reason_for_context(ctx, 32) ==
+            fullmag::fem::FULLMAG_FEM_CPU_THREAD_CAP_MEDIUM_MESH,
+        "medium FEM contexts report medium-mesh auto CPU thread cap");
 
     ctx.mesh.n_nodes = 100000;
     ctx.mesh.n_elements = 500000;
     check(
         fullmag::fem::auto_cpu_thread_cap_for_context(ctx, 32) == 32,
         "large FEM contexts keep requested auto CPU threads");
+    check(
+        fullmag::fem::auto_cpu_thread_cap_reason_for_context(ctx, 32) ==
+            fullmag::fem::FULLMAG_FEM_CPU_THREAD_CAP_AUTO_UNCAPPED,
+        "large FEM contexts report uncapped auto CPU threads");
+
+    ctx.mesh.n_nodes = 5000;
+    ctx.mesh.n_elements = 1000;
+    ctx.demag.enabled = true;
+    check(
+        fullmag::fem::auto_cpu_thread_cap_for_context(ctx, 32) == 32,
+        "FEM demag contexts keep requested auto CPU threads");
+    check(
+        fullmag::fem::auto_cpu_thread_cap_reason_for_context(ctx, 32) ==
+            fullmag::fem::FULLMAG_FEM_CPU_THREAD_CAP_AUTO_UNCAPPED,
+        "FEM demag contexts report uncapped auto CPU threads");
 }
 
 void configure_cpu_runtime_writes_context_fields() {
@@ -172,6 +197,9 @@ void configure_cpu_runtime_writes_context_fields() {
     check(!ctx.cpu_threads.auto_requested, "manual CPU runtime does not mark auto mode");
     check(ctx.cpu_threads.requested_omp_threads == 3, "manual CPU runtime stores requested threads");
     check(ctx.cpu_threads.effective_omp_threads == 3, "manual CPU runtime stores effective threads");
+    check(
+        ctx.cpu_threads.cap_reason == fullmag::fem::FULLMAG_FEM_CPU_THREAD_CAP_NONE,
+        "manual CPU runtime reports no auto cap reason");
 }
 
 } // namespace

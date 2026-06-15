@@ -26,6 +26,38 @@ m0 dot delta_m = 0
 `m0` is the equilibrium magnetization and `delta_m` is a tangent-plane complex
 perturbation.
 
+## Product Split
+
+The magnetic frequency-domain family has two separate public study products:
+
+- `modal_eigen` / `Eigenmodes`,
+- `driven_response` / `Frequency Response`.
+
+They share the same linearized tangent-space operator semantics and the same
+SI precession coefficient `gamma0 = mu0 * |gamma|`, but they answer different
+physical questions and must stay distinct in capabilities, manifests, UI
+labels, and provenance.
+
+Modal eigen analysis solves
+
+```text
+A q = lambda B q
+```
+
+for tangent variables `q`.
+
+Driven response solves
+
+```text
+(i omega B - A) q = b
+```
+
+for the harmonic response at requested frequencies.
+
+`Eigenmodes` must not be described as the frequency-domain solver without the
+word `modal`, and `Frequency Response` must not be described as inheriting the
+modal eigensolver production status.
+
 ## Equilibrium Linearization
 
 A frequency-domain solve is meaningful only when the equilibrium is sufficiently

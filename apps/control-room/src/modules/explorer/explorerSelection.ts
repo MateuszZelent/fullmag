@@ -39,6 +39,7 @@ const STUDY_STAGE_SELECTION_KINDS = new Set<string>([
   "study.stage.hysteresis",
   "study.stage.relax",
   "study.stage.run",
+  "study.stage.change_device",
   "study.stage.save_state",
 ]);
 
@@ -57,6 +58,9 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       ...(node.branchId ? { branchId: node.branchId } : {}),
       ...(node.calculationMode ? { calculationMode: node.calculationMode } : {}),
       ...(node.fieldId ? { fieldId: node.fieldId } : {}),
+      ...(node.fmrPeakIndex !== undefined
+        ? { fmrPeakIndex: node.fmrPeakIndex }
+        : {}),
       ...(node.frequencyIndex !== undefined
         ? { frequencyIndex: node.frequencyIndex }
         : {}),

@@ -85,6 +85,7 @@ void fill_demag_solver_stats(
 #if FULLMAG_HAS_MFEM_STACK
     stats.requested_omp_threads = ctx.cpu_threads.requested_omp_threads;
     stats.effective_omp_threads = ctx.cpu_threads.effective_omp_threads;
+    stats.cpu_thread_cap_reason = ctx.cpu_threads.cap_reason;
 #else
     (void)ctx;
 #endif

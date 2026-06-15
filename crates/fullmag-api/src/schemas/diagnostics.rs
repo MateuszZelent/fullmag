@@ -35,6 +35,8 @@ pub struct SolverProfileThreadingResource {
     pub requested_omp_threads: i32,
     pub effective_omp_threads: i32,
     pub thread_mode: String,
+    #[serde(default)]
+    pub cap_reason: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mfem_device: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -54,6 +56,12 @@ pub struct SolverProfilePhaseResource {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SolverProfileStepSampleResource {
     pub step: u64,
+    #[serde(default)]
+    pub sample_time_unix_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delta_wall_time_ns: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unprofiled_gap_wall_time_ns: Option<u64>,
     pub time: f64,
     pub dt: f64,
     pub total_ns: u64,
@@ -67,6 +75,66 @@ pub struct SolverProfileStepSampleResource {
     pub demag_solves: u32,
     pub poisson_iterations: u32,
     pub poisson_final_residual: f64,
+    #[serde(default)]
+    pub demag_solver_setup_reused: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demag_solver: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demag_preconditioner: Option<String>,
+    #[serde(default)]
+    pub field_copy_bytes: u64,
+    #[serde(default)]
+    pub artifact_enqueue_bytes: u64,
+    #[serde(default)]
+    pub artifact_queue_depth_max: u64,
+    #[serde(default)]
+    pub artifact_queue_depth_current: u64,
+    #[serde(default)]
+    pub artifact_writer_jobs_completed: u64,
+    #[serde(default)]
+    pub artifact_writer_job_wall_time_ns: u64,
+    #[serde(default)]
+    pub artifact_scalar_row_writer_wall_time_ns: u64,
+    #[serde(default)]
+    pub artifact_field_snapshot_writer_wall_time_ns: u64,
+    #[serde(default)]
+    pub artifact_native_field_snapshot_writer_wall_time_ns: u64,
+    #[serde(default)]
+    pub native_ffi_overhead_wall_time_ns: u64,
+    #[serde(default)]
+    pub finalization_wall_time_ns: u64,
+    #[serde(default)]
+    pub finalization_field_copy_wall_time_ns: u64,
+    #[serde(default)]
+    pub finalization_field_copy_bytes: u64,
+    #[serde(default)]
+    pub relaxation_state_copy_wall_time_ns: u64,
+    #[serde(default)]
+    pub relaxation_state_upload_wall_time_ns: u64,
+    #[serde(default)]
+    pub relaxation_retraction_wall_time_ns: u64,
+    #[serde(default)]
+    pub relaxation_gradient_wall_time_ns: u64,
+    #[serde(default)]
+    pub relaxation_metric_wall_time_ns: u64,
+    #[serde(default)]
+    pub relaxation_line_search_wall_time_ns: u64,
+    #[serde(default)]
+    pub relaxation_update_wall_time_ns: u64,
+    #[serde(default)]
+    pub hot_loop_h2d_bytes: u64,
+    #[serde(default)]
+    pub hot_loop_d2h_bytes: u64,
+    #[serde(default)]
+    pub hot_loop_host_sync_count: u64,
+    #[serde(default)]
+    pub hot_loop_control_scalar_d2h_bytes: u64,
+    #[serde(default)]
+    pub hot_loop_control_scalar_host_sync_count: u64,
+    #[serde(default)]
+    pub relaxation_preconditioner_cache_hits: u32,
+    #[serde(default)]
+    pub relaxation_preconditioner_cache_misses: u32,
     pub threading: SolverProfileThreadingResource,
 }
 
@@ -79,16 +147,45 @@ pub struct SolverProfileAggregatesResource {
     pub average_demag_ns: u64,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
+pub struct LivePublisherDiagnosticsResource {
+    pub replace_count: u64,
+    pub publish_count: u64,
+    pub coalesced_wake_count: u64,
+    pub disconnected_wake_count: u64,
+    pub last_payload_estimated_bytes: u64,
+    pub max_payload_estimated_bytes: u64,
+    pub last_replace_wall_time_ns: u64,
+    pub max_replace_wall_time_ns: u64,
+    pub total_replace_wall_time_ns: u64,
+    pub last_merge_wall_time_ns: u64,
+    pub max_merge_wall_time_ns: u64,
+    pub total_merge_wall_time_ns: u64,
+    pub last_clone_wall_time_ns: u64,
+    pub max_clone_wall_time_ns: u64,
+    pub total_clone_wall_time_ns: u64,
+    pub last_publish_wall_time_ns: u64,
+    pub max_publish_wall_time_ns: u64,
+    pub total_publish_wall_time_ns: u64,
+    pub last_publish_lag_wall_time_ns: u64,
+    pub max_publish_lag_wall_time_ns: u64,
+    pub total_publish_lag_wall_time_ns: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SolverProfileResource {
     pub revision: u64,
     pub state: String,
     pub config: SolverProfileCommandConfig,
+    #[serde(default)]
+    pub preview_3d_disabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub threading: Option<SolverProfileThreadingResource>,
     pub latest_samples: Vec<SolverProfileStepSampleResource>,
     pub aggregates: SolverProfileAggregatesResource,
     pub artifact_refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_publisher: Option<LivePublisherDiagnosticsResource>,
 }
 
 impl Default for SolverProfileResource {
@@ -97,10 +194,12 @@ impl Default for SolverProfileResource {
             revision: 0,
             state: "disabled".to_string(),
             config: SolverProfileCommandConfig::default(),
+            preview_3d_disabled: false,
             threading: None,
             latest_samples: Vec::new(),
             aggregates: SolverProfileAggregatesResource::default(),
             artifact_refs: Vec::new(),
+            live_publisher: None,
         }
     }
 }

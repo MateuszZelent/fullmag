@@ -124,12 +124,16 @@ const DEFAULT_EIGENMODES_STAGE: JsonObject = {
   eigen_normalization: "unit_l2",
   eigen_spin_wave_bc: "free",
   eigen_target: "lowest",
+  eigen_frequency_min: "",
+  eigen_frequency_max: "",
   entrypoint_kind: "flat_eigenmodes",
   equilibrium_source: "relax",
   include_demag: true,
   kind: "eigenmodes",
   normalization: "unit_l2",
   target: "lowest",
+  frequency_min: "",
+  frequency_max: "",
 };
 
 const DEFAULT_FREQUENCY_RESPONSE_STAGE: JsonObject = {
@@ -821,7 +825,7 @@ function buildSolverProfileCommand(
       emit_engine_log: false,
       enabled: requestedEnabled,
       max_samples: maxSamples,
-      persist_artifact: false,
+      persist_artifact: requestedEnabled,
       sample_every: sampleEvery,
       sample_interval_wall_ms: sampleIntervalWallMs,
     },
@@ -1235,9 +1239,10 @@ async function resolveObjectFieldStateTarget(
 function sceneObjects(scene: unknown): string[] {
   const objects = record(scene).objects;
   if (!Array.isArray(objects)) return [];
-  return objects
-    .map((entry) => asString(record(entry).id))
-    .filter((objectId): objectId is string => Boolean(objectId));
+  return objects.flatMap((entry) => {
+    const objectId = asString(record(entry).id);
+    return objectId ? [objectId] : [];
+  });
 }
 
 function pickFieldStateFileBase64(): Promise<{

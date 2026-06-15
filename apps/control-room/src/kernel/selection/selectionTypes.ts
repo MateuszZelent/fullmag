@@ -187,6 +187,7 @@ export type SelectionRef =
       branchId?: string;
       calculationMode?: string;
       fieldId?: string;
+      fmrPeakIndex?: number;
       frequencyIndex?: number;
       kind: string;
       modeIndex?: number;

@@ -8,6 +8,16 @@ export interface DecodedFieldVector {
   values: Float64Array;
 }
 
+export interface DecodedComplexFieldVector {
+  componentCount: number;
+  dtype: "complex128";
+  grid: [number, number, number];
+  pointCount: number;
+  quantityId: string;
+  valueCount: number;
+  values: Float64Array;
+}
+
 export interface DecodedTopology {
   boundaryFaceCount: number;
   boundaryFaces: Uint32Array;

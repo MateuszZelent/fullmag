@@ -3,6 +3,7 @@ import type {
   UniverseResource,
 } from "@/kernel/api/apiTypes";
 import type {
+  DecodedComplexFieldVector,
   DecodedFieldVector,
   DecodedTopology,
 } from "@/kernel/api/codecs";
@@ -66,11 +67,13 @@ export interface Viewport3DTopologyRenderModel<
 }
 
 export interface Viewport3DFieldRenderModel {
+  complexFieldVector: DecodedComplexFieldVector | null;
   fullVectorSegments: Float32Array | null;
   partVectorSegments: Map<string, Float32Array | null>;
   scalarColors: ScalarColorBuffer | null;
   scalarColorsByPartAndMode: Map<string, Map<string, ScalarColorBuffer | null>>;
   scalarColorsByMode: Map<string, ScalarColorBuffer | null>;
+  visualizationPhaseRad: number | null;
 }
 
 export interface Viewport3DFieldRenderOptions {
@@ -78,6 +81,7 @@ export interface Viewport3DFieldRenderOptions {
   fullVectorAnchorMode?: Viewport3DVectorAnchorMode;
   fullVectorSurfaceOffsetEnabled?: boolean;
   fullVectorSurfaceOffsetScale?: number;
+  complexFieldVector?: DecodedComplexFieldVector | null;
   partFieldVectors?: ReadonlyMap<string, DecodedFieldVector>;
   partVectorAnchorModes?: ReadonlyMap<string, Viewport3DVectorAnchorMode>;
   partVectorBudgets?: ReadonlyMap<string, number>;
@@ -89,6 +93,7 @@ export interface Viewport3DFieldRenderOptions {
   scalarColorPalette?: string;
   scalarColorsVisible?: boolean;
   vectorColorMode?: string;
+  visualizationPhaseRad?: number | null;
 }
 
 export type Viewport3DVectorAnchorMode = "center" | "tail";
@@ -127,6 +132,10 @@ const DEFAULT_VIEWPORT_3D_VECTOR_GLYPH_BUDGET = 2048;
 const scalarColorCache = new WeakMap<
   DecodedFieldVector,
   Map<string, ScalarColorBuffer | null>
+>();
+const complexPhaseProjectionCache = new WeakMap<
+  DecodedComplexFieldVector,
+  Map<string, DecodedFieldVector>
 >();
 const partScalarColorCache = new WeakMap<
   Viewport3DTopologyPartRenderModel<Viewport3DRenderablePart>,
@@ -335,15 +344,21 @@ export function buildViewport3DFieldRenderModel(
   options: Viewport3DFieldRenderOptions = {},
 ): Viewport3DFieldRenderModel | null {
   if (!topology) return null;
+  const visualizationPhaseRad = finitePhaseRad(options.visualizationPhaseRad);
+  const renderFieldVector =
+    buildCachedComplexPhaseProjection(
+      options.complexFieldVector,
+      visualizationPhaseRad,
+    ) ?? fieldVector;
   const fullFieldVector = isFullTopologyFieldVector(
-    fieldVector,
+    renderFieldVector,
     topology.nodeCount,
   )
-    ? fieldVector
+    ? renderFieldVector
     : null;
   const magneticFieldNodeIndices =
-    !fullFieldVector && fieldVector
-      ? buildMagneticFieldNodeIndices(topology, fieldVector.pointCount)
+    !fullFieldVector && renderFieldVector
+      ? buildMagneticFieldNodeIndices(topology, renderFieldVector.pointCount)
       : null;
   const magneticFieldValueResolver = magneticFieldNodeIndices
     ? buildNodeIndexFieldValueResolver(
@@ -374,13 +389,20 @@ export function buildViewport3DFieldRenderModel(
                 )
               : buildCachedMappedVertexScalarColors(
                   topology,
-                  fieldVector,
+                  renderFieldVector,
                   magneticFieldNodeIndices,
                   colorMode,
                   options.scalarColorPalette,
                 ),
           ]),
         );
+  attachComplexShaderValuesByMode(
+    scalarColorsByMode,
+    options.complexFieldVector,
+    fullFieldVector ? null : magneticFieldNodeIndices,
+    topology.nodeCount,
+    visualizationPhaseRad,
+  );
   const scalarColors =
     scalarColorsByMode.get(options.vectorColorMode ?? "magnitude") ?? null;
   const partVectorSegments = new Map<string, Float32Array | null>();
@@ -421,10 +443,10 @@ export function buildViewport3DFieldRenderModel(
     );
     const partFieldVector =
       explicitPartFieldVector ??
-      (partUsesMagneticOnlyField ? fieldVector : fullFieldVector);
+      (partUsesMagneticOnlyField ? renderFieldVector : fullFieldVector);
     const sampledVectorSelection =
       partFieldVector &&
-      partFieldVector !== fieldVector &&
+      partFieldVector !== renderFieldVector &&
       partFieldVector.pointCount < topology.nodeCount
         ? buildScopedPartFieldSampleSelection(
             vectorSelection,
@@ -440,7 +462,7 @@ export function buildViewport3DFieldRenderModel(
             magneticVectorNodeIndices,
           )
         : sampledVectorSelection;
-    if (partFieldVector && partFieldVector !== fieldVector) {
+    if (partFieldVector && partFieldVector !== renderFieldVector) {
       scalarColorsByPartAndMode.set(
         partId,
         new Map(
@@ -465,7 +487,7 @@ export function buildViewport3DFieldRenderModel(
       partFieldVector &&
       (partUsesMagneticOnlyField
         ? magneticFieldValueResolver
-        : partFieldVector !== fieldVector &&
+        : partFieldVector !== renderFieldVector &&
             partFieldVector.pointCount < topology.nodeCount
           ? buildScopedPartFieldValueResolver(
               vectorSelection,
@@ -499,6 +521,7 @@ export function buildViewport3DFieldRenderModel(
     options.fullVectorBudget ?? DEFAULT_VIEWPORT_3D_VECTOR_GLYPH_BUDGET;
 
   return {
+    complexFieldVector: options.complexFieldVector ?? null,
     fullVectorSegments: buildCachedFullVectorSegments(
       topology,
       fullFieldVector,
@@ -518,7 +541,142 @@ export function buildViewport3DFieldRenderModel(
     scalarColors,
     scalarColorsByPartAndMode,
     scalarColorsByMode,
+    visualizationPhaseRad,
   };
+}
+
+function finitePhaseRad(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function buildCachedComplexPhaseProjection(
+  complexFieldVector: DecodedComplexFieldVector | null | undefined,
+  phaseRad: number | null | undefined,
+): DecodedFieldVector | null {
+  const phase = finitePhaseRad(phaseRad);
+  if (!complexFieldVector || phase === null) return null;
+  const cacheKey = `${complexFieldVector.componentCount}:${phase}`;
+  let cachedByPhase = complexPhaseProjectionCache.get(complexFieldVector);
+  if (!cachedByPhase) {
+    cachedByPhase = new Map();
+    complexPhaseProjectionCache.set(complexFieldVector, cachedByPhase);
+  }
+  const cached = cachedByPhase.get(cacheKey);
+  if (cached) return cached;
+
+  const projected = buildComplexPhaseProjection(complexFieldVector, phase);
+  cachedByPhase.set(cacheKey, projected);
+  return projected;
+}
+
+function buildComplexPhaseProjection(
+  complexFieldVector: DecodedComplexFieldVector,
+  phaseRad: number,
+): DecodedFieldVector {
+  const componentCount = complexFieldVector.componentCount;
+  const projectedValues = new Float64Array(
+    complexFieldVector.pointCount * componentCount,
+  );
+  const cosPhase = Math.cos(phaseRad);
+  const sinPhase = Math.sin(phaseRad);
+
+  for (
+    let pointIndex = 0;
+    pointIndex < complexFieldVector.pointCount;
+    pointIndex += 1
+  ) {
+    for (
+      let componentIndex = 0;
+      componentIndex < componentCount;
+      componentIndex += 1
+    ) {
+      const source = (pointIndex * componentCount + componentIndex) * 2;
+      const target = pointIndex * componentCount + componentIndex;
+      const real = complexFieldVector.values[source] ?? 0;
+      const imag = complexFieldVector.values[source + 1] ?? 0;
+      projectedValues[target] = real * cosPhase - imag * sinPhase;
+    }
+  }
+
+  return {
+    dtype: "float64",
+    grid: complexFieldVector.grid,
+    nComp: componentCount,
+    pointCount: complexFieldVector.pointCount,
+    quantityId: complexFieldVector.quantityId,
+    valueCount: projectedValues.length,
+    values: projectedValues,
+  };
+}
+
+function attachComplexShaderValuesByMode(
+  scalarColorsByMode: Map<string, ScalarColorBuffer | null>,
+  complexFieldVector: DecodedComplexFieldVector | null | undefined,
+  targetNodeIndices: Uint32Array | null,
+  vertexCount: number,
+  phaseRad: number | null,
+): void {
+  if (!complexFieldVector || phaseRad === null) return;
+  for (const buffer of scalarColorsByMode.values()) {
+    attachComplexShaderValues(
+      buffer,
+      complexFieldVector,
+      targetNodeIndices,
+      vertexCount,
+      phaseRad,
+    );
+  }
+}
+
+function attachComplexShaderValues(
+  buffer: ScalarColorBuffer | null,
+  complexFieldVector: DecodedComplexFieldVector,
+  targetNodeIndices: Uint32Array | null,
+  vertexCount: number,
+  phaseRad: number,
+): void {
+  if (!buffer || complexFieldVector.pointCount <= 0) return;
+  const fullTopologyField = complexFieldVector.pointCount === vertexCount;
+  if (!fullTopologyField && !targetNodeIndices) return;
+  if (targetNodeIndices && targetNodeIndices.length < complexFieldVector.pointCount) {
+    return;
+  }
+
+  const complexRealValues = new Float32Array(vertexCount * 3);
+  const complexImagValues = new Float32Array(vertexCount * 3);
+  const componentCount = complexFieldVector.componentCount;
+
+  for (
+    let pointIndex = 0;
+    pointIndex < complexFieldVector.pointCount;
+    pointIndex += 1
+  ) {
+    const nodeIndex = fullTopologyField
+      ? pointIndex
+      : targetNodeIndices?.[pointIndex] ?? -1;
+    if (nodeIndex < 0 || nodeIndex >= vertexCount) continue;
+
+    const target = nodeIndex * 3;
+    const source = pointIndex * componentCount * 2;
+    complexRealValues[target] = complexFieldVector.values[source] ?? 0;
+    complexImagValues[target] = complexFieldVector.values[source + 1] ?? 0;
+    if (componentCount > 1) {
+      complexRealValues[target + 1] =
+        complexFieldVector.values[source + 2] ?? 0;
+      complexImagValues[target + 1] =
+        complexFieldVector.values[source + 3] ?? 0;
+    }
+    if (componentCount > 2) {
+      complexRealValues[target + 2] =
+        complexFieldVector.values[source + 4] ?? 0;
+      complexImagValues[target + 2] =
+        complexFieldVector.values[source + 5] ?? 0;
+    }
+  }
+
+  buffer.complexRealValues = complexRealValues;
+  buffer.complexImagValues = complexImagValues;
+  buffer.complexPhaseRad = phaseRad;
 }
 
 function isFullTopologyFieldVector(

@@ -14,6 +14,7 @@
 #include "cpu/mfem/interactions/demag_poisson_periodic.hpp"
 #include "cpu/mfem/interactions/demag_poisson_recovery.hpp"
 #include "cpu/mfem/interactions/demag_poisson_rhs.hpp"
+#include "cpu/mfem/runtime/mfem_device.hpp"
 #include "fem_common.hpp"
 #include "gpu/cuda/demag_poisson/poisson.hpp"
 
@@ -62,8 +63,9 @@ bool context_initialize_poisson(Context &ctx, std::string &error)
         poisson_bilinear->Assemble();
         poisson_bilinear->Finalize();
 
+        const bool use_device = mfem::Device::IsEnabled();
         auto *gf_potential = new mfem::GridFunction(potential_fes);
-        gf_potential->UseDevice(true);
+        gf_potential->UseDevice(use_device);
         *gf_potential = 0.0;
 
         ctx.poisson_demag.potential_fec = potential_fec;

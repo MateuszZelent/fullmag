@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { decodeFieldVector } from "./fieldVectorCodec";
+import { asDecodedComplexFieldVector, decodeFieldVector } from "./fieldVectorCodec";
 
 function makeFieldVectorBuffer({
   nComp = 3,
@@ -60,6 +60,30 @@ describe("decodeFieldVector", () => {
     expect(decoded.nComp).toBe(6);
     expect(decoded.valueCount).toBe(6);
     expect(Array.from(decoded.values)).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it("exposes even-component analysis fields as complex real-imag pairs", () => {
+    const decoded = decodeFieldVector(
+      makeFieldVectorBuffer({
+        nComp: 6,
+        quantityId: "analysis:eigen",
+        values: [1, 0.1, 2, 0.2, 3, 0.3],
+      }),
+    );
+
+    expect(asDecodedComplexFieldVector(decoded)).toMatchObject({
+      componentCount: 3,
+      dtype: "complex128",
+      pointCount: 1,
+      quantityId: "analysis:eigen",
+      valueCount: 6,
+    });
+  });
+
+  it("does not treat real xyz field vectors as complex analysis fields", () => {
+    const decoded = decodeFieldVector(makeFieldVectorBuffer());
+
+    expect(asDecodedComplexFieldVector(decoded)).toBeNull();
   });
 
   it("rejects invalid FMVP component counts", () => {

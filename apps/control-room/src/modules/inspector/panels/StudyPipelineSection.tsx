@@ -3,6 +3,7 @@ import {
   ArrowDown,
   ArrowUp,
   Copy,
+  Cpu,
   Gauge,
   Plus,
   Save,
@@ -12,6 +13,7 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 
+import { formatFrequencyHz } from "@/shared/domain/analysis/frequencyUnits";
 import { Button } from "@/shared/ui/Button";
 
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
@@ -28,6 +30,7 @@ import type {
   StudyStageModel,
 } from "./StudyInspectorPanelModel";
 import { StudyProgressBar } from "./StudyProgressBar";
+import type { FrequencyDomainAuthoringView } from "./stages/StageInspectorFrame";
 
 type HysteresisSettleStepDraft = {
   [key: string]: unknown;
@@ -248,6 +251,15 @@ export function StudyPipelineSection({
           Save
         </Button>
         <Button
+          size="sm"
+          type="button"
+          variant="ghost"
+          onClick={() => onAddStage("change_device")}
+        >
+          <Cpu size={13} aria-hidden="true" />
+          Device
+        </Button>
+        <Button
           disabled={!draft}
           size="sm"
           title="Duplicate selected stage"
@@ -389,11 +401,13 @@ export function StudyStageDraftEditor({
   index,
   onUpdate,
   validation,
+  view = "overview",
 }: {
   draft: StudyStageDraft;
   index: number;
   onUpdate: (patch: Partial<StudyStageDraft>) => void;
   validation: readonly { message: string; severity: "error" | "warning" }[];
+  view?: FrequencyDomainAuthoringView;
 }) {
   return (
     <div className="fm-study-stage-editor">
@@ -428,6 +442,7 @@ export function StudyStageDraftEditor({
         <option value="eigenmodes">Eigenmodes</option>
         <option value="frequency_response">Frequency response</option>
         <option value="save_state">Save state</option>
+        <option value="change_device">Change device</option>
       </FormField>
       <FormField
         label="Stage ID"
@@ -444,14 +459,21 @@ export function StudyStageDraftEditor({
       ) : draft.kind === "hysteresis" ? (
         <HysteresisStageDraftFields draft={draft} onUpdate={onUpdate} />
       ) : draft.kind === "eigenmodes" ? (
-        <EigenmodesStageDraftFields draft={draft} onUpdate={onUpdate} />
+        <EigenmodesStageDraftFields
+          draft={draft}
+          onUpdate={onUpdate}
+          view={view}
+        />
       ) : draft.kind === "frequency_response" ? (
         <FrequencyResponseStageDraftFields
           draft={draft}
           onUpdate={onUpdate}
+          view={view}
         />
       ) : draft.kind === "save_state" ? (
         <SaveStateStageDraftFields draft={draft} onUpdate={onUpdate} />
+      ) : draft.kind === "change_device" ? (
+        <ChangeDeviceStageDraftFields draft={draft} onUpdate={onUpdate} />
       ) : (
         <RelaxStageDraftFields draft={draft} onUpdate={onUpdate} />
       )}
@@ -464,8 +486,31 @@ function studyStageDraftKindLabel(kind: StudyStageDraftKind): string {
   if (kind === "frequency_response") return "Frequency Response";
   if (kind === "hysteresis") return "Hysteresis";
   if (kind === "save_state") return "Save State";
+  if (kind === "change_device") return "Change Device";
   if (kind === "run") return "Run";
   return "Relax";
+}
+
+function ChangeDeviceStageDraftFields({
+  draft,
+  onUpdate,
+}: {
+  draft: StudyStageDraft;
+  onUpdate: (patch: Partial<StudyStageDraft>) => void;
+}) {
+  return (
+    <FormField
+      label="Device"
+      type="select"
+      value={draft.deviceTarget}
+      onChange={(event) => onUpdate({ deviceTarget: event.target.value })}
+    >
+      <option value="cpu">CPU</option>
+      <option value="gpu">GPU</option>
+      <option value="cuda">CUDA</option>
+      <option value="auto">Auto</option>
+    </FormField>
+  );
 }
 
 function HysteresisStageDraftFields({
@@ -687,6 +732,30 @@ function HysteresisStageDraftFields({
   );
 }
 
+function hysteresisSettleBranchKey(branch: HysteresisSettleBranchDraft): string {
+  return `settle-branch:${branch.branchId}:${branch.when}:${branch.run}`;
+}
+
+function hysteresisMinorLoopKey(loop: HysteresisMinorLoopDraft): string {
+  return `minor-loop:${loop.reversalField}:${loop.returnField}:${loop.parentBranch}:${loop.closurePolicy}`;
+}
+
+function hysteresisFieldSegmentKey(
+  segment: HysteresisFieldSegmentDraft,
+): string {
+  return `field-segment:${segment.segmentId}:${segment.label}:${segment.startField}:${segment.stopField}:${segment.step}`;
+}
+
+function hysteresisDenseWindowKey(
+  window: HysteresisDenseWindowDraft,
+): string {
+  return `dense-window:${window.centerField}:${window.halfWidth}:${window.step}:${window.priority}:${window.reason}`;
+}
+
+function hysteresisSettleStepKey(step: HysteresisSettleStepDraft): string {
+  return `settle-step:${String(step.step_id ?? "")}:${String(step.kind ?? "")}:${String(step.method ?? "")}:${String(step.applies_to ?? "")}`;
+}
+
 function HysteresisSettleBranchesEditor({
   draft,
   onUpdate,
@@ -723,7 +792,10 @@ function HysteresisSettleBranchesEditor({
         <strong>Settle tree branches</strong>
       </div>
       {branches.map((branch, index) => (
-        <div className="fm-inspector-form-section" key={index}>
+        <div
+          className="fm-inspector-form-section"
+          key={hysteresisSettleBranchKey(branch)}
+        >
           <div className="fm-inspector-form-section__header">
             <strong>Branch {index + 1}</strong>
             <div className="fm-inspector-toolbar">
@@ -833,7 +905,10 @@ function HysteresisMinorLoopsEditor({
         <strong>Minor loop branches</strong>
       </div>
       {loops.map((loop, index) => (
-        <div className="fm-inspector-form-section" key={index}>
+        <div
+          className="fm-inspector-form-section"
+          key={hysteresisMinorLoopKey(loop)}
+        >
           <div className="fm-inspector-form-section__header">
             <strong>Loop {index + 1}</strong>
             <div className="fm-inspector-toolbar">
@@ -950,7 +1025,10 @@ function HysteresisFieldSegmentsEditor({
         <strong>Piecewise field segments</strong>
       </div>
       {segments.map((segment, index) => (
-        <div className="fm-inspector-form-section" key={index}>
+        <div
+          className="fm-inspector-form-section"
+          key={hysteresisFieldSegmentKey(segment)}
+        >
           <div className="fm-inspector-form-section__header">
             <strong>Segment {index + 1}</strong>
             <div className="fm-inspector-toolbar">
@@ -1085,7 +1163,10 @@ function HysteresisDenseWindowsEditor({
         <strong>Dense refinement windows</strong>
       </div>
       {windows.map((window, index) => (
-        <div className="fm-inspector-form-section" key={index}>
+        <div
+          className="fm-inspector-form-section"
+          key={hysteresisDenseWindowKey(window)}
+        >
           <div className="fm-inspector-form-section__header">
             <strong>Window {index + 1}</strong>
             <div className="fm-inspector-toolbar">
@@ -1212,7 +1293,10 @@ function HysteresisSettleAlgorithmsEditor({
         <strong>Settle algorithms</strong>
       </div>
       {steps.map((step, index) => (
-        <div className="fm-inspector-form-section" key={index}>
+        <div
+          className="fm-inspector-form-section"
+          key={hysteresisSettleStepKey(step)}
+        >
           <div className="fm-inspector-form-section__header">
             <strong>Algorithm {index + 1}</strong>
             <div className="fm-inspector-toolbar">
@@ -1427,9 +1511,9 @@ function parseHysteresisSettleSteps(value: string): HysteresisSettleStepDraft[] 
   try {
     const parsed = JSON.parse(value) as unknown;
     if (!Array.isArray(parsed)) return [DEFAULT_RELAX_SETTLE_STEP];
-    const steps = parsed
-      .filter((step): step is Record<string, unknown> => isRecord(step))
-      .map((step) => normalizeHysteresisSettleStepPatch(step));
+    const steps = parsed.flatMap((step) =>
+      isRecord(step) ? [normalizeHysteresisSettleStepPatch(step)] : [],
+    );
     return steps.length > 0 ? steps : [DEFAULT_RELAX_SETTLE_STEP];
   } catch {
     return [DEFAULT_RELAX_SETTLE_STEP];
@@ -1442,9 +1526,13 @@ function parseHysteresisFieldSegments(
   try {
     const parsed = JSON.parse(value) as unknown;
     if (!Array.isArray(parsed)) return [defaultHysteresisFieldSegment(0)];
-    const segments = parsed
-      .filter((segment): segment is Record<string, unknown> => isRecord(segment))
-      .map((segment, index) => normalizeHysteresisFieldSegment(segment, index));
+    let segmentIndex = 0;
+    const segments = parsed.flatMap((segment) => {
+      if (!isRecord(segment)) return [];
+      const normalized = normalizeHysteresisFieldSegment(segment, segmentIndex);
+      segmentIndex += 1;
+      return [normalized];
+    });
     return segments.length > 0 ? segments : [defaultHysteresisFieldSegment(0)];
   } catch {
     return [defaultHysteresisFieldSegment(0)];
@@ -1504,9 +1592,13 @@ function parseHysteresisDenseWindows(
   try {
     const parsed = JSON.parse(value) as unknown;
     if (!Array.isArray(parsed)) return [defaultHysteresisDenseWindow(0)];
-    const windows = parsed
-      .filter((window): window is Record<string, unknown> => isRecord(window))
-      .map((window, index) => normalizeHysteresisDenseWindow(window, index));
+    let windowIndex = 0;
+    const windows = parsed.flatMap((window) => {
+      if (!isRecord(window)) return [];
+      const normalized = normalizeHysteresisDenseWindow(window, windowIndex);
+      windowIndex += 1;
+      return [normalized];
+    });
     return windows.length > 0 ? windows : [defaultHysteresisDenseWindow(0)];
   } catch {
     return [defaultHysteresisDenseWindow(0)];
@@ -1552,9 +1644,9 @@ function parseHysteresisMinorLoops(value: string): HysteresisMinorLoopDraft[] {
   try {
     const parsed = JSON.parse(value) as unknown;
     if (!Array.isArray(parsed)) return [defaultHysteresisMinorLoop(0)];
-    const loops = parsed
-      .filter((loop): loop is Record<string, unknown> => isRecord(loop))
-      .map((loop) => normalizeHysteresisMinorLoop(loop));
+    const loops = parsed.flatMap((loop) =>
+      isRecord(loop) ? [normalizeHysteresisMinorLoop(loop)] : [],
+    );
     return loops.length > 0 ? loops : [defaultHysteresisMinorLoop(0)];
   } catch {
     return [defaultHysteresisMinorLoop(0)];
@@ -1567,9 +1659,13 @@ function parseHysteresisSettleBranches(
   try {
     const parsed = JSON.parse(value) as unknown;
     if (!Array.isArray(parsed)) return [defaultHysteresisSettleBranch(0)];
-    const branches = parsed
-      .filter((branch): branch is Record<string, unknown> => isRecord(branch))
-      .map((branch, index) => normalizeHysteresisSettleBranch(branch, index));
+    let branchIndex = 0;
+    const branches = parsed.flatMap((branch) => {
+      if (!isRecord(branch)) return [];
+      const normalized = normalizeHysteresisSettleBranch(branch, branchIndex);
+      branchIndex += 1;
+      return [normalized];
+    });
     return branches.length > 0 ? branches : [defaultHysteresisSettleBranch(0)];
   } catch {
     return [defaultHysteresisSettleBranch(0)];
@@ -1847,13 +1943,89 @@ function RelaxStageDraftFields({
 function EigenmodesStageDraftFields({
   draft,
   onUpdate,
+  view,
 }: {
   draft: StudyStageDraft;
   onUpdate: (patch: Partial<StudyStageDraft>) => void;
+  view: FrequencyDomainAuthoringView;
 }) {
+  if (view === "calculation_mode") {
+    return <CalculationModeDraftField draft={draft} onUpdate={onUpdate} />;
+  }
+  if (view === "solver" || view === "outputs") {
+    return (
+      <>
+        {view === "solver" ? (
+          <SpectralStageDraftFields
+            draft={draft}
+            onUpdate={onUpdate}
+            view="solver"
+          />
+        ) : null}
+        <FormField
+          label="Mode count"
+          value={draft.count}
+          onChange={(event) => onUpdate({ count: event.target.value })}
+        />
+        <FormField
+          label="Target"
+          type="select"
+          value={draft.target}
+          onChange={(event) => onUpdate({ target: event.target.value })}
+        >
+          <option value="lowest">Lowest</option>
+          <option value="nearest">Nearest</option>
+          <option value="frequency_window">Frequency window</option>
+          <option value="largest">Largest</option>
+          <option value="near_frequency">Near frequency</option>
+        </FormField>
+        {draft.target === "frequency_window" ? (
+          <>
+            <FormField
+              label="Frequency min"
+              hint={frequencyDraftPreview(draft.frequencyMin)}
+              unit="Hz"
+              value={draft.frequencyMin}
+              onChange={(event) => onUpdate({ frequencyMin: event.target.value })}
+            />
+            <FormField
+              label="Frequency max"
+              hint={frequencyDraftPreview(draft.frequencyMax)}
+              unit="Hz"
+              value={draft.frequencyMax}
+              onChange={(event) => onUpdate({ frequencyMax: event.target.value })}
+            />
+          </>
+        ) : (
+          <FormField
+            label="Target freq"
+            hint={frequencyDraftPreview(draft.targetFrequency)}
+            unit="Hz"
+            value={draft.targetFrequency}
+            onChange={(event) =>
+              onUpdate({ targetFrequency: event.target.value })
+            }
+          />
+        )}
+      </>
+    );
+  }
+  if (view !== "overview") {
+    return (
+      <SpectralStageDraftFields
+        draft={draft}
+        onUpdate={onUpdate}
+        view={view}
+      />
+    );
+  }
   return (
     <>
-      <SpectralStageDraftFields draft={draft} onUpdate={onUpdate} />
+      <SpectralStageDraftFields
+        draft={draft}
+        onUpdate={onUpdate}
+        view="overview"
+      />
       <FormField
         label="Mode count"
         value={draft.count}
@@ -1866,15 +2038,37 @@ function EigenmodesStageDraftFields({
         onChange={(event) => onUpdate({ target: event.target.value })}
       >
         <option value="lowest">Lowest</option>
+        <option value="nearest">Nearest</option>
+        <option value="frequency_window">Frequency window</option>
         <option value="largest">Largest</option>
         <option value="near_frequency">Near frequency</option>
       </FormField>
-      <FormField
-        label="Target freq"
-        unit="Hz"
-        value={draft.targetFrequency}
-        onChange={(event) => onUpdate({ targetFrequency: event.target.value })}
-      />
+      {draft.target === "frequency_window" ? (
+        <>
+          <FormField
+            label="Frequency min"
+            hint={frequencyDraftPreview(draft.frequencyMin)}
+            unit="Hz"
+            value={draft.frequencyMin}
+            onChange={(event) => onUpdate({ frequencyMin: event.target.value })}
+          />
+          <FormField
+            label="Frequency max"
+            hint={frequencyDraftPreview(draft.frequencyMax)}
+            unit="Hz"
+            value={draft.frequencyMax}
+            onChange={(event) => onUpdate({ frequencyMax: event.target.value })}
+          />
+        </>
+      ) : (
+        <FormField
+          label="Target freq"
+          hint={frequencyDraftPreview(draft.targetFrequency)}
+          unit="Hz"
+          value={draft.targetFrequency}
+          onChange={(event) => onUpdate({ targetFrequency: event.target.value })}
+        />
+      )}
     </>
   );
 }
@@ -1882,16 +2076,73 @@ function EigenmodesStageDraftFields({
 function FrequencyResponseStageDraftFields({
   draft,
   onUpdate,
+  view,
 }: {
   draft: StudyStageDraft;
   onUpdate: (patch: Partial<StudyStageDraft>) => void;
+  view: FrequencyDomainAuthoringView;
 }) {
-  return (
-    <>
-      <SpectralStageDraftFields draft={draft} onUpdate={onUpdate} />
+  if (view === "calculation_mode") {
+    return <CalculationModeDraftField draft={draft} onUpdate={onUpdate} />;
+  }
+  if (view === "excitation") {
+    return (
+      <>
+        <FormField
+          label="Excitation"
+          unit="A/m"
+          value={draft.excitationField}
+          onChange={(event) => onUpdate({ excitationField: event.target.value })}
+        />
+        <FormField
+          label="Excitation phase"
+          unit="rad"
+          value={draft.excitationPhaseRad}
+          onChange={(event) =>
+            onUpdate({ excitationPhaseRad: event.target.value })
+          }
+        />
+      </>
+    );
+  }
+  if (view === "sweep") {
+    return (
       <FormField
         label="Frequencies"
-        hint="Comma or whitespace separated values in Hz."
+        hint={frequencyListDraftPreview(draft.frequenciesHz)}
+        value={draft.frequenciesHz}
+        onChange={(event) => onUpdate({ frequenciesHz: event.target.value })}
+      />
+    );
+  }
+  if (view === "outputs") {
+    return (
+      <FormField
+        label="Observable"
+        value={draft.observable}
+        onChange={(event) => onUpdate({ observable: event.target.value })}
+      />
+    );
+  }
+  if (view !== "overview") {
+    return (
+      <SpectralStageDraftFields
+        draft={draft}
+        onUpdate={onUpdate}
+        view={view}
+      />
+    );
+  }
+  return (
+    <>
+      <SpectralStageDraftFields
+        draft={draft}
+        onUpdate={onUpdate}
+        view="overview"
+      />
+      <FormField
+        label="Frequencies"
+        hint={frequencyListDraftPreview(draft.frequenciesHz)}
         value={draft.frequenciesHz}
         onChange={(event) => onUpdate({ frequenciesHz: event.target.value })}
       />
@@ -1913,6 +2164,69 @@ function FrequencyResponseStageDraftFields({
         onChange={(event) => onUpdate({ observable: event.target.value })}
       />
     </>
+  );
+}
+
+function frequencyDraftPreview(value: string | null | undefined): string {
+  const parsed = Number(value ?? "");
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return "Stored as Hz; preview not available";
+  }
+  return `Stored as Hz; preview ${formatFrequencyHz(parsed)}`;
+}
+
+function frequencyListDraftPreview(value: string | null | undefined): string {
+  const frequencies = parseNumberList(value).filter(
+    (entry) => Number.isFinite(entry) && entry > 0,
+  );
+  if (!frequencies.length) {
+    return "Comma or whitespace separated values in Hz.";
+  }
+  return `Stored as Hz; preview ${frequencies
+    .map((entry) => formatFrequencyHz(entry))
+    .join(", ")}`;
+}
+
+function parseNumberList(value: string | null | undefined): number[] {
+  return String(value ?? "")
+    .split(/[\s,;]+/)
+    .flatMap((entry) => {
+      const parsed = Number(entry.trim());
+      return Number.isFinite(parsed) ? [parsed] : [];
+    });
+}
+
+function CalculationModeDraftField({
+  draft,
+  onUpdate,
+}: {
+  draft: StudyStageDraft;
+  onUpdate: (patch: Partial<StudyStageDraft>) => void;
+}) {
+  const options =
+    draft.kind === "frequency_response"
+      ? [
+          ["fmr_response", "FMR response"],
+          ["response_map", "Response map"],
+        ]
+      : [
+          ["fmr_modal", "FMR modal"],
+          ["free_modes", "Free modes"],
+          ["dispersion_modal", "Dispersion modal"],
+        ];
+  return (
+    <FormField
+      label="Calculation mode"
+      type="select"
+      value={draft.calculationMode}
+      onChange={(event) => onUpdate({ calculationMode: event.target.value })}
+    >
+      {options.map(([value, label]) => (
+        <option key={value} value={value}>
+          {label}
+        </option>
+      ))}
+    </FormField>
   );
 }
 
@@ -1947,76 +2261,106 @@ function SaveStateStageDraftFields({
 function SpectralStageDraftFields({
   draft,
   onUpdate,
+  view,
 }: {
   draft: StudyStageDraft;
   onUpdate: (patch: Partial<StudyStageDraft>) => void;
+  view: FrequencyDomainAuthoringView;
 }) {
+  const showEquilibrium = view === "overview" || view === "equilibrium";
+  const showOperator =
+    view === "overview" || view === "operator" || view === "solver";
+  const showBoundary =
+    view === "overview" || view === "boundary" || view === "periodic_pairs";
+  const showKSampling =
+    view === "overview" ||
+    view === "k_sampling" ||
+    view === "k_path" ||
+    view === "k_grid";
   return (
     <>
-      <FormField
-        label="Include demag"
-        checked={draft.includeDemag}
-        type="checkbox"
-        onChange={(event) => onUpdate({ includeDemag: event.target.checked })}
-      />
-      <FormField
-        label="Equilibrium"
-        type="select"
-        value={draft.equilibriumSource}
-        onChange={(event) =>
-          onUpdate({ equilibriumSource: event.target.value })
-        }
-      >
-        <option value="relax">Relax stage</option>
-        <option value="provided">Provided artifact</option>
-        <option value="current_state">Current state</option>
-      </FormField>
-      <FormField
-        label="Eq artifact"
-        value={draft.equilibriumArtifact}
-        onChange={(event) =>
-          onUpdate({ equilibriumArtifact: event.target.value })
-        }
-      />
-      <FormField
-        label="Normalization"
-        type="select"
-        value={draft.normalization}
-        onChange={(event) => onUpdate({ normalization: event.target.value })}
-      >
-        <option value="unit_l2">Unit L2</option>
-        <option value="max_component">Max component</option>
-        <option value="none">None</option>
-      </FormField>
-      <FormField
-        label="Damping"
-        type="select"
-        value={draft.dampingPolicy}
-        onChange={(event) => onUpdate({ dampingPolicy: event.target.value })}
-      >
-        <option value="ignore">Ignore</option>
-        <option value="linearized">Linearized</option>
-        <option value="full">Full</option>
-      </FormField>
-      <FormField
-        label="k vector"
-        value={draft.kVector}
-        onChange={(event) => onUpdate({ kVector: event.target.value })}
-      />
-      <FormField
-        label="k sampling"
-        hint="JSON object."
-        type="textarea"
-        rows={3}
-        value={draft.kSampling}
-        onChange={(event) => onUpdate({ kSampling: event.target.value })}
-      />
-      <FormField
-        label="BC"
-        hint="Boundary condition name or JSON object."
-        value={draft.bc}
-        onChange={(event) => onUpdate({ bc: event.target.value })}
-      />
+      {showOperator ? (
+        <>
+          <FormField
+            label="Include demag"
+            checked={draft.includeDemag}
+            type="checkbox"
+            onChange={(event) =>
+              onUpdate({ includeDemag: event.target.checked })
+            }
+          />
+          <FormField
+            label="Normalization"
+            type="select"
+            value={draft.normalization}
+            onChange={(event) =>
+              onUpdate({ normalization: event.target.value })
+            }
+          >
+            <option value="unit_l2">Unit L2</option>
+            <option value="unit_max_amplitude">Unit max amplitude</option>
+          </FormField>
+          <FormField
+            label="Damping"
+            type="select"
+            value={draft.dampingPolicy}
+            onChange={(event) =>
+              onUpdate({ dampingPolicy: event.target.value })
+            }
+          >
+            <option value="ignore">Ignore</option>
+            <option value="include">Include</option>
+          </FormField>
+        </>
+      ) : null}
+      {showEquilibrium ? (
+        <>
+          <FormField
+            label="Equilibrium"
+            type="select"
+            value={draft.equilibriumSource}
+            onChange={(event) =>
+              onUpdate({ equilibriumSource: event.target.value })
+            }
+          >
+            <option value="relax">Relax stage</option>
+            <option value="provided">Provided state</option>
+            <option value="artifact">Named artifact</option>
+          </FormField>
+          <FormField
+            label="Eq artifact"
+            value={draft.equilibriumArtifact}
+            onChange={(event) =>
+              onUpdate({ equilibriumArtifact: event.target.value })
+            }
+          />
+        </>
+      ) : null}
+      {showKSampling ? (
+        <>
+          <FormField
+            label="k vector"
+            value={draft.kVector}
+            onChange={(event) => onUpdate({ kVector: event.target.value })}
+          />
+          <FormField
+            label="k sampling"
+            hint="JSON object."
+            type="textarea"
+            rows={3}
+            value={draft.kSampling}
+            onChange={(event) => onUpdate({ kSampling: event.target.value })}
+          />
+        </>
+      ) : null}
+      {showBoundary ? (
+        <FormField
+          label="BC"
+          hint="Boundary condition name or JSON object."
+          value={draft.bc}
+          onChange={(event) => onUpdate({ bc: event.target.value })}
+        />
+      ) : null}
     </>
   );
 }

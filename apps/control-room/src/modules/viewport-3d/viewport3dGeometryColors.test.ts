@@ -6,6 +6,7 @@ import type { DecodedFieldVector } from "@/kernel/api/codecs";
 import {
   applyVertexScalarColorBuffer,
   applyVertexScalarColors,
+  canApplyVertexScalarColorBuffer,
   canApplyVertexScalarColors,
 } from "./viewport3dGeometryColors";
 import { magnitudeColorRgb } from "./viewport3dVectorColoring";
@@ -104,5 +105,23 @@ describe("viewport3dGeometryColors", () => {
     ).toBe(true);
     expect(geometry.hasAttribute("color")).toBe(true);
     expect(canApplyVertexScalarColors(vectorField([1, 0, 0]), 2)).toBe(true);
+  });
+
+  it("routes complex mode buffers through the scalar shader instead of vertex colors", () => {
+    expect(
+      canApplyVertexScalarColorBuffer(
+        {
+          colors: new Float32Array([
+            1, 0, 0,
+            0, 1, 0,
+          ]),
+          complexImagValues: new Float32Array(6),
+          complexPhaseRad: 0.5,
+          complexRealValues: new Float32Array(6),
+          range: { max: 1, min: 0 },
+        },
+        2,
+      ),
+    ).toBe(false);
   });
 });

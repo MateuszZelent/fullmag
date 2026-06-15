@@ -129,7 +129,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip3 install --no-cache-dir cmake==3.30.5
-RUN pip3 install --no-cache-dir numpy gmsh meshio trimesh
+RUN pip3 install --no-cache-dir numpy gmsh meshio trimesh scipy h5py zarr
 RUN curl https://sh.rustup.rs -sSf | bash -s -- -y --default-toolchain nightly
 RUN corepack enable && corepack prepare pnpm@10.8.1 --activate
 

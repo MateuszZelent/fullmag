@@ -46,8 +46,42 @@ describe("AntennaObjectPanelModel", () => {
       objectId: "center_microstrip",
       source: "center_drive",
       spatialProfile: "uniform",
-      waveform: "sinc pulse, cutoff 2.000e+10 Hz, t0 5.000e-11 s",
+      waveform: "sinc pulse, cutoff 20 GHz, t0 5.000e-11 s",
     });
+  });
+
+  it("formats sinusoidal antenna frequency with automatic display units", () => {
+    const model = resolveAntennaObjectPanelModel(
+      {
+        ...EMPTY_SELECTION,
+        objectId: "center_microstrip",
+        ref: {
+          kind: "object.antenna",
+          nodeId: "model:object:center_microstrip:antenna",
+          objectId: "center_microstrip",
+          type: "scene-object",
+          visualizationTargetId: "object:center_microstrip",
+        },
+      },
+      {
+        current_modules: {
+          modules: [
+            {
+              B: 0.001,
+              direction: [0, 1, 0],
+              kind: "antenna_field_source",
+              model: "prescribed_zeeman_mask",
+              name: "center_drive",
+              object: "center_microstrip",
+              spatial_profile: { kind: "uniform" },
+              waveform: { frequency_hz: 750e6, kind: "sinusoidal" },
+            },
+          ],
+        },
+      } as never,
+    );
+
+    expect(model.waveform).toBe("sin, 750 MHz");
   });
 
   it("builds a current_modules merge patch for edited antenna waveform", () => {

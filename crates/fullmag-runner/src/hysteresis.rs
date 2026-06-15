@@ -2426,6 +2426,7 @@ fn execute_settle_step_at_field(
     hysteresis_progress: Option<(Option<usize>, f64, usize, &SettleStepIR)>,
     on_step: &mut (dyn FnMut(StepUpdate) -> StepAction + Send),
 ) -> Result<ExecutedRun, RunError> {
+    let live_display_selection = (field_every_n != u64::MAX).then_some(display_selection);
     match backend_plan {
         BackendPlanIR::Fdm(fdm) => {
             let mut mutated_fdm = fdm.clone();
@@ -2448,7 +2449,7 @@ fn execute_settle_step_at_field(
                 grid,
                 field_every_n,
                 initial_snapshot,
-                display_selection: Some(display_selection),
+                display_selection: live_display_selection,
                 interrupt_requested,
                 on_step: &mut live_on_step,
             };
@@ -2476,7 +2477,7 @@ fn execute_settle_step_at_field(
                 grid,
                 field_every_n,
                 initial_snapshot,
-                display_selection: Some(display_selection),
+                display_selection: live_display_selection,
                 interrupt_requested,
                 on_step: &mut live_on_step,
             };

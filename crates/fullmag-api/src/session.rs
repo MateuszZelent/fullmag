@@ -493,6 +493,18 @@ fn merge_stage_record_linkage(
         incoming.state_transition_ui_presentation =
             existing.state_transition_ui_presentation.clone();
     }
+    if incoming.progress_percent.is_none() {
+        incoming.progress_percent = existing.progress_percent;
+    }
+    if incoming.progress_label.is_none() {
+        incoming.progress_label = existing.progress_label.clone();
+    }
+    if incoming.progress_detail.is_none() {
+        incoming.progress_detail = existing.progress_detail.clone();
+    }
+    if incoming.last_progress_unix_ms.is_none() {
+        incoming.last_progress_unix_ms = existing.last_progress_unix_ms;
+    }
 }
 
 fn next_revision(current: u64) -> u64 {
@@ -658,6 +670,7 @@ fn stage_execution_changed(
                 || prev.total_stages != next.total_stages
                 || prev.completed_stage_indexes != next.completed_stage_indexes
                 || prev.stage_statuses != next.stage_statuses
+                || prev.stages != next.stages
         }
     }
 }
@@ -2033,6 +2046,10 @@ mod tests {
                 metric_name: None,
                 metric_value: None,
                 threshold: None,
+                progress_percent: None,
+                progress_label: None,
+                progress_detail: None,
+                last_progress_unix_ms: None,
                 current_field_m_t: None,
                 current_point_index: None,
                 current_settle_step_index: None,
@@ -2469,6 +2486,10 @@ mod tests {
                 metric_name: None,
                 metric_value: None,
                 threshold: None,
+                progress_percent: None,
+                progress_label: None,
+                progress_detail: None,
+                last_progress_unix_ms: None,
                 current_field_m_t: None,
                 current_point_index: None,
                 current_settle_step_index: None,
@@ -2512,6 +2533,10 @@ mod tests {
                         metric_name: None,
                         metric_value: None,
                         threshold: None,
+                        progress_percent: None,
+                        progress_label: None,
+                        progress_detail: None,
+                        last_progress_unix_ms: None,
                         current_field_m_t: None,
                         current_point_index: None,
                         current_settle_step_index: None,
@@ -2866,6 +2891,10 @@ mod tests {
                 metric_name: None,
                 metric_value: None,
                 threshold: None,
+                progress_percent: None,
+                progress_label: None,
+                progress_detail: None,
+                last_progress_unix_ms: None,
                 current_field_m_t: None,
                 current_point_index: None,
                 current_settle_step_index: None,

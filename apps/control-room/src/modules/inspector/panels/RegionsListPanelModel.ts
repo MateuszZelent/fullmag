@@ -286,9 +286,10 @@ export function findRegionIdByName(
   if (!object || !Array.isArray(object.regions)) return null;
 
   const targetName = regionName.trim();
-  const matches = object.regions
-    .map(asRecord)
-    .filter((region) => asString(region?.name) === targetName);
+  const matches = object.regions.flatMap((region) => {
+    const record = asRecord(region);
+    return asString(record?.name) === targetName ? [record] : [];
+  });
   if (matches.length !== 1) return null;
 
   return asString(matches[0]?.region_id) ?? asString(matches[0]?.id);
@@ -307,11 +308,11 @@ export function findLastRegionSelection(
     : null;
   if (!object || !Array.isArray(object.regions)) return null;
 
-  const candidates = object.regions
-    .map(asRecord)
-    .filter((region): region is JsonRecord => {
-      const regionId = asString(region?.region_id) ?? asString(region?.id);
-      return Boolean(regionId && regionId !== excludedRegionId);
+  const candidates = object.regions.flatMap((region) => {
+      const record = asRecord(region);
+      if (!record) return [];
+      const regionId = asString(record.region_id) ?? asString(record.id);
+      return regionId && regionId !== excludedRegionId ? [record] : [];
     });
   const last = candidates.at(-1);
   if (!last) return null;

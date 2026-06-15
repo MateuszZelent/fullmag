@@ -7,6 +7,8 @@ import {
   canApplyScalarShaderColorBuffer,
   createScalarSurfaceShaderMaterial,
   updateScalarSurfaceShaderMaterial,
+  VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE,
+  VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE,
   VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE,
   VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE,
 } from "./viewport3dScalarSurfaceShader";
@@ -28,6 +30,25 @@ function orientationBuffer(values: number[]): ScalarColorBuffer {
     colorPalette: "viridis",
     range: { max: 1, min: 0 },
     vectorValues: new Float32Array(values),
+  };
+}
+
+function complexBuffer(): ScalarColorBuffer {
+  return {
+    colors: new Float32Array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6]),
+    colorMode: "x",
+    colorPalette: "viridis",
+    complexImagValues: new Float32Array([
+      0, 1, 0,
+      0, 0, 1,
+    ]),
+    complexPhaseRad: Math.PI / 2,
+    complexRealValues: new Float32Array([
+      1, 0, 0,
+      0, 1, 0,
+    ]),
+    range: { max: 1, min: -1 },
+    scalarValues: new Float32Array([1, 0]),
   };
 }
 
@@ -60,6 +81,30 @@ describe("viewport3dScalarSurfaceShader", () => {
       ),
     ).toEqual([
       1, 0, 0,
+      0, 0, 1,
+    ]);
+  });
+
+  it("applies complex-value attributes for shader-side mode phase projection", () => {
+    const geometry = new BufferGeometry();
+    const buffer = complexBuffer();
+
+    expect(canApplyScalarShaderColorBuffer(buffer, 2)).toBe(true);
+    expect(applyScalarShaderColorBuffer(geometry, buffer, 2)).toBe(true);
+    expect(
+      Array.from(
+        geometry.getAttribute(VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE).array,
+      ),
+    ).toEqual([
+      1, 0, 0,
+      0, 1, 0,
+    ]);
+    expect(
+      Array.from(
+        geometry.getAttribute(VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE).array,
+      ),
+    ).toEqual([
+      0, 1, 0,
       0, 0, 1,
     ]);
   });
@@ -101,6 +146,27 @@ describe("viewport3dScalarSurfaceShader", () => {
 
     expect(material.uniforms.fmColorModeId.value).toBe(1);
     expect(material.vertexShader).toContain(VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE);
+    material.dispose();
+  });
+
+  it("creates a shader material with complex phase uniforms", () => {
+    const material = createScalarSurfaceShaderMaterial(complexBuffer(), {
+      depthTest: true,
+      depthWrite: true,
+      opacity: 1,
+      polygonOffset: false,
+      polygonOffsetFactor: 0,
+      polygonOffsetUnits: 0,
+      side: 0,
+      transparent: false,
+    });
+
+    expect(material.uniforms.fmPhaseRad.value).toBe(Math.PI / 2);
+    expect(material.uniforms.fmColorModeId.value).toBe(2);
+    expect(material.vertexShader).toContain(
+      VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE,
+    );
+    expect(material.vertexShader).toContain("scalarFromVector");
     material.dispose();
   });
 

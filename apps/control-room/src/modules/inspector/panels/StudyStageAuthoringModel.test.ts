@@ -88,14 +88,14 @@ describe("StudyStageAuthoringModel", () => {
     ).toMatchObject({
       bc: '{"kind":"periodic","axes":["x"]}',
       count: "12",
-      dampingPolicy: "linearized",
+      dampingPolicy: "include",
       equilibriumArtifact: "artifact://relaxed",
       equilibriumSource: "provided",
       includeDemag: false,
       kSampling: '{"path":"gamma-x","points":5}',
       kVector: "0, 1, -1",
       kind: "eigenmodes",
-      normalization: "max_component",
+      normalization: "unit_max_amplitude",
       stageId: "modes-1",
       target: "near_frequency",
       targetFrequency: "2000000000",
@@ -121,6 +121,22 @@ describe("StudyStageAuthoringModel", () => {
       kind: "frequency_response",
       observable: "mx",
       stageId: "freq-1",
+    });
+
+    expect(
+      createStudyStageDraft(
+        {
+          device: "cpu",
+          entrypoint_kind: "flat_change_device",
+          kind: "change_device",
+          stage_id: "device-cpu",
+        },
+        4,
+      ),
+    ).toMatchObject({
+      deviceTarget: "cpu",
+      kind: "change_device",
+      stageId: "device-cpu",
     });
 
     expect(
@@ -464,35 +480,59 @@ describe("StudyStageAuthoringModel", () => {
     });
   });
 
+  it("serializes spectral authoring options with Python DSL vocabulary", () => {
+    expect(
+      studyStageDraftToSceneStage({
+        ...createDefaultStudyStageDraft("eigenmodes", 0),
+        calculationMode: "dispersion_modal",
+        dampingPolicy: "include",
+        equilibriumSource: "artifact",
+        normalization: "unit_max_amplitude",
+        stageId: "modes-1",
+      }),
+    ).toMatchObject({
+      calculation_mode: "dispersion_modal",
+      damping_policy: "include",
+      eigen_calculation_mode: "dispersion_modal",
+      eigen_damping_policy: "include",
+      eigen_equilibrium_source: "artifact",
+      eigen_normalization: "unit_max_amplitude",
+      equilibrium_source: "artifact",
+      normalization: "unit_max_amplitude",
+    });
+  });
+
   it("serializes eigenmodes, frequency response, and save-state stages", () => {
     expect(
       studyStageDraftToSceneStage({
         ...createDefaultStudyStageDraft("eigenmodes", 0),
         bc: '{"kind":"periodic","axes":["x"]}',
         count: "4",
-        dampingPolicy: "linearized",
+        dampingPolicy: "include",
         equilibriumArtifact: "artifact://relaxed",
         equilibriumSource: "provided",
         includeDemag: false,
         kSampling: '{"points":5}',
         kVector: "0, 1, -1",
-        normalization: "max_component",
+        normalization: "unit_max_amplitude",
         stageId: "modes-1",
         target: "near_frequency",
         targetFrequency: "2e9",
       }),
     ).toEqual({
       bc: { axes: ["x"], kind: "periodic" },
+      calculation_mode: "fmr_modal",
       count: 4,
-      damping_policy: "linearized",
+      damping_policy: "include",
+      eigen_calculation_mode: "fmr_modal",
       eigen_count: 4,
-      eigen_damping_policy: "linearized",
+      eigen_damping_policy: "include",
       eigen_equilibrium_artifact: "artifact://relaxed",
       eigen_equilibrium_source: "provided",
       eigen_include_demag: false,
       eigen_k_sampling: { points: 5 },
       eigen_k_vector: [0, 1, -1],
-      eigen_normalization: "max_component",
+      eigen_normalization: "unit_max_amplitude",
       eigen_spin_wave_bc: { axes: ["x"], kind: "periodic" },
       eigen_target: "near_frequency",
       eigen_target_frequency: 2e9,
@@ -503,7 +543,7 @@ describe("StudyStageAuthoringModel", () => {
       k_sampling: { points: 5 },
       k_vector: [0, 1, -1],
       kind: "eigenmodes",
-      normalization: "max_component",
+      normalization: "unit_max_amplitude",
       stage_id: "modes-1",
       target: "near_frequency",
       target_frequency: 2e9,
@@ -548,6 +588,35 @@ describe("StudyStageAuthoringModel", () => {
       kind: "save_state",
       stage_id: "save-1",
     });
+
+    expect(
+      studyStageDraftToSceneStage({
+        ...createDefaultStudyStageDraft("change_device", 3),
+        deviceTarget: "cpu",
+        stageId: "device-cpu",
+      }),
+    ).toEqual({
+      device: "cpu",
+      entrypoint_kind: "flat_change_device",
+      kind: "change_device",
+      stage_id: "device-cpu",
+    });
+  });
+
+  it("validates change-device stage requests", () => {
+    expect(
+      validateStudyStageDraft({
+        ...createDefaultStudyStageDraft("change_device", 0),
+        deviceTarget: "cuda:0",
+      }),
+    ).toEqual([]);
+
+    expect(
+      validateStudyStageDraft({
+        ...createDefaultStudyStageDraft("change_device", 0),
+        deviceTarget: "tpu",
+      }).map((issue) => issue.message),
+    ).toContain("Device must be cpu, gpu, cuda, cuda:<index>, or auto.");
   });
 
   it("validates spectral lists, vectors, and JSON object fields", () => {
@@ -565,6 +634,38 @@ describe("StudyStageAuthoringModel", () => {
       "k sampling must be a JSON object.",
       "BC must be a boundary condition name or JSON object.",
     ]);
+  });
+
+  it("rejects spectral options outside the Python DSL vocabulary", () => {
+    expect(
+      validateStudyStageDraft({
+        ...createDefaultStudyStageDraft("eigenmodes", 0),
+        calculationMode: "response_map",
+        dampingPolicy: "linearized",
+        equilibriumSource: "current_state",
+        normalization: "max_component",
+      }).map((issue) => issue.message),
+    ).toEqual([
+      "Calculation mode must be fmr_modal, free_modes, or dispersion_modal.",
+      "Normalization must be unit_l2 or unit_max_amplitude.",
+      "Damping policy must be ignore or include.",
+      "Equilibrium source must be provided, relax, or artifact.",
+    ]);
+  });
+
+  it("serializes frequency-response calculation mode intent", () => {
+    expect(
+      studyStageDraftToSceneStage({
+        ...createDefaultStudyStageDraft("frequency_response", 0),
+        calculationMode: "response_map",
+        frequenciesHz: "1e9",
+        stageId: "response-1",
+      }),
+    ).toMatchObject({
+      calculation_mode: "response_map",
+      frequency_calculation_mode: "response_map",
+      kind: "frequency_response",
+    });
   });
 
   it("validates required positive stage fields", () => {

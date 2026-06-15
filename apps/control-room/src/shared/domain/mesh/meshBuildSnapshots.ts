@@ -1,4 +1,4 @@
-export type MeshBuildSnapshotGroup =
+type MeshBuildSnapshotGroup =
   | "identity"
   | "provenance"
   | "publish"
@@ -18,7 +18,7 @@ export interface MeshBuildSnapshotInput {
   next?: MeshBuildSnapshotResources | null;
 }
 
-export interface MeshBuildSnapshotResources {
+interface MeshBuildSnapshotResources {
   build?: Record<string, unknown> | null;
   manifest?: Record<string, unknown> | null;
   quality?: Record<string, unknown> | null;

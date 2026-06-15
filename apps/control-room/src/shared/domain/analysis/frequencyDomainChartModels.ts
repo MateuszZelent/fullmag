@@ -1,5 +1,6 @@
 import type { AnalysisChartResourceRef } from "./chartCursorPoint";
 import {
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
@@ -8,7 +9,7 @@ import {
 import type { SelectionRef } from "@/kernel/selection/selectionTypes";
 
 type ResourceStatus = "idle" | "loading" | "ready" | "stale" | "error";
-export type FrequencyDomainCalculationMode =
+type FrequencyDomainCalculationMode =
   | "dispersion_modal"
   | "fmr_modal"
   | "fmr_response"
@@ -96,8 +97,11 @@ export interface EigenDispersionPoint {
 export interface EigenBranchPoint {
   frequencyImagHz: number | null;
   frequencyRealHz: number;
+  modeFieldId: string | null;
+  modeFieldResourceKey: string | null;
   overlapPrev: number | null;
   rawModeIndex: number;
+  residualNorm: number | null;
   sampleIndex: number;
   trackingConfidence: number | null;
 }
@@ -107,11 +111,37 @@ export interface EigenBranch {
   frequencyMaxHz: number | null;
   frequencyMinHz: number | null;
   label: string | null;
+  overlapPrevMean?: number | null;
   overlapPrevMin: number | null;
   points: EigenBranchPoint[];
+  sampleGapCount?: number;
+  sampleGapMax?: number | null;
   sampleMax: number | null;
   sampleMin: number | null;
   trackingConfidenceMin: number | null;
+  warnings?: string[];
+}
+
+interface EigenBranchDetailChartPoint {
+  label: string;
+  sampleIndex: number;
+}
+
+interface EigenBranchFrequencyChartPoint
+  extends EigenBranchDetailChartPoint {
+  valueHz: number;
+}
+
+interface EigenBranchOverlapChartPoint
+  extends EigenBranchDetailChartPoint {
+  value: number;
+}
+
+export interface EigenBranchDetailChartModel {
+  frequencyRangeHz: { max: number | null; min: number | null };
+  frequencySeries: EigenBranchFrequencyChartPoint[];
+  overlapSeries: EigenBranchOverlapChartPoint[];
+  sampleRange: { max: number | null; min: number | null };
 }
 
 export interface FrequencyResponsePoint {
@@ -130,6 +160,7 @@ export interface FmrPeakPoint {
   amplitude: number | null;
   absorbedPowerDensity: number | null;
   fieldId: string | null;
+  fieldResourceKey?: string | null;
   frequencyHz: number;
   frequencyPointIndex: number | null;
   linewidthHz: number | null;
@@ -137,6 +168,23 @@ export interface FmrPeakPoint {
   phaseRad: number | null;
   source: "driven_response" | "modal";
   validationStatus: "fail" | "pass" | "unavailable" | "warn";
+}
+
+export interface FmrModalDrivenComparisonPoint {
+  detuningHz: number;
+  drivenPeak: FmrPeakPoint;
+  modalPeak: FmrPeakPoint;
+}
+
+export interface FmrModalDrivenComparisonModel {
+  diagnostics: string[];
+  nearestComparison: FmrModalDrivenComparisonPoint | null;
+  pairs: FmrModalDrivenComparisonPoint[];
+  readiness:
+    | "driven-only"
+    | "missing-peaks"
+    | "modal-and-driven"
+    | "modal-only";
 }
 
 export interface FrequencyDomainSelectionContext {
@@ -178,9 +226,10 @@ function finiteNumber(value: unknown): number | null {
 }
 
 function finiteNumberList(value: unknown): number[] {
-  return array(value)
-    .map(finiteNumber)
-    .filter((item): item is number => item != null);
+  return array(value).flatMap((item) => {
+    const parsed = finiteNumber(item);
+    return parsed == null ? [] : [parsed];
+  });
 }
 
 function frequencyChartScale(valuesHz: readonly number[]): FrequencyChartScale {
@@ -192,11 +241,6 @@ function frequencyChartScale(valuesHz: readonly number[]): FrequencyChartScale {
   if (maxAbs >= 1e9) return { divisor: 1e9, unit: "GHz" };
   if (maxAbs >= 1e6) return { divisor: 1e6, unit: "MHz" };
   return { divisor: 1, unit: "Hz" };
-}
-
-function eigenModeFieldId(sampleIndex: number, modeIndex: number): string | null {
-  if (sampleIndex < 0 || modeIndex < 0) return null;
-  return `analysis:eigen:sample-${String(sampleIndex).padStart(4, "0")}:mode-${String(modeIndex).padStart(4, "0")}`;
 }
 
 function fieldVectorResourceKey(fieldId: string): string {
@@ -363,9 +407,7 @@ export function buildEigenSpectrumChartModel(
       rowIndex,
     );
     const sampleIndex = finiteInteger(item?.sample_index ?? item?.sampleIndex);
-    const modeFieldId =
-      stringValue(item?.mode_field_id ?? item?.modeFieldId) ??
-      eigenModeFieldId(sampleIndex, rawModeIndex);
+    const modeFieldId = stringValue(item?.mode_field_id ?? item?.modeFieldId);
     const modeFieldResourceKey =
       stringValue(item?.mode_field_resource_key ?? item?.modeFieldResourceKey) ??
       (modeFieldId ? fieldVectorResourceKey(modeFieldId) : null);
@@ -453,14 +495,15 @@ export function buildEigenDispersionChartModel(
   const series = [...branchIds].map((branchId) => ({
     id: `analysis.frequency-domain:eigen:dispersion:${branchId}`,
     label: branchId === "raw" ? "Raw modes" : `Branch ${branchId}`,
-    points: parsed.points
-      .map((point, rowIndex) => ({ point, rowIndex }))
-      .filter(({ point }) => (point.branchId ?? "raw") === branchId)
-      .map(({ point, rowIndex }) => ({
+    points: parsed.points.flatMap((point, rowIndex) =>
+      (point.branchId ?? "raw") === branchId
+        ? [{
         rowIndex,
         x: point.pathS,
         y: point.frequencyHz / frequencyScale.divisor,
-      })),
+          }]
+        : [],
+    ),
     quantity: "frequency",
     source: {
       kind: "analysis.frequency_domain" as const,
@@ -497,6 +540,79 @@ export function buildEigenDispersionPointSelectionRef(
     sampleIndex: point.sampleIndex,
     type: "frequency-domain",
   });
+}
+
+export function buildEigenBranchSelectionRef(
+  branch: EigenBranch,
+  context: FrequencyDomainSelectionContext = {},
+): SelectionRef {
+  return cleanFrequencyDomainSelectionRef({
+    analysisRunId: context.analysisRunId ?? undefined,
+    analysisStageId: context.analysisStageId ?? undefined,
+    artifactPath: context.artifactPath ?? undefined,
+    branchId: branch.branchId,
+    calculationMode: context.calculationMode ?? "dispersion_modal",
+    kind: "results.eigen.branch",
+    nodeId: context.nodeId ?? frequencyDomainBranchNodeId(branch),
+    resourceRef:
+      context.resourceRef ?? ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
+    type: "frequency-domain",
+  });
+}
+
+export function buildEigenBranchPointModeSelectionRef(
+  branchId: string,
+  point: EigenBranchPoint,
+  context: FrequencyDomainSelectionContext = {},
+): SelectionRef {
+  return cleanFrequencyDomainSelectionRef({
+    analysisRunId: context.analysisRunId ?? undefined,
+    analysisStageId: context.analysisStageId ?? undefined,
+    artifactPath: context.artifactPath ?? undefined,
+    branchId,
+    calculationMode: context.calculationMode ?? "dispersion_modal",
+    fieldId: point.modeFieldId ?? undefined,
+    kind: "results.eigen.mode",
+    modeIndex: point.rawModeIndex,
+    nodeId: context.nodeId ?? frequencyDomainBranchPointModeNodeId(point),
+    resourceRef:
+      context.resourceRef ??
+      point.modeFieldResourceKey ??
+      (point.modeFieldId ? fieldVectorResourceKey(point.modeFieldId) : undefined),
+    sampleIndex: point.sampleIndex,
+    type: "frequency-domain",
+  });
+}
+
+export function buildEigenBranchDetailChartModel(
+  branch: EigenBranch | null | undefined,
+): EigenBranchDetailChartModel {
+  const points = (branch?.points ?? []).toSorted(
+    (left, right) =>
+      left.sampleIndex - right.sampleIndex ||
+      left.rawModeIndex - right.rawModeIndex,
+  );
+  const frequencySeries = points.map((point) => ({
+    label: `sample ${point.sampleIndex} mode ${point.rawModeIndex}`,
+    sampleIndex: point.sampleIndex,
+    valueHz: point.frequencyRealHz,
+  }));
+  const overlapSeries = points.flatMap((point) =>
+    point.overlapPrev != null
+      ? [{
+      label: `sample ${point.sampleIndex} mode ${point.rawModeIndex}`,
+      sampleIndex: point.sampleIndex,
+      value: point.overlapPrev!,
+        }]
+      : [],
+  );
+
+  return {
+    frequencyRangeHz: minMax(frequencySeries.map((point) => point.valueHz)),
+    frequencySeries,
+    overlapSeries,
+    sampleRange: minMax(points.map((point) => point.sampleIndex)),
+  };
 }
 
 export function buildEigenBranchesModel(
@@ -539,10 +655,15 @@ export function buildEigenBranchesModel(
           point?.frequency_imag_hz ?? point?.frequencyImagHz,
         ),
         frequencyRealHz,
+        modeFieldId: stringValue(point?.mode_field_id ?? point?.modeFieldId),
+        modeFieldResourceKey: stringValue(
+          point?.mode_field_resource_key ?? point?.modeFieldResourceKey,
+        ),
         overlapPrev: finiteNumber(point?.overlap_prev ?? point?.overlapPrev),
         rawModeIndex: finiteInteger(
           point?.raw_mode_index ?? point?.rawModeIndex ?? point?.mode_index,
         ),
+        residualNorm: finiteNumber(point?.residual_norm ?? point?.residualNorm),
         sampleIndex: finiteInteger(point?.sample_index ?? point?.sampleIndex),
         trackingConfidence: finiteNumber(
           point?.tracking_confidence ?? point?.trackingConfidence,
@@ -550,24 +671,33 @@ export function buildEigenBranchesModel(
       });
     });
 
+    const overlapValues = points.flatMap((point) =>
+      point.overlapPrev == null ? [] : [point.overlapPrev],
+    );
+    const gapSummary = branchSampleGapSummary(points);
+
     branches.push({
       branchId,
       frequencyMaxHz: minMax(points.map((point) => point.frequencyRealHz)).max,
       frequencyMinHz: minMax(points.map((point) => point.frequencyRealHz)).min,
       label: stringValue(branch?.label),
-      overlapPrevMin: minMax(
-        points
-          .map((point) => point.overlapPrev)
-          .filter((value): value is number => value != null),
-      ).min,
+      overlapPrevMean:
+        overlapValues.length > 0
+          ? overlapValues.reduce((sum, value) => sum + value, 0) /
+            overlapValues.length
+          : null,
+      overlapPrevMin: minMax(overlapValues).min,
       points,
+      sampleGapCount: gapSummary.count,
+      sampleGapMax: gapSummary.max,
       sampleMax: minMax(points.map((point) => point.sampleIndex)).max,
       sampleMin: minMax(points.map((point) => point.sampleIndex)).min,
       trackingConfidenceMin: minMax(
-        points
-          .map((point) => point.trackingConfidence)
-          .filter((value): value is number => value != null),
+        points.flatMap((point) =>
+          point.trackingConfidence == null ? [] : [point.trackingConfidence],
+        ),
       ).min,
+      warnings: gapSummary.warnings,
     });
   });
 
@@ -622,8 +752,7 @@ export function buildFrequencyResponseChartModel(
         (frequencyIndex == null
           ? null
           : responseFieldResources.get(frequencyIndex)) ??
-        stringValue(item?.field_id ?? item?.fieldId) ??
-        responseFieldIdFromIndex(frequencyIndex),
+        stringValue(item?.field_id ?? item?.fieldId),
       frequencyIndex,
       frequencyHz,
       observableId: stringValue(item?.observable_id ?? item?.observableId) ?? "response",
@@ -720,6 +849,7 @@ export function buildFmrPeakTableModel({
       absorbedPowerDensity: null,
       amplitude: null,
       fieldId: point.modeFieldId,
+      fieldResourceKey: point.modeFieldResourceKey,
       frequencyHz: point.frequencyHz,
       frequencyPointIndex: null,
       linewidthHz: null,
@@ -735,6 +865,7 @@ export function buildFmrPeakTableModel({
       absorbedPowerDensity: point.absorbedPowerDensity,
       amplitude: point.amplitude,
       fieldId: point.fieldId,
+      fieldResourceKey: point.fieldId ? fieldVectorResourceKey(point.fieldId) : null,
       frequencyHz: point.frequencyHz,
       frequencyPointIndex: point.frequencyIndex,
       linewidthHz: null,
@@ -754,6 +885,52 @@ export function buildFmrPeakTableModel({
   diagnostics.push(...modal.diagnostics, ...response.diagnostics);
 
   return { diagnostics, peaks };
+}
+
+export function buildFmrModalDrivenComparisonModel({
+  responseSweep,
+  spectrum,
+}: {
+  responseSweep?: FrequencyDomainJsonArtifactLike | null;
+  spectrum?: FrequencyDomainJsonArtifactLike | null;
+}): FmrModalDrivenComparisonModel {
+  const peakModel = buildFmrPeakTableModel({ responseSweep, spectrum });
+  const modalPeaks = peakModel.peaks.filter((peak) => peak.source === "modal");
+  const drivenPeaks = peakModel.peaks.filter(
+    (peak) => peak.source === "driven_response",
+  );
+
+  if (modalPeaks.length === 0 || drivenPeaks.length === 0) {
+    return {
+      diagnostics: peakModel.diagnostics,
+      nearestComparison: null,
+      pairs: [],
+      readiness:
+        modalPeaks.length > 0
+          ? "modal-only"
+          : drivenPeaks.length > 0
+            ? "driven-only"
+            : "missing-peaks",
+    };
+  }
+
+  const pairs = drivenPeaks
+    .map((drivenPeak): FmrModalDrivenComparisonPoint => {
+      const modalPeak = nearestPeakByFrequency(drivenPeak, modalPeaks);
+      return {
+        detuningHz: drivenPeak.frequencyHz - modalPeak.frequencyHz,
+        drivenPeak,
+        modalPeak,
+      };
+    })
+    .sort((left, right) => Math.abs(left.detuningHz) - Math.abs(right.detuningHz));
+
+  return {
+    diagnostics: peakModel.diagnostics,
+    nearestComparison: pairs[0] ?? null,
+    pairs,
+    readiness: "modal-and-driven",
+  };
 }
 
 function cleanFrequencyDomainSelectionRef(
@@ -777,7 +954,7 @@ function localResponsePeaks(
 
   const peaks: FrequencyResponsePoint[] = [];
   for (const observablePoints of byObservable.values()) {
-    const sorted = [...observablePoints].sort(
+    const sorted = observablePoints.toSorted(
       (left, right) => left.frequencyHz - right.frequencyHz,
     );
     if (sorted.length === 1) {
@@ -800,6 +977,18 @@ function peakMetric(point: FrequencyResponsePoint): number {
   return point.amplitude ?? point.absorbedPowerDensity ?? -Infinity;
 }
 
+function nearestPeakByFrequency(
+  drivenPeak: FmrPeakPoint,
+  modalPeaks: readonly FmrPeakPoint[],
+): FmrPeakPoint {
+  return modalPeaks.reduce((best, candidate) =>
+    Math.abs(candidate.frequencyHz - drivenPeak.frequencyHz) <
+    Math.abs(best.frequencyHz - drivenPeak.frequencyHz)
+      ? candidate
+      : best,
+  );
+}
+
 function frequencyDomainModeNodeId(point: EigenSpectrumPoint): string {
   return `results:eigen:sample:${point.sampleIndex}:mode:${point.rawModeIndex}`;
 }
@@ -808,16 +997,42 @@ function frequencyDomainDispersionPointNodeId(point: EigenDispersionPoint): stri
   return `results:eigen:dispersion:sample:${point.sampleIndex}:mode:${point.rawModeIndex}`;
 }
 
+function frequencyDomainBranchNodeId(branch: EigenBranch): string {
+  return `results:eigen:branches:branch:${branch.branchId}`;
+}
+
+function frequencyDomainBranchPointModeNodeId(point: EigenBranchPoint): string {
+  return `results:eigen:sample:${point.sampleIndex}:mode:${point.rawModeIndex}`;
+}
+
 function frequencyDomainResponsePointNodeId(point: FrequencyResponsePoint): string {
   const index = point.frequencyIndex ?? Math.round(point.frequencyHz);
   return `results:frequency-response:frequency:${index}`;
 }
 
-function responseFieldIdFromIndex(value: unknown): string | null {
-  const index = finiteNumber(value);
-  return index == null
-    ? null
-    : `analysis:frequency-response:frequency-${Math.trunc(index).toString().padStart(4, "0")}`;
+function branchSampleGapSummary(points: readonly EigenBranchPoint[]): {
+  count: number;
+  max: number | null;
+  warnings: string[];
+} {
+  const sampleIndices = Array.from(
+    new Set(points.map((point) => point.sampleIndex)),
+  ).sort((left, right) => left - right);
+  let count = 0;
+  let max: number | null = null;
+  const warnings: string[] = [];
+
+  for (let index = 1; index < sampleIndices.length; index += 1) {
+    const previous = sampleIndices[index - 1]!;
+    const current = sampleIndices[index]!;
+    const missingSamples = current - previous - 1;
+    if (missingSamples <= 0) continue;
+    count += 1;
+    max = max == null ? missingSamples : Math.max(max, missingSamples);
+    warnings.push(`sample gap ${missingSamples} between ${previous} and ${current}`);
+  }
+
+  return { count, max, warnings };
 }
 
 function minMax(values: readonly number[]): { max: number | null; min: number | null } {
@@ -892,7 +1107,10 @@ function parseDispersionCsv(csv: string): {
   droppedPointCount: number;
   points: EigenDispersionPoint[];
 } {
-  const lines = csv.split(/\r?\n/).filter((line) => line.trim().length > 0);
+  const lines: string[] = [];
+  for (const line of csv.split(/\r?\n/)) {
+    if (line.trim().length > 0) lines.push(line);
+  }
   if (lines.length === 0) return { droppedPointCount: 0, points: [] };
   const headers = lines[0]?.split(",").map((item) => item.trim()) ?? [];
   const points: EigenDispersionPoint[] = [];

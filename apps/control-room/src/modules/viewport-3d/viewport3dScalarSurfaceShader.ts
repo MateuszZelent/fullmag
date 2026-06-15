@@ -13,6 +13,8 @@ import {
 
 export const VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE = "fmScalarValue";
 export const VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE = "fmVectorValue";
+export const VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE = "fmComplexRealValue";
+export const VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE = "fmComplexImagValue";
 
 export interface Viewport3DScalarSurfaceShaderOptions {
   depthTest: boolean;
@@ -37,8 +39,9 @@ export function canApplyScalarShaderColorBuffer(
   const hasVectorValues = Boolean(
     buffer.vectorValues && buffer.vectorValues.length === vertexCount * 3,
   );
+  const hasComplexValues = canApplyComplexShaderColorBuffer(buffer, vertexCount);
   return Boolean(
-    (hasScalarValues || hasVectorValues) &&
+    (hasScalarValues || hasVectorValues || hasComplexValues) &&
       Number.isFinite(buffer.range.min) &&
       Number.isFinite(buffer.range.max),
   );
@@ -57,8 +60,9 @@ export function applyScalarShaderColorBuffer(
   const hasVectorValues = Boolean(
     vectorValues && vectorValues.length === vertexCount * 3,
   );
+  const hasComplexValues = canApplyComplexShaderColorBuffer(buffer, vertexCount);
 
-  if (!hasScalarValues && !hasVectorValues) {
+  if (!hasScalarValues && !hasVectorValues && !hasComplexValues) {
     deleteShaderAttributes(geometry);
     return false;
   }
@@ -87,6 +91,30 @@ export function applyScalarShaderColorBuffer(
     geometry.deleteAttribute(VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE);
   }
 
+  if (hasComplexValues && buffer?.complexRealValues && buffer.complexImagValues) {
+    setFloatAttribute(
+      geometry,
+      VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE,
+      buffer.complexRealValues,
+      3,
+      vertexCount,
+    );
+    setFloatAttribute(
+      geometry,
+      VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE,
+      buffer.complexImagValues,
+      3,
+      vertexCount,
+    );
+  } else {
+    if (geometry.hasAttribute(VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE)) {
+      geometry.deleteAttribute(VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE);
+    }
+    if (geometry.hasAttribute(VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE)) {
+      geometry.deleteAttribute(VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE);
+    }
+  }
+
   return true;
 }
 
@@ -96,6 +124,7 @@ export function createScalarSurfaceShaderMaterial(
 ): ShaderMaterial {
   const colorModeId = shaderColorModeId(buffer.colorMode);
   const orientationMode = colorModeId === 1;
+  const complexMode = hasComplexShaderValues(buffer);
   const material = new ShaderMaterial({
     depthTest: options.depthTest,
     depthWrite: options.depthWrite,
@@ -112,12 +141,11 @@ export function createScalarSurfaceShaderMaterial(
       fmColorModeId: { value: colorModeId },
       fmOpacity: { value: options.opacity },
       fmPaletteId: { value: scalarPaletteId(buffer.colorPalette) },
+      fmPhaseRad: { value: finitePhaseRad(buffer.complexPhaseRad) ?? 0 },
       fmScalarMax: { value: buffer.range.max },
       fmScalarMin: { value: buffer.range.min },
     },
-    vertexShader: orientationMode
-      ? ORIENTATION_SURFACE_VERTEX_SHADER
-      : SCALAR_SURFACE_VERTEX_SHADER,
+    vertexShader: resolveSurfaceVertexShader(orientationMode, complexMode),
   });
   material.toneMapped = options.toneMapped ?? false;
   return material;
@@ -130,9 +158,10 @@ export function updateScalarSurfaceShaderMaterial(
 ): void {
   const nextColorModeId = shaderColorModeId(buffer.colorMode);
   const orientationMode = nextColorModeId === 1;
-  const nextVertexShader = orientationMode
-    ? ORIENTATION_SURFACE_VERTEX_SHADER
-    : SCALAR_SURFACE_VERTEX_SHADER;
+  const nextVertexShader = resolveSurfaceVertexShader(
+    orientationMode,
+    hasComplexShaderValues(buffer),
+  );
   const nextFragmentShader = orientationMode
     ? ORIENTATION_SURFACE_FRAGMENT_SHADER
     : SCALAR_SURFACE_FRAGMENT_SHADER;
@@ -149,8 +178,46 @@ export function updateScalarSurfaceShaderMaterial(
   material.uniforms.fmColorModeId.value = nextColorModeId;
   material.uniforms.fmOpacity.value = opacity;
   material.uniforms.fmPaletteId.value = scalarPaletteId(buffer.colorPalette);
+  material.uniforms.fmPhaseRad.value = finitePhaseRad(buffer.complexPhaseRad) ?? 0;
   material.uniforms.fmScalarMax.value = buffer.range.max;
   material.uniforms.fmScalarMin.value = buffer.range.min;
+}
+
+function canApplyComplexShaderColorBuffer(
+  buffer: ScalarColorBuffer | null | undefined,
+  vertexCount: number,
+): boolean {
+  return Boolean(
+    buffer?.complexRealValues &&
+      buffer.complexImagValues &&
+      buffer.complexRealValues.length === vertexCount * 3 &&
+      buffer.complexImagValues.length === vertexCount * 3,
+  );
+}
+
+function hasComplexShaderValues(buffer: ScalarColorBuffer): boolean {
+  return canApplyComplexShaderColorBuffer(
+    buffer,
+    (buffer.complexRealValues?.length ?? 0) / 3,
+  );
+}
+
+function finitePhaseRad(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function resolveSurfaceVertexShader(
+  orientationMode: boolean,
+  complexMode: boolean,
+): string {
+  if (complexMode) {
+    return orientationMode
+      ? COMPLEX_ORIENTATION_SURFACE_VERTEX_SHADER
+      : COMPLEX_SCALAR_SURFACE_VERTEX_SHADER;
+  }
+  return orientationMode
+    ? ORIENTATION_SURFACE_VERTEX_SHADER
+    : SCALAR_SURFACE_VERTEX_SHADER;
 }
 
 function setFloatAttribute(
@@ -182,12 +249,28 @@ function deleteShaderAttributes(geometry: BufferGeometry): void {
   if (geometry.hasAttribute(VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE)) {
     geometry.deleteAttribute(VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE);
   }
+  if (geometry.hasAttribute(VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE)) {
+    geometry.deleteAttribute(VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE);
+  }
+  if (geometry.hasAttribute(VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE)) {
+    geometry.deleteAttribute(VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE);
+  }
 }
 
 function shaderColorModeId(mode: string | null | undefined): number {
-  return normalizeViewport3DVectorColorMode(mode, "magnitude") === "orientation"
-    ? 1
-    : 0;
+  switch (normalizeViewport3DVectorColorMode(mode, "magnitude")) {
+    case "orientation":
+      return 1;
+    case "x":
+      return 2;
+    case "y":
+      return 3;
+    case "z":
+      return 4;
+    case "magnitude":
+    case "monochrome":
+      return 0;
+  }
 }
 
 function scalarPaletteId(palette: string | null | undefined): number {
@@ -221,6 +304,39 @@ varying vec3 vVectorValue;
 
 void main() {
   vVectorValue = ${VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE};
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`;
+
+const COMPLEX_SCALAR_SURFACE_VERTEX_SHADER = `
+attribute vec3 ${VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE};
+attribute vec3 ${VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE};
+uniform int fmColorModeId;
+uniform float fmPhaseRad;
+varying float vScalarValue;
+
+float scalarFromVector(vec3 value) {
+  if (fmColorModeId == 2) return value.x;
+  if (fmColorModeId == 3) return value.y;
+  if (fmColorModeId == 4) return value.z;
+  return length(value);
+}
+
+void main() {
+  vec3 projected = ${VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE} * cos(fmPhaseRad) - ${VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE} * sin(fmPhaseRad);
+  vScalarValue = scalarFromVector(projected);
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`;
+
+const COMPLEX_ORIENTATION_SURFACE_VERTEX_SHADER = `
+attribute vec3 ${VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE};
+attribute vec3 ${VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE};
+uniform float fmPhaseRad;
+varying vec3 vVectorValue;
+
+void main() {
+  vVectorValue = ${VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE} * cos(fmPhaseRad) - ${VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE} * sin(fmPhaseRad);
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 }
 `;

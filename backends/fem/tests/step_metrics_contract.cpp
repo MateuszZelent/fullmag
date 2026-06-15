@@ -103,6 +103,7 @@ void fill_common_step_metrics_reports_energy_fields_torque_and_averages() {
 #if FULLMAG_HAS_MFEM_STACK
     ctx.cpu_threads.requested_omp_threads = 7;
     ctx.cpu_threads.effective_omp_threads = 3;
+    ctx.cpu_threads.cap_reason = fullmag::fem::FULLMAG_FEM_CPU_THREAD_CAP_SMALL_MESH;
 #endif
 
     ctx.zeeman.has_external_field = true;
@@ -162,6 +163,9 @@ void fill_common_step_metrics_reports_energy_fields_torque_and_averages() {
 #if FULLMAG_HAS_MFEM_STACK
     check(stats.requested_omp_threads == 7, "requested OMP threads");
     check(stats.effective_omp_threads == 3, "effective OMP threads");
+    check(
+        stats.cpu_thread_cap_reason == fullmag::fem::FULLMAG_FEM_CPU_THREAD_CAP_SMALL_MESH,
+        "CPU thread cap reason is filled");
     check(timings.extra_energy_wall_time_ns > 0, "extra energy timing is accumulated");
 #endif
 }

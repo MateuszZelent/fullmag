@@ -1,5 +1,6 @@
 import type { SceneResource } from "@/kernel/api/apiTypes";
 import type { Selection } from "@/kernel/selection/selectionTypes";
+import { formatFrequencyHz } from "@/shared/domain/analysis/frequencyUnits";
 
 export interface AntennaObjectPanelModel {
   amplitude: string;
@@ -68,10 +69,10 @@ function formatWaveform(value: unknown): string {
   if (kind === "sinc_pulse") {
     const cutoff = waveform.cutoff_hz;
     const t0 = waveform.t0;
-    return `sinc pulse, cutoff ${formatNumber(cutoff, "Hz")}, t0 ${formatNumber(t0, "s")}`;
+    return `sinc pulse, cutoff ${formatFrequency(cutoff)}, t0 ${formatNumber(t0, "s")}`;
   }
   if (kind === "sinusoidal") {
-    return `sin, ${formatNumber(waveform.frequency_hz, "Hz")}`;
+    return `sin, ${formatFrequency(waveform.frequency_hz)}`;
   }
   return kind;
 }
@@ -92,12 +93,21 @@ function formatNumber(value: unknown, unit: string): string {
     : `unavailable ${unit}`;
 }
 
+function formatFrequency(value: unknown): string {
+  return typeof value === "number" && Number.isFinite(value)
+    ? formatFrequencyHz(value)
+    : "unavailable Hz";
+}
+
 function antennaModules(scene: SceneResource | null): JsonRecord[] {
   const sceneRecord = asRecord(scene);
   const currentModules = asRecord(sceneRecord?.current_modules);
   const modules = currentModules?.modules;
   if (!Array.isArray(modules)) return [];
-  return modules.map(asRecord).filter((entry): entry is JsonRecord => Boolean(entry));
+  return modules.flatMap((module) => {
+    const entry = asRecord(module);
+    return entry ? [entry] : [];
+  });
 }
 
 function sourceForObject(
@@ -173,10 +183,10 @@ function parsePositive(value: string, label: string): { error: string | null; va
 }
 
 function parseDirection(value: string): { error: string | null; value: [number, number, number] } {
-  const parts = value
-    .split(/[,\s]+/)
-    .map((part) => part.trim())
-    .filter(Boolean);
+  const parts = value.split(/[,\s]+/).flatMap((part) => {
+    const trimmed = part.trim();
+    return trimmed ? [trimmed] : [];
+  });
   if (parts.length !== 3) {
     return { error: "Direction must contain three components.", value: [0, 0, 0] };
   }

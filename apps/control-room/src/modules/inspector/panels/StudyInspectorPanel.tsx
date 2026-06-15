@@ -1103,68 +1103,117 @@ export function StudySelectedStageSection({
   model: StudyInspectorModel;
   stageExecutionRevision?: number | null;
 }) {
+  const selectedStage = model.selectedStage;
+  const eigenmodeSolving =
+    selectedStage !== null &&
+    selectedStage.kind.toLowerCase().includes("eigen") &&
+    ["accepted", "dispatched", "materializing", "pending", "queued", "running"].includes(
+      selectedStage.status.toLowerCase(),
+    );
+  const selectedStageHasProgress =
+    selectedStage !== null &&
+    (selectedStage.progressLabel != null ||
+      selectedStage.progressDetail != null ||
+      selectedStage.progressPercent > 0);
+  const selectedStageProgressValue =
+    eigenmodeSolving && !selectedStageHasProgress
+      ? null
+      : (selectedStage?.progressPercent ?? null);
+  const selectedStageProgressLabel =
+    selectedStage?.progressLabel ??
+    (eigenmodeSolving ? "waiting for solver progress telemetry" : undefined);
+
   return (
     <InspectorSection
       value="selected-stage"
       title="Selected Stage"
-      badge={model.selectedStage?.status ?? "none"}
+      badge={selectedStage?.status ?? "none"}
     >
-      <FieldRow label="Kind" value={model.selectedStage?.kind ?? "none"} />
-      <FieldRow label="Status" value={model.selectedStage?.status ?? "none"} />
+      <FieldRow label="Kind" value={selectedStage?.kind ?? "none"} />
+      <FieldRow label="Status" value={selectedStage?.status ?? "none"} />
+      {eigenmodeSolving ? (
+        <FieldRow
+          label="Eigenmode solve progress"
+          value={selectedStageProgressLabel}
+        />
+      ) : null}
+      {selectedStage?.progressDetail ? (
+        <FieldRow label="Progress detail" value={selectedStage.progressDetail} />
+      ) : null}
       <FieldRow
         label="Stop reason"
-        value={model.selectedStage?.stopReason ?? "not available"}
+        value={selectedStage?.stopReason ?? "not available"}
       />
       <FieldRow
         label="Completed"
-        value={model.selectedStage?.completedAtIso ?? "not completed"}
+        value={selectedStage?.completedAtIso ?? "not completed"}
       />
       <FieldRow
         label="Command"
-        value={model.selectedStage?.commandId ?? "not linked"}
+        value={selectedStage?.commandId ?? "not linked"}
       />
-      {model.selectedStage?.runtimeMetric ? (
+      {selectedStage?.transition ? (
+        <>
+          <FieldRow
+            label="State transition"
+            value={selectedStage.transition.label ?? "declared"}
+          />
+          <FieldRow
+            label="Transition kind"
+            value={selectedStage.transition.kind ?? "not available"}
+          />
+          <FieldRow
+            label="Transition reason"
+            value={selectedStage.transition.reason ?? "not available"}
+          />
+          <FieldRow
+            label="Transfer operator"
+            value={selectedStage.transition.transferOperator ?? "not available"}
+          />
+        </>
+      ) : null}
+      {selectedStage?.runtimeMetric ? (
         <>
           <FieldRow
             label="Stop metric"
-            value={model.selectedStage.runtimeMetric.name}
+            value={selectedStage.runtimeMetric.name}
           />
           <FieldRow
             label="Metric value"
-            value={model.selectedStage.runtimeMetric.value}
+            value={selectedStage.runtimeMetric.value}
           />
           <FieldRow
             label="Metric threshold"
-            value={model.selectedStage.runtimeMetric.threshold}
+            value={selectedStage.runtimeMetric.threshold}
           />
         </>
       ) : null}
       <FieldRow
         label="Torque stop"
-        value={model.selectedStage?.torqueToleranceFormatted ?? "not set"}
+        value={selectedStage?.torqueToleranceFormatted ?? "not set"}
       />
       <FieldRow
         label="Energy stop"
-        value={model.selectedStage?.energyTolerance ?? "not set"}
+        value={selectedStage?.energyTolerance ?? "not set"}
       />
       <FieldRow
         label="Step budget"
-        value={model.selectedStage?.maxSteps ?? "not set"}
+        value={selectedStage?.maxSteps ?? "not set"}
       />
       <FieldRow
         label="Time budget"
-        value={model.selectedStage?.untilSeconds ?? "not set"}
-        unit={model.selectedStage?.untilSeconds ? "s" : undefined}
+        value={selectedStage?.untilSeconds ?? "not set"}
+        unit={selectedStage?.untilSeconds ? "s" : undefined}
       />
       <FieldRow
         label="Checkpoint"
-        value={model.selectedStage?.checkpointRef ?? "not available"}
+        value={selectedStage?.checkpointRef ?? "not available"}
       />
       <FieldRow
         label="Artifacts"
         value={
-          model.selectedStage?.artifactRefs.length
-            ? model.selectedStage.artifactRefs.join(", ")
+          selectedStage?.artifactRefs.length
+            ? selectedStage.artifactRefs.join(", ")
             : "none"
         }
       />
@@ -1177,8 +1226,14 @@ export function StudySelectedStageSection({
         }
       />
       <StudyProgressBar
-        label="Selected stage progress"
-        value={model.selectedStage?.progressPercent ?? null}
+        indeterminate={eigenmodeSolving && !selectedStageHasProgress}
+        label={
+          eigenmodeSolving
+            ? "Eigenmode solve progress"
+            : "Selected stage progress"
+        }
+        statusLabel={selectedStage?.progressLabel ?? undefined}
+        value={selectedStageProgressValue}
       />
     </InspectorSection>
   );

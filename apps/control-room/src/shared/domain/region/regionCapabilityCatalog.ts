@@ -1,4 +1,4 @@
-export type RegionCapabilityGateId =
+type RegionCapabilityGateId =
   | "regions.conformal_or_projected_boundary"
   | "regions.material_override"
   | "regions.mesh_policy"
@@ -26,7 +26,7 @@ const REGION_CAPABILITY_PRESENTATION: Record<
   },
 };
 
-export function isRegionCapabilityGateId(
+function isRegionCapabilityGateId(
   value: string | null | undefined,
 ): value is RegionCapabilityGateId {
   return (

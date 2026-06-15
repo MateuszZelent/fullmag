@@ -73,8 +73,11 @@ contract rather than bypassing it.
 
 ### FEM CPU native
 
-- First target for scalable magnetic eigen via assembled operators and
-  PETSc/SLEPc.
+- First target for scalable magnetic eigen via sparse or matrix-free operators
+  and PETSc/SLEPc-class eigensolvers.
+- Must support frequency-window eigenmode requests as a first-class production
+  contract: e.g. up to 20 modes in 100 MHz..5 GHz, with Hz bounds preserved in
+  IR, artifacts, provenance, and UI.
 - First target for quasistatic mechanics because CPU debugging and residual
   introspection are required before GPU promotion.
 - Must keep mechanics ownership outside central bridge accumulation points.
@@ -114,13 +117,18 @@ Descriptor rules:
 ## Solve Stack
 
 - Magnetic eigen: dense reference for small validation problems; the current
-  runner warns on dense O(n^3) solves above roughly 3,000 effective DOF and uses
-  a transitional CPU sparse LOBPCG lane above 5,000 effective DOF when the
-  problem is real-valued. The scalar-projected path now materializes an
+  runner uses a transitional CPU sparse LOBPCG lane above 3,000 effective DOF
+  when the problem is real-valued. The scalar-projected path now materializes an
   `AssembledScalarOperator` with a PETSc/SLEPc binding descriptor for the
   assembled symmetric generalized tangent operator. PETSc/SLEPc EPS with
   shift-invert remains the production-sized CPU FEM target before any scalable
-  capability promotion.
+  capability promotion. Production eigenmodes for large objects must be
+  spectral-window solves, not dense prefix solves: `target=frequency_window`
+  carries `frequency_min_hz`, `frequency_max_hz`, and `count` as the maximum
+  number of accepted modes returned from that interval. Krylov-Schur/Arnoldi,
+  LOBPCG/Jacobi-Davidson, shift-invert/Cayley, and FEAST/contour methods are
+  acceptable implementations when they publish residuals, converged-mode counts,
+  linear-solve policy, and resolved spectral transform.
 - Driven magnetic response: block-real or complex harmonic solve with residual
   per frequency and reusable sweep state. The current runner now contains an
   initial dense block-real primitive in `eigen::response_block_real` for
@@ -152,7 +160,10 @@ Descriptor rules:
 
 Initial CPU policies:
 
-- magnetic eigen: SLEPc shift-invert with documented linear solve policy;
+- magnetic eigen: SLEPc Krylov-Schur/Arnoldi or LOBPCG for exterior modes;
+  shift-invert/Cayley for nearest/interior modes; FEAST or equivalent contour
+  interval solve for frequency windows; every policy must document linear
+  solver, preconditioner, tolerance, iteration cap, and restart/reuse behavior;
 - driven response: GMRES or equivalent Krylov method with reusable preconditioner;
 - quasistatic mechanics: CG for SPD constrained systems, GMRES for nonsymmetric
   extensions, AMG/Jacobi/none as explicit policies;
@@ -171,6 +182,9 @@ The selected policy must appear in artifacts and benchmark records.
 
 ## Frontend And CLI
 
+- Authoring UI must expose semantic frequency-window eigenmode settings:
+  lower frequency, upper frequency, mode cap, tolerance, and solver status.
+  Frequencies are displayed with automatic MHz/GHz scaling but stored in Hz.
 - Authoring UI can expose semantic frequency-response settings.
 - Run buttons must respect capability diagnostics.
 - Analyze views must not synthesize missing response artifacts.
@@ -206,14 +220,16 @@ release evidence is recorded.
 
 | Feature | Correctness case | Scaling case |
 |---|---|---|
-| magnetic eigen | exchange-only reciprocal dispersion | increasing FEM DOF count with SLEPc residuals |
+| magnetic eigen | exchange-only reciprocal dispersion | frequency-window solve on increasing FEM DOF count with SLEPc/FEAST residuals |
 | driven magnetic response | single resonance under field drive | multi-frequency sweep with preconditioner reuse |
 | quasistatic mechanics | clamped bar or patch test | accepted-step repeated RHS refresh |
 | elastodynamics | harmonic beam or acoustic mode | sweep across mechanical resonance |
 | coupled eigenmodes | synthetic weak-coupling anticrossing | coupled branch tracking under mesh refinement |
 
-Benchmark records must include engine id, hardware, DOF count, mode or frequency
-count, tolerance, iteration counts, wall time, residuals, and artifact paths.
+Benchmark records must include engine id, hardware, DOF count, requested
+frequency window, accepted mode count, tolerance, eigensolver family, spectral
+transform, linear solver, preconditioner, iteration counts, wall time,
+residuals, and artifact paths.
 
 ## MR Schedule
 

@@ -80,6 +80,9 @@ pub(crate) struct ScriptRunSummary {
     pub rhs_wall_time_ns: Option<u64>,
     pub extra_energy_wall_time_ns: Option<u64>,
     pub snapshot_wall_time_ns: Option<u64>,
+    pub relaxation_preconditioner_wall_time_ns: Option<u64>,
+    pub relaxation_preconditioner_cache_hits: Option<u32>,
+    pub relaxation_preconditioner_cache_misses: Option<u32>,
     pub rhs_evals: Option<u32>,
     pub demag_solves: Option<u32>,
     /// Number of eigenmode frequencies found (FEM eigen only).
@@ -306,6 +309,9 @@ pub(crate) enum ScriptExecutionStageAction {
         #[serde(default)]
         dataset: Option<String>,
     },
+    ChangeDevice {
+        device: String,
+    },
 }
 
 fn default_stage_action_artifact_name() -> String {
@@ -364,6 +370,9 @@ pub(crate) enum ResolvedScriptStageAction {
         format: String,
         dataset: Option<String>,
     },
+    ChangeDevice {
+        device: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -388,6 +397,7 @@ pub(crate) enum StageTransitionReason {
     MeshGenerationChanged,
     ObjectTopologyChanged,
     MaterialTopologyChanged,
+    DeviceChange,
     CheckpointLoad,
     UserExport,
     IncompatibleImplicitState,
@@ -454,6 +464,9 @@ impl StageTransitionMetadata {
     }
 
     pub(crate) fn legacy_state_transition_label(&self) -> &'static str {
+        if self.reason == StageTransitionReason::DeviceChange {
+            return "Change device";
+        }
         match self.kind {
             StageTransitionKind::ContinueInPlace => "continues",
             StageTransitionKind::SaveCheckpoint => "preserved",
@@ -633,6 +646,14 @@ pub(crate) struct CurrentLiveStageExecutionRecord {
     pub metric_value: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub threshold: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_percent: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_progress_unix_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_field_m_t: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

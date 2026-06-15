@@ -12,13 +12,13 @@ interface AnalysisFieldOverlayPhaseAnimationHandle {
 }
 
 const TWO_PI = Math.PI * 2;
-const DEFAULT_INTERVAL_MS = 100;
+const DEFAULT_INTERVAL_MS = 250;
 
 export function startAnalysisFieldOverlayPhaseAnimation(
   controller: AnalysisFieldOverlayController,
   options: AnalysisFieldOverlayPhaseAnimationOptions = {},
 ): AnalysisFieldOverlayPhaseAnimationHandle {
-  const intervalMs = Math.max(16, options.intervalMs ?? DEFAULT_INTERVAL_MS);
+  const intervalMs = Math.max(100, options.intervalMs ?? DEFAULT_INTERVAL_MS);
   let intervalId: ReturnType<typeof globalThis.setInterval> | null = null;
   let stopped = false;
 
@@ -34,16 +34,13 @@ export function startAnalysisFieldOverlayPhaseAnimation(
       stopInterval();
       return;
     }
-    const phaseRad = snapshot.query.phase_rad ?? 0;
+    const phaseRad =
+      snapshot.visualizationPhaseRad ?? snapshot.query.phase_rad ?? 0;
     const animationRateHz = snapshot.animation.animationRateHz;
     controller.update({
-      query: {
-        ...snapshot.query,
-        phase_rad: wrapPhaseRad(
-          phaseRad + TWO_PI * animationRateHz * (intervalMs / 1000),
-        ),
-        view: "phase_rotated_real",
-      },
+      visualizationPhaseRad: wrapPhaseRad(
+        phaseRad + TWO_PI * animationRateHz * (intervalMs / 1000),
+      ),
     });
   };
 

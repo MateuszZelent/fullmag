@@ -1,13 +1,13 @@
 import type { JsonObject } from "@/kernel/api/apiTypes";
 
-export type MeshPolicyDiffScope = "airbox" | "object" | "region" | "shared-domain";
-export type MeshPolicyDiffState =
+type MeshPolicyDiffScope = "airbox" | "object" | "region" | "shared-domain";
+type MeshPolicyDiffState =
   | "added"
   | "changed"
   | "realized-drift"
   | "removed"
   | "unchanged";
-export type MeshPolicyDiffImpact =
+type MeshPolicyDiffImpact =
   | "backend"
   | "cost"
   | "geometry"

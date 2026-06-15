@@ -10,7 +10,13 @@
  */
 
 import { spawn } from "node:child_process";
-import { createReadStream, existsSync, statSync } from "node:fs";
+import {
+  createReadStream,
+  existsSync,
+  readFileSync,
+  statSync,
+  unlinkSync,
+} from "node:fs";
 import { createServer } from "node:http";
 import { resolve, dirname, extname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,6 +49,7 @@ if (staticRoot) {
 
 function startDevServer() {
   process.stderr.write(`[control-room dev-server] starting on :${port}\n`);
+  removeStaleNextDevLock();
 
   const pnpmCmd = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
   const child = spawn(
@@ -117,6 +124,46 @@ function startDevServer() {
     );
     process.exit(1);
   });
+}
+
+function removeStaleNextDevLock() {
+  const lockPath = join(appDir, ".next", "dev", "lock");
+  if (!existsSync(lockPath)) {
+    return;
+  }
+
+  let lock;
+  try {
+    lock = JSON.parse(readFileSync(lockPath, "utf8"));
+  } catch {
+    return;
+  }
+
+  const pid = Number(lock.pid);
+  if (!Number.isInteger(pid) || pid <= 0 || processIsRunning(pid)) {
+    return;
+  }
+
+  try {
+    unlinkSync(lockPath);
+    const lockPort = Number.isInteger(Number(lock.port))
+      ? ` on :${Number(lock.port)}`
+      : "";
+    process.stderr.write(
+      `[control-room dev-server] removed stale Next dev lock for pid ${pid}${lockPort}\n`,
+    );
+  } catch {
+    // If the lock disappears concurrently, let Next handle the remaining state.
+  }
+}
+
+function processIsRunning(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function startStaticServer(root) {

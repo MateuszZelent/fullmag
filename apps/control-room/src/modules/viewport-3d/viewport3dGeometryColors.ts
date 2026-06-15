@@ -39,7 +39,12 @@ export function canApplyVertexScalarColorBuffer(
   colorBuffer: ScalarColorBuffer | null | undefined,
   vertexCount: number,
 ): boolean {
-  return Boolean(colorBuffer && colorBuffer.colors.length === vertexCount * 3);
+  return Boolean(
+    colorBuffer &&
+      !colorBuffer.complexRealValues &&
+      !colorBuffer.complexImagValues &&
+      colorBuffer.colors.length === vertexCount * 3,
+  );
 }
 
 export function applyVertexScalarColorBuffer(

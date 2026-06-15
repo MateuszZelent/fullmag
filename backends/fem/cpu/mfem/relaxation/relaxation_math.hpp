@@ -58,7 +58,12 @@ bool exchange_mass_preconditioned_gradient(
     const std::vector<double> &gradient_xyz,
     double exchange_weight,
     std::vector<double> &preconditioned_gradient_xyz,
-    std::string &error);
+    std::string &error,
+    uint64_t *preconditioner_wall_time_ns,
+    uint32_t *preconditioner_cache_hits,
+    uint32_t *preconditioner_cache_misses);
+
+void destroy_exchange_mass_preconditioner_cache(Context &ctx);
 
 bool validate_relaxation_state_fields(
     const Context &ctx,
@@ -92,6 +97,13 @@ std::vector<double> retracted_step(
     const std::vector<double> &direction_xyz,
     double step_size);
 
+void retracted_step_into(
+    const Context &ctx,
+    const std::vector<double> &m_xyz,
+    const std::vector<double> &direction_xyz,
+    double step_size,
+    std::vector<double> &trial_xyz);
+
 int ensure_cpu_mfem_relaxation_lane(
     Context &ctx,
     const char *algorithm_name,
@@ -104,6 +116,10 @@ int upload_and_snapshot(
     const char *algorithm_name,
     const char *snapshot_name,
     std::string &error);
+
+bool take_cached_current_stats(
+    Context &ctx,
+    fullmag_fem_step_stats &stats);
 
 int restore_after_failed_line_search(
     Context &ctx,
@@ -130,9 +146,14 @@ int restore_previous_relaxation_state(
     const std::string &original_error,
     std::string &error);
 
+void accumulate_relaxation_profile_sample(
+    fullmag_fem_step_stats &accumulated_stats,
+    const fullmag_fem_step_stats &sample_stats);
+
 void finish_accepted_relaxation_step(
     Context &ctx,
     const fullmag_fem_step_stats &trial_stats,
+    const fullmag_fem_step_stats &accumulated_stats,
     fullmag_fem_step_stats &out_stats,
     double accepted_step_size);
 

@@ -228,6 +228,12 @@ struct Context {
     uint32_t stats_stride = 1;
     bool disable_precession = false;
 
+    // Hot-loop host-boundary audit for scalar control/readback decisions.
+    uint64_t hot_loop_d2h_bytes = 0;
+    uint64_t hot_loop_host_sync_count = 0;
+    uint64_t hot_loop_control_scalar_d2h_bytes = 0;
+    uint64_t hot_loop_control_scalar_host_sync_count = 0;
+
 
     // Step counter
     uint64_t step_count = 0;
@@ -472,6 +478,37 @@ inline bool fullmag_fdm_should_fill_step_stats(const Context &ctx) {
     return fullmag_fdm_should_fill_step_stats_for_step(ctx, ctx.step_count);
 }
 
+inline void fullmag_fdm_reset_hot_loop_audit(Context &ctx) {
+    ctx.hot_loop_d2h_bytes = 0;
+    ctx.hot_loop_host_sync_count = 0;
+    ctx.hot_loop_control_scalar_d2h_bytes = 0;
+    ctx.hot_loop_control_scalar_host_sync_count = 0;
+}
+
+inline void fullmag_fdm_record_control_scalar_d2h(Context &ctx, uint64_t bytes) {
+    ctx.hot_loop_d2h_bytes += bytes;
+    ctx.hot_loop_control_scalar_d2h_bytes += bytes;
+}
+
+inline void fullmag_fdm_record_control_scalar_host_sync(Context &ctx) {
+    ctx.hot_loop_host_sync_count += 1;
+    ctx.hot_loop_control_scalar_host_sync_count += 1;
+}
+
+inline void fullmag_fdm_publish_hot_loop_audit(
+    const Context &ctx,
+    fullmag_fdm_step_stats *stats)
+{
+    if (stats == nullptr) {
+        return;
+    }
+    stats->hot_loop_d2h_bytes = ctx.hot_loop_d2h_bytes;
+    stats->hot_loop_host_sync_count = ctx.hot_loop_host_sync_count;
+    stats->hot_loop_control_scalar_d2h_bytes = ctx.hot_loop_control_scalar_d2h_bytes;
+    stats->hot_loop_control_scalar_host_sync_count =
+        ctx.hot_loop_control_scalar_host_sync_count;
+}
+
 inline void fullmag_fdm_fill_step_stats_metadata(
     const Context &ctx,
     fullmag_fdm_step_stats *stats,
@@ -486,6 +523,7 @@ inline void fullmag_fdm_fill_step_stats_metadata(
     stats->time_seconds = ctx.current_time;
     stats->dt_seconds = dt;
     stats->suggested_next_dt = suggested_next_dt;
+    fullmag_fdm_publish_hot_loop_audit(ctx, stats);
 }
 
 /// Plain-old-data copy of SOT fields from Context.

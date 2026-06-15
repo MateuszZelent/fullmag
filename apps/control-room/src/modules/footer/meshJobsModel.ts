@@ -18,7 +18,7 @@ interface MeshJobsSummaryRow {
   value: string;
 }
 
-export interface MeshJobsHistoryRow {
+interface MeshJobsHistoryRow {
   id: string;
   elements: string;
   mesh: string;
@@ -27,7 +27,7 @@ export interface MeshJobsHistoryRow {
   target: string;
 }
 
-export interface MeshJobsViewportConfirmation {
+interface MeshJobsViewportConfirmation {
   meshRevision: number | string;
   rendererId: string;
 }

@@ -3,20 +3,36 @@
 import { useSyncExternalStore } from "react";
 
 import type { FieldVectorQuery } from "../api/apiTypes";
+import type {
+  SurfaceColorSource,
+  VisualizationGeometryScope,
+} from "./ObjectVisualizationController";
 
 export type AnalysisFieldOverlaySource = "eigen-mode" | "frequency-response";
 
-export interface AnalysisFieldOverlayAnimationState {
+interface AnalysisFieldOverlayAnimationState {
   animatePhase: boolean;
   animationRateHz: number;
 }
 
+export interface AnalysisFieldOverlayAppearanceState {
+  geometryScope?: VisualizationGeometryScope;
+  scalarColorPalette?: string;
+  shaderMonoColor?: string;
+  shaderVisible?: boolean;
+  surfaceColorSource?: SurfaceColorSource;
+  vectorBudget?: number;
+  vectorsVisible?: boolean;
+}
+
 export interface AnalysisFieldOverlayState {
+  appearance?: AnalysisFieldOverlayAppearanceState;
   animation?: AnalysisFieldOverlayAnimationState;
   fieldId: string;
   label: string;
   query: FieldVectorQuery;
   source: AnalysisFieldOverlaySource;
+  visualizationPhaseRad?: number;
 }
 
 type AnalysisFieldOverlayListener = () => void;
@@ -35,7 +51,8 @@ export class AnalysisFieldOverlayController {
     }
     this.snapshot = {
       ...next,
-      animation: next.animation ? { ...next.animation } : undefined,
+      ...(next.appearance ? { appearance: { ...next.appearance } } : {}),
+      ...(next.animation ? { animation: { ...next.animation } } : {}),
       query: { ...next.query },
     };
     this.notify();
@@ -48,12 +65,16 @@ export class AnalysisFieldOverlayController {
     this.set({
       ...this.snapshot,
       ...next,
-      animation:
-        next.animation === undefined
-          ? this.snapshot.animation
-            ? { ...this.snapshot.animation }
-            : undefined
-          : { ...next.animation },
+      ...(next.appearance === undefined
+        ? this.snapshot.appearance
+          ? { appearance: { ...this.snapshot.appearance } }
+          : {}
+        : { appearance: { ...next.appearance } }),
+      ...(next.animation === undefined
+        ? this.snapshot.animation
+          ? { animation: { ...this.snapshot.animation } }
+          : {}
+        : { animation: { ...next.animation } }),
       query: next.query ? { ...next.query } : { ...this.snapshot.query },
     });
   }
@@ -88,8 +109,28 @@ function analysisFieldOverlayStateEquals(
     left.fieldId === right.fieldId &&
     left.label === right.label &&
     left.source === right.source &&
+    (left.visualizationPhaseRad ?? null) ===
+      (right.visualizationPhaseRad ?? null) &&
+    analysisFieldOverlayAppearanceEquals(left.appearance, right.appearance) &&
     analysisFieldOverlayAnimationEquals(left.animation, right.animation) &&
     fieldVectorQueryEquals(left.query, right.query)
+  );
+}
+
+function analysisFieldOverlayAppearanceEquals(
+  left: AnalysisFieldOverlayAppearanceState | undefined,
+  right: AnalysisFieldOverlayAppearanceState | undefined,
+): boolean {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  return (
+    (left.geometryScope ?? null) === (right.geometryScope ?? null) &&
+    (left.scalarColorPalette ?? null) === (right.scalarColorPalette ?? null) &&
+    (left.shaderMonoColor ?? null) === (right.shaderMonoColor ?? null) &&
+    (left.shaderVisible ?? null) === (right.shaderVisible ?? null) &&
+    (left.surfaceColorSource ?? null) === (right.surfaceColorSource ?? null) &&
+    (left.vectorBudget ?? null) === (right.vectorBudget ?? null) &&
+    (left.vectorsVisible ?? null) === (right.vectorsVisible ?? null)
   );
 }
 

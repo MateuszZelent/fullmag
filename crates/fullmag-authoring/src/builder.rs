@@ -278,6 +278,7 @@ pub enum StudyPrimitiveStageKind {
     Eigenmodes,
     FrequencyResponse,
     Hysteresis,
+    ChangeDevice,
     SetField,
     SetCurrent,
     SaveState,
@@ -770,7 +771,9 @@ fn default_solver_max_steps() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ScriptBuilderSolverState, StudyPipelineDocument, StudyPipelineNode};
+    use super::{
+        ScriptBuilderSolverState, StudyPipelineDocument, StudyPipelineNode, StudyPrimitiveStageKind,
+    };
 
     #[test]
     fn solver_defaults_match_canonical_relax_defaults() {
@@ -811,6 +814,38 @@ mod tests {
         assert_eq!(
             node.payload.get("kind").and_then(|value| value.as_str()),
             Some("hysteresis")
+        );
+    }
+
+    #[test]
+    fn study_pipeline_accepts_change_device_primitive_stage() {
+        let document: StudyPipelineDocument = serde_json::from_value(serde_json::json!({
+            "version": "study_pipeline.v1",
+            "nodes": [
+                {
+                    "id": "stage_change_device",
+                    "label": "Change device",
+                    "enabled": true,
+                    "source": "script_imported",
+                    "node_kind": "primitive",
+                    "stage_kind": "change_device",
+                    "payload": {
+                        "kind": "change_device",
+                        "entrypoint_kind": "flat_change_device",
+                        "device": "cpu"
+                    }
+                }
+            ]
+        }))
+        .expect("change_device primitive stage should deserialize");
+
+        let StudyPipelineNode::Primitive(node) = &document.nodes[0] else {
+            panic!("expected primitive change_device stage");
+        };
+        assert_eq!(node.stage_kind, StudyPrimitiveStageKind::ChangeDevice);
+        assert_eq!(
+            node.payload.get("device").and_then(|value| value.as_str()),
+            Some("cpu")
         );
     }
 }

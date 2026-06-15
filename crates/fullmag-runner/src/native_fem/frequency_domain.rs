@@ -155,11 +155,89 @@ pub(crate) struct NativeDrivenFrequencyResponseResult {
     pub artifact_manifest_path: String,
 }
 
+#[derive(Clone)]
+#[allow(dead_code)]
+pub(crate) struct NativeModalEigenRequest<'a> {
+    pub mesh_asset_id: &'a str,
+    pub equilibrium_source_kind: &'a str,
+    pub gamma_rad_s_t: f64,
+    pub mu0_t_m_a: f64,
+    pub alpha: f64,
+    pub include_exchange: bool,
+    pub include_demag: bool,
+    pub demag_realization: Option<&'a str>,
+    pub damping_policy: &'a str,
+    pub spin_wave_bc_kind: &'a str,
+    pub k_vector_rad_m: Option<&'a [f64]>,
+    pub operator_diagnostics_json: Option<&'a str>,
+    pub requested_mode_count: i32,
+    pub target_kind: &'a str,
+    pub target_frequency_hz: f64,
+    pub frequency_min_hz: f64,
+    pub frequency_max_hz: f64,
+    pub residual_tolerance: f64,
+    pub max_outer_iterations: i32,
+    pub max_linear_iterations: i32,
+    pub output_directory: Option<&'a Path>,
+    pub write_partial_artifacts: bool,
+    pub completeness_policy: i32,
+    pub eigensolver_family: i32,
+    pub spectral_transform_kind: i32,
+}
+
+#[derive(Clone)]
+#[allow(dead_code)]
+pub(crate) struct NativeDrivenResponseContractRequest<'a> {
+    pub mesh_asset_id: &'a str,
+    pub equilibrium_source_kind: &'a str,
+    pub gamma_rad_s_t: f64,
+    pub mu0_t_m_a: f64,
+    pub alpha: f64,
+    pub include_exchange: bool,
+    pub include_demag: bool,
+    pub demag_realization: Option<&'a str>,
+    pub damping_policy: &'a str,
+    pub spin_wave_bc_kind: &'a str,
+    pub k_vector_rad_m: Option<&'a [f64]>,
+    pub operator_diagnostics_json: Option<&'a str>,
+    pub frequencies_hz: &'a [f64],
+    pub excitation_field_a_m: &'a [f64],
+    pub excitation_phase_rad: f64,
+    pub residual_tolerance: f64,
+    pub max_linear_iterations: i32,
+    pub output_directory: Option<&'a Path>,
+    pub write_partial_artifacts: bool,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) struct NativeFrequencyDomainContractResult {
+    pub status: NativeFrequencyDomainStatus,
+    pub error_message: String,
+    pub diagnostics_json: String,
+    pub result_json: String,
+    pub artifact_manifest_path: String,
+}
+
 #[allow(dead_code)]
 pub(crate) fn solve_native_driven_frequency_response(
     request: NativeDrivenFrequencyResponseRequest<'_>,
 ) -> Result<NativeDrivenFrequencyResponseResult, String> {
     solve_native_driven_frequency_response_impl(request)
+}
+
+#[allow(dead_code)]
+pub(crate) fn solve_native_modal_eigen(
+    request: NativeModalEigenRequest<'_>,
+) -> Result<NativeFrequencyDomainContractResult, String> {
+    solve_native_modal_eigen_impl(request)
+}
+
+#[allow(dead_code)]
+pub(crate) fn solve_native_driven_response_contract(
+    request: NativeDrivenResponseContractRequest<'_>,
+) -> Result<NativeFrequencyDomainContractResult, String> {
+    solve_native_driven_response_contract_impl(request)
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -456,6 +534,196 @@ fn solve_native_driven_frequency_response_impl(
 }
 
 #[cfg(feature = "fem-gpu")]
+fn solve_native_modal_eigen_impl(
+    request: NativeModalEigenRequest<'_>,
+) -> Result<NativeFrequencyDomainContractResult, String> {
+    let mesh_asset_id = CString::new(request.mesh_asset_id.as_bytes())
+        .map_err(|_| "native FEM modal_eigen mesh_asset_id contains NUL".to_string())?;
+    let equilibrium_source_kind = CString::new(request.equilibrium_source_kind.as_bytes())
+        .map_err(|_| "native FEM modal_eigen equilibrium_source_kind contains NUL".to_string())?;
+    let damping_policy = CString::new(request.damping_policy.as_bytes())
+        .map_err(|_| "native FEM modal_eigen damping_policy contains NUL".to_string())?;
+    let spin_wave_bc_kind = CString::new(request.spin_wave_bc_kind.as_bytes())
+        .map_err(|_| "native FEM modal_eigen spin_wave_bc_kind contains NUL".to_string())?;
+    let target_kind = CString::new(request.target_kind.as_bytes())
+        .map_err(|_| "native FEM modal_eigen target_kind contains NUL".to_string())?;
+    let demag_realization = request
+        .demag_realization
+        .map(|value| CString::new(value.as_bytes()))
+        .transpose()
+        .map_err(|_| "native FEM modal_eigen demag_realization contains NUL".to_string())?;
+    let operator_diagnostics_json = request
+        .operator_diagnostics_json
+        .map(|value| CString::new(value.as_bytes()))
+        .transpose()
+        .map_err(|_| "native FEM modal_eigen operator_diagnostics_json contains NUL".to_string())?;
+    let output_directory = request
+        .output_directory
+        .map(|path| CString::new(path.to_string_lossy().as_bytes()))
+        .transpose()
+        .map_err(|_| "native FEM modal_eigen output_directory contains NUL".to_string())?;
+
+    let ffi_request = ffi::FullmagFemModalEigenRequest {
+        abi_version: ffi::FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION,
+        operator_request: ffi::FullmagFemLinearizedOperatorRequest {
+            abi_version: ffi::FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION,
+            mesh_asset_id: mesh_asset_id.as_ptr(),
+            equilibrium_source_kind: equilibrium_source_kind.as_ptr(),
+            gamma_rad_s_T: request.gamma_rad_s_t,
+            mu0_T_m_A: request.mu0_t_m_a,
+            alpha: request.alpha,
+            include_exchange: i32::from(request.include_exchange),
+            include_demag: i32::from(request.include_demag),
+            demag_realization: optional_str_ptr(demag_realization.as_ref()),
+            damping_policy: damping_policy.as_ptr(),
+            spin_wave_bc_kind: spin_wave_bc_kind.as_ptr(),
+            k_vector_rad_m: request
+                .k_vector_rad_m
+                .map_or(std::ptr::null(), |values| values.as_ptr()),
+            k_vector_len: request
+                .k_vector_rad_m
+                .map_or(0, |values| values.len() as i32),
+            operator_diagnostics_json: optional_str_ptr(operator_diagnostics_json.as_ref()),
+        },
+        requested_mode_count: request.requested_mode_count,
+        target_kind: target_kind.as_ptr(),
+        target_frequency_hz: request.target_frequency_hz,
+        frequency_min_hz: request.frequency_min_hz,
+        frequency_max_hz: request.frequency_max_hz,
+        residual_tolerance: request.residual_tolerance,
+        max_outer_iterations: request.max_outer_iterations,
+        max_linear_iterations: request.max_linear_iterations,
+        output_directory: optional_str_ptr(output_directory.as_ref()),
+        write_partial_artifacts: i32::from(request.write_partial_artifacts),
+        completeness_policy: request.completeness_policy,
+        eigensolver_family: request.eigensolver_family,
+        spectral_transform_kind: request.spectral_transform_kind,
+        cancel_user_data: std::ptr::null_mut(),
+        cancel_requested: None,
+        progress_user_data: std::ptr::null_mut(),
+        progress_callback: None,
+    };
+
+    let mut ffi_result = NativeFrequencyDomainContractFfiResult {
+        inner: unsafe { ffi::fullmag_fem_modal_eigen_solve(&ffi_request) },
+    };
+    let owned = ffi_result.to_owned_result();
+    if ffi_result.inner.error_message.is_null() {
+        ffi_result.inner.diagnostics_json = std::ptr::null_mut();
+        ffi_result.inner.result_json = std::ptr::null_mut();
+        ffi_result.inner.artifact_manifest_path = std::ptr::null_mut();
+    } else {
+        ffi_result.inner.error_message = std::ptr::null_mut();
+        ffi_result.inner.diagnostics_json = std::ptr::null_mut();
+        ffi_result.inner.result_json = std::ptr::null_mut();
+        ffi_result.inner.artifact_manifest_path = std::ptr::null_mut();
+    }
+    Ok(owned)
+}
+
+#[cfg(feature = "fem-gpu")]
+fn solve_native_driven_response_contract_impl(
+    request: NativeDrivenResponseContractRequest<'_>,
+) -> Result<NativeFrequencyDomainContractResult, String> {
+    let mesh_asset_id = CString::new(request.mesh_asset_id.as_bytes())
+        .map_err(|_| "native FEM driven_response mesh_asset_id contains NUL".to_string())?;
+    let equilibrium_source_kind = CString::new(request.equilibrium_source_kind.as_bytes())
+        .map_err(|_| {
+            "native FEM driven_response equilibrium_source_kind contains NUL".to_string()
+        })?;
+    let damping_policy = CString::new(request.damping_policy.as_bytes())
+        .map_err(|_| "native FEM driven_response damping_policy contains NUL".to_string())?;
+    let spin_wave_bc_kind = CString::new(request.spin_wave_bc_kind.as_bytes())
+        .map_err(|_| "native FEM driven_response spin_wave_bc_kind contains NUL".to_string())?;
+    let demag_realization = request
+        .demag_realization
+        .map(|value| CString::new(value.as_bytes()))
+        .transpose()
+        .map_err(|_| "native FEM driven_response demag_realization contains NUL".to_string())?;
+    let operator_diagnostics_json = request
+        .operator_diagnostics_json
+        .map(|value| CString::new(value.as_bytes()))
+        .transpose()
+        .map_err(|_| {
+            "native FEM driven_response operator_diagnostics_json contains NUL".to_string()
+        })?;
+    let output_directory = request
+        .output_directory
+        .map(|path| CString::new(path.to_string_lossy().as_bytes()))
+        .transpose()
+        .map_err(|_| "native FEM driven_response output_directory contains NUL".to_string())?;
+
+    let ffi_request = ffi::FullmagFemDrivenResponseRequest {
+        abi_version: ffi::FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION,
+        operator_request: ffi::FullmagFemLinearizedOperatorRequest {
+            abi_version: ffi::FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION,
+            mesh_asset_id: mesh_asset_id.as_ptr(),
+            equilibrium_source_kind: equilibrium_source_kind.as_ptr(),
+            gamma_rad_s_T: request.gamma_rad_s_t,
+            mu0_T_m_A: request.mu0_t_m_a,
+            alpha: request.alpha,
+            include_exchange: i32::from(request.include_exchange),
+            include_demag: i32::from(request.include_demag),
+            demag_realization: optional_str_ptr(demag_realization.as_ref()),
+            damping_policy: damping_policy.as_ptr(),
+            spin_wave_bc_kind: spin_wave_bc_kind.as_ptr(),
+            k_vector_rad_m: request
+                .k_vector_rad_m
+                .map_or(std::ptr::null(), |values| values.as_ptr()),
+            k_vector_len: request
+                .k_vector_rad_m
+                .map_or(0, |values| values.len() as i32),
+            operator_diagnostics_json: optional_str_ptr(operator_diagnostics_json.as_ref()),
+        },
+        frequencies_hz: request.frequencies_hz.as_ptr(),
+        frequency_count: request.frequencies_hz.len() as i32,
+        excitation_field_A_m: request.excitation_field_a_m.as_ptr(),
+        excitation_field_len: request.excitation_field_a_m.len() as i32,
+        excitation_phase_rad: request.excitation_phase_rad,
+        residual_tolerance: request.residual_tolerance,
+        max_linear_iterations: request.max_linear_iterations,
+        output_directory: optional_str_ptr(output_directory.as_ref()),
+        write_partial_artifacts: i32::from(request.write_partial_artifacts),
+        cancel_user_data: std::ptr::null_mut(),
+        cancel_requested: None,
+        progress_user_data: std::ptr::null_mut(),
+        progress_callback: None,
+    };
+
+    let mut ffi_result = NativeFrequencyDomainContractFfiResult {
+        inner: unsafe { ffi::fullmag_fem_driven_response_solve(&ffi_request) },
+    };
+    let owned = ffi_result.to_owned_result();
+    if ffi_result.inner.error_message.is_null() {
+        ffi_result.inner.diagnostics_json = std::ptr::null_mut();
+        ffi_result.inner.result_json = std::ptr::null_mut();
+        ffi_result.inner.artifact_manifest_path = std::ptr::null_mut();
+    } else {
+        ffi_result.inner.error_message = std::ptr::null_mut();
+        ffi_result.inner.diagnostics_json = std::ptr::null_mut();
+        ffi_result.inner.result_json = std::ptr::null_mut();
+        ffi_result.inner.artifact_manifest_path = std::ptr::null_mut();
+    }
+    Ok(owned)
+}
+
+#[cfg(not(feature = "fem-gpu"))]
+fn solve_native_modal_eigen_impl(
+    request: NativeModalEigenRequest<'_>,
+) -> Result<NativeFrequencyDomainContractResult, String> {
+    let _ = request;
+    Err("native FEM modal eigen solve requires the fem-gpu feature".to_string())
+}
+
+#[cfg(not(feature = "fem-gpu"))]
+fn solve_native_driven_response_contract_impl(
+    request: NativeDrivenResponseContractRequest<'_>,
+) -> Result<NativeFrequencyDomainContractResult, String> {
+    let _ = request;
+    Err("native FEM driven response solve requires the fem-gpu feature".to_string())
+}
+
+#[cfg(feature = "fem-gpu")]
 fn map_dmi_kind(
     kind: NativeDrivenFrequencyResponseDmiKind,
 ) -> ffi::fullmag_fem_frequency_domain_dmi_kind {
@@ -467,6 +735,11 @@ fn map_dmi_kind(
             ffi::fullmag_fem_frequency_domain_dmi_kind::FULLMAG_FEM_FREQUENCY_DOMAIN_DMI_BULK
         }
     }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn optional_str_ptr(value: Option<&CString>) -> *const std::os::raw::c_char {
+    value.map_or(std::ptr::null(), |value| value.as_ptr())
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -602,6 +875,49 @@ impl Drop for NativeDrivenFrequencyResponseFfiResult {
 }
 
 #[cfg(feature = "fem-gpu")]
+struct NativeFrequencyDomainContractFfiResult {
+    inner: ffi::FullmagFemFrequencyDomainResult,
+}
+
+#[cfg(feature = "fem-gpu")]
+impl Default for NativeFrequencyDomainContractFfiResult {
+    fn default() -> Self {
+        Self {
+            inner: ffi::FullmagFemFrequencyDomainResult {
+                abi_version: ffi::FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION,
+                status: ffi::FullmagFemFrequencyDomainStatus::FULLMAG_FEM_FD_UNAVAILABLE,
+                error_message: std::ptr::null_mut(),
+                diagnostics_json: std::ptr::null_mut(),
+                result_json: std::ptr::null_mut(),
+                artifact_manifest_path: std::ptr::null_mut(),
+            },
+        }
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+impl NativeFrequencyDomainContractFfiResult {
+    fn to_owned_result(&self) -> NativeFrequencyDomainContractResult {
+        NativeFrequencyDomainContractResult {
+            status: map_contract_status(self.inner.status),
+            error_message: ffi_string(self.inner.error_message),
+            diagnostics_json: ffi_string(self.inner.diagnostics_json),
+            result_json: ffi_string(self.inner.result_json),
+            artifact_manifest_path: ffi_string(self.inner.artifact_manifest_path),
+        }
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+impl Drop for NativeFrequencyDomainContractFfiResult {
+    fn drop(&mut self) {
+        unsafe {
+            ffi::fullmag_fem_frequency_domain_result_destroy(&mut self.inner);
+        }
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
 fn ffi_string(value: *const std::os::raw::c_char) -> String {
     if value.is_null() {
         String::new()
@@ -639,6 +955,33 @@ fn map_status(status: ffi::fullmag_fem_frequency_domain_status) -> NativeFrequen
     }
 }
 
+#[cfg(feature = "fem-gpu")]
+fn map_contract_status(
+    status: ffi::FullmagFemFrequencyDomainStatus,
+) -> NativeFrequencyDomainStatus {
+    match status {
+        ffi::FullmagFemFrequencyDomainStatus::FULLMAG_FEM_FD_OK => NativeFrequencyDomainStatus::Ok,
+        ffi::FullmagFemFrequencyDomainStatus::FULLMAG_FEM_FD_UNAVAILABLE => {
+            NativeFrequencyDomainStatus::Unavailable
+        }
+        ffi::FullmagFemFrequencyDomainStatus::FULLMAG_FEM_FD_VALIDATION_ERROR => {
+            NativeFrequencyDomainStatus::ValidationError
+        }
+        ffi::FullmagFemFrequencyDomainStatus::FULLMAG_FEM_FD_OPERATOR_ERROR => {
+            NativeFrequencyDomainStatus::OperatorError
+        }
+        ffi::FullmagFemFrequencyDomainStatus::FULLMAG_FEM_FD_SOLVE_ERROR => {
+            NativeFrequencyDomainStatus::SolveError
+        }
+        ffi::FullmagFemFrequencyDomainStatus::FULLMAG_FEM_FD_ARTIFACT_ERROR => {
+            NativeFrequencyDomainStatus::ArtifactError
+        }
+        ffi::FullmagFemFrequencyDomainStatus::FULLMAG_FEM_FD_INTERRUPTED => {
+            NativeFrequencyDomainStatus::Interrupted
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -667,6 +1010,83 @@ mod tests {
                 })
                 .expect_err("native solve should require fem-gpu feature");
             assert!(err.contains("fem-gpu"));
+        }
+    }
+
+    #[test]
+    fn native_frequency_domain_unavailable_modal_contract_is_structured() {
+        #[cfg(not(feature = "fem-gpu"))]
+        {
+            let err = solve_native_modal_eigen(NativeModalEigenRequest {
+                mesh_asset_id: "mesh",
+                equilibrium_source_kind: "relax",
+                gamma_rad_s_t: 1.760859e11,
+                mu0_t_m_a: 1.25663706212e-6,
+                alpha: 0.01,
+                include_exchange: true,
+                include_demag: false,
+                demag_realization: None,
+                damping_policy: "include",
+                spin_wave_bc_kind: "free",
+                k_vector_rad_m: None,
+                operator_diagnostics_json: None,
+                requested_mode_count: 8,
+                target_kind: "frequency_window",
+                target_frequency_hz: 0.0,
+                frequency_min_hz: 1.0e8,
+                frequency_max_hz: 5.0e9,
+                residual_tolerance: 1.0e-8,
+                max_outer_iterations: 32,
+                max_linear_iterations: 128,
+                output_directory: None,
+                write_partial_artifacts: false,
+                completeness_policy: 0,
+                eigensolver_family: 0,
+                spectral_transform_kind: 0,
+            })
+            .expect_err("native modal contract should require fem-gpu feature");
+            assert!(err.contains("fem-gpu"));
+        }
+
+        #[cfg(feature = "fem-gpu")]
+        {
+            let result = solve_native_modal_eigen(NativeModalEigenRequest {
+                mesh_asset_id: "mesh",
+                equilibrium_source_kind: "relax",
+                gamma_rad_s_t: 1.760859e11,
+                mu0_t_m_a: 1.25663706212e-6,
+                alpha: 0.01,
+                include_exchange: true,
+                include_demag: false,
+                demag_realization: None,
+                damping_policy: "include",
+                spin_wave_bc_kind: "free",
+                k_vector_rad_m: None,
+                operator_diagnostics_json: None,
+                requested_mode_count: 8,
+                target_kind: "frequency_window",
+                target_frequency_hz: 0.0,
+                frequency_min_hz: 1.0e8,
+                frequency_max_hz: 5.0e9,
+                residual_tolerance: 1.0e-8,
+                max_outer_iterations: 32,
+                max_linear_iterations: 128,
+                output_directory: None,
+                write_partial_artifacts: false,
+                completeness_policy: 0,
+                eigensolver_family: 0,
+                spectral_transform_kind: 0,
+            })
+            .expect("native modal contract should return a structured unavailable result");
+            assert_eq!(result.status, NativeFrequencyDomainStatus::Unavailable);
+            assert!(result.error_message.contains("modal_eigen"));
+            assert!(result
+                .diagnostics_json
+                .contains("\"study_product\":\"modal_eigen\""));
+            assert!(result
+                .diagnostics_json
+                .contains("\"unsupported_reason\":\"modal_solver_not_implemented\""));
+            assert!(result.result_json.contains("\"status\":\"unavailable\""));
         }
     }
 

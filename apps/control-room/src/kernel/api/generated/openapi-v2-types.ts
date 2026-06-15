@@ -4587,6 +4587,50 @@ export interface components {
             note?: string | null;
             triangle_count?: number | null;
         };
+        LivePublisherDiagnosticsResource: {
+            /** Format: int64 */
+            coalesced_wake_count: number;
+            /** Format: int64 */
+            disconnected_wake_count: number;
+            /** Format: int64 */
+            last_clone_wall_time_ns: number;
+            /** Format: int64 */
+            last_merge_wall_time_ns: number;
+            /** Format: int64 */
+            last_payload_estimated_bytes: number;
+            /** Format: int64 */
+            last_publish_lag_wall_time_ns: number;
+            /** Format: int64 */
+            last_publish_wall_time_ns: number;
+            /** Format: int64 */
+            last_replace_wall_time_ns: number;
+            /** Format: int64 */
+            max_clone_wall_time_ns: number;
+            /** Format: int64 */
+            max_merge_wall_time_ns: number;
+            /** Format: int64 */
+            max_payload_estimated_bytes: number;
+            /** Format: int64 */
+            max_publish_lag_wall_time_ns: number;
+            /** Format: int64 */
+            max_publish_wall_time_ns: number;
+            /** Format: int64 */
+            max_replace_wall_time_ns: number;
+            /** Format: int64 */
+            publish_count: number;
+            /** Format: int64 */
+            replace_count: number;
+            /** Format: int64 */
+            total_clone_wall_time_ns: number;
+            /** Format: int64 */
+            total_merge_wall_time_ns: number;
+            /** Format: int64 */
+            total_publish_lag_wall_time_ns: number;
+            /** Format: int64 */
+            total_publish_wall_time_ns: number;
+            /** Format: int64 */
+            total_replace_wall_time_ns: number;
+        };
         LiveStatus: {
             api_contract_version: string;
             /** @description Canonical UI gating source for the current session. Platform and meshing capabilities have narrower ownership. */
@@ -6305,12 +6349,35 @@ export interface components {
             artifact_refs: string[];
             config: components["schemas"]["SolverProfileCommandConfig"];
             latest_samples: components["schemas"]["SolverProfileStepSampleResource"][];
+            live_publisher?: null | components["schemas"]["LivePublisherDiagnosticsResource"];
+            preview_3d_disabled?: boolean;
             /** Format: int64 */
             revision: number;
             state: string;
             threading?: null | components["schemas"]["SolverProfileThreadingResource"];
         };
         SolverProfileStepSampleResource: {
+            /** Format: int64 */
+            artifact_enqueue_bytes?: number;
+            /** Format: int64 */
+            artifact_field_snapshot_writer_wall_time_ns?: number;
+            /** Format: int64 */
+            artifact_native_field_snapshot_writer_wall_time_ns?: number;
+            /** Format: int64 */
+            artifact_queue_depth_current?: number;
+            /** Format: int64 */
+            artifact_queue_depth_max?: number;
+            /** Format: int64 */
+            artifact_scalar_row_writer_wall_time_ns?: number;
+            /** Format: int64 */
+            artifact_writer_job_wall_time_ns?: number;
+            /** Format: int64 */
+            artifact_writer_jobs_completed?: number;
+            /** Format: int64 */
+            delta_wall_time_ns?: number | null;
+            demag_preconditioner?: string | null;
+            demag_solver?: string | null;
+            demag_solver_setup_reused?: boolean;
             /** Format: int32 */
             demag_solves: number;
             /** Format: int64 */
@@ -6319,7 +6386,27 @@ export interface components {
             /** Format: double */
             dt: number;
             /** Format: int64 */
+            field_copy_bytes?: number;
+            /** Format: int64 */
+            finalization_field_copy_bytes?: number;
+            /** Format: int64 */
+            finalization_field_copy_wall_time_ns?: number;
+            /** Format: int64 */
+            finalization_wall_time_ns?: number;
+            /** Format: int64 */
+            hot_loop_control_scalar_d2h_bytes?: number;
+            /** Format: int64 */
+            hot_loop_control_scalar_host_sync_count?: number;
+            /** Format: int64 */
+            hot_loop_d2h_bytes?: number;
+            /** Format: int64 */
+            hot_loop_h2d_bytes?: number;
+            /** Format: int64 */
+            hot_loop_host_sync_count?: number;
+            /** Format: int64 */
             missing_ns: number;
+            /** Format: int64 */
+            native_ffi_overhead_wall_time_ns?: number;
             /** Format: int64 */
             phase_sum_ns: number;
             phases: components["schemas"]["SolverProfilePhaseResource"][];
@@ -6329,8 +6416,28 @@ export interface components {
             poisson_iterations: number;
             /** Format: int32 */
             rejected_attempts: number;
+            /** Format: int64 */
+            relaxation_gradient_wall_time_ns?: number;
+            /** Format: int64 */
+            relaxation_line_search_wall_time_ns?: number;
+            /** Format: int64 */
+            relaxation_metric_wall_time_ns?: number;
+            /** Format: int32 */
+            relaxation_preconditioner_cache_hits?: number;
+            /** Format: int32 */
+            relaxation_preconditioner_cache_misses?: number;
+            /** Format: int64 */
+            relaxation_retraction_wall_time_ns?: number;
+            /** Format: int64 */
+            relaxation_state_copy_wall_time_ns?: number;
+            /** Format: int64 */
+            relaxation_state_upload_wall_time_ns?: number;
+            /** Format: int64 */
+            relaxation_update_wall_time_ns?: number;
             /** Format: int32 */
             rhs_evaluations: number;
+            /** Format: int64 */
+            sample_time_unix_ms?: number;
             /** Format: int64 */
             step: number;
             threading: components["schemas"]["SolverProfileThreadingResource"];
@@ -6338,8 +6445,11 @@ export interface components {
             time: number;
             /** Format: int64 */
             total_ns: number;
+            /** Format: int64 */
+            unprofiled_gap_wall_time_ns?: number | null;
         };
         SolverProfileThreadingResource: {
+            cap_reason?: string;
             /** Format: int32 */
             effective_omp_threads: number;
             mfem_device?: string | null;
@@ -6417,10 +6527,16 @@ export interface components {
             index: number;
             kind?: string | null;
             label?: string | null;
+            /** Format: int64 */
+            last_progress_unix_ms?: number | null;
             loaded_state_ref?: string | null;
             metric_name?: string | null;
             /** Format: double */
             metric_value?: number | null;
+            progress_detail?: string | null;
+            progress_label?: string | null;
+            /** Format: double */
+            progress_percent?: number | null;
             reason?: string | null;
             resume_from_checkpoint_ref?: string | null;
             stage_id: string;

@@ -267,8 +267,10 @@ export function resolveMeshRegionMembershipsRevision(
 ): ResourceRevision | null {
   if (!memberships || memberships.length === 0) return null;
   return memberships
-    .map(resolveMeshRegionMembershipRevision)
-    .filter((revision): revision is ResourceRevision => revision !== null)
+    .flatMap((membership) => {
+      const revision = resolveMeshRegionMembershipRevision(membership);
+      return revision === null ? [] : [revision];
+    })
     .sort()
     .join("|");
 }
@@ -284,7 +286,7 @@ export function resolveMeshRegionMembershipListRevision(
     resource.mesh_id,
     resource.mesh_revision,
     membershipsRevision ?? "empty",
-    [...(resource.unresolved_region_ids ?? [])].sort().join(","),
+    (resource.unresolved_region_ids ?? []).toSorted().join(","),
   ].join(":");
 }
 
@@ -801,7 +803,9 @@ export function useMeshRegionMembershipsResource(
 }
 
 function normalizeMeshRegionMembershipIds(regionIds: readonly string[]): string[] {
-  return [...new Set(regionIds.filter((regionId) => regionId.length > 0))].sort();
+  return Array.from(
+    new Set(regionIds.filter((regionId) => regionId.length > 0)),
+  ).toSorted();
 }
 
 export function useMeshUniverseReportResource(

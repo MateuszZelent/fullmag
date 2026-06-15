@@ -15,11 +15,13 @@
 use fullmag_ir::{FemPlanIR, IntegratorChoice, RelaxationAlgorithmIR, RelaxationControlIR};
 
 #[cfg(feature = "fem-gpu")]
-use crate::artifact_pipeline::ArtifactRecorder;
+use crate::artifact_pipeline::{apply_artifact_enqueue_metrics, ArtifactRecorder};
 #[cfg(feature = "fem-gpu")]
-use crate::dispatch::flatten_vectors;
+use crate::dispatch::FemEngine;
 #[cfg(feature = "fem-gpu")]
-use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
+use crate::interactive_runtime::{
+    cached_display_refresh_due, display_is_global_scalar, display_refresh_due,
+};
 #[cfg(feature = "fem-gpu")]
 use crate::native_fem::NativeFemBackend;
 use crate::relaxation::llg_overdamped_uses_pure_damping;
@@ -30,7 +32,7 @@ use crate::types::ExecutionProvenance;
 use crate::types::{FemMeshPayload, LiveStepConsumer, RunError, StepAction, StepStats, StepUpdate};
 
 #[cfg(feature = "fem-gpu")]
-use super::preview::build_fem_cached_preview_fields;
+use super::preview::{FemCachedPreviewHandoff, FemLiveMagnetizationHandoff, FemLivePreviewHandoff};
 #[cfg(feature = "fem-gpu")]
 use super::scalars::ensure_fem_object_scalars;
 
@@ -164,7 +166,11 @@ pub(crate) fn execute_llg_overdamped(
     let mut backend_completion: Option<fullmag_ir::StageCompletionIR> = None;
     let mut cancelled = false;
     let mut paused = false;
+    let mut last_cached_preview_revision = last_preview_revision;
     let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
+    let mut live_preview_handoff = FemLivePreviewHandoff::default();
+    let mut cached_preview_handoff = FemCachedPreviewHandoff::default();
+    let mut live_magnetization_handoff = FemLiveMagnetizationHandoff::default();
 
     let until_label = if until_seconds.is_finite() {
         format!("{until_seconds:.4e}")
@@ -206,27 +212,60 @@ pub(crate) fn execute_llg_overdamped(
                     );
                     let preview_targets_global_scalar =
                         display_is_global_scalar(&display_selection);
+                    let mut live_stats = current_stats.clone();
+                    let preview_start = std::time::Instant::now();
                     let preview_field = if preview_due && !preview_targets_global_scalar {
                         let request = display_selection.preview_request();
-                        Some(backend.copy_live_preview_field(&request, node_count)?)
+                        live_preview_handoff.request_preview(backend, &request)?
                     } else {
-                        None
+                        live_preview_handoff.poll_completed()?
                     };
-                    let cached_preview_fields = if preview_due {
-                        build_fem_cached_preview_fields(
+                    live_stats.preview_wall_time_ns = preview_start.elapsed().as_nanos() as u64;
+                    let cached_preview_due = cached_display_refresh_due(
+                        last_cached_preview_revision,
+                        &display_selection,
+                        current_stats.step,
+                        live.field_every_n,
+                    );
+                    let cached_start = std::time::Instant::now();
+                    let cached_preview_fields = if cached_preview_due {
+                        cached_preview_handoff.request_cached_previews(
                             backend,
+                            FemEngine::CpuNative,
                             &display_selection,
                             plan,
-                            node_count,
-                        )
+                        )?
                     } else {
-                        None
+                        cached_preview_handoff.poll_completed()?
                     };
+                    live_stats.cached_preview_wall_time_ns =
+                        cached_start.elapsed().as_nanos() as u64;
+                    let live_preview_wall_time_ns = live_stats
+                        .preview_wall_time_ns
+                        .saturating_add(live_stats.cached_preview_wall_time_ns);
+                    let magnetization_payload =
+                        live_magnetization_handoff.request_magnetization(backend, node_count)?;
+                    let (magnetization, field_copy_wall_time_ns, field_copy_bytes) =
+                        match magnetization_payload {
+                            Some((payload, wall_time_ns, bytes)) => {
+                                (Some(payload), wall_time_ns, bytes)
+                            }
+                            None => (None, 0, 0),
+                        };
+                    live_stats.field_copy_wall_time_ns = live_stats
+                        .field_copy_wall_time_ns
+                        .saturating_add(field_copy_wall_time_ns);
+                    live_stats.field_copy_bytes =
+                        live_stats.field_copy_bytes.saturating_add(field_copy_bytes);
+                    live_stats.wall_time_ns = live_stats
+                        .wall_time_ns
+                        .saturating_add(live_preview_wall_time_ns)
+                        .saturating_add(field_copy_wall_time_ns);
                     let action = (live.on_step)(StepUpdate {
-                        stats: current_stats.clone(),
+                        stats: live_stats,
                         grid: live.grid,
                         fem_mesh: (current_stats.step == 0).then_some(FemMeshPayload::from(plan)),
-                        magnetization: Some(flatten_vectors(&backend.copy_m(node_count)?)),
+                        magnetization,
                         preview_field,
                         cached_preview_fields,
                         hysteresis_field_m_t: None,
@@ -239,6 +278,9 @@ pub(crate) fn execute_llg_overdamped(
                     });
                     if preview_due {
                         last_preview_revision = Some(display_selection.revision);
+                    }
+                    if cached_preview_due {
+                        last_cached_preview_revision = Some(display_selection.revision);
                     }
                     match action {
                         StepAction::Continue => {}
@@ -295,52 +337,67 @@ pub(crate) fn execute_llg_overdamped(
             let preview_targets_global_scalar = display_selection
                 .as_ref()
                 .is_some_and(display_is_global_scalar);
+            let mut live_stats = stats.clone();
             let magnetization = if stats.step % heavy_payload_every == 0 {
-                Some(flatten_vectors(&backend.copy_m(node_count)?))
+                live_magnetization_handoff.request_magnetization(backend, node_count)?
             } else {
-                None
+                live_magnetization_handoff.poll_completed(node_count)?
             };
+            let magnetization =
+                if let Some((payload, field_copy_wall_time_ns, field_copy_bytes)) = magnetization {
+                    live_stats.field_copy_wall_time_ns = live_stats
+                        .field_copy_wall_time_ns
+                        .saturating_add(field_copy_wall_time_ns);
+                    live_stats.field_copy_bytes =
+                        live_stats.field_copy_bytes.saturating_add(field_copy_bytes);
+                    Some(payload)
+                } else {
+                    None
+                };
+            let preview_start = std::time::Instant::now();
             let preview_field = if preview_due && !preview_targets_global_scalar {
                 let selection = display_selection.as_ref().expect("checked preview_due");
                 let request = selection.preview_request();
-                Some(backend.copy_live_preview_field(&request, node_count)?)
+                live_preview_handoff.request_preview(backend, &request)?
             } else {
-                None
+                live_preview_handoff.poll_completed()?
             };
-            let cached_preview_fields = if preview_due {
-                display_selection.as_ref().and_then(|selection| {
-                    build_fem_cached_preview_fields(backend, selection, plan, node_count)
+            live_stats.preview_wall_time_ns = preview_start.elapsed().as_nanos() as u64;
+            let cached_preview_due = display_selection
+                .as_ref()
+                .map(|selection| {
+                    cached_display_refresh_due(
+                        last_cached_preview_revision,
+                        selection,
+                        stats.step,
+                        heavy_payload_every,
+                    )
                 })
+                .unwrap_or(false);
+            let cached_start = std::time::Instant::now();
+            let cached_preview_fields = if cached_preview_due {
+                match display_selection.as_ref() {
+                    Some(selection) => cached_preview_handoff.request_cached_previews(
+                        backend,
+                        FemEngine::CpuNative,
+                        selection,
+                        plan,
+                    )?,
+                    None => cached_preview_handoff.poll_completed()?,
+                }
             } else {
-                None
+                cached_preview_handoff.poll_completed()?
             };
-            if stats.step <= 2 || preview_due {
-                eprintln!(
-                    "[fullmag-runner] native-fem live update step={} every_n={} preview_due={} preview_quantity={} preview_field={} cached_preview_fields={} global_scalar={} mag_len={}",
-                    stats.step,
-                    display_selection
-                        .as_ref()
-                        .map(|selection| u64::from(selection.selection.every_n.max(1)))
-                        .unwrap_or(0),
-                    preview_due,
-                    display_selection
-                        .as_ref()
-                        .map(|selection| selection.selection.quantity.as_str())
-                        .unwrap_or("-"),
-                    preview_field.is_some(),
-                    cached_preview_fields
-                        .as_ref()
-                        .map(|fields| fields.len())
-                        .unwrap_or(0),
-                    preview_targets_global_scalar,
-                    magnetization
-                        .as_ref()
-                        .map(|values| values.len())
-                        .unwrap_or(0),
-                );
-            }
+            live_stats.cached_preview_wall_time_ns = cached_start.elapsed().as_nanos() as u64;
+            let live_preview_wall_time_ns = live_stats
+                .preview_wall_time_ns
+                .saturating_add(live_stats.cached_preview_wall_time_ns);
+            live_stats.wall_time_ns = live_stats
+                .wall_time_ns
+                .saturating_add(live_preview_wall_time_ns)
+                .saturating_add(live_stats.field_copy_wall_time_ns);
             let action = (live.on_step)(StepUpdate {
-                stats: stats.clone(),
+                stats: live_stats,
                 grid: live.grid,
                 fem_mesh: Some(FemMeshPayload::from(plan)),
                 magnetization,
@@ -362,6 +419,14 @@ pub(crate) fn execute_llg_overdamped(
                         .revision,
                 );
             }
+            if cached_preview_due {
+                last_cached_preview_revision = Some(
+                    display_selection
+                        .as_ref()
+                        .map(|selection| selection.revision)
+                        .unwrap_or_default(),
+                );
+            }
             match action {
                 StepAction::Continue => {}
                 StepAction::Stop => {
@@ -376,7 +441,8 @@ pub(crate) fn execute_llg_overdamped(
             break;
         }
 
-        artifacts.record_scalar(&stats)?;
+        let artifact_metrics = artifacts.record_scalar(&stats)?;
+        apply_artifact_enqueue_metrics(&mut stats, artifact_metrics);
         steps.push(stats);
 
         let latest = steps.last().expect("just pushed stats");

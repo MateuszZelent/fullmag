@@ -6,7 +6,7 @@ import type { components } from "@/kernel/api/generated/openapi-v2-types";
 
 export type SceneMaterialParameterAssignment =
   components["schemas"]["SceneMaterialParameterAssignment"];
-export type SceneMaterialParameterField =
+type SceneMaterialParameterField =
   components["schemas"]["SceneMaterialParameterField"];
 export type SceneMaterialParameterName =
   components["schemas"]["SceneMaterialParameterName"];

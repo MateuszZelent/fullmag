@@ -113,6 +113,7 @@ void gpu_rk_publish_final_step_stats(
     }
     stats.requested_omp_threads = ctx.cpu_threads.requested_omp_threads;
     stats.effective_omp_threads = ctx.cpu_threads.effective_omp_threads;
+    stats.cpu_thread_cap_reason = ctx.cpu_threads.cap_reason;
     context_update_stage_completion_from_stats(ctx, stats);
 }
 

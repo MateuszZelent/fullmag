@@ -285,6 +285,7 @@ bool recover_demag_poisson_field(
         parallel_recover);
     mfem::GridFunction &gf_u = demag_recovery_workspace->potential;
     gf_u.SetFromTrueDofs(potential);
+    gf_u.HostRead();
     std::vector<double> &node_weight = demag_recovery_workspace->node_weight;
 
     if (parallel_recover) {

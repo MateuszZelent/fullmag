@@ -390,6 +390,10 @@ pub struct fullmag_fdm_step_stats {
     pub max_torque_Apm: f64,
     pub suggested_next_dt: f64,
     pub wall_time_ns: u64,
+    pub hot_loop_d2h_bytes: u64,
+    pub hot_loop_host_sync_count: u64,
+    pub hot_loop_control_scalar_d2h_bytes: u64,
+    pub hot_loop_control_scalar_host_sync_count: u64,
 }
 
 // ── Device info ──
@@ -588,4 +592,40 @@ extern "C" {
     pub fn fullmag_fdm_backend_last_error(handle: *mut fullmag_fdm_backend) -> *const c_char;
 
     pub fn fullmag_fdm_backend_destroy(handle: *mut fullmag_fdm_backend);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fullmag_fdm_step_stats;
+
+    #[test]
+    fn step_stats_abi_carries_hot_loop_scalar_readback_audit() {
+        let stats = fullmag_fdm_step_stats {
+            step: 1,
+            time_seconds: 0.0,
+            dt_seconds: 1.0e-12,
+            exchange_energy_joules: 0.0,
+            demag_energy_joules: 0.0,
+            external_energy_joules: 0.0,
+            anisotropy_energy_joules: 0.0,
+            cubic_energy_joules: 0.0,
+            dmi_energy_joules: 0.0,
+            total_energy_joules: 0.0,
+            max_effective_field_amplitude: 0.0,
+            max_demag_field_amplitude: 0.0,
+            max_rhs_amplitude: 0.0,
+            max_torque_Apm: 0.0,
+            suggested_next_dt: 0.0,
+            wall_time_ns: 0,
+            hot_loop_d2h_bytes: 24,
+            hot_loop_host_sync_count: 1,
+            hot_loop_control_scalar_d2h_bytes: 24,
+            hot_loop_control_scalar_host_sync_count: 1,
+        };
+
+        assert_eq!(stats.hot_loop_d2h_bytes, 24);
+        assert_eq!(stats.hot_loop_host_sync_count, 1);
+        assert_eq!(stats.hot_loop_control_scalar_d2h_bytes, 24);
+        assert_eq!(stats.hot_loop_control_scalar_host_sync_count, 1);
+    }
 }

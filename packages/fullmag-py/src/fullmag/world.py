@@ -1903,6 +1903,8 @@ class EigenmodesStageSpec:
     count: int = 10
     target: str = "lowest"
     target_frequency: float | None = None
+    frequency_min: float | None = None
+    frequency_max: float | None = None
     include_demag: bool = True
     equilibrium_source: str = "relax"
     equilibrium_artifact: str | None = None
@@ -2242,6 +2244,8 @@ def eigenmodes_stage(
     count: int = 10,
     target: str = "lowest",
     target_frequency: float | None = None,
+    frequency_min: float | None = None,
+    frequency_max: float | None = None,
     include_demag: bool = True,
     equilibrium_source: str = "relax",
     equilibrium_artifact: str | None = None,
@@ -2255,6 +2259,8 @@ def eigenmodes_stage(
         count=count,
         target=target,
         target_frequency=target_frequency,
+        frequency_min=frequency_min,
+        frequency_max=frequency_max,
         include_demag=include_demag,
         equilibrium_source=equilibrium_source,
         equilibrium_artifact=equilibrium_artifact,
@@ -2308,6 +2314,17 @@ def save_state_stage(
         format=str(format) if format is not None else None,
         dataset=str(dataset) if dataset is not None else None,
     )
+
+
+def _normalize_stage_device(device: str) -> str:
+    normalized = str(device).strip().lower()
+    if normalized in {"cpu", "gpu", "cuda", "auto"}:
+        return normalized
+    if normalized.startswith("cuda:"):
+        index = normalized.split(":", 1)[1]
+        if index.isdigit():
+            return normalized
+    raise ValueError("change_device(device) requires 'cpu', 'gpu', 'cuda', 'cuda:<index>', or 'auto'")
 
 
 def _relax_problem_from_spec(spec: RelaxStageSpec) -> Problem:
@@ -2365,6 +2382,8 @@ def _capture_stage(stage_spec: object) -> CapturedStage:
                 eigen_count=stage_spec.count,
                 eigen_target=stage_spec.target,
                 eigen_target_frequency=stage_spec.target_frequency,
+                eigen_frequency_min=stage_spec.frequency_min,
+                eigen_frequency_max=stage_spec.frequency_max,
                 eigen_include_demag=stage_spec.include_demag,
                 eigen_equilibrium_source=stage_spec.equilibrium_source,
                 eigen_equilibrium_artifact=stage_spec.equilibrium_artifact,
@@ -2882,6 +2901,8 @@ class StudyStagesBuilder:
         count: int = 10,
         target: str = "lowest",
         target_frequency: float | None = None,
+        frequency_min: float | None = None,
+        frequency_max: float | None = None,
         include_demag: bool = True,
         equilibrium_source: str = "relax",
         equilibrium_artifact: str | None = None,
@@ -2896,6 +2917,8 @@ class StudyStagesBuilder:
                 count=count,
                 target=target,
                 target_frequency=target_frequency,
+                frequency_min=frequency_min,
+                frequency_max=frequency_max,
                 include_demag=include_demag,
                 equilibrium_source=equilibrium_source,
                 equilibrium_artifact=equilibrium_artifact,
@@ -2957,6 +2980,23 @@ class StudyStagesBuilder:
                 dataset=dataset,
             )
         )
+
+    def change_device(self, device: str) -> "StudyStagesBuilder":
+        normalized = _normalize_stage_device(device)
+        _state._declared_stages.append(
+            CapturedStage(
+                problem=_build_problem(),
+                entrypoint_kind="flat_change_device",
+                default_until_seconds=None,
+                action={
+                    "kind": "change_device",
+                    "device": normalized,
+                },
+            )
+        )
+        if _state._interactive:
+            _state._wait_for_solve = True
+        return self
 
     def add_hysteresis_sweep(
         self,
@@ -3881,6 +3921,8 @@ class StudyBuilder:
         count: int = 10,
         target: str = "lowest",
         target_frequency: float | None = None,
+        frequency_min: float | None = None,
+        frequency_max: float | None = None,
         include_demag: bool = True,
         equilibrium_source: str = "relax",
         equilibrium_artifact: str | None = None,
@@ -3894,6 +3936,8 @@ class StudyBuilder:
             count=count,
             target=target,
             target_frequency=target_frequency,
+            frequency_min=frequency_min,
+            frequency_max=frequency_max,
             include_demag=include_demag,
             equilibrium_source=equilibrium_source,
             equilibrium_artifact=equilibrium_artifact,
@@ -5719,6 +5763,8 @@ def _build_problem(
     eigen_count: int = 10,
     eigen_target: str = "lowest",
     eigen_target_frequency: float | None = None,
+    eigen_frequency_min: float | None = None,
+    eigen_frequency_max: float | None = None,
     eigen_include_demag: bool = True,
     eigen_equilibrium_source: str = "relax",
     eigen_equilibrium_artifact: str | None = None,
@@ -5883,6 +5929,8 @@ def _build_problem(
             count=eigen_count,
             target=eigen_target,
             target_frequency=eigen_target_frequency,
+            frequency_min=eigen_frequency_min,
+            frequency_max=eigen_frequency_max,
             include_demag=eigen_include_demag,
             equilibrium_source=eigen_equilibrium_source,
             equilibrium_artifact=eigen_equilibrium_artifact,
@@ -6299,6 +6347,8 @@ def eigenmodes(
     count: int = 10,
     target: str = "lowest",
     target_frequency: float | None = None,
+    frequency_min: float | None = None,
+    frequency_max: float | None = None,
     include_demag: bool = True,
     equilibrium_source: str = "relax",
     equilibrium_artifact: str | None = None,
@@ -6315,9 +6365,11 @@ def eigenmodes(
     count : int
         Number of eigenfrequencies/modes to compute.
     target : str
-        ``"lowest"`` or ``"nearest"`` target selection strategy.
+        ``"lowest"``, ``"nearest"``, or ``"frequency_window"`` target selection strategy.
     target_frequency : float, optional
         Target frequency in Hz when ``target="nearest"``.
+    frequency_min, frequency_max : float, optional
+        Frequency-window bounds in Hz when ``target="frequency_window"``.
     include_demag : bool
         Include demagnetization in the linearized operator.
     equilibrium_source : str
@@ -6339,6 +6391,8 @@ def eigenmodes(
         eigen_count=count,
         eigen_target=target,
         eigen_target_frequency=target_frequency,
+        eigen_frequency_min=frequency_min,
+        eigen_frequency_max=frequency_max,
         eigen_include_demag=include_demag,
         eigen_equilibrium_source=equilibrium_source,
         eigen_equilibrium_artifact=equilibrium_artifact,

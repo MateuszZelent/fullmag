@@ -35,6 +35,32 @@ pub struct StepDiagnostics {
     pub extra_energy_wall_time_ns: u64,
     #[serde(default)]
     pub snapshot_wall_time_ns: u64,
+    #[serde(default)]
+    pub relaxation_preconditioner_wall_time_ns: u64,
+    #[serde(default)]
+    pub relaxation_state_copy_wall_time_ns: u64,
+    #[serde(default)]
+    pub relaxation_state_upload_wall_time_ns: u64,
+    #[serde(default)]
+    pub relaxation_retraction_wall_time_ns: u64,
+    #[serde(default)]
+    pub relaxation_gradient_wall_time_ns: u64,
+    #[serde(default)]
+    pub relaxation_metric_wall_time_ns: u64,
+    #[serde(default)]
+    pub relaxation_line_search_wall_time_ns: u64,
+    #[serde(default)]
+    pub relaxation_update_wall_time_ns: u64,
+    #[serde(default)]
+    pub relaxation_preconditioner_cache_hits: u32,
+    #[serde(default)]
+    pub relaxation_preconditioner_cache_misses: u32,
+    #[serde(default)]
+    pub finalization_wall_time_ns: u64,
+    #[serde(default)]
+    pub finalization_field_copy_wall_time_ns: u64,
+    #[serde(default)]
+    pub finalization_field_copy_bytes: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_estimate: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
