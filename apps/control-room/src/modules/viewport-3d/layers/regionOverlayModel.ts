@@ -33,6 +33,7 @@ export interface RegionOverlayInput {
 
 export interface RegionOverlayOptions {
   resolveSettings?: (region: RegionOverlayInput) => VisualizationTargetSettings;
+  renderedSurfacePartIds?: ReadonlySet<string>;
   selectedObjectId?: string | null;
   selectedRegionId?: string | null;
   theme?: RegionOverlayTheme;
@@ -115,6 +116,7 @@ export interface RegionMeshOverlayOwnerPart {
 export interface RegionMeshOverlayModel extends RegionOverlayBaseModel {
   edgeIndices: Uint32Array | null;
   positions: Float32Array;
+  surfaceOverlayVisible: boolean;
   surfaceEdgeIndices: Uint32Array | null;
   surfaceIndices: Uint32Array | null;
 }
@@ -264,12 +266,24 @@ export function buildRegionMeshOverlayModels(
         selected: region.selected,
         slot: region.slot,
         style: region.style,
+        surfaceOverlayVisible: !meshPartSurfaceAlreadyRendered(
+          region.meshPartIds,
+          options.renderedSurfacePartIds,
+        ),
         surfaceEdgeIndices,
         surfaceIndices,
         transform: defaultRegionTransform(),
       },
     ];
   });
+}
+
+function meshPartSurfaceAlreadyRendered(
+  meshPartIdsValue: readonly string[] | null,
+  renderedSurfacePartIds: ReadonlySet<string> | null | undefined,
+): boolean {
+  if (!meshPartIdsValue?.length || !renderedSurfacePartIds?.size) return false;
+  return meshPartIdsValue.every((id) => renderedSurfacePartIds.has(id));
 }
 
 function positionsForTopology(topology: DecodedTopology): Float32Array {

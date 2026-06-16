@@ -338,7 +338,9 @@ describe("viewport smoke projection round-trip", () => {
 
     expect(screenshotScript).toContain("enableDimensionFrameCage");
     expect(screenshotScript).toContain('selectDimensionFrameMode(page, "Off")');
-    expect(screenshotScript).toContain('name: "Floor + vertical"');
+    expect(screenshotScript).toContain(
+      'selectDimensionFrameMode(page, "Floor + vertical")',
+    );
     expect(screenshotScript).toContain("viewport-3d.dimension-frame-cage");
     expect(screenshotScript).toContain("dimensionFrameChangedPixels=");
     expect(screenshotScript).toContain("profileChangedPixels=");

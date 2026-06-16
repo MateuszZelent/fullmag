@@ -20,6 +20,10 @@ struct Context;
  * component. This module owns the projection from that RHS to H_ex in A/m:
  * magnetic lumped-mass setup, optional consistent-mass CG projection, periodic
  * reduced-node aggregation/lift, Ms scaling, and host-side component export.
+ * Lumped projection applies pointwise 1/Ms_i scaling after the volume-mass
+ * inverse. Consistent projection solves with the Ms-weighted mass form and then
+ * applies the common -2/mu0 field scale, which is the weak-form equivalent of
+ * H_ex = 2 div(A grad m)/(mu0 Ms).
  *
  * It does not assemble the exchange stiffness form, choose magnetic element
  * attributes, upload legacy sparse GPU operators, pack AoS fields, add Zeeman

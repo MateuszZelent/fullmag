@@ -1,16 +1,20 @@
 # FEM Exchange Interaction
 
-- Status: native FEM CPU module contract, full field assembly requires MFEM runtime validation
-- Last updated: 2026-05-30
+- Status: native FEM CPU/GPU module contract, full field assembly requires MFEM runtime validation
+- Last updated: 2026-06-17
 - Implementation:
-  `native/backends/fem/cpu/mfem/interactions/exchange.hpp/.cpp`,
-  `native/backends/fem/cpu/mfem/interactions/exchange_operator.hpp/.cpp`,
-  `native/backends/fem/cpu/mfem/interactions/exchange_field.hpp/.cpp`,
-  `native/backends/fem/cpu/mfem/interactions/exchange_runtime.hpp/.cpp`,
-  `native/backends/fem/cpu/mfem/interactions/exchange_fallback.hpp/.cpp`,
-  `native/backends/fem/cpu/mfem/interactions/exchange_legacy_gpu_upload.hpp/.cpp`,
-  `native/backends/fem/cpu/mfem/interactions/exchange_mass_projection.hpp/.cpp`
-- Test: `native/backends/fem/tests/exchange_contract.cpp`
+  `backends/fem/cpu/mfem/interactions/exchange.hpp/.cpp`,
+  `backends/fem/cpu/mfem/interactions/exchange_operator.hpp/.cpp`,
+  `backends/fem/cpu/mfem/interactions/exchange_field.hpp/.cpp`,
+  `backends/fem/cpu/mfem/interactions/exchange_runtime.hpp/.cpp`,
+  `backends/fem/cpu/mfem/interactions/exchange_fallback.hpp/.cpp`,
+  `backends/fem/cpu/mfem/interactions/exchange_legacy_gpu_upload.hpp/.cpp`,
+  `backends/fem/cpu/mfem/interactions/exchange_mass_projection.hpp/.cpp`,
+  `backends/fem/gpu/cuda/exchange/exchange_kernels.hpp/.cu`,
+  `backends/fem/gpu/cuda/integrators/rk/rk_exchange_dispatch.hpp/.cu`,
+  `backends/fem/gpu/cuda/integrators/rk/rk_exchange_energy_reductions.hpp/.cu`
+- Test: `backends/fem/tests/exchange_contract.cpp`,
+  `backends/fem/tests/source_facade_gpu_rk_contract.cpp`
 
 ## Pole
 
@@ -68,12 +72,48 @@ M h_raw_c = rhs_c
 H_ex,c = -2 h_raw_c / (mu0 Ms)
 ```
 
-The default projection uses the lumped magnetic mass diagonal. The
-consistent-mass mode solves the mass projection with CG. Periodic reductions
-aggregate RHS and mass on periodic node classes before lifting the field back to
-full nodes. This projection policy is kept separate from exchange stiffness
-assembly so the operator module remains responsible only for magnetic-attribute
+The default projection uses the unweighted lumped magnetic volume mass diagonal
+and applies pointwise `1/Ms_i` scaling:
+
+```text
+H_ex,i = -2 (K_A m)_i / (mu0 Ms_i M_lumped,i)
+```
+
+The consistent-mass mode instead solves the `Ms`-weighted mass projection:
+
+```text
+M_Ms q = K_A m
+H_ex = -2 q / mu0
+```
+
+which is equivalent to the weak statement
+`delta E_ex = -mu0 integral Ms H_ex.delta_m dV`. Periodic reductions aggregate
+RHS and mass on periodic node classes before lifting the field back to full
+nodes. This projection policy is kept separate from exchange stiffness assembly
+so the operator module remains responsible only for magnetic-attribute
 selection and MFEM form setup.
+
+## GPU realization
+
+The current native FEM GPU RK path uses the assembled MFEM stiffness matrix as a
+legacy sparse CSR operator uploaded to device memory. The field kernel applies
+the same lumped projection as the CPU lumped path:
+
+```text
+H_ex = -2 M_lumped^-1 K_A m / (mu0 Ms)
+```
+
+with nonmagnetic nodes masked to zero. GPU RK planning currently requires
+`enable_exchange=true`, so final GPU exchange-energy reduction assumes the
+legacy sparse operator is present. The final energy kernel computes
+
+```text
+E_ex = sum_i m_i . (K_A m)_i
+```
+
+across the three magnetization components, matching the CPU assembled stiffness
+energy convention. Consistent-mass exchange projection is a CPU/MFEM projection
+policy; it is not the current device-resident GPU RK exchange path.
 
 Source ownership:
 
@@ -105,6 +145,9 @@ and the top-level `Context` does not own a flat `enable_exchange` field.
 - The legacy sparse GPU upload is isolated in `exchange_legacy_gpu_upload.*`.
   It validates CSR shape/index data and transfers the assembled operator plus
   lumped mass vectors; it does not change the physical exchange contract.
+- The GPU RK device-resident path currently requires exchange to be enabled and
+  uses the legacy sparse/lumped projection path. Consistent-mass projection is
+  not claimed as the current GPU RK exchange realization.
 - The no-MFEM fallback is isolated in `exchange_fallback.*` and does not claim
   active exchange execution.
 
@@ -123,6 +166,11 @@ legacy GPU upload. It also checks top-level source-contract docstrings for the
 aggregate, operator, field-compute, runtime-refresh, fallback, mass-projection,
 and legacy GPU upload sources, plus exchange enablement storage in
 `ExchangeRuntimeState` instead of flat `Context`.
+
+`fem_source_facade_gpu_rk_contract` checks that GPU RK exchange field and energy
+headers document the legacy sparse/lumped projection, sign, units, magnetic-node
+masking, and the separation between exchange upload, RK dispatch, and final
+energy reductions.
 
 Runtime validation is gated by
 `tests/fem_exchange_validation/sinusoidal_mode.py`. The scripted acceptance

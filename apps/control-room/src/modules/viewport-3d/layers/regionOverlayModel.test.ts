@@ -545,6 +545,81 @@ describe("regionOverlayModel", () => {
     expect(Array.from(models[0].surfaceIndices ?? [])).toEqual([0, 1, 2]);
   });
 
+  it("keeps rendered mesh-backed region surfaces from drawing a second color overlay", () => {
+    const topology = {
+      boundaryFaceCount: 0,
+      boundaryFaces: new Uint32Array(),
+      boundaryMarkers: new Uint32Array(),
+      elementCount: 1,
+      elementMarkers: Uint32Array.from([1]),
+      indices: Uint32Array.from([0, 1, 2, 3]),
+      nodeCount: 4,
+      positions: Float64Array.from([
+        0, 0, 0,
+        1, 0, 0,
+        0, 1, 0,
+        0, 0, 1,
+      ]),
+    };
+
+    const [meshBacked] = buildRegionMeshOverlayModels(
+      [
+        {
+          enabled: true,
+          mesh_part_ids: ["part:film:core"],
+          name: "Core",
+          owner_object_id: "film",
+          priority: 0,
+          region_id: "film:core",
+        },
+      ],
+      topology,
+      [
+        {
+          element_count: 1,
+          element_start: 0,
+          id: "part:film:core",
+          object_id: "film",
+          surface_faces: [[0, 1, 2]],
+        },
+      ],
+      {
+        renderedSurfacePartIds: new Set(["part:film:core"]),
+      },
+    );
+
+    const [membershipFallback] = buildRegionMeshOverlayModels(
+      [
+        {
+          enabled: true,
+          mesh_part_ids: ["membership:film%3Acore"],
+          name: "Core",
+          owner_object_id: "film",
+          priority: 0,
+          region_id: "film:core",
+        },
+      ],
+      topology,
+      [
+        {
+          element_count: 1,
+          element_start: 0,
+          id: "membership:film%3Acore",
+          object_id: "film",
+          surface_faces: [[0, 1, 2]],
+        },
+      ],
+      {
+        renderedSurfacePartIds: new Set(["part:film:core"]),
+      },
+    );
+
+    expect(meshBacked?.style.fillVisible).toBe(true);
+    expect(meshBacked?.surfaceOverlayVisible).toBe(false);
+    expect(membershipFallback?.style.fillVisible).toBe(true);
+    expect(membershipFallback?.surfaceOverlayVisible).toBe(true);
+  });
+
   it("shares converted topology positions across mesh-backed region overlays", () => {
     const topology = {
       boundaryFaceCount: 0,

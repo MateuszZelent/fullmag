@@ -9,12 +9,15 @@ const source = readFileSync(
 );
 
 describe("RibbonMenuRenderer performance contracts", () => {
-  it("debounces high-frequency slider commands and flushes on interaction end", () => {
-    expect(source).toContain("SLIDER_COMMAND_DEBOUNCE_MS");
-    expect(source).toContain("useDebouncedSliderCommand");
-    expect(source).toContain("setTimeout(flushSliderCommand");
+  it("stages high-frequency slider values locally and flushes only on interaction boundaries", () => {
+    expect(source).not.toContain("SLIDER_COMMAND_DEBOUNCE_MS");
+    expect(source).not.toContain("useDebouncedSliderCommand");
+    expect(source).not.toContain("setTimeout(flushSliderCommand");
+    expect(source).toContain("useDraftSliderCommand");
     expect(source).toContain("onPointerUp={flushSliderCommand}");
+    expect(source).toContain("onPointerCancel={flushSliderCommand}");
     expect(source).toContain("onBlur={flushSliderCommand}");
+    expect(source).toContain("onKeyUp={flushSliderCommand}");
     expect(source).toContain("value={draftValue}");
     expect(source).toContain("key={node.id}");
   });

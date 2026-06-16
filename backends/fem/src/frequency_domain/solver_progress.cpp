@@ -14,7 +14,18 @@ std::string solver_progress_json(const SolverProgressState &state) noexcept
     json += state.solver_phase != nullptr ? state.solver_phase : "";
     json += "\",\"execution_lane\":\"";
     json += state.execution_lane != nullptr ? state.execution_lane : "";
-    json += "\",\"stop_reason\":";
+    json += "\"";
+    if (state.contour_point_index >= 0) {
+        json += ",\"contour_point_index\":";
+        json += std::to_string(state.contour_point_index);
+        json += ",\"contour_point_count\":";
+        json += std::to_string(state.contour_point_count);
+        json += ",\"linear_iteration\":";
+        json += std::to_string(state.linear_iteration);
+        json += ",\"max_linear_iterations\":";
+        json += std::to_string(state.max_linear_iterations);
+    }
+    json += ",\"stop_reason\":";
     if (state.stop_reason == nullptr) {
         json += "null";
     } else {

@@ -403,6 +403,9 @@ void exchange_source_files_document_module_boundaries() {
         mass_projection.find("does not assemble exchange operators or upload GPU state") != std::string::npos,
         "exchange mass-projection source file must document its non-owning operator/upload boundary");
     check(
+        mass_projection.find("including Ms scaling") != std::string::npos,
+        "exchange mass-projection source file must document Ms scaling ownership");
+    check(
         gpu_upload.find("Exchange legacy GPU upload source contract") != std::string::npos,
         "exchange legacy GPU upload source file must document its source contract");
     check(
@@ -598,6 +601,27 @@ void spatial_a_and_ms_exchange_pass_directional_derivative() {
         "exchange projection must report the same spatial-A energy used by the field");
 }
 
+void exchange_mass_projection_header_documents_ms_weighted_consistent_projection() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string mass_projection_header = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "exchange_mass_projection.hpp");
+    const std::string exchange_docs =
+        read_text_file(repo_root() / "docs" / "physics" / "fem_exchange.md");
+
+    check(
+        mass_projection_header.find("Lumped projection applies pointwise 1/Ms_i scaling") !=
+            std::string::npos,
+        "exchange mass-projection header must document lumped 1/Ms_i scaling");
+    check(
+        mass_projection_header.find("Consistent projection solves with the Ms-weighted mass form") !=
+            std::string::npos,
+        "exchange mass-projection header must document Ms-weighted consistent projection");
+    check(
+        exchange_docs.find("M_Ms q = K_A m") != std::string::npos &&
+            exchange_docs.find("H_ex = -2 q / mu0") != std::string::npos,
+        "exchange physics note must document the Ms-weighted consistent-mass weak form");
+}
+
 mfem::Mesh two_tet_marker_mesh() {
     mfem::Mesh mesh(3, 5, 2, 0, 3);
     const double v0[] = {0.0, 0.0, 0.0};
@@ -764,6 +788,7 @@ int main() {
     progress_report_marks_exchange_split_contract_covered();
 #if FULLMAG_HAS_MFEM_STACK
     spatial_a_and_ms_exchange_pass_directional_derivative();
+    exchange_mass_projection_header_documents_ms_weighted_consistent_projection();
     sharp_element_a_and_ms_exchange_pass_directional_derivative();
 #endif
 #if !FULLMAG_HAS_MFEM_STACK

@@ -2,7 +2,8 @@
  * GPU CUDA Zeeman kernels module header.
  *
  * Declares exported FEM CUDA wrappers for external-field Zeeman energy
- * evaluation.
+ * evaluation. Device fields use H_ext in A/m and reduced magnetization m.
+ * The kernels do not apply gamma_mu0, damping, or direct-torque semantics.
  */
 #pragma once
 
@@ -14,6 +15,7 @@ namespace fullmag::fem {
 
 /// Per-block Zeeman energy partials:
 /// -mu0 * Ms_i * (m_i . H_ext_i) * lumped_mass_i.
+/// Nonmagnetic FEM nodes are skipped when magnetic_node_mask is present.
 void fullmag_cuda_external_energy_blocks(
     const double *mx,
     const double *my,

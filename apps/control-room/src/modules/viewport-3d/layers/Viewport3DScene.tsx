@@ -694,6 +694,14 @@ function Viewport3DModelLayerStack({
   materialProfile: ReturnType<typeof resolveViewport3DMaterialProfile>;
   visualProfile: Viewport3DVisualProfile;
 }) {
+  const renderedMeshRegionSurfacePartIds = useMemo(
+    () =>
+      new Set(
+        femDomain.magneticParts.flatMap((part) => (part.id ? [part.id] : [])),
+    ),
+    [femDomain.magneticParts],
+  );
+
   if (!viewport3DSceneLayersEnabledFromBrowserConfig()) return null;
 
   const hasMeshBackedRegionOverlays = meshRegionOverlays.length > 0;
@@ -792,6 +800,7 @@ function Viewport3DModelLayerStack({
           getRegionSettings={getRegionSettings}
           magneticParts={meshRegionOverlayParts}
           onSelectRegion={onSelectRegion}
+          renderedSurfacePartIds={renderedMeshRegionSurfacePartIds}
           regions={meshRegionOverlays}
           selectedObjectId={selectedObjectId}
           selectedRegionId={selectedRegionId}

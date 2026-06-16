@@ -268,10 +268,11 @@ describe("Viewport3DModule scene wiring", () => {
 
     expect(source).toContain("beginViewport3DFieldUpdateHold();");
     expect(source).toContain("endViewport3DFieldUpdateHold();");
-    expect(source).toContain("scheduleFieldUpdatePointerHoldRelease");
-    expect(source).toContain("}, 150);");
+    expect(source).not.toContain("scheduleFieldUpdatePointerHoldRelease");
+    expect(source).not.toContain("fieldUpdatePointerHoldReleaseTimeoutRef");
+    expect(source).not.toContain("}, 150);");
     expect(source).toContain("onPointerDownCapture={holdFieldUpdatesForPointerGesture}");
-    expect(source).toContain("onPointerUpCapture={scheduleFieldUpdatePointerHoldRelease}");
+    expect(source).toContain("onPointerUpCapture={releaseFieldUpdatePointerHold}");
     expect(source).toContain("onPointerCancelCapture={releaseFieldUpdatePointerHold}");
   });
 

@@ -65,7 +65,7 @@ layer = study.geometry(
     fm.Box(size=LAYER_SIZE, name="permalloy_layer"),
     name="permalloy_layer",
 )
-layer.Ms = 1.46e5
+layer.Ms = 1.46e6
 layer.Aex = 6.5e-12
 layer.alpha = 0.001
 layer.Ku1 = 1.e3

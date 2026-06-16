@@ -23,6 +23,7 @@ export interface RegionMeshOverlayLayerProps {
   getRegionSettings?: (region: RegionOverlayInput) => VisualizationTargetSettings;
   magneticParts: readonly RegionMeshOverlayOwnerPart[];
   onSelectRegion?: (selection: RegionOverlaySelection) => void;
+  renderedSurfacePartIds?: ReadonlySet<string>;
   regions: readonly RegionOverlayInput[];
   selectedObjectId?: string | null;
   selectedRegionId?: string | null;
@@ -48,6 +49,7 @@ export function RegionMeshOverlayLayer({
   getRegionSettings,
   magneticParts,
   onSelectRegion,
+  renderedSurfacePartIds,
   regions,
   selectedObjectId = null,
   selectedRegionId = null,
@@ -60,6 +62,7 @@ export function RegionMeshOverlayLayer({
     () =>
       buildRegionMeshOverlayModels(regions, topology, magneticParts, {
         resolveSettings: getRegionSettings,
+        renderedSurfacePartIds,
         selectedObjectId,
         selectedRegionId,
         theme,
@@ -67,6 +70,7 @@ export function RegionMeshOverlayLayer({
     [
       getRegionSettings,
       magneticParts,
+      renderedSurfacePartIds,
       regions,
       selectedObjectId,
       selectedRegionId,
@@ -159,10 +163,13 @@ function RegionMeshOverlayShape({
         >
           <meshBasicMaterial
             color={fillColor}
-            opacity={model.style.fillOpacity}
+            colorWrite={model.surfaceOverlayVisible}
+            opacity={model.surfaceOverlayVisible ? model.style.fillOpacity : 0}
             {...materialPolicyProps("selectionShell")}
-            depthWrite={model.style.fillOpacity >= 1}
-            transparent={model.style.fillOpacity < 1}
+            depthWrite={
+              model.surfaceOverlayVisible && model.style.fillOpacity >= 1
+            }
+            transparent={!model.surfaceOverlayVisible || model.style.fillOpacity < 1}
           />
         </mesh>
       ) : null}

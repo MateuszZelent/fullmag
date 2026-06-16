@@ -187,8 +187,6 @@ function runRadioCommand(
 // ── Slider ────────────────────────────────────────────────────────────────────
 type SliderNode = Extract<RibbonMenuNode, { type: "slider" }>;
 
-const SLIDER_COMMAND_DEBOUNCE_MS = 120;
-
 function SliderMenuItem({
   node,
   onCommand,
@@ -200,8 +198,10 @@ function SliderMenuItem({
     sourceValue: number;
     value: number;
   } | null>(null);
-  const { flushSliderCommand, scheduleSliderCommand } =
-    useDebouncedSliderCommand(node, onCommand);
+  const { flushSliderCommand, stageSliderCommand } = useDraftSliderCommand(
+    node,
+    onCommand,
+  );
   const draftValue =
     draftState?.sourceValue === node.value ? draftState.value : node.value;
 
@@ -231,10 +231,12 @@ function SliderMenuItem({
         onChange={(e) => {
           const next = Number(e.target.value);
           setDraftState({ sourceValue: node.value, value: next });
-          scheduleSliderCommand(next);
+          stageSliderCommand(next);
         }}
         onPointerUp={flushSliderCommand}
+        onPointerCancel={flushSliderCommand}
         onBlur={flushSliderCommand}
+        onKeyUp={flushSliderCommand}
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => e.stopPropagation()}
       />
@@ -242,17 +244,16 @@ function SliderMenuItem({
   );
 }
 
-function useDebouncedSliderCommand(
+function useDraftSliderCommand(
   node: SliderNode,
   onCommand?: (commandId: string, input?: unknown) => void,
 ): {
   flushSliderCommand: () => void;
-  scheduleSliderCommand: (value: number) => void;
+  stageSliderCommand: (value: number) => void;
 } {
   const commandRef = useRef({ node, onCommand });
   const dirtyRef = useRef(false);
   const latestValueRef = useRef(node.value);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     commandRef.current = { node, onCommand };
@@ -273,43 +274,33 @@ function useDebouncedSliderCommand(
     );
   }, []);
 
-  const clearSliderCommandTimer = useCallback(() => {
-    if (timerRef.current === null) return;
-    clearTimeout(timerRef.current);
-    timerRef.current = null;
-  }, []);
-
   const flushSliderCommand = useCallback(() => {
     if (!dirtyRef.current) return;
     const value = latestValueRef.current;
     dirtyRef.current = false;
-    clearSliderCommandTimer();
     emitSliderCommand(value);
-  }, [clearSliderCommandTimer, emitSliderCommand]);
+  }, [emitSliderCommand]);
 
-  const scheduleSliderCommand = useCallback(
+  const stageSliderCommand = useCallback(
     (value: number) => {
       dirtyRef.current = true;
       latestValueRef.current = value;
-      clearSliderCommandTimer();
-      timerRef.current = setTimeout(flushSliderCommand, SLIDER_COMMAND_DEBOUNCE_MS);
     },
-    [clearSliderCommandTimer, flushSliderCommand],
+    [],
   );
 
   useEffect(
     () => () => {
       const shouldFlush = dirtyRef.current;
       const value = latestValueRef.current;
-      clearSliderCommandTimer();
       if (!shouldFlush) return;
       dirtyRef.current = false;
       emitSliderCommand(value);
     },
-    [clearSliderCommandTimer, emitSliderCommand],
+    [emitSliderCommand],
   );
 
-  return { flushSliderCommand, scheduleSliderCommand };
+  return { flushSliderCommand, stageSliderCommand };
 }
 
 // ── Color picker ──────────────────────────────────────────────────────────────

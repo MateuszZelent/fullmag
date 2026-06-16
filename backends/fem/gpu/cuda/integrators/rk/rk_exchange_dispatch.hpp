@@ -4,6 +4,10 @@
  * Declares the device-resident legacy sparse exchange dispatch used by the RK
  * RHS runtime. RHS orchestration remains in rk_rhs_runtime.cu; exchange
  * operator assembly and upload remain outside the RK stepper.
+ *
+ * The dispatched field kernel consumes the assembled K_A operator, per-node
+ * Ms, inverse lumped volume mass, and magnetic-node mask. It emits H_ex in A/m
+ * with the same sign convention as CPU lumped exchange projection.
  */
 #pragma once
 

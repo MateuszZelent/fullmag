@@ -22,9 +22,11 @@ mkdir -p .fullmag/runtimes/fem-gpu-host/bin .fullmag/runtimes/fem-gpu-host/lib .
 clear_runtime_bundle_contents() {
   local runtime_root=".fullmag/runtimes/fem-gpu-host"
   mkdir -p "$runtime_root/bin" "$runtime_root/lib" "$runtime_root/include"
-  find "$runtime_root/bin" "$runtime_root/lib" "$runtime_root/include" \
+  find "$runtime_root/bin" "$runtime_root/lib" \
     -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+  rm -rf "$runtime_root/include"
   rm -rf "$runtime_root/openmpi"
+  mkdir -p "$runtime_root/include"
   mkdir -p "$runtime_root/openmpi/bin"
 }
 echo "[export_fem_gpu_runtime] using cached cargo target when available; no cargo clean is performed"
@@ -152,7 +154,7 @@ for dep_entry in /opt/fullmag-deps/lib/*; do
   fi
 done
 echo "[export_fem_gpu_runtime] bundling MFEM/libCEED/Hypre host headers"
-cp -a /opt/fullmag-deps/include/. .fullmag/runtimes/fem-gpu-host/include/
+cp -R /opt/fullmag-deps/include/. .fullmag/runtimes/fem-gpu-host/include/
 echo "[export_fem_gpu_runtime] bundling PETSc/SLEPc headers"
 rm -rf .fullmag/runtimes/fem-gpu-host/include/petsc .fullmag/runtimes/fem-gpu-host/include/slepc
 mkdir -p .fullmag/runtimes/fem-gpu-host/include/petsc .fullmag/runtimes/fem-gpu-host/include/slepc

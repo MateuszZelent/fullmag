@@ -13,8 +13,13 @@ describe("RegionMeshOverlayLayer", () => {
       "renderOrder={RENDER_POLICIES.selectionShell.renderOrder}",
     );
     expect(source).toContain('materialPolicyProps("selectionShell")');
-    expect(source).toContain("depthWrite={model.style.fillOpacity >= 1}");
-    expect(source).toContain("transparent={model.style.fillOpacity < 1}");
+    expect(source).toContain("colorWrite={model.surfaceOverlayVisible}");
+    expect(source).toContain(
+      "model.surfaceOverlayVisible && model.style.fillOpacity >= 1",
+    );
+    expect(source).toContain(
+      "!model.surfaceOverlayVisible || model.style.fillOpacity < 1",
+    );
     expect(source).not.toContain("depthTest={false}");
     expect(source).not.toContain("computeVertexNormals");
   });

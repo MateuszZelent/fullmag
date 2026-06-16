@@ -33,14 +33,17 @@ double extract_json_number(const char *json, const char *key)
 }
 
 char g_last_progress_json[2048]{};
+int g_progress_event_count = 0;
 
 void reset_progress_capture()
 {
     g_last_progress_json[0] = '\0';
+    g_progress_event_count = 0;
 }
 
 void capture_progress(void *, const char *progress_json)
 {
+    ++g_progress_event_count;
     if (progress_json == nullptr) {
         g_last_progress_json[0] = '\0';
         return;
@@ -247,6 +250,45 @@ void frequency_window_reports_unresolved_subwindow()
     fullmag_fem_frequency_domain_result_destroy(&result);
 }
 
+void frequency_window_wide_auto_selects_contour_interval_solver()
+{
+    constexpr double stiffness_matrix_row_major[] = {1.0, 0.0, 0.0, 1.0};
+    constexpr double gyrotropic_mass_row_major[] = {0.0, -1.0, 1.0, 0.0};
+
+    reset_progress_capture();
+    FullmagFemModalEigenRequest request = base_request();
+    request.target_kind = "frequency_window";
+    request.frequency_min_hz = 0.1;
+    request.frequency_max_hz = 0.5;
+    request.eigensolver_family = 0;
+    request.tiny_validation_enabled = 1;
+    request.tiny_validation_tangent_dof_count = 2;
+    request.tiny_validation_stiffness_matrix_row_major = stiffness_matrix_row_major;
+    request.tiny_validation_mass_matrix_row_major = gyrotropic_mass_row_major;
+    request.progress_callback = capture_progress;
+
+    FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_OK,
+          "wide frequency window should select the contour interval solver");
+    check(contains(result.diagnostics_json, "\"resolved_solver_family\":\"contour_interval\""),
+          "wide frequency window diagnostics expose the contour solver family");
+    check(contains(result.diagnostics_json, "\"solver_selection_reason\":\"frequency_window_relative_width_ge_0.5\""),
+          "wide frequency window diagnostics expose resolved policy");
+    check(contains(result.diagnostics_json, "\"contour_point_count\":16"),
+          "contour diagnostics expose contour point count");
+    check(contains(result.diagnostics_json, "\"certified_count\":true"),
+          "contour diagnostics expose certified contour count separately");
+    check(contains(result.result_json, "\"window_completeness\":\"certified\""),
+          "contour interval result exposes certified window completeness");
+    check(g_progress_event_count == 16,
+          "contour interval solve must emit one progress event per contour point");
+    check(contains(g_last_progress_json, "\"solver_phase\":\"solving_contour_interval\""),
+          "contour progress reports solving_contour_interval");
+    check(contains(g_last_progress_json, "\"contour_point_index\":15"),
+          "contour progress reports the final contour point index");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+}
+
 void modal_without_validation_problem_stays_unavailable()
 {
     FullmagFemModalEigenRequest request = base_request();
@@ -279,6 +321,7 @@ int main()
     modal_shift_invert_reports_ksp_iterations();
     modal_shift_invert_cancel_returns_interrupted();
     frequency_window_reports_unresolved_subwindow();
+    frequency_window_wide_auto_selects_contour_interval_solver();
     modal_without_validation_problem_stays_unavailable();
     return 0;
 }

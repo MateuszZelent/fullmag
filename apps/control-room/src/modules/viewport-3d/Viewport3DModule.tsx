@@ -530,37 +530,19 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   const [dismissedResourceIssueKey, setDismissedResourceIssueKey] =
     useState<string | null>(null);
   const fieldUpdatePointerHoldRef = useRef(false);
-  const fieldUpdatePointerHoldReleaseTimeoutRef = useRef<number | null>(null);
   const releaseFieldUpdatePointerHold = useCallback(() => {
-    if (fieldUpdatePointerHoldReleaseTimeoutRef.current !== null) {
-      window.clearTimeout(fieldUpdatePointerHoldReleaseTimeoutRef.current);
-      fieldUpdatePointerHoldReleaseTimeoutRef.current = null;
-    }
     if (!fieldUpdatePointerHoldRef.current) return;
     fieldUpdatePointerHoldRef.current = false;
     endViewport3DFieldUpdateHold();
   }, []);
-  const scheduleFieldUpdatePointerHoldRelease = useCallback(() => {
-    if (fieldUpdatePointerHoldReleaseTimeoutRef.current !== null) {
-      window.clearTimeout(fieldUpdatePointerHoldReleaseTimeoutRef.current);
-    }
-    fieldUpdatePointerHoldReleaseTimeoutRef.current = window.setTimeout(() => {
-      fieldUpdatePointerHoldReleaseTimeoutRef.current = null;
-      releaseFieldUpdatePointerHold();
-    }, 150);
-  }, [releaseFieldUpdatePointerHold]);
   const holdFieldUpdatesForPointerGesture = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
       if (event.button < 0 || event.button > 2) return;
-      if (fieldUpdatePointerHoldReleaseTimeoutRef.current !== null) {
-        window.clearTimeout(fieldUpdatePointerHoldReleaseTimeoutRef.current);
-        fieldUpdatePointerHoldReleaseTimeoutRef.current = null;
-      }
       if (!fieldUpdatePointerHoldRef.current) {
         fieldUpdatePointerHoldRef.current = true;
         beginViewport3DFieldUpdateHold();
       }
-      window.addEventListener("pointerup", scheduleFieldUpdatePointerHoldRelease, {
+      window.addEventListener("pointerup", releaseFieldUpdatePointerHold, {
         capture: true,
         once: true,
       });
@@ -569,7 +551,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
         once: true,
       });
     },
-    [releaseFieldUpdatePointerHold, scheduleFieldUpdatePointerHoldRelease],
+    [releaseFieldUpdatePointerHold],
   );
   useEffect(
     () => () => {
@@ -740,7 +722,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       onPointerCancelCapture={releaseFieldUpdatePointerHold}
       onPointerDown={() => kernel.layout.setFocusedSlot(slotId)}
       onPointerDownCapture={holdFieldUpdatesForPointerGesture}
-      onPointerUpCapture={scheduleFieldUpdatePointerHoldRelease}
+      onPointerUpCapture={releaseFieldUpdatePointerHold}
     >
       <div aria-live="polite" className="fm-viewport-3d__hud">
         <span>{quantityId}</span>
