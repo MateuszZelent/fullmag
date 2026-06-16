@@ -152,6 +152,10 @@ const VIEWPORT_3D_RENDER_CACHE_DEFINITIONS = [
   ["viewport3d.render.scalarColorCache", "Scalar color cache"],
   ["viewport3d.render.partScalarColorCache", "Part scalar color cache"],
   ["viewport3d.render.mappedScalarColorCache", "Mapped scalar color cache"],
+  [
+    "viewport3d.render.complexPhaseProjectionCache",
+    "Complex phase projection cache",
+  ],
   ["viewport3d.render.fullVectorSegmentCache", "Full vector segment cache"],
   ["viewport3d.render.partVectorSegmentCache", "Part vector segment cache"],
 ] as const;
@@ -610,17 +614,13 @@ function buildCachedComplexPhaseProjection(
   const phase = finitePhaseRad(phaseRad);
   if (!complexFieldVector || phase === null) return null;
   const cacheKey = `${complexFieldVector.componentCount}:${phase}`;
-  let cachedByPhase = complexPhaseProjectionCache.get(complexFieldVector);
-  if (!cachedByPhase) {
-    cachedByPhase = new Map();
-    complexPhaseProjectionCache.set(complexFieldVector, cachedByPhase);
-  }
-  const cached = cachedByPhase.get(cacheKey);
-  if (cached) return cached;
-
-  const projected = buildComplexPhaseProjection(complexFieldVector, phase);
-  cachedByPhase.set(cacheKey, projected);
-  return projected;
+  return getCachedValue(
+    complexPhaseProjectionCache,
+    complexFieldVector,
+    cacheKey,
+    () => buildComplexPhaseProjection(complexFieldVector, phase),
+    "viewport3d.render.complexPhaseProjectionCache",
+  );
 }
 
 function buildComplexPhaseProjection(
@@ -1145,6 +1145,11 @@ function estimateRenderCacheValueByteLength(value: unknown): number {
   if (!value) return 0;
   if (ArrayBuffer.isView(value)) return value.byteLength;
   if (typeof value !== "object") return 0;
+
+  const maybeDecodedFieldVector = value as Partial<DecodedFieldVector>;
+  if (ArrayBuffer.isView(maybeDecodedFieldVector.values)) {
+    return maybeDecodedFieldVector.values.byteLength;
+  }
 
   const maybeScalarColorBuffer = value as Partial<ScalarColorBuffer>;
   return (

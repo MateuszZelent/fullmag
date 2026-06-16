@@ -1,6 +1,7 @@
 "use client";
 
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
+import { memoryBudgetRegistry } from "@/kernel/performance/MemoryBudgetRegistry";
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 import { type ThreeEvent, useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, memo } from "react";
@@ -60,6 +61,23 @@ import type { RegionOverlaySelection } from "./RegionOverlayLayer";
 const VECTOR_SEGMENT_STRIDE = 7;
 const FDM_INSPECT_PROJECTION_FALLBACK_LIMIT = 5000;
 const FDM_INSPECT_PROJECTION_HIT_RADIUS_PX = 36;
+const FDM_VECTOR_SEGMENT_CACHE_MAX_ENTRIES_PER_FIELD = 8;
+const FDM_VECTOR_SEGMENT_CACHE_MEMORY_BUDGET_ID =
+  "viewport3d.render.fdmVectorSegmentCache";
+
+const fdmVectorSegmentCacheCounter = {
+  byteLength: 0,
+  entryCount: 0,
+};
+
+memoryBudgetRegistry.register(FDM_VECTOR_SEGMENT_CACHE_MEMORY_BUDGET_ID, () => ({
+  byteLength: fdmVectorSegmentCacheCounter.byteLength,
+  category: "render-buffer",
+  entryCount: fdmVectorSegmentCacheCounter.entryCount,
+  id: FDM_VECTOR_SEGMENT_CACHE_MEMORY_BUDGET_ID,
+  label: "FDM vector segment cache",
+  maxBytes: null,
+}));
 
 export interface FdmCuboidInstanceModel {
   cellSize: [number, number, number];
@@ -321,6 +339,28 @@ function cacheFdmVectorSegments(
   }
 
   fieldCache.set(cacheKey, segments);
+  fdmVectorSegmentCacheCounter.entryCount += 1;
+  fdmVectorSegmentCacheCounter.byteLength += fdmVectorSegmentByteLength(segments);
+  evictOldestFdmVectorSegmentCacheEntries(fieldCache);
+}
+
+function evictOldestFdmVectorSegmentCacheEntries(
+  fieldCache: Map<string, Float32Array | null>,
+): void {
+  while (fieldCache.size > FDM_VECTOR_SEGMENT_CACHE_MAX_ENTRIES_PER_FIELD) {
+    const oldestKey = fieldCache.keys().next().value;
+    if (oldestKey === undefined) return;
+    const value = fieldCache.get(oldestKey);
+    fieldCache.delete(oldestKey);
+    fdmVectorSegmentCacheCounter.entryCount -= 1;
+    fdmVectorSegmentCacheCounter.byteLength -= fdmVectorSegmentByteLength(value);
+  }
+}
+
+function fdmVectorSegmentByteLength(
+  segments: Float32Array | null | undefined,
+): number {
+  return segments?.byteLength ?? 0;
 }
 
 export function buildFdmVectorSegments(

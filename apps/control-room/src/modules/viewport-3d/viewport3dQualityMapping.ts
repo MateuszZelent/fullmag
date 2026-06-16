@@ -2,6 +2,7 @@ import type {
   DecodedMeshQualityData,
   DecodedTopology,
 } from "@/kernel/api/codecs";
+import { memoryBudgetRegistry } from "@/kernel/performance/MemoryBudgetRegistry";
 
 import type { ScalarColorBuffer } from "./viewport3dFieldMapping";
 import { magnitudeColorRgb } from "./viewport3dVectorColoring";
@@ -11,6 +12,26 @@ export type MeshQualityColorMetric = "gamma" | "sicn" | "volume";
 type MeshQualityColorCacheEntry = Partial<
   Record<string, ScalarColorBuffer | null>
 >;
+
+const MESH_QUALITY_COLOR_CACHE_MAX_ENTRIES_PER_QUALITY = 8;
+const MESH_QUALITY_COLOR_CACHE_MEMORY_BUDGET_ID =
+  "viewport3d.render.meshQualityColorCache";
+const meshQualityColorCacheCounter = {
+  byteLength: 0,
+  entryCount: 0,
+};
+
+memoryBudgetRegistry.register(
+  MESH_QUALITY_COLOR_CACHE_MEMORY_BUDGET_ID,
+  () => ({
+    byteLength: meshQualityColorCacheCounter.byteLength,
+    category: "render-buffer",
+    entryCount: meshQualityColorCacheCounter.entryCount,
+    id: MESH_QUALITY_COLOR_CACHE_MEMORY_BUDGET_ID,
+    label: "Mesh quality color cache",
+    maxBytes: null,
+  }),
+);
 
 const meshQualityVertexColorCache = new WeakMap<
   DecodedTopology,
@@ -105,7 +126,43 @@ function cacheMeshQualityVertexColors(
   }
   const entry = byQuality.get(quality) ?? {};
   entry[cacheKey] = result;
+  meshQualityColorCacheCounter.entryCount += 1;
+  meshQualityColorCacheCounter.byteLength += meshQualityColorByteLength(result);
+  evictOldestMeshQualityColorCacheEntries(entry);
   byQuality.set(quality, entry);
+}
+
+function evictOldestMeshQualityColorCacheEntries(
+  entry: MeshQualityColorCacheEntry,
+): void {
+  const keys = Object.keys(entry);
+  while (keys.length > MESH_QUALITY_COLOR_CACHE_MAX_ENTRIES_PER_QUALITY) {
+    const oldestKey = keys.shift();
+    if (!oldestKey) return;
+    const value = entry[oldestKey];
+    delete entry[oldestKey];
+    meshQualityColorCacheCounter.entryCount = Math.max(
+      0,
+      meshQualityColorCacheCounter.entryCount - 1,
+    );
+    meshQualityColorCacheCounter.byteLength = Math.max(
+      0,
+      meshQualityColorCacheCounter.byteLength -
+        meshQualityColorByteLength(value),
+    );
+  }
+}
+
+function meshQualityColorByteLength(
+  result: ScalarColorBuffer | null | undefined,
+): number {
+  return (
+    (result?.colors.byteLength ?? 0) +
+    (result?.scalarValues?.byteLength ?? 0) +
+    (result?.vectorValues?.byteLength ?? 0) +
+    (result?.complexRealValues?.byteLength ?? 0) +
+    (result?.complexImagValues?.byteLength ?? 0)
+  );
 }
 
 function rangeFor(values: Float64Array): { max: number; min: number } | null {

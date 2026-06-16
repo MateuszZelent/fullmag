@@ -161,6 +161,8 @@ function RegionMeshOverlayShape({
             color={fillColor}
             opacity={model.style.fillOpacity}
             {...materialPolicyProps("selectionShell")}
+            depthWrite={model.style.fillOpacity >= 1}
+            transparent={model.style.fillOpacity < 1}
           />
         </mesh>
       ) : null}

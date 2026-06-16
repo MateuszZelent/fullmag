@@ -96,25 +96,25 @@ export function buildVectorGlyphInstances(
     const shaftRadius = length * shaftRadiusRatio;
     const headRadius = length * headRadiusRatio;
 
-    directions.set([ux, uy, uz], target);
-    shaftCenters.set(
-      [
-        sx + ux * (shaftLength / 2),
-        sy + uy * (shaftLength / 2),
-        sz + uz * (shaftLength / 2),
-      ],
-      target,
-    );
-    headCenters.set(
-      [
-        sx + ux * (shaftLength + headLength / 2),
-        sy + uy * (shaftLength + headLength / 2),
-        sz + uz * (shaftLength + headLength / 2),
-      ],
-      target,
-    );
-    shaftScales.set([shaftRadius, shaftLength, shaftRadius], target);
-    headScales.set([headRadius, headLength, headRadius], target);
+    directions[target] = ux;
+    directions[target + 1] = uy;
+    directions[target + 2] = uz;
+
+    shaftCenters[target] = sx + ux * (shaftLength / 2);
+    shaftCenters[target + 1] = sy + uy * (shaftLength / 2);
+    shaftCenters[target + 2] = sz + uz * (shaftLength / 2);
+
+    headCenters[target] = sx + ux * (shaftLength + headLength / 2);
+    headCenters[target + 1] = sy + uy * (shaftLength + headLength / 2);
+    headCenters[target + 2] = sz + uz * (shaftLength + headLength / 2);
+
+    shaftScales[target] = shaftRadius;
+    shaftScales[target + 1] = shaftLength;
+    shaftScales[target + 2] = shaftRadius;
+
+    headScales[target] = headRadius;
+    headScales[target + 1] = headLength;
+    headScales[target + 2] = headRadius;
 
     if (colors && colorRange) {
       const rgb = resolveViewport3DVectorColorRgb(

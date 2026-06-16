@@ -30,11 +30,11 @@ study.device("cpu", precision="double")
 
 study.universe(
     mode="auto",
-    size=(700e-9, 1400e-9, 380e-9),
+    size=(800e-9, 2400e-9, 580e-9),
     center=(0.0, 0.0, 0.0),
     padding=(0.0, 0.0, 0.0),
 )
-study.universe.mesh(minimum_element_size=5e-9, maximum_element_size=300e-9,growth_rate=1.6)
+study.universe.mesh(minimum_element_size=5e-9, maximum_element_size=400e-9,growth_rate=1.6)
 study.airbox.visualization(
     show=True,
     mode="vectors",

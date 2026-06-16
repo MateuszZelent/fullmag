@@ -1,9 +1,21 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
 import { buildVectorGlyphInstances } from "./vectorGlyphGeometry";
 import { magnitudeColorRgb } from "../viewport3dVectorColoring";
 
 describe("vectorGlyphGeometry", () => {
+  it("avoids per-glyph temporary arrays in the transform hot loop", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("./vectorGlyphGeometry.ts", import.meta.url)),
+      "utf8",
+    );
+
+    expect(source).not.toContain(".set([");
+  });
+
   it("builds shaft and head instance transforms from vector segments", () => {
     const glyphs = buildVectorGlyphInstances(
       new Float32Array([0, 0, 0, 1, 0, 0]),

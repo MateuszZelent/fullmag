@@ -146,6 +146,7 @@ const DEFAULT_CENTER: NumericVector3 = [0, 0, 0];
 const DEFAULT_AXIS: NumericVector3 = [0, 0, 1];
 const DEFAULT_QUATERNION: NumericQuaternion = [0, 0, 0, 1];
 const DEFAULT_SCALE: NumericVector3 = [1, 1, 1];
+const topologyPositionCache = new WeakMap<DecodedTopology, Float32Array>();
 
 export function resolveRegionOverlayColor(
   slot: number,
@@ -166,14 +167,19 @@ export function resolveRegionOverlayStyle({
 }): RegionOverlayStyle {
   const targetVisible = settings?.visible ?? true;
   const fillVisible = enabled && targetVisible && (settings?.shaderVisible ?? true);
+  const wireframeRequested = settings?.wireframeVisible ?? true;
   const wireframeVisible =
-    enabled && targetVisible && (settings?.wireframeVisible ?? true);
+    enabled && targetVisible && wireframeRequested && !fillVisible;
   const opacityScale = Math.max(0, Math.min(100, settings?.opacityPercent ?? 100)) / 100;
   const wireframeOpacityScale =
     Math.max(0, Math.min(100, settings?.wireframeOpacityPercent ?? 100)) / 100;
   const fillOpacityBase = selected ? 1 : 0.14;
   return {
-    fillOpacity: fillVisible ? fillOpacityBase * opacityScale : 0,
+    fillOpacity: fillVisible
+      ? selected
+        ? fillOpacityBase
+        : fillOpacityBase * opacityScale
+      : 0,
     fillVisible,
     surfaceColor: settings?.shaderMonoColor ?? null,
     wireframeOpacity: wireframeVisible
@@ -211,6 +217,8 @@ export function buildRegionMeshOverlayModels(
     return [];
   }
 
+  const positions = positionsForTopology(topology);
+
   return buildRegionMeshOverlaySelectionModels(regions, options).flatMap((region) => {
     const selectedElements = regionMeshElementIndices(region, topology, ownerParts);
     if (selectedElements.length === 0) return [];
@@ -243,7 +251,7 @@ export function buildRegionMeshOverlayModels(
         label: region.label,
         meshPartIds: region.meshPartIds,
         objectId: region.objectId,
-        positions: Float32Array.from(topology.positions),
+        positions,
         priority: region.priority,
         regionId: region.regionId,
         selected: region.selected,
@@ -255,6 +263,14 @@ export function buildRegionMeshOverlayModels(
       },
     ];
   });
+}
+
+function positionsForTopology(topology: DecodedTopology): Float32Array {
+  const cached = topologyPositionCache.get(topology);
+  if (cached) return cached;
+  const positions = Float32Array.from(topology.positions);
+  topologyPositionCache.set(topology, positions);
+  return positions;
 }
 
 function meshOverlayPartsForIds(

@@ -4,6 +4,7 @@ import type {
   DecodedMeshQualityData,
   DecodedTopology,
 } from "@/kernel/api/codecs";
+import { memoryBudgetRegistry } from "@/kernel/performance/MemoryBudgetRegistry";
 
 import { buildMeshQualityVertexColors } from "./viewport3dQualityMapping";
 import { magnitudeColorRgb } from "./viewport3dVectorColoring";
@@ -89,6 +90,31 @@ describe("buildMeshQualityVertexColors", () => {
     expect(Array.from(inferno?.colors.slice(0, 3) ?? [])).toEqual(
       Array.from(Float32Array.from(magnitudeColorRgb(0, "inferno"))),
     );
+  });
+
+  it("bounds mesh quality color cache entries when palette changes", () => {
+    const topology = topologyFixture();
+    const quality = qualityFixture();
+    const before =
+      memoryBudgetRegistry.snapshot().find(
+        (entry) => entry.id === "viewport3d.render.meshQualityColorCache",
+      )?.entryCount ?? 0;
+
+    for (let index = 0; index < 20; index += 1) {
+      buildMeshQualityVertexColors(
+        topology,
+        quality,
+        "gamma",
+        `palette-${index}`,
+      );
+    }
+
+    const after =
+      memoryBudgetRegistry.snapshot().find(
+        (entry) => entry.id === "viewport3d.render.meshQualityColorCache",
+      )?.entryCount ?? 0;
+
+    expect(after - before).toBeLessThanOrEqual(8);
   });
 
   it("rejects missing metric arrays and element-count drift", () => {

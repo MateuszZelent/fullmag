@@ -1027,6 +1027,43 @@ describe("viewport3dRenderModel", () => {
     );
   });
 
+  it("bounds complex phase projection cache entries during phase animation", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [],
+      [],
+    );
+    const complexFieldVector = {
+      componentCount: 3,
+      dtype: "complex128" as const,
+      grid: [4, 1, 1] as [number, number, number],
+      pointCount: 4,
+      quantityId: "analysis:eigen:mode",
+      valueCount: 24,
+      values: new Float64Array(24).fill(1),
+    };
+    const before =
+      getViewport3DRenderCacheStats().find(
+        (entry) => entry.id === "viewport3d.render.complexPhaseProjectionCache",
+      )?.entryCount ?? 0;
+
+    for (let index = 0; index < 20; index += 1) {
+      buildViewport3DFieldRenderModel(topologyModel, null, 0.5, {
+        complexFieldVector,
+        fullVectorBudget: 0,
+        scalarColorsVisible: true,
+        visualizationPhaseRad: index / 20,
+      });
+    }
+
+    const after =
+      getViewport3DRenderCacheStats().find(
+        (entry) => entry.id === "viewport3d.render.complexPhaseProjectionCache",
+      )?.entryCount ?? 0;
+
+    expect(after - before).toBeLessThanOrEqual(8);
+  });
+
   it("rejects full-domain field buffers that do not match the active topology node count", () => {
     const topologyModel = buildViewport3DTopologyRenderModel(
       topologyFixture(),

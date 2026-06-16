@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
+import { memoryBudgetRegistry } from "@/kernel/performance/MemoryBudgetRegistry";
 import type { FdmGridRenderDomain } from "../viewport3dDomainAdapter";
 import {
   FDM_CUBOID_UPLOAD_BATCH_SIZE,
@@ -204,6 +205,35 @@ describe("FdmCuboidLayer model", () => {
       expect.closeTo(1.5e-9),
       1,
     ]);
+  });
+
+  it("bounds FDM vector segment cache entries when vector scale changes", () => {
+    const model = buildFdmCuboidInstanceModel(domainFixture());
+    const fieldVector = vectorField([
+      1, 0, 0,
+      0, 1, 0,
+      0, 0, 1,
+      0, 0, 1,
+      0, 1, 0,
+      0, 0, 1,
+      -1, 0, 0,
+      0, 0, 1,
+    ]);
+    const before =
+      memoryBudgetRegistry.snapshot().find(
+        (entry) => entry.id === "viewport3d.render.fdmVectorSegmentCache",
+      )?.entryCount ?? 0;
+
+    for (let index = 0; index < 20; index += 1) {
+      buildFdmVectorSegments(model, fieldVector, (index + 1) * 1e-9, 4);
+    }
+
+    const after =
+      memoryBudgetRegistry.snapshot().find(
+        (entry) => entry.id === "viewport3d.render.fdmVectorSegmentCache",
+      )?.entryCount ?? 0;
+
+    expect(after - before).toBeLessThanOrEqual(8);
   });
 
   it("reuses the scene-level FDM instance model for surface color mapping and layer rendering", () => {
