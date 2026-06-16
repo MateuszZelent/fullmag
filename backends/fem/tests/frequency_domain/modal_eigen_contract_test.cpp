@@ -28,6 +28,31 @@ int main()
     check(zeroed.status == static_cast<FullmagFemFrequencyDomainStatus>(0),
           "destroy on zeroed result must be idempotent");
 
+    fullmag_fem_frequency_domain_dependency_info dependency_info{};
+    check(
+        fullmag_fem_get_frequency_domain_dependency_info(&dependency_info) ==
+            FULLMAG_FEM_OK,
+        "frequency-domain dependency info query succeeds");
+    check(
+        contains(
+            dependency_info.diagnostics_json,
+            "modal_eigen_native_cpu_slepc_available"),
+        "dependency diagnostics expose modal_eigen_native_cpu_slepc_available");
+#if FULLMAG_FEM_WITH_SLEPC
+    check(dependency_info.petsc_available == 1, "PETSc dependency is available");
+    check(dependency_info.slepc_available == 1, "SLEPc dependency is available");
+    check(
+        dependency_info.modal_eigen_native_cpu_slepc_available == 1,
+        "modal_eigen native CPU SLEPc capability is available");
+    check(std::strlen(dependency_info.petsc_version) > 0, "PETSc version is populated");
+    check(std::strlen(dependency_info.slepc_version) > 0, "SLEPc version is populated");
+#else
+    check(dependency_info.slepc_available == 0, "SLEPc dependency is not available");
+    check(
+        dependency_info.modal_eigen_native_cpu_slepc_available == 0,
+        "modal_eigen native CPU SLEPc capability is unavailable");
+#endif
+
     FullmagFemModalEigenRequest invalid{};
     invalid.abi_version = 999u;
     invalid.operator_request.abi_version = FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION;

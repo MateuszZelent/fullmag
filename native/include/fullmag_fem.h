@@ -427,6 +427,22 @@ typedef struct {
 } fullmag_fem_frequency_domain_availability_info;
 
 typedef struct {
+    int petsc_available;
+    int slepc_available;
+    int modal_eigen_native_cpu_slepc_available;
+    char petsc_version[64];
+    char slepc_version[64];
+    char petsc_pkgconfig_dir[256];
+    char slepc_pkgconfig_dir[256];
+    char petsc_find_module_file[256];
+    char slepc_find_module_file[256];
+    char petsc_library_path[256];
+    char slepc_library_path[256];
+    char reason[256];
+    char diagnostics_json[1024];
+} fullmag_fem_frequency_domain_dependency_info;
+
+typedef struct {
     uint64_t total_frequency_points;
     uint64_t completed_frequency_points;
     uint64_t written_frequency_point_artifacts;
@@ -625,6 +641,9 @@ typedef struct {
     uint64_t availability_request_phase_convention_offset;
     uint64_t availability_info_size;
     uint64_t availability_info_diagnostics_json_offset;
+    uint64_t dependency_info_size;
+    uint64_t dependency_info_modal_eigen_native_cpu_slepc_available_offset;
+    uint64_t dependency_info_diagnostics_json_offset;
     uint64_t sweep_progress_size;
     uint64_t sweep_progress_progress_json_offset;
     uint64_t progress_size;
@@ -726,6 +745,9 @@ int fullmag_fem_get_availability_info(fullmag_fem_availability_info *out_info);
 int fullmag_fem_get_frequency_domain_availability_info(
     const fullmag_fem_frequency_domain_availability_request *request,
     fullmag_fem_frequency_domain_availability_info *out_info
+);
+int fullmag_fem_get_frequency_domain_dependency_info(
+    fullmag_fem_frequency_domain_dependency_info *out_info
 );
 int fullmag_fem_get_frequency_domain_abi_layout(
     fullmag_fem_frequency_domain_abi_layout *out_layout

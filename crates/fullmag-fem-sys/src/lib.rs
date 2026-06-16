@@ -473,6 +473,24 @@ pub struct fullmag_fem_frequency_domain_availability_info {
 }
 
 #[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct fullmag_fem_frequency_domain_dependency_info {
+    pub petsc_available: i32,
+    pub slepc_available: i32,
+    pub modal_eigen_native_cpu_slepc_available: i32,
+    pub petsc_version: [c_char; 64],
+    pub slepc_version: [c_char; 64],
+    pub petsc_pkgconfig_dir: [c_char; 256],
+    pub slepc_pkgconfig_dir: [c_char; 256],
+    pub petsc_find_module_file: [c_char; 256],
+    pub slepc_find_module_file: [c_char; 256],
+    pub petsc_library_path: [c_char; 256],
+    pub slepc_library_path: [c_char; 256],
+    pub reason: [c_char; 256],
+    pub diagnostics_json: [c_char; 1024],
+}
+
+#[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct fullmag_fem_frequency_domain_sweep_progress {
     pub total_frequency_points: u64,
@@ -708,6 +726,9 @@ pub struct fullmag_fem_frequency_domain_abi_layout {
     pub availability_request_phase_convention_offset: u64,
     pub availability_info_size: u64,
     pub availability_info_diagnostics_json_offset: u64,
+    pub dependency_info_size: u64,
+    pub dependency_info_modal_eigen_native_cpu_slepc_available_offset: u64,
+    pub dependency_info_diagnostics_json_offset: u64,
     pub sweep_progress_size: u64,
     pub sweep_progress_progress_json_offset: u64,
     pub progress_size: u64,
@@ -834,6 +855,9 @@ extern "C" {
     pub fn fullmag_fem_get_frequency_domain_availability_info(
         request: *const fullmag_fem_frequency_domain_availability_request,
         out_info: *mut fullmag_fem_frequency_domain_availability_info,
+    ) -> i32;
+    pub fn fullmag_fem_get_frequency_domain_dependency_info(
+        out_info: *mut fullmag_fem_frequency_domain_dependency_info,
     ) -> i32;
     pub fn fullmag_fem_get_frequency_domain_abi_layout(
         out_layout: *mut fullmag_fem_frequency_domain_abi_layout,
@@ -1274,6 +1298,7 @@ mod tests {
 
         type AvailabilityRequest = fullmag_fem_frequency_domain_availability_request;
         type AvailabilityInfo = fullmag_fem_frequency_domain_availability_info;
+        type DependencyInfo = fullmag_fem_frequency_domain_dependency_info;
         type SweepProgress = fullmag_fem_frequency_domain_sweep_progress;
         type Progress = fullmag_fem_frequency_domain_progress;
         type ExchangeEdge = fullmag_fem_frequency_domain_exchange_edge;
@@ -1298,6 +1323,18 @@ mod tests {
         assert_eq!(
             layout.availability_info_diagnostics_json_offset,
             std::mem::offset_of!(AvailabilityInfo, diagnostics_json) as u64
+        );
+        assert_eq!(
+            layout.dependency_info_size,
+            std::mem::size_of::<DependencyInfo>() as u64
+        );
+        assert_eq!(
+            layout.dependency_info_modal_eigen_native_cpu_slepc_available_offset,
+            std::mem::offset_of!(DependencyInfo, modal_eigen_native_cpu_slepc_available) as u64
+        );
+        assert_eq!(
+            layout.dependency_info_diagnostics_json_offset,
+            std::mem::offset_of!(DependencyInfo, diagnostics_json) as u64
         );
         assert_eq!(
             layout.sweep_progress_size,

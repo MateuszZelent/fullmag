@@ -53,6 +53,42 @@ namespace {
 constexpr const char *kUnavailableMessage =
     "fullmag_fem native backend was built without the MFEM stack; rebuild with FULLMAG_USE_MFEM_STACK=ON and an installed MFEM toolchain";
 
+#ifndef FULLMAG_FEM_WITH_SLEPC
+#define FULLMAG_FEM_WITH_SLEPC 0
+#endif
+
+#ifndef FULLMAG_FEM_PETSC_VERSION
+#define FULLMAG_FEM_PETSC_VERSION ""
+#endif
+
+#ifndef FULLMAG_FEM_SLEPC_VERSION
+#define FULLMAG_FEM_SLEPC_VERSION ""
+#endif
+
+#ifndef FULLMAG_FEM_PETSC_PKGCONFIG_DIR
+#define FULLMAG_FEM_PETSC_PKGCONFIG_DIR ""
+#endif
+
+#ifndef FULLMAG_FEM_SLEPC_PKGCONFIG_DIR
+#define FULLMAG_FEM_SLEPC_PKGCONFIG_DIR ""
+#endif
+
+#ifndef FULLMAG_FEM_PETSC_FIND_MODULE_FILE
+#define FULLMAG_FEM_PETSC_FIND_MODULE_FILE ""
+#endif
+
+#ifndef FULLMAG_FEM_SLEPC_FIND_MODULE_FILE
+#define FULLMAG_FEM_SLEPC_FIND_MODULE_FILE ""
+#endif
+
+#ifndef FULLMAG_FEM_PETSC_LIBRARY_PATH
+#define FULLMAG_FEM_PETSC_LIBRARY_PATH ""
+#endif
+
+#ifndef FULLMAG_FEM_SLEPC_LIBRARY_PATH
+#define FULLMAG_FEM_SLEPC_LIBRARY_PATH ""
+#endif
+
 struct FemSnapshotPayload {
     std::vector<double> data;
     void *host_aos = nullptr;
@@ -753,6 +789,109 @@ int fullmag_fem_get_frequency_domain_availability_info(
     return FULLMAG_FEM_OK;
 }
 
+int fullmag_fem_get_frequency_domain_dependency_info(
+    fullmag_fem_frequency_domain_dependency_info *out_info
+) {
+    if (out_info == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_get_frequency_domain_dependency_info received null out_info");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+
+    *out_info = {};
+    const bool petsc_available =
+        FULLMAG_FEM_WITH_SLEPC != 0 && FULLMAG_FEM_PETSC_VERSION[0] != '\0';
+    const bool slepc_available =
+        FULLMAG_FEM_WITH_SLEPC != 0 && FULLMAG_FEM_SLEPC_VERSION[0] != '\0';
+    const bool modal_eigen_native_cpu_slepc_available =
+        FULLMAG_FEM_WITH_SLEPC != 0 && petsc_available && slepc_available;
+    const char *reason = modal_eigen_native_cpu_slepc_available
+                             ? ""
+                             : "modal_eigen production CPU path requires PETSc/SLEPc, but fullmag_fem was built without SLEPc support";
+
+    out_info->petsc_available = petsc_available ? 1 : 0;
+    out_info->slepc_available = slepc_available ? 1 : 0;
+    out_info->modal_eigen_native_cpu_slepc_available =
+        modal_eigen_native_cpu_slepc_available ? 1 : 0;
+    std::snprintf(
+        out_info->petsc_version,
+        sizeof(out_info->petsc_version),
+        "%s",
+        FULLMAG_FEM_PETSC_VERSION);
+    std::snprintf(
+        out_info->slepc_version,
+        sizeof(out_info->slepc_version),
+        "%s",
+        FULLMAG_FEM_SLEPC_VERSION);
+    std::snprintf(
+        out_info->petsc_pkgconfig_dir,
+        sizeof(out_info->petsc_pkgconfig_dir),
+        "%s",
+        FULLMAG_FEM_PETSC_PKGCONFIG_DIR);
+    std::snprintf(
+        out_info->slepc_pkgconfig_dir,
+        sizeof(out_info->slepc_pkgconfig_dir),
+        "%s",
+        FULLMAG_FEM_SLEPC_PKGCONFIG_DIR);
+    std::snprintf(
+        out_info->petsc_find_module_file,
+        sizeof(out_info->petsc_find_module_file),
+        "%s",
+        FULLMAG_FEM_PETSC_FIND_MODULE_FILE);
+    std::snprintf(
+        out_info->slepc_find_module_file,
+        sizeof(out_info->slepc_find_module_file),
+        "%s",
+        FULLMAG_FEM_SLEPC_FIND_MODULE_FILE);
+    std::snprintf(
+        out_info->petsc_library_path,
+        sizeof(out_info->petsc_library_path),
+        "%s",
+        FULLMAG_FEM_PETSC_LIBRARY_PATH);
+    std::snprintf(
+        out_info->slepc_library_path,
+        sizeof(out_info->slepc_library_path),
+        "%s",
+        FULLMAG_FEM_SLEPC_LIBRARY_PATH);
+    if (!modal_eigen_native_cpu_slepc_available) {
+        std::snprintf(
+            out_info->reason,
+            sizeof(out_info->reason),
+            "%s",
+            reason);
+    }
+    std::snprintf(
+        out_info->diagnostics_json,
+        sizeof(out_info->diagnostics_json),
+        "{\"schema_version\":\"fullmag_fem_frequency_domain_dependency_info.v1\","
+        "\"petsc_available\":%s,"
+        "\"slepc_available\":%s,"
+        "\"modal_eigen_native_cpu_slepc_available\":%s,"
+        "\"petsc_version\":\"%s\","
+        "\"slepc_version\":\"%s\","
+        "\"petsc_pkgconfig_dir\":\"%s\","
+        "\"slepc_pkgconfig_dir\":\"%s\","
+        "\"petsc_find_module_file\":\"%s\","
+        "\"slepc_find_module_file\":\"%s\","
+        "\"petsc_library_path\":\"%s\","
+        "\"slepc_library_path\":\"%s\","
+        "\"reason\":\"%s\"}",
+        petsc_available ? "true" : "false",
+        slepc_available ? "true" : "false",
+        modal_eigen_native_cpu_slepc_available ? "true" : "false",
+        FULLMAG_FEM_PETSC_VERSION,
+        FULLMAG_FEM_SLEPC_VERSION,
+        FULLMAG_FEM_PETSC_PKGCONFIG_DIR,
+        FULLMAG_FEM_SLEPC_PKGCONFIG_DIR,
+        FULLMAG_FEM_PETSC_FIND_MODULE_FILE,
+        FULLMAG_FEM_SLEPC_FIND_MODULE_FILE,
+        FULLMAG_FEM_PETSC_LIBRARY_PATH,
+        FULLMAG_FEM_SLEPC_LIBRARY_PATH,
+        reason);
+    fullmag_fem_clear_global_error();
+    return FULLMAG_FEM_OK;
+}
+
 int fullmag_fem_get_frequency_domain_abi_layout(
     fullmag_fem_frequency_domain_abi_layout *out_layout
 ) {
@@ -771,6 +910,12 @@ int fullmag_fem_get_frequency_domain_abi_layout(
         sizeof(fullmag_fem_frequency_domain_availability_info);
     out_layout->availability_info_diagnostics_json_offset =
         offsetof(fullmag_fem_frequency_domain_availability_info, diagnostics_json);
+    out_layout->dependency_info_size =
+        sizeof(fullmag_fem_frequency_domain_dependency_info);
+    out_layout->dependency_info_modal_eigen_native_cpu_slepc_available_offset =
+        offsetof(fullmag_fem_frequency_domain_dependency_info, modal_eigen_native_cpu_slepc_available);
+    out_layout->dependency_info_diagnostics_json_offset =
+        offsetof(fullmag_fem_frequency_domain_dependency_info, diagnostics_json);
     out_layout->sweep_progress_size =
         sizeof(fullmag_fem_frequency_domain_sweep_progress);
     out_layout->sweep_progress_progress_json_offset =

@@ -766,7 +766,7 @@ pub async fn get_frequency_domain_response_diagnostics_v1(
     json_artifact_resource(
         &state,
         "frequency_domain_response_diagnostics.v1",
-        "response/diagnostics.v1.json",
+        "response/diagnostics/solver.v1.json",
         "/v2/sessions/current/analysis/frequency-domain/response/diagnostics.v1",
     )
     .await

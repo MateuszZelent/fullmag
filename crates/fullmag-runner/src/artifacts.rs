@@ -728,7 +728,12 @@ pub(crate) fn write_artifacts(
         fs::write(artifact_path, &artifact.bytes)?;
     }
 
-    write_periodic_pairs_artifact(output_dir, plan)?;
+    if !matches!(
+        plan.backend_plan,
+        BackendPlanIR::FemFrequencyResponse(_) | BackendPlanIR::FemEigen(_)
+    ) {
+        write_periodic_pairs_artifact(output_dir, plan)?;
+    }
 
     write_prescribed_current_transport_artifacts(
         output_dir,

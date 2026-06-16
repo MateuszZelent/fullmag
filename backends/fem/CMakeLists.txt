@@ -5,6 +5,9 @@
 
 option(FULLMAG_ENABLE_FEM_GPU "Build FEM GPU backend sources" ON)
 option(FULLMAG_USE_MFEM_STACK "Build FEM backend against MFEM/libCEED/hypre" OFF)
+option(FULLMAG_FEM_WITH_SLEPC "Build FEM frequency-domain dependency slice against PETSc/SLEPc" ON)
+
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 set(FEM_PUBLIC_HEADERS
     ${CMAKE_SOURCE_DIR}/include/fullmag_fem.h
@@ -162,6 +165,10 @@ set(FEM_SOURCES
 
 if(FULLMAG_USE_MFEM_STACK)
     find_package(MFEM CONFIG REQUIRED)
+    if(FULLMAG_FEM_WITH_SLEPC)
+        find_package(PETSc REQUIRED)
+        find_package(SLEPc REQUIRED)
+    endif()
 
     list(APPEND FEM_SOURCES
         src/mfem_bridge.cpp
@@ -241,6 +248,12 @@ endif()
 
 add_library(fullmag_fem SHARED ${FEM_SOURCES})
 
+function(fullmag_private_string_define target macro value)
+    string(REPLACE "\\" "\\\\" escaped "${value}")
+    string(REPLACE "\"" "\\\"" escaped "${escaped}")
+    target_compile_definitions(${target} PRIVATE ${macro}="${escaped}")
+endfunction()
+
 target_include_directories(fullmag_fem
     PUBLIC
         ${CMAKE_SOURCE_DIR}/include
@@ -262,9 +275,40 @@ if(FULLMAG_USE_MFEM_STACK)
     else()
         target_link_libraries(fullmag_fem PRIVATE mfem)
     endif()
+    if(FULLMAG_FEM_WITH_SLEPC)
+        target_compile_definitions(fullmag_fem PUBLIC FULLMAG_FEM_WITH_SLEPC=1)
+        fullmag_private_string_define(fullmag_fem FULLMAG_FEM_PETSC_VERSION "${PETSc_VERSION}")
+        fullmag_private_string_define(fullmag_fem FULLMAG_FEM_SLEPC_VERSION "${SLEPc_VERSION}")
+        fullmag_private_string_define(fullmag_fem FULLMAG_FEM_PETSC_PKGCONFIG_DIR "${PETSc_PKGCONFIG_DIR}")
+        fullmag_private_string_define(fullmag_fem FULLMAG_FEM_SLEPC_PKGCONFIG_DIR "${SLEPc_PKGCONFIG_DIR}")
+        fullmag_private_string_define(fullmag_fem FULLMAG_FEM_PETSC_FIND_MODULE_FILE "${PETSc_FIND_MODULE_FILE}")
+        fullmag_private_string_define(fullmag_fem FULLMAG_FEM_SLEPC_FIND_MODULE_FILE "${SLEPc_FIND_MODULE_FILE}")
+        fullmag_private_string_define(fullmag_fem FULLMAG_FEM_PETSC_LIBRARY_PATH "${PETSc_LIBRARY}")
+        fullmag_private_string_define(fullmag_fem FULLMAG_FEM_SLEPC_LIBRARY_PATH "${SLEPc_LIBRARY}")
+        target_link_libraries(fullmag_fem PRIVATE PETSC::petsc SLEPC::slepc)
+    else()
+        target_compile_definitions(fullmag_fem PUBLIC FULLMAG_FEM_WITH_SLEPC=0)
+        fullmag_private_string_define(fullmag_fem FULLMAG_FEM_PETSC_VERSION "")
+        fullmag_private_string_define(fullmag_fem FULLMAG_FEM_SLEPC_VERSION "")
+        fullmag_private_string_define(fullmag_fem FULLMAG_FEM_PETSC_PKGCONFIG_DIR "")
+        fullmag_private_string_define(fullmag_fem FULLMAG_FEM_SLEPC_PKGCONFIG_DIR "")
+        fullmag_private_string_define(fullmag_fem FULLMAG_FEM_PETSC_FIND_MODULE_FILE "")
+        fullmag_private_string_define(fullmag_fem FULLMAG_FEM_SLEPC_FIND_MODULE_FILE "")
+        fullmag_private_string_define(fullmag_fem FULLMAG_FEM_PETSC_LIBRARY_PATH "")
+        fullmag_private_string_define(fullmag_fem FULLMAG_FEM_SLEPC_LIBRARY_PATH "")
+    endif()
 else()
     target_compile_definitions(fullmag_fem PUBLIC FULLMAG_HAS_MFEM_STACK=0)
     target_compile_definitions(fullmag_fem PUBLIC FULLMAG_HAS_CUDA_RUNTIME=0)
+    target_compile_definitions(fullmag_fem PUBLIC FULLMAG_FEM_WITH_SLEPC=0)
+    fullmag_private_string_define(fullmag_fem FULLMAG_FEM_PETSC_VERSION "")
+    fullmag_private_string_define(fullmag_fem FULLMAG_FEM_SLEPC_VERSION "")
+    fullmag_private_string_define(fullmag_fem FULLMAG_FEM_PETSC_PKGCONFIG_DIR "")
+    fullmag_private_string_define(fullmag_fem FULLMAG_FEM_SLEPC_PKGCONFIG_DIR "")
+    fullmag_private_string_define(fullmag_fem FULLMAG_FEM_PETSC_FIND_MODULE_FILE "")
+    fullmag_private_string_define(fullmag_fem FULLMAG_FEM_SLEPC_FIND_MODULE_FILE "")
+    fullmag_private_string_define(fullmag_fem FULLMAG_FEM_PETSC_LIBRARY_PATH "")
+    fullmag_private_string_define(fullmag_fem FULLMAG_FEM_SLEPC_LIBRARY_PATH "")
 endif()
 
 set_target_properties(fullmag_fem PROPERTIES

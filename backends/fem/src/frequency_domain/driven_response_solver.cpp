@@ -371,6 +371,7 @@ double max_static_periodic_tangent_mismatch(
     return max_mismatch;
 }
 
+
 void project_static_periodic_tangent(
     const std::vector<std::uint64_t> &representative_node,
     const std::vector<std::uint64_t> &representative_count,
@@ -395,12 +396,24 @@ void project_static_periodic_tangent(
     for (std::uint64_t node = 0;
          node < static_cast<std::uint64_t>(representative_node.size());
          ++node) {
+        if (representative_node[static_cast<std::size_t>(node)] == node) {
+            const double count = static_cast<double>(
+                representative_count[static_cast<std::size_t>(node)]);
+            if (count > 0.0) {
+                output[node * 2] /= count;
+                output[node * 2 + 1] /= count;
+            }
+        }
+    }
+    for (std::uint64_t node = 0;
+         node < static_cast<std::uint64_t>(representative_node.size());
+         ++node) {
         const std::uint64_t representative =
             representative_node[static_cast<std::size_t>(node)];
-        const double count = static_cast<double>(
-            representative_count[static_cast<std::size_t>(representative)]);
-        output[node * 2] = output[representative * 2] / count;
-        output[node * 2 + 1] = output[representative * 2 + 1] / count;
+        if (representative != node) {
+            output[node * 2] = output[representative * 2];
+            output[node * 2 + 1] = output[representative * 2 + 1];
+        }
     }
 }
 
@@ -779,7 +792,7 @@ FrequencyDomainStatus write_response_zarr_store_attrs(
         "{\"fullmag_kind\":\"frequency_domain_response_field_store\","
         "\"schema_version\":1,"
         "\"preferred_container\":\"zarr\","
-        "\"quantity_ids\":[\"delta_m\"],"
+        "\"quantity_ids\":[\"dynamic_response\"],"
         "\"axes\":[\"frequency\",\"spatial_sample\",\"component\",\"complex\"],"
         "\"component_order\":[\"x\",\"y\",\"z\"],"
         "\"complex_order\":[\"real\",\"imag\"],"
@@ -901,6 +914,8 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
     char sweep_v2[256]{};
     char progress[256]{};
     char diagnostics[256]{};
+    char diagnostics_dir[256]{};
+    char solver_diagnostics[256]{};
     char periodic_pairs[256]{};
     if (std::snprintf(frequency_domain_dir, sizeof(frequency_domain_dir), "%s/frequency_domain", request.output_directory) < 0 ||
         std::snprintf(response_dir, sizeof(response_dir), "%s/response", request.output_directory) < 0 ||
@@ -913,6 +928,8 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
         std::snprintf(sweep_v2, sizeof(sweep_v2), "%s/magnetic_response_sweep.v2.json", response_dir) < 0 ||
         std::snprintf(progress, sizeof(progress), "%s/progress.v1.json", response_dir) < 0 ||
         std::snprintf(diagnostics, sizeof(diagnostics), "%s/diagnostics.v1.json", response_dir) < 0 ||
+        std::snprintf(diagnostics_dir, sizeof(diagnostics_dir), "%s/diagnostics", response_dir) < 0 ||
+        std::snprintf(solver_diagnostics, sizeof(solver_diagnostics), "%s/solver.v1.json", diagnostics_dir) < 0 ||
         std::snprintf(periodic_pairs, sizeof(periodic_pairs), "%s/periodic_pairs.v1.json", mesh_dir) < 0) {
         std::snprintf(error_message, 128, "failed to format frequency response artifact paths");
         return FrequencyDomainStatus::artifact_error;
@@ -928,6 +945,8 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
         std::strlen(sweep_v2) >= sizeof(sweep_v2) - 1 ||
         std::strlen(progress) >= sizeof(progress) - 1 ||
         std::strlen(diagnostics) >= sizeof(diagnostics) - 1 ||
+        std::strlen(diagnostics_dir) >= sizeof(diagnostics_dir) - 1 ||
+        std::strlen(solver_diagnostics) >= sizeof(solver_diagnostics) - 1 ||
         std::strlen(periodic_pairs) >= sizeof(periodic_pairs) - 1) {
         std::snprintf(error_message, 128, "frequency response artifact path exceeded fixed buffer");
         return FrequencyDomainStatus::artifact_error;
@@ -1354,6 +1373,8 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
         manifest_json,
         error_message,
         "{\"schema_version\":\"frequency_domain_manifest.v1\","
+        "\"analysis_family\":\"magnetic_frequency_domain\","
+        "\"study_product\":\"driven_response\","
         "\"revision\":\"%s\","
         "\"created_at\":\"1970-01-01T00:00:00Z\","
         "\"session_id\":\"native-validation\","
@@ -1388,15 +1409,19 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
         "\"periodic_or_floquet\":%s},"
         "\"artifacts\":{\"response_sweep_v1_path\":\"response/magnetic_response_sweep.v1.json\","
         "\"response_sweep_v2_path\":\"response/magnetic_response_sweep.v2.json\","
-        "\"response_diagnostics_v1_path\":\"response/diagnostics.v1.json\","
+        "\"response_diagnostics_v1_path\":\"response/diagnostics/solver.v1.json\","
+        "\"solver_diagnostics_path\":\"response/diagnostics/solver.v1.json\","
         "\"response_progress_v1_path\":\"response/progress.v1.json\","
         "\"response_cancel_requested_v1_path\":%s,"
+        "\"response_map_v1_path\":null,"
+        "\"response_map_v2_path\":null,"
         "\"periodic_pairs_v1_path\":%s,"
         "\"frequency_point_paths\":%s},"
         "\"resources\":{\"response_sweep_resource_key\":\"/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep\","
         "\"response_progress_resource_key\":\"/v2/sessions/current/analysis/frequency-domain/response/progress.v1\","
-        "\"response_diagnostics_resource_key\":\"/v2/sessions/current/analysis/frequency-domain/response/diagnostics.v1\","
+        "\"response_diagnostics_resource_key\":\"/v2/sessions/current/analysis/frequency-domain/response/diagnostics/solver.v1\","
         "\"response_cancel_requested_resource_key\":%s,"
+        "\"response_map_resource_key\":null,"
         "\"response_field_resources\":%s},"
         "\"diagnostics\":{\"assembled_mfem_operator_solver\":%s,"
         "\"matrix_free_solver\":%s,"
@@ -1572,6 +1597,10 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
             return status;
         }
     }
+    status = ensure_directory(diagnostics_dir, error_message);
+    if (status != FrequencyDomainStatus::ok) {
+        return status;
+    }
     status = ensure_directory(frequency_points_dir, error_message);
     if (status != FrequencyDomainStatus::ok) {
         return status;
@@ -1608,6 +1637,10 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
         return status;
     }
     status = write_text_artifact(diagnostics, diagnostics_json.c_str(), error_message);
+    if (status != FrequencyDomainStatus::ok) {
+        return status;
+    }
+    status = write_text_artifact(solver_diagnostics, diagnostics_json.c_str(), error_message);
     if (status != FrequencyDomainStatus::ok) {
         return status;
     }
@@ -2090,11 +2123,15 @@ FrequencyDomainStatus write_unavailable_response_artifacts(
     char response_dir[256]{};
     char manifest[256]{};
     char diagnostics[256]{};
+    char diagnostics_dir[256]{};
+    char solver_diagnostics[256]{};
     char progress[256]{};
     if (std::snprintf(frequency_domain_dir, sizeof(frequency_domain_dir), "%s/frequency_domain", request.output_directory) < 0 ||
         std::snprintf(response_dir, sizeof(response_dir), "%s/response", request.output_directory) < 0 ||
         std::snprintf(manifest, sizeof(manifest), "%s/manifest.v1.json", frequency_domain_dir) < 0 ||
         std::snprintf(diagnostics, sizeof(diagnostics), "%s/diagnostics.v1.json", response_dir) < 0 ||
+        std::snprintf(diagnostics_dir, sizeof(diagnostics_dir), "%s/diagnostics", response_dir) < 0 ||
+        std::snprintf(solver_diagnostics, sizeof(solver_diagnostics), "%s/solver.v1.json", diagnostics_dir) < 0 ||
         std::snprintf(progress, sizeof(progress), "%s/progress.v1.json", response_dir) < 0) {
         std::snprintf(error_message, 128, "failed to format unavailable frequency response artifact paths");
         return FrequencyDomainStatus::artifact_error;
@@ -2103,6 +2140,8 @@ FrequencyDomainStatus write_unavailable_response_artifacts(
         std::strlen(response_dir) >= sizeof(response_dir) - 1 ||
         std::strlen(manifest) >= sizeof(manifest) - 1 ||
         std::strlen(diagnostics) >= sizeof(diagnostics) - 1 ||
+        std::strlen(diagnostics_dir) >= sizeof(diagnostics_dir) - 1 ||
+        std::strlen(solver_diagnostics) >= sizeof(solver_diagnostics) - 1 ||
         std::strlen(progress) >= sizeof(progress) - 1) {
         std::snprintf(error_message, 128, "unavailable frequency response artifact path exceeded fixed buffer");
         return FrequencyDomainStatus::artifact_error;
@@ -2156,6 +2195,8 @@ FrequencyDomainStatus write_unavailable_response_artifacts(
         manifest_json,
         error_message,
         "{\"schema_version\":\"frequency_domain_manifest.v1\","
+        "\"analysis_family\":\"magnetic_frequency_domain\","
+        "\"study_product\":\"driven_response\","
         "\"revision\":\"unavailable-v1\","
         "\"created_at\":\"1970-01-01T00:00:00Z\","
         "\"session_id\":\"native-validation\","
@@ -2189,13 +2230,17 @@ FrequencyDomainStatus write_unavailable_response_artifacts(
         "\"normalization\":\"linear_response_tangent\","
         "\"spin_wave_bc\":{\"kind\":\"open\"},"
         "\"periodic_or_floquet\":false},"
-        "\"artifacts\":{\"response_diagnostics_v1_path\":\"response/diagnostics.v1.json\","
+        "\"artifacts\":{\"response_diagnostics_v1_path\":\"response/diagnostics/solver.v1.json\","
+        "\"solver_diagnostics_path\":\"response/diagnostics/solver.v1.json\","
         "\"response_progress_v1_path\":\"response/progress.v1.json\","
         "\"response_cancel_requested_v1_path\":null,"
+        "\"response_map_v1_path\":null,"
+        "\"response_map_v2_path\":null,"
         "\"frequency_point_paths\":[]},"
         "\"resources\":{\"response_progress_resource_key\":\"/v2/sessions/current/analysis/frequency-domain/response/progress.v1\","
-        "\"response_diagnostics_resource_key\":\"/v2/sessions/current/analysis/frequency-domain/response/diagnostics.v1\","
+        "\"response_diagnostics_resource_key\":\"/v2/sessions/current/analysis/frequency-domain/response/diagnostics/solver.v1\","
         "\"response_cancel_requested_resource_key\":null,"
+        "\"response_map_resource_key\":null,"
         "\"response_field_resources\":[]},"
         "\"diagnostics\":{\"requested_frequency_count\":%llu,"
         "\"completed_frequency_point_count\":0,"
@@ -2230,7 +2275,15 @@ FrequencyDomainStatus write_unavailable_response_artifacts(
     if (status != FrequencyDomainStatus::ok) {
         return status;
     }
+    status = ensure_directory(diagnostics_dir, error_message);
+    if (status != FrequencyDomainStatus::ok) {
+        return status;
+    }
     status = write_text_artifact(diagnostics, diagnostics_json.c_str(), error_message);
+    if (status != FrequencyDomainStatus::ok) {
+        return status;
+    }
+    status = write_text_artifact(solver_diagnostics, diagnostics_json.c_str(), error_message);
     if (status != FrequencyDomainStatus::ok) {
         return status;
     }

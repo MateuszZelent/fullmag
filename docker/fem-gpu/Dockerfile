@@ -108,6 +108,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
     libglu1-mesa \
     libopenmpi-dev \
+    libpetsc-real-dev \
+    libslepc-real-dev \
     libsm6 \
     libx11-6 \
     libxcursor1 \

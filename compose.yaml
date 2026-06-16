@@ -40,6 +40,7 @@ services:
       FULLMAG_PYTHON: /usr/bin/python3
       FULLMAG_USE_MFEM_STACK: "ON"
       FULLMAG_FEM_REQUIRE_CEED: "1"
+      FULLMAG_FEM_WITH_SLEPC: "ON"
       FULLMAG_FEM_GPU_MIN_NODES: "0"
       FULLMAG_FEM_MFEM_DEVICE: ceed-cuda:/gpu/cuda/shared
       CMAKE_PREFIX_PATH: /opt/fullmag-deps

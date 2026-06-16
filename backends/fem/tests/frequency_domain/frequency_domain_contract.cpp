@@ -1653,8 +1653,11 @@ void driven_response_solver_writes_failure_artifacts_for_unavailable_run()
         "failure manifest records requested frequency count");
     check(contains(manifest.c_str(), "\"production_solver_available\":false"), "failure manifest records production solver unavailable");
     check(
-        contains(manifest.c_str(), "\"response_diagnostics_v1_path\":\"response/diagnostics.v1.json\""),
+        contains(manifest.c_str(), "\"response_diagnostics_v1_path\":\"response/diagnostics/solver.v1.json\""),
         "failure manifest links response diagnostics artifact");
+    check(
+        contains(manifest.c_str(), "\"solver_diagnostics_path\":\"response/diagnostics/solver.v1.json\""),
+        "failure manifest links solver diagnostics artifact");
     check(
         contains(manifest.c_str(), "\"response_progress_v1_path\":\"response/progress.v1.json\""),
         "failure manifest links response progress artifact");
@@ -1672,7 +1675,7 @@ void driven_response_solver_writes_failure_artifacts_for_unavailable_run()
     std::snprintf(
         diagnostics_path,
         sizeof(diagnostics_path),
-        "%s/response/diagnostics.v1.json",
+        "%s/response/diagnostics/solver.v1.json",
         output_directory);
     const std::string diagnostics = read_text_file(diagnostics_path);
     check(
@@ -1775,7 +1778,7 @@ void production_gpu_unavailable_artifact_reports_gpu_lane()
     std::snprintf(
         diagnostics_path,
         sizeof(diagnostics_path),
-        "%s/response/diagnostics.v1.json",
+        "%s/response/diagnostics/solver.v1.json",
         output_directory);
     const std::string diagnostics = read_text_file(diagnostics_path);
     check(
@@ -3407,7 +3410,12 @@ void driven_response_solver_writes_minimal_assembled_validation_artifacts()
     check(contains(manifest.c_str(), "\"requested_execution\""), "manifest records requested execution");
     check(contains(manifest.c_str(), "\"solve_equation\":\"(i omega B - L) q = f\""), "manifest records solve equation");
     check(contains(manifest.c_str(), "\"response_sweep_v2_path\":\"response/magnetic_response_sweep.v2.json\""), "manifest links response sweep v2");
-    check(contains(manifest.c_str(), "\"response_diagnostics_v1_path\":\"response/diagnostics.v1.json\""), "manifest links response diagnostics");
+    check(
+        contains(manifest.c_str(), "\"response_diagnostics_v1_path\":\"response/diagnostics/solver.v1.json\""),
+        "manifest links response diagnostics v1");
+    check(
+        contains(manifest.c_str(), "\"solver_diagnostics_path\":\"response/diagnostics/solver.v1.json\""),
+        "manifest links solver diagnostics");
     check(contains(manifest.c_str(), "\"frequency_point_paths\""), "manifest links frequency-point metadata");
     check(contains(manifest.c_str(), "response/frequency_points/frequency_0001.json"), "manifest links second frequency-point metadata");
     check(contains(manifest.c_str(), "\"response_field_resources\""), "manifest links response field payload resources");
@@ -3494,7 +3502,7 @@ void driven_response_solver_writes_minimal_assembled_validation_artifacts()
     std::snprintf(
         diagnostics_path,
         sizeof(diagnostics_path),
-        "%s/response/diagnostics.v1.json",
+        "%s/response/diagnostics/solver.v1.json",
         output_directory);
     const std::string diagnostics = read_text_file(diagnostics_path);
     check(
@@ -4997,14 +5005,17 @@ void c_abi_driven_response_solve_reports_unavailable_failure_artifacts()
         contains(manifest.c_str(), "\"frequency_count\":1"),
         "C ABI failure manifest records requested frequency count");
     check(
-        contains(manifest.c_str(), "\"response_diagnostics_v1_path\":\"response/diagnostics.v1.json\""),
+        contains(manifest.c_str(), "\"response_diagnostics_v1_path\":\"response/diagnostics/solver.v1.json\""),
         "C ABI failure manifest links diagnostics");
+    check(
+        contains(manifest.c_str(), "\"solver_diagnostics_path\":\"response/diagnostics/solver.v1.json\""),
+        "C ABI failure manifest links solver diagnostics");
 
     char diagnostics_path[256]{};
     std::snprintf(
         diagnostics_path,
         sizeof(diagnostics_path),
-        "%s/response/diagnostics.v1.json",
+        "%s/response/diagnostics/solver.v1.json",
         output_directory);
     const std::string diagnostics = read_text_file(diagnostics_path);
     check(

@@ -11,6 +11,8 @@ cd "${REPO_ROOT}"
 
 : "${FULLMAG_FEM_RUNTIME_CARGO_JOBS:=1}"
 
+docker compose --profile fem-gpu build fem-gpu
+
 docker compose --profile fem-gpu run --rm -T \
   -e FULLMAG_FEM_RUNTIME_CARGO_JOBS="${FULLMAG_FEM_RUNTIME_CARGO_JOBS}" \
   fem-gpu bash -lc '
@@ -74,11 +76,70 @@ copy_native_library_group() {
     fi
   done
 }
+resolve_pkg_library_path() {
+  local pkg="$1"
+  local stem="$2"
+  local libdir
+  libdir="$(pkg-config --variable=libdir "$pkg")"
+  if [ -e "$libdir/${stem}.so" ]; then
+    readlink -f "$libdir/${stem}.so"
+    return 0
+  fi
+  find /lib /usr/lib -name "${stem}.so*" -print | sort | head -n1
+}
+copy_pkg_library_group() {
+  local pkg="$1"
+  local stem="$2"
+  local resolved
+  local source_dir
+  local resolved_name
+  local dest_dir=".fullmag/runtimes/fem-gpu-host/lib"
+  resolved="$(resolve_pkg_library_path "$pkg" "$stem")"
+  if [ -z "$resolved" ]; then
+    echo "[export_fem_gpu_runtime] failed to resolve $pkg library group for $stem" >&2
+    exit 1
+  fi
+  source_dir="$(dirname "$resolved")"
+  resolved_name="$(basename "$resolved")"
+  copy_native_library_group "$source_dir" "$stem"
+  if [ -f "$dest_dir/$resolved_name" ]; then
+    rm -f "$dest_dir/${stem}.so"
+    ln -s "$resolved_name" "$dest_dir/${stem}.so"
+  fi
+}
+copy_pkg_include_dirs() {
+  local pkg="$1"
+  local dest="$2"
+  local copied=0
+  mkdir -p "$dest"
+  for flag in $(pkg-config --cflags-only-I "$pkg"); do
+    case "$flag" in
+      -I*)
+        local include_dir="${flag#-I}"
+        if [ -d "$include_dir" ]; then
+          cp -a "$include_dir"/. "$dest"/
+          copied=1
+        fi
+        ;;
+    esac
+  done
+  if [ "$copied" -eq 0 ]; then
+    echo "[export_fem_gpu_runtime] failed to copy any include dirs for $pkg" >&2
+    exit 1
+  fi
+}
 FEM_LIB="$(latest_native_lib_dir "*fullmag-fem-sys*/out/native-build/backends/fem/libfullmag_fem.so.0")"
 FDM_LIB="$(latest_native_lib_dir "*fullmag-fdm-sys*/out/native-build/backends/fdm/libfullmag_fdm.so.0")"
 echo "[export_fem_gpu_runtime] bundling FEM and FDM native libraries"
 copy_native_library_group "$FEM_LIB" libfullmag_fem
 copy_native_library_group "$FDM_LIB" libfullmag_fdm
+petsc_version="$(pkg-config --modversion PETSc)"
+slepc_version="$(pkg-config --modversion SLEPc)"
+petsc_pkgconfig_dir="$(pkg-config --variable=pcfiledir PETSc)"
+slepc_pkgconfig_dir="$(pkg-config --variable=pcfiledir SLEPc)"
+echo "[export_fem_gpu_runtime] bundling PETSc/SLEPc shared libraries"
+copy_pkg_library_group PETSc libpetsc_real
+copy_pkg_library_group SLEPc libslepc_real
 for dep_entry in /opt/fullmag-deps/lib/*; do
   dep_name="$(basename "$dep_entry")"
   dep_dest=".fullmag/runtimes/fem-gpu-host/lib/$dep_name"
@@ -92,6 +153,11 @@ for dep_entry in /opt/fullmag-deps/lib/*; do
 done
 echo "[export_fem_gpu_runtime] bundling MFEM/libCEED/Hypre host headers"
 cp -a /opt/fullmag-deps/include/. .fullmag/runtimes/fem-gpu-host/include/
+echo "[export_fem_gpu_runtime] bundling PETSc/SLEPc headers"
+rm -rf .fullmag/runtimes/fem-gpu-host/include/petsc .fullmag/runtimes/fem-gpu-host/include/slepc
+mkdir -p .fullmag/runtimes/fem-gpu-host/include/petsc .fullmag/runtimes/fem-gpu-host/include/slepc
+copy_pkg_include_dirs PETSc .fullmag/runtimes/fem-gpu-host/include/petsc
+copy_pkg_include_dirs SLEPc .fullmag/runtimes/fem-gpu-host/include/slepc
 echo "[export_fem_gpu_runtime] bundling OpenMPI headers referenced by MFEM"
 rm -rf .fullmag/runtimes/fem-gpu-host/include/openmpi
 mkdir -p .fullmag/runtimes/fem-gpu-host/include/openmpi
@@ -112,6 +178,12 @@ perl -0pi -e "s#/usr/lib/x86_64-linux-gnu/openmpi/include/openmpi#\\\${PACKAGE_P
   .fullmag/runtimes/fem-gpu-host/lib/cmake/mfem/MFEMConfig.cmake
 perl -0pi -e "s#/usr/lib/x86_64-linux-gnu/openmpi/include/openmpi#\\\${_IMPORT_PREFIX}/include/openmpi/openmpi#g; s#/usr/lib/x86_64-linux-gnu/openmpi/include#\\\${_IMPORT_PREFIX}/include/openmpi#g; s#/opt/fullmag-deps/include#\\\${_IMPORT_PREFIX}/include#g; s#/opt/fullmag-deps/lib/libHYPRE.so#\\\${_IMPORT_PREFIX}/lib/libHYPRE.so#g; s#/opt/fullmag-deps/lib/libceed.so#\\\${_IMPORT_PREFIX}/lib/libceed.so#g; s#/usr/lib/x86_64-linux-gnu/openmpi/lib/libmpi_cxx.so#\\\${_IMPORT_PREFIX}/lib/libmpi_cxx.so.40#g; s#/usr/lib/x86_64-linux-gnu/openmpi/lib/libmpi.so#\\\${_IMPORT_PREFIX}/lib/libmpi.so.40#g; s#/usr/local/cuda-12.4/targets/x86_64-linux/lib/libcurand.so#\\\${_IMPORT_PREFIX}/lib/libcurand.so#g; s#/usr/local/cuda-12.4/targets/x86_64-linux/lib/libcublas.so#\\\${_IMPORT_PREFIX}/lib/libcublas.so#g; s#/usr/local/cuda-12.4/targets/x86_64-linux/lib/libcusparse.so#\\\${_IMPORT_PREFIX}/lib/libcusparse.so#g" \
   .fullmag/runtimes/fem-gpu-host/lib/cmake/mfem/MFEMTargets.cmake
+echo "[export_fem_gpu_runtime] bundling PETSc/SLEPc CMake find modules"
+mkdir -p .fullmag/runtimes/fem-gpu-host/lib/cmake/fullmag-frequency-domain
+cp -a backends/fem/cmake/FindPETSc.cmake \
+  .fullmag/runtimes/fem-gpu-host/lib/cmake/fullmag-frequency-domain/FindPETSc.cmake
+cp -a backends/fem/cmake/FindSLEPc.cmake \
+  .fullmag/runtimes/fem-gpu-host/lib/cmake/fullmag-frequency-domain/FindSLEPc.cmake
 # Bundle OpenMPI runtime libs so the exported host runtime does not depend
 # on host-installed libmpi/libopen-rte variants.
 shopt -s nullglob
@@ -171,6 +243,46 @@ require_exported_path .fullmag/runtimes/fem-gpu-host/openmpi/lib/openmpi3/mca_pm
 require_exported_path .fullmag/runtimes/fem-gpu-host/openmpi/lib/openmpi3/mca_btl_self.so "OpenMPI self BTL component"
 require_exported_path .fullmag/runtimes/fem-gpu-host/lib/pmix2/lib/pmix/mca_pcompress_zlib.so "PMIx compression component"
 require_exported_path .fullmag/runtimes/fem-gpu-host/lib/pmix2/share/pmix/help-pmix-runtime.txt "PMIx help data"
+require_exported_path .fullmag/runtimes/fem-gpu-host/lib/libpetsc_real.so "PETSc shared library"
+require_exported_path .fullmag/runtimes/fem-gpu-host/lib/libslepc_real.so "SLEPc shared library"
+require_exported_path .fullmag/runtimes/fem-gpu-host/lib/cmake/fullmag-frequency-domain/FindPETSc.cmake "PETSc CMake find module"
+require_exported_path .fullmag/runtimes/fem-gpu-host/lib/cmake/fullmag-frequency-domain/FindSLEPc.cmake "SLEPc CMake find module"
+export PETSC_VERSION="$petsc_version"
+export SLEPC_VERSION="$slepc_version"
+export PETSC_PKGCONFIG_DIR="$petsc_pkgconfig_dir"
+export SLEPC_PKGCONFIG_DIR="$slepc_pkgconfig_dir"
+python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+runtime = Path(".fullmag/runtimes/fem-gpu-host")
+payload = {
+    "petsc_available": True,
+    "slepc_available": True,
+    "modal_eigen_native_cpu_slepc_available": True,
+    "petsc_version": os.environ["PETSC_VERSION"],
+    "slepc_version": os.environ["SLEPC_VERSION"],
+    "petsc_pkgconfig_dir": os.environ["PETSC_PKGCONFIG_DIR"],
+    "slepc_pkgconfig_dir": os.environ["SLEPC_PKGCONFIG_DIR"],
+    "exported_runtime_library_paths": sorted(
+        [f"lib/{path.name}" for path in runtime.joinpath("lib").glob("libpetsc_real.so*")]
+        + [f"lib/{path.name}" for path in runtime.joinpath("lib").glob("libslepc_real.so*")]
+    ),
+    "exported_cmake_module_paths": [
+        "lib/cmake/fullmag-frequency-domain/FindPETSc.cmake",
+        "lib/cmake/fullmag-frequency-domain/FindSLEPc.cmake",
+    ],
+    "exported_header_paths": [
+        "include/petsc",
+        "include/slepc",
+    ],
+}
+(runtime / "frequency-domain-dependency-info.json").write_text(
+    json.dumps(payload, indent=2) + "\n",
+    encoding="utf-8",
+)
+PY
 runtime_owner="$(stat -c "%u:%g" .fullmag/runtimes/fem-gpu-host)"
 chown -R "${runtime_owner}" \
   .fullmag/runtimes/fem-gpu-host/bin \
@@ -285,20 +397,36 @@ chmod +x "${RUNTIME_ROOT}/bin/fullmag-fem-gpu"
 
 docker_image_id="$(docker image inspect fullmag/fem-gpu:local --format '{{.Id}}' 2>/dev/null || true)"
 created_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-cat > "${RUNTIME_ROOT}/manifest.json" <<EOF
-{
-  "schema": 1,
-  "runtime": "fem-gpu-host",
-  "docker_image": "fullmag/fem-gpu:local",
-  "docker_image_id": "${docker_image_id}",
-  "created_at": "${created_at}",
-  "binaries": {
-    "launcher": "bin/fullmag-fem-gpu",
-    "worker": "bin/fullmag-fem-gpu-bin",
-    "api": "bin/fullmag-api"
-  }
+export RUNTIME_ROOT
+export docker_image_id
+export created_at
+python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+runtime_root = Path(os.environ["RUNTIME_ROOT"])
+dependency_info = json.loads(
+    (runtime_root / "frequency-domain-dependency-info.json").read_text(encoding="utf-8")
+)
+manifest = {
+    "schema": 1,
+    "runtime": "fem-gpu-host",
+    "docker_image": "fullmag/fem-gpu:local",
+    "docker_image_id": os.environ["docker_image_id"],
+    "created_at": os.environ["created_at"],
+    "binaries": {
+        "launcher": "bin/fullmag-fem-gpu",
+        "worker": "bin/fullmag-fem-gpu-bin",
+        "api": "bin/fullmag-api",
+    },
+    "frequency_domain_dependencies": dependency_info,
 }
-EOF
+(runtime_root / "manifest.json").write_text(
+    json.dumps(manifest, indent=2) + "\n",
+    encoding="utf-8",
+)
+PY
 
 cat > "${RUNTIME_ROOT}/README.md" <<EOF
 # Managed FEM host runtime bundle

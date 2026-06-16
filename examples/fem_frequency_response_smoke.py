@@ -36,7 +36,7 @@ body.Aex = 13e-12
 body.alpha = 0.02
 body.m = fm.init.UniformMagnetization((0.98, 0.12, 0.04))
 
-study.demag(enabled=True)
+study.demag(realization="fredkin_koehler")
 study.b_ext(0.05, 0.0, 0.0)
 study.solver(dt=1e-13, g=2.115)
 study.tableautosave(1e-12, quantities=["time", "step", "mx", "my", "mz", "E_total"])

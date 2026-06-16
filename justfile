@@ -255,7 +255,7 @@ verify-fem-frequency-domain-runtime:
         test -f .fullmag/reports/frequency-domain-runtime/artifacts/response/magnetic_response_sweep.v1.json && \
         test -f .fullmag/reports/frequency-domain-runtime/artifacts/response/magnetic_response_sweep.v2.json && \
         test -f .fullmag/reports/frequency-domain-runtime/artifacts/response/progress.v1.json && \
-        test -f .fullmag/reports/frequency-domain-runtime/artifacts/response/diagnostics.v1.json && \
+        test -f .fullmag/reports/frequency-domain-runtime/artifacts/response/diagnostics/solver.v1.json && \
         test -f .fullmag/reports/frequency-domain-runtime/artifacts/response/frequency_points/frequency_0000.json && \
         test -f .fullmag/reports/frequency-domain-runtime/artifacts/response/field_payloads.zarr/frequency_0000/vector_xyz_complex/0.0.0 && \
         test -f .fullmag/reports/frequency-domain-runtime/artifacts/frequency_domain/manifest.v1.json && \
@@ -283,7 +283,7 @@ verify-fem-frequency-domain-static-periodic-runtime:
         test -f .fullmag/reports/frequency-domain-static-periodic-runtime/artifacts/response/magnetic_response_sweep.v1.json && \
         test -f .fullmag/reports/frequency-domain-static-periodic-runtime/artifacts/response/magnetic_response_sweep.v2.json && \
         test -f .fullmag/reports/frequency-domain-static-periodic-runtime/artifacts/response/progress.v1.json && \
-        test -f .fullmag/reports/frequency-domain-static-periodic-runtime/artifacts/response/diagnostics.v1.json && \
+        test -f .fullmag/reports/frequency-domain-static-periodic-runtime/artifacts/response/diagnostics/solver.v1.json && \
         test -f .fullmag/reports/frequency-domain-static-periodic-runtime/artifacts/response/frequency_points/frequency_0000.json && \
         test -f .fullmag/reports/frequency-domain-static-periodic-runtime/artifacts/response/field_payloads.zarr/frequency_0000/vector_xyz_complex/0.0.0 && \
         test -f .fullmag/reports/frequency-domain-static-periodic-runtime/artifacts/frequency_domain/manifest.v1.json && \
@@ -1044,6 +1044,12 @@ ensure-managed-fem-runtime:
         echo "Managed FEM runtime rebuild did not produce {{gpu_runtime_bin}} and {{gpu_runtime_manifest}}" >&2; \
         exit 2; \
     fi
+
+inspect-managed-fem-frequency-domain-deps:
+    just ensure-managed-fem-runtime
+    docker compose --profile fem-gpu run --rm -T \
+      fem-gpu bash -lc 'printf "PETSc version: "; pkg-config --modversion PETSc; printf "SLEPc version: "; pkg-config --modversion SLEPc; printf "PETSc pkg-config dir: "; pkg-config --variable=pcfiledir PETSc; printf "SLEPc pkg-config dir: "; pkg-config --variable=pcfiledir SLEPc'
+    python3 -c 'import json; from pathlib import Path; manifest = json.loads(Path(".fullmag/runtimes/fem-gpu-host/manifest.json").read_text()); deps = manifest.get("frequency_domain_dependencies", {}); print("Manifest modal_eigen_native_cpu_slepc_available: " + str(deps.get("modal_eigen_native_cpu_slepc_available"))); print("Manifest PETSc version: " + deps.get("petsc_version", "")); print("Manifest SLEPc version: " + deps.get("slepc_version", "")); print("Manifest PETSc pkg-config dir: " + deps.get("petsc_pkgconfig_dir", "")); print("Manifest SLEPc pkg-config dir: " + deps.get("slepc_pkgconfig_dir", "")); print("Manifest exported runtime library paths:"); [print("  " + path) for path in deps.get("exported_runtime_library_paths", [])]; print("Manifest exported CMake module paths:"); [print("  " + path) for path in deps.get("exported_cmake_module_paths", [])]'
 
 run-stno-interactive-managed fem_execution="gpu" cpu_threads="auto":
     just ensure-python

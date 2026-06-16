@@ -29,6 +29,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=FULLMAG_FEM_LIB_DIR");
     println!("cargo:rerun-if-env-changed=FULLMAG_USE_MFEM_STACK");
     println!("cargo:rerun-if-env-changed=FULLMAG_FEM_REQUIRE_GPU");
+    println!("cargo:rerun-if-env-changed=FULLMAG_FEM_WITH_SLEPC");
 
     if std::env::var_os("CARGO_FEATURE_BUILD_NATIVE").is_none() {
         return;
@@ -44,6 +45,13 @@ fn main() {
     let cmake = std::env::var("FULLMAG_CMAKE").unwrap_or_else(|_| "cmake".to_string());
     let use_mfem_stack = env_flag("FULLMAG_USE_MFEM_STACK");
     let require_gpu = env_flag("FULLMAG_FEM_REQUIRE_GPU");
+    let with_slepc = std::env::var("FULLMAG_FEM_WITH_SLEPC").unwrap_or_else(|_| {
+        if use_mfem_stack {
+            "ON".to_string()
+        } else {
+            "OFF".to_string()
+        }
+    });
     if require_gpu && !use_mfem_stack {
         panic!(
             "FULLMAG_FEM_REQUIRE_GPU=1 but FULLMAG_USE_MFEM_STACK is OFF; set FULLMAG_USE_MFEM_STACK=ON or provide a prebuilt FEM GPU runtime via FULLMAG_FEM_LIB_DIR"
@@ -63,7 +71,8 @@ fn main() {
         .arg(format!(
             "-DFULLMAG_USE_MFEM_STACK={}",
             if use_mfem_stack { "ON" } else { "OFF" }
-        ));
+        ))
+        .arg(format!("-DFULLMAG_FEM_WITH_SLEPC={}", with_slepc));
 
     let configure_status = configure
         .status()

@@ -2472,7 +2472,9 @@ pub(crate) fn plan_fem_eigen(
         });
     }
 
-    let resolved_demag_realization: Option<fullmag_ir::ResolvedFemDemagIR> = if enable_demag {
+    let resolved_demag_realization: Option<fullmag_ir::ResolvedFemDemagIR> = if enable_demag
+        && operator.include_demag
+    {
         let has_air_elements = mesh.element_markers.iter().any(|&m| m == 0);
         if demag_realization.requires_airbox() && !has_air_elements {
             return Err(PlanError {
