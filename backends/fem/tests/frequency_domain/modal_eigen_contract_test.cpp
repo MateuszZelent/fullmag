@@ -1,5 +1,6 @@
 #include "fullmag_fem.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -19,15 +20,66 @@ bool contains(const char *haystack, const char *needle)
     return haystack != nullptr && std::strstr(haystack, needle) != nullptr;
 }
 
-} // namespace
-
-int main()
+double extract_json_number(const char *json, const char *key)
 {
-    FullmagFemFrequencyDomainResult zeroed{};
-    fullmag_fem_frequency_domain_result_destroy(&zeroed);
-    check(zeroed.status == static_cast<FullmagFemFrequencyDomainStatus>(0),
-          "destroy on zeroed result must be idempotent");
+    check(json != nullptr, "JSON buffer must be present");
+    const char *start = std::strstr(json, key);
+    check(start != nullptr, "JSON key must be present");
+    start += std::strlen(key);
+    char *end = nullptr;
+    const double value = std::strtod(start, &end);
+    check(end != start, "JSON numeric value must parse");
+    return value;
+}
 
+char g_last_progress_json[2048]{};
+
+void reset_progress_capture()
+{
+    g_last_progress_json[0] = '\0';
+}
+
+void capture_progress(void *, const char *progress_json)
+{
+    if (progress_json == nullptr) {
+        g_last_progress_json[0] = '\0';
+        return;
+    }
+    std::snprintf(
+        g_last_progress_json,
+        sizeof(g_last_progress_json),
+        "%s",
+        progress_json);
+}
+
+int always_cancel(void *)
+{
+    return 1;
+}
+
+FullmagFemModalEigenRequest base_request()
+{
+    FullmagFemModalEigenRequest request{};
+    request.abi_version = FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION;
+    request.operator_request.abi_version = FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION;
+    request.operator_request.mesh_asset_id = "macrospin_validation";
+    request.operator_request.equilibrium_source_kind = "provided";
+    request.operator_request.gamma_rad_s_T = 1.760859e11;
+    request.operator_request.mu0_T_m_A = 1.25663706212e-6;
+    request.operator_request.alpha = 0.0;
+    request.requested_mode_count = 1;
+    request.target_kind = "nearest_frequency";
+    request.target_frequency_hz = 0.16;
+    request.frequency_min_hz = 0.0;
+    request.frequency_max_hz = 1.0;
+    request.residual_tolerance = 1.0e-12;
+    request.max_outer_iterations = 32;
+    request.max_linear_iterations = 128;
+    return request;
+}
+
+void modal_dependency_info_is_reported()
+{
     fullmag_fem_frequency_domain_dependency_info dependency_info{};
     check(
         fullmag_fem_get_frequency_domain_dependency_info(&dependency_info) ==
@@ -52,7 +104,10 @@ int main()
         dependency_info.modal_eigen_native_cpu_slepc_available == 0,
         "modal_eigen native CPU SLEPc capability is unavailable");
 #endif
+}
 
+void modal_invalid_abi_returns_validation_error()
+{
     FullmagFemModalEigenRequest invalid{};
     invalid.abi_version = 999u;
     invalid.operator_request.abi_version = FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION;
@@ -65,26 +120,111 @@ int main()
     check(contains(invalid_result.diagnostics_json, "unsupported_abi_version"),
           "invalid modal ABI exposes diagnostics");
     fullmag_fem_frequency_domain_result_destroy(&invalid_result);
+}
 
-    FullmagFemModalEigenRequest request{};
-    request.abi_version = FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION;
-    request.operator_request.abi_version = FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION;
-    request.operator_request.mesh_asset_id = "mesh";
-    request.operator_request.equilibrium_source_kind = "relax";
-    request.operator_request.gamma_rad_s_T = 1.760859e11;
-    request.operator_request.mu0_T_m_A = 1.25663706212e-6;
-    request.operator_request.alpha = 0.01;
-    request.requested_mode_count = 8;
-    request.target_kind = "frequency_window";
-    request.frequency_min_hz = 1.0e8;
-    request.frequency_max_hz = 5.0e9;
-    request.residual_tolerance = 1.0e-8;
-    request.max_outer_iterations = 32;
-    request.max_linear_iterations = 128;
+void modal_shift_invert_finds_macrospin_mode()
+{
+    constexpr double stiffness_matrix_row_major[] = {1.0, 0.0, 0.0, 1.0};
+    constexpr double gyrotropic_mass_row_major[] = {0.0, -1.0, 1.0, 0.0};
+
+    FullmagFemModalEigenRequest request = base_request();
+    request.tiny_validation_enabled = 1;
+    request.tiny_validation_tangent_dof_count = 2;
+    request.tiny_validation_stiffness_matrix_row_major = stiffness_matrix_row_major;
+    request.tiny_validation_mass_matrix_row_major = gyrotropic_mass_row_major;
+
+    FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_OK, "macrospin modal validation should succeed");
+    check(contains(result.diagnostics_json, "\"tiny_validation_solver\":true"),
+          "macrospin modal validation diagnostics identify validation lane");
+    check(contains(result.result_json, "\"status\":\"ok\""),
+          "macrospin modal result reports ok");
+    check(contains(result.result_json, "\"accepted_mode_count\":1"),
+          "macrospin modal result accepts one positive-frequency mode");
+    const double frequency_hz =
+        extract_json_number(result.result_json, "\"frequency_hz\":");
+    check(std::abs(frequency_hz - 0.15915494309189535) < 1.0e-12,
+          "macrospin modal frequency matches 1/(2*pi)");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+}
+
+void modal_shift_invert_residual_below_tolerance()
+{
+    constexpr double stiffness_matrix_row_major[] = {1.0, 0.0, 0.0, 1.0};
+    constexpr double gyrotropic_mass_row_major[] = {0.0, -1.0, 1.0, 0.0};
+
+    FullmagFemModalEigenRequest request = base_request();
+    request.tiny_validation_enabled = 1;
+    request.tiny_validation_tangent_dof_count = 2;
+    request.tiny_validation_stiffness_matrix_row_major = stiffness_matrix_row_major;
+    request.tiny_validation_mass_matrix_row_major = gyrotropic_mass_row_major;
+
+    FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_OK, "macrospin residual validation should succeed");
+    const double residual =
+        extract_json_number(result.result_json, "\"relative_residual\":");
+    check(residual <= request.residual_tolerance,
+          "macrospin modal residual must satisfy requested tolerance");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+}
+
+void modal_shift_invert_reports_ksp_iterations()
+{
+    constexpr double stiffness_matrix_row_major[] = {1.0, 0.0, 0.0, 1.0};
+    constexpr double gyrotropic_mass_row_major[] = {0.0, -1.0, 1.0, 0.0};
+
+    reset_progress_capture();
+    FullmagFemModalEigenRequest request = base_request();
+    request.tiny_validation_enabled = 1;
+    request.tiny_validation_tangent_dof_count = 2;
+    request.tiny_validation_stiffness_matrix_row_major = stiffness_matrix_row_major;
+    request.tiny_validation_mass_matrix_row_major = gyrotropic_mass_row_major;
+    request.progress_callback = capture_progress;
+
+    FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_OK, "progress-reporting modal validation should succeed");
+    check(contains(g_last_progress_json, "\"solver_phase\":\"solving_shift_invert\""),
+          "modal progress phase reports solving_shift_invert");
+    check(contains(g_last_progress_json, "\"outer_iteration\":1"),
+          "modal progress reports outer iterations");
+    check(contains(g_last_progress_json, "\"linear_iteration\":1"),
+          "modal progress reports shifted linear iterations");
+    check(contains(g_last_progress_json, "\"accepted_mode_count\":1"),
+          "modal progress reports accepted mode count");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+}
+
+void modal_shift_invert_cancel_returns_interrupted()
+{
+    constexpr double stiffness_matrix_row_major[] = {1.0, 0.0, 0.0, 1.0};
+    constexpr double gyrotropic_mass_row_major[] = {0.0, -1.0, 1.0, 0.0};
+
+    FullmagFemModalEigenRequest request = base_request();
+    request.tiny_validation_enabled = 1;
+    request.tiny_validation_tangent_dof_count = 2;
+    request.tiny_validation_stiffness_matrix_row_major = stiffness_matrix_row_major;
+    request.tiny_validation_mass_matrix_row_major = gyrotropic_mass_row_major;
+    request.cancel_requested = always_cancel;
+
+    FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_INTERRUPTED,
+          "modal cancellation must report interrupted");
+    check(contains(result.diagnostics_json, "\"status\":\"interrupted\""),
+          "cancelled modal diagnostics report interrupted");
+    check(contains(result.diagnostics_json, "\"stop_reason\":\"cancel_requested\""),
+          "cancelled modal diagnostics report cancel stop reason");
+    check(contains(result.result_json, "\"status\":\"interrupted\""),
+          "cancelled modal result reports interrupted");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+}
+
+void modal_without_validation_problem_stays_unavailable()
+{
+    FullmagFemModalEigenRequest request = base_request();
 
     FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
     check(result.status == FULLMAG_FEM_FD_UNAVAILABLE,
-          "modal skeleton returns structured unavailable");
+          "modal contract without validation problem stays unavailable");
     check(contains(result.diagnostics_json, "\"study_product\":\"modal_eigen\""),
           "modal diagnostics preserve study_product");
     check(contains(result.diagnostics_json, "progress_schema_version"),
@@ -92,6 +232,23 @@ int main()
     check(contains(result.result_json, "\"status\":\"unavailable\""),
           "modal result json reports unavailable");
     fullmag_fem_frequency_domain_result_destroy(&result);
+}
 
+} // namespace
+
+int main()
+{
+    FullmagFemFrequencyDomainResult zeroed{};
+    fullmag_fem_frequency_domain_result_destroy(&zeroed);
+    check(zeroed.status == static_cast<FullmagFemFrequencyDomainStatus>(0),
+          "destroy on zeroed result must be idempotent");
+
+    modal_dependency_info_is_reported();
+    modal_invalid_abi_returns_validation_error();
+    modal_shift_invert_finds_macrospin_mode();
+    modal_shift_invert_residual_below_tolerance();
+    modal_shift_invert_reports_ksp_iterations();
+    modal_shift_invert_cancel_returns_interrupted();
+    modal_without_validation_problem_stays_unavailable();
     return 0;
 }

@@ -452,8 +452,8 @@ FrequencyDomainStatus apply_tangent_precession_operator(
     for (std::uint64_t node_index = 0; node_index < shape.node_count; ++node_index) {
         const double h1 = effective_field_tangent[node_index * 2];
         const double h2 = effective_field_tangent[node_index * 2 + 1];
-        const double y1 = -gamma0 * h2;
-        const double y2 = gamma0 * h1;
+        const double y1 = gamma0 * h2;
+        const double y2 = -gamma0 * h1;
         out_rhs_tangent[node_index * 2] = y1;
         out_rhs_tangent[node_index * 2 + 1] = y2;
         max_abs_rhs = std::max(max_abs_rhs, std::abs(y1));

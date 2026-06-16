@@ -1005,8 +1005,8 @@ void zeeman_tangent_block_uses_parallel_field_and_reports_transverse_residual()
             fd::FrequencyDomainStatus::ok,
         "Zeeman tangent block for z equilibrium succeeds");
     check(blocks[0].kind == fd::FrequencyDomainOperatorTermKind::zeeman, "Zeeman block kind");
-    check(std::abs(blocks[0].a00 - 3.0) < 1.0e-12, "Zeeman z block a00");
-    check(std::abs(blocks[0].a11 - 3.0) < 1.0e-12, "Zeeman z block a11");
+    check(std::abs(blocks[0].a00 + 3.0) < 1.0e-12, "Zeeman z block a00");
+    check(std::abs(blocks[0].a11 + 3.0) < 1.0e-12, "Zeeman z block a11");
     check(std::abs(blocks[0].a01) < 1.0e-12, "Zeeman z block a01");
     check(std::abs(blocks[0].a10) < 1.0e-12, "Zeeman z block a10");
     check(diagnostics.node_count == 1, "Zeeman diagnostics node count");
@@ -1016,8 +1016,8 @@ void zeeman_tangent_block_uses_parallel_field_and_reports_transverse_residual()
         fd::build_zeeman_tangent_blocks(nodes + 1, h1, 1, blocks + 1, &diagnostics) ==
             fd::FrequencyDomainStatus::ok,
         "Zeeman tangent block for x equilibrium succeeds");
-    check(std::abs(blocks[1].a00 + 2.0) < 1.0e-12, "Zeeman x block a00");
-    check(std::abs(blocks[1].a11 + 2.0) < 1.0e-12, "Zeeman x block a11");
+    check(std::abs(blocks[1].a00 - 2.0) < 1.0e-12, "Zeeman x block a00");
+    check(std::abs(blocks[1].a11 - 2.0) < 1.0e-12, "Zeeman x block a11");
     check(
         std::abs(diagnostics.max_transverse_field_abs - 4.0) < 1.0e-12,
         "Zeeman diagnostics report transverse field residual");
@@ -1033,10 +1033,10 @@ void zeeman_tangent_block_uses_parallel_field_and_reports_transverse_residual()
             tangent_out,
             &operator_diagnostics) == fd::FrequencyDomainStatus::ok,
         "Zeeman blocks apply through tangent local operator");
-    check(std::abs(tangent_out[0] - 6.0) < 1.0e-12, "Zeeman output node0 e1");
-    check(std::abs(tangent_out[1] + 3.0) < 1.0e-12, "Zeeman output node0 e2");
-    check(std::abs(tangent_out[2] + 6.0) < 1.0e-12, "Zeeman output node1 e1");
-    check(std::abs(tangent_out[3] + 8.0) < 1.0e-12, "Zeeman output node1 e2");
+    check(std::abs(tangent_out[0] + 6.0) < 1.0e-12, "Zeeman output node0 e1");
+    check(std::abs(tangent_out[1] - 3.0) < 1.0e-12, "Zeeman output node0 e2");
+    check(std::abs(tangent_out[2] - 6.0) < 1.0e-12, "Zeeman output node1 e1");
+    check(std::abs(tangent_out[3] - 8.0) < 1.0e-12, "Zeeman output node1 e2");
 }
 
 void zeeman_tangent_block_rejects_nonfinite_external_field()
@@ -1362,8 +1362,8 @@ void tangent_precession_operator_rotates_effective_field_variation()
     check(diagnostics.tangent_dof_count == 2, "precession diagnostics keep tangent DOFs");
     check(diagnostics.gamma0 == 10.0, "precession diagnostics keep gamma0");
     check(diagnostics.max_abs_rhs == 30.0, "precession diagnostics report max RHS");
-    check(std::abs(rhs_tangent[0] - 30.0) < 1.0e-12, "precession output e1");
-    check(std::abs(rhs_tangent[1] - 20.0) < 1.0e-12, "precession output e2");
+    check(std::abs(rhs_tangent[0] + 30.0) < 1.0e-12, "precession output e1");
+    check(std::abs(rhs_tangent[1] + 20.0) < 1.0e-12, "precession output e2");
 }
 
 void tangent_damping_operator_rotates_perturbation_by_alpha()
@@ -4629,6 +4629,47 @@ void c_abi_production_cpu_lane_rejects_invalid_static_periodic_requests()
     }
 }
 
+void c_abi_production_cpu_lane_rejects_invalid_equilibrium_before_solve()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double nonunit_equilibrium_m[] = {0.0, 0.0, 2.0};
+    const double h_ext_a_per_m[] = {0.0, 0.0, 2.0};
+    const double drive_real[] = {1.0, 0.0};
+
+    fullmag_fem_frequency_domain_driven_response_request request{};
+    request.node_count = 1;
+    request.tangent_dof_count = 2;
+    request.alpha = 0.0;
+    request.gamma0 = 1.0;
+    request.requested_execution_lane =
+        FULLMAG_FEM_FREQUENCY_DOMAIN_EXECUTION_PRODUCTION_CPU;
+    request.frequencies_hz = frequencies_hz;
+    request.frequency_count = 1;
+    request.mfem_operator_enabled = 1;
+    request.mfem_include_zeeman = 1;
+    request.mfem_equilibrium_m = nonunit_equilibrium_m;
+    request.mfem_h_ext_a_per_m = h_ext_a_per_m;
+    request.mfem_drive_real = drive_real;
+
+    fullmag_fem_frequency_domain_solve_result result{};
+    const int status =
+        fullmag_fem_frequency_domain_solve_driven_response(&request, &result);
+
+    check(status == FULLMAG_FEM_OK, "C ABI invalid equilibrium request returns owned result");
+    check(
+        result.status == FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_VALIDATION_ERROR,
+        "C ABI invalid equilibrium request is validation error");
+    check(
+        contains(result.error_message, "equilibrium magnetization"),
+        "C ABI invalid equilibrium request names equilibrium magnetization");
+    check(
+        contains(result.error_message, "unit vectors"),
+        "C ABI invalid equilibrium request preserves tangent-frame reason");
+
+    fullmag_fem_frequency_domain_solve_result_release(&result);
+}
+
 void c_abi_production_cpu_lane_interruption_preserves_partial_artifacts()
 {
     constexpr double one_over_two_pi_hz = 0.15915494309189535;
@@ -5355,10 +5396,10 @@ void mfem_zeeman_operator_applies_parallel_field_blocks_in_tangent_layout()
     check(diagnostics.tangent_dof_count == 4, "MFEM Zeeman diagnostics keep tangent DOFs");
     check(std::abs(diagnostics.max_parallel_field_abs - 3.0) < 1.0e-12, "MFEM Zeeman diagnostics max parallel");
     check(std::abs(diagnostics.max_abs_output + 0.0 - 8.0) < 1.0e-12, "MFEM Zeeman diagnostics max output");
-    check(std::abs(tangent_out[0] - 6.0) < 1.0e-12, "MFEM Zeeman output node0 e1");
-    check(std::abs(tangent_out[1] + 3.0) < 1.0e-12, "MFEM Zeeman output node0 e2");
-    check(std::abs(tangent_out[2] + 6.0) < 1.0e-12, "MFEM Zeeman output node1 e1");
-    check(std::abs(tangent_out[3] + 8.0) < 1.0e-12, "MFEM Zeeman output node1 e2");
+    check(std::abs(tangent_out[0] + 6.0) < 1.0e-12, "MFEM Zeeman output node0 e1");
+    check(std::abs(tangent_out[1] - 3.0) < 1.0e-12, "MFEM Zeeman output node0 e2");
+    check(std::abs(tangent_out[2] - 6.0) < 1.0e-12, "MFEM Zeeman output node1 e1");
+    check(std::abs(tangent_out[3] - 8.0) < 1.0e-12, "MFEM Zeeman output node1 e2");
 }
 
 void mfem_zeeman_operator_rejects_disabled_zeeman_descriptor()
@@ -6028,17 +6069,17 @@ void mfem_linearized_operator_combines_exchange_zeeman_precession_and_mass()
     check(diagnostics.node_count == 2, "MFEM linearized diagnostics keep node count");
     check(diagnostics.tangent_dof_count == 4, "MFEM linearized diagnostics keep tangent DOFs");
     check(diagnostics.exchange_edge_count == 1, "MFEM linearized diagnostics keep exchange edge count");
-    check(std::abs(diagnostics.max_abs_effective_field - 17.0) < 1.0e-12, "MFEM linearized diagnostics effective field max");
-    check(std::abs(diagnostics.max_abs_stiffness_rhs - 170.0) < 1.0e-12, "MFEM linearized diagnostics stiffness max");
+    check(std::abs(diagnostics.max_abs_effective_field - 10.0) < 1.0e-12, "MFEM linearized diagnostics effective field max");
+    check(std::abs(diagnostics.max_abs_stiffness_rhs - 100.0) < 1.0e-12, "MFEM linearized diagnostics stiffness max");
     check(std::abs(diagnostics.max_abs_mass_rhs - 4.3) < 1.0e-12, "MFEM linearized diagnostics mass max");
-    check(std::abs(effective_field_workspace[0] - 11.0) < 1.0e-12, "MFEM linearized effective node0 e1");
-    check(std::abs(effective_field_workspace[1] - 2.0) < 1.0e-12, "MFEM linearized effective node0 e2");
-    check(std::abs(effective_field_workspace[2] + 17.0) < 1.0e-12, "MFEM linearized effective node1 e1");
-    check(std::abs(effective_field_workspace[3] - 16.0) < 1.0e-12, "MFEM linearized effective node1 e2");
-    check(std::abs(stiffness_rhs[0] + 20.0) < 1.0e-12, "MFEM linearized stiffness node0 e1");
-    check(std::abs(stiffness_rhs[1] - 110.0) < 1.0e-12, "MFEM linearized stiffness node0 e2");
-    check(std::abs(stiffness_rhs[2] + 160.0) < 1.0e-12, "MFEM linearized stiffness node1 e1");
-    check(std::abs(stiffness_rhs[3] + 170.0) < 1.0e-12, "MFEM linearized stiffness node1 e2");
+    check(std::abs(effective_field_workspace[0] - 5.0) < 1.0e-12, "MFEM linearized effective node0 e1");
+    check(std::abs(effective_field_workspace[1] + 10.0) < 1.0e-12, "MFEM linearized effective node0 e2");
+    check(std::abs(effective_field_workspace[2] - 1.0) < 1.0e-12, "MFEM linearized effective node1 e1");
+    check(std::abs(effective_field_workspace[3] + 8.0) < 1.0e-12, "MFEM linearized effective node1 e2");
+    check(std::abs(stiffness_rhs[0] + 100.0) < 1.0e-12, "MFEM linearized stiffness node0 e1");
+    check(std::abs(stiffness_rhs[1] + 50.0) < 1.0e-12, "MFEM linearized stiffness node0 e2");
+    check(std::abs(stiffness_rhs[2] + 80.0) < 1.0e-12, "MFEM linearized stiffness node1 e1");
+    check(std::abs(stiffness_rhs[3] + 10.0) < 1.0e-12, "MFEM linearized stiffness node1 e2");
     check(std::abs(mass_rhs[0] - 1.2) < 1.0e-12, "MFEM linearized mass node0 e1");
     check(std::abs(mass_rhs[1] - 1.9) < 1.0e-12, "MFEM linearized mass node0 e2");
     check(std::abs(mass_rhs[2] + 2.6) < 1.0e-12, "MFEM linearized mass node1 e1");
@@ -6109,8 +6150,8 @@ void mfem_linearized_operator_adds_preassembled_dmi_field()
     check(std::abs(diagnostics.max_abs_dmi_field - 43.0) < 1.0e-12, "MFEM DMI linearized diagnostics");
     check(std::abs(effective_field_workspace[0] - 3.0) < 1.0e-12, "MFEM DMI effective e1");
     check(std::abs(effective_field_workspace[1] - 43.0) < 1.0e-12, "MFEM DMI effective e2");
-    check(std::abs(stiffness_rhs[0] + 43.0) < 1.0e-12, "MFEM DMI stiffness e1");
-    check(std::abs(stiffness_rhs[1] - 3.0) < 1.0e-12, "MFEM DMI stiffness e2");
+    check(std::abs(stiffness_rhs[0] - 43.0) < 1.0e-12, "MFEM DMI stiffness e1");
+    check(std::abs(stiffness_rhs[1] + 3.0) < 1.0e-12, "MFEM DMI stiffness e2");
     check(std::abs(mass_rhs[0] - 5.0) < 1.0e-12, "MFEM DMI mass e1");
     check(std::abs(mass_rhs[1] - 7.0) < 1.0e-12, "MFEM DMI mass e2");
 }
@@ -6284,10 +6325,10 @@ void mfem_linearized_operator_adds_uniaxial_anisotropy_field()
     check(
         std::abs(diagnostics.max_abs_uniaxial_anisotropy_field - 12.0) < 1.0e-12,
         "MFEM uniaxial anisotropy diagnostics report anisotropy field");
-    check(std::abs(effective_field_workspace[0] - 18.0) < 1.0e-12, "MFEM uniaxial anisotropy effective e1");
-    check(std::abs(effective_field_workspace[1] - 10.0) < 1.0e-12, "MFEM uniaxial anisotropy effective e2");
+    check(std::abs(effective_field_workspace[0] - 6.0) < 1.0e-12, "MFEM uniaxial anisotropy effective e1");
+    check(std::abs(effective_field_workspace[1] + 10.0) < 1.0e-12, "MFEM uniaxial anisotropy effective e2");
     check(std::abs(stiffness_rhs[0] + 10.0) < 1.0e-12, "MFEM uniaxial anisotropy stiffness e1");
-    check(std::abs(stiffness_rhs[1] - 18.0) < 1.0e-12, "MFEM uniaxial anisotropy stiffness e2");
+    check(std::abs(stiffness_rhs[1] + 6.0) < 1.0e-12, "MFEM uniaxial anisotropy stiffness e2");
 }
 
 void mfem_linearized_operator_uses_nodewise_alpha_mass()
@@ -6814,6 +6855,7 @@ int main()
     c_abi_driven_response_manifest_preserves_temporal_phase_convention();
     c_abi_production_cpu_lane_runs_mfem_matrix_free_response_problem();
     c_abi_production_cpu_lane_rejects_invalid_static_periodic_requests();
+    c_abi_production_cpu_lane_rejects_invalid_equilibrium_before_solve();
     c_abi_production_cpu_lane_interruption_preserves_partial_artifacts();
     c_abi_production_cpu_lane_does_not_fallback_to_tiny_validation_solver();
     c_abi_production_cpu_lane_runs_mfem_dmi_matrix_free_response_problem();

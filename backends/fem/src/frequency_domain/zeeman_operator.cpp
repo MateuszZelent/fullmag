@@ -64,10 +64,12 @@ FrequencyDomainStatus build_zeeman_tangent_blocks(
 
         TangentOperatorLocalBlock &block = out_blocks[node_index];
         block.kind = FrequencyDomainOperatorTermKind::zeeman;
-        block.a00 = h_parallel;
+        // A fixed field has delta_H = 0; the linearized Zeeman contribution is
+        // -gamma0 * delta_m x H0, represented through the shared -m0 x (...) rotator.
+        block.a00 = -h_parallel;
         block.a01 = 0.0;
         block.a10 = 0.0;
-        block.a11 = h_parallel;
+        block.a11 = -h_parallel;
     }
 
     if (out_diagnostics != nullptr) {

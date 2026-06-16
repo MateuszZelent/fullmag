@@ -607,6 +607,12 @@ typedef struct {
     int (*cancel_requested)(void *user_data);
     void *progress_user_data;
     void (*progress_callback)(void *user_data, const char *progress_json);
+    int tiny_validation_enabled;
+    uint64_t tiny_validation_tangent_dof_count;
+    const double *tiny_validation_stiffness_matrix_row_major;
+    const double *tiny_validation_mass_matrix_row_major;
+    const double *tiny_validation_stiffness_diagonal;
+    const double *tiny_validation_mass_diagonal;
 } FullmagFemModalEigenRequest;
 
 typedef struct {

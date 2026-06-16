@@ -6,6 +6,9 @@
 
 namespace fullmag::fem::frequency_domain {
 
+struct MfemOperatorContextDescriptor;
+struct EquilibriumStateDiagnostics;
+
 enum class FrequencyDomainBoundaryKind {
     open_boundary,
     periodic_zero_phase,
@@ -44,6 +47,24 @@ struct FrequencyDomainOperatorValidationDiagnostics {
     char error_message[128] = "";
 };
 
+struct LinearizedLlgOperatorDiagnostics {
+    std::uint64_t active_node_count = 0;
+    std::uint64_t tangent_dof_count = 0;
+    bool exchange_enabled = false;
+    bool zeeman_enabled = false;
+    bool uniaxial_anisotropy_enabled = false;
+    bool dmi_enabled = false;
+    bool demag_enabled = false;
+    char frequency_units[16] = "";
+    char angular_frequency_units[16] = "";
+    char field_units[16] = "";
+    double equilibrium_norm_error_max_abs = 0.0;
+    double equilibrium_residual_max_abs = 0.0;
+    double equilibrium_residual_rms = 0.0;
+    char demag_realization[64] = "";
+    char error_message[128] = "";
+};
+
 struct DrivenFrequencyResponseRequest {
     FrequencyDomainOperatorRequest operator_request{};
     const double *frequencies_hz = nullptr;
@@ -79,5 +100,11 @@ FrequencyDomainStatus validate_driven_frequency_response_request(
 FrequencyDomainStatus validate_modal_dynamic_matrix_request(
     const ModalDynamicMatrixRequest &request,
     FrequencyDomainSolveRequestDiagnostics *out_diagnostics) noexcept;
+
+FrequencyDomainStatus build_linearized_llg_operator_diagnostics(
+    const MfemOperatorContextDescriptor &descriptor,
+    const EquilibriumStateDiagnostics &equilibrium_diagnostics,
+    const char *demag_realization,
+    LinearizedLlgOperatorDiagnostics *out_diagnostics) noexcept;
 
 } // namespace fullmag::fem::frequency_domain

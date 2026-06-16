@@ -43,6 +43,12 @@ struct ModalEigenRequest {
     int (*cancel_requested)(void *user_data) = nullptr;
     void *progress_user_data = nullptr;
     void (*progress_callback)(void *user_data, const char *progress_json) = nullptr;
+    int tiny_validation_enabled = 0;
+    std::uint64_t tiny_validation_tangent_dof_count = 0;
+    const double *tiny_validation_stiffness_matrix_row_major = nullptr;
+    const double *tiny_validation_mass_matrix_row_major = nullptr;
+    const double *tiny_validation_stiffness_diagonal = nullptr;
+    const double *tiny_validation_mass_diagonal = nullptr;
 };
 
 struct DrivenResponseContractRequest {

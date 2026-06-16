@@ -1305,14 +1305,31 @@ int fullmag_fem_frequency_domain_solve_driven_response(
             frequency_domain_tangent_nodes.resize(
                 static_cast<std::size_t>(request->node_count));
             fd::TangentFrameDiagnostics tangent_diagnostics{};
-            if (fd::build_tangent_frame(
+            const fd::FrequencyDomainStatus tangent_status = fd::build_tangent_frame(
                     request->mfem_equilibrium_m,
                     request->node_count,
                     frequency_domain_tangent_nodes.data(),
-                    &tangent_diagnostics) == fd::FrequencyDomainStatus::ok) {
-                native_request.mfem_validation_problem.nodes =
-                    frequency_domain_tangent_nodes.data();
+                    &tangent_diagnostics);
+            if (tangent_status != fd::FrequencyDomainStatus::ok) {
+                char error_message[192]{};
+                std::snprintf(
+                    error_message,
+                    sizeof(error_message),
+                    "invalid MFEM frequency-domain equilibrium magnetization: %s",
+                    tangent_diagnostics.error_message);
+                if (!fill_frequency_domain_validation_result(
+                        out_result,
+                        request->frequency_count,
+                        error_message)) {
+                    fullmag_fem_set_global_error(
+                        "failed to allocate invalid MFEM equilibrium result");
+                    return FULLMAG_FEM_ERR_INTERNAL;
+                }
+                fullmag_fem_clear_global_error();
+                return FULLMAG_FEM_OK;
             }
+            native_request.mfem_validation_problem.nodes =
+                frequency_domain_tangent_nodes.data();
         }
     }
 
@@ -1393,6 +1410,17 @@ FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve(
     native_request.cancel_requested = request->cancel_requested;
     native_request.progress_user_data = request->progress_user_data;
     native_request.progress_callback = request->progress_callback;
+    native_request.tiny_validation_enabled = request->tiny_validation_enabled;
+    native_request.tiny_validation_tangent_dof_count =
+        request->tiny_validation_tangent_dof_count;
+    native_request.tiny_validation_stiffness_matrix_row_major =
+        request->tiny_validation_stiffness_matrix_row_major;
+    native_request.tiny_validation_mass_matrix_row_major =
+        request->tiny_validation_mass_matrix_row_major;
+    native_request.tiny_validation_stiffness_diagonal =
+        request->tiny_validation_stiffness_diagonal;
+    native_request.tiny_validation_mass_diagonal =
+        request->tiny_validation_mass_diagonal;
 
     return copy_frequency_domain_contract_result(
         fd::solve_modal_eigen_contract(native_request));

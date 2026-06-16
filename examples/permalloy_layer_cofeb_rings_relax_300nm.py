@@ -46,7 +46,7 @@ def ring_geometry(name: str, z_center: float) -> object:
 study = fm.study("permalloy_layer_cofeb_rings_relax_300nm")
 
 # Engine
-study.engine("fem")
+study.engine("femaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 study.device("gpu", precision="double")
 study.universe(
     mode="auto",

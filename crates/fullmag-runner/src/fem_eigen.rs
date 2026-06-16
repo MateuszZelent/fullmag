@@ -257,6 +257,9 @@ pub(crate) fn execute_gpu_fem_eigen(
         completeness_policy: 0,
         eigensolver_family: 0,
         spectral_transform_kind: 0,
+        cancel_requested: None,
+        progress_callback: None,
+        tiny_validation_problem: None,
     })
     .map_err(|message| RunError { message })?;
 

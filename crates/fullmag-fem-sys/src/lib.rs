@@ -685,6 +685,12 @@ pub struct FullmagFemModalEigenRequest {
     pub cancel_requested: Option<unsafe extern "C" fn(*mut c_void) -> i32>,
     pub progress_user_data: *mut c_void,
     pub progress_callback: Option<unsafe extern "C" fn(*mut c_void, *const c_char)>,
+    pub tiny_validation_enabled: i32,
+    pub tiny_validation_tangent_dof_count: u64,
+    pub tiny_validation_stiffness_matrix_row_major: *const f64,
+    pub tiny_validation_mass_matrix_row_major: *const f64,
+    pub tiny_validation_stiffness_diagonal: *const f64,
+    pub tiny_validation_mass_diagonal: *const f64,
 }
 
 #[repr(C)]

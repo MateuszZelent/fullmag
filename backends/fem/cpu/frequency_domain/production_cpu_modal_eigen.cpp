@@ -4,6 +4,64 @@
 
 namespace fullmag::fem::frequency_domain {
 
+namespace {
+
+std::string escape_json_string(const char *value)
+{
+    if (value == nullptr) {
+        return "";
+    }
+    std::string escaped;
+    for (const char *it = value; *it != '\0'; ++it) {
+        switch (*it) {
+        case '\\':
+            escaped += "\\\\";
+            break;
+        case '"':
+            escaped += "\\\"";
+            break;
+        case '\n':
+            escaped += "\\n";
+            break;
+        case '\r':
+            escaped += "\\r";
+            break;
+        case '\t':
+            escaped += "\\t";
+            break;
+        default:
+            escaped += *it;
+            break;
+        }
+    }
+    return escaped;
+}
+
+std::string with_operator_diagnostics(
+    std::string diagnostics_json,
+    const char *operator_diagnostics_json)
+{
+    if (operator_diagnostics_json == nullptr || operator_diagnostics_json[0] == '\0') {
+        return diagnostics_json;
+    }
+    if (diagnostics_json.empty() || diagnostics_json.back() != '}') {
+        return diagnostics_json;
+    }
+    diagnostics_json.pop_back();
+    diagnostics_json += ",\"operator_diagnostics\":";
+    if (operator_diagnostics_json[0] == '{' || operator_diagnostics_json[0] == '[') {
+        diagnostics_json += operator_diagnostics_json;
+    } else {
+        diagnostics_json += "\"";
+        diagnostics_json += escape_json_string(operator_diagnostics_json);
+        diagnostics_json += "\"";
+    }
+    diagnostics_json += "}";
+    return diagnostics_json;
+}
+
+} // namespace
+
 #ifndef FULLMAG_FEM_WITH_SLEPC
 #define FULLMAG_FEM_WITH_SLEPC 0
 #endif
@@ -44,6 +102,9 @@ FrequencyDomainContractResult production_cpu_modal_eigen_unavailable(
         ",\"petsc_version\":\"" + FULLMAG_FEM_PETSC_VERSION +
         "\",\"slepc_version\":\"" + FULLMAG_FEM_SLEPC_VERSION +
         "\",\"unsupported_reason\":\"" + unsupported_reason + "\"}";
+    result.diagnostics_json = with_operator_diagnostics(
+        result.diagnostics_json,
+        request.operator_request.operator_diagnostics_json);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","

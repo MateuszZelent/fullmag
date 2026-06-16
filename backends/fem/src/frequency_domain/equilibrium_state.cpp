@@ -75,15 +75,33 @@ FrequencyDomainStatus build_equilibrium_state(
     for (std::uint64_t node_index = 0; node_index < node_count; ++node_index) {
         const TangentFrameNode &node = out_nodes[node_index];
         const double *h = static_field_xyz + node_index * 3;
+        if (!std::isfinite(h[0]) || !std::isfinite(h[1]) || !std::isfinite(h[2])) {
+            if (out_diagnostics != nullptr) {
+                copy_error(out_diagnostics->error_message, "static equilibrium field must contain finite values");
+            }
+            return FrequencyDomainStatus::validation_error;
+        }
         double torque[3]{};
         cross3(node.m, h, torque);
         const double torque_norm = norm3(torque);
+        if (!std::isfinite(torque_norm)) {
+            if (out_diagnostics != nullptr) {
+                copy_error(out_diagnostics->error_message, "equilibrium residual must be finite");
+            }
+            return FrequencyDomainStatus::validation_error;
+        }
         max_torque = std::max(max_torque, torque_norm);
         torque_square_sum += torque_norm * torque_norm;
     }
 
     const double rms_torque =
         node_count > 0 ? std::sqrt(torque_square_sum / static_cast<double>(node_count)) : 0.0;
+    if (!std::isfinite(rms_torque)) {
+        if (out_diagnostics != nullptr) {
+            copy_error(out_diagnostics->error_message, "equilibrium residual RMS must be finite");
+        }
+        return FrequencyDomainStatus::validation_error;
+    }
     if (out_diagnostics != nullptr) {
         out_diagnostics->max_m_cross_h_abs = max_torque;
         out_diagnostics->rms_m_cross_h_abs = rms_torque;

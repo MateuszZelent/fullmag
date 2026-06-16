@@ -2,7 +2,7 @@
 use fullmag_fem_sys as ffi;
 
 #[cfg(feature = "fem-gpu")]
-use std::ffi::{c_void, CStr, CString};
+use std::ffi::{c_char, c_void, CStr, CString};
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
@@ -44,6 +44,7 @@ pub(crate) struct NativeFrequencyDomainProgress {
 pub(crate) type NativeFrequencyDomainProgressCallback<'a> =
     dyn Fn(NativeFrequencyDomainProgress) + 'a;
 pub(crate) type NativeFrequencyDomainCancelCallback<'a> = dyn Fn() -> bool + 'a;
+pub(crate) type NativeModalEigenProgressCallback<'a> = dyn Fn(&str) + 'a;
 
 #[derive(Clone)]
 #[allow(dead_code)]
@@ -183,6 +184,19 @@ pub(crate) struct NativeModalEigenRequest<'a> {
     pub completeness_policy: i32,
     pub eigensolver_family: i32,
     pub spectral_transform_kind: i32,
+    pub cancel_requested: Option<&'a NativeFrequencyDomainCancelCallback<'a>>,
+    pub progress_callback: Option<&'a NativeModalEigenProgressCallback<'a>>,
+    pub tiny_validation_problem: Option<NativeModalEigenTinyValidationProblem<'a>>,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) struct NativeModalEigenTinyValidationProblem<'a> {
+    pub tangent_dof_count: u64,
+    pub stiffness_matrix_row_major: Option<&'a [f64]>,
+    pub mass_matrix_row_major: Option<&'a [f64]>,
+    pub stiffness_diagonal: Option<&'a [f64]>,
+    pub mass_diagonal: Option<&'a [f64]>,
 }
 
 #[derive(Clone)]
@@ -562,6 +576,32 @@ fn solve_native_modal_eigen_impl(
         .map(|path| CString::new(path.to_string_lossy().as_bytes()))
         .transpose()
         .map_err(|_| "native FEM modal_eigen output_directory contains NUL".to_string())?;
+    let cancel_callback = request.cancel_requested;
+    let (cancel_requested, cancel_user_data) = if cancel_callback.is_some() {
+        (
+            Some(
+                dispatch_native_frequency_domain_cancel as unsafe extern "C" fn(*mut c_void) -> i32,
+            ),
+            (&cancel_callback as *const Option<&NativeFrequencyDomainCancelCallback<'_>>)
+                as *mut c_void,
+        )
+    } else {
+        (None, std::ptr::null_mut())
+    };
+    let progress_callback = request.progress_callback;
+    let (progress_callback_fn, progress_user_data) = if progress_callback.is_some() {
+        (
+            Some(
+                dispatch_native_modal_eigen_progress_json
+                    as unsafe extern "C" fn(*mut c_void, *const c_char),
+            ),
+            (&progress_callback as *const Option<&NativeModalEigenProgressCallback<'_>>)
+                as *mut c_void,
+        )
+    } else {
+        (None, std::ptr::null_mut())
+    };
+    let tiny_validation = request.tiny_validation_problem.as_ref();
 
     let ffi_request = ffi::FullmagFemModalEigenRequest {
         abi_version: ffi::FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION,
@@ -598,10 +638,26 @@ fn solve_native_modal_eigen_impl(
         completeness_policy: request.completeness_policy,
         eigensolver_family: request.eigensolver_family,
         spectral_transform_kind: request.spectral_transform_kind,
-        cancel_user_data: std::ptr::null_mut(),
-        cancel_requested: None,
-        progress_user_data: std::ptr::null_mut(),
-        progress_callback: None,
+        cancel_user_data,
+        cancel_requested,
+        progress_user_data,
+        progress_callback: progress_callback_fn,
+        tiny_validation_enabled: tiny_validation.is_some() as i32,
+        tiny_validation_tangent_dof_count: tiny_validation
+            .map(|problem| problem.tangent_dof_count)
+            .unwrap_or(0),
+        tiny_validation_stiffness_matrix_row_major: tiny_validation
+            .and_then(|problem| problem.stiffness_matrix_row_major)
+            .map_or(std::ptr::null(), slice_ptr_or_null),
+        tiny_validation_mass_matrix_row_major: tiny_validation
+            .and_then(|problem| problem.mass_matrix_row_major)
+            .map_or(std::ptr::null(), slice_ptr_or_null),
+        tiny_validation_stiffness_diagonal: tiny_validation
+            .and_then(|problem| problem.stiffness_diagonal)
+            .map_or(std::ptr::null(), slice_ptr_or_null),
+        tiny_validation_mass_diagonal: tiny_validation
+            .and_then(|problem| problem.mass_diagonal)
+            .map_or(std::ptr::null(), slice_ptr_or_null),
     };
 
     let mut ffi_result = NativeFrequencyDomainContractFfiResult {
@@ -826,6 +882,22 @@ unsafe extern "C" fn dispatch_native_frequency_domain_progress(
 }
 
 #[cfg(feature = "fem-gpu")]
+unsafe extern "C" fn dispatch_native_modal_eigen_progress_json(
+    user_data: *mut c_void,
+    progress_json: *const c_char,
+) {
+    if user_data.is_null() || progress_json.is_null() {
+        return;
+    }
+    let callback =
+        unsafe { &*user_data.cast::<Option<&NativeModalEigenProgressCallback<'_>>>() };
+    if let Some(callback) = callback {
+        let progress_json = unsafe { CStr::from_ptr(progress_json) }.to_string_lossy();
+        callback(progress_json.as_ref());
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
 struct NativeDrivenFrequencyResponseFfiResult {
     inner: ffi::fullmag_fem_frequency_domain_solve_result,
 }
@@ -1043,6 +1115,9 @@ mod tests {
                 completeness_policy: 0,
                 eigensolver_family: 0,
                 spectral_transform_kind: 0,
+                cancel_requested: None,
+                progress_callback: None,
+                tiny_validation_problem: None,
             })
             .expect_err("native modal contract should require fem-gpu feature");
             assert!(err.contains("fem-gpu"));
@@ -1076,6 +1151,9 @@ mod tests {
                 completeness_policy: 0,
                 eigensolver_family: 0,
                 spectral_transform_kind: 0,
+                cancel_requested: None,
+                progress_callback: None,
+                tiny_validation_problem: None,
             })
             .expect("native modal contract should return a structured unavailable result");
             assert_eq!(result.status, NativeFrequencyDomainStatus::Unavailable);
@@ -1088,6 +1166,209 @@ mod tests {
                 .contains("\"unsupported_reason\":\"modal_solver_not_implemented\""));
             assert!(result.result_json.contains("\"status\":\"unavailable\""));
         }
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn frequency_domain_operator_diagnostics_are_embedded_in_modal_contract_results() {
+        let result = solve_native_modal_eigen(NativeModalEigenRequest {
+            mesh_asset_id: "mesh",
+            equilibrium_source_kind: "relax",
+            gamma_rad_s_t: 1.760859e11,
+            mu0_t_m_a: 1.25663706212e-6,
+            alpha: 0.01,
+            include_exchange: true,
+            include_demag: false,
+            demag_realization: None,
+            damping_policy: "include",
+            spin_wave_bc_kind: "free",
+            k_vector_rad_m: None,
+            operator_diagnostics_json: Some(
+                "{\"schema_version\":\"frequency_domain_operator_diagnostics.v1\",\"active_node_count\":4,\"tangent_dof_count\":8}",
+            ),
+            requested_mode_count: 8,
+            target_kind: "frequency_window",
+            target_frequency_hz: 0.0,
+            frequency_min_hz: 1.0e8,
+            frequency_max_hz: 5.0e9,
+            residual_tolerance: 1.0e-8,
+            max_outer_iterations: 32,
+            max_linear_iterations: 128,
+            output_directory: None,
+            write_partial_artifacts: false,
+            completeness_policy: 0,
+            eigensolver_family: 0,
+            spectral_transform_kind: 0,
+            cancel_requested: None,
+            progress_callback: None,
+            tiny_validation_problem: None,
+        })
+        .expect("native modal contract should return a structured unavailable result");
+
+        assert_eq!(result.status, NativeFrequencyDomainStatus::Unavailable);
+        assert!(result
+            .diagnostics_json
+            .contains("\"operator_diagnostics\":{\"schema_version\":\"frequency_domain_operator_diagnostics.v1\""), "{}", result.diagnostics_json);
+        assert!(result
+            .diagnostics_json
+            .contains("\"active_node_count\":4"), "{}", result.diagnostics_json);
+        assert!(result
+            .diagnostics_json
+            .contains("\"tangent_dof_count\":8"), "{}", result.diagnostics_json);
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn modal_shift_invert_progress_reports_validation_solve() {
+        use std::cell::RefCell;
+
+        let stiffness_matrix_row_major = [1.0, 0.0, 0.0, 1.0];
+        let gyrotropic_mass_row_major = [0.0, -1.0, 1.0, 0.0];
+        let progress_events = RefCell::new(Vec::<String>::new());
+        let progress_callback = |progress_json: &str| {
+            progress_events.borrow_mut().push(progress_json.to_string());
+        };
+
+        let result = solve_native_modal_eigen(NativeModalEigenRequest {
+            mesh_asset_id: "macrospin_validation",
+            equilibrium_source_kind: "provided",
+            gamma_rad_s_t: 1.760859e11,
+            mu0_t_m_a: 1.25663706212e-6,
+            alpha: 0.0,
+            include_exchange: false,
+            include_demag: false,
+            demag_realization: None,
+            damping_policy: "ignore",
+            spin_wave_bc_kind: "free",
+            k_vector_rad_m: None,
+            operator_diagnostics_json: None,
+            requested_mode_count: 1,
+            target_kind: "nearest_frequency",
+            target_frequency_hz: 0.16,
+            frequency_min_hz: 0.0,
+            frequency_max_hz: 1.0,
+            residual_tolerance: 1.0e-12,
+            max_outer_iterations: 32,
+            max_linear_iterations: 128,
+            output_directory: None,
+            write_partial_artifacts: false,
+            completeness_policy: 0,
+            eigensolver_family: 0,
+            spectral_transform_kind: 0,
+            cancel_requested: None,
+            progress_callback: Some(&progress_callback),
+            tiny_validation_problem: Some(NativeModalEigenTinyValidationProblem {
+                tangent_dof_count: 2,
+                stiffness_matrix_row_major: Some(&stiffness_matrix_row_major),
+                mass_matrix_row_major: Some(&gyrotropic_mass_row_major),
+                stiffness_diagonal: None,
+                mass_diagonal: None,
+            }),
+        })
+        .expect("native modal validation solve should return a structured result");
+
+        assert_eq!(result.status, NativeFrequencyDomainStatus::Ok);
+        assert!(result.diagnostics_json.contains("\"tiny_validation_solver\":true"));
+        assert!(result.result_json.contains("\"status\":\"ok\""));
+        let progress_events = progress_events.into_inner();
+        assert_eq!(progress_events.len(), 1);
+        assert!(progress_events[0].contains("\"solver_phase\":\"solving_shift_invert\""));
+        assert!(progress_events[0].contains("\"outer_iteration\":1"));
+        assert!(progress_events[0].contains("\"linear_iteration\":1"));
+        assert!(progress_events[0].contains("\"accepted_mode_count\":1"));
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn modal_shift_invert_progress_cancel_returns_interrupted() {
+        let stiffness_matrix_row_major = [1.0, 0.0, 0.0, 1.0];
+        let gyrotropic_mass_row_major = [0.0, -1.0, 1.0, 0.0];
+        let cancel_callback = || true;
+
+        let result = solve_native_modal_eigen(NativeModalEigenRequest {
+            mesh_asset_id: "macrospin_validation",
+            equilibrium_source_kind: "provided",
+            gamma_rad_s_t: 1.760859e11,
+            mu0_t_m_a: 1.25663706212e-6,
+            alpha: 0.0,
+            include_exchange: false,
+            include_demag: false,
+            demag_realization: None,
+            damping_policy: "ignore",
+            spin_wave_bc_kind: "free",
+            k_vector_rad_m: None,
+            operator_diagnostics_json: None,
+            requested_mode_count: 1,
+            target_kind: "nearest_frequency",
+            target_frequency_hz: 0.16,
+            frequency_min_hz: 0.0,
+            frequency_max_hz: 1.0,
+            residual_tolerance: 1.0e-12,
+            max_outer_iterations: 32,
+            max_linear_iterations: 128,
+            output_directory: None,
+            write_partial_artifacts: false,
+            completeness_policy: 0,
+            eigensolver_family: 0,
+            spectral_transform_kind: 0,
+            cancel_requested: Some(&cancel_callback),
+            progress_callback: None,
+            tiny_validation_problem: Some(NativeModalEigenTinyValidationProblem {
+                tangent_dof_count: 2,
+                stiffness_matrix_row_major: Some(&stiffness_matrix_row_major),
+                mass_matrix_row_major: Some(&gyrotropic_mass_row_major),
+                stiffness_diagonal: None,
+                mass_diagonal: None,
+            }),
+        })
+        .expect("native modal validation cancel should return a structured result");
+
+        assert_eq!(result.status, NativeFrequencyDomainStatus::Interrupted);
+        assert!(result.diagnostics_json.contains("\"status\":\"interrupted\""));
+        assert!(result.diagnostics_json.contains("\"stop_reason\":\"cancel_requested\""));
+        assert!(result.result_json.contains("\"status\":\"interrupted\""));
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn frequency_domain_operator_diagnostics_are_embedded_in_driven_contract_results() {
+        let frequencies_hz = [1.0e9];
+        let excitation_field_a_m = [0.0, 0.0, 1.0];
+        let result = solve_native_driven_response_contract(NativeDrivenResponseContractRequest {
+            mesh_asset_id: "mesh",
+            equilibrium_source_kind: "relax",
+            gamma_rad_s_t: 1.760859e11,
+            mu0_t_m_a: 1.25663706212e-6,
+            alpha: 0.01,
+            include_exchange: true,
+            include_demag: false,
+            demag_realization: None,
+            damping_policy: "include",
+            spin_wave_bc_kind: "free",
+            k_vector_rad_m: None,
+            operator_diagnostics_json: Some(
+                "{\"schema_version\":\"frequency_domain_operator_diagnostics.v1\",\"active_node_count\":6,\"tangent_dof_count\":12}",
+            ),
+            frequencies_hz: &frequencies_hz,
+            excitation_field_a_m: &excitation_field_a_m,
+            excitation_phase_rad: 0.0,
+            residual_tolerance: 1.0e-8,
+            max_linear_iterations: 64,
+            output_directory: None,
+            write_partial_artifacts: false,
+        })
+        .expect("native driven contract should return a structured unavailable result");
+
+        assert_eq!(result.status, NativeFrequencyDomainStatus::Unavailable);
+        assert!(result
+            .diagnostics_json
+            .contains("\"operator_diagnostics\":{\"schema_version\":\"frequency_domain_operator_diagnostics.v1\""), "{}", result.diagnostics_json);
+        assert!(result
+            .diagnostics_json
+            .contains("\"active_node_count\":6"), "{}", result.diagnostics_json);
+        assert!(result
+            .diagnostics_json
+            .contains("\"tangent_dof_count\":12"), "{}", result.diagnostics_json);
     }
 
     #[cfg(feature = "fem-gpu")]
