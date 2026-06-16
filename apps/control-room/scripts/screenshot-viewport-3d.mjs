@@ -475,18 +475,10 @@ async function setVisualProfile(page, profile) {
 
 async function enableDimensionFrameCage(page) {
   const commandId = "viewport-3d.dimension-frame-cage";
+  await selectDimensionFrameMode(page, "Off");
+  await page.waitForTimeout(120);
   const baseline = await sampleCanvasComposite(page);
-  await page.getByRole("tab", { exact: true, name: "View" }).click({
-    force: true,
-  });
-  await clickFreshAction(
-    page,
-    '[data-action-id="view-dimension-frame"]',
-    "open dimension frame menu",
-  );
-  await page
-    .getByRole("menuitemradio", { exact: true, name: "Floor + vertical" })
-    .click({ force: true });
+  await selectDimensionFrameMode(page, "Floor + vertical");
   const changed = await waitForCanvasCompositeChange(
     page,
     baseline,
@@ -498,6 +490,20 @@ async function enableDimensionFrameCage(page) {
     `Viewport 3D dimension frame screenshot passed (command=${commandId}, changedPixels=${delta.changedPixels}/${delta.sampledPixels}).`,
   );
   return delta;
+}
+
+async function selectDimensionFrameMode(page, name) {
+  await page.getByRole("tab", { exact: true, name: "View" }).click({
+    force: true,
+  });
+  await clickFreshAction(
+    page,
+    '[data-action-id="view-dimension-frame"]',
+    "open dimension frame menu",
+  );
+  await page
+    .getByRole("menuitemradio", { exact: true, name })
+    .click({ force: true });
 }
 
 async function waitForCanvasCompositeChange(

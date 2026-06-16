@@ -240,6 +240,59 @@ describe("regionOverlayModel", () => {
     });
   });
 
+  it("uses opaque fill defaults for realized mesh-backed region surfaces", () => {
+    expect(
+      resolveRegionOverlayStyle({
+        enabled: true,
+        realizedSurface: true,
+        selected: false,
+      }),
+    ).toMatchObject({
+      fillOpacity: 1,
+      fillVisible: true,
+      wireframeOpacity: 0,
+      wireframeVisible: false,
+    });
+    expect(
+      resolveRegionOverlayStyle({
+        enabled: true,
+        realizedSurface: true,
+        selected: false,
+        settings: {
+          opacityPercent: 40,
+          shaderVisible: true,
+          visible: true,
+        } as never,
+      }),
+    ).toMatchObject({
+      fillOpacity: 0.4,
+      fillVisible: true,
+    });
+  });
+
+  it("uses solid mono color only when the region surface source is solid", () => {
+    expect(
+      resolveRegionOverlayStyle({
+        enabled: true,
+        selected: false,
+        settings: {
+          shaderMonoColor: "#123456",
+          surfaceColorSource: "orientation",
+        } as never,
+      }),
+    ).toMatchObject({ surfaceColor: null });
+    expect(
+      resolveRegionOverlayStyle({
+        enabled: true,
+        selected: false,
+        settings: {
+          shaderMonoColor: "#123456",
+          surfaceColorSource: "solid",
+        } as never,
+      }),
+    ).toMatchObject({ surfaceColor: "#123456" });
+  });
+
   it("applies per-region visualization target settings to authored overlays", () => {
     const [surfaceOnly] = buildRegionOverlayModels(
       [
@@ -258,6 +311,7 @@ describe("regionOverlayModel", () => {
             opacityPercent: 50,
             shaderMonoColor: "#123456",
             shaderVisible: true,
+            surfaceColorSource: "solid",
             visible: true,
             wireframeColor: "#abcdef",
             wireframeOpacityPercent: 80,

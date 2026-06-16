@@ -3,7 +3,11 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { buildVectorGlyphInstances } from "./vectorGlyphGeometry";
+import {
+  buildVectorGlyphColors,
+  buildVectorGlyphInstances,
+  buildVectorGlyphTransforms,
+} from "./vectorGlyphGeometry";
 import { magnitudeColorRgb } from "../viewport3dVectorColoring";
 
 describe("vectorGlyphGeometry", () => {
@@ -17,7 +21,7 @@ describe("vectorGlyphGeometry", () => {
   });
 
   it("builds shaft and head instance transforms from vector segments", () => {
-    const glyphs = buildVectorGlyphInstances(
+    const glyphs = buildVectorGlyphTransforms(
       new Float32Array([0, 0, 0, 1, 0, 0]),
       {
         headLengthRatio: 0.25,
@@ -27,11 +31,26 @@ describe("vectorGlyphGeometry", () => {
     );
 
     expect(glyphs.count).toBe(1);
+    expect("colors" in glyphs).toBe(false);
     expectFloatArrayClose(glyphs.directions, [1, 0, 0]);
     expectFloatArrayClose(glyphs.shaftCenters, [0.375, 0, 0]);
     expectFloatArrayClose(glyphs.shaftScales, [0.05, 0.75, 0.05]);
     expectFloatArrayClose(glyphs.headCenters, [0.875, 0, 0]);
     expectFloatArrayClose(glyphs.headScales, [0.12, 0.25, 0.12]);
+  });
+
+  it("builds vector glyph colors independently from transform buffers", () => {
+    const segments = new Float32Array([
+      0, 0, 0, 1, 0, 0,
+      0, 0, 0, -1, 0, 0,
+    ]);
+    const transforms = buildVectorGlyphTransforms(segments);
+    const colors = buildVectorGlyphColors(segments, "x");
+
+    expect(transforms.count).toBe(2);
+    expect(colors).toBeInstanceOf(Float32Array);
+    expect(colors?.length).toBe(6);
+    expect(buildVectorGlyphColors(segments, "monochrome")).toBeNull();
   });
 
   it("maps orientation coloring to one color per glyph instance", () => {

@@ -218,6 +218,35 @@ void modal_shift_invert_cancel_returns_interrupted()
     fullmag_fem_frequency_domain_result_destroy(&result);
 }
 
+void frequency_window_reports_unresolved_subwindow()
+{
+    constexpr double stiffness_matrix_row_major[] = {1.0, 0.0, 0.0, 1.0};
+    constexpr double gyrotropic_mass_row_major[] = {0.0, -1.0, 1.0, 0.0};
+
+    FullmagFemModalEigenRequest request = base_request();
+    request.target_kind = "frequency_window";
+    request.frequency_min_hz = 0.1;
+    request.frequency_max_hz = 0.5;
+    request.max_outer_iterations = 0;
+    request.tiny_validation_enabled = 1;
+    request.tiny_validation_tangent_dof_count = 2;
+    request.tiny_validation_stiffness_matrix_row_major = stiffness_matrix_row_major;
+    request.tiny_validation_mass_matrix_row_major = gyrotropic_mass_row_major;
+
+    FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_SOLVE_ERROR,
+          "unresolved frequency window must not report ok");
+    check(contains(result.diagnostics_json, "\"window_completeness\""),
+          "unresolved frequency window diagnostics include completeness");
+    check(contains(result.diagnostics_json, "\"status\":\"partial_convergence\""),
+          "unresolved frequency window reports partial convergence");
+    check(contains(result.diagnostics_json, "\"stop_reason\":\"max_iterations\""),
+          "unresolved frequency window records max_iterations stop reason");
+    check(contains(result.result_json, "\"window_completeness\":\"partial_convergence\""),
+          "unresolved frequency window result exposes completeness status");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+}
+
 void modal_without_validation_problem_stays_unavailable()
 {
     FullmagFemModalEigenRequest request = base_request();
@@ -249,6 +278,7 @@ int main()
     modal_shift_invert_residual_below_tolerance();
     modal_shift_invert_reports_ksp_iterations();
     modal_shift_invert_cancel_returns_interrupted();
+    frequency_window_reports_unresolved_subwindow();
     modal_without_validation_problem_stays_unavailable();
     return 0;
 }

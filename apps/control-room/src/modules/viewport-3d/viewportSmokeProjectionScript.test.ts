@@ -337,6 +337,7 @@ describe("viewport smoke projection round-trip", () => {
     const screenshotScript = readFileSync(screenshotScriptUrl, "utf8");
 
     expect(screenshotScript).toContain("enableDimensionFrameCage");
+    expect(screenshotScript).toContain('selectDimensionFrameMode(page, "Off")');
     expect(screenshotScript).toContain('name: "Floor + vertical"');
     expect(screenshotScript).toContain("viewport-3d.dimension-frame-cage");
     expect(screenshotScript).toContain("dimensionFrameChangedPixels=");

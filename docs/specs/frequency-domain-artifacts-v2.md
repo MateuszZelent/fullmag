@@ -288,6 +288,23 @@ Reference driven manifest:
 Modal solver diagnostics live at `eigen/diagnostics/solver.v1.json` and must
 describe the modal `modal_eigen` solve only.
 
+When the modal target is `frequency_window`, solver diagnostics must also
+publish the resolved window search contract:
+
+- `requested_window_hz = [frequency_min_hz, frequency_max_hz]`,
+- `resolved_search_window_hz = [min_guarded_hz, max_guarded_hz]`,
+- `window_completeness.{policy,status,certification_method,additional_modes_may_exist}`,
+- `subwindows[]` with requested/search bounds, shift, iteration totals,
+  candidate/accepted counts, residual max, and a modal `stop_reason`.
+
+The allowed completeness policies are `best_effort` and `certified_count`.
+The allowed statuses are `not_certified`, `certified`,
+`partial_convergence`, `truncated_by_requested_count`, and
+`window_exhausted`. Subwindow stop reasons must use the modal solver vocabulary
+(`converged`, `window_exhausted`, `partial_convergence`, `max_iterations`,
+`linear_solve_failed`, `residual_not_met`, `cancelled`,
+`capability_missing`, or `operator_invalid`), never a generic `completed`.
+
 ## response/diagnostics/solver.v1.json
 
 Driven solver diagnostics live at `response/diagnostics/solver.v1.json` and

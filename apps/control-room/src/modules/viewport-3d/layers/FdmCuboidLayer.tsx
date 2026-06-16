@@ -173,7 +173,8 @@ export function buildFdmCuboidInstanceModel(
   const topography = normalizeVoxelTopography(options.voxelTopography);
   const gridCells = Math.max(nx * ny * nz, 1);
   const totalCells = Math.min(domain.totalCells, gridCells);
-  const sampledCellIndices: number[] = [];
+  const sampledCellIndices = new Uint32Array(candidateCount);
+  let sampledCellCount = 0;
 
   for (let instance = 0; instance < candidateCount; instance += 1) {
     const cellIndex = Math.min(
@@ -183,10 +184,11 @@ export function buildFdmCuboidInstanceModel(
     if (!cellPassesMagnitudeThreshold(options.fieldVector, cellIndex, threshold)) {
       continue;
     }
-    sampledCellIndices.push(cellIndex);
+    sampledCellIndices[sampledCellCount] = cellIndex;
+    sampledCellCount += 1;
   }
 
-  const count = sampledCellIndices.length;
+  const count = sampledCellCount;
   if (count <= 0) return null;
 
   const centers = new Float32Array(count * 3);
@@ -533,7 +535,6 @@ interface FdmCuboidMatrixUploadOptions {
   shaderVisible: boolean;
   surfaceRef: { current: InstancedMesh | null };
   tracker: Viewport3DResourceTracker;
-  usesInstanceColors: boolean;
   wireframeRef: { current: InstancedMesh | null };
   wireframeVisible: boolean;
 }
@@ -544,7 +545,6 @@ function useFdmCuboidMatrixUpload({
   shaderVisible,
   surfaceRef,
   tracker,
-  usesInstanceColors,
   wireframeRef,
   wireframeVisible,
 }: FdmCuboidMatrixUploadOptions): void {
@@ -618,7 +618,6 @@ function useFdmCuboidMatrixUpload({
     shaderVisible,
     surfaceRef,
     tracker,
-    usesInstanceColors,
     wireframeRef,
     wireframeVisible,
   ]);
@@ -828,16 +827,17 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
   const usesInstanceColors = Boolean(
     surfaceColors && surfaceColors.colors.length === (model?.count ?? 0) * 3,
   );
+  const surfaceMaterialColor = surfaceMaterialColorFromSettings(
+    renderSettings,
+    colors.mesh,
+    usesInstanceColors,
+  );
   const surfaceMaterial = useMemo(
     () =>
       tracker.track(
         "material",
         new MeshBasicMaterial({
-          color: surfaceMaterialColorFromSettings(
-            renderSettings,
-            colors.mesh,
-            usesInstanceColors,
-          ),
+          color: surfaceMaterialColor,
           opacity: surfaceOpacity,
           vertexColors: usesInstanceColors,
           ...materialProfile.magneticSurface,
@@ -845,25 +845,26 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
         }),
       ),
     [
-      colors.mesh,
       materialProfile.magneticSurface,
-      renderSettings,
+      surfaceMaterialColor,
       surfaceOpacity,
       tracker,
       usesInstanceColors,
     ],
   );
   const wireframePolicy = RENDER_POLICIES.featureEdges;
+  const wireframeColor = wireframeColorFromSettings(renderSettings, colors.wire);
+  const wireframeOpacity = wireframeOpacityFromSettings(
+    renderSettings,
+    materialProfile.featureEdges,
+  );
   const wireframeMaterial = useMemo(
     () =>
       tracker.track(
         "material",
         new MeshBasicMaterial({
-          color: wireframeColorFromSettings(renderSettings, colors.wire),
-          opacity: wireframeOpacityFromSettings(
-            renderSettings,
-            materialProfile.featureEdges,
-          ),
+          color: wireframeColor,
+          opacity: wireframeOpacity,
           transparent: wireframePolicy.transparent,
           depthWrite: wireframePolicy.depthWrite,
           depthTest: wireframePolicy.depthTest,
@@ -871,7 +872,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
           wireframe: true,
         }),
       ),
-    [colors.wire, materialProfile.featureEdges, renderSettings, tracker, wireframePolicy],
+    [tracker, wireframeColor, wireframeOpacity, wireframePolicy],
   );
 
   useEffect(() => () => tracker.release("geometry", geometry), [geometry, tracker]);
@@ -890,7 +891,6 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
     shaderVisible: renderSettings.shaderVisible,
     surfaceRef,
     tracker,
-    usesInstanceColors,
     wireframeRef,
     wireframeVisible: renderSettings.wireframeVisible,
   });

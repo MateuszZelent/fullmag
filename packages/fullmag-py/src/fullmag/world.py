@@ -1889,6 +1889,7 @@ class RelaxStageSpec:
     dt: float | Literal["auto"] | None = None
     max_error: float | None = None
     dt_min: float | None = None
+    dt_max: float | None = None
     field_refresh: FieldRefreshPolicy | None = None
     stop: RelaxStop | None = None
 
@@ -2190,6 +2191,7 @@ def relax_stage(
     dt: float | Literal["auto"] | None = None,
     max_error: float | None = None,
     dt_min: float | None = None,
+    dt_max: float | None = None,
     field_refresh: FieldRefreshPolicy | None = None,
     stop: RelaxStop | None = None,
 ) -> RelaxStageSpec:
@@ -2214,6 +2216,7 @@ def relax_stage(
         dt=dt,
         max_error=max_error,
         dt_min=dt_min,
+        dt_max=dt_max,
         field_refresh=field_refresh,
     )
     return RelaxStageSpec(
@@ -2228,6 +2231,7 @@ def relax_stage(
         dt=dt,
         max_error=max_error,
         dt_min=dt_min,
+        dt_max=dt_max,
         field_refresh=field_refresh,
         stop=resolved_stop,
     )
@@ -2334,6 +2338,7 @@ def _relax_problem_from_spec(spec: RelaxStageSpec) -> Problem:
         dt=spec.dt,
         max_error=spec.max_error,
         dt_min=spec.dt_min,
+        dt_max=spec.dt_max,
         field_refresh=spec.field_refresh,
     )
     problem = _build_problem(
@@ -2855,6 +2860,7 @@ class StudyStagesBuilder:
         dt: float | Literal["auto"] | None = None,
         max_error: float | None = None,
         dt_min: float | None = None,
+        dt_max: float | None = None,
         field_refresh: FieldRefreshPolicy | None = None,
         stop: RelaxStop | None = None,
     ) -> "StudyStagesBuilder":
@@ -2871,6 +2877,7 @@ class StudyStagesBuilder:
                 dt=dt,
                 max_error=max_error,
                 dt_min=dt_min,
+                dt_max=dt_max,
                 field_refresh=field_refresh,
                 stop=stop,
             )
@@ -3881,6 +3888,7 @@ class StudyBuilder:
         dt: float | Literal["auto"] | None = None,
         max_error: float | None = None,
         dt_min: float | None = None,
+        dt_max: float | None = None,
         field_refresh: FieldRefreshPolicy | None = None,
         stop: RelaxStop | None = None,
     ) -> Any:
@@ -3896,6 +3904,7 @@ class StudyBuilder:
             dt=dt,
             max_error=max_error,
             dt_min=dt_min,
+            dt_max=dt_max,
             field_refresh=field_refresh,
             stop=stop,
         )
@@ -5690,12 +5699,19 @@ def _build_relax_llg_dynamics(
     dt: float | Literal["auto"] | None,
     max_error: float | None,
     dt_min: float | None,
+    dt_max: float | None,
     field_refresh: FieldRefreshPolicy | None = None,
 ) -> LLG | None:
     if algorithm != "llg_overdamped":
-        if solver is not None or dt is not None or max_error is not None or dt_min is not None:
+        if (
+            solver is not None
+            or dt is not None
+            or max_error is not None
+            or dt_min is not None
+            or dt_max is not None
+        ):
             raise TypeError(
-                "solver/dt/max_error/dt_min are supported only for algorithm='llg_overdamped'"
+                "solver/dt/max_error/dt_min/dt_max are supported only for algorithm='llg_overdamped'"
             )
         return None
 
@@ -5706,6 +5722,11 @@ def _build_relax_llg_dynamics(
             raise ValueError("dt_min must be positive when provided")
         if fixed_timestep is not None:
             raise ValueError("dt_min requires dt='auto' for relax()")
+    if dt_max is not None:
+        if dt_max <= 0.0:
+            raise ValueError("dt_max must be positive when provided")
+        if fixed_timestep is not None:
+            raise ValueError("dt_max requires dt='auto' for relax()")
 
     adaptive_timestep = None
     if max_error is not None:
@@ -5720,6 +5741,8 @@ def _build_relax_llg_dynamics(
         adaptive_kwargs: dict[str, Any] = {"atol": max_error}
         if dt_min is not None:
             adaptive_kwargs["dt_min"] = dt_min
+        if dt_max is not None:
+            adaptive_kwargs["dt_max"] = dt_max
         adaptive_timestep = AdaptiveTimestep(**adaptive_kwargs)
     elif dt_is_auto and integrator in ADAPTIVE_INTEGRATORS:
         # dt=None (default) with an adaptive integrator: use default adaptive
@@ -5728,6 +5751,8 @@ def _build_relax_llg_dynamics(
         adaptive_kwargs = {}
         if dt_min is not None:
             adaptive_kwargs["dt_min"] = dt_min
+        if dt_max is not None:
+            adaptive_kwargs["dt_max"] = dt_max
         adaptive_timestep = AdaptiveTimestep(**adaptive_kwargs)
 
     if dt_is_auto and integrator not in ADAPTIVE_INTEGRATORS:
@@ -6048,6 +6073,7 @@ def run_while(
                 "dt",
                 "max_error",
                 "dt_min",
+                "dt_max",
             }
             unsupported = sorted(set(kwargs) - allowed)
             if unsupported:
@@ -6083,6 +6109,7 @@ def run_while(
                 dt=relax_kwargs.get("dt"),  # type: ignore[arg-type]
                 max_error=relax_kwargs.get("max_error"),  # type: ignore[arg-type]
                 dt_min=relax_kwargs.get("dt_min"),  # type: ignore[arg-type]
+                dt_max=relax_kwargs.get("dt_max"),  # type: ignore[arg-type]
             )
         until = cfg.max_time if cfg.max_time is not None else cfg.chunk_time * float(cfg.max_steps)
         return run(until)
@@ -6186,6 +6213,7 @@ def relax(
     dt: float | Literal["auto"] | None = None,
     max_error: float | None = None,
     dt_min: float | None = None,
+    dt_max: float | None = None,
     field_refresh: FieldRefreshPolicy | None = None,
     stop: RelaxStop | None = None,
 ) -> Any:
@@ -6219,6 +6247,8 @@ def relax(
         Only meaningful with adaptive-capable solvers (``rk23``/``rk45``).
     dt_min : float, optional
         Minimum adaptive relaxation timestep in seconds.
+    dt_max : float, optional
+        Maximum adaptive relaxation timestep in seconds.
     """
     (
         stop,
@@ -6242,6 +6272,7 @@ def relax(
         dt=dt,
         max_error=max_error,
         dt_min=dt_min,
+        dt_max=dt_max,
         field_refresh=field_refresh,
     )
     from fullmag.runtime import Simulation

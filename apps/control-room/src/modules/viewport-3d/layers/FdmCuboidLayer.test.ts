@@ -157,6 +157,18 @@ describe("FdmCuboidLayer model", () => {
     ).toBeNull();
   });
 
+  it("preallocates sampled FDM cell indices in the instance-model hot path", () => {
+    const layerSource = readFileSync(fdmCuboidLayerPath, "utf8");
+    const instanceModelBlock = layerSource.slice(
+      layerSource.indexOf("export function buildFdmCuboidInstanceModel"),
+      layerSource.indexOf("function clampVoxelFillRatio"),
+    );
+
+    expect(instanceModelBlock).toContain("new Uint32Array(candidateCount)");
+    expect(instanceModelBlock).not.toContain("sampledCellIndices.push");
+    expect(instanceModelBlock).not.toContain("number[] = []");
+  });
+
   it("builds vector glyph segments from sampled FDM cell indices", () => {
     const model = buildFdmCuboidInstanceModel(domainFixture());
     const segments = buildFdmVectorSegments(
@@ -258,6 +270,34 @@ describe("FdmCuboidLayer model", () => {
 
     expect(layerSource).toContain("MeshBasicMaterial");
     expect(layerSource).not.toContain("MeshStandardMaterial");
+  });
+
+  it("keeps FDM matrix uploads independent from scalar color changes", () => {
+    const layerSource = readFileSync(fdmCuboidLayerPath, "utf8");
+    const matrixUploadBlock = layerSource.slice(
+      layerSource.indexOf("interface FdmCuboidMatrixUploadOptions"),
+      layerSource.indexOf("interface FdmCuboidColorUploadOptions"),
+    );
+
+    expect(matrixUploadBlock).not.toContain("usesInstanceColors");
+  });
+
+  it("does not recreate FDM materials for vector-only setting changes", () => {
+    const layerSource = readFileSync(fdmCuboidLayerPath, "utf8");
+    const surfaceMaterialBlock = layerSource.slice(
+      layerSource.indexOf("const surfaceMaterial = useMemo"),
+      layerSource.indexOf("const wireframePolicy = RENDER_POLICIES.featureEdges"),
+    );
+    const wireframeMaterialBlock = layerSource.slice(
+      layerSource.indexOf("const wireframeMaterial = useMemo"),
+      layerSource.indexOf("useEffect(() => () => tracker.release(\"geometry\", geometry)"),
+    );
+
+    expect(surfaceMaterialBlock).toContain("surfaceMaterialColor");
+    expect(surfaceMaterialBlock).not.toContain("renderSettings,");
+    expect(wireframeMaterialBlock).toContain("wireframeColor");
+    expect(wireframeMaterialBlock).toContain("wireframeOpacity");
+    expect(wireframeMaterialBlock).not.toContain("renderSettings,");
   });
 
   it("uses a native raycast path for FDM inspect hover sampling", () => {

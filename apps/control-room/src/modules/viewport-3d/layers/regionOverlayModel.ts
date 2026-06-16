@@ -158,10 +158,12 @@ export function resolveRegionOverlayColor(
 
 export function resolveRegionOverlayStyle({
   enabled,
+  realizedSurface = false,
   selected,
   settings,
 }: {
   enabled: boolean;
+  realizedSurface?: boolean;
   selected: boolean;
   settings?: VisualizationTargetSettings | null;
 }): RegionOverlayStyle {
@@ -173,7 +175,7 @@ export function resolveRegionOverlayStyle({
   const opacityScale = Math.max(0, Math.min(100, settings?.opacityPercent ?? 100)) / 100;
   const wireframeOpacityScale =
     Math.max(0, Math.min(100, settings?.wireframeOpacityPercent ?? 100)) / 100;
-  const fillOpacityBase = selected ? 1 : 0.14;
+  const fillOpacityBase = realizedSurface ? 1 : selected ? 1 : 0.14;
   return {
     fillOpacity: fillVisible
       ? selected
@@ -181,7 +183,12 @@ export function resolveRegionOverlayStyle({
         : fillOpacityBase * opacityScale
       : 0,
     fillVisible,
-    surfaceColor: settings?.shaderMonoColor ?? null,
+    surfaceColor:
+      settings &&
+      (settings.surfaceColorSource === undefined ||
+        settings.surfaceColorSource === "solid")
+        ? settings.shaderMonoColor
+        : null,
     wireframeOpacity: wireframeVisible
       ? (selected ? 1 : 0.72) * wireframeOpacityScale
       : 0,
@@ -370,7 +377,12 @@ function buildRegionMeshOverlaySelectionModels(
       const enabled = region.enabled !== false;
       const selected = options.selectedRegionId === regionId;
       const settings = options.resolveSettings?.(region) ?? null;
-      const style = resolveRegionOverlayStyle({ enabled, selected, settings });
+      const style = resolveRegionOverlayStyle({
+        enabled,
+        realizedSurface: true,
+        selected,
+        settings,
+      });
       if (!style.fillVisible && !style.wireframeVisible) return [];
 
       return [

@@ -54,11 +54,45 @@ describe("VectorFieldLayer performance contracts", () => {
     expect(vectorFieldLayerSource).toContain(
       "fullmag.viewport3d.uploadVectorGlyphMatrices",
     );
+    expect(vectorFieldLayerSource).toContain("buildVectorGlyphTransforms");
+    expect(vectorFieldLayerSource).toContain("buildVectorGlyphColors");
+    expect(vectorFieldLayerSource).not.toContain(
+      "buildVectorGlyphInstances(segments",
+    );
     expect(vectorFieldLayerSource).not.toContain(
       "for (let index = 0; index < glyphs.count; index += 1)",
     );
     expect(vectorFieldLayerSource).not.toContain("requestAnimationFrame");
     expect(vectorFieldLayerSource).not.toContain("setTimeout(callback, 0)");
+  });
+
+  it("keeps vector color changes out of glyph transform builds and matrix uploads", () => {
+    const transformMemoStart = vectorFieldLayerSource.indexOf(
+      "const glyphTransforms = useMemo(",
+    );
+    const colorMemoStart = vectorFieldLayerSource.indexOf(
+      "const glyphColors = useMemo(",
+    );
+    expect(transformMemoStart).toBeGreaterThanOrEqual(0);
+    expect(colorMemoStart).toBeGreaterThan(transformMemoStart);
+
+    const transformMemoSource = vectorFieldLayerSource.slice(
+      transformMemoStart,
+      colorMemoStart,
+    );
+    expect(transformMemoSource).toContain("buildVectorGlyphTransforms");
+    expect(transformMemoSource).not.toContain("colorMode");
+    expect(vectorFieldLayerSource).toContain(
+      "buildVectorGlyphColors(segments, colorMode)",
+    );
+    expect(vectorFieldLayerSource).toContain(`  }, [
+    glyphTransforms,
+    headRef,
+    invalidate,
+    shaftRef,
+    tracker,
+    transformScratch,
+  ]);`);
   });
 });
 

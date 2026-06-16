@@ -15,14 +15,17 @@ export interface VectorGlyphInstanceOptions {
   shaftRadiusRatio?: number;
 }
 
-export interface VectorGlyphInstances {
-  colors: Float32Array | null;
+export interface VectorGlyphTransforms {
   count: number;
   directions: Float32Array;
   headCenters: Float32Array;
   headScales: Float32Array;
   shaftCenters: Float32Array;
   shaftScales: Float32Array;
+}
+
+export interface VectorGlyphInstances extends VectorGlyphTransforms {
+  colors: Float32Array | null;
 }
 
 // V1-matched proportions: larger head, thicker shaft for better visibility.
@@ -44,30 +47,25 @@ export function buildVectorGlyphInstances(
   segments: Float32Array,
   options: VectorGlyphInstanceOptions = {},
 ): VectorGlyphInstances {
+  const transforms = buildVectorGlyphTransforms(segments, options);
+  return {
+    ...transforms,
+    colors: buildVectorGlyphColors(segments, options.colorMode),
+  };
+}
+
+export function buildVectorGlyphTransforms(
+  segments: Float32Array,
+  options: VectorGlyphInstanceOptions = {},
+): VectorGlyphTransforms {
   // Support both 7-channel (production) and 6-channel (legacy / test) formats.
-  const segmentStride =
-    segments.length > 0 && segments.length % FLOATS_PER_SEGMENT === 0
-      ? FLOATS_PER_SEGMENT
-      : 6;
+  const segmentStride = resolveSegmentStride(segments);
   const count = Math.floor(segments.length / segmentStride);
-  const colorMode = normalizeViewport3DVectorColorMode(options.colorMode);
   const headLengthRatio =
     options.headLengthRatio ?? DEFAULT_HEAD_LENGTH_RATIO;
   const headRadiusRatio = options.headRadiusRatio ?? DEFAULT_HEAD_RADIUS_RATIO;
   const shaftRadiusRatio =
     options.shaftRadiusRatio ?? DEFAULT_SHAFT_RADIUS_RATIO;
-  const colors =
-    colorMode !== "monochrome"
-      ? new Float32Array(count * 3)
-      : null;
-  const colorRange = colors
-    ? resolveSegmentColorRange(
-        segments,
-        count,
-        segmentStride,
-        colorMode,
-      )
-    : null;
   const directions = new Float32Array(count * 3);
   const headCenters = new Float32Array(count * 3);
   const headScales = new Float32Array(count * 3);
@@ -83,7 +81,6 @@ export function buildVectorGlyphInstances(
     const ex = segments[source + 3] ?? sx;
     const ey = segments[source + 4] ?? sy;
     const ez = segments[source + 5] ?? sz;
-    const relMag = segmentStride >= 7 ? (segments[source + 6] ?? 1) : 1;
     const dx = ex - sx;
     const dy = ey - sy;
     const dz = ez - sz;
@@ -115,22 +112,9 @@ export function buildVectorGlyphInstances(
     headScales[target] = headRadius;
     headScales[target + 1] = headLength;
     headScales[target + 2] = headRadius;
-
-    if (colors && colorRange) {
-      const rgb = resolveViewport3DVectorColorRgb(
-        colorMode,
-        dx,
-        dy,
-        dz,
-        colorRange,
-        relMag,
-      );
-      if (rgb) colors.set(rgb, target);
-    }
   }
 
   return {
-    colors,
     count,
     directions,
     headCenters,
@@ -138,6 +122,56 @@ export function buildVectorGlyphInstances(
     shaftCenters,
     shaftScales,
   };
+}
+
+export function buildVectorGlyphColors(
+  segments: Float32Array,
+  colorModeValue?: string,
+): Float32Array | null {
+  const segmentStride = resolveSegmentStride(segments);
+  const count = Math.floor(segments.length / segmentStride);
+  const colorMode = normalizeViewport3DVectorColorMode(colorModeValue);
+  if (colorMode === "monochrome") return null;
+
+  const colors = new Float32Array(count * 3);
+  const colorRange = resolveSegmentColorRange(
+    segments,
+    count,
+    segmentStride,
+    colorMode,
+  );
+
+  for (let vector = 0; vector < count; vector += 1) {
+    const source = vector * segmentStride;
+    const target = vector * 3;
+    const sx = segments[source] ?? 0;
+    const sy = segments[source + 1] ?? 0;
+    const sz = segments[source + 2] ?? 0;
+    const dx = (segments[source + 3] ?? sx) - sx;
+    const dy = (segments[source + 4] ?? sy) - sy;
+    const dz = (segments[source + 5] ?? sz) - sz;
+    const relMag = segmentStride >= 7 ? (segments[source + 6] ?? 1) : 1;
+    const rgb = resolveViewport3DVectorColorRgb(
+      colorMode,
+      dx,
+      dy,
+      dz,
+      colorRange,
+      relMag,
+    );
+    if (!rgb) continue;
+    colors[target] = rgb[0] ?? 0;
+    colors[target + 1] = rgb[1] ?? 0;
+    colors[target + 2] = rgb[2] ?? 0;
+  }
+
+  return colors;
+}
+
+function resolveSegmentStride(segments: Float32Array): number {
+  return segments.length > 0 && segments.length % FLOATS_PER_SEGMENT === 0
+    ? FLOATS_PER_SEGMENT
+    : 6;
 }
 
 function resolveSegmentColorRange(

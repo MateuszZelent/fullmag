@@ -1,11 +1,16 @@
 #include "frequency_domain/modal_eigen_solver.hpp"
 
+#include "cpu/frequency_domain/mode_deduplication.hpp"
+#include "cpu/frequency_domain/mode_filter.hpp"
+#include "cpu/frequency_domain/window_partition.hpp"
+
 #include <cmath>
 #include <complex>
 #include <cstdio>
 #include <cstring>
 #include <limits>
 #include <string>
+#include <vector>
 
 namespace fullmag::fem::frequency_domain {
 
@@ -178,6 +183,135 @@ double target_shift_frequency_hz(const ModalEigenRequest &request) noexcept
     return 0.0;
 }
 
+bool is_frequency_window(const ModalEigenRequest &request) noexcept
+{
+    const char *target_kind = request.target_kind != nullptr ? request.target_kind : "";
+    return std::strcmp(target_kind, "frequency_window") == 0;
+}
+
+FrequencyWindowPartitionRequest partition_request_from_modal_request(
+    const ModalEigenRequest &request) noexcept
+{
+    FrequencyWindowPartitionRequest partition_request{};
+    partition_request.frequency_min_hz = request.frequency_min_hz;
+    partition_request.frequency_max_hz = request.frequency_max_hz;
+    partition_request.requested_mode_count = request.requested_mode_count;
+    partition_request.completeness_policy = request.completeness_policy;
+    return partition_request;
+}
+
+std::string window_completeness_status(
+    const FrequencyWindowPartition &partition,
+    bool unresolved,
+    bool truncated_by_requested_count) noexcept
+{
+    if (unresolved) {
+        return "partial_convergence";
+    }
+    if (truncated_by_requested_count) {
+        return "truncated_by_requested_count";
+    }
+    if (!partition.uncertified_subwindows.empty() ||
+        std::strcmp(partition.certification_method, "none") == 0) {
+        return "not_certified";
+    }
+    return "certified";
+}
+
+std::string window_diagnostics_json(
+    const ModalEigenRequest &request,
+    const FrequencyWindowPartition &partition,
+    double accepted_frequency_hz,
+    double residual,
+    std::uint64_t accepted_mode_count,
+    bool unresolved,
+    bool truncated_by_requested_count)
+{
+    if (partition.subwindows.empty()) {
+        return "";
+    }
+    const std::string completeness_status =
+        window_completeness_status(partition, unresolved, truncated_by_requested_count);
+    double resolved_min_hz = partition.subwindows.front().search_min_hz;
+    double resolved_max_hz = partition.subwindows.front().search_max_hz;
+    for (const FrequencySubwindow &subwindow : partition.subwindows) {
+        resolved_min_hz = std::min(resolved_min_hz, subwindow.search_min_hz);
+        resolved_max_hz = std::max(resolved_max_hz, subwindow.search_max_hz);
+    }
+    const char *additional_modes_may_exist =
+        std::strcmp(partition.completeness_policy, "best_effort") == 0 ||
+                unresolved || truncated_by_requested_count ?
+            "true" :
+            "false";
+
+    std::string json =
+        "\"requested_window_hz\":[" +
+        format_double(request.frequency_min_hz) + "," +
+        format_double(request.frequency_max_hz) + "],"
+        "\"resolved_search_window_hz\":[" +
+        format_double(resolved_min_hz) + "," +
+        format_double(resolved_max_hz) + "],"
+        "\"window_completeness\":{"
+        "\"policy\":\"" +
+        std::string(partition.completeness_policy) +
+        "\",\"status\":\"" +
+        completeness_status +
+        "\",\"certification_method\":\"" +
+        std::string(partition.certification_method) +
+        "\",\"estimated_modes_in_window\":" +
+        std::to_string(partition.estimated_modes_in_window) +
+        ",\"certified_modes_in_window\":" +
+        std::to_string(partition.certified_modes_in_window) +
+        ",\"additional_modes_may_exist\":" +
+        std::string(additional_modes_may_exist) +
+        "},\"subwindows\":[";
+
+    for (std::size_t i = 0; i < partition.subwindows.size(); ++i) {
+        const FrequencySubwindow &subwindow = partition.subwindows[i];
+        const bool candidate_in_search =
+            std::isfinite(accepted_frequency_hz) &&
+            accepted_frequency_hz >= subwindow.search_min_hz &&
+            accepted_frequency_hz <= subwindow.search_max_hz;
+        const bool accepted_in_requested =
+            accepted_mode_count > 0 &&
+            std::isfinite(accepted_frequency_hz) &&
+            accepted_frequency_hz >= subwindow.requested_min_hz &&
+            accepted_frequency_hz <= subwindow.requested_max_hz;
+        const char *stop_reason = unresolved ?
+            "max_iterations" :
+            (accepted_in_requested ? "converged" : "window_exhausted");
+        if (i > 0) {
+            json += ",";
+        }
+        json +=
+            "{\"index\":" +
+            std::to_string(subwindow.index) +
+            ",\"requested_hz\":[" +
+            format_double(subwindow.requested_min_hz) + "," +
+            format_double(subwindow.requested_max_hz) +
+            "],\"search_hz\":[" +
+            format_double(subwindow.search_min_hz) + "," +
+            format_double(subwindow.search_max_hz) +
+            "],\"shift_hz\":" +
+            format_double(subwindow.shift_hz) +
+            ",\"outer_iterations\":" +
+            std::to_string(unresolved ? 0 : 1) +
+            ",\"linear_iterations_total\":" +
+            std::to_string(unresolved ? 0 : 1) +
+            ",\"candidate_modes\":" +
+            std::to_string(candidate_in_search ? 1 : 0) +
+            ",\"accepted_modes\":" +
+            std::to_string(accepted_in_requested ? 1 : 0) +
+            ",\"residual_max\":" +
+            format_double(candidate_in_search ? residual : 0.0) +
+            ",\"stop_reason\":\"" +
+            stop_reason +
+            "\"}";
+    }
+    json += "]";
+    return json;
+}
+
 bool load_tiny_validation_matrix(
     const double *matrix_row_major,
     const double *diagonal,
@@ -202,6 +336,44 @@ bool load_tiny_validation_matrix(
 double complex_vector_norm2(const std::complex<double> v[2]) noexcept
 {
     return std::sqrt(std::norm(v[0]) + std::norm(v[1]));
+}
+
+FrequencyDomainContractResult unresolved_window_result(
+    const ModalEigenRequest &request,
+    const FrequencyWindowPartition &partition) noexcept
+{
+    FrequencyDomainContractResult result{};
+    result.status = FrequencyDomainStatus::solve_error;
+    result.error_message =
+        "native FEM modal_eigen frequency window did not resolve before max_outer_iterations";
+    std::string diagnostics =
+        "{\"schema_version\":\"frequency_domain_modal_diagnostics.v1\","
+        "\"study_product\":\"modal_eigen\","
+        "\"status\":\"solve_error\","
+        "\"complete\":false,"
+        "\"execution_lane\":\"validation\","
+        "\"progress_schema_version\":\"fem_frequency_domain_progress.v1\","
+        "\"tiny_validation_solver\":true,"
+        "\"stop_reason\":\"max_iterations\",";
+    diagnostics += window_diagnostics_json(
+        request,
+        partition,
+        std::numeric_limits<double>::quiet_NaN(),
+        0.0,
+        0,
+        true,
+        false);
+    diagnostics += "}";
+    result.diagnostics_json = with_operator_diagnostics(
+        diagnostics,
+        request.operator_request.operator_diagnostics_json);
+    result.result_json =
+        "{\"schema_version\":\"frequency_domain_modal_result.v1\","
+        "\"study_product\":\"modal_eigen\","
+        "\"status\":\"solve_error\","
+        "\"accepted_mode_count\":0,"
+        "\"window_completeness\":\"partial_convergence\"}";
+    return result;
 }
 
 FrequencyDomainContractResult interrupted_result(
@@ -267,6 +439,20 @@ FrequencyDomainContractResult solve_tiny_validation_modal_problem(
             "modal tiny validation requires stiffness and gyrotropic mass matrices",
             "tiny_validation_missing_matrices",
             request.operator_request.operator_diagnostics_json);
+    }
+    FrequencyWindowPartition partition{};
+    if (is_frequency_window(request)) {
+        partition = partition_frequency_window(partition_request_from_modal_request(request));
+        if (partition.subwindows.empty()) {
+            return validation_error_result(
+                "modal_eigen",
+                "modal frequency_window requires finite ordered non-negative bounds",
+                "invalid_frequency_window",
+                request.operator_request.operator_diagnostics_json);
+        }
+        if (request.max_outer_iterations <= 0) {
+            return unresolved_window_result(request, partition);
+        }
     }
 
     const double det_g =
@@ -453,6 +639,70 @@ FrequencyDomainContractResult solve_tiny_validation_modal_problem(
         return result;
     }
 
+    std::uint64_t accepted_mode_count = 1;
+    bool truncated_by_requested_count = false;
+    if (is_frequency_window(request)) {
+        ModalCandidate candidate{};
+        candidate.frequency_hz = chosen_frequency_hz;
+        candidate.relative_residual = relative_residual;
+        candidate.mode = {eigenvector[0], eigenvector[1]};
+        const std::vector<ModalCandidate> filtered = filter_modes_for_window(
+            std::vector<ModalCandidate>{candidate},
+            request.frequency_min_hz,
+            request.frequency_max_hz,
+            request.residual_tolerance);
+        constexpr double identity_mass[4] = {
+            1.0, 0.0,
+            0.0, 1.0,
+        };
+        std::vector<ModalCandidate> deduplicated =
+            deduplicate_modes_by_frequency_and_overlap(
+                filtered,
+                identity_mass,
+                2,
+                1.0e-6,
+                1.0e3,
+                0.90);
+        if (request.requested_mode_count > 0 &&
+            static_cast<int>(deduplicated.size()) > request.requested_mode_count) {
+            deduplicated.resize(static_cast<std::size_t>(request.requested_mode_count));
+            truncated_by_requested_count = true;
+        }
+        accepted_mode_count = deduplicated.size();
+        if (deduplicated.empty()) {
+            result.status = FrequencyDomainStatus::solve_error;
+            result.error_message =
+                "modal tiny validation found no accepted mode in the requested frequency window";
+            result.diagnostics_json =
+                "{\"schema_version\":\"frequency_domain_modal_diagnostics.v1\","
+                "\"study_product\":\"modal_eigen\","
+                "\"status\":\"solve_error\","
+                "\"complete\":false,"
+                "\"execution_lane\":\"validation\","
+                "\"tiny_validation_solver\":true,"
+                "\"stop_reason\":\"window_exhausted\",";
+            result.diagnostics_json += window_diagnostics_json(
+                request,
+                partition,
+                chosen_frequency_hz,
+                relative_residual,
+                0,
+                false,
+                false);
+            result.diagnostics_json += "}";
+            result.diagnostics_json = with_operator_diagnostics(
+                result.diagnostics_json,
+                request.operator_request.operator_diagnostics_json);
+            result.result_json =
+                "{\"schema_version\":\"frequency_domain_modal_result.v1\","
+                "\"study_product\":\"modal_eigen\","
+                "\"status\":\"solve_error\","
+                "\"accepted_mode_count\":0,"
+                "\"window_completeness\":\"window_exhausted\"}";
+            return result;
+        }
+    }
+
     if (cancel_requested(request)) {
         return interrupted_result(
             request,
@@ -464,9 +714,24 @@ FrequencyDomainContractResult solve_tiny_validation_modal_problem(
         request,
         shift_frequency_hz,
         candidate_mode_count,
-        1,
+        accepted_mode_count,
         relative_residual);
 
+    const std::string window_diagnostics =
+        is_frequency_window(request) ?
+            window_diagnostics_json(
+                request,
+                partition,
+                chosen_frequency_hz,
+                relative_residual,
+                accepted_mode_count,
+                false,
+                truncated_by_requested_count) :
+            "";
+    const std::string completeness_status =
+        is_frequency_window(request) ?
+            window_completeness_status(partition, false, truncated_by_requested_count) :
+            "";
     result.status = FrequencyDomainStatus::ok;
     result.error_message.clear();
     result.diagnostics_json =
@@ -486,7 +751,8 @@ FrequencyDomainContractResult solve_tiny_validation_modal_problem(
         "\"conjugate_pair_policy\":\"keep_positive_frequency_partner\","
         "\"requested_mode_count\":" +
         std::to_string(request.requested_mode_count) +
-        ",\"accepted_mode_count\":1,"
+        ",\"accepted_mode_count\":" +
+        std::to_string(accepted_mode_count) + ","
         "\"candidate_mode_count\":" +
         std::to_string(candidate_mode_count) +
         ",\"shift_frequency_hz\":" +
@@ -494,7 +760,12 @@ FrequencyDomainContractResult solve_tiny_validation_modal_problem(
         ",\"outer_iteration\":1,"
         "\"linear_iteration\":1,"
         "\"relative_residual_max\":" +
-        format_double(relative_residual) + "}";
+        format_double(relative_residual);
+    if (!window_diagnostics.empty()) {
+        result.diagnostics_json += ",";
+        result.diagnostics_json += window_diagnostics;
+    }
+    result.diagnostics_json += "}";
     result.diagnostics_json = with_operator_diagnostics(
         result.diagnostics_json,
         request.operator_request.operator_diagnostics_json);
@@ -502,7 +773,8 @@ FrequencyDomainContractResult solve_tiny_validation_modal_problem(
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
         "\"status\":\"ok\","
-        "\"accepted_mode_count\":1,"
+        "\"accepted_mode_count\":" +
+        std::to_string(accepted_mode_count) + ","
         "\"frequency_hz\":" +
         format_double(chosen_frequency_hz) +
         ",\"omega_rad_s\":" +
@@ -514,7 +786,13 @@ FrequencyDomainContractResult solve_tiny_validation_modal_problem(
         "\"relative_residual\":" +
         format_double(relative_residual) +
         ",\"shift_frequency_hz\":" +
-        format_double(shift_frequency_hz) + "}";
+        format_double(shift_frequency_hz);
+    if (is_frequency_window(request)) {
+        result.result_json += ",\"window_completeness\":\"";
+        result.result_json += completeness_status;
+        result.result_json += "\"";
+    }
+    result.result_json += "}";
     result.artifact_manifest_path.clear();
     return result;
 }

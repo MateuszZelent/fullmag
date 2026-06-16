@@ -3994,6 +3994,36 @@ class ProblemApiTests(unittest.TestCase):
         self.assertIn('solver="rk45"', rewritten)
         self.assertIn("dt=2e-13", rewritten)
 
+    def test_study_builder_relax_stage_roundtrips_adaptive_dt_max(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("stage_authoring")
+        study.engine("fem")
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.texture.uniform(1, 0, 0)
+        study.stages.add_relax(
+            max_steps=25,
+            solver="rk45",
+            max_error=1e-6,
+            dt_min=1e-17,
+            dt_max=1e-15,
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_builder_study_stage_relax_dt_max.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+
+        rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+        self.assertIn('solver="rk45"', rewritten)
+        self.assertIn("dt_min=1e-17", rewritten)
+        self.assertIn("dt_max=1e-15", rewritten)
+
     def test_study_stage_builder_add_minimize_maps_to_relaxation_algorithm(self) -> None:
         script = """
         import fullmag as fm
@@ -5444,6 +5474,38 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(dynamics["integrator"], "rk45")
         self.assertEqual(dynamics["adaptive_timestep"]["atol"], 1e-4)
         self.assertEqual(dynamics["adaptive_timestep"]["dt_min"], 1e-17)
+
+    def test_staged_relax_dt_max_lowers_to_adaptive_timestep(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("staged_relax_dt_max")
+        study.engine("fem")
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.texture.uniform(1, 0, 0)
+        body.mesh(maximum_element_size=5e-9, order=1).build()
+        study.stages.add_relax(
+            solver="rk45",
+            max_error=1e-6,
+            dt_min=1e-17,
+            dt_max=1e-15,
+            max_steps=5,
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_staged_relax_dt_max.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path)
+
+        dynamics = loaded.stages[0].problem.study.to_ir()["dynamics"]
+        self.assertEqual(dynamics["integrator"], "rk45")
+        self.assertEqual(dynamics["adaptive_timestep"]["atol"], 1e-6)
+        self.assertEqual(dynamics["adaptive_timestep"]["dt_min"], 1e-17)
+        self.assertEqual(dynamics["adaptive_timestep"]["dt_max"], 1e-15)
 
     def test_flat_stage_sequence_is_supported(self) -> None:
         script = """
