@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isValidElement, type ReactElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -9,6 +10,7 @@ import {
 } from "@/kernel/visualization/ObjectVisualizationController";
 
 import type { Viewport3DMeshPart } from "../viewport3dDomainAdapter";
+import { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import type {
   Viewport3DFieldRenderModel,
   Viewport3DTopologyRenderModel,
@@ -30,6 +32,10 @@ import {
 } from "./BoundsLayers";
 import { VERTEX_COLOR_MATERIAL_COLOR } from "./viewport3DLayerSettings";
 import { resolveViewport3DMaterialProfile } from "./viewport3DMaterialProfile";
+
+vi.mock("../viewport3dBatchedInvalidate", () => ({
+  useBatchedInvalidate: () => () => undefined,
+}));
 
 const colors = {
   accent: "#aaccff",
@@ -351,6 +357,47 @@ describe("AirboxLayer", () => {
       topologyModel,
       topologyFreshness: "current",
     });
+  });
+
+  it("renders vector-only airbox layers when sampled H_eff segments are present", () => {
+    const topologyModel = airboxTopology();
+    const tracker = new Viewport3DResourceTracker();
+    const fieldModel = {
+      complexFieldVector: null,
+      fullVectorSegments: null,
+      partVectorSegments: new Map([
+        ["airbox-part", new Float32Array([0, 0, 0, 1, 0, 0, 1])],
+      ]),
+      scalarColors: null,
+      scalarColorsByPartAndMode: new Map(),
+      scalarColorsByMode: new Map(),
+      visualizationPhaseRad: null,
+    } satisfies Viewport3DFieldRenderModel;
+
+    const markup = renderToStaticMarkup(
+      <AirboxLayerContent
+        colors={colors}
+        fieldModel={fieldModel}
+        materialProfile={materialProfile}
+        onSelectPart={() => undefined}
+        settings={{
+          ...DEFAULT_AIRBOX_VISUALIZATION,
+          boundsVisible: false,
+          pointsVisible: false,
+          shaderVisible: false,
+          vectorsVisible: true,
+          visible: true,
+          wireframeVisible: false,
+        }}
+        topologyFreshness="current"
+        topologyModel={topologyModel}
+        tracker={tracker}
+        vectorColorMode="orientation"
+        vectorStyle={{}}
+      />,
+    );
+
+    expect(markup).toContain("instancedMesh");
   });
 });
 

@@ -124,6 +124,10 @@ export class ResourceCache<TData> {
     };
   }
 
+  maxBytes(): number {
+    return this.options.maxBytes;
+  }
+
   private evictUntilWithinBudget(): void {
     while (this.byteLength > this.options.maxBytes) {
       let oldestKey: string | undefined;

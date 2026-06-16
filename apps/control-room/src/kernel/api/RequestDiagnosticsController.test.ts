@@ -44,6 +44,11 @@ describe("RequestDiagnosticsController", () => {
       channel: "http",
       direction: "rx",
     });
+    expect(diagnostics.stats()).toMatchObject({
+      entryCount: 2,
+      maxEntries: 2,
+    });
+    expect(diagnostics.stats().byteLength).toBeGreaterThan(0);
   });
 
   it("publishes changes to subscribers and clears entries", async () => {

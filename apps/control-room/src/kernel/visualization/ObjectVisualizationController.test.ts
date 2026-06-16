@@ -60,6 +60,7 @@ describe("ObjectVisualizationController", () => {
       wireframeColor: "var(--fm-airbox-wire)",
       wireframeOpacityPercent: 100,
       wireframeVisible: false,
+      airboxSyntheticVectorsEnabled: false,
     });
   });
 
@@ -148,6 +149,7 @@ describe("ObjectVisualizationController", () => {
         pointColor: "#66eeff",
         wireframeColor: "#888888",
         wireframeOpacityPercent: 75,
+        airboxSyntheticVectorsEnabled: true,
       }),
     ).toEqual({});
     expect(
@@ -161,8 +163,10 @@ describe("ObjectVisualizationController", () => {
         pointColor: "#66eeff",
         wireframeColor: "#888888",
         wireframeOpacityPercent: 75,
+        airboxSyntheticVectorsEnabled: true,
       }),
     ).toEqual({
+      airboxSyntheticVectorsEnabled: true,
       shaderColorMode: "monochrome",
       shaderMonoColor: "#ffffff",
       surfaceColorSource: "solid",
@@ -172,6 +176,40 @@ describe("ObjectVisualizationController", () => {
       pointColor: "#66eeff",
       wireframeColor: "#888888",
       wireframeOpacityPercent: 75,
+    });
+  });
+
+  it("serializes airbox vector length and thickness as per-airbox overrides", () => {
+    const patch = airboxVisualizationStatePatchFromTargetPatch(
+      {
+        vectorLengthScale: 2.25,
+        vectorThickness: 1.5,
+      },
+      [],
+    );
+
+    expect(patch).toEqual({
+      overrides: [
+        {
+          scope: "airbox",
+          scope_id: "airbox",
+          style: {
+            vector_length_scale: 2.25,
+            vector_thickness: 1.5,
+          },
+        },
+      ],
+    });
+    expect(patch).not.toHaveProperty("vector_style");
+  });
+
+  it("keeps airbox vector length in local optimistic patches", () => {
+    expect(
+      airboxLocalVisualizationPatchFromTargetPatch({
+        vectorLengthScale: 2,
+      }),
+    ).toEqual({
+      vectorLengthScale: 2,
     });
   });
 
@@ -1080,7 +1118,6 @@ describe("ObjectVisualizationController", () => {
         opacityPercent: 25,
         shaderVisible: true,
         vectorBudget: 64,
-        vectorLengthScale: 2.25,
         vectorsVisible: true,
         visible: false,
         wireframeVisible: false,
@@ -1096,9 +1133,36 @@ describe("ObjectVisualizationController", () => {
           wireframe: { visible: false },
         },
       },
-      vector_style: {
-        length_scale: 2.25,
+    });
+  });
+
+  it("combines backend airbox layer patches with per-airbox style overrides", () => {
+    expect(
+      airboxVisualizationStatePatchFromTargetPatch(
+        {
+          vectorBudget: 64,
+          vectorLengthScale: 2.25,
+          vectorThickness: 1.5,
+          vectorsVisible: true,
+        },
+        [],
+      ),
+    ).toEqual({
+      layers: {
+        airbox: {
+          vectors: { density: 64, domain: "airbox_only", visible: true },
+        },
       },
+      overrides: [
+        {
+          scope: "airbox",
+          scope_id: "airbox",
+          style: {
+            vector_length_scale: 2.25,
+            vector_thickness: 1.5,
+          },
+        },
+      ],
     });
   });
 
@@ -1148,7 +1212,7 @@ describe("ObjectVisualizationController", () => {
         visible: false,
         wireframeVisible: false,
       }),
-    ).toEqual({ geometryScope: "full" });
+    ).toEqual({ geometryScope: "full", vectorLengthScale: 2 });
   });
 
   it("builds backend global visualization state patches from default target patches", () => {

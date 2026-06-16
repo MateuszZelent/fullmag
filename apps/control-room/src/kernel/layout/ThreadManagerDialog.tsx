@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Copy, Cpu, X } from "lucide-react";
+import { Check, Copy, Cpu, Database, X } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -18,10 +18,14 @@ import {
 } from "@/kernel/performance/reactRenderProfiler";
 import {
   buildThreadManagerClipboardLog,
+  buildThreadManagerMemoryBudgetRows,
   buildThreadManagerModel,
+  formatBytes,
   formatMs,
   type ThreadManagerLane,
+  type ThreadManagerMemoryBudgetRow,
 } from "@/kernel/performance/threadManagerModel";
+import { memoryBudgetRegistry } from "@/kernel/performance/MemoryBudgetRegistry";
 import { Button } from "@/shared/ui/Button";
 import {
   Dialog,
@@ -48,6 +52,11 @@ export function ThreadManagerDialog({
 }: ThreadManagerDialogProps) {
   const entries = useThreadDiagnostics(kernel, open);
   const model = useMemo(() => buildThreadManagerModel(entries), [entries]);
+  const diagnosticsStats = kernel.diagnostics.stats();
+  const memoryBudgetRows = buildThreadManagerMemoryBudgetRows([
+    ...memoryBudgetRegistry.snapshot(),
+    diagnosticsMemoryBudgetEntry(diagnosticsStats),
+  ]);
   const [copyState, setCopyState] = useState<CopyState>("idle");
   const copyResetTimerRef = useRef<number | null>(null);
   const reactProfilerEnabled = shouldEnableReactRenderProfiler();
@@ -86,6 +95,7 @@ export function ThreadManagerDialog({
       entries,
       generatedAt: new Date(),
       jsHeapBytes: memorySnapshot?.usedJSHeapSize ?? null,
+      memoryBudgetRows,
       model,
       reactProfilerEnabled,
     });
@@ -108,6 +118,7 @@ export function ThreadManagerDialog({
     entries,
     hardwareConcurrency,
     memorySnapshot?.usedJSHeapSize,
+    memoryBudgetRows,
     model,
     reactProfilerEnabled,
   ]);
@@ -296,6 +307,63 @@ export function ThreadManagerDialog({
           )}
         </section>
 
+        <section
+          className="fm-thread-manager__section"
+          aria-label="Memory budgets"
+        >
+          <div className="fm-thread-manager__section-title">
+            <Database size={14} aria-hidden="true" />
+            <span>Memory Budgets</span>
+          </div>
+          {memoryBudgetRows.length > 0 ? (
+            <div
+              className="fm-thread-manager__table fm-thread-manager__table--memory"
+              role="table"
+            >
+              <div
+                className="fm-thread-manager__row fm-thread-manager__row--header fm-thread-manager__row--memory"
+                role="row"
+              >
+                <span role="columnheader">Component</span>
+                <span role="columnheader">Usage</span>
+                <span role="columnheader">Limit</span>
+                <span role="columnheader">Entries</span>
+                <span role="columnheader">Util</span>
+                <span role="columnheader">Status</span>
+              </div>
+              {memoryBudgetRows.map((row) => (
+                <div
+                  className="fm-thread-manager__row fm-thread-manager__row--memory"
+                  data-status={row.status}
+                  role="row"
+                  key={row.id}
+                >
+                  <span role="cell" title={row.category}>
+                    {row.label}
+                  </span>
+                  <span role="cell">{formatBytes(row.byteLength)}</span>
+                  <span role="cell">
+                    {row.maxBytes === null
+                      ? "unbounded"
+                      : formatBytes(row.maxBytes)}
+                  </span>
+                  <span role="cell">{row.entryCount}</span>
+                  <span role="cell">
+                    {row.utilizationPercent === null
+                      ? "n/a"
+                      : `${row.utilizationPercent.toFixed(0)}%`}
+                  </span>
+                  <span role="cell">{memoryBudgetStatusLabel(row)}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="fm-thread-manager__empty" role="status">
+              No memory budget providers registered.
+            </div>
+          )}
+        </section>
+
         <section className="fm-thread-manager__section" aria-label="Workers">
           <div className="fm-thread-manager__section-title">
             <Cpu size={14} aria-hidden="true" />
@@ -362,16 +430,6 @@ function readBrowserMemorySnapshot(): BrowserMemorySnapshot | null {
   return memory;
 }
 
-function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes)) return "n/a";
-  if (bytes < 1024) return `${Math.round(bytes)} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) {
-    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  }
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
-}
-
 function formatRate(value: number, unit: string): string {
   if (!Number.isFinite(value)) return "n/a";
   if (unit === "fps") return `${value.toFixed(1)} fps`;
@@ -398,6 +456,32 @@ function laneLabel(lane: ThreadManagerLane): string {
       return "react";
     case "other":
       return "other";
+  }
+}
+
+function diagnosticsMemoryBudgetEntry(
+  stats: ReturnType<KernelApi["diagnostics"]["stats"]>,
+) {
+  return {
+    byteLength: stats.byteLength,
+    category: "session-state" as const,
+    entryCount: stats.entryCount,
+    id: "diagnostics.requestBuffer",
+    label: "Diagnostics buffer",
+    maxBytes: null,
+  };
+}
+
+function memoryBudgetStatusLabel(row: ThreadManagerMemoryBudgetRow): string {
+  switch (row.status) {
+    case "ok":
+      return "ok";
+    case "over-budget":
+      return "over budget";
+    case "unbounded-high":
+      return "unbounded high";
+    case "unbounded":
+      return "unbounded";
   }
 }
 

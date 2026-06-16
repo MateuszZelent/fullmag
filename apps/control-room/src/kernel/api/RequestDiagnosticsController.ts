@@ -38,6 +38,12 @@ export interface RequestDiagnosticRecord {
   timestampMs?: number;
 }
 
+export interface RequestDiagnosticsStats {
+  byteLength: number;
+  entryCount: number;
+  maxEntries: number;
+}
+
 type RequestDiagnosticListener = () => void;
 
 interface AggregatedTransportDiagnostic {
@@ -124,6 +130,17 @@ export class RequestDiagnosticsController {
     return this.newestFirstEntries;
   }
 
+  stats(): RequestDiagnosticsStats {
+    return {
+      byteLength: this.entries.reduce(
+        (total, entry) => total + estimateDiagnosticEntryByteLength(entry),
+        0,
+      ),
+      entryCount: this.entries.length,
+      maxEntries: this.maxEntries,
+    };
+  }
+
   subscribe(listener: RequestDiagnosticListener): () => void {
     this.listeners.add(listener);
     return () => {
@@ -203,6 +220,24 @@ export class RequestDiagnosticsController {
 
     return null;
   }
+}
+
+function estimateDiagnosticEntryByteLength(entry: RequestDiagnosticEntry): number {
+  return (
+    96 +
+    estimateStringByteLength(entry.contentType) +
+    estimateStringByteLength(entry.detail) +
+    estimateStringByteLength(entry.id) +
+    estimateStringByteLength(entry.messageType) +
+    estimateStringByteLength(entry.method) +
+    estimateStringByteLength(entry.outcome) +
+    estimateStringByteLength(entry.path) +
+    estimateStringByteLength(entry.requestId)
+  );
+}
+
+function estimateStringByteLength(value: string | null): number {
+  return value ? value.length * 2 : 0;
 }
 
 function normalizeByteLength(byteLength: number | null | undefined): number | null {

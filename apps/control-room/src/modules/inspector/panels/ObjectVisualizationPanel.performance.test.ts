@@ -51,6 +51,12 @@ describe("ObjectVisualizationPanel performance contracts", () => {
     expect(panelSource).toContain("onFieldCatalogRequest()");
   });
 
+  it("renders the airbox synthetic vector developer toggle locally", () => {
+    expect(panelSource).toContain('label="Dev +Z vectors"');
+    expect(panelSource).toContain("airboxSyntheticVectorsEnabled");
+    expect(panelSource).toContain("delete remotePatch.airboxSyntheticVectorsEnabled");
+  });
+
   it("renders scalar colormap controls in the visualization inspector", () => {
     expect(panelSource).toContain("resolveSurfaceColorSourceItems(settings.activeQuantityId)");
     expect(panelSource).toContain("ScalarColorbarControl");

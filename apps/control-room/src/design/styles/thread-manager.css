@@ -173,6 +173,16 @@
   grid-template-columns: minmax(160px, 1.4fr) 92px 72px 84px 84px minmax(110px, 1fr);
 }
 
+.fm-thread-manager__row--memory {
+  grid-template-columns: minmax(180px, 1.4fr) 96px 96px 72px 74px minmax(120px, 1fr);
+}
+
+.fm-thread-manager__row--memory[data-status="over-budget"] [role="cell"]:last-child,
+.fm-thread-manager__row--memory[data-status="unbounded-high"] [role="cell"]:last-child {
+  color: var(--fm-warning);
+  font-weight: 650;
+}
+
 .fm-thread-manager__workers {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -233,5 +243,9 @@
 
   .fm-thread-manager__row--activity {
     grid-template-columns: minmax(140px, 1.2fr) 88px 64px 76px 76px 100px;
+  }
+
+  .fm-thread-manager__row--memory {
+    grid-template-columns: minmax(150px, 1.2fr) 88px 88px 64px 64px 110px;
   }
 }

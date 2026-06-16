@@ -231,7 +231,9 @@ export function FallbackTopologyMeshLayer({
     !renderSettings.visible ||
     (!renderSettings.shaderVisible &&
       !renderSettings.wireframeVisible &&
-      !renderSettings.pointsVisible)
+      !renderSettings.pointsVisible &&
+      !renderSettings.vectorsVisible &&
+      !renderSettings.boundsVisible)
   ) {
     return null;
   }

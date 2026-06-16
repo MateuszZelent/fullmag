@@ -4,6 +4,7 @@ import type { RequestDiagnosticEntry } from "../api/RequestDiagnosticsController
 
 import {
   buildThreadManagerClipboardLog,
+  buildThreadManagerMemoryBudgetRows,
   buildThreadManagerModel,
   formatMs,
 } from "./threadManagerModel";
@@ -175,6 +176,47 @@ describe("threadManagerModel", () => {
     );
     expect(log).toContain(
       "10\tMEASURE\tfullmag.browser.longtask\t72.0 ms\tsource=workspace;attribution=script",
+    );
+  });
+
+  it("includes memory budgets in the clipboard log", () => {
+    const entries = [entry("fullmag.api.requestBinaryResource.field-vector", 8, 1)];
+    const model = buildThreadManagerModel(entries);
+    const memoryBudgetRows = buildThreadManagerMemoryBudgetRows([
+      {
+        byteLength: 128 * 1024 * 1024,
+        category: "viewport-cache",
+        entryCount: 4,
+        id: "viewport3d.fieldVectorCache",
+        label: "Field vector cache",
+        maxBytes: 128 * 1024 * 1024,
+      },
+      {
+        byteLength: 120 * 1024 * 1024,
+        category: "render-buffer",
+        entryCount: 48,
+        id: "viewport3d.render.partVectorSegmentCache",
+        label: "Part vector segment cache",
+        maxBytes: null,
+      },
+    ]);
+
+    const log = buildThreadManagerClipboardLog({
+      browserCores: null,
+      entries,
+      generatedAt: new Date("2026-05-28T07:30:00.000Z"),
+      jsHeapBytes: null,
+      memoryBudgetRows,
+      model,
+      reactProfilerEnabled: false,
+    });
+
+    expect(log).toContain("Memory Budgets");
+    expect(log).toContain(
+      "Field vector cache\tviewport-cache\t128.0 MB\t128.0 MB\t4\t100%\tok",
+    );
+    expect(log).toContain(
+      "Part vector segment cache\trender-buffer\t120.0 MB\tunbounded\t48\tn/a\tunbounded-high",
     );
   });
 

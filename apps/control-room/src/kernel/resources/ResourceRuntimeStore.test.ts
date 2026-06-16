@@ -181,6 +181,51 @@ describe("ResourceRuntimeStore", () => {
     });
   });
 
+  it("aborts stale in-flight loads when latest-only mode is requested", async () => {
+    const store = new ResourceRuntimeStore<string>();
+    const first = deferred<string>();
+    const latest = deferred<string>();
+    const signals: AbortSignal[] = [];
+    const firstLoad = vi.fn(({ signal }: { signal: AbortSignal }) => {
+      signals.push(signal);
+      return first.promise;
+    });
+    const latestLoad = vi.fn(({ signal }: { signal: AbortSignal }) => {
+      signals.push(signal);
+      return latest.promise;
+    });
+
+    void store.ensureLoad({
+      abortStaleInflight: true,
+      externalRevision: 1,
+      load: firstLoad,
+      resourceKey: "data/fields/m",
+      resolveRevision: () => 1,
+    });
+    const latestResult = store.ensureLoad({
+      abortStaleInflight: true,
+      externalRevision: 2,
+      load: latestLoad,
+      resourceKey: "data/fields/m",
+      resolveRevision: () => 2,
+    });
+
+    expect(firstLoad).toHaveBeenCalledTimes(1);
+    expect(latestLoad).toHaveBeenCalledTimes(1);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(signals[1]?.aborted).toBe(false);
+
+    first.resolve("old");
+    latest.resolve("new");
+    await latestResult;
+
+    expect(store.getSnapshot("data/fields/m")).toMatchObject({
+      data: "new",
+      revision: 2,
+      status: "ready",
+    });
+  });
+
   it("aborts an active load when a resource is paused", async () => {
     const store = new ResourceRuntimeStore<string>();
     const first = deferred<string>();

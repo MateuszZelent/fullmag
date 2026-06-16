@@ -56,7 +56,11 @@ async function patchSelectedTarget(
   }
 
   const localPatch = airboxLocalVisualizationPatchFromTargetPatch(patch);
-  const statePatch = airboxVisualizationStatePatchFromTargetPatch(patch);
+  const state = visualizationStateFromContext(context);
+  const statePatch = airboxVisualizationStatePatchFromTargetPatch(
+    patch,
+    state ? state.overrides ?? [] : undefined,
+  );
   if (Object.keys(localPatch).length > 0) {
     visualization.patchTarget(target, localPatch);
   }

@@ -6,6 +6,7 @@ import {
   resolveMeshPartSurfaceMaterialColor,
   surfaceMaterialColorFromSettings,
   VERTEX_COLOR_MATERIAL_COLOR,
+  vectorStyleFromSettings,
 } from "./viewport3DLayerSettings";
 
 function settings(
@@ -13,6 +14,7 @@ function settings(
 ): VisualizationTargetSettings {
   return {
     activeQuantityId: "m",
+    airboxSyntheticVectorsEnabled: false,
     boundsVisible: false,
     geometryScope: "full",
     opacityPercent: 100,
@@ -74,5 +76,18 @@ describe("resolveMeshPartSurfaceMaterialColor", () => {
         false,
       ),
     ).toBe("#313244");
+  });
+});
+
+describe("vectorStyleFromSettings", () => {
+  it("does not inherit global vector thickness when target settings omit it", () => {
+    expect(
+      vectorStyleFromSettings(settings({ vectorThickness: undefined }), {
+        monoColor: "#ffffff",
+        thickness: 4,
+      }),
+    ).toMatchObject({
+      thickness: 1,
+    });
   });
 });

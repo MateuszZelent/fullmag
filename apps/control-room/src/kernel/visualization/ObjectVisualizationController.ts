@@ -40,6 +40,7 @@ export interface VisualizationTargetRef {
 
 export interface VisualizationTargetSettings {
   activeQuantityId: string;
+  airboxSyntheticVectorsEnabled: boolean;
   boundsVisible: boolean;
   geometryScope: VisualizationGeometryScope;
   opacityPercent: number;
@@ -115,6 +116,7 @@ export const AIRBOX_VISUALIZATION_TARGET: VisualizationTargetRef = {
 
 export const DEFAULT_OBJECT_VISUALIZATION: VisualizationTargetSettings = {
   activeQuantityId: "m",
+  airboxSyntheticVectorsEnabled: false,
   boundsVisible: false,
   geometryScope: "surface",
   opacityPercent: 100,
@@ -145,6 +147,7 @@ export const DEFAULT_OBJECT_VISUALIZATION: VisualizationTargetSettings = {
 
 export const DEFAULT_AIRBOX_VISUALIZATION: VisualizationTargetSettings = {
   activeQuantityId: "H_demag",
+  airboxSyntheticVectorsEnabled: false,
   boundsVisible: false,
   geometryScope: "full",
   opacityPercent: 28,
@@ -996,18 +999,8 @@ export function airboxVisualizationStatePatchFromTargetPatch(
       ? {}
       : { wireframe: { visible: patch.wireframeVisible } }),
   };
-  const vectorStyle =
-    patch.vectorLengthScale === undefined
-      ? {}
-      : {
-          vector_style: {
-            length_scale: Math.max(0.1, Math.min(5, patch.vectorLengthScale)),
-          },
-        };
-
   const statePatch: VisualizationStatePatch = {
     ...(Object.keys(airbox).length > 0 ? { layers: { airbox } } : {}),
-    ...vectorStyle,
   };
   const hasAirboxOverride =
     currentOverrides?.some(
@@ -1046,6 +1039,12 @@ export function airboxVisualizationStatePatchFromTargetPatch(
     ...(patch.geometryScope === undefined
       ? {}
       : { geometryScope: patch.geometryScope }),
+    ...(patch.vectorLengthScale === undefined
+      ? {}
+      : { vectorLengthScale: patch.vectorLengthScale }),
+    ...(patch.vectorThickness === undefined
+      ? {}
+      : { vectorThickness: patch.vectorThickness }),
   };
   return currentOverrides && Object.keys(targetPatch).length > 0
     ? {
@@ -1066,6 +1065,9 @@ export function airboxLocalVisualizationPatchFromTargetPatch(
     ...(patch.activeQuantityId === undefined
       ? {}
       : { activeQuantityId: patch.activeQuantityId }),
+    ...(patch.airboxSyntheticVectorsEnabled === undefined
+      ? {}
+      : { airboxSyntheticVectorsEnabled: patch.airboxSyntheticVectorsEnabled }),
     ...(patch.geometryScope === undefined
       ? {}
       : { geometryScope: patch.geometryScope }),
@@ -1096,6 +1098,9 @@ export function airboxLocalVisualizationPatchFromTargetPatch(
     ...(patch.vectorMonoColor === undefined
       ? {}
       : { vectorMonoColor: patch.vectorMonoColor }),
+    ...(patch.vectorLengthScale === undefined
+      ? {}
+      : { vectorLengthScale: patch.vectorLengthScale }),
     ...(patch.vectorThickness === undefined
       ? {}
       : { vectorThickness: patch.vectorThickness }),

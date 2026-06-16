@@ -7,6 +7,10 @@ import type {
   DecodedFieldVector,
   DecodedTopology,
 } from "@/kernel/api/codecs";
+import {
+  memoryBudgetRegistry,
+  type MemoryBudgetEntry,
+} from "@/kernel/performance/MemoryBudgetRegistry";
 
 import {
   buildMappedVertexScalarColors,
@@ -128,6 +132,50 @@ type Viewport3DVectorFieldValueResolver = (
 ) => number | null;
 
 const DEFAULT_VIEWPORT_3D_VECTOR_GLYPH_BUDGET = 2048;
+const RENDER_CACHE_MAX_ENTRIES_PER_OWNER = 8;
+
+interface Viewport3DRenderCacheCounter {
+  byteLength: number;
+  entryCount: number;
+  id: string;
+  label: string;
+}
+
+interface ScopedVectorSelectionResolution {
+  resolverSelection: Viewport3DNodeSelection;
+  renderSelection: Viewport3DNodeSelection;
+}
+
+const renderCacheCounters = new Map<string, Viewport3DRenderCacheCounter>();
+
+const VIEWPORT_3D_RENDER_CACHE_DEFINITIONS = [
+  ["viewport3d.render.scalarColorCache", "Scalar color cache"],
+  ["viewport3d.render.partScalarColorCache", "Part scalar color cache"],
+  ["viewport3d.render.mappedScalarColorCache", "Mapped scalar color cache"],
+  ["viewport3d.render.fullVectorSegmentCache", "Full vector segment cache"],
+  ["viewport3d.render.partVectorSegmentCache", "Part vector segment cache"],
+] as const;
+
+for (const [id, label] of VIEWPORT_3D_RENDER_CACHE_DEFINITIONS) {
+  renderCacheCounters.set(id, {
+    byteLength: 0,
+    entryCount: 0,
+    id,
+    label,
+  });
+  memoryBudgetRegistry.register(id, () => {
+    const counter = renderCacheCounters.get(id);
+    if (!counter) return null;
+    return {
+      byteLength: counter.byteLength,
+      category: "render-buffer",
+      entryCount: counter.entryCount,
+      id,
+      label: counter.label,
+      maxBytes: null,
+    };
+  });
+}
 
 const scalarColorCache = new WeakMap<
   DecodedFieldVector,
@@ -444,24 +492,31 @@ export function buildViewport3DFieldRenderModel(
     const partFieldVector =
       explicitPartFieldVector ??
       (partUsesMagneticOnlyField ? renderFieldVector : fullFieldVector);
-    const sampledVectorSelection =
+    const isScopedPartFieldVector = Boolean(
       partFieldVector &&
-      partFieldVector !== renderFieldVector &&
-      partFieldVector.pointCount < topology.nodeCount
-        ? buildScopedPartFieldSampleSelection(
+        partFieldVector !== renderFieldVector &&
+        partFieldVector.pointCount < topology.nodeCount,
+    );
+    const scopedVectorSelection =
+      isScopedPartFieldVector && partFieldVector
+        ? resolveScopedPartVectorSelection(
             vectorSelection,
             topology,
             partFieldVector.pointCount,
+            airboxPartSet.has(partModel) ? magneticVectorNodeIndices : null,
           )
-        : vectorSelection;
-    const renderVectorSelection =
-      airboxPartSet.has(partModel) && magneticVectorNodeIndices
-        ? filterNodeSelectionExcludingIndices(
-            sampledVectorSelection,
-            topology,
-            magneticVectorNodeIndices,
-          )
-        : sampledVectorSelection;
+        : {
+            renderSelection:
+              airboxPartSet.has(partModel) && magneticVectorNodeIndices
+                ? filterNodeSelectionExcludingIndices(
+                    vectorSelection,
+                    topology,
+                    magneticVectorNodeIndices,
+                  )
+                : vectorSelection,
+            resolverSelection: vectorSelection,
+          };
+    const renderVectorSelection = scopedVectorSelection.renderSelection;
     if (partFieldVector && partFieldVector !== renderFieldVector) {
       scalarColorsByPartAndMode.set(
         partId,
@@ -487,10 +542,9 @@ export function buildViewport3DFieldRenderModel(
       partFieldVector &&
       (partUsesMagneticOnlyField
         ? magneticFieldValueResolver
-        : partFieldVector !== renderFieldVector &&
-            partFieldVector.pointCount < topology.nodeCount
+        : isScopedPartFieldVector
           ? buildScopedPartFieldValueResolver(
-              vectorSelection,
+              scopedVectorSelection.resolverSelection,
               topology,
               partFieldVector.pointCount,
             )
@@ -709,6 +763,7 @@ function buildCachedMappedVertexScalarColors(
         colorMode,
         colorPalette,
       ),
+    "viewport3d.render.mappedScalarColorCache",
   );
 }
 
@@ -732,6 +787,7 @@ function buildCachedVertexScalarColors(
         colorMode,
         colorPalette,
       ),
+    "viewport3d.render.scalarColorCache",
   );
 }
 
@@ -810,6 +866,60 @@ function filterNodeSelectionExcludingIndices(
     : { nodeCount: 0, nodeStart: 0 };
 }
 
+function resolveScopedPartVectorSelection(
+  vectorSelection: Viewport3DNodeSelection,
+  topology: Pick<Viewport3DPositionSource, "nodeCount">,
+  fieldPointCount: number,
+  excludedNodeIndices: ReadonlySet<number> | null,
+): ScopedVectorSelectionResolution {
+  const sampledVectorSelection = buildScopedPartFieldSampleSelection(
+    vectorSelection,
+    topology,
+    fieldPointCount,
+  );
+  if (!excludedNodeIndices || excludedNodeIndices.size === 0) {
+    return {
+      renderSelection: sampledVectorSelection,
+      resolverSelection: vectorSelection,
+    };
+  }
+
+  const filteredSampledSelection = filterNodeSelectionExcludingIndices(
+    sampledVectorSelection,
+    topology,
+    excludedNodeIndices,
+  );
+  const filteredBaseSelection = filterNodeSelectionExcludingIndices(
+    vectorSelection,
+    topology,
+    excludedNodeIndices,
+  );
+  const filteredSampledCount = resolveNodeSelectionCount(
+    filteredSampledSelection,
+    topology,
+  );
+  const filteredBaseCount = resolveNodeSelectionCount(
+    filteredBaseSelection,
+    topology,
+  );
+  const expectedVisibleCount = Math.min(fieldPointCount, filteredBaseCount);
+  if (filteredSampledCount >= expectedVisibleCount) {
+    return {
+      renderSelection: filteredSampledSelection,
+      resolverSelection: vectorSelection,
+    };
+  }
+
+  return {
+    renderSelection: buildScopedPartFieldSampleSelection(
+      filteredBaseSelection,
+      topology,
+      fieldPointCount,
+    ),
+    resolverSelection: filteredBaseSelection,
+  };
+}
+
 function buildNodeIndexFieldValueResolver(
   targetNodeIndices: Uint32Array,
   nodeCount: number,
@@ -865,6 +975,7 @@ function buildCachedPartVertexScalarColors(
         colorMode,
         colorPalette,
       ),
+    "viewport3d.render.partScalarColorCache",
   );
 }
 
@@ -916,6 +1027,7 @@ function buildCachedFullVectorSegments(
         budget,
         vectorOptions,
       ),
+    "viewport3d.render.fullVectorSegmentCache",
   );
 }
 
@@ -951,6 +1063,7 @@ function buildCachedPartVectorSegments(
         vectorOptions,
         fieldValueResolver,
       ),
+    "viewport3d.render.partVectorSegmentCache",
   );
 }
 
@@ -959,6 +1072,7 @@ function getCachedValue<TKey extends object, TValue>(
   owner: TKey,
   key: string,
   build: () => TValue,
+  statsId?: string,
 ): TValue {
   let entries = cache.get(owner);
   if (!entries) {
@@ -972,6 +1086,8 @@ function getCachedValue<TKey extends object, TValue>(
 
   const value = build();
   entries.set(key, value);
+  recordRenderCacheInsert(statsId, value);
+  evictOldestRenderCacheEntries(entries, statsId);
   return value;
 }
 
@@ -984,6 +1100,7 @@ function getCachedNestedFieldValue<TOwner extends object, TValue>(
   fieldVector: DecodedFieldVector,
   key: string,
   build: () => TValue,
+  statsId?: string,
 ): TValue {
   let fieldCache = cache.get(owner);
   if (!fieldCache) {
@@ -991,7 +1108,66 @@ function getCachedNestedFieldValue<TOwner extends object, TValue>(
     cache.set(owner, fieldCache);
   }
 
-  return getCachedValue(fieldCache, fieldVector, key, build);
+  return getCachedValue(fieldCache, fieldVector, key, build, statsId);
+}
+
+function evictOldestRenderCacheEntries<TValue>(
+  entries: Map<string, TValue>,
+  statsId: string | undefined,
+): void {
+  while (entries.size > RENDER_CACHE_MAX_ENTRIES_PER_OWNER) {
+    const oldestKey = entries.keys().next().value;
+    if (oldestKey === undefined) return;
+    const value = entries.get(oldestKey);
+    entries.delete(oldestKey);
+    recordRenderCacheEviction(statsId, value);
+  }
+}
+
+function recordRenderCacheInsert(statsId: string | undefined, value: unknown) {
+  const counter = statsId ? renderCacheCounters.get(statsId) : null;
+  if (!counter) return;
+  counter.entryCount += 1;
+  counter.byteLength += estimateRenderCacheValueByteLength(value);
+}
+
+function recordRenderCacheEviction(statsId: string | undefined, value: unknown) {
+  const counter = statsId ? renderCacheCounters.get(statsId) : null;
+  if (!counter) return;
+  counter.entryCount = Math.max(0, counter.entryCount - 1);
+  counter.byteLength = Math.max(
+    0,
+    counter.byteLength - estimateRenderCacheValueByteLength(value),
+  );
+}
+
+function estimateRenderCacheValueByteLength(value: unknown): number {
+  if (!value) return 0;
+  if (ArrayBuffer.isView(value)) return value.byteLength;
+  if (typeof value !== "object") return 0;
+
+  const maybeScalarColorBuffer = value as Partial<ScalarColorBuffer>;
+  return (
+    (maybeScalarColorBuffer.colors?.byteLength ?? 0) +
+    (maybeScalarColorBuffer.complexImagValues?.byteLength ?? 0) +
+    (maybeScalarColorBuffer.complexRealValues?.byteLength ?? 0) +
+    (maybeScalarColorBuffer.scalarValues?.byteLength ?? 0) +
+    (maybeScalarColorBuffer.vectorValues?.byteLength ?? 0)
+  );
+}
+
+export function getViewport3DRenderCacheStats(): MemoryBudgetEntry[] {
+  return VIEWPORT_3D_RENDER_CACHE_DEFINITIONS.map(([id]) => {
+    const counter = renderCacheCounters.get(id);
+    return {
+      byteLength: counter?.byteLength ?? 0,
+      category: "render-buffer",
+      entryCount: counter?.entryCount ?? 0,
+      id,
+      label: counter?.label ?? id,
+      maxBytes: null,
+    };
+  });
 }
 
 export function viewport3DFieldRenderOptionsNeedFieldData(

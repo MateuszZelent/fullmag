@@ -20,7 +20,7 @@ import fullmag as fm
 
 STRIP_SIZE = (300e-9, 1000e-9, 10e-9)
 HOLE_RADIUS = 40e-9
-HOLE_HEIGHT = 16e-9
+HOLE_HEIGHT = 10e-9
 N_MODES = 12
 
 
@@ -47,7 +47,7 @@ strip = study.geometry(
     - fm.Cylinder(radius=HOLE_RADIUS, height=HOLE_HEIGHT, name="central_hole"),
     name="permalloy_strip_with_hole",
 )
-strip.Ms = 800e3
+strip.Ms = 800e3        
 strip.Aex = 13e-12
 strip.alpha = 0.02
 strip.m = fm.texture.uniform(0.02, 1.0, 0.0)
@@ -81,18 +81,8 @@ study.save("H_eff", every=25e-12)
 study.save("spectrum")
 study.save("mode", indices=(0, 1, 2, 3))
 
-study.stages.add_relax(
-    algorithm="llg_overdamped",
-    solver="rk23",
-    max_steps=1000,
-    tol=1e-5,
-)
-study.stages.add_eigenmodes(
-    count=N_MODES,
-    target="lowest",
-    include_demag=True,
-    equilibrium_source="relax",
-    normalization="unit_l2",
-    damping_policy="ignore",
-    bc="free",
+study.stages.add_minimize(
+    method="bb",
+    max_steps=2000,
+    tol=1e-4,
 )

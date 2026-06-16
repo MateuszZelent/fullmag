@@ -13,9 +13,11 @@ import {
 } from "@/shared/domain/study/HysteresisChart";
 
 import {
+  buildViewport3DAirboxSyntheticVectorField,
   resolveViewport3DActiveQuantityId,
   resolveViewport3DAnalysisComplexFieldQuery,
   resolveViewport3DDisplayedLiveValue,
+  resolveViewport3DPrimaryFieldDataOptions,
   resolveViewport3DPrimaryFieldRenderOptions,
   resolveViewport3DPrimaryFieldVectorEnabled,
   resolveViewport3DPrimaryFieldQuery,
@@ -84,6 +86,52 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("magneticPartFieldQueries.size > 0");
     expect(source).toContain("targetQuantityFieldQueries.size > 0");
     expect(source).toContain("fieldVectorEnabled,");
+  });
+
+  it("passes the resolved FDM target field vector to the cuboid layer", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+
+    expect(source).toContain("const fdmFieldVector =");
+    expect(source).toContain("targetQuantityFieldVectors.data?.get(");
+    expect(source).toContain("fieldVector: fdmFieldVector,");
+  });
+
+  it("builds synthetic +Z airbox vector fields without backend data", () => {
+    const field = buildViewport3DAirboxSyntheticVectorField(
+      {
+        boundary_face_count: 0,
+        boundary_face_start: 0,
+        id: "airbox",
+        label: "Airbox",
+        node_indices: [2, 4, 6],
+        role: "air",
+      } as never,
+      8,
+    );
+
+    expect(field).toMatchObject({
+      dtype: "float64",
+      grid: [3, 1, 1],
+      nComp: 3,
+      pointCount: 3,
+      quantityId: "debug:airbox:synthetic:+z",
+      valueCount: 9,
+    });
+    expect(Array.from(field?.values ?? [])).toEqual([
+      0, 0, 1,
+      0, 0, 1,
+      0, 0, 1,
+    ]);
+  });
+
+  it("wires synthetic airbox vectors as a local render-only override", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+
+    expect(source).toContain("airboxSettings.airboxSyntheticVectorsEnabled");
+    expect(source).toContain("buildViewport3DAirboxSyntheticVectorField");
+    expect(source).toContain(
+      "(airboxVectorsVisible && !airboxSettings.airboxSyntheticVectorsEnabled)",
+    );
   });
 
   it("uses frequency-domain analysis overlay fields as the primary 3D field source", () => {
@@ -1241,13 +1289,21 @@ describe("useViewport3DSceneModel", () => {
       vectorDomain: "auto",
     });
 
-    expect(viewport3DFieldRenderOptionsNeedFieldData(primaryOptions)).toBe(false);
+    expect(primaryOptions.partVectorBudgets).toEqual(
+      new Map([["part:__air__", 1024]]),
+    );
+    const primaryDataOptions = resolveViewport3DPrimaryFieldDataOptions(
+      primaryOptions,
+      new Set(["part:__air__"]),
+    );
+
+    expect(viewport3DFieldRenderOptionsNeedFieldData(primaryDataOptions)).toBe(false);
     expect(resolveViewport3DPrimaryFieldQuery({
       fdmInstanceModelNeedsFieldVector: false,
       fdmSurfaceColorMode: null,
       fdmTopographyEnabled: false,
       fdmVectorsVisible: false,
-      fieldRenderOptions: primaryOptions,
+      fieldRenderOptions: primaryDataOptions,
     })).toEqual({
       component: "full",
       scope_kind: "full",
@@ -1308,7 +1364,15 @@ describe("useViewport3DSceneModel", () => {
       vectorDomain: "auto",
     });
 
-    expect(viewport3DFieldRenderOptionsNeedFieldData(primaryOptions)).toBe(false);
+    expect(primaryOptions.partVectorBudgets).toEqual(
+      new Map([["part:arch_waveguide", 512]]),
+    );
+    const primaryDataOptions = resolveViewport3DPrimaryFieldDataOptions(
+      primaryOptions,
+      new Set(["part:arch_waveguide"]),
+    );
+
+    expect(viewport3DFieldRenderOptionsNeedFieldData(primaryDataOptions)).toBe(false);
   });
 
   it("keeps scalar-colored magnetic parts on the unsampled primary path", () => {

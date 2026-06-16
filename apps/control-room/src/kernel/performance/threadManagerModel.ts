@@ -1,4 +1,5 @@
 import type { RequestDiagnosticEntry } from "../api/RequestDiagnosticsController";
+import type { MemoryBudgetEntry } from "./MemoryBudgetRegistry";
 
 export type ThreadManagerLane =
   | "aggregate"
@@ -52,8 +53,20 @@ export interface ThreadManagerClipboardLogInput {
   entries: readonly RequestDiagnosticEntry[];
   generatedAt: Date;
   jsHeapBytes: number | null;
+  memoryBudgetRows?: readonly ThreadManagerMemoryBudgetRow[];
   model: ThreadManagerModel;
   reactProfilerEnabled: boolean;
+}
+
+export interface ThreadManagerMemoryBudgetRow {
+  byteLength: number;
+  category: string;
+  entryCount: number;
+  id: string;
+  label: string;
+  maxBytes: number | null;
+  status: "ok" | "over-budget" | "unbounded-high" | "unbounded";
+  utilizationPercent: number | null;
 }
 
 interface ThreadManagerGroupAccumulator {
@@ -160,6 +173,7 @@ export function buildThreadManagerClipboardLog({
   entries,
   generatedAt,
   jsHeapBytes,
+  memoryBudgetRows = [],
   model,
   reactProfilerEnabled,
 }: ThreadManagerClipboardLogInput): string {
@@ -214,6 +228,28 @@ export function buildThreadManagerClipboardLog({
     }
   }
 
+  lines.push("", "Memory Budgets");
+  if (memoryBudgetRows.length === 0) {
+    lines.push("none");
+  } else {
+    lines.push("component\tcategory\tusage\tlimit\tentries\tutil\tstatus");
+    for (const row of memoryBudgetRows) {
+      lines.push(
+        [
+          row.label,
+          row.category,
+          formatBytes(row.byteLength),
+          row.maxBytes === null ? "unbounded" : formatBytes(row.maxBytes),
+          String(row.entryCount),
+          row.utilizationPercent === null
+            ? "n/a"
+            : `${row.utilizationPercent.toFixed(0)}%`,
+          row.status,
+        ].join("\t"),
+      );
+    }
+  }
+
   lines.push("", "Workers");
   for (const worker of model.workerRows) {
     lines.push(
@@ -238,6 +274,40 @@ export function buildThreadManagerClipboardLog({
   }
 
   return lines.join("\n");
+}
+
+export function buildThreadManagerMemoryBudgetRows(
+  entries: readonly MemoryBudgetEntry[],
+): ThreadManagerMemoryBudgetRow[] {
+  return entries
+    .map((entry) => {
+      const utilizationPercent =
+        entry.maxBytes && entry.maxBytes > 0
+          ? (entry.byteLength / entry.maxBytes) * 100
+          : null;
+      return {
+        byteLength: Math.max(0, entry.byteLength),
+        category: entry.category,
+        entryCount: Math.max(0, entry.entryCount),
+        id: entry.id,
+        label: entry.label,
+        maxBytes: entry.maxBytes,
+        status: resolveMemoryBudgetStatus(entry, utilizationPercent),
+        utilizationPercent,
+      };
+    })
+    .sort((left, right) => right.byteLength - left.byteLength);
+}
+
+function resolveMemoryBudgetStatus(
+  entry: MemoryBudgetEntry,
+  utilizationPercent: number | null,
+): ThreadManagerMemoryBudgetRow["status"] {
+  if (utilizationPercent !== null) {
+    return utilizationPercent > 100 ? "over-budget" : "ok";
+  }
+  if (entry.byteLength >= 100 * 1024 * 1024) return "unbounded-high";
+  return "unbounded";
 }
 
 function classifyThreadManagerPath(entry: RequestDiagnosticEntry): {
@@ -431,7 +501,7 @@ function totalUnitLabel(unit: string): string {
   return unit;
 }
 
-function formatBytes(bytes: number): string {
+export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes)) return "n/a";
   if (bytes < 1024) return `${Math.round(bytes)} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;

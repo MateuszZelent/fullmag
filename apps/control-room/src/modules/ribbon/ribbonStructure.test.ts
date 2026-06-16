@@ -899,7 +899,7 @@ describe("ribbon structure", () => {
       });
   });
 
-  it("keeps selected airbox style controls local while visibility patches canonical state", async () => {
+  it("persists selected airbox vector style separately from display state", async () => {
     const { context, invalidations, patches } =
       createVisualizationRibbonContext({
         layers: {
@@ -996,6 +996,17 @@ describe("ribbon structure", () => {
       });
     expect(patches).toEqual([
       {
+        overrides: [
+          {
+            scope: "airbox",
+            scope_id: "airbox",
+            style: {
+              vector_thickness: 2.4,
+            },
+          },
+        ],
+      },
+      {
         layers: {
           airbox: {
             visible: false,
@@ -1004,7 +1015,10 @@ describe("ribbon structure", () => {
       },
     ]);
     await vi.waitFor(() =>
-      expect(invalidations).toEqual([[VISUALIZATION_STATE_PATH, 41]]),
+      expect(invalidations).toEqual([
+        [VISUALIZATION_STATE_PATH, 41],
+        [VISUALIZATION_STATE_PATH, 42],
+      ]),
     );
   });
 

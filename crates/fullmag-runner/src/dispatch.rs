@@ -2194,7 +2194,14 @@ pub(crate) fn execute_fem<'a>(
     match engine {
         FemEngine::CpuNative => {
             let cpu_plan = fem_plan_for_cpu_native(&normalized_plan);
-            execute_native_fem(&cpu_plan, until_seconds, outputs, live, artifact_writer)
+            execute_native_fem(
+                FemEngine::CpuNative,
+                &cpu_plan,
+                until_seconds,
+                outputs,
+                live,
+                artifact_writer,
+            )
         }
         FemEngine::NativeGpu => {
             if let Some(min_nodes) = should_fallback_to_cpu_for_small_fem_gpu(&normalized_plan) {
@@ -2209,6 +2216,7 @@ pub(crate) fn execute_fem<'a>(
                 );
                 let cpu_plan = fem_plan_for_cpu_native(&normalized_plan);
                 return execute_native_fem(
+                    FemEngine::CpuNative,
                     &cpu_plan,
                     until_seconds,
                     outputs,
@@ -2217,7 +2225,14 @@ pub(crate) fn execute_fem<'a>(
                 );
             }
             let gpu_plan = fem_plan_for_native_gpu(&normalized_plan);
-            execute_native_fem(&gpu_plan, until_seconds, outputs, live, artifact_writer)
+            execute_native_fem(
+                FemEngine::NativeGpu,
+                &gpu_plan,
+                until_seconds,
+                outputs,
+                live,
+                artifact_writer,
+            )
         }
     }
 }
@@ -3211,6 +3226,7 @@ fn native_fem_requires_initial_snapshot(live_present: bool, direct_minimization:
 
 #[cfg(feature = "fem-gpu")]
 fn execute_native_fem(
+    engine: FemEngine,
     plan: &FemPlanIR,
     until_seconds: f64,
     outputs: &[OutputIR],
@@ -3364,6 +3380,7 @@ fn execute_native_fem(
     if let Some(native_step_control) = native_relaxation_step {
         let outcome = crate::fem::relax::direct_minimizer::execute_direct_minimizer(
             &mut backend,
+            engine,
             plan,
             node_count,
             native_step_control,
@@ -3380,6 +3397,7 @@ fn execute_native_fem(
     } else {
         let outcome = crate::fem::relax::llg_overdamped::execute_llg_overdamped(
             &mut backend,
+            engine,
             plan,
             until_seconds,
             node_count,
@@ -3400,6 +3418,7 @@ fn execute_native_fem(
 
     crate::fem::relax::finalize::finalize_native_fem_relaxation(
         &mut backend,
+        engine,
         plan,
         node_count,
         initial_magnetization,
@@ -3458,6 +3477,7 @@ pub(crate) fn fem_poisson_demag_provenance(
 
 #[cfg(not(feature = "fem-gpu"))]
 fn execute_native_fem(
+    _engine: FemEngine,
     _plan: &FemPlanIR,
     _until_seconds: f64,
     _outputs: &[OutputIR],

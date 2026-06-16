@@ -16,6 +16,7 @@ import {
   buildVectorLineSegmentsForNodeSelection,
   combineViewport3DBounds,
   distributeVectorGlyphBudget,
+  getViewport3DRenderCacheStats,
   resolveNodeSelectionCount,
   resolveTopologyBounds,
   resolveUniverseBounds,
@@ -1324,6 +1325,44 @@ describe("viewport3dRenderModel", () => {
     expect(secondFieldModel?.partVectorSegments.get("part-b")).toBeNull();
   });
 
+  it("bounds per-owner render vector cache entries when vector scale changes", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "part-a",
+          label: "Part A",
+          nodeCount: 4,
+          nodeStart: 0,
+        },
+      ],
+      [],
+    );
+    const fieldVector = fieldVectorFixture();
+    const before =
+      getViewport3DRenderCacheStats().find(
+        (entry) => entry.id === "viewport3d.render.partVectorSegmentCache",
+      )?.entryCount ?? 0;
+
+    for (let index = 0; index < 20; index += 1) {
+      buildViewport3DFieldRenderModel(topologyModel, null, 1, {
+        partFieldVectors: new Map([["part-a", fieldVector]]),
+        partVectorBudgets: new Map([["part-a", 4]]),
+        partVectorScales: new Map([["part-a", index + 1]]),
+        scalarColorsVisible: false,
+      });
+    }
+
+    const after =
+      getViewport3DRenderCacheStats().find(
+        (entry) => entry.id === "viewport3d.render.partVectorSegmentCache",
+      )?.entryCount ?? 0;
+
+    expect(after - before).toBeLessThanOrEqual(8);
+  });
+
   it("detects when field-vector data is not needed by render options", () => {
     expect(
       viewport3DFieldRenderOptionsNeedFieldData({
@@ -1713,13 +1752,80 @@ describe("viewport3dRenderModel", () => {
     });
 
     const segments = fieldModel?.partVectorSegments.get("airbox");
-    expect(segments?.length).toBe(21);
+    expect(segments?.length).toBe(35);
+    expect(segments?.[0]).toBeCloseTo(5.5);
+    expect(segments?.[3]).toBeCloseTo(6.5);
+    expect(segments?.[7]).toBeCloseTo(6.5);
+    expect(segments?.[10]).toBeCloseTo(7.5);
+    expect(segments?.[14]).toBeCloseTo(7.5);
+    expect(segments?.[17]).toBeCloseTo(8.5);
+  });
+
+  it("keeps sampled airbox vectors visible when backend samples exclude magnetic nodes first", () => {
+    const positions: number[] = [];
+    for (let node = 0; node < 12; node += 1) {
+      positions.push(node, 0, 0);
+    }
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      {
+        boundaryFaceCount: 0,
+        boundaryFaces: new Uint32Array(),
+        boundaryMarkers: new Uint32Array(),
+        elementCount: 0,
+        elementMarkers: new Uint32Array(),
+        indices: new Uint32Array(),
+        nodeCount: 12,
+        positions: new Float64Array(positions),
+      },
+      [
+        {
+          boundary_face_count: 0,
+          boundary_face_start: 0,
+          id: "magnetic-part",
+          label: "Magnetic Part",
+          node_indices: [0, 1, 2, 3, 4, 5],
+        },
+      ],
+      [
+        {
+          boundary_face_count: 0,
+          boundary_face_start: 0,
+          id: "airbox",
+          label: "Airbox",
+          node_indices: Array.from({ length: 12 }, (_, index) => index),
+          role: "air",
+        },
+      ],
+    );
+
+    const fieldModel = buildViewport3DFieldRenderModel(topologyModel, null, 1, {
+      partFieldVectors: new Map([
+        [
+          "airbox",
+          {
+            dtype: "float64",
+            grid: [2, 1, 1],
+            nComp: 3,
+            pointCount: 2,
+            quantityId: "H_demag",
+            valueCount: 6,
+            values: new Float64Array([
+              1, 0, 0,
+              1, 0, 0,
+            ]),
+          },
+        ],
+      ]),
+      partVectorBudgets: new Map([["airbox", 2]]),
+      scalarColorsVisible: false,
+    });
+
+    const segments = fieldModel?.partVectorSegments.get("airbox");
+    expect(segments?.length).toBe(14);
     expect(segments?.[0]).toBeCloseTo(5.5);
     expect(segments?.[3]).toBeCloseTo(6.5);
     expect(segments?.[7]).toBeCloseTo(8.5);
     expect(segments?.[10]).toBeCloseTo(9.5);
-    expect(segments?.[14]).toBeCloseTo(11.5);
-    expect(segments?.[17]).toBeCloseTo(12.5);
   });
 
   it("builds sampled magnetic part vectors at matching global topology positions", () => {

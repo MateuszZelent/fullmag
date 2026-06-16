@@ -25,6 +25,7 @@ interface LoadContext {
 }
 
 interface UseResourceOptions<TData> {
+  abortStaleInflight?: boolean;
   enabled?: boolean;
   load: (context: LoadContext) => Promise<TData>;
   minRefetchIntervalMs?: number;
@@ -42,6 +43,7 @@ interface UseResourceSelectorOptions<TData, TSelected>
 const NOOP_SUBSCRIBE = () => undefined;
 
 export function useResource<TData>({
+  abortStaleInflight = false,
   enabled = true,
   load,
   minRefetchIntervalMs,
@@ -94,6 +96,7 @@ export function useResource<TData>({
   const errorCountRef = useRef(0);
 
   useResourceLoader({
+    abortStaleInflight,
     enabled,
     errorCountRef,
     externalRevision,
@@ -133,6 +136,7 @@ export function useResource<TData>({
 }
 
 export function useResourceSelector<TData, TSelected>({
+  abortStaleInflight = false,
   enabled = true,
   isEqual = Object.is,
   load,
@@ -212,6 +216,7 @@ export function useResourceSelector<TData, TSelected>({
   );
 
   useResourceLoader({
+    abortStaleInflight,
     enabled,
     errorCountRef,
     externalRevision,
@@ -228,6 +233,7 @@ export function useResourceSelector<TData, TSelected>({
 }
 
 function useResourceLoader<TData>({
+  abortStaleInflight = false,
   enabled,
   errorCountRef,
   externalRevision,
@@ -239,6 +245,7 @@ function useResourceLoader<TData>({
   resourceKey,
   runtimeStore,
 }: {
+  abortStaleInflight?: boolean;
   enabled: boolean;
   errorCountRef: { current: number };
   externalRevision: ResourceRevision | null;
@@ -264,6 +271,7 @@ function useResourceLoader<TData>({
     const timeoutId = setTimeout(() => {
       runtimeStore
         .ensureLoad({
+          abortStaleInflight,
           externalRevision,
           force: refreshToken > 0,
           load,
@@ -283,6 +291,7 @@ function useResourceLoader<TData>({
       clearTimeout(timeoutId);
     };
   }, [
+    abortStaleInflight,
     enabled,
     errorCountRef,
     externalRevision,

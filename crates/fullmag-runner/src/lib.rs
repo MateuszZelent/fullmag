@@ -3439,6 +3439,11 @@ mod tests {
             let source = fs::read_to_string(format!("{}{}", env!("CARGO_MANIFEST_DIR"), path))
                 .expect("read FEM relaxation source");
             assert!(
+                source.contains("engine: FemEngine")
+                    && !source.contains("FemEngine::CpuNative,"),
+                "{path} must use the resolved FEM engine for cached-preview quantities, not hard-code CPU"
+            );
+            assert!(
                 source.contains("FemCachedPreviewHandoff::default()"),
                 "{path} must keep cached-preview snapshot state across solver steps"
             );
@@ -3452,6 +3457,15 @@ mod tests {
                 "{path} must not synchronously warm cached preview fields in the hot loop"
             );
         }
+        let finalize = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/fem/relax/finalize.rs"
+        ))
+        .expect("read FEM relaxation finalization source");
+        assert!(
+            finalize.contains("engine: FemEngine") && !finalize.contains("FemEngine::CpuNative,"),
+            "FEM relaxation finalization must use the resolved engine for cached-preview flushes"
+        );
     }
 
     #[test]

@@ -13,6 +13,7 @@ interface LoadContext {
 }
 
 export interface ResourceRuntimeLoadRequest<TData> {
+  abortStaleInflight?: boolean;
   externalRevision: ResourceRevision | null;
   force?: boolean;
   load: (context: LoadContext) => Promise<TData>;
@@ -212,6 +213,7 @@ export class ResourceRuntimeStore<TData = unknown> {
   }
 
   ensureLoad<TLoadData = TData>({
+    abortStaleInflight = false,
     externalRevision,
     force = false,
     load,
@@ -251,6 +253,7 @@ export class ResourceRuntimeStore<TData = unknown> {
     const delayMs = refetchDelayMs(entry, minRefetchIntervalMs);
     if (!force && delayMs > 0) {
       entry.pendingRequest = {
+        abortStaleInflight,
         externalRevision,
         force: false,
         load,
@@ -268,8 +271,16 @@ export class ResourceRuntimeStore<TData = unknown> {
       return Promise.resolve(entry.snapshot);
     }
 
-    if (!force && entry.inflight) {
+    if (!force && entry.inflight && abortStaleInflight) {
+      entry.sequence += 1;
+      entry.controller?.abort();
+      entry.controller = null;
+      entry.inflight = null;
+      entry.inflightExternalRevision = null;
+      entry.pendingRequest = null;
+    } else if (!force && entry.inflight) {
       entry.pendingRequest = {
+        abortStaleInflight,
         externalRevision,
         force: false,
         load,

@@ -149,6 +149,7 @@ pub(crate) struct LlgOverdampedExecution {
 #[cfg(feature = "fem-gpu")]
 pub(crate) fn execute_llg_overdamped(
     backend: &mut NativeFemBackend,
+    engine: FemEngine,
     plan: &FemPlanIR,
     until_seconds: f64,
     node_count: usize,
@@ -231,7 +232,7 @@ pub(crate) fn execute_llg_overdamped(
                     let cached_preview_fields = if cached_preview_due {
                         cached_preview_handoff.request_cached_previews(
                             backend,
-                            FemEngine::CpuNative,
+                            engine,
                             &display_selection,
                             plan,
                         )?
@@ -377,12 +378,8 @@ pub(crate) fn execute_llg_overdamped(
             let cached_start = std::time::Instant::now();
             let cached_preview_fields = if cached_preview_due {
                 match display_selection.as_ref() {
-                    Some(selection) => cached_preview_handoff.request_cached_previews(
-                        backend,
-                        FemEngine::CpuNative,
-                        selection,
-                        plan,
-                    )?,
+                    Some(selection) => cached_preview_handoff
+                        .request_cached_previews(backend, engine, selection, plan)?,
                     None => cached_preview_handoff.poll_completed()?,
                 }
             } else {

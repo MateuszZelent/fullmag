@@ -30,7 +30,7 @@ When a new object is committed but no current mesh exists yet, the target id sti
 
 ## 3. State Ownership
 
-The owner is the v2 visualization resource. Object and part display/style overrides are stored in `visualization/state.overrides`, including `vector_budget` and `vector_length_scale`. Airbox display reads and writes `visualization/state.layers.airbox` through the typed v2 facade; airbox arrow budget is `layers.airbox.vectors.density`, and airbox arrow length is `vector_style.length_scale`.
+The owner is the v2 visualization resource. Object and part display/style overrides are stored in `visualization/state.overrides`, including `vector_budget` and `vector_length_scale`. Airbox display reads and writes `visualization/state.layers.airbox` through the typed v2 facade; airbox arrow budget is `layers.airbox.vectors.density`, while airbox arrow length and vector thickness are persisted as the `airbox` target override style (`vector_length_scale`, `vector_thickness`) rather than global `vector_style`.
 
 The kernel visualization controller is only the UI-side resolver/cache around the v2 resource. It may preserve immediate local feedback while a revision-driven refetch is pending, but it must not become a second persistence model for fields already present in the v2 contract.
 

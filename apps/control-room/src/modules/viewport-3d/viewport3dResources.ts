@@ -28,6 +28,7 @@ import type {
   DecodedTopology,
 } from "@/kernel/api/codecs";
 import { useKernel } from "@/kernel/KernelContext";
+import { memoryBudgetRegistry } from "@/kernel/performance/MemoryBudgetRegistry";
 import { fieldVectorMinRefetchIntervalMs } from "@/kernel/realtime/communicationPolicy";
 import { ResourceCache } from "@/kernel/resources/ResourceCache";
 import { useResource } from "@/kernel/resources/useResource";
@@ -42,6 +43,42 @@ const fieldVectorCache = new ResourceCache<DecodedFieldVector>({
 });
 const qualityDataCache = new ResourceCache<DecodedMeshQualityData>({
   maxBytes: 48 * 1024 * 1024,
+});
+
+memoryBudgetRegistry.register("viewport3d.topologyCache", () => {
+  const stats = topologyCache.stats();
+  return {
+    byteLength: stats.byteLength,
+    category: "viewport-cache",
+    entryCount: stats.entryCount,
+    id: "viewport3d.topologyCache",
+    label: "Viewport topology cache",
+    maxBytes: topologyCache.maxBytes(),
+  };
+});
+
+memoryBudgetRegistry.register("viewport3d.fieldVectorCache", () => {
+  const stats = fieldVectorCache.stats();
+  return {
+    byteLength: stats.byteLength,
+    category: "viewport-cache",
+    entryCount: stats.entryCount,
+    id: "viewport3d.fieldVectorCache",
+    label: "Field vector cache",
+    maxBytes: fieldVectorCache.maxBytes(),
+  };
+});
+
+memoryBudgetRegistry.register("viewport3d.qualityDataCache", () => {
+  const stats = qualityDataCache.stats();
+  return {
+    byteLength: stats.byteLength,
+    category: "viewport-cache",
+    entryCount: stats.entryCount,
+    id: "viewport3d.qualityDataCache",
+    label: "Mesh quality cache",
+    maxBytes: qualityDataCache.maxBytes(),
+  };
 });
 
 const VIEWPORT_3D_DOMAIN_META_RESOURCE_KEY = DATA_DOMAIN_META_PATH;
@@ -398,6 +435,7 @@ export function useViewport3DFieldVector(
   );
 
   const resource = useResource({
+    abortStaleInflight: true,
     enabled,
     load,
     minRefetchIntervalMs: fieldVectorMinRefetchIntervalMs(),
@@ -486,6 +524,7 @@ export function useViewport3DAirboxFieldVectors(
   }, [requestKeys]);
 
   const resource = useResource({
+    abortStaleInflight: true,
     enabled: enabled && requestKeys.size > 0,
     load,
     minRefetchIntervalMs: fieldVectorMinRefetchIntervalMs(),
@@ -573,6 +612,7 @@ export function useViewport3DQuantityFieldVectors(
   }, [requestKeys]);
 
   const resource = useResource({
+    abortStaleInflight: true,
     enabled: enabled && requestKeys.size > 0,
     load,
     minRefetchIntervalMs: fieldVectorMinRefetchIntervalMs(),
@@ -648,6 +688,7 @@ export function useViewport3DPartFieldVectors(
   }, [requestKeys]);
 
   const resource = useResource({
+    abortStaleInflight: true,
     enabled: enabled && requestKeys.size > 0,
     load,
     minRefetchIntervalMs: fieldVectorMinRefetchIntervalMs(),

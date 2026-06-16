@@ -2485,18 +2485,43 @@ pub(crate) fn apply_continuation_initial_state(
     problem: &mut ProblemIR,
     final_magnetization: &[[f64; 3]],
 ) -> Result<()> {
-    if problem.magnets.len() != 1 {
+    if problem.magnets.len() == 1 {
+        problem.magnets[0].initial_magnetization =
+            Some(fullmag_ir::InitialMagnetizationIR::SampledField {
+                values: final_magnetization.to_vec(),
+            });
+        return Ok(());
+    }
+
+    let shared_domain_node_count = problem
+        .geometry_assets
+        .as_ref()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_ref())
+        .and_then(|asset| asset.mesh.as_ref())
+        .map(|mesh| mesh.nodes.len());
+
+    if shared_domain_node_count == Some(final_magnetization.len()) {
+        let sampled = fullmag_ir::InitialMagnetizationIR::SampledField {
+            values: final_magnetization.to_vec(),
+        };
+        for magnet in &mut problem.magnets {
+            magnet.initial_magnetization = Some(sampled.clone());
+        }
+        return Ok(());
+    }
+
+    if let Some(node_count) = shared_domain_node_count {
+        bail!(
+            "multi-stage shared-domain continuation has {} vectors, but the FEM domain mesh has {} nodes",
+            final_magnetization.len(),
+            node_count
+        );
+    } else {
         bail!(
             "multi-stage flat scripts currently require exactly one magnet; found {}",
             problem.magnets.len()
         );
     }
-
-    problem.magnets[0].initial_magnetization =
-        Some(fullmag_ir::InitialMagnetizationIR::SampledField {
-            values: final_magnetization.to_vec(),
-        });
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -3015,6 +3040,61 @@ mod tests {
             }
         }))
         .expect("sample ProblemIR should deserialize")
+    }
+
+    #[test]
+    fn continuation_initial_state_supports_multi_magnet_shared_domain() {
+        let mut problem = sample_problem_ir();
+        problem.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fem;
+        problem
+            .geometry
+            .entries
+            .push(fullmag_ir::GeometryEntryIR::Box {
+                name: "ring".to_string(),
+                size: [0.5, 0.5, 0.5],
+            });
+        problem.regions.push(fullmag_ir::RegionIR {
+            name: "ring".to_string(),
+            geometry: "ring".to_string(),
+        });
+        problem.magnets.push(fullmag_ir::MagnetIR {
+            name: "ring".to_string(),
+            region: "ring".to_string(),
+            material: "Py".to_string(),
+            initial_magnetization: None,
+        });
+        problem.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+            fem_domain_mesh_asset: Some(fullmag_ir::FemDomainMeshAssetIR {
+                mesh_source: None,
+                mesh: Some(fullmag_ir::MeshIR {
+                    mesh_name: "shared_domain".to_string(),
+                    nodes: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                    elements: Vec::new(),
+                    element_markers: Vec::new(),
+                    boundary_faces: Vec::new(),
+                    boundary_markers: Vec::new(),
+                    periodic_boundary_pairs: Vec::new(),
+                    periodic_node_pairs: Vec::new(),
+                    per_domain_quality: std::collections::HashMap::new(),
+                }),
+                region_markers: Vec::new(),
+                object_region_markers: Vec::new(),
+                build_report: None,
+            }),
+            ..Default::default()
+        });
+        let continuation = vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+
+        apply_continuation_initial_state(&mut problem, &continuation)
+            .expect("shared-domain continuation should support multiple magnets");
+
+        for magnet in &problem.magnets {
+            assert!(matches!(
+                magnet.initial_magnetization.as_ref(),
+                Some(fullmag_ir::InitialMagnetizationIR::SampledField { values })
+                    if values == &continuation
+            ));
+        }
     }
 
     fn sample_problem_ir_with_adaptive_relax_dt(dt_initial: f64) -> ProblemIR {

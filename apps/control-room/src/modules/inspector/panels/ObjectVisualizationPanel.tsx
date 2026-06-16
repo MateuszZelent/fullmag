@@ -246,6 +246,7 @@ function remoteVisualizationTargetPatch(
   patch: VisualizationTargetPatch,
 ): VisualizationTargetPatch {
   const remotePatch = { ...patch };
+  delete remotePatch.airboxSyntheticVectorsEnabled;
   delete remotePatch.vectorCenteringEnabled;
   delete remotePatch.vectorSurfaceOffsetEnabled;
   delete remotePatch.vectorSurfaceOffsetScale;
@@ -682,6 +683,7 @@ function VisualizationVectorsSection({
   pending,
   sectionDisabled,
   settings,
+  targetKind,
   vectorBudgetRange,
 }: {
   meshParts?: ReadonlyArray<{
@@ -704,6 +706,7 @@ function VisualizationVectorsSection({
   pending: boolean;
   sectionDisabled: SectionDisabled;
   settings: VisualizationTargetSettings;
+  targetKind: VisualizationTargetKind;
   vectorBudgetRange: VisualizationVectorBudgetRange;
 }) {
   const vectorBudgetValue = Math.max(
@@ -749,6 +752,20 @@ function VisualizationVectorsSection({
         value={`${formatCount(vectorBudgetDiagnostic.displayedGlyphCount)} / ${formatCount(vectorBudgetDiagnostic.availableNodeCount)}${vectorBudgetDiagnostic.exact ? "" : " est."}`}
       />
       <div className="fm-visualization-toggle-grid">
+        {targetKind === "airbox" ? (
+          <ToggleButton
+            active={settings.airboxSyntheticVectorsEnabled}
+            disabled={pending || sectionDisabled("vectors")}
+            label="Dev +Z vectors"
+            onClick={() =>
+              void patch({
+                airboxSyntheticVectorsEnabled:
+                  !settings.airboxSyntheticVectorsEnabled,
+                vectorsVisible: true,
+              })
+            }
+          />
+        ) : null}
         <ToggleButton
           active={settings.vectorCenteringEnabled}
           disabled={pending || sectionDisabled("vectors")}
@@ -1354,6 +1371,7 @@ function ObjectVisualizationPanelView({
         pending={pending}
         sectionDisabled={sectionDisabled}
         settings={settings}
+        targetKind={target.kind}
         vectorBudgetRange={vectorBudgetRange}
       />
       <VisualizationGeometryScopeSection

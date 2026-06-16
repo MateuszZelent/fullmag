@@ -76,7 +76,7 @@ export function vectorStyleFromSettings(
       settings.vectorMonoColor,
       fallback.monoColor ?? null,
     ),
-    thickness: settings.vectorThickness ?? fallback.thickness,
+    thickness: settings.vectorThickness ?? 1,
   };
 }
 
