@@ -9,8 +9,11 @@ import {
 
 import type { Viewport3DMeshPart } from "../viewport3dDomainAdapter";
 import {
+  distributeVectorGlyphBudget,
+  resolveNodeSelectionCount,
   type Viewport3DFieldRenderOptions,
   type Viewport3DTopologyRenderModel,
+  type Viewport3DVectorBudgetTarget,
 } from "../viewport3dRenderModel";
 
 const EMPTY_FIELD_RENDER_OPTIONS: Viewport3DFieldRenderOptions = {
@@ -34,11 +37,13 @@ export function useViewport3DFieldRenderOptions({
   topologyRenderModel,
   vectorColorMode,
   vectorDomain,
+  maxVectorGlyphs,
 }: {
   airboxSettings: VisualizationTargetSettings;
   airboxQuantityCompatible: boolean;
   fallbackSettings: VisualizationTargetSettings;
   getPartSettings: (part: Viewport3DMeshPart) => VisualizationTargetSettings;
+  maxVectorGlyphs: number;
   scalarColorPalette: string;
   topologyRenderModel: Viewport3DTopologyRenderModel<Viewport3DMeshPart> | null;
   vectorColorMode: string;
@@ -160,29 +165,35 @@ export function useViewport3DFieldRenderOptions({
       }
     }
 
-    return retainViewport3DFieldRenderOptions(topologyRenderModel, {
-      fullVectorBudget,
-      fullVectorAnchorMode,
-      fullVectorSurfaceOffsetEnabled,
-      fullVectorSurfaceOffsetScale,
-      partVectorAnchorModes:
-        partVectorAnchorModes.size > 0 ? partVectorAnchorModes : undefined,
-      partVectorBudgets,
-      partVectorScales: partVectorScales.size > 0 ? partVectorScales : undefined,
-      partVectorScopes,
-      partVectorSurfaceOffsetEnabled:
-        partVectorSurfaceOffsetEnabled.size > 0
-          ? partVectorSurfaceOffsetEnabled
-          : undefined,
-      partVectorSurfaceOffsetScales:
-        partVectorSurfaceOffsetScales.size > 0
-          ? partVectorSurfaceOffsetScales
-          : undefined,
-      scalarColorModes,
-      scalarColorPalette,
-      scalarColorsVisible,
-      vectorColorMode,
-    });
+    const next = limitViewport3DFieldRenderVectorBudgets(
+      {
+        fullVectorBudget,
+        fullVectorAnchorMode,
+        fullVectorSurfaceOffsetEnabled,
+        fullVectorSurfaceOffsetScale,
+        partVectorAnchorModes:
+          partVectorAnchorModes.size > 0 ? partVectorAnchorModes : undefined,
+        partVectorBudgets,
+        partVectorScales: partVectorScales.size > 0 ? partVectorScales : undefined,
+        partVectorScopes,
+        partVectorSurfaceOffsetEnabled:
+          partVectorSurfaceOffsetEnabled.size > 0
+            ? partVectorSurfaceOffsetEnabled
+            : undefined,
+        partVectorSurfaceOffsetScales:
+          partVectorSurfaceOffsetScales.size > 0
+            ? partVectorSurfaceOffsetScales
+            : undefined,
+        scalarColorModes,
+        scalarColorPalette,
+        scalarColorsVisible,
+        vectorColorMode,
+      },
+      topologyRenderModel,
+      maxVectorGlyphs,
+    );
+
+    return retainViewport3DFieldRenderOptions(topologyRenderModel, next);
   }, [
     airboxSettings.vectorBudget,
     airboxSettings.vectorCenteringEnabled,
@@ -204,11 +215,98 @@ export function useViewport3DFieldRenderOptions({
     fallbackSettings.vectorsVisible,
     fallbackSettings.visible,
     getPartSettings,
+    maxVectorGlyphs,
     scalarColorPalette,
     topologyRenderModel,
     vectorColorMode,
     vectorDomain,
   ]);
+}
+
+export function clampViewport3DInteractiveVectorBudget(
+  requestedBudget: number,
+  maxVectorGlyphs: number,
+): number {
+  const requested = Math.max(0, Math.floor(requestedBudget));
+  const max = Math.max(0, Math.floor(maxVectorGlyphs));
+  if (requested <= 0 || max <= 0) return 0;
+  return Math.min(requested, max);
+}
+
+export function limitViewport3DFieldRenderVectorBudgets(
+  options: Viewport3DFieldRenderOptions,
+  topologyRenderModel: Viewport3DTopologyRenderModel<Viewport3DMeshPart>,
+  maxVectorGlyphs: number,
+): Viewport3DFieldRenderOptions {
+  const maxGlyphs = Math.max(0, Math.floor(maxVectorGlyphs));
+  const fullVectorBudget = clampViewport3DInteractiveVectorBudget(
+    options.fullVectorBudget ?? 0,
+    maxGlyphs,
+  );
+  const requestedBudgets = options.partVectorBudgets ?? new Map<string, number>();
+  if (requestedBudgets.size === 0) {
+    return fullVectorBudget === (options.fullVectorBudget ?? 0)
+      ? options
+      : { ...options, fullVectorBudget };
+  }
+
+  const partsById = new Map(
+    [...topologyRenderModel.magneticParts, ...topologyRenderModel.airboxParts].map(
+      (partModel) => [partModel.part.id, partModel] as const,
+    ),
+  );
+  const requestedByPartId = new Map<string, number>();
+  const budgetTargets: Viewport3DVectorBudgetTarget[] = [];
+
+  for (const [partId, requestedBudget] of requestedBudgets) {
+    const requested = Math.max(0, Math.floor(requestedBudget));
+    if (requested <= 0) continue;
+
+    const partModel = partsById.get(partId);
+    const vectorScope = options.partVectorScopes?.get(partId) ?? "full";
+    const availableNodeCount = partModel
+      ? resolveNodeSelectionCount(
+          vectorScope === "surface"
+            ? partModel.surfaceNodeSelection ?? partModel.part
+            : partModel.part,
+          topologyRenderModel,
+        )
+      : requested;
+    const targetNodeCount = Math.min(requested, availableNodeCount);
+    if (targetNodeCount <= 0) continue;
+
+    requestedByPartId.set(partId, requested);
+    budgetTargets.push({
+      id: partId,
+      nodeCount: targetNodeCount,
+      visible: true,
+    });
+  }
+
+  const distributedBudgets = distributeVectorGlyphBudget(
+    budgetTargets,
+    maxGlyphs,
+  );
+  const partVectorBudgets = new Map<string, number>();
+  for (const [partId, requested] of requestedByPartId) {
+    const budget = distributedBudgets.get(partId) ?? 0;
+    if (budget > 0) {
+      partVectorBudgets.set(partId, Math.min(requested, budget));
+    }
+  }
+
+  if (
+    fullVectorBudget === (options.fullVectorBudget ?? 0) &&
+    sameNumberMap(partVectorBudgets, requestedBudgets)
+  ) {
+    return options;
+  }
+
+  return {
+    ...options,
+    fullVectorBudget,
+    partVectorBudgets,
+  };
 }
 
 export function viewport3DAirboxVectorsVisible(

@@ -92,7 +92,6 @@ export function FallbackTopologyMeshLayer({
       new BufferAttribute(topologyModel.positions, 3),
     );
     next.setIndex(new BufferAttribute(topologyModel.fallbackSurfaceIndices, 1));
-    next.computeVertexNormals();
     return next;
   }, [topologyModel, tracker]);
   const edgeGeometry = useMemo(() => {
@@ -265,7 +264,7 @@ export function FallbackTopologyMeshLayer({
           {scalarShaderMaterial ? (
             <primitive attach="material" object={scalarShaderMaterial} />
           ) : (
-            <meshStandardMaterial
+            <meshBasicMaterial
               color={surfaceMaterialColorFromSettings(
                 renderSettings,
                 colors.mesh,

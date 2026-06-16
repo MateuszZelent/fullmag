@@ -5,6 +5,8 @@ const VIEWPORT_3D_REFRESH_DEFAULT_INTERVAL_MS = 1_000;
 const VIEWPORT_3D_REFRESH_MIN_INTERVAL_MS = 200;
 const VIEWPORT_3D_REFRESH_MAX_INTERVAL_MS = 5_000;
 const VIEWPORT_3D_REFRESH_FLASH_MS = 650;
+const VIEWPORT_3D_REFRESH_COUNTDOWN_MAX_TICK_MS = 1_000;
+const VIEWPORT_3D_REFRESH_COUNTDOWN_MIN_TICK_MS = 250;
 
 export interface Viewport3DFieldRefreshState {
   enabled: boolean;
@@ -28,6 +30,34 @@ export interface Viewport3DRefreshCountdownDisplay {
   progress: number;
   state: "counting" | "error" | "syncing" | "updated" | "waiting";
   title: string;
+}
+
+export function resolveViewport3DRefreshCountdownNextTickDelay(input: {
+  enabled: boolean;
+  nowMs: number;
+  sample: Viewport3DRefreshSample;
+  status: ResourceStatus;
+}): number | null {
+  if (!input.enabled || input.status === "idle" || input.status === "error") {
+    return null;
+  }
+  if (input.status === "loading" || input.status === "stale") {
+    return null;
+  }
+  if (input.sample.refreshedAtMs === null || input.nowMs <= 0) {
+    return null;
+  }
+
+  if (input.nowMs < input.sample.flashUntilMs) {
+    return clampTickDelay(input.sample.flashUntilMs - input.nowMs);
+  }
+
+  const elapsedMs = Math.max(0, input.nowMs - input.sample.refreshedAtMs);
+  const remainingMs = Math.max(0, input.sample.intervalMs - elapsedMs);
+  if (remainingMs <= 0) {
+    return null;
+  }
+  return clampTickDelay(remainingMs);
 }
 
 export const EMPTY_VIEWPORT_3D_REFRESH_SAMPLE: Viewport3DRefreshSample = {
@@ -173,4 +203,12 @@ function clamp(value: number, min: number, max: number): number {
 
 function clamp01(value: number): number {
   return clamp(value, 0, 1);
+}
+
+function clampTickDelay(value: number): number {
+  return clamp(
+    value,
+    VIEWPORT_3D_REFRESH_COUNTDOWN_MIN_TICK_MS,
+    VIEWPORT_3D_REFRESH_COUNTDOWN_MAX_TICK_MS,
+  );
 }

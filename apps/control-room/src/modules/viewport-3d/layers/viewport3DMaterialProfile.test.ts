@@ -13,21 +13,19 @@ describe("viewport3D material profile", () => {
     expect(profile.primitivePreview.toneMapped).toBe(false);
   });
 
-  it("uses lower roughness for lit magnetic surfaces", () => {
-    const lite = resolveViewport3DMaterialProfile(
-      getViewport3DVisualProfile("interactive-lite"),
-    );
+  it("keeps magnetic and primitive surfaces unlit", () => {
     const interactive = resolveViewport3DMaterialProfile(
       getViewport3DVisualProfile("interactive"),
     );
 
-    expect(interactive.magneticSurface.roughness).toBeLessThan(
-      lite.magneticSurface.roughness ?? 1,
-    );
-    expect(interactive.magneticSurface.toneMapped).toBe(true);
+    expect(interactive.magneticSurface).toEqual({ toneMapped: false });
+    expect(interactive.primitivePreview).toEqual({ toneMapped: false });
+    expect(interactive.magneticSurface).not.toHaveProperty("metalness");
+    expect(interactive.magneticSurface).not.toHaveProperty("roughness");
+    expect(interactive.primitivePreview).not.toHaveProperty("emissiveIntensity");
   });
 
-  it("boosts primitive previews in figure profiles", () => {
+  it("keeps capture-oriented primitive previews unlit", () => {
     const interactive = resolveViewport3DMaterialProfile(
       getViewport3DVisualProfile("interactive"),
     );
@@ -35,9 +33,7 @@ describe("viewport3D material profile", () => {
       getViewport3DVisualProfile("figure"),
     );
 
-    expect(figure.primitivePreview.emissiveIntensity).toBeGreaterThan(
-      interactive.primitivePreview.emissiveIntensity ?? 0,
-    );
+    expect(figure.primitivePreview).toEqual(interactive.primitivePreview);
   });
 
   it("maps visual profile edge opacity and boost into feature edge opacity", () => {
@@ -68,10 +64,10 @@ describe("viewport3D material profile", () => {
     });
     expect(interactive.grid).toMatchObject({
       depthWrite: false,
-      opacity: 0.34,
+      opacity: 0.26,
       toneMapped: false,
     });
-    expect(interactive.axes.opacity).toBe(0.75);
+    expect(interactive.axes.opacity).toBe(0.6);
     expect(interactive.dimensionFrame).toMatchObject({
       labelOpacity: expect.any(Number),
       majorOpacity: expect.any(Number),
@@ -84,12 +80,10 @@ describe("viewport3D material profile", () => {
     expect(interactive.dimensionFrame.majorOpacity).toBeLessThanOrEqual(0.46);
     expect(interactive.dimensionFrame.labelOpacity).toBeGreaterThanOrEqual(0.72);
     expect(interactive.dimensionFrame.labelOpacity).toBeLessThanOrEqual(1);
-    expect(figure.dimensionFrame.majorOpacity).toBeGreaterThan(
+    expect(figure.dimensionFrame.majorOpacity).toBe(
       interactive.dimensionFrame.majorOpacity,
     );
-    expect(figure.selectionShell.opacity).toBeGreaterThan(
-      interactive.selectionShell.opacity,
-    );
+    expect(figure.selectionShell.opacity).toBe(interactive.selectionShell.opacity);
   });
 
   it("keeps render pass policy out of material appearance profiles", () => {

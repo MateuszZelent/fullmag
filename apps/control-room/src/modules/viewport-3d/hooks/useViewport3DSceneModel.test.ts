@@ -124,7 +124,7 @@ describe("useViewport3DSceneModel", () => {
     ]);
   });
 
-  it("wires synthetic airbox vectors as a local render-only override", () => {
+  it("wires synthetic airbox vectors as a local render-only fallback", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
 
     expect(source).toContain("airboxSettings.airboxSyntheticVectorsEnabled");
@@ -132,6 +132,7 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain(
       "(airboxVectorsVisible && !airboxSettings.airboxSyntheticVectorsEnabled)",
     );
+    expect(source).toContain("if (partFieldVectors.has(partModel.part.id))");
   });
 
   it("uses frequency-domain analysis overlay fields as the primary 3D field source", () => {
@@ -1322,6 +1323,7 @@ describe("useViewport3DSceneModel", () => {
           vectorsVisible: true,
           visible: true,
         }) as never,
+      maxVectorGlyphs: 2048,
       magneticParts: [{ part }] as never,
       vectorDomain: "auto",
     });
@@ -1386,11 +1388,35 @@ describe("useViewport3DSceneModel", () => {
           vectorsVisible: true,
           visible: true,
         }) as never,
+      maxVectorGlyphs: 2048,
       magneticParts: [{ part: { id: "part:arch_waveguide" } }] as never,
       vectorDomain: "auto",
     });
 
     expect(scopedRequests.size).toBe(0);
+  });
+
+  it("caps scoped vector-only requests to the interactive glyph budget", () => {
+    const scopedRequests = resolveViewport3DScopedPartVectorFieldRequests({
+      getPartSettings: () =>
+        ({
+          activeQuantityId: "m",
+          shaderVisible: false,
+          surfaceColorSource: "magnitude",
+          vectorBudget: 48_461,
+          vectorsVisible: true,
+          visible: true,
+        }) as never,
+      maxVectorGlyphs: 2048,
+      magneticParts: [{ part: { id: "part:arch_waveguide" } }] as never,
+      vectorDomain: "auto",
+    });
+
+    expect(scopedRequests.get("part:arch_waveguide")?.query).toEqual({
+      component: "full",
+      max_samples: 2048,
+      scope_kind: "full",
+    });
   });
 
   it("consumes visualization resources separately from the camera registry", () => {

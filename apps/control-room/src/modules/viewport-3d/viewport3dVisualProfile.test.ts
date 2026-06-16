@@ -21,8 +21,8 @@ describe("viewport3d visual profiles", () => {
       id: "interactive",
       antialias: true,
       preserveDrawingBuffer: false,
-      toneMapping: "aces",
-      voxelFillRatio: 0.92,
+      toneMapping: "none",
+      voxelFillRatio: 1,
       voxelMagnitudeThreshold: 0,
       voxelTopography: {
         amplitudeCells: 0,
@@ -34,9 +34,9 @@ describe("viewport3d visual profiles", () => {
 
   it("defines profile-owned FDM voxel gap and threshold settings", () => {
     expect(getViewport3DVisualProfile("interactive-lite").voxelFillRatio).toBe(
-      0.88,
+      1,
     );
-    expect(getViewport3DVisualProfile("figure").voxelFillRatio).toBe(0.96);
+    expect(getViewport3DVisualProfile("figure").voxelFillRatio).toBe(1);
     expect(
       getViewport3DVisualProfile("capture").voxelMagnitudeThreshold,
     ).toBe(0);
@@ -102,11 +102,11 @@ describe("viewport3d visual profiles", () => {
     ).toMatchObject({ antialias: false });
   });
 
-  it("configures ACES tone mapping for quality profiles", () => {
+  it("keeps quality profiles un-tonemapped for scientific surface colors", () => {
     const renderer = {
       outputColorSpace: "",
-      toneMapping: NoToneMapping,
-      toneMappingExposure: 1,
+      toneMapping: ACESFilmicToneMapping,
+      toneMappingExposure: 2,
     } as WebGLRenderer;
 
     configureViewport3DRenderer(
@@ -114,8 +114,8 @@ describe("viewport3d visual profiles", () => {
       getViewport3DVisualProfile("balanced"),
     );
 
-    expect(renderer.toneMapping).toBe(ACESFilmicToneMapping);
-    expect(renderer.toneMappingExposure).toBe(1.05);
+    expect(renderer.toneMapping).toBe(NoToneMapping);
+    expect(renderer.toneMappingExposure).toBe(1);
     expect(renderer.outputColorSpace).toBe(SRGBColorSpace);
   });
 

@@ -106,7 +106,6 @@ function RegionMeshOverlayShape({
     const next = new BufferGeometry();
     next.setAttribute("position", new BufferAttribute(model.positions, 3));
     next.setIndex(new BufferAttribute(model.surfaceIndices, 1));
-    next.computeVertexNormals();
     return tracker.track("geometry", next);
   }, [model, tracker]);
   const edgeGeometry = useMemo(() => {
@@ -156,14 +155,12 @@ function RegionMeshOverlayShape({
       {surfaceGeometry ? (
         <mesh
           geometry={surfaceGeometry}
-          renderOrder={RENDER_POLICIES.contextSurface.renderOrder + 1}
+          renderOrder={RENDER_POLICIES.selectionShell.renderOrder}
         >
           <meshBasicMaterial
             color={fillColor}
-            depthTest={false}
-            depthWrite={false}
             opacity={model.style.fillOpacity}
-            transparent
+            {...materialPolicyProps("selectionShell")}
           />
         </mesh>
       ) : null}

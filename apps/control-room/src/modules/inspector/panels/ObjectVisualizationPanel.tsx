@@ -756,7 +756,7 @@ function VisualizationVectorsSection({
           <ToggleButton
             active={settings.airboxSyntheticVectorsEnabled}
             disabled={pending || sectionDisabled("vectors")}
-            label="Dev +Z vectors"
+            label="Dev fallback +Z"
             onClick={() =>
               void patch({
                 airboxSyntheticVectorsEnabled:
@@ -1447,16 +1447,33 @@ function NumberField({
 }) {
   const [draftOverride, setDraftOverride] = useState<number | null>(null);
   const latestOnChangeRef = useRef(onChange);
+  const draftFrameRef = useRef<number | null>(null);
   const pendingValueRef = useRef<number | null>(null);
+  const queuedDraftValueRef = useRef<number | null>(null);
   const displayValue = draftOverride ?? value;
 
   useEffect(() => {
     latestOnChangeRef.current = onChange;
   }, [onChange]);
 
+  useEffect(
+    () => () => {
+      if (draftFrameRef.current !== null) {
+        window.cancelAnimationFrame(draftFrameRef.current);
+        draftFrameRef.current = null;
+      }
+    },
+    [],
+  );
+
   const flushDraft = useCallback(() => {
     const pendingValue = pendingValueRef.current;
     pendingValueRef.current = null;
+    queuedDraftValueRef.current = null;
+    if (draftFrameRef.current !== null) {
+      window.cancelAnimationFrame(draftFrameRef.current);
+      draftFrameRef.current = null;
+    }
     setDraftOverride(null);
     if (pendingValue !== null) {
       latestOnChangeRef.current(pendingValue);
@@ -1466,7 +1483,17 @@ function NumberField({
   const scheduleDraft = useCallback(
     (nextValue: number) => {
       pendingValueRef.current = nextValue;
-      setDraftOverride(nextValue);
+      queuedDraftValueRef.current = nextValue;
+      if (draftFrameRef.current !== null) return;
+
+      draftFrameRef.current = window.requestAnimationFrame(() => {
+        draftFrameRef.current = null;
+        const queuedValue = queuedDraftValueRef.current;
+        queuedDraftValueRef.current = null;
+        if (queuedValue !== null) {
+          setDraftOverride(queuedValue);
+        }
+      });
     },
     [],
   );

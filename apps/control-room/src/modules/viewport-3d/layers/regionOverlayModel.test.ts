@@ -225,7 +225,7 @@ describe("regionOverlayModel", () => {
       wireframeVisible: true,
     });
     expect(resolveRegionOverlayStyle({ enabled: true, selected: true })).toMatchObject({
-      fillOpacity: 0.25,
+      fillOpacity: 1,
       fillVisible: true,
       wireframeOpacity: 1,
       wireframeScale: 1.008,
@@ -275,6 +275,21 @@ describe("regionOverlayModel", () => {
         wireframeVisible: false,
         wireframeColor: "#abcdef",
       },
+    });
+    expect(
+      resolveRegionOverlayStyle({
+        enabled: true,
+        selected: true,
+        settings: {
+          opacityPercent: 40,
+          shaderVisible: true,
+          visible: true,
+          wireframeVisible: true,
+        } as never,
+      }),
+    ).toMatchObject({
+      fillOpacity: 0.4,
+      fillVisible: true,
     });
 
     expect(
@@ -413,6 +428,51 @@ describe("regionOverlayModel", () => {
     expect(Array.from(models[0].edgeIndices ?? [])).toEqual([
       0, 1, 0, 2, 0, 3, 1, 2, 1, 3, 2, 3,
     ]);
+  });
+
+  it("uses mesh-part surface faces for realized region overlay surfaces", () => {
+    const topology = {
+      boundaryFaceCount: 0,
+      boundaryFaces: new Uint32Array(),
+      boundaryMarkers: new Uint32Array(),
+      elementCount: 2,
+      elementMarkers: Uint32Array.from([1, 1]),
+      indices: Uint32Array.from([0, 1, 2, 3, 1, 2, 3, 4]),
+      nodeCount: 5,
+      positions: Float64Array.from([
+        0, 0, 0,
+        1, 0, 0,
+        0, 1, 0,
+        0, 0, 1,
+        1, 1, 1,
+      ]),
+    };
+
+    const models = buildRegionMeshOverlayModels(
+      [
+        {
+          enabled: true,
+          mesh_part_ids: ["part:film:core"],
+          name: "Core",
+          owner_object_id: "film",
+          priority: 0,
+          region_id: "film:core",
+        },
+      ],
+      topology,
+      [
+        {
+          element_count: 1,
+          element_start: 0,
+          id: "part:film:core",
+          object_id: "film",
+          surface_faces: [[0, 1, 2]],
+        },
+      ],
+    );
+
+    expect(models).toHaveLength(1);
+    expect(Array.from(models[0].surfaceIndices ?? [])).toEqual([0, 1, 2]);
   });
 
   it("keeps mesh-backed overlays scoped to the owner object and region settings", () => {

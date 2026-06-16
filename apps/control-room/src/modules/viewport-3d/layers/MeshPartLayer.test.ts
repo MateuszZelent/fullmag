@@ -16,6 +16,18 @@ describe("MeshPartLayer", () => {
     expect(source).toContain("<primitive attach=\"material\" object={scalarShaderMaterial} />");
   });
 
+  it("uses unlit materials for mesh part fallback surfaces", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("./MeshPartLayer.tsx", import.meta.url)),
+      "utf8",
+    );
+
+    expect(source).toContain("<meshBasicMaterial");
+    expect(source).not.toContain("<meshStandardMaterial");
+    expect(source).not.toContain("MeshStandardMaterial");
+    expect(source).not.toContain("computeVertexNormals");
+  });
+
   it("does not suppress hidden full-volume wireframe behind a shaded magnetic surface", () => {
     const source = readFileSync(
       fileURLToPath(new URL("./MeshPartLayer.tsx", import.meta.url)),

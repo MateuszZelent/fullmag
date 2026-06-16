@@ -104,6 +104,11 @@ function airboxTopology(): Viewport3DTopologyRenderModel<Viewport3DMeshPart> {
 }
 
 describe("AirboxLayer", () => {
+  it("does not build unused normals for unlit airbox surfaces", () => {
+    expect(boundsLayersSource).toContain("<meshBasicMaterial");
+    expect(boundsLayersSource).not.toContain("computeVertexNormals");
+  });
+
   it("renders wireframe-only airbox edges as hidden-edge overlays", () => {
     expect(resolveAirboxWireframeSemantic(visibleWireframeAirbox)).toBe(
       "hiddenEdges",

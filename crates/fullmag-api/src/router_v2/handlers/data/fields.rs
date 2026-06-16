@@ -968,13 +968,17 @@ fn resolve_field_scope(
             resolve_part_scope(mesh, part_id, "part")?
         }
         "airbox" => {
-            let part_id = mesh
+            let part = mesh
                 .mesh_parts
                 .iter()
                 .find(|part| part.role == "air")
-                .map(|part| part.id.clone())
                 .ok_or_else(|| ApiError::not_found("airbox mesh part not found"))?;
-            resolve_part_scope(mesh, &part_id, "airbox")?
+            ResolvedFieldScope {
+                domain: ResolvedFieldScopeDomain::Air,
+                kind: "airbox".to_string(),
+                id: Some(part.id.clone()),
+                node_indices: node_indices_for_airbox_part(mesh, part),
+            }
         }
         "selection" => {
             let selection = workspace_selection.ok_or_else(|| {
@@ -1082,6 +1086,50 @@ fn node_indices_for_part(part: &fullmag_runner::FemMeshPartPayload) -> Vec<usize
             .map(|index| *index as usize)
             .collect()
     }
+}
+
+fn node_indices_for_airbox_part(
+    mesh: &FemMeshPayload,
+    part: &fullmag_runner::FemMeshPartPayload,
+) -> Vec<usize> {
+    let mut node_indices = node_indices_for_part(part);
+    let magnetic_nodes = magnetic_node_index_set(mesh);
+    if magnetic_nodes.is_empty() {
+        return node_indices;
+    }
+    node_indices.retain(|index| !magnetic_nodes.contains(index));
+    node_indices
+}
+
+fn magnetic_node_index_set(mesh: &FemMeshPayload) -> BTreeSet<usize> {
+    let mut node_indices = BTreeSet::new();
+    for part in &mesh.mesh_parts {
+        if part.role == "magnetic_object" {
+            node_indices.extend(node_indices_for_part(part));
+        }
+    }
+    if !node_indices.is_empty() {
+        return node_indices;
+    }
+
+    for segment in &mesh.object_segments {
+        if segment.object_id != "__air__" {
+            node_indices.extend(node_indices_for_segment(mesh, segment));
+        }
+    }
+    if !node_indices.is_empty() {
+        return node_indices;
+    }
+
+    for (element_index, marker) in mesh.element_markers.iter().enumerate() {
+        if *marker == 0 {
+            continue;
+        }
+        if let Some(element) = mesh.elements.get(element_index) {
+            node_indices.extend(element.iter().map(|index| *index as usize));
+        }
+    }
+    node_indices
 }
 
 fn node_indices_for_segment(

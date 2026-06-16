@@ -1,27 +1,18 @@
-import type { MeshStandardMaterialParameters } from "three";
+import type { MeshBasicMaterialParameters } from "three";
 
 import type { Viewport3DVisualProfile } from "../viewport3dVisualProfile";
 
 export interface Viewport3DMaterialProfile {
   airSurface: Pick<
-    MeshStandardMaterialParameters,
-    | "emissiveIntensity"
-    | "metalness"
-    | "roughness"
+    MeshBasicMaterialParameters,
     | "toneMapped"
   >;
   magneticSurface: Pick<
-    MeshStandardMaterialParameters,
-    | "emissiveIntensity"
-    | "metalness"
-    | "roughness"
+    MeshBasicMaterialParameters,
     | "toneMapped"
   >;
   primitivePreview: Pick<
-    MeshStandardMaterialParameters,
-    | "emissiveIntensity"
-    | "metalness"
-    | "roughness"
+    MeshBasicMaterialParameters,
     | "toneMapped"
   >;
   featureEdges: {
@@ -60,21 +51,12 @@ export function resolveViewport3DMaterialProfile(
   const figureBoost = visualProfile.lighting === "figure" ? 1 : 0;
   return {
     airSurface: {
-      emissiveIntensity: 0.02 + figureBoost * 0.02,
-      metalness: 0,
-      roughness: 0.92,
       toneMapped: visualProfile.toneMapping !== "none",
     },
     magneticSurface: {
-      emissiveIntensity: 0,
-      metalness: 0,
-      roughness: visualProfile.lighting === "minimal" ? 0.88 : 0.72,
       toneMapped: visualProfile.toneMapping !== "none",
     },
     primitivePreview: {
-      emissiveIntensity: 0.08 + figureBoost * 0.04,
-      metalness: 0,
-      roughness: 0.68,
       toneMapped: visualProfile.toneMapping !== "none",
     },
     featureEdges: {

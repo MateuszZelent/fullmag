@@ -710,6 +710,7 @@ describe("RealtimeInvalidationBridge", () => {
       payload: {
         changes: [
           {
+            recommended_fetch: DATA_FIELDS_PATH,
             quantity_ids: ["m"],
             resource: "fields",
             resource_id: "samples",

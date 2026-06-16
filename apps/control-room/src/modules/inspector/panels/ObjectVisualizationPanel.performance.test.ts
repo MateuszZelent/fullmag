@@ -10,7 +10,9 @@ const panelSource = readFileSync(
 describe("ObjectVisualizationPanel performance contracts", () => {
   it("stages range-field commits until interaction boundaries", () => {
     expect(panelSource).toContain("pendingValueRef");
-    expect(panelSource).toContain("setDraftOverride(nextValue)");
+    expect(panelSource).toContain("queuedDraftValueRef");
+    expect(panelSource).toContain("window.requestAnimationFrame");
+    expect(panelSource).toContain("window.cancelAnimationFrame");
     expect(panelSource).not.toContain("window.setTimeout(");
     expect(panelSource).toContain("onPointerUp={flushDraft}");
     expect(panelSource).toContain("onPointerCancel={flushDraft}");
@@ -52,7 +54,7 @@ describe("ObjectVisualizationPanel performance contracts", () => {
   });
 
   it("renders the airbox synthetic vector developer toggle locally", () => {
-    expect(panelSource).toContain('label="Dev +Z vectors"');
+    expect(panelSource).toContain('label="Dev fallback +Z"');
     expect(panelSource).toContain("airboxSyntheticVectorsEnabled");
     expect(panelSource).toContain("delete remotePatch.airboxSyntheticVectorsEnabled");
   });

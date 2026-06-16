@@ -223,6 +223,13 @@ describe("FdmCuboidLayer model", () => {
     expect(layerSource).toContain("instanceModel !== undefined");
   });
 
+  it("uses unlit materials for FDM cell surfaces", () => {
+    const layerSource = readFileSync(fdmCuboidLayerPath, "utf8");
+
+    expect(layerSource).toContain("MeshBasicMaterial");
+    expect(layerSource).not.toContain("MeshStandardMaterial");
+  });
+
   it("uses a native raycast path for FDM inspect hover sampling", () => {
     const layerSource = readFileSync(fdmCuboidLayerPath, "utf8");
 

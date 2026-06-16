@@ -345,6 +345,8 @@ export class RealtimeInvalidationBridge {
           continue;
         }
         const recommendedFetch = change.recommended_fetch;
+        const fieldSampleChange =
+          change.resource === "fields" && change.resource_id === "samples";
 
         if (recommendedFetch && shouldInvalidateSessionStatus(recommendedFetch)) {
           statusRevision = latestRevision(
@@ -352,15 +354,7 @@ export class RealtimeInvalidationBridge {
             dependentResourceRevision(recommendedFetch, change.revision),
           );
         }
-        if (recommendedFetch) {
-          this.queueResourceInvalidation(
-            recommendedFetch,
-            change.revision,
-          );
-        } else if (
-          change.resource === "fields" &&
-          change.resource_id === "samples"
-        ) {
+        if (fieldSampleChange) {
           if (change.broad || !change.quantity_ids?.length) {
             this.queuePrefixInvalidation(DATA_FIELDS_PATH, change.revision);
           } else {
@@ -371,6 +365,11 @@ export class RealtimeInvalidationBridge {
               );
             }
           }
+        } else if (recommendedFetch) {
+          this.queueResourceInvalidation(
+            recommendedFetch,
+            change.revision,
+          );
         }
         handled = true;
       }

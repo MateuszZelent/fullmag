@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
@@ -51,6 +53,16 @@ function vectorFieldModel(): Viewport3DFieldRenderModel {
 }
 
 describe("FallbackTopologyMeshLayer", () => {
+  it("does not build unused normals for unlit fallback surfaces", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("./FallbackTopologyMeshLayer.tsx", import.meta.url)),
+      "utf8",
+    );
+
+    expect(source).toContain("<meshBasicMaterial");
+    expect(source).not.toContain("computeVertexNormals");
+  });
+
   it("renders vector-only fallback topology layers", () => {
     const tracker = new Viewport3DResourceTracker();
     const markup = renderToStaticMarkup(

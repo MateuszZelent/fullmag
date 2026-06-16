@@ -150,7 +150,6 @@ function remapExtrudedCardinalAxisGeometry(
   }
 
   position.needsUpdate = true;
-  geometry.computeVertexNormals();
   geometry.computeBoundingBox();
   geometry.computeBoundingSphere();
 }

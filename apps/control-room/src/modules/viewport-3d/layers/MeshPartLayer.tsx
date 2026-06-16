@@ -5,7 +5,7 @@ import { useEffect, useMemo, memo, useRef } from "react";
 import {
   BufferAttribute,
   BufferGeometry,
-  type MeshStandardMaterial,
+  type MeshBasicMaterial,
 } from "three";
 import {
   RENDER_POLICIES,
@@ -99,7 +99,6 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       new BufferAttribute(topologyModel.positions, 3),
     );
     next.setIndex(new BufferAttribute(surfaceIndices, 1));
-    next.computeVertexNormals();
     return next;
   }, [partModel, topologyModel, tracker]);
   const edgeGeometry = useMemo(() => {
@@ -213,7 +212,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     vertexColorsEnabled,
   ]);
 
-  const materialRef = useRef<MeshStandardMaterial>(null);
+  const materialRef = useRef<MeshBasicMaterial>(null);
   const hasScalarColors = vertexColorsEnabled && canUseVertexScalarColors;
   const surfaceOpacity = opacityFromSettings(renderSettings);
   const surfacePolicy = useMemo(
@@ -290,7 +289,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
           {scalarShaderMaterial ? (
             <primitive attach="material" object={scalarShaderMaterial} />
           ) : (
-            <meshStandardMaterial
+            <meshBasicMaterial
               ref={materialRef}
               color={meshColor}
               opacity={surfaceOpacity}

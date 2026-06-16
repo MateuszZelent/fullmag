@@ -9,7 +9,7 @@
  * Usage:
  *   import { RENDER_POLICIES, applyRenderPolicy } from "./viewport3DRenderPolicy";
  *   // on a declarative R3F material:
- *   <meshStandardMaterial {...materialPolicyProps("solidSurface")} />
+ *   <meshBasicMaterial {...materialPolicyProps("solidSurface")} />
  *   // on the parent <mesh>:
  *   <mesh renderOrder={RENDER_POLICIES.solidSurface.renderOrder}>
  */

@@ -92,6 +92,7 @@ import {
 import {
   EMPTY_VIEWPORT_3D_REFRESH_SAMPLE,
   resolveViewport3DRefreshCountdownDisplay,
+  resolveViewport3DRefreshCountdownNextTickDelay,
   updateViewport3DRefreshSample,
   type Viewport3DFieldRefreshState,
 } from "./viewport3dRefreshCountdown";
@@ -959,8 +960,6 @@ const Viewport3DInspectTooltip = memo(function Viewport3DInspectTooltip({
   );
 });
 
-const VIEWPORT_3D_REFRESH_COUNTDOWN_TICK_MS = 100;
-
 interface Viewport3DRefreshCountdownState {
   nowMs: number;
   sample: typeof EMPTY_VIEWPORT_3D_REFRESH_SAMPLE;
@@ -1003,23 +1002,11 @@ const Viewport3DFieldRefreshCountdown = memo(
         return;
       }
 
-      let timeoutId: ReturnType<typeof setTimeout> | null = null;
-      const tick = () => {
-        const nowMs = Date.now();
-        dispatchCountdownTick({
-          nowMs,
-          revision: refresh.revision,
-          status: refresh.status,
-        });
-        timeoutId = setTimeout(tick, VIEWPORT_3D_REFRESH_COUNTDOWN_TICK_MS);
-      };
-      const initialTimeoutId = setTimeout(tick, 0);
-      return () => {
-        if (timeoutId !== null) {
-          clearTimeout(timeoutId);
-        }
-        clearTimeout(initialTimeoutId);
-      };
+      dispatchCountdownTick({
+        nowMs: Date.now(),
+        revision: refresh.revision,
+        status: refresh.status,
+      });
     }, [refresh.enabled, refresh.revision, refresh.status]);
 
     const display = resolveViewport3DRefreshCountdownDisplay({
@@ -1028,6 +1015,32 @@ const Viewport3DFieldRefreshCountdown = memo(
       sample: countdown.sample,
       status: refresh.status,
     });
+
+    useEffect(() => {
+      const delayMs = resolveViewport3DRefreshCountdownNextTickDelay({
+        enabled: refresh.enabled,
+        nowMs: countdown.nowMs,
+        sample: countdown.sample,
+        status: refresh.status,
+      });
+      if (delayMs === null) return;
+
+      const timeoutId = setTimeout(() => {
+        dispatchCountdownTick({
+          nowMs: Date.now(),
+          revision: refresh.revision,
+          status: refresh.status,
+        });
+      }, delayMs);
+      return () => clearTimeout(timeoutId);
+    }, [
+      countdown.nowMs,
+      countdown.sample,
+      refresh.enabled,
+      refresh.revision,
+      refresh.status,
+    ]);
+
     if (!display) return null;
 
     const progressDegrees = `${Math.round(display.progress * 360)}deg`;

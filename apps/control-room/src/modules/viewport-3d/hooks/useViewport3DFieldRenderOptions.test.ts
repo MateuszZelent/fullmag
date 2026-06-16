@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  clampViewport3DInteractiveVectorBudget,
+  limitViewport3DFieldRenderVectorBudgets,
   sameViewport3DFieldRenderOptions,
   viewport3DAirboxVectorsVisible,
 } from "./useViewport3DFieldRenderOptions";
@@ -109,5 +111,38 @@ describe("sameViewport3DFieldRenderOptions", () => {
 
   it("does not allow airbox vectors for magnetic-only quantities", () => {
     expect(viewport3DAirboxVectorsVisible(true, true, false, "all")).toBe(false);
+  });
+
+  it("caps pathological per-target vector budgets before render-model builds", () => {
+    const limited = limitViewport3DFieldRenderVectorBudgets(
+      {
+        fullVectorBudget: 0,
+        partVectorBudgets: new Map([["part:__air__", 48_461]]),
+        partVectorScopes: new Map([["part:__air__", "full"]]),
+      },
+      {
+        airboxParts: [
+          {
+            part: {
+              id: "part:__air__",
+              nodeCount: 58_224,
+            },
+            surfaceNodeSelection: null,
+          },
+        ],
+        magneticParts: [],
+        nodeCount: 61_689,
+      } as never,
+      2048,
+    );
+
+    expect(limited.partVectorBudgets).toEqual(
+      new Map([["part:__air__", 2048]]),
+    );
+  });
+
+  it("keeps small requested vector budgets below the interactive cap", () => {
+    expect(clampViewport3DInteractiveVectorBudget(512, 2048)).toBe(512);
+    expect(clampViewport3DInteractiveVectorBudget(48_461, 2048)).toBe(2048);
   });
 });

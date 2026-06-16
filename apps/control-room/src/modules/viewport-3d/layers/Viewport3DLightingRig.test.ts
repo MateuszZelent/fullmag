@@ -14,19 +14,16 @@ describe("Viewport3DLightingRig", () => {
     expect(rig.ambient.intensity).toBe(0.6);
   });
 
-  it("uses a key/fill/rim studio rig for interactive rendering", () => {
+  it("keeps interactive rendering free of directional highlights", () => {
     const rig = resolveViewport3DLightingRig(
       getViewport3DVisualProfile("interactive"),
     );
 
-    expect(rig.directional).toHaveLength(3);
-    expect(rig.hemisphere).not.toBeNull();
-    expect(rig.directional[0]?.intensity).toBeGreaterThan(
-      rig.directional[1]?.intensity ?? 0,
-    );
+    expect(rig.directional).toHaveLength(0);
+    expect(rig.hemisphere).toBeNull();
   });
 
-  it("boosts the figure rig without changing the light topology", () => {
+  it("keeps capture-oriented profiles on the same neutral light topology", () => {
     const interactive = resolveViewport3DLightingRig(
       getViewport3DVisualProfile("interactive"),
     );
@@ -35,9 +32,6 @@ describe("Viewport3DLightingRig", () => {
     );
 
     expect(figure.directional).toHaveLength(interactive.directional.length);
-    expect(figure.directional[0]?.intensity).toBeGreaterThan(
-      interactive.directional[0]?.intensity ?? 0,
-    );
+    expect(figure.hemisphere).toBe(interactive.hemisphere);
   });
 });
-

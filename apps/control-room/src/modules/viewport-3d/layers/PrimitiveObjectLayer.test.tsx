@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_OBJECT_VISUALIZATION } from "@/kernel/visualization/ObjectVisualizationController";
@@ -35,6 +38,21 @@ function primitiveObject(
 }
 
 describe("PrimitiveObjectLayer geometry resources", () => {
+  it("uses unlit materials for primitive preview surfaces", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("./PrimitiveObjectLayer.tsx", import.meta.url)),
+      "utf8",
+    );
+    const modelSource = readFileSync(
+      fileURLToPath(new URL("./PrimitiveObjectLayerModel.ts", import.meta.url)),
+      "utf8",
+    );
+
+    expect(source).toContain("<meshBasicMaterial");
+    expect(source).not.toContain("<meshStandardMaterial");
+    expect(modelSource).not.toContain("computeVertexNormals");
+  });
+
   it("creates primitive geometry variants from object bounds", () => {
     expect(createPrimitiveObjectGeometry(primitiveObject("box")).type).toBe(
       "BoxGeometry",

@@ -177,7 +177,7 @@ function RenderablePrimitiveObject({
           }}
         >
           <primitive attach="geometry" object={geometry} />
-          <meshStandardMaterial
+          <meshBasicMaterial
             color={shaderColor}
             opacity={opacity}
             {...materialProfile.primitivePreview}

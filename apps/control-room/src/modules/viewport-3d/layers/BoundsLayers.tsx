@@ -200,7 +200,6 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
     const next = tracker.track("geometry", new BufferGeometry());
     next.setAttribute("position", new BufferAttribute(topologyModel.positions, 3));
     next.setIndex(new BufferAttribute(surfaceIndices, 1));
-    next.computeVertexNormals();
     return next;
   }, [partModel, topologyModel, tracker]);
   const edgeGeometry = useMemo(() => {

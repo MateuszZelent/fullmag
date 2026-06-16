@@ -19433,6 +19433,68 @@ async fn v2_field_vector_accepts_quantity_alias_for_scoped_airbox_samples() {
 }
 
 #[tokio::test]
+async fn v2_field_vector_airbox_scope_excludes_shared_magnetic_nodes() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_scoped_fem_mesh_payload();
+        mesh.nodes.push([3.0, 0.0, 0.0]);
+        mesh.nodes.push([4.0, 0.0, 0.0]);
+        mesh.mesh_parts[0].node_indices = vec![0, 1, 2, 3];
+        mesh.mesh_parts[1].node_indices = vec![0, 1, 2, 4, 5];
+        mesh.mesh_parts[1].node_start = 0;
+        mesh.mesh_parts[1].node_count = 5;
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "H_demag": {
+                "values": [
+                    [0.0, 0.1, 0.2],
+                    [1.0, 1.1, 1.2],
+                    [2.0, 2.1, 2.2],
+                    [3.0, 3.1, 3.2],
+                    [4.0, 4.1, 4.2],
+                    [5.0, 5.1, 5.2],
+                    [6.0, 6.1, 6.2],
+                    [7.0, 7.1, 7.2],
+                    [8.0, 8.1, 8.2],
+                    [9.0, 9.1, 9.2]
+                ],
+                "layout": {
+                    "grid_cells": [10, 1, 1]
+                }
+            }
+        }))
+        .expect("scoped H_demag latest_fields should deserialize");
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/h_demag/samples/vector?scope_kind=airbox")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-point-count")
+            .and_then(|value| value.to_str().ok()),
+        Some("2")
+    );
+    let bytes = body_bytes(response).await;
+    assert_eq!(&bytes[..4], b"FMVP");
+    let values: Vec<f64> = bytes[48..]
+        .chunks_exact(8)
+        .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
+        .collect();
+    assert_eq!(values, vec![4.0, 4.1, 4.2, 5.0, 5.1, 5.2]);
+}
+
+#[tokio::test]
 async fn v2_field_vector_object_scope_prefers_mesh_part_node_indices() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {

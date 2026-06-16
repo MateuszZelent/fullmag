@@ -26,40 +26,10 @@ export interface Viewport3DLightingRigModel {
 export function resolveViewport3DLightingRig(
   profile: Viewport3DVisualProfile,
 ): Viewport3DLightingRigModel {
-  if (profile.lighting === "minimal") {
-    return {
-      ambient: { color: 0xffffff, intensity: 0.6 },
-      directional: [],
-      hemisphere: null,
-    };
-  }
-
-  const figureBoost = profile.lighting === "figure" ? 1.12 : 1;
   return {
-    ambient: {
-      color: 0x8888aa,
-      intensity: 0.72 * figureBoost,
-    },
-    directional: [
-      {
-        color: 0xffffff,
-        intensity: 1.35 * figureBoost,
-        position: [1.5, 2.5, 3.5],
-      },
-      {
-        color: 0xccccff,
-        intensity: 0.52 * figureBoost,
-        position: [-1.8, 0.4, 1.2],
-      },
-      {
-        color: 0xffffff,
-        intensity: 0.34 * figureBoost,
-        position: [0, -1.4, -2.4],
-      },
-    ],
-    hemisphere: {
-      args: [0x8898bf, 0x293245, 0.42 * figureBoost],
-    },
+    ambient: { color: 0xffffff, intensity: profile.lighting === "minimal" ? 0.6 : 0.72 },
+    directional: [],
+    hemisphere: null,
   };
 }
 

@@ -11,7 +11,6 @@ import {
   InstancedMesh,
   Matrix4,
   MeshBasicMaterial,
-  MeshStandardMaterial,
   Quaternion,
   Raycaster,
   Vector2,
@@ -793,7 +792,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
     () =>
       tracker.track(
         "material",
-        new MeshStandardMaterial({
+        new MeshBasicMaterial({
           color: surfaceMaterialColorFromSettings(
             renderSettings,
             colors.mesh,
