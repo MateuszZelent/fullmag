@@ -1,0 +1,191 @@
+.fm-diagnostic-recorder.fm-dialog {
+  width: min(1120px, calc(100vw - 32px));
+  max-height: min(820px, calc(100vh - 32px));
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.fm-diagnostic-recorder__close {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: 6px;
+  color: var(--fm-text-muted);
+  background: var(--fm-bg-elevated);
+}
+
+.fm-diagnostic-recorder__close:hover {
+  color: var(--fm-text-primary);
+  border-color: var(--fm-border-strong);
+}
+
+.fm-diagnostic-recorder__summary,
+.fm-diagnostic-recorder__panel {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 8px;
+}
+
+.fm-diagnostic-recorder__metric {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: 8px;
+  background: var(--fm-bg-surface);
+}
+
+.fm-diagnostic-recorder__metric span,
+.fm-diagnostic-recorder__profile span {
+  color: var(--fm-text-muted);
+  font-size: 12px;
+}
+
+.fm-diagnostic-recorder__metric strong {
+  overflow: hidden;
+  color: var(--fm-text-primary);
+  font-size: 16px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-diagnostic-recorder__metric[data-tone="critical"] strong {
+  color: var(--fm-danger);
+}
+
+.fm-diagnostic-recorder__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.fm-diagnostic-recorder__toolbar-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.fm-diagnostic-recorder__toolbar-actions .fm-button {
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.fm-diagnostic-recorder__profile {
+  display: grid;
+  gap: 4px;
+}
+
+.fm-diagnostic-recorder__profile select {
+  min-width: 150px;
+  height: 32px;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: 6px;
+  color: var(--fm-text-primary);
+  background: var(--fm-bg-surface);
+  font: inherit;
+  font-size: 13px;
+}
+
+.fm-diagnostic-recorder__tabs {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.fm-diagnostic-recorder__table {
+  display: grid;
+  max-height: 360px;
+  overflow: auto;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: 8px;
+  background: var(--fm-bg-surface);
+}
+
+.fm-diagnostic-recorder__row {
+  display: grid;
+  grid-template-columns: minmax(178px, 0.9fr) 110px 82px minmax(220px, 1.4fr) 92px;
+  gap: 8px;
+  align-items: center;
+  min-width: 720px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--fm-border-subtle);
+  color: var(--fm-text-secondary);
+  font-size: 12px;
+}
+
+.fm-diagnostic-recorder__row:first-child {
+  border-top: 0;
+}
+
+.fm-diagnostic-recorder__row--header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  color: var(--fm-text-muted);
+  background: var(--fm-bg-elevated);
+  font-size: 11px;
+  font-weight: 650;
+  text-transform: uppercase;
+}
+
+.fm-diagnostic-recorder__row [role="cell"]:nth-child(4) {
+  overflow: hidden;
+  color: var(--fm-text-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-diagnostic-recorder__row[data-severity="critical"] [role="cell"]:nth-child(3) {
+  color: var(--fm-danger);
+  font-weight: 650;
+}
+
+.fm-diagnostic-recorder__row[data-severity="warning"] [role="cell"]:nth-child(3) {
+  color: var(--fm-warning);
+  font-weight: 650;
+}
+
+.fm-diagnostic-recorder__empty,
+.fm-diagnostic-recorder__json,
+.fm-diagnostic-recorder__report {
+  padding: 12px;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: 8px;
+  color: var(--fm-text-secondary);
+  background: var(--fm-bg-surface);
+  font-size: 12px;
+}
+
+.fm-diagnostic-recorder__json,
+.fm-diagnostic-recorder__report {
+  max-height: 360px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 760px) {
+  .fm-diagnostic-recorder__summary,
+  .fm-diagnostic-recorder__panel {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .fm-diagnostic-recorder__toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .fm-diagnostic-recorder__toolbar-actions {
+    justify-content: flex-start;
+  }
+}

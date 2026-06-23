@@ -186,18 +186,24 @@ describe("threadManagerModel", () => {
       {
         byteLength: 128 * 1024 * 1024,
         category: "viewport-cache",
+        createdAtMs: 0,
         entryCount: 4,
         id: "viewport3d.fieldVectorCache",
         label: "Field vector cache",
         maxBytes: 128 * 1024 * 1024,
+        owner: "viewport-3d",
+        releaseReason: null,
       },
       {
         byteLength: 120 * 1024 * 1024,
         category: "render-buffer",
+        createdAtMs: 0,
         entryCount: 48,
         id: "viewport3d.render.partVectorSegmentCache",
         label: "Part vector segment cache",
         maxBytes: null,
+        owner: "viewport-3d",
+        releaseReason: null,
       },
     ]);
 

@@ -1159,6 +1159,77 @@ run-cofeb-rings-relax-headless fem_execution="gpu" cpu_threads="auto":
     FULLMAG_CPU_THREADS="$cpu_threads_env" \
     '{{gpu_runtime_bin}}' examples/permalloy_layer_cofeb_rings_relax_300nm.py --backend fem --headless --json
 
+run-cofeb-rings-relax-diagnostics fem_execution="gpu" cpu_threads="auto" web_port="3192" scenario="viewport-3d":
+    just ensure-python
+    just ensure-managed-fem-runtime
+    bash -euo pipefail -c '\
+      mode="{{fem_execution}}"; \
+      case "$mode" in 0|cpu|CPU) mode="cpu" ;; gpu|GPU) mode="gpu" ;; *) echo "unsupported FEM execution mode: $mode (expected cpu or gpu)" >&2; exit 2 ;; esac; \
+      if [ "{{cpu_threads}}" = "auto" ]; then cpu_threads_env=auto; else cpu_threads_env="{{cpu_threads}}"; fi; \
+      if command -v pnpm >/dev/null 2>&1; then PNPM_CMD=pnpm; \
+      elif command -v corepack >/dev/null 2>&1; then PNPM_CMD="corepack pnpm"; \
+      else echo "pnpm or corepack not found on PATH" >&2; exit 127; fi; \
+      report_dir="{{repo_root}}/.fullmag/reports/cofeb-rings-relax-diagnostics"; \
+      artifact_root="$report_dir/browser"; \
+      app_log="$report_dir/fullmag-interactive.log"; \
+      recorder_log="$report_dir/diagnostic-recorder.log"; \
+      mkdir -p "$artifact_root"; \
+      sim_pid=""; \
+      cleanup() { \
+        if [ -n "$sim_pid" ] && kill -0 "$sim_pid" >/dev/null 2>&1; then \
+          kill "$sim_pid" >/dev/null 2>&1 || true; \
+          wait "$sim_pid" >/dev/null 2>&1 || true; \
+        fi; \
+      }; \
+      trap cleanup EXIT INT TERM; \
+      FULLMAG_PYTHON="{{repo_python}}" \
+      FULLMAG_FDM_EXECUTION=cpu \
+      FULLMAG_FEM_EXECUTION="$mode" \
+      FULLMAG_RELAX_DEVICE="$mode" \
+      FULLMAG_CPU_THREADS="$cpu_threads_env" \
+      FULLMAG_COFEB_RINGS_MINIMIZE_MAX_STEPS="${FULLMAG_COFEB_RINGS_MINIMIZE_MAX_STEPS:-10}" \
+      FULLMAG_COFEB_RINGS_RELAX_MAX_STEPS="${FULLMAG_COFEB_RINGS_RELAX_MAX_STEPS:-10}" \
+      "{{gpu_runtime_bin}}" --dev -i examples/permalloy_layer_cofeb_rings_relax_300nm.py --web-port "{{web_port}}" \
+        > "$app_log" 2>&1 & \
+      sim_pid=$!; \
+      web_url="http://localhost:{{web_port}}/workspace"; \
+      for _ in $(seq 1 600); do \
+        curl -fsS "$web_url" >/dev/null 2>&1 && break; \
+        if ! kill -0 "$sim_pid" >/dev/null 2>&1; then \
+          echo "CoFeB rings simulation exited before control room became ready; see $app_log" >&2; \
+          tail -n 120 "$app_log" >&2 || true; \
+          exit 1; \
+        fi; \
+        sleep 0.5; \
+      done; \
+      curl -fsS "$web_url" >/dev/null 2>&1 || { echo "control room did not become ready at $web_url; see $app_log" >&2; exit 1; }; \
+      CONTROL_ROOM_URL="$web_url" \
+      CONTROL_ROOM_DIAGNOSTICS_SCENARIO="{{scenario}}" \
+      CONTROL_ROOM_DIAGNOSTICS_OUTPUT_DIR="$artifact_root" \
+      CONTROL_ROOM_DIAGNOSTICS_TIMEOUT_MS="${CONTROL_ROOM_DIAGNOSTICS_TIMEOUT_MS:-180000}" \
+      CONTROL_ROOM_DIAGNOSTICS_CANVAS_TIMEOUT_MS="${CONTROL_ROOM_DIAGNOSTICS_CANVAS_TIMEOUT_MS:-180000}" \
+      $PNPM_CMD --dir apps/control-room diagnostics:record | tee "$recorder_log"; \
+      artifact_dir="$(sed -n "s/^Diagnostic artifact: //p" "$recorder_log" | tail -n 1)"; \
+      if [ -z "$artifact_dir" ] || [ ! -f "$artifact_dir/summary.json" ]; then \
+        echo "diagnostic recorder did not produce a readable artifact; see $recorder_log" >&2; \
+        exit 1; \
+      fi; \
+      for _ in $(seq 1 600); do \
+        grep -Eq "\[fullmag\] stage 2/2 .* completed" "$app_log" && break; \
+        if ! kill -0 "$sim_pid" >/dev/null 2>&1; then break; fi; \
+        sleep 0.5; \
+      done; \
+      if ! grep -Eq "\[fullmag\] stage 2/2 .* completed" "$app_log"; then \
+        echo "CoFeB rings short simulation did not complete both stages; see $app_log" >&2; \
+        tail -n 120 "$app_log" >&2 || true; \
+        exit 1; \
+      fi; \
+      printf "\nCoFeB rings diagnostic logs:\n"; \
+      printf "  fullmag: %s\n" "$app_log"; \
+      printf "  recorder: %s\n" "$recorder_log"; \
+      printf "  artifact: %s\n" "$artifact_dir"; \
+      node -e '\''const fs=require("fs"); const dir=process.argv[1]; const summary=JSON.parse(fs.readFileSync(`${dir}/summary.json`,"utf8")); const report=fs.readFileSync(`${dir}/suspect-report.md`,"utf8").split("\n").slice(0,28).join("\n"); console.log(`  records: ${summary.recordCount}, warnings: ${summary.warningCount}, critical: ${summary.criticalCount}, dropped: ${summary.droppedCount}`); console.log(report);'\'' "$artifact_dir"'
+
 run-permalloy-skyrmion-relax fem_execution="gpu":
     just run-permalloy-skyrmion-relax-interactive "{{fem_execution}}"
 

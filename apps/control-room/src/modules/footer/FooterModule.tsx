@@ -4,6 +4,7 @@ import {
   Activity,
   Clipboard,
   ClipboardCheck,
+  Cpu,
   FileText,
   Gauge,
   Hammer,
@@ -34,10 +35,11 @@ import {
 import { CommandAuditTable } from "./CommandAuditTable";
 import { FooterDiagnostics } from "./FooterDiagnostics";
 import { FooterTelemetry } from "./FooterTelemetry";
+import { DiagnosticRecorderFooterPanel } from "./DiagnosticRecorderFooterPanel";
 import { MeshJobsPanel } from "./MeshJobsPanel";
 import { TransportLogTable } from "./TransportLogTable";
 
-type FooterTabId = "engine" | "logs" | "mesh" | "telemetry";
+type FooterTabId = "diagnostics" | "engine" | "logs" | "mesh" | "telemetry";
 
 const EMPTY_DIAGNOSTIC_ENTRIES: RequestDiagnosticEntry[] = [];
 
@@ -79,6 +81,10 @@ function FooterModuleContent({ kernel }: ModuleProps) {
             <Gauge size={14} aria-hidden="true" />
             Telemetry
           </TabsTrigger>
+          <TabsTrigger value="diagnostics" className="fm-footer__tab">
+            <Cpu size={14} aria-hidden="true" />
+            Diagnostics
+          </TabsTrigger>
           <TabsTrigger value="engine" className="fm-footer__tab">
             <FileText size={14} aria-hidden="true" />
             Engine
@@ -113,6 +119,12 @@ function FooterModuleContent({ kernel }: ModuleProps) {
       <TabsContent value="telemetry" className="fm-footer__content">
         {activeTab === "telemetry" ? (
           <FooterTelemetry bus={kernel.bus} />
+        ) : null}
+      </TabsContent>
+
+      <TabsContent value="diagnostics" className="fm-footer__content">
+        {activeTab === "diagnostics" ? (
+          <DiagnosticRecorderFooterPanel kernel={kernel} />
         ) : null}
       </TabsContent>
 

@@ -17,6 +17,7 @@ import { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import { LayoutController } from "@/kernel/layout/LayoutController";
 import { ModuleRegistry } from "@/kernel/module/ModuleRegistry";
+import { DiagnosticRecorderController } from "@/kernel/performance/diagnostic-recorder/DiagnosticRecorderController";
 import { RealtimeInvalidationBridge } from "@/kernel/realtime/RealtimeInvalidationBridge";
 import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
 import { SelectionController } from "@/kernel/selection/SelectionController";
@@ -52,6 +53,9 @@ function makeKernel(): KernelApi {
     commandDiagnostics: new CommandDiagnosticsController(),
     commands,
     diagnostics: new RequestDiagnosticsController(),
+    diagnosticRecorder: new DiagnosticRecorderController({
+      config: { enabled: false },
+    }),
     layout: new LayoutController(bus),
     modules: new ModuleRegistry(),
     realtime: new RealtimeInvalidationBridge(resources),

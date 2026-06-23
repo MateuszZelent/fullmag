@@ -79,4 +79,61 @@ describe("ResourceCache", () => {
     expect(cache.get("c")?.data).toBe("c");
     expect(cache.get("d")?.data).toBe("d");
   });
+
+  it("emits diagnostic cache events without changing cache behavior", () => {
+    const events: unknown[] = [];
+    const cache = new ResourceCache<string>({
+      maxBytes: 3,
+      onEvent: (event) => events.push({ ...event, timestampMs: 0 }),
+    });
+    const unsubscribe = cache.subscribe((event) => {
+      events.push({ listener: true, ...event, timestampMs: 0 });
+    });
+
+    cache.get("missing");
+    cache.set("a", { byteLength: 2, data: "a" });
+    cache.get("a");
+    cache.set("b", { byteLength: 2, data: "b" });
+    unsubscribe();
+    cache.clear();
+
+    expect(events).toEqual([
+      expect.objectContaining({ action: "miss", byteLength: null, key: "missing" }),
+      expect.objectContaining({
+        action: "miss",
+        byteLength: null,
+        key: "missing",
+        listener: true,
+      }),
+      expect.objectContaining({ action: "set", byteLength: 2, key: "a" }),
+      expect.objectContaining({
+        action: "set",
+        byteLength: 2,
+        key: "a",
+        listener: true,
+      }),
+      expect.objectContaining({ action: "hit", byteLength: 2, key: "a" }),
+      expect.objectContaining({
+        action: "hit",
+        byteLength: 2,
+        key: "a",
+        listener: true,
+      }),
+      expect.objectContaining({ action: "set", byteLength: 2, key: "b" }),
+      expect.objectContaining({
+        action: "set",
+        byteLength: 2,
+        key: "b",
+        listener: true,
+      }),
+      expect.objectContaining({ action: "evict", byteLength: 2, key: "a" }),
+      expect.objectContaining({
+        action: "evict",
+        byteLength: 2,
+        key: "a",
+        listener: true,
+      }),
+      expect.objectContaining({ action: "evict", byteLength: 2, key: "b" }),
+    ]);
+  });
 });

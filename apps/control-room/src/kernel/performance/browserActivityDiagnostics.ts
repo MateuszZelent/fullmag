@@ -58,6 +58,7 @@ interface BrowserActivityDiagnosticsOptions {
 const LONG_TASK_PATH = "fullmag.browser.longtask";
 const LONG_ANIMATION_FRAME_PATH = "fullmag.browser.long-animation-frame";
 const MIN_BROWSER_ACTIVITY_SAMPLE_INTERVAL_MS = 1_000;
+const CRITICAL_BROWSER_ACTIVITY_MS = 100;
 
 export function startBrowserActivityDiagnostics({
   diagnostics,
@@ -87,7 +88,8 @@ export function startBrowserActivityDiagnostics({
           now,
           timeOrigin,
         });
-        const sample = sampler.sample(LONG_TASK_PATH, timestampMs);
+        const durationMs = normalizeDuration(entry.duration);
+        const sample = sampler.sample(LONG_TASK_PATH, timestampMs, durationMs);
         if (!sample.record) continue;
         diagnostics.record({
           byteLength: null,
@@ -98,7 +100,7 @@ export function startBrowserActivityDiagnostics({
             sample.suppressedSinceLast,
           ),
           direction: "rx",
-          durationMs: normalizeDuration(entry.duration),
+          durationMs,
           messageType: "longtask",
           method: "LONGTASK",
           outcome: "ok",
@@ -127,7 +129,12 @@ export function startBrowserActivityDiagnostics({
           now,
           timeOrigin,
         });
-        const sample = sampler.sample(LONG_ANIMATION_FRAME_PATH, timestampMs);
+        const durationMs = normalizeDuration(entry.duration);
+        const sample = sampler.sample(
+          LONG_ANIMATION_FRAME_PATH,
+          timestampMs,
+          durationMs,
+        );
         if (!sample.record) continue;
         diagnostics.record({
           byteLength: null,
@@ -138,7 +145,7 @@ export function startBrowserActivityDiagnostics({
             sample.suppressedSinceLast,
           ),
           direction: "rx",
-          durationMs: normalizeDuration(entry.duration),
+          durationMs,
           messageType: "long-animation-frame",
           method: "LOAF",
           outcome: "ok",
@@ -170,14 +177,16 @@ function createBrowserActivitySampler(): {
   sample: (
     path: string,
     timestampMs: number,
+    durationMs: number | null,
   ) => { record: boolean; suppressedSinceLast: number };
 } {
   const lastRecordedAt = new Map<string, number>();
   const suppressed = new Map<string, number>();
   return {
-    sample(path, timestampMs) {
+    sample(path, timestampMs, durationMs) {
       const last = lastRecordedAt.get(path);
       if (
+        (durationMs ?? 0) < CRITICAL_BROWSER_ACTIVITY_MS &&
         last !== undefined &&
         timestampMs - last < MIN_BROWSER_ACTIVITY_SAMPLE_INTERVAL_MS
       ) {

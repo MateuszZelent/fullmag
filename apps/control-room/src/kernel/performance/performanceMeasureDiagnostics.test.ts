@@ -62,7 +62,8 @@ describe("performance measure diagnostics", () => {
       expect.objectContaining({
         byteLength: null,
         channel: "performance",
-        detail: "performance measure",
+        detail:
+          "performance measure;bucket=viewport-build;source=fullmag.viewport3d.buildViewport3DTopologyRenderModel;suppressedSinceLast=0",
         direction: "rx",
         durationMs: 12.7,
         messageType: "measure",
@@ -112,13 +113,15 @@ describe("performance measure diagnostics", () => {
 
     expect(records).toEqual([
       expect.objectContaining({
-        detail: "performance measure",
+        detail:
+          "performance measure;bucket=react-render;source=fullmag.react.render.Viewport3DModule.update;suppressedSinceLast=0",
         durationMs: 1,
         path: "fullmag.react.render.Viewport3DModule.update",
         timestampMs: 1_050,
       }),
       expect.objectContaining({
-        detail: "performance measure;suppressedSinceLast=1",
+        detail:
+          "performance measure;bucket=react-render;source=fullmag.react.render.Viewport3DModule.update;suppressedSinceLast=1",
         durationMs: 3,
         path: "fullmag.react.render.Viewport3DModule.update",
         timestampMs: 2_100,
@@ -126,5 +129,39 @@ describe("performance measure diagnostics", () => {
     ]);
 
     stop();
+  });
+
+  it("does not sample out critical React render measures", () => {
+    const records: RequestDiagnosticRecord[] = [];
+    startPerformanceMeasureDiagnostics({
+      diagnostics: {
+        record: (entry) => records.push(entry),
+      },
+      observerConstructor: FakePerformanceObserver,
+      timeOrigin: 1_000,
+    });
+
+    FakePerformanceObserver.latest?.emit([
+      {
+        duration: 1,
+        entryType: "measure",
+        name: "fullmag.react.render.Viewport3DModule.update",
+        startTime: 50,
+      },
+      {
+        duration: 140,
+        entryType: "measure",
+        name: "fullmag.react.render.Viewport3DModule.update",
+        startTime: 100,
+      },
+    ]);
+
+    expect(records).toEqual([
+      expect.objectContaining({ durationMs: 1 }),
+      expect.objectContaining({
+        detail: expect.stringContaining("suppressedSinceLast=0"),
+        durationMs: 140,
+      }),
+    ]);
   });
 });

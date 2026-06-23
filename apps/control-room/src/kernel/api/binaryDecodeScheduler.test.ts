@@ -128,4 +128,65 @@ describe("binaryDecodeScheduler", () => {
 
     await expect(recovered).resolves.toBe("decoded-after-error");
   });
+
+  it("emits decode diagnostics for inline decoding without a worker", async () => {
+    vi.stubGlobal("Worker", undefined);
+    const events: unknown[] = [];
+    const scheduler = createBinaryDecodeScheduler({
+      now: (() => {
+        let current = 100;
+        return () => current++;
+      })(),
+      onEvent: (event) => events.push(event),
+    });
+
+    await expect(
+      scheduler({
+        buffer: new ArrayBuffer(16),
+        decodeInline: () => "inline",
+        kind: "field-vector",
+        path: "/v2/sessions/current/data/field-vector/m",
+      }),
+    ).resolves.toBe("inline");
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        errorName: null,
+        kind: "field-vector",
+        outcome: "ok",
+        path: "/v2/sessions/current/data/field-vector/m",
+        payloadBytes: 16,
+        worker: false,
+      }),
+    ]);
+  });
+
+  it("emits decode diagnostics for worker transfer failures", async () => {
+    vi.stubGlobal("Worker", FakeBinaryDecodeWorker);
+    const events: unknown[] = [];
+    const scheduler = createBinaryDecodeScheduler({
+      onEvent: (event) => events.push(event),
+    });
+
+    const failed = scheduler({
+      buffer: new ArrayBuffer(8),
+      decodeInline: () => "inline",
+      kind: "field-vector",
+      path: "/binary",
+    });
+    const worker = FakeBinaryDecodeWorker.instances[0];
+    worker.emit("messageerror", new Event("messageerror"));
+
+    await expect(failed).rejects.toMatchObject({
+      name: "BinaryDecodeWorkerError",
+    });
+    expect(events).toEqual([
+      expect.objectContaining({
+        errorName: "BinaryDecodeWorkerError",
+        outcome: "error",
+        payloadBytes: 8,
+        worker: true,
+      }),
+    ]);
+  });
 });

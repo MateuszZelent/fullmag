@@ -36,6 +36,7 @@ interface PerformanceMeasureDiagnosticsOptions {
 const DEFAULT_PERFORMANCE_MEASURE_PREFIX = "fullmag.";
 const REACT_RENDER_MEASURE_PREFIX = "fullmag.react.render.";
 const MIN_REACT_RENDER_SAMPLE_INTERVAL_MS = 1_000;
+const CRITICAL_PERFORMANCE_MEASURE_MS = 100;
 
 export function startPerformanceMeasureDiagnostics({
   diagnostics,
@@ -63,19 +64,20 @@ export function startPerformanceMeasureDiagnostics({
         now,
         timeOrigin,
       });
-      const sample = sampler.sample(entry.name, timestampMs);
+      const durationMs = normalizePerformanceDuration(entry.duration);
+      const sample = sampler.sample(entry.name, timestampMs, durationMs);
       if (!sample.record) continue;
 
       diagnostics.record({
         byteLength: null,
         channel: "performance",
         contentType: null,
-        detail:
-          sample.suppressedSinceLast > 0
-            ? `performance measure;suppressedSinceLast=${sample.suppressedSinceLast}`
-            : "performance measure",
+        detail: formatPerformanceMeasureDetail(
+          entry.name,
+          sample.suppressedSinceLast,
+        ),
         direction: "rx",
-        durationMs: normalizePerformanceDuration(entry.duration),
+        durationMs,
         messageType: "measure",
         method: "MEASURE",
         outcome: "ok",
@@ -101,18 +103,23 @@ function createPerformanceMeasureSampler(): {
   sample: (
     path: string,
     timestampMs: number,
+    durationMs: number | null,
   ) => { record: boolean; suppressedSinceLast: number };
 } {
   const lastRecordedAt = new Map<string, number>();
   const suppressed = new Map<string, number>();
   return {
-    sample(path, timestampMs) {
+    sample(path, timestampMs, durationMs) {
       if (!path.startsWith(REACT_RENDER_MEASURE_PREFIX)) {
         return { record: true, suppressedSinceLast: 0 };
       }
 
+      const critical =
+        typeof durationMs === "number" &&
+        durationMs >= CRITICAL_PERFORMANCE_MEASURE_MS;
       const last = lastRecordedAt.get(path);
       if (
+        !critical &&
         last !== undefined &&
         timestampMs - last < MIN_REACT_RENDER_SAMPLE_INTERVAL_MS
       ) {
@@ -126,6 +133,38 @@ function createPerformanceMeasureSampler(): {
       return { record: true, suppressedSinceLast };
     },
   };
+}
+
+function formatPerformanceMeasureDetail(
+  name: string,
+  suppressedSinceLast: number,
+): string {
+  return [
+    "performance measure",
+    `bucket=${classifyPerformanceMeasureBucket(name)}`,
+    `source=${sanitizeDetailValue(name)}`,
+    `suppressedSinceLast=${suppressedSinceLast}`,
+  ].join(";");
+}
+
+function classifyPerformanceMeasureBucket(name: string): string {
+  if (name.startsWith(REACT_RENDER_MEASURE_PREFIX)) return "react-render";
+  if (name.startsWith("fullmag.viewport3d.")) {
+    if (/upload/i.test(name)) return "viewport-upload";
+    return "viewport-build";
+  }
+  if (name.startsWith("fullmag.api.requestBinaryResource.")) {
+    return "binary-decode";
+  }
+  if (name.startsWith("fullmag.resource") || name.includes("ResourceCache")) {
+    return "resource-cache";
+  }
+  if (name.startsWith("fullmag.browser.")) return "startup";
+  return "unknown";
+}
+
+function sanitizeDetailValue(value: string): string {
+  return value.replace(/[;\n\r]/g, " ").slice(0, 240);
 }
 
 function normalizePerformanceDuration(durationMs: number): number | null {

@@ -13,7 +13,7 @@ function performanceMeasure(name: string): PerformanceMeasure {
 }
 
 describe("performance measure guard", () => {
-  it("retries DataCloneError measurements without the clone-heavy detail", () => {
+  it("records measurements without clone-heavy detail", () => {
     const calls: Array<{
       endMark?: string;
       name: string;
@@ -21,12 +21,6 @@ describe("performance measure guard", () => {
     }> = [];
     const measure: TestMeasureFn = vi.fn((name, options, endMark) => {
       calls.push({ endMark, name, options });
-      if (typeof options === "object" && options && "detail" in options) {
-        throw new DOMException(
-          "Data cannot be cloned, out of memory.",
-          "DataCloneError",
-        );
-      }
       return performanceMeasure(name);
     });
     const target = {
@@ -43,12 +37,11 @@ describe("performance measure guard", () => {
       }),
     ).toMatchObject({ name: "ReactComponent" });
 
-    expect(calls).toHaveLength(2);
-    expect(calls[1]).toEqual({
+    expect(calls).toEqual([{
       endMark: undefined,
       name: "ReactComponent",
       options: { end: 12, start: 4 },
-    });
+    }]);
   });
 
   it("does not swallow non-clone performance errors", () => {

@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronDown, Search } from "lucide-react";
-import { useMemo, useReducer, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useReducer, useSyncExternalStore } from "react";
 
 import { useTheme } from "@/design/theme/ThemeProvider";
 import {
@@ -64,7 +64,7 @@ import { CommunicationPolicyDialog } from "./CommunicationPolicyDialog";
 import { DataPreviewDialog } from "./DataPreviewDialog";
 import { MaterialLibraryDialog } from "./MaterialLibraryDialog";
 import { RegistryInspectorDialog } from "./RegistryInspectorDialog";
-import { ThreadManagerDialog } from "./ThreadManagerDialog";
+import { DiagnosticRecorderDialog } from "./diagnostic-recorder/DiagnosticRecorderDialog";
 
 function subscribeToHydration(): () => void {
   return () => {};
@@ -379,6 +379,11 @@ export function AppMenuBar() {
     dispatchDialogState({ open, type: "thread-manager" });
   const setMaterialLibraryOpen = (open: boolean) =>
     dispatchDialogState({ open, type: "material-library" });
+  useEffect(() => {
+    return kernel.bus.on("diagnostics:recorder-open-requested", () => {
+      dispatchDialogState({ open: true, type: "thread-manager" });
+    });
+  }, [kernel.bus]);
   const visualizationSnapshot = useObjectVisualizationSelector((snapshot) =>
     dialogState.registryOpen ? snapshot : EMPTY_OBJECT_VISUALIZATION_SNAPSHOT,
   );
@@ -566,7 +571,7 @@ export function AppMenuBar() {
         onOpenChange={setRegistryOpen}
       />
 
-      <ThreadManagerDialog
+      <DiagnosticRecorderDialog
         kernel={kernel}
         onOpenChange={setThreadManagerOpen}
         open={dialogState.threadManagerOpen}

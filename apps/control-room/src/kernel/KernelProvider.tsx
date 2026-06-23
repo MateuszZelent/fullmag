@@ -3,6 +3,10 @@
 import { useEffect, useMemo, useRef, type ReactNode } from "react";
 
 import { SESSION_EVENTS_WS_PATH } from "./api/apiPaths";
+import {
+  createBinaryDecodeScheduler,
+  type BinaryDecodeDiagnosticEvent,
+} from "./api/binaryDecodeScheduler";
 import { ControlRoomApi } from "./api/ControlRoomApi";
 import {
   resolveControlRoomApiBase,
@@ -21,7 +25,17 @@ import {
 import { CommandDiagnosticsController } from "./commands/CommandDiagnosticsController";
 import { EventBus } from "./events/EventBus";
 import type { KernelEventMap } from "./events/eventTypes";
-import { performanceDiagnosticsEnabledFromBrowserConfig } from "./browserFullmagConfig";
+import {
+  performanceDiagnosticsEnabledFromBrowserConfig,
+  type BrowserFullmagConfig,
+} from "./browserFullmagConfig";
+import {
+  DIAGNOSTIC_EVENT_NAMES,
+  DiagnosticRecorderController,
+} from "./performance/diagnostic-recorder/DiagnosticRecorderController";
+import { recordDiagnosticBrowserSnapshot } from "./performance/diagnostic-recorder/diagnosticBrowserSnapshot";
+import { installDiagnosticConsoleCapture } from "./performance/diagnostic-recorder/diagnosticConsoleCapture";
+import { resolveDiagnosticRecorderConfig } from "./performance/diagnostic-recorder/diagnosticRecorderConfig";
 import { KernelContext } from "./KernelContext";
 import { LayoutController } from "./layout/LayoutController";
 import { SHELL_COMMANDS } from "./layout/shellCommands";
@@ -54,9 +68,25 @@ interface KernelProviderProps {
 function createKernel(): KernelApi {
   const bus = new EventBus<KernelEventMap>();
   const diagnostics = new RequestDiagnosticsController();
+  const browserConfig =
+    typeof window === "undefined"
+      ? undefined
+      : (window as Window & { __FULLMAG_CONFIG__?: BrowserFullmagConfig })
+          .__FULLMAG_CONFIG__;
+  const diagnosticRecorder = new DiagnosticRecorderController({
+    config: resolveDiagnosticRecorderConfig(browserConfig),
+    diagnostics,
+  });
+  diagnosticRecorder.mark(DIAGNOSTIC_EVENT_NAMES.kernelCreated);
   const commandDiagnostics = new CommandDiagnosticsController();
+  const binaryDecodeScheduler = createBinaryDecodeScheduler({
+    onEvent: (event) => {
+      recordBinaryDecodeDiagnostic(diagnosticRecorder, event);
+    },
+  });
   const api = new ControlRoomApi({
     baseUrl: resolveControlRoomApiBase(),
+    binaryDecodeScheduler,
     diagnostics,
   });
   const commands = new CommandRegistry();
@@ -123,6 +153,7 @@ function createKernel(): KernelApi {
     commandDiagnostics,
     commands,
     diagnostics,
+    diagnosticRecorder,
     layout,
     modules,
     realtime,
@@ -131,6 +162,73 @@ function createKernel(): KernelApi {
     visualization,
     visualizationSync,
   };
+}
+
+function recordBinaryDecodeDiagnostic(
+  diagnosticRecorder: DiagnosticRecorderController,
+  event: BinaryDecodeDiagnosticEvent,
+): void {
+  diagnosticRecorder.record({
+    byteLength: event.payloadBytes,
+    detail: {
+      decoderKind: event.kind,
+      errorName: event.errorName,
+      outcome: event.outcome,
+      path: event.path,
+      queueWaitMs: event.queueWaitMs,
+      worker: event.worker,
+    },
+    droppedCount: 0,
+    durationMs: event.durationMs,
+    id: "",
+    kind: "binary-decode",
+    lane: event.worker ? "worker" : "main-thread",
+    name:
+      event.outcome === "ok"
+        ? "binary-decode.finished"
+        : "binary-decode.error",
+    severity:
+      event.outcome === "error" || event.durationMs >= 100
+        ? "warning"
+        : "info",
+    startTimeMs: Math.max(0, event.timestampMs - event.durationMs),
+    timestampMs: event.timestampMs,
+  });
+}
+
+function DiagnosticRecorderConnector({ kernel }: { kernel: KernelApi }) {
+  useEffect(() => {
+    const diagnosticWindow = window as Window & {
+      __FULLMAG_DIAGNOSTIC_RECORDER_EXPORT__?: () => ReturnType<
+        KernelApi["diagnosticRecorder"]["exportArtifact"]
+      >;
+    };
+    const exportDiagnosticArtifact = () =>
+      kernel.diagnosticRecorder.exportArtifact();
+    diagnosticWindow.__FULLMAG_DIAGNOSTIC_RECORDER_EXPORT__ =
+      exportDiagnosticArtifact;
+    kernel.diagnosticRecorder.drainEarlyRecorder();
+    recordDiagnosticBrowserSnapshot((record) => {
+      kernel.diagnosticRecorder.record(record);
+    });
+    const cleanupConsoleCapture = installDiagnosticConsoleCapture({
+      record: (record) => {
+        kernel.diagnosticRecorder.record(record);
+      },
+    });
+    kernel.diagnosticRecorder.mark(DIAGNOSTIC_EVENT_NAMES.kernelProviderMounted);
+    return () => {
+      if (
+        diagnosticWindow.__FULLMAG_DIAGNOSTIC_RECORDER_EXPORT__ ===
+        exportDiagnosticArtifact
+      ) {
+        delete diagnosticWindow.__FULLMAG_DIAGNOSTIC_RECORDER_EXPORT__;
+      }
+      cleanupConsoleCapture();
+    };
+  }, [kernel]);
+
+  return null;
 }
 
 function RealtimeConnector({ kernel }: { kernel: KernelApi }) {
@@ -362,6 +460,7 @@ export function KernelProvider({ children }: KernelProviderProps) {
       <VisualizationRegistrySyncConnector kernel={kernel} />
       <CameraRegistrySyncConnector kernel={kernel} />
       <BrowserAuditConnector kernel={kernel} />
+      <DiagnosticRecorderConnector kernel={kernel} />
       <PerformanceDiagnosticsConnector kernel={kernel} />
       {children}
     </KernelContext.Provider>

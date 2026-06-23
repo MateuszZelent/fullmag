@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { ResourceCache } from "@/kernel/resources/ResourceCache";
 import { ResourceRuntimeStore } from "@/kernel/resources/ResourceRuntimeStore";
+import { compareDiagnosticLeakSnapshots } from "@/kernel/performance/diagnostic-recorder/diagnosticLeakDetector";
 
 import { Viewport3DResourceTracker } from "./viewport3dDiagnostics";
 
@@ -76,6 +77,38 @@ describe("viewport 3D memory stress", () => {
     tracker.disposeAll();
 
     expect(tracker.getSnapshot().geometries).toBe(0);
+    expect(
+      compareDiagnosticLeakSnapshots(
+        {
+          activeWorkers: 0,
+          dirtyFramesAfterIdle: 0,
+          jsHeapUsedBytes: null,
+          kind: "before",
+          moduleOwnedResourceCount: 0,
+          objectUrlCount: 0,
+          resourceCacheBytes: 0,
+          subscriptionCount: 0,
+          timestampMs: 1,
+          totalTrackedBytes: 0,
+          viewportCacheBytes: 0,
+          webglEstimatedBytes: 0,
+        },
+        {
+          activeWorkers: 0,
+          dirtyFramesAfterIdle: 0,
+          jsHeapUsedBytes: null,
+          kind: "after-unmount",
+          moduleOwnedResourceCount: tracker.getLedgerSnapshot().length,
+          objectUrlCount: 0,
+          resourceCacheBytes: 0,
+          subscriptionCount: 0,
+          timestampMs: 2,
+          totalTrackedBytes: 0,
+          viewportCacheBytes: 0,
+          webglEstimatedBytes: 0,
+        },
+      ).classification,
+    ).toBe("ok");
     expect(disposeFns.every((dispose) => dispose.mock.calls.length === 1)).toBe(
       true,
     );

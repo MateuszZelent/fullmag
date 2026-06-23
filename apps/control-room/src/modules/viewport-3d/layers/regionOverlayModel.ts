@@ -229,6 +229,12 @@ export function buildRegionMeshOverlayModels(
   const positions = positionsForTopology(topology);
 
   return buildRegionMeshOverlaySelectionModels(regions, options).flatMap((region) => {
+    const surfaceOverlayVisible = !meshPartSurfaceAlreadyRendered(
+      region.meshPartIds,
+      options.renderedSurfacePartIds,
+    );
+    if (!surfaceOverlayVisible && !region.style.wireframeVisible) return [];
+
     const selectedElements = regionMeshElementIndices(region, topology, ownerParts);
     if (selectedElements.length === 0) return [];
     const selectedMeshParts = region.meshPartIds?.length
@@ -266,10 +272,7 @@ export function buildRegionMeshOverlayModels(
         selected: region.selected,
         slot: region.slot,
         style: region.style,
-        surfaceOverlayVisible: !meshPartSurfaceAlreadyRendered(
-          region.meshPartIds,
-          options.renderedSurfacePartIds,
-        ),
+        surfaceOverlayVisible,
         surfaceEdgeIndices,
         surfaceIndices,
         transform: defaultRegionTransform(),

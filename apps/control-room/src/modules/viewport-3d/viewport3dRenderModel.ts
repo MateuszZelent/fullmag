@@ -1167,10 +1167,13 @@ export function getViewport3DRenderCacheStats(): MemoryBudgetEntry[] {
     return {
       byteLength: counter?.byteLength ?? 0,
       category: "render-buffer",
+      createdAtMs: 0,
       entryCount: counter?.entryCount ?? 0,
       id,
       label: counter?.label ?? id,
       maxBytes: null,
+      owner: "viewport-3d",
+      releaseReason: null,
     };
   });
 }

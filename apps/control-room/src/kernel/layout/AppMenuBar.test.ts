@@ -96,14 +96,14 @@ describe("app menu command model", () => {
     });
   });
 
-  it("exposes the thread manager from the Tools menu", () => {
+  it("exposes the diagnostic recorder from the Tools menu through the thread-manager alias", () => {
     const toolsMenu = MAIN_MENUS.find((menu) => menu.id === "tools");
     const threadManagerItem = toolsMenu?.children?.find(
       (item) => item.id === "tools.thread-manager",
     );
 
     expect(threadManagerItem).toMatchObject({
-      label: "Thread Manager",
+      label: "Diagnostic Recorder",
     });
   });
 

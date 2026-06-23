@@ -10,6 +10,8 @@ import {
 
 import type { ResourceRevision } from "../api/apiTypes";
 import { useKernel } from "../KernelContext";
+import type { KernelApi } from "../types";
+import { DIAGNOSTIC_EVENT_NAMES } from "../performance/diagnostic-recorder/diagnosticRecorderTypes";
 import { errorRetryDelayMs } from "../realtime/communicationPolicy";
 
 import {
@@ -51,7 +53,7 @@ export function useResource<TData>({
   resolveRevision,
   resourceKey,
 }: UseResourceOptions<TData>): ResourceResult<TData> {
-  const { resources } = useKernel();
+  const { diagnosticRecorder, resources } = useKernel();
   const runtimeStore = sharedResourceRuntimeStore as ResourceRuntimeStore<TData>;
 
   // Stabilize the subscribe callback so useSyncExternalStore doesn't
@@ -97,6 +99,7 @@ export function useResource<TData>({
 
   useResourceLoader({
     abortStaleInflight,
+    diagnosticRecorder,
     enabled,
     errorCountRef,
     externalRevision,
@@ -146,7 +149,7 @@ export function useResourceSelector<TData, TSelected>({
   resourceKey,
   selector,
 }: UseResourceSelectorOptions<TData, TSelected>): TSelected {
-  const { resources } = useKernel();
+  const { diagnosticRecorder, resources } = useKernel();
   const runtimeStore = sharedResourceRuntimeStore as ResourceRuntimeStore<TData>;
   const [refreshToken, setRefreshToken] = useState(0);
   const errorCountRef = useRef(0);
@@ -217,6 +220,7 @@ export function useResourceSelector<TData, TSelected>({
 
   useResourceLoader({
     abortStaleInflight,
+    diagnosticRecorder,
     enabled,
     errorCountRef,
     externalRevision,
@@ -234,6 +238,7 @@ export function useResourceSelector<TData, TSelected>({
 
 function useResourceLoader<TData>({
   abortStaleInflight = false,
+  diagnosticRecorder,
   enabled,
   errorCountRef,
   externalRevision,
@@ -246,6 +251,7 @@ function useResourceLoader<TData>({
   runtimeStore,
 }: {
   abortStaleInflight?: boolean;
+  diagnosticRecorder: KernelApi["diagnosticRecorder"];
   enabled: boolean;
   errorCountRef: { current: number };
   externalRevision: ResourceRevision | null;
@@ -261,14 +267,42 @@ function useResourceLoader<TData>({
     if (!enabled) return;
     if (pauseLoad) {
       runtimeStore.pauseLoad(resourceKey);
+      recordResourceHookDiagnostic({
+        action: "stale-skip",
+        diagnosticRecorder,
+        detail: { reason: "pause-load" },
+        resourceKey,
+        revision: externalRevision,
+      });
       return;
     }
     let cancelled = false;
+    let completed = false;
+    let started = false;
 
     // If the last attempt failed, wait before retrying to avoid
     // a hot render loop when the backend is unreachable.
     const delay = errorCountRef.current > 0 ? errorRetryDelayMs() : 0;
     const timeoutId = setTimeout(() => {
+      started = true;
+      const snapshotBeforeLoad = runtimeStore.getSnapshot(resourceKey);
+      recordResourceHookDiagnostic({
+        action: resourceSettledForRevision(
+          snapshotBeforeLoad,
+          resourceKey,
+          externalRevision,
+        )
+          ? "hit"
+          : "miss",
+        diagnosticRecorder,
+        detail: {
+          abortStaleInflight,
+          force: refreshToken > 0,
+          minRefetchIntervalMs,
+        },
+        resourceKey,
+        revision: externalRevision,
+      });
       runtimeStore
         .ensureLoad({
           abortStaleInflight,
@@ -280,7 +314,17 @@ function useResourceLoader<TData>({
           resourceKey,
         })
         .then((snapshot) => {
+          completed = true;
           if (cancelled) return;
+          if (snapshot.status === "ready") {
+            recordResourceHookDiagnostic({
+              action: "set",
+              diagnosticRecorder,
+              detail: { status: snapshot.status },
+              resourceKey,
+              revision: snapshot.revision,
+            });
+          }
           errorCountRef.current =
             snapshot.status === "error" ? errorCountRef.current + 1 : 0;
         });
@@ -289,9 +333,19 @@ function useResourceLoader<TData>({
     return () => {
       cancelled = true;
       clearTimeout(timeoutId);
+      if (started && !completed) {
+        recordResourceHookDiagnostic({
+          action: "abort",
+          diagnosticRecorder,
+          detail: { reason: "effect-cleanup" },
+          resourceKey,
+          revision: externalRevision,
+        });
+      }
     };
   }, [
     abortStaleInflight,
+    diagnosticRecorder,
     enabled,
     errorCountRef,
     externalRevision,
@@ -303,6 +357,53 @@ function useResourceLoader<TData>({
     resourceKey,
     runtimeStore,
   ]);
+}
+
+function recordResourceHookDiagnostic({
+  action,
+  detail,
+  diagnosticRecorder,
+  resourceKey,
+  revision,
+}: {
+  action: "abort" | "hit" | "miss" | "set" | "stale-skip";
+  detail: Record<string, boolean | number | string | null>;
+  diagnosticRecorder: KernelApi["diagnosticRecorder"];
+  resourceKey: ResourceKey;
+  revision: ResourceRevision | null;
+}): void {
+  diagnosticRecorder.record({
+    byteLength: null,
+    cacheAction: action,
+    detail,
+    droppedCount: 0,
+    durationMs: null,
+    id: "",
+    kind: "resource-hook",
+    lane: "resource-cache",
+    name:
+      action === "set"
+        ? DIAGNOSTIC_EVENT_NAMES.resourceCacheSet
+        : `resource-hook.${action}`,
+    resourceKey,
+    revision,
+    severity: "info",
+    startTimeMs: null,
+    timestampMs: Date.now(),
+  });
+}
+
+function resourceSettledForRevision<TData>(
+  snapshot: ResourceRuntimeSnapshot<TData>,
+  resourceKey: ResourceKey,
+  externalRevision: ResourceRevision | null,
+): boolean {
+  return (
+    snapshot.status === "ready" &&
+    snapshot.settledResourceKey === resourceKey &&
+    (snapshot.settledExternalRevision === externalRevision ||
+      snapshot.revision === externalRevision)
+  );
 }
 
 function visibleResourceResult<TData>({

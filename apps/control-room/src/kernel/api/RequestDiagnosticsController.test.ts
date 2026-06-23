@@ -94,6 +94,47 @@ describe("RequestDiagnosticsController", () => {
     expect(listener).toHaveBeenCalledTimes(2);
   });
 
+  it("emits normalized records to raw record listeners", () => {
+    const diagnostics = new RequestDiagnosticsController();
+    const records: unknown[] = [];
+    const unsubscribe = diagnostics.subscribeRecords((entry) => {
+      records.push(entry);
+    });
+
+    diagnostics.record({
+      byteLength: 42.6,
+      detail: "attempt 1",
+      durationMs: 12,
+      etag: "\"status-1\"",
+      method: "GET",
+      outcome: "ok",
+      path: "/v2/sessions/current/status",
+      requestId: "req-1",
+      resourceKey: "session-status",
+      status: 200,
+      timestampMs: 50,
+    });
+    unsubscribe();
+    diagnostics.record({
+      method: "GET",
+      outcome: "ok",
+      path: "/after-unsubscribe",
+      requestId: "req-2",
+      status: 200,
+    });
+
+    expect(records).toEqual([
+      expect.objectContaining({
+        byteLength: 43,
+        channel: "http",
+        direction: "rx",
+        etag: "\"status-1\"",
+        resourceKey: "session-status",
+        timestampMs: 50,
+      }),
+    ]);
+  });
+
   it("reuses newest-first snapshots until diagnostics change", () => {
     const diagnostics = new RequestDiagnosticsController();
 

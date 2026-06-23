@@ -12,6 +12,7 @@ import type { ModuleRegistry } from "./module/ModuleRegistry";
 import type { RealtimeInvalidationBridge } from "./realtime/RealtimeInvalidationBridge";
 import type { ResourceInvalidationController } from "./resources/ResourceInvalidationController";
 import type { SelectionController } from "./selection/SelectionController";
+import type { DiagnosticRecorderController } from "./performance/diagnostic-recorder/DiagnosticRecorderController";
 import type { AnalysisFieldOverlayController } from "./visualization/AnalysisFieldOverlayController";
 import type { CameraRegistryController } from "./visualization/CameraRegistryController";
 import type { ObjectVisualizationController } from "./visualization/ObjectVisualizationController";
@@ -63,6 +64,7 @@ export interface KernelApi {
   readonly commandDiagnostics: CommandDiagnosticsController;
   readonly commands: CommandRegistry;
   readonly diagnostics: RequestDiagnosticsController;
+  readonly diagnosticRecorder: DiagnosticRecorderController;
   readonly modules: ModuleRegistry;
   readonly realtime: RealtimeInvalidationBridge;
   readonly resources: ResourceInvalidationController;

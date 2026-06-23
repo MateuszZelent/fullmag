@@ -465,10 +465,13 @@ function diagnosticsMemoryBudgetEntry(
   return {
     byteLength: stats.byteLength,
     category: "session-state" as const,
+    createdAtMs: 0,
     entryCount: stats.entryCount,
     id: "diagnostics.requestBuffer",
     label: "Diagnostics buffer",
     maxBytes: null,
+    owner: "diagnostics",
+    releaseReason: null,
   };
 }
 

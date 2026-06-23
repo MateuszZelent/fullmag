@@ -76,10 +76,63 @@ describe("viewport3dDiagnostics", () => {
           frames: 2,
           geometries: 1,
           materials: 0,
+          renderTargets: 0,
           textures: 0,
           workers: 0,
         },
       }),
     ).toBe("q:m top:7 field:8 surface:stale-visible obj:3 air:1 geo:1 cache:2KB frames:2");
+  });
+
+  it("records viewport resource ledger events without forcing subscriptions", () => {
+    const records: unknown[] = [];
+    const tracker = new Viewport3DResourceTracker({
+      record: (record) => records.push(record),
+    });
+    const dispose = vi.fn();
+    const texture = { dispose };
+    const listener = vi.fn();
+    tracker.subscribe(listener);
+
+    tracker.track("texture", texture, {
+      byteLength: 4096,
+      id: "viewport3d.texture.field",
+      label: "Field texture",
+      owner: "viewport-3d",
+    });
+
+    expect(tracker.getLedgerSnapshot()).toEqual([
+      {
+        byteLength: 4096,
+        createdAtMs: expect.any(Number),
+        id: "viewport3d.texture.field",
+        kind: "texture",
+        label: "Field texture",
+        owner: "viewport-3d",
+      },
+    ]);
+    expect(listener).not.toHaveBeenCalled();
+
+    tracker.release("texture", texture, "quantity-switch");
+
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(tracker.getLedgerSnapshot()).toEqual([]);
+    expect(records).toEqual([
+      expect.objectContaining({
+        detail: expect.objectContaining({
+          byteLength: 4096,
+          kind: "texture",
+          resourceId: "viewport3d.texture.field",
+        }),
+        name: "viewport-3d.resource-tracked",
+      }),
+      expect.objectContaining({
+        detail: expect.objectContaining({
+          releaseReason: "quantity-switch",
+          resourceId: "viewport3d.texture.field",
+        }),
+        name: "viewport-3d.resource-released",
+      }),
+    ]);
   });
 });

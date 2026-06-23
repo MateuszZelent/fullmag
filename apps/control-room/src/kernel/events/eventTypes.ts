@@ -65,7 +65,10 @@ export interface KernelEventMap {
   };
   "footer:tab-requested": {
     reason?: string;
-    tab: "engine" | "logs" | "mesh" | "telemetry";
+    tab: "diagnostics" | "engine" | "logs" | "mesh" | "telemetry";
+  };
+  "diagnostics:recorder-open-requested": {
+    source: string;
   };
   "mesh:build-confirm-requested": {
     commandId: "mesh.build-selected" | "mesh.build-shared-domain";

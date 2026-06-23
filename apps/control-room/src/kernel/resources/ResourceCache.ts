@@ -7,6 +7,7 @@ export interface ResourceCacheEntry<TData> {
 
 export interface ResourceCacheOptions {
   maxBytes: number;
+  onEvent?: ResourceCacheEventListener;
 }
 
 export interface ResourceCacheStats {
@@ -14,17 +15,33 @@ export interface ResourceCacheStats {
   entryCount: number;
 }
 
+export type ResourceCacheEventAction = "evict" | "hit" | "miss" | "set";
+
+export interface ResourceCacheEvent {
+  action: ResourceCacheEventAction;
+  byteLength: number | null;
+  entryCount: number;
+  key: string;
+  maxBytes: number;
+  retained: boolean;
+  timestampMs: number;
+}
+
+export type ResourceCacheEventListener = (event: ResourceCacheEvent) => void;
+
 export class ResourceCache<TData> {
   private readonly entries = new Map<string, ResourceCacheEntry<TData>>();
   private readonly inflight = new Map<string, Promise<ResourceCacheEntry<TData>>>();
+  private readonly listeners = new Set<ResourceCacheEventListener>();
   private readonly retained = new Map<string, number>();
   private byteLength = 0;
 
   constructor(private readonly options: ResourceCacheOptions) {}
 
   clear(): void {
-    for (const entry of this.entries.values()) {
+    for (const [key, entry] of this.entries) {
       entry.dispose?.();
+      this.emit("evict", key, entry.byteLength);
     }
     this.entries.clear();
     this.retained.clear();
@@ -39,15 +56,20 @@ export class ResourceCache<TData> {
     this.retained.delete(key);
     this.byteLength -= entry.byteLength;
     entry.dispose?.();
+    this.emit("evict", key, entry.byteLength);
     return true;
   }
 
   get(key: string): ResourceCacheEntry<TData> | null {
     const entry = this.entries.get(key);
-    if (!entry) return null;
+    if (!entry) {
+      this.emit("miss", key, null);
+      return null;
+    }
 
     this.entries.delete(key);
     this.entries.set(key, entry);
+    this.emit("hit", key, entry.byteLength);
     return entry;
   }
 
@@ -66,6 +88,7 @@ export class ResourceCache<TData> {
 
     const current = this.inflight.get(key);
     if (current) {
+      this.emit("hit", key, null);
       return current;
     }
 
@@ -90,12 +113,14 @@ export class ResourceCache<TData> {
       }
       this.entries.set(key, entry);
       this.byteLength += entry.byteLength;
+      this.emit("set", key, entry.byteLength);
       return true;
     }
 
     this.delete(key);
     this.entries.set(key, entry);
     this.byteLength += entry.byteLength;
+    this.emit("set", key, entry.byteLength);
     this.evictUntilWithinBudget();
     return true;
   }
@@ -126,6 +151,33 @@ export class ResourceCache<TData> {
 
   maxBytes(): number {
     return this.options.maxBytes;
+  }
+
+  subscribe(listener: ResourceCacheEventListener): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  private emit(
+    action: ResourceCacheEventAction,
+    key: string,
+    byteLength: number | null,
+  ): void {
+    const event: ResourceCacheEvent = {
+      action,
+      byteLength,
+      entryCount: this.entries.size,
+      key,
+      maxBytes: this.options.maxBytes,
+      retained: this.retained.has(key),
+      timestampMs: Date.now(),
+    };
+    this.options.onEvent?.(event);
+    for (const listener of this.listeners) {
+      listener(event);
+    }
   }
 
   private evictUntilWithinBudget(): void {

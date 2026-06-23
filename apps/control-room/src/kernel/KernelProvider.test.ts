@@ -53,6 +53,23 @@ describe("KernelProvider performance contracts", () => {
     );
   });
 
+  it("creates and drains the diagnostic recorder early in the kernel", () => {
+    expect(kernelProviderSource).toContain("DiagnosticRecorderController");
+    expect(kernelProviderSource).toContain("createBinaryDecodeScheduler");
+    expect(kernelProviderSource).toContain("installDiagnosticConsoleCapture");
+    expect(kernelProviderSource).toContain("recordDiagnosticBrowserSnapshot");
+    expect(kernelProviderSource).toContain("recordBinaryDecodeDiagnostic");
+    expect(kernelProviderSource).toContain(
+      "__FULLMAG_DIAGNOSTIC_RECORDER_EXPORT__",
+    );
+    expect(kernelProviderSource).toContain("diagnosticRecorder.mark");
+    expect(kernelProviderSource).toContain("DiagnosticRecorderConnector");
+    expect(kernelProviderSource).toContain(
+      "kernel.diagnosticRecorder.drainEarlyRecorder()",
+    );
+    expect(kernelProviderSource).toContain("DIAGNOSTIC_EVENT_NAMES.kernelCreated");
+  });
+
   it("can skip performance diagnostics from browser runtime flags", () => {
     expect(kernelProviderSource).toContain(
       "performanceDiagnosticsEnabledFromBrowserConfig",

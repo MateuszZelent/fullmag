@@ -2062,10 +2062,12 @@ export class ControlRoomApi {
           detail: "decoded binary payload",
           direction: "rx",
           durationMs: decodeDurationMs,
+          etag,
           method: "GET",
           outcome: "ok",
           path: requestState.lastRequestPath,
           requestId: response.headers.get("x-request-id") ?? "binary-payload",
+          resourceKey: requestState.lastRequestPath,
           status: response.status,
         });
 
@@ -2127,10 +2129,12 @@ export class ControlRoomApi {
           detail: `attempt ${attempt}`,
           direction: "tx",
           durationMs: null,
+          etag: null,
           method,
           outcome: "sent",
           path,
           requestId,
+          resourceKey: path,
           status: null,
         });
 
@@ -2161,10 +2165,12 @@ export class ControlRoomApi {
           detail: responseDetail,
           direction: "rx",
           durationMs: Date.now() - started,
+          etag: response.headers.get("etag"),
           method,
           outcome: accepted ? "ok" : "error",
           path,
           requestId,
+          resourceKey: path,
           status: response.status,
         });
 
@@ -2199,6 +2205,7 @@ export class ControlRoomApi {
       detail: null,
       direction: "rx",
       durationMs: Date.now() - started,
+      etag: null,
       method,
       outcome:
         lastError instanceof DOMException && lastError.name === "AbortError"
@@ -2206,6 +2213,7 @@ export class ControlRoomApi {
           : "network-error",
       path,
       requestId,
+      resourceKey: path,
       status: null,
     });
 

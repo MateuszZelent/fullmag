@@ -12,12 +12,14 @@ export interface RequestDiagnosticEntry {
   detail: string | null;
   direction: TransportDirection;
   durationMs: number | null;
+  etag?: string | null;
   id: string;
   messageType: string | null;
   method: string;
   outcome: TransportOutcome;
   path: string;
   requestId: string;
+  resourceKey?: string | null;
   status: number | null;
   timestampMs: number;
 }
@@ -29,11 +31,13 @@ export interface RequestDiagnosticRecord {
   detail?: string | null;
   direction?: TransportDirection;
   durationMs?: number | null;
+  etag?: string | null;
   messageType?: string | null;
   method: string;
   outcome: TransportOutcome;
   path: string;
   requestId: string;
+  resourceKey?: string | null;
   status?: number | null;
   timestampMs?: number;
 }
@@ -45,6 +49,7 @@ export interface RequestDiagnosticsStats {
 }
 
 type RequestDiagnosticListener = () => void;
+type RequestDiagnosticRecordListener = (entry: RequestDiagnosticEntry) => void;
 
 interface AggregatedTransportDiagnostic {
   count: number;
@@ -56,6 +61,7 @@ export class RequestDiagnosticsController {
   private readonly entries: RequestDiagnosticEntry[] = [];
   private readonly aggregatedEntries = new Map<string, AggregatedTransportDiagnostic>();
   private readonly listeners = new Set<RequestDiagnosticListener>();
+  private readonly recordListeners = new Set<RequestDiagnosticRecordListener>();
   private newestFirstEntries: RequestDiagnosticEntry[] | null = null;
   private notificationQueued = false;
   private sequence = 0;
@@ -87,15 +93,19 @@ export class RequestDiagnosticsController {
       detail: entry.detail ?? null,
       direction: entry.direction ?? "rx",
       durationMs: entry.durationMs ?? null,
+      etag: entry.etag ?? null,
       id: `${timestampMs}-${this.sequence++}`,
       messageType: entry.messageType ?? null,
       method: entry.method,
       outcome: entry.outcome,
       path: entry.path,
       requestId: entry.requestId,
+      resourceKey: entry.resourceKey ?? null,
       status: entry.status ?? null,
       timestampMs,
     };
+
+    this.notifyRecordListeners(normalizedEntry);
 
     if (this.mergeAggregatedEntry(normalizedEntry)) {
       this.newestFirstEntries = null;
@@ -146,6 +156,19 @@ export class RequestDiagnosticsController {
     return () => {
       this.listeners.delete(listener);
     };
+  }
+
+  subscribeRecords(listener: RequestDiagnosticRecordListener): () => void {
+    this.recordListeners.add(listener);
+    return () => {
+      this.recordListeners.delete(listener);
+    };
+  }
+
+  private notifyRecordListeners(entry: RequestDiagnosticEntry): void {
+    for (const listener of this.recordListeners) {
+      listener(entry);
+    }
   }
 
   private schedulePublish(): void {
@@ -227,12 +250,14 @@ function estimateDiagnosticEntryByteLength(entry: RequestDiagnosticEntry): numbe
     96 +
     estimateStringByteLength(entry.contentType) +
     estimateStringByteLength(entry.detail) +
+    estimateStringByteLength(entry.etag ?? null) +
     estimateStringByteLength(entry.id) +
     estimateStringByteLength(entry.messageType) +
     estimateStringByteLength(entry.method) +
     estimateStringByteLength(entry.outcome) +
     estimateStringByteLength(entry.path) +
-    estimateStringByteLength(entry.requestId)
+    estimateStringByteLength(entry.requestId) +
+    estimateStringByteLength(entry.resourceKey ?? null)
   );
 }
 

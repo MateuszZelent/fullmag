@@ -12,10 +12,14 @@ Run with:
     fullmag --dev -i examples/permalloy_layer_cofeb_rings_relax_300nm.py
 """
 
+import os
+
 import fullmag as fm
 
 
 NM = 1e-9
+MINIMIZE_MAX_STEPS = int(os.environ.get("FULLMAG_COFEB_RINGS_MINIMIZE_MAX_STEPS", "4000"))
+RELAX_MAX_STEPS = int(os.environ.get("FULLMAG_COFEB_RINGS_RELAX_MAX_STEPS", "7500"))
 
 LAYER_SIZE = (2000 * NM, 600 * NM, 10 * NM)
 RING_OUTER_RADIUS = 150 * NM
@@ -65,11 +69,11 @@ layer = study.geometry(
     fm.Box(size=LAYER_SIZE, name="permalloy_layer"),
     name="permalloy_layer",
 )
-layer.Ms = 1.46e6
-layer.Aex = 6.5e-12
+layer.Ms = 1.6e6
+layer.Aex = 15e-12
 layer.alpha = 0.001
-layer.Ku1 = 1.e3
-layer.anisU = (0,0,1)
+layer.Ku1 = 1e5
+layer.anisU = (1,0,0)
 layer.m = fm.texture.uniform(1.0, 0.0, 0.0)
 layer.mesh(maximum_element_size=8 * NM, minimum_element_size=2 * NM, order=1)
 
@@ -123,7 +127,7 @@ study.tableautosave(1e-16, quantities=["t", "step", "mx", "my", "mz", "E_total"]
 
 study.stages.add_minimize(
     method="bb",
-    max_steps=4000,
+    max_steps=MINIMIZE_MAX_STEPS,
     tol=1e-4,
 )
 
@@ -133,6 +137,6 @@ study.stages.add_relax(
     max_error=1e-6,
     dt_min=1e-17,
     dt_max=1e-15,
-    max_steps=7500,
+    max_steps=RELAX_MAX_STEPS,
     tol=1e-4,
 )

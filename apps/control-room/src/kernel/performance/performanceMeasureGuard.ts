@@ -34,21 +34,20 @@ export function installPerformanceMeasureGuard(
     startOrMeasureOptions,
     endMark,
   ) => {
+    const safeStartOrMeasureOptions = hasMeasureDetail(startOrMeasureOptions)
+      ? measureOptionsWithoutDetail(startOrMeasureOptions)
+      : startOrMeasureOptions;
     try {
-      return nativeMeasure(measureName, startOrMeasureOptions, endMark);
+      return nativeMeasure(measureName, safeStartOrMeasureOptions, endMark);
     } catch (error) {
       if (
         !isDetailCloneFailure(error) ||
-        !hasMeasureDetail(startOrMeasureOptions)
+        safeStartOrMeasureOptions === startOrMeasureOptions
       ) {
         throw error;
       }
 
-      return nativeMeasure(
-        measureName,
-        measureOptionsWithoutDetail(startOrMeasureOptions),
-        endMark,
-      );
+      return nativeMeasure(measureName, safeStartOrMeasureOptions, endMark);
     }
   };
 

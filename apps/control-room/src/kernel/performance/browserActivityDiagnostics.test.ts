@@ -209,4 +209,39 @@ describe("browser activity diagnostics", () => {
       }),
     ]);
   });
+
+  it("does not sample out critical browser activity", () => {
+    const records: unknown[] = [];
+    FakePerformanceObserver.instances = [];
+    startBrowserActivityDiagnostics({
+      diagnostics: {
+        record: (entry) => records.push(entry),
+      },
+      observerConstructor: FakePerformanceObserver,
+      timeOrigin: 1_000,
+    });
+    const observer = FakePerformanceObserver.instances.find(
+      (item) => item.observedType === "long-animation-frame",
+    );
+
+    observer?.emit([
+      {
+        duration: 60,
+        entryType: "long-animation-frame",
+        name: "long-animation-frame",
+        startTime: 25,
+      },
+      {
+        duration: 120,
+        entryType: "long-animation-frame",
+        name: "long-animation-frame",
+        startTime: 500,
+      },
+    ]);
+
+    expect(records).toEqual([
+      expect.objectContaining({ durationMs: 60 }),
+      expect.objectContaining({ durationMs: 120 }),
+    ]);
+  });
 });

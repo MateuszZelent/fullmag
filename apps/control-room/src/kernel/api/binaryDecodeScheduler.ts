@@ -9,6 +9,23 @@ interface BinaryDecodeTask<TData> {
   path: string;
 }
 
+export interface BinaryDecodeDiagnosticEvent {
+  durationMs: number;
+  errorName: string | null;
+  kind: BinaryDecoderKind;
+  outcome: "error" | "ok";
+  path: string;
+  payloadBytes: number;
+  queueWaitMs: number;
+  timestampMs: number;
+  worker: boolean;
+}
+
+export interface BinaryDecodeSchedulerOptions {
+  now?: () => number;
+  onEvent?: (event: BinaryDecodeDiagnosticEvent) => void;
+}
+
 export type BinaryDecodeScheduler = <TData>(
   task: BinaryDecodeTask<TData>,
 ) => Promise<TData> | TData;
@@ -47,14 +64,79 @@ interface PendingDecode {
 
 let workerClient: BinaryDecodeWorkerClient | null | undefined;
 
-export function createBinaryDecodeScheduler(): BinaryDecodeScheduler {
-  return async <TData>({ buffer, decodeInline, kind }: BinaryDecodeTask<TData>) => {
+export function createBinaryDecodeScheduler(
+  options: BinaryDecodeSchedulerOptions = {},
+): BinaryDecodeScheduler {
+  const now = options.now ?? Date.now;
+  return async <TData>({
+    buffer,
+    decodeInline,
+    kind,
+    path,
+  }: BinaryDecodeTask<TData>) => {
+    const queuedAtMs = now();
+    const payloadBytes = buffer.byteLength;
     const client = getBinaryDecodeWorkerClient();
+    const startedAtMs = now();
     if (client) {
-      return (await client.decode(kind, buffer)) as TData;
+      try {
+        const data = (await client.decode(kind, buffer)) as TData;
+        recordDecodeDiagnostic(options, {
+          durationMs: Math.max(0, now() - startedAtMs),
+          errorName: null,
+          kind,
+          outcome: "ok",
+          path,
+          payloadBytes,
+          queueWaitMs: Math.max(0, startedAtMs - queuedAtMs),
+          timestampMs: now(),
+          worker: true,
+        });
+        return data;
+      } catch (error) {
+        recordDecodeDiagnostic(options, {
+          durationMs: Math.max(0, now() - startedAtMs),
+          errorName: error instanceof Error ? error.name : "DecodeError",
+          kind,
+          outcome: "error",
+          path,
+          payloadBytes,
+          queueWaitMs: Math.max(0, startedAtMs - queuedAtMs),
+          timestampMs: now(),
+          worker: true,
+        });
+        throw error;
+      }
     }
 
-    return decodeInline(buffer);
+    try {
+      const data = decodeInline(buffer);
+      recordDecodeDiagnostic(options, {
+        durationMs: Math.max(0, now() - startedAtMs),
+        errorName: null,
+        kind,
+        outcome: "ok",
+        path,
+        payloadBytes,
+        queueWaitMs: Math.max(0, startedAtMs - queuedAtMs),
+        timestampMs: now(),
+        worker: false,
+      });
+      return data;
+    } catch (error) {
+      recordDecodeDiagnostic(options, {
+        durationMs: Math.max(0, now() - startedAtMs),
+        errorName: error instanceof Error ? error.name : "DecodeError",
+        kind,
+        outcome: "error",
+        path,
+        payloadBytes,
+        queueWaitMs: Math.max(0, startedAtMs - queuedAtMs),
+        timestampMs: now(),
+        worker: false,
+      });
+      throw error;
+    }
   };
 }
 
@@ -79,6 +161,13 @@ function getBinaryDecodeWorkerClient(): BinaryDecodeWorkerClient | null {
     workerClient = null;
   }
   return workerClient;
+}
+
+function recordDecodeDiagnostic(
+  options: BinaryDecodeSchedulerOptions,
+  event: BinaryDecodeDiagnosticEvent,
+): void {
+  options.onEvent?.(event);
 }
 
 class BinaryDecodeWorkerClient {

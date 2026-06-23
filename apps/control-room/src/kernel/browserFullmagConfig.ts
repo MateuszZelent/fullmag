@@ -2,6 +2,10 @@ export interface BrowserFullmagConfig {
   readonly allowMissingSessionSmoke?: unknown;
   readonly apiBase?: unknown;
   readonly controlRoomApiBase?: unknown;
+  readonly diagnosticRecorderMaxBytes?: unknown;
+  readonly diagnosticRecorderMaxRecords?: unknown;
+  readonly diagnosticRecorderProfile?: unknown;
+  readonly diagnosticRecorderScenario?: unknown;
   readonly disablePerformanceDiagnostics?: unknown;
   readonly disableRealtime?: unknown;
   readonly disableViewport3D?: unknown;
@@ -23,6 +27,7 @@ export interface BrowserFullmagConfig {
   readonly disableViewport3DSceneLayers?: unknown;
   readonly disableViewport3DTopologyMeshLayer?: unknown;
   readonly enableAuditHooks?: unknown;
+  readonly enableDiagnosticRecorder?: unknown;
   readonly enablePerformanceDiagnostics?: unknown;
   readonly enableViewport3DOrbitDebug?: unknown;
   readonly runtimeHttpBase?: unknown;

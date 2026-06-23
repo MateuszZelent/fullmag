@@ -18,9 +18,16 @@ export function CanvasLifecycleProbe({
     frames: 0,
     startedAtMs: 0,
   });
+  const firstNonZeroBufferRecordedRef = useRef(false);
 
   useEffect(() => {
     const canvas = gl.domElement;
+    const context = gl.getContext();
+    tracker.recordCanvasReady({
+      contextLost: context.isContextLost(),
+      drawingBufferHeight: context.drawingBufferHeight,
+      drawingBufferWidth: context.drawingBufferWidth,
+    });
     const onLost = (event: Event) => {
       event.preventDefault();
       tracker.recordContextLost();
@@ -42,6 +49,18 @@ export function CanvasLifecycleProbe({
 
   useFrame(() => {
     const now = performance.now();
+    if (!firstNonZeroBufferRecordedRef.current) {
+      const context = gl.getContext();
+      if (context.drawingBufferWidth > 0 && context.drawingBufferHeight > 0) {
+        firstNonZeroBufferRecordedRef.current = true;
+        tracker.recordCanvasReady({
+          contextLost: context.isContextLost(),
+          drawingBufferHeight: context.drawingBufferHeight,
+          drawingBufferWidth: context.drawingBufferWidth,
+          firstNonZeroDrawingBuffer: true,
+        });
+      }
+    }
     const window = frameWindowRef.current;
     if (window.startedAtMs === 0) {
       window.startedAtMs = now;
