@@ -154,6 +154,16 @@ void gpu_exchange_kernels_are_owned_by_cuda_exchange_module() {
                 std::string::npos,
         "GPU CUDA exchange kernels header must own legacy sparse exchange wrapper declarations");
     check(
+        exchange_header.find("H_ex = -2 M_lumped^-1 K_A m / (mu0 Ms)") !=
+                std::string::npos &&
+            exchange_header.find("E_ex = sum_i m_i . (K_A m)_i") !=
+                std::string::npos &&
+            exchange_header.find("does not implement the CPU/MFEM consistent-mass projection policy") !=
+                std::string::npos &&
+            exchange_header.find("Nonmagnetic FEM nodes are skipped") !=
+                std::string::npos,
+        "GPU CUDA exchange kernels header must document field sign, energy convention, lumped projection, and masking");
+    check(
         exchange_source.find("#include \"gpu/cuda/exchange/exchange_kernels.hpp\"") !=
                 std::string::npos &&
             exchange_source.find("GPU CUDA exchange kernels source contract") !=
@@ -458,6 +468,10 @@ void gpu_rk_step_stats_is_owned_by_cuda_rk_module() {
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_exchange_energy_reductions.hpp");
     const std::string external_energy_header =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_external_energy_reductions.hpp");
+    const std::string zeeman_kernel_header =
+        read_text_file(root / "gpu" / "cuda" / "interactions" / "zeeman" / "zeeman_kernels.hpp");
+    const std::string exchange_dispatch_header =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_exchange_dispatch.hpp");
     const std::string demag_energy_header =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_demag_energy_reductions.hpp");
     const std::string anisotropy_energy_header =
@@ -641,11 +655,43 @@ void gpu_rk_step_stats_is_owned_by_cuda_rk_module() {
                 std::string::npos,
         "GPU CUDA RK exchange final energy reductions header must document and declare exchange energy reductions");
     check(
+        exchange_dispatch_header.find("assembled K_A operator") !=
+                std::string::npos &&
+            exchange_dispatch_header.find("inverse lumped volume mass") !=
+                std::string::npos &&
+            exchange_dispatch_header.find("same sign convention as CPU lumped exchange projection") !=
+                std::string::npos,
+        "GPU CUDA RK exchange dispatch header must document device inputs and CPU lumped sign convention");
+    check(
+        exchange_energy_header.find("E_ex = sum_i m_i . (K_A m)_i") !=
+                std::string::npos &&
+            exchange_energy_header.find("GPU RK planning requires exchange to be enabled") !=
+                std::string::npos &&
+            exchange_energy_header.find("does not own CSR upload") !=
+                std::string::npos,
+        "GPU CUDA RK exchange energy header must document energy convention and uploaded-CSR precondition");
+    check(
         external_energy_header.find("GPU CUDA RK external final energy reductions module header") !=
                 std::string::npos &&
             external_energy_header.find("gpu_rk_reduce_final_external_energy_terms(") !=
                 std::string::npos,
         "GPU CUDA RK external final energy reductions header must document and declare external energy reductions");
+    check(
+        external_energy_header.find("E_Z = -mu0 sum_i Ms_i (m_i . H_ext_i) w_i") !=
+                std::string::npos &&
+            external_energy_header.find("The device H_ext buffer is in A/m") !=
+                std::string::npos &&
+            external_energy_header.find("does not import the plan field, upload H_ext") !=
+                std::string::npos,
+        "GPU CUDA RK external final energy reductions header must document Zeeman units, energy sign, and ownership boundary");
+    check(
+        zeeman_kernel_header.find("Device fields use H_ext in A/m and reduced magnetization m") !=
+                std::string::npos &&
+            zeeman_kernel_header.find("do not apply gamma_mu0, damping, or direct-torque semantics") !=
+                std::string::npos &&
+            zeeman_kernel_header.find("Nonmagnetic FEM nodes are skipped") !=
+                std::string::npos,
+        "GPU CUDA Zeeman kernel header must document H_ext units, no torque conversion, and magnetic-node masking");
     check(
         demag_energy_header.find("GPU CUDA RK demag final energy reductions module header") !=
                 std::string::npos &&
@@ -805,7 +851,7 @@ void gpu_rk_step_stats_is_owned_by_cuda_rk_module() {
                 std::string::npos &&
             anisotropy_energy_source.find("fullmag_cuda_cubic_anisotropy_field_energy_blocks(") !=
                 std::string::npos &&
-            anisotropy_energy_source.find("GPU RK uniaxial anisotropy energy requires device-resident Ms, Ku, Ku2, lumped mass, and H_ani buffers") !=
+            anisotropy_energy_source.find("GPU RK uniaxial anisotropy energy requires device-resident Ms, Ku, Ku2, anisotropy axis, lumped mass, and H_ani buffers") !=
                 std::string::npos &&
             anisotropy_energy_source.find("GPU RK cubic anisotropy energy requires device-resident Ms, Kc1/Kc2/Kc3, lumped mass, and H_cubic buffers") !=
                 std::string::npos &&

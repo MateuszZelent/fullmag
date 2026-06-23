@@ -1331,6 +1331,89 @@ mod tests {
 
     #[cfg(feature = "fem-gpu")]
     #[test]
+    fn frequency_window_reports_window_diagnostics() {
+        let stiffness_matrix_row_major = [1.0, 0.0, 0.0, 1.0];
+        let gyrotropic_mass_row_major = [0.0, -1.0, 1.0, 0.0];
+
+        let result = solve_native_modal_eigen(NativeModalEigenRequest {
+            mesh_asset_id: "macrospin_validation",
+            equilibrium_source_kind: "provided",
+            gamma_rad_s_t: 1.760859e11,
+            mu0_t_m_a: 1.25663706212e-6,
+            alpha: 0.0,
+            include_exchange: false,
+            include_demag: false,
+            demag_realization: None,
+            damping_policy: "ignore",
+            spin_wave_bc_kind: "free",
+            k_vector_rad_m: None,
+            operator_diagnostics_json: None,
+            requested_mode_count: 1,
+            target_kind: "frequency_window",
+            target_frequency_hz: 0.0,
+            frequency_min_hz: 0.1,
+            frequency_max_hz: 0.5,
+            residual_tolerance: 1.0e-12,
+            max_outer_iterations: 32,
+            max_linear_iterations: 128,
+            output_directory: None,
+            write_partial_artifacts: false,
+            completeness_policy: 0,
+            eigensolver_family: 0,
+            spectral_transform_kind: 0,
+            cancel_requested: None,
+            progress_callback: None,
+            tiny_validation_problem: Some(NativeModalEigenTinyValidationProblem {
+                tangent_dof_count: 2,
+                stiffness_matrix_row_major: Some(&stiffness_matrix_row_major),
+                mass_matrix_row_major: Some(&gyrotropic_mass_row_major),
+                stiffness_diagonal: None,
+                mass_diagonal: None,
+            }),
+        })
+        .expect("native modal frequency-window validation solve should return a result");
+
+        assert_eq!(result.status, NativeFrequencyDomainStatus::Ok);
+        assert!(
+            result.diagnostics_json.contains("\"requested_window_hz\""),
+            "{}",
+            result.diagnostics_json
+        );
+        assert!(
+            result.diagnostics_json.contains("\"resolved_search_window_hz\""),
+            "{}",
+            result.diagnostics_json
+        );
+        assert!(
+            result.diagnostics_json.contains("\"window_completeness\""),
+            "{}",
+            result.diagnostics_json
+        );
+        assert!(
+            result.diagnostics_json.contains("\"policy\":\"best_effort\""),
+            "{}",
+            result.diagnostics_json
+        );
+        assert!(
+            result.diagnostics_json.contains("\"status\":\"not_certified\""),
+            "{}",
+            result.diagnostics_json
+        );
+        assert!(
+            result.diagnostics_json.contains("\"subwindows\""),
+            "{}",
+            result.diagnostics_json
+        );
+        assert!(
+            result.result_json
+                .contains("\"window_completeness\":\"not_certified\""),
+            "{}",
+            result.result_json
+        );
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
     fn frequency_domain_operator_diagnostics_are_embedded_in_driven_contract_results() {
         let frequencies_hz = [1.0e9];
         let excitation_field_a_m = [0.0, 0.0, 1.0];

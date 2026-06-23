@@ -29,6 +29,7 @@ pub(crate) struct NativeFemRelaxationFinalization {
 
 pub(crate) fn finalize_native_fem_relaxation(
     backend: &mut NativeFemBackend,
+    engine: FemEngine,
     plan: &FemPlanIR,
     node_count: usize,
     initial_magnetization: Vec<[f64; 3]>,
@@ -66,7 +67,7 @@ pub(crate) fn finalize_native_fem_relaxation(
             let cached_start = std::time::Instant::now();
             if let Some(cached) = build_fem_cached_preview_fields(
                 backend,
-                FemEngine::CpuNative,
+                engine,
                 &display_selection,
                 plan,
                 node_count,

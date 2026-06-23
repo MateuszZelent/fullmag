@@ -68,6 +68,7 @@ from fullmag.runtime.loader import LoadedProblem, LoadedStage
 
 
 DEFAULT_ADAPTIVE_DT_MIN = 1e-15
+DEFAULT_ADAPTIVE_ATOL = 1e-6
 
 
 def _builder_base_problem(loaded: LoadedProblem) -> Problem:
@@ -2831,6 +2832,14 @@ def _render_stages(
                     call_parts.append(f"solver={_py_repr(relax_solver)}")
                 if relax_fixed_timestep is not None:
                     call_parts.append(f"dt={_py_number(relax_fixed_timestep)}")
+                if study.dynamics.adaptive_timestep is not None:
+                    adaptive_timestep = study.dynamics.adaptive_timestep
+                    if adaptive_timestep.atol != DEFAULT_ADAPTIVE_ATOL:
+                        call_parts.append(f"max_error={_py_number(adaptive_timestep.atol)}")
+                    if adaptive_timestep.dt_min != DEFAULT_ADAPTIVE_DT_MIN:
+                        call_parts.append(f"dt_min={_py_number(adaptive_timestep.dt_min)}")
+                    if adaptive_timestep.dt_max is not None:
+                        call_parts.append(f"dt_max={_py_number(adaptive_timestep.dt_max)}")
             if is_study_surface:
                 lines.append(f"study.stages.add_relax({', '.join(call_parts)})")
             else:

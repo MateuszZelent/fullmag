@@ -3,6 +3,13 @@
  *
  * Declares exported FEM CUDA wrappers for the legacy sparse exchange field and
  * exchange energy kernels used by the device-resident RK path.
+ *
+ * Physics contract:
+ * - field path: H_ex = -2 M_lumped^-1 K_A m / (mu0 Ms),
+ * - energy path: E_ex = sum_i m_i . (K_A m)_i across x/y/z components.
+ *
+ * The current GPU RK exchange realization is the legacy sparse/lumped path. It
+ * does not implement the CPU/MFEM consistent-mass projection policy.
  */
 #pragma once
 
@@ -12,7 +19,9 @@
 
 namespace fullmag::fem {
 
-/// Legacy assembled FEM exchange: h_ex = -2/(mu0*Ms) * M_lumped^-1 * K * m.
+/// Legacy assembled FEM exchange:
+/// h_ex = -2/(mu0*Ms) * M_lumped^-1 * K * m.
+/// Nonmagnetic FEM nodes are skipped when magnetic_node_mask is present.
 void fullmag_cuda_legacy_sparse_exchange(
     const uint32_t *csr_row_offsets,
     const uint32_t *csr_col_indices,
@@ -27,6 +36,8 @@ void fullmag_cuda_legacy_sparse_exchange(
 
 /// Per-block exchange energy partials for legacy sparse operator:
 /// sum_i m_i · (K m)_i across x/y/z components.
+/// GPU RK planning requires exchange to be enabled before this reduction is
+/// used, so uploaded CSR exchange state is a precondition.
 void fullmag_cuda_legacy_sparse_exchange_energy_blocks(
     const uint32_t *csr_row_offsets,
     const uint32_t *csr_col_indices,

@@ -652,6 +652,99 @@ def validate_eigen_summary(
         )
 
 
+def require_frequency_pair(value: object, name: str) -> list[float]:
+    if not isinstance(value, list) or len(value) != 2:
+        fail(f"{name} must be a two-element frequency range")
+    lo = require_finite_number(value[0], f"{name}[0]")
+    hi = require_finite_number(value[1], f"{name}[1]")
+    if lo < 0.0 or hi < lo:
+        fail(f"{name} must be an ordered non-negative frequency range")
+    return [lo, hi]
+
+
+def validate_solver_window_diagnostics(diagnostics: dict) -> None:
+    if "window_completeness" not in diagnostics:
+        return
+
+    requested = require_frequency_pair(
+        diagnostics.get("requested_window_hz"),
+        "solver_diagnostics.requested_window_hz",
+    )
+    resolved = require_frequency_pair(
+        diagnostics.get("resolved_search_window_hz"),
+        "solver_diagnostics.resolved_search_window_hz",
+    )
+    if resolved[0] > requested[0] or resolved[1] < requested[1]:
+        fail("solver_diagnostics.resolved_search_window_hz must cover requested_window_hz")
+
+    completeness = diagnostics.get("window_completeness")
+    if not isinstance(completeness, dict):
+        fail("solver_diagnostics.window_completeness must be an object")
+    policy = completeness.get("policy")
+    if policy not in {"best_effort", "certified_count"}:
+        fail("solver_diagnostics.window_completeness.policy is invalid")
+    status = completeness.get("status")
+    if status not in {
+        "not_certified",
+        "certified",
+        "partial_convergence",
+        "truncated_by_requested_count",
+        "window_exhausted",
+    }:
+        fail("solver_diagnostics.window_completeness.status is invalid")
+    certification_method = completeness.get("certification_method")
+    if not isinstance(certification_method, str) or not certification_method:
+        fail("solver_diagnostics.window_completeness.certification_method must be a string")
+    if not isinstance(completeness.get("additional_modes_may_exist"), bool):
+        fail("solver_diagnostics.window_completeness.additional_modes_may_exist must be boolean")
+    for key in ["estimated_modes_in_window", "certified_modes_in_window"]:
+        if key in completeness:
+            require_non_negative_int(
+                completeness.get(key),
+                f"solver_diagnostics.window_completeness.{key}",
+            )
+
+    subwindows = require_object_list(
+        diagnostics.get("subwindows"),
+        "solver_diagnostics.subwindows",
+    )
+    if not subwindows:
+        fail("solver_diagnostics.subwindows must not be empty")
+    valid_stop_reasons = {
+        "converged",
+        "window_exhausted",
+        "partial_convergence",
+        "max_iterations",
+        "linear_solve_failed",
+        "residual_not_met",
+        "cancelled",
+        "capability_missing",
+        "operator_invalid",
+    }
+    for position, subwindow in enumerate(subwindows):
+        name = f"solver_diagnostics.subwindows[{position}]"
+        require_non_negative_int(subwindow.get("index"), f"{name}.index")
+        requested_hz = require_frequency_pair(subwindow.get("requested_hz"), f"{name}.requested_hz")
+        search_hz = require_frequency_pair(subwindow.get("search_hz"), f"{name}.search_hz")
+        if search_hz[0] > requested_hz[0] or search_hz[1] < requested_hz[1]:
+            fail(f"{name}.search_hz must cover requested_hz")
+        shift_hz = require_finite_number(subwindow.get("shift_hz"), f"{name}.shift_hz")
+        if shift_hz < requested_hz[0] or shift_hz > requested_hz[1]:
+            fail(f"{name}.shift_hz must be inside requested_hz")
+        require_non_negative_int(subwindow.get("outer_iterations"), f"{name}.outer_iterations")
+        require_non_negative_int(
+            subwindow.get("linear_iterations_total"),
+            f"{name}.linear_iterations_total",
+        )
+        require_non_negative_int(subwindow.get("candidate_modes"), f"{name}.candidate_modes")
+        require_non_negative_int(subwindow.get("accepted_modes"), f"{name}.accepted_modes")
+        residual = require_finite_number(subwindow.get("residual_max"), f"{name}.residual_max")
+        if residual < 0.0:
+            fail(f"{name}.residual_max must be non-negative")
+        if subwindow.get("stop_reason") not in valid_stop_reasons:
+            fail(f"{name}.stop_reason is invalid")
+
+
 def validate_dispersion(
     root: Path,
     known_modes: dict[tuple[int, int], tuple[float, float, float]],
@@ -725,6 +818,7 @@ def main() -> int:
     branches = load_json(root / "eigen/branches.v2.json")
     summary = load_json(root / "eigen/metadata/eigen_summary.json")
     manifest = load_json(root / "frequency_domain/manifest.v1.json")
+    solver_diagnostics = load_json(root / "eigen/diagnostics/solver.v1.json")
 
     require_equal(spectrum.get("schema_version"), "eigen_spectrum.v2", "spectrum.schema_version")
     require_equal(branches.get("schema_version"), "eigen_branches.v2", "branches.schema_version")
@@ -741,6 +835,17 @@ def main() -> int:
         "manifest.artifacts.solver_diagnostics_path",
     )
     require_file(root / "eigen/diagnostics/solver.v1.json")
+    require_equal(
+        solver_diagnostics.get("schema_version"),
+        "frequency_domain_modal_solver_diagnostics.v1",
+        "solver_diagnostics.schema_version",
+    )
+    require_equal(
+        solver_diagnostics.get("study_product"),
+        "modal_eigen",
+        "solver_diagnostics.study_product",
+    )
+    validate_solver_window_diagnostics(solver_diagnostics)
     require_equal(
         manifest.get("artifacts", {}).get("spectrum_v2_path"),
         "eigen/spectrum.v2.json",

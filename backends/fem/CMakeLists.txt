@@ -133,6 +133,8 @@ set(FEM_SOURCES
     cpu/mfem/runtime/state_io.cpp
     cpu/mfem/runtime/step_metrics.cpp
     cpu/frequency_domain/dense_driven_response.cpp
+    cpu/frequency_domain/contour_interval_solver.cpp
+    cpu/frequency_domain/contour_quadrature.cpp
     cpu/frequency_domain/mfem_driven_response_validation.cpp
     cpu/frequency_domain/mfem_dmi_operator.cpp
     cpu/frequency_domain/production_cpu_modal_eigen.cpp
@@ -146,6 +148,9 @@ set(FEM_SOURCES
     cpu/frequency_domain/mfem_operator_context.cpp
     cpu/frequency_domain/mfem_tangent_space.cpp
     cpu/frequency_domain/mfem_zeeman_operator.cpp
+    cpu/frequency_domain/mode_deduplication.cpp
+    cpu/frequency_domain/mode_filter.cpp
+    cpu/frequency_domain/window_partition.cpp
     src/frequency_domain/anisotropy_operator.cpp
     src/frequency_domain/driven_response_solver.cpp
     src/frequency_domain/equilibrium_state.cpp
@@ -398,6 +403,18 @@ add_fem_source_facade_contract(
 add_fem_source_facade_contract(
     fem_driven_response_contract
     tests/frequency_domain/driven_response_contract_test.cpp
+)
+add_fem_source_facade_contract(
+    fem_window_partition_contract
+    tests/frequency_domain/window_partition_test.cpp
+)
+add_fem_source_facade_contract(
+    fem_mode_deduplication_contract
+    tests/frequency_domain/mode_deduplication_test.cpp
+)
+add_fem_source_facade_contract(
+    fem_contour_interval_solver_contract
+    tests/frequency_domain/contour_interval_solver_test.cpp
 )
 
 add_executable(fem_dmi_weak_residual tests/dmi_weak_residual.cpp)

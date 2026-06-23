@@ -33,6 +33,7 @@ def write_eigen_fixture(
     omit_mode_omega_rad_s: bool = False,
     omit_mode_tangent_leakage: bool = False,
     gamma_rad_s_t_override: float | None = None,
+    solver_diagnostics_override: dict[str, object] | None = None,
 ) -> None:
     (root / "eigen" / "modes" / "sample_0000").mkdir(parents=True)
     (root / "eigen" / "mode_fields" / "sample_0000" / "mode_0000").mkdir(
@@ -420,9 +421,10 @@ def write_eigen_fixture(
     }
     (root / "frequency_domain" / "manifest.v1.json").write_text(json.dumps(manifest))
     (root / "eigen" / "diagnostics").mkdir(parents=True, exist_ok=True)
-    (root / "eigen" / "diagnostics" / "solver.v1.json").write_text(
-        json.dumps(
-            {
+    solver_diagnostics = (
+        solver_diagnostics_override
+        if solver_diagnostics_override is not None
+        else {
                 "schema_version": "frequency_domain_modal_solver_diagnostics.v1",
                 "study_product": "modal_eigen",
                 "status": "ready",
@@ -431,7 +433,9 @@ def write_eigen_fixture(
                 "sample_count": 1,
                 "mode_count": 1,
             }
-        )
+    )
+    (root / "eigen" / "diagnostics" / "solver.v1.json").write_text(
+        json.dumps(solver_diagnostics)
     )
 
 
@@ -616,6 +620,36 @@ def test_validator_rejects_gamma_constant_unit_drift(tmp_path: Path) -> None:
 
     assert result.returncode != 0
     assert "gamma0_rad_s_per_A_m" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_window_completeness_without_subwindows(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(
+        tmp_path,
+        solver_diagnostics_override={
+            "schema_version": "frequency_domain_modal_solver_diagnostics.v1",
+            "study_product": "modal_eigen",
+            "status": "ready",
+            "complete": True,
+            "solver_model": "shift_invert",
+            "sample_count": 1,
+            "mode_count": 1,
+            "requested_window_hz": [1.0e8, 5.0e9],
+            "resolved_search_window_hz": [7.5e7, 5.125e9],
+            "window_completeness": {
+                "policy": "best_effort",
+                "status": "not_certified",
+                "certification_method": "none",
+                "additional_modes_may_exist": True,
+            },
+        },
+    )
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "solver_diagnostics.subwindows" in (result.stderr + result.stdout)
 
 
 def test_validator_accepts_exp_i_omega_t_phase_convention(tmp_path: Path) -> None:

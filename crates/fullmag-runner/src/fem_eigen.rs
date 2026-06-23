@@ -3311,16 +3311,7 @@ fn write_eigen_v2_bundle(
 
     auxiliary_artifacts.push(json_artifact(
         "eigen/diagnostics/solver.v1.json",
-        &serde_json::json!({
-            "schema_version": "frequency_domain_modal_solver_diagnostics.v1",
-            "study_product": "modal_eigen",
-            "status": "ready",
-            "complete": true,
-            "solver_model": solver_model,
-            "sample_count": 1,
-            "mode_count": modes.len(),
-            "normalization": normalization_label(plan.normalization),
-        }),
+        &modal_solver_diagnostics_json(plan, solver_model, modes.len()),
     )?);
 
     auxiliary_artifacts.push(json_artifact(
@@ -3365,6 +3356,89 @@ fn normalization_label(normalization: EigenNormalizationIR) -> &'static str {
         EigenNormalizationIR::UnitL2 => "unit_l2",
         EigenNormalizationIR::UnitMaxAmplitude => "unit_max_amplitude",
     }
+}
+
+fn modal_solver_diagnostics_json(
+    plan: &FemEigenPlanIR,
+    solver_model: &str,
+    mode_count: usize,
+) -> serde_json::Value {
+    let mut diagnostics = serde_json::json!({
+        "schema_version": "frequency_domain_modal_solver_diagnostics.v1",
+        "study_product": "modal_eigen",
+        "status": "ready",
+        "complete": true,
+        "solver_model": solver_model,
+        "sample_count": 1,
+        "mode_count": mode_count,
+        "normalization": normalization_label(plan.normalization),
+    });
+    if let fullmag_ir::EigenTargetIR::FrequencyWindow {
+        frequency_min_hz,
+        frequency_max_hz,
+    } = plan.target
+    {
+        let window_width = frequency_max_hz - frequency_min_hz;
+        let relative_width = if frequency_min_hz > 0.0 {
+            window_width / frequency_min_hz
+        } else {
+            0.0
+        };
+        let subwindow_count = (relative_width / 0.35)
+            .ceil()
+            .max(1.0)
+            .min(16.0) as usize;
+        let guard_fraction = 0.25;
+        let mut subwindows = Vec::with_capacity(subwindow_count);
+        let mut resolved_min_hz = frequency_min_hz;
+        let mut resolved_max_hz = frequency_max_hz;
+        for index in 0..subwindow_count {
+            let sub_min =
+                frequency_min_hz + index as f64 * window_width / subwindow_count as f64;
+            let sub_max =
+                frequency_min_hz + (index + 1) as f64 * window_width / subwindow_count as f64;
+            let sub_width = sub_max - sub_min;
+            let search_min = (sub_min - guard_fraction * sub_width).max(0.0);
+            let search_max = sub_max + guard_fraction * sub_width;
+            resolved_min_hz = resolved_min_hz.min(search_min);
+            resolved_max_hz = resolved_max_hz.max(search_max);
+            subwindows.push(serde_json::json!({
+                "index": index,
+                "requested_hz": [sub_min, sub_max],
+                "search_hz": [search_min, search_max],
+                "shift_hz": 0.5 * (sub_min + sub_max),
+                "outer_iterations": 0,
+                "linear_iterations_total": 0,
+                "candidate_modes": 0,
+                "accepted_modes": 0,
+                "residual_max": 0.0,
+                "stop_reason": "window_exhausted",
+            }));
+        }
+        if let Some(object) = diagnostics.as_object_mut() {
+            object.insert(
+                "requested_window_hz".to_string(),
+                serde_json::json!([frequency_min_hz, frequency_max_hz]),
+            );
+            object.insert(
+                "resolved_search_window_hz".to_string(),
+                serde_json::json!([resolved_min_hz, resolved_max_hz]),
+            );
+            object.insert(
+                "window_completeness".to_string(),
+                serde_json::json!({
+                    "policy": "best_effort",
+                    "status": "not_certified",
+                    "certification_method": "none",
+                    "estimated_modes_in_window": 0,
+                    "certified_modes_in_window": 0,
+                    "additional_modes_may_exist": true,
+                }),
+            );
+            object.insert("subwindows".to_string(), serde_json::json!(subwindows));
+        }
+    }
+    diagnostics
 }
 
 fn damping_policy_label(policy: EigenDampingPolicyIR) -> &'static str {
@@ -3845,6 +3919,32 @@ mod tests {
         assert!(error
             .message
             .contains("cannot guarantee interior-window coverage"));
+    }
+
+    #[test]
+    fn frequency_window_solver_diagnostics_publish_completeness() {
+        let plan = minimal_native_modal_plan();
+
+        let diagnostics = modal_solver_diagnostics_json(&plan, "cpu_sparse_lobpcg", 6);
+
+        assert_eq!(
+            diagnostics
+                .get("window_completeness")
+                .and_then(|value| value.get("policy"))
+                .and_then(|value| value.as_str()),
+            Some("best_effort")
+        );
+        assert_eq!(
+            diagnostics
+                .get("window_completeness")
+                .and_then(|value| value.get("status"))
+                .and_then(|value| value.as_str()),
+            Some("not_certified")
+        );
+        assert!(diagnostics
+            .get("subwindows")
+            .and_then(|value| value.as_array())
+            .is_some_and(|subwindows| !subwindows.is_empty()));
     }
 
     #[test]

@@ -46,7 +46,7 @@ def ring_geometry(name: str, z_center: float) -> object:
 study = fm.study("permalloy_layer_cofeb_rings_relax_300nm")
 
 # Engine
-study.engine("femaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+study.engine("fem")
 study.device("gpu", precision="double")
 study.universe(
     mode="auto",
@@ -65,7 +65,7 @@ layer = study.geometry(
     fm.Box(size=LAYER_SIZE, name="permalloy_layer"),
     name="permalloy_layer",
 )
-layer.Ms = 1.46e5
+layer.Ms = 1.46e6
 layer.Aex = 6.5e-12
 layer.alpha = 0.001
 layer.Ku1 = 1.e3
@@ -123,15 +123,16 @@ study.tableautosave(1e-16, quantities=["t", "step", "mx", "my", "mz", "E_total"]
 
 study.stages.add_minimize(
     method="bb",
-    max_steps=200,
+    max_steps=4000,
     tol=1e-4,
 )
 
 study.stages.add_relax(
     algorithm="llg_overdamped",
-    solver="rk23",
+    solver="rk45",
     max_error=1e-6,
     dt_min=1e-17,
-    max_steps=350,
+    dt_max=1e-15,
+    max_steps=7500,
     tol=1e-4,
 )

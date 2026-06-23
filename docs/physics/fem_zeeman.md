@@ -1,13 +1,16 @@
 # FEM Zeeman / External Field
 
-- Status: native FEM CPU module contract
-- Last updated: 2026-05-18
+- Status: native FEM CPU/GPU module contract
+- Last updated: 2026-06-17
 - Implementation:
-  `native/backends/fem/cpu/mfem/interactions/zeeman.hpp/.cpp`,
-  `native/backends/fem/cpu/mfem/interactions/zeeman_uniform_field.hpp/.cpp`,
-  `native/backends/fem/cpu/mfem/interactions/zeeman_field.hpp/.cpp`,
-  `native/backends/fem/cpu/mfem/interactions/zeeman_energy.hpp/.cpp`
-- Test: `native/backends/fem/tests/zeeman_contract.cpp`
+  `backends/fem/cpu/mfem/interactions/zeeman.hpp/.cpp`,
+  `backends/fem/cpu/mfem/interactions/zeeman_uniform_field.hpp/.cpp`,
+  `backends/fem/cpu/mfem/interactions/zeeman_field.hpp/.cpp`,
+  `backends/fem/cpu/mfem/interactions/zeeman_energy.hpp/.cpp`,
+  `backends/fem/gpu/cuda/interactions/zeeman/zeeman_kernels.hpp/.cu`,
+  `backends/fem/gpu/cuda/integrators/rk/rk_external_energy_reductions.hpp/.cu`
+- Test: `backends/fem/tests/zeeman_contract.cpp`,
+  `backends/fem/tests/source_facade_gpu_rk_contract.cpp`
 
 ## Energia
 
@@ -56,12 +59,35 @@ broadcast, `zeeman_field.hpp/.cpp` owns additive `H_eff` composition, and
 `zeeman_energy.hpp/.cpp` owns the `E_Z` integration. `zeeman.hpp/.cpp` remains
 an aggregate include and compatibility translation unit.
 
+## GPU realization
+
+The native FEM GPU RK path consumes the same nodal `H_ext` buffer in A/m after
+host-side plan import and field-buffer upload. Device-side effective-field
+accumulation adds `h_ext` directly into `h_eff`; it does not multiply by
+`gamma_mu0`, damping, or `Ms`. Those factors belong respectively to the LLG RHS
+or energy reductions.
+
+The final GPU energy reduction uses the same nodal lumped formula as CPU:
+
+```text
+E_Z = -mu0 sum_i Ms_i (m_i . H_ext_i) w_i
+```
+
+and masks out nonmagnetic FEM nodes. The reduction owns only the final scalar
+publication path for RK stats; it does not own Zeeman plan import, field upload,
+or RK orchestration.
+
 ## Ograniczenia capability
 
 - Uniform `H_ext` is executable in the current native FEM CPU path.
+- Uniform `H_ext` is executable in the current native FEM GPU RK path when the
+  runtime has device-resident `Ms`, lumped mass, magnetic-node mask, and `H_ext`
+  buffers.
 - Spatially sampled and time-envelope Zeeman variants must be represented as
   explicit capability extensions before production labeling.
-- GPU parity is not claimed by this module.
+- End-to-end CPU/GPU numerical parity remains a runtime validation gate; the
+  local source contracts only prove matching sign, units, ownership, and
+  device-resident reduction semantics.
 
 ## Testy
 
@@ -72,10 +98,13 @@ Current gate:
   source-module ownership. It also checks top-level source contracts for the
   aggregate, uniform-field broadcast, field-add, and energy integration source
   files so their ownership boundaries stay visible in implementation files.
+- `fem_source_facade_gpu_rk_contract` checks that GPU RK external-energy
+  reductions keep the Zeeman scalar path device-resident and documented as the
+  same `H_ext` in A/m, `-mu0 Ms m.H_ext` energy contract.
 
 Required before production qualification:
 
 - sampled field projection;
 - time envelope refresh;
-- FEM CPU/GPU parity for uniform field;
+- FEM CPU/GPU parity for uniform field beyond local source contracts;
 - explicit public API unit-conversion tests.
