@@ -1,6 +1,7 @@
 "use client";
 
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
+import { viewport3DVectorLayersEnabledFromBrowserConfig } from "@/kernel/browserFullmagConfig";
 import { memoryBudgetRegistry } from "@/kernel/performance/MemoryBudgetRegistry";
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 import { type ThreeEvent, useThree } from "@react-three/fiber";
@@ -1088,7 +1089,8 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
           renderOrder={wireframePolicy.renderOrder}
         />
       ) : null}
-      {renderSettings.vectorsVisible ? (
+      {viewport3DVectorLayersEnabledFromBrowserConfig() &&
+      renderSettings.vectorsVisible ? (
         <VectorFieldLayer
           colors={colors}
           colorMode={vectorColorModeFromSettings(renderSettings, vectorColorMode)}

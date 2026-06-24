@@ -43,14 +43,25 @@ describe("CameraControls", () => {
 
   it("configures orbit controls with unrestricted yaw and damped native interaction", () => {
     const options = resolveViewport3DCameraInteractionOptions();
+    const source = readFileSync(
+      new URL("./CameraControls.tsx", import.meta.url),
+      "utf8",
+    );
+    const orbitControlsStart = source.indexOf("<DreiOrbitControls");
+    const orbitControlsBlock = source.slice(
+      orbitControlsStart,
+      source.indexOf("/>", orbitControlsStart),
+    );
 
     expect(options.dampingFactor).toBeGreaterThan(0);
     expect(options.enableDamping).toBe(true);
     expect(options.enablePan).toBe(true);
     expect(options.enableRotate).toBe(true);
     expect(options.enableZoom).toBe(true);
+    expect(options.panSpeed).toBeGreaterThan(options.rotateSpeed);
     expect(options.rotateSpeed).toBeGreaterThan(0);
     expect(options.zoomSpeed).toBeGreaterThan(0);
+    expect(orbitControlsBlock).toContain("panSpeed={options.panSpeed}");
   });
 
   it("handles wheel zoom with a damped viewport-owned interaction path", () => {

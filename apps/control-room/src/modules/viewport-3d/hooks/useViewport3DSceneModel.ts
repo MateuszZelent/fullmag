@@ -65,6 +65,10 @@ import {
 import { useObjectVisualizationSelector } from "@/kernel/visualization/useObjectVisualization";
 import { useCameraRegistryCamera } from "@/kernel/visualization/useCameraRegistry";
 import {
+  viewport3DFieldColorLayersEnabledFromBrowserConfig,
+  viewport3DVectorLayersEnabledFromBrowserConfig,
+} from "@/kernel/browserFullmagConfig";
+import {
   useAnalysisFieldOverlay,
   type AnalysisFieldOverlayAppearanceState,
 } from "@/kernel/visualization/AnalysisFieldOverlayController";
@@ -77,6 +81,7 @@ import {
   mergeViewport3DFieldScalarColors,
   useViewport3DChunkedScalarColors,
 } from "./useViewport3DChunkedScalarColors";
+import { useViewport3DTopologyIndexBundle } from "./useViewport3DTopologyIndexBundle";
 import {
   useViewport3DFieldRenderOptions,
   clampViewport3DInteractiveVectorBudget,
@@ -767,6 +772,35 @@ export function sameViewport3DQuantityId(left: string, right: string): boolean {
   return sameQuantityId(left, right);
 }
 
+export function applyViewport3DFieldLayerDiagnosticOverrides(
+  options: Viewport3DFieldRenderOptions,
+  {
+    fieldColorLayersEnabled,
+    vectorLayersEnabled,
+  }: {
+    fieldColorLayersEnabled: boolean;
+    vectorLayersEnabled: boolean;
+  },
+): Viewport3DFieldRenderOptions {
+  if (fieldColorLayersEnabled && vectorLayersEnabled) return options;
+
+  return {
+    ...options,
+    ...(vectorLayersEnabled
+      ? {}
+      : {
+          fullVectorBudget: 0,
+          partVectorBudgets: new Map<string, number>(),
+        }),
+    ...(fieldColorLayersEnabled
+      ? {}
+      : {
+          scalarColorModes: new Set<string>(),
+          scalarColorsVisible: false,
+        }),
+  };
+}
+
 export function resolveViewport3DPrimaryFieldQuery({
   fdmInstanceModelNeedsFieldVector,
   fdmSurfaceColorMode,
@@ -1407,6 +1441,19 @@ export function useViewport3DSceneModel({
     () => adaptFemSharedDomainManifest(sharedDomainManifest.data),
     [sharedDomainManifest.data],
   );
+  const topologyIndexBundle = useViewport3DTopologyIndexBundle({
+    airboxParts: femDomain.airboxParts,
+    enabled: Boolean(topology.data),
+    magneticParts: femDomain.magneticParts,
+    magneticSurfacePartsByPartId: femDomain.magneticSurfacePartsByPartId,
+    topology: topology.data,
+  });
+  const topologyIndexState =
+    topologyIndexBundle.status === "building"
+      ? "pending"
+      : topologyIndexBundle.status === "ready"
+        ? "ready"
+        : "unavailable";
   const topologyRenderModel = useMemo(
     () =>
       measureViewport3DModelBuild(
@@ -1421,6 +1468,10 @@ export function useViewport3DSceneModel({
               meshGenerationId: sharedDomainManifest.data?.generation_id ?? null,
               meshRevision: sharedDomainManifest.data?.revision ?? null,
             },
+            {
+              topologyIndexBundle: topologyIndexBundle.bundle,
+              topologyIndexState,
+            },
           ),
       ),
     [
@@ -1430,6 +1481,8 @@ export function useViewport3DSceneModel({
       sharedDomainManifest.data?.generation_id,
       sharedDomainManifest.data?.revision,
       topology.data,
+      topologyIndexBundle.bundle,
+      topologyIndexState,
     ],
   );
   const primitiveModel = useMemo(
@@ -1990,7 +2043,7 @@ export function useViewport3DSceneModel({
     airboxFieldQuery,
     { pauseLoad: fieldUpdateHoldActive },
   );
-  const fieldRenderOptions = useViewport3DFieldRenderOptions({
+  const rawFieldRenderOptions = useViewport3DFieldRenderOptions({
     airboxSettings,
     airboxQuantityCompatible,
     fallbackSettings,
@@ -2001,6 +2054,17 @@ export function useViewport3DSceneModel({
     vectorColorMode,
     vectorDomain,
   });
+  const fieldColorLayersEnabled =
+    viewport3DFieldColorLayersEnabledFromBrowserConfig();
+  const vectorLayersEnabled = viewport3DVectorLayersEnabledFromBrowserConfig();
+  const fieldRenderOptions = useMemo(
+    () =>
+      applyViewport3DFieldLayerDiagnosticOverrides(rawFieldRenderOptions, {
+        fieldColorLayersEnabled,
+        vectorLayersEnabled,
+      }),
+    [fieldColorLayersEnabled, rawFieldRenderOptions, vectorLayersEnabled],
+  );
   const primaryFieldRenderOptions = useMemo(
     () =>
       currentTopologyRenderModel

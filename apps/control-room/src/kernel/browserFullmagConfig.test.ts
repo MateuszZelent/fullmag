@@ -13,6 +13,7 @@ import {
   viewport3DDimensionFrameMinorLinesEnabledFromBrowserConfig,
   viewport3DEnabledFromBrowserConfig,
   viewport3DFdmCuboidLayerEnabledFromBrowserConfig,
+  viewport3DFieldColorLayersEnabledFromBrowserConfig,
   viewport3DMeshSizeHighlightLayerEnabledFromBrowserConfig,
   viewport3DOrbitDebugEnabledFromBrowserConfig,
   viewport3DOverlayLayersEnabledFromBrowserConfig,
@@ -21,6 +22,7 @@ import {
   viewport3DPrimitiveObjectLayerEnabledFromBrowserConfig,
   viewport3DSceneLayersEnabledFromBrowserConfig,
   viewport3DTopologyMeshLayerEnabledFromBrowserConfig,
+  viewport3DVectorLayersEnabledFromBrowserConfig,
 } from "./browserFullmagConfig";
 
 describe("browser fullmag config", () => {
@@ -34,9 +36,14 @@ describe("browser fullmag config", () => {
     );
   });
 
-  it("keeps performance diagnostics opt-in so production viewport work stays quiet", () => {
+  it("keeps performance diagnostics opt-in unless diagnostic recording is active", () => {
     expect(performanceDiagnosticsEnabledFromBrowserConfig()).toBe(false);
     expect(performanceDiagnosticsEnabledFromBrowserConfig({})).toBe(false);
+    expect(
+      performanceDiagnosticsEnabledFromBrowserConfig({
+        enableDiagnosticRecorder: true,
+      }),
+    ).toBe(true);
     expect(
       performanceDiagnosticsEnabledFromBrowserConfig({
         enablePerformanceDiagnostics: true,
@@ -64,6 +71,7 @@ describe("browser fullmag config", () => {
     expect(viewport3DDimensionFrameMinorLinesEnabledFromBrowserConfig()).toBe(
       true,
     );
+    expect(viewport3DFieldColorLayersEnabledFromBrowserConfig()).toBe(true);
     expect(viewport3DAirboxLayerEnabledFromBrowserConfig()).toBe(true);
     expect(viewport3DMeshSizeHighlightLayerEnabledFromBrowserConfig()).toBe(
       true,
@@ -74,6 +82,7 @@ describe("browser fullmag config", () => {
     expect(viewport3DPrimitiveObjectLayerEnabledFromBrowserConfig()).toBe(true);
     expect(viewport3DSceneLayersEnabledFromBrowserConfig()).toBe(true);
     expect(viewport3DTopologyMeshLayerEnabledFromBrowserConfig()).toBe(true);
+    expect(viewport3DVectorLayersEnabledFromBrowserConfig()).toBe(true);
     expect(
       viewport3DBoundsLayersEnabledFromBrowserConfig({
         disableViewport3DBoundsLayers: true,
@@ -120,6 +129,11 @@ describe("browser fullmag config", () => {
       }),
     ).toBe(false);
     expect(
+      viewport3DFieldColorLayersEnabledFromBrowserConfig({
+        disableViewport3DFieldColorLayers: true,
+      }),
+    ).toBe(false);
+    expect(
       viewport3DAirboxLayerEnabledFromBrowserConfig({
         disableViewport3DAirboxLayer: true,
       }),
@@ -157,6 +171,11 @@ describe("browser fullmag config", () => {
     expect(
       viewport3DTopologyMeshLayerEnabledFromBrowserConfig({
         disableViewport3DTopologyMeshLayer: true,
+      }),
+    ).toBe(false);
+    expect(
+      viewport3DVectorLayersEnabledFromBrowserConfig({
+        disableViewport3DVectorLayers: true,
       }),
     ).toBe(false);
   });

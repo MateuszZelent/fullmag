@@ -11,6 +11,10 @@ import {
 } from "./viewport3DRenderPolicy";
 
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
+import {
+  viewport3DFieldColorLayersEnabledFromBrowserConfig,
+  viewport3DVectorLayersEnabledFromBrowserConfig,
+} from "@/kernel/browserFullmagConfig";
 
 import {
   resolveMeshPartBounds,
@@ -218,6 +222,7 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
     tracker,
   ]);
   const pointsGeometry = useMemo(() => {
+    if (!renderSettings.pointsVisible) return null;
     const indices = renderSettings.geometryScope === "full"
       ? resolvePartNodeIndices(partModel.part, topologyModel.nodeCount)
       : (partModel.surfaceIndices ? getUniqueSortedIndices(partModel.surfaceIndices) : null);
@@ -227,7 +232,13 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
     next.setAttribute("position", new BufferAttribute(topologyModel.positions, 3));
     next.setIndex(new BufferAttribute(indices, 1));
     return next;
-  }, [partModel, topologyModel, renderSettings.geometryScope, tracker]);
+  }, [
+    partModel,
+    topologyModel,
+    renderSettings.geometryScope,
+    renderSettings.pointsVisible,
+    tracker,
+  ]);
 
   useEffect(() => () => tracker.release("geometry", geometry), [geometry, tracker]);
   useEffect(
@@ -243,15 +254,18 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
   const part = partModel.part;
   const airboxWireframeSemantic =
     resolveAirboxWireframeSemantic(renderSettings);
+  const fieldColorLayersEnabled =
+    viewport3DFieldColorLayersEnabledFromBrowserConfig();
   const surfaceColorState = resolveAirboxSurfaceColorState(
     renderSettings,
-    fieldModel,
+    fieldColorLayersEnabled ? fieldModel : null,
     topologyModel.nodeCount,
     colors.mesh,
   );
   useEffect(() => {
     if (!geometry) return;
     if (!renderSettings.shaderVisible) return;
+    if (!fieldColorLayersEnabled) return;
     applyVertexScalarColorBuffer(
       geometry,
       surfaceColorState.vertexColorsEnabled
@@ -264,6 +278,7 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
   }, [
     geometry,
     invalidate,
+    fieldColorLayersEnabled,
     renderSettings.shaderVisible,
     surfaceColorState.scalarColors,
     topologyModel.nodeCount,
@@ -346,7 +361,8 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
             />
           )
         ) : null}
-        {renderSettings.vectorsVisible ? (
+        {viewport3DVectorLayersEnabledFromBrowserConfig() &&
+        renderSettings.vectorsVisible ? (
           <VectorFieldLayer
             colors={colors}
             colorMode={vectorColorModeFromSettings(renderSettings, vectorColorMode)}
@@ -436,7 +452,8 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
           />
         )
       ) : null}
-      {renderSettings.vectorsVisible ? (
+      {viewport3DVectorLayersEnabledFromBrowserConfig() &&
+      renderSettings.vectorsVisible ? (
         <VectorFieldLayer
           colors={colors}
           colorMode={vectorColorModeFromSettings(renderSettings, vectorColorMode)}

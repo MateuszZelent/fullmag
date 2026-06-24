@@ -85,7 +85,9 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("checkObjectVisualizationPanelVisualizationSelector");
     expect(auditScript).toContain("checkObjectVisualizationPanelNumberFieldCommitBoundary");
     expect(auditScript).toContain("pendingValueRef");
-    expect(auditScript).toContain("setDraftOverride(nextValue)");
+    expect(auditScript).toContain("queuedDraftValueRef");
+    expect(auditScript).toContain("window.requestAnimationFrame");
+    expect(auditScript).toContain("setDraftOverride(queuedValue)");
     expect(auditScript).not.toContain("VISUALIZATION_NUMBER_COMMIT_DELAY_MS");
     expect(auditScript).toContain("Wireframe opacity");
     expect(auditScript).toContain("Vector alpha");
@@ -206,8 +208,12 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("channel: \"performance\"");
     expect(auditScript).toContain("checkVisualizationPatchHotPath");
     expect(auditScript).toContain("checkRibbonSliderCommandDebounce");
-    expect(auditScript).toContain("SLIDER_COMMAND_DEBOUNCE_MS");
+    expect(auditScript).toContain("useDraftSliderCommand");
+    expect(auditScript).toContain("stageSliderCommand(next)");
+    expect(auditScript).toContain("RibbonMenuRenderer slider draft");
+    expect(auditScript).toContain("const SLIDER_COMMAND_DEBOUNCE_MS");
     expect(auditScript).toContain("useDebouncedSliderCommand");
+    expect(auditScript).toContain("setTimeout(flushSliderCommand");
     expect(auditScript).toContain("checkReactRenderProfilerInstrumentation");
     expect(auditScript).toContain("WorkspaceRenderProfiler");
     expect(auditScript).toContain("fullmag.react.render.RibbonModule");

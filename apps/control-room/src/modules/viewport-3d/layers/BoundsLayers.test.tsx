@@ -37,6 +37,10 @@ vi.mock("../viewport3dBatchedInvalidate", () => ({
   useBatchedInvalidate: () => () => undefined,
 }));
 
+vi.mock("./VectorFieldLayer", () => ({
+  VectorFieldLayer: () => "instancedMesh",
+}));
+
 const colors = {
   accent: "#aaccff",
   background: "#000000",
@@ -67,6 +71,20 @@ const boundsLayersSource = readFileSync(
   join(process.cwd(), "src/modules/viewport-3d/layers/BoundsLayers.tsx"),
   "utf8",
 );
+
+it("lets diagnostics bypass airbox field-color buffer application", () => {
+  expect(boundsLayersSource).toContain(
+    "viewport3DFieldColorLayersEnabledFromBrowserConfig",
+  );
+  expect(boundsLayersSource).toContain("fieldColorLayersEnabled");
+  expect(boundsLayersSource).toContain(
+    "if (!fieldColorLayersEnabled) return;",
+  );
+});
+
+it("does not build airbox point geometry when points are hidden", () => {
+  expect(boundsLayersSource).toContain("if (!renderSettings.pointsVisible) return null;");
+});
 
 function airboxTopology(): Viewport3DTopologyRenderModel<Viewport3DMeshPart> {
   const part = {

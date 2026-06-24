@@ -14,6 +14,10 @@ import {
 } from "./viewport3DRenderPolicy";
 
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
+import {
+  viewport3DFieldColorLayersEnabledFromBrowserConfig,
+  viewport3DVectorLayersEnabledFromBrowserConfig,
+} from "@/kernel/browserFullmagConfig";
 
 import {
   resolveMeshPartBounds,
@@ -132,6 +136,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     [edgeGeometry, tracker],
   );
   const pointGeometry = useMemo(() => {
+    if (!renderSettings.pointsVisible) return null;
     if (!topologyModel) return null;
     const nodeSelection =
       renderSettings.geometryScope === "full"
@@ -139,14 +144,24 @@ export const MeshPartLayer = memo(function MeshPartLayer({
         : partModel.surfaceNodeSelection ?? partModel.part;
     const next = buildViewport3DPointGeometry(topologyModel, nodeSelection);
     return next ? tracker.track("geometry", next) : null;
-  }, [partModel, renderSettings.geometryScope, topologyModel, tracker]);
+  }, [
+    partModel,
+    renderSettings.geometryScope,
+    renderSettings.pointsVisible,
+    topologyModel,
+    tracker,
+  ]);
 
   useEffect(
     () => () => tracker.release("geometry", pointGeometry),
     [pointGeometry, tracker],
   );
 
-  const scalarColorMode = surfaceScalarColorModeFromSettings(renderSettings);
+  const fieldColorLayersEnabled =
+    viewport3DFieldColorLayersEnabledFromBrowserConfig();
+  const scalarColorMode = fieldColorLayersEnabled
+    ? surfaceScalarColorModeFromSettings(renderSettings)
+    : null;
   const part = partModel.part;
   const scalarColors = scalarColorMode
     ? fieldModel?.scalarColorsByPartAndMode
@@ -157,7 +172,8 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     : null;
   const effectiveScalarColors = meshQualityColors ?? scalarColors;
   const vertexColorsEnabled =
-    Boolean(meshQualityColors) || shaderUsesVertexColors(renderSettings);
+    Boolean(meshQualityColors) ||
+    (fieldColorLayersEnabled && shaderUsesVertexColors(renderSettings));
   const canUseVertexScalarColors = canApplyVertexScalarColorBuffer(
     effectiveScalarColors,
     topologyModel?.nodeCount ?? 0,
@@ -172,6 +188,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     !canUseVertexScalarColors;
   useEffect(() => {
     if (!geometry || !topologyModel) return;
+    if (!fieldColorLayersEnabled && !meshQualityColors) return;
     // Skip the destructive zero-fill when the surface mesh is unmounted
     // (shaderVisible === false).  The geometry's color buffer persists across
     // visibility toggles but the cached ScalarColorBuffer reference is stable,
@@ -204,6 +221,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     effectiveScalarColors,
     geometry,
     invalidate,
+    fieldColorLayersEnabled,
     meshQualityColors,
     renderSettings.shaderVisible,
     shaderScalarColorsEnabled,
@@ -220,6 +238,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     [surfaceOpacity],
   );
   const scalarShaderMaterial = useMemo(() => {
+    if (!fieldColorLayersEnabled && !meshQualityColors) return null;
     if (!shaderScalarColorsEnabled || !effectiveScalarColors) return null;
     return tracker.track(
       "material",
@@ -231,7 +250,9 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     );
   }, [
     effectiveScalarColors,
+    fieldColorLayersEnabled,
     materialProfile.magneticSurface.toneMapped,
+    meshQualityColors,
     shaderScalarColorsEnabled,
     surfaceOpacity,
     surfacePolicy,
@@ -351,7 +372,8 @@ export const MeshPartLayer = memo(function MeshPartLayer({
           />
         </points>
       ) : null}
-      {renderSettings.vectorsVisible ? (
+      {viewport3DVectorLayersEnabledFromBrowserConfig() &&
+      renderSettings.vectorsVisible ? (
         <VectorFieldLayer
           colors={colors}
           colorMode={vectorColorModeFromSettings(renderSettings, vectorColorMode)}

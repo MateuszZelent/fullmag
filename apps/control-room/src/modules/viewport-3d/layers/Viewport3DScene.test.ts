@@ -9,7 +9,10 @@ import {
   resolveViewport3DProjectionCameraClip,
   resolveViewport3DOrthographicCameraFrame,
   resolveViewport3DOrthographicZoom,
+  resolveNextViewport3DModelLayerStage,
+  resolveViewport3DModelLayerStageVisibility,
   scheduleViewport3DProjectionRenderFrames,
+  VIEWPORT_3D_MODEL_LAYER_FINAL_STAGE,
 } from "./Viewport3DScene";
 
 function invokeFrameCallback(
@@ -385,5 +388,50 @@ describe("Viewport3DScene scale helpers", () => {
     cleanup();
 
     expect(frameHost.cancelAnimationFrame).toHaveBeenCalledWith(42);
+  });
+
+  it("stages heavy model layers without disabling the final visualization", () => {
+    expect(resolveViewport3DModelLayerStageVisibility(0)).toEqual({
+      authoredRegionOverlays: false,
+      baseGeometry: false,
+      fieldDrivenLayers: false,
+      hysteresisReplayGlyphs: false,
+      meshSizeHighlight: false,
+      primitiveObjects: true,
+      realizedRegionOverlays: false,
+    });
+    expect(resolveViewport3DModelLayerStageVisibility(1)).toMatchObject({
+      baseGeometry: true,
+      fieldDrivenLayers: false,
+    });
+    expect(resolveViewport3DModelLayerStageVisibility(2)).toMatchObject({
+      baseGeometry: true,
+      fieldDrivenLayers: true,
+      realizedRegionOverlays: false,
+    });
+    expect(
+      resolveViewport3DModelLayerStageVisibility(
+        VIEWPORT_3D_MODEL_LAYER_FINAL_STAGE,
+      ),
+    ).toEqual({
+      authoredRegionOverlays: true,
+      baseGeometry: true,
+      fieldDrivenLayers: true,
+      hysteresisReplayGlyphs: true,
+      meshSizeHighlight: true,
+      primitiveObjects: true,
+      realizedRegionOverlays: true,
+    });
+  });
+
+  it("advances model layer stages one step at a time", () => {
+    expect(resolveNextViewport3DModelLayerStage(0)).toBe(1);
+    expect(resolveNextViewport3DModelLayerStage(1)).toBe(2);
+    expect(resolveNextViewport3DModelLayerStage(2)).toBe(
+      VIEWPORT_3D_MODEL_LAYER_FINAL_STAGE,
+    );
+    expect(resolveNextViewport3DModelLayerStage(999)).toBe(
+      VIEWPORT_3D_MODEL_LAYER_FINAL_STAGE,
+    );
   });
 });

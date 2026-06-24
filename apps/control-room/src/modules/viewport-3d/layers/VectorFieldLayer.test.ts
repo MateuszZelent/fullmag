@@ -54,10 +54,19 @@ describe("VectorFieldLayer performance contracts", () => {
     expect(vectorFieldLayerSource).toContain(
       "fullmag.viewport3d.uploadVectorGlyphMatrices",
     );
-    expect(vectorFieldLayerSource).toContain("buildVectorGlyphTransforms");
-    expect(vectorFieldLayerSource).toContain("buildVectorGlyphColors");
+    expect(vectorFieldLayerSource).toContain("function useVectorGlyphBuild");
+    expect(vectorFieldLayerSource).toContain(
+      "buildViewport3DVectorGlyphsOffMainThread",
+    );
+    expect(vectorFieldLayerSource).toContain("vector-glyph-build");
     expect(vectorFieldLayerSource).not.toContain(
       "buildVectorGlyphInstances(segments",
+    );
+    expect(vectorFieldLayerSource).not.toContain(
+      "buildVectorGlyphTransforms(segments",
+    );
+    expect(vectorFieldLayerSource).not.toContain(
+      "buildVectorGlyphColors(segments",
     );
     expect(vectorFieldLayerSource).not.toContain(
       "for (let index = 0; index < glyphs.count; index += 1)",
@@ -66,25 +75,31 @@ describe("VectorFieldLayer performance contracts", () => {
     expect(vectorFieldLayerSource).not.toContain("setTimeout(callback, 0)");
   });
 
-  it("keeps vector color changes out of glyph transform builds and matrix uploads", () => {
-    const transformMemoStart = vectorFieldLayerSource.indexOf(
+  it("keeps glyph builds asynchronous and uploads only resolved build buffers", () => {
+    const buildHookStart = vectorFieldLayerSource.indexOf(
+      "function useVectorGlyphBuild(",
+    );
+    const uploadHookStart = vectorFieldLayerSource.indexOf(
+      "function useVectorGlyphUpload(",
+    );
+    expect(buildHookStart).toBeGreaterThanOrEqual(0);
+    expect(uploadHookStart).toBeGreaterThan(buildHookStart);
+
+    const buildHookSource = vectorFieldLayerSource.slice(
+      buildHookStart,
+      uploadHookStart,
+    );
+    expect(buildHookSource).toContain(
+      "buildViewport3DVectorGlyphsOffMainThread",
+    );
+    expect(buildHookSource).toContain("createVectorGlyphBuildStore");
+    expect(buildHookSource).toContain("useSyncExternalStore");
+    expect(buildHookSource).toContain("AbortController");
+    expect(buildHookSource).not.toContain("useState<VectorGlyphBuildResult");
+    expect(vectorFieldLayerSource).not.toContain(
       "const glyphTransforms = useMemo(",
     );
-    const colorMemoStart = vectorFieldLayerSource.indexOf(
-      "const glyphColors = useMemo(",
-    );
-    expect(transformMemoStart).toBeGreaterThanOrEqual(0);
-    expect(colorMemoStart).toBeGreaterThan(transformMemoStart);
-
-    const transformMemoSource = vectorFieldLayerSource.slice(
-      transformMemoStart,
-      colorMemoStart,
-    );
-    expect(transformMemoSource).toContain("buildVectorGlyphTransforms");
-    expect(transformMemoSource).not.toContain("colorMode");
-    expect(vectorFieldLayerSource).toContain(
-      "buildVectorGlyphColors(segments, colorMode)",
-    );
+    expect(vectorFieldLayerSource).not.toContain("const glyphColors = useMemo(");
     expect(vectorFieldLayerSource).toContain(`  }, [
     glyphTransforms,
     headRef,

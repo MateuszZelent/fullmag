@@ -785,7 +785,10 @@ function checkObjectVisualizationPanelNumberFieldCommitBoundary() {
 
   requireTokens(numberField, "ObjectVisualizationPanel NumberField commit boundary", [
     "pendingValueRef",
-    "setDraftOverride(nextValue)",
+    "queuedDraftValueRef",
+    "window.requestAnimationFrame",
+    "window.cancelAnimationFrame",
+    "setDraftOverride(queuedValue)",
     "onPointerUp={flushDraft}",
     "onPointerCancel={flushDraft}",
     "onKeyUp={flushDraft}",
@@ -1244,32 +1247,39 @@ function checkRibbonSliderCommandDebounce() {
   const slider = blockBetween(
     source,
     "function SliderMenuItem",
-    "function useDebouncedSliderCommand",
+    "function useDraftSliderCommand",
   );
-  const debouncedCommand = blockBetween(
+  const draftCommand = blockBetween(
     source,
-    "function useDebouncedSliderCommand",
+    "function useDraftSliderCommand",
     "// ── Color picker",
   );
 
-  requireTokens(source, "RibbonMenuRenderer slider debounce", [
-    "const SLIDER_COMMAND_DEBOUNCE_MS = 120",
-    "useDebouncedSliderCommand",
+  requireTokens(source, "RibbonMenuRenderer slider draft", [
+    "useDraftSliderCommand",
     "key={node.id}",
+  ]);
+  forbidTokens(source, "RibbonMenuRenderer slider draft", [
+    "const SLIDER_COMMAND_DEBOUNCE_MS",
+    "useDebouncedSliderCommand",
+    "setTimeout(flushSliderCommand",
   ]);
   requireTokens(slider, "SliderMenuItem local draft", [
     "const [draftState, setDraftState] = useState<",
     "draftState?.sourceValue === node.value ? draftState.value : node.value",
     "value={draftValue}",
     "setDraftState({ sourceValue: node.value, value: next })",
-    "scheduleSliderCommand(next)",
+    "stageSliderCommand(next)",
     "onPointerUp={flushSliderCommand}",
+    "onPointerCancel={flushSliderCommand}",
     "onBlur={flushSliderCommand}",
+    "onKeyUp={flushSliderCommand}",
   ]);
-  requireTokens(debouncedCommand, "useDebouncedSliderCommand", [
-    "setTimeout(flushSliderCommand, SLIDER_COMMAND_DEBOUNCE_MS)",
-    "clearTimeout(timerRef.current)",
+  requireTokens(draftCommand, "useDraftSliderCommand", [
+    "dirtyRef.current = true",
+    "latestValueRef.current = value",
     "emitSliderCommand(value)",
+    "dirtyRef.current = false",
   ]);
 }
 

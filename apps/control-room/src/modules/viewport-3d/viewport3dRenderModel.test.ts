@@ -8,6 +8,7 @@ import type { DecodedFieldVector, DecodedTopology } from "@/kernel/api/codecs";
 import {
   buildViewport3DFieldRenderModel,
   buildViewport3DTopologyRenderModel,
+  EMPTY_VIEWPORT_3D_TOPOLOGY_INDICES,
   buildPartSurfaceIndices,
   buildPartVolumeEdgeIndices,
   buildTetraSurfaceIndices,
@@ -28,6 +29,10 @@ import { magnitudeColorRgb } from "./viewport3dVectorColoring";
 
 const viewport3dRenderModelSource = readFileSync(
   join(process.cwd(), "src/modules/viewport-3d/viewport3dRenderModel.ts"),
+  "utf8",
+);
+const viewport3dTopologyIndexModelSource = readFileSync(
+  join(process.cwd(), "src/modules/viewport-3d/viewport3dTopologyIndexModel.ts"),
   "utf8",
 );
 
@@ -98,6 +103,24 @@ describe("viewport3dRenderModel performance contracts", () => {
       "? buildAveragedSurfaceNodeNormals(",
     );
   });
+
+  it("measures lazy topology index builds where first access can block the viewport", () => {
+    expect(viewport3dRenderModelSource).toContain(
+      "fullmag.viewport3d.buildTopologySurfaceIndices",
+    );
+    expect(viewport3dRenderModelSource).toContain(
+      "fullmag.viewport3d.buildTopologyVolumeEdgeIndices",
+    );
+    expect(viewport3dRenderModelSource).toContain(
+      "fullmag.viewport3d.buildPartSurfaceIndices",
+    );
+    expect(viewport3dRenderModelSource).toContain(
+      "fullmag.viewport3d.buildPartVolumeEdgeIndices",
+    );
+    expect(viewport3dRenderModelSource).toContain(
+      "fullmag.viewport3d.buildSurfaceEdgeIndices",
+    );
+  });
 });
 
 describe("viewport3dRenderModel", () => {
@@ -164,13 +187,13 @@ describe("viewport3dRenderModel", () => {
   });
 
   it("deduplicates tetrahedral volume edges without string churn on safe node ranges", () => {
-    expect(viewport3dRenderModelSource).toContain(
+    expect(viewport3dTopologyIndexModelSource).toContain(
       "function resolveNumericEdgeKeyBase",
     );
-    expect(viewport3dRenderModelSource).toContain(
+    expect(viewport3dTopologyIndexModelSource).toContain(
       "appendTetraEdgeByNumericKey",
     );
-    expect(viewport3dRenderModelSource).toContain(
+    expect(viewport3dTopologyIndexModelSource).toContain(
       "appendTetraEdgeByStringKey",
     );
   });
@@ -313,6 +336,34 @@ describe("viewport3dRenderModel", () => {
     expect(firstPart?.surfaceIndices).toBe(secondPart?.surfaceIndices);
     expect(firstPart?.edgeIndices).toBe(secondPart?.edgeIndices);
     expect(firstPart?.volumeEdgeIndices).toBe(secondPart?.volumeEdgeIndices);
+  });
+
+  it("does not synchronously derive topology indices while worker build is pending", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "part-a",
+          label: "Part A",
+        },
+      ],
+      [],
+      undefined,
+      {},
+      { topologyIndexState: "pending" },
+    );
+
+    expect(topologyModel?.fallbackSurfaceIndices).toBe(
+      EMPTY_VIEWPORT_3D_TOPOLOGY_INDICES,
+    );
+    expect(topologyModel?.fallbackVolumeEdgeIndices).toBe(
+      EMPTY_VIEWPORT_3D_TOPOLOGY_INDICES,
+    );
+    expect(topologyModel?.magneticParts[0]?.surfaceIndices).toBeNull();
+    expect(topologyModel?.magneticParts[0]?.edgeIndices).toBeNull();
+    expect(topologyModel?.magneticParts[0]?.volumeEdgeIndices).toBeNull();
   });
 
   it("builds sampled normalized vector line segments", () => {

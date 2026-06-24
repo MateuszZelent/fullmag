@@ -30,6 +30,8 @@ import {
   useLayoutEffect,
   useMemo,
   useRef,
+  useState,
+  startTransition,
   type RefObject,
 } from "react";
 import {
@@ -429,6 +431,112 @@ export function scheduleViewport3DProjectionRenderFrames({
   return () => frameHost.cancelAnimationFrame(frameId);
 }
 
+export const VIEWPORT_3D_MODEL_LAYER_FINAL_STAGE = 3;
+
+export interface Viewport3DModelLayerStageVisibility {
+  authoredRegionOverlays: boolean;
+  baseGeometry: boolean;
+  fieldDrivenLayers: boolean;
+  hysteresisReplayGlyphs: boolean;
+  meshSizeHighlight: boolean;
+  primitiveObjects: boolean;
+  realizedRegionOverlays: boolean;
+}
+
+export function resolveNextViewport3DModelLayerStage(stage: number): number {
+  return Math.min(
+    Math.max(0, Math.floor(stage)) + 1,
+    VIEWPORT_3D_MODEL_LAYER_FINAL_STAGE,
+  );
+}
+
+export function resolveViewport3DModelLayerStageVisibility(
+  stage: number,
+): Viewport3DModelLayerStageVisibility {
+  const safeStage = Math.max(0, Math.floor(stage));
+  const baseGeometry = safeStage >= 1;
+  const fieldDrivenLayers = safeStage >= 2;
+  const finalLayers = safeStage >= VIEWPORT_3D_MODEL_LAYER_FINAL_STAGE;
+  return {
+    authoredRegionOverlays: finalLayers,
+    baseGeometry,
+    fieldDrivenLayers,
+    hysteresisReplayGlyphs: finalLayers,
+    meshSizeHighlight: finalLayers,
+    primitiveObjects: true,
+    realizedRegionOverlays: finalLayers,
+  };
+}
+
+function resolveViewport3DModelLayerStageKey({
+  fdmInstanceModel,
+  primitiveModel,
+  topologyModel,
+}: Pick<
+  Viewport3DSceneProps,
+  "fdmInstanceModel" | "primitiveModel" | "topologyModel"
+>): string {
+  return [
+    topologyModel?.meshGenerationId ?? "no-mesh-generation",
+    topologyModel?.meshRevision ?? "no-mesh-revision",
+    topologyModel?.nodeCount ?? 0,
+    topologyModel?.magneticParts.length ?? 0,
+    topologyModel?.airboxParts.length ?? 0,
+    primitiveModel?.sceneRevision ?? "no-scene-revision",
+    primitiveModel?.objects.length ?? 0,
+    fdmInstanceModel ? "fdm-ready" : "fdm-empty",
+  ].join(":");
+}
+
+function useViewport3DModelLayerStage({
+  resetKey,
+  tracker,
+}: {
+  resetKey: string;
+  tracker: Viewport3DResourceTracker;
+}): number {
+  const invalidate = useThree((state) => state.invalidate);
+  const [stageState, setStageState] = useState(() => ({
+    resetKey,
+    stage: 0,
+  }));
+  const stage = stageState.resetKey === resetKey ? stageState.stage : 0;
+
+  useEffect(() => {
+    tracker.recordDirtyFrame("model-layer-stage-reset");
+    invalidate();
+  }, [invalidate, resetKey, tracker]);
+
+  useEffect(() => {
+    if (stage >= VIEWPORT_3D_MODEL_LAYER_FINAL_STAGE) return undefined;
+    if (typeof window === "undefined") return undefined;
+
+    let cancelled = false;
+    const frameId = window.requestAnimationFrame(() => {
+      if (cancelled) return;
+      tracker.recordDirtyFrame("model-layer-stage");
+      startTransition(() => {
+        setStageState((current) => {
+          const currentStage =
+            current.resetKey === resetKey ? current.stage : 0;
+          return {
+            resetKey,
+            stage: resolveNextViewport3DModelLayerStage(currentStage),
+          };
+        });
+      });
+      invalidate();
+    });
+
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [invalidate, resetKey, stage, tracker]);
+
+  return stage;
+}
+
 function Viewport3DProjectionStack({
   bounds,
   cameraClip,
@@ -694,6 +802,21 @@ function Viewport3DModelLayerStack({
   materialProfile: ReturnType<typeof resolveViewport3DMaterialProfile>;
   visualProfile: Viewport3DVisualProfile;
 }) {
+  const modelLayerStageKey = useMemo(
+    () =>
+      resolveViewport3DModelLayerStageKey({
+        fdmInstanceModel,
+        primitiveModel,
+        topologyModel,
+      }),
+    [fdmInstanceModel, primitiveModel, topologyModel],
+  );
+  const modelLayerStage = useViewport3DModelLayerStage({
+    resetKey: modelLayerStageKey,
+    tracker,
+  });
+  const stageVisibility =
+    resolveViewport3DModelLayerStageVisibility(modelLayerStage);
   const renderedMeshRegionSurfacePartIds = useMemo(
     () =>
       new Set(
@@ -706,8 +829,19 @@ function Viewport3DModelLayerStack({
 
   const hasMeshBackedRegionOverlays = meshRegionOverlays.length > 0;
   const authoredRegionOverlaysVisible =
+    stageVisibility.authoredRegionOverlays &&
     regionOverlayModeShowsAuthored(regionOverlayMode, hasMeshBackedRegionOverlays) &&
     viewport3DOverlayLayersEnabledFromBrowserConfig();
+  const stagedFieldModel = stageVisibility.fieldDrivenLayers ? fieldModel : null;
+  const stagedFieldVector = stageVisibility.fieldDrivenLayers ? fieldVector : null;
+  const stagedFdmSurfaceColors = stageVisibility.fieldDrivenLayers
+    ? fdmSurfaceColors
+    : null;
+  const stagedMeshQualityColors = stageVisibility.fieldDrivenLayers
+    ? meshQualityColors
+    : null;
+  const stagedMeshQualityOverlayVisible =
+    stageVisibility.fieldDrivenLayers && meshQualityOverlayVisible;
 
   return (
     <>
@@ -719,11 +853,12 @@ function Viewport3DModelLayerStack({
           selectedRegionId={selectedRegionId}
         />
       ) : null}
-      {viewport3DFdmCuboidLayerEnabledFromBrowserConfig() ? (
+      {stageVisibility.baseGeometry &&
+      viewport3DFdmCuboidLayerEnabledFromBrowserConfig() ? (
         <FdmCuboidLayer
           colors={colors}
           domain={fdmDomain}
-          fieldVector={fieldVector}
+          fieldVector={stagedFieldVector}
           instanceModel={fdmInstanceModel}
           inspectEnabled={inspectEnabled}
           inspectQuantityId={inspectQuantityId}
@@ -737,7 +872,7 @@ function Viewport3DModelLayerStack({
           selectedObjectId={selectedObjectId}
           selectedRegionId={selectedRegionId}
           settings={fdmSettings}
-          surfaceColors={fdmSurfaceColors}
+          surfaceColors={stagedFdmSurfaceColors}
           tracker={tracker}
           vectorColorMode={vectorColorMode}
           vectorScale={vectorScale}
@@ -747,10 +882,11 @@ function Viewport3DModelLayerStack({
           voxelTopography={visualProfile.voxelTopography}
         />
       ) : null}
-      {viewport3DAirboxLayerEnabledFromBrowserConfig() ? (
+      {stageVisibility.baseGeometry &&
+      viewport3DAirboxLayerEnabledFromBrowserConfig() ? (
         <AirboxLayer
           colors={colors}
-          fieldModel={fieldModel}
+          fieldModel={stagedFieldModel}
           materialProfile={materialProfile}
           onSelectPart={onSelectPart}
           settings={airboxSettings}
@@ -761,7 +897,8 @@ function Viewport3DModelLayerStack({
           vectorStyle={vectorStyle}
         />
       ) : null}
-      {viewport3DPrimitiveObjectLayerEnabledFromBrowserConfig() ? (
+      {stageVisibility.primitiveObjects &&
+      viewport3DPrimitiveObjectLayerEnabledFromBrowserConfig() ? (
         <PrimitiveObjectLayer
           colors={colors}
           getObjectSettings={getObjectSettings}
@@ -771,17 +908,18 @@ function Viewport3DModelLayerStack({
           tracker={tracker}
         />
       ) : null}
-      {viewport3DTopologyMeshLayerEnabledFromBrowserConfig() ? (
+      {stageVisibility.baseGeometry &&
+      viewport3DTopologyMeshLayerEnabledFromBrowserConfig() ? (
         <TopologyMeshLayer
           colors={colors}
           fallbackSettings={fallbackSettings}
           femDomain={femDomain}
-          fieldModel={fieldModel}
+          fieldModel={stagedFieldModel}
           getPartSettings={getPartSettings}
           materialProfile={materialProfile}
           magnetizationTexturePreviews={magnetizationTexturePreviews}
-          meshQualityColors={meshQualityColors}
-          meshQualityOverlayVisible={meshQualityOverlayVisible}
+          meshQualityColors={stagedMeshQualityColors}
+          meshQualityOverlayVisible={stagedMeshQualityOverlayVisible}
           onSelectDomain={onSelectDomain}
           onSelectPart={onSelectPart}
           tracker={tracker}
@@ -795,6 +933,7 @@ function Viewport3DModelLayerStack({
         regionOverlayMode,
         hasMeshBackedRegionOverlays,
       ) &&
+      stageVisibility.realizedRegionOverlays &&
       viewport3DOverlayLayersEnabledFromBrowserConfig() ? (
         <RegionMeshOverlayLayer
           getRegionSettings={getRegionSettings}
@@ -817,18 +956,21 @@ function Viewport3DModelLayerStack({
           selectedRegionId={selectedRegionId}
         />
       ) : null}
-      {viewport3DMeshSizeHighlightLayerEnabledFromBrowserConfig() ? (
+      {stageVisibility.meshSizeHighlight &&
+      viewport3DMeshSizeHighlightLayerEnabledFromBrowserConfig() ? (
         <MeshSizeHighlightLayer
           colors={colors}
           model={meshSizeHighlightModel}
           tracker={tracker}
         />
       ) : null}
-      <HysteresisReplayGlyphLayer
-        bounds={bounds}
-        glyphModel={hysteresisReplayGlyphModel}
-        tracker={tracker}
-      />
+      {stageVisibility.hysteresisReplayGlyphs ? (
+        <HysteresisReplayGlyphLayer
+          bounds={bounds}
+          glyphModel={hysteresisReplayGlyphModel}
+          tracker={tracker}
+        />
+      ) : null}
     </>
   );
 }

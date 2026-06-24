@@ -18,6 +18,10 @@ vi.mock("../viewport3dBatchedInvalidate", () => ({
   useBatchedInvalidate: () => () => undefined,
 }));
 
+vi.mock("./VectorFieldLayer", () => ({
+  VectorFieldLayer: () => "instancedMesh",
+}));
+
 const colors = {
   accent: "#aaccff",
   background: "#000000",
@@ -61,6 +65,26 @@ describe("FallbackTopologyMeshLayer", () => {
 
     expect(source).toContain("<meshBasicMaterial");
     expect(source).not.toContain("computeVertexNormals");
+  });
+
+  it("lets diagnostics bypass fallback field-color buffer application", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("./FallbackTopologyMeshLayer.tsx", import.meta.url)),
+      "utf8",
+    );
+
+    expect(source).toContain("viewport3DFieldColorLayersEnabledFromBrowserConfig");
+    expect(source).toContain("fieldColorLayersEnabled");
+    expect(source).toContain("if (!fieldColorLayersEnabled && !meshQualityColors) return;");
+  });
+
+  it("does not build fallback point geometry when points are hidden", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("./FallbackTopologyMeshLayer.tsx", import.meta.url)),
+      "utf8",
+    );
+
+    expect(source).toContain("if (!renderSettings.pointsVisible) return null;");
   });
 
   it("renders vector-only fallback topology layers", () => {

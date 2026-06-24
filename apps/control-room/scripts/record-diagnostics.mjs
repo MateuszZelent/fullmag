@@ -17,6 +17,24 @@ const headless =
 const allowMissingSession =
   process.env.CONTROL_ROOM_DIAGNOSTICS_ALLOW_MISSING_SESSION === "1";
 const traceEnabled = process.env.CONTROL_ROOM_DIAGNOSTICS_TRACE === "1";
+const disable3DAirbox =
+  process.env.CONTROL_ROOM_DIAGNOSTICS_DISABLE_3D_AIRBOX === "1";
+const disable3DObjects =
+  process.env.CONTROL_ROOM_DIAGNOSTICS_DISABLE_3D_OBJECTS === "1";
+const disable3DOrientationHud =
+  process.env.CONTROL_ROOM_DIAGNOSTICS_DISABLE_3D_ORIENTATION_HUD === "1";
+const disable3DDimensionFrame =
+  process.env.CONTROL_ROOM_DIAGNOSTICS_DISABLE_3D_DIMENSION_FRAME === "1";
+const disable3DOverlays =
+  process.env.CONTROL_ROOM_DIAGNOSTICS_DISABLE_3D_OVERLAYS === "1";
+const disable3DPrimitives =
+  process.env.CONTROL_ROOM_DIAGNOSTICS_DISABLE_3D_PRIMITIVES === "1";
+const disable3DTopologyMesh =
+  process.env.CONTROL_ROOM_DIAGNOSTICS_DISABLE_3D_TOPOLOGY_MESH === "1";
+const disable3DVectors =
+  process.env.CONTROL_ROOM_DIAGNOSTICS_DISABLE_3D_VECTORS === "1";
+const disable3DFieldColors =
+  process.env.CONTROL_ROOM_DIAGNOSTICS_DISABLE_3D_FIELD_COLORS === "1";
 const timeoutMs = numericEnv("CONTROL_ROOM_DIAGNOSTICS_TIMEOUT_MS", 120_000);
 const canvasTimeoutMs = numericEnv(
   "CONTROL_ROOM_DIAGNOSTICS_CANVAS_TIMEOUT_MS",
@@ -78,17 +96,62 @@ if (traceEnabled) {
 }
 
 await page.addInitScript(
-  ({ allowMissingSession, apiBase, scenario }) => {
+  ({
+    allowMissingSession,
+    apiBase,
+    disable3DAirbox,
+    disable3DDimensionFrame,
+    disable3DFieldColors,
+    disable3DObjects,
+    disable3DOverlays,
+    disable3DOrientationHud,
+    disable3DPrimitives,
+    disable3DTopologyMesh,
+    disable3DVectors,
+    scenario,
+  }) => {
     window.__FULLMAG_CONFIG__ = {
       ...(window.__FULLMAG_CONFIG__ ?? {}),
       ...(apiBase ? { controlRoomApiBase: apiBase } : {}),
       ...(allowMissingSession ? { allowMissingSessionSmoke: true } : {}),
+      ...(disable3DAirbox ? { disableViewport3DAirboxLayer: true } : {}),
+      ...(disable3DObjects ? { disableViewport3DSceneLayers: true } : {}),
+      ...(disable3DOrientationHud
+        ? { disableViewport3DOrientationHud: true }
+        : {}),
+      ...(disable3DDimensionFrame
+        ? { disableViewport3DDimensionFrame: true }
+        : {}),
+      ...(disable3DOverlays ? { disableViewport3DOverlayLayers: true } : {}),
+      ...(disable3DPrimitives
+        ? { disableViewport3DPrimitiveObjectLayer: true }
+        : {}),
+      ...(disable3DTopologyMesh
+        ? { disableViewport3DTopologyMeshLayer: true }
+        : {}),
+      ...(disable3DVectors ? { disableViewport3DVectorLayers: true } : {}),
+      ...(disable3DFieldColors
+        ? { disableViewport3DFieldColorLayers: true }
+        : {}),
       diagnosticRecorderProfile: "forensic",
       diagnosticRecorderScenario: scenario,
       enableDiagnosticRecorder: true,
     };
   },
-  { allowMissingSession, apiBase, scenario },
+  {
+    allowMissingSession,
+    apiBase,
+    disable3DAirbox,
+    disable3DDimensionFrame,
+    disable3DFieldColors,
+    disable3DObjects,
+    disable3DOverlays,
+    disable3DOrientationHud,
+    disable3DPrimitives,
+    disable3DTopologyMesh,
+    disable3DVectors,
+    scenario,
+  },
 );
 
 page.on("console", (message) => {

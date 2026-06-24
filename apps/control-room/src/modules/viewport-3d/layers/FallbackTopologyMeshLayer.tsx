@@ -10,6 +10,10 @@ import {
 } from "./viewport3DRenderPolicy";
 
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
+import {
+  viewport3DFieldColorLayersEnabledFromBrowserConfig,
+  viewport3DVectorLayersEnabledFromBrowserConfig,
+} from "@/kernel/browserFullmagConfig";
 
 import {
   resolveFemPartSelectionByBoundaryFace,
@@ -118,6 +122,7 @@ export function FallbackTopologyMeshLayer({
     [edgeGeometry, tracker],
   );
   const pointGeometry = useMemo(() => {
+    if (!renderSettings.pointsVisible) return null;
     if (!topologyModel) return null;
     const selection =
       renderSettings.geometryScope === "full"
@@ -125,20 +130,30 @@ export function FallbackTopologyMeshLayer({
         : { nodeIndices: uniqueSortedSurfaceIndices(topologyModel.fallbackSurfaceIndices) };
     const next = buildViewport3DPointGeometry(topologyModel, selection);
     return next ? tracker.track("geometry", next) : null;
-  }, [renderSettings.geometryScope, topologyModel, tracker]);
+  }, [
+    renderSettings.geometryScope,
+    renderSettings.pointsVisible,
+    topologyModel,
+    tracker,
+  ]);
 
   useEffect(
     () => () => tracker.release("geometry", pointGeometry),
     [pointGeometry, tracker],
   );
 
-  const scalarColorMode = surfaceScalarColorModeFromSettings(renderSettings);
+  const fieldColorLayersEnabled =
+    viewport3DFieldColorLayersEnabledFromBrowserConfig();
+  const scalarColorMode = fieldColorLayersEnabled
+    ? surfaceScalarColorModeFromSettings(renderSettings)
+    : null;
   const scalarColors = scalarColorMode
     ? fieldModel?.scalarColorsByMode.get(scalarColorMode) ?? null
     : null;
   const effectiveScalarColors = meshQualityColors ?? scalarColors;
   const vertexColorsEnabled =
-    Boolean(meshQualityColors) || shaderUsesVertexColors(renderSettings);
+    Boolean(meshQualityColors) ||
+    (fieldColorLayersEnabled && shaderUsesVertexColors(renderSettings));
   const canUseVertexScalarColors = canApplyVertexScalarColorBuffer(
     effectiveScalarColors,
     topologyModel?.nodeCount ?? 0,
@@ -153,6 +168,7 @@ export function FallbackTopologyMeshLayer({
     !canUseVertexScalarColors;
   useEffect(() => {
     if (!geometry || !topologyModel) return;
+    if (!fieldColorLayersEnabled && !meshQualityColors) return;
     if (shaderScalarColorsEnabled) {
       applyScalarShaderColorBuffer(
         geometry,
@@ -177,6 +193,7 @@ export function FallbackTopologyMeshLayer({
     invalidate();
   }, [
     effectiveScalarColors,
+    fieldColorLayersEnabled,
     geometry,
     invalidate,
     meshQualityColors,
@@ -194,6 +211,7 @@ export function FallbackTopologyMeshLayer({
     [surfaceOpacity],
   );
   const scalarShaderMaterial = useMemo(() => {
+    if (!fieldColorLayersEnabled && !meshQualityColors) return null;
     if (!shaderScalarColorsEnabled || !effectiveScalarColors) return null;
     return tracker.track(
       "material",
@@ -205,7 +223,9 @@ export function FallbackTopologyMeshLayer({
     );
   }, [
     effectiveScalarColors,
+    fieldColorLayersEnabled,
     materialProfile.magneticSurface.toneMapped,
+    meshQualityColors,
     shaderScalarColorsEnabled,
     surfaceOpacity,
     surfacePolicy,
@@ -322,7 +342,8 @@ export function FallbackTopologyMeshLayer({
           />
         </points>
       ) : null}
-      {renderSettings.vectorsVisible ? (
+      {viewport3DVectorLayersEnabledFromBrowserConfig() &&
+      renderSettings.vectorsVisible ? (
         <VectorFieldLayer
           colors={colors}
           colorMode={vectorColorModeFromSettings(

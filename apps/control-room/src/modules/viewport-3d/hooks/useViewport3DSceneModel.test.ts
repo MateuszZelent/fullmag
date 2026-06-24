@@ -14,6 +14,7 @@ import {
 
 import {
   buildViewport3DAirboxSyntheticVectorField,
+  applyViewport3DFieldLayerDiagnosticOverrides,
   resolveViewport3DActiveQuantityId,
   resolveViewport3DAnalysisComplexFieldQuery,
   resolveViewport3DDisplayedLiveValue,
@@ -69,6 +70,29 @@ function fieldVectorResourceRef(
 }
 
 describe("useViewport3DSceneModel", () => {
+  it("can disable vector glyphs and field colors independently for diagnostics", () => {
+    const options = applyViewport3DFieldLayerDiagnosticOverrides(
+      {
+        fullVectorBudget: 64,
+        partVectorBudgets: new Map([
+          ["part-a", 32],
+          ["part-b", 16],
+        ]),
+        scalarColorModes: new Set(["orientation", "magnitude"]),
+        scalarColorsVisible: true,
+      },
+      {
+        fieldColorLayersEnabled: false,
+        vectorLayersEnabled: false,
+      },
+    );
+
+    expect(options.fullVectorBudget).toBe(0);
+    expect(options.partVectorBudgets).toEqual(new Map());
+    expect(options.scalarColorModes).toEqual(new Set());
+    expect(options.scalarColorsVisible).toBe(false);
+  });
+
   it("keeps the previously displayed live field value while camera field updates are held", () => {
     expect(resolveViewport3DDisplayedLiveValue("next", "previous", true)).toBe(
       "previous",

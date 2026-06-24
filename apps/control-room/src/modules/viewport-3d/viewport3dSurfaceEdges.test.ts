@@ -42,16 +42,18 @@ describe("viewport3dSurfaceEdges", () => {
   });
 
   it("builds line-index geometry for dedicated volume edge passes", () => {
+    const lineIndices = new Uint32Array([0, 1, 1, 2]);
     const geometry = buildLineIndexGeometry(
       new Float32Array([
         0, 0, 0,
         1, 0, 0,
         0, 1, 0,
       ]),
-      new Uint32Array([0, 1, 1, 2]),
+      lineIndices,
     );
 
     expect(Array.from(geometry?.getIndex()?.array ?? [])).toEqual([0, 1, 1, 2]);
+    expect(geometry?.getIndex()?.array).toBe(lineIndices);
     expect(geometry?.getAttribute("position").count).toBe(3);
   });
 });

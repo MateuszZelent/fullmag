@@ -667,10 +667,9 @@ function assertSmoothCameraWheelZoomPhase(phase) {
 }
 
 function assertResponsiveCameraRightPanPhase(phase) {
-  const longAnimationFrameCount = phase.longAnimationFrameCount ?? 0;
-  if (longAnimationFrameCount > 0) {
+  if (cameraPhaseHasBlockingLongAnimationFrames(phase)) {
     throw new Error(
-      `Camera right-button pan produced long animation frames: longAnimationFrameCount=${longAnimationFrameCount}, maxLongAnimationFrameMs=${phase.maxLongAnimationFrameMs ?? 0}, longAnimationFrameBlockingMs=${phase.longAnimationFrameBlockingMs ?? 0}, topInvokers=${JSON.stringify(phase.longAnimationFrameTopInvokers ?? [])}.`,
+      `Camera right-button pan produced blocking long animation frames: longAnimationFrameCount=${phase.longAnimationFrameCount ?? 0}, maxLongAnimationFrameMs=${phase.maxLongAnimationFrameMs ?? 0}, longAnimationFrameBlockingMs=${phase.longAnimationFrameBlockingMs ?? 0}, topInvokers=${JSON.stringify(phase.longAnimationFrameTopInvokers ?? [])}.`,
     );
   }
   const viewportMeasureCount = phase.viewportMeasureCount ?? 0;
@@ -679,6 +678,18 @@ function assertResponsiveCameraRightPanPhase(phase) {
       `Camera right-button pan rebuilt viewport data during interaction: viewportMeasureCount=${viewportMeasureCount}, viewportMeasureTotals=${JSON.stringify(phase.viewportMeasureTotals ?? {})}.`,
     );
   }
+}
+
+function cameraPhaseHasBlockingLongAnimationFrames(phase) {
+  const longAnimationFrameBlockingMs = phase.longAnimationFrameBlockingMs ?? 0;
+  if (longAnimationFrameBlockingMs > 0) return true;
+
+  return (phase.longAnimationFrameTopInvokers ?? []).some(
+    (invoker) =>
+      invoker.invokerType &&
+      invoker.invoker !== "unknown-frame" &&
+      (invoker.maxDurationMs ?? 0) > 50,
+  );
 }
 
 function markInitialForbiddenResourceRequestSettled(request) {

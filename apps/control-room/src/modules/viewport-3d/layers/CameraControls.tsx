@@ -60,6 +60,7 @@ interface Viewport3DCameraControlsDiagnostics {
   minDistance: number | null;
   minPolarAngle: number | null;
   mouseButtons: Record<string, number> | null;
+  panSpeed: number | null;
   state: number | null;
 }
 
@@ -76,6 +77,7 @@ interface Viewport3DCameraInteractionOptions {
   enablePan: boolean;
   enableRotate: boolean;
   enableZoom: boolean;
+  panSpeed: number;
   rotateSpeed: number;
   zoomSpeed: number;
 }
@@ -108,6 +110,7 @@ const VIEWPORT_3D_CAMERA_INTERACTION_OPTIONS = {
   enablePan: true,
   enableRotate: true,
   enableZoom: true,
+  panSpeed: 2,
   rotateSpeed: 1,
   zoomSpeed: 1,
 } satisfies Viewport3DCameraInteractionOptions;
@@ -658,6 +661,7 @@ function readViewport3DCameraControlsDiagnostics({
         minPolarAngle?: number;
         mouseButtons?: Record<string, number>;
         object?: Camera;
+        panSpeed?: number;
         state?: number;
       })
     | null;
@@ -706,6 +710,8 @@ function readViewport3DCameraControlsDiagnostics({
         ? controlsState.minPolarAngle
         : null,
     mouseButtons: controlsState?.mouseButtons ?? null,
+    panSpeed:
+      typeof controlsState?.panSpeed === "number" ? controlsState.panSpeed : null,
     state: typeof controlsState?.state === "number" ? controlsState.state : null,
   };
 }
@@ -1369,6 +1375,7 @@ export function OrbitCameraControls(props: OrbitCameraControlsProps) {
       enablePan={options.enablePan}
       enableRotate={options.enableRotate}
       enableZoom={options.enableZoom}
+      panSpeed={options.panSpeed}
       rotateSpeed={options.rotateSpeed}
       screenSpacePanning
       zoomSpeed={options.zoomSpeed}

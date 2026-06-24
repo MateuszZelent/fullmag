@@ -1,6 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useRef, type RefObject } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useSyncExternalStore,
+  type RefObject,
+} from "react";
 import {
   BufferAttribute,
   BufferGeometry,
@@ -18,11 +24,12 @@ import {
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
 import type { Viewport3DColors } from "../viewport3dTypes";
+import type { VectorGlyphTransforms } from "./vectorGlyphGeometry";
 import {
-  buildVectorGlyphColors,
-  buildVectorGlyphTransforms,
-  type VectorGlyphTransforms,
-} from "./vectorGlyphGeometry";
+  buildViewport3DVectorGlyphsOffMainThread,
+  type VectorGlyphBuildRequest,
+  type VectorGlyphBuildResult,
+} from "./vectorGlyphBuildScheduler";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import { RENDER_POLICIES } from "./viewport3DRenderPolicy";
 
@@ -52,6 +59,17 @@ interface VectorGlyphTransformScratch {
   position: Vector3;
   quaternion: Quaternion;
   scale: Vector3;
+}
+
+interface VectorGlyphBuildSnapshot {
+  request: VectorGlyphBuildRequest | null;
+  result: VectorGlyphBuildResult | null;
+}
+
+interface VectorGlyphBuildStore {
+  getSnapshot: () => VectorGlyphBuildSnapshot;
+  publish: (snapshot: VectorGlyphBuildSnapshot) => void;
+  subscribe: (listener: () => void) => () => void;
 }
 
 function buildVectorGlyphUploadBatches(
@@ -124,6 +142,36 @@ function measureVectorGlyphWork(name: string, startMark: string | null): void {
 function clearVectorGlyphWorkMark(startMark: string | null): void {
   if (!startMark) return;
   globalThis.performance?.clearMarks?.(startMark);
+}
+
+function createVectorGlyphBuildStore(): VectorGlyphBuildStore {
+  let snapshot: VectorGlyphBuildSnapshot = {
+    request: null,
+    result: null,
+  };
+  const listeners = new Set<() => void>();
+
+  return {
+    getSnapshot: () => snapshot,
+    publish: (nextSnapshot) => {
+      if (
+        snapshot.request === nextSnapshot.request &&
+        snapshot.result === nextSnapshot.result
+      ) {
+        return;
+      }
+      snapshot = nextSnapshot;
+      for (const listener of listeners) {
+        listener();
+      }
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
 }
 
 function measureVectorGlyphSyncWork<T>(name: string, task: () => T): T {
@@ -362,6 +410,84 @@ function useVectorGlyphInstanceColorAttribute(
   return instanceColorAttrRef;
 }
 
+function useVectorGlyphBuild({
+  colorMode,
+  headRadiusRatio,
+  invalidate,
+  segments,
+  shaftRadiusRatio,
+  tracker,
+}: {
+  colorMode: string;
+  headRadiusRatio: number;
+  invalidate: () => void;
+  segments: Float32Array | null;
+  shaftRadiusRatio: number;
+  tracker: Viewport3DResourceTracker;
+}): VectorGlyphBuildResult | null {
+  const store = useMemo(() => createVectorGlyphBuildStore(), []);
+  const request = useMemo<VectorGlyphBuildRequest | null>(
+    () =>
+      segments
+        ? {
+            colorMode,
+            headRadiusRatio,
+            segments,
+            shaftRadiusRatio,
+          }
+        : null,
+    [colorMode, headRadiusRatio, segments, shaftRadiusRatio],
+  );
+  const snapshot = useSyncExternalStore(
+    store.subscribe,
+    store.getSnapshot,
+    store.getSnapshot,
+  );
+
+  useEffect(() => {
+    if (!request) return;
+
+    const abortController = new AbortController();
+    const startMark = markVectorGlyphWork(VECTOR_GLYPH_BUILD_MEASURE);
+    let measured = false;
+
+    void buildViewport3DVectorGlyphsOffMainThread(request, {
+      signal: abortController.signal,
+    })
+      .then((result) => {
+        if (abortController.signal.aborted) return;
+        store.publish({ request, result });
+        measureVectorGlyphWork(VECTOR_GLYPH_BUILD_MEASURE, startMark);
+        measured = true;
+        tracker.recordDirtyFrame("vector-glyph-build");
+        invalidate();
+      })
+      .catch((error: unknown) => {
+        if (isAbortError(error)) return;
+        measureVectorGlyphWork(VECTOR_GLYPH_BUILD_MEASURE, startMark);
+        measured = true;
+      });
+
+    return () => {
+      abortController.abort();
+      if (!measured) {
+        clearVectorGlyphWorkMark(startMark);
+      }
+    };
+  }, [invalidate, request, store, tracker]);
+
+  if (!request) return null;
+  return snapshot.request === request ? snapshot.result : null;
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.name === "AbortError" ||
+      error.message === "Vector glyph build aborted")
+  );
+}
+
 function useVectorGlyphUpload({
   glyphColors,
   glyphCount,
@@ -586,26 +712,16 @@ export function VectorFieldLayer({
     opacity: opacity * (materialProfile?.opacityScale ?? 1),
     style,
   });
-  const glyphTransforms = useMemo(
-    () =>
-      segments
-        ? measureVectorGlyphSyncWork(VECTOR_GLYPH_BUILD_MEASURE, () =>
-            buildVectorGlyphTransforms(segments, {
-              headRadiusRatio: resolvedStyle.headRadiusRatio,
-              shaftRadiusRatio: resolvedStyle.shaftRadiusRatio,
-            }),
-          )
-        : null,
-    [
-      resolvedStyle.headRadiusRatio,
-      resolvedStyle.shaftRadiusRatio,
-      segments,
-    ],
-  );
-  const glyphColors = useMemo(
-    () => (segments ? buildVectorGlyphColors(segments, colorMode) : null),
-    [colorMode, segments],
-  );
+  const glyphBuild = useVectorGlyphBuild({
+    colorMode,
+    headRadiusRatio: resolvedStyle.headRadiusRatio,
+    invalidate,
+    segments,
+    shaftRadiusRatio: resolvedStyle.shaftRadiusRatio,
+    tracker,
+  });
+  const glyphTransforms = glyphBuild?.transforms ?? null;
+  const glyphColors = glyphBuild?.colors ?? null;
   const useInstanceColors = Boolean(glyphColors);
   const glyphCount = glyphTransforms?.count ?? 0;
   const transformScratch = useMemo(

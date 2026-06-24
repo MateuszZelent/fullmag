@@ -545,7 +545,7 @@ describe("regionOverlayModel", () => {
     expect(Array.from(models[0].surfaceIndices ?? [])).toEqual([0, 1, 2]);
   });
 
-  it("skips rendered mesh-backed region surfaces with no visible overlay work", () => {
+  it("keeps rendered mesh-backed region surfaces from drawing a second color overlay", () => {
     const topology = {
       boundaryFaceCount: 0,
       boundaryFaces: new Uint32Array(),
@@ -562,7 +562,7 @@ describe("regionOverlayModel", () => {
       ]),
     };
 
-    const meshBacked = buildRegionMeshOverlayModels(
+    const [meshBacked] = buildRegionMeshOverlayModels(
       [
         {
           enabled: true,
@@ -614,7 +614,8 @@ describe("regionOverlayModel", () => {
       },
     );
 
-    expect(meshBacked).toEqual([]);
+    expect(meshBacked?.style.fillVisible).toBe(true);
+    expect(meshBacked?.surfaceOverlayVisible).toBe(false);
     expect(membershipFallback?.style.fillVisible).toBe(true);
     expect(membershipFallback?.surfaceOverlayVisible).toBe(true);
   });

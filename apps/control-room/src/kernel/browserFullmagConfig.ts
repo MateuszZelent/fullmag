@@ -18,6 +18,7 @@ export interface BrowserFullmagConfig {
   readonly disableViewport3DDimensionFrameLines?: unknown;
   readonly disableViewport3DDimensionFrameMajorLines?: unknown;
   readonly disableViewport3DDimensionFrameMinorLines?: unknown;
+  readonly disableViewport3DFieldColorLayers?: unknown;
   readonly disableViewport3DAirboxLayer?: unknown;
   readonly disableViewport3DMeshSizeHighlightLayer?: unknown;
   readonly disableViewport3DOverlayLayers?: unknown;
@@ -26,6 +27,7 @@ export interface BrowserFullmagConfig {
   readonly disableViewport3DPrimitiveObjectLayer?: unknown;
   readonly disableViewport3DSceneLayers?: unknown;
   readonly disableViewport3DTopologyMeshLayer?: unknown;
+  readonly disableViewport3DVectorLayers?: unknown;
   readonly enableAuditHooks?: unknown;
   readonly enableDiagnosticRecorder?: unknown;
   readonly enablePerformanceDiagnostics?: unknown;
@@ -54,7 +56,10 @@ export function performanceDiagnosticsEnabledFromBrowserConfig(
   config: BrowserFullmagConfig | undefined = readBrowserFullmagConfig(),
 ): boolean {
   if (config?.disablePerformanceDiagnostics === true) return false;
-  return config?.enablePerformanceDiagnostics === true;
+  return (
+    config?.enablePerformanceDiagnostics === true ||
+    config?.enableDiagnosticRecorder === true
+  );
 }
 
 export function viewport3DCanvasLifecycleProbeEnabledFromBrowserConfig(
@@ -111,6 +116,12 @@ export function viewport3DDimensionFrameMinorLinesEnabledFromBrowserConfig(
   return config?.disableViewport3DDimensionFrameMinorLines !== true;
 }
 
+export function viewport3DFieldColorLayersEnabledFromBrowserConfig(
+  config: BrowserFullmagConfig | undefined = readBrowserFullmagConfig(),
+): boolean {
+  return config?.disableViewport3DFieldColorLayers !== true;
+}
+
 export function viewport3DAirboxLayerEnabledFromBrowserConfig(
   config: BrowserFullmagConfig | undefined = readBrowserFullmagConfig(),
 ): boolean {
@@ -163,4 +174,10 @@ export function viewport3DTopologyMeshLayerEnabledFromBrowserConfig(
   config: BrowserFullmagConfig | undefined = readBrowserFullmagConfig(),
 ): boolean {
   return config?.disableViewport3DTopologyMeshLayer !== true;
+}
+
+export function viewport3DVectorLayersEnabledFromBrowserConfig(
+  config: BrowserFullmagConfig | undefined = readBrowserFullmagConfig(),
+): boolean {
+  return config?.disableViewport3DVectorLayers !== true;
 }
