@@ -42,7 +42,7 @@ describe("visualization target commands", () => {
     );
 
     expect(result.status).toBe("completed");
-    expect(visualization.getSettings({ id: "free-layer", kind: "object" }))
+    expect(visualization.getSettings({ id: "object:free-layer", kind: "object" }))
       .toMatchObject({
         vectorsVisible: true,
       });
@@ -116,7 +116,7 @@ describe("visualization target commands", () => {
     );
     visualization.patchTarget(
       {
-        id: "free-layer",
+        id: "object:free-layer",
         kind: "object",
       },
       {
@@ -134,7 +134,7 @@ describe("visualization target commands", () => {
     );
 
     expect(result.status).toBe("completed");
-    expect(visualization.getSettings({ id: "free-layer", kind: "object" }))
+    expect(visualization.getSettings({ id: "object:free-layer", kind: "object" }))
       .toMatchObject({
         opacityPercent: 100,
       });
@@ -208,7 +208,7 @@ describe("visualization target commands", () => {
               },
             },
             scope: "object",
-            scope_id: "free-layer",
+            scope_id: "object:free-layer",
           },
         ],
       },

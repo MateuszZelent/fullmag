@@ -53,6 +53,26 @@ export function buildViewport3DFieldColorJobKey(
   });
 }
 
+export function buildViewport3DFdmCuboidJobKey(
+  parts: Viewport3DBuildJobKeyParts,
+): Viewport3DBuildJobKey {
+  return buildViewport3DBuildJobKey({
+    algorithmVersion: parts.algorithmVersion,
+    component: parts.component,
+    domainId: parts.domainId,
+    fieldRevision: parts.fieldRevision,
+    lane: "fdm-cuboid",
+    quantityId: parts.quantityId,
+    samplingRevision: parts.samplingRevision,
+    scopeId: parts.scopeId,
+    scopeKind: parts.scopeKind,
+    sessionId: parts.sessionId,
+    styleRevision: parts.styleRevision,
+    targetVisualizationRevision: parts.targetVisualizationRevision,
+    topologyRevision: parts.topologyRevision,
+  });
+}
+
 export function buildViewport3DVectorGlyphJobKey(
   parts: Viewport3DBuildJobKeyParts,
 ): Viewport3DBuildJobKey {
@@ -92,4 +112,3 @@ function buildViewport3DBuildJobKey(
 ): Viewport3DBuildJobKey {
   return `${normalized.lane}:${JSON.stringify(normalized)}`;
 }
-

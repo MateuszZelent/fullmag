@@ -55,7 +55,7 @@ interface EarlyDiagnosticWindowLike {
   setTimeout(callback: () => void, delayMs: number): TimerHandle;
 }
 
-export interface EarlyDiagnosticRecordInput {
+interface EarlyDiagnosticRecordInput {
   byteLength?: number | null;
   detail?: Record<string, unknown>;
   durationMs?: number | null;
@@ -66,7 +66,7 @@ export interface EarlyDiagnosticRecordInput {
   startTimeMs?: number | null;
 }
 
-export interface EarlyDiagnosticRecorderSnapshot {
+interface EarlyDiagnosticRecorderSnapshot {
   droppedCount: number;
   maxRecords: number;
   records: DiagnosticRecord[];
@@ -230,9 +230,10 @@ function installPerformanceObservers({
     "event",
     "measure",
   ];
+  const supportedTypes = supported ? new Set(supported) : null;
 
   for (const type of entryTypes) {
-    if (supported && !supported.includes(type)) continue;
+    if (supportedTypes && !supportedTypes.has(type)) continue;
     const observer = new observerConstructor((list) => {
       for (const entry of list.getEntries()) {
         const diagnostic = performanceEntryToDiagnosticRecord(entry);

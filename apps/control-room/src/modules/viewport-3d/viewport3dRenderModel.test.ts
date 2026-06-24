@@ -266,7 +266,13 @@ describe("viewport3dRenderModel", () => {
     const first = buildViewport3DTopologyRenderModel(topology, [], []);
     const second = buildViewport3DTopologyRenderModel(topology, [], []);
 
+    expect(first?.fallbackSurfaceEdgeIndices).toBe(
+      second?.fallbackSurfaceEdgeIndices,
+    );
     expect(first?.fallbackSurfaceIndices).toBe(second?.fallbackSurfaceIndices);
+    expect(first?.fallbackSurfaceNodeIndices).toBe(
+      second?.fallbackSurfaceNodeIndices,
+    );
     expect(first?.fallbackVolumeEdgeIndices).toBe(
       second?.fallbackVolumeEdgeIndices,
     );
@@ -335,6 +341,7 @@ describe("viewport3dRenderModel", () => {
     const secondPart = second?.magneticParts[0];
     expect(firstPart?.surfaceIndices).toBe(secondPart?.surfaceIndices);
     expect(firstPart?.edgeIndices).toBe(secondPart?.edgeIndices);
+    expect(firstPart?.surfaceNodeIndices).toBe(secondPart?.surfaceNodeIndices);
     expect(firstPart?.volumeEdgeIndices).toBe(secondPart?.volumeEdgeIndices);
   });
 
@@ -358,11 +365,16 @@ describe("viewport3dRenderModel", () => {
     expect(topologyModel?.fallbackSurfaceIndices).toBe(
       EMPTY_VIEWPORT_3D_TOPOLOGY_INDICES,
     );
+    expect(topologyModel?.fallbackSurfaceEdgeIndices).toBeNull();
+    expect(topologyModel?.fallbackSurfaceNodeIndices).toBe(
+      EMPTY_VIEWPORT_3D_TOPOLOGY_INDICES,
+    );
     expect(topologyModel?.fallbackVolumeEdgeIndices).toBe(
       EMPTY_VIEWPORT_3D_TOPOLOGY_INDICES,
     );
     expect(topologyModel?.magneticParts[0]?.surfaceIndices).toBeNull();
     expect(topologyModel?.magneticParts[0]?.edgeIndices).toBeNull();
+    expect(topologyModel?.magneticParts[0]?.surfaceNodeIndices).toBeNull();
     expect(topologyModel?.magneticParts[0]?.volumeEdgeIndices).toBeNull();
   });
 

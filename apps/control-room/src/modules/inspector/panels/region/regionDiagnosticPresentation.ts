@@ -15,24 +15,22 @@ export function resolveRegionInlineDiagnostics(
   capabilityGates: readonly string[],
 ): RegionInlineDiagnostic[] {
   const allowed = new Set(capabilityGates);
-  return diagnostics
-    .filter(
-      (diagnostic) => {
-        const severity = diagnostic.severity.toLowerCase();
-        return (
-          diagnostic.capabilityGate !== null &&
-          allowed.has(diagnostic.capabilityGate) &&
-          (severity === "warning" || severity === "error")
-        );
-      },
-    )
-    .map((diagnostic) => {
+  const inlineDiagnostics: RegionInlineDiagnostic[] = [];
+  for (const diagnostic of diagnostics) {
+    const severity = diagnostic.severity.toLowerCase();
+    if (
+      diagnostic.capabilityGate !== null &&
+      allowed.has(diagnostic.capabilityGate) &&
+      (severity === "warning" || severity === "error")
+    ) {
       const capabilityLabel = regionCapabilityLabel(diagnostic.capabilityGate);
-      return {
+      inlineDiagnostics.push({
         capabilityLabel,
         diagnosticId: diagnostic.diagnosticId,
         kind: diagnostic.severity.toLowerCase() === "error" ? "error" : "warning",
         message: `${capabilityLabel}: ${diagnostic.message}`,
-      };
-    });
+      });
+    }
+  }
+  return inlineDiagnostics;
 }

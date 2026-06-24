@@ -54,6 +54,74 @@ describe("diagnosticArtifactExport", () => {
     });
   });
 
+  it("builds viewport 3D build and visible stale summaries", () => {
+    const controller = new DiagnosticRecorderController({
+      config: { enabled: true, profile: "forensic", scenario: "viewport-3d" },
+      now: () => 1_000,
+    });
+    controller.record({
+      byteLength: 16_384,
+      buildKey: "vector-glyph:key",
+      buildLane: "vector-glyph",
+      buildState: "ready",
+      detail: {
+        buildLane: "vector-glyph",
+        displayedRevision: "field-1",
+        targetKey: "part:__air__",
+        targetRevision: "field-2",
+        topologyRevision: "topology-1",
+        visibleState: "stale-physical",
+      },
+      displayedRevision: "field-1",
+      droppedBecauseObsolete: false,
+      droppedCount: 0,
+      durationMs: 2_400,
+      fallbackReason: null,
+      id: "build-vector",
+      inputBytes: 8_192,
+      itemCount: 1200,
+      kind: "viewport-3d-build-job",
+      lane: "viewport-3d",
+      mainAdoptMs: 16,
+      mainUploadMs: 20,
+      name: "fullmag.viewport3d.build-engine.vector-glyph",
+      outputBytes: 16_384,
+      queueWaitMs: 1_800,
+      revisionSummary: "topology=topology-1 field=field-2",
+      severity: "warning",
+      startTimeMs: 0,
+      targetRevision: "field-2",
+      timestampMs: 2_400,
+      transferMs: 12,
+      visibleState: "stale-physical",
+      workerComputeMs: 552,
+    });
+
+    const artifact = controller.exportArtifact();
+
+    expect(artifact.streams.viewport3dBuild).toHaveLength(1);
+    expect(artifact.viewport3dBuildSummary.lanes).toEqual([
+      expect.objectContaining({
+        jobs: 1,
+        lane: "vector-glyph",
+        queueWaitMaxMs: 1800,
+        workerComputeMaxMs: 552,
+      }),
+    ]);
+    expect(artifact.viewport3dVisibleRevisionSummary).toMatchObject({
+      topologyRevision: "topology-1",
+      stalePhysicalTargets: [
+        expect.objectContaining({
+          displayedRevision: "field-1",
+          targetKey: "part:__air__",
+          targetRevision: "field-2",
+        }),
+      ],
+    });
+    expect(artifact.suspectReport.text).toContain("Queue Bottleneck");
+    expect(artifact.suspectReport.text).toContain("Visible Stale Revision");
+  });
+
   it("serializes JSON and NDJSON after redacting dangerous detail keys", () => {
     const controller = new DiagnosticRecorderController({
       config: { enabled: true },

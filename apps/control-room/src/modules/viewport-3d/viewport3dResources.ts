@@ -44,6 +44,17 @@ const fieldVectorCache = new ResourceCache<DecodedFieldVector>({
 const qualityDataCache = new ResourceCache<DecodedMeshQualityData>({
   maxBytes: 48 * 1024 * 1024,
 });
+const binaryResourceInflight = new WeakMap<
+  ResourceCache<unknown>,
+  Map<string, InflightBinaryResource<unknown>>
+>();
+
+interface InflightBinaryResource<TData> {
+  readonly abortListeners: Map<AbortSignal, () => void>;
+  readonly consumerSignals: Set<AbortSignal>;
+  readonly controller: AbortController;
+  readonly promise: Promise<TData | null>;
+}
 
 memoryBudgetRegistry.register("viewport3d.topologyCache", () => {
   const stats = topologyCache.stats();
@@ -152,8 +163,15 @@ export function getViewport3DCacheStats() {
 export async function loadCachedBinaryResource<TData>(
   cache: ResourceCache<TData>,
   key: string,
-  request: (etag?: string | null) => Promise<BinaryResourceResult<TData>>,
-  options: { pauseRequest?: () => boolean; preferCached?: boolean } = {},
+  request: (
+    etag?: string | null,
+    signal?: AbortSignal,
+  ) => Promise<BinaryResourceResult<TData>>,
+  options: {
+    pauseRequest?: () => boolean;
+    preferCached?: boolean;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<TData | null> {
   const cached = cache.get(key);
   if (cached && options.preferCached) {
@@ -163,31 +181,127 @@ export async function loadCachedBinaryResource<TData>(
     return cached?.data ?? null;
   }
 
-  const result = await request(cached?.etag);
-
-  if (result.status === "not-modified") {
-    if (!cached) {
-      throw new Error(`Binary resource ${key} returned 304 without cache entry`);
-    }
-    if (!cache.peek(key)) {
-      cache.set(key, cached);
-    } else {
-      cache.get(key);
-    }
-    return cached.data;
+  const inflight = getInflightBinaryResource<TData>(cache, key);
+  if (inflight) {
+    retainInflightBinaryResource(inflight, options.signal);
+    return inflight.promise;
   }
 
-  if (result.status === "not-applicable") {
-    cache.delete(key);
-    return null;
+  const controller = new AbortController();
+  const pending = (async () => {
+    const result = await request(cached?.etag, controller.signal);
+
+    if (result.status === "not-modified") {
+      if (!cached) {
+        throw new Error(`Binary resource ${key} returned 304 without cache entry`);
+      }
+      if (!cache.peek(key)) {
+        cache.set(key, cached);
+      } else {
+        cache.get(key);
+      }
+      return cached.data;
+    }
+
+    if (result.status === "not-applicable") {
+      cache.delete(key);
+      return null;
+    }
+
+    cache.set(key, {
+      byteLength: result.byteLength,
+      data: result.data,
+      etag: result.etag,
+    });
+    return result.data;
+  })();
+
+  const inflightResource: InflightBinaryResource<TData> = {
+    abortListeners: new Map<AbortSignal, () => void>(),
+    consumerSignals: new Set<AbortSignal>(),
+    controller,
+    promise: pending,
+  };
+  retainInflightBinaryResource(inflightResource, options.signal);
+  setInflightBinaryResource(cache, key, inflightResource);
+  try {
+    return await pending;
+  } finally {
+    clearInflightBinaryResource(cache, key, inflightResource);
+  }
+}
+
+function getInflightBinaryResource<TData>(
+  cache: ResourceCache<TData>,
+  key: string,
+): InflightBinaryResource<TData> | null {
+  const inflight = binaryResourceInflight
+    .get(cache as ResourceCache<unknown>)
+    ?.get(key);
+  return (inflight as InflightBinaryResource<TData> | undefined) ?? null;
+}
+
+function setInflightBinaryResource<TData>(
+  cache: ResourceCache<TData>,
+  key: string,
+  inflight: InflightBinaryResource<TData>,
+): void {
+  const typedCache = cache as ResourceCache<unknown>;
+  let cacheInflight = binaryResourceInflight.get(typedCache);
+  if (!cacheInflight) {
+    cacheInflight = new Map<string, InflightBinaryResource<unknown>>();
+    binaryResourceInflight.set(typedCache, cacheInflight);
+  }
+  cacheInflight.set(key, inflight as InflightBinaryResource<unknown>);
+}
+
+function clearInflightBinaryResource<TData>(
+  cache: ResourceCache<TData>,
+  key: string,
+  inflight: InflightBinaryResource<TData>,
+): void {
+  const typedCache = cache as ResourceCache<unknown>;
+  const cacheInflight = binaryResourceInflight.get(typedCache);
+  if (!cacheInflight || cacheInflight.get(key) !== inflight) return;
+  releaseInflightBinaryResourceListeners(inflight);
+  cacheInflight.delete(key);
+  if (cacheInflight.size === 0) {
+    binaryResourceInflight.delete(typedCache);
+  }
+}
+
+function retainInflightBinaryResource<TData>(
+  inflight: InflightBinaryResource<TData>,
+  signal: AbortSignal | undefined,
+): void {
+  if (!signal || inflight.abortListeners.has(signal)) return;
+  if (signal.aborted) {
+    if (inflight.consumerSignals.size === 0) {
+      inflight.controller.abort();
+    }
+    return;
   }
 
-  cache.set(key, {
-    byteLength: result.byteLength,
-    data: result.data,
-    etag: result.etag,
-  });
-  return result.data;
+  const release = () => {
+    inflight.consumerSignals.delete(signal);
+    inflight.abortListeners.delete(signal);
+    if (inflight.consumerSignals.size === 0) {
+      inflight.controller.abort();
+    }
+  };
+  inflight.consumerSignals.add(signal);
+  inflight.abortListeners.set(signal, release);
+  signal.addEventListener("abort", release, { once: true });
+}
+
+function releaseInflightBinaryResourceListeners<TData>(
+  inflight: InflightBinaryResource<TData>,
+): void {
+  for (const [signal, release] of inflight.abortListeners) {
+    signal.removeEventListener("abort", release);
+  }
+  inflight.abortListeners.clear();
+  inflight.consumerSignals.clear();
 }
 
 export function cachedBinaryResourceMatchesRevision<TData>(
@@ -368,7 +482,9 @@ export function useViewport3DDomainTopology() {
       loadCachedBinaryResource(
         topologyCache,
         VIEWPORT_3D_DOMAIN_TOPOLOGY_RESOURCE_KEY,
-        (etag) => api.data.domain.topologyChunked({ etag, signal }),
+        (etag, requestSignal) =>
+          api.data.domain.topologyChunked({ etag, signal: requestSignal }),
+        { signal },
       ),
     [api],
   );
@@ -417,7 +533,11 @@ export function useViewport3DFieldVector(
       loadCachedBinaryResource(
         fieldVectorCache,
         requestKey,
-        (etag) => api.data.fields.vector(quantityId, query, { etag, signal }),
+        (etag, requestSignal) =>
+          api.data.fields.vector(quantityId, query, {
+            etag,
+            signal: requestSignal,
+          }),
         {
           pauseRequest: viewport3DFieldUpdateHoldActive,
           preferCached: cachedBinaryResourceMatchesRevision(
@@ -425,6 +545,7 @@ export function useViewport3DFieldVector(
             requestKey,
             resources.getRevision(requestKey),
           ),
+          signal,
         },
       ),
     [api, quantityId, query, requestKey, resources],
@@ -482,8 +603,11 @@ export function useViewport3DAirboxFieldVectors(
             const data = await loadCachedBinaryResource(
               fieldVectorCache,
               key,
-              (etag) =>
-                api.data.fields.vector(quantityId, query, { etag, signal }),
+              (etag, requestSignal) =>
+                api.data.fields.vector(quantityId, query, {
+                  etag,
+                  signal: requestSignal,
+                }),
               {
                 pauseRequest: viewport3DFieldUpdateHoldActive,
                 preferCached: cachedBinaryResourceMatchesRevision(
@@ -491,6 +615,7 @@ export function useViewport3DAirboxFieldVectors(
                   key,
                   resources.getRevision(key),
                 ),
+                signal,
               },
             ).catch((error: unknown) => {
               if (airboxFieldVectorUnavailable(error)) {
@@ -576,11 +701,11 @@ export function useViewport3DQuantityFieldVectors(
           const data = await loadCachedBinaryResource(
             fieldVectorCache,
             request.key,
-            (etag) =>
+            (etag, requestSignal) =>
               api.data.fields.vector(
                 quantityId,
                 request.query,
-                { etag, signal },
+                { etag, signal: requestSignal },
               ),
             {
               pauseRequest: viewport3DFieldUpdateHoldActive,
@@ -589,6 +714,7 @@ export function useViewport3DQuantityFieldVectors(
                 request.key,
                 resources.getRevision(request.key),
               ),
+              signal,
             },
           );
           return [quantityId, data] as const;
@@ -652,11 +778,11 @@ export function useViewport3DPartFieldVectors(
           const data = await loadCachedBinaryResource(
             fieldVectorCache,
             request.key,
-            (etag) =>
+            (etag, requestSignal) =>
               api.data.fields.vector(
                 request.quantityId,
                 request.query,
-                { etag, signal },
+                { etag, signal: requestSignal },
               ),
             {
               pauseRequest: viewport3DFieldUpdateHoldActive,
@@ -665,6 +791,7 @@ export function useViewport3DPartFieldVectors(
                 request.key,
                 resources.getRevision(request.key),
               ),
+              signal,
             },
           );
           return [partId, data] as const;
@@ -709,7 +836,12 @@ export function useViewport3DMeshQualityData(enabled = true) {
       loadCachedBinaryResource(
         qualityDataCache,
         VIEWPORT_3D_SHARED_DOMAIN_QUALITY_DATA_RESOURCE_KEY,
-        (etag) => api.meshing.sharedDomain.qualityData({ etag, signal }),
+        (etag, requestSignal) =>
+          api.meshing.sharedDomain.qualityData({
+            etag,
+            signal: requestSignal,
+          }),
+        { signal },
       ),
     [api],
   );

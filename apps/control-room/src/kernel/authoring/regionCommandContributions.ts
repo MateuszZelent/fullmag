@@ -59,17 +59,27 @@ function ownerRegionOrder(context: CommandContext): string[] | null {
     | RegionListResource
     | undefined;
   if (!target || !Array.isArray(regions?.regions)) return null;
-  const ordered = regions.regions
-    .filter((region) => {
-      const ownerObjectId = region.owner_object_id ?? null;
-      return (
-        region.source === "authored_object_region" &&
-        (ownerObjectId === target.objectId ||
-          region.source_object_ids.includes(target.objectId))
-      );
-    })
-    .map((region) => region.region_id);
+  const ordered: string[] = [];
+  for (const region of regions.regions) {
+    if (
+      region.source === "authored_object_region" &&
+      regionReferencesObject(region, target.objectId)
+    ) {
+      ordered.push(region.region_id);
+    }
+  }
   return ordered.includes(target.regionId) ? ordered : null;
+}
+
+function regionReferencesObject(
+  region: RegionListResource["regions"][number],
+  objectId: string,
+): boolean {
+  if ((region.owner_object_id ?? null) === objectId) return true;
+  for (const sourceObjectId of region.source_object_ids) {
+    if (sourceObjectId === objectId) return true;
+  }
+  return false;
 }
 
 function movedRegionOrder(

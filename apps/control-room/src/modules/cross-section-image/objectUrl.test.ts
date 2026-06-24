@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createObjectUrl, revokeObjectUrl, type ObjectUrlApi } from "./objectUrl";
+import {
+  createObjectUrl,
+  createObjectUrlEffect,
+  revokeObjectUrl,
+  type ObjectUrlApi,
+} from "./objectUrl";
 
 describe("cross-section image object URL helpers", () => {
   it("creates a typed blob URL from PNG bytes", async () => {
@@ -40,6 +45,47 @@ describe("cross-section image object URL helpers", () => {
     expect(objectUrlApi.revokeObjectURL).toHaveBeenCalledTimes(1);
     expect(objectUrlApi.revokeObjectURL).toHaveBeenCalledWith(
       "blob:cross-section",
+    );
+  });
+
+  it("revokes image object URLs on replacement and unmount", async () => {
+    const objectUrlApi: ObjectUrlApi = {
+      createObjectURL: vi
+        .fn()
+        .mockReturnValueOnce("blob:cross-section-first")
+        .mockReturnValueOnce("blob:cross-section-second"),
+      revokeObjectURL: vi.fn(),
+    };
+    const setUrl = vi.fn();
+
+    const cleanupFirst = createObjectUrlEffect(
+      new Uint8Array([1]).buffer,
+      "image/png",
+      setUrl,
+      objectUrlApi,
+    );
+    await Promise.resolve();
+
+    cleanupFirst();
+    const cleanupSecond = createObjectUrlEffect(
+      new Uint8Array([2]).buffer,
+      "image/png",
+      setUrl,
+      objectUrlApi,
+    );
+    await Promise.resolve();
+    cleanupSecond();
+
+    expect(setUrl).toHaveBeenCalledWith("blob:cross-section-first");
+    expect(setUrl).toHaveBeenCalledWith("blob:cross-section-second");
+    expect(objectUrlApi.revokeObjectURL).toHaveBeenCalledTimes(2);
+    expect(objectUrlApi.revokeObjectURL).toHaveBeenNthCalledWith(
+      1,
+      "blob:cross-section-first",
+    );
+    expect(objectUrlApi.revokeObjectURL).toHaveBeenNthCalledWith(
+      2,
+      "blob:cross-section-second",
     );
   });
 });

@@ -14,6 +14,7 @@ import {
   resolveHysteresisStepViewportTarget,
   resolveViewport3DSelectionBounds,
   targetForFdmDomain,
+  targetForMeshPart,
 } from "./viewport3DTargets";
 
 function fieldVectorResourceRef(
@@ -27,9 +28,23 @@ function fieldVectorResourceRef(
 describe("viewport3DTargets", () => {
   it("maps the FDM structured domain to a stable object visualization target", () => {
     expect(targetForFdmDomain("current")).toEqual({
-      id: "current",
+      id: "object:current",
       kind: "object",
       label: "current",
+    });
+  });
+
+  it("maps mesh parts with object ownership to canonical object visualization targets", () => {
+    expect(
+      targetForMeshPart({
+        id: "mesh-part:free-layer",
+        label: "Free layer",
+        object_id: "free-layer",
+      } as Parameters<typeof targetForMeshPart>[0]),
+    ).toEqual({
+      id: "object:free-layer",
+      kind: "object",
+      label: "Free layer",
     });
   });
 

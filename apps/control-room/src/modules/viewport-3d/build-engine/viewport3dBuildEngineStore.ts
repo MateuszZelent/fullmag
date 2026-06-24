@@ -1,20 +1,29 @@
 import type {
+  Viewport3DBuildFallbackSnapshot,
+  Viewport3DBuildFallbackStateInput,
   Viewport3DBuildEngineSnapshot,
   Viewport3DBuildJobKey,
   Viewport3DBuildJobSnapshot,
+  Viewport3DBuildLane,
 } from "./viewport3dBuildEngineTypes";
 
 export interface Viewport3DBuildEngineStore {
   getSnapshot: () => Viewport3DBuildEngineSnapshot;
+  publishFallbackState: (fallback: Viewport3DBuildFallbackStateInput) => void;
   publishJobState: (job: Viewport3DBuildJobSnapshot) => void;
   subscribe: (listener: () => void) => () => void;
 }
 
 const EMPTY_VIEWPORT_3D_BUILD_ENGINE_SNAPSHOT: Viewport3DBuildEngineSnapshot = {
+  fallbacks: [],
   jobs: [],
 };
 
 export function createViewport3DBuildEngineStore(): Viewport3DBuildEngineStore {
+  const fallbacksByLane = new Map<
+    Viewport3DBuildLane,
+    Viewport3DBuildFallbackSnapshot
+  >();
   const jobsByKey = new Map<Viewport3DBuildJobKey, Viewport3DBuildJobSnapshot>();
   const listeners = new Set<() => void>();
   let snapshot = EMPTY_VIEWPORT_3D_BUILD_ENGINE_SNAPSHOT;
@@ -26,18 +35,23 @@ export function createViewport3DBuildEngineStore(): Viewport3DBuildEngineStore {
     }
 
     jobsByKey.set(job.key, job);
-    snapshot = {
-      jobs: Array.from(jobsByKey.values()).sort((left, right) =>
-        left.key.localeCompare(right.key),
-      ),
-    };
-    for (const listener of listeners) {
-      listener();
-    }
+    rebuildSnapshotAndNotify();
+  }
+
+  function publishFallbackState(
+    fallback: Viewport3DBuildFallbackStateInput,
+  ): void {
+    const previous = fallbacksByLane.get(fallback.lane);
+    fallbacksByLane.set(fallback.lane, {
+      ...fallback,
+      count: (previous?.count ?? 0) + 1,
+    });
+    rebuildSnapshotAndNotify();
   }
 
   return {
     getSnapshot: () => snapshot,
+    publishFallbackState,
     publishJobState,
     subscribe: (listener) => {
       listeners.add(listener);
@@ -46,6 +60,20 @@ export function createViewport3DBuildEngineStore(): Viewport3DBuildEngineStore {
       };
     },
   };
+
+  function rebuildSnapshotAndNotify(): void {
+    snapshot = {
+      fallbacks: Array.from(fallbacksByLane.values()).sort((left, right) =>
+        left.lane.localeCompare(right.lane),
+      ),
+      jobs: Array.from(jobsByKey.values()).sort((left, right) =>
+        left.key.localeCompare(right.key),
+      ),
+    };
+    for (const listener of listeners) {
+      listener();
+    }
+  }
 }
 
 function areJobSnapshotsEqual(
@@ -60,4 +88,3 @@ function areJobSnapshotsEqual(
     left.state === right.state
   );
 }
-

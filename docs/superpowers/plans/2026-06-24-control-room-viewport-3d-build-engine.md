@@ -455,7 +455,7 @@ Steps:
 - [x] Implement generic worker pool leases with max pool size and active job counts.
 - [x] Add pool tests for max two vector workers, lease release, dispose and idle termination.
 - [x] Add explicit fallback diagnostic when Worker is unavailable.
-- [ ] Add user-facing fallback state snapshot if a worker lane permanently falls back.
+- [x] Add user-facing fallback state snapshot if a worker lane permanently falls back.
 - [x] Add diagnostics for `queuedAt`, `startedAt`, `finishedAt`, `abortedAt`, `fallbackReason`.
 
 Core scheduler contract:
@@ -564,13 +564,13 @@ Steps:
 - [x] Identify current topology-index derivation points.
 - [x] Move topology-index build to `topology-index` lane.
 - [x] Add key tests proving field revision changes do not rebuild topology.
-- [ ] Move region overlay face/group derivation to `region-overlay` lane where it is currently main-thread heavy.
+- [x] Move region overlay face/group derivation to `region-overlay` lane where it is currently main-thread heavy.
 - [x] Extract mesh-backed region overlay build model and worker wrapper under `region-overlays/`.
 - [x] Route `RegionMeshOverlayLayer` through the region overlay build-model boundary.
-- [ ] Cache topology indices by topology revision and target registry revision.
-- [ ] Cache region overlays by topology revision, region revision and overlay display mode.
+- [x] Cache topology indices by topology revision and target registry revision.
+- [x] Cache region overlays by topology revision, region revision and overlay display mode.
 - [x] Cache mesh-backed region overlay geometry buffers by topology object and resolved region/part selection with bounded eviction.
-- [ ] Preserve authored primitive overlays while realized mesh overlays build when semantically valid.
+- [x] Preserve authored primitive overlays while realized mesh overlays build when semantically valid.
 - [x] Add diagnostics for topology index build count, bytes, queue wait and adoption.
 
 Acceptance:
@@ -601,13 +601,17 @@ Steps:
 - [x] Key color buffers by topology revision, field revision, quantity, component, color map, range, target and sampling.
 - [x] Reuse topology/cache handles across field color rebuilds.
 - [x] Use backend-provided stats when available; compute stats in worker only when absent.
+- [x] Route FEM magnetic-only field colors through mapped worker targets when topology also contains airbox nodes, so mapped scalar colors do not fall back to synchronous render-model builds.
+- [x] Keep large scalar color modes out of `buildViewport3DFieldRenderModel` when a worker target is available; merge the worker result into the model when ready.
 - [x] Send resulting buffers to GPU upload manager, not direct layer adoption.
+  - [x] Route scalar shader attributes (`fmScalarValue`, `fmVectorValue`, complex values) through the frame-budgeted upload manager with stale-visible material adoption instead of synchronous layer-side buffer copies.
 
 Acceptance:
 
 - field-color update cannot produce multi-second React/R3F render windows;
 - color quality and range semantics match current visual output;
 - topology is not rebuilt for color-only changes.
+- FEM shared-domain fields whose samples cover only magnetic nodes are treated as mapped color targets, not as unsupported full-domain mismatches.
 
 ### Phase 7: GPU Upload Manager
 
@@ -617,6 +621,24 @@ Files:
 
 - Create: `apps/control-room/src/modules/viewport-3d/build-engine/gpu/viewport3dGpuUploadTypes.ts`
 - Create: `apps/control-room/src/modules/viewport-3d/build-engine/gpu/viewport3dGpuUploadManager.ts`
+- Create/complete: `apps/control-room/src/modules/viewport-3d/build-engine/gpu/viewport3dGpuUploadDiagnostics.ts`
+
+Steps:
+
+- [x] Add frame-budgeted upload tickets with max frame budget, byte budget and item budget.
+- [x] Route scalar shader attribute uploads through GPU upload manager.
+- [x] Route topology/region overlay geometry adoption through GPU upload manager where implemented.
+- [x] Route vector glyph matrix/color adoption through GPU upload manager.
+- [x] Export GPU upload diagnostics into Diagnostic Recorder artifacts as `*-upload` build lanes.
+- [x] Report max per-frame upload time separately from total ticket wall time, so long asynchronous waits are not misclassified as main-thread freezes.
+- [ ] Replace remaining legacy `performance.measure` wall-time labels such as `uploadVectorGlyphMatrices` with phase-specific records or remove them from suspect ranking.
+
+Current diagnostic note:
+
+- Latest CofeB artifact: `.fullmag/reports/cofeb-rings-relax-diagnostics/browser/2026-06-24T19-44-15-216Z-viewport-3d`.
+- Field-color upload max per-frame time is about `0.5 ms`; vector glyph matrix upload max per-frame time is about `1.9 ms`.
+- Field-color build and region-overlay build still have long wall times, but they are no longer synchronous render-model builds.
+- The remaining user-visible freeze includes a large main-thread long task with insufficient call-stack attribution; future diagnostic work must capture real main-thread script attribution or a non-empty Chromium trace.
 - Create: `apps/control-room/src/modules/viewport-3d/build-engine/gpu/viewport3dGpuUploadDiagnostics.ts`
 - Test: `apps/control-room/src/modules/viewport-3d/build-engine/gpu/viewport3dGpuUploadManager.test.ts`
 
@@ -632,6 +654,10 @@ Steps:
 - [x] Integrate vector glyph uploads first.
 - [x] Integrate field color uploads next.
 - [ ] Integrate topology/overlay uploads where applicable.
+  - [x] Route realized region-overlay surface/edge geometry adoption through the shared GPU upload manager instead of render-time `useMemo`.
+  - [x] Route mesh-part surface, wireframe and point geometry adoption through the shared GPU upload manager instead of render-time `useMemo`.
+  - [x] Route fallback topology surface, wireframe and point geometry adoption through the shared GPU upload manager instead of render-time `useMemo`.
+  - [x] Route airbox mesh-part surface, wireframe and point geometry adoption through the shared GPU upload manager instead of render-time `useMemo`.
 
 Acceptance:
 
@@ -656,10 +682,17 @@ Files:
 Steps:
 
 - [ ] Audit each 3D layer for large `useMemo`, large typed array creation and render-time loops.
+  - [x] Add a source-level guard for realized region-overlay geometry adoption outside render-time `useMemo`.
+  - [x] Add a source-level guard for mesh-part topology geometry adoption outside render-time `useMemo`.
+  - [x] Add a source-level guard for fallback topology geometry adoption outside render-time `useMemo`.
+  - [x] Add a source-level guard for airbox mesh-part topology geometry adoption outside render-time `useMemo`.
+- [x] Move fallback topology and mesh-part point rendering to prepared topology node indices so R3F layers no longer compact point positions in render.
+- [x] Move fallback topology surface wireframe edge derivation to the topology-index contract so the fallback layer consumes prepared edge indices.
 - [ ] Move heavy derivation to build lanes.
 - [ ] Replace large React state with refs, cache handles or external-store snapshots.
 - [ ] Ensure cleanup releases cache refs and upload tickets.
 - [ ] Ensure material/uniform-only changes avoid geometry rebuilds.
+  - [x] Keep scalar shader material on the last visible attribute buffer until the new color-mode attributes are uploaded, preventing white/empty transitional surfaces during orientation/component switches.
 - [ ] Ensure camera-only interaction schedules no build jobs.
 - [ ] Ensure quantity switch does not recreate topology geometry.
 - [ ] Keep `CanvasLifecycleProbe` and dirty reasons accurate.
@@ -685,13 +718,14 @@ Files:
 
 Steps:
 
-- [ ] Add build-engine record type to diagnostic artifacts.
+- [x] Add build-engine record type to diagnostic artifacts.
 - [x] Add lane breakdown summary to `record-diagnostics.mjs`.
-- [ ] Add suspect sections: queue bottleneck, worker bottleneck, transfer bottleneck, upload bottleneck, React rerender bottleneck, resource/decode bottleneck, GPU-driver suspicion.
-- [ ] Add visible stale revision summary.
-- [ ] Add worker pool status to diagnostic dialog/tools UI.
-- [ ] Keep UI lightweight: no live charts that create their own sampling overhead.
-- [ ] Bound diagnostic log memory and record dropped-event counts.
+- [x] Add suspect sections: queue bottleneck, worker bottleneck, transfer bottleneck, upload bottleneck, React rerender bottleneck, resource/decode bottleneck, GPU-driver suspicion.
+- [x] Add visible stale revision summary.
+- [x] Add worker pool status to diagnostic dialog/tools UI.
+- [x] Show fallback counts and fallback reasons per build lane in the Diagnostic Recorder Build Engine panel.
+- [x] Keep UI lightweight: no live charts that create their own sampling overhead.
+- [x] Bound diagnostic log memory and record dropped-event counts.
 
 Acceptance:
 
@@ -746,10 +780,13 @@ Steps:
 
 - [ ] Add stress loop: mount 3D, load field, switch quantities, switch 3D/cross-section/plots, select/clear objects, unmount.
 - [ ] Assert workers terminate after idle/unmount.
+  - [x] Add optional worker-pool idle timeout with owner cleanup callback and configure the vector glyph worker pool to terminate idle workers without leaking client-side event listeners.
 - [ ] Assert WebGL geometries/materials/textures return to expected baseline.
 - [ ] Assert cache entries release references after layer unmount.
 - [ ] Assert object URLs are revoked where binary/image resources are used.
+  - [x] Add tested cross-section image object URL lifecycle helper and route the image module through it so replacement/unmount revokes generated blob URLs.
 - [ ] Assert no active 3D resource hooks remain when non-3D center tab is active.
+  - [x] Add layout-driven inactive-tab pause for viewport-3d-exclusive resource keys so non-3D center tabs abort/block 3D field-vector, topology, manifest and quality-data resource loads.
 
 Acceptance:
 

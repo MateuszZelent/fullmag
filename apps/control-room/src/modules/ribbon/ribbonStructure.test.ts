@@ -423,7 +423,7 @@ describe("ribbon structure", () => {
     await runRibbonNode(vectorAlphaNode, 48, commandContext);
     await runRibbonNode(wireframeOpacityNode, 64, commandContext);
 
-    expect(visualization.getSettings({ id: "free-layer", kind: "object" }))
+    expect(visualization.getSettings({ id: "object:free-layer", kind: "object" }))
       .toMatchObject({
         boundsVisible: true,
         shaderColorMode: "monochrome",
@@ -477,7 +477,7 @@ describe("ribbon structure", () => {
       visualization,
     });
 
-    expect(visualization.getSettings({ id: "free-layer", kind: "object" }))
+    expect(visualization.getSettings({ id: "object:free-layer", kind: "object" }))
       .toMatchObject({
         shaderColorMode: "monochrome",
         shaderMonoColor: "#336699",
@@ -544,7 +544,7 @@ describe("ribbon structure", () => {
           {
             display: { geometry_scope: "surface" },
             scope: "object",
-            scope_id: "free-layer",
+            scope_id: "object:free-layer",
           },
         ],
       },
@@ -601,7 +601,7 @@ describe("ribbon structure", () => {
           {
             quantity: { active_quantity_id: "H_eff" },
             scope: "object",
-            scope_id: "free-layer",
+            scope_id: "object:free-layer",
           },
         ],
       },

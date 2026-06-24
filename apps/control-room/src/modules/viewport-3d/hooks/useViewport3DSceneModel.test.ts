@@ -22,6 +22,7 @@ import {
   resolveViewport3DPrimaryFieldRenderOptions,
   resolveViewport3DPrimaryFieldVectorEnabled,
   resolveViewport3DPrimaryFieldQuery,
+  resolveViewport3DFieldRenderModelBuildOptions,
   resolveViewport3DSelectedSnapshotId,
   resolveViewport3DSelectedSnapshotQuery,
   filterViewport3DMeshBackedRegionOverlays,
@@ -110,6 +111,81 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("magneticPartFieldQueries.size > 0");
     expect(source).toContain("targetQuantityFieldQueries.size > 0");
     expect(source).toContain("fieldVectorEnabled,");
+  });
+
+  it("keeps large full-domain scalar color builds out of the synchronous render model", () => {
+    const options = resolveViewport3DFieldRenderModelBuildOptions({
+      complexFieldVector: null,
+      fieldRenderOptions: {
+        partVectorBudgets: new Map([["part-a", 256]]),
+        scalarColorModes: new Set(["x"]),
+        scalarColorsVisible: true,
+      },
+      fieldVector: { pointCount: 75_000 } as never,
+      topology: { nodeCount: 75_000 } as never,
+    });
+
+    expect(options.partVectorBudgets).toEqual(new Map([["part-a", 256]]));
+    expect(options.scalarColorModes).toEqual(new Set());
+    expect(options.scalarColorsVisible).toBe(false);
+  });
+
+  it("keeps large mapped scalar color builds out of the synchronous render model", () => {
+    const options = resolveViewport3DFieldRenderModelBuildOptions({
+      complexFieldVector: null,
+      fieldRenderOptions: {
+        scalarColorModes: new Set(["orientation"]),
+        scalarColorsVisible: true,
+      },
+      fieldVector: { pointCount: 50_001 } as never,
+      topology: {
+        magneticParts: [
+          {
+            part: {
+              id: "cofeb",
+              nodeCount: 50_001,
+              nodeStart: 10,
+            },
+          },
+        ],
+        nodeCount: 75_000,
+      } as never,
+    });
+
+    expect(options.scalarColorModes).toEqual(new Set());
+    expect(options.scalarColorsVisible).toBe(false);
+  });
+
+  it("keeps synchronous scalar colors for small, unmapped, and complex field cases", () => {
+    const fieldRenderOptions = {
+      scalarColorModes: new Set(["x"]),
+      scalarColorsVisible: true,
+    };
+
+    expect(
+      resolveViewport3DFieldRenderModelBuildOptions({
+        complexFieldVector: null,
+        fieldRenderOptions,
+        fieldVector: { pointCount: 10_000 } as never,
+        topology: { nodeCount: 10_000 } as never,
+      }),
+    ).toBe(fieldRenderOptions);
+    expect(
+      resolveViewport3DFieldRenderModelBuildOptions({
+        complexFieldVector: null,
+        fieldRenderOptions,
+        fieldVector: { pointCount: 50_000 } as never,
+        topology: { magneticParts: [], nodeCount: 75_000 } as never,
+      }),
+    ).toBe(fieldRenderOptions);
+    expect(
+      resolveViewport3DFieldRenderModelBuildOptions({
+        complexFieldVector: {},
+        fieldRenderOptions,
+        fieldVector: { pointCount: 75_000 } as never,
+        topology: { nodeCount: 75_000 } as never,
+      }),
+    ).toBe(fieldRenderOptions);
   });
 
   it("passes the resolved FDM target field vector to the cuboid layer", () => {
@@ -1089,7 +1165,7 @@ describe("useViewport3DSceneModel", () => {
       kind: "region" as const,
     };
     visualization.patchTarget(
-      { id: "film", kind: "object" },
+      { id: "object:film", kind: "object" },
       {
         shaderVisible: false,
         vectorsVisible: true,
@@ -1608,16 +1684,20 @@ describe("useViewport3DSceneModel", () => {
     ).toBe(4e-6);
   });
 
-  it("builds the FDM instance model once in the scene model without coupling solid rendering to field revisions", () => {
+  it("routes FDM cuboid model builds through the build-engine lane without camera coupling", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
 
     expect(source).toContain("const fdmInstanceModelEnabled = Boolean(");
     expect(source).toContain("const fdmInstanceModelNeedsFieldVector =");
     expect(source).toContain("const fdmInstanceModelFieldVector = fdmInstanceModelNeedsFieldVector");
-    expect(source).toContain("const fdmInstanceModel = useMemo<");
-    expect(source).toContain("if (!fdmInstanceModelEnabled) return undefined;");
-    expect(source).toContain("fieldVector: fdmInstanceModelFieldVector");
+    expect(source).toContain("buildViewport3DFdmCuboidJobKey");
+    expect(source).toContain("useFdmCuboidBuildResult");
+    expect(source).toContain("modelFieldVector: fdmInstanceModelFieldVector");
+    expect(source).toContain("fdmBuildFieldRevision");
     expect(source).toContain("fdmInstanceModel: fdmInstanceModel");
+    expect(source).toContain("fdmVectorSegments");
+    expect(source).not.toContain("const fdmInstanceModel = useMemo<");
+    expect(source).not.toContain("buildFdmCuboidInstanceModel(");
     expect(source).not.toContain("const fdmSurfaceInstanceModel");
   });
 });

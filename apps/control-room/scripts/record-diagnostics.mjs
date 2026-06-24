@@ -367,6 +367,10 @@ function mergePlaywrightStreams(
 
 async function writeArtifactDirectory(artifact, { artifactDir, traceEvents }) {
   const viewport3dBuildSummary = buildViewport3DBuildSummary(artifact);
+  const viewport3dVisibleRevisionSummary =
+    buildViewport3DVisibleRevisionSummary(artifact);
+  artifact.viewport3dBuildSummary = viewport3dBuildSummary;
+  artifact.viewport3dVisibleRevisionSummary = viewport3dVisibleRevisionSummary;
   if (viewport3dBuildSummary.lanes.length > 0) {
     artifact.suspectReport.text += formatViewport3DBuildSummaryText(
       viewport3dBuildSummary,
@@ -379,6 +383,10 @@ async function writeArtifactDirectory(artifact, { artifactDir, traceEvents }) {
     path.join(artifactDir, "viewport3d-build-summary.json"),
     viewport3dBuildSummary,
   );
+  await writeJson(
+    path.join(artifactDir, "viewport3d-visible-revision-summary.json"),
+    viewport3dVisibleRevisionSummary,
+  );
   await writeFile(
     path.join(artifactDir, "suspect-report.md"),
     artifact.suspectReport.text,
@@ -388,6 +396,14 @@ async function writeArtifactDirectory(artifact, { artifactDir, traceEvents }) {
   await writeNdjson(path.join(artifactDir, "requests.ndjson"), artifact.streams.requests);
   await writeNdjson(path.join(artifactDir, "resources.ndjson"), artifact.streams.resources);
   await writeNdjson(path.join(artifactDir, "memory.ndjson"), artifact.streams.memory);
+  await writeNdjson(
+    path.join(artifactDir, "viewport-3d-build.ndjson"),
+    artifact.streams.viewport3dBuild ?? [],
+  );
+  await writeNdjson(
+    path.join(artifactDir, "viewport-3d-worker-pools.ndjson"),
+    artifact.streams.viewport3dWorkerPools ?? [],
+  );
   await writeNdjson(path.join(artifactDir, "viewport-3d.ndjson"), artifact.streams.viewport3d);
   await writeNdjson(path.join(artifactDir, "console.ndjson"), artifact.streams.console);
   await writeNdjson(path.join(artifactDir, "react.ndjson"), artifact.streams.react);
@@ -471,13 +487,13 @@ function topSuspectsText(artifact) {
 
 function buildViewport3DBuildSummary(artifact) {
   const byLane = new Map();
-  for (const record of artifact.streams.performance ?? []) {
-    if (!record.name?.startsWith(VIEWPORT_3D_BUILD_ENGINE_PREFIX)) continue;
+  for (const record of viewport3DBuildRecords(artifact)) {
     const lane =
       stringDetail(record, "buildLane") ??
       record.name.slice(VIEWPORT_3D_BUILD_ENGINE_PREFIX.length);
     const summary = ensureViewport3DBuildLaneSummary(byLane, lane);
-    const state = stringDetail(record, "state");
+    const state =
+      stringDetail(record, "buildState") ?? stringDetail(record, "state");
     const fallbackReason = stringDetail(record, "fallbackReason");
 
     summary.jobs += 1;
@@ -530,6 +546,63 @@ function buildViewport3DBuildSummary(artifact) {
   };
 }
 
+function buildViewport3DVisibleRevisionSummary(artifact) {
+  const summary = {
+    fieldRevision: null,
+    invalidSuppressedTargets: [],
+    staleCompatibleTargets: [],
+    stalePhysicalTargets: [],
+    targetVisualizationRevision: null,
+    topologyRevision: null,
+  };
+  for (const record of viewport3DRevisionRecords(artifact)) {
+    summary.topologyRevision =
+      stringDetail(record, "topologyRevision") ?? summary.topologyRevision;
+    summary.fieldRevision =
+      stringDetail(record, "fieldRevision") ?? summary.fieldRevision;
+    summary.targetVisualizationRevision =
+      stringDetail(record, "targetVisualizationRevision") ??
+      summary.targetVisualizationRevision;
+    const visibleState = stringDetail(record, "visibleState");
+    if (!visibleState) continue;
+    const target = {
+      displayedRevision: stringDetail(record, "displayedRevision"),
+      lane: stringDetail(record, "buildLane"),
+      targetKey: stringDetail(record, "targetKey"),
+      targetRevision: stringDetail(record, "targetRevision"),
+    };
+    if (visibleState === "stale-physical") {
+      pushVisibleRevisionTarget(summary.stalePhysicalTargets, target);
+    } else if (visibleState === "stale-compatible") {
+      pushVisibleRevisionTarget(summary.staleCompatibleTargets, target);
+    } else if (
+      visibleState === "invalid" ||
+      visibleState === "invalid-suppressed"
+    ) {
+      pushVisibleRevisionTarget(summary.invalidSuppressedTargets, target);
+    }
+  }
+  return summary;
+}
+
+function viewport3DBuildRecords(artifact) {
+  return [
+    ...(artifact.streams.viewport3dBuild ?? []),
+    ...(artifact.streams.performance ?? []).filter((record) =>
+      record.name?.startsWith(VIEWPORT_3D_BUILD_ENGINE_PREFIX),
+    ),
+  ];
+}
+
+function viewport3DRevisionRecords(artifact) {
+  return [
+    ...(artifact.streams.viewport3dBuild ?? []),
+    ...(artifact.streams.viewport3d ?? []),
+    ...(artifact.streams.performance ?? []),
+    ...(artifact.streams.timeline ?? []),
+  ];
+}
+
 function ensureViewport3DBuildLaneSummary(byLane, lane) {
   const existing = byLane.get(lane);
   if (existing) return existing;
@@ -577,17 +650,51 @@ function formatViewport3DBuildSummaryText(summary) {
 }
 
 function numericDetail(record, key) {
+  const direct = record[key];
+  if (typeof direct === "number" && Number.isFinite(direct)) return direct;
   const value = record.detail?.[key];
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 function stringDetail(record, key) {
+  const direct = record[key];
+  if (typeof direct === "string" && direct.length > 0) return direct;
   const value = record.detail?.[key];
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
 function booleanDetail(record, key) {
+  const direct = record[key];
+  if (typeof direct === "boolean") return direct;
   return record.detail?.[key] === true;
+}
+
+function pushVisibleRevisionTarget(targets, target) {
+  if (targets.length >= 80) return;
+  const key = [
+    target.lane,
+    target.targetKey,
+    target.displayedRevision,
+    target.targetRevision,
+  ]
+    .map((value) => value ?? "null")
+    .join(":");
+  if (
+    targets.some(
+      (existing) =>
+        [
+          existing.lane,
+          existing.targetKey,
+          existing.displayedRevision,
+          existing.targetRevision,
+        ]
+          .map((value) => value ?? "null")
+          .join(":") === key,
+    )
+  ) {
+    return;
+  }
+  targets.push(target);
 }
 
 async function waitForInteractiveStop() {

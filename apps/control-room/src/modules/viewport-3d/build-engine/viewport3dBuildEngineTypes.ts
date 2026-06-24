@@ -2,6 +2,7 @@ export type Viewport3DBuildLane =
   | "binary-decode"
   | "bounds-hud"
   | "field-color"
+  | "fdm-cuboid"
   | "gpu-upload"
   | "mesh-quality"
   | "region-overlay"
@@ -46,7 +47,9 @@ export interface Viewport3DBuildRequest {
 }
 
 export interface Viewport3DBuildRunnerContext {
+  readonly recordMainAdopt: (durationMs: number) => void;
   readonly recordFallback: (reason: string) => void;
+  readonly recordTransfer: (durationMs: number) => void;
   readonly signal: AbortSignal;
 }
 
@@ -58,6 +61,7 @@ export type Viewport3DBuildRunner<TResult> = (
 export interface Viewport3DBuildScheduleOptions {
   readonly latestWins?: boolean;
   readonly onDiagnosticRecord?: (record: Viewport3DBuildDiagnosticRecord) => void;
+  readonly onFallbackState?: (snapshot: Viewport3DBuildFallbackSnapshot) => void;
   readonly onJobState?: (snapshot: Viewport3DBuildJobSnapshot) => void;
   readonly signal?: AbortSignal;
 }
@@ -70,7 +74,21 @@ export interface Viewport3DBuildJobSnapshot {
   readonly state: Viewport3DBuildState;
 }
 
+export interface Viewport3DBuildFallbackStateInput {
+  readonly key: Viewport3DBuildJobKey;
+  readonly lane: Viewport3DBuildLane;
+  readonly reason: string;
+  readonly revisionSummary: string;
+  readonly timestampMs: number;
+}
+
+export interface Viewport3DBuildFallbackSnapshot
+  extends Viewport3DBuildFallbackStateInput {
+  readonly count: number;
+}
+
 export interface Viewport3DBuildEngineSnapshot {
+  readonly fallbacks: readonly Viewport3DBuildFallbackSnapshot[];
   readonly jobs: readonly Viewport3DBuildJobSnapshot[];
 }
 

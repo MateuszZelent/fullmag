@@ -7,6 +7,7 @@ import {
   DEFAULT_AIRBOX_VISUALIZATION,
   DEFAULT_OBJECT_VISUALIZATION,
   ObjectVisualizationController,
+  mergeVisualizationStateTargetOverride,
   renderModePatch,
   resolveAirboxVisualizationSettingsFromState,
   resolveEffectiveVisualizationSettings,
@@ -223,7 +224,27 @@ describe("ObjectVisualizationController", () => {
         ref: null,
       }),
     ).toEqual({
-      id: "free-layer",
+      id: "object:free-layer",
+      kind: "object",
+      label: "Free layer",
+    });
+
+    expect(
+      resolveVisualizationTargetFromSelection({
+        kind: "object.visualization",
+        label: "Free layer",
+        nodeId: "model:object:free-layer:visualization",
+        objectId: "free-layer",
+        ref: {
+          kind: "object.visualization",
+          nodeId: "model:object:free-layer:visualization",
+          objectId: "free-layer",
+          type: "scene-object",
+          visualizationTargetId: "object:free-layer",
+        },
+      }),
+    ).toEqual({
+      id: "object:free-layer",
       kind: "object",
       label: "Free layer",
     });
@@ -760,6 +781,42 @@ describe("ObjectVisualizationController", () => {
         },
       },
     });
+  });
+
+  it("merges legacy raw object overrides into canonical object targets", () => {
+    expect(
+      mergeVisualizationStateTargetOverride(
+        [
+          {
+            scope: "object",
+            scope_id: "free-layer",
+            style: {
+              surface_color_source: "solid",
+              surface_mono_color: "#ffffff",
+            },
+          },
+        ],
+        { id: "object:free-layer", kind: "object" },
+        {
+          shaderMonoColor: "#00ffaa",
+          vectorsVisible: true,
+        },
+      ),
+    ).toEqual([
+      {
+        display: {
+          vectors: {
+            visible: true,
+          },
+        },
+        scope: "object",
+        scope_id: "object:free-layer",
+        style: {
+          surface_color_source: "solid",
+          surface_mono_color: "#00ffaa",
+        },
+      },
+    ]);
   });
 
   it("applies global object display defaults before per-target overrides", () => {

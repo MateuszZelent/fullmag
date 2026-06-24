@@ -19,4 +19,11 @@ describe("DiagnosticRecorderFooterPanel", () => {
     expect(source).toContain("Open");
     expect(source).toContain("Export");
   });
+
+  it("keeps export filename timestamp generation outside the JSX render path", () => {
+    expect(source).toContain("handleExportClick");
+    expect(source).not.toContain(
+      "filename: `fullmag-diagnostics-${Date.now()}-${snapshot.scenario}.json`",
+    );
+  });
 });

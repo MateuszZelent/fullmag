@@ -20,7 +20,7 @@ import {
 import { useCrossSectionWorkspaceSelector } from "@/kernel/workspace/useCrossSectionWorkspace";
 import { Button } from "@/shared/ui/Button";
 
-import { createObjectUrl, revokeObjectUrl } from "./objectUrl";
+import { createObjectUrlEffect } from "./objectUrl";
 
 const FALLBACK_QUERY: CrossSectionImageQuery = {
   metric: "skewness",
@@ -227,15 +227,7 @@ function useObjectUrl(data: ArrayBuffer | null, contentType: string): string | n
   const [url, setUrl] = useState<string | null>(null);
 
   useEffect(() => {
-    let disposed = false;
-    const nextUrl = createObjectUrl(data, contentType);
-    queueMicrotask(() => {
-      if (!disposed) setUrl(nextUrl);
-    });
-    return () => {
-      disposed = true;
-      revokeObjectUrl(nextUrl);
-    };
+    return createObjectUrlEffect(data, contentType, setUrl);
   }, [contentType, data]);
 
   return url;

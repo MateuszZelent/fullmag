@@ -50,6 +50,8 @@ export interface DiagnosticRecorderControllerOptions {
 
 type DiagnosticStreamName = keyof DiagnosticArtifactV1["streams"];
 
+const DIAGNOSTIC_DETAIL_PART_PATTERN = /^([^=]+)=(.*)$/;
+
 const EMPTY_STREAMS: DiagnosticArtifactV1["streams"] = {
   browserMetrics: [],
   console: [],
@@ -59,6 +61,8 @@ const EMPTY_STREAMS: DiagnosticArtifactV1["streams"] = {
   requests: [],
   resources: [],
   timeline: [],
+  viewport3dBuild: [],
+  viewport3dWorkerPools: [],
   viewport3d: [],
 };
 
@@ -231,9 +235,8 @@ export class DiagnosticRecorderController {
 
   private evictOneNonCriticalRecord(): boolean {
     for (const stream of Object.values(this.streams) as DiagnosticAnyRecord[][]) {
-      const index = stream.findIndex((record) => record.severity !== "critical");
-      if (index >= 0) {
-        const [removed] = stream.splice(index, 1);
+      const removed = shiftFirstNonCriticalRecord(stream);
+      if (removed) {
         this.estimatedByteLength = Math.max(
           0,
           this.estimatedByteLength - estimateRecordBytes(removed),
@@ -288,6 +291,17 @@ export class DiagnosticRecorderController {
   }
 }
 
+function shiftFirstNonCriticalRecord(
+  stream: DiagnosticAnyRecord[],
+): DiagnosticAnyRecord | null {
+  for (let index = 0; index < stream.length; index += 1) {
+    if (stream[index]?.severity === "critical") continue;
+    const [removed] = stream.splice(index, 1);
+    return removed ?? null;
+  }
+  return null;
+}
+
 function normalizeRecord(
   record: DiagnosticAnyRecord,
   id: () => string,
@@ -309,6 +323,10 @@ function resolveStreamName(record: DiagnosticAnyRecord): DiagnosticStreamName {
   if ("componentId" in record) return "react";
   if ("method" in record && "path" in record) return "requests";
   if ("cacheAction" in record) return "resources";
+  if (record.kind === "viewport-3d-build-job") return "viewport3dBuild";
+  if (record.kind === "viewport-3d-worker-pool") {
+    return "viewport3dWorkerPools";
+  }
   if ("geometries" in record || record.kind === "viewport-frame-window") {
     return "viewport3d";
   }
@@ -394,10 +412,10 @@ function parseDiagnosticDetail(detail: string | null): DiagnosticRecordDetail {
   if (!detail) return {};
   const parsed: DiagnosticRecordDetail = {};
   for (const part of detail.split(";")) {
-    const separator = part.indexOf("=");
-    if (separator <= 0) continue;
-    const key = part.slice(0, separator).trim();
-    const rawValue = part.slice(separator + 1).trim();
+    const match = DIAGNOSTIC_DETAIL_PART_PATTERN.exec(part);
+    if (!match) continue;
+    const key = match[1].trim();
+    const rawValue = match[2].trim();
     if (!key) continue;
     parsed[key] = parseDiagnosticScalar(rawValue);
   }
@@ -517,6 +535,8 @@ function cloneStreams(
     requests: [...streams.requests],
     resources: [...streams.resources],
     timeline: [...streams.timeline],
+    viewport3dBuild: [...streams.viewport3dBuild],
+    viewport3dWorkerPools: [...streams.viewport3dWorkerPools],
     viewport3d: [...streams.viewport3d],
   };
 }

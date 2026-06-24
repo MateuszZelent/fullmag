@@ -1291,8 +1291,11 @@ function checkViewportPerformanceMarks() {
     "performanceTarget.measure(name, startMark, endMark)",
     "fullmag.viewport3d.buildViewport3DTopologyRenderModel",
     "fullmag.viewport3d.buildMeshQualityVertexColors",
-    "fullmag.viewport3d.buildFdmCuboidInstanceModel",
     "fullmag.viewport3d.buildViewport3DFieldRenderModel",
+  ]);
+  requireTokens(source, "useViewport3DSceneModel FDM build-engine path", [
+    "buildViewport3DFdmCuboidJobKey",
+    "useFdmCuboidBuildResult",
   ]);
 }
 
@@ -1455,7 +1458,7 @@ function checkFdmVectorSegmentCache() {
   const buildSegments = blockBetween(
     source,
     "export function buildFdmVectorSegments",
-    "export function resolveFdmVectorGlyphScale",
+    "interface FdmInspectProjectionFallbackInput",
   );
 
   requireTokens(source, "FdmCuboidLayer vector segment cache", [
@@ -1484,10 +1487,16 @@ function checkFdmCuboidSceneModelReuse() {
     "const fdmInstanceModelEnabled = Boolean(",
     "const fdmInstanceModelNeedsFieldVector =",
     "const fdmInstanceModelFieldVector = fdmInstanceModelNeedsFieldVector",
-    "const fdmInstanceModel = useMemo",
-    "fieldVector: fdmInstanceModelFieldVector",
+    "buildViewport3DFdmCuboidJobKey",
+    "useFdmCuboidBuildResult",
+    "modelFieldVector: fdmInstanceModelFieldVector",
+    "fdmVectorSegments",
     "fdmInstanceModel?.cellIndices",
     "fdmInstanceModel: fdmInstanceModel",
+  ]);
+  forbidTokens(sceneModelSource, "useViewport3DSceneModel FDM model reuse", [
+    "const fdmInstanceModel = useMemo",
+    "buildFdmCuboidInstanceModel(",
   ]);
   forbidTokens(sceneModelSource, "useViewport3DSceneModel FDM model reuse", [
     "const fdmSurfaceInstanceModel",
@@ -1495,10 +1504,15 @@ function checkFdmCuboidSceneModelReuse() {
   ]);
   requireTokens(sceneSource, "Viewport3DScene FDM model reuse", [
     "fdmInstanceModel: FdmCuboidInstanceModel | null | undefined",
+    "fdmVectorSegments: Float32Array | null",
     "instanceModel={fdmInstanceModel}",
+    "vectorSegments={fdmVectorSegments}",
   ]);
   requireTokens(layerSource, "FdmCuboidLayer precomputed instance model", [
     "instanceModel?: FdmCuboidInstanceModel | null",
+    "const model = instanceModel ?? null",
+  ]);
+  forbidTokens(layerSource, "FdmCuboidLayer precomputed instance model", [
     "instanceModel !== undefined",
   ]);
 }
@@ -1534,7 +1548,6 @@ function checkViewportSmokeComputeMetrics() {
     "PerformanceObserver",
     '"longtask"',
     "fullmag.viewport3d.buildViewport3DTopologyRenderModel",
-    "fullmag.viewport3d.buildFdmCuboidInstanceModel",
     "fullmag.viewport3d.buildViewport3DFieldRenderModel",
     "fullmag.viewport3d.buildVectorGlyphInstances",
     "fullmag.viewport3d.uploadVectorGlyphColors",

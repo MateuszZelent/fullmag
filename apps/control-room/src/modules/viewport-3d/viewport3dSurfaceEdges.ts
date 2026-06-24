@@ -4,19 +4,6 @@ import { buildSurfaceEdgeIndices } from "./viewport3dTopologyIndexModel";
 
 export { buildSurfaceEdgeIndices } from "./viewport3dTopologyIndexModel";
 
-export function buildSurfaceEdgeGeometry(
-  positions: Float32Array,
-  surfaceIndices: ArrayLike<number> | null | undefined,
-): BufferGeometry | null {
-  const edgeIndices = buildSurfaceEdgeIndices(surfaceIndices);
-  if (!edgeIndices) return null;
-
-  const geometry = new BufferGeometry();
-  geometry.setAttribute("position", new BufferAttribute(positions, 3));
-  geometry.setIndex(new BufferAttribute(edgeIndices, 1));
-  return geometry;
-}
-
 export function buildLineIndexGeometry(
   positions: Float32Array,
   lineIndices: ArrayLike<number> | null | undefined,

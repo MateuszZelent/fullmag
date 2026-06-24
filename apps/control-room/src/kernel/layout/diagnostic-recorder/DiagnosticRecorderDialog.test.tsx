@@ -22,6 +22,7 @@ describe("DiagnosticRecorderDialog", () => {
       "Requests",
       "Memory",
       "Viewport 3D",
+      "Build Engine",
       "Console",
       "Export",
     ]) {
@@ -31,5 +32,26 @@ describe("DiagnosticRecorderDialog", () => {
     expect(source).toContain("Stop");
     expect(source).toContain("Export JSON");
     expect(source).not.toContain("setInterval");
+  });
+
+  it("exposes lightweight viewport build-engine and stale revision diagnostics", () => {
+    expect(source).toContain("viewport3dBuildSummary");
+    expect(source).toContain("viewport3dVisibleRevisionSummary");
+    expect(source).toContain("BuildEngineSummary");
+    expect(source).toContain("StaleRevisionSummary");
+    expect(source).toContain("WorkerPoolSummary");
+    expect(source).toContain("viewport3dWorkerPools");
+    expect(source).toContain("Fallbacks");
+    expect(source).toContain("fallbackReasons");
+    expect(source).not.toContain("requestAnimationFrame");
+  });
+
+  it("marks live diagnostic timestamp cells as intentionally hydration-variant", () => {
+    const suppressedTimestampCells = source.match(
+      /<span role="cell" suppressHydrationWarning>/g,
+    );
+
+    expect(suppressedTimestampCells).toHaveLength(2);
+    expect(source).not.toContain("new Date(record.timestampMs)");
   });
 });

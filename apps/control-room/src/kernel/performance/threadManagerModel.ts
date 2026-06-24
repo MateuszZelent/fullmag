@@ -1,7 +1,7 @@
 import type { RequestDiagnosticEntry } from "../api/RequestDiagnosticsController";
 import type { MemoryBudgetEntry } from "./MemoryBudgetRegistry";
 
-export type ThreadManagerLane =
+type ThreadManagerLane =
   | "aggregate"
   | "main"
   | "worker-io"
@@ -501,7 +501,7 @@ function totalUnitLabel(unit: string): string {
   return unit;
 }
 
-export function formatBytes(bytes: number): string {
+function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes)) return "n/a";
   if (bytes < 1024) return `${Math.round(bytes)} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;

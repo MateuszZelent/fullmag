@@ -1443,8 +1443,8 @@ function BranchSampleTable({ branch }: { branch: EigenBranch | null }) {
 }
 
 function branchSamplesCsv(branch: EigenBranch): string {
-  const rows = [...branch.points]
-    .sort(
+  const rows = branch.points
+    .toSorted(
       (left, right) =>
         left.sampleIndex - right.sampleIndex ||
         left.rawModeIndex - right.rawModeIndex,

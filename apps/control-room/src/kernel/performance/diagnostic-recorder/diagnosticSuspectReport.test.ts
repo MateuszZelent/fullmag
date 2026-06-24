@@ -32,6 +32,8 @@ function artifact(
       requests: [],
       resources: [],
       timeline: [],
+      viewport3dBuild: [],
+      viewport3dWorkerPools: [],
       viewport3d: [],
       ...streams,
     },
@@ -41,6 +43,18 @@ function artifact(
       recordCount: 0,
       slowestRecord: null,
       warningCount: 0,
+    },
+    viewport3dBuildSummary: {
+      lanes: [],
+      totalJobs: 0,
+    },
+    viewport3dVisibleRevisionSummary: {
+      fieldRevision: null,
+      invalidSuppressedTargets: [],
+      staleCompatibleTargets: [],
+      stalePhysicalTargets: [],
+      targetVisualizationRevision: null,
+      topologyRevision: null,
     },
   };
 }
@@ -152,5 +166,67 @@ describe("buildDiagnosticSuspectReport", () => {
       ]),
     );
     expect(report.text).toContain("Top Suspects");
+  });
+
+  it("classifies viewport 3D build-engine phase bottlenecks and stale visible targets", () => {
+    const report = buildDiagnosticSuspectReport(
+      artifact({
+        viewport3dBuild: [
+          {
+            byteLength: 4096,
+            buildKey: "vector-glyph:key",
+            buildLane: "vector-glyph",
+            buildState: "ready",
+            detail: {
+              buildLane: "vector-glyph",
+              displayedRevision: "field-1",
+              targetKey: "part:__air__",
+              targetRevision: "field-2",
+              visibleState: "stale-physical",
+            },
+            displayedRevision: "field-1",
+            droppedBecauseObsolete: false,
+            droppedCount: 0,
+            durationMs: 2_000,
+            fallbackReason: null,
+            id: "build-vector",
+            inputBytes: 2048,
+            itemCount: 1200,
+            kind: "viewport-3d-build-job",
+            lane: "viewport-3d",
+            mainAdoptMs: 12,
+            mainUploadMs: 18,
+            name: "fullmag.viewport3d.build-engine.vector-glyph",
+            outputBytes: 4096,
+            queueWaitMs: 1_400,
+            revisionSummary: "topology=1 field=2",
+            severity: "warning",
+            startTimeMs: 0,
+            targetRevision: "field-2",
+            timestampMs: 2_000,
+            transferMs: 20,
+            visibleState: "stale-physical",
+            workerComputeMs: 550,
+          },
+        ],
+      }),
+      () => 2_000,
+    );
+
+    expect(report.suspects).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          detail: expect.objectContaining({ suspectCategory: "worker-queue" }),
+          reason: expect.stringContaining("queue bottleneck"),
+        }),
+        expect.objectContaining({
+          detail: expect.objectContaining({ suspectCategory: "visible-stale" }),
+          reason: expect.stringContaining("stale physical"),
+        }),
+      ]),
+    );
+    expect(report.text).toContain("## Suspect Sections");
+    expect(report.text).toContain("Queue Bottleneck");
+    expect(report.text).toContain("Visible Stale Revision");
   });
 });

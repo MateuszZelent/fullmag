@@ -4,13 +4,13 @@ import type {
 } from "../viewport3dBuildEngineTypes";
 import { selectViewport3DCacheEvictionKeys } from "./viewport3dCacheEviction";
 
-export type Viewport3DDerivedBufferState =
+type Viewport3DDerivedBufferState =
   | "invalid"
   | "ready-current"
   | "stale-compatible"
   | "stale-physical";
 
-export interface Viewport3DDerivedBufferCacheEntry<TBuffer> {
+interface Viewport3DDerivedBufferCacheEntry<TBuffer> {
   readonly buffer: TBuffer;
   readonly createdAtMs: number;
   readonly estimatedBytes: number;
@@ -24,7 +24,7 @@ export interface Viewport3DDerivedBufferCacheEntry<TBuffer> {
   readonly topologyRevision: string | null;
 }
 
-export interface Viewport3DDerivedBufferPutInput<TBuffer> {
+interface Viewport3DDerivedBufferPutInput<TBuffer> {
   readonly buffer: TBuffer;
   readonly estimatedBytes: number;
   readonly fieldRevision: string | number | null;
@@ -35,7 +35,7 @@ export interface Viewport3DDerivedBufferPutInput<TBuffer> {
   readonly topologyRevision: string | number | null;
 }
 
-export interface Viewport3DDerivedBufferResolveInput {
+interface Viewport3DDerivedBufferResolveInput {
   readonly fieldRevision: string | number | null;
   readonly groupKey: string;
   readonly key: Viewport3DBuildJobKey;
@@ -44,21 +44,21 @@ export interface Viewport3DDerivedBufferResolveInput {
   readonly topologyRevision: string | number | null;
 }
 
-export interface Viewport3DDerivedBufferResolveResult<TBuffer> {
+interface Viewport3DDerivedBufferResolveResult<TBuffer> {
   readonly displayedRevision: string | null;
   readonly entry: Viewport3DDerivedBufferCacheEntry<TBuffer> | null;
   readonly state: Viewport3DDerivedBufferState;
   readonly targetRevision: string | null;
 }
 
-export interface Viewport3DDerivedBufferCacheSnapshot<TBuffer> {
+interface Viewport3DDerivedBufferCacheSnapshot<TBuffer> {
   readonly entries: readonly Viewport3DDerivedBufferCacheEntry<TBuffer>[];
   readonly entryCount: number;
   readonly estimatedBytes: number;
   readonly retainedBytes: number;
 }
 
-export interface Viewport3DDerivedBufferEvictStaleRevisionsInput {
+interface Viewport3DDerivedBufferEvictStaleRevisionsInput {
   readonly fieldRevision: string | number | null;
   readonly groupKey: string;
   readonly lane: Viewport3DBuildLane;

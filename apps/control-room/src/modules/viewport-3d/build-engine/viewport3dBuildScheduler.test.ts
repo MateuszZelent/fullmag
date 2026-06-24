@@ -6,6 +6,7 @@ import {
 } from "./viewport3dBuildScheduler";
 import type {
   Viewport3DBuildDiagnosticRecord,
+  Viewport3DBuildFallbackSnapshot,
   Viewport3DBuildJobSnapshot,
   Viewport3DBuildRequest,
   Viewport3DBuildRunner,
@@ -223,6 +224,42 @@ describe("viewport3dBuildScheduler", () => {
     ]);
   });
 
+  it("accumulates runner-reported transfer and main adoption timings", async () => {
+    let nowMs = 0;
+    const records: Viewport3DBuildDiagnosticRecord[] = [];
+    const scheduler = createViewport3DBuildScheduler({
+      laneConcurrency: { "vector-glyph": 1 },
+      now: () => nowMs,
+      onDiagnosticRecord: (record) => records.push(record),
+    });
+    const pending = deferred<string>();
+    const runner: Viewport3DBuildRunner<string> = (_request, context) => {
+      context.recordTransfer(3);
+      context.recordTransfer(4);
+      context.recordMainAdopt(2);
+      context.recordMainAdopt(5);
+      return pending.promise;
+    };
+
+    nowMs = 10;
+    const result = scheduler.schedule(buildRequest("vector:timed"), runner);
+
+    nowMs = 40;
+    pending.resolve("ready");
+    await expect(result).resolves.toBe("ready");
+    scheduler.dispose();
+
+    expect(records).toEqual([
+      expect.objectContaining({
+        key: "vector:timed",
+        mainAdoptMs: 7,
+        state: "ready",
+        transferMs: 7,
+        workerComputeMs: 30,
+      }),
+    ]);
+  });
+
   it("records latest-wins aborts as obsolete diagnostic records", async () => {
     let nowMs = 0;
     const records: Viewport3DBuildDiagnosticRecord[] = [];
@@ -267,5 +304,53 @@ describe("viewport3dBuildScheduler", () => {
         state: "ready",
       }),
     ]);
+  });
+
+  it("publishes worker fallback state as soon as a runner falls back", async () => {
+    let nowMs = 0;
+    const fallbacks: Viewport3DBuildFallbackSnapshot[] = [];
+    const records: Viewport3DBuildDiagnosticRecord[] = [];
+    const scheduler = createViewport3DBuildScheduler({
+      laneConcurrency: { "vector-glyph": 1 },
+      now: () => nowMs,
+      onDiagnosticRecord: (record) => records.push(record),
+      onFallbackState: (snapshot) => fallbacks.push(snapshot),
+    });
+    const pending = deferred<string>();
+    const runner: Viewport3DBuildRunner<string> = (_request, context) => {
+      context.recordFallback("worker-unavailable");
+      return pending.promise;
+    };
+
+    nowMs = 10;
+    const result = scheduler.schedule(
+      buildRequest("vector:fallback", "field:m", {
+        revisionSummary: "topology-1 field-1",
+      }),
+      runner,
+    );
+
+    expect(fallbacks).toEqual([
+      {
+        count: 1,
+        key: "vector:fallback",
+        lane: "vector-glyph",
+        reason: "worker-unavailable",
+        revisionSummary: "topology-1 field-1",
+        timestampMs: 10,
+      },
+    ]);
+
+    nowMs = 25;
+    pending.resolve("ready-on-main");
+    await expect(result).resolves.toBe("ready-on-main");
+    expect(records).toEqual([
+      expect.objectContaining({
+        fallbackReason: "worker-unavailable",
+        key: "vector:fallback",
+        state: "ready",
+      }),
+    ]);
+    scheduler.dispose();
   });
 });

@@ -18,6 +18,10 @@ describe("viewport3dDiagnostics", () => {
     expect(source).toContain(
       "createDiagnosticRecordFromViewport3DBuildDiagnostic",
     );
+    expect(source).toContain("subscribeViewport3DGpuUploadDiagnostics");
+    expect(source).toContain(
+      "createDiagnosticRecordFromViewport3DGpuUploadDiagnostic",
+    );
   });
 
   it("tracks and disposes viewport-owned resources without forcing React updates", () => {

@@ -10,6 +10,7 @@ import {
   resolveViewport3DOrthographicCameraFrame,
   resolveViewport3DOrthographicZoom,
   resolveNextViewport3DModelLayerStage,
+  resolveAuthoredRegionOverlayVisibility,
   resolveViewport3DModelLayerStageVisibility,
   scheduleViewport3DProjectionRenderFrames,
   VIEWPORT_3D_MODEL_LAYER_FINAL_STAGE,
@@ -264,6 +265,18 @@ describe("Viewport3DScene scale helpers", () => {
     expect(source).not.toContain("interactionActive={interactionActive}");
   });
 
+  it("owns realized region overlay build status where authored overlay fallback is resolved", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DScene.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("useViewport3DRegionOverlayModels");
+    expect(source).toContain("realizedRegionOverlayModels.status");
+    expect(source).toContain("models={realizedRegionOverlayModels.models}");
+    expect(source).not.toContain("onBuildStatusChange=");
+  });
+
   it("can skip viewport canvas probes and orientation widgets from browser runtime flags", () => {
     const source = readFileSync(
       new URL("./Viewport3DScene.tsx", import.meta.url),
@@ -433,5 +446,56 @@ describe("Viewport3DScene scale helpers", () => {
     expect(resolveNextViewport3DModelLayerStage(999)).toBe(
       VIEWPORT_3D_MODEL_LAYER_FINAL_STAGE,
     );
+  });
+});
+
+describe("Viewport3DScene region overlay visibility", () => {
+  it("keeps authored overlays visible in auto mode while realized overlays are building", () => {
+    const base = {
+      hasMeshBackedRegionOverlays: true,
+      overlayLayersEnabled: true,
+      regionOverlayMode: "auto" as const,
+      stageVisible: true,
+    };
+
+    expect(
+      resolveAuthoredRegionOverlayVisibility({
+        ...base,
+        realizedBuildStatus: "pending",
+      }),
+    ).toBe(true);
+    expect(
+      resolveAuthoredRegionOverlayVisibility({
+        ...base,
+        realizedBuildStatus: "stale-visible",
+      }),
+    ).toBe(true);
+    expect(
+      resolveAuthoredRegionOverlayVisibility({
+        ...base,
+        realizedBuildStatus: "ready",
+      }),
+    ).toBe(false);
+    expect(
+      resolveAuthoredRegionOverlayVisibility({
+        ...base,
+        realizedBuildStatus: "pending",
+        regionOverlayMode: "realized",
+      }),
+    ).toBe(false);
+    expect(
+      resolveAuthoredRegionOverlayVisibility({
+        ...base,
+        realizedBuildStatus: "ready",
+        regionOverlayMode: "both",
+      }),
+    ).toBe(true);
+    expect(
+      resolveAuthoredRegionOverlayVisibility({
+        ...base,
+        realizedBuildStatus: "pending",
+        overlayLayersEnabled: false,
+      }),
+    ).toBe(false);
   });
 });

@@ -1,7 +1,7 @@
 "use client";
 
 import type { ThreeEvent } from "@react-three/fiber";
-import { useEffect, useMemo, memo } from "react";
+import { useCallback, useEffect, useMemo, memo } from "react";
 import { BufferAttribute, BufferGeometry } from "three";
 import type { ColorRepresentation } from "three";
 import {
@@ -16,6 +16,7 @@ import {
   viewport3DVectorLayersEnabledFromBrowserConfig,
 } from "@/kernel/browserFullmagConfig";
 
+import { createViewport3DGpuUploadManager } from "../build-engine/gpu/viewport3dGpuUploadManager";
 import {
   resolveMeshPartBounds,
   selectionForMeshPart,
@@ -27,8 +28,10 @@ import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
 import {
   canApplyVertexScalarColorBuffer,
 } from "../viewport3dGeometryColors";
+import { useViewport3DGeometryUpload } from "../hooks/useViewport3DGeometryUpload";
 import { useViewport3DScalarColorUpload } from "../hooks/useViewport3DScalarColorUpload";
 import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
+import { createViewport3DIndexedPointGeometry } from "../viewport3dPointGeometry";
 import {
   isViewport3DTopologyRenderable,
   resolveUnavailableTopologyVisualizationSettings,
@@ -64,6 +67,8 @@ export interface AirboxSurfaceColorState {
   scalarColors: ScalarColorBuffer | null;
   vertexColorsEnabled: boolean;
 }
+
+const AIRBOX_MESH_PART_GEOMETRY_UPLOAD_FRAME_BUDGET_MS = 3;
 
 export function BoundsBox({
   bounds,
@@ -198,60 +203,100 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
   const resolvedSettings =
     resolveAirboxTopologyVisualizationSettings(settings, topologyFreshness);
   const renderSettings = resolvedSettings;
-  const geometry = useMemo(() => {
-    const { surfaceIndices } = partModel;
+  const topologyUploadManager = useMemo(
+    () =>
+      createViewport3DGpuUploadManager({
+        policy: {
+          targetFrameBudgetMs: AIRBOX_MESH_PART_GEOMETRY_UPLOAD_FRAME_BUDGET_MS,
+        },
+      }),
+    [],
+  );
+  useEffect(() => () => topologyUploadManager.dispose(), [topologyUploadManager]);
+
+  const part = partModel.part;
+  const topologyRevision = topologyModel.meshRevision ?? null;
+  const surfaceIndices = partModel.surfaceIndices;
+  const createSurfaceGeometry = useCallback(() => {
     if (!surfaceIndices?.length) return null;
-    const next = tracker.track("geometry", new BufferGeometry());
+    const next = new BufferGeometry();
     next.setAttribute("position", new BufferAttribute(topologyModel.positions, 3));
     next.setIndex(new BufferAttribute(surfaceIndices, 1));
     return next;
-  }, [partModel, topologyModel, tracker]);
-  const edgeGeometry = useMemo(() => {
-    const edgeIndices = resolveAirboxWireframeEdgeIndices(
+  }, [surfaceIndices, topologyModel.positions]);
+  const geometry = useViewport3DGeometryUpload({
+    createGeometry: createSurfaceGeometry,
+    dirtyReason: "airbox-surface",
+    enabled: Boolean(surfaceIndices?.length),
+    estimatedBytes:
+      topologyModel.positions.byteLength + (surfaceIndices?.byteLength ?? 0),
+    invalidate,
+    itemCount: surfaceIndices?.length ?? 0,
+    key: `airbox-surface:${part.id}:topology=${topologyRevision ?? "none"}:positions=${topologyModel.positions.byteLength}:indices=${surfaceIndices?.byteLength ?? 0}`,
+    lane: "topology-index",
+    targetRevision: topologyRevision === null ? null : String(topologyRevision),
+    tracker,
+    uploadManager: topologyUploadManager,
+  });
+
+  const edgeIndices = resolveAirboxWireframeEdgeIndices(
+    renderSettings.geometryScope,
+    partModel,
+    renderSettings.wireframeVisible,
+  );
+  const createEdgeGeometry = useCallback(() => {
+    const next = buildLineIndexGeometry(topologyModel.positions, edgeIndices);
+    return next;
+  }, [edgeIndices, topologyModel.positions]);
+  const edgeGeometry = useViewport3DGeometryUpload({
+    createGeometry: createEdgeGeometry,
+    dirtyReason: "airbox-wireframe",
+    enabled: Boolean(renderSettings.wireframeVisible && edgeIndices?.length),
+    estimatedBytes:
+      topologyModel.positions.byteLength + (edgeIndices?.byteLength ?? 0),
+    invalidate,
+    itemCount: edgeIndices?.length ?? 0,
+    key: `airbox-wireframe:${part.id}:scope=${renderSettings.geometryScope}:topology=${topologyRevision ?? "none"}:positions=${topologyModel.positions.byteLength}:indices=${edgeIndices?.byteLength ?? 0}`,
+    lane: "topology-index",
+    targetRevision: topologyRevision === null ? null : String(topologyRevision),
+    tracker,
+    uploadManager: topologyUploadManager,
+  });
+
+  const createPointsGeometry = useCallback(() => {
+    if (!renderSettings.pointsVisible) return null;
+    const selection = resolveAirboxPointSelection(
       renderSettings.geometryScope,
       partModel,
-      renderSettings.wireframeVisible,
     );
-    const next = buildLineIndexGeometry(topologyModel.positions, edgeIndices);
-    return next ? tracker.track("geometry", next) : null;
+    return createViewport3DIndexedPointGeometry(topologyModel, selection);
   }, [
     partModel,
-    renderSettings.geometryScope,
-    renderSettings.wireframeVisible,
-    topologyModel.positions,
-    tracker,
-  ]);
-  const pointsGeometry = useMemo(() => {
-    if (!renderSettings.pointsVisible) return null;
-    const indices = renderSettings.geometryScope === "full"
-      ? resolvePartNodeIndices(partModel.part, topologyModel.nodeCount)
-      : (partModel.surfaceIndices ? getUniqueSortedIndices(partModel.surfaceIndices) : null);
-
-    if (!indices || !indices.length) return null;
-    const next = tracker.track("geometry", new BufferGeometry());
-    next.setAttribute("position", new BufferAttribute(topologyModel.positions, 3));
-    next.setIndex(new BufferAttribute(indices, 1));
-    return next;
-  }, [
-    partModel,
-    topologyModel,
     renderSettings.geometryScope,
     renderSettings.pointsVisible,
-    tracker,
+    topologyModel,
   ]);
-
-  useEffect(() => () => tracker.release("geometry", geometry), [geometry, tracker]);
-  useEffect(
-    () => () => tracker.release("geometry", edgeGeometry),
-    [edgeGeometry, tracker],
-  );
-  useEffect(
-    () => () => tracker.release("geometry", pointsGeometry),
-    [pointsGeometry, tracker],
-  );
+  const pointsGeometry = useViewport3DGeometryUpload({
+    createGeometry: createPointsGeometry,
+    dirtyReason: "airbox-points",
+    enabled: Boolean(renderSettings.pointsVisible),
+    estimatedBytes:
+      topologyModel.positions.byteLength +
+      airboxPointSelectionEstimatedBytes(partModel),
+    invalidate,
+    itemCount: airboxPointSelectionCount(
+      renderSettings.geometryScope,
+      partModel,
+      topologyModel.nodeCount,
+    ),
+    key: `airbox-points:${part.id}:scope=${renderSettings.geometryScope}:topology=${topologyRevision ?? "none"}:positions=${topologyModel.positions.byteLength}:selection=${airboxPointSelectionRevision(renderSettings.geometryScope, partModel, topologyModel.nodeCount)}`,
+    lane: "topology-index",
+    targetRevision: topologyRevision === null ? null : String(topologyRevision),
+    tracker,
+    uploadManager: topologyUploadManager,
+  });
 
   const opacity = opacityFromSettings(renderSettings);
-  const part = partModel.part;
   const airboxWireframeSemantic =
     resolveAirboxWireframeSemantic(renderSettings);
   const fieldColorLayersEnabled =
@@ -462,6 +507,126 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
     </group>
   );
 });
+
+function resolveAirboxPointSelection(
+  geometryScope: VisualizationTargetSettings["geometryScope"],
+  partModel: Viewport3DTopologyPartRenderModel<Viewport3DMeshPart>,
+): Viewport3DMeshPart | { nodeIndices: Uint32Array } | null {
+  if (geometryScope === "full") return partModel.part;
+
+  const nodeIndices =
+    partModel.surfaceNodeIndices ??
+    (partModel.surfaceIndices ? getUniqueSortedIndices(partModel.surfaceIndices) : null);
+  if (!nodeIndices?.length) return null;
+  return { nodeIndices };
+}
+
+function airboxPointSelectionEstimatedBytes(
+  partModel: Viewport3DTopologyPartRenderModel<Viewport3DMeshPart>,
+): number {
+  return (
+    partModel.surfaceNodeIndices?.byteLength ??
+    partModel.surfaceIndices?.byteLength ??
+    0
+  );
+}
+
+function airboxPointSelectionCount(
+  geometryScope: VisualizationTargetSettings["geometryScope"],
+  partModel: Viewport3DTopologyPartRenderModel<Viewport3DMeshPart>,
+  nodeCount: number,
+): number {
+  if (geometryScope === "full") {
+    return resolveAirboxFullPointSelectionCount(partModel.part, nodeCount);
+  }
+
+  return (
+    partModel.surfaceNodeIndices?.length ??
+    partModel.surfaceIndices?.length ??
+    0
+  );
+}
+
+function airboxPointSelectionRevision(
+  geometryScope: VisualizationTargetSettings["geometryScope"],
+  partModel: Viewport3DTopologyPartRenderModel<Viewport3DMeshPart>,
+  nodeCount: number,
+): string {
+  if (geometryScope === "full") {
+    return `full:${airboxPartNodeSelectionRevision(partModel.part, nodeCount)}`;
+  }
+
+  const nodeIndices = partModel.surfaceNodeIndices;
+  if (nodeIndices?.length) {
+    return `surface-nodes:${nodeIndices.length}:${nodeIndices[0] ?? "none"}:${nodeIndices[nodeIndices.length - 1] ?? "none"}`;
+  }
+
+  const surfaceIndices = partModel.surfaceIndices;
+  if (surfaceIndices?.length) {
+    return `surface-indices:${surfaceIndices.length}:${surfaceIndices[0] ?? "none"}:${surfaceIndices[surfaceIndices.length - 1] ?? "none"}`;
+  }
+
+  return "surface:empty";
+}
+
+function airboxPartNodeSelectionRevision(
+  part: Viewport3DMeshPart,
+  nodeCount: number,
+): string {
+  const indices = airboxPartNodeIndices(part);
+  if (indices?.length) {
+    return `indices:${indices.length}:${indices[0] ?? "none"}:${indices[indices.length - 1] ?? "none"}`;
+  }
+
+  const start = airboxPartNodeStart(part);
+  return `range:${start}:${resolveAirboxFullPointSelectionCount(part, nodeCount)}`;
+}
+
+function resolveAirboxFullPointSelectionCount(
+  part: Viewport3DMeshPart,
+  nodeCount: number,
+): number {
+  const indices = airboxPartNodeIndices(part);
+  if (indices?.length) return indices.length;
+
+  const start = airboxPartNodeStart(part);
+  const rawCount = airboxPartNodeCount(part);
+  const count =
+    rawCount === undefined || (rawCount <= 0 && start > 0)
+      ? nodeCount - start
+      : Math.max(0, Math.floor(rawCount));
+  if (count <= 0 || start >= nodeCount) return 0;
+
+  return Math.min(count, nodeCount - start);
+}
+
+function airboxPartNodeIndices(
+  part: Viewport3DMeshPart,
+): readonly number[] | undefined {
+  return (
+    part.node_indices ??
+    (part as Viewport3DMeshPart & { nodeIndices?: readonly number[] })
+      .nodeIndices
+  );
+}
+
+function airboxPartNodeStart(part: Viewport3DMeshPart): number {
+  return Math.max(
+    0,
+    Math.floor(
+      part.node_start ??
+        (part as Viewport3DMeshPart & { nodeStart?: number }).nodeStart ??
+        0,
+    ),
+  );
+}
+
+function airboxPartNodeCount(part: Viewport3DMeshPart): number | undefined {
+  return (
+    part.node_count ??
+    (part as Viewport3DMeshPart & { nodeCount?: number }).nodeCount
+  );
+}
 
 function AirboxWireframeFallback({
   bounds,

@@ -240,4 +240,90 @@ describe("DiagnosticRecorderController", () => {
     ]);
     expect(controller.getSnapshot().streams.timeline).toEqual([]);
   });
+
+  it("keeps viewport 3D build-engine records in a typed artifact stream", () => {
+    const controller = new DiagnosticRecorderController({
+      config: { enabled: true },
+    });
+
+    controller.record({
+      byteLength: 4096,
+      buildKey: "vector-glyph:key",
+      buildLane: "vector-glyph",
+      buildState: "ready",
+      detail: {
+        buildLane: "vector-glyph",
+        state: "ready",
+      },
+      displayedRevision: null,
+      droppedBecauseObsolete: false,
+      droppedCount: 0,
+      durationMs: 360,
+      fallbackReason: null,
+      id: "build-vector",
+      inputBytes: 2048,
+      itemCount: 1200,
+      kind: "viewport-3d-build-job",
+      lane: "viewport-3d",
+      mainAdoptMs: 8,
+      mainUploadMs: 12,
+      name: "fullmag.viewport3d.build-engine.vector-glyph",
+      outputBytes: 4096,
+      queueWaitMs: 240,
+      revisionSummary: "topology=1 field=2",
+      severity: "warning",
+      startTimeMs: 10,
+      targetRevision: null,
+      timestampMs: 370,
+      transferMs: 20,
+      visibleState: null,
+      workerComputeMs: 80,
+    });
+
+    expect(controller.getSnapshot().streams.viewport3dBuild).toEqual([
+      expect.objectContaining({
+        buildLane: "vector-glyph",
+        buildState: "ready",
+        queueWaitMs: 240,
+        workerComputeMs: 80,
+      }),
+    ]);
+    expect(controller.getSnapshot().streams.performance).toEqual([]);
+  });
+
+  it("keeps viewport 3D worker-pool status in a typed artifact stream", () => {
+    const controller = new DiagnosticRecorderController({
+      config: { enabled: true },
+    });
+
+    controller.record({
+      activeJobs: 2,
+      byteLength: null,
+      detail: {
+        poolId: "vector-glyph",
+      },
+      droppedCount: 0,
+      durationMs: null,
+      id: "pool-vector",
+      kind: "viewport-3d-worker-pool",
+      lane: "worker",
+      maxWorkers: 2,
+      name: "fullmag.viewport3d.worker-pool.vector-glyph",
+      poolId: "vector-glyph",
+      severity: "info",
+      startTimeMs: null,
+      timestampMs: 370,
+      workerCount: 2,
+    });
+
+    expect(controller.getSnapshot().streams.viewport3dWorkerPools).toEqual([
+      expect.objectContaining({
+        activeJobs: 2,
+        maxWorkers: 2,
+        poolId: "vector-glyph",
+        workerCount: 2,
+      }),
+    ]);
+    expect(controller.getSnapshot().streams.timeline).toEqual([]);
+  });
 });

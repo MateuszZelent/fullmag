@@ -5,12 +5,15 @@ import type {
   Viewport3DWorkerPoolSnapshot,
   Viewport3DWorkerPoolWorker,
 } from "./viewport3dWorkerPoolTypes";
+import {
+  createViewport3DWorkerPoolDiagnosticRecord,
+  recordViewport3DWorkerPoolDiagnostic,
+} from "./viewport3dWorkerPoolDiagnostics";
 
 export type {
   Viewport3DWorkerPool,
   Viewport3DWorkerPoolLease,
   Viewport3DWorkerPoolOptions,
-  Viewport3DWorkerPoolSnapshot,
   Viewport3DWorkerPoolWorker,
 } from "./viewport3dWorkerPoolTypes";
 
@@ -24,16 +27,24 @@ export function createViewport3DWorkerPool<
 >(
   options: Viewport3DWorkerPoolOptions<TWorker>,
 ): Viewport3DWorkerPool<TWorker> {
+  const idleTimeoutMs =
+    typeof options.idleTimeoutMs === "number"
+      ? Math.max(0, Math.floor(options.idleTimeoutMs))
+      : null;
   const maxWorkers = Math.max(1, Math.floor(options.maxWorkers));
+  const poolId = options.poolId ?? null;
   const slots: WorkerPoolSlot<TWorker>[] = [];
   let disposed = false;
+  let idleTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
   function acquire(): Viewport3DWorkerPoolLease<TWorker> {
     if (disposed) {
       throw new Error("Viewport 3D worker pool has been disposed.");
     }
+    clearIdleTerminationTimer();
     const slot = acquireSlot();
     slot.activeJobs += 1;
+    publishSnapshot();
     let released = false;
 
     return {
@@ -42,6 +53,8 @@ export function createViewport3DWorkerPool<
         if (released) return;
         released = true;
         slot.activeJobs = Math.max(slot.activeJobs - 1, 0);
+        publishSnapshot();
+        scheduleIdleTermination();
       },
     };
   }
@@ -55,6 +68,7 @@ export function createViewport3DWorkerPool<
         worker: options.createWorker(),
       };
       slots.push(slot);
+      publishSnapshot();
       return slot;
     }
     return slots.reduce((leastBusy, slot) =>
@@ -65,11 +79,12 @@ export function createViewport3DWorkerPool<
   function dispose(): void {
     if (disposed) return;
     disposed = true;
-    for (const slot of slots) {
+    clearIdleTerminationTimer();
+    for (const slot of slots.splice(0)) {
       slot.activeJobs = 0;
-      slot.worker.terminate();
+      terminateSlot(slot);
     }
-    slots.length = 0;
+    publishSnapshot();
   }
 
   function snapshot(): Viewport3DWorkerPoolSnapshot {
@@ -85,4 +100,46 @@ export function createViewport3DWorkerPool<
     dispose,
     snapshot,
   };
+
+  function publishSnapshot(): void {
+    if (!poolId) return;
+    recordViewport3DWorkerPoolDiagnostic(
+      createViewport3DWorkerPoolDiagnosticRecord(poolId, snapshot()),
+    );
+  }
+
+  function scheduleIdleTermination(): void {
+    if (
+      idleTimeoutMs === null ||
+      disposed ||
+      idleTimeoutId !== null ||
+      snapshot().activeJobs > 0 ||
+      slots.length === 0
+    ) {
+      return;
+    }
+    idleTimeoutId = setTimeout(() => {
+      idleTimeoutId = null;
+      terminateIdleSlots();
+    }, idleTimeoutMs);
+  }
+
+  function clearIdleTerminationTimer(): void {
+    if (idleTimeoutId === null) return;
+    clearTimeout(idleTimeoutId);
+    idleTimeoutId = null;
+  }
+
+  function terminateIdleSlots(): void {
+    if (disposed || snapshot().activeJobs > 0) return;
+    for (const slot of slots.splice(0)) {
+      terminateSlot(slot);
+    }
+    publishSnapshot();
+  }
+
+  function terminateSlot(slot: WorkerPoolSlot<TWorker>): void {
+    slot.worker.terminate();
+    options.onWorkerTerminated?.(slot.worker);
+  }
 }

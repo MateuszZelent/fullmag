@@ -1,6 +1,6 @@
 "use client";
 
-import { Line, Text } from "@react-three/drei";
+import { Line } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import {
   useCallback,
@@ -612,13 +612,22 @@ function ViewCubeFacePanel({
       ))}
       <AutoOrientText
         color={String(colors.textPrimary ?? colors.wire)}
+        outlineColor={String(colors.background ?? colors.panel)}
         label={label}
       />
     </group>
   );
 }
 
-function AutoOrientText({ color, label }: { color: string; label: string }) {
+function AutoOrientText({
+  color,
+  label,
+  outlineColor,
+}: {
+  color: string;
+  label: string;
+  outlineColor: string;
+}) {
   const ref = useRef<Group>(null);
   const scratch = useMemo(
     () => ({
@@ -627,6 +636,12 @@ function AutoOrientText({ color, label }: { color: string; label: string }) {
     }),
     [],
   );
+  const texture = useMemo(
+    () => buildViewCubeLabelTexture(label, color, outlineColor),
+    [color, label, outlineColor],
+  );
+
+  useEffect(() => () => texture.dispose(), [texture]);
 
   useFrame(({ camera }) => {
     if (!ref.current || !ref.current.parent) return;
@@ -643,17 +658,16 @@ function AutoOrientText({ color, label }: { color: string; label: string }) {
 
   return (
     <group position={[0, 0, 0.28]} ref={ref}>
-      <Text
-        anchorX="center"
-        anchorY="middle"
-        color={color}
-        material-depthTest={false}
-        fontSize={13}
-        fontWeight={700}
-        renderOrder={WIDGET_RENDER_ORDER + 5}
-      >
-        {label}
-      </Text>
+      <mesh renderOrder={WIDGET_RENDER_ORDER + 5}>
+        <planeGeometry args={[43, 15]} />
+        <meshBasicMaterial
+          depthTest={false}
+          depthWrite={false}
+          map={texture}
+          toneMapped={false}
+          transparent
+        />
+      </mesh>
     </group>
   );
 }
@@ -748,6 +762,34 @@ function buildViewCubeFaceTexture(
       ctx.lineWidth = 4;
       ctx.strokeRect(2, 2, size - 4, size - 4);
     }
+  }
+
+  const texture = new CanvasTexture(canvas);
+  texture.needsUpdate = true;
+  texture.anisotropy = 4;
+  return texture;
+}
+
+function buildViewCubeLabelTexture(
+  label: string,
+  color: string,
+  outlineColor: string,
+): CanvasTexture {
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 96;
+  const ctx = canvas.getContext("2d");
+  if (ctx) {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.font = "800 42px Inter, Arial, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.lineJoin = "round";
+    ctx.lineWidth = 7;
+    ctx.strokeStyle = outlineColor;
+    ctx.fillStyle = color;
+    ctx.strokeText(label, canvas.width / 2, canvas.height / 2 + 2);
+    ctx.fillText(label, canvas.width / 2, canvas.height / 2 + 2);
   }
 
   const texture = new CanvasTexture(canvas);

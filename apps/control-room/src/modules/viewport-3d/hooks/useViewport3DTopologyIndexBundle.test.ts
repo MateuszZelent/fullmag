@@ -1,12 +1,39 @@
-import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  clearViewport3DTopologyIndexBundleCacheForTests,
   createViewport3DTopologyIndexBuildReference,
+  getViewport3DTopologyIndexBundleCacheSnapshotForTests,
+  putViewport3DTopologyIndexBundleInCache,
+  retainViewport3DTopologyIndexBundleFromCache,
   resolveViewport3DTopologyIndexStatus,
   viewport3DTopologyIndexStateIsCompatible,
 } from "./useViewport3DTopologyIndexBundle";
+import type { Viewport3DTopologyIndexBundle } from "../viewport3dTopologyIndexModel";
+
+const topologyIndexHookSource = readFileSync(
+  new URL("./useViewport3DTopologyIndexBundle.ts", import.meta.url),
+  "utf8",
+);
+
+function makeTopologyIndexBundle(seed: number): Viewport3DTopologyIndexBundle {
+  return {
+    airboxPartsById: new Map(),
+    fallbackSurfaceEdgeIndices: Uint32Array.from([seed + 4, seed + 5]),
+    fallbackSurfaceIndices: Uint32Array.from([seed, seed + 1]),
+    fallbackSurfaceNodeIndices: Uint32Array.from([seed, seed + 1]),
+    fallbackVolumeEdgeIndices: Uint32Array.from([seed + 2, seed + 3]),
+    magneticPartsById: new Map(),
+  };
+}
 
 describe("useViewport3DTopologyIndexBundle", () => {
+  afterEach(() => {
+    clearViewport3DTopologyIndexBundleCacheForTests();
+  });
+
   it("creates semantic topology-index build references without field revisions", () => {
     const reference = createViewport3DTopologyIndexBuildReference({
       domainId: "shared-domain",
@@ -75,5 +102,79 @@ describe("useViewport3DTopologyIndexBundle", () => {
         },
       ),
     ).toBe(false);
+  });
+
+  it("retains cached topology index bundles by semantic build key", () => {
+    const bundle = makeTopologyIndexBundle(0);
+    const handle = putViewport3DTopologyIndexBundleInCache({
+      bundle,
+      key: "topology-index:topology=mesh-7:targets=targets-4",
+    });
+
+    expect(handle.bundle).toBe(bundle);
+    expect(
+      getViewport3DTopologyIndexBundleCacheSnapshotForTests(),
+    ).toMatchObject({
+      entryCount: 1,
+      retainedEntries: 1,
+    });
+
+    const retained = retainViewport3DTopologyIndexBundleFromCache(
+      "topology-index:topology=mesh-7:targets=targets-4",
+    );
+    expect(retained?.bundle).toBe(bundle);
+
+    retained?.release();
+    handle.release();
+    expect(
+      getViewport3DTopologyIndexBundleCacheSnapshotForTests(),
+    ).toMatchObject({
+      entryCount: 1,
+      retainedEntries: 0,
+    });
+  });
+
+  it("uses semantic cache handles instead of storing topology bundles in React state", () => {
+    const reducerStateSource = topologyIndexHookSource.slice(
+      topologyIndexHookSource.indexOf("interface Viewport3DTopologyIndexReducerState"),
+      topologyIndexHookSource.indexOf("type Viewport3DTopologyIndexAction"),
+    );
+
+    expect(topologyIndexHookSource).toContain(
+      "retainViewport3DTopologyIndexBundleFromCache",
+    );
+    expect(topologyIndexHookSource).toContain(
+      "putViewport3DTopologyIndexBundleInCache",
+    );
+    expect(topologyIndexHookSource).toContain(
+      "topologyIndexBundleBuffers.get(state.token)",
+    );
+    expect(reducerStateSource).not.toContain(
+      "bundle: Viewport3DTopologyIndexBundle | null;",
+    );
+    expect(reducerStateSource).toContain("token: object | null;");
+  });
+
+  it("evicts old unretained topology index bundles while preserving retained visible entries", () => {
+    const retained = putViewport3DTopologyIndexBundleInCache({
+      bundle: makeTopologyIndexBundle(0),
+      key: "topology-index:retained",
+    });
+
+    for (let index = 0; index < 24; index += 1) {
+      putViewport3DTopologyIndexBundleInCache({
+        bundle: makeTopologyIndexBundle(index),
+        key: `topology-index:free:${index}`,
+      }).release();
+    }
+
+    const snapshot = getViewport3DTopologyIndexBundleCacheSnapshotForTests();
+    expect(snapshot.entryCount).toBeLessThanOrEqual(16);
+    expect(snapshot.keys).toContain("topology-index:retained");
+    expect(
+      retainViewport3DTopologyIndexBundleFromCache("topology-index:retained")
+        ?.bundle,
+    ).toBe(retained.bundle);
+    retained.release();
   });
 });

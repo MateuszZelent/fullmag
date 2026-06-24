@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildViewport3DFieldColorJobKey,
+  buildViewport3DFdmCuboidJobKey,
   buildViewport3DRegionOverlayJobKey,
   buildViewport3DTopologyIndexJobKey,
   buildViewport3DVectorGlyphJobKey,
@@ -42,6 +43,9 @@ describe("viewport3dBuildJobKeys", () => {
     expect(buildViewport3DFieldColorJobKey(first)).toBe(
       buildViewport3DFieldColorJobKey(second),
     );
+    expect(buildViewport3DFdmCuboidJobKey(first)).toBe(
+      buildViewport3DFdmCuboidJobKey(second),
+    );
     expect(buildViewport3DVectorGlyphJobKey(first)).toBe(
       buildViewport3DVectorGlyphJobKey(second),
     );
@@ -66,6 +70,9 @@ describe("viewport3dBuildJobKeys", () => {
     expect(buildViewport3DFieldColorJobKey(first)).not.toBe(
       buildViewport3DFieldColorJobKey(second),
     );
+    expect(buildViewport3DFdmCuboidJobKey(first)).not.toBe(
+      buildViewport3DFdmCuboidJobKey(second),
+    );
     expect(buildViewport3DVectorGlyphJobKey(first)).not.toBe(
       buildViewport3DVectorGlyphJobKey(second),
     );
@@ -87,9 +94,11 @@ describe("viewport3dBuildJobKeys", () => {
     expect(buildViewport3DFieldColorJobKey(first)).not.toBe(
       buildViewport3DFieldColorJobKey(second),
     );
+    expect(buildViewport3DFdmCuboidJobKey(first)).not.toBe(
+      buildViewport3DFdmCuboidJobKey(second),
+    );
     expect(buildViewport3DVectorGlyphJobKey(first)).not.toBe(
       buildViewport3DVectorGlyphJobKey(second),
     );
   });
 });
-

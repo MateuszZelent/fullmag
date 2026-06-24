@@ -50,6 +50,8 @@ describe("diagnostic recorder types", () => {
         requests: [],
         resources: [],
         timeline: [baseRecord()],
+        viewport3dBuild: [],
+        viewport3dWorkerPools: [],
         viewport3d: [],
       },
       summary: {
@@ -63,6 +65,18 @@ describe("diagnostic recorder types", () => {
         generatedAtIso: "2026-06-23T00:00:00.000Z",
         suspects: [],
         text: "No suspects.",
+      },
+      viewport3dBuildSummary: {
+        lanes: [],
+        totalJobs: 0,
+      },
+      viewport3dVisibleRevisionSummary: {
+        fieldRevision: null,
+        invalidSuppressedTargets: [],
+        staleCompatibleTargets: [],
+        stalePhysicalTargets: [],
+        targetVisualizationRevision: null,
+        topologyRevision: null,
       },
     } satisfies DiagnosticArtifactV1;
 

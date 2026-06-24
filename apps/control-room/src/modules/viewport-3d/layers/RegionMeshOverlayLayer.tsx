@@ -1,39 +1,48 @@
 "use client";
 
 import type { ThreeEvent } from "@react-three/fiber";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { BufferAttribute, BufferGeometry } from "three";
 
-import type { DecodedTopology } from "@/kernel/api/codecs";
-import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
-
+import { createViewport3DGpuUploadManager } from "../build-engine/gpu/viewport3dGpuUploadManager";
+import type {
+  Viewport3DGpuUploadChunk,
+  Viewport3DGpuUploadManager,
+} from "../build-engine/gpu/viewport3dGpuUploadTypes";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
-import {
-  type RegionMeshOverlayModel,
-  type RegionMeshOverlayOwnerPart,
-  type RegionOverlayInput,
-  type RegionOverlayTheme,
-} from "./regionOverlayModel";
-import { buildViewport3DRegionOverlayModels } from "../region-overlays/viewport3dRegionOverlayBuildModel";
+import { type RegionMeshOverlayModel } from "./regionOverlayModel";
 import { materialPolicyProps, RENDER_POLICIES } from "./viewport3DRenderPolicy";
 import type { RegionOverlaySelection } from "./RegionOverlayLayer";
 
 export interface RegionMeshOverlayLayerProps {
-  getRegionSettings?: (region: RegionOverlayInput) => VisualizationTargetSettings;
-  magneticParts: readonly RegionMeshOverlayOwnerPart[];
+  models: readonly RegionMeshOverlayModel[];
   onSelectRegion?: (selection: RegionOverlaySelection) => void;
-  renderedSurfacePartIds?: ReadonlySet<string>;
-  regions: readonly RegionOverlayInput[];
-  selectedObjectId?: string | null;
-  selectedRegionId?: string | null;
-  theme?: RegionOverlayTheme;
-  topology: DecodedTopology | null | undefined;
+  targetVisualizationRevision?: string | number | null;
+  topologyRevision?: string | number | null;
   tracker: Viewport3DResourceTracker;
   visible?: boolean;
 }
 
 const CSS_VARIABLE_COLOR_PATTERN = /^var\((--[-_a-zA-Z0-9]+)\)$/;
+const REGION_MESH_OVERLAY_UPLOAD_FRAME_BUDGET_MS = 3;
+
+interface RegionMeshOverlayGeometrySnapshot {
+  readonly geometry: BufferGeometry | null;
+  readonly version: number;
+}
+
+interface RegionMeshOverlayGeometryStore {
+  readonly getSnapshot: () => RegionMeshOverlayGeometrySnapshot;
+  readonly publish: (geometry: BufferGeometry | null) => void;
+  readonly subscribe: (listener: () => void) => () => void;
+}
+
+const EMPTY_REGION_MESH_OVERLAY_GEOMETRY_SNAPSHOT:
+  RegionMeshOverlayGeometrySnapshot = {
+    geometry: null,
+    version: 0,
+  };
 
 function resolveCssColorToken(color: string): string {
   const match = CSS_VARIABLE_COLOR_PATTERN.exec(color.trim());
@@ -46,47 +55,23 @@ function resolveCssColorToken(color: string): string {
 }
 
 export function RegionMeshOverlayLayer({
-  getRegionSettings,
-  magneticParts,
+  models,
   onSelectRegion,
-  renderedSurfacePartIds,
-  regions,
-  selectedObjectId = null,
-  selectedRegionId = null,
-  theme = "mocha",
-  topology,
+  targetVisualizationRevision = null,
+  topologyRevision = null,
   tracker,
   visible = true,
 }: RegionMeshOverlayLayerProps) {
-  const models = useMemo(
-    () => {
-      if (!topology) return [];
-      return buildViewport3DRegionOverlayModels({
-        magneticParts,
-        regions,
-        renderedSurfacePartIds: renderedSurfacePartIds
-          ? [...renderedSurfacePartIds].toSorted()
-          : undefined,
-        selectedObjectId,
-        selectedRegionId,
-        settingsByRegionId: getRegionSettings
-          ? resolveRegionSettingsEntries(regions, getRegionSettings)
-          : undefined,
-        theme,
-        topology,
-      }).models;
-    },
-    [
-      getRegionSettings,
-      magneticParts,
-      renderedSurfacePartIds,
-      regions,
-      selectedObjectId,
-      selectedRegionId,
-      theme,
-      topology,
-    ],
+  const uploadManager = useMemo(
+    () =>
+      createViewport3DGpuUploadManager({
+        policy: {
+          targetFrameBudgetMs: REGION_MESH_OVERLAY_UPLOAD_FRAME_BUDGET_MS,
+        },
+      }),
+    [],
   );
+  useEffect(() => () => uploadManager.dispose(), [uploadManager]);
 
   if (!visible || models.length === 0) return null;
 
@@ -97,63 +82,59 @@ export function RegionMeshOverlayLayer({
           key={model.regionId}
           model={model}
           onSelectRegion={onSelectRegion}
+          targetVisualizationRevision={targetVisualizationRevision}
+          topologyRevision={topologyRevision}
           tracker={tracker}
+          uploadManager={uploadManager}
         />
       ))}
     </group>
   );
 }
 
-function resolveRegionSettingsEntries(
-  regions: readonly RegionOverlayInput[],
-  getRegionSettings: (region: RegionOverlayInput) => VisualizationTargetSettings,
-): Array<readonly [string, VisualizationTargetSettings]> {
-  return regions.flatMap((region) =>
-    typeof region.region_id === "string"
-      ? [[region.region_id, getRegionSettings(region)] as const]
-      : [],
-  );
-}
-
 function RegionMeshOverlayShape({
   model,
   onSelectRegion,
+  targetVisualizationRevision,
+  topologyRevision,
   tracker,
+  uploadManager,
 }: {
   model: RegionMeshOverlayModel;
   onSelectRegion?: (selection: RegionOverlaySelection) => void;
+  targetVisualizationRevision?: string | number | null;
+  topologyRevision?: string | number | null;
   tracker: Viewport3DResourceTracker;
+  uploadManager: Viewport3DGpuUploadManager;
 }) {
   const invalidate = useBatchedInvalidate();
-  const surfaceGeometry = useMemo(() => {
-    if (!model.surfaceIndices?.length || !model.style.fillVisible) return null;
-    const next = new BufferGeometry();
-    next.setAttribute("position", new BufferAttribute(model.positions, 3));
-    next.setIndex(new BufferAttribute(model.surfaceIndices, 1));
-    return tracker.track("geometry", next);
-  }, [model, tracker]);
-  const edgeGeometry = useMemo(() => {
-    const indices = model.surfaceEdgeIndices ?? model.edgeIndices;
-    if (!indices?.length || !model.style.wireframeVisible) return null;
-    const next = new BufferGeometry();
-    next.setAttribute("position", new BufferAttribute(model.positions, 3));
-    next.setIndex(new BufferAttribute(indices, 1));
-    return tracker.track("geometry", next);
-  }, [model, tracker]);
-
-  useEffect(
-    () => () => tracker.release("geometry", surfaceGeometry),
-    [surfaceGeometry, tracker],
-  );
-  useEffect(
-    () => () => tracker.release("geometry", edgeGeometry),
-    [edgeGeometry, tracker],
-  );
-  useEffect(() => {
-    if (!surfaceGeometry && !edgeGeometry) return;
-    tracker.recordDirtyFrame("region-mesh-overlay");
-    invalidate();
-  }, [edgeGeometry, invalidate, surfaceGeometry, tracker]);
+  const surfaceGeometry = useRegionMeshOverlayGeometryUpload({
+    dirtyReason: "region-mesh-overlay",
+    enabled: Boolean(model.surfaceIndices?.length && model.style.fillVisible),
+    indices: model.surfaceIndices ?? null,
+    invalidate,
+    kind: "surface",
+    model,
+    targetVisualizationRevision,
+    topologyRevision,
+    tracker,
+    uploadManager,
+  });
+  const edgeGeometry = useRegionMeshOverlayGeometryUpload({
+    dirtyReason: "region-mesh-overlay",
+    enabled: Boolean(
+      (model.surfaceEdgeIndices?.length || model.edgeIndices?.length) &&
+        model.style.wireframeVisible,
+    ),
+    indices: model.surfaceEdgeIndices ?? model.edgeIndices,
+    invalidate,
+    kind: "edge",
+    model,
+    targetVisualizationRevision,
+    topologyRevision,
+    tracker,
+    uploadManager,
+  });
 
   if (!surfaceGeometry && !edgeGeometry) return null;
 
@@ -207,4 +188,167 @@ function RegionMeshOverlayShape({
       ) : null}
     </group>
   );
+}
+
+function useRegionMeshOverlayGeometryUpload({
+  dirtyReason,
+  enabled,
+  indices,
+  invalidate,
+  kind,
+  model,
+  targetVisualizationRevision,
+  topologyRevision,
+  tracker,
+  uploadManager,
+}: {
+  dirtyReason: string;
+  enabled: boolean;
+  indices: Uint32Array | null | undefined;
+  invalidate: () => void;
+  kind: "edge" | "surface";
+  model: RegionMeshOverlayModel;
+  targetVisualizationRevision?: string | number | null;
+  topologyRevision?: string | number | null;
+  tracker: Viewport3DResourceTracker;
+  uploadManager: Viewport3DGpuUploadManager;
+}): BufferGeometry | null {
+  const store = useMemo(() => createRegionMeshOverlayGeometryStore(), []);
+  const snapshot = useSyncExternalStore(
+    store.subscribe,
+    store.getSnapshot,
+    store.getSnapshot,
+  );
+  const uploadKey = createRegionMeshOverlayGeometryUploadKey({
+    indexBytes: indices?.byteLength ?? 0,
+    kind,
+    positionsBytes: model.positions.byteLength,
+    regionId: model.regionId,
+    targetVisualizationRevision,
+    topologyRevision,
+  });
+
+  useEffect(() => {
+    store.publish(null);
+
+    if (!enabled || !indices?.length) return;
+
+    const abortController = new AbortController();
+    let uploadedGeometry: BufferGeometry | null = null;
+    const estimatedBytes = model.positions.byteLength + indices.byteLength;
+    const chunks: Viewport3DGpuUploadChunk[] = [
+      {
+        estimatedBytes,
+        itemCount: indices.length,
+        upload: () => {
+          uploadedGeometry = tracker.track(
+            "geometry",
+            createRegionMeshOverlayGeometry(model.positions, indices),
+          );
+        },
+      },
+    ];
+
+    uploadManager.enqueue({
+      chunks,
+      estimatedBytes,
+      key: uploadKey,
+      lane: "region-overlay",
+      onVisible: () => {
+        if (!uploadedGeometry) return;
+        store.publish(uploadedGeometry);
+        tracker.recordDirtyFrame(dirtyReason);
+        invalidate();
+      },
+      signal: abortController.signal,
+      targetRevision: uploadKey,
+    });
+
+    return () => {
+      abortController.abort();
+      if (!uploadedGeometry) return;
+      if (store.getSnapshot().geometry === uploadedGeometry) {
+        store.publish(null);
+      }
+      tracker.release("geometry", uploadedGeometry);
+    };
+  }, [
+    dirtyReason,
+    enabled,
+    indices,
+    invalidate,
+    model.positions,
+    store,
+    targetVisualizationRevision,
+    topologyRevision,
+    tracker,
+    uploadKey,
+    uploadManager,
+  ]);
+
+  return snapshot.geometry;
+}
+
+function createRegionMeshOverlayGeometryStore():
+  RegionMeshOverlayGeometryStore {
+  const listeners = new Set<() => void>();
+  let snapshot = EMPTY_REGION_MESH_OVERLAY_GEOMETRY_SNAPSHOT;
+
+  function publish(geometry: BufferGeometry | null): void {
+    if (snapshot.geometry === geometry) return;
+    snapshot = {
+      geometry,
+      version: snapshot.version + 1,
+    };
+    for (const listener of listeners) {
+      listener();
+    }
+  }
+
+  return {
+    getSnapshot: () => snapshot,
+    publish,
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
+}
+
+function createRegionMeshOverlayGeometry(
+  positions: Float32Array,
+  indices: Uint32Array,
+): BufferGeometry {
+  const geometry = new BufferGeometry();
+  geometry.setAttribute("position", new BufferAttribute(positions, 3));
+  geometry.setIndex(new BufferAttribute(indices, 1));
+  return geometry;
+}
+
+function createRegionMeshOverlayGeometryUploadKey({
+  indexBytes,
+  kind,
+  positionsBytes,
+  regionId,
+  targetVisualizationRevision,
+  topologyRevision,
+}: {
+  indexBytes: number;
+  kind: "edge" | "surface";
+  positionsBytes: number;
+  regionId: string;
+  targetVisualizationRevision?: string | number | null;
+  topologyRevision?: string | number | null;
+}): string {
+  return [
+    "region-overlay-geometry",
+    `region=${regionId}`,
+    `kind=${kind}`,
+    `topology=${topologyRevision ?? "none"}`,
+    `targets=${targetVisualizationRevision ?? "none"}`,
+    `positions=${positionsBytes}`,
+    `indices=${indexBytes}`,
+  ].join(":");
 }

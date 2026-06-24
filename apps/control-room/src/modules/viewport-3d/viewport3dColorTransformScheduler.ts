@@ -9,6 +9,7 @@ import {
   buildViewport3DFieldColorBuffer,
   estimateViewport3DFieldColorBuildInputBytes,
   estimateViewport3DFieldColorBuildOutputBytes,
+  type Viewport3DFieldColorBuildTarget,
 } from "./field-colors/viewport3dFieldColorBuildModel";
 import type {
   Viewport3DFieldColorBuildWorkerRequest,
@@ -26,6 +27,7 @@ export interface Viewport3DColorTransformBuildOptions
   latestWins?: boolean;
   onDiagnosticRecord?: (record: Viewport3DBuildDiagnosticRecord) => void;
   revisionSummary?: string;
+  target?: Viewport3DFieldColorBuildTarget;
 }
 
 interface PendingColorTransform {
@@ -59,7 +61,7 @@ export async function buildVertexScalarColorsOffMainThread(
     return scheduler.schedule(
       {
         groupKey: options.groupKey,
-        inputBytes: estimateFieldColorInputBytes(fieldVector),
+        inputBytes: estimateFieldColorInputBytes(fieldVector, options.target),
         itemCount: fieldVector.pointCount,
         key: buildKey,
         lane: "field-color",
@@ -112,10 +114,7 @@ async function executeVertexScalarColorBuild(
   const result = await buildViewport3DFieldColorBuffer({
     ...options,
     fieldVector,
-    target: {
-      kind: "full-domain",
-      vertexCount: fieldVector.pointCount,
-    },
+    target: options.target ?? defaultFieldColorTarget(fieldVector),
   });
   if (!result) {
     throw new Error("Viewport 3D field-color build returned no buffer.");
@@ -166,13 +165,13 @@ export function disposeViewport3DColorTransformWorkerForTests(): void {
   colorTransformWorkerFallbackReason = undefined;
 }
 
-function estimateFieldColorInputBytes(fieldVector: DecodedFieldVector): number {
+function estimateFieldColorInputBytes(
+  fieldVector: DecodedFieldVector,
+  target: Viewport3DFieldColorBuildTarget | undefined,
+): number {
   return estimateViewport3DFieldColorBuildInputBytes({
     fieldVector,
-    target: {
-      kind: "full-domain",
-      vertexCount: fieldVector.pointCount,
-    },
+    target: target ?? defaultFieldColorTarget(fieldVector),
   });
 }
 
@@ -184,11 +183,49 @@ function estimateFieldColorOutputBytes(
     colorMode: options.colorMode,
     fieldVector,
     shaderOnly: options.shaderOnly,
-    target: {
-      kind: "full-domain",
-      vertexCount: fieldVector.pointCount,
-    },
+    target: options.target ?? defaultFieldColorTarget(fieldVector),
   });
+}
+
+function defaultFieldColorTarget(
+  fieldVector: DecodedFieldVector,
+): Viewport3DFieldColorBuildTarget {
+  return {
+    kind: "full-domain",
+    vertexCount: fieldVector.pointCount,
+  };
+}
+
+function cloneFieldColorBuildTargetForWorker(
+  target: Viewport3DFieldColorBuildTarget,
+): {
+  target: Viewport3DFieldColorBuildTarget;
+  transferables: Transferable[];
+} {
+  switch (target.kind) {
+    case "mapped-vertices": {
+      const targetNodeIndices = new Uint32Array(target.targetNodeIndices);
+      return {
+        target: {
+          ...target,
+          targetNodeIndices,
+        },
+        transferables: [targetNodeIndices.buffer],
+      };
+    }
+    case "sampled": {
+      const pointIndices = new Uint32Array(target.pointIndices);
+      return {
+        target: {
+          ...target,
+          pointIndices,
+        },
+        transferables: [pointIndices.buffer],
+      };
+    }
+    case "full-domain":
+      return { target, transferables: [] };
+  }
 }
 
 class ColorTransformWorkerClient {
@@ -216,7 +253,7 @@ class ColorTransformWorkerClient {
 
   transform(
     fieldVector: DecodedFieldVector,
-    options: ChunkedFieldTransformOptions,
+    options: Viewport3DColorTransformBuildOptions,
   ): Promise<ScalarColorBuffer> {
     if (this.disposed) {
       return Promise.reject(
@@ -227,6 +264,9 @@ class ColorTransformWorkerClient {
     this.clearIdleDisposeTimer();
     const id = this.nextId++;
     const values = new Float64Array(fieldVector.values);
+    const target = cloneFieldColorBuildTargetForWorker(
+      options.target ?? defaultFieldColorTarget(fieldVector),
+    );
     const request: Viewport3DFieldColorBuildWorkerRequest = {
       chunkSize: options.chunkSize,
       colorMode: options.colorMode,
@@ -238,10 +278,7 @@ class ColorTransformWorkerClient {
       id,
       scalarRange: options.scalarRange,
       shaderOnly: options.shaderOnly,
-      target: {
-        kind: "full-domain",
-        vertexCount: fieldVector.pointCount,
-      },
+      target: target.target,
     };
 
     return new Promise((resolve, reject) => {
@@ -261,7 +298,7 @@ class ColorTransformWorkerClient {
         signal,
       });
       try {
-        this.worker.postMessage(request, [values.buffer]);
+        this.worker.postMessage(request, [values.buffer, ...target.transferables]);
       } catch (error) {
         this.clearPending(id);
         this.dispose(error);

@@ -358,15 +358,21 @@ describe("viewport3dResources", () => {
       data: "cached",
       etag: '"topology-1"',
     });
-    const request = vi.fn(async (etag?: string | null) => ({
-      etag: etag ?? null,
-      status: "not-modified" as const,
-    }));
+    const request = vi.fn(
+      async (etag?: string | null, signal?: AbortSignal) => {
+        expect(signal).toBeInstanceOf(AbortSignal);
+        return {
+          etag: etag ?? null,
+          status: "not-modified" as const,
+        };
+      },
+    );
 
     await expect(
       loadCachedBinaryResource(cache, "topology", request),
     ).resolves.toBe("cached");
-    expect(request).toHaveBeenCalledWith('"topology-1"');
+    expect(request.mock.calls[0]?.[0]).toBe('"topology-1"');
+    expect(request.mock.calls[0]?.[1]).toBeInstanceOf(AbortSignal);
   });
 
   it("restores a cached binary entry when it was evicted during a 304 request", async () => {
@@ -477,6 +483,77 @@ describe("viewport3dResources", () => {
     });
   });
 
+  it("deduplicates concurrent binary loads for the same cache key", async () => {
+    const cache = new ResourceCache<string>({ maxBytes: 32 });
+    const request = vi.fn(async () => ({
+      byteLength: 5,
+      data: "fresh",
+      etag: '"field-1"',
+      status: "ready" as const,
+    }));
+
+    const [first, second] = await Promise.all([
+      loadCachedBinaryResource(cache, "field:m", request),
+      loadCachedBinaryResource(cache, "field:m", request),
+    ]);
+
+    expect(first).toBe("fresh");
+    expect(second).toBe("fresh");
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a shared binary request alive until every consumer aborts", async () => {
+    const cache = new ResourceCache<string>({ maxBytes: 32 });
+    let resolveRequest!: (result: {
+      byteLength: number;
+      data: string;
+      etag: string;
+      status: "ready";
+    }) => void;
+    const pendingRequest = new Promise<{
+      byteLength: number;
+      data: string;
+      etag: string;
+      status: "ready";
+    }>((resolve) => {
+      resolveRequest = resolve;
+    });
+    const requestSignals: AbortSignal[] = [];
+    const request = vi.fn((_etag?: string | null, signal?: AbortSignal) => {
+      if (signal) requestSignals.push(signal);
+      return pendingRequest;
+    });
+    const firstController = new AbortController();
+    const secondController = new AbortController();
+
+    const first = loadCachedBinaryResource(cache, "field:m", request, {
+      signal: firstController.signal,
+    });
+    const second = loadCachedBinaryResource(cache, "field:m", request, {
+      signal: secondController.signal,
+    });
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(requestSignals[0]?.aborted).toBe(false);
+
+    firstController.abort();
+    expect(requestSignals[0]?.aborted).toBe(false);
+
+    secondController.abort();
+    expect(requestSignals[0]?.aborted).toBe(true);
+
+    resolveRequest({
+      byteLength: 5,
+      data: "fresh",
+      etag: '"field-1"',
+      status: "ready",
+    });
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      "fresh",
+      "fresh",
+    ]);
+  });
+
   it("retains oversized binary data as the current entry for future 304 reuse", async () => {
     const cache = new ResourceCache<string>({ maxBytes: 4 });
     const request = vi
@@ -499,7 +576,8 @@ describe("viewport3dResources", () => {
       loadCachedBinaryResource(cache, "topology", request),
     ).resolves.toBe("large-topology");
 
-    expect(request).toHaveBeenNthCalledWith(2, '"large-1"');
+    expect(request.mock.calls[1]?.[0]).toBe('"large-1"');
+    expect(request.mock.calls[1]?.[1]).toBeInstanceOf(AbortSignal);
     expect(cache.stats()).toEqual({ byteLength: 8, entryCount: 1 });
   });
 

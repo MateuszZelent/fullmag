@@ -4,7 +4,7 @@ import {
   redactDiagnosticDetail,
 } from "./diagnosticRecorderTypes";
 
-export type DiagnosticLeakSnapshotKind =
+type DiagnosticLeakSnapshotKind =
   | "after-forced-gc"
   | "after-load"
   | "after-quantity-loop"
@@ -12,7 +12,7 @@ export type DiagnosticLeakSnapshotKind =
   | "after-unmount"
   | "before";
 
-export type DiagnosticLeakClassification =
+type DiagnosticLeakClassification =
   | "leak-confirmed"
   | "leak-suspected"
   | "ok"
@@ -56,7 +56,7 @@ export interface DiagnosticLeakComparison {
   reasons: string[];
 }
 
-export const DEFAULT_DIAGNOSTIC_LEAK_THRESHOLDS: DiagnosticLeakThresholds = {
+const DEFAULT_DIAGNOSTIC_LEAK_THRESHOLDS: DiagnosticLeakThresholds = {
   jsHeapGrowthWarningBytes: 25 * 1024 * 1024,
   trackedGrowthWatchBytes: 1 * 1024 * 1024,
   webglGrowthWatchBytes: 1 * 1024 * 1024,

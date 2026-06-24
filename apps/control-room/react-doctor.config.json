@@ -17,6 +17,12 @@
         "rules": ["react-doctor/async-await-in-loop"]
       },
       {
+        "files": [
+          "src/modules/viewport-3d/field-colors/viewport3dFieldColorBuildModel.ts"
+        ],
+        "rules": ["react-doctor/async-await-in-loop"]
+      },
+      {
         "files": ["src/kernel/api/ControlRoomApi.ts"],
         "rules": ["react-doctor/async-await-in-loop"]
       },

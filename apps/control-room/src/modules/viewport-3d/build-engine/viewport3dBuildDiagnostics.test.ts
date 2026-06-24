@@ -45,13 +45,21 @@ describe("viewport3dBuildDiagnostics", () => {
 
     expect(record).toMatchObject({
       byteLength: 128,
+      buildKey: "vector-glyph:topology-1:field-1",
+      buildLane: "vector-glyph",
+      buildState: "ready",
       durationMs: 80,
-      kind: "measure",
+      inputBytes: 64,
+      itemCount: 4,
+      kind: "viewport-3d-build-job",
       lane: "viewport-3d",
       name: "fullmag.viewport3d.build-engine.vector-glyph",
+      outputBytes: 128,
+      queueWaitMs: 20,
       severity: "warning",
       startTimeMs: 10,
       timestampMs: 90,
+      workerComputeMs: 60,
     });
     expect(record.detail).toMatchObject({
       buildKey: "vector-glyph:topology-1:field-1",

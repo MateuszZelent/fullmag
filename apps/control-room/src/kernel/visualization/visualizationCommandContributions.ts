@@ -12,6 +12,7 @@ import {
   mergeVisualizationStateTargetOverride,
   renderModePatch,
   resolveVisualizationTargetFromSelection,
+  visualizationStateOverrideMatchesTarget,
   type SurfaceColorSource,
   type VisualizationColorMode,
   type VisualizationGeometryScope,
@@ -111,7 +112,7 @@ async function clearTargetOverrideResource(
 
   await patchVisualizationState(context, {
     overrides: (state.overrides ?? []).filter(
-      (entry) => !(entry.scope === target.kind && entry.scope_id === target.id),
+      (entry) => !visualizationStateOverrideMatchesTarget(entry, target),
     ),
   });
   return true;

@@ -195,6 +195,21 @@ describe("Viewport3DModule scene wiring", () => {
     expect(source).toContain("onCameraInteractionEnd={endCameraInteraction}");
   });
 
+  it("installs the Three console policy before mounting the R3F canvas", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DModule.tsx", import.meta.url),
+      "utf8",
+    );
+    const installCall = source.indexOf("installViewport3DThreeConsolePolicy();");
+    const canvasStart = source.indexOf("<Canvas");
+
+    expect(source).toContain(
+      'import { installViewport3DThreeConsolePolicy } from "./viewport3dThreeConsolePolicy";',
+    );
+    expect(installCall).toBeGreaterThanOrEqual(0);
+    expect(canvasStart).toBeGreaterThan(installCall);
+  });
+
   it("forwards dimension-frame widget state into the scene", () => {
     const source = readFileSync(
       new URL("./Viewport3DModule.tsx", import.meta.url),

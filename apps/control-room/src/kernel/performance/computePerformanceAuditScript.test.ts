@@ -123,7 +123,8 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("status?.resources.field_revision");
     expect(auditScript).toContain("fullmag.viewport3d.buildViewport3DTopologyRenderModel");
     expect(auditScript).toContain("fullmag.api.requestBinaryResource.topology");
-    expect(auditScript).toContain("fullmag.viewport3d.buildFdmCuboidInstanceModel");
+    expect(auditScript).toContain("buildViewport3DFdmCuboidJobKey");
+    expect(auditScript).toContain("useFdmCuboidBuildResult");
     expect(auditScript).toContain("fullmag.viewport3d.buildVectorGlyphInstances");
     expect(auditScript).toContain("fullmag.viewport3d.uploadVectorGlyphColors");
     expect(auditScript).toContain("fullmag.viewport3d.uploadVectorGlyphMatrices");

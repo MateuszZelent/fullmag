@@ -17,7 +17,7 @@ export interface ResourceCacheStats {
 
 export type ResourceCacheEventAction = "evict" | "hit" | "miss" | "set";
 
-export interface ResourceCacheEvent {
+interface ResourceCacheEvent {
   action: ResourceCacheEventAction;
   byteLength: number | null;
   entryCount: number;

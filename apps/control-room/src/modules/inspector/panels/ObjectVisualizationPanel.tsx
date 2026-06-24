@@ -15,6 +15,7 @@ import {
   renderModePatch,
   resolveTargetVisualization,
   resolveVisualizationTargetFromSelection,
+  visualizationStateOverrideMatchesTarget,
   visualizationTargetKey,
   type ObjectVisualizationSnapshot,
   type VisualizationGeometryScope,
@@ -1089,8 +1090,7 @@ function useObjectVisualizationPanelState(
 
     visualizationSync.queuePatch({
       overrides: (visualizationState.data.overrides ?? []).filter(
-        (entry) =>
-          !(entry.scope === target.kind && entry.scope_id === target.id),
+        (entry) => !visualizationStateOverrideMatchesTarget(entry, target),
       ),
     });
     visualization.clearTarget(target);

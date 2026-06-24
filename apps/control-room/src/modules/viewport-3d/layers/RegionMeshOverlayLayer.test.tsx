@@ -3,13 +3,16 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 describe("RegionMeshOverlayLayer", () => {
-  it("consumes the region overlay build-model boundary instead of deriving directly in the layer", () => {
+  it("renders prebuilt async region overlay models without lifting status through effects", () => {
     const source = readFileSync(
       fileURLToPath(new URL("./RegionMeshOverlayLayer.tsx", import.meta.url)),
       "utf8",
     );
 
-    expect(source).toContain("buildViewport3DRegionOverlayModels");
+    expect(source).toContain("models: readonly RegionMeshOverlayModel[]");
+    expect(source).not.toContain("useViewport3DRegionOverlayModels");
+    expect(source).not.toContain("onBuildStatusChange");
+    expect(source).not.toContain("buildViewport3DRegionOverlayModels(");
     expect(source).not.toContain("buildRegionMeshOverlayModels(");
   });
 
@@ -32,5 +35,21 @@ describe("RegionMeshOverlayLayer", () => {
     );
     expect(source).not.toContain("depthTest={false}");
     expect(source).not.toContain("computeVertexNormals");
+  });
+
+  it("routes realized overlay geometry adoption through the GPU upload manager", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("./RegionMeshOverlayLayer.tsx", import.meta.url)),
+      "utf8",
+    );
+    const shapeSource = source.slice(
+      source.indexOf("function RegionMeshOverlayShape"),
+    );
+
+    expect(source).toContain("createViewport3DGpuUploadManager");
+    expect(source).toContain("useRegionMeshOverlayGeometryUpload");
+    expect(source).toContain('lane: "region-overlay"');
+    expect(shapeSource).not.toContain("const surfaceGeometry = useMemo");
+    expect(shapeSource).not.toContain("const edgeGeometry = useMemo");
   });
 });

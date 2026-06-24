@@ -10,6 +10,7 @@ import {
   chunkedScalarColorStateIsCompatible,
   createViewport3DFieldColorBuildReference,
   mergeViewport3DFieldScalarColors,
+  resolveViewport3DChunkedFieldColorTarget,
   shouldStartChunkedScalarColorBuild,
 } from "./useViewport3DChunkedScalarColors";
 
@@ -82,6 +83,10 @@ describe("useViewport3DChunkedScalarColors", () => {
       targetScopeId: "part-a",
       targetScopeKind: "part",
     });
+    const targetVisualizationChanged = createViewport3DFieldColorBuildReference({
+      ...base,
+      targetVisualizationRevision: "targets-4",
+    });
     const samplingChanged = createViewport3DFieldColorBuildReference({
       ...base,
       samplingRevision: "full-domain:chunked:v2",
@@ -95,10 +100,11 @@ describe("useViewport3DChunkedScalarColors", () => {
     expect(first!.buildKey).not.toBe(paletteChanged!.buildKey);
     expect(first!.buildKey).not.toBe(rangeChanged!.buildKey);
     expect(first!.buildKey).not.toBe(targetChanged!.buildKey);
+    expect(first!.buildKey).toBe(targetVisualizationChanged!.buildKey);
     expect(first!.buildKey).not.toBe(samplingChanged!.buildKey);
     expect(first).toEqual({
       buildKey:
-        'field-color:{"algorithmVersion":1,"component":"orientation","domainId":"shared-domain","fieldRevision":"field-7","lane":"field-color","quantityId":"m","samplingRevision":"full-domain:chunked","scopeId":"full","scopeKind":"full","sessionId":"current","styleRevision":"palette=viridis|range=auto:min=-1:max=1|target=surface/full","targetVisualizationRevision":"targets-3","topologyRevision":"mesh-4"}',
+        'field-color:{"algorithmVersion":1,"component":"orientation","domainId":"shared-domain","fieldRevision":"field-7","lane":"field-color","quantityId":"m","samplingRevision":"full-domain:chunked","scopeId":"full","scopeKind":"full","sessionId":"current","styleRevision":"palette=viridis|range=auto:min=-1:max=1|target=surface/full","targetVisualizationRevision":"field-color-data","topologyRevision":"mesh-4"}',
       groupKey:
         "field-color:session=current:domain=shared-domain:quantity=m:scope=full:full:target=surface/full",
       revisionSummary:
@@ -151,6 +157,7 @@ describe("useViewport3DChunkedScalarColors", () => {
       colorPalette: "viridis",
       fieldVector,
       modesKey: "orientation",
+      targetKind: "full-domain" as const,
       token: {},
       topology,
     };
@@ -162,6 +169,7 @@ describe("useViewport3DChunkedScalarColors", () => {
         fieldPointCount: 75_000,
         modesKey: "orientation",
         needsChunking: true,
+        targetKind: "full-domain",
         topology,
       }),
     ).toBe(true);
@@ -174,6 +182,7 @@ describe("useViewport3DChunkedScalarColors", () => {
       colorPalette: "viridis",
       fieldVector,
       modesKey: "orientation",
+      targetKind: "full-domain" as const,
       token: {},
       topology,
     };
@@ -185,6 +194,7 @@ describe("useViewport3DChunkedScalarColors", () => {
         fieldPointCount: 75_000,
         modesKey: "orientation",
         needsChunking: true,
+        targetKind: "full-domain",
         topology: { nodeCount: 75_000 },
       }),
     ).toBe(false);
@@ -195,6 +205,7 @@ describe("useViewport3DChunkedScalarColors", () => {
         fieldPointCount: 75_000,
         modesKey: "magnitude",
         needsChunking: true,
+        targetKind: "full-domain",
         topology,
       }),
     ).toBe(false);
@@ -205,9 +216,42 @@ describe("useViewport3DChunkedScalarColors", () => {
         fieldPointCount: 10_000,
         modesKey: "orientation",
         needsChunking: false,
+        targetKind: "full-domain",
         topology,
       }),
     ).toBe(false);
+  });
+
+  it("routes magnetic-only field colors through mapped worker targets", () => {
+    const target = resolveViewport3DChunkedFieldColorTarget(
+      {
+        magneticParts: [
+          {
+            part: {
+              id: "cofeb",
+              nodeCount: 2,
+              nodeStart: 1,
+            },
+          },
+          {
+            part: {
+              id: "ring",
+              node_indices: [4],
+            },
+          },
+        ],
+        nodeCount: 5,
+      } as never,
+      {
+        pointCount: 3,
+      } as never,
+    );
+
+    expect(target).toEqual({
+      kind: "mapped-vertices",
+      targetNodeIndices: new Uint32Array([1, 2, 4]),
+      vertexCount: 5,
+    });
   });
 
   it("does not start overlapping chunked color builds while a previous build is pending", () => {

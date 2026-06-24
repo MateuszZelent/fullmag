@@ -2,7 +2,14 @@ import { BufferAttribute, BufferGeometry } from "three";
 import { describe, expect, it } from "vitest";
 
 import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
-import { createViewport3DScalarColorUploadPlan } from "./useViewport3DScalarColorUpload";
+import {
+  createViewport3DScalarColorUploadPlan,
+  createViewport3DScalarShaderColorUploadPlan,
+} from "./useViewport3DScalarColorUpload";
+import {
+  VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE,
+  VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE,
+} from "../viewport3dScalarSurfaceShader";
 
 function scalarColorBuffer(vertexCount: number): ScalarColorBuffer {
   const colors = new Float32Array(vertexCount * 3);
@@ -69,5 +76,82 @@ describe("createViewport3DScalarColorUploadPlan", () => {
     expect(Array.from(existing.array as Float32Array)).toEqual(
       Array.from(colorBuffer.colors),
     );
+  });
+});
+
+describe("createViewport3DScalarShaderColorUploadPlan", () => {
+  it("splits scalar shader attributes into upload chunks before visible adoption", () => {
+    const geometry = new BufferGeometry();
+    const scalarValues = new Float32Array([1, 2, 3, 4, 5]);
+    const colorBuffer: ScalarColorBuffer = {
+      colors: new Float32Array(),
+      colorMode: "x",
+      range: { max: 5, min: 1 },
+      scalarValues,
+    };
+
+    const uploadPlan = createViewport3DScalarShaderColorUploadPlan(
+      geometry,
+      colorBuffer,
+      5,
+      2,
+    );
+
+    expect(uploadPlan).not.toBeNull();
+    expect(uploadPlan?.chunks.map((chunk) => chunk.itemCount)).toEqual([
+      2, 2, 1,
+    ]);
+    expect(uploadPlan?.estimatedBytes).toBe(scalarValues.byteLength);
+    expect(geometry.hasAttribute(VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE)).toBe(false);
+
+    for (const chunk of uploadPlan?.chunks ?? []) {
+      chunk.upload();
+    }
+    expect(geometry.hasAttribute(VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE)).toBe(false);
+
+    uploadPlan?.onVisible();
+    const attribute = geometry.getAttribute(
+      VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE,
+    ) as BufferAttribute;
+    expect(attribute).toBeInstanceOf(BufferAttribute);
+    expect(Array.from(attribute.array as Float32Array)).toEqual(
+      Array.from(scalarValues),
+    );
+    expect(attribute.version).toBeGreaterThan(0);
+  });
+
+  it("reuses compatible shader attributes and removes attributes from the previous shader mode", () => {
+    const geometry = new BufferGeometry();
+    const scalarAttribute = new BufferAttribute(new Float32Array(2), 1);
+    geometry.setAttribute(VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE, scalarAttribute);
+    geometry.setAttribute(
+      VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE,
+      new BufferAttribute(new Float32Array(6).fill(1), 3),
+    );
+    const scalarValues = new Float32Array([7, 9]);
+    const colorBuffer: ScalarColorBuffer = {
+      colors: new Float32Array(),
+      colorMode: "x",
+      range: { max: 9, min: 7 },
+      scalarValues,
+    };
+
+    const uploadPlan = createViewport3DScalarShaderColorUploadPlan(
+      geometry,
+      colorBuffer,
+      2,
+      1,
+    );
+
+    for (const chunk of uploadPlan?.chunks ?? []) {
+      chunk.upload();
+    }
+    uploadPlan?.onVisible();
+
+    expect(geometry.getAttribute(VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE)).toBe(
+      scalarAttribute,
+    );
+    expect(Array.from(scalarAttribute.array as Float32Array)).toEqual([7, 9]);
+    expect(geometry.hasAttribute(VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE)).toBe(false);
   });
 });

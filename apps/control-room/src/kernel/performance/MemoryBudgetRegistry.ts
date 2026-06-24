@@ -1,6 +1,6 @@
 "use client";
 
-export type MemoryBudgetCategory =
+type MemoryBudgetCategory =
   | "api-cache"
   | "binary-buffer"
   | "diagnostics-buffer"
@@ -24,7 +24,7 @@ export interface MemoryBudgetEntry {
   releaseReason: string | null;
 }
 
-export type MemoryBudgetProviderEntry = Omit<
+type MemoryBudgetProviderEntry = Omit<
   MemoryBudgetEntry,
   "createdAtMs" | "owner" | "releaseReason"
 > &

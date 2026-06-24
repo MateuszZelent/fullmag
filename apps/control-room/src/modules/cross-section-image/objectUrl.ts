@@ -20,6 +20,23 @@ export function revokeObjectUrl(
   objectUrlApi.revokeObjectURL(url);
 }
 
+export function createObjectUrlEffect(
+  data: ArrayBuffer | null,
+  contentType: string,
+  setUrl: (url: string | null) => void,
+  objectUrlApi: ObjectUrlApi | null = defaultObjectUrlApi(),
+): () => void {
+  let disposed = false;
+  const nextUrl = createObjectUrl(data, contentType, objectUrlApi);
+  queueMicrotask(() => {
+    if (!disposed) setUrl(nextUrl);
+  });
+  return () => {
+    disposed = true;
+    revokeObjectUrl(nextUrl, objectUrlApi);
+  };
+}
+
 function defaultObjectUrlApi(): ObjectUrlApi | null {
   return typeof URL === "undefined" ? null : URL;
 }

@@ -1,6 +1,10 @@
 import type { DiagnosticRecorderSnapshot } from "./DiagnosticRecorderController";
 import { buildDiagnosticSuspectReport } from "./diagnosticSuspectReport";
 import {
+  buildDiagnosticViewport3DBuildSummary,
+  buildDiagnosticViewport3DVisibleRevisionSummary,
+} from "./diagnosticViewport3DSummaries";
+import {
   DIAGNOSTIC_ARTIFACT_VERSION,
   type DiagnosticAnyRecord,
   type DiagnosticArtifactV1,
@@ -29,6 +33,11 @@ export function buildDiagnosticArtifactV1(
     },
     streams: redactStreams(snapshot.streams),
     summary: snapshot.summary,
+    viewport3dBuildSummary: buildDiagnosticViewport3DBuildSummary(
+      snapshot.streams,
+    ),
+    viewport3dVisibleRevisionSummary:
+      buildDiagnosticViewport3DVisibleRevisionSummary(snapshot.streams),
   };
 
   return {
@@ -51,7 +60,7 @@ export function serializeDiagnosticStreamNdjson(
     .join("\n");
 }
 
-export function redactDiagnosticRecord<TRecord extends DiagnosticAnyRecord>(
+function redactDiagnosticRecord<TRecord extends DiagnosticAnyRecord>(
   record: TRecord,
 ): TRecord {
   return {
@@ -79,6 +88,10 @@ function redactStreams(
     requests: streams.requests.map(redactDiagnosticRecord),
     resources: streams.resources.map(redactDiagnosticRecord),
     timeline: streams.timeline.map(redactDiagnosticRecord),
+    viewport3dBuild: streams.viewport3dBuild.map(redactDiagnosticRecord),
+    viewport3dWorkerPools: streams.viewport3dWorkerPools.map(
+      redactDiagnosticRecord,
+    ),
     viewport3d: streams.viewport3d.map(redactDiagnosticRecord),
   };
 }

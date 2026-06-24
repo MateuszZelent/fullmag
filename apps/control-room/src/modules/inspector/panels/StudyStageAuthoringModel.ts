@@ -1927,17 +1927,17 @@ function parseSettleStepDrafts(value: string): SettleStepDraft[] {
   try {
     const parsed = JSON.parse(value) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed
-      .map((item) => {
-        const step = asRecord(item);
-        if (!step) return null;
-        return {
-          onNonConvergence: stringObjectValue(
-            step.on_non_convergence ?? step.onNonConvergence,
-          ).trim(),
-        };
-      })
-      .filter((step): step is SettleStepDraft => Boolean(step));
+    const steps: SettleStepDraft[] = [];
+    for (const item of parsed) {
+      const step = asRecord(item);
+      if (!step) continue;
+      steps.push({
+        onNonConvergence: stringObjectValue(
+          step.on_non_convergence ?? step.onNonConvergence,
+        ).trim(),
+      });
+    }
+    return steps;
   } catch {
     return [];
   }
@@ -2061,16 +2061,16 @@ function parseMinorLoopDrafts(value: string): MinorLoopDraft[] {
   try {
     const parsed = JSON.parse(value) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed
-      .map((item, index) => {
-        const loop = asRecord(item);
-        if (!loop) return null;
-        const reversal = finiteObjectNumber(loop.reversal_mT ?? loop.reversalMt);
-        const returnField = finiteObjectNumber(loop.return_mT ?? loop.returnMt);
-        if (reversal === null || returnField === null) return null;
-        return { index, returnField, reversal };
-      })
-      .filter((loop): loop is MinorLoopDraft => Boolean(loop));
+    const loops: MinorLoopDraft[] = [];
+    parsed.forEach((item, index) => {
+      const loop = asRecord(item);
+      if (!loop) return;
+      const reversal = finiteObjectNumber(loop.reversal_mT ?? loop.reversalMt);
+      const returnField = finiteObjectNumber(loop.return_mT ?? loop.returnMt);
+      if (reversal === null || returnField === null) return;
+      loops.push({ index, returnField, reversal });
+    });
+    return loops;
   } catch {
     return [];
   }
@@ -2228,21 +2228,20 @@ function parseFieldSegmentDrafts(value: string): FieldSegmentDraft[] {
   try {
     const parsed = JSON.parse(value) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed
-      .map((item) => {
-        const segment = asRecord(item);
-        if (!segment) return null;
-        const start = finiteObjectNumber(segment.startField ?? segment.start_field ?? segment.start);
-        const stop = finiteObjectNumber(segment.stopField ?? segment.stop_field ?? segment.stop);
-        const endpointPolicy = stringValue(
-          segment.endpointPolicy ?? segment.endpoint_policy,
-          "",
-        ).trim();
-        return start === null || stop === null
-          ? null
-          : { endpointPolicy, start, stop };
-      })
-      .filter((segment): segment is FieldSegmentDraft => Boolean(segment));
+    const segments: FieldSegmentDraft[] = [];
+    for (const item of parsed) {
+      const segment = asRecord(item);
+      if (!segment) continue;
+      const start = finiteObjectNumber(segment.startField ?? segment.start_field ?? segment.start);
+      const stop = finiteObjectNumber(segment.stopField ?? segment.stop_field ?? segment.stop);
+      const endpointPolicy = stringValue(
+        segment.endpointPolicy ?? segment.endpoint_policy,
+        "",
+      ).trim();
+      if (start === null || stop === null) continue;
+      segments.push({ endpointPolicy, start, stop });
+    }
+    return segments;
   } catch {
     return [];
   }
@@ -2259,30 +2258,30 @@ function parseDenseWindowDrafts(value: string): DenseWindowDraft[] {
   try {
     const parsed = JSON.parse(value) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed
-      .map((item, index) => {
-        const window = asRecord(item);
-        if (!window) return null;
-        const center = finiteObjectNumber(window.center_mT ?? window.centerMt);
-        const halfWidth = finiteObjectNumber(window.half_width_mT ?? window.halfWidthMt);
-        if (center === null || halfWidth === null || halfWidth <= 0) return null;
-        const rawPriority = window.priority;
-        const priority =
-          rawPriority === null || rawPriority === undefined
-            ? null
-            : Number(rawPriority);
-        const validPriority =
-          priority !== null && Number.isInteger(priority) && priority >= 0
-            ? priority
-            : null;
-        return {
-          end: center + halfWidth,
-          index,
-          priority: validPriority,
-          start: center - halfWidth,
-        };
-      })
-      .filter((window): window is DenseWindowDraft => Boolean(window));
+    const windows: DenseWindowDraft[] = [];
+    parsed.forEach((item, index) => {
+      const window = asRecord(item);
+      if (!window) return;
+      const center = finiteObjectNumber(window.center_mT ?? window.centerMt);
+      const halfWidth = finiteObjectNumber(window.half_width_mT ?? window.halfWidthMt);
+      if (center === null || halfWidth === null || halfWidth <= 0) return;
+      const rawPriority = window.priority;
+      const priority =
+        rawPriority === null || rawPriority === undefined
+          ? null
+          : Number(rawPriority);
+      const validPriority =
+        priority !== null && Number.isInteger(priority) && priority >= 0
+          ? priority
+          : null;
+      windows.push({
+        end: center + halfWidth,
+        index,
+        priority: validPriority,
+        start: center - halfWidth,
+      });
+    });
+    return windows;
   } catch {
     return [];
   }

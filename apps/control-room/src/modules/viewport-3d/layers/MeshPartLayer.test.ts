@@ -12,8 +12,10 @@ describe("MeshPartLayer", () => {
     );
 
     expect(source).toContain("canApplyScalarShaderColorBuffer");
+    expect(source).toContain("useViewport3DScalarShaderColorUpload");
     expect(source).toContain("field-scalar-shader");
     expect(source).toContain("<primitive attach=\"material\" object={scalarShaderMaterial} />");
+    expect(source).not.toContain("applyScalarShaderColorBuffer");
   });
 
   it("lets diagnostics bypass field-color buffer application without hiding surfaces", () => {
@@ -24,7 +26,9 @@ describe("MeshPartLayer", () => {
 
     expect(source).toContain("viewport3DFieldColorLayersEnabledFromBrowserConfig");
     expect(source).toContain("fieldColorLayersEnabled");
-    expect(source).toContain("if (!fieldColorLayersEnabled && !meshQualityColors) return;");
+    expect(source).toContain("useViewport3DScalarShaderColorUpload");
+    expect(source).toContain("field-scalar-shader");
+    expect(source).not.toContain("applyScalarShaderColorBuffer");
   });
 
   it("uses unlit materials for mesh part fallback surfaces", () => {
@@ -74,6 +78,22 @@ describe("MeshPartLayer", () => {
     );
 
     expect(source).toContain("if (!renderSettings.pointsVisible) return null;");
+  });
+
+  it("routes mesh part topology geometry adoption through the GPU upload manager", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("./MeshPartLayer.tsx", import.meta.url)),
+      "utf8",
+    );
+    const componentSource = source.slice(
+      source.indexOf("export const MeshPartLayer"),
+    );
+
+    expect(source).toContain("useViewport3DGeometryUpload");
+    expect(source).toContain('lane: "topology-index"');
+    expect(componentSource).not.toContain("const geometry = useMemo");
+    expect(componentSource).not.toContain("const edgeGeometry = useMemo");
+    expect(componentSource).not.toContain("const pointGeometry = useMemo");
   });
 
   it("uses volume edges for full magnetic-object wireframe and surface edges for surface mode", () => {

@@ -60,5 +60,38 @@ describe("viewport3dBuildEngineStore", () => {
       },
     ]);
   });
-});
 
+  it("exposes small worker fallback snapshots per lane", () => {
+    const store = createViewport3DBuildEngineStore();
+    const listener = vi.fn();
+
+    const unsubscribe = store.subscribe(listener);
+    store.publishFallbackState({
+      key: "vector-glyph:field-1",
+      lane: "vector-glyph",
+      reason: "worker-unavailable",
+      revisionSummary: "topology-1 field-1",
+      timestampMs: 42,
+    });
+    store.publishFallbackState({
+      key: "vector-glyph:field-2",
+      lane: "vector-glyph",
+      reason: "worker-unavailable",
+      revisionSummary: "topology-1 field-2",
+      timestampMs: 84,
+    });
+    unsubscribe();
+
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(store.getSnapshot().fallbacks).toEqual([
+      {
+        count: 2,
+        key: "vector-glyph:field-2",
+        lane: "vector-glyph",
+        reason: "worker-unavailable",
+        revisionSummary: "topology-1 field-2",
+        timestampMs: 84,
+      },
+    ]);
+  });
+});

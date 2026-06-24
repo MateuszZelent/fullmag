@@ -58,6 +58,9 @@ import { ObjectVisualizationController } from "./visualization/ObjectVisualizati
 import { VisualizationRegistrySyncController } from "./visualization/VisualizationRegistrySyncController";
 import { VISUALIZATION_TARGET_COMMANDS } from "./visualization/visualizationCommandContributions";
 import { resolveControlRoomModules } from "@/modules";
+import {
+  createViewport3DInactiveResourcePauseController,
+} from "@/modules/viewport-3d/viewport3dResourceLifecycle";
 
 installPerformanceMeasureGuard();
 
@@ -450,6 +453,22 @@ function PerformanceDiagnosticsConnector({ kernel }: { kernel: KernelApi }) {
   return null;
 }
 
+function Viewport3DResourceLifecycleConnector({
+  kernel,
+}: {
+  kernel: KernelApi;
+}) {
+  useEffect(
+    () =>
+      createViewport3DInactiveResourcePauseController({
+        layout: kernel.layout,
+      }),
+    [kernel.layout],
+  );
+
+  return null;
+}
+
 export function KernelProvider({ children }: KernelProviderProps) {
   const kernel = useMemo(() => createKernel(), []);
 
@@ -462,6 +481,7 @@ export function KernelProvider({ children }: KernelProviderProps) {
       <BrowserAuditConnector kernel={kernel} />
       <DiagnosticRecorderConnector kernel={kernel} />
       <PerformanceDiagnosticsConnector kernel={kernel} />
+      <Viewport3DResourceLifecycleConnector kernel={kernel} />
       {children}
     </KernelContext.Provider>
   );

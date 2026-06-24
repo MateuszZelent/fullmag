@@ -81,6 +81,7 @@ import { resolveCrossSectionQueryFromVisualizationState } from "@/shared/domain/
 
 import {
   mergeViewport3DFieldScalarColors,
+  resolveViewport3DChunkedFieldColorTarget,
   useViewport3DChunkedScalarColors,
 } from "./useViewport3DChunkedScalarColors";
 import { useViewport3DTopologyIndexBundle } from "./useViewport3DTopologyIndexBundle";
@@ -102,9 +103,10 @@ import {
   type HysteresisReplayMeshCompatibility,
 } from "../model/viewport3DTargets";
 import {
-  buildFdmCuboidInstanceModel,
+  useFdmCuboidBuildResult,
   type FdmCuboidInstanceModel,
 } from "../layers/FdmCuboidLayer";
+import { buildViewport3DFdmCuboidJobKey } from "../build-engine/viewport3dBuildJobKeys";
 import { Viewport3DScene } from "../layers/Viewport3DScene";
 import { buildClipPlaneIntersectionMarkerBuffers } from "../layers/clipPlaneModel";
 import {
@@ -124,6 +126,7 @@ import {
 } from "../viewport3dDiagnostics";
 import {
   buildSampledScalarColors,
+  fieldTransformNeedsChunking,
   type ScalarRange,
 } from "../viewport3dFieldMapping";
 import { buildViewport3DResourceFrameKey } from "../viewport3dInvalidation";
@@ -149,6 +152,8 @@ import {
   resolveUniverseBounds,
   resolveViewport3DMaxVectorGlyphs,
   type Viewport3DFieldRenderOptions,
+  type Viewport3DRenderablePart,
+  type Viewport3DTopologyRenderModel,
   type Viewport3DBounds,
   viewport3DFieldRenderOptionsNeedFieldData,
 } from "../viewport3dRenderModel";
@@ -1055,6 +1060,45 @@ export function resolveViewport3DPrimaryFieldDataOptions(
   };
 }
 
+export function resolveViewport3DFieldRenderModelBuildOptions({
+  complexFieldVector,
+  fieldRenderOptions,
+  fieldVector,
+  topology,
+}: {
+  complexFieldVector: object | null | undefined;
+  fieldRenderOptions: Viewport3DFieldRenderOptions;
+  fieldVector: DecodedFieldVector | null | undefined;
+  topology:
+    | Viewport3DTopologyRenderModel<Viewport3DRenderablePart>
+    | null
+    | undefined;
+}): Viewport3DFieldRenderOptions {
+  const scalarModes = fieldRenderOptions.scalarColorModes ?? new Set<string>();
+  const fieldColorTarget = resolveViewport3DChunkedFieldColorTarget(
+    topology,
+    fieldVector,
+  );
+  const offMainThreadScalarColors =
+    !complexFieldVector &&
+    fieldRenderOptions.scalarColorsVisible !== false &&
+    scalarModes.size > 0 &&
+    Boolean(fieldVector) &&
+    Boolean(fieldColorTarget) &&
+    Boolean(topology) &&
+    fieldTransformNeedsChunking(
+      Math.max(fieldVector?.pointCount ?? 0, topology?.nodeCount ?? 0),
+    );
+
+  if (!offMainThreadScalarColors) return fieldRenderOptions;
+
+  return {
+    ...fieldRenderOptions,
+    scalarColorModes: new Set<string>(),
+    scalarColorsVisible: false,
+  };
+}
+
 function applyAnalysisOverlayAppearance(
   settings: VisualizationTargetSettings,
   appearance: AnalysisFieldOverlayAppearanceState | null | undefined,
@@ -1797,7 +1841,7 @@ export function useViewport3DSceneModel({
 
     for (const object of primitiveModel.objects) {
       pushViewportVisualizationTarget(targets, seen, {
-        id: object.objectId,
+        id: visualizationTargetIdForSceneObject(object.objectId),
         kind: "object",
         label: object.label,
       });
@@ -1906,7 +1950,7 @@ export function useViewport3DSceneModel({
       resolveTargetVisualization({
         snapshot: objectVisualizationSnapshot,
         target: {
-          id: object.objectId,
+          id: visualizationTargetIdForSceneObject(object.objectId),
           kind: "object",
           label: object.label,
         },
@@ -1922,7 +1966,7 @@ export function useViewport3DSceneModel({
       const objectSettings = resolveTargetVisualization({
         snapshot: objectVisualizationSnapshot,
         target: {
-          id: objectId,
+          id: visualizationTargetIdForSceneObject(objectId),
           kind: "object",
           label: objectId,
         },
@@ -2460,31 +2504,77 @@ export function useViewport3DSceneModel({
       : targetQuantityFieldVectors.data?.get(
           resolveCanonicalQuantityId(fdmSettings.activeQuantityId),
         ) ?? null;
+  const fdmFieldRevision =
+    sameViewport3DQuantityId(fdmSettings.activeQuantityId, primaryFieldQuantityId)
+      ? fieldVector.payloadRevision ?? fieldVector.revision
+      : targetQuantityFieldVectors.payloadRevision ??
+        targetQuantityFieldVectors.revision;
   const fdmInstanceModelFieldVector = fdmInstanceModelNeedsFieldVector
     ? fdmFieldVector
     : null;
-  const fdmInstanceModel = useMemo<
-    FdmCuboidInstanceModel | null | undefined
-  >(() => {
-    if (!fdmInstanceModelEnabled) return undefined;
-    return measureViewport3DModelBuild(
-      "fullmag.viewport3d.buildFdmCuboidInstanceModel",
-      () =>
-        buildFdmCuboidInstanceModel(fdmDomain, {
-          fieldVector: fdmInstanceModelFieldVector,
-          voxelFillRatio: visualProfile.voxelFillRatio,
-          voxelMagnitudeThreshold: fdmVoxelMagnitudeThreshold,
-          voxelTopography: fdmVoxelTopography,
-        }),
-    );
-  }, [
-    fdmDomain,
-    fdmInstanceModelEnabled,
-    fdmInstanceModelFieldVector,
-    fdmVoxelMagnitudeThreshold,
-    fdmVoxelTopography,
-    visualProfile.voxelFillRatio,
-  ]);
+  const fdmMaxVectorGlyphs = clampViewport3DInteractiveVectorBudget(
+    fdmSettings.vectorBudget,
+    maxInteractiveVectorGlyphs,
+  );
+  const fdmVectorAnchorMode = fdmSettings.vectorCenteringEnabled
+    ? "center"
+    : "tail";
+  const fdmBuildTopologyRevision =
+    domainMeta.revision == null ? null : String(domainMeta.revision);
+  const fdmBuildFieldRevision =
+    fdmInstanceModelNeedsFieldVector || fdmVectorsVisible
+      ? fdmFieldRevision == null
+        ? null
+        : String(fdmFieldRevision)
+      : null;
+  const fdmBuildTargetRevision =
+    renderingState?.revision == null ? null : String(renderingState.revision);
+  const fdmBuildSamplingRevision = fdmDomain
+    ? `shape=${fdmDomain.shape.join("x")}|display=${fdmDomain.displayCellCount}|total=${fdmDomain.totalCells}|stride=${fdmDomain.stride}`
+    : "none";
+  const fdmBuildStyleRevision = [
+    `fill=${visualProfile.voxelFillRatio}`,
+    `threshold=${fdmVoxelMagnitudeThreshold}`,
+    `topography=${fdmVoxelTopography.enabled}:${fdmVoxelTopography.component}:${fdmVoxelTopography.amplitudeCells}`,
+    `vectors=${fdmVectorsVisible}:${fdmMaxVectorGlyphs}:${fdmVectorScale}:${fdmVectorAnchorMode}`,
+  ].join("|");
+  const fdmBuildKey = fdmInstanceModelEnabled
+    ? buildViewport3DFdmCuboidJobKey({
+        algorithmVersion: 1,
+        component: fdmVectorsVisible ? "full" : null,
+        domainId: domainMeta.data?.domain_id ?? "shared-domain",
+        fieldRevision: fdmBuildFieldRevision,
+        quantityId: resolveCanonicalQuantityId(fdmSettings.activeQuantityId),
+        samplingRevision: fdmBuildSamplingRevision,
+        scopeId: "full",
+        scopeKind: "full",
+        sessionId: "current",
+        styleRevision: fdmBuildStyleRevision,
+        targetVisualizationRevision: fdmBuildTargetRevision ?? "unknown",
+        topologyRevision: fdmBuildTopologyRevision,
+      })
+    : null;
+  const fdmBuildGroupKey = fdmInstanceModelEnabled
+    ? `fdm-cuboid:session=current:domain=${domainMeta.data?.domain_id ?? "shared-domain"}`
+    : null;
+  const fdmBuildResult = useFdmCuboidBuildResult({
+    buildKey: fdmBuildKey,
+    domain: fdmDomain,
+    enabled: fdmInstanceModelEnabled,
+    groupKey: fdmBuildGroupKey,
+    maxVectorGlyphs: fdmMaxVectorGlyphs,
+    modelFieldVector: fdmInstanceModelFieldVector,
+    revisionSummary: `domain=${fdmBuildTopologyRevision ?? "none"} field=${fdmBuildFieldRevision ?? "none"} target=${fdmBuildTargetRevision ?? "none"}`,
+    vectorAnchorMode: fdmVectorAnchorMode,
+    vectorField: fdmVectorsVisible ? fdmFieldVector : null,
+    vectorScale: fdmVectorScale,
+    voxelFillRatio: visualProfile.voxelFillRatio,
+    voxelMagnitudeThreshold: fdmVoxelMagnitudeThreshold,
+    voxelTopography: fdmVoxelTopography,
+  });
+  const fdmInstanceModel: FdmCuboidInstanceModel | null | undefined =
+    fdmBuildResult?.model;
+  const fdmVectorSegments = fdmBuildResult?.vectorSegments ?? null;
   const fdmSurfaceColors = useMemo(() => {
     if (!fdmSurfaceColorMode) return null;
     return buildSampledScalarColors(
@@ -2513,6 +2603,21 @@ export function useViewport3DSceneModel({
     topology: currentTopologyRenderModel,
     topologyRevision: topology.revision,
   });
+  const fieldRenderModelBuildOptions = useMemo(
+    () =>
+      resolveViewport3DFieldRenderModelBuildOptions({
+        complexFieldVector: analysisComplexField,
+        fieldRenderOptions: resolvedFieldRenderOptions,
+        fieldVector: committedFieldVector,
+        topology: currentTopologyRenderModel,
+      }),
+    [
+      analysisComplexField,
+      committedFieldVector,
+      currentTopologyRenderModel,
+      resolvedFieldRenderOptions,
+    ],
+  );
   const fieldRenderModel = useMemo(() => {
     const model = measureViewport3DModelBuild(
       "fullmag.viewport3d.buildViewport3DFieldRenderModel",
@@ -2522,7 +2627,7 @@ export function useViewport3DSceneModel({
           committedFieldVector,
           vectorScale,
           {
-            ...resolvedFieldRenderOptions,
+            ...fieldRenderModelBuildOptions,
             buildDomainId: "shared-domain",
             buildSessionId: "current",
             complexFieldVector: analysisComplexField,
@@ -2543,8 +2648,8 @@ export function useViewport3DSceneModel({
     committedFieldVector,
     currentTopologyRenderModel,
     analysisComplexField,
+    fieldRenderModelBuildOptions,
     fieldScalarRangesByMode,
-    resolvedFieldRenderOptions,
     fieldVector.payloadRevision,
     fieldVector.revision,
     renderingState?.revision,
@@ -2705,6 +2810,7 @@ export function useViewport3DSceneModel({
     fdmInstanceModel: fdmInstanceModel,
     fdmSettings,
     fdmSurfaceColors,
+    fdmVectorSegments,
     femDomain,
     fieldDataIssue,
     fieldRefresh,

@@ -8,7 +8,7 @@ import type {
 } from "./viewport3dGpuUploadTypes";
 import type { Viewport3DBuildJobKey } from "../viewport3dBuildEngineTypes";
 
-export const DEFAULT_VIEWPORT_3D_GPU_UPLOAD_POLICY: Viewport3DGpuUploadPolicy =
+const DEFAULT_VIEWPORT_3D_GPU_UPLOAD_POLICY: Viewport3DGpuUploadPolicy =
   {
     maxBytesPerSlice: 4 * 1024 * 1024,
     maxFrameBudgetMs: 5,

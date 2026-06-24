@@ -1,5 +1,6 @@
 import type {
   Viewport3DBuildDiagnosticRecord,
+  Viewport3DBuildFallbackSnapshot,
   Viewport3DBuildJobKey,
   Viewport3DBuildJobSnapshot,
   Viewport3DBuildLane,
@@ -29,6 +30,7 @@ export interface Viewport3DBuildSchedulerPolicy {
   readonly laneConcurrency?: Partial<Record<Viewport3DBuildLane, number>>;
   readonly now?: () => number;
   readonly onDiagnosticRecord?: (record: Viewport3DBuildDiagnosticRecord) => void;
+  readonly onFallbackState?: (snapshot: Viewport3DBuildFallbackSnapshot) => void;
   readonly onJobState?: (snapshot: Viewport3DBuildJobSnapshot) => void;
 }
 
@@ -44,16 +46,19 @@ interface PendingBuildJob {
   readonly runner: Viewport3DBuildRunner<unknown>;
   externalAbortListener: (() => void) | null;
   fallbackReason: string | null;
+  mainAdoptMs: number;
   options: Viewport3DBuildScheduleOptions;
   running: boolean;
   settled: boolean;
   startedAtMs: number | null;
+  transferMs: number;
 }
 
 const DEFAULT_LANE_CONCURRENCY: Record<Viewport3DBuildLane, number> = {
   "binary-decode": 1,
   "bounds-hud": 1,
   "field-color": 1,
+  "fdm-cuboid": 1,
   "gpu-upload": 1,
   "mesh-quality": 1,
   "region-overlay": 1,
@@ -69,6 +74,7 @@ export function createViewport3DBuildScheduler(
     ...policy.laneConcurrency,
   };
   const activeByLane = new Map<Viewport3DBuildLane, number>();
+  const fallbackCountsByLane = new Map<Viewport3DBuildLane, number>();
   const jobsByKey = new Map<Viewport3DBuildJobKey, PendingBuildJob>();
   const queuesByLane = new Map<Viewport3DBuildLane, PendingBuildJob[]>();
   const now = policy.now ?? defaultNow;
@@ -107,6 +113,7 @@ export function createViewport3DBuildScheduler(
       fallbackReason: null,
       key: request.key,
       lane: request.lane,
+      mainAdoptMs: 0,
       options,
       promise,
       queuedAtMs: now(),
@@ -117,6 +124,7 @@ export function createViewport3DBuildScheduler(
       running: false,
       settled: false,
       startedAtMs: null,
+      transferMs: 0,
     };
     if (options.signal) {
       job.externalAbortListener = () => abortJob(job, false);
@@ -167,8 +175,15 @@ export function createViewport3DBuildScheduler(
     let result: Promise<unknown> | unknown;
     try {
       result = job.runner(job.request, {
+        recordMainAdopt: (durationMs) => {
+          job.mainAdoptMs += normalizeDurationMs(durationMs);
+        },
         recordFallback: (reason) => {
           job.fallbackReason = reason;
+          publishFallbackState(job, reason);
+        },
+        recordTransfer: (durationMs) => {
+          job.transferMs += normalizeDurationMs(durationMs);
         },
         signal: job.abortController.signal,
       });
@@ -271,6 +286,24 @@ export function createViewport3DBuildScheduler(
     });
   }
 
+  function publishFallbackState(
+    job: PendingBuildJob,
+    reason: string,
+  ): void {
+    const count = (fallbackCountsByLane.get(job.lane) ?? 0) + 1;
+    fallbackCountsByLane.set(job.lane, count);
+    const snapshot: Viewport3DBuildFallbackSnapshot = {
+      count,
+      key: job.key,
+      lane: job.lane,
+      reason,
+      revisionSummary: job.request.revisionSummary,
+      timestampMs: now(),
+    };
+    policy.onFallbackState?.(snapshot);
+    job.options.onFallbackState?.(snapshot);
+  }
+
   function recordTerminalDiagnostic(
     job: PendingBuildJob,
     state: Viewport3DBuildState,
@@ -295,7 +328,7 @@ export function createViewport3DBuildScheduler(
       key: job.key,
       kind: "viewport-3d-build-job",
       lane: job.lane,
-      mainAdoptMs: 0,
+      mainAdoptMs: job.mainAdoptMs,
       mainUploadMs: 0,
       outputBytes: job.request.outputBytesEstimate,
       queuedAtMs: job.queuedAtMs,
@@ -304,7 +337,7 @@ export function createViewport3DBuildScheduler(
       startedAtMs,
       state,
       totalWallMs: Math.max(finishedAtMs - job.queuedAtMs, 0),
-      transferMs: 0,
+      transferMs: job.transferMs,
       workerComputeMs,
     };
     policy.onDiagnosticRecord?.(record);
@@ -343,4 +376,8 @@ function defaultNow(): number {
     return performance.now();
   }
   return Date.now();
+}
+
+function normalizeDurationMs(durationMs: number): number {
+  return Number.isFinite(durationMs) ? Math.max(0, durationMs) : 0;
 }

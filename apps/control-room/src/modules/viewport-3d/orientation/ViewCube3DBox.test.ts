@@ -67,6 +67,15 @@ describe("ViewCube3DBox", () => {
     expect(panelBlock).toContain("side={DoubleSide}");
   });
 
+  it("renders face labels without drei Text or Troika font resolution", () => {
+    const source = readFileSync(sourceUrl, "utf8");
+
+    expect(source).not.toContain("import { Line, Text } from \"@react-three/drei\"");
+    expect(source).not.toContain("<Text");
+    expect(source).not.toContain("</Text>");
+    expect(source).toContain("CanvasTexture");
+  });
+
   it("uses a native raycast fallback for screen-space box clicks", () => {
     const source = readFileSync(sourceUrl, "utf8");
 

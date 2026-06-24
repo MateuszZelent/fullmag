@@ -14,7 +14,7 @@ declare global {
 }
 
 export const REACT_RENDER_PROFILE_MEASURE_PREFIX = "fullmag.react.render.";
-export const REACT_RENDER_PROFILE_STORAGE_KEY = "fullmag:react-profiler";
+const REACT_RENDER_PROFILE_STORAGE_KEY = "fullmag:react-profiler";
 const MIN_REACT_RENDER_MEASURE_INTERVAL_MS = 1_000;
 const lastReactRenderMeasureAtByName = new Map<string, number>();
 

@@ -35,7 +35,9 @@ function topologyFixture(): DecodedTopology {
 function topologyModelFixture(): Viewport3DTopologyRenderModel {
   return {
     airboxParts: [],
+    fallbackSurfaceEdgeIndices: null,
     fallbackSurfaceIndices: new Uint32Array(),
+    fallbackSurfaceNodeIndices: new Uint32Array(),
     fallbackVolumeEdgeIndices: new Uint32Array(),
     magneticParts: [],
     meshGenerationId: null,

@@ -21,13 +21,16 @@ export interface Viewport3DTopologyIndexPartInput
 export interface Viewport3DPreparedPartTopologyIndices {
   edgeIndices: Uint32Array | null;
   surfaceIndices: Uint32Array | null;
+  surfaceNodeIndices: Uint32Array | null;
   surfaceNodeSelection: { nodeIndices: number[] } | null;
   volumeEdgeIndices: Uint32Array | null;
 }
 
 export interface Viewport3DTopologyIndexBundle {
   airboxPartsById: Map<string, Viewport3DPreparedPartTopologyIndices>;
+  fallbackSurfaceEdgeIndices: Uint32Array | null;
   fallbackSurfaceIndices: Uint32Array;
+  fallbackSurfaceNodeIndices: Uint32Array;
   fallbackVolumeEdgeIndices: Uint32Array;
   magneticPartsById: Map<string, Viewport3DPreparedPartTopologyIndices>;
 }
@@ -47,6 +50,9 @@ export function buildViewport3DTopologyIndexBundle({
   topology: Pick<DecodedTopology, "boundaryFaces" | "indices" | "nodeCount">;
 }): Viewport3DTopologyIndexBundle {
   const fallbackSurfaceIndices = buildTetraSurfaceIndices(topology.indices);
+  const fallbackSurfaceEdgeIndices =
+    buildSurfaceEdgeIndices(fallbackSurfaceIndices);
+  const fallbackSurfaceNodeIndices = uniqueSortedIndices(fallbackSurfaceIndices);
   const fallbackVolumeEdgeIndices = buildTetraVolumeEdgeIndices(topology.indices);
   const airboxVolumeEdgeFallback =
     airboxParts.length > 0
@@ -87,7 +93,9 @@ export function buildViewport3DTopologyIndexBundle({
 
   return {
     airboxPartsById,
+    fallbackSurfaceEdgeIndices,
     fallbackSurfaceIndices,
+    fallbackSurfaceNodeIndices,
     fallbackVolumeEdgeIndices,
     magneticPartsById,
   };
@@ -109,11 +117,15 @@ function buildPreparedPartTopologyIndices({
     topology,
     supplementalSurfaceParts,
   );
+  const surfaceNodeIndices = surfaceIndices
+    ? uniqueSortedIndices(surfaceIndices)
+    : null;
   return {
     edgeIndices: buildSurfaceEdgeIndices(surfaceIndices),
     surfaceIndices,
-    surfaceNodeSelection: surfaceIndices
-      ? { nodeIndices: uniqueSortedIndices(surfaceIndices) }
+    surfaceNodeIndices,
+    surfaceNodeSelection: surfaceNodeIndices
+      ? { nodeIndices: Array.from(surfaceNodeIndices) }
       : null,
     volumeEdgeIndices:
       buildPartVolumeEdgeIndices(part, topology) ?? fallbackVolumeEdgeIndices,
@@ -327,19 +339,23 @@ export function buildUnclaimedVolumeEdgeIndices(
     : null;
 }
 
-export function uniqueSortedIndices(indices: Uint32Array): number[] {
+export function uniqueSortedIndices(indices: Uint32Array): Uint32Array {
   const unique = new Set<number>();
   for (let index = 0; index < indices.length; index += 1) {
     unique.add(indices[index] ?? 0);
   }
-  return Array.from(unique).toSorted((left, right) => left - right);
+  return new Uint32Array(
+    Array.from(unique).toSorted((left, right) => left - right),
+  );
 }
 
 export function transferablesForTopologyIndexBundle(
   bundle: Viewport3DTopologyIndexBundle,
 ): Transferable[] {
   const transferables: Transferable[] = [];
+  addArrayBufferTransferable(transferables, bundle.fallbackSurfaceEdgeIndices?.buffer);
   addArrayBufferTransferable(transferables, bundle.fallbackSurfaceIndices.buffer);
+  addArrayBufferTransferable(transferables, bundle.fallbackSurfaceNodeIndices.buffer);
   addArrayBufferTransferable(
     transferables,
     bundle.fallbackVolumeEdgeIndices.buffer,
@@ -359,6 +375,7 @@ function addPreparedPartTransferables(
 ): void {
   addArrayBufferTransferable(transferables, prepared.edgeIndices?.buffer);
   addArrayBufferTransferable(transferables, prepared.surfaceIndices?.buffer);
+  addArrayBufferTransferable(transferables, prepared.surfaceNodeIndices?.buffer);
   addArrayBufferTransferable(transferables, prepared.volumeEdgeIndices?.buffer);
 }
 

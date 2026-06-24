@@ -50,22 +50,23 @@ function expectColorBufferToMatch(
 describe("viewport3dFieldColorBuildModel", () => {
   it("matches current full-domain chunked color semantics", async () => {
     const fieldVector = fieldVectorFixture();
-    const expected = await buildVertexScalarColorsChunked(fieldVector, {
-      colorMode: "orientation",
-      colorPalette: "viridis",
-      shaderOnly: true,
-    });
-
-    const result = await buildViewport3DFieldColorBuffer({
-      colorMode: "orientation",
-      colorPalette: "viridis",
-      fieldVector,
-      shaderOnly: true,
-      target: {
-        kind: "full-domain",
-        vertexCount: fieldVector.pointCount,
-      },
-    });
+    const [expected, result] = await Promise.all([
+      buildVertexScalarColorsChunked(fieldVector, {
+        colorMode: "orientation",
+        colorPalette: "viridis",
+        shaderOnly: true,
+      }),
+      buildViewport3DFieldColorBuffer({
+        colorMode: "orientation",
+        colorPalette: "viridis",
+        fieldVector,
+        shaderOnly: true,
+        target: {
+          kind: "full-domain",
+          vertexCount: fieldVector.pointCount,
+        },
+      }),
+    ]);
 
     expect(result).not.toBeNull();
     expectColorBufferToMatch(result!, expected);

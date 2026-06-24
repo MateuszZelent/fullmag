@@ -725,7 +725,7 @@ function useVectorGlyphUpload({
       key:
         uploadKeys?.colorKey ??
         `vector-glyph-colors:${glyphCount}:${glyphColors.byteLength}`,
-      lane: "gpu-upload",
+      lane: "vector-glyph",
       onVisible: () => {
         shaft.count = glyphCount;
         head.count = glyphCount;
@@ -851,7 +851,7 @@ function useVectorGlyphUpload({
       key:
         uploadKeys?.matrixKey ??
         `vector-glyph-matrices:${activeGlyphs.count}:${activeGlyphs.directions.byteLength}`,
-      lane: "gpu-upload",
+      lane: "vector-glyph",
       onVisible: () => {
         activeShaft.count = activeGlyphs.count;
         activeHead.count = activeGlyphs.count;

@@ -7,7 +7,10 @@ import {
   normalizeQuantityIdOrDefault,
   resolveCanonicalQuantityId,
 } from "../api/quantityIds";
-import type { Selection } from "../selection/selectionTypes";
+import {
+  visualizationTargetIdForSceneObject,
+  type Selection,
+} from "../selection/selectionTypes";
 
 export type VisualizationTargetKind = "airbox" | "object" | "part" | "region";
 export type VisualizationRenderMode =
@@ -430,8 +433,8 @@ function resolveVisualizationStateTargetOverride(
   state: VisualizationStateResource | null | undefined,
   target: VisualizationTargetRef,
 ): VisualizationStoredTargetPatch | null {
-  const override = state?.overrides?.find(
-    (entry) => entry.scope === target.kind && entry.scope_id === target.id,
+  const override = state?.overrides?.find((entry) =>
+    visualizationStateOverrideMatchesTarget(entry, target),
   );
   if (!override) return null;
   const display = override.display ?? null;
@@ -621,14 +624,27 @@ export function mergeVisualizationStateTargetOverride(
   patch: VisualizationTargetPatch,
 ): VisualizationStateResource["overrides"] {
   const next = visualizationStateOverrideFromTargetPatch(target, patch);
-  const current = overrides.find(
-    (entry) => entry.scope === target.kind && entry.scope_id === target.id,
+  const current = overrides.find((entry) =>
+    visualizationStateOverrideMatchesTarget(entry, target),
   );
   const merged = current ? mergeVisualizationOverride(current, next) : next;
   const rest = overrides.filter(
-    (entry) => !(entry.scope === target.kind && entry.scope_id === target.id),
+    (entry) => !visualizationStateOverrideMatchesTarget(entry, target),
   );
   return [...rest.map(normalizeVisualizationStateOverride), merged];
+}
+
+export function visualizationStateOverrideMatchesTarget(
+  entry: VisualizationStateResource["overrides"][number],
+  target: VisualizationTargetRef,
+): boolean {
+  if (entry.scope !== target.kind) return false;
+  if (entry.scope_id === target.id) return true;
+  return (
+    target.kind === "object" &&
+    target.id.startsWith("object:") &&
+    entry.scope_id === target.id.slice("object:".length)
+  );
 }
 
 function normalizeVisualizationStateOverride(
@@ -1142,7 +1158,10 @@ export function resolveVisualizationTargetFromSelection(
 
   if (selection.objectId) {
     return {
-      id: selection.objectId,
+      id:
+        selection.ref?.type === "scene-object"
+          ? selection.ref.visualizationTargetId
+          : visualizationTargetIdForSceneObject(selection.objectId),
       kind: "object",
       label: selection.label,
     };

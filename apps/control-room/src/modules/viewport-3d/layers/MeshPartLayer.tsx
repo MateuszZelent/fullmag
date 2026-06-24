@@ -1,7 +1,7 @@
 "use client";
 
 import { type ThreeEvent } from "@react-three/fiber";
-import { useEffect, useMemo, memo, useRef } from "react";
+import { useCallback, useEffect, useMemo, memo, useRef } from "react";
 import {
   BufferAttribute,
   BufferGeometry,
@@ -19,6 +19,7 @@ import {
   viewport3DVectorLayersEnabledFromBrowserConfig,
 } from "@/kernel/browserFullmagConfig";
 
+import { createViewport3DGpuUploadManager } from "../build-engine/gpu/viewport3dGpuUploadManager";
 import {
   resolveMeshPartBounds,
   selectionForMeshPart,
@@ -30,12 +31,15 @@ import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
 import {
   canApplyVertexScalarColorBuffer,
 } from "../viewport3dGeometryColors";
-import { useViewport3DScalarColorUpload } from "../hooks/useViewport3DScalarColorUpload";
+import { useViewport3DGeometryUpload } from "../hooks/useViewport3DGeometryUpload";
+import {
+  useViewport3DScalarColorUpload,
+  useViewport3DScalarShaderColorUpload,
+} from "../hooks/useViewport3DScalarColorUpload";
 import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
 import type { Viewport3DMagnetizationTexturePreview } from "../viewport3dPrimitiveModel";
-import { buildViewport3DPointGeometry } from "../viewport3dPointGeometry";
+import { createViewport3DIndexedPointGeometry } from "../viewport3dPointGeometry";
 import {
-  applyScalarShaderColorBuffer,
   canApplyScalarShaderColorBuffer,
   createScalarSurfaceShaderMaterial,
   updateScalarSurfaceShaderMaterial,
@@ -62,6 +66,8 @@ import {
   wireframeColorFromSettings,
   wireframeOpacityFromSettings,
 } from "./viewport3DLayerSettings";
+
+const MESH_PART_GEOMETRY_UPLOAD_FRAME_BUDGET_MS = 3;
 
 export const MeshPartLayer = memo(function MeshPartLayer({
   colors,
@@ -92,25 +98,54 @@ export const MeshPartLayer = memo(function MeshPartLayer({
 }) {
   const invalidate = useBatchedInvalidate();
   const renderSettings = settings;
-  const geometry = useMemo(() => {
+  const topologyUploadManager = useMemo(
+    () =>
+      createViewport3DGpuUploadManager({
+        policy: {
+          targetFrameBudgetMs: MESH_PART_GEOMETRY_UPLOAD_FRAME_BUDGET_MS,
+        },
+      }),
+    [],
+  );
+  useEffect(() => () => topologyUploadManager.dispose(), [topologyUploadManager]);
+
+  const part = partModel.part;
+  const topologyRevision = topologyModel?.meshRevision ?? null;
+  const surfaceIndices = partModel.surfaceIndices;
+  const createSurfaceGeometry = useCallback(() => {
     if (!topologyModel) return null;
-    const surfaceIndices = partModel.surfaceIndices;
     if (!surfaceIndices?.length) return null;
 
-    const next = tracker.track("geometry", new BufferGeometry());
+    const next = new BufferGeometry();
     next.setAttribute(
       "position",
       new BufferAttribute(topologyModel.positions, 3),
     );
     next.setIndex(new BufferAttribute(surfaceIndices, 1));
     return next;
-  }, [partModel, topologyModel, tracker]);
-  const edgeGeometry = useMemo(() => {
-    const edgeIndices = resolveMeshPartWireframeEdgeIndices(
-      renderSettings.geometryScope,
-      partModel,
-      renderSettings.wireframeVisible,
-    );
+  }, [surfaceIndices, topologyModel]);
+  const geometry = useViewport3DGeometryUpload({
+    createGeometry: createSurfaceGeometry,
+    dirtyReason: "mesh-part-surface",
+    enabled: Boolean(topologyModel && surfaceIndices?.length),
+    estimatedBytes:
+      (topologyModel?.positions.byteLength ?? 0) +
+      (surfaceIndices?.byteLength ?? 0),
+    invalidate,
+    itemCount: surfaceIndices?.length ?? 0,
+    key: `mesh-part-surface:${part.id}:topology=${topologyRevision ?? "none"}:positions=${topologyModel?.positions.byteLength ?? 0}:indices=${surfaceIndices?.byteLength ?? 0}`,
+    lane: "topology-index",
+    targetRevision: topologyRevision === null ? null : String(topologyRevision),
+    tracker,
+    uploadManager: topologyUploadManager,
+  });
+
+  const edgeIndices = resolveMeshPartWireframeEdgeIndices(
+    renderSettings.geometryScope,
+    partModel,
+    renderSettings.wireframeVisible,
+  );
+  const createEdgeGeometry = useCallback(() => {
     if (!topologyModel || !edgeIndices) return null;
     const next = new BufferGeometry();
     next.setAttribute(
@@ -118,51 +153,58 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       new BufferAttribute(topologyModel.positions, 3),
     );
     next.setIndex(new BufferAttribute(edgeIndices, 1));
-    return tracker.track("geometry", next);
-  }, [
-    partModel,
-    renderSettings.geometryScope,
-    renderSettings.wireframeVisible,
-    topologyModel,
+    return next;
+  }, [edgeIndices, topologyModel]);
+  const edgeGeometry = useViewport3DGeometryUpload({
+    createGeometry: createEdgeGeometry,
+    dirtyReason: "mesh-part-wireframe",
+    enabled: Boolean(topologyModel && edgeIndices?.length),
+    estimatedBytes:
+      (topologyModel?.positions.byteLength ?? 0) + (edgeIndices?.byteLength ?? 0),
+    invalidate,
+    itemCount: edgeIndices?.length ?? 0,
+    key: `mesh-part-wireframe:${part.id}:scope=${renderSettings.geometryScope}:topology=${topologyRevision ?? "none"}:positions=${topologyModel?.positions.byteLength ?? 0}:indices=${edgeIndices?.byteLength ?? 0}`,
+    lane: "topology-index",
+    targetRevision: topologyRevision === null ? null : String(topologyRevision),
     tracker,
-  ]);
+    uploadManager: topologyUploadManager,
+  });
 
-  useEffect(
-    () => () => tracker.release("geometry", geometry),
-    [geometry, tracker],
-  );
-  useEffect(
-    () => () => tracker.release("geometry", edgeGeometry),
-    [edgeGeometry, tracker],
-  );
-  const pointGeometry = useMemo(() => {
+  const nodeSelection =
+    renderSettings.geometryScope === "full"
+      ? partModel.part
+      : partModel.surfaceNodeSelection ?? partModel.part;
+  const nodeSelectionIndices = meshPartPointSelectionIndices(nodeSelection);
+  const createPointGeometry = useCallback(() => {
     if (!renderSettings.pointsVisible) return null;
     if (!topologyModel) return null;
-    const nodeSelection =
-      renderSettings.geometryScope === "full"
-        ? partModel.part
-        : partModel.surfaceNodeSelection ?? partModel.part;
-    const next = buildViewport3DPointGeometry(topologyModel, nodeSelection);
-    return next ? tracker.track("geometry", next) : null;
-  }, [
-    partModel,
-    renderSettings.geometryScope,
-    renderSettings.pointsVisible,
-    topologyModel,
+    return createViewport3DIndexedPointGeometry(topologyModel, nodeSelection);
+  }, [nodeSelection, renderSettings.pointsVisible, topologyModel]);
+  const pointGeometry = useViewport3DGeometryUpload({
+    createGeometry: createPointGeometry,
+    dirtyReason: "mesh-part-points",
+    enabled: Boolean(renderSettings.pointsVisible && topologyModel),
+    estimatedBytes:
+      (topologyModel?.positions.byteLength ?? 0) +
+      (nodeSelectionIndices?.length ?? 0) * Uint32Array.BYTES_PER_ELEMENT,
+    invalidate,
+    itemCount:
+      nodeSelectionIndices?.length ??
+      meshPartPointSelectionCount(nodeSelection) ??
+      topologyModel?.nodeCount ??
+      0,
+    key: `mesh-part-points:${part.id}:scope=${renderSettings.geometryScope}:topology=${topologyRevision ?? "none"}:positions=${topologyModel?.positions.byteLength ?? 0}:selection=${meshPartPointSelectionRevision(nodeSelection)}`,
+    lane: "topology-index",
+    targetRevision: topologyRevision === null ? null : String(topologyRevision),
     tracker,
-  ]);
-
-  useEffect(
-    () => () => tracker.release("geometry", pointGeometry),
-    [pointGeometry, tracker],
-  );
+    uploadManager: topologyUploadManager,
+  });
 
   const fieldColorLayersEnabled =
     viewport3DFieldColorLayersEnabledFromBrowserConfig();
   const scalarColorMode = fieldColorLayersEnabled
     ? surfaceScalarColorModeFromSettings(renderSettings)
     : null;
-  const part = partModel.part;
   const scalarColors = scalarColorMode
     ? fieldModel?.scalarColorsByPartAndMode
         .get(part.id)
@@ -186,38 +228,24 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       topologyModel?.nodeCount ?? 0,
     ) &&
     !canUseVertexScalarColors;
-  useEffect(() => {
-    if (!geometry || !topologyModel) return;
-    if (!fieldColorLayersEnabled && !meshQualityColors) return;
-    // Skip the destructive zero-fill when the surface mesh is unmounted
-    // (shaderVisible === false).  The geometry's color buffer persists across
-    // visibility toggles but the cached ScalarColorBuffer reference is stable,
-    // so without this guard the effect would zero the buffer while hidden and
-    // then skip re-application on toggle-on (same ref → deps unchanged).
-    if (!renderSettings.shaderVisible) return;
-    if (!shaderScalarColorsEnabled) {
-      applyScalarShaderColorBuffer(geometry, null, topologyModel.nodeCount);
-      return;
-    }
-
-    applyScalarShaderColorBuffer(
-      geometry,
-      effectiveScalarColors,
-      topologyModel.nodeCount,
-    );
-    tracker.recordDirtyFrame("field-scalar-shader");
-    invalidate();
-  }, [
-    effectiveScalarColors,
+  const visibleShaderScalarColors = useViewport3DScalarShaderColorUpload({
+    colorBuffer: shaderScalarColorsEnabled ? effectiveScalarColors : null,
+    dirtyReason: "field-scalar-shader",
+    enabled: Boolean(
+      geometry &&
+        topologyModel &&
+        renderSettings.shaderVisible &&
+        (fieldColorLayersEnabled || meshQualityColors),
+    ),
     geometry,
     invalidate,
-    fieldColorLayersEnabled,
-    meshQualityColors,
-    renderSettings.shaderVisible,
-    shaderScalarColorsEnabled,
-    topologyModel,
+    targetRevision: effectiveScalarColors?.targetRevision ?? null,
     tracker,
-  ]);
+    uploadKey:
+      effectiveScalarColors?.buildKey ??
+      `mesh-part-shader-values:${part.id}:${topologyModel?.nodeCount ?? 0}`,
+    vertexCount: topologyModel?.nodeCount ?? 0,
+  });
   useViewport3DScalarColorUpload({
     colorBuffer: effectiveScalarColors,
     dirtyReason: meshQualityColors ? "mesh-quality-colors" : "field-colors",
@@ -248,17 +276,16 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   );
   const scalarShaderMaterial = useMemo(() => {
     if (!fieldColorLayersEnabled && !meshQualityColors) return null;
-    if (!shaderScalarColorsEnabled || !effectiveScalarColors) return null;
+    if (!shaderScalarColorsEnabled || !visibleShaderScalarColors) return null;
     return tracker.track(
       "material",
-      createScalarSurfaceShaderMaterial(effectiveScalarColors, {
+      createScalarSurfaceShaderMaterial(visibleShaderScalarColors, {
         ...surfacePolicy,
         opacity: surfaceOpacity,
         toneMapped: materialProfile.magneticSurface.toneMapped,
       }),
     );
   }, [
-    effectiveScalarColors,
     fieldColorLayersEnabled,
     materialProfile.magneticSurface.toneMapped,
     meshQualityColors,
@@ -266,6 +293,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     surfaceOpacity,
     surfacePolicy,
     tracker,
+    visibleShaderScalarColors,
   ]);
 
   useEffect(
@@ -273,13 +301,13 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     [scalarShaderMaterial, tracker],
   );
   useEffect(() => {
-    if (!scalarShaderMaterial || !effectiveScalarColors) return;
+    if (!scalarShaderMaterial || !visibleShaderScalarColors) return;
     updateScalarSurfaceShaderMaterial(
       scalarShaderMaterial,
-      effectiveScalarColors,
+      visibleShaderScalarColors,
       surfaceOpacity,
     );
-  }, [effectiveScalarColors, scalarShaderMaterial, surfaceOpacity]);
+  }, [scalarShaderMaterial, surfaceOpacity, visibleShaderScalarColors]);
 
   useEffect(() => {
     if (materialRef.current) {
@@ -397,6 +425,52 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     </group>
   );
 });
+
+function meshPartPointSelectionRevision(
+  selection: Viewport3DMeshPart | NonNullable<
+    Viewport3DTopologyPartRenderModel<Viewport3DMeshPart>["surfaceNodeSelection"]
+  >,
+): string {
+  const explicitIndices = meshPartPointSelectionIndices(selection);
+  if (explicitIndices?.length) {
+    return `indices:${explicitIndices.length}:${explicitIndices[0] ?? "none"}:${explicitIndices[explicitIndices.length - 1] ?? "none"}`;
+  }
+  const start = meshPartPointSelectionStart(selection) ?? 0;
+  const count = meshPartPointSelectionCount(selection) ?? 0;
+  return `range:${start}:${count}`;
+}
+
+function meshPartPointSelectionIndices(
+  selection: Viewport3DMeshPart | NonNullable<
+    Viewport3DTopologyPartRenderModel<Viewport3DMeshPart>["surfaceNodeSelection"]
+  >,
+): ArrayLike<number> | undefined {
+  if ("nodeIndices" in selection && selection.nodeIndices) {
+    return selection.nodeIndices;
+  }
+  if ("node_indices" in selection) return selection.node_indices;
+  return undefined;
+}
+
+function meshPartPointSelectionStart(
+  selection: Viewport3DMeshPart | NonNullable<
+    Viewport3DTopologyPartRenderModel<Viewport3DMeshPart>["surfaceNodeSelection"]
+  >,
+): number | undefined {
+  if ("nodeStart" in selection) return selection.nodeStart;
+  if ("node_start" in selection) return selection.node_start;
+  return undefined;
+}
+
+function meshPartPointSelectionCount(
+  selection: Viewport3DMeshPart | NonNullable<
+    Viewport3DTopologyPartRenderModel<Viewport3DMeshPart>["surfaceNodeSelection"]
+  >,
+): number | undefined {
+  if ("nodeCount" in selection) return selection.nodeCount;
+  if ("node_count" in selection) return selection.node_count;
+  return undefined;
+}
 
 export function resolveMeshPartWireframeEdgeIndices(
   geometryScope: VisualizationTargetSettings["geometryScope"],

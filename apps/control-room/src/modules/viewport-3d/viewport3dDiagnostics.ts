@@ -15,6 +15,14 @@ import {
   createDiagnosticRecordFromViewport3DBuildDiagnostic,
   subscribeViewport3DBuildDiagnostics,
 } from "./build-engine/viewport3dBuildDiagnostics";
+import {
+  createDiagnosticRecordFromViewport3DWorkerPoolDiagnostic,
+  subscribeViewport3DWorkerPoolDiagnostics,
+} from "./build-engine/workerPool/viewport3dWorkerPoolDiagnostics";
+import {
+  createDiagnosticRecordFromViewport3DGpuUploadDiagnostic,
+  subscribeViewport3DGpuUploadDiagnostics,
+} from "./build-engine/gpu/viewport3dGpuUploadDiagnostics";
 
 export type Viewport3DResourceKind =
   | "geometry"
@@ -355,6 +363,24 @@ export function useViewport3DResourceTracker(): Viewport3DResourceTracker {
       subscribeViewport3DBuildDiagnostics((record) => {
         diagnosticRecorder.record(
           createDiagnosticRecordFromViewport3DBuildDiagnostic(record),
+        );
+      }),
+    [diagnosticRecorder],
+  );
+  useEffect(
+    () =>
+      subscribeViewport3DWorkerPoolDiagnostics((record) => {
+        diagnosticRecorder.record(
+          createDiagnosticRecordFromViewport3DWorkerPoolDiagnostic(record),
+        );
+      }),
+    [diagnosticRecorder],
+  );
+  useEffect(
+    () =>
+      subscribeViewport3DGpuUploadDiagnostics((record) => {
+        diagnosticRecorder.record(
+          createDiagnosticRecordFromViewport3DGpuUploadDiagnostic(record),
         );
       }),
     [diagnosticRecorder],

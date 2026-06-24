@@ -41,17 +41,18 @@ export interface Viewport3DTopologyIndexBuildReferenceInput {
 }
 
 interface Viewport3DTopologyIndexReducerState {
-  bundle: Viewport3DTopologyIndexBundle | null;
   identity: Viewport3DTopologyIndexIdentity | null;
   pending: boolean;
+  token: object | null;
   unavailable: boolean;
 }
 
 type Viewport3DTopologyIndexAction =
+  | { type: "clear" }
   | { identity: Viewport3DTopologyIndexIdentity; type: "start" }
   | {
-      bundle: Viewport3DTopologyIndexBundle;
       identity: Viewport3DTopologyIndexIdentity;
+      token: object;
       type: "success";
     }
   | { identity: Viewport3DTopologyIndexIdentity; type: "unavailable" };
@@ -61,13 +62,44 @@ export interface Viewport3DTopologyIndexBundleResult {
   status: Viewport3DTopologyIndexBuildStatus;
 }
 
+export interface Viewport3DTopologyIndexBundleCacheHandle {
+  bundle: Viewport3DTopologyIndexBundle;
+  release: () => void;
+  token: object;
+}
+
+export interface Viewport3DTopologyIndexBundleCacheSnapshot {
+  entryCount: number;
+  estimatedBytes: number;
+  keys: readonly string[];
+  retainedEntries: number;
+}
+
+interface Viewport3DTopologyIndexBundleCacheEntry {
+  bundle: Viewport3DTopologyIndexBundle;
+  estimatedBytes: number;
+  key: string;
+  lastUsedAtMs: number;
+  refCount: number;
+  token: object;
+}
+
+const TOPOLOGY_INDEX_BUNDLE_CACHE_LIMIT = 16;
 const VIEWPORT_3D_TOPOLOGY_INDEX_INITIAL_STATE: Viewport3DTopologyIndexReducerState =
   {
-    bundle: null,
     identity: null,
     pending: false,
+    token: null,
     unavailable: false,
   };
+const topologyIndexBundleBuffers = new WeakMap<
+  object,
+  Viewport3DTopologyIndexBundle
+>();
+const topologyIndexBundleCache = new Map<
+  string,
+  Viewport3DTopologyIndexBundleCacheEntry
+>();
 
 export function createViewport3DTopologyIndexBuildReference({
   domainId,
@@ -102,28 +134,86 @@ function viewport3DTopologyIndexReducer(
   action: Viewport3DTopologyIndexAction,
 ): Viewport3DTopologyIndexReducerState {
   switch (action.type) {
+    case "clear":
+      return VIEWPORT_3D_TOPOLOGY_INDEX_INITIAL_STATE;
     case "start":
       return {
-        bundle: null,
         identity: action.identity,
         pending: true,
+        token: null,
         unavailable: false,
       };
     case "success":
       return {
-        bundle: action.bundle,
         identity: action.identity,
         pending: false,
+        token: action.token,
         unavailable: false,
       };
     case "unavailable":
       return {
-        bundle: null,
         identity: action.identity,
         pending: false,
+        token: null,
         unavailable: true,
       };
   }
+}
+
+export function putViewport3DTopologyIndexBundleInCache({
+  bundle,
+  key,
+}: {
+  bundle: Viewport3DTopologyIndexBundle;
+  key: string;
+}): Viewport3DTopologyIndexBundleCacheHandle {
+  const previous = topologyIndexBundleCache.get(key);
+  if (previous) {
+    topologyIndexBundleBuffers.delete(previous.token);
+  }
+  const token = {};
+  const entry: Viewport3DTopologyIndexBundleCacheEntry = {
+    bundle,
+    estimatedBytes: estimateTopologyIndexBundleBytes(bundle),
+    key,
+    lastUsedAtMs: now(),
+    refCount: 1,
+    token,
+  };
+  topologyIndexBundleBuffers.set(token, bundle);
+  topologyIndexBundleCache.set(key, entry);
+  evictTopologyIndexBundleCache();
+  return createTopologyIndexBundleCacheHandle(entry);
+}
+
+export function retainViewport3DTopologyIndexBundleFromCache(
+  key: string,
+): Viewport3DTopologyIndexBundleCacheHandle | null {
+  const entry = topologyIndexBundleCache.get(key);
+  if (!entry) return null;
+  entry.refCount += 1;
+  entry.lastUsedAtMs = now();
+  return createTopologyIndexBundleCacheHandle(entry);
+}
+
+export function getViewport3DTopologyIndexBundleCacheSnapshotForTests(): Viewport3DTopologyIndexBundleCacheSnapshot {
+  const entries = [...topologyIndexBundleCache.values()];
+  return {
+    entryCount: entries.length,
+    estimatedBytes: entries.reduce(
+      (total, entry) => total + entry.estimatedBytes,
+      0,
+    ),
+    keys: entries.map((entry) => entry.key),
+    retainedEntries: entries.filter((entry) => entry.refCount > 0).length,
+  };
+}
+
+export function clearViewport3DTopologyIndexBundleCacheForTests(): void {
+  for (const entry of topologyIndexBundleCache.values()) {
+    topologyIndexBundleBuffers.delete(entry.token);
+  }
+  topologyIndexBundleCache.clear();
 }
 
 export function viewport3DTopologyIndexStateIsCompatible(
@@ -191,6 +281,7 @@ export function useViewport3DTopologyIndexBundle({
   );
   const activeBuildIdRef = useRef(0);
   const activeControllerRef = useRef<AbortController | null>(null);
+  const activeTokenRef = useRef<object | null>(null);
   const identity = useMemo<Viewport3DTopologyIndexIdentity | null>(
     () =>
       topology
@@ -217,7 +308,7 @@ export function useViewport3DTopologyIndexBundle({
     state.identity,
     identity,
   );
-  const hasCompatibleBundle = compatible && Boolean(state.bundle);
+  const hasCompatibleBundle = compatible && Boolean(state.token);
   const pendingForCurrentRequest = compatible && state.pending;
   const hasCompatibleUnavailableState = compatible && state.unavailable;
   const status = resolveViewport3DTopologyIndexStatus({
@@ -233,8 +324,21 @@ export function useViewport3DTopologyIndexBundle({
       activeBuildIdRef.current += 1;
       activeControllerRef.current?.abort();
       activeControllerRef.current = null;
+      releaseTopologyIndexBundleToken(activeTokenRef.current);
+      activeTokenRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    if (enabled && topology && identity) return;
+
+    activeBuildIdRef.current += 1;
+    activeControllerRef.current?.abort();
+    activeControllerRef.current = null;
+    releaseTopologyIndexBundleToken(activeTokenRef.current);
+    activeTokenRef.current = null;
+    dispatch({ type: "clear" });
+  }, [enabled, identity, topology]);
 
   useEffect(() => {
     if (!enabled || !topology || !identity || status !== "building") {
@@ -242,6 +346,25 @@ export function useViewport3DTopologyIndexBundle({
     }
     if (pendingForCurrentRequest) {
       return undefined;
+    }
+
+    if (buildReference) {
+      const cached = retainViewport3DTopologyIndexBundleFromCache(
+        buildReference.buildKey,
+      );
+      if (cached) {
+        activeBuildIdRef.current += 1;
+        activeControllerRef.current?.abort();
+        activeControllerRef.current = null;
+        if (activeTokenRef.current === cached.token) {
+          cached.release();
+        } else {
+          releaseTopologyIndexBundleToken(activeTokenRef.current);
+          activeTokenRef.current = cached.token;
+        }
+        dispatch({ identity, token: cached.token, type: "success" });
+        return undefined;
+      }
     }
 
     activeBuildIdRef.current += 1;
@@ -271,13 +394,23 @@ export function useViewport3DTopologyIndexBundle({
     })
       .then((bundle) => {
         if (activeBuildIdRef.current === buildId) {
-          dispatch({ bundle, identity, type: "success" });
+          const handle = buildReference
+            ? putViewport3DTopologyIndexBundleInCache({
+                bundle,
+                key: buildReference.buildKey,
+              })
+            : createTopologyIndexBundleHandle(bundle);
+          releaseTopologyIndexBundleToken(activeTokenRef.current);
+          activeTokenRef.current = handle.token;
+          dispatch({ identity, token: handle.token, type: "success" });
         }
       })
       .catch((error) => {
         if (activeBuildIdRef.current !== buildId || isAbortError(error)) {
           return;
         }
+        releaseTopologyIndexBundleToken(activeTokenRef.current);
+        activeTokenRef.current = null;
         dispatch({ identity, type: "unavailable" });
       })
       .finally(() => {
@@ -289,9 +422,7 @@ export function useViewport3DTopologyIndexBundle({
     return undefined;
   }, [
     airboxParts,
-    buildReference?.buildKey,
-    buildReference?.groupKey,
-    buildReference?.revisionSummary,
+    buildReference,
     enabled,
     identity,
     magneticParts,
@@ -302,11 +433,101 @@ export function useViewport3DTopologyIndexBundle({
   ]);
 
   return {
-    bundle: hasCompatibleBundle ? state.bundle : null,
+    bundle:
+      hasCompatibleBundle && state.token
+        ? topologyIndexBundleBuffers.get(state.token) ?? null
+        : null,
     status,
   };
 }
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
+}
+
+function createTopologyIndexBundleHandle(
+  bundle: Viewport3DTopologyIndexBundle,
+): Viewport3DTopologyIndexBundleCacheHandle {
+  const token = {};
+  topologyIndexBundleBuffers.set(token, bundle);
+  return {
+    bundle,
+    release: () => topologyIndexBundleBuffers.delete(token),
+    token,
+  };
+}
+
+function createTopologyIndexBundleCacheHandle(
+  entry: Viewport3DTopologyIndexBundleCacheEntry,
+): Viewport3DTopologyIndexBundleCacheHandle {
+  let released = false;
+  return {
+    bundle: entry.bundle,
+    release: () => {
+      if (released) return;
+      released = true;
+      releaseTopologyIndexBundleToken(entry.token);
+    },
+    token: entry.token,
+  };
+}
+
+function releaseTopologyIndexBundleToken(token: object | null): void {
+  if (!token) return;
+  for (const entry of topologyIndexBundleCache.values()) {
+    if (entry.token !== token) continue;
+    entry.refCount = Math.max(0, entry.refCount - 1);
+    entry.lastUsedAtMs = now();
+    evictTopologyIndexBundleCache();
+    return;
+  }
+  topologyIndexBundleBuffers.delete(token);
+}
+
+function evictTopologyIndexBundleCache(): void {
+  while (topologyIndexBundleCache.size > TOPOLOGY_INDEX_BUNDLE_CACHE_LIMIT) {
+    const evictable = [...topologyIndexBundleCache.values()]
+      .filter((entry) => entry.refCount === 0)
+      .toSorted((left, right) => left.lastUsedAtMs - right.lastUsedAtMs)[0];
+    if (!evictable) return;
+    topologyIndexBundleCache.delete(evictable.key);
+    topologyIndexBundleBuffers.delete(evictable.token);
+  }
+}
+
+function estimateTopologyIndexBundleBytes(
+  bundle: Viewport3DTopologyIndexBundle,
+): number {
+  let total =
+    (bundle.fallbackSurfaceEdgeIndices?.byteLength ?? 0) +
+    bundle.fallbackSurfaceIndices.byteLength +
+    bundle.fallbackSurfaceNodeIndices.byteLength +
+    bundle.fallbackVolumeEdgeIndices.byteLength;
+  for (const indices of bundle.magneticPartsById.values()) {
+    total += estimatePreparedPartTopologyIndexBytes(indices);
+  }
+  for (const indices of bundle.airboxPartsById.values()) {
+    total += estimatePreparedPartTopologyIndexBytes(indices);
+  }
+  return total;
+}
+
+function estimatePreparedPartTopologyIndexBytes(
+  indices: Viewport3DTopologyIndexBundle["magneticPartsById"] extends Map<
+    string,
+    infer TIndices
+  >
+    ? TIndices
+    : never,
+): number {
+  return (
+    (indices.edgeIndices?.byteLength ?? 0) +
+    (indices.surfaceIndices?.byteLength ?? 0) +
+    (indices.surfaceNodeIndices?.byteLength ?? 0) +
+    (indices.volumeEdgeIndices?.byteLength ?? 0)
+  );
+}
+
+function now(): number {
+  return globalThis.performance?.now?.() ?? Date.now();
 }

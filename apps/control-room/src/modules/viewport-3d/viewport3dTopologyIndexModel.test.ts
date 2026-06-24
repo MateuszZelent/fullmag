@@ -67,6 +67,15 @@ describe("viewport3dTopologyIndexModel", () => {
       1, 3,
       2, 3,
     ]);
+    expect(Array.from(bundle.fallbackSurfaceEdgeIndices ?? [])).toEqual([
+      0, 1,
+      1, 2,
+      0, 2,
+      1, 3,
+      0, 3,
+      2, 3,
+    ]);
+    expect(Array.from(bundle.fallbackSurfaceNodeIndices)).toEqual([0, 1, 2, 3]);
     expect(Array.from(bundle.magneticPartsById.get("magnet")?.surfaceIndices ?? []))
       .toEqual([
         0, 1, 2,
@@ -80,6 +89,9 @@ describe("viewport3dTopologyIndexModel", () => {
         2, 3,
         1, 3,
       ]);
+    expect(
+      Array.from(bundle.magneticPartsById.get("magnet")?.surfaceNodeIndices ?? []),
+    ).toEqual([0, 1, 2, 3]);
     expect(Array.from(bundle.airboxPartsById.get("airbox")?.surfaceIndices ?? []))
       .toEqual([1, 2, 3]);
   });

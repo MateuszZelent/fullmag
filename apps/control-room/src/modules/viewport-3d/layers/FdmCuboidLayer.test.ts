@@ -51,6 +51,10 @@ const fdmCuboidLayerPath = join(
   process.cwd(),
   "src/modules/viewport-3d/layers/FdmCuboidLayer.tsx",
 );
+const fdmCuboidBuildModelPath = join(
+  process.cwd(),
+  "src/modules/viewport-3d/layers/fdmCuboidBuildModel.ts",
+);
 const viewport3DScenePath = join(
   process.cwd(),
   "src/modules/viewport-3d/layers/Viewport3DScene.tsx",
@@ -158,10 +162,10 @@ describe("FdmCuboidLayer model", () => {
   });
 
   it("preallocates sampled FDM cell indices in the instance-model hot path", () => {
-    const layerSource = readFileSync(fdmCuboidLayerPath, "utf8");
-    const instanceModelBlock = layerSource.slice(
-      layerSource.indexOf("export function buildFdmCuboidInstanceModel"),
-      layerSource.indexOf("function clampVoxelFillRatio"),
+    const buildModelSource = readFileSync(fdmCuboidBuildModelPath, "utf8");
+    const instanceModelBlock = buildModelSource.slice(
+      buildModelSource.indexOf("export function buildFdmCuboidInstanceModel"),
+      buildModelSource.indexOf("export function buildFdmVectorSegmentsUncached"),
     );
 
     expect(instanceModelBlock).toContain("new Uint32Array(candidateCount)");
@@ -254,15 +258,23 @@ describe("FdmCuboidLayer model", () => {
     const sceneModelSource = readFileSync(viewport3DSceneModelPath, "utf8");
 
     expect(sceneModelSource).toContain("const fdmInstanceModelEnabled = Boolean(");
-    expect(sceneModelSource).toContain("const fdmInstanceModel = useMemo");
+    expect(sceneModelSource).toContain("useFdmCuboidBuildResult");
+    expect(sceneModelSource).toContain("buildViewport3DFdmCuboidJobKey");
     expect(sceneModelSource).toContain("fdmInstanceModel?.cellIndices");
-    expect(sceneModelSource).toContain("fieldVector: fdmInstanceModelFieldVector");
+    expect(sceneModelSource).toContain(
+      "modelFieldVector: fdmInstanceModelFieldVector",
+    );
     expect(sceneModelSource).toContain("fdmInstanceModel: fdmInstanceModel");
+    expect(sceneModelSource).toContain("fdmVectorSegments");
+    expect(sceneModelSource).not.toContain("buildFdmCuboidInstanceModel(");
     expect(sceneModelSource).not.toContain("const fdmSurfaceInstanceModel");
     expect(sceneSource).toContain("fdmInstanceModel: FdmCuboidInstanceModel | null | undefined");
+    expect(sceneSource).toContain("fdmVectorSegments: Float32Array | null");
     expect(sceneSource).toContain("instanceModel={fdmInstanceModel}");
+    expect(sceneSource).toContain("vectorSegments={fdmVectorSegments}");
     expect(layerSource).toContain("instanceModel?: FdmCuboidInstanceModel | null");
-    expect(layerSource).toContain("instanceModel !== undefined");
+    expect(layerSource).toContain("const model = instanceModel ?? null");
+    expect(layerSource).not.toContain("instanceModel !== undefined");
   });
 
   it("uses unlit materials for FDM cell surfaces", () => {

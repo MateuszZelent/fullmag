@@ -23,6 +23,7 @@ import {
   DEFAULT_AIRBOX_VISUALIZATION,
   hasVisualizationStatePatch,
   mergeVisualizationStateTargetOverride,
+  visualizationStateOverrideMatchesTarget,
   visualizationStatePatchFromDefaultTargetPatch,
   type VisualizationTargetKind,
   type VisualizationTargetPatch,
@@ -509,7 +510,7 @@ async function clearTargetOverrideResource(
 
   await patchVisualizationState(context, {
     overrides: (state.overrides ?? []).filter(
-      (entry) => !(entry.scope === target.kind && entry.scope_id === target.id),
+      (entry) => !visualizationStateOverrideMatchesTarget(entry, target),
     ),
   });
   return true;

@@ -1,5 +1,8 @@
 import type { FieldVectorQuery } from "@/kernel/api/apiTypes";
-import type { Selection } from "@/kernel/selection/selectionTypes";
+import {
+  visualizationTargetIdForSceneObject,
+  type Selection,
+} from "@/kernel/selection/selectionTypes";
 import {
   type VisualizationTargetRef,
 } from "@/kernel/visualization/ObjectVisualizationController";
@@ -61,7 +64,7 @@ export function targetForFdmDomain(
 ): VisualizationTargetRef | null {
   if (!domainId) return null;
   return {
-    id: domainId,
+    id: visualizationTargetIdForSceneObject(domainId),
     kind: "object",
     label: domainId,
   };
@@ -72,7 +75,7 @@ export function targetForMeshPart(
 ): VisualizationTargetRef {
   if (part.object_id) {
     return {
-      id: part.object_id,
+      id: visualizationTargetIdForSceneObject(part.object_id),
       kind: "object",
       label: part.label,
     };

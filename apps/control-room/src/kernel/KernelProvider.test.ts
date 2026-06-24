@@ -116,4 +116,13 @@ describe("KernelProvider performance contracts", () => {
     expect(kernelProviderSource).toContain("kernel.layout.setActiveViewportMainModule(\"viewport-3d\")");
     expect(kernelProviderSource).toContain("kernel.layout.setFocusedSlot(\"viewport-main\")");
   });
+
+  it("pauses viewport-3d-only resource hooks when a non-3D center tab is active", () => {
+    expect(kernelProviderSource).toContain(
+      "createViewport3DInactiveResourcePauseController",
+    );
+    expect(kernelProviderSource).toContain(
+      "<Viewport3DResourceLifecycleConnector kernel={kernel} />",
+    );
+  });
 });

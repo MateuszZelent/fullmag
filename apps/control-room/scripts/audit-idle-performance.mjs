@@ -47,6 +47,23 @@ if (failures.length > 0) {
 console.log("Idle performance audit passed.");
 
 function allowsViewport3DDemandFrameOneShots(relativePath, content) {
+  if (
+    relativePath ===
+    path.join("build-engine", "gpu", "viewport3dGpuUploadManager.ts")
+  ) {
+    const requestCount = countOccurrences(content, "requestAnimationFrame(");
+    const cancelCount = countOccurrences(content, "cancelAnimationFrame(");
+    return (
+      requestCount === 1 &&
+      cancelCount === 1 &&
+      content.includes("function defaultScheduleFrame") &&
+      content.includes("function defaultCancelFrame") &&
+      content.includes("scheduleFrame(runFrame)") &&
+      content.includes("targetFrameBudgetMs") &&
+      content.includes("maxFrameBudgetMs")
+    );
+  }
+
   if (relativePath === path.join("layers", "FdmCuboidLayer.tsx")) {
     const requestCount = countOccurrences(content, "requestAnimationFrame(");
     const cancelCount = countOccurrences(content, "cancelAnimationFrame(");
@@ -66,11 +83,12 @@ function allowsViewport3DDemandFrameOneShots(relativePath, content) {
   const requestCount = countOccurrences(content, "requestAnimationFrame(");
   const cancelCount = countOccurrences(content, "cancelAnimationFrame(");
   return (
-    requestCount === 2 &&
-    cancelCount === 2 &&
+    requestCount === 3 &&
+    cancelCount === 3 &&
     content.includes("idle-audit-allow-one-shot-raf") &&
     content.includes('tracker.recordDirtyFrame("camera-projection-followup")') &&
     content.includes('tracker.recordDirtyFrame("resources-updated")') &&
+    content.includes('tracker.recordDirtyFrame("model-layer-stage")') &&
     content.includes("invalidate();")
   );
 }

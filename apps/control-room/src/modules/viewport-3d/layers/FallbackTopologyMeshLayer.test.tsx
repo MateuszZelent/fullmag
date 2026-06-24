@@ -34,7 +34,9 @@ const colors = {
 function fallbackTopology(): Viewport3DTopologyRenderModel {
   return {
     airboxParts: [],
+    fallbackSurfaceEdgeIndices: null,
     fallbackSurfaceIndices: new Uint32Array(),
+    fallbackSurfaceNodeIndices: new Uint32Array(),
     fallbackVolumeEdgeIndices: new Uint32Array(),
     magneticParts: [],
     meshGenerationId: null,
@@ -77,7 +79,9 @@ describe("FallbackTopologyMeshLayer", () => {
 
     expect(source).toContain("viewport3DFieldColorLayersEnabledFromBrowserConfig");
     expect(source).toContain("fieldColorLayersEnabled");
-    expect(source).toContain("if (!fieldColorLayersEnabled && !meshQualityColors) return;");
+    expect(source).toContain("useViewport3DScalarShaderColorUpload");
+    expect(source).toContain("field-scalar-shader");
+    expect(source).not.toContain("applyScalarShaderColorBuffer");
   });
 
   it("does not build fallback point geometry when points are hidden", () => {
@@ -87,6 +91,30 @@ describe("FallbackTopologyMeshLayer", () => {
     );
 
     expect(source).toContain("if (!renderSettings.pointsVisible) return null;");
+  });
+
+  it("routes fallback topology geometry adoption through the upload manager", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("./FallbackTopologyMeshLayer.tsx", import.meta.url)),
+      "utf8",
+    );
+
+    expect(source).toContain("useViewport3DGeometryUpload");
+    expect(source).toContain("createViewport3DGpuUploadManager");
+    expect(source).toContain('lane: "topology-index"');
+    expect(source).not.toContain("const geometry = useMemo");
+    expect(source).not.toContain("const edgeGeometry = useMemo");
+    expect(source).not.toContain("const pointGeometry = useMemo");
+  });
+
+  it("delegates fallback primitive rendering out of the upload orchestration component", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("./FallbackTopologyMeshLayer.tsx", import.meta.url)),
+      "utf8",
+    );
+
+    expect(source).toContain("function FallbackTopologyMeshPrimitives");
+    expect(source).toContain("<FallbackTopologyMeshPrimitives");
   });
 
   it("renders vector-only fallback topology layers", () => {

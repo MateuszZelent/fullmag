@@ -22,6 +22,8 @@ export interface VectorGlyphBuildOptions {
   groupKey?: string;
   latestWins?: boolean;
   onDiagnosticRecord?: (record: Viewport3DBuildDiagnosticRecord) => void;
+  recordMainAdopt?: (durationMs: number) => void;
+  recordTransfer?: (durationMs: number) => void;
   revisionSummary?: string;
   signal?: AbortSignal;
 }
@@ -56,6 +58,7 @@ type VectorGlyphWorkerResponse =
 interface PendingVectorGlyphBuild {
   abortListener: (() => void) | null;
   lease: Viewport3DWorkerPoolLease<Worker>;
+  recordMainAdopt: ((durationMs: number) => void) | null;
   reject: (reason: unknown) => void;
   resolve: (value: VectorGlyphBuildResult) => void;
   signal: AbortSignal | null;
@@ -91,7 +94,9 @@ export async function buildViewport3DVectorGlyphsOffMainThread(
     },
     (_buildRequest, context) =>
       executeVectorGlyphBuild(request, {
+        recordMainAdopt: context.recordMainAdopt,
         recordFallback: context.recordFallback,
+        recordTransfer: context.recordTransfer,
         signal: context.signal,
       }),
     {
@@ -180,7 +185,10 @@ class VectorGlyphWorkerClient {
   constructor() {
     this.pool = createViewport3DWorkerPool({
       createWorker: () => this.createWorker(),
+      idleTimeoutMs: VECTOR_GLYPH_WORKER_IDLE_TIMEOUT_MS,
       maxWorkers: VECTOR_GLYPH_WORKER_POOL_SIZE,
+      onWorkerTerminated: (worker) => this.releaseWorker(worker),
+      poolId: "vector-glyph",
     });
   }
 
@@ -224,12 +232,15 @@ class VectorGlyphWorkerClient {
       this.pending.set(id, {
         abortListener,
         lease,
+        recordMainAdopt: options.recordMainAdopt ?? null,
         reject,
         resolve,
         signal,
       });
       try {
+        const transferStartMs = now();
         lease.worker.postMessage(request, transferables);
+        options.recordTransfer?.(now() - transferStartMs);
       } catch (error) {
         this.clearPending(id);
         this.dispose(error);
@@ -269,9 +280,11 @@ class VectorGlyphWorkerClient {
     const response = event.data;
     const pending = this.clearPending(response.id);
     if (!pending) return;
+    const adoptStartMs = now();
 
     if (response.ok) {
       pending.resolve(response.data);
+      pending.recordMainAdopt?.(now() - adoptStartMs);
       this.scheduleIdleDispose();
       return;
     }
@@ -279,6 +292,7 @@ class VectorGlyphWorkerClient {
     const error = new Error(response.error.message);
     error.name = response.error.name;
     pending.reject(error);
+    pending.recordMainAdopt?.(now() - adoptStartMs);
     this.scheduleIdleDispose();
   };
 
@@ -318,6 +332,13 @@ class VectorGlyphWorkerClient {
     return worker;
   }
 
+  private releaseWorker(worker: Worker): void {
+    worker.removeEventListener("message", this.handleMessage);
+    worker.removeEventListener("error", this.handleError);
+    worker.removeEventListener("messageerror", this.handleError);
+    this.workers.delete(worker);
+  }
+
   private abortPending(id: number): void {
     const pending = this.clearPending(id);
     if (!pending) return;
@@ -347,6 +368,10 @@ function addArrayBufferTransferable(
   if (buffer instanceof ArrayBuffer) {
     transferables.push(buffer);
   }
+}
+
+function now(): number {
+  return typeof performance !== "undefined" ? performance.now() : Date.now();
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {

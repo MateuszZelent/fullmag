@@ -90,6 +90,21 @@ it("does not build airbox point geometry when points are hidden", () => {
   expect(boundsLayersSource).toContain("if (!renderSettings.pointsVisible) return null;");
 });
 
+it("routes airbox mesh-part topology geometry adoption through the upload manager", () => {
+  const start = boundsLayersSource.indexOf("const AirboxMeshPartLayer");
+  const end = boundsLayersSource.indexOf("function AirboxWireframeFallback");
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+  const airboxMeshPartLayerSource = boundsLayersSource.slice(start, end);
+
+  expect(airboxMeshPartLayerSource).toContain("useViewport3DGeometryUpload");
+  expect(airboxMeshPartLayerSource).toContain("createViewport3DGpuUploadManager");
+  expect(airboxMeshPartLayerSource).toContain('lane: "topology-index"');
+  expect(airboxMeshPartLayerSource).not.toContain("const geometry = useMemo");
+  expect(airboxMeshPartLayerSource).not.toContain("const edgeGeometry = useMemo");
+  expect(airboxMeshPartLayerSource).not.toContain("const pointsGeometry = useMemo");
+});
+
 function airboxTopology(): Viewport3DTopologyRenderModel<Viewport3DMeshPart> {
   const part = {
     boundary_face_count: 1,
@@ -111,11 +126,14 @@ function airboxTopology(): Viewport3DTopologyRenderModel<Viewport3DMeshPart> {
         edgeIndices: null,
         part,
         surfaceIndices: null,
+        surfaceNodeIndices: null,
         surfaceNodeSelection: null,
         volumeEdgeIndices: null,
       },
     ],
+    fallbackSurfaceEdgeIndices: null,
     fallbackSurfaceIndices: new Uint32Array(),
+    fallbackSurfaceNodeIndices: new Uint32Array(),
     fallbackVolumeEdgeIndices: new Uint32Array(),
     magneticParts: [],
     meshGenerationId: null,

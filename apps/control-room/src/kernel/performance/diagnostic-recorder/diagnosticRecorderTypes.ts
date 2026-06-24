@@ -63,7 +63,7 @@ export interface DiagnosticRecord {
   timestampMs: number;
 }
 
-export type DiagnosticRequestOutcome =
+type DiagnosticRequestOutcome =
   | "aborted"
   | "error"
   | "network-error"
@@ -82,7 +82,7 @@ export interface DiagnosticRequestRecord extends DiagnosticRecord {
   status: number | null;
 }
 
-export interface DiagnosticResourceRecord extends DiagnosticRecord {
+interface DiagnosticResourceRecord extends DiagnosticRecord {
   cacheAction:
     | "abort"
     | "evict"
@@ -119,7 +119,7 @@ export interface DiagnosticConsoleRecord extends DiagnosticRecord {
   source: string | null;
 }
 
-export interface DiagnosticReactRecord extends DiagnosticRecord {
+interface DiagnosticReactRecord extends DiagnosticRecord {
   componentId: string;
   phase: "mount" | "nested-update" | "update";
 }
@@ -128,6 +128,73 @@ export interface DiagnosticBrowserMetricRecord extends DiagnosticRecord {
   metricName: string;
   unit: "bytes" | "count" | "ms" | "ratio";
   value: number;
+}
+
+export interface DiagnosticViewport3DBuildRecord extends DiagnosticRecord {
+  buildKey: string;
+  buildLane: string;
+  buildState: string;
+  displayedRevision: string | null;
+  droppedBecauseObsolete: boolean;
+  fallbackReason: string | null;
+  inputBytes: number;
+  itemCount: number;
+  mainAdoptMs: number;
+  mainUploadMs: number;
+  outputBytes: number;
+  queueWaitMs: number;
+  revisionSummary: string;
+  targetRevision: string | null;
+  transferMs: number;
+  visibleState: string | null;
+  workerComputeMs: number;
+}
+
+export interface DiagnosticViewport3DWorkerPoolRecord extends DiagnosticRecord {
+  activeJobs: number;
+  maxWorkers: number;
+  poolId: string;
+  workerCount: number;
+}
+
+export interface DiagnosticViewport3DBuildLaneSummary {
+  aborted: number;
+  failed: number;
+  fallbackCount: number;
+  fallbackReasons: string[];
+  inputBytes: number;
+  itemCount: number;
+  jobs: number;
+  lane: string;
+  mainAdoptMaxMs: number;
+  mainUploadMaxMs: number;
+  obsoleteDropped: number;
+  outputBytes: number;
+  queueWaitMaxMs: number;
+  totalWallMaxMs: number;
+  transferMaxMs: number;
+  workerComputeMaxMs: number;
+}
+
+export interface DiagnosticViewport3DBuildSummary {
+  lanes: DiagnosticViewport3DBuildLaneSummary[];
+  totalJobs: number;
+}
+
+export interface DiagnosticViewport3DVisibleRevisionTarget {
+  displayedRevision: string | null;
+  lane: string | null;
+  targetKey: string | null;
+  targetRevision: string | null;
+}
+
+export interface DiagnosticViewport3DVisibleRevisionSummary {
+  fieldRevision: string | null;
+  invalidSuppressedTargets: DiagnosticViewport3DVisibleRevisionTarget[];
+  staleCompatibleTargets: DiagnosticViewport3DVisibleRevisionTarget[];
+  stalePhysicalTargets: DiagnosticViewport3DVisibleRevisionTarget[];
+  targetVisualizationRevision: string | null;
+  topologyRevision: string | null;
 }
 
 export interface DiagnosticManifest {
@@ -176,10 +243,14 @@ export interface DiagnosticArtifactV1 {
     requests: DiagnosticRequestRecord[];
     resources: DiagnosticResourceRecord[];
     timeline: DiagnosticRecord[];
+    viewport3dBuild: DiagnosticViewport3DBuildRecord[];
+    viewport3dWorkerPools: DiagnosticViewport3DWorkerPoolRecord[];
     viewport3d: DiagnosticViewport3DRecord[];
   };
   summary: DiagnosticSummary;
   suspectReport: DiagnosticSuspectReport;
+  viewport3dBuildSummary: DiagnosticViewport3DBuildSummary;
+  viewport3dVisibleRevisionSummary: DiagnosticViewport3DVisibleRevisionSummary;
 }
 
 export type DiagnosticAnyRecord =
@@ -190,6 +261,8 @@ export type DiagnosticAnyRecord =
   | DiagnosticRecord
   | DiagnosticRequestRecord
   | DiagnosticResourceRecord
+  | DiagnosticViewport3DBuildRecord
+  | DiagnosticViewport3DWorkerPoolRecord
   | DiagnosticViewport3DRecord;
 
 export type DiagnosticRequestRecordInput = Omit<

@@ -102,6 +102,10 @@ import {
   type RegionOverlaySelection,
 } from "./RegionOverlayLayer";
 import { RegionMeshOverlayLayer } from "./RegionMeshOverlayLayer";
+import {
+  useViewport3DRegionOverlayModels,
+  type Viewport3DRegionOverlayBuildStatus,
+} from "../region-overlays/useViewport3DRegionOverlayModels";
 import { PostProcessingLayer } from "./PostProcessingLayer";
 import { PrimitiveObjectLayer } from "./PrimitiveObjectLayer";
 import { FdmCuboidLayer, type FdmCuboidInstanceModel } from "./FdmCuboidLayer";
@@ -114,8 +118,6 @@ import {
   buildRegionOverlayModels,
   type RegionMeshOverlayOwnerPart,
   type RegionOverlayInput,
-} from "./regionOverlayModel";
-import type {
 } from "./regionOverlayModel";
 import {
   regionOverlayModeShowsAuthored,
@@ -148,6 +150,7 @@ interface Viewport3DSceneProps {
   fdmInstanceModel: FdmCuboidInstanceModel | null | undefined;
   fdmSettings: VisualizationTargetSettings;
   fdmSurfaceColors: ScalarColorBuffer | null;
+  fdmVectorSegments: Float32Array | null;
   fieldVector: DecodedFieldVector | null | undefined;
   femDomain: FemManifestRenderDomain;
   fieldModel: Viewport3DFieldRenderModel | null;
@@ -195,6 +198,7 @@ interface Viewport3DSceneProps {
   topologyFreshness: Viewport3DTopologyFreshness;
   topology: DecodedTopology | null | undefined;
   topologyModel: Viewport3DTopologyRenderModel<Viewport3DMeshPart> | null;
+  topologyRevision: number | string | null;
   vectorColorMode: string;
   vectorScale: number;
   vectorStyle: VectorFieldLayerVectorStyle;
@@ -233,7 +237,6 @@ interface Viewport3DCameraClip {
 
 const FALLBACK_GRID_SIZE = 1e-6;
 const PERSPECTIVE_CAMERA_FOV_DEGREES = 42;
-type Viewport3DVisualProfile = ReturnType<typeof getViewport3DVisualProfile>;
 
 export function resolveViewport3DProjectionCameraClip(
   bounds: Viewport3DBounds | null,
@@ -468,6 +471,38 @@ export function resolveViewport3DModelLayerStageVisibility(
   };
 }
 
+export interface Viewport3DAuthoredRegionOverlayVisibilityInput {
+  readonly hasMeshBackedRegionOverlays: boolean;
+  readonly overlayLayersEnabled: boolean;
+  readonly realizedBuildStatus: Viewport3DRegionOverlayBuildStatus;
+  readonly regionOverlayMode: RegionOverlayMode;
+  readonly stageVisible: boolean;
+}
+
+export function resolveAuthoredRegionOverlayVisibility({
+  hasMeshBackedRegionOverlays,
+  overlayLayersEnabled,
+  realizedBuildStatus,
+  regionOverlayMode,
+  stageVisible,
+}: Viewport3DAuthoredRegionOverlayVisibilityInput): boolean {
+  if (!stageVisible || !overlayLayersEnabled) return false;
+  if (
+    regionOverlayModeShowsAuthored(
+      regionOverlayMode,
+      hasMeshBackedRegionOverlays,
+    )
+  ) {
+    return true;
+  }
+  return (
+    regionOverlayMode === "auto" &&
+    hasMeshBackedRegionOverlays &&
+    (realizedBuildStatus === "pending" ||
+      realizedBuildStatus === "stale-visible")
+  );
+}
+
 function resolveViewport3DModelLayerStageKey({
   fdmInstanceModel,
   primitiveModel,
@@ -512,6 +547,7 @@ function useViewport3DModelLayerStage({
     if (typeof window === "undefined") return undefined;
 
     let cancelled = false;
+    // idle-audit-allow-one-shot-raf: mount the next model-layer stage after the current demand frame.
     const frameId = window.requestAnimationFrame(() => {
       if (cancelled) return;
       tracker.recordDirtyFrame("model-layer-stage");
@@ -713,10 +749,10 @@ function Viewport3DModelLayerStack({
   airboxSettings,
   bounds,
   colors,
-  fdmDomain,
   fdmInstanceModel,
   fdmSettings,
   fdmSurfaceColors,
+  fdmVectorSegments,
   fieldModel,
   fieldVector,
   fallbackSettings,
@@ -729,7 +765,6 @@ function Viewport3DModelLayerStack({
   inspectQuantityId,
   magnetizationTexturePreviews,
   materialProfile,
-  maxVectorGlyphs,
   meshQualityColors,
   meshQualityOverlayVisible,
   meshRegionOverlayParts,
@@ -749,20 +784,20 @@ function Viewport3DModelLayerStack({
   topologyFreshness,
   topology,
   topologyModel,
+  topologyRevision,
   tracker,
   vectorColorMode,
-  vectorScale,
   vectorStyle,
-  visualProfile,
+  visualizationRevision,
 }: Pick<
   Viewport3DSceneProps,
   | "airboxSettings"
   | "bounds"
   | "colors"
-  | "fdmDomain"
   | "fdmInstanceModel"
   | "fdmSettings"
   | "fdmSurfaceColors"
+  | "fdmVectorSegments"
   | "fieldModel"
   | "fieldVector"
   | "fallbackSettings"
@@ -772,7 +807,6 @@ function Viewport3DModelLayerStack({
   | "getPartSettings"
   | "hysteresisReplayGlyphModel"
   | "magnetizationTexturePreviews"
-  | "maxVectorGlyphs"
   | "meshQualityColors"
   | "meshQualityOverlayVisible"
   | "meshRegionOverlayParts"
@@ -794,13 +828,13 @@ function Viewport3DModelLayerStack({
   | "topology"
   | "topologyFreshness"
   | "topologyModel"
+  | "topologyRevision"
   | "tracker"
   | "vectorColorMode"
-  | "vectorScale"
   | "vectorStyle"
+  | "visualizationRevision"
 > & {
   materialProfile: ReturnType<typeof resolveViewport3DMaterialProfile>;
-  visualProfile: Viewport3DVisualProfile;
 }) {
   const modelLayerStageKey = useMemo(
     () =>
@@ -824,14 +858,48 @@ function Viewport3DModelLayerStack({
     ),
     [femDomain.magneticParts],
   );
+  const renderedMeshRegionSurfacePartIdList = useMemo(
+    () => [...renderedMeshRegionSurfacePartIds].toSorted(),
+    [renderedMeshRegionSurfacePartIds],
+  );
+  const meshRegionOverlaySettingsByRegionId = useMemo(
+    () => resolveRegionSettingsEntries(meshRegionOverlays, getRegionSettings),
+    [getRegionSettings, meshRegionOverlays],
+  );
+  const hasMeshBackedRegionOverlays = meshRegionOverlays.length > 0;
+  const overlayLayersEnabled = viewport3DOverlayLayersEnabledFromBrowserConfig();
+  const realizedRegionOverlaysVisible =
+    regionOverlayModeShowsRealized(
+      regionOverlayMode,
+      hasMeshBackedRegionOverlays,
+    ) &&
+    stageVisibility.realizedRegionOverlays &&
+    overlayLayersEnabled;
+  const realizedRegionOverlayModels = useViewport3DRegionOverlayModels({
+    enabled: realizedRegionOverlaysVisible,
+    magneticParts: meshRegionOverlayParts,
+    regions: meshRegionOverlays,
+    renderedSurfacePartIds: renderedMeshRegionSurfacePartIdList,
+    selectedObjectId,
+    selectedRegionId,
+    settingsByRegionId: meshRegionOverlaySettingsByRegionId,
+    targetVisualizationRevision: visualizationRevision,
+    topology,
+    topologyRevision,
+  });
+  const realizedRegionOverlayBuildStatus = realizedRegionOverlaysVisible
+    ? realizedRegionOverlayModels.status
+    : "disabled";
 
   if (!viewport3DSceneLayersEnabledFromBrowserConfig()) return null;
 
-  const hasMeshBackedRegionOverlays = meshRegionOverlays.length > 0;
-  const authoredRegionOverlaysVisible =
-    stageVisibility.authoredRegionOverlays &&
-    regionOverlayModeShowsAuthored(regionOverlayMode, hasMeshBackedRegionOverlays) &&
-    viewport3DOverlayLayersEnabledFromBrowserConfig();
+  const authoredRegionOverlaysVisible = resolveAuthoredRegionOverlayVisibility({
+    hasMeshBackedRegionOverlays,
+    overlayLayersEnabled,
+    realizedBuildStatus: realizedRegionOverlayBuildStatus,
+    regionOverlayMode,
+    stageVisible: stageVisibility.authoredRegionOverlays,
+  });
   const stagedFieldModel = stageVisibility.fieldDrivenLayers ? fieldModel : null;
   const stagedFieldVector = stageVisibility.fieldDrivenLayers ? fieldVector : null;
   const stagedFdmSurfaceColors = stageVisibility.fieldDrivenLayers
@@ -857,12 +925,10 @@ function Viewport3DModelLayerStack({
       viewport3DFdmCuboidLayerEnabledFromBrowserConfig() ? (
         <FdmCuboidLayer
           colors={colors}
-          domain={fdmDomain}
           fieldVector={stagedFieldVector}
           instanceModel={fdmInstanceModel}
           inspectEnabled={inspectEnabled}
           inspectQuantityId={inspectQuantityId}
-          maxVectorGlyphs={maxVectorGlyphs}
           materialProfile={materialProfile}
           onInspectClear={onInspectClear}
           onInspectSample={onInspectSample}
@@ -875,11 +941,8 @@ function Viewport3DModelLayerStack({
           surfaceColors={stagedFdmSurfaceColors}
           tracker={tracker}
           vectorColorMode={vectorColorMode}
-          vectorScale={vectorScale}
+          vectorSegments={fdmVectorSegments}
           vectorStyle={vectorStyle}
-          voxelFillRatio={visualProfile.voxelFillRatio}
-          voxelMagnitudeThreshold={visualProfile.voxelMagnitudeThreshold}
-          voxelTopography={visualProfile.voxelTopography}
         />
       ) : null}
       {stageVisibility.baseGeometry &&
@@ -929,21 +992,12 @@ function Viewport3DModelLayerStack({
           vectorStyle={vectorStyle}
         />
       ) : null}
-      {regionOverlayModeShowsRealized(
-        regionOverlayMode,
-        hasMeshBackedRegionOverlays,
-      ) &&
-      stageVisibility.realizedRegionOverlays &&
-      viewport3DOverlayLayersEnabledFromBrowserConfig() ? (
+      {realizedRegionOverlaysVisible ? (
         <RegionMeshOverlayLayer
-          getRegionSettings={getRegionSettings}
-          magneticParts={meshRegionOverlayParts}
+          models={realizedRegionOverlayModels.models}
           onSelectRegion={onSelectRegion}
-          renderedSurfacePartIds={renderedMeshRegionSurfacePartIds}
-          regions={meshRegionOverlays}
-          selectedObjectId={selectedObjectId}
-          selectedRegionId={selectedRegionId}
-          topology={topology}
+          targetVisualizationRevision={visualizationRevision}
+          topologyRevision={topologyRevision}
           tracker={tracker}
         />
       ) : null}
@@ -1034,6 +1088,17 @@ function RegionOverlayNativePickingLayer({
   return null;
 }
 
+function resolveRegionSettingsEntries(
+  regions: readonly RegionOverlayInput[],
+  getRegionSettings: (region: RegionOverlayInput) => VisualizationTargetSettings,
+): Array<readonly [string, VisualizationTargetSettings]> {
+  return regions.flatMap((region) =>
+    typeof region.region_id === "string"
+      ? [[region.region_id, getRegionSettings(region)] as const]
+      : [],
+  );
+}
+
 function Viewport3DInteractionAndHudStack({
   cameraGestureRef,
   cameraOrthographicScale,
@@ -1118,10 +1183,10 @@ export function Viewport3DScene({
   dimensionFrameDensity,
   dimensionFrameMode,
   airboxSettings,
-  fdmDomain,
   fdmInstanceModel,
   fdmSettings,
   fdmSurfaceColors,
+  fdmVectorSegments,
   fieldVector,
   femDomain,
   fieldModel,
@@ -1132,7 +1197,6 @@ export function Viewport3DScene({
   getRegionSettings,
   hysteresisReplayGlyphModel,
   magnetizationTexturePreviews,
-  maxVectorGlyphs,
   meshQualityColors,
   meshQualityOverlayVisible,
   meshRegionOverlayParts,
@@ -1164,8 +1228,8 @@ export function Viewport3DScene({
   topology,
   topologyFreshness,
   topologyModel,
+  topologyRevision,
   vectorColorMode,
-  vectorScale,
   vectorStyle,
   visualizationRevision,
   hslReferenceVisible,
@@ -1283,10 +1347,10 @@ export function Viewport3DScene({
         airboxSettings={airboxSettings}
         bounds={bounds}
         colors={colors}
-        fdmDomain={fdmDomain}
         fdmInstanceModel={fdmInstanceModel}
         fdmSettings={fdmSettings}
         fdmSurfaceColors={fdmSurfaceColors}
+        fdmVectorSegments={fdmVectorSegments}
         fieldModel={fieldModel}
         fieldVector={fieldVector}
         inspectEnabled={inspectEnabled}
@@ -1299,7 +1363,6 @@ export function Viewport3DScene({
         hysteresisReplayGlyphModel={hysteresisReplayGlyphModel}
         magnetizationTexturePreviews={magnetizationTexturePreviews}
         materialProfile={materialProfile}
-        maxVectorGlyphs={maxVectorGlyphs}
         meshQualityColors={meshQualityColors}
         meshQualityOverlayVisible={meshQualityOverlayVisible}
         meshRegionOverlayParts={meshRegionOverlayParts}
@@ -1319,11 +1382,11 @@ export function Viewport3DScene({
         topology={topology}
         topologyFreshness={topologyFreshness}
         topologyModel={topologyModel}
+        topologyRevision={topologyRevision}
         tracker={tracker}
         vectorColorMode={vectorColorMode}
-        vectorScale={vectorScale}
         vectorStyle={vectorStyle}
-        visualProfile={visualProfile}
+        visualizationRevision={visualizationRevision}
       />
       <Viewport3DInteractionAndHudStack
         cameraGestureRef={cameraGestureRef}

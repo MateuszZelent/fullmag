@@ -115,8 +115,11 @@ import {
   beginViewport3DFieldUpdateHold,
   endViewport3DFieldUpdateHold,
 } from "./viewport3dFieldUpdateHold";
+import { installViewport3DThreeConsolePolicy } from "./viewport3dThreeConsolePolicy";
 
 type Viewport3DSceneProps = ComponentProps<typeof Viewport3DScene>;
+
+installViewport3DThreeConsolePolicy();
 
 interface MeshQualityRange {
   max: number;

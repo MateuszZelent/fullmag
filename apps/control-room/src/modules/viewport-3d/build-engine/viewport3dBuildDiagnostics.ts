@@ -1,7 +1,7 @@
 import type {
-  DiagnosticRecord,
   DiagnosticRecordDetail,
   DiagnosticRecordSeverity,
+  DiagnosticViewport3DBuildRecord,
 } from "@/kernel/performance/diagnostic-recorder/diagnosticRecorderTypes";
 
 import type { Viewport3DBuildDiagnosticRecord } from "./viewport3dBuildEngineTypes";
@@ -14,19 +14,36 @@ const listeners = new Set<Viewport3DBuildDiagnosticListener>();
 
 export function createDiagnosticRecordFromViewport3DBuildDiagnostic(
   record: Viewport3DBuildDiagnosticRecord,
-): DiagnosticRecord {
+): DiagnosticViewport3DBuildRecord {
   return {
+    buildKey: record.key,
+    buildLane: record.lane,
+    buildState: record.state,
     byteLength: record.outputBytes,
+    displayedRevision: null,
     detail: buildDiagnosticDetail(record),
+    droppedBecauseObsolete: record.droppedBecauseObsolete,
     droppedCount: 0,
     durationMs: record.totalWallMs,
+    fallbackReason: record.fallbackReason,
     id: "",
-    kind: "measure",
+    inputBytes: record.inputBytes,
+    itemCount: record.itemCount,
+    kind: "viewport-3d-build-job",
     lane: "viewport-3d",
+    mainAdoptMs: record.mainAdoptMs,
+    mainUploadMs: record.mainUploadMs,
     name: `fullmag.viewport3d.build-engine.${record.lane}`,
+    outputBytes: record.outputBytes,
+    queueWaitMs: record.queueWaitMs,
+    revisionSummary: record.revisionSummary,
     severity: buildDiagnosticSeverity(record),
     startTimeMs: record.queuedAtMs,
+    targetRevision: null,
     timestampMs: record.finishedAtMs,
+    transferMs: record.transferMs,
+    visibleState: null,
+    workerComputeMs: record.workerComputeMs,
   };
 }
 

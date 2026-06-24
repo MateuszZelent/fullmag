@@ -6,7 +6,10 @@ export interface Viewport3DWorkerPoolOptions<
   TWorker extends Viewport3DWorkerPoolWorker,
 > {
   readonly createWorker: () => TWorker;
+  readonly idleTimeoutMs?: number;
   readonly maxWorkers: number;
+  readonly onWorkerTerminated?: (worker: TWorker) => void;
+  readonly poolId?: string;
 }
 
 export interface Viewport3DWorkerPoolSnapshot {

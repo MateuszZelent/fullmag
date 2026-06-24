@@ -104,6 +104,62 @@ describe("vectorGlyphBuildScheduler", () => {
     );
   });
 
+  it("records worker transfer and main adoption timings for glyph builds", async () => {
+    const pendingWorker = installPendingWorkerStub();
+    let nowMs = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => {
+      nowMs += 1;
+      return nowMs;
+    });
+    const records: Viewport3DBuildDiagnosticRecord[] = [];
+
+    const result = buildViewport3DVectorGlyphsOffMainThread({
+      colorMode: "x",
+      headRadiusRatio: 0.2,
+      segments: new Float32Array([0, 0, 0, 2, 0, 0, 1]),
+      shaftRadiusRatio: 0.08,
+    }, {
+      buildKey: "vector-glyph:timed-worker",
+      onDiagnosticRecord: (record) => records.push(record),
+    });
+
+    const worker = pendingWorker.instances[0];
+    const listener = worker.listeners.get("message")?.values().next().value;
+    expect(listener).toBeTypeOf("function");
+    listener?.({
+      data: {
+        data: {
+          colors: new Float32Array([1, 0, 0]),
+          transforms: {
+            count: 1,
+            directions: new Float32Array([1, 0, 0]),
+            headCenters: new Float32Array([1, 0, 0]),
+            headScales: new Float32Array([1, 1, 1]),
+            shaftCenters: new Float32Array([0.5, 0, 0]),
+            shaftScales: new Float32Array([1, 1, 1]),
+          },
+        },
+        id: 1,
+        ok: true,
+      },
+    } as MessageEvent);
+
+    await expect(result).resolves.toMatchObject({
+      transforms: { count: 1 },
+    });
+
+    expect(records).toEqual([
+      expect.objectContaining({
+        key: "vector-glyph:timed-worker",
+        mainAdoptMs: expect.any(Number),
+        state: "ready",
+        transferMs: expect.any(Number),
+      }),
+    ]);
+    expect(records[0]?.transferMs).toBeGreaterThan(0);
+    expect(records[0]?.mainAdoptMs).toBeGreaterThan(0);
+  });
+
   it("keeps pure glyph build logic out of the client worker scheduler", () => {
     const workerSource = readFileSync(
       new URL("./vectorGlyphBuildWorker.ts", import.meta.url),

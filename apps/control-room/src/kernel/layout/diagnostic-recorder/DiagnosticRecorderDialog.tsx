@@ -15,6 +15,10 @@ import { serializeDiagnosticArtifactJson } from "@/kernel/performance/diagnostic
 import type {
   DiagnosticAnyRecord,
   DiagnosticRecorderProfile,
+  DiagnosticViewport3DBuildLaneSummary,
+  DiagnosticViewport3DVisibleRevisionSummary,
+  DiagnosticViewport3DVisibleRevisionTarget,
+  DiagnosticViewport3DWorkerPoolRecord,
 } from "@/kernel/performance/diagnostic-recorder/diagnosticRecorderTypes";
 import { useDiagnosticRecorderSnapshot } from "@/kernel/performance/diagnostic-recorder/useDiagnosticRecorderSnapshot";
 import { Button } from "@/shared/ui/Button";
@@ -96,10 +100,17 @@ export function DiagnosticRecorderDialog({
 
   const slowestRecord = snapshot.summary.slowestRecord;
   const viewportRecordCount = snapshot.streams.viewport3d.length;
+  const viewportBuildRecordCount = snapshot.streams.viewport3dBuild.length;
+  const viewportWorkerPoolRecords = latestWorkerPoolRecords(
+    snapshot.streams.viewport3dWorkerPools,
+  );
   const consoleErrorCount = snapshot.streams.console.filter(
     (record) => record.level === "error",
   ).length;
   const memoryBytes = latestMemoryBytes(snapshot.streams.memory);
+  const viewport3dBuildSummary = artifact.viewport3dBuildSummary;
+  const viewport3dVisibleRevisionSummary =
+    artifact.viewport3dVisibleRevisionSummary;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -209,6 +220,7 @@ export function DiagnosticRecorderDialog({
             <TabsTrigger value="requests">Requests</TabsTrigger>
             <TabsTrigger value="memory">Memory</TabsTrigger>
             <TabsTrigger value="viewport-3d">Viewport 3D</TabsTrigger>
+            <TabsTrigger value="build-engine">Build Engine</TabsTrigger>
             <TabsTrigger value="console">Console</TabsTrigger>
             <TabsTrigger value="export">Export</TabsTrigger>
           </TabsList>
@@ -250,6 +262,15 @@ export function DiagnosticRecorderDialog({
           <TabsContent value="viewport-3d">
             <RecordTable records={snapshot.streams.viewport3d} />
           </TabsContent>
+          <TabsContent value="build-engine">
+            <BuildEngineSummary
+              recordCount={viewportBuildRecordCount}
+              summary={viewport3dBuildSummary}
+            />
+            <WorkerPoolSummary records={viewportWorkerPoolRecords} />
+            <StaleRevisionSummary summary={viewport3dVisibleRevisionSummary} />
+            <RecordTable records={snapshot.streams.viewport3dBuild} />
+          </TabsContent>
           <TabsContent value="console">
             <RecordTable records={snapshot.streams.console} />
           </TabsContent>
@@ -261,6 +282,204 @@ export function DiagnosticRecorderDialog({
         </Tabs>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function BuildEngineSummary({
+  recordCount,
+  summary,
+}: {
+  recordCount: number;
+  summary: {
+    lanes: DiagnosticViewport3DBuildLaneSummary[];
+    totalJobs: number;
+  };
+}) {
+  const worstWorkerMs = maxLaneValue(summary.lanes, "workerComputeMaxMs");
+  const worstQueueMs = maxLaneValue(summary.lanes, "queueWaitMaxMs");
+  const worstUploadMs = maxLaneValue(summary.lanes, "mainUploadMaxMs");
+  const fallbackCount = summary.lanes.reduce(
+    (total, lane) => total + lane.fallbackCount,
+    0,
+  );
+  return (
+    <section className="fm-diagnostic-recorder__section">
+      <div className="fm-diagnostic-recorder__panel">
+        <Metric label="Build records" value={String(recordCount)} />
+        <Metric label="Build jobs" value={String(summary.totalJobs)} />
+        <Metric label="Lanes" value={String(summary.lanes.length)} />
+        <Metric
+          label="Fallbacks"
+          tone={fallbackCount > 0 ? "critical" : "default"}
+          value={String(fallbackCount)}
+        />
+        <Metric label="Queue max" value={formatMs(worstQueueMs)} />
+        <Metric label="Worker max" value={formatMs(worstWorkerMs)} />
+        <Metric label="Upload max" value={formatMs(worstUploadMs)} />
+      </div>
+      {summary.lanes.length === 0 ? (
+        <div className="fm-diagnostic-recorder__empty" role="status">
+          No build-engine records.
+        </div>
+      ) : (
+        <div className="fm-diagnostic-recorder__table" role="table">
+          <div
+            className="fm-diagnostic-recorder__row fm-diagnostic-recorder__row--header"
+            role="row"
+          >
+            <span role="columnheader">Lane</span>
+            <span role="columnheader">Jobs</span>
+            <span role="columnheader">Aborted</span>
+            <span role="columnheader">Queue</span>
+            <span role="columnheader">Worker</span>
+            <span role="columnheader">Transfer</span>
+            <span role="columnheader">Upload</span>
+            <span role="columnheader">Output</span>
+            <span role="columnheader">Fallbacks</span>
+            <span role="columnheader">Fallback reasons</span>
+          </div>
+          {summary.lanes.slice(0, 12).map((lane) => (
+            <div
+              className="fm-diagnostic-recorder__row"
+              key={lane.lane}
+              role="row"
+            >
+              <span role="cell">{lane.lane}</span>
+              <span role="cell">{lane.jobs}</span>
+              <span role="cell">{lane.aborted}</span>
+              <span role="cell">{formatMs(lane.queueWaitMaxMs)}</span>
+              <span role="cell">{formatMs(lane.workerComputeMaxMs)}</span>
+              <span role="cell">{formatMs(lane.transferMaxMs)}</span>
+              <span role="cell">{formatMs(lane.mainUploadMaxMs)}</span>
+              <span role="cell">{formatBytes(lane.outputBytes)}</span>
+              <span role="cell">{lane.fallbackCount}</span>
+              <span role="cell">{formatFallbackReasons(lane.fallbackReasons)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function formatFallbackReasons(reasons: readonly string[]): string {
+  return reasons.length > 0 ? reasons.join(", ") : "n/a";
+}
+
+function StaleRevisionSummary({
+  summary,
+}: {
+  summary: DiagnosticViewport3DVisibleRevisionSummary;
+}) {
+  const staleCount =
+    summary.stalePhysicalTargets.length +
+    summary.staleCompatibleTargets.length +
+    summary.invalidSuppressedTargets.length;
+  return (
+    <section className="fm-diagnostic-recorder__section">
+      <div className="fm-diagnostic-recorder__panel">
+        <Metric
+          label="Topology"
+          value={summary.topologyRevision ?? "n/a"}
+        />
+        <Metric label="Field" value={summary.fieldRevision ?? "n/a"} />
+        <Metric
+          label="Target viz"
+          value={summary.targetVisualizationRevision ?? "n/a"}
+        />
+        <Metric label="Stale visible" value={String(staleCount)} />
+      </div>
+      {staleCount === 0 ? (
+        <div className="fm-diagnostic-recorder__empty" role="status">
+          No stale visible revisions.
+        </div>
+      ) : (
+        <div className="fm-diagnostic-recorder__table" role="table">
+          <div
+            className="fm-diagnostic-recorder__row fm-diagnostic-recorder__row--header"
+            role="row"
+          >
+            <span role="columnheader">State</span>
+            <span role="columnheader">Lane</span>
+            <span role="columnheader">Target</span>
+            <span role="columnheader">Displayed</span>
+            <span role="columnheader">Target revision</span>
+          </div>
+          {visibleRevisionRows(summary).map((row) => (
+            <div
+              className="fm-diagnostic-recorder__row"
+              key={`${row.state}:${row.target.targetKey}:${row.target.displayedRevision}:${row.target.targetRevision}`}
+              role="row"
+            >
+              <span role="cell">{row.state}</span>
+              <span role="cell">{row.target.lane ?? "n/a"}</span>
+              <span role="cell">{row.target.targetKey ?? "n/a"}</span>
+              <span role="cell">{row.target.displayedRevision ?? "n/a"}</span>
+              <span role="cell">{row.target.targetRevision ?? "n/a"}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function WorkerPoolSummary({
+  records,
+}: {
+  records: readonly DiagnosticViewport3DWorkerPoolRecord[];
+}) {
+  const activeJobs = records.reduce((total, record) => total + record.activeJobs, 0);
+  const workerCount = records.reduce(
+    (total, record) => total + record.workerCount,
+    0,
+  );
+  const maxWorkers = records.reduce((total, record) => total + record.maxWorkers, 0);
+  return (
+    <section className="fm-diagnostic-recorder__section">
+      <div className="fm-diagnostic-recorder__panel">
+        <Metric label="Worker pools" value={String(records.length)} />
+        <Metric label="Active jobs" value={String(activeJobs)} />
+        <Metric label="Workers" value={String(workerCount)} />
+        <Metric label="Max workers" value={String(maxWorkers)} />
+      </div>
+      {records.length === 0 ? (
+        <div className="fm-diagnostic-recorder__empty" role="status">
+          No worker-pool status.
+        </div>
+      ) : (
+        <div className="fm-diagnostic-recorder__table" role="table">
+          <div
+            className="fm-diagnostic-recorder__row fm-diagnostic-recorder__row--header"
+            role="row"
+          >
+            <span role="columnheader">Pool</span>
+            <span role="columnheader">Active jobs</span>
+            <span role="columnheader">Workers</span>
+            <span role="columnheader">Max workers</span>
+            <span role="columnheader">Updated</span>
+          </div>
+          {records.map((record) => {
+            const updatedAt = formatDiagnosticTimestamp(record.timestampMs);
+            return (
+              <div
+                className="fm-diagnostic-recorder__row"
+                key={record.poolId}
+                role="row"
+              >
+                <span role="cell">{record.poolId}</span>
+                <span role="cell">{record.activeJobs}</span>
+                <span role="cell">{record.workerCount}</span>
+                <span role="cell">{record.maxWorkers}</span>
+                <span role="cell" suppressHydrationWarning>
+                  {updatedAt}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -302,24 +521,77 @@ function RecordTable({ records }: { records: readonly DiagnosticAnyRecord[] }) {
         <span role="columnheader">Name</span>
         <span role="columnheader">Duration</span>
       </div>
-      {visibleRecords.map((record) => (
-        <div
-          className="fm-diagnostic-recorder__row"
-          data-severity={record.severity}
-          key={record.id || `${record.timestampMs}:${record.name}`}
-          role="row"
-        >
-          <span role="cell">{new Date(record.timestampMs).toISOString()}</span>
-          <span role="cell">{record.lane}</span>
-          <span role="cell">{record.severity}</span>
-          <span role="cell" title={record.name}>
-            {record.name}
-          </span>
-          <span role="cell">{formatMs(record.durationMs)}</span>
-        </div>
-      ))}
+      {visibleRecords.map((record) => {
+        const recordedAt = formatDiagnosticTimestamp(record.timestampMs);
+        return (
+          <div
+            className="fm-diagnostic-recorder__row"
+            data-severity={record.severity}
+            key={record.id || `${record.timestampMs}:${record.name}`}
+            role="row"
+          >
+            <span role="cell" suppressHydrationWarning>
+              {recordedAt}
+            </span>
+            <span role="cell">{record.lane}</span>
+            <span role="cell">{record.severity}</span>
+            <span role="cell" title={record.name}>
+              {record.name}
+            </span>
+            <span role="cell">{formatMs(record.durationMs)}</span>
+          </div>
+        );
+      })}
     </div>
   );
+}
+
+function latestWorkerPoolRecords(
+  records: readonly DiagnosticViewport3DWorkerPoolRecord[],
+): DiagnosticViewport3DWorkerPoolRecord[] {
+  const byPool = new Map<string, DiagnosticViewport3DWorkerPoolRecord>();
+  for (const record of records) {
+    byPool.set(record.poolId, record);
+  }
+  return Array.from(byPool.values()).toSorted((left, right) =>
+    left.poolId.localeCompare(right.poolId),
+  );
+}
+
+function maxLaneValue(
+  lanes: readonly DiagnosticViewport3DBuildLaneSummary[],
+  key: keyof Pick<
+    DiagnosticViewport3DBuildLaneSummary,
+    | "mainUploadMaxMs"
+    | "queueWaitMaxMs"
+    | "transferMaxMs"
+    | "workerComputeMaxMs"
+  >,
+): number | null {
+  if (lanes.length === 0) return null;
+  return lanes.reduce((max, lane) => Math.max(max, lane[key]), 0);
+}
+
+function visibleRevisionRows(
+  summary: DiagnosticViewport3DVisibleRevisionSummary,
+): Array<{
+  state: string;
+  target: DiagnosticViewport3DVisibleRevisionTarget;
+}> {
+  return [
+    ...summary.stalePhysicalTargets.map((target) => ({
+      state: "stale-physical",
+      target,
+    })),
+    ...summary.staleCompatibleTargets.map((target) => ({
+      state: "stale-compatible",
+      target,
+    })),
+    ...summary.invalidSuppressedTargets.map((target) => ({
+      state: "invalid",
+      target,
+    })),
+  ];
 }
 
 function latestMemoryBytes(
@@ -338,6 +610,10 @@ function formatBytes(bytes: number | null): string {
 
 function formatMs(value: number | null): string {
   return typeof value === "number" ? `${value.toFixed(1)} ms` : "n/a";
+}
+
+function formatDiagnosticTimestamp(timestampMs: number): string {
+  return new Date(timestampMs).toISOString();
 }
 
 async function writeClipboardText(text: string): Promise<void> {

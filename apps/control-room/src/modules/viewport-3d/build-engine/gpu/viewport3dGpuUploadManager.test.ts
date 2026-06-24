@@ -1,8 +1,40 @@
 import { describe, expect, it } from "vitest";
 
+import { createDiagnosticRecordFromViewport3DGpuUploadDiagnostic } from "./viewport3dGpuUploadDiagnostics";
 import { createViewport3DGpuUploadManager } from "./viewport3dGpuUploadManager";
 
 describe("viewport3dGpuUploadManager", () => {
+  it("exports max per-frame upload time rather than ticket wall time", () => {
+    const record = createDiagnosticRecordFromViewport3DGpuUploadDiagnostic({
+      aborted: false,
+      budgetExceeded: true,
+      completedAtMs: 250,
+      key: "vector-glyph-upload",
+      kind: "viewport-3d-gpu-upload",
+      lane: "vector-glyph",
+      mainUploadMs: 120,
+      maxChunkMs: 4,
+      maxFrameUploadMs: 18,
+      queuedAtMs: 100,
+      targetRevision: "field=f1",
+      totalWallMs: 150,
+      uploadBytes: 2048,
+      uploadChunks: 8,
+      uploadFrames: 6,
+    });
+
+    expect(record).toMatchObject({
+      buildLane: "vector-glyph-upload",
+      durationMs: 18,
+      mainUploadMs: 18,
+      severity: "warning",
+    });
+    expect(record.detail).toMatchObject({
+      totalMainUploadMs: 120,
+      totalWallMs: 150,
+    });
+  });
+
   it("splits upload chunks across frame-budgeted slices before adopting visible handles", () => {
     let nowMs = 0;
     const scheduled: Array<() => void> = [];

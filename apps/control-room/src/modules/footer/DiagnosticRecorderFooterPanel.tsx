@@ -13,12 +13,24 @@ export function DiagnosticRecorderFooterPanel({
   kernel: ModuleProps["kernel"];
 }) {
   const snapshot = useDiagnosticRecorderSnapshot(kernel.diagnosticRecorder);
-  const artifact = kernel.diagnosticRecorder.exportArtifact();
   const slowest = snapshot.summary.slowestRecord;
   const memoryBytes = snapshot.streams.memory.at(-1)?.usedJSHeapBytes ?? null;
   const viewportResourceCount = snapshot.streams.viewport3d.filter(
     (record) => record.name === "viewport-3d.resource-tracked",
   ).length;
+  const handleOpenClick = () => {
+    kernel.bus.emit("diagnostics:recorder-open-requested", {
+      source: "footer",
+    });
+  };
+  const handleExportClick = () => {
+    const artifact = kernel.diagnosticRecorder.exportArtifact();
+    downloadTextFile({
+      filename: diagnosticArtifactFilename(snapshot.scenario),
+      mimeType: "application/json",
+      text: serializeDiagnosticArtifactJson(artifact),
+    });
+  };
 
   return (
     <div className="fm-footer-recorder">
@@ -46,11 +58,7 @@ export function DiagnosticRecorderFooterPanel({
           size="sm"
           type="button"
           variant="secondary"
-          onClick={() =>
-            kernel.bus.emit("diagnostics:recorder-open-requested", {
-              source: "footer",
-            })
-          }
+          onClick={handleOpenClick}
         >
           <Maximize2 size={14} aria-hidden="true" />
           Open
@@ -59,13 +67,7 @@ export function DiagnosticRecorderFooterPanel({
           size="sm"
           type="button"
           variant="secondary"
-          onClick={() =>
-            downloadTextFile({
-              filename: `fullmag-diagnostics-${Date.now()}-${snapshot.scenario}.json`,
-              mimeType: "application/json",
-              text: serializeDiagnosticArtifactJson(artifact),
-            })
-          }
+          onClick={handleExportClick}
         >
           <Download size={14} aria-hidden="true" />
           Export
@@ -101,6 +103,10 @@ function formatBytes(bytes: number | null): string {
 
 function formatMs(value: number | null): string {
   return typeof value === "number" ? `${value.toFixed(1)} ms` : "n/a";
+}
+
+function diagnosticArtifactFilename(scenario: string): string {
+  return `fullmag-diagnostics-${Date.now()}-${scenario}.json`;
 }
 
 function downloadTextFile({

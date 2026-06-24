@@ -67,7 +67,11 @@ describe("diagnostic recorder script", () => {
 
   it("writes a lane summary for viewport 3D build-engine records", () => {
     expect(script).toContain("viewport3d-build-summary.json");
+    expect(script).toContain("viewport3d-visible-revision-summary.json");
+    expect(script).toContain("viewport-3d-build.ndjson");
+    expect(script).toContain("viewport-3d-worker-pools.ndjson");
     expect(script).toContain("buildViewport3DBuildSummary");
+    expect(script).toContain("buildViewport3DVisibleRevisionSummary");
     expect(script).toContain("fullmag.viewport3d.build-engine.");
     expect(script).toContain("queueWaitMaxMs");
     expect(script).toContain("workerComputeMaxMs");

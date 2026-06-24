@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { buildViewport3DPointPositions } from "./viewport3dPointGeometry";
+import {
+  buildViewport3DPointPositions,
+  createViewport3DIndexedPointGeometry,
+} from "./viewport3dPointGeometry";
 
 const source = {
   nodeCount: 5,
@@ -28,5 +31,14 @@ describe("viewport3dPointGeometry", () => {
       1, 0, 0,
       3, 0, 0,
     ]);
+  });
+
+  it("creates indexed point geometry without compacting shared positions", () => {
+    const geometry = createViewport3DIndexedPointGeometry(source, {
+      nodeIndices: new Uint32Array([1, 3]),
+    });
+
+    expect(geometry?.getAttribute("position").array).toBe(source.positions);
+    expect(Array.from(geometry?.getIndex()?.array ?? [])).toEqual([1, 3]);
   });
 });
