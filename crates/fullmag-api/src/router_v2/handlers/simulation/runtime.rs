@@ -529,32 +529,73 @@ pub async fn get_hysteresis_settle_pipeline(
 fn build_hysteresis_resolved_settle_steps(
     stage: &HysteresisSceneStage,
 ) -> Vec<HysteresisResolvedSettleStepSchema> {
-    stage
+    let Some(pipeline) = stage
         .value
         .get("settle_pipeline")
-        .and_then(|pipeline| pipeline.get("steps"))
-        .and_then(Value::as_array)
-        .map(|steps| {
-            steps
-                .iter()
-                .enumerate()
-                .map(|(idx, step)| {
-                    let kind =
-                        value_string(step.get("kind")).unwrap_or_else(|| "settle".to_string());
-                    let method = value_string(step.get("method")).unwrap_or_else(|| kind.clone());
-                    HysteresisResolvedSettleStepSchema {
-                        step_index: idx as u32,
-                        step_id: format!("settle_step_{idx:03}_{kind}"),
-                        kind,
-                        method,
-                        applies_to: step.get("applies_to").cloned(),
-                        on_non_convergence: value_string(step.get("on_non_convergence")),
-                        resolved_parameters: step.clone(),
-                    }
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+        .and_then(Value::as_object)
+    else {
+        return Vec::new();
+    };
+
+    let mut resolved_steps = Vec::new();
+    if let Some(steps) = pipeline.get("steps").and_then(Value::as_array) {
+        for step in steps {
+            push_hysteresis_resolved_settle_step(&mut resolved_steps, step, None, None);
+        }
+        return resolved_steps;
+    }
+
+    if let Some(default_step) = pipeline.get("default") {
+        push_hysteresis_resolved_settle_step(
+            &mut resolved_steps,
+            default_step,
+            Some("default"),
+            None,
+        );
+    }
+    if let Some(branches) = pipeline.get("branches").and_then(Value::as_array) {
+        for branch in branches {
+            let branch_when = branch.get("when").and_then(Value::as_str);
+            if let Some(run) = branch.get("run") {
+                push_hysteresis_resolved_settle_step(
+                    &mut resolved_steps,
+                    run,
+                    Some("branch"),
+                    branch_when,
+                );
+            }
+        }
+    }
+    resolved_steps
+}
+
+fn push_hysteresis_resolved_settle_step(
+    resolved_steps: &mut Vec<HysteresisResolvedSettleStepSchema>,
+    step: &Value,
+    pipeline_role: Option<&str>,
+    branch_when: Option<&str>,
+) {
+    let step_index = resolved_steps.len() as u32;
+    let kind = value_string(step.get("kind")).unwrap_or_else(|| "settle".to_string());
+    let method = value_string(step.get("method")).unwrap_or_else(|| kind.clone());
+    let mut resolved_parameters = step.clone();
+    if let Some(object) = resolved_parameters.as_object_mut() {
+        if let Some(role) = pipeline_role {
+            object.insert("pipeline_role".to_string(), Value::String(role.to_string()));
+        }
+        if let Some(when) = branch_when {
+            object.insert("branch_when".to_string(), Value::String(when.to_string()));
+        }
+    }
+    resolved_steps.push(HysteresisResolvedSettleStepSchema {
+        step_index,
+        step_id: format!("settle_step_{step_index:03}_{kind}"),
+        kind,
+        method,
+        applies_to: step.get("applies_to").cloned(),
+        on_non_convergence: value_string(step.get("on_non_convergence")),
+        resolved_parameters,
+    });
 }
 
 fn build_hysteresis_resolved_branch_ids(stage: &HysteresisSceneStage) -> Vec<String> {

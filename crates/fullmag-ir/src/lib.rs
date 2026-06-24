@@ -2173,6 +2173,12 @@ fn validate_settle_step(step: &SettleStepIR, idx: usize, errors: &mut Vec<String
                 idx,
                 errors,
             );
+            validate_settle_direct_minimizer_physical_time(
+                method,
+                *max_physical_time_s,
+                idx,
+                errors,
+            );
             validate_settle_applies_to(applies_to.as_ref(), idx, errors);
             validate_settle_stop_criteria(stop_criteria.as_ref(), idx, errors);
             validate_settle_non_convergence_policy(on_non_convergence, idx, errors);
@@ -2220,6 +2226,12 @@ fn validate_settle_step(step: &SettleStepIR, idx: usize, errors: &mut Vec<String
             validate_settle_time_controls(
                 *timestep_s,
                 *max_pseudotime_s,
+                *max_physical_time_s,
+                idx,
+                errors,
+            );
+            validate_settle_direct_minimizer_physical_time(
+                method,
                 *max_physical_time_s,
                 idx,
                 errors,
@@ -2275,7 +2287,7 @@ fn validate_settle_step(step: &SettleStepIR, idx: usize, errors: &mut Vec<String
                 errors,
             );
             validate_settle_applies_to(applies_to.as_ref(), idx, errors);
-            validate_settle_stop_criteria(stop_criteria.as_ref(), idx, errors);
+            validate_dynamics_settle_stop_criteria(stop_criteria.as_ref(), idx, errors);
             validate_settle_non_convergence_policy(on_non_convergence, idx, errors);
             validate_settle_retry_policy(
                 on_non_convergence,
@@ -2318,6 +2330,46 @@ fn validate_settle_time_controls(
                 idx
             ));
         }
+    }
+}
+
+fn validate_settle_direct_minimizer_physical_time(
+    method: &str,
+    max_physical_time_s: Option<f64>,
+    idx: usize,
+    errors: &mut Vec<String>,
+) {
+    let Some(algorithm) = direct_minimizer_relaxation_method(method) else {
+        return;
+    };
+    if max_physical_time_s.is_some() {
+        errors.push(format!(
+            "study.stages[].hysteresis.settle_pipeline.steps[{}].max_physical_time_s is unsupported for direct minimizer '{}'; direct minimizers do not advance physical time. Use max_pseudotime_s or method='llg_overdamped' for physical-time relaxation.",
+            idx,
+            algorithm
+        ));
+    }
+}
+
+fn direct_minimizer_relaxation_method(method: &str) -> Option<&'static str> {
+    match method.trim() {
+        "projected_gradient_bb" => Some("projected_gradient_bb"),
+        "nonlinear_cg" => Some("nonlinear_cg"),
+        "tangent_plane_implicit" => Some("tangent_plane_implicit"),
+        _ => None,
+    }
+}
+
+fn validate_dynamics_settle_stop_criteria(
+    stop_criteria: Option<&serde_json::Value>,
+    idx: usize,
+    errors: &mut Vec<String>,
+) {
+    if stop_criteria.is_some() {
+        errors.push(format!(
+            "study.stages[].hysteresis.settle_pipeline.steps[{}].stop_criteria is unsupported for DynamicsSettle because dynamics-settle is duration-based; use relax or minimize settle steps for convergence criteria",
+            idx
+        ));
     }
 }
 
@@ -2569,16 +2621,32 @@ fn validate_settle_applies_to_value(value: &serde_json::Value) -> bool {
                 | "minor"
                 | "recoil"
                 | "key_events"
-                | "branch_id"
-                | "point_selector"
         ),
         serde_json::Value::Array(selectors) => {
             !selectors.is_empty() && selectors.iter().all(validate_settle_applies_to_value)
         }
-        serde_json::Value::Object(object) => object
-            .get("kind")
-            .is_some_and(validate_settle_applies_to_value),
+        serde_json::Value::Object(object) => validate_settle_applies_to_object(object),
         _ => false,
+    }
+}
+
+fn validate_settle_applies_to_object(object: &serde_json::Map<String, serde_json::Value>) -> bool {
+    let Some(kind) = object.get("kind").and_then(serde_json::Value::as_str) else {
+        return false;
+    };
+    match kind {
+        "branch_id" => object
+            .get("branch_id")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|branch_id| !branch_id.trim().is_empty()),
+        "point_selector" => object
+            .get("point_ids")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|point_ids| {
+                !point_ids.is_empty()
+                    && point_ids.iter().all(|point_id| point_id.as_u64().is_some())
+            }),
+        _ => validate_settle_applies_to_value(&serde_json::Value::String(kind.to_string())),
     }
 }
 

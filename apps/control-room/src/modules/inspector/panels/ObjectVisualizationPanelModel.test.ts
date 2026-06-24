@@ -151,6 +151,13 @@ describe("ObjectVisualizationPanelModel", () => {
     ).toEqual({ scope_id: "body", scope_kind: "object" });
     expect(
       fieldMetaScopeQueryForVisualizationTarget({
+        id: "object:permalloy_layer",
+        kind: "object",
+        label: "Permalloy layer",
+      }),
+    ).toEqual({ scope_id: "permalloy_layer", scope_kind: "object" });
+    expect(
+      fieldMetaScopeQueryForVisualizationTarget({
         id: "part:body",
         kind: "part",
         label: "Body part",

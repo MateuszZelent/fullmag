@@ -545,7 +545,7 @@ fn hysteresis_validation_rejects_invalid_settle_step_selection_contract() {
                 alpha: 1.0,
                 torque_tolerance: 1e-5,
                 max_steps: 100,
-                applies_to: Some(serde_json::json!("unknown_selector")),
+                applies_to: Some(serde_json::json!("branch_id")),
                 stop_criteria: Some(serde_json::json!({
                     "kind": "any_of",
                     "criteria": ["torque_below", "unknown_stop"]
@@ -581,6 +581,125 @@ fn hysteresis_validation_rejects_invalid_settle_step_selection_contract() {
     assert!(errors
         .iter()
         .any(|error| error.contains("settle_pipeline.steps[0].stop_criteria")));
+}
+
+#[test]
+fn hysteresis_validation_rejects_direct_minimizer_physical_time_budget() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study = StudyIR::Hysteresis {
+        field_min_mT: Some(-100.0),
+        field_max_mT: Some(100.0),
+        field_step_mT: Some(10.0),
+        field_values_mT: None,
+        field_unit_provenance: None,
+        direction: None,
+        orientation: Some(FieldOrientationIR::Preset {
+            preset_name: "oop_positive".to_string(),
+        }),
+        measurement_axis: MeasurementAxisIR::field_axis(),
+        angular_family: None,
+        initial_protocol: "positive_saturation".to_string(),
+        initial_state_ref: None,
+        saturation: None,
+        branch_mode: "major_loop".to_string(),
+        settle_pipeline: Some(SettlePipelineIR::Sequence {
+            steps: vec![SettleStepIR::Minimize {
+                method: "projected_gradient_bb".to_string(),
+                torque_tolerance: 5e-5,
+                energy_tolerance: 1e-20,
+                max_steps: 100,
+                applies_to: None,
+                stop_criteria: None,
+                timestep_s: None,
+                max_pseudotime_s: None,
+                max_physical_time_s: Some(1e-9),
+                on_non_convergence: "continue_with_warning".to_string(),
+                retry_timestep_scale: None,
+                retry_max_attempts: None,
+            }],
+        }),
+        storage: None,
+        field_schedule: None,
+        schedule_refinements: None,
+        adaptive_refinement: None,
+        minor_loops: None,
+        sampling: SamplingIR {
+            outputs: vec![OutputIR::Scalar {
+                name: "mz".to_string(),
+                every_seconds: 1.0e-12,
+            }],
+            table_autosave: None,
+        },
+    };
+
+    let errors = ir
+        .validate()
+        .expect_err("direct minimizer settle steps must reject physical time");
+    assert!(errors.iter().any(|error| {
+        error.contains("settle_pipeline.steps[0].max_physical_time_s")
+            && error.contains("projected_gradient_bb")
+            && error.contains("direct minimizer")
+            && error.contains("max_pseudotime_s")
+            && error.contains("llg_overdamped")
+    }));
+}
+
+#[test]
+fn hysteresis_validation_rejects_dynamics_settle_stop_criteria() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study = StudyIR::Hysteresis {
+        field_min_mT: Some(-100.0),
+        field_max_mT: Some(100.0),
+        field_step_mT: Some(10.0),
+        field_values_mT: None,
+        field_unit_provenance: None,
+        direction: None,
+        orientation: Some(FieldOrientationIR::Preset {
+            preset_name: "oop_positive".to_string(),
+        }),
+        measurement_axis: MeasurementAxisIR::field_axis(),
+        angular_family: None,
+        initial_protocol: "positive_saturation".to_string(),
+        initial_state_ref: None,
+        saturation: None,
+        branch_mode: "major_loop".to_string(),
+        settle_pipeline: Some(SettlePipelineIR::Sequence {
+            steps: vec![SettleStepIR::DynamicsSettle {
+                method: "heun_dynamics_settle".to_string(),
+                damping: 1.0,
+                max_steps: 100,
+                applies_to: None,
+                stop_criteria: Some(serde_json::json!("torque_below")),
+                timestep_s: None,
+                max_pseudotime_s: None,
+                max_physical_time_s: None,
+                on_non_convergence: "continue_with_warning".to_string(),
+                retry_timestep_scale: None,
+                retry_max_attempts: None,
+            }],
+        }),
+        storage: None,
+        field_schedule: None,
+        schedule_refinements: None,
+        adaptive_refinement: None,
+        minor_loops: None,
+        sampling: SamplingIR {
+            outputs: vec![OutputIR::Scalar {
+                name: "mz".to_string(),
+                every_seconds: 1.0e-12,
+            }],
+            table_autosave: None,
+        },
+    };
+
+    let errors = ir
+        .validate()
+        .expect_err("dynamics-settle stop_criteria must not be accepted when ignored");
+    assert!(errors.iter().any(|error| {
+        error.contains("settle_pipeline.steps[0].stop_criteria")
+            && error.contains("DynamicsSettle")
+            && error.contains("duration-based")
+    }));
 }
 
 #[test]

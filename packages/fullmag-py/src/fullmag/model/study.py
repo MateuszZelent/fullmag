@@ -30,6 +30,11 @@ SUPPORTED_RELAXATION_ALGORITHMS = {
     "nonlinear_cg",
     "tangent_plane_implicit",
 }
+DIRECT_MINIMIZER_RELAXATION_ALGORITHMS = {
+    "projected_gradient_bb",
+    "nonlinear_cg",
+    "tangent_plane_implicit",
+}
 SUPPORTED_EIGEN_OPERATORS = {"linearized_llg", "full_2x2"}
 SUPPORTED_EIGEN_TARGETS = {"lowest", "nearest", "frequency_window"}
 SUPPORTED_EQUILIBRIUM_SOURCES = {"provided", "relax", "artifact"}
@@ -51,6 +56,8 @@ SUPPORTED_SETTLE_APPLIES_TO = {
     "minor",
     "recoil",
     "key_events",
+}
+SUPPORTED_SETTLE_APPLIES_TO_OBJECT_KINDS = SUPPORTED_SETTLE_APPLIES_TO | {
     "branch_id",
     "point_selector",
 }
@@ -1329,9 +1336,20 @@ def _require_supported_settle_applies_to(value: object | None) -> object | None:
         return normalized
     if isinstance(value, Mapping):
         kind = require_non_empty(str(value.get("kind", "")), "applies_to.kind")
-        if kind not in SUPPORTED_SETTLE_APPLIES_TO:
-            supported = ", ".join(sorted(SUPPORTED_SETTLE_APPLIES_TO))
+        if kind not in SUPPORTED_SETTLE_APPLIES_TO_OBJECT_KINDS:
+            supported = ", ".join(sorted(SUPPORTED_SETTLE_APPLIES_TO_OBJECT_KINDS))
             raise ValueError(f"applies_to.kind must be one of: {supported}")
+        if kind == "branch_id":
+            require_non_empty(str(value.get("branch_id", "")), "applies_to.branch_id")
+        if kind == "point_selector":
+            point_ids = value.get("point_ids")
+            if (
+                not isinstance(point_ids, Sequence)
+                or isinstance(point_ids, (str, bytes))
+                or not point_ids
+                or any(not isinstance(point_id, int) or point_id < 0 for point_id in point_ids)
+            ):
+                raise ValueError("applies_to.point_ids must be a non-empty list of point ids")
         return dict(value)
     raise TypeError("applies_to must be a string, list, mapping, or None")
 
@@ -1373,6 +1391,17 @@ def _require_supported_settle_stop_criteria(value: object | None) -> object | No
     raise TypeError("stop_criteria must be a string, list, mapping, or None")
 
 
+def _validate_settle_physical_time(method: str, max_physical_time_s: float | None) -> None:
+    if max_physical_time_s is None:
+        return
+    if method in DIRECT_MINIMIZER_RELAXATION_ALGORITHMS:
+        raise ValueError(
+            f"{method} is a direct minimizer and does not advance physical time; "
+            "max_physical_time_s is unsupported. Use max_pseudotime_s or "
+            'method="llg_overdamped" for physical-time relaxation.'
+        )
+
+
 class SettleStep:
     pass
 
@@ -1403,6 +1432,7 @@ class RelaxStep(SettleStep):
             require_positive(self.max_pseudotime_s, "max_pseudotime_s")
         if self.max_physical_time_s is not None:
             require_positive(self.max_physical_time_s, "max_physical_time_s")
+        _validate_settle_physical_time(self.method, self.max_physical_time_s)
         policy = _require_supported_settle_non_convergence(self.on_non_convergence)
         _validate_settle_retry_policy(policy, self.retry_timestep_scale, self.retry_max_attempts)
         object.__setattr__(
@@ -1466,6 +1496,7 @@ class MinimizeStep(SettleStep):
             require_positive(self.max_pseudotime_s, "max_pseudotime_s")
         if self.max_physical_time_s is not None:
             require_positive(self.max_physical_time_s, "max_physical_time_s")
+        _validate_settle_physical_time(self.method, self.max_physical_time_s)
         policy = _require_supported_settle_non_convergence(self.on_non_convergence)
         _validate_settle_retry_policy(policy, self.retry_timestep_scale, self.retry_max_attempts)
         object.__setattr__(
@@ -1527,15 +1558,15 @@ class DynamicsSettleStep(SettleStep):
             require_positive(self.max_pseudotime_s, "max_pseudotime_s")
         if self.max_physical_time_s is not None:
             require_positive(self.max_physical_time_s, "max_physical_time_s")
+        if self.stop_criteria is not None:
+            raise ValueError(
+                "DynamicsSettleStep stop_criteria is unsupported because dynamics-settle "
+                "is duration-based; use RelaxStep or MinimizeStep for convergence criteria."
+            )
         policy = _require_supported_settle_non_convergence(self.on_non_convergence)
         _validate_settle_retry_policy(policy, self.retry_timestep_scale, self.retry_max_attempts)
         object.__setattr__(
             self, "applies_to", _require_supported_settle_applies_to(self.applies_to)
-        )
-        object.__setattr__(
-            self,
-            "stop_criteria",
-            _require_supported_settle_stop_criteria(self.stop_criteria),
         )
 
     def to_ir(self) -> dict[str, object]:

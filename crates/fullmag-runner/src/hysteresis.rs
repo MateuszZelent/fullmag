@@ -2760,7 +2760,6 @@ fn settle_selector_matches_point_role(selector: &str, point_role: &str) -> bool 
         "key_events" => point_role == "key_event",
         "preparation" => point_role == "preparation",
         "saturation_probe" => point_role == "saturation_probe",
-        "branch_id" | "point_selector" => true,
         _ => false,
     }
 }
@@ -7026,6 +7025,14 @@ mod tests {
         ));
         assert!(!settle_applies_to_matches_context(
             Some(&serde_json::json!({"branch_id": "descending"})),
+            &descending_context
+        ));
+        assert!(!settle_applies_to_matches_context(
+            Some(&serde_json::json!("branch_id")),
+            &descending_context
+        ));
+        assert!(!settle_applies_to_matches_context(
+            Some(&serde_json::json!("point_selector")),
             &descending_context
         ));
         assert!(!settle_applies_to_matches_context(

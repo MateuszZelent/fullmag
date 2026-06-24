@@ -262,6 +262,8 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
   }, [tableColumns.data, xAxisId, yAxisIds]);
 
   useEffect(() => {
+    const currentSelection = selection.get();
+    if (selectedHysteresisStageIdFromSelection(currentSelection)) return;
     selection.set(
       {
         kind: "analysis.chart",
@@ -542,6 +544,9 @@ export function selectedHysteresisStageIdFromSelection(
     return ref.stageId;
   }
   if (ref?.type === "hysteresis-snapshot") {
+    return ref.stageId;
+  }
+  if (ref?.type === "analysis-chart-point" && ref.stageId) {
     return ref.stageId;
   }
   if (

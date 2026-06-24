@@ -916,6 +916,9 @@ describe("ControlRoomApi", () => {
     await api.simulation.stages.hysteresis.executionTree("stage 1", {
       after: 3,
       before: 2,
+      include_bookmarks: true,
+      include_snapshots: true,
+      include_warnings: true,
       window: "active",
     });
     await api.simulation.stages.hysteresis.progress("stage 1");
@@ -927,7 +930,7 @@ describe("ControlRoomApi", () => {
       "http://127.0.0.1:8765/v2/sessions/current/simulation/stages/stage%201/hysteresis/saturation",
       "http://127.0.0.1:8765/v2/sessions/current/simulation/stages/stage%201/hysteresis/orientation",
       "http://127.0.0.1:8765/v2/sessions/current/simulation/stages/stage%201/hysteresis/settle-pipeline",
-      "http://127.0.0.1:8765/v2/sessions/current/simulation/stages/stage%201/hysteresis/execution-tree?after=3&before=2&window=active",
+      "http://127.0.0.1:8765/v2/sessions/current/simulation/stages/stage%201/hysteresis/execution-tree?after=3&before=2&include_bookmarks=true&include_snapshots=true&include_warnings=true&window=active",
       "http://127.0.0.1:8765/v2/sessions/current/simulation/stages/stage%201/hysteresis/progress",
     ]);
   });

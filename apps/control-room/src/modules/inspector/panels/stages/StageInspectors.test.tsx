@@ -1708,7 +1708,7 @@ describe("Study stage inspectors", () => {
     const executionTreeKey = `${SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH.replace(
       "{stage_id}",
       "hysteresis-1",
-    )}:window=active:before=1:after=1`;
+    )}?after=1&before=1&include_bookmarks=true&include_snapshots=true&include_warnings=true&window=active`;
     const executionTree: HysteresisExecutionTreeResource = {
       active_point_index: 4,
       after: 1,
@@ -1781,7 +1781,7 @@ describe("Study stage inspectors", () => {
     const executionTreeKey = `${SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH.replace(
       "{stage_id}",
       "hysteresis-1",
-    )}:window=active:before=1:after=1`;
+    )}?after=1&before=1&include_bookmarks=true&include_snapshots=true&include_warnings=true&window=active`;
     const executionTree: HysteresisExecutionTreeResource = {
       active_point_index: 7,
       after: 1,

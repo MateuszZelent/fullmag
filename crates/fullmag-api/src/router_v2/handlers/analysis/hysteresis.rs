@@ -725,7 +725,6 @@ pub async fn get_angular_family(
     Path(stage_id): Path<String>,
 ) -> Result<Json<HysteresisAngularFamilyResource>, ApiError> {
     let stage = resolve_hysteresis_scene_stage(&state, &stage_id).await?;
-    let points = read_hysteresis_points(&state, &stage.stage_id).await?;
     let metrics = match read_typed_stage_artifact::<HysteresisMetricsSchema>(
         &state,
         &stage.stage_id,
@@ -759,7 +758,7 @@ pub async fn get_angular_family(
                     Some(&stage.stage_id),
                 )
             } else if is_active_variant {
-                points.clone()
+                read_hysteresis_points_if_available(&state, &stage.stage_id).await?
             } else {
                 Vec::new()
             };
@@ -809,6 +808,7 @@ pub async fn get_angular_family(
             stage.stage_id
         )));
     };
+    let points = read_hysteresis_points(&state, &stage.stage_id).await?;
     let Some(family) = family_value.as_object() else {
         return Err(ApiError::internal(
             "hysteresis angular_family is not an object",

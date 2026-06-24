@@ -43,6 +43,19 @@ function settleBranchRunKind(branch: Record<string, unknown>): string {
   return displayValue(run?.algorithm_kind) ?? displayValue(run?.kind) ?? "n/a";
 }
 
+function resolvedSettleStep(step: Record<string, unknown>): Record<string, unknown> {
+  const resolvedParameters = isRecord(step.resolved_parameters)
+    ? step.resolved_parameters
+    : {};
+  return { ...resolvedParameters, ...step };
+}
+
+function resolvedBranchIdsToRecords(branchIds: readonly unknown[]): Record<string, unknown>[] {
+  return branchIds
+    .filter((branchId): branchId is string => typeof branchId === "string")
+    .map((branchId) => ({ branch_id: branchId }));
+}
+
 export function HysteresisSettlePipelineInspector({
   draft,
   executionTree,
@@ -55,18 +68,28 @@ export function HysteresisSettlePipelineInspector({
   const pipeline = isRecord(settlePipeline?.settle_pipeline)
     ? settlePipeline.settle_pipeline
     : null;
-  const resolvedSteps = Array.isArray(pipeline?.steps)
+  const topLevelResolvedSteps = Array.isArray(settlePipeline?.resolved_steps)
+    ? settlePipeline.resolved_steps.filter(isRecord).map(resolvedSettleStep)
+    : [];
+  const rawPipelineSteps = Array.isArray(pipeline?.steps)
     ? pipeline.steps.filter(isRecord)
     : [];
-  const settleSteps = resolvedSteps.length > 0
-    ? resolvedSteps
-    : parseJsonArray(draft?.settleSteps);
-  const resolvedBranches = Array.isArray(pipeline?.branches)
+  const settleSteps = topLevelResolvedSteps.length > 0
+    ? topLevelResolvedSteps
+    : rawPipelineSteps.length > 0
+      ? rawPipelineSteps
+      : parseJsonArray(draft?.settleSteps);
+  const topLevelResolvedBranches = Array.isArray(settlePipeline?.resolved_branch_ids)
+    ? resolvedBranchIdsToRecords(settlePipeline.resolved_branch_ids)
+    : [];
+  const rawPipelineBranches = Array.isArray(pipeline?.branches)
     ? pipeline.branches.filter(isRecord)
     : [];
-  const settleBranches = resolvedBranches.length > 0
-    ? resolvedBranches
-    : parseJsonArray(draft?.settleBranches);
+  const settleBranches = topLevelResolvedBranches.length > 0
+    ? topLevelResolvedBranches
+    : rawPipelineBranches.length > 0
+      ? rawPipelineBranches
+      : parseJsonArray(draft?.settleBranches);
   const activeNode = executionTree?.nodes.find((node) => node.status === "active");
   const activeStep = activeNode?.children?.find((node) => node.status === "active");
 

@@ -719,27 +719,59 @@ export function useHysteresisExecutionTreeResource(
     after = 3,
     before = 2,
     enabled = true,
+    include_bookmarks = true,
+    include_snapshots = true,
+    include_warnings = true,
     window = "active",
   }: RuntimeResourceOptions & {
     after?: number;
     before?: number;
+    include_bookmarks?: boolean;
+    include_snapshots?: boolean;
+    include_warnings?: boolean;
     window?: string;
   } = {},
 ) {
   const { api } = useKernel();
-  const queryKey = `window=${window}:before=${before}:after=${after}`;
   const resourceKey = stageId
-    ? `${SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH.replace("{stage_id}", stageId)}:${queryKey}`
+    ? resolveHysteresisExecutionTreeResourceKey(stageId, {
+        after,
+        before,
+        include_bookmarks,
+        include_snapshots,
+        include_warnings,
+        window,
+      })
     : `${SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH}:none`;
 
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>
       stageId
         ? api.simulation.stages.hysteresis
-            .executionTree(stageId, { after, before, window }, { signal })
+            .executionTree(
+              stageId,
+              {
+                after,
+                before,
+                include_bookmarks,
+                include_snapshots,
+                include_warnings,
+                window,
+              },
+              { signal },
+            )
             .catch(ignoreMissingResource<HysteresisExecutionTreeResource>)
         : Promise.resolve(null),
-    [after, api, before, stageId, window],
+    [
+      after,
+      api,
+      before,
+      include_bookmarks,
+      include_snapshots,
+      include_warnings,
+      stageId,
+      window,
+    ],
   );
 
   return useResource<HysteresisExecutionTreeResource | null>({
@@ -748,6 +780,34 @@ export function useHysteresisExecutionTreeResource(
     resolveRevision: (data) => data?.revision ?? null,
     resourceKey,
   });
+}
+
+export function resolveHysteresisExecutionTreeResourceKey(
+  stageId: string,
+  query: {
+    after: number;
+    before: number;
+    include_bookmarks: boolean;
+    include_snapshots: boolean;
+    include_warnings: boolean;
+    window: string;
+  },
+): string {
+  const path = SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH.replace(
+    "{stage_id}",
+    encodeURIComponent(stageId),
+  );
+  const params = [
+    ["after", String(query.after)],
+    ["before", String(query.before)],
+    ["include_bookmarks", String(query.include_bookmarks)],
+    ["include_snapshots", String(query.include_snapshots)],
+    ["include_warnings", String(query.include_warnings)],
+    ["window", query.window],
+  ];
+  return `${path}?${params
+    .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
+    .join("&")}`;
 }
 
 export function useHysteresisProgressResource(

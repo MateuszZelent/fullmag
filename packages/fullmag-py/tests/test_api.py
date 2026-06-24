@@ -4497,7 +4497,6 @@ class ProblemApiTests(unittest.TestCase):
                 fm.MinimizeStep(
                     timestep_s=2e-13,
                     max_pseudotime_s=4e-10,
-                    max_physical_time_s=8e-10,
                     max_steps=200,
                 ),
                 fm.RelaxStep(
@@ -4518,7 +4517,7 @@ class ProblemApiTests(unittest.TestCase):
         steps = loaded.stages[0].problem.study.to_ir()["settle_pipeline"]["steps"]
         self.assertEqual(steps[0]["timestep_s"], 2e-13)
         self.assertEqual(steps[0]["max_pseudotime_s"], 4e-10)
-        self.assertEqual(steps[0]["max_physical_time_s"], 8e-10)
+        self.assertNotIn("max_physical_time_s", steps[0])
         self.assertEqual(steps[1]["timestep_s"], 1e-13)
         self.assertEqual(steps[1]["max_pseudotime_s"], 2e-10)
         self.assertEqual(steps[1]["max_physical_time_s"], 6e-10)
@@ -4526,7 +4525,6 @@ class ProblemApiTests(unittest.TestCase):
         rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
         self.assertIn("timestep_s=2e-13", rewritten)
         self.assertIn("max_pseudotime_s=4e-10", rewritten)
-        self.assertIn("max_physical_time_s=8e-10", rewritten)
         self.assertIn("timestep_s=1e-13", rewritten)
         self.assertIn("max_pseudotime_s=2e-10", rewritten)
         self.assertIn("max_physical_time_s=6e-10", rewritten)
@@ -4539,6 +4537,24 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(
             reloaded.stages[0].problem.study.to_ir()["settle_pipeline"]["steps"],
             steps,
+        )
+
+    def test_hysteresis_direct_minimizer_settle_step_rejects_physical_time(self) -> None:
+        with self.assertRaisesRegex(ValueError, "direct minimizer.*max_physical_time_s"):
+            fm.MinimizeStep(max_physical_time_s=1e-9)
+
+        with self.assertRaisesRegex(ValueError, "direct minimizer.*max_physical_time_s"):
+            fm.RelaxStep(method="nonlinear_cg", max_physical_time_s=1e-9)
+
+        self.assertEqual(
+            fm.MinimizeStep(max_pseudotime_s=1e-9).to_ir()["max_pseudotime_s"],
+            1e-9,
+        )
+        self.assertEqual(
+            fm.RelaxStep(method="llg_overdamped", max_physical_time_s=1e-9).to_ir()[
+                "max_physical_time_s"
+            ],
+            1e-9,
         )
 
     def test_study_stage_builder_hysteresis_settle_step_selection_round_trip(self) -> None:
@@ -4859,6 +4875,23 @@ class ProblemApiTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "max_physical_time_s must be positive"):
             fm.DynamicsSettleStep(max_physical_time_s=0.0)
+
+        with self.assertRaisesRegex(ValueError, "DynamicsSettleStep stop_criteria"):
+            fm.DynamicsSettleStep(stop_criteria="torque_below")
+
+        with self.assertRaisesRegex(ValueError, "applies_to must be one of"):
+            fm.RelaxStep(applies_to="branch_id")
+
+        with self.assertRaisesRegex(ValueError, "applies_to.point_ids"):
+            fm.RelaxStep(applies_to={"kind": "point_selector"})
+
+        branch_step = fm.RelaxStep(
+            applies_to={"kind": "branch_id", "branch_id": "descending"}
+        )
+        self.assertEqual(
+            branch_step.to_ir()["applies_to"],
+            {"kind": "branch_id", "branch_id": "descending"},
+        )
 
         with self.assertRaisesRegex(ValueError, "max_steps must be positive"):
             fm.RelaxStep(max_steps=0)

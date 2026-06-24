@@ -12698,6 +12698,79 @@ async fn hysteresis_stage_requested_resources_return_authoring_payload() {
 }
 
 #[tokio::test]
+async fn hysteresis_settle_pipeline_resource_flattens_tree_default_and_branches() {
+    let (app, state, _repo_root) = test_router_with_session_store_state().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 13;
+        snapshot.scene_document = Some(sample_scene_document_with_stage(serde_json::json!({
+            "entrypoint_kind": "flat_hysteresis",
+            "field_values_mT": [100.0, 50.0],
+            "kind": "hysteresis",
+            "stage_id": "hysteresis-tree",
+            "settle_pipeline": {
+                "kind": "tree",
+                "default": {
+                    "kind": "minimize",
+                    "method": "projected_gradient_bb",
+                    "max_steps": 200,
+                    "on_non_convergence": "run_next_algorithm"
+                },
+                "branches": [{
+                    "when": "non_converged",
+                    "run": {
+                        "kind": "relax",
+                        "method": "llg_overdamped",
+                        "max_steps": 500,
+                        "on_non_convergence": "continue_with_warning"
+                    }
+                }]
+            }
+        })));
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(
+                    "/v2/sessions/current/simulation/stages/hysteresis-tree/hysteresis/settle-pipeline",
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let settle_pipeline = body_json(response).await;
+    assert_eq!(
+        settle_pipeline["resolved_steps"].as_array().map(Vec::len),
+        Some(2)
+    );
+    assert_eq!(settle_pipeline["resolved_steps"][0]["step_index"], 0);
+    assert_eq!(
+        settle_pipeline["resolved_steps"][0]["step_id"],
+        "settle_step_000_minimize"
+    );
+    assert_eq!(
+        settle_pipeline["resolved_steps"][0]["resolved_parameters"]["pipeline_role"],
+        "default"
+    );
+    assert_eq!(settle_pipeline["resolved_steps"][1]["step_index"], 1);
+    assert_eq!(
+        settle_pipeline["resolved_steps"][1]["step_id"],
+        "settle_step_001_relax"
+    );
+    assert_eq!(
+        settle_pipeline["resolved_steps"][1]["resolved_parameters"]["pipeline_role"],
+        "branch"
+    );
+    assert_eq!(
+        settle_pipeline["resolved_steps"][1]["resolved_parameters"]["branch_when"],
+        "non_converged"
+    );
+}
+
+#[tokio::test]
 async fn hysteresis_stage_requested_resources_reject_non_hysteresis_stage() {
     let (app, state, _repo_root) = test_router_with_session_store_state().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -17208,6 +17281,115 @@ async fn hysteresis_family_resource_prefers_runtime_manifest_when_available() {
     let variant_points = body_json(variant_points_response).await;
     assert_eq!(variant_points.as_array().map(Vec::len), Some(1));
     assert_eq!(variant_points[0]["field_value_mT"], 90.0);
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn hysteresis_family_resource_uses_manifest_variant_paths_without_top_level_points() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    fs::write(
+        artifact_dir.join("hysteresis_angular_family.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "kind": "angular_family",
+            "family_id": "runtime_family",
+            "label": "Runtime family",
+            "active_variant_id": "ip_x",
+            "variants": [
+                {
+                    "variant_id": "ip_x",
+                    "label": "IP x",
+                    "orientation": {
+                        "kind": "spherical",
+                        "theta_deg": 90.0,
+                        "phi_deg": 0.0
+                    },
+                    "measurement_axis": "field_axis",
+                    "data_status": "computed_active_stage",
+                    "point_count": 1,
+                    "points_path": "hysteresis_angular_family/ip_x/hysteresis_points.json",
+                    "metrics_path": "hysteresis_angular_family/ip_x/hysteresis_metrics.json"
+                }
+            ]
+        }))
+        .expect("angular-family manifest should serialize"),
+    )
+    .expect("angular-family manifest should be writable");
+    let variant_dir = artifact_dir.join("hysteresis_angular_family").join("ip_x");
+    fs::create_dir_all(&variant_dir).expect("variant artifact directory should be writable");
+    fs::write(
+        variant_dir.join("hysteresis_points.json"),
+        serde_json::to_vec(&serde_json::json!([
+            {
+                "point_id": 0,
+                "field_value_mT": 90.0,
+                "m_parallel": 0.9,
+                "m_oop": 0.0,
+                "m_ip": 0.9,
+                "m_avg": [0.9, 0.0, 0.0],
+                "status": "Completed"
+            }
+        ]))
+        .expect("variant points should serialize"),
+    )
+    .expect("variant points should be writable");
+    fs::write(
+        variant_dir.join("hysteresis_metrics.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "H_c_plus": null,
+            "H_c_minus": null,
+            "H_c": null,
+            "H_eb": null,
+            "M_r_plus": 0.9,
+            "M_r_minus": null,
+            "loop_area": 0.0,
+            "magnetization_average_weighting": "uniform_sample_average",
+            "saturation_status": "not_evaluated"
+        }))
+        .expect("variant metrics should serialize"),
+    )
+    .expect("variant metrics should be writable");
+
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("test session should be active");
+        snapshot.state_version = 21;
+        snapshot.scene_document = Some(sample_scene_document_with_stage(serde_json::json!({
+            "entrypoint_kind": "flat_hysteresis",
+            "kind": "hysteresis",
+            "stage_id": "stage_0",
+            "field_values_mT": [90.0],
+            "measurement_axis": "field_axis",
+            "orientation": {
+                "kind": "spherical",
+                "theta_deg": 90.0,
+                "phi_deg": 0.0
+            }
+        })));
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/analysis/hysteresis-family/stage_0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let family = body_json(response).await;
+    assert_eq!(family["family_id"], "runtime_family");
+    assert_eq!(family["series"].as_array().map(Vec::len), Some(1));
+    assert_eq!(family["series"][0]["variant_id"], "ip_x");
+    assert_eq!(family["series"][0]["data_status"], "computed_active_stage");
+    assert_eq!(family["series"][0]["point_count"], 1);
+    assert_eq!(family["series"][0]["metrics"]["M_r_plus"], 0.9);
+    assert_eq!(
+        family["series"][0]["points"].as_array().map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(family["series"][0]["points"][0]["field_value_mT"], 90.0);
 
     let _ = fs::remove_dir_all(&artifact_dir);
 }

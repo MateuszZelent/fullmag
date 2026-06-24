@@ -131,7 +131,12 @@ export function fieldMetaScopeQueryForVisualizationTarget(
 ): Pick<FieldMetaQuery, "scope_id" | "scope_kind"> {
   switch (target?.kind) {
     case "object":
-      return { scope_id: target.id, scope_kind: "object" };
+      return {
+        scope_id: target.id.startsWith("object:")
+          ? target.id.slice("object:".length)
+          : target.id,
+        scope_kind: "object",
+      };
     case "part":
       return { scope_id: target.id, scope_kind: "part" };
     case "airbox":

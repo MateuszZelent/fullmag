@@ -788,6 +788,25 @@ export function buildHysteresisLoadPointIn3DInput({
   };
 }
 
+export function buildHysteresisSelectPointCommandInput({
+  point,
+  stageId,
+  targetMetadata = {},
+  yAxisKey,
+}: {
+  point: HysteresisPointSchema;
+  stageId: string;
+  targetMetadata?: HysteresisTargetMetadata;
+  yAxisKey: YAxisKey;
+}) {
+  return buildHysteresisLoadPointIn3DInput({
+    point,
+    stageId,
+    targetMetadata,
+    yAxisKey,
+  });
+}
+
 export function buildHysteresisUsePointAsInitialStateInput({
   point,
   stageId,
@@ -1147,7 +1166,25 @@ function useHysteresisChartView({
       }),
         commandSource === "inspector" ? "inspector" : "analysis-plots",
     );
-  }, [commandSource, kernel.selection, stageId, targetMetadata, yAxisKey]);
+    kernel.commands.execute(
+      "hysteresis.load-point-in-3d",
+      commandContext,
+      buildHysteresisSelectPointCommandInput({
+        point: pt,
+        stageId,
+        targetMetadata,
+        yAxisKey,
+      }),
+    );
+  }, [
+    commandContext,
+    commandSource,
+    kernel.commands,
+    kernel.selection,
+    stageId,
+    targetMetadata,
+    yAxisKey,
+  ]);
 
   const selectPoint = useCallback((idx: number) => {
     selectPointResource(points[idx] ?? null);
