@@ -4457,6 +4457,16 @@ export interface components {
             stage_index: number;
             storage?: unknown;
         };
+        HysteresisResolvedSettleStepSchema: {
+            applies_to?: unknown;
+            kind: string;
+            method: string;
+            on_non_convergence?: string | null;
+            resolved_parameters: unknown;
+            step_id: string;
+            /** Format: int32 */
+            step_index: number;
+        };
         HysteresisSaturationProbePointSchema: {
             /** Format: double */
             field_value_mT: number;
@@ -4485,6 +4495,8 @@ export interface components {
             transverse_threshold: number;
         };
         HysteresisSettlePipelineSchema: {
+            resolved_branch_ids?: string[];
+            resolved_steps?: components["schemas"]["HysteresisResolvedSettleStepSchema"][];
             /** Format: int64 */
             revision: number;
             settle_pipeline?: unknown;
@@ -4500,6 +4512,9 @@ export interface components {
             /** Format: double */
             field_value_mT: number;
             method: string;
+            metric_name?: string | null;
+            /** Format: double */
+            metric_value?: number | null;
             point_id: number;
             resolved_parameters?: unknown;
             /** Format: double */
@@ -4509,6 +4524,8 @@ export interface components {
             status: string;
             step_index: number;
             stop_reason?: string | null;
+            /** Format: double */
+            threshold?: number | null;
             /** Format: double */
             torque?: number | null;
         };
@@ -8412,6 +8429,10 @@ export interface operations {
             query?: {
                 /** @description Optional component projection used for statistics (`x`, `y`, `z`, `magnitude`, `full`). */
                 component?: string | null;
+                /** @description Optional FEM scope used for statistics (`full`, `object`, `part`, `airbox`, `selection`). */
+                scope_kind?: string | null;
+                /** @description Scope identifier for `object` and `part` scopes. */
+                scope_id?: string | null;
                 /**
                  * @description Optional persisted analysis snapshot id, for example a saved
                  *     hysteresis-point magnetization state.

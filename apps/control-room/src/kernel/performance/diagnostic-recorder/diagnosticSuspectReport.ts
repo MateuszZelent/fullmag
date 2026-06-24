@@ -15,6 +15,12 @@ import {
 
 type DiagnosticArtifactForReport = Omit<DiagnosticArtifactV1, "suspectReport">;
 
+const LEGACY_VIEWPORT_3D_ASYNC_WALL_TIME_MEASURES = new Set([
+  "fullmag.viewport3d.buildVectorGlyphInstances",
+  "fullmag.viewport3d.uploadVectorGlyphColors",
+  "fullmag.viewport3d.uploadVectorGlyphMatrices",
+]);
+
 export function buildDiagnosticSuspectReport(
   artifact: DiagnosticArtifactForReport,
   now: () => number = Date.now,
@@ -47,6 +53,9 @@ function topLongestRecords(
 ): DiagnosticSuspect[] {
   const candidates: DiagnosticRecord[] = [];
   for (const record of records) {
+    if (isLegacyViewport3DAsyncWallTimeMeasure(record)) {
+      continue;
+    }
     if (typeof record.durationMs === "number" && record.durationMs >= 50) {
       candidates.push(record);
     }
@@ -70,6 +79,14 @@ function topLongestRecords(
     });
   }
   return suspects;
+}
+
+function isLegacyViewport3DAsyncWallTimeMeasure(
+  record: DiagnosticRecord,
+): boolean {
+  if (record.kind !== "measure") return false;
+  const source = stringValue(record, "source") ?? record.name;
+  return LEGACY_VIEWPORT_3D_ASYNC_WALL_TIME_MEASURES.has(source);
 }
 
 function topSlowRequests(

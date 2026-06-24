@@ -21,6 +21,7 @@ import {
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
   ANALYSIS_HYSTERESIS_POINT_PATH,
+  ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH,
   DATA_FIELD_VECTOR_PATH,
   MESHING_PERIODIC_PAIRS_PATH,
 } from "@/kernel/api/apiPaths";
@@ -49,6 +50,13 @@ function analysisFieldVectorResourceKey(fieldId: string): string {
 
 function hysteresisPointResourceKey(stageId: string, pointId: number): string {
   return ANALYSIS_HYSTERESIS_POINT_PATH.replace("{stage_id}", stageId).replace(
+    "{point_id}",
+    String(pointId),
+  );
+}
+
+function hysteresisSettleTraceResourceKey(stageId: string, pointId: number): string {
+  return ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH.replace("{stage_id}", stageId).replace(
     "{point_id}",
     String(pointId),
   );
@@ -2185,7 +2193,10 @@ describe("buildModelTree", () => {
               kind: "settle_algorithm",
               label: "Relax",
               node_id: "point-7:relax",
+              point_id: 7,
+              resource_ref: hysteresisSettleTraceResourceKey("hysteresis-1", 7),
               settle_step_id: "relax",
+              selection_ref: "hysteresis-settle:hysteresis-1:7:0",
               stage_id: "hysteresis-1",
               status: "done",
               updated_revision: 22,
@@ -2194,7 +2205,10 @@ describe("buildModelTree", () => {
               kind: "settle_algorithm",
               label: "Minimize",
               node_id: "point-7:minimize",
+              point_id: 7,
+              resource_ref: hysteresisSettleTraceResourceKey("hysteresis-1", 7),
               settle_step_id: "minimize",
+              selection_ref: "hysteresis-settle:hysteresis-1:7:1",
               stage_id: "hysteresis-1",
               status: "active",
               updated_revision: 22,
@@ -2203,7 +2217,10 @@ describe("buildModelTree", () => {
               kind: "settle_algorithm",
               label: "Dynamics settle",
               node_id: "point-7:dynamics",
+              point_id: 7,
+              resource_ref: hysteresisSettleTraceResourceKey("hysteresis-1", 7),
               settle_step_id: "dynamics",
+              selection_ref: "hysteresis-settle:hysteresis-1:7:2",
               stage_id: "hysteresis-1",
               status: "queued",
               updated_revision: 22,
@@ -2250,6 +2267,8 @@ describe("buildModelTree", () => {
           label: "Field +30 mT",
           node_id: "point-7",
           point_id: 7,
+          resource_ref: hysteresisPointResourceKey("hysteresis-1", 7),
+          selection_ref: "hysteresis-point:hysteresis-1:7",
           stage_id: "hysteresis-1",
           status: "active",
           updated_revision: 22,
@@ -2269,30 +2288,55 @@ describe("buildModelTree", () => {
     });
     expect(flattened.find((node) => node.id === `${stageId}:field-point:7`)).toMatchObject({
       badge: "Field +30 mT",
+      hysteresisExecutionNodeId: "point-7",
+      hysteresisExecutionNodeKind: "field_point",
+      hysteresisPointId: 7,
+      hysteresisSelectionRef: "hysteresis-point:hysteresis-1:7",
       label: "Field +30 mT",
+      resourceRef: hysteresisPointResourceKey("hysteresis-1", 7),
       status: "running",
     });
     expect(
       flattened.find((node) => node.id === `${stageId}:field-point:7:algorithm:relax`),
     ).toMatchObject({
+      hysteresisExecutionNodeId: "point-7:relax",
+      hysteresisExecutionNodeKind: "settle_algorithm",
+      hysteresisPointId: 7,
+      hysteresisSelectionRef: "hysteresis-settle:hysteresis-1:7:0",
       label: "Relax",
+      resourceRef: hysteresisSettleTraceResourceKey("hysteresis-1", 7),
       status: "completed",
     });
     expect(
       flattened.find((node) => node.id === `${stageId}:field-point:7:algorithm:minimize`),
     ).toMatchObject({
+      hysteresisSelectionRef: "hysteresis-settle:hysteresis-1:7:1",
       label: "Minimize",
+      resourceRef: hysteresisSettleTraceResourceKey("hysteresis-1", 7),
       status: "running",
     });
     expect(
       flattened.find((node) => node.id === `${stageId}:field-point:7:algorithm:dynamics`),
     ).toMatchObject({
+      hysteresisSelectionRef: "hysteresis-settle:hysteresis-1:7:2",
       label: "Dynamics settle",
+      resourceRef: hysteresisSettleTraceResourceKey("hysteresis-1", 7),
       status: "queued",
     });
     expect(
       flattened.find((node) => node.id === `${stageId}:field-point:7:snapshot:hysteresis_point_007`),
     ).toMatchObject({
+      contextCommands: expect.arrayContaining([
+        "hysteresis.use-point-as-initial-state",
+        "workspace.focus-selection",
+      ]),
+      contextCommandInputs: {
+        "hysteresis.use-point-as-initial-state": {
+          snapshotId: "hysteresis_point_007_from_selection",
+          snapshotResourceRef: snapshotVectorResourceKey("hysteresis_point_007_from_resource"),
+          stageId: "hysteresis-1",
+        },
+      },
       fieldOrientation: JSON.stringify({ kind: "preset", preset_name: "in_plane_x" }),
       fieldRevision: 12,
       hysteresisSnapshotId: "hysteresis_point_007_from_selection",
@@ -2317,6 +2361,17 @@ describe("buildModelTree", () => {
           node.id === `${stageId}:points:bookmarks:snapshot:hysteresis_point_007`,
       ),
     ).toMatchObject({
+      contextCommands: expect.arrayContaining([
+        "hysteresis.use-point-as-initial-state",
+        "workspace.focus-selection",
+      ]),
+      contextCommandInputs: {
+        "hysteresis.use-point-as-initial-state": {
+          snapshotId: "hysteresis_point_007_from_selection",
+          snapshotResourceRef: snapshotVectorResourceKey("hysteresis_point_007_from_resource"),
+          stageId: "hysteresis-1",
+        },
+      },
       fieldOrientation: JSON.stringify({ kind: "preset", preset_name: "in_plane_x" }),
       fieldRevision: 12,
       hysteresisSnapshotId: "hysteresis_point_007_from_selection",
@@ -2331,6 +2386,7 @@ describe("buildModelTree", () => {
     ).toMatchObject({
       hysteresisExecutionNodeId: "point-7:warnings",
       hysteresisExecutionNodeKind: "warning",
+      hysteresisSelectionRef: "hysteresis-warning:hysteresis-1:7",
       hysteresisPointId: 7,
       label: "2 warning(s)",
       resourceRef: hysteresisPointResourceKey("hysteresis-1", 7),
@@ -2347,6 +2403,7 @@ describe("buildModelTree", () => {
     expect(
       flattened.find((node) => node.id === `${stageId}:field-point:7:snapshot:hysteresis_point_missing`),
     ).not.toMatchObject({
+      contextCommands: expect.arrayContaining(["hysteresis.use-point-as-initial-state"]),
       hysteresisSnapshotId: "hysteresis_point_missing",
     });
   });
@@ -2633,12 +2690,20 @@ describe("buildModelTree", () => {
       status: "queued",
     });
     expect(
+      flattened.find((node) => node.id === `${stageId}:transitions:continue`)
+        ?.contextCommands,
+    ).not.toEqual(expect.arrayContaining(["hysteresis.continue-to-next-stage"]));
+    expect(
       flattened.find((node) => node.id === `${stageId}:transitions:export-loop`),
     ).toMatchObject({
       label: "Export loop CSV",
       badge: "after completion",
       status: "queued",
     });
+    expect(
+      flattened.find((node) => node.id === `${stageId}:transitions:export-loop`)
+        ?.contextCommands,
+    ).not.toEqual(expect.arrayContaining(["hysteresis.export-loop-csv"]));
   });
 
   it("keeps completed hysteresis continuation explicit without marking it executable", () => {
@@ -2688,6 +2753,11 @@ describe("buildModelTree", () => {
       label: "Continue to next stage",
       badge: "available",
       contextCommands: expect.arrayContaining(["hysteresis.continue-to-next-stage"]),
+      contextCommandInputs: {
+        "hysteresis.continue-to-next-stage": {
+          stageId: "hysteresis-1",
+        },
+      },
       status: "ready",
     });
     expect(
@@ -2704,6 +2774,12 @@ describe("buildModelTree", () => {
     ).toMatchObject({
       label: "Export loop CSV",
       badge: "available",
+      contextCommands: expect.arrayContaining(["hysteresis.export-loop-csv"]),
+      contextCommandInputs: {
+        "hysteresis.export-loop-csv": {
+          stageId: "hysteresis-1",
+        },
+      },
       status: "ready",
     });
     expect(

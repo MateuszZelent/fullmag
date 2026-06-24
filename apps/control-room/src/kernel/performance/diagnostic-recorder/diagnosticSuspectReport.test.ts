@@ -229,4 +229,81 @@ describe("buildDiagnosticSuspectReport", () => {
     expect(report.text).toContain("Queue Bottleneck");
     expect(report.text).toContain("Visible Stale Revision");
   });
+
+  it("keeps legacy async viewport 3D wall-time measures out of the suspect ranking", () => {
+    const report = buildDiagnosticSuspectReport(
+      artifact({
+        performance: [
+          {
+            byteLength: null,
+            detail: {
+              bucket: "viewport-upload",
+              source: "fullmag.viewport3d.uploadVectorGlyphMatrices",
+            },
+            droppedCount: 0,
+            durationMs: 15_000,
+            id: "legacy-upload-measure",
+            kind: "measure",
+            lane: "viewport-3d",
+            name: "fullmag.viewport3d.uploadVectorGlyphMatrices",
+            severity: "critical",
+            startTimeMs: 0,
+            timestampMs: 15_000,
+          },
+        ],
+        viewport3dBuild: [
+          {
+            byteLength: 4096,
+            buildKey: "vector-glyph-upload:key",
+            buildLane: "vector-glyph-upload",
+            buildState: "ready",
+            detail: {
+              buildLane: "vector-glyph-upload",
+              maxFrameUploadMs: 1.9,
+              totalWallMs: 15_000,
+            },
+            displayedRevision: null,
+            droppedBecauseObsolete: false,
+            droppedCount: 0,
+            durationMs: 1.9,
+            fallbackReason: null,
+            id: "vector-upload",
+            inputBytes: 4096,
+            itemCount: 12,
+            kind: "viewport-3d-build-job",
+            lane: "viewport-3d",
+            mainAdoptMs: 0,
+            mainUploadMs: 1.9,
+            name: "fullmag.viewport3d.gpu-upload.vector-glyph",
+            outputBytes: 4096,
+            queueWaitMs: 0,
+            revisionSummary: "frames=6 chunks=12 bytes=4096",
+            severity: "info",
+            startTimeMs: 0,
+            targetRevision: "field-2",
+            timestampMs: 15_000,
+            transferMs: 0,
+            visibleState: "ready-current",
+            workerComputeMs: 0,
+          },
+        ],
+      }),
+      () => 2_000,
+    );
+
+    expect(report.suspects).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          reason: expect.stringContaining("uploadVectorGlyphMatrices"),
+        }),
+      ]),
+    );
+    expect(report.suspects).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          detail: expect.objectContaining({ suspectCategory: "gpu-upload" }),
+        }),
+      ]),
+    );
+  });
 });

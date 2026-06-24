@@ -908,6 +908,13 @@ function hysteresisSnapshotArtifactRefFromLegacyResource(
   return trimmed;
 }
 
+function invalidateHysteresisReturnToLiveResources(context: CommandContext): void {
+  context.resources?.invalidatePrefix(
+    DATA_FIELD_VECTOR_PATH.split("{quantity_id}")[0],
+    `hysteresis-return-to-live:${Date.now()}`,
+  );
+}
+
 function invalidateImportedSessionResources(
   context: CommandContext,
   revision: string | number,
@@ -2223,16 +2230,26 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
         return { status: "failed", message: "Selection context not available." };
       }
       const input = context.input as { stageId?: string | null } | null;
+      let returnedToLive = false;
       if (input?.stageId) {
         const ref = context.selection.get().ref;
+        const replayRef =
+          ref?.type === "analysis-chart-point" || ref?.type === "hysteresis-snapshot";
         if (
-          (ref?.type === "analysis-chart-point" || ref?.type === "hysteresis-snapshot") &&
+          replayRef &&
           ref.stageId === input.stageId
         ) {
           context.selection.clear("analysis-plots");
+          returnedToLive = true;
+        } else if (ref === null) {
+          returnedToLive = true;
         }
       } else {
         context.selection.clear("analysis-plots");
+        returnedToLive = true;
+      }
+      if (returnedToLive) {
+        invalidateHysteresisReturnToLiveResources(context);
       }
       return {
         status: "completed",
@@ -2323,8 +2340,19 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
     group: "hysteresis",
     scope: "runtime",
     isEnabled: () => true,
-    run: (context) => {
-      const input = resolveHysteresisLoopCommandInput(context.input);
+    run: async (context) => {
+      let input = resolveHysteresisLoopCommandInput(context.input);
+      if (!input) {
+        const stageId =
+          commandInputStageId(context.input) ?? selectedStageId(context);
+        if (stageId && context.api) {
+          const points = await context.api.analysis.hysteresis.points(stageId);
+          input = {
+            points: Array.isArray(points) ? points : [],
+            stageId,
+          };
+        }
+      }
       if (!input) {
         return { status: "failed", message: "Missing hysteresis loop input." };
       }

@@ -38,6 +38,7 @@ export interface HysteresisInspectorCommonProps {
   kernel: KernelApi;
   metrics: HysteresisMetricsSchema | null | undefined;
   minorLoops: HysteresisMinorLoopSchema[];
+  onUpdateDraft: StageInspectorFrameProps["onUpdateDraft"];
   orientation: HysteresisOrientationSchema | null | undefined;
   points: HysteresisPointSchema[];
   progress: HysteresisProgressSchema | null | undefined;

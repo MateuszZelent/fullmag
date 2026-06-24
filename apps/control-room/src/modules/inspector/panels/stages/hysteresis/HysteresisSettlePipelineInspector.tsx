@@ -1,8 +1,17 @@
 "use client";
 
 import { FieldRow } from "../../../primitives/FieldRow";
+import { FormField } from "../../../primitives/FormField";
 import { InspectorSection } from "../../../primitives/InspectorSection";
-import { displayValue, isRecord, parseJsonArray } from "./HysteresisInspectorUtils";
+import {
+  HysteresisSettleAlgorithmsEditor,
+  HysteresisSettleBranchesEditor,
+} from "../../StudyPipelineSection";
+import {
+  displayValue,
+  isRecord,
+  parseJsonArray,
+} from "./HysteresisInspectorUtils";
 import type { HysteresisInspectorCommonProps } from "./HysteresisInspectorTypes";
 
 function settleStepKey(step: Record<string, unknown>): string {
@@ -37,8 +46,12 @@ function settleBranchRunKind(branch: Record<string, unknown>): string {
 export function HysteresisSettlePipelineInspector({
   draft,
   executionTree,
+  onUpdateDraft,
   settlePipeline,
-}: Pick<HysteresisInspectorCommonProps, "draft" | "executionTree" | "settlePipeline">) {
+}: Pick<
+  HysteresisInspectorCommonProps,
+  "draft" | "executionTree" | "onUpdateDraft" | "settlePipeline"
+>) {
   const pipeline = isRecord(settlePipeline?.settle_pipeline)
     ? settlePipeline.settle_pipeline
     : null;
@@ -67,6 +80,55 @@ export function HysteresisSettlePipelineInspector({
         label="Pipeline mode"
         value={displayValue(pipeline?.kind) ?? draft?.settlePipelineMode ?? "n/a"}
       />
+      {draft?.kind === "hysteresis" ? (
+        <div className="fm-inspector-form-section">
+          <div className="fm-inspector-form-section__header">
+            <strong>Draft controls</strong>
+            <span>Save stage commits changes</span>
+          </div>
+          <FormField
+            label="Settle pipeline mode"
+            type="select"
+            value={draft.settlePipelineMode}
+            onChange={(event) =>
+              onUpdateDraft({ settlePipelineMode: event.target.value })
+            }
+          >
+            <option value="sequence">Sequence</option>
+            <option value="tree">Tree</option>
+          </FormField>
+          <HysteresisSettleAlgorithmsEditor
+            draft={draft}
+            onUpdate={onUpdateDraft}
+          />
+          <FormField
+            label="Settle steps JSON"
+            rows={5}
+            type="textarea"
+            value={draft.settleSteps}
+            onChange={(event) =>
+              onUpdateDraft({ settleSteps: event.target.value })
+            }
+          />
+          {draft.settlePipelineMode === "tree" ? (
+            <>
+              <HysteresisSettleBranchesEditor
+                draft={draft}
+                onUpdate={onUpdateDraft}
+              />
+              <FormField
+                label="Fallback branches JSON"
+                rows={4}
+                type="textarea"
+                value={draft.settleBranches}
+                onChange={(event) =>
+                  onUpdateDraft({ settleBranches: event.target.value })
+                }
+              />
+            </>
+          ) : null}
+        </div>
+      ) : null}
       {activeStep && (
         <FieldRow
           label="Active algorithm"

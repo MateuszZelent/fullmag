@@ -756,7 +756,7 @@ function hysteresisSettleStepKey(step: HysteresisSettleStepDraft): string {
   return `settle-step:${String(step.step_id ?? "")}:${String(step.kind ?? "")}:${String(step.method ?? "")}:${String(step.applies_to ?? "")}`;
 }
 
-function HysteresisSettleBranchesEditor({
+export function HysteresisSettleBranchesEditor({
   draft,
   onUpdate,
 }: {
@@ -1255,7 +1255,7 @@ function HysteresisDenseWindowsEditor({
   );
 }
 
-function HysteresisSettleAlgorithmsEditor({
+export function HysteresisSettleAlgorithmsEditor({
   draft,
   onUpdate,
 }: {

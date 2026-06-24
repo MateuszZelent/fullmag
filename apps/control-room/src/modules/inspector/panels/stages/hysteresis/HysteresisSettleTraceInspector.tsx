@@ -63,7 +63,7 @@ function HysteresisSettleTraceRow({
         <span className="fm-hysteresis-inspector-step__method">{entry.method}</span>
       </div>
       <div className="fm-hysteresis-inspector-step__meta">
-        <span>Status: {entry.status}</span>
+        <span>Status: {settleTraceStatusLabel(entry.status)}</span>
         {entry.retry_attempt > 0 && <span>retry {entry.retry_attempt}</span>}
         {entry.resolved_timestep_s != null && (
           <span>dt: {entry.resolved_timestep_s.toExponential(2)} s</span>
@@ -71,6 +71,13 @@ function HysteresisSettleTraceRow({
         {entry.torque != null && <span>Torque: {entry.torque.toExponential(2)}</span>}
         {entry.energy != null && <span>Energy: {entry.energy.toExponential(2)}</span>}
         {entry.stop_reason && <span>Stop reason: {entry.stop_reason}</span>}
+        {entry.metric_name && <span>Stop metric: {entry.metric_name}</span>}
+        {entry.metric_value != null && (
+          <span>Value: {entry.metric_value.toExponential(2)}</span>
+        )}
+        {entry.threshold != null && (
+          <span>Threshold: {entry.threshold.toExponential(2)}</span>
+        )}
         {entry.resolved_parameters != null && (
           <span>
             Resolved params: {settleTraceValue(entry.resolved_parameters)}
@@ -80,6 +87,12 @@ function HysteresisSettleTraceRow({
       </div>
     </div>
   );
+}
+
+function settleTraceStatusLabel(status: string): string {
+  if (status === "completed_duration") return "duration complete";
+  if (status === "non_converged") return "non converged";
+  return status;
 }
 
 function settleTraceValue(value: unknown): string {

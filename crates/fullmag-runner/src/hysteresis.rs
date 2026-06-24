@@ -8,8 +8,8 @@ use crate::types::{
 use fullmag_ir::{
     AdaptiveRefinementIR, BackendPlanIR, ExecutionPlanIR, FieldOrientationIR, FieldScheduleIR,
     FieldWindowIR, HysteresisAngularFamilyIR, MeasurementAxisIR, ProblemIR, RelaxStopIR,
-    RelaxationAlgorithmIR, RelaxationControlIR, SettlePipelineIR, SettleStepIR, StageStopReason,
-    StudyIR,
+    RelaxationAlgorithmIR, RelaxationControlIR, SettlePipelineIR, SettleStepIR, StageCompletionIR,
+    StageStopReason, StudyIR,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -264,6 +264,12 @@ pub struct HysteresisSettleTraceEntry {
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metric_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metric_value: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub threshold: Option<f64>,
     pub fallback_reason: Option<String>,
     pub retry_attempt: u32,
     pub resolved_timestep_s: Option<f64>,
@@ -2096,6 +2102,7 @@ fn run_settle_at_field(
     let mut trace = Vec::new();
     let mut previous_non_converged = false;
     let mut pending_fallback_reason: Option<String> = None;
+    let mut terminal_completion: Option<StageCompletionIR> = None;
 
     for (settle_idx, planned_step) in steps.into_iter().enumerate() {
         if planned_step.run_condition == PlannedSettleStepCondition::OnPreviousNonConverged
@@ -2116,6 +2123,7 @@ fn run_settle_at_field(
                         Some(format!("applies_to_not_matching_{}", progress.point_role)),
                         0,
                         Some(resolved_settle_timestep(backend_plan, &step, None)),
+                        None,
                         None,
                     ));
                 }
@@ -2156,6 +2164,7 @@ fn run_settle_at_field(
                             0,
                             Some(resolved_settle_timestep(backend_plan, &step, None)),
                             None,
+                            None,
                         ));
                     }
                     break;
@@ -2172,6 +2181,7 @@ fn run_settle_at_field(
                             fallback_reason.clone(),
                             0,
                             Some(resolved_settle_timestep(backend_plan, &step, None)),
+                            None,
                             None,
                         ));
                     }
@@ -2209,7 +2219,7 @@ fn run_settle_at_field(
                     .map(|progress| (progress.point_idx, progress.field_m_t, settle_idx, &step)),
                 on_step,
             )?;
-            let settle_status = settle_status(&executed_run.result);
+            let settle_status = settle_status_for_step(&step, &executed_run.result);
             if let Some(progress) = hysteresis_progress.as_ref() {
                 if let Some(point_idx) = progress.point_idx {
                     trace.push(settle_trace_entry(
@@ -2221,6 +2231,7 @@ fn run_settle_at_field(
                         last_fallback_reason.clone(),
                         retry_attempt,
                         Some(resolved_timestep),
+                        executed_run.result.completion.as_ref(),
                         executed_run.result.steps.last(),
                     ));
                 }
@@ -2238,6 +2249,7 @@ fn run_settle_at_field(
         };
 
         current_magnetization = executed_run.result.final_magnetization.clone();
+        terminal_completion = executed_run.result.completion.clone();
         if let Some(progress) = hysteresis_progress.as_ref() {
             let action = (*on_step)(hysteresis_progress_update(
                 backend_plan,
@@ -2262,7 +2274,7 @@ fn run_settle_at_field(
         }
         accumulated_steps.extend(executed_run.result.steps.clone());
         final_status = executed_run.result.status;
-        let settle_status = settle_status(&executed_run.result);
+        let settle_status = settle_status_for_step(&step, &executed_run.result);
         previous_non_converged = settle_status == "non_converged";
         final_provenance = executed_run.provenance;
 
@@ -2299,7 +2311,7 @@ fn run_settle_at_field(
                 status: final_status,
                 steps: accumulated_steps,
                 final_magnetization: current_magnetization,
-                completion: None,
+                completion: terminal_completion,
             },
             initial_magnetization: initial_m.to_vec(),
             field_snapshots: Vec::new(),
@@ -2312,7 +2324,7 @@ fn run_settle_at_field(
 }
 
 fn settle_step_relaxation_control(step: &SettleStepIR) -> Result<RelaxationControlIR, RunError> {
-    match step {
+    let control = match step {
         SettleStepIR::Relax {
             method,
             torque_tolerance,
@@ -2320,7 +2332,7 @@ fn settle_step_relaxation_control(step: &SettleStepIR) -> Result<RelaxationContr
             max_pseudotime_s,
             max_physical_time_s,
             ..
-        } => Ok(RelaxationControlIR {
+        } => RelaxationControlIR {
             algorithm: settle_relaxation_algorithm(method)?,
             stop: RelaxStopIR {
                 torque_tolerance_apm: Some(*torque_tolerance),
@@ -2329,7 +2341,7 @@ fn settle_step_relaxation_control(step: &SettleStepIR) -> Result<RelaxationContr
                 max_pseudotime_s: *max_pseudotime_s,
                 max_physical_time_s: *max_physical_time_s,
             },
-        }),
+        },
         SettleStepIR::Minimize {
             method,
             torque_tolerance,
@@ -2338,7 +2350,7 @@ fn settle_step_relaxation_control(step: &SettleStepIR) -> Result<RelaxationContr
             max_pseudotime_s,
             max_physical_time_s,
             ..
-        } => Ok(RelaxationControlIR {
+        } => RelaxationControlIR {
             algorithm: settle_minimize_algorithm(method)?,
             stop: RelaxStopIR {
                 torque_tolerance_apm: Some(*torque_tolerance),
@@ -2347,14 +2359,14 @@ fn settle_step_relaxation_control(step: &SettleStepIR) -> Result<RelaxationContr
                 max_pseudotime_s: *max_pseudotime_s,
                 max_physical_time_s: *max_physical_time_s,
             },
-        }),
+        },
         SettleStepIR::DynamicsSettle {
             method,
             max_steps,
             max_pseudotime_s,
             max_physical_time_s,
             ..
-        } => Ok(RelaxationControlIR {
+        } => RelaxationControlIR {
             algorithm: settle_dynamics_algorithm(method)?,
             stop: RelaxStopIR {
                 torque_tolerance_apm: None,
@@ -2363,8 +2375,33 @@ fn settle_step_relaxation_control(step: &SettleStepIR) -> Result<RelaxationContr
                 max_pseudotime_s: *max_pseudotime_s,
                 max_physical_time_s: *max_physical_time_s,
             },
-        }),
+        },
+    };
+    reject_direct_minimizer_physical_time(&control)?;
+    Ok(control)
+}
+
+fn reject_direct_minimizer_physical_time(control: &RelaxationControlIR) -> Result<(), RunError> {
+    if relaxation_algorithm_is_direct_minimizer(control.algorithm)
+        && control.stop.max_physical_time_s.is_some()
+    {
+        return Err(RunError {
+            message: format!(
+                "hysteresis settle method '{}' is a direct minimizer and does not advance physical time; max_physical_time_s is unsupported for this method. Use max_pseudotime_s or method='llg_overdamped' for physical-time relaxation.",
+                control.algorithm.as_str()
+            ),
+        });
     }
+    Ok(())
+}
+
+fn relaxation_algorithm_is_direct_minimizer(algorithm: RelaxationAlgorithmIR) -> bool {
+    matches!(
+        algorithm,
+        RelaxationAlgorithmIR::ProjectedGradientBb
+            | RelaxationAlgorithmIR::NonlinearCg
+            | RelaxationAlgorithmIR::TangentPlaneImplicit
+    )
 }
 
 fn settle_relaxation_algorithm(method: &str) -> Result<RelaxationAlgorithmIR, RunError> {
@@ -2682,7 +2719,7 @@ fn settle_applies_to_matches_context(
         serde_json::Value::Object(object) => {
             settle_applies_to_object_matches_context(object, context)
         }
-        _ => true,
+        _ => false,
     }
 }
 
@@ -2691,7 +2728,7 @@ fn settle_applies_to_object_matches_context(
     context: &HysteresisProgressContext,
 ) -> bool {
     let Some(kind) = object.get("kind").and_then(|value| value.as_str()) else {
-        return true;
+        return false;
     };
     match kind {
         "branch_id" => object
@@ -2724,7 +2761,7 @@ fn settle_selector_matches_point_role(selector: &str, point_role: &str) -> bool 
         "preparation" => point_role == "preparation",
         "saturation_probe" => point_role == "saturation_probe",
         "branch_id" | "point_selector" => true,
-        _ => true,
+        _ => false,
     }
 }
 
@@ -2789,6 +2826,34 @@ fn settle_status(result: &RunResult) -> &'static str {
     }
 }
 
+fn settle_status_for_step(step: &SettleStepIR, result: &RunResult) -> &'static str {
+    let status = settle_status(result);
+    if matches!(step, SettleStepIR::DynamicsSettle { .. })
+        && status == "non_converged"
+        && dynamics_settle_completed_duration(result)
+    {
+        return "completed_duration";
+    }
+    status
+}
+
+fn dynamics_settle_completed_duration(result: &RunResult) -> bool {
+    if result.status != RunStatus::Completed {
+        return false;
+    }
+    matches!(
+        result
+            .completion
+            .as_ref()
+            .and_then(|completion| completion.reason),
+        Some(
+            StageStopReason::MaxSteps
+                | StageStopReason::MaxPseudotime
+                | StageStopReason::MaxPhysicalTime
+        )
+    )
+}
+
 fn hysteresis_point_quality(
     run_status: RunStatus,
     trace: &[HysteresisSettleTraceEntry],
@@ -2797,9 +2862,17 @@ fn hysteresis_point_quality(
         .iter()
         .filter(|entry| entry.status == "non_converged")
         .count() as u32;
-    let terminal_settle_reason = trace.last().map(|entry| entry.status.clone());
+    let terminal_settle_reason = trace.last().map(|entry| {
+        entry
+            .stop_reason
+            .clone()
+            .unwrap_or_else(|| entry.status.clone())
+    });
+    let terminal_settle_status = trace.last().map(|entry| entry.status.as_str());
     let settle_status = if warning_count > 0 {
         "non_converged".to_string()
+    } else if terminal_settle_status == Some("completed_duration") {
+        "completed_duration".to_string()
     } else {
         terminal_settle_reason
             .clone()
@@ -2828,9 +2901,13 @@ fn settle_trace_entry(
     fallback_reason: Option<String>,
     retry_attempt: u32,
     resolved_timestep_s: Option<f64>,
+    completion: Option<&StageCompletionIR>,
     stats: Option<&StepStats>,
 ) -> HysteresisSettleTraceEntry {
-    let stop_reason = Some(status.clone());
+    let stop_reason = completion
+        .and_then(|completion| completion.reason)
+        .map(stage_stop_reason_label)
+        .or_else(|| Some(status.clone()));
     let resolved_parameters = Some(settle_trace_resolved_parameters(step, resolved_timestep_s));
     HysteresisSettleTraceEntry {
         point_id,
@@ -2844,6 +2921,9 @@ fn settle_trace_entry(
         method: hysteresis_settle_step_method(step).to_string(),
         status,
         stop_reason,
+        metric_name: completion.and_then(|completion| completion.metric_name.clone()),
+        metric_value: completion.and_then(|completion| completion.metric_value),
+        threshold: completion.and_then(|completion| completion.threshold),
         fallback_reason,
         retry_attempt,
         resolved_timestep_s,
@@ -2851,6 +2931,20 @@ fn settle_trace_entry(
         torque: stats.map(|stats| stats.max_torque_Apm),
         energy: stats.map(|stats| stats.e_total),
     }
+}
+
+fn stage_stop_reason_label(reason: StageStopReason) -> String {
+    match reason {
+        StageStopReason::Torque => "Torque",
+        StageStopReason::Energy => "Energy",
+        StageStopReason::MaxSteps => "MaxSteps",
+        StageStopReason::MaxPseudotime => "MaxPseudotime",
+        StageStopReason::MaxPhysicalTime => "MaxPhysicalTime",
+        StageStopReason::UserCancelled => "UserCancelled",
+        StageStopReason::BackendError => "BackendError",
+        StageStopReason::Gradient => "Gradient",
+    }
+    .to_string()
 }
 
 fn settle_trace_resolved_parameters(
@@ -6848,6 +6942,7 @@ mod tests {
             0,
             Some(HYSTERESIS_SETTLE_STEP_DT_SECONDS),
             None,
+            None,
         );
         assert_eq!(skipped.status, "skipped");
         assert_eq!(
@@ -6924,6 +7019,18 @@ mod tests {
         assert!(!settle_step_applies_to_context(
             &point_step,
             &ascending_context
+        ));
+        assert!(!settle_applies_to_matches_context(
+            Some(&serde_json::json!(123)),
+            &descending_context
+        ));
+        assert!(!settle_applies_to_matches_context(
+            Some(&serde_json::json!({"branch_id": "descending"})),
+            &descending_context
+        ));
+        assert!(!settle_applies_to_matches_context(
+            Some(&serde_json::json!("unknown_selector")),
+            &descending_context
         ));
     }
 
@@ -7031,6 +7138,7 @@ mod tests {
                 0,
                 Some(HYSTERESIS_SETTLE_STEP_DT_SECONDS),
                 None,
+                None,
             ),
             settle_trace_entry(
                 2,
@@ -7054,6 +7162,7 @@ mod tests {
                 Some("previous_step_non_converged".to_string()),
                 0,
                 Some(HYSTERESIS_SETTLE_STEP_DT_SECONDS),
+                None,
                 None,
             ),
         ];
@@ -7091,6 +7200,13 @@ mod tests {
             e_total: -3.5,
             ..StepStats::default()
         };
+        let completion = StageCompletionIR {
+            status: "completed".to_string(),
+            reason: Some(StageStopReason::MaxSteps),
+            metric_name: Some("steps".to_string()),
+            metric_value: Some(200.0),
+            threshold: Some(200.0),
+        };
 
         let entry = settle_trace_entry(
             4,
@@ -7101,6 +7217,7 @@ mod tests {
             Some("previous_step_non_converged".to_string()),
             1,
             Some(5e-14),
+            Some(&completion),
             Some(&stats),
         );
 
@@ -7116,7 +7233,10 @@ mod tests {
         );
         assert_eq!(entry.retry_attempt, 1);
         assert_eq!(entry.resolved_timestep_s, Some(5e-14));
-        assert_eq!(entry.stop_reason.as_deref(), Some("non_converged"));
+        assert_eq!(entry.stop_reason.as_deref(), Some("MaxSteps"));
+        assert_eq!(entry.metric_name.as_deref(), Some("steps"));
+        assert_eq!(entry.metric_value, Some(200.0));
+        assert_eq!(entry.threshold, Some(200.0));
         assert_eq!(
             entry
                 .resolved_parameters
@@ -7271,6 +7391,167 @@ mod tests {
             settle_step_until_seconds(&step, 0.0, None),
             2000.0 * HYSTERESIS_SETTLE_STEP_DT_SECONDS
         );
+    }
+
+    #[test]
+    fn direct_minimizer_settle_step_rejects_physical_time_budget() {
+        let step = SettleStepIR::Minimize {
+            method: "projected_gradient_bb".to_string(),
+            torque_tolerance: 5e-5,
+            energy_tolerance: 1e-20,
+            max_steps: 2000,
+            applies_to: None,
+            stop_criteria: None,
+            timestep_s: None,
+            max_pseudotime_s: None,
+            max_physical_time_s: Some(1e-9),
+            on_non_convergence: "run_next_algorithm".to_string(),
+            retry_timestep_scale: None,
+            retry_max_attempts: None,
+        };
+
+        let err = settle_step_relaxation_control(&step)
+            .expect_err("direct minimizer settle steps must reject physical time");
+        assert!(err.message.contains("projected_gradient_bb"));
+        assert!(err.message.contains("direct minimizer"));
+        assert!(err.message.contains("max_physical_time_s"));
+        assert!(err.message.contains("max_pseudotime_s"));
+        assert!(err.message.contains("llg_overdamped"));
+
+        let tpi_step = SettleStepIR::Minimize {
+            method: "tangent_plane_implicit".to_string(),
+            torque_tolerance: 5e-5,
+            energy_tolerance: 1e-20,
+            max_steps: 2000,
+            applies_to: None,
+            stop_criteria: None,
+            timestep_s: None,
+            max_pseudotime_s: None,
+            max_physical_time_s: Some(1e-9),
+            on_non_convergence: "run_next_algorithm".to_string(),
+            retry_timestep_scale: None,
+            retry_max_attempts: None,
+        };
+
+        let err = settle_step_relaxation_control(&tpi_step)
+            .expect_err("TPI settle steps must reject physical time");
+        assert!(err.message.contains("tangent_plane_implicit"));
+        assert!(err.message.contains("direct minimizer"));
+    }
+
+    #[test]
+    fn settle_run_preserves_terminal_completion() {
+        let problem = minimal_fdm_hysteresis_problem();
+        let plan = fullmag_plan::plan(&problem).expect("minimal hysteresis plan");
+        let pipeline = SettlePipelineIR::Sequence {
+            steps: vec![SettleStepIR::Relax {
+                method: "llg_overdamped".to_string(),
+                alpha: 1.0,
+                torque_tolerance: 1e-5,
+                max_steps: 8,
+                applies_to: None,
+                stop_criteria: None,
+                timestep_s: None,
+                max_pseudotime_s: None,
+                max_physical_time_s: None,
+                on_non_convergence: "continue_with_warning".to_string(),
+                retry_timestep_scale: None,
+                retry_max_attempts: None,
+            }],
+        };
+        let display = || crate::interactive::DisplaySelectionState::default();
+        let mut on_step = |_| StepAction::Continue;
+
+        let run = run_settle_at_field(
+            &plan.backend_plan,
+            &problem,
+            &[[1.0, 0.0, 0.0]],
+            [0.0, 0.0, 0.0],
+            Some(HysteresisProgressContext {
+                point_idx: Some(0),
+                field_m_t: 0.0,
+                point_role: "major",
+                branch_id: None,
+            }),
+            Some(&pipeline),
+            0.0,
+            u64::MAX,
+            &display,
+            None,
+            false,
+            &mut on_step,
+        )
+        .expect("settle run should complete");
+
+        let completion = run
+            .executed_run
+            .result
+            .completion
+            .expect("settled point run should preserve terminal completion");
+        assert_eq!(completion.reason, Some(StageStopReason::Torque));
+        assert_eq!(completion.metric_name.as_deref(), Some("max_torque_apm"));
+        assert_eq!(run.trace[0].stop_reason.as_deref(), Some("Torque"));
+        assert_eq!(run.trace[0].metric_name.as_deref(), Some("max_torque_apm"));
+    }
+
+    #[test]
+    fn dynamics_settle_hard_limit_reports_completed_duration() {
+        let problem = minimal_fdm_hysteresis_problem();
+        let plan = fullmag_plan::plan(&problem).expect("minimal hysteresis plan");
+        let pipeline = SettlePipelineIR::Sequence {
+            steps: vec![SettleStepIR::DynamicsSettle {
+                method: "heun_dynamics_settle".to_string(),
+                damping: 1.0,
+                max_steps: 2,
+                applies_to: None,
+                stop_criteria: None,
+                timestep_s: None,
+                max_pseudotime_s: None,
+                max_physical_time_s: None,
+                on_non_convergence: "continue_with_warning".to_string(),
+                retry_timestep_scale: None,
+                retry_max_attempts: None,
+            }],
+        };
+        let display = || crate::interactive::DisplaySelectionState::default();
+        let mut on_step = |_| StepAction::Continue;
+
+        let run = run_settle_at_field(
+            &plan.backend_plan,
+            &problem,
+            &[[1.0, 0.0, 0.0]],
+            [0.0, 0.0, 0.0],
+            Some(HysteresisProgressContext {
+                point_idx: Some(0),
+                field_m_t: 0.0,
+                point_role: "major",
+                branch_id: None,
+            }),
+            Some(&pipeline),
+            0.0,
+            u64::MAX,
+            &display,
+            None,
+            false,
+            &mut on_step,
+        )
+        .expect("duration settle run should complete");
+
+        assert_eq!(run.trace[0].status, "completed_duration");
+        assert_eq!(run.trace[0].stop_reason.as_deref(), Some("MaxSteps"));
+        assert_eq!(
+            run.executed_run
+                .result
+                .completion
+                .as_ref()
+                .and_then(|entry| entry.reason),
+            Some(StageStopReason::MaxSteps)
+        );
+        let quality = hysteresis_point_quality(run.executed_run.result.status, &run.trace);
+        assert_eq!(quality.settle_status, "completed_duration");
+        assert!(!quality.has_non_converged_steps);
+        assert_eq!(quality.warning_count, 0);
+        assert_eq!(quality.terminal_settle_reason.as_deref(), Some("MaxSteps"));
     }
 
     #[test]
@@ -7960,6 +8241,9 @@ mod tests {
             method: "llg_overdamped".to_string(),
             status: "Completed".to_string(),
             stop_reason: Some("Completed".to_string()),
+            metric_name: None,
+            metric_value: None,
+            threshold: None,
             fallback_reason: None,
             retry_attempt: 0,
             resolved_timestep_s: Some(HYSTERESIS_SETTLE_STEP_DT_SECONDS),

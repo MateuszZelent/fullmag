@@ -37,6 +37,10 @@ export type FieldCatalogResource = components["schemas"]["FieldCatalog"];
 export type FieldMetaResource = components["schemas"]["FieldMeta"];
 export interface FieldMetaQuery {
   component?: string | null;
+  scope_id?: string | null;
+  scope_kind?: string | null;
+  snapshot_id?: string | null;
+  stage_id?: string | null;
 }
 export type FieldStateExportRequest =
   components["schemas"]["FieldStateExportRequest"];

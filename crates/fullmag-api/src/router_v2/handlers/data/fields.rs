@@ -722,6 +722,11 @@ pub async fn get_field_meta(
 ) -> Result<Json<FieldMeta>, ApiError> {
     let quantity_id = canonical_quantity_id(&quantity_id);
     let quantity_id = quantity_id.as_ref();
+    let workspace_selection = if query.scope_kind.as_deref() == Some("selection") {
+        Some(state.current_workspace_selection.read().await.clone())
+    } else {
+        None
+    };
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
@@ -746,7 +751,41 @@ pub async fn get_field_meta(
         .map(str::trim)
         .filter(|id| !id.is_empty());
 
-    if let Some(snapshot_id) = requested_snapshot_id {
+    let latest_field_values = || {
+        if let Some(raw) = snapshot.latest_fields.get(quantity_id) {
+            let values = flatten_json_field_values(raw);
+            if !field_values_match_current_domain(snapshot, quantity_id, n_comp as usize, &values) {
+                return None;
+            }
+            let element_count = if n_comp > 0 {
+                values.len() / n_comp as usize
+            } else {
+                values.len()
+            };
+            let grid = json_field_grid(raw).unwrap_or([element_count as u32, 1, 1]);
+            Some((values, grid))
+        } else {
+            None
+        }
+    };
+    let preview_field_values = || {
+        if let Some(field) = snapshot.preview_cache.get(quantity_id) {
+            if !field_values_match_current_domain(
+                snapshot,
+                quantity_id,
+                n_comp as usize,
+                &field.vector_field_values,
+            ) {
+                return None;
+            }
+            Some((field.vector_field_values.clone(), field.preview_grid))
+        } else {
+            None
+        }
+    };
+    let raw_values_opt: Option<(Vec<f64>, [u32; 3])> = if let Some(snapshot_id) =
+        requested_snapshot_id
+    {
         if quantity_id != "m" {
             return Err(ApiError::bad_request(format!(
                 "persisted hysteresis snapshot '{snapshot_id}' is only available for magnetization"
@@ -754,99 +793,66 @@ pub async fn get_field_meta(
         }
         validate_hysteresis_snapshot_stage_scope(&state, query.stage_id.as_deref(), snapshot_id)
             .await?;
-        let (values, _) = persisted_hysteresis_magnetization_values(snapshot, snapshot_id)?;
-        return Ok(Json(FieldMeta {
-            quantity_id: quantity_id.to_string(),
-            label,
-            kind,
-            components: n_comp,
-            location,
-            unit,
-            field_revision: field_quantity_revision(snapshot, quantity_id),
-            domain_generation_id: gen_id,
-            stats: projected_field_stats(&values, n_comp as usize, &component)?,
-        }));
-    }
-
-    if let Some(values) = snapshot
-        .latest_fields
-        .get(quantity_id)
-        .map(|raw| flatten_json_field_values(raw))
-        .filter(|values| {
-            field_values_match_current_domain(snapshot, quantity_id, n_comp as usize, values)
-        })
-    {
-        return Ok(Json(FieldMeta {
-            quantity_id: quantity_id.to_string(),
-            label,
-            kind,
-            components: n_comp,
-            location,
-            unit,
-            field_revision: field_quantity_revision(snapshot, quantity_id),
-            domain_generation_id: gen_id,
-            stats: projected_field_stats(&values, n_comp as usize, &component)?,
-        }));
-    }
-
-    if let Some(values) = snapshot.preview_cache.get(quantity_id).and_then(|field| {
-        if field_values_match_current_domain(
+        Some(persisted_hysteresis_magnetization_values(
             snapshot,
-            quantity_id,
-            n_comp as usize,
-            &field.vector_field_values,
-        ) {
-            Some(field.vector_field_values.as_slice())
-        } else {
-            None
-        }
-    }) {
-        return Ok(Json(FieldMeta {
-            quantity_id: quantity_id.to_string(),
-            label,
-            kind,
-            components: n_comp,
-            location,
-            unit,
-            field_revision: field_quantity_revision(snapshot, quantity_id),
-            domain_generation_id: gen_id,
-            stats: projected_field_stats(values, n_comp as usize, &component)?,
-        }));
-    }
+            snapshot_id,
+        )?)
+    } else if quantity_id == "m" {
+        live_magnetization_values(snapshot)
+            .or_else(preview_field_values)
+            .or_else(latest_field_values)
+    } else {
+        latest_field_values().or_else(preview_field_values)
+    };
 
-    if quantity_id == "m" && live_magnetization_available(snapshot) {
-        let values = live_magnetization_values(snapshot)
-            .map(|(values, _)| values)
-            .filter(|values| {
-                field_values_match_current_domain(snapshot, quantity_id, n_comp as usize, values)
-            });
-        return Ok(Json(FieldMeta {
-            quantity_id: quantity_id.to_string(),
-            label,
-            kind,
-            components: n_comp,
-            location,
-            unit,
-            field_revision: field_quantity_revision(snapshot, quantity_id),
-            domain_generation_id: gen_id,
-            stats: values
-                .as_deref()
-                .map(|values| projected_field_stats(values, n_comp as usize, &component))
-                .transpose()?
-                .flatten(),
-        }));
-    }
+    let (raw_values, grid) = raw_values_opt.ok_or_else(|| {
+        ApiError::not_found(format!("field '{}' not available in memory", quantity_id))
+    })?;
+    let raw_point_count = if n_comp > 0 {
+        raw_values.len() / n_comp as usize
+    } else {
+        raw_values.len()
+    };
+    let scope_query = FieldVectorQuery {
+        component: query.component.clone(),
+        scope_kind: query.scope_kind.clone(),
+        scope_id: query.scope_id.clone(),
+        max_samples: None,
+        snapshot_id: query.snapshot_id.clone(),
+        stage_id: query.stage_id.clone(),
+        view: None,
+        phase_rad: None,
+    };
+    let resolved_scope = resolve_field_scope(
+        &scope_query,
+        snapshot,
+        workspace_selection.as_ref(),
+        raw_point_count,
+        quantity_id,
+    )?;
+    let raw_values = apply_field_scope(raw_values, grid, n_comp as usize, resolved_scope.as_ref());
 
-    Err(ApiError::not_found(format!(
-        "field '{}' not available in memory",
-        quantity_id
-    )))
+    Ok(Json(FieldMeta {
+        quantity_id: quantity_id.to_string(),
+        label,
+        kind,
+        components: n_comp,
+        location,
+        unit,
+        field_revision: field_quantity_revision(snapshot, quantity_id),
+        domain_generation_id: gen_id,
+        stats: projected_field_stats(&raw_values, n_comp as usize, &component)?,
+    }))
 }
 
 #[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]
 pub struct FieldMetaQuery {
     /// Optional component projection used for statistics (`x`, `y`, `z`, `magnitude`, `full`).
     pub component: Option<String>,
+    /// Optional FEM scope used for statistics (`full`, `object`, `part`, `airbox`, `selection`).
+    pub scope_kind: Option<String>,
+    /// Scope identifier for `object` and `part` scopes.
+    pub scope_id: Option<String>,
     /// Optional persisted analysis snapshot id, for example a saved
     /// hysteresis-point magnetization state.
     pub snapshot_id: Option<String>,

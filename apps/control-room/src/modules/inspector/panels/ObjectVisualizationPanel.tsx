@@ -67,6 +67,7 @@ import {
   buildVisualizationVectorBudgetDiagnostic,
   buildVisualizationPanelSections,
   colorPickerInputValue,
+  fieldMetaScopeQueryForVisualizationTarget,
   formatScalarColorbarValue,
   resolveVisualizationVectorBudgetRange,
   resolveObjectVisualizationPanelTopologyFreshness,
@@ -453,6 +454,7 @@ function VisualizationSurfaceColoringSection({
   fieldCatalog,
   onFieldCatalogRequest,
   settings,
+  target,
 }: {
   patch: PatchVisualizationTarget;
   patchColor: (
@@ -464,6 +466,7 @@ function VisualizationSurfaceColoringSection({
   fieldCatalog: ReturnType<typeof useFieldCatalogResource>;
   onFieldCatalogRequest: () => void;
   settings: VisualizationTargetSettings;
+  target: VisualizationTargetRef;
 }) {
   const colorbarComponent = surfaceColorSourceFieldMetaComponent(
     settings.surfaceColorSource,
@@ -473,10 +476,12 @@ function VisualizationSurfaceColoringSection({
     settings.surfaceColorSource,
     settings.activeQuantityId,
   );
+  const fieldMetaScopeQuery = fieldMetaScopeQueryForVisualizationTarget(target);
   const fieldMeta = useFieldMetaResource({
     component: colorbarComponent ?? null,
     enabled: showColorbar,
     quantityId: settings.activeQuantityId,
+    ...fieldMetaScopeQuery,
   });
   return (
     <InspectorSection title="Surface Coloring" collapsible>
@@ -1348,6 +1353,7 @@ function ObjectVisualizationPanelView({
         fieldCatalog={fieldCatalog}
         onFieldCatalogRequest={onFieldCatalogRequest}
         settings={settings}
+        target={target}
       />
       <VisualizationPointsSection
         patchColor={patchColor}

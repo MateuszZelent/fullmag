@@ -127,6 +127,9 @@ pub struct HysteresisSettleTraceEntrySchema {
     pub method: String,
     pub status: String,
     pub stop_reason: Option<String>,
+    pub metric_name: Option<String>,
+    pub metric_value: Option<f64>,
+    pub threshold: Option<f64>,
     pub fallback_reason: Option<String>,
     pub retry_attempt: u32,
     pub resolved_timestep_s: Option<f64>,
@@ -401,6 +404,23 @@ pub struct HysteresisSettlePipelineSchema {
     pub stage_index: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub settle_pipeline: Option<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resolved_steps: Vec<HysteresisResolvedSettleStepSchema>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resolved_branch_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct HysteresisResolvedSettleStepSchema {
+    pub step_index: u32,
+    pub step_id: String,
+    pub kind: String,
+    pub method: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub applies_to: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub on_non_convergence: Option<String>,
+    pub resolved_parameters: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

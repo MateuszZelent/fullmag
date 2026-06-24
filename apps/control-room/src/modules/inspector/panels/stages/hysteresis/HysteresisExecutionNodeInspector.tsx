@@ -41,6 +41,9 @@ export function HysteresisExecutionNodeInspector({
           {activeExecutionNode.resourceRef && (
             <FieldRow label="Resource ref" value={activeExecutionNode.resourceRef} />
           )}
+          {activeExecutionNode.selectionRef && (
+            <FieldRow label="Selection ref" value={activeExecutionNode.selectionRef} />
+          )}
           <div className="fm-hysteresis-inspector-empty">
             This execution-tree node is outside the currently loaded live window.
           </div>

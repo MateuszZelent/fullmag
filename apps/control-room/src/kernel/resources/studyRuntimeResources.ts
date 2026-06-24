@@ -74,6 +74,7 @@ import type {
   EngineLogResource,
   FieldCatalogResource,
   FieldMetaResource,
+  FieldMetaQuery,
   CpuTelemetryResource,
   GpuTelemetryResource,
   LiveStatusResource,
@@ -142,6 +143,11 @@ function ignoreMissingResource<T>(error: unknown): T | null {
 
 interface RuntimeResourceOptions {
   enabled?: boolean;
+}
+
+interface RuntimeCommandControlResourceOptions extends RuntimeResourceOptions {
+  includeSharedDomainReadiness?: boolean;
+  includeStageExecution?: boolean;
 }
 
 export const STUDY_RUNTIME_CONTROL_RESOURCE_KEYS = [
@@ -1507,41 +1513,77 @@ export function useFieldCatalogResource({
   });
 }
 
-export function resolveFieldMetaResourceKey(quantityId: string): string {
-  return resolveFieldMetaResourceKeyWithComponent(quantityId, null);
+function fieldMetaQueryEntries(query: FieldMetaQuery): Array<[string, string]> {
+  const entries: Array<[string, string]> = [];
+  const push = (key: keyof FieldMetaQuery) => {
+    const value = query[key];
+    if (typeof value === "string" && value.length > 0) {
+      entries.push([key, value]);
+    }
+  };
+  push("component");
+  push("scope_id");
+  push("scope_kind");
+  push("snapshot_id");
+  push("stage_id");
+  return entries;
+}
+
+export function resolveFieldMetaResourceKey(
+  quantityId: string,
+  query: FieldMetaQuery = {},
+): string {
+  const path = DATA_FIELD_META_PATH.replace(
+    "{quantity_id}",
+    encodeURIComponent(normalizeQuantityIdOrDefault(quantityId)),
+  );
+  const params = fieldMetaQueryEntries(query)
+    .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
+    .join("&");
+  return params ? `${path}?${params}` : path;
 }
 
 export function resolveFieldMetaResourceKeyWithComponent(
   quantityId: string,
   component: string | null | undefined,
 ): string {
-  const path = DATA_FIELD_META_PATH.replace(
-    "{quantity_id}",
-    encodeURIComponent(normalizeQuantityIdOrDefault(quantityId)),
-  );
-  return component ? `${path}?component=${encodeURIComponent(component)}` : path;
+  return resolveFieldMetaResourceKey(quantityId, { component });
 }
 
 export function useFieldMetaResource({
   enabled = true,
   component = null,
+  scope_id = null,
+  scope_kind = null,
+  snapshot_id = null,
+  stage_id = null,
   quantityId,
-}: RuntimeResourceOptions & { component?: string | null; quantityId: string }) {
+}: RuntimeResourceOptions & FieldMetaQuery & { quantityId: string }) {
   const { api } = useKernel();
   const resolvedQuantityId = useMemo(
     () => normalizeQuantityIdOrDefault(quantityId),
     [quantityId],
   );
+  const query = useMemo(
+    () => ({
+      component,
+      scope_id,
+      scope_kind,
+      snapshot_id,
+      stage_id,
+    }),
+    [component, scope_id, scope_kind, snapshot_id, stage_id],
+  );
   const resourceKey = useMemo(
-    () => resolveFieldMetaResourceKeyWithComponent(resolvedQuantityId, component),
-    [component, resolvedQuantityId],
+    () => resolveFieldMetaResourceKey(resolvedQuantityId, query),
+    [query, resolvedQuantityId],
   );
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>
       api.data.fields
-        .meta(resolvedQuantityId, { component }, { signal })
+        .meta(resolvedQuantityId, query, { signal })
         .catch(ignoreMissingResource<FieldMetaResource>),
-    [api, component, resolvedQuantityId],
+    [api, query, resolvedQuantityId],
   );
 
   return useResource<FieldMetaResource | null>({
@@ -1980,7 +2022,9 @@ export function useStudyRuntimeCommandResourceData({
 
 export function useRuntimeCommandControlResourceData({
   enabled = true,
-}: RuntimeResourceOptions = {}): Readonly<Record<string, unknown>> {
+  includeSharedDomainReadiness = true,
+  includeStageExecution = true,
+}: RuntimeCommandControlResourceOptions = {}): Readonly<Record<string, unknown>> {
   const sessionStatus = useSessionStatusSelector(selectRuntimeCommandControlSessionStatus, {
     enabled,
     isEqual: runtimeCommandControlSessionStatusEquals,
@@ -1990,14 +2034,20 @@ export function useRuntimeCommandControlResourceData({
   });
   const geometryValidation = useGeometryValidationResource({ enabled });
   const meshBuildCurrent = useMeshBuildCurrent({
-    enabled: shouldLoadRuntimeMeshBuild(enabled, sessionStatus),
+    enabled:
+      includeSharedDomainReadiness &&
+      shouldLoadRuntimeMeshBuild(enabled, sessionStatus),
   });
   const meshManifest = useMeshSharedDomainManifestResource({
-    enabled: shouldLoadRuntimeMeshManifest(enabled, sessionStatus),
+    enabled:
+      includeSharedDomainReadiness &&
+      shouldLoadRuntimeMeshManifest(enabled, sessionStatus),
   });
   const solverStatus = useSolverStatusResource({ enabled });
   const stageExecution = useStageExecutionResource({
-    enabled: shouldLoadRuntimeStageExecution(enabled, sessionStatus),
+    enabled:
+      includeStageExecution &&
+      shouldLoadRuntimeStageExecution(enabled, sessionStatus),
   });
 
   return useMemo(

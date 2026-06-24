@@ -889,8 +889,7 @@ unsafe extern "C" fn dispatch_native_modal_eigen_progress_json(
     if user_data.is_null() || progress_json.is_null() {
         return;
     }
-    let callback =
-        unsafe { &*user_data.cast::<Option<&NativeModalEigenProgressCallback<'_>>>() };
+    let callback = unsafe { &*user_data.cast::<Option<&NativeModalEigenProgressCallback<'_>>>() };
     if let Some(callback) = callback {
         let progress_json = unsafe { CStr::from_ptr(progress_json) }.to_string_lossy();
         callback(progress_json.as_ref());
@@ -1209,12 +1208,16 @@ mod tests {
         assert!(result
             .diagnostics_json
             .contains("\"operator_diagnostics\":{\"schema_version\":\"frequency_domain_operator_diagnostics.v1\""), "{}", result.diagnostics_json);
-        assert!(result
-            .diagnostics_json
-            .contains("\"active_node_count\":4"), "{}", result.diagnostics_json);
-        assert!(result
-            .diagnostics_json
-            .contains("\"tangent_dof_count\":8"), "{}", result.diagnostics_json);
+        assert!(
+            result.diagnostics_json.contains("\"active_node_count\":4"),
+            "{}",
+            result.diagnostics_json
+        );
+        assert!(
+            result.diagnostics_json.contains("\"tangent_dof_count\":8"),
+            "{}",
+            result.diagnostics_json
+        );
     }
 
     #[cfg(feature = "fem-gpu")]
@@ -1268,7 +1271,9 @@ mod tests {
         .expect("native modal validation solve should return a structured result");
 
         assert_eq!(result.status, NativeFrequencyDomainStatus::Ok);
-        assert!(result.diagnostics_json.contains("\"tiny_validation_solver\":true"));
+        assert!(result
+            .diagnostics_json
+            .contains("\"tiny_validation_solver\":true"));
         assert!(result.result_json.contains("\"status\":\"ok\""));
         let progress_events = progress_events.into_inner();
         assert_eq!(progress_events.len(), 1);
@@ -1324,8 +1329,12 @@ mod tests {
         .expect("native modal validation cancel should return a structured result");
 
         assert_eq!(result.status, NativeFrequencyDomainStatus::Interrupted);
-        assert!(result.diagnostics_json.contains("\"status\":\"interrupted\""));
-        assert!(result.diagnostics_json.contains("\"stop_reason\":\"cancel_requested\""));
+        assert!(result
+            .diagnostics_json
+            .contains("\"status\":\"interrupted\""));
+        assert!(result
+            .diagnostics_json
+            .contains("\"stop_reason\":\"cancel_requested\""));
         assert!(result.result_json.contains("\"status\":\"interrupted\""));
     }
 
@@ -1380,7 +1389,9 @@ mod tests {
             result.diagnostics_json
         );
         assert!(
-            result.diagnostics_json.contains("\"resolved_search_window_hz\""),
+            result
+                .diagnostics_json
+                .contains("\"resolved_search_window_hz\""),
             "{}",
             result.diagnostics_json
         );
@@ -1390,12 +1401,16 @@ mod tests {
             result.diagnostics_json
         );
         assert!(
-            result.diagnostics_json.contains("\"policy\":\"best_effort\""),
+            result
+                .diagnostics_json
+                .contains("\"policy\":\"best_effort\""),
             "{}",
             result.diagnostics_json
         );
         assert!(
-            result.diagnostics_json.contains("\"status\":\"not_certified\""),
+            result
+                .diagnostics_json
+                .contains("\"status\":\"not_certified\""),
             "{}",
             result.diagnostics_json
         );
@@ -1405,7 +1420,8 @@ mod tests {
             result.diagnostics_json
         );
         assert!(
-            result.result_json
+            result
+                .result_json
                 .contains("\"window_completeness\":\"not_certified\""),
             "{}",
             result.result_json
@@ -1446,12 +1462,16 @@ mod tests {
         assert!(result
             .diagnostics_json
             .contains("\"operator_diagnostics\":{\"schema_version\":\"frequency_domain_operator_diagnostics.v1\""), "{}", result.diagnostics_json);
-        assert!(result
-            .diagnostics_json
-            .contains("\"active_node_count\":6"), "{}", result.diagnostics_json);
-        assert!(result
-            .diagnostics_json
-            .contains("\"tangent_dof_count\":12"), "{}", result.diagnostics_json);
+        assert!(
+            result.diagnostics_json.contains("\"active_node_count\":6"),
+            "{}",
+            result.diagnostics_json
+        );
+        assert!(
+            result.diagnostics_json.contains("\"tangent_dof_count\":12"),
+            "{}",
+            result.diagnostics_json
+        );
     }
 
     #[cfg(feature = "fem-gpu")]

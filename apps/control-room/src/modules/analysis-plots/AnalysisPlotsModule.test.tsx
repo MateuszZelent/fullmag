@@ -40,7 +40,9 @@ import {
   buildHysteresisMetricMarkerModel,
   buildHysteresisChartPointSelection,
   buildHysteresisLoadPointIn3DInput,
+  buildHysteresisSelectPointCommandInput,
   clearHysteresisPointSelectionForLive,
+  formatHysteresisChartTooltip,
   getProgressYValue,
   HYSTERESIS_CHART_VALUE_AXIS_SCALE,
   hysteresisChartReplayActionPresentation,
@@ -373,6 +375,100 @@ describe("AnalysisPlotsView", () => {
       [20, 0.3, 0],
       [-20, -0.6, 1],
     ]);
+  });
+
+  it("keeps RGB overlay series scoped by hysteresis branch when branches are loaded", () => {
+    const branches = [
+      {
+        branch_id: "ascending",
+        branch_index: 0,
+        branch_role: "major",
+        direction: 1,
+        end_field_mT: 20,
+        end_point_id: 0,
+        point_count: 1,
+        points: [{
+          field_value_mT: 20,
+          m_avg: [0.1, 0.2, 0.3],
+          m_ip: 0.224,
+          m_oop: 0.3,
+          m_parallel: 0.2,
+          point_id: 0,
+          snapshot_id: null,
+          status: "Completed",
+        }],
+        start_field_mT: 20,
+        start_point_id: 0,
+      },
+      {
+        branch_id: "descending",
+        branch_index: 1,
+        branch_role: "major",
+        direction: -1,
+        end_field_mT: -20,
+        end_point_id: 1,
+        point_count: 1,
+        points: [{
+          field_value_mT: -20,
+          m_avg: [-0.4, 0.5, -0.6],
+          m_ip: 0.64,
+          m_oop: -0.6,
+          m_parallel: 0.5,
+          point_id: 1,
+          snapshot_id: null,
+          status: "Completed",
+        }],
+        start_field_mT: -20,
+        start_point_id: 1,
+      },
+    ];
+
+    const series = buildHysteresisChartLineSeriesModel(
+      [],
+      branches,
+      [],
+      "rgb-overlay",
+      "m_parallel",
+    );
+
+    expect(series.map((entry) => [entry.branchId, entry.name])).toEqual([
+      ["mx-overlay:ascending", "M_x Ascending (Forward)"],
+      ["my-overlay:ascending", "M_y Ascending (Forward)"],
+      ["mz-overlay:ascending", "M_z Ascending (Forward)"],
+      ["mx-overlay:descending", "M_x Descending (Return)"],
+      ["my-overlay:descending", "M_y Descending (Return)"],
+      ["mz-overlay:descending", "M_z Descending (Return)"],
+    ]);
+    expect(series[0].data).toEqual([[20, 0.1, 0]]);
+    expect(series[3].data).toEqual([[-20, -0.4, 1]]);
+  });
+
+  it("formats branch-aware hysteresis overlay tooltips from ECharts series ids", () => {
+    const tooltip = formatHysteresisChartTooltip(
+      {
+        data: [20, 0.1, 0],
+        seriesId: "mx-overlay:ascending",
+        seriesName: "M_x Ascending (Forward)",
+      },
+      {
+        branchMode: "major_loop",
+        points: [{
+          field_value_mT: 20,
+          m_avg: [0.1, 0.2, 0.3],
+          m_ip: 0.224,
+          m_oop: 0.3,
+          m_parallel: 0.2,
+          point_id: 0,
+          snapshot_id: "hysteresis_point_001",
+          status: "Completed",
+        }],
+        xAxisUnit: "mT",
+      },
+    );
+
+    expect(tooltip).toContain("Branch: ascending");
+    expect(tooltip).toContain("Series: M_x Ascending (Forward)");
+    expect(tooltip).toContain("Snapshot available");
   });
 
   it("builds angular-family series only for computed variants", () => {
@@ -900,6 +996,28 @@ describe("AnalysisPlotsView", () => {
     })).toBe("hysteresis-1");
 
     expect(selectedHysteresisStageIdFromSelection({
+      kind: "analysis.chart-point",
+      label: "Point 4",
+      moduleSource: "analysis-plots",
+      nodeId: "analysis:hysteresis:hysteresis-1:point:4",
+      objectId: null,
+      ref: {
+        chartId: "hysteresis:hysteresis-1",
+        kind: "analysis.chart-point",
+        nodeId: "analysis:hysteresis:hysteresis-1:point:4",
+        pointId: 4,
+        quantity: "m",
+        rowIndex: 4,
+        seriesId: "hysteresis:hysteresis-1:m_parallel",
+        stageId: "hysteresis-1",
+        tableId: "hysteresis:hysteresis-1",
+        type: "analysis-chart-point",
+        x: 10,
+        y: 0.25,
+      },
+    })).toBe("hysteresis-1");
+
+    expect(selectedHysteresisStageIdFromSelection({
       kind: "study.stage.relax",
       label: "Relax",
       moduleSource: "explorer",
@@ -913,6 +1031,42 @@ describe("AnalysisPlotsView", () => {
         type: "study-stage",
       },
     })).toBeNull();
+  });
+
+  it("builds the load-in-3D command input when selecting a hysteresis chart point", () => {
+    const point = {
+      field_value_mT: -15,
+      m_avg: [0.1, 0.2, 0.3],
+      m_ip: 0.224,
+      m_oop: 0.3,
+      m_parallel: 0.8,
+      point_id: 7,
+      snapshot_id: "hysteresis_point_008",
+      snapshot_resource_ref: "data/fields/m?snapshot_id=hysteresis_point_008",
+      status: "Completed",
+    };
+
+    expect(buildHysteresisSelectPointCommandInput({
+      point,
+      stageId: "hysteresis-1",
+      targetMetadata: {
+        fieldOrientation: "oop_positive",
+        fieldRevision: 42,
+        measurementAxis: "parallel_to_field",
+        meshIdentity: "mesh:shared:1",
+      },
+      yAxisKey: "m_parallel",
+    })).toEqual(buildHysteresisLoadPointIn3DInput({
+      point,
+      stageId: "hysteresis-1",
+      targetMetadata: {
+        fieldOrientation: "oop_positive",
+        fieldRevision: 42,
+        measurementAxis: "parallel_to_field",
+        meshIdentity: "mesh:shared:1",
+      },
+      yAxisKey: "m_parallel",
+    }));
   });
 
   it("clears only the selected hysteresis point for the active stage when returning to live", () => {

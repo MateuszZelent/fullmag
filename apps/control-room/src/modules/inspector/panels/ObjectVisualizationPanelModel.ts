@@ -1,6 +1,7 @@
 import { DATA_FIELD_VECTOR_PATH } from "@/kernel/api/apiPaths";
 import type {
   FieldCatalogResource,
+  FieldMetaQuery,
   MeshSharedDomainManifestResource,
 } from "@/kernel/api/apiTypes";
 import {
@@ -123,6 +124,22 @@ export function shouldShowSurfaceFieldColorbar(
     surfaceColorSourceFieldMetaComponent(surfaceColorSource, activeQuantityId) !==
     undefined
   );
+}
+
+export function fieldMetaScopeQueryForVisualizationTarget(
+  target: VisualizationTargetRef | null | undefined,
+): Pick<FieldMetaQuery, "scope_id" | "scope_kind"> {
+  switch (target?.kind) {
+    case "object":
+      return { scope_id: target.id, scope_kind: "object" };
+    case "part":
+      return { scope_id: target.id, scope_kind: "part" };
+    case "airbox":
+      return { scope_id: null, scope_kind: "airbox" };
+    case "region":
+    case undefined:
+      return { scope_id: null, scope_kind: null };
+  }
 }
 
 const SCALAR_COLOR_PALETTE_STOPS: Record<string, [number, number, number][]> = {

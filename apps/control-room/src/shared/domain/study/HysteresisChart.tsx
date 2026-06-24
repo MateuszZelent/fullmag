@@ -37,7 +37,7 @@ import {
 } from "@/kernel/resources/studyRuntimeResources";
 import type { KernelApi } from "@/kernel/types";
 import { Button } from "@/shared/ui/Button";
-import { ChevronLeft, ChevronRight, Pause, Play } from "lucide-react";
+import { ChevronLeft, ChevronRight, Pause, Play, ZoomOut } from "lucide-react";
 
 interface HysteresisChartProps {
   commandSource?: CommandContext["source"];
@@ -66,6 +66,12 @@ interface HysteresisChartLineSeriesModel {
   branchId: string | null;
   data: ChartDataPoint[];
   name: string;
+}
+
+interface HysteresisChartOverlayComponent {
+  id: string;
+  name: string;
+  yAxisKey: YAxisKey;
 }
 
 export type HysteresisMetricMarkerKind =
@@ -130,6 +136,18 @@ export function selectedHysteresisPointId(
     return null;
   }
   return ref.pointId;
+}
+
+export function resolveHysteresisChartPointById(
+  points: readonly HysteresisPointSchema[],
+  branches: readonly HysteresisBranch[],
+  minorLoops: readonly HysteresisMinorLoop[],
+  pointId: number,
+): HysteresisPointSchema | null {
+  return points.find((point) => point.point_id === pointId)
+    ?? branches.flatMap((branch) => branch.points).find((point) => point.point_id === pointId)
+    ?? minorLoops.flatMap((loop) => loop.points).find((point) => point.point_id === pointId)
+    ?? null;
 }
 
 export function clearHysteresisPointSelectionForLive(
@@ -218,6 +236,8 @@ interface ChartClickParams {
 
 interface TooltipParam {
   data?: unknown;
+  seriesId?: unknown;
+  seriesName?: unknown;
 }
 
 interface HysteresisChartColors {
@@ -241,6 +261,64 @@ function isChartDataPoint(value: unknown): value is ChartDataPoint {
     typeof value[1] === "number" &&
     typeof value[2] === "number"
   );
+}
+
+export function formatHysteresisChartTooltip(
+  params: unknown,
+  {
+    branchMode,
+    points,
+    xAxisUnit,
+  }: {
+    branchMode?: string | null;
+    points: readonly HysteresisPointSchema[];
+    xAxisUnit: XAxisUnit;
+  },
+): string {
+  let result = "";
+  const entries = Array.isArray(params)
+    ? (params as TooltipParam[])
+    : [params as TooltipParam];
+  entries.forEach((entry) => {
+    if (!isChartDataPoint(entry.data)) return;
+    const pointId = entry.data[2];
+    const matchedPoint = points.find((point) => point.point_id === pointId);
+    const branchId = hysteresisBranchIdFromSeriesId(entry.seriesId);
+    const seriesName =
+      typeof entry.seriesName === "string" ? entry.seriesName : null;
+    result += `<div style="font-weight: bold; margin-bottom: 4px;">Point ID: ${pointId}</div>`;
+    if (branchMode) {
+      result += `<div>Protocol: ${branchMode}</div>`;
+    }
+    if (branchId) {
+      result += `<div>Branch: ${branchId}</div>`;
+    }
+    if (seriesName) {
+      result += `<div>Series: ${seriesName}</div>`;
+    }
+    result += `<div>H: ${entry.data[0].toFixed(2)} ${xAxisUnit}</div>`;
+    result += `<div>M: ${entry.data[1].toFixed(5)}</div>`;
+    if (matchedPoint?.snapshot_id) {
+      result += `<div>Snapshot available</div>`;
+    }
+  });
+  return result;
+}
+
+function hysteresisBranchIdFromSeriesId(value: unknown): string | null {
+  if (typeof value !== "string" || value.length === 0) return null;
+  const separatorIndex = value.indexOf(":");
+  if (separatorIndex >= 0 && separatorIndex < value.length - 1) {
+    return value.slice(separatorIndex + 1);
+  }
+  if (
+    value === "ascending" ||
+    value === "descending" ||
+    value.startsWith("minor_loop")
+  ) {
+    return value;
+  }
+  return null;
 }
 
 function isViewMode(value: string): value is ViewMode {
@@ -469,66 +547,28 @@ export function buildHysteresisChartLineSeriesModel(
   }
 
   if (viewMode === "oop-ip-overlay") {
-    const sourcePoints = points.length > 0
-      ? points
-      : branches.flatMap((branch) => branch.points);
-    const overlaySeries: HysteresisChartLineSeriesModel[] = [
-      {
-        branchId: "oop-overlay",
-        data: sourcePoints.map((p) => [
-          formatXValue(p.field_value_mT),
-          getPointYValue(p, "m_oop"),
-          p.point_id,
-        ]),
-        name: "M_oop",
-      },
-      {
-        branchId: "ip-overlay",
-        data: sourcePoints.map((p) => [
-          formatXValue(p.field_value_mT),
-          getPointYValue(p, "m_ip"),
-          p.point_id,
-        ]),
-        name: "M_ip",
-      },
-    ];
-    return overlaySeries.filter((series) => series.data.length > 0);
+    return buildHysteresisComponentOverlaySeries(
+      points,
+      branches,
+      [
+        { id: "oop-overlay", name: "M_oop", yAxisKey: "m_oop" },
+        { id: "ip-overlay", name: "M_ip", yAxisKey: "m_ip" },
+      ],
+      formatXValue,
+    );
   }
 
   if (viewMode === "rgb-overlay") {
-    const sourcePoints = points.length > 0
-      ? points
-      : branches.flatMap((branch) => branch.points);
-    const overlaySeries: HysteresisChartLineSeriesModel[] = [
-      {
-        branchId: "mx-overlay",
-        data: sourcePoints.map((p) => [
-          formatXValue(p.field_value_mT),
-          getPointYValue(p, "m_avg_x"),
-          p.point_id,
-        ]),
-        name: "M_x",
-      },
-      {
-        branchId: "my-overlay",
-        data: sourcePoints.map((p) => [
-          formatXValue(p.field_value_mT),
-          getPointYValue(p, "m_avg_y"),
-          p.point_id,
-        ]),
-        name: "M_y",
-      },
-      {
-        branchId: "mz-overlay",
-        data: sourcePoints.map((p) => [
-          formatXValue(p.field_value_mT),
-          getPointYValue(p, "m_avg_z"),
-          p.point_id,
-        ]),
-        name: "M_z",
-      },
-    ];
-    return overlaySeries.filter((series) => series.data.length > 0);
+    return buildHysteresisComponentOverlaySeries(
+      points,
+      branches,
+      [
+        { id: "mx-overlay", name: "M_x", yAxisKey: "m_avg_x" },
+        { id: "my-overlay", name: "M_y", yAxisKey: "m_avg_y" },
+        { id: "mz-overlay", name: "M_z", yAxisKey: "m_avg_z" },
+      ],
+      formatXValue,
+    );
   }
 
   if (viewMode === "minor") {
@@ -572,6 +612,45 @@ export function buildHysteresisChartLineSeriesModel(
       ? "Ascending (Forward)"
       : "Descending (Return)",
   }));
+}
+
+function buildHysteresisComponentOverlaySeries(
+  points: HysteresisPointSchema[],
+  branches: HysteresisBranch[],
+  components: HysteresisChartOverlayComponent[],
+  formatXValue: (fieldValmT: number) => number,
+): HysteresisChartLineSeriesModel[] {
+  const sources = branches.length > 0
+    ? branches.map((branch) => ({
+        branchId: branch.branch_id,
+        name: hysteresisBranchSeriesName(branch.branch_id),
+        points: branch.points,
+      }))
+    : [{ branchId: null, name: null, points }];
+
+  return sources.flatMap((source) =>
+    source.points.length > 0
+      ? components.map((component) => ({
+          branchId: source.branchId
+            ? `${component.id}:${source.branchId}`
+            : component.id,
+          data: source.points.map((point) => [
+            formatXValue(point.field_value_mT),
+            getPointYValue(point, component.yAxisKey),
+            point.point_id,
+          ]),
+          name: source.name
+            ? `${component.name} ${source.name}`
+            : component.name,
+        }))
+      : [],
+  );
+}
+
+function hysteresisBranchSeriesName(branchId: string): string {
+  if (branchId === "ascending") return "Ascending (Forward)";
+  if (branchId === "descending") return "Descending (Return)";
+  return branchId;
 }
 
 export function buildHysteresisAngularFamilyLineSeriesModel(
@@ -709,6 +788,21 @@ export function buildHysteresisLoadPointIn3DInput({
   };
 }
 
+export function buildHysteresisUsePointAsInitialStateInput({
+  point,
+  stageId,
+}: {
+  point: HysteresisPointSchema;
+  stageId: string;
+}) {
+  return {
+    stageId,
+    snapshotId: point.snapshot_id ?? null,
+    snapshotArtifactRef: point.snapshot_json_artifact_ref ?? null,
+    snapshotResourceRef: point.snapshot_resource_ref ?? null,
+  };
+}
+
 export function hysteresisChartReplayActionPresentation(
   snapshotId?: string | null,
   snapshotStorageStatus?: string | null,
@@ -732,6 +826,70 @@ export function hysteresisChartReplayActionPresentation(
     disabled: false,
     title: "Load point magnetization in 3D viewport",
   };
+}
+
+export function hysteresisChartInitialStateActionPresentation(
+  snapshotId?: string | null,
+  snapshotStorageStatus?: string | null,
+  snapshotStorageReason?: string | null,
+): { disabled: boolean; title: string } {
+  if (!snapshotId) {
+    return {
+      disabled: true,
+      title: "Snapshot not saved for this point",
+    };
+  }
+  if (snapshotStorageStatus === "missing") {
+    return {
+      disabled: true,
+      title: snapshotStorageReason
+        ? `Snapshot payload is missing for this point: ${snapshotStorageReason}`
+        : "Snapshot payload is missing for this point",
+    };
+  }
+  return {
+    disabled: false,
+    title: "Use point magnetization as the initial state for the selected or only object",
+  };
+}
+
+export function buildHysteresisChartDataZoomModel(
+  colors: Pick<HysteresisChartColors, "axis" | "border" | "surface" | "textMuted">,
+): EChartsOption["dataZoom"] {
+  return [
+    {
+      type: "inside",
+      filterMode: "none",
+      start: 0,
+      end: 100,
+    },
+    {
+      type: "slider",
+      filterMode: "none",
+      bottom: 8,
+      height: 12,
+      showDetail: false,
+      showDataShadow: false,
+      borderColor: colors.border,
+      backgroundColor: colors.surface,
+      fillerColor: colors.textMuted,
+      handleSize: "100%",
+      handleStyle: {
+        color: colors.axis,
+        borderWidth: 0,
+      },
+      start: 0,
+      end: 100,
+    },
+  ];
+}
+
+export function resetHysteresisChartZoom(
+  chart: Pick<ECharts, "dispatchAction"> | null,
+): boolean {
+  if (!chart) return false;
+  chart.dispatchAction({ type: "dataZoom", start: 0, end: 100 });
+  return true;
 }
 
 export function hysteresisPointVectorResourceRef(
@@ -932,18 +1090,31 @@ function useHysteresisChartView({
   const selectedIndex = selectedPointId == null
     ? -1
     : points.findIndex((point) => point.point_id === selectedPointId);
+  const selectedResourcePoint = selectedPointId == null
+    ? null
+    : resolveHysteresisChartPointById(
+        points,
+        branches,
+        minorLoops,
+        selectedPointId,
+      );
   const navigationIndex = resolveHysteresisNavigationIndex(
     selectedIndex,
     progressIndex,
     points.length,
   );
   const resolvedActiveIndex = navigationIndex;
-  const activePoint = points[resolvedActiveIndex] ?? null;
+  const activePoint = selectedResourcePoint ?? points[resolvedActiveIndex] ?? null;
   const liveFieldValue = activePoint?.field_value_mT ?? progress?.current_field_mT ?? null;
   const liveYValue = activePoint ? getPointYValue(activePoint, yAxisKey) : getProgressYValue(progress, yAxisKey);
   const liveSettleLabel = progressSettleLabel(progress);
   const activePointSnapshotId = activePoint?.snapshot_id ?? null;
   const replayAction = hysteresisChartReplayActionPresentation(
+    activePointSnapshotId,
+    activePoint?.snapshot_storage_status ?? null,
+    activePoint?.snapshot_storage_reason ?? null,
+  );
+  const initialStateAction = hysteresisChartInitialStateActionPresentation(
     activePointSnapshotId,
     activePoint?.snapshot_storage_status ?? null,
     activePoint?.snapshot_storage_reason ?? null,
@@ -964,8 +1135,7 @@ function useHysteresisChartView({
     [commandSource, kernel],
   );
 
-  const selectPoint = useCallback((idx: number) => {
-    const pt = points[idx];
+  const selectPointResource = useCallback((pt: HysteresisPointSchema | null) => {
     if (!pt) return;
     kernel.selection.set(
       buildHysteresisChartPointSelection({
@@ -977,7 +1147,11 @@ function useHysteresisChartView({
       }),
         commandSource === "inspector" ? "inspector" : "analysis-plots",
     );
-  }, [commandSource, kernel.selection, points, stageId, targetMetadata, yAxisKey]);
+  }, [commandSource, kernel.selection, stageId, targetMetadata, yAxisKey]);
+
+  const selectPoint = useCallback((idx: number) => {
+    selectPointResource(points[idx] ?? null);
+  }, [points, selectPointResource]);
 
   const returnToLive = useCallback(() => {
     setIsPlaying(false);
@@ -1000,6 +1174,22 @@ function useHysteresisChartView({
       }),
     );
   }, [activePoint, commandContext, kernel.commands, stageId, targetMetadata, yAxisKey]);
+
+  const useSelectedPointAsInitialState = useCallback(() => {
+    if (!activePoint) return;
+    kernel.commands.execute(
+      "hysteresis.use-point-as-initial-state",
+      commandContext,
+      buildHysteresisUsePointAsInitialStateInput({
+        point: activePoint,
+        stageId,
+      }),
+    );
+  }, [activePoint, commandContext, kernel.commands, stageId]);
+
+  const resetZoom = useCallback(() => {
+    resetHysteresisChartZoom(chartRef.current);
+  }, []);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLDivElement>) => {
@@ -1030,10 +1220,12 @@ function useHysteresisChartView({
     const event = params as ChartClickParams;
     if (event.componentType === "series" && isChartDataPoint(event.data)) {
       const ptId = event.data[2];
-      const idx = points.findIndex((p) => p.point_id === ptId);
-      if (idx !== -1) {
-        selectPoint(idx);
-      }
+      selectPointResource(resolveHysteresisChartPointById(
+        points,
+        branches,
+        minorLoops,
+        ptId,
+      ));
     }
   });
 
@@ -1108,18 +1300,19 @@ function useHysteresisChartView({
         ];
         const color = series.branchId.startsWith("angular-family:")
           ? angularFamilyColors[seriesIndex % angularFamilyColors.length]
-          : series.branchId === "oop-overlay"
+          : series.branchId.startsWith("oop-overlay")
           ? colors.remanence
-          : series.branchId === "mx-overlay"
+          : series.branchId.startsWith("mx-overlay")
             ? colors.metric
-            : series.branchId === "my-overlay"
+            : series.branchId.startsWith("my-overlay")
               ? colors.branchAscending
-              : series.branchId === "mz-overlay"
+              : series.branchId.startsWith("mz-overlay")
                 ? colors.branchDescending
-                : series.branchId === "ip-overlay" || series.branchId === "ascending"
+                : series.branchId.startsWith("ip-overlay") || series.branchId === "ascending"
                   ? colors.branchAscending
                   : colors.branchDescending;
         seriesList.push({
+          id: series.branchId,
           name: series.name,
           type: "line",
           data: series.data,
@@ -1162,6 +1355,11 @@ function useHysteresisChartView({
           label: { show: false },
         });
       }
+      const tooltipPoints = uniqueHysteresisPointsById([
+        ...points,
+        ...branches.flatMap((branch) => branch.points),
+        ...minorLoops.flatMap((loop) => loop.points),
+      ]);
 
       const option: EChartsOption = {
         backgroundColor: "transparent",
@@ -1170,23 +1368,12 @@ function useHysteresisChartView({
           backgroundColor: colors.surface,
           borderColor: colors.border,
           textStyle: { color: colors.text },
-          formatter: (params: unknown) => {
-            let res = "";
-            const entries = Array.isArray(params) ? (params as TooltipParam[]) : [params as TooltipParam];
-            entries.forEach((p) => {
-              if (isChartDataPoint(p.data)) {
-                const ptId = p.data[2];
-                const matchedPt = points.find((pt) => pt.point_id === ptId);
-                res += `<div style="font-weight: bold; margin-bottom: 4px;">Point ID: ${ptId}</div>`;
-                res += `<div>H: ${p.data[0].toFixed(2)} ${xAxisUnit}</div>`;
-                res += `<div>M: ${p.data[1].toFixed(5)}</div>`;
-                if (matchedPt?.snapshot_id) {
-                  res += `<div>Snapshot available</div>`;
-                }
-              }
-            });
-            return res;
-          },
+          formatter: (params: unknown) =>
+            formatHysteresisChartTooltip(params, {
+              branchMode,
+              points: tooltipPoints,
+              xAxisUnit,
+            }),
         },
         grid: {
           left: "5%",
@@ -1217,9 +1404,15 @@ function useHysteresisChartView({
           splitLine: { show: true, lineStyle: { color: colors.border } },
           axisLabel: { color: colors.axis },
         },
+        dataZoom: buildHysteresisChartDataZoomModel(colors),
         series: [
           ...seriesList.map((s) => ({
             ...s,
+            id: typeof s.id === "string"
+              ? s.id
+              : typeof s.name === "string"
+                ? s.name
+                : undefined,
             markPoint: markPoints.length > 0 ? {
               symbol: "pin",
               symbolSize: 30,
@@ -1400,6 +1593,25 @@ function useHysteresisChartView({
             title={replayAction.title}
           >
             Load in 3D
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={useSelectedPointAsInitialState}
+            disabled={initialStateAction.disabled}
+            title={initialStateAction.title}
+          >
+            Use as initial
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={resetZoom}
+            disabled={points.length === 0}
+            title="Reset local chart zoom"
+          >
+            <ZoomOut size={14} />
+            Reset zoom
           </Button>
           <Button
             size="sm"

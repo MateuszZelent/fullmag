@@ -2845,4 +2845,53 @@ describe("Study stage inspectors", () => {
     expect(settleMarkup).toContain("projected_gradient_bb");
     expect(settleMarkup).toContain("Max steps: 2000");
   });
+
+  it("prefers resolved hysteresis settle pipeline fields over raw fallback steps", () => {
+    const settlePipelineKey = SIMULATION_STAGE_HYSTERESIS_SETTLE_PIPELINE_PATH.replace(
+      "{stage_id}",
+      "hysteresis-1",
+    );
+    const settlePipeline: HysteresisSettlePipelineSchema = {
+      resolved_branch_ids: ["descending", "ascending"],
+      resolved_steps: [
+        {
+          applies_to: { branch_id: "ascending" },
+          kind: "minimize",
+          method: "projected_gradient_bb",
+          resolved_parameters: {
+            alpha: 0.5,
+            max_steps: 1500,
+            torque_tolerance: 175,
+          },
+          step_id: "resolved-minimize",
+          step_index: 0,
+        },
+      ],
+      revision: 24,
+      settle_pipeline: {
+        kind: "sequence",
+        steps: [
+          {
+            kind: "llg",
+            max_steps: 12,
+            method: "raw-fallback",
+          },
+        ],
+      },
+      stage_id: "hysteresis-1",
+      stage_index: 0,
+    };
+    sharedResourceRuntimeStore.updateData(settlePipelineKey, settlePipeline, 24);
+
+    const settleMarkup = render(
+      <HysteresisStageInspector {...props("hysteresis")} />,
+      ["hysteresis-settle"],
+    );
+
+    expect(settleMarkup).toContain("projected_gradient_bb");
+    expect(settleMarkup).toContain("resolved-minimize");
+    expect(settleMarkup).toContain("Max steps: 1500");
+    expect(settleMarkup).toContain("descending");
+    expect(settleMarkup).not.toContain("raw-fallback");
+  });
 });

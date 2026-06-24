@@ -3384,17 +3384,13 @@ fn modal_solver_diagnostics_json(
         } else {
             0.0
         };
-        let subwindow_count = (relative_width / 0.35)
-            .ceil()
-            .max(1.0)
-            .min(16.0) as usize;
+        let subwindow_count = (relative_width / 0.35).ceil().max(1.0).min(16.0) as usize;
         let guard_fraction = 0.25;
         let mut subwindows = Vec::with_capacity(subwindow_count);
         let mut resolved_min_hz = frequency_min_hz;
         let mut resolved_max_hz = frequency_max_hz;
         for index in 0..subwindow_count {
-            let sub_min =
-                frequency_min_hz + index as f64 * window_width / subwindow_count as f64;
+            let sub_min = frequency_min_hz + index as f64 * window_width / subwindow_count as f64;
             let sub_max =
                 frequency_min_hz + (index + 1) as f64 * window_width / subwindow_count as f64;
             let sub_width = sub_max - sub_min;

@@ -360,6 +360,22 @@ pub(crate) async fn read_hysteresis_minor_loops_if_available(
     }
 }
 
+pub(crate) async fn read_hysteresis_settle_trace_if_available(
+    state: &Arc<AppState>,
+    stage_id: &str,
+) -> Result<Vec<HysteresisSettleTraceEntrySchema>, ApiError> {
+    match read_optional_typed_stage_artifact_with_path::<Vec<HysteresisSettleTraceEntrySchema>>(
+        state,
+        stage_id,
+        "hysteresis_settle_trace.json",
+    )
+    .await?
+    {
+        Some((_path, trace)) => Ok(trace),
+        None => Ok(Vec::new()),
+    }
+}
+
 async fn read_hysteresis_points(
     state: &Arc<AppState>,
     stage_id: &str,

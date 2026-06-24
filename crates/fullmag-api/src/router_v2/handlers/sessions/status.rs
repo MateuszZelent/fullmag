@@ -429,6 +429,11 @@ pub(crate) fn field_quantity_revision(snapshot: &SessionStateResponse, quantity_
         .get(quantity_id)
         .copied()
         .or_else(|| {
+            (quantity_id == "m")
+                .then(|| live_magnetization_revision(snapshot))
+                .flatten()
+        })
+        .or_else(|| {
             snapshot.latest_fields.get(quantity_id).and_then(|value| {
                 value
                     .get("field_revision")
@@ -445,6 +450,16 @@ pub(crate) fn field_quantity_revision(snapshot: &SessionStateResponse, quantity_
             .then(|| field_revision(snapshot).max(1))
         })
         .unwrap_or(0)
+}
+
+fn live_magnetization_revision(snapshot: &SessionStateResponse) -> Option<u64> {
+    if !live_magnetization_available(snapshot) {
+        return None;
+    }
+    snapshot
+        .live_state
+        .as_ref()
+        .map(|state| state.latest_step.step.max(1))
 }
 
 pub(crate) fn slice_revision(field_revision: u64, display_revision: u64) -> u64 {

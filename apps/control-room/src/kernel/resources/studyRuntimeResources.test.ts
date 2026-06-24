@@ -12,6 +12,7 @@ import {
   ANALYSIS_EIGEN_MODE_V2_PATH,
   ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH,
   ANALYSIS_HYSTERESIS_FAMILY_PATH,
+  DATA_FIELD_META_PATH,
   DATA_TABLE_COLUMNS_PATH,
   DATA_TABLE_PATH,
   DIAGNOSTICS_SOLVER_PROFILE_PATH,
@@ -21,6 +22,7 @@ import {
   MODEL_SCENE_PATH,
   PERSISTENCE_CHECKPOINTS_PATH,
   SIMULATION_RUN_CURRENT_PATH,
+  SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH,
   DATA_TABLE_ROWS_PATH,
   DATA_TABLES_PATH,
 } from "../api/apiPaths";
@@ -30,6 +32,8 @@ import {
   STUDY_RUNTIME_CONTROL_RESOURCE_KEYS,
   frequencyDomainManifestRevision,
   frequencyDomainSweepProgressRevision,
+  resolveHysteresisExecutionTreeResourceKey,
+  resolveFieldMetaResourceKey,
   runtimeCommandControlSessionStatusEquals,
   selectStudyRuntimeCommandSessionStatus,
   shouldLoadRuntimeCommandQueue,
@@ -217,6 +221,42 @@ describe("study runtime command resource bundles", () => {
       "useSessionStatusSelector(selectRuntimeCommandControlSessionStatus",
     );
     expect(controlHook).not.toContain("useSessionStatus()");
+  });
+
+  it("builds scoped field metadata resource keys", () => {
+    const expectedPath = DATA_FIELD_META_PATH.replace("{quantity_id}", "m");
+
+    expect(
+      resolveFieldMetaResourceKey("m", {
+        component: "z",
+        scope_id: "part:body",
+        scope_kind: "part",
+        snapshot_id: "hysteresis point 4",
+        stage_id: "stage/1",
+      }),
+    ).toBe(
+      `${expectedPath}?component=z&scope_id=part%3Abody&scope_kind=part&snapshot_id=hysteresis%20point%204&stage_id=stage%2F1`,
+    );
+  });
+
+  it("builds hysteresis execution tree resource keys with include flags", () => {
+    const expectedPath = SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH.replace(
+      "{stage_id}",
+      "stage%201",
+    );
+
+    expect(
+      resolveHysteresisExecutionTreeResourceKey("stage 1", {
+        after: 3,
+        before: 2,
+        include_bookmarks: true,
+        include_snapshots: false,
+        include_warnings: true,
+        window: "active",
+      }),
+    ).toBe(
+      `${expectedPath}?after=3&before=2&include_bookmarks=true&include_snapshots=false&include_warnings=true&window=active`,
+    );
   });
 
   it("treats session identity changes as runtime command control changes", () => {

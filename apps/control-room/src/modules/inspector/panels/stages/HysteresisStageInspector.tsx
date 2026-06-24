@@ -259,6 +259,7 @@ export function HysteresisStageInspector(props: HysteresisStageInspectorProps) {
       <HysteresisSettlePipelineInspector
         draft={props.draft}
         executionTree={executionTree}
+        onUpdateDraft={props.onUpdateDraft}
         settlePipeline={settlePipeline}
       />
     ),

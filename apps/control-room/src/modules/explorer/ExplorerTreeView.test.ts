@@ -24,6 +24,11 @@ import {
 } from "./ExplorerTreeView";
 import { explorerStatusClassName } from "./explorerStatusClass";
 
+const explorerTreeViewSource = readFileSync(
+  fileURLToPath(import.meta.resolve("./ExplorerTreeView.tsx")),
+  "utf8",
+);
+
 describe("flattenVisibleExplorerRows", () => {
   it("keeps collapsed descendants out of the rendered row list", () => {
     const nodes: ExplorerNode[] = [
@@ -221,6 +226,58 @@ describe("flattenVisibleExplorerRows", () => {
     });
     expect(items.find((item) => item.command.id === "study.run")).toMatchObject({
       disabled: false,
+    });
+  });
+
+  it("keeps context-menu runtime resources off mesh readiness and stage execution", () => {
+    expect(explorerTreeViewSource).toContain(
+      "useRuntimeCommandControlResourceData({",
+    );
+    expect(explorerTreeViewSource).toContain(
+      "includeSharedDomainReadiness: false",
+    );
+    expect(explorerTreeViewSource).toContain("includeStageExecution: false");
+    expect(explorerTreeViewSource).toContain(
+      "resourceData={runtimeResourceData}",
+    );
+  });
+
+  it("resolves context command state with node-provided command input", () => {
+    const commands = new CommandRegistry();
+    commands.register({
+      id: "test.input-gated",
+      title: "Input gated",
+      group: "test",
+      scope: "selection",
+      isEnabled: (context) =>
+        (context.input as { enabled?: boolean } | null)?.enabled === true,
+      disabledReason: () => "Expected command input.",
+      run: () => ({ status: "completed" }),
+    });
+    const kernel = {
+      commands,
+    } as unknown as KernelApi;
+    const node: ExplorerNode = {
+      contextCommands: ["test.input-gated"],
+      contextCommandInputs: {
+        "test.input-gated": { enabled: true },
+      },
+      id: "model:study:stages:stage:hysteresis-1:field-point:7:snapshot:hysteresis_point_007",
+      kind: "study.stage.action",
+      label: "Snapshot hysteresis_point_007",
+      parentId: "model:study:stages:stage:hysteresis-1:field-point:7",
+    };
+
+    const items = contextCommandItemsForNode({
+      kernel,
+      node,
+      resourceData: {},
+    });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      disabled: false,
+      disabledReason: "Expected command input.",
     });
   });
 

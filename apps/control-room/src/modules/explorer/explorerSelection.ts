@@ -207,6 +207,9 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       ...(node.hysteresisPointId !== undefined
         ? { hysteresisPointId: node.hysteresisPointId }
         : {}),
+      ...(node.hysteresisSelectionRef
+        ? { hysteresisSelectionRef: node.hysteresisSelectionRef }
+        : {}),
       ...(node.resourceRef ? { resourceRef: node.resourceRef } : {}),
       kind: node.kind,
       nodeId: node.id,

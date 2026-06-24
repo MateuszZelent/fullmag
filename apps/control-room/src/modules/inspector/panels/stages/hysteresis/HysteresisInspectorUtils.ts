@@ -146,6 +146,7 @@ export interface ActiveHysteresisExecutionNodeSelection {
   nodeKind: string | null;
   pointId: number | null;
   resourceRef: string | null;
+  selectionRef: string | null;
 }
 
 export function activeHysteresisSnapshotSelection(
@@ -266,6 +267,7 @@ export function activeHysteresisExecutionNodeSelection(
     nodeKind: ref.hysteresisExecutionNodeKind ?? null,
     pointId: ref.hysteresisPointId ?? null,
     resourceRef: ref.resourceRef ?? null,
+    selectionRef: ref.hysteresisSelectionRef ?? null,
   };
 }
 
@@ -277,7 +279,8 @@ export function activeHysteresisExecutionNodeSelectionEquals(
     left?.nodeId === right?.nodeId &&
     left?.nodeKind === right?.nodeKind &&
     left?.pointId === right?.pointId &&
-    left?.resourceRef === right?.resourceRef
+    left?.resourceRef === right?.resourceRef &&
+    left?.selectionRef === right?.selectionRef
   );
 }
 

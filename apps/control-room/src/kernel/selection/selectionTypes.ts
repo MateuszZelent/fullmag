@@ -174,6 +174,7 @@ export type SelectionRef =
       hysteresisExecutionNodeId?: string;
       hysteresisExecutionNodeKind?: string;
       hysteresisPointId?: number;
+      hysteresisSelectionRef?: string;
       nodeId: string;
       resourceRef?: string;
       stageId: string;
@@ -376,6 +377,10 @@ export function selectionRefEquals(
         ) &&
         (left.hysteresisPointId ?? null) ===
           (right.hysteresisPointId ?? null) &&
+        nullableStringEquals(
+          left.hysteresisSelectionRef,
+          right.hysteresisSelectionRef,
+        ) &&
         nullableStringEquals(left.resourceRef, right.resourceRef)
       );
     case "frequency-domain":

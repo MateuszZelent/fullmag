@@ -274,6 +274,7 @@ function buildHysteresisRuntimeBranchNode(
     branchId: node.node_id,
     hysteresisExecutionNodeId: node.node_id,
     hysteresisExecutionNodeKind: node.kind,
+    ...(node.selection_ref ? { hysteresisSelectionRef: node.selection_ref } : {}),
     ...(node.resource_ref ? { resourceRef: node.resource_ref } : {}),
     stageId: nodeStageId,
     stageIndex,
@@ -419,10 +420,11 @@ function buildHysteresisTransitionsNode(
         stageId: nodeStageId,
         stageIndex: stage.index,
         status: stageCompleted ? "ready" : "queued",
-        contextCommands: [
+        ...hysteresisStageTransitionCommandProps(
+          stageCompleted,
           "hysteresis.continue-to-next-stage",
-          "workspace.focus-selection",
-        ],
+          { stageId: nodeStageId },
+        ),
       },
       {
         id: `${transitionsNodeId}:use-selected-point`,
@@ -446,7 +448,11 @@ function buildHysteresisTransitionsNode(
         stageId: nodeStageId,
         stageIndex: stage.index,
         status: stageCompleted ? "ready" : "queued",
-        contextCommands: ["workspace.focus-selection"],
+        ...hysteresisStageTransitionCommandProps(
+          stageCompleted,
+          "hysteresis.export-loop-csv",
+          { stageId: nodeStageId },
+        ),
       },
       {
         id: `${transitionsNodeId}:open-snapshots`,
@@ -461,6 +467,23 @@ function buildHysteresisTransitionsNode(
         contextCommands: ["workspace.focus-selection"],
       },
     ],
+  };
+}
+
+function hysteresisStageTransitionCommandProps(
+  available: boolean,
+  commandId: string,
+  input: unknown,
+): Pick<ExplorerNode, "contextCommands" | "contextCommandInputs"> {
+  if (!available) {
+    return { contextCommands: ["workspace.focus-selection"] };
+  }
+
+  return {
+    contextCommands: [commandId, "workspace.focus-selection"],
+    contextCommandInputs: {
+      [commandId]: input,
+    },
   };
 }
 
@@ -479,6 +502,17 @@ function buildHysteresisFieldNode(
       parentId,
       badge: executionFieldNode.label,
       icon: "magnet",
+      hysteresisExecutionNodeId: executionFieldNode.node_id,
+      hysteresisExecutionNodeKind: executionFieldNode.kind,
+      ...(typeof executionFieldNode.point_id === "number"
+        ? { hysteresisPointId: executionFieldNode.point_id }
+        : {}),
+      ...(executionFieldNode.selection_ref
+        ? { hysteresisSelectionRef: executionFieldNode.selection_ref }
+        : {}),
+      ...(executionFieldNode.resource_ref
+        ? { resourceRef: executionFieldNode.resource_ref }
+        : {}),
       stageId: nodeStageId,
       stageIndex: stage.index,
       status: explorerStatusFromExecutionTree(executionFieldNode.status),
@@ -524,6 +558,10 @@ function buildHysteresisExecutionTreeChildNode(
     isReplayableHysteresisSnapshotNode(node) && typeof node.point_id === "number"
       ? node.point_id
       : null;
+  const replayableSnapshotId =
+    replayableSnapshotPointId !== null
+      ? hysteresisSnapshotIdFromExecutionNode(node)
+      : null;
   return {
     id: `${parentId}:${idSuffix}`,
     kind: "study.stage.action",
@@ -536,6 +574,7 @@ function buildHysteresisExecutionTreeChildNode(
     ...(typeof node.point_id === "number"
       ? { hysteresisPointId: node.point_id }
       : {}),
+    ...(node.selection_ref ? { hysteresisSelectionRef: node.selection_ref } : {}),
     ...(node.resource_ref ? { resourceRef: node.resource_ref } : {}),
     ...(node.field_orientation ? { fieldOrientation: JSON.stringify(node.field_orientation) } : {}),
     ...(node.field_revision !== undefined && node.field_revision !== null
@@ -546,7 +585,7 @@ function buildHysteresisExecutionTreeChildNode(
     ...(replayableSnapshotPointId !== null
       ? {
           hysteresisPointId: replayableSnapshotPointId,
-          hysteresisSnapshotId: hysteresisSnapshotIdFromExecutionNode(node) ?? undefined,
+          hysteresisSnapshotId: replayableSnapshotId ?? undefined,
           resourceRef: node.resource_ref ?? undefined,
           ...(node.field_orientation
             ? { fieldOrientation: JSON.stringify(node.field_orientation) }
@@ -563,7 +602,11 @@ function buildHysteresisExecutionTreeChildNode(
     stageId: nodeStageId,
     stageIndex,
     status: explorerStatusFromExecutionTree(node.status),
-    contextCommands: ["workspace.focus-selection"],
+    ...hysteresisSnapshotContextCommandProps(
+      nodeStageId,
+      replayableSnapshotId,
+      node.resource_ref,
+    ),
   };
 }
 
@@ -782,6 +825,7 @@ function buildHysteresisBookmarkNodes(
       ...(typeof node.point_id === "number"
         ? { hysteresisPointId: node.point_id }
         : {}),
+      ...(node.selection_ref ? { hysteresisSelectionRef: node.selection_ref } : {}),
       ...(node.resource_ref ? { resourceRef: node.resource_ref } : {}),
       ...(node.field_orientation ? { fieldOrientation: JSON.stringify(node.field_orientation) } : {}),
       ...(node.field_revision !== undefined && node.field_revision !== null
@@ -809,9 +853,37 @@ function buildHysteresisBookmarkNodes(
       stageId: nodeStageId,
       stageIndex: stage.index,
       status: explorerStatusFromExecutionTree(node.status),
-      contextCommands: ["workspace.focus-selection"],
+      ...hysteresisSnapshotContextCommandProps(
+        nodeStageId,
+        snapshotId,
+        node.resource_ref,
+      ),
     };
   });
+}
+
+function hysteresisSnapshotContextCommandProps(
+  stageId: string,
+  snapshotId: string | null,
+  snapshotResourceRef: string | null | undefined,
+): Pick<ExplorerNode, "contextCommands" | "contextCommandInputs"> {
+  if (!snapshotId) {
+    return { contextCommands: ["workspace.focus-selection"] };
+  }
+
+  return {
+    contextCommands: [
+      "hysteresis.use-point-as-initial-state",
+      "workspace.focus-selection",
+    ],
+    contextCommandInputs: {
+      "hysteresis.use-point-as-initial-state": {
+        ...(snapshotResourceRef ? { snapshotResourceRef } : {}),
+        snapshotId,
+        stageId,
+      },
+    },
+  };
 }
 
 function isReplayableHysteresisSnapshotNode(

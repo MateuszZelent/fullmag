@@ -19,6 +19,7 @@ import {
   buildVisualizationVectorBudgetDiagnostic,
   buildVisualizationPanelSections,
   colorPickerInputValue,
+  fieldMetaScopeQueryForVisualizationTarget,
   geometryScopeDisplayPatch,
   quantitySourcePatch,
   resolveSurfaceColorSourceItems,
@@ -138,6 +139,37 @@ describe("ObjectVisualizationPanelModel", () => {
     expect(shouldShowSurfaceFieldColorbar("colormap", "mat_ms")).toBe(true);
     expect(shouldShowSurfaceFieldColorbar("orientation", "m")).toBe(false);
     expect(shouldShowSurfaceFieldColorbar("solid", "m")).toBe(false);
+  });
+
+  it("maps visualization targets to scoped field metadata queries", () => {
+    expect(
+      fieldMetaScopeQueryForVisualizationTarget({
+        id: "body",
+        kind: "object",
+        label: "Body",
+      }),
+    ).toEqual({ scope_id: "body", scope_kind: "object" });
+    expect(
+      fieldMetaScopeQueryForVisualizationTarget({
+        id: "part:body",
+        kind: "part",
+        label: "Body part",
+      }),
+    ).toEqual({ scope_id: "part:body", scope_kind: "part" });
+    expect(
+      fieldMetaScopeQueryForVisualizationTarget({
+        id: "airbox",
+        kind: "airbox",
+        label: "Airbox",
+      }),
+    ).toEqual({ scope_id: null, scope_kind: "airbox" });
+    expect(
+      fieldMetaScopeQueryForVisualizationTarget({
+        id: "region-a",
+        kind: "region",
+        label: "Region A",
+      }),
+    ).toEqual({ scope_id: null, scope_kind: null });
   });
 
   it("builds scalar palette patches for the visualization quantity colormap", () => {

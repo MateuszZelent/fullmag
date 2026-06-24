@@ -973,6 +973,40 @@ describe("ControlRoomApi", () => {
     expect(headers.get("x-request-id")).toBe("req-fields");
   });
 
+  it("queries scoped field metadata through the v2 data facade", async () => {
+    let observedUrl = "";
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url) => {
+        observedUrl = String(url);
+        return jsonResponse({
+          components: 3,
+          domain_generation_id: 3,
+          field_revision: 8,
+          kind: "vector",
+          label: "Magnetization",
+          location: "nodes",
+          quantity_id: "m",
+          stats: { max: 0.4, mean: 0.1, min: -0.2 },
+          unit: "",
+        });
+      },
+    });
+
+    const meta = await api.data.fields.meta("m", {
+      component: "y",
+      scope_id: "film",
+      scope_kind: "object",
+      snapshot_id: "hysteresis-stage-1-point-4",
+      stage_id: "hysteresis-1",
+    });
+
+    expect(meta.stats?.min).toBe(-0.2);
+    expect(observedUrl).toBe(
+      "http://127.0.0.1:8765/v2/sessions/current/data/fields/m/meta?component=y&scope_id=film&scope_kind=object&snapshot_id=hysteresis-stage-1-point-4&stage_id=hysteresis-1",
+    );
+  });
+
   it("loads scalar windows through the v2 data facade", async () => {
     let observedUrl = "";
     const fetchImpl = vi.fn(async (url: RequestInfo | URL) => {

@@ -2309,6 +2309,10 @@ function scalarWindowQueryParams(query: ScalarWindowQuery): QueryParams {
 function fieldMetaQueryParams(query: FieldMetaQuery): QueryParams {
   return {
     component: query.component ?? undefined,
+    scope_id: query.scope_id ?? undefined,
+    scope_kind: query.scope_kind ?? undefined,
+    snapshot_id: query.snapshot_id ?? undefined,
+    stage_id: query.stage_id ?? undefined,
   };
 }
 

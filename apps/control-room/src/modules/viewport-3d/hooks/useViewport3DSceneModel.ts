@@ -2399,21 +2399,29 @@ export function useViewport3DSceneModel({
     component: "magnitude",
     enabled: scalarRangeStatsEnabled && scalarRangeModeFlags.magnitude,
     quantityId: primaryFieldQuantityId,
+    snapshot_id: selectedSnapshotQuery?.snapshot_id ?? null,
+    stage_id: selectedSnapshotQuery?.stage_id ?? null,
   });
   const primaryXFieldMeta = useFieldMetaResource({
     component: "x",
     enabled: scalarRangeStatsEnabled && scalarRangeModeFlags.x,
     quantityId: primaryFieldQuantityId,
+    snapshot_id: selectedSnapshotQuery?.snapshot_id ?? null,
+    stage_id: selectedSnapshotQuery?.stage_id ?? null,
   });
   const primaryYFieldMeta = useFieldMetaResource({
     component: "y",
     enabled: scalarRangeStatsEnabled && scalarRangeModeFlags.y,
     quantityId: primaryFieldQuantityId,
+    snapshot_id: selectedSnapshotQuery?.snapshot_id ?? null,
+    stage_id: selectedSnapshotQuery?.stage_id ?? null,
   });
   const primaryZFieldMeta = useFieldMetaResource({
     component: "z",
     enabled: scalarRangeStatsEnabled && scalarRangeModeFlags.z,
     quantityId: primaryFieldQuantityId,
+    snapshot_id: selectedSnapshotQuery?.snapshot_id ?? null,
+    stage_id: selectedSnapshotQuery?.stage_id ?? null,
   });
   const fieldScalarRangesByMode = useMemo<
     ReadonlyMap<string, ScalarRange> | undefined

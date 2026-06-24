@@ -13,12 +13,14 @@ use serde_json::Value;
 use crate::error::ApiError;
 use crate::router_v2::handlers::analysis::hysteresis::{
     read_hysteresis_minor_loops_if_available, read_hysteresis_points_if_available,
+    read_hysteresis_settle_trace_if_available,
 };
 use crate::schemas::hysteresis::{
     HysteresisExecutionTreeNode, HysteresisExecutionTreeResource,
     HysteresisFieldUnitProvenanceSchema, HysteresisMinorLoopSchema, HysteresisOrientationSchema,
     HysteresisPointSchema, HysteresisProgressSchema, HysteresisProtocolSchema,
-    HysteresisSettlePipelineSchema, HysteresisStagePlanSchema, HysteresisStageSaturationSchema,
+    HysteresisResolvedSettleStepSchema, HysteresisSettlePipelineSchema,
+    HysteresisSettleTraceEntrySchema, HysteresisStagePlanSchema, HysteresisStageSaturationSchema,
     HysteresisStorageEstimateSchema,
 };
 use crate::schemas::runtime::{
@@ -512,12 +514,57 @@ pub async fn get_hysteresis_settle_pipeline(
     Path(stage_id): Path<String>,
 ) -> Result<Json<HysteresisSettlePipelineSchema>, ApiError> {
     let stage = resolve_hysteresis_scene_stage(&state, &stage_id).await?;
+    let resolved_steps = build_hysteresis_resolved_settle_steps(&stage);
+    let resolved_branch_ids = build_hysteresis_resolved_branch_ids(&stage);
     Ok(Json(HysteresisSettlePipelineSchema {
         revision: stage.revision,
         stage_id: stage.stage_id,
         stage_index: stage.stage_index,
         settle_pipeline: stage.value.get("settle_pipeline").cloned(),
+        resolved_steps,
+        resolved_branch_ids,
     }))
+}
+
+fn build_hysteresis_resolved_settle_steps(
+    stage: &HysteresisSceneStage,
+) -> Vec<HysteresisResolvedSettleStepSchema> {
+    stage
+        .value
+        .get("settle_pipeline")
+        .and_then(|pipeline| pipeline.get("steps"))
+        .and_then(Value::as_array)
+        .map(|steps| {
+            steps
+                .iter()
+                .enumerate()
+                .map(|(idx, step)| {
+                    let kind =
+                        value_string(step.get("kind")).unwrap_or_else(|| "settle".to_string());
+                    let method = value_string(step.get("method")).unwrap_or_else(|| kind.clone());
+                    HysteresisResolvedSettleStepSchema {
+                        step_index: idx as u32,
+                        step_id: format!("settle_step_{idx:03}_{kind}"),
+                        kind,
+                        method,
+                        applies_to: step.get("applies_to").cloned(),
+                        on_non_convergence: value_string(step.get("on_non_convergence")),
+                        resolved_parameters: step.clone(),
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn build_hysteresis_resolved_branch_ids(stage: &HysteresisSceneStage) -> Vec<String> {
+    let values = materialize_hysteresis_stage_field_values(&stage.value);
+    infer_hysteresis_execution_branch_segments(&values)
+        .into_iter()
+        .map(|segment| hysteresis_execution_branch_id(segment.direction, segment.branch_index))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 #[utoipa::path(
@@ -542,12 +589,14 @@ pub async fn get_hysteresis_execution_tree(
     let progress = resolve_hysteresis_stage_progress(&state, &stage.stage_id).await?;
     let points = read_hysteresis_points_if_available(&state, &stage.stage_id).await?;
     let minor_loops = read_hysteresis_minor_loops_if_available(&state, &stage.stage_id).await?;
+    let settle_trace = read_hysteresis_settle_trace_if_available(&state, &stage.stage_id).await?;
     Ok(Json(build_hysteresis_execution_tree(
         stage,
         progress,
         query,
         points,
         minor_loops,
+        settle_trace,
     )))
 }
 
@@ -709,6 +758,9 @@ fn average_hysteresis_live_magnetization(
         return None;
     }
     if let Some(mesh) = step.fem_mesh.as_ref().or(snapshot_mesh) {
+        if let Some(weighted) = average_fem_magnetization_by_element_volume(values, mesh) {
+            return Some(weighted);
+        }
         let mut node_indices = BTreeSet::new();
         for part in &mesh.mesh_parts {
             if part.role != "magnetic_object" {
@@ -741,8 +793,105 @@ fn average_hysteresis_live_magnetization(
 }
 
 fn project_hysteresis_m_parallel(m_avg: [f64; 3], stage: &serde_json::Map<String, Value>) -> f64 {
-    let axis = hysteresis_field_axis(stage);
+    let axis = hysteresis_measurement_axis(stage);
     m_avg[0] * axis[0] + m_avg[1] * axis[1] + m_avg[2] * axis[2]
+}
+
+fn average_fem_magnetization_by_element_volume(
+    values: &[f64],
+    mesh: &fullmag_runner::FemMeshPayload,
+) -> Option<[f64; 3]> {
+    let point_count = values.len() / 3;
+    let mut total = [0.0; 3];
+    let mut total_weight = 0.0;
+
+    for part in &mesh.mesh_parts {
+        if part.role != "magnetic_object" {
+            continue;
+        }
+        let start = part.element_start as usize;
+        let end = start.saturating_add(part.element_count as usize);
+        let Some(elements) = mesh.elements.get(start..end) else {
+            continue;
+        };
+        for element in elements {
+            let volume = tetrahedron_volume(mesh, *element)?;
+            if !volume.is_finite() || volume <= 0.0 {
+                continue;
+            }
+            let node_weight = volume / 4.0;
+            for node_index in element {
+                let index = *node_index as usize;
+                if index >= point_count {
+                    continue;
+                }
+                let offset = index * 3;
+                total[0] += values[offset] * node_weight;
+                total[1] += values[offset + 1] * node_weight;
+                total[2] += values[offset + 2] * node_weight;
+                total_weight += node_weight;
+            }
+        }
+    }
+
+    if total_weight > 0.0 {
+        Some([
+            total[0] / total_weight,
+            total[1] / total_weight,
+            total[2] / total_weight,
+        ])
+    } else {
+        None
+    }
+}
+
+fn tetrahedron_volume(mesh: &fullmag_runner::FemMeshPayload, element: [u32; 4]) -> Option<f64> {
+    let a = *mesh.nodes.get(element[0] as usize)?;
+    let b = *mesh.nodes.get(element[1] as usize)?;
+    let c = *mesh.nodes.get(element[2] as usize)?;
+    let d = *mesh.nodes.get(element[3] as usize)?;
+    let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    let ad = [d[0] - a[0], d[1] - a[1], d[2] - a[2]];
+    let cross = [
+        ac[1] * ad[2] - ac[2] * ad[1],
+        ac[2] * ad[0] - ac[0] * ad[2],
+        ac[0] * ad[1] - ac[1] * ad[0],
+    ];
+    let triple = ab[0] * cross[0] + ab[1] * cross[1] + ab[2] * cross[2];
+    Some(triple.abs() / 6.0)
+}
+
+fn hysteresis_measurement_axis(stage: &serde_json::Map<String, Value>) -> [f64; 3] {
+    let field_axis = hysteresis_field_axis(stage);
+    let Some(axis) = stage.get("measurement_axis") else {
+        return field_axis;
+    };
+
+    hysteresis_measurement_axis_from_value(axis, field_axis).unwrap_or(field_axis)
+}
+
+fn hysteresis_measurement_axis_from_value(axis: &Value, field_axis: [f64; 3]) -> Option<[f64; 3]> {
+    if let Some(named) = axis.as_str() {
+        return Some(match named {
+            "field_axis" => field_axis,
+            "sample_normal" => [0.0, 0.0, 1.0],
+            "easy_axis" => [0.0, 0.0, 1.0],
+            _ => field_axis,
+        });
+    }
+
+    let object = axis.as_object()?;
+    if let Some(vector) = value_vec3(object.get("vector")) {
+        return Some(normalized_axis_or_default(vector));
+    }
+    let kind = object.get("kind").and_then(Value::as_str)?;
+    Some(match kind {
+        "field_axis" => field_axis,
+        "sample_normal" => [0.0, 0.0, 1.0],
+        "easy_axis" => [0.0, 0.0, 1.0],
+        _ => field_axis,
+    })
 }
 
 fn hysteresis_field_axis(stage: &serde_json::Map<String, Value>) -> [f64; 3] {
@@ -1732,13 +1881,18 @@ fn build_hysteresis_execution_tree(
     query: HysteresisExecutionTreeQuery,
     points: Vec<HysteresisPointSchema>,
     minor_loops: Vec<HysteresisMinorLoopSchema>,
+    settle_trace: Vec<HysteresisSettleTraceEntrySchema>,
 ) -> HysteresisExecutionTreeResource {
     let before = query.before.unwrap_or(2).min(50);
     let after = query.after.unwrap_or(3).min(50);
     let window = query.window.clone().unwrap_or_else(|| "active".to_string());
     let values = materialize_hysteresis_stage_field_values(&stage.value);
     let total_points = values.len() as u32;
-    let active_point_index = infer_hysteresis_active_point_index(&progress, &values);
+    let active_point_index = if progress.status == "completed" {
+        None
+    } else {
+        infer_hysteresis_active_point_index(&progress, &values)
+    };
     let points_by_id: HashMap<u32, HysteresisPointSchema> = points
         .into_iter()
         .filter_map(|point| {
@@ -1747,6 +1901,15 @@ fn build_hysteresis_execution_tree(
                 .map(|point_id| (point_id, point))
         })
         .collect();
+    let settle_trace_by_step: HashMap<(u32, usize), HysteresisSettleTraceEntrySchema> =
+        settle_trace
+            .into_iter()
+            .filter_map(|entry| {
+                u32::try_from(entry.point_id)
+                    .ok()
+                    .map(|point_id| ((point_id, entry.step_index), entry))
+            })
+            .collect();
 
     let (start, end) = if total_points == 0 {
         (0, 0)
@@ -1777,6 +1940,7 @@ fn build_hysteresis_execution_tree(
                 &stage,
                 &progress,
                 &points_by_id,
+                &settle_trace_by_step,
                 &query,
                 idx,
                 field_value_m_t,
@@ -1798,6 +1962,7 @@ fn build_hysteresis_execution_tree(
         &stage,
         &progress,
         &points_by_id,
+        &settle_trace_by_step,
         &query,
         &values,
         start,
@@ -1810,6 +1975,7 @@ fn build_hysteresis_execution_tree(
         &stage,
         &progress,
         &points_by_id,
+        &settle_trace_by_step,
         &query,
         &minor_loops,
         start,
@@ -1847,6 +2013,7 @@ fn hysteresis_branch_nodes(
     stage: &HysteresisSceneStage,
     progress: &HysteresisProgressSchema,
     points_by_id: &HashMap<u32, HysteresisPointSchema>,
+    settle_trace_by_step: &HashMap<(u32, usize), HysteresisSettleTraceEntrySchema>,
     query: &HysteresisExecutionTreeQuery,
     values: &[f64],
     window_start: u32,
@@ -1866,6 +2033,7 @@ fn hysteresis_branch_nodes(
                 stage,
                 progress,
                 points_by_id,
+                settle_trace_by_step,
                 query,
                 values,
                 segment,
@@ -1883,6 +2051,7 @@ fn hysteresis_branch_node(
     stage: &HysteresisSceneStage,
     progress: &HysteresisProgressSchema,
     points_by_id: &HashMap<u32, HysteresisPointSchema>,
+    settle_trace_by_step: &HashMap<(u32, usize), HysteresisSettleTraceEntrySchema>,
     query: &HysteresisExecutionTreeQuery,
     values: &[f64],
     segment: HysteresisBranchTreeSegment,
@@ -1937,6 +2106,7 @@ fn hysteresis_branch_node(
                     stage,
                     progress,
                     points_by_id,
+                    settle_trace_by_step,
                     query,
                     point_id,
                     field_value_m_t,
@@ -1971,6 +2141,7 @@ fn hysteresis_minor_loop_branch_nodes(
     stage: &HysteresisSceneStage,
     progress: &HysteresisProgressSchema,
     points_by_id: &HashMap<u32, HysteresisPointSchema>,
+    settle_trace_by_step: &HashMap<(u32, usize), HysteresisSettleTraceEntrySchema>,
     query: &HysteresisExecutionTreeQuery,
     minor_loops: &[HysteresisMinorLoopSchema],
     window_start: u32,
@@ -1986,6 +2157,7 @@ fn hysteresis_minor_loop_branch_nodes(
                 stage,
                 progress,
                 points_by_id,
+                settle_trace_by_step,
                 query,
                 minor_loop,
                 window_start,
@@ -2002,6 +2174,7 @@ fn hysteresis_minor_loop_branch_node(
     stage: &HysteresisSceneStage,
     progress: &HysteresisProgressSchema,
     points_by_id: &HashMap<u32, HysteresisPointSchema>,
+    settle_trace_by_step: &HashMap<(u32, usize), HysteresisSettleTraceEntrySchema>,
     query: &HysteresisExecutionTreeQuery,
     minor_loop: &HysteresisMinorLoopSchema,
     window_start: u32,
@@ -2068,6 +2241,7 @@ fn hysteresis_minor_loop_branch_node(
                     stage,
                     progress,
                     points_by_id,
+                    settle_trace_by_step,
                     query,
                     point_id,
                     field_value_m_t,
@@ -2218,20 +2392,24 @@ fn hysteresis_field_point_node(
     stage: &HysteresisSceneStage,
     progress: &HysteresisProgressSchema,
     points_by_id: &HashMap<u32, HysteresisPointSchema>,
+    settle_trace_by_step: &HashMap<(u32, usize), HysteresisSettleTraceEntrySchema>,
     query: &HysteresisExecutionTreeQuery,
     point_id: u32,
     field_value_m_t: f64,
     active_point_index: Option<u32>,
 ) -> HysteresisExecutionTreeNode {
     let status = match active_point_index {
+        _ if progress.status == "completed" => "done",
         Some(active) if point_id < active => "done",
         Some(active) if point_id == active => "active",
         Some(_) => "queued",
-        None if progress.status == "completed" => "done",
         _ => "queued",
     };
-    let mut children = if status == "active" {
-        hysteresis_settle_algorithm_nodes(stage, progress, point_id)
+    let has_settle_trace = settle_trace_by_step
+        .keys()
+        .any(|(trace_point_id, _step_index)| *trace_point_id == point_id);
+    let mut children = if status == "active" || has_settle_trace {
+        hysteresis_settle_algorithm_nodes(stage, progress, settle_trace_by_step, point_id)
     } else {
         Vec::new()
     };
@@ -2352,6 +2530,7 @@ fn hysteresis_snapshot_tree_status(point: &HysteresisPointSchema) -> &'static st
 fn hysteresis_settle_algorithm_nodes(
     stage: &HysteresisSceneStage,
     progress: &HysteresisProgressSchema,
+    settle_trace_by_step: &HashMap<(u32, usize), HysteresisSettleTraceEntrySchema>,
     point_id: u32,
 ) -> Vec<HysteresisExecutionTreeNode> {
     let steps = stage
@@ -2369,12 +2548,15 @@ fn hysteresis_settle_algorithm_nodes(
             let idx_u32 = idx as u32;
             let kind = value_string(step.get("kind")).unwrap_or_else(|| "settle".to_string());
             let method = value_string(step.get("method")).unwrap_or_else(|| kind.clone());
-            let status = match active_step {
+            let trace_status = settle_trace_by_step
+                .get(&(point_id, idx))
+                .map(|entry| hysteresis_settle_trace_tree_status(&entry.status));
+            let status = trace_status.unwrap_or_else(|| match active_step {
                 Some(active) if idx_u32 < active => "done",
                 Some(active) if idx_u32 == active => "active",
                 Some(_) => "queued",
                 None => "queued",
-            };
+            });
             HysteresisExecutionTreeNode {
                 node_id: format!("{}:point:{point_id}:settle:{idx_u32}", stage.stage_id),
                 kind: "settle_algorithm".to_string(),
@@ -2400,6 +2582,17 @@ fn hysteresis_settle_algorithm_nodes(
             }
         })
         .collect()
+}
+
+fn hysteresis_settle_trace_tree_status(status: &str) -> &'static str {
+    match status {
+        "converged" | "completed" | "completed_duration" | "done" => "done",
+        "skipped" => "skipped",
+        "non_converged" | "warning" => "warning",
+        "failed" | "error" => "failed",
+        "running" | "active" => "active",
+        _ => "queued",
+    }
 }
 
 fn materialize_hysteresis_stage_field_values(stage: &serde_json::Map<String, Value>) -> Vec<f64> {

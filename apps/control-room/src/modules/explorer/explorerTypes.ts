@@ -223,6 +223,7 @@ export interface ExplorerNode {
   badge?: string;
   children?: ExplorerNode[];
   contextCommands?: CommandId[];
+  contextCommandInputs?: Partial<Record<CommandId, unknown>>;
   analysisRunId?: string;
   analysisStageId?: string;
   artifactPath?: string;
@@ -239,6 +240,7 @@ export interface ExplorerNode {
   hysteresisExecutionNodeId?: string;
   hysteresisExecutionNodeKind?: string;
   hysteresisPointId?: number;
+  hysteresisSelectionRef?: string;
   hysteresisSnapshotId?: string;
   measurementAxis?: string;
   meshIdentity?: string;

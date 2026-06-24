@@ -109,6 +109,19 @@ function contextCommandsForNode(
   return commands;
 }
 
+function commandContextForNode(
+  kernel: KernelApi,
+  node: ExplorerNode,
+  commandId: string,
+  resourceData: Readonly<Record<string, unknown>>,
+) {
+  const input = node.contextCommandInputs?.[commandId];
+  return createCommandContext("explorer", kernel, {
+    ...(input !== undefined ? { input } : {}),
+    resourceData,
+  });
+}
+
 export interface ExplorerContextCommandItem {
   active: boolean;
   activeResource: CommandActiveResource | null;
@@ -126,17 +139,23 @@ export function contextCommandItemsForNode({
   node: ExplorerNode;
   resourceData: Readonly<Record<string, unknown>>;
 }): ExplorerContextCommandItem[] {
-  const context = createCommandContext("explorer", kernel, { resourceData });
-  return contextCommandsForNode(kernel, node).map((command) => ({
-    active: kernel.commands.isActive(command.id, context),
-    activeResource:
-      kernel.commands.isActive(command.id, context)
-        ? command.activeResource?.(context) ?? null
-        : null,
-    command,
-    disabled: !kernel.commands.isEnabled(command.id, context),
-    disabledReason: kernel.commands.get(command.id)?.disabledReason?.(context) ?? null,
-  }));
+  return contextCommandsForNode(kernel, node).map((command) => {
+    const context = commandContextForNode(
+      kernel,
+      node,
+      command.id,
+      resourceData,
+    );
+    const active = kernel.commands.isActive(command.id, context);
+    return {
+      active,
+      activeResource: active ? command.activeResource?.(context) ?? null : null,
+      command,
+      disabled: !kernel.commands.isEnabled(command.id, context),
+      disabledReason:
+        kernel.commands.get(command.id)?.disabledReason?.(context) ?? null,
+    };
+  });
 }
 
 interface ExplorerTreeRowModel {
@@ -379,7 +398,7 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
             onSelect={() => {
               void kernel.commands.execute(
                 command.id,
-                createCommandContext("explorer", kernel, { resourceData }),
+                commandContextForNode(kernel, node, command.id, resourceData),
               );
             }}
           >
@@ -438,7 +457,10 @@ export function ExplorerTreeView({
 }: ExplorerTreeViewProps) {
   const treeRef = useRef<HTMLDivElement | null>(null);
   const [viewport, setViewport] = useState({ height: 420, scrollTop: 0 });
-  const runtimeResourceData = useRuntimeCommandControlResourceData();
+  const runtimeResourceData = useRuntimeCommandControlResourceData({
+    includeSharedDomainReadiness: false,
+    includeStageExecution: false,
+  });
   const rows = useMemo(
     () => flattenVisibleExplorerRows(nodes, expandedIds),
     [expandedIds, nodes],

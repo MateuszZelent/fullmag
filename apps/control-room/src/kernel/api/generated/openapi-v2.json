@@ -6708,6 +6708,40 @@
         ],
         "type": "object"
       },
+      "HysteresisResolvedSettleStepSchema": {
+        "properties": {
+          "applies_to": {},
+          "kind": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "on_non_convergence": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resolved_parameters": {},
+          "step_id": {
+            "type": "string"
+          },
+          "step_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "step_index",
+          "step_id",
+          "kind",
+          "method",
+          "resolved_parameters"
+        ],
+        "type": "object"
+      },
       "HysteresisSaturationProbePointSchema": {
         "properties": {
           "field_value_mT": {
@@ -6797,6 +6831,18 @@
       },
       "HysteresisSettlePipelineSchema": {
         "properties": {
+          "resolved_branch_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "resolved_steps": {
+            "items": {
+              "$ref": "#/components/schemas/HysteresisResolvedSettleStepSchema"
+            },
+            "type": "array"
+          },
           "revision": {
             "format": "int64",
             "minimum": 0,
@@ -6844,6 +6890,19 @@
           "method": {
             "type": "string"
           },
+          "metric_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "metric_value": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
           "point_id": {
             "minimum": 0,
             "type": "integer"
@@ -6871,6 +6930,13 @@
           "stop_reason": {
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "threshold": {
+            "format": "double",
+            "type": [
+              "number",
               "null"
             ]
           },
@@ -19021,6 +19087,30 @@
             "description": "Optional component projection used for statistics (`x`, `y`, `z`, `magnitude`, `full`).",
             "in": "query",
             "name": "component",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional FEM scope used for statistics (`full`, `object`, `part`, `airbox`, `selection`).",
+            "in": "query",
+            "name": "scope_kind",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Scope identifier for `object` and `part` scopes.",
+            "in": "query",
+            "name": "scope_id",
             "required": false,
             "schema": {
               "type": [

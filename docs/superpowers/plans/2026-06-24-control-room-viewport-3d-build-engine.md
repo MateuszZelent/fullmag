@@ -631,7 +631,7 @@ Steps:
 - [x] Route vector glyph matrix/color adoption through GPU upload manager.
 - [x] Export GPU upload diagnostics into Diagnostic Recorder artifacts as `*-upload` build lanes.
 - [x] Report max per-frame upload time separately from total ticket wall time, so long asynchronous waits are not misclassified as main-thread freezes.
-- [ ] Replace remaining legacy `performance.measure` wall-time labels such as `uploadVectorGlyphMatrices` with phase-specific records or remove them from suspect ranking.
+- [x] Replace remaining legacy `performance.measure` wall-time labels such as `uploadVectorGlyphMatrices` with phase-specific records or remove them from suspect ranking.
 
 Current diagnostic note:
 
