@@ -4,10 +4,12 @@ import { useEffect, useMemo, useReducer, useRef } from "react";
 
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 
+import { buildViewport3DFieldColorJobKey } from "../build-engine/viewport3dBuildJobKeys";
 import { buildVertexScalarColorsOffMainThread } from "../viewport3dColorTransformScheduler";
 import {
   fieldTransformNeedsChunking,
   type ScalarColorBuffer,
+  type ScalarRange,
 } from "../viewport3dFieldMapping";
 import type {
   Viewport3DFieldRenderModel,
@@ -46,6 +48,31 @@ export interface Viewport3DChunkedScalarColorResult {
   status: Viewport3DChunkedScalarColorStatus;
 }
 
+export interface Viewport3DFieldColorBuildReference {
+  buildKey: string;
+  groupKey: string;
+  revisionSummary: string;
+  targetRevision: string;
+  topologyRevision: string;
+}
+
+export interface Viewport3DFieldColorBuildReferenceInput {
+  cameraRevision?: string | number | null;
+  colorMode: string;
+  colorPalette: string;
+  colorRangeRevision?: string | number | null;
+  domainId: string;
+  fieldRevision: string | number | null;
+  quantityId: string | null | undefined;
+  samplingRevision?: string | number | null;
+  sessionId: string;
+  targetId?: string | number | null;
+  targetScopeId?: string | number | null;
+  targetScopeKind?: string | number | null;
+  targetVisualizationRevision: string | number | null;
+  topologyRevision: string | number | null;
+}
+
 export interface ChunkedScalarColorCompatibilityRequest {
   colorPalette: string;
   enabled: boolean;
@@ -64,6 +91,93 @@ const CHUNKED_SCALAR_COLOR_INITIAL_STATE: ChunkedScalarColorReducerState = {
   chunkedState: null,
   pending: false,
 };
+
+export function createViewport3DFieldColorBuildReference({
+  colorMode,
+  colorPalette,
+  colorRangeRevision,
+  domainId,
+  fieldRevision,
+  quantityId,
+  samplingRevision,
+  sessionId,
+  targetId,
+  targetScopeId,
+  targetScopeKind,
+  targetVisualizationRevision,
+  topologyRevision,
+}: Viewport3DFieldColorBuildReferenceInput): Viewport3DFieldColorBuildReference | null {
+  const resolvedTopologyRevision = revisionToString(topologyRevision);
+  const resolvedFieldRevision = revisionToString(fieldRevision);
+  if (!resolvedTopologyRevision || !resolvedFieldRevision || !quantityId) {
+    return null;
+  }
+  const resolvedTargetRevision =
+    revisionToString(targetVisualizationRevision) ?? "unknown";
+  const resolvedColorRangeRevision =
+    revisionToString(colorRangeRevision) ?? "auto";
+  const resolvedSamplingRevision =
+    revisionToString(samplingRevision) ?? "full-domain";
+  const resolvedTargetId = revisionToString(targetId) ?? "surface/full";
+  const resolvedTargetScopeId = revisionToString(targetScopeId) ?? "full";
+  const resolvedTargetScopeKind =
+    revisionToString(targetScopeKind) ?? "full";
+  const buildKey = buildViewport3DFieldColorJobKey({
+    algorithmVersion: 1,
+    component: colorMode,
+    domainId,
+    fieldRevision: resolvedFieldRevision,
+    quantityId,
+    samplingRevision: resolvedSamplingRevision,
+    scopeId: resolvedTargetScopeId,
+    scopeKind: resolvedTargetScopeKind,
+    sessionId,
+    styleRevision: [
+      `palette=${colorPalette}`,
+      `range=${resolvedColorRangeRevision}`,
+      `target=${resolvedTargetId}`,
+    ].join("|"),
+    targetVisualizationRevision: resolvedTargetRevision,
+    topologyRevision: resolvedTopologyRevision,
+  });
+
+  return {
+    buildKey,
+    groupKey: [
+      "field-color",
+      `session=${sessionId}`,
+      `domain=${domainId}`,
+      `quantity=${quantityId}`,
+      `scope=${resolvedTargetScopeKind}:${resolvedTargetScopeId}`,
+      `target=${resolvedTargetId}`,
+    ].join(":"),
+    revisionSummary: [
+      `topology=${resolvedTopologyRevision}`,
+      `field=${resolvedFieldRevision}`,
+      `quantity=${quantityId}`,
+      `mode=${colorMode}`,
+      `palette=${colorPalette}`,
+      `range=${resolvedColorRangeRevision}`,
+      `target=${resolvedTargetId}`,
+      `sampling=${resolvedSamplingRevision}`,
+    ].join(" "),
+    targetRevision: `field=${resolvedFieldRevision}`,
+    topologyRevision: resolvedTopologyRevision,
+  };
+}
+
+export function attachViewport3DFieldColorBuildReference(
+  colors: ScalarColorBuffer | null,
+  reference: Viewport3DFieldColorBuildReference | null,
+): ScalarColorBuffer | null {
+  if (!colors || !reference) return colors;
+  return {
+    ...colors,
+    buildKey: reference.buildKey,
+    targetRevision: reference.targetRevision,
+    topologyRevision: reference.topologyRevision,
+  };
+}
 
 function chunkedScalarColorReducer(
   state: ChunkedScalarColorReducerState,
@@ -144,20 +258,32 @@ export function mergeViewport3DFieldScalarColors(
 }
 
 export function useViewport3DChunkedScalarColors({
+  buildDomainId,
+  buildSessionId,
   colorModes,
   colorPalette = "viridis",
   enabled,
+  fieldRevision,
+  fieldScalarRangesByMode,
   fieldVector,
+  targetVisualizationRevision,
   topology,
+  topologyRevision,
 }: {
+  buildDomainId?: string;
+  buildSessionId?: string;
   colorModes: ReadonlySet<string> | null | undefined;
   colorPalette?: string;
   enabled: boolean;
+  fieldRevision?: string | number | null;
+  fieldScalarRangesByMode?: ReadonlyMap<string, ScalarRange>;
   fieldVector: DecodedFieldVector | null | undefined;
+  targetVisualizationRevision?: string | number | null;
   topology:
     | Viewport3DTopologyRenderModel<Viewport3DRenderablePart>
     | null
     | undefined;
+  topologyRevision?: string | number | null;
 }): Viewport3DChunkedScalarColorResult {
   const modes = useMemo(
     () =>
@@ -166,7 +292,16 @@ export function useViewport3DChunkedScalarColors({
         .sort(),
     [colorModes],
   );
-  const modesKey = useMemo(() => modes.join("|"), [modes]);
+  const modesKey = useMemo(
+    () =>
+      modes
+        .map(
+          (mode) =>
+            `${mode}:${scalarRangeRevisionKey(fieldScalarRangesByMode?.get(mode))}`,
+        )
+        .join("|"),
+    [fieldScalarRangesByMode, modes],
+  );
   const [chunkedColorState, dispatchChunkedColorState] = useReducer(
     chunkedScalarColorReducer,
     CHUNKED_SCALAR_COLOR_INITIAL_STATE,
@@ -255,17 +390,53 @@ export function useViewport3DChunkedScalarColors({
     });
 
     void (async () => {
-      const entries = await Promise.all(
-        modes.map(async (mode) => [
-          mode,
-          await buildVertexScalarColorsOffMainThread(fieldVector, {
-            colorMode: mode,
-            colorPalette,
-            shaderOnly: true,
-            signal: controller.signal,
-            yieldToMain: yieldToViewport3DMainThread,
-          }),
-        ] as const),
+      const entries = (await Promise.all(
+        modes.map(async (mode) => {
+          const fieldColorBuildReference =
+            createViewport3DFieldColorBuildReference({
+              colorMode: mode,
+              colorPalette,
+              colorRangeRevision: scalarRangeRevisionKey(
+                fieldScalarRangesByMode?.get(mode),
+              ),
+              domainId:
+                buildDomainId ??
+                topology.meshGenerationId ??
+                "viewport-3d",
+              fieldRevision: fieldRevision ?? null,
+              quantityId: fieldVector.quantityId,
+              sessionId: buildSessionId ?? "current",
+              targetVisualizationRevision:
+                targetVisualizationRevision ?? null,
+              topologyRevision:
+                topologyRevision ?? topology.meshRevision ?? null,
+            });
+          const colors = await buildVertexScalarColorsOffMainThread(
+            fieldVector,
+            {
+              buildKey: fieldColorBuildReference?.buildKey,
+              colorMode: mode,
+              colorPalette,
+              groupKey: fieldColorBuildReference?.groupKey,
+              latestWins: Boolean(fieldColorBuildReference),
+              revisionSummary: fieldColorBuildReference?.revisionSummary,
+              scalarRange: fieldScalarRangesByMode?.get(mode),
+              shaderOnly: true,
+              signal: controller.signal,
+              yieldToMain: yieldToViewport3DMainThread,
+            },
+          );
+          return [
+            mode,
+            attachViewport3DFieldColorBuildReference(
+              colors,
+              fieldColorBuildReference,
+            ),
+          ] as const;
+        }),
+      )).filter(
+        (entry): entry is readonly [string, ScalarColorBuffer] =>
+          entry[1] !== null,
       );
 
       if (activeBuildIdRef.current === buildId) {
@@ -299,12 +470,18 @@ export function useViewport3DChunkedScalarColors({
   }, [
     chunkedColorState.chunkedState?.fieldVector,
     chunkedColorState.pending,
+    buildDomainId,
+    buildSessionId,
     colorPalette,
     eligibleForChunkedBuild,
+    fieldRevision,
+    fieldScalarRangesByMode,
     fieldVector,
     modes,
     modesKey,
+    targetVisualizationRevision,
     topology,
+    topologyRevision,
   ]);
 
   const compatible = chunkedScalarColorStateIsCompatible(
@@ -335,6 +512,31 @@ function releaseChunkedScalarColorToken(token: object | null): void {
   if (token) {
     chunkedScalarColorBuffers.delete(token);
   }
+}
+
+function revisionToString(
+  revision: string | number | null | undefined,
+): string | null {
+  if (typeof revision === "number" && Number.isFinite(revision)) {
+    return String(revision);
+  }
+  if (typeof revision === "string" && revision.length > 0) {
+    return revision;
+  }
+  return null;
+}
+
+function scalarRangeRevisionKey(
+  range: ScalarRange | null | undefined,
+): string {
+  if (
+    !range ||
+    !Number.isFinite(range.min) ||
+    !Number.isFinite(range.max)
+  ) {
+    return "auto";
+  }
+  return `min=${range.min}:max=${range.max}`;
 }
 
 function resolveChunkedScalarColorStatus({

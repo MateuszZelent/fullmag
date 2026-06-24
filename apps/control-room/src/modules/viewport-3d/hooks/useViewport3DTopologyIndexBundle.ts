@@ -4,6 +4,7 @@ import { useEffect, useMemo, useReducer, useRef } from "react";
 
 import type { DecodedTopology } from "@/kernel/api/codecs";
 
+import { buildViewport3DTopologyIndexJobKey } from "../build-engine/viewport3dBuildJobKeys";
 import {
   buildViewport3DTopologyIndicesOffMainThread,
   type Viewport3DTopologyIndexBuildRequest,
@@ -24,6 +25,19 @@ export interface Viewport3DTopologyIndexIdentity {
   magneticParts: object;
   magneticSurfacePartsByPartId: object;
   topology: object;
+}
+
+export interface Viewport3DTopologyIndexBuildReference {
+  buildKey: string;
+  groupKey: string;
+  revisionSummary: string;
+}
+
+export interface Viewport3DTopologyIndexBuildReferenceInput {
+  domainId: string;
+  sessionId: string;
+  targetVisualizationRevision: string | null;
+  topologyRevision: string | null;
 }
 
 interface Viewport3DTopologyIndexReducerState {
@@ -54,6 +68,34 @@ const VIEWPORT_3D_TOPOLOGY_INDEX_INITIAL_STATE: Viewport3DTopologyIndexReducerSt
     pending: false,
     unavailable: false,
   };
+
+export function createViewport3DTopologyIndexBuildReference({
+  domainId,
+  sessionId,
+  targetVisualizationRevision,
+  topologyRevision,
+}: Viewport3DTopologyIndexBuildReferenceInput): Viewport3DTopologyIndexBuildReference | null {
+  if (!topologyRevision) return null;
+  const resolvedTargetRevision = targetVisualizationRevision ?? "unknown";
+  return {
+    buildKey: buildViewport3DTopologyIndexJobKey({
+      algorithmVersion: 1,
+      component: null,
+      domainId,
+      fieldRevision: null,
+      quantityId: null,
+      samplingRevision: "none",
+      scopeId: null,
+      scopeKind: null,
+      sessionId,
+      styleRevision: "none",
+      targetVisualizationRevision: resolvedTargetRevision,
+      topologyRevision,
+    }),
+    groupKey: `topology-index:session=${sessionId}:domain=${domainId}`,
+    revisionSummary: `topology=${topologyRevision} targets=${resolvedTargetRevision}`,
+  };
+}
 
 function viewport3DTopologyIndexReducer(
   _state: Viewport3DTopologyIndexReducerState,
@@ -121,19 +163,27 @@ export function resolveViewport3DTopologyIndexStatus({
 
 export function useViewport3DTopologyIndexBundle({
   airboxParts,
+  domainId = "shared-domain",
   enabled,
   magneticParts,
   magneticSurfacePartsByPartId,
+  sessionId = "current",
+  targetVisualizationRevision,
   topology,
+  topologyRevision,
 }: {
   airboxParts: readonly Viewport3DTopologyIndexPartInput[];
+  domainId?: string;
   enabled: boolean;
   magneticParts: readonly Viewport3DTopologyIndexPartInput[];
   magneticSurfacePartsByPartId: ReadonlyMap<
     string,
     readonly Viewport3DTopologyIndexPartInput[]
   >;
+  sessionId?: string;
+  targetVisualizationRevision?: string | null;
   topology: DecodedTopology | null | undefined;
+  topologyRevision?: string | null;
 }): Viewport3DTopologyIndexBundleResult {
   const [state, dispatch] = useReducer(
     viewport3DTopologyIndexReducer,
@@ -152,6 +202,16 @@ export function useViewport3DTopologyIndexBundle({
           }
         : null,
     [airboxParts, magneticParts, magneticSurfacePartsByPartId, topology],
+  );
+  const buildReference = useMemo(
+    () =>
+      createViewport3DTopologyIndexBuildReference({
+        domainId,
+        sessionId,
+        targetVisualizationRevision: targetVisualizationRevision ?? null,
+        topologyRevision: topologyRevision ?? null,
+      }),
+    [domainId, sessionId, targetVisualizationRevision, topologyRevision],
   );
   const compatible = viewport3DTopologyIndexStateIsCompatible(
     state.identity,
@@ -203,6 +263,10 @@ export function useViewport3DTopologyIndexBundle({
     };
 
     void buildViewport3DTopologyIndicesOffMainThread(request, {
+      buildKey: buildReference?.buildKey,
+      groupKey: buildReference?.groupKey,
+      latestWins: true,
+      revisionSummary: buildReference?.revisionSummary,
       signal: controller.signal,
     })
       .then((bundle) => {
@@ -225,6 +289,9 @@ export function useViewport3DTopologyIndexBundle({
     return undefined;
   }, [
     airboxParts,
+    buildReference?.buildKey,
+    buildReference?.groupKey,
+    buildReference?.revisionSummary,
     enabled,
     identity,
     magneticParts,

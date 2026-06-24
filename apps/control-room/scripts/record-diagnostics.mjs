@@ -43,6 +43,7 @@ const canvasTimeoutMs = numericEnv(
 const outputRoot =
   process.env.CONTROL_ROOM_DIAGNOSTICS_OUTPUT_DIR ??
   path.join(process.cwd(), "artifacts", "diagnostics");
+const VIEWPORT_3D_BUILD_ENGINE_PREFIX = "fullmag.viewport3d.build-engine.";
 
 async function loadPlaywright() {
   try {
@@ -365,8 +366,19 @@ function mergePlaywrightStreams(
 }
 
 async function writeArtifactDirectory(artifact, { artifactDir, traceEvents }) {
+  const viewport3dBuildSummary = buildViewport3DBuildSummary(artifact);
+  if (viewport3dBuildSummary.lanes.length > 0) {
+    artifact.suspectReport.text += formatViewport3DBuildSummaryText(
+      viewport3dBuildSummary,
+    );
+  }
+
   await writeJson(path.join(artifactDir, "manifest.json"), artifact.manifest);
   await writeJson(path.join(artifactDir, "summary.json"), artifact.summary);
+  await writeJson(
+    path.join(artifactDir, "viewport3d-build-summary.json"),
+    viewport3dBuildSummary,
+  );
   await writeFile(
     path.join(artifactDir, "suspect-report.md"),
     artifact.suspectReport.text,
@@ -455,6 +467,127 @@ function topSuspectsText(artifact) {
       .slice(0, 5)
       .map((suspect, index) => `${index + 1}. [${suspect.severity}] ${suspect.reason}`),
   ].join("\n");
+}
+
+function buildViewport3DBuildSummary(artifact) {
+  const byLane = new Map();
+  for (const record of artifact.streams.performance ?? []) {
+    if (!record.name?.startsWith(VIEWPORT_3D_BUILD_ENGINE_PREFIX)) continue;
+    const lane =
+      stringDetail(record, "buildLane") ??
+      record.name.slice(VIEWPORT_3D_BUILD_ENGINE_PREFIX.length);
+    const summary = ensureViewport3DBuildLaneSummary(byLane, lane);
+    const state = stringDetail(record, "state");
+    const fallbackReason = stringDetail(record, "fallbackReason");
+
+    summary.jobs += 1;
+    summary.aborted += state === "aborted" ? 1 : 0;
+    summary.failed += state === "failed" ? 1 : 0;
+    summary.obsoleteDropped += booleanDetail(record, "droppedBecauseObsolete")
+      ? 1
+      : 0;
+    summary.fallbackCount += fallbackReason ? 1 : 0;
+    if (fallbackReason) summary.fallbackReasons.add(fallbackReason);
+    summary.queueWaitMaxMs = Math.max(
+      summary.queueWaitMaxMs,
+      numericDetail(record, "queueWaitMs"),
+    );
+    summary.workerComputeMaxMs = Math.max(
+      summary.workerComputeMaxMs,
+      numericDetail(record, "workerComputeMs"),
+    );
+    summary.transferMaxMs = Math.max(
+      summary.transferMaxMs,
+      numericDetail(record, "transferMs"),
+    );
+    summary.mainAdoptMaxMs = Math.max(
+      summary.mainAdoptMaxMs,
+      numericDetail(record, "mainAdoptMs"),
+    );
+    summary.mainUploadMaxMs = Math.max(
+      summary.mainUploadMaxMs,
+      numericDetail(record, "mainUploadMs"),
+    );
+    summary.totalWallMaxMs = Math.max(
+      summary.totalWallMaxMs,
+      record.durationMs ?? numericDetail(record, "totalWallMs"),
+    );
+    summary.inputBytes += numericDetail(record, "inputBytes");
+    summary.outputBytes += numericDetail(record, "outputBytes");
+    summary.itemCount += numericDetail(record, "itemCount");
+  }
+
+  const lanes = Array.from(byLane.values())
+    .map((summary) => ({
+      ...summary,
+      fallbackReasons: Array.from(summary.fallbackReasons).sort(),
+    }))
+    .toSorted((left, right) => right.totalWallMaxMs - left.totalWallMaxMs);
+
+  return {
+    lanes,
+    totalJobs: lanes.reduce((total, lane) => total + lane.jobs, 0),
+  };
+}
+
+function ensureViewport3DBuildLaneSummary(byLane, lane) {
+  const existing = byLane.get(lane);
+  if (existing) return existing;
+  const summary = {
+    aborted: 0,
+    failed: 0,
+    fallbackCount: 0,
+    fallbackReasons: new Set(),
+    inputBytes: 0,
+    itemCount: 0,
+    jobs: 0,
+    lane,
+    mainAdoptMaxMs: 0,
+    mainUploadMaxMs: 0,
+    obsoleteDropped: 0,
+    outputBytes: 0,
+    queueWaitMaxMs: 0,
+    totalWallMaxMs: 0,
+    transferMaxMs: 0,
+    workerComputeMaxMs: 0,
+  };
+  byLane.set(lane, summary);
+  return summary;
+}
+
+function formatViewport3DBuildSummaryText(summary) {
+  if (summary.lanes.length === 0) return "";
+  return [
+    "",
+    "",
+    "## Viewport 3D Build Summary",
+    ...summary.lanes.slice(0, 10).map((lane) =>
+      [
+        `- ${lane.lane}: jobs=${lane.jobs}`,
+        `wallMax=${lane.totalWallMaxMs}ms`,
+        `queueMax=${lane.queueWaitMaxMs}ms`,
+        `workerMax=${lane.workerComputeMaxMs}ms`,
+        `transferMax=${lane.transferMaxMs}ms`,
+        `uploadMax=${lane.mainUploadMaxMs}ms`,
+        `items=${lane.itemCount}`,
+        `fallbacks=${lane.fallbackCount}`,
+      ].join(" "),
+    ),
+  ].join("\n");
+}
+
+function numericDetail(record, key) {
+  const value = record.detail?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function stringDetail(record, key) {
+  const value = record.detail?.[key];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function booleanDetail(record, key) {
+  return record.detail?.[key] === true;
 }
 
 async function waitForInteractiveStop() {

@@ -3,6 +3,14 @@ import {
   type VectorGlyphBuildRequest,
   type VectorGlyphBuildResult,
 } from "./vectorGlyphBuildModel";
+import {
+  createViewport3DWorkerPool,
+  type Viewport3DWorkerPool,
+  type Viewport3DWorkerPoolLease,
+} from "../build-engine/workerPool/viewport3dWorkerPool";
+import type { Viewport3DBuildDiagnosticRecord } from "../build-engine/viewport3dBuildEngineTypes";
+import { recordViewport3DBuildDiagnostic } from "../build-engine/viewport3dBuildDiagnostics";
+import { createViewport3DBuildScheduler } from "../build-engine/viewport3dBuildScheduler";
 
 export type {
   VectorGlyphBuildRequest,
@@ -10,7 +18,16 @@ export type {
 } from "./vectorGlyphBuildModel";
 
 export interface VectorGlyphBuildOptions {
+  buildKey?: string;
+  groupKey?: string;
+  latestWins?: boolean;
+  onDiagnosticRecord?: (record: Viewport3DBuildDiagnosticRecord) => void;
+  revisionSummary?: string;
   signal?: AbortSignal;
+}
+
+interface VectorGlyphBuildExecutionOptions extends VectorGlyphBuildOptions {
+  recordFallback?: (reason: string) => void;
 }
 
 interface VectorGlyphWorkerRequest extends VectorGlyphBuildRequest {
@@ -38,18 +55,56 @@ type VectorGlyphWorkerResponse =
 
 interface PendingVectorGlyphBuild {
   abortListener: (() => void) | null;
+  lease: Viewport3DWorkerPoolLease<Worker>;
   reject: (reason: unknown) => void;
   resolve: (value: VectorGlyphBuildResult) => void;
   signal: AbortSignal | null;
 }
 
 const VECTOR_GLYPH_WORKER_IDLE_TIMEOUT_MS = 30_000;
+const VECTOR_GLYPH_WORKER_POOL_SIZE = 2;
 
+let fallbackVectorGlyphBuildId = 1;
+let vectorGlyphBuildJobScheduler:
+  | ReturnType<typeof createViewport3DBuildScheduler>
+  | undefined;
 let vectorGlyphWorkerClient: VectorGlyphWorkerClient | null | undefined;
+let vectorGlyphWorkerFallbackReason: string | null | undefined;
 
 export async function buildViewport3DVectorGlyphsOffMainThread(
   request: VectorGlyphBuildRequest,
   options: VectorGlyphBuildOptions = {},
+): Promise<VectorGlyphBuildResult> {
+  throwIfAborted(options.signal);
+  const buildKey =
+    options.buildKey ?? `vector-glyph:adhoc:${fallbackVectorGlyphBuildId++}`;
+  const scheduler = getVectorGlyphBuildJobScheduler();
+  return scheduler.schedule(
+    {
+      groupKey: options.groupKey,
+      inputBytes: request.segments.byteLength,
+      itemCount: Math.floor(request.segments.length / 7),
+      key: buildKey,
+      lane: "vector-glyph",
+      outputBytesEstimate: request.segments.byteLength * 4,
+      revisionSummary: options.revisionSummary ?? buildKey,
+    },
+    (_buildRequest, context) =>
+      executeVectorGlyphBuild(request, {
+        recordFallback: context.recordFallback,
+        signal: context.signal,
+      }),
+    {
+      latestWins: options.latestWins,
+      onDiagnosticRecord: options.onDiagnosticRecord,
+      signal: options.signal,
+    },
+  );
+}
+
+async function executeVectorGlyphBuild(
+  request: VectorGlyphBuildRequest,
+  options: VectorGlyphBuildExecutionOptions,
 ): Promise<VectorGlyphBuildResult> {
   throwIfAborted(options.signal);
   const client = getVectorGlyphWorkerClient();
@@ -58,16 +113,39 @@ export async function buildViewport3DVectorGlyphsOffMainThread(
       return await client.build(request, options);
     } catch (error) {
       if (isAbortError(error)) throw error;
+      vectorGlyphWorkerFallbackReason = "worker-error";
+      options.recordFallback?.(vectorGlyphWorkerFallbackReason);
       vectorGlyphWorkerClient = null;
     }
+  } else {
+    options.recordFallback?.(
+      vectorGlyphWorkerFallbackReason ?? "worker-unavailable",
+    );
   }
 
   return buildViewport3DVectorGlyphs(request);
 }
 
 export function disposeVectorGlyphBuildWorkerForTests(): void {
+  vectorGlyphBuildJobScheduler?.dispose();
+  vectorGlyphBuildJobScheduler = undefined;
   vectorGlyphWorkerClient?.dispose();
   vectorGlyphWorkerClient = undefined;
+  vectorGlyphWorkerFallbackReason = undefined;
+}
+
+function getVectorGlyphBuildJobScheduler(): ReturnType<
+  typeof createViewport3DBuildScheduler
+> {
+  if (!vectorGlyphBuildJobScheduler) {
+    vectorGlyphBuildJobScheduler = createViewport3DBuildScheduler({
+      laneConcurrency: {
+        "vector-glyph": 2,
+      },
+      onDiagnosticRecord: recordViewport3DBuildDiagnostic,
+    });
+  }
+  return vectorGlyphBuildJobScheduler;
 }
 
 function getVectorGlyphWorkerClient(): VectorGlyphWorkerClient | null {
@@ -76,13 +154,16 @@ function getVectorGlyphWorkerClient(): VectorGlyphWorkerClient | null {
   }
 
   if (typeof Worker === "undefined") {
+    vectorGlyphWorkerFallbackReason = "worker-unavailable";
     vectorGlyphWorkerClient = null;
     return vectorGlyphWorkerClient;
   }
 
   try {
     vectorGlyphWorkerClient = new VectorGlyphWorkerClient();
+    vectorGlyphWorkerFallbackReason = null;
   } catch {
+    vectorGlyphWorkerFallbackReason = "worker-construction-failed";
     vectorGlyphWorkerClient = null;
   }
   return vectorGlyphWorkerClient;
@@ -93,19 +174,14 @@ class VectorGlyphWorkerClient {
   private idleTimeoutId: ReturnType<typeof setTimeout> | null = null;
   private nextId = 1;
   private readonly pending = new Map<number, PendingVectorGlyphBuild>();
-  private readonly worker: Worker;
+  private readonly pool: Viewport3DWorkerPool<Worker>;
+  private readonly workers = new Set<Worker>();
 
   constructor() {
-    this.worker = new Worker(
-      new URL("./vectorGlyphBuildWorker.ts", import.meta.url),
-      {
-        name: "fullmag-viewport3d-vector-glyph-build",
-        type: "module",
-      },
-    );
-    this.worker.addEventListener("message", this.handleMessage);
-    this.worker.addEventListener("error", this.handleError);
-    this.worker.addEventListener("messageerror", this.handleError);
+    this.pool = createViewport3DWorkerPool({
+      createWorker: () => this.createWorker(),
+      maxWorkers: VECTOR_GLYPH_WORKER_POOL_SIZE,
+    });
   }
 
   build(
@@ -133,6 +209,13 @@ class VectorGlyphWorkerClient {
     addArrayBufferTransferable(transferables, segments.buffer);
 
     return new Promise((resolve, reject) => {
+      let lease: Viewport3DWorkerPoolLease<Worker>;
+      try {
+        lease = this.pool.acquire();
+      } catch (error) {
+        reject(error);
+        return;
+      }
       const signal = options.signal ?? null;
       const abortListener = signal ? () => this.abortPending(id) : null;
       if (signal && abortListener) {
@@ -140,12 +223,13 @@ class VectorGlyphWorkerClient {
       }
       this.pending.set(id, {
         abortListener,
+        lease,
         reject,
         resolve,
         signal,
       });
       try {
-        this.worker.postMessage(request, transferables);
+        lease.worker.postMessage(request, transferables);
       } catch (error) {
         this.clearPending(id);
         this.dispose(error);
@@ -166,10 +250,13 @@ class VectorGlyphWorkerClient {
       const pending = this.clearPending(id);
       pending?.reject(error);
     }
-    this.worker.removeEventListener("message", this.handleMessage);
-    this.worker.removeEventListener("error", this.handleError);
-    this.worker.removeEventListener("messageerror", this.handleError);
-    this.worker.terminate();
+    for (const worker of this.workers) {
+      worker.removeEventListener("message", this.handleMessage);
+      worker.removeEventListener("error", this.handleError);
+      worker.removeEventListener("messageerror", this.handleError);
+    }
+    this.pool.dispose();
+    this.workers.clear();
     if (vectorGlyphWorkerClient === this) {
       vectorGlyphWorkerClient = undefined;
     }
@@ -209,10 +296,26 @@ class VectorGlyphWorkerClient {
     const pending = this.pending.get(id);
     if (!pending) return null;
     this.pending.delete(id);
+    pending.lease.release();
     if (pending.signal && pending.abortListener) {
       pending.signal.removeEventListener("abort", pending.abortListener);
     }
     return pending;
+  }
+
+  private createWorker(): Worker {
+    const worker = new Worker(
+      new URL("./vectorGlyphBuildWorker.ts", import.meta.url),
+      {
+        name: "fullmag-viewport3d-vector-glyph-build",
+        type: "module",
+      },
+    );
+    worker.addEventListener("message", this.handleMessage);
+    worker.addEventListener("error", this.handleError);
+    worker.addEventListener("messageerror", this.handleError);
+    this.workers.add(worker);
+    return worker;
   }
 
   private abortPending(id: number): void {

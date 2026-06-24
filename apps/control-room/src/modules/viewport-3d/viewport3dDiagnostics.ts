@@ -11,6 +11,11 @@ import {
 } from "@/kernel/performance/diagnostic-recorder/diagnosticRecorderTypes";
 import type { ResourceCacheStats } from "@/kernel/resources/ResourceCache";
 
+import {
+  createDiagnosticRecordFromViewport3DBuildDiagnostic,
+  subscribeViewport3DBuildDiagnostics,
+} from "./build-engine/viewport3dBuildDiagnostics";
+
 export type Viewport3DResourceKind =
   | "geometry"
   | "material"
@@ -345,6 +350,15 @@ export function useViewport3DResourceTracker(): Viewport3DResourceTracker {
   );
 
   useEffect(() => () => tracker.disposeAll(), [tracker]);
+  useEffect(
+    () =>
+      subscribeViewport3DBuildDiagnostics((record) => {
+        diagnosticRecorder.record(
+          createDiagnosticRecordFromViewport3DBuildDiagnostic(record),
+        );
+      }),
+    [diagnosticRecorder],
+  );
 
   return tracker;
 }

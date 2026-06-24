@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildViewport3DTopologyIndicesOffMainThread } from "./viewport3dTopologyIndexScheduler";
+import type { Viewport3DBuildDiagnosticRecord } from "./build-engine/viewport3dBuildEngineTypes";
 
 describe("viewport3dTopologyIndexScheduler", () => {
   afterEach(() => {
@@ -88,5 +89,51 @@ describe("viewport3dTopologyIndexScheduler", () => {
     expect(schedulerSource).toContain("addArrayBufferTransferable");
     expect(workerSource).toContain("transferablesForTopologyIndexBundle(data)");
     expect(modelSource).toContain("transferablesForTopologyIndexBundle");
+  });
+
+  it("routes topology index work through the build-engine topology-index lane", async () => {
+    vi.stubGlobal("Worker", undefined);
+    const records: Viewport3DBuildDiagnosticRecord[] = [];
+
+    await buildViewport3DTopologyIndicesOffMainThread(
+      {
+        airboxParts: [],
+        magneticParts: [
+          {
+            boundary_face_count: 0,
+            boundary_face_start: 0,
+            element_count: 1,
+            element_start: 0,
+            id: "magnetic",
+          },
+        ],
+        topology: {
+          boundaryFaces: new Uint32Array([]),
+          indices: new Uint32Array([0, 1, 2, 3]),
+          nodeCount: 4,
+        },
+      },
+      {
+        buildKey: "topology-index:session=current:topology=mesh-7",
+        groupKey: "topology-index:session=current",
+        latestWins: true,
+        onDiagnosticRecord: (record) => records.push(record),
+        revisionSummary: "topology=mesh-7",
+      },
+    );
+
+    expect(records).toEqual([
+      expect.objectContaining({
+        inputBytes: 16,
+        itemCount: 4,
+        key: "topology-index:session=current:topology=mesh-7",
+        lane: "topology-index",
+        mainAdoptMs: 0,
+        outputBytes: 16,
+        queueWaitMs: expect.any(Number),
+        revisionSummary: "topology=mesh-7",
+        state: "ready",
+      }),
+    ]);
   });
 });

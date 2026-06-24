@@ -11,6 +11,7 @@ import {
 
 import type {
   FieldVectorQuery,
+  FieldMetaResource,
   LiveStatusResource,
   MeshHistogramBinElementsResource,
   MeshRegionMembershipResource,
@@ -34,6 +35,7 @@ import {
   useMeshRegionMembershipsResource,
   useModelRegionsResource,
 } from "@/kernel/resources/geometryLifecycleResources";
+import { useFieldMetaResource } from "@/kernel/resources/studyRuntimeResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { useKernel } from "@/kernel/KernelContext";
 import type {
@@ -120,7 +122,10 @@ import {
   buildViewport3DDiagnostics,
   type Viewport3DResourceCounts,
 } from "../viewport3dDiagnostics";
-import { buildSampledScalarColors } from "../viewport3dFieldMapping";
+import {
+  buildSampledScalarColors,
+  type ScalarRange,
+} from "../viewport3dFieldMapping";
 import { buildViewport3DResourceFrameKey } from "../viewport3dInvalidation";
 import type { Viewport3DResourceFrameState } from "../viewport3dInvalidation";
 import {
@@ -195,6 +200,44 @@ const VIEWPORT_3D_SCALAR_FIELD_COMPONENTS = new Set([
   "y",
   "z",
 ]);
+
+interface Viewport3DScalarRangeModeFlags {
+  magnitude: boolean;
+  x: boolean;
+  y: boolean;
+  z: boolean;
+}
+
+function resolveViewport3DScalarRangeModeFlags(
+  scalarColorModes: ReadonlySet<string> | null | undefined,
+  vectorColorMode: string,
+): Viewport3DScalarRangeModeFlags {
+  const modes = new Set(scalarColorModes ?? []);
+  modes.add(vectorColorMode);
+  return {
+    magnitude: modes.has("magnitude"),
+    x: modes.has("x"),
+    y: modes.has("y"),
+    z: modes.has("z"),
+  };
+}
+
+function resolveViewport3DFieldMetaScalarRange(
+  fieldMeta: FieldMetaResource | null | undefined,
+): ScalarRange | null {
+  const stats = fieldMeta?.stats;
+  if (
+    !stats ||
+    !Number.isFinite(stats.min) ||
+    !Number.isFinite(stats.max)
+  ) {
+    return null;
+  }
+  return {
+    max: stats.max,
+    min: stats.min,
+  };
+}
 
 function asJsonRecord(value: unknown): JsonRecord | null {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value)
@@ -1446,7 +1489,10 @@ export function useViewport3DSceneModel({
     enabled: Boolean(topology.data),
     magneticParts: femDomain.magneticParts,
     magneticSurfacePartsByPartId: femDomain.magneticSurfacePartsByPartId,
+    targetVisualizationRevision:
+      renderingState?.revision == null ? null : String(renderingState.revision),
     topology: topology.data,
+    topologyRevision: topology.revision == null ? null : String(topology.revision),
   });
   const topologyIndexState =
     topologyIndexBundle.status === "building"
@@ -2295,6 +2341,57 @@ export function useViewport3DSceneModel({
   const fieldVectorEnabled =
     primaryFieldVectorEnabled &&
     hysteresisReplayMeshCompatibility.status !== "mismatch";
+  const scalarRangeModeFlags = useMemo(
+    () =>
+      resolveViewport3DScalarRangeModeFlags(
+        primaryFieldRenderOptions.scalarColorModes,
+        vectorColorMode,
+      ),
+    [primaryFieldRenderOptions.scalarColorModes, vectorColorMode],
+  );
+  const scalarRangeStatsEnabled =
+    fieldVectorEnabled && primaryFieldRenderOptions.scalarColorsVisible !== false;
+  const primaryMagnitudeFieldMeta = useFieldMetaResource({
+    component: "magnitude",
+    enabled: scalarRangeStatsEnabled && scalarRangeModeFlags.magnitude,
+    quantityId: primaryFieldQuantityId,
+  });
+  const primaryXFieldMeta = useFieldMetaResource({
+    component: "x",
+    enabled: scalarRangeStatsEnabled && scalarRangeModeFlags.x,
+    quantityId: primaryFieldQuantityId,
+  });
+  const primaryYFieldMeta = useFieldMetaResource({
+    component: "y",
+    enabled: scalarRangeStatsEnabled && scalarRangeModeFlags.y,
+    quantityId: primaryFieldQuantityId,
+  });
+  const primaryZFieldMeta = useFieldMetaResource({
+    component: "z",
+    enabled: scalarRangeStatsEnabled && scalarRangeModeFlags.z,
+    quantityId: primaryFieldQuantityId,
+  });
+  const fieldScalarRangesByMode = useMemo<
+    ReadonlyMap<string, ScalarRange> | undefined
+  >(() => {
+    const entries: [string, ScalarRange][] = [];
+    const magnitudeRange = resolveViewport3DFieldMetaScalarRange(
+      primaryMagnitudeFieldMeta.data,
+    );
+    const xRange = resolveViewport3DFieldMetaScalarRange(primaryXFieldMeta.data);
+    const yRange = resolveViewport3DFieldMetaScalarRange(primaryYFieldMeta.data);
+    const zRange = resolveViewport3DFieldMetaScalarRange(primaryZFieldMeta.data);
+    if (magnitudeRange) entries.push(["magnitude", magnitudeRange]);
+    if (xRange) entries.push(["x", xRange]);
+    if (yRange) entries.push(["y", yRange]);
+    if (zRange) entries.push(["z", zRange]);
+    return entries.length > 0 ? new Map(entries) : undefined;
+  }, [
+    primaryMagnitudeFieldMeta.data,
+    primaryXFieldMeta.data,
+    primaryYFieldMeta.data,
+    primaryZFieldMeta.data,
+  ]);
   const fieldVector = useViewport3DFieldVector(
     primaryFieldQuantityId,
     primaryFieldQuery,
@@ -2403,24 +2500,36 @@ export function useViewport3DSceneModel({
     scalarColorPalette,
   ]);
   const chunkedScalarColors = useViewport3DChunkedScalarColors({
+    buildDomainId: "shared-domain",
+    buildSessionId: "current",
     colorModes: primaryFieldRenderOptions.scalarColorModes,
     colorPalette:
       primaryFieldRenderOptions.scalarColorPalette ?? scalarColorPalette,
     enabled: primaryFieldRenderOptions.scalarColorsVisible !== false,
+    fieldRevision: fieldVector.payloadRevision ?? fieldVector.revision,
+    fieldScalarRangesByMode,
     fieldVector: committedFieldVector,
+    targetVisualizationRevision: renderingState?.revision ?? null,
     topology: currentTopologyRenderModel,
+    topologyRevision: topology.revision,
   });
   const fieldRenderModel = useMemo(() => {
     const model = measureViewport3DModelBuild(
       "fullmag.viewport3d.buildViewport3DFieldRenderModel",
       () =>
-          buildViewport3DFieldRenderModel(
+        buildViewport3DFieldRenderModel(
           currentTopologyRenderModel,
           committedFieldVector,
           vectorScale,
           {
             ...resolvedFieldRenderOptions,
+            buildDomainId: "shared-domain",
+            buildSessionId: "current",
             complexFieldVector: analysisComplexField,
+            fieldRevision: fieldVector.payloadRevision ?? fieldVector.revision,
+            scalarRangesByMode: fieldScalarRangesByMode,
+            targetVisualizationRevision: renderingState?.revision ?? null,
+            topologyRevision: topology.revision,
           },
         ),
     );
@@ -2434,7 +2543,12 @@ export function useViewport3DSceneModel({
     committedFieldVector,
     currentTopologyRenderModel,
     analysisComplexField,
+    fieldScalarRangesByMode,
     resolvedFieldRenderOptions,
+    fieldVector.payloadRevision,
+    fieldVector.revision,
+    renderingState?.revision,
+    topology.revision,
     vectorColorMode,
     vectorScale,
   ]);

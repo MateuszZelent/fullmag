@@ -47,7 +47,9 @@ function fallbackTopology(): Viewport3DTopologyRenderModel {
 function vectorFieldModel(): Viewport3DFieldRenderModel {
   return {
     complexFieldVector: null,
+    fullVectorBuild: null,
     fullVectorSegments: new Float32Array([0, 0, 0, 1, 0, 0, 1]),
+    partVectorBuilds: new Map(),
     partVectorSegments: new Map(),
     scalarColors: null,
     scalarColorsByPartAndMode: new Map(),

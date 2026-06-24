@@ -14,6 +14,7 @@ export interface ScalarRange {
 }
 
 export interface ScalarColorBuffer {
+  buildKey?: string;
   colors: Float32Array;
   colorMode?: string;
   colorPalette?: string;
@@ -22,6 +23,8 @@ export interface ScalarColorBuffer {
   complexRealValues?: Float32Array;
   range: ScalarRange;
   scalarValues?: Float32Array;
+  targetRevision?: string;
+  topologyRevision?: string;
   vectorValues?: Float32Array;
 }
 
@@ -29,6 +32,7 @@ export interface ChunkedFieldTransformOptions {
   chunkSize?: number;
   colorMode?: string;
   colorPalette?: string;
+  scalarRange?: ScalarRange | null;
   shaderOnly?: boolean;
   signal?: AbortSignal;
   yieldToMain?: () => Promise<void>;
@@ -49,6 +53,7 @@ export function buildVertexScalarColors(
   maxSynchronousPoints = VIEWPORT_3D_SYNC_COLOR_POINT_LIMIT,
   colorMode = "magnitude",
   colorPalette = "viridis",
+  scalarRange?: ScalarRange | null,
 ): ScalarColorBuffer | null {
   const resolvedColorMode = normalizeViewport3DVectorColorMode(
     colorMode,
@@ -69,6 +74,7 @@ export function buildVertexScalarColors(
     vertexCount,
     resolvedColorMode,
     colorPalette,
+    scalarRange,
   );
 }
 
@@ -139,6 +145,7 @@ export function buildMappedVertexScalarColors(
   maxSynchronousPoints = VIEWPORT_3D_SYNC_COLOR_POINT_LIMIT,
   colorMode = "magnitude",
   colorPalette = "viridis",
+  scalarRange?: ScalarRange | null,
 ): ScalarColorBuffer | null {
   const resolvedColorMode = normalizeViewport3DVectorColorMode(
     colorMode,
@@ -155,7 +162,9 @@ export function buildMappedVertexScalarColors(
     return null;
   }
 
-  const range = resolveScalarRange(fieldVector, resolvedColorMode);
+  const range =
+    resolveProvidedScalarRange(scalarRange) ??
+    resolveScalarRange(fieldVector, resolvedColorMode);
   const colors = new Float32Array(vertexCount * 3);
   const scalarValues = shaderScalarModeSupports(resolvedColorMode)
     ? new Float32Array(vertexCount)
@@ -210,13 +219,14 @@ export async function buildVertexScalarColorsChunked(
   const range =
     shaderOnly && shaderVectorMode
       ? { max: 1, min: 0 }
-      : await resolveScalarRangeChunked(
-          fieldVector,
-          colorMode,
-          chunkSize,
-          options.signal,
-          yieldToMain,
-        );
+      : resolveProvidedScalarRange(options.scalarRange) ??
+        (await resolveScalarRangeChunked(
+            fieldVector,
+            colorMode,
+            chunkSize,
+            options.signal,
+            yieldToMain,
+          ));
   const colors = shaderOnly
     ? new Float32Array(0)
     : new Float32Array(fieldVector.pointCount * 3);
@@ -255,6 +265,22 @@ export async function buildVertexScalarColorsChunked(
     range,
     scalarValues,
     vectorValues,
+  };
+}
+
+function resolveProvidedScalarRange(
+  range: ScalarRange | null | undefined,
+): ScalarRange | null {
+  if (
+    !range ||
+    !Number.isFinite(range.min) ||
+    !Number.isFinite(range.max)
+  ) {
+    return null;
+  }
+  return {
+    max: range.max,
+    min: range.min,
   };
 }
 
@@ -326,8 +352,11 @@ function buildVertexScalarColorsUnchecked(
   vertexCount: number,
   colorMode: Viewport3DVectorColorMode,
   colorPalette: string,
+  scalarRange?: ScalarRange | null,
 ): ScalarColorBuffer {
-  const range = resolveScalarRange(fieldVector, colorMode);
+  const range =
+    resolveProvidedScalarRange(scalarRange) ??
+    resolveScalarRange(fieldVector, colorMode);
   const colors = new Float32Array(vertexCount * 3);
   const scalarValues = shaderScalarModeSupports(colorMode)
     ? new Float32Array(vertexCount)

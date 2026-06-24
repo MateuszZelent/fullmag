@@ -12,6 +12,7 @@ import {
 import { DEFAULT_OBJECT_VISUALIZATION } from "@/kernel/visualization/ObjectVisualizationController";
 
 import {
+  createVectorGlyphUploadKeys,
   ensureWhiteVertexColorAttribute,
   resolveVectorFieldLayerStyle,
   syncVectorGlyphMaterialStyle,
@@ -32,6 +33,24 @@ import {
 } from "./viewport3DLayerSettings";
 
 describe("VectorFieldLayer performance contracts", () => {
+  it("keys glyph uploads by semantic build revision instead of buffer shape only", () => {
+    expect(
+      createVectorGlyphUploadKeys({
+        buildKey: "vector-glyph:session=s1:topology=t1:field=f2",
+        colorByteLength: 96,
+        glyphCount: 8,
+        targetRevision: "target-viz-7",
+        transformByteLength: 1024,
+      }),
+    ).toEqual({
+      colorKey:
+        "vector-glyph-colors:vector-glyph:session=s1:topology=t1:field=f2:target=target-viz-7:count=8:bytes=96",
+      matrixKey:
+        "vector-glyph-matrices:vector-glyph:session=s1:topology=t1:field=f2:target=target-viz-7:count=8:bytes=1024",
+      targetRevision: "target-viz-7",
+    });
+  });
+
   it("routes glyph matrix uploads through cancellable bounded batches", () => {
     expect(vectorFieldLayerSource).toContain(
       "const VECTOR_GLYPH_UPLOAD_BATCH_SIZE",
@@ -42,8 +61,14 @@ describe("VectorFieldLayer performance contracts", () => {
     expect(vectorFieldLayerSource).toContain(
       "function buildVectorGlyphUploadBatches",
     );
-    expect(vectorFieldLayerSource).toContain("requestVectorGlyphUploadTask");
-    expect(vectorFieldLayerSource).toContain("cancelVectorGlyphUploadTask");
+    expect(vectorFieldLayerSource).toContain("createViewport3DGpuUploadManager");
+    expect(vectorFieldLayerSource).toContain("uploadManager.enqueue");
+    expect(vectorFieldLayerSource).toContain("onVisible:");
+    expect(vectorFieldLayerSource).toContain(
+      `onVisible: () => {
+        activeShaft.count = activeGlyphs.count;
+        activeHead.count = activeGlyphs.count;`,
+    );
     expect(vectorFieldLayerSource).toContain("addUpdateRange");
     expect(vectorFieldLayerSource).toContain(
       "fullmag.viewport3d.buildVectorGlyphInstances",
@@ -71,6 +96,17 @@ describe("VectorFieldLayer performance contracts", () => {
     expect(vectorFieldLayerSource).not.toContain(
       "for (let index = 0; index < glyphs.count; index += 1)",
     );
+    expect(vectorFieldLayerSource).not.toContain(
+      "function requestVectorGlyphUploadTask",
+    );
+    expect(vectorFieldLayerSource).not.toContain(
+      "function cancelVectorGlyphUploadTask",
+    );
+    expect(vectorFieldLayerSource).not.toContain(
+      `// Set visible count (may be less than capacity).
+    activeShaft.count = activeGlyphs.count;
+    activeHead.count = activeGlyphs.count;`,
+    );
     expect(vectorFieldLayerSource).not.toContain("requestAnimationFrame");
     expect(vectorFieldLayerSource).not.toContain("setTimeout(callback, 0)");
   });
@@ -92,22 +128,34 @@ describe("VectorFieldLayer performance contracts", () => {
     expect(buildHookSource).toContain(
       "buildViewport3DVectorGlyphsOffMainThread",
     );
+    expect(buildHookSource).toContain("buildKey:");
+    expect(buildHookSource).toContain("groupKey:");
+    expect(buildHookSource).toContain("latestWins: true");
     expect(buildHookSource).toContain("createVectorGlyphBuildStore");
+    expect(buildHookSource).toContain("snapshot.buildKey === buildKey");
     expect(buildHookSource).toContain("useSyncExternalStore");
     expect(buildHookSource).toContain("AbortController");
+    expect(buildHookSource).toContain("createViewport3DDerivedBufferCache");
+    expect(buildHookSource).toContain("resolveVisible");
+    expect(buildHookSource).toContain("retainedBuildRef");
+    expect(buildHookSource).toContain("cache.tryRetain(visibleCacheKey)");
+    expect(buildHookSource).toContain(
+      "if (!retainedVisibleBuild) return undefined;",
+    );
+    expect(buildHookSource).toContain("cache.evictStaleRevisions");
+    expect(buildHookSource).toContain("retainedBuildRef.current.release()");
+    expect(buildHookSource).toContain("stale-compatible");
+    expect(buildHookSource).toContain("stale-physical");
     expect(buildHookSource).not.toContain("useState<VectorGlyphBuildResult");
     expect(vectorFieldLayerSource).not.toContain(
       "const glyphTransforms = useMemo(",
     );
     expect(vectorFieldLayerSource).not.toContain("const glyphColors = useMemo(");
-    expect(vectorFieldLayerSource).toContain(`  }, [
-    glyphTransforms,
-    headRef,
-    invalidate,
-    shaftRef,
-    tracker,
-    transformScratch,
-  ]);`);
+    expect(vectorFieldLayerSource).toContain("createVectorGlyphUploadKeys");
+    expect(vectorFieldLayerSource).toContain(
+      "targetRevision: uploadKeys?.targetRevision ?? null",
+    );
+    expect(vectorFieldLayerSource).toContain("buildKey: vectorGlyphBuildKey");
   });
 });
 

@@ -2,39 +2,31 @@
 
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 
+import type { Viewport3DBuildDiagnosticRecord } from "./build-engine/viewport3dBuildEngineTypes";
+import { recordViewport3DBuildDiagnostic } from "./build-engine/viewport3dBuildDiagnostics";
+import { createViewport3DBuildScheduler } from "./build-engine/viewport3dBuildScheduler";
 import {
-  buildVertexScalarColorsChunked,
+  buildViewport3DFieldColorBuffer,
+  estimateViewport3DFieldColorBuildInputBytes,
+  estimateViewport3DFieldColorBuildOutputBytes,
+} from "./field-colors/viewport3dFieldColorBuildModel";
+import type {
+  Viewport3DFieldColorBuildWorkerRequest,
+  Viewport3DFieldColorBuildWorkerResponse,
+} from "./field-colors/viewport3dFieldColorBuildWorker";
+import {
   type ChunkedFieldTransformOptions,
   type ScalarColorBuffer,
 } from "./viewport3dFieldMapping";
 
-interface ColorTransformWorkerRequest {
-  fieldVector: DecodedFieldVector;
-  id: number;
-  options: Pick<
-    ChunkedFieldTransformOptions,
-    "chunkSize" | "colorMode" | "colorPalette" | "shaderOnly"
-  >;
+export interface Viewport3DColorTransformBuildOptions
+  extends ChunkedFieldTransformOptions {
+  buildKey?: string;
+  groupKey?: string;
+  latestWins?: boolean;
+  onDiagnosticRecord?: (record: Viewport3DBuildDiagnosticRecord) => void;
+  revisionSummary?: string;
 }
-
-interface ColorTransformWorkerOkResponse {
-  data: ScalarColorBuffer;
-  id: number;
-  ok: true;
-}
-
-interface ColorTransformWorkerErrorResponse {
-  error: {
-    message: string;
-    name: string;
-  };
-  id: number;
-  ok: false;
-}
-
-type ColorTransformWorkerResponse =
-  | ColorTransformWorkerErrorResponse
-  | ColorTransformWorkerOkResponse;
 
 interface PendingColorTransform {
   abortListener: (() => void) | null;
@@ -45,14 +37,60 @@ interface PendingColorTransform {
 
 const COLOR_TRANSFORM_WORKER_IDLE_TIMEOUT_MS = 30_000;
 
+let fallbackColorTransformBuildId = 1;
+let colorTransformBuildJobScheduler:
+  | ReturnType<typeof createViewport3DBuildScheduler>
+  | undefined;
 let colorTransformWorkerClient:
   | ColorTransformWorkerClient
   | null
   | undefined;
+let colorTransformWorkerFallbackReason: string | null | undefined;
 
 export async function buildVertexScalarColorsOffMainThread(
   fieldVector: DecodedFieldVector,
-  options: ChunkedFieldTransformOptions = {},
+  options: Viewport3DColorTransformBuildOptions = {},
+): Promise<ScalarColorBuffer> {
+  throwIfAborted(options.signal);
+  if (options.buildKey) {
+    const buildKey =
+      options.buildKey ?? `field-color:adhoc:${fallbackColorTransformBuildId++}`;
+    const scheduler = getColorTransformBuildJobScheduler();
+    return scheduler.schedule(
+      {
+        groupKey: options.groupKey,
+        inputBytes: estimateFieldColorInputBytes(fieldVector),
+        itemCount: fieldVector.pointCount,
+        key: buildKey,
+        lane: "field-color",
+        outputBytesEstimate: estimateFieldColorOutputBytes(fieldVector, options),
+        revisionSummary: options.revisionSummary ?? buildKey,
+      },
+      (_buildRequest, context) =>
+        executeVertexScalarColorBuild(fieldVector, {
+          ...options,
+          recordFallback: context.recordFallback,
+          signal: context.signal,
+        }),
+      {
+        latestWins: options.latestWins,
+        onDiagnosticRecord: options.onDiagnosticRecord,
+        signal: options.signal,
+      },
+    );
+  }
+
+  return executeVertexScalarColorBuild(fieldVector, options);
+}
+
+interface Viewport3DColorTransformBuildExecutionOptions
+  extends Viewport3DColorTransformBuildOptions {
+  recordFallback?: (reason: string) => void;
+}
+
+async function executeVertexScalarColorBuild(
+  fieldVector: DecodedFieldVector,
+  options: Viewport3DColorTransformBuildExecutionOptions = {},
 ): Promise<ScalarColorBuffer> {
   throwIfAborted(options.signal);
   const client = getColorTransformWorkerClient();
@@ -61,11 +99,42 @@ export async function buildVertexScalarColorsOffMainThread(
       return await client.transform(fieldVector, options);
     } catch (error) {
       if (isAbortError(error)) throw error;
+      colorTransformWorkerFallbackReason = "worker-error";
+      options.recordFallback?.(colorTransformWorkerFallbackReason);
       colorTransformWorkerClient = null;
     }
+  } else {
+    options.recordFallback?.(
+      colorTransformWorkerFallbackReason ?? "worker-unavailable",
+    );
   }
 
-  return buildVertexScalarColorsChunked(fieldVector, options);
+  const result = await buildViewport3DFieldColorBuffer({
+    ...options,
+    fieldVector,
+    target: {
+      kind: "full-domain",
+      vertexCount: fieldVector.pointCount,
+    },
+  });
+  if (!result) {
+    throw new Error("Viewport 3D field-color build returned no buffer.");
+  }
+  return result;
+}
+
+function getColorTransformBuildJobScheduler(): ReturnType<
+  typeof createViewport3DBuildScheduler
+> {
+  if (!colorTransformBuildJobScheduler) {
+    colorTransformBuildJobScheduler = createViewport3DBuildScheduler({
+      laneConcurrency: {
+        "field-color": 1,
+      },
+      onDiagnosticRecord: recordViewport3DBuildDiagnostic,
+    });
+  }
+  return colorTransformBuildJobScheduler;
 }
 
 function getColorTransformWorkerClient(): ColorTransformWorkerClient | null {
@@ -74,16 +143,52 @@ function getColorTransformWorkerClient(): ColorTransformWorkerClient | null {
   }
 
   if (typeof Worker === "undefined") {
+    colorTransformWorkerFallbackReason = "worker-unavailable";
     colorTransformWorkerClient = null;
     return colorTransformWorkerClient;
   }
 
   try {
     colorTransformWorkerClient = new ColorTransformWorkerClient();
+    colorTransformWorkerFallbackReason = null;
   } catch {
+    colorTransformWorkerFallbackReason = "worker-construction-failed";
     colorTransformWorkerClient = null;
   }
   return colorTransformWorkerClient;
+}
+
+export function disposeViewport3DColorTransformWorkerForTests(): void {
+  colorTransformBuildJobScheduler?.dispose();
+  colorTransformBuildJobScheduler = undefined;
+  colorTransformWorkerClient?.dispose();
+  colorTransformWorkerClient = undefined;
+  colorTransformWorkerFallbackReason = undefined;
+}
+
+function estimateFieldColorInputBytes(fieldVector: DecodedFieldVector): number {
+  return estimateViewport3DFieldColorBuildInputBytes({
+    fieldVector,
+    target: {
+      kind: "full-domain",
+      vertexCount: fieldVector.pointCount,
+    },
+  });
+}
+
+function estimateFieldColorOutputBytes(
+  fieldVector: DecodedFieldVector,
+  options: Viewport3DColorTransformBuildOptions,
+): number {
+  return estimateViewport3DFieldColorBuildOutputBytes({
+    colorMode: options.colorMode,
+    fieldVector,
+    shaderOnly: options.shaderOnly,
+    target: {
+      kind: "full-domain",
+      vertexCount: fieldVector.pointCount,
+    },
+  });
 }
 
 class ColorTransformWorkerClient {
@@ -95,9 +200,12 @@ class ColorTransformWorkerClient {
 
   constructor() {
     this.worker = new Worker(
-      new URL("./viewport3dColorTransformWorker.ts", import.meta.url),
+      new URL(
+        "./field-colors/viewport3dFieldColorBuildWorker.ts",
+        import.meta.url,
+      ),
       {
-        name: "fullmag-viewport3d-color-transform",
+        name: "fullmag-viewport3d-field-color-build",
         type: "module",
       },
     );
@@ -119,17 +227,20 @@ class ColorTransformWorkerClient {
     this.clearIdleDisposeTimer();
     const id = this.nextId++;
     const values = new Float64Array(fieldVector.values);
-    const request: ColorTransformWorkerRequest = {
+    const request: Viewport3DFieldColorBuildWorkerRequest = {
+      chunkSize: options.chunkSize,
+      colorMode: options.colorMode,
+      colorPalette: options.colorPalette,
       fieldVector: {
         ...fieldVector,
         values,
       },
       id,
-      options: {
-        chunkSize: options.chunkSize,
-        colorMode: options.colorMode,
-        colorPalette: options.colorPalette,
-        shaderOnly: options.shaderOnly,
+      scalarRange: options.scalarRange,
+      shaderOnly: options.shaderOnly,
+      target: {
+        kind: "full-domain",
+        vertexCount: fieldVector.pointCount,
       },
     };
 
@@ -181,7 +292,7 @@ class ColorTransformWorkerClient {
   }
 
   private readonly handleMessage = (
-    event: MessageEvent<ColorTransformWorkerResponse>,
+    event: MessageEvent<Viewport3DFieldColorBuildWorkerResponse>,
   ): void => {
     if (this.disposed) return;
     const response = event.data;

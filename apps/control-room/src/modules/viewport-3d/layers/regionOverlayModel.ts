@@ -32,7 +32,9 @@ export interface RegionOverlayInput {
 }
 
 export interface RegionOverlayOptions {
-  resolveSettings?: (region: RegionOverlayInput) => VisualizationTargetSettings;
+  resolveSettings?: (
+    region: RegionOverlayInput,
+  ) => VisualizationTargetSettings | undefined;
   renderedSurfacePartIds?: ReadonlySet<string>;
   selectedObjectId?: string | null;
   selectedRegionId?: string | null;
@@ -121,6 +123,12 @@ export interface RegionMeshOverlayModel extends RegionOverlayBaseModel {
   surfaceIndices: Uint32Array | null;
 }
 
+interface RegionMeshOverlayGeometryBuffers {
+  readonly edgeIndices: Uint32Array | null;
+  readonly surfaceEdgeIndices: Uint32Array | null;
+  readonly surfaceIndices: Uint32Array | null;
+}
+
 const REGION_COLORS = {
   latte: [
     "var(--fm-region-overlay-0)",
@@ -148,7 +156,12 @@ const DEFAULT_CENTER: NumericVector3 = [0, 0, 0];
 const DEFAULT_AXIS: NumericVector3 = [0, 0, 1];
 const DEFAULT_QUATERNION: NumericQuaternion = [0, 0, 0, 1];
 const DEFAULT_SCALE: NumericVector3 = [1, 1, 1];
+const REGION_MESH_OVERLAY_GEOMETRY_CACHE_LIMIT = 16;
 const topologyPositionCache = new WeakMap<DecodedTopology, Float32Array>();
+const regionMeshOverlayGeometryCache = new WeakMap<
+  DecodedTopology,
+  Map<string, RegionMeshOverlayGeometryBuffers>
+>();
 
 export function resolveRegionOverlayColor(
   slot: number,
@@ -234,28 +247,16 @@ export function buildRegionMeshOverlayModels(
     const selectedMeshParts = region.meshPartIds?.length
       ? meshOverlayPartsForIds(region.meshPartIds, ownerParts)
       : [];
-
-    const selectedTetraIndices = new Uint32Array(selectedElements.length * 4);
-    selectedElements.forEach((elementIndex, targetElement) => {
-      const source = elementIndex * 4;
-      const target = targetElement * 4;
-      selectedTetraIndices[target] = topology.indices[source] ?? 0;
-      selectedTetraIndices[target + 1] = topology.indices[source + 1] ?? 0;
-      selectedTetraIndices[target + 2] = topology.indices[source + 2] ?? 0;
-      selectedTetraIndices[target + 3] = topology.indices[source + 3] ?? 0;
-    });
-
-    const surfaceIndices =
-      selectedMeshParts.length > 0
-        ? surfaceIndicesForMeshOverlayParts(selectedMeshParts, topology) ??
-          buildSelectedTetraBoundarySurfaceIndices(topology, selectedElements)
-        : buildSelectedTetraBoundarySurfaceIndices(topology, selectedElements);
-    const edgeIndices = buildTetraVolumeEdgeIndices(selectedTetraIndices);
-    const surfaceEdgeIndices = buildSurfaceEdgeIndices(surfaceIndices);
+    const geometry = cachedRegionMeshOverlayGeometry(
+      topology,
+      region,
+      selectedElements,
+      selectedMeshParts,
+    );
     return [
       {
         color: region.color,
-        edgeIndices: edgeIndices.length > 0 ? edgeIndices : null,
+        edgeIndices: geometry.edgeIndices,
         enabled: region.enabled,
         label: region.label,
         meshPartIds: region.meshPartIds,
@@ -270,11 +271,95 @@ export function buildRegionMeshOverlayModels(
           region.meshPartIds,
           options.renderedSurfacePartIds,
         ),
-        surfaceEdgeIndices,
-        surfaceIndices,
+        surfaceEdgeIndices: geometry.surfaceEdgeIndices,
+        surfaceIndices: geometry.surfaceIndices,
         transform: defaultRegionTransform(),
       },
     ];
+  });
+}
+
+function cachedRegionMeshOverlayGeometry(
+  topology: DecodedTopology,
+  region: RegionMeshOverlaySelectionModel,
+  selectedElements: readonly number[],
+  selectedMeshParts: readonly RegionMeshOverlayOwnerPart[],
+): RegionMeshOverlayGeometryBuffers {
+  const key = regionMeshOverlayGeometryCacheKey(
+    region,
+    selectedElements,
+    selectedMeshParts,
+  );
+  let topologyCache = regionMeshOverlayGeometryCache.get(topology);
+  if (!topologyCache) {
+    topologyCache = new Map<string, RegionMeshOverlayGeometryBuffers>();
+    regionMeshOverlayGeometryCache.set(topology, topologyCache);
+  }
+  const cached = topologyCache.get(key);
+  if (cached) return cached;
+
+  const selectedTetraIndices = new Uint32Array(selectedElements.length * 4);
+  selectedElements.forEach((elementIndex, targetElement) => {
+    const source = elementIndex * 4;
+    const target = targetElement * 4;
+    selectedTetraIndices[target] = topology.indices[source] ?? 0;
+    selectedTetraIndices[target + 1] = topology.indices[source + 1] ?? 0;
+    selectedTetraIndices[target + 2] = topology.indices[source + 2] ?? 0;
+    selectedTetraIndices[target + 3] = topology.indices[source + 3] ?? 0;
+  });
+
+  const surfaceIndices =
+    selectedMeshParts.length > 0
+      ? surfaceIndicesForMeshOverlayParts(selectedMeshParts, topology) ??
+        buildSelectedTetraBoundarySurfaceIndices(topology, selectedElements)
+      : buildSelectedTetraBoundarySurfaceIndices(topology, selectedElements);
+  const edgeIndices = buildTetraVolumeEdgeIndices(selectedTetraIndices);
+  const geometry: RegionMeshOverlayGeometryBuffers = {
+    edgeIndices: edgeIndices.length > 0 ? edgeIndices : null,
+    surfaceEdgeIndices: buildSurfaceEdgeIndices(surfaceIndices),
+    surfaceIndices,
+  };
+  topologyCache.set(key, geometry);
+  evictOldestRegionMeshOverlayGeometryEntries(topologyCache);
+  return geometry;
+}
+
+function evictOldestRegionMeshOverlayGeometryEntries(
+  entries: Map<string, RegionMeshOverlayGeometryBuffers>,
+): void {
+  while (entries.size > REGION_MESH_OVERLAY_GEOMETRY_CACHE_LIMIT) {
+    const oldestKey = entries.keys().next().value;
+    if (oldestKey === undefined) return;
+    entries.delete(oldestKey);
+  }
+}
+
+function regionMeshOverlayGeometryCacheKey(
+  region: RegionMeshOverlaySelectionModel,
+  selectedElements: readonly number[],
+  selectedMeshParts: readonly RegionMeshOverlayOwnerPart[],
+): string {
+  return [
+    region.regionId,
+    region.objectId,
+    region.meshPartIds?.join(",") ?? "",
+    selectedElements.join(","),
+    selectedMeshParts.map(regionMeshOverlayOwnerPartCacheKey).join("|"),
+  ].join("::");
+}
+
+function regionMeshOverlayOwnerPartCacheKey(
+  part: RegionMeshOverlayOwnerPart,
+): string {
+  return JSON.stringify({
+    boundary_face_count: part.boundary_face_count ?? null,
+    boundary_face_indices: part.boundary_face_indices ?? null,
+    boundary_face_start: part.boundary_face_start ?? null,
+    element_count: part.element_count ?? null,
+    element_indices: part.element_indices ?? null,
+    element_start: part.element_start ?? null,
+    id: part.id ?? null,
+    surface_faces: part.surface_faces ?? null,
   });
 }
 

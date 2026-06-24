@@ -5,6 +5,9 @@ import {
   type Viewport3DTopologyIndexBundle,
   type Viewport3DTopologyIndexPartInput,
 } from "./viewport3dTopologyIndexModel";
+import type { Viewport3DBuildDiagnosticRecord } from "./build-engine/viewport3dBuildEngineTypes";
+import { recordViewport3DBuildDiagnostic } from "./build-engine/viewport3dBuildDiagnostics";
+import { createViewport3DBuildScheduler } from "./build-engine/viewport3dBuildScheduler";
 
 export interface Viewport3DTopologyIndexBuildRequest {
   airboxParts: readonly Viewport3DTopologyIndexPartInput[];
@@ -21,7 +24,17 @@ export interface Viewport3DTopologyIndexBuildRequest {
 }
 
 export interface Viewport3DTopologyIndexBuildOptions {
+  buildKey?: string;
+  groupKey?: string;
+  latestWins?: boolean;
+  onDiagnosticRecord?: (record: Viewport3DBuildDiagnosticRecord) => void;
+  revisionSummary?: string;
   signal?: AbortSignal;
+}
+
+interface Viewport3DTopologyIndexBuildExecutionOptions
+  extends Viewport3DTopologyIndexBuildOptions {
+  recordFallback?: (reason: string) => void;
 }
 
 interface TopologyIndexWorkerRequest extends Viewport3DTopologyIndexBuildRequest {
@@ -59,14 +72,51 @@ interface PendingTopologyIndexBuild {
 
 const TOPOLOGY_INDEX_WORKER_IDLE_TIMEOUT_MS = 30_000;
 
+let fallbackTopologyIndexBuildId = 1;
+let topologyIndexBuildJobScheduler:
+  | ReturnType<typeof createViewport3DBuildScheduler>
+  | undefined;
 let topologyIndexWorkerClient:
   | TopologyIndexWorkerClient
   | null
   | undefined;
+let topologyIndexWorkerFallbackReason: string | null | undefined;
 
 export async function buildViewport3DTopologyIndicesOffMainThread(
   request: Viewport3DTopologyIndexBuildRequest,
   options: Viewport3DTopologyIndexBuildOptions = {},
+): Promise<Viewport3DTopologyIndexBundle> {
+  throwIfAborted(options.signal);
+  const buildKey =
+    options.buildKey ??
+    `topology-index:adhoc:${fallbackTopologyIndexBuildId++}`;
+  const scheduler = getTopologyIndexBuildJobScheduler();
+  return scheduler.schedule(
+    {
+      groupKey: options.groupKey,
+      inputBytes: estimateTopologyIndexBuildInputBytes(request),
+      itemCount: request.topology.nodeCount,
+      key: buildKey,
+      lane: "topology-index",
+      outputBytesEstimate: estimateTopologyIndexBuildInputBytes(request),
+      revisionSummary: options.revisionSummary ?? buildKey,
+    },
+    (_buildRequest, context) =>
+      executeViewport3DTopologyIndexBuild(request, {
+        recordFallback: context.recordFallback,
+        signal: context.signal,
+      }),
+    {
+      latestWins: options.latestWins,
+      onDiagnosticRecord: options.onDiagnosticRecord,
+      signal: options.signal,
+    },
+  );
+}
+
+async function executeViewport3DTopologyIndexBuild(
+  request: Viewport3DTopologyIndexBuildRequest,
+  options: Viewport3DTopologyIndexBuildExecutionOptions,
 ): Promise<Viewport3DTopologyIndexBundle> {
   throwIfAborted(options.signal);
   const client = getTopologyIndexWorkerClient();
@@ -75,16 +125,39 @@ export async function buildViewport3DTopologyIndicesOffMainThread(
       return await client.build(request, options);
     } catch (error) {
       if (isAbortError(error)) throw error;
+      topologyIndexWorkerFallbackReason = "worker-error";
+      options.recordFallback?.(topologyIndexWorkerFallbackReason);
       topologyIndexWorkerClient = null;
     }
+  } else {
+    options.recordFallback?.(
+      topologyIndexWorkerFallbackReason ?? "worker-unavailable",
+    );
   }
 
   return buildViewport3DTopologyIndexBundle(request);
 }
 
 export function disposeViewport3DTopologyIndexWorkerForTests(): void {
+  topologyIndexBuildJobScheduler?.dispose();
+  topologyIndexBuildJobScheduler = undefined;
   topologyIndexWorkerClient?.dispose();
   topologyIndexWorkerClient = undefined;
+  topologyIndexWorkerFallbackReason = undefined;
+}
+
+function getTopologyIndexBuildJobScheduler(): ReturnType<
+  typeof createViewport3DBuildScheduler
+> {
+  if (!topologyIndexBuildJobScheduler) {
+    topologyIndexBuildJobScheduler = createViewport3DBuildScheduler({
+      laneConcurrency: {
+        "topology-index": 1,
+      },
+      onDiagnosticRecord: recordViewport3DBuildDiagnostic,
+    });
+  }
+  return topologyIndexBuildJobScheduler;
 }
 
 function getTopologyIndexWorkerClient(): TopologyIndexWorkerClient | null {
@@ -93,16 +166,25 @@ function getTopologyIndexWorkerClient(): TopologyIndexWorkerClient | null {
   }
 
   if (typeof Worker === "undefined") {
+    topologyIndexWorkerFallbackReason = "worker-unavailable";
     topologyIndexWorkerClient = null;
     return topologyIndexWorkerClient;
   }
 
   try {
     topologyIndexWorkerClient = new TopologyIndexWorkerClient();
+    topologyIndexWorkerFallbackReason = null;
   } catch {
+    topologyIndexWorkerFallbackReason = "worker-construction-failed";
     topologyIndexWorkerClient = null;
   }
   return topologyIndexWorkerClient;
+}
+
+function estimateTopologyIndexBuildInputBytes(
+  request: Viewport3DTopologyIndexBuildRequest,
+): number {
+  return request.topology.boundaryFaces.byteLength + request.topology.indices.byteLength;
 }
 
 class TopologyIndexWorkerClient {

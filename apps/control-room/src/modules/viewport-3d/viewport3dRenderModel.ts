@@ -16,7 +16,9 @@ import {
   buildMappedVertexScalarColors,
   buildVertexScalarColors,
   type ScalarColorBuffer,
+  type ScalarRange,
 } from "./viewport3dFieldMapping";
+import { buildViewport3DVectorGlyphJobKey } from "./build-engine/viewport3dBuildJobKeys";
 import {
   buildPartSurfaceIndices as buildPartSurfaceIndicesUncached,
   buildPartSurfaceIndicesWithSupplemental as buildPartSurfaceIndicesWithSupplementalUncached,
@@ -100,7 +102,9 @@ export interface Viewport3DTopologyRenderModelOptions {
 
 export interface Viewport3DFieldRenderModel {
   complexFieldVector: DecodedComplexFieldVector | null;
+  fullVectorBuild: Viewport3DVectorBuildReference | null;
   fullVectorSegments: Float32Array | null;
+  partVectorBuilds: Map<string, Viewport3DVectorBuildReference | null>;
   partVectorSegments: Map<string, Float32Array | null>;
   scalarColors: ScalarColorBuffer | null;
   scalarColorsByPartAndMode: Map<string, Map<string, ScalarColorBuffer | null>>;
@@ -108,7 +112,18 @@ export interface Viewport3DFieldRenderModel {
   visualizationPhaseRad: number | null;
 }
 
+export interface Viewport3DVectorBuildReference {
+  buildKey: string;
+  fieldRevision: string;
+  groupKey: string;
+  revisionSummary: string;
+  targetRevision: string;
+  topologyRevision: string;
+}
+
 export interface Viewport3DFieldRenderOptions {
+  buildDomainId?: string;
+  buildSessionId?: string;
   fullVectorBudget?: number;
   fullVectorAnchorMode?: Viewport3DVectorAnchorMode;
   fullVectorSurfaceOffsetEnabled?: boolean;
@@ -123,7 +138,11 @@ export interface Viewport3DFieldRenderOptions {
   partVectorSurfaceOffsetScales?: ReadonlyMap<string, number>;
   scalarColorModes?: ReadonlySet<string>;
   scalarColorPalette?: string;
+  scalarRangesByMode?: ReadonlyMap<string, ScalarRange>;
   scalarColorsVisible?: boolean;
+  fieldRevision?: string | number | null;
+  targetVisualizationRevision?: string | number | null;
+  topologyRevision?: string | number | null;
   vectorColorMode?: string;
   visualizationPhaseRad?: number | null;
 }
@@ -527,6 +546,7 @@ export function buildViewport3DFieldRenderModel(
                   topology.nodeCount,
                   colorMode,
                   options.scalarColorPalette,
+                  options.scalarRangesByMode?.get(colorMode),
                 )
               : buildCachedMappedVertexScalarColors(
                   topology,
@@ -534,6 +554,7 @@ export function buildViewport3DFieldRenderModel(
                   magneticFieldNodeIndices,
                   colorMode,
                   options.scalarColorPalette,
+                  options.scalarRangesByMode?.get(colorMode),
                 ),
           ]),
         );
@@ -546,6 +567,10 @@ export function buildViewport3DFieldRenderModel(
   );
   const scalarColors =
     scalarColorsByMode.get(options.vectorColorMode ?? "magnitude") ?? null;
+  const partVectorBuilds = new Map<
+    string,
+    Viewport3DVectorBuildReference | null
+  >();
   const partVectorSegments = new Map<string, Float32Array | null>();
   const scalarColorsByPartAndMode = new Map<
     string,
@@ -622,6 +647,7 @@ export function buildViewport3DFieldRenderModel(
               partFieldVector,
               colorMode,
               options.scalarColorPalette,
+              options.scalarRangesByMode?.get(colorMode),
             ),
           ]),
         ),
@@ -642,54 +668,189 @@ export function buildViewport3DFieldRenderModel(
               partFieldVector.pointCount,
             )
           : null);
-    partVectorSegments.set(
+    const anchorMode = options.partVectorAnchorModes?.get(partId) ?? "center";
+    const partSegments = buildCachedPartVectorSegments(
+      partModel,
+      topology,
+      partFieldVector,
+      renderVectorSelection,
+      vectorScope,
+      scale * partScale,
+      partBudget,
+      {
+        anchorMode,
+        surfaceOffsetEnabled,
+        surfaceOffsetScale,
+        surfaceTriangleIndices:
+          surfaceOffsetEnabled ? partModel.surfaceIndices : null,
+      },
+      fieldValueResolver,
+    );
+    partVectorSegments.set(partId, partSegments);
+    partVectorBuilds.set(
       partId,
-      buildCachedPartVectorSegments(
-        partModel,
+      buildVectorGlyphBuildReference({
+        budget: partBudget,
+        fieldVector: partFieldVector,
+        options,
+        scale: scale * partScale,
+        scopeId: partId,
+        scopeKind: vectorScope,
+        segments: partSegments,
         topology,
-        partFieldVector,
-        renderVectorSelection,
-        vectorScope,
-        scale * partScale,
-        partBudget,
-        {
-          anchorMode: options.partVectorAnchorModes?.get(partId) ?? "center",
-          surfaceOffsetEnabled,
-          surfaceOffsetScale,
-          surfaceTriangleIndices:
-            surfaceOffsetEnabled ? partModel.surfaceIndices : null,
-        },
-        fieldValueResolver,
-      ),
+        vectorAnchorMode: anchorMode,
+        vectorSurfaceOffsetEnabled: surfaceOffsetEnabled,
+        vectorSurfaceOffsetScale: surfaceOffsetScale,
+      }),
     );
   }
 
   const fullVectorBudget =
     options.fullVectorBudget ?? DEFAULT_VIEWPORT_3D_VECTOR_GLYPH_BUDGET;
+  const fullVectorAnchorMode = options.fullVectorAnchorMode ?? "center";
+  const fullVectorSurfaceOffsetEnabled =
+    options.fullVectorSurfaceOffsetEnabled ?? false;
+  const fullVectorSurfaceOffsetScale =
+    options.fullVectorSurfaceOffsetScale ?? 0;
+  const fullVectorSegments = buildCachedFullVectorSegments(
+    topology,
+    fullFieldVector,
+    scale,
+    fullVectorBudget,
+    {
+      anchorMode: fullVectorAnchorMode,
+      surfaceOffsetEnabled: fullVectorSurfaceOffsetEnabled,
+      surfaceOffsetScale: fullVectorSurfaceOffsetScale,
+      surfaceTriangleIndices:
+        fullVectorSurfaceOffsetEnabled === true
+          ? topology.fallbackSurfaceIndices
+          : null,
+    },
+  );
 
   return {
     complexFieldVector: options.complexFieldVector ?? null,
-    fullVectorSegments: buildCachedFullVectorSegments(
-      topology,
-      fullFieldVector,
+    fullVectorBuild: buildVectorGlyphBuildReference({
+      budget: fullVectorBudget,
+      fieldVector: fullFieldVector,
+      options,
       scale,
-      fullVectorBudget,
-      {
-        anchorMode: options.fullVectorAnchorMode ?? "center",
-        surfaceOffsetEnabled: options.fullVectorSurfaceOffsetEnabled ?? false,
-        surfaceOffsetScale: options.fullVectorSurfaceOffsetScale ?? 0,
-        surfaceTriangleIndices:
-          options.fullVectorSurfaceOffsetEnabled === true
-            ? topology.fallbackSurfaceIndices
-            : null,
-      },
-    ),
+      scopeId: "full",
+      scopeKind: "full",
+      segments: fullVectorSegments,
+      topology,
+      vectorAnchorMode: fullVectorAnchorMode,
+      vectorSurfaceOffsetEnabled: fullVectorSurfaceOffsetEnabled,
+      vectorSurfaceOffsetScale: fullVectorSurfaceOffsetScale,
+    }),
+    fullVectorSegments,
+    partVectorBuilds,
     partVectorSegments,
     scalarColors,
     scalarColorsByPartAndMode,
     scalarColorsByMode,
     visualizationPhaseRad,
   };
+}
+
+function buildVectorGlyphBuildReference({
+  budget,
+  fieldVector,
+  options,
+  scale,
+  scopeId,
+  scopeKind,
+  segments,
+  topology,
+  vectorAnchorMode,
+  vectorSurfaceOffsetEnabled,
+  vectorSurfaceOffsetScale,
+}: {
+  budget: number;
+  fieldVector: DecodedFieldVector | null | undefined;
+  options: Viewport3DFieldRenderOptions;
+  scale: number;
+  scopeId: string;
+  scopeKind: string;
+  segments: Float32Array | null;
+  topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>;
+  vectorAnchorMode: Viewport3DVectorAnchorMode;
+  vectorSurfaceOffsetEnabled: boolean;
+  vectorSurfaceOffsetScale: number;
+}): Viewport3DVectorBuildReference | null {
+  if (!segments || !fieldVector) return null;
+  const topologyRevision = revisionToString(
+    options.topologyRevision ?? topology.meshRevision,
+  );
+  const fieldRevision = revisionToString(options.fieldRevision);
+  if (!topologyRevision || !fieldRevision) return null;
+
+  const sessionId = options.buildSessionId ?? "current";
+  const domainId =
+    options.buildDomainId ?? topology.meshGenerationId ?? "viewport-3d";
+  const quantityId = fieldVector.quantityId;
+  const samplingRevision = [
+    options.vectorColorMode ?? "magnitude",
+    scopeKind,
+    scopeId,
+    budget,
+    scale,
+    vectorAnchorMode,
+    vectorSurfaceOffsetEnabled,
+    vectorSurfaceOffsetScale,
+  ].join(":");
+  const styleRevision = "vector-segments-v1";
+  const targetVisualizationRevision =
+    revisionToString(options.targetVisualizationRevision) ?? "unknown";
+  const buildKey = buildViewport3DVectorGlyphJobKey({
+    algorithmVersion: 1,
+    component: "full",
+    domainId,
+    fieldRevision,
+    quantityId,
+    samplingRevision,
+    scopeId,
+    scopeKind,
+    sessionId,
+    styleRevision,
+    targetVisualizationRevision,
+    topologyRevision,
+  });
+  const groupKey = [
+    "vector-glyph",
+    sessionId,
+    domainId,
+    quantityId,
+    scopeKind,
+    scopeId,
+  ].join(":");
+  const revisionSummary = [
+    `topology=${topologyRevision}`,
+    `field=${fieldRevision}`,
+    `quantity=${quantityId}`,
+    `scope=${scopeKind}:${scopeId}`,
+  ].join(" ");
+
+  return {
+    buildKey,
+    fieldRevision,
+    groupKey,
+    revisionSummary,
+    targetRevision: `field=${fieldRevision}`,
+    topologyRevision,
+  };
+}
+
+function revisionToString(
+  revision: string | number | null | undefined,
+): string | null {
+  if (typeof revision === "number" && Number.isFinite(revision)) {
+    return String(revision);
+  }
+  if (typeof revision === "string" && revision.length > 0) {
+    return revision;
+  }
+  return null;
 }
 
 function finitePhaseRad(value: number | null | undefined): number | null {
@@ -835,6 +996,7 @@ function buildCachedMappedVertexScalarColors(
   targetNodeIndices: Uint32Array | null | undefined,
   colorMode: string | undefined,
   colorPalette: string | undefined,
+  scalarRange?: ScalarRange | null,
 ): ScalarColorBuffer | null {
   if (!fieldVector || !targetNodeIndices) return null;
 
@@ -842,7 +1004,7 @@ function buildCachedMappedVertexScalarColors(
     mappedScalarColorCache,
     topology,
     fieldVector,
-    `${targetNodeIndices.length}:${topology.nodeCount}:${colorMode ?? "magnitude"}:${colorPalette ?? "viridis"}:mapped`,
+    `${targetNodeIndices.length}:${topology.nodeCount}:${colorMode ?? "magnitude"}:${colorPalette ?? "viridis"}:${scalarRangeCacheKey(scalarRange)}:mapped`,
     () =>
       buildMappedVertexScalarColors(
         fieldVector,
@@ -851,6 +1013,7 @@ function buildCachedMappedVertexScalarColors(
         Number.POSITIVE_INFINITY,
         colorMode,
         colorPalette,
+        scalarRange,
       ),
     "viewport3d.render.mappedScalarColorCache",
   );
@@ -861,13 +1024,14 @@ function buildCachedVertexScalarColors(
   vertexCount: number,
   colorMode: string | undefined,
   colorPalette: string | undefined,
+  scalarRange?: ScalarRange | null,
 ): ScalarColorBuffer | null {
   if (!fieldVector) return null;
 
   return getCachedValue(
     scalarColorCache,
     fieldVector,
-    `${vertexCount}:${colorMode ?? "magnitude"}:${colorPalette ?? "viridis"}`,
+    `${vertexCount}:${colorMode ?? "magnitude"}:${colorPalette ?? "viridis"}:${scalarRangeCacheKey(scalarRange)}`,
     () =>
       buildVertexScalarColors(
         fieldVector,
@@ -875,9 +1039,21 @@ function buildCachedVertexScalarColors(
         undefined,
         colorMode,
         colorPalette,
+        scalarRange,
       ),
     "viewport3d.render.scalarColorCache",
   );
+}
+
+function scalarRangeCacheKey(range: ScalarRange | null | undefined): string {
+  if (
+    !range ||
+    !Number.isFinite(range.min) ||
+    !Number.isFinite(range.max)
+  ) {
+    return "auto";
+  }
+  return `range=${range.min}:${range.max}`;
 }
 
 function buildMagneticFieldNodeIndices(
@@ -1034,6 +1210,7 @@ function buildCachedPartVertexScalarColors(
   fieldVector: DecodedFieldVector | null | undefined,
   colorMode: string | undefined,
   colorPalette: string | undefined,
+  scalarRange?: ScalarRange | null,
 ): ScalarColorBuffer | null {
   if (!fieldVector) return null;
   if (fieldVector.pointCount >= topology.nodeCount) {
@@ -1042,6 +1219,7 @@ function buildCachedPartVertexScalarColors(
       topology.nodeCount,
       colorMode,
       colorPalette,
+      scalarRange,
     );
   }
 
@@ -1054,7 +1232,7 @@ function buildCachedPartVertexScalarColors(
     partScalarColorCache,
     partModel,
     fieldVector,
-    `${topology.nodeCount}:${colorMode ?? "magnitude"}:${colorPalette ?? "viridis"}:scoped`,
+    `${topology.nodeCount}:${colorMode ?? "magnitude"}:${colorPalette ?? "viridis"}:${scalarRangeCacheKey(scalarRange)}:scoped`,
     () =>
       buildMappedVertexScalarColors(
         fieldVector,
@@ -1063,6 +1241,7 @@ function buildCachedPartVertexScalarColors(
         undefined,
         colorMode,
         colorPalette,
+        scalarRange,
       ),
     "viewport3d.render.partScalarColorCache",
   );

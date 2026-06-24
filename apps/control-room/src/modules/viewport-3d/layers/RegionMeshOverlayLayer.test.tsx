@@ -3,6 +3,16 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 describe("RegionMeshOverlayLayer", () => {
+  it("consumes the region overlay build-model boundary instead of deriving directly in the layer", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("./RegionMeshOverlayLayer.tsx", import.meta.url)),
+      "utf8",
+    );
+
+    expect(source).toContain("buildViewport3DRegionOverlayModels");
+    expect(source).not.toContain("buildRegionMeshOverlayModels(");
+  });
+
   it("uses depth-tested selection-shell policy for realized region surfaces", () => {
     const source = readFileSync(
       fileURLToPath(new URL("./RegionMeshOverlayLayer.tsx", import.meta.url)),

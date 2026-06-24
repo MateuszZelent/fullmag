@@ -10,12 +10,12 @@ import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectV
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
 import {
-  buildRegionMeshOverlayModels,
   type RegionMeshOverlayModel,
   type RegionMeshOverlayOwnerPart,
   type RegionOverlayInput,
   type RegionOverlayTheme,
 } from "./regionOverlayModel";
+import { buildViewport3DRegionOverlayModels } from "../region-overlays/viewport3dRegionOverlayBuildModel";
 import { materialPolicyProps, RENDER_POLICIES } from "./viewport3DRenderPolicy";
 import type { RegionOverlaySelection } from "./RegionOverlayLayer";
 
@@ -59,14 +59,23 @@ export function RegionMeshOverlayLayer({
   visible = true,
 }: RegionMeshOverlayLayerProps) {
   const models = useMemo(
-    () =>
-      buildRegionMeshOverlayModels(regions, topology, magneticParts, {
-        resolveSettings: getRegionSettings,
-        renderedSurfacePartIds,
+    () => {
+      if (!topology) return [];
+      return buildViewport3DRegionOverlayModels({
+        magneticParts,
+        regions,
+        renderedSurfacePartIds: renderedSurfacePartIds
+          ? [...renderedSurfacePartIds].toSorted()
+          : undefined,
         selectedObjectId,
         selectedRegionId,
+        settingsByRegionId: getRegionSettings
+          ? resolveRegionSettingsEntries(regions, getRegionSettings)
+          : undefined,
         theme,
-      }),
+        topology,
+      }).models;
+    },
     [
       getRegionSettings,
       magneticParts,
@@ -92,6 +101,17 @@ export function RegionMeshOverlayLayer({
         />
       ))}
     </group>
+  );
+}
+
+function resolveRegionSettingsEntries(
+  regions: readonly RegionOverlayInput[],
+  getRegionSettings: (region: RegionOverlayInput) => VisualizationTargetSettings,
+): Array<readonly [string, VisualizationTargetSettings]> {
+  return regions.flatMap((region) =>
+    typeof region.region_id === "string"
+      ? [[region.region_id, getRegionSettings(region)] as const]
+      : [],
   );
 }
 

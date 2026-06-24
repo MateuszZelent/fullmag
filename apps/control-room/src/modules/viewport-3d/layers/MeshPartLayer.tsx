@@ -28,9 +28,9 @@ import {
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
 import {
-  applyVertexScalarColorBuffer,
   canApplyVertexScalarColorBuffer,
 } from "../viewport3dGeometryColors";
+import { useViewport3DScalarColorUpload } from "../hooks/useViewport3DScalarColorUpload";
 import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
 import type { Viewport3DMagnetizationTexturePreview } from "../viewport3dPrimitiveModel";
 import { buildViewport3DPointGeometry } from "../viewport3dPointGeometry";
@@ -195,27 +195,17 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     // so without this guard the effect would zero the buffer while hidden and
     // then skip re-application on toggle-on (same ref → deps unchanged).
     if (!renderSettings.shaderVisible) return;
-    if (shaderScalarColorsEnabled) {
-      applyScalarShaderColorBuffer(
-        geometry,
-        effectiveScalarColors,
-        topologyModel.nodeCount,
-      );
-    } else {
+    if (!shaderScalarColorsEnabled) {
       applyScalarShaderColorBuffer(geometry, null, topologyModel.nodeCount);
-      applyVertexScalarColorBuffer(
-        geometry,
-        vertexColorsEnabled ? effectiveScalarColors : null,
-        topologyModel.nodeCount,
-      );
+      return;
     }
-    tracker.recordDirtyFrame(
-      shaderScalarColorsEnabled
-        ? "field-scalar-shader"
-        : meshQualityColors
-          ? "mesh-quality-colors"
-          : "field-colors",
+
+    applyScalarShaderColorBuffer(
+      geometry,
+      effectiveScalarColors,
+      topologyModel.nodeCount,
     );
+    tracker.recordDirtyFrame("field-scalar-shader");
     invalidate();
   }, [
     effectiveScalarColors,
@@ -227,8 +217,27 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     shaderScalarColorsEnabled,
     topologyModel,
     tracker,
-    vertexColorsEnabled,
   ]);
+  useViewport3DScalarColorUpload({
+    colorBuffer: effectiveScalarColors,
+    dirtyReason: meshQualityColors ? "mesh-quality-colors" : "field-colors",
+    enabled: Boolean(
+      geometry &&
+        topologyModel &&
+        renderSettings.shaderVisible &&
+        (fieldColorLayersEnabled || meshQualityColors) &&
+        !shaderScalarColorsEnabled,
+    ),
+    geometry,
+    invalidate,
+    targetRevision: effectiveScalarColors?.targetRevision ?? null,
+    tracker,
+    uploadKey:
+      effectiveScalarColors?.buildKey ??
+      `mesh-part-colors:${part.id}:${topologyModel?.nodeCount ?? 0}`,
+    vertexColorsEnabled,
+    vertexCount: topologyModel?.nodeCount ?? 0,
+  });
 
   const materialRef = useRef<MeshBasicMaterial>(null);
   const hasScalarColors = vertexColorsEnabled && canUseVertexScalarColors;
@@ -375,6 +384,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       {viewport3DVectorLayersEnabledFromBrowserConfig() &&
       renderSettings.vectorsVisible ? (
         <VectorFieldLayer
+          buildReference={fieldModel?.partVectorBuilds.get(part.id) ?? null}
           colors={colors}
           colorMode={vectorColorModeFromSettings(renderSettings, vectorColorMode)}
           materialProfile={materialProfile.glyphs}

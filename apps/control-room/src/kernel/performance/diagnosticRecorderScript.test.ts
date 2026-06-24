@@ -64,4 +64,13 @@ describe("diagnostic recorder script", () => {
     expect(script).toContain("viewport-3d.ndjson");
     expect(script).toContain("__FULLMAG_DIAGNOSTIC_RECORDER_EXPORT__");
   });
+
+  it("writes a lane summary for viewport 3D build-engine records", () => {
+    expect(script).toContain("viewport3d-build-summary.json");
+    expect(script).toContain("buildViewport3DBuildSummary");
+    expect(script).toContain("fullmag.viewport3d.build-engine.");
+    expect(script).toContain("queueWaitMaxMs");
+    expect(script).toContain("workerComputeMaxMs");
+    expect(script).toContain("fallbackReasons");
+  });
 });

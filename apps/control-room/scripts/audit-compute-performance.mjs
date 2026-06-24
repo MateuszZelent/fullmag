@@ -1431,8 +1431,10 @@ function checkVectorGlyphChunkedUpload() {
   requireTokens(source, "VectorFieldLayer chunked upload", [
     "const VECTOR_GLYPH_UPLOAD_BATCH_SIZE",
     "function buildVectorGlyphUploadBatches",
-    "requestVectorGlyphUploadTask",
-    "cancelVectorGlyphUploadTask",
+    "createViewport3DGpuUploadManager",
+    "uploadManager.enqueue",
+    "AbortController",
+    "onVisible: () =>",
     "const batches = buildVectorGlyphUploadBatches(activeGlyphs.count)",
     "for (let index = batch.start; index < batch.end; index += 1)",
     "activeShaft.setMatrixAt(index, matrix)",
@@ -1442,6 +1444,8 @@ function checkVectorGlyphChunkedUpload() {
     "fullmag.viewport3d.uploadVectorGlyphMatrices",
   ]);
   forbidTokens(source, "VectorFieldLayer chunked upload", [
+    "function requestVectorGlyphUploadTask",
+    "function cancelVectorGlyphUploadTask",
     "for (let index = 0; index < glyphs.count; index += 1)",
   ]);
 }

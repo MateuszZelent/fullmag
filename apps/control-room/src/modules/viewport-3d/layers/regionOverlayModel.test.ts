@@ -683,6 +683,100 @@ describe("regionOverlayModel", () => {
     expect(secondModels[0].positions).toBe(firstModels[0].positions);
   });
 
+  it("reuses mesh-backed overlay geometry buffers for unchanged topology and regions", () => {
+    const topology = {
+      boundaryFaceCount: 0,
+      boundaryFaces: new Uint32Array(),
+      boundaryMarkers: new Uint32Array(),
+      elementCount: 2,
+      elementMarkers: Uint32Array.from([1, 1]),
+      indices: Uint32Array.from([0, 1, 2, 3, 1, 2, 3, 4]),
+      nodeCount: 5,
+      positions: Float64Array.from([
+        0, 0, 0,
+        1, 0, 0,
+        0, 1, 0,
+        0, 0, 1,
+        1, 1, 1,
+      ]),
+    };
+    const regions = [
+      {
+        enabled: true,
+        mesh_part_ids: ["part:film:core"],
+        name: "Core",
+        owner_object_id: "film",
+        priority: 0,
+        region_id: "film:core",
+      },
+    ];
+    const parts = [
+      {
+        element_count: 1,
+        element_start: 0,
+        id: "part:film:core",
+        object_id: "film",
+        surface_faces: [[0, 1, 2]],
+      },
+    ];
+
+    const firstModels = buildRegionMeshOverlayModels(regions, topology, parts);
+    const secondModels = buildRegionMeshOverlayModels(regions, topology, parts);
+
+    expect(secondModels[0].surfaceIndices).toBe(firstModels[0].surfaceIndices);
+    expect(secondModels[0].edgeIndices).toBe(firstModels[0].edgeIndices);
+    expect(secondModels[0].surfaceEdgeIndices).toBe(
+      firstModels[0].surfaceEdgeIndices,
+    );
+  });
+
+  it("evicts old mesh-backed overlay geometry cache entries", () => {
+    const topology = {
+      boundaryFaceCount: 0,
+      boundaryFaces: new Uint32Array(),
+      boundaryMarkers: new Uint32Array(),
+      elementCount: 1,
+      elementMarkers: Uint32Array.from([1]),
+      indices: Uint32Array.from([0, 1, 2, 3]),
+      nodeCount: 4,
+      positions: Float64Array.from([
+        0, 0, 0,
+        1, 0, 0,
+        0, 1, 0,
+        0, 0, 1,
+      ]),
+    };
+    const part = {
+      element_count: 1,
+      element_start: 0,
+      id: "part:film:core",
+      object_id: "film",
+      surface_faces: [[0, 1, 2]],
+    };
+    const regionFor = (index: number) => ({
+      enabled: true,
+      mesh_part_ids: ["part:film:core"],
+      name: `Core ${index}`,
+      owner_object_id: "film",
+      priority: index,
+      region_id: `film:core:${index}`,
+    });
+
+    const first = buildRegionMeshOverlayModels([regionFor(0)], topology, [part]);
+    const firstSurfaceIndices = first[0].surfaceIndices;
+
+    for (let index = 1; index <= 20; index += 1) {
+      buildRegionMeshOverlayModels([regionFor(index)], topology, [part]);
+    }
+
+    const rebuilt = buildRegionMeshOverlayModels([regionFor(0)], topology, [part]);
+
+    expect(rebuilt[0].surfaceIndices).not.toBe(firstSurfaceIndices);
+    expect(Array.from(rebuilt[0].surfaceIndices ?? [])).toEqual(
+      Array.from(firstSurfaceIndices ?? []),
+    );
+  });
+
   it("keeps mesh-backed overlays scoped to the owner object and region settings", () => {
     const topology = {
       boundaryFaceCount: 0,

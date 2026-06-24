@@ -78,7 +78,11 @@ it("lets diagnostics bypass airbox field-color buffer application", () => {
   );
   expect(boundsLayersSource).toContain("fieldColorLayersEnabled");
   expect(boundsLayersSource).toContain(
-    "if (!fieldColorLayersEnabled) return;",
+    "fieldColorLayersEnabled ? fieldModel : null",
+  );
+  expect(boundsLayersSource).toContain("useViewport3DScalarColorUpload");
+  expect(boundsLayersSource).toContain(
+    "geometry && renderSettings.shaderVisible && fieldColorLayersEnabled",
   );
 });
 
@@ -303,7 +307,9 @@ describe("AirboxLayer", () => {
     };
     const fieldModel = {
       complexFieldVector: null,
+      fullVectorBuild: null,
       fullVectorSegments: null,
+      partVectorBuilds: new Map(),
       partVectorSegments: new Map(),
       scalarColors: null,
       scalarColorsByPartAndMode: new Map(),
@@ -387,7 +393,9 @@ describe("AirboxLayer", () => {
     const tracker = new Viewport3DResourceTracker();
     const fieldModel = {
       complexFieldVector: null,
+      fullVectorBuild: null,
       fullVectorSegments: null,
+      partVectorBuilds: new Map(),
       partVectorSegments: new Map([
         ["airbox-part", new Float32Array([0, 0, 0, 1, 0, 0, 1])],
       ]),

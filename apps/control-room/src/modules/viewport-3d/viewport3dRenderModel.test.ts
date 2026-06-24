@@ -870,6 +870,57 @@ describe("viewport3dRenderModel", () => {
     );
   });
 
+  it("builds semantic vector glyph job metadata from topology and field revisions", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "part-a",
+          label: "Part A",
+          nodeCount: 2,
+          nodeStart: 0,
+        },
+      ],
+      [],
+    );
+
+    const fieldModel = buildViewport3DFieldRenderModel(
+      topologyModel,
+      fieldVectorFixture(),
+      0.5,
+      {
+        buildDomainId: "shared-domain",
+        buildSessionId: "current",
+        fieldRevision: "field-41",
+        fullVectorBudget: 4,
+        partVectorBudgets: new Map([["part-a", 2]]),
+        targetVisualizationRevision: "viz-9",
+        topologyRevision: "mesh-7",
+        vectorColorMode: "x",
+      },
+    );
+
+    expect(fieldModel?.fullVectorBuild?.buildKey).toContain("vector-glyph");
+    expect(fieldModel?.fullVectorBuild?.buildKey).toContain("field-41");
+    expect(fieldModel?.fullVectorBuild?.buildKey).toContain("mesh-7");
+    expect(fieldModel?.fullVectorBuild?.groupKey).toBe(
+      "vector-glyph:current:shared-domain:m:full:full",
+    );
+    expect(fieldModel?.fullVectorBuild).toMatchObject({
+      fieldRevision: "field-41",
+      targetRevision: "field=field-41",
+      topologyRevision: "mesh-7",
+    });
+    expect(fieldModel?.partVectorBuilds.get("part-a")?.buildKey).toContain(
+      "part-a",
+    );
+    expect(fieldModel?.partVectorBuilds.get("part-a")?.groupKey).toBe(
+      "vector-glyph:current:shared-domain:m:full:part-a",
+    );
+  });
+
   it("skips hidden field-derived buffers before allocating vector glyph data", () => {
     const topologyModel = buildViewport3DTopologyRenderModel(
       topologyFixture(),

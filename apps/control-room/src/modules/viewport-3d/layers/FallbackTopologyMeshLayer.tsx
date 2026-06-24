@@ -28,9 +28,9 @@ import {
 } from "../viewport3dSurfaceEdges";
 import { buildViewport3DPointGeometry } from "../viewport3dPointGeometry";
 import {
-  applyVertexScalarColorBuffer,
   canApplyVertexScalarColorBuffer,
 } from "../viewport3dGeometryColors";
+import { useViewport3DScalarColorUpload } from "../hooks/useViewport3DScalarColorUpload";
 import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
 import type {
   Viewport3DFieldRenderModel,
@@ -169,27 +169,17 @@ export function FallbackTopologyMeshLayer({
   useEffect(() => {
     if (!geometry || !topologyModel) return;
     if (!fieldColorLayersEnabled && !meshQualityColors) return;
-    if (shaderScalarColorsEnabled) {
-      applyScalarShaderColorBuffer(
-        geometry,
-        effectiveScalarColors,
-        topologyModel.nodeCount,
-      );
-    } else {
+    if (!shaderScalarColorsEnabled) {
       applyScalarShaderColorBuffer(geometry, null, topologyModel.nodeCount);
-      applyVertexScalarColorBuffer(
-        geometry,
-        vertexColorsEnabled ? effectiveScalarColors : null,
-        topologyModel.nodeCount,
-      );
+      return;
     }
-    tracker.recordDirtyFrame(
-      shaderScalarColorsEnabled
-        ? "field-scalar-shader"
-        : meshQualityColors
-          ? "mesh-quality-colors"
-          : "field-colors",
+
+    applyScalarShaderColorBuffer(
+      geometry,
+      effectiveScalarColors,
+      topologyModel.nodeCount,
     );
+    tracker.recordDirtyFrame("field-scalar-shader");
     invalidate();
   }, [
     effectiveScalarColors,
@@ -200,8 +190,26 @@ export function FallbackTopologyMeshLayer({
     shaderScalarColorsEnabled,
     topologyModel,
     tracker,
-    vertexColorsEnabled,
   ]);
+  useViewport3DScalarColorUpload({
+    colorBuffer: effectiveScalarColors,
+    dirtyReason: meshQualityColors ? "mesh-quality-colors" : "field-colors",
+    enabled: Boolean(
+      geometry &&
+        topologyModel &&
+        (fieldColorLayersEnabled || meshQualityColors) &&
+        !shaderScalarColorsEnabled,
+    ),
+    geometry,
+    invalidate,
+    targetRevision: effectiveScalarColors?.targetRevision ?? null,
+    tracker,
+    uploadKey:
+      effectiveScalarColors?.buildKey ??
+      `fallback-surface-colors:${topologyModel?.nodeCount ?? 0}`,
+    vertexColorsEnabled,
+    vertexCount: topologyModel?.nodeCount ?? 0,
+  });
 
   const hasScalarColors =
     vertexColorsEnabled && canUseVertexScalarColors;
@@ -345,6 +353,7 @@ export function FallbackTopologyMeshLayer({
       {viewport3DVectorLayersEnabledFromBrowserConfig() &&
       renderSettings.vectorsVisible ? (
         <VectorFieldLayer
+          buildReference={fieldModel?.fullVectorBuild ?? null}
           colors={colors}
           colorMode={vectorColorModeFromSettings(
             renderSettings,

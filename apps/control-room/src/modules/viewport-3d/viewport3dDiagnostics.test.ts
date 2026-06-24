@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -6,6 +8,18 @@ import {
 } from "./viewport3dDiagnostics";
 
 describe("viewport3dDiagnostics", () => {
+  it("subscribes build-engine diagnostics into the diagnostic recorder", () => {
+    const source = readFileSync(
+      new URL("./viewport3dDiagnostics.ts", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("subscribeViewport3DBuildDiagnostics");
+    expect(source).toContain(
+      "createDiagnosticRecordFromViewport3DBuildDiagnostic",
+    );
+  });
+
   it("tracks and disposes viewport-owned resources without forcing React updates", () => {
     const tracker = new Viewport3DResourceTracker();
     const dispose = vi.fn();

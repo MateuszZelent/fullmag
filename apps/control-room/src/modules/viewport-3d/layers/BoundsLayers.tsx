@@ -25,9 +25,9 @@ import {
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
 import {
-  applyVertexScalarColorBuffer,
   canApplyVertexScalarColorBuffer,
 } from "../viewport3dGeometryColors";
+import { useViewport3DScalarColorUpload } from "../hooks/useViewport3DScalarColorUpload";
 import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
 import {
   isViewport3DTopologyRenderable,
@@ -262,29 +262,22 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
     topologyModel.nodeCount,
     colors.mesh,
   );
-  useEffect(() => {
-    if (!geometry) return;
-    if (!renderSettings.shaderVisible) return;
-    if (!fieldColorLayersEnabled) return;
-    applyVertexScalarColorBuffer(
-      geometry,
-      surfaceColorState.vertexColorsEnabled
-        ? surfaceColorState.scalarColors
-        : null,
-      topologyModel.nodeCount,
-    );
-    tracker.recordDirtyFrame("airbox-field-colors");
-    invalidate();
-  }, [
+  useViewport3DScalarColorUpload({
+    colorBuffer: surfaceColorState.scalarColors,
+    dirtyReason: "airbox-field-colors",
+    enabled: Boolean(
+      geometry && renderSettings.shaderVisible && fieldColorLayersEnabled,
+    ),
     geometry,
     invalidate,
-    fieldColorLayersEnabled,
-    renderSettings.shaderVisible,
-    surfaceColorState.scalarColors,
-    topologyModel.nodeCount,
+    targetRevision: surfaceColorState.scalarColors?.targetRevision ?? null,
     tracker,
-    surfaceColorState.vertexColorsEnabled,
-  ]);
+    uploadKey:
+      surfaceColorState.scalarColors?.buildKey ??
+      `airbox-surface-colors:${part.id}:${topologyModel.nodeCount}`,
+    vertexColorsEnabled: surfaceColorState.vertexColorsEnabled,
+    vertexCount: topologyModel.nodeCount,
+  });
 
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
     event.stopPropagation();
@@ -364,6 +357,7 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
         {viewport3DVectorLayersEnabledFromBrowserConfig() &&
         renderSettings.vectorsVisible ? (
           <VectorFieldLayer
+            buildReference={fieldModel?.partVectorBuilds.get(part.id) ?? null}
             colors={colors}
             colorMode={vectorColorModeFromSettings(renderSettings, vectorColorMode)}
             materialProfile={materialProfile.glyphs}
@@ -455,6 +449,7 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
       {viewport3DVectorLayersEnabledFromBrowserConfig() &&
       renderSettings.vectorsVisible ? (
         <VectorFieldLayer
+          buildReference={fieldModel?.partVectorBuilds.get(part.id) ?? null}
           colors={colors}
           colorMode={vectorColorModeFromSettings(renderSettings, vectorColorMode)}
           materialProfile={materialProfile.glyphs}
