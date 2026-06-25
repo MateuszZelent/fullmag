@@ -4,12 +4,14 @@ import type { ReactElement } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
 import {
+  useHysteresisBookmarksResource,
   useHysteresisBranchesResource,
   useHysteresisExecutionTreeResource,
   useHysteresisFamilyResource,
   useHysteresisMetricsResource,
   useHysteresisMinorLoopsResource,
   useHysteresisOrientationResource,
+  useHysteresisPointResource,
   useHysteresisPointsResource,
   useHysteresisAdaptiveRefinementResource,
   useHysteresisProgressResource,
@@ -95,6 +97,7 @@ export function HysteresisStageInspector(props: HysteresisStageInspectorProps) {
   });
   const angularFamilyRes = useHysteresisFamilyResource(stageId);
   const metricsRes = useHysteresisMetricsResource(stageId);
+  const bookmarksRes = useHysteresisBookmarksResource(stageId);
   const branchesRes = useHysteresisBranchesResource(stageId);
   const minorLoopsRes = useHysteresisMinorLoopsResource(stageId);
   const reversalFieldsRes = useHysteresisReversalFieldsResource(stageId);
@@ -105,18 +108,22 @@ export function HysteresisStageInspector(props: HysteresisStageInspectorProps) {
   });
   const adaptiveRefinementRes = useHysteresisAdaptiveRefinementResource(stageId);
   const orientationRes = useHysteresisOrientationResource(stageId);
+  const pointDetailRes = useHysteresisPointResource(stageId, activePoint?.pointId, {
+    enabled: activePoint?.pointId != null,
+  });
   const settleTraceRes = useHysteresisSettleTraceResource(
     stageId,
     activePoint?.pointId,
     { enabled: activePoint?.pointId != null },
   );
 
-  const points = Array.isArray(pointsRes.data) ? pointsRes.data : [];
+  const points = Array.isArray(pointsRes.data?.points) ? pointsRes.data.points : [];
   const stagePlan = stagePlanRes.data;
   const protocol = protocolRes.data;
   const settlePipeline = settlePipelineRes.data;
   const executionTree = executionTreeRes.data;
   const angularFamily = angularFamilyRes.data;
+  const bookmarks = bookmarksRes.data;
   const branches = Array.isArray(branchesRes.data) ? branchesRes.data : [];
   const minorLoops = Array.isArray(minorLoopsRes.data) ? minorLoopsRes.data : [];
   const reversalFields = Array.isArray(reversalFieldsRes.data) ? reversalFieldsRes.data : [];
@@ -163,6 +170,7 @@ export function HysteresisStageInspector(props: HysteresisStageInspectorProps) {
       <HysteresisPointDetailInspector
         activePoint={activePoint}
         kernel={kernel}
+        pointDetail={pointDetailRes.data}
         points={points}
         progress={progress}
         stageId={stageId}
@@ -239,7 +247,10 @@ export function HysteresisStageInspector(props: HysteresisStageInspectorProps) {
       />
     ),
     "points-bookmarks": (
-      <HysteresisBookmarksInspector executionTree={executionTree} />
+      <HysteresisBookmarksInspector
+        bookmarks={bookmarks}
+        executionTree={executionTree}
+      />
     ),
     protocol: (
       <HysteresisProtocolInspector

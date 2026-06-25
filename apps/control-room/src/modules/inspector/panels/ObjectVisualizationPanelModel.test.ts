@@ -22,6 +22,7 @@ import {
   fieldMetaScopeQueryForVisualizationTarget,
   geometryScopeDisplayPatch,
   quantitySourcePatch,
+  objectVisualizationTargetForMeshPart,
   resolveSurfaceColorSourceItems,
   resolveObjectVisualizationPanelTopologyFreshness,
   scalarColorPalettePatch,
@@ -62,6 +63,20 @@ describe("ObjectVisualizationPanelModel", () => {
       "magnitude",
       "monochrome",
     ]);
+  });
+
+  it("does not expose duplicate orientation aliases as inspector option values", () => {
+    const surfaceValues: string[] = SURFACE_COLOR_SOURCE_ITEMS.map(
+      (item) => item.value,
+    );
+    const vectorValues: string[] = VISUALIZATION_COLOR_MODE_ITEMS.map(
+      (item) => item.value,
+    );
+
+    expect(surfaceValues).not.toContain("hsl_orientation");
+    expect(vectorValues).not.toContain("hsl_orientation");
+    expect(new Set(surfaceValues).size).toBe(surfaceValues.length);
+    expect(new Set(vectorValues).size).toBe(vectorValues.length);
   });
 
   it("exposes target quantity options for the inspector visualization panel", () => {
@@ -177,6 +192,20 @@ describe("ObjectVisualizationPanelModel", () => {
         label: "Region A",
       }),
     ).toEqual({ scope_id: null, scope_kind: null });
+  });
+
+  it("maps manifest mesh parts to the same canonical object targets as the viewport", () => {
+    expect(
+      objectVisualizationTargetForMeshPart({
+        id: "part:permalloy_layer",
+        label: "Permalloy layer",
+        object_id: "permalloy_layer",
+      } as MeshPart),
+    ).toEqual({
+      id: "object:permalloy_layer",
+      kind: "object",
+      label: "Permalloy layer",
+    });
   });
 
   it("builds scalar palette patches for the visualization quantity colormap", () => {

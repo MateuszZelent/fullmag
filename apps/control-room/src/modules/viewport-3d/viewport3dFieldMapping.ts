@@ -21,6 +21,7 @@ export interface ScalarColorBuffer {
   complexImagValues?: Float32Array;
   complexPhaseRad?: number;
   complexRealValues?: Float32Array;
+  quantityId?: string;
   range: ScalarRange;
   scalarValues?: Float32Array;
   targetRevision?: string;
@@ -63,6 +64,7 @@ export function buildVertexScalarColors(
     !fieldVector ||
     fieldVector.pointCount > vertexCount ||
     fieldVector.pointCount === 0 ||
+    !fieldVectorSupportsScalarColorMode(fieldVector, resolvedColorMode) ||
     resolvedColorMode === "monochrome" ||
     fieldTransformNeedsChunking(fieldVector.pointCount, maxSynchronousPoints)
   ) {
@@ -93,6 +95,7 @@ export function buildSampledScalarColors(
     !pointIndices ||
     pointIndices.length === 0 ||
     fieldVector.pointCount === 0 ||
+    !fieldVectorSupportsScalarColorMode(fieldVector, resolvedColorMode) ||
     resolvedColorMode === "monochrome"
   ) {
     return null;
@@ -133,6 +136,7 @@ export function buildSampledScalarColors(
     colors,
     colorMode: resolvedColorMode,
     colorPalette,
+    quantityId: fieldVector.quantityId,
     range,
     scalarValues,
   };
@@ -156,6 +160,7 @@ export function buildMappedVertexScalarColors(
     !targetNodeIndices ||
     targetNodeIndices.length < fieldVector.pointCount ||
     fieldVector.pointCount === 0 ||
+    !fieldVectorSupportsScalarColorMode(fieldVector, resolvedColorMode) ||
     resolvedColorMode === "monochrome" ||
     fieldTransformNeedsChunking(fieldVector.pointCount, maxSynchronousPoints)
   ) {
@@ -195,6 +200,7 @@ export function buildMappedVertexScalarColors(
     colors,
     colorMode: resolvedColorMode,
     colorPalette,
+    quantityId: fieldVector.quantityId,
     range,
     scalarValues,
   };
@@ -203,13 +209,16 @@ export function buildMappedVertexScalarColors(
 export async function buildVertexScalarColorsChunked(
   fieldVector: DecodedFieldVector,
   options: ChunkedFieldTransformOptions = {},
-): Promise<ScalarColorBuffer> {
+): Promise<ScalarColorBuffer | null> {
   const chunkSize = Math.max(Math.floor(options.chunkSize ?? 10_000), 1);
   const colorMode = normalizeViewport3DVectorColorMode(
     options.colorMode,
     "magnitude",
   );
   const colorPalette = options.colorPalette ?? "viridis";
+  if (!fieldVectorSupportsScalarColorMode(fieldVector, colorMode)) {
+    return null;
+  }
   const shaderScalarMode = shaderScalarModeSupports(colorMode);
   const shaderVectorMode = shaderVectorModeSupports(colorMode, fieldVector);
   const shaderOnly = Boolean(
@@ -262,10 +271,18 @@ export async function buildVertexScalarColorsChunked(
     colors,
     colorMode,
     colorPalette,
+    quantityId: fieldVector.quantityId,
     range,
     scalarValues,
     vectorValues,
   };
+}
+
+export function fieldVectorSupportsScalarColorMode(
+  fieldVector: Pick<DecodedFieldVector, "nComp">,
+  colorMode: Viewport3DVectorColorMode,
+): boolean {
+  return colorMode !== "orientation" || fieldVector.nComp >= 3;
 }
 
 function resolveProvidedScalarRange(
@@ -375,6 +392,7 @@ function buildVertexScalarColorsUnchecked(
     colors,
     colorMode,
     colorPalette,
+    quantityId: fieldVector.quantityId,
     range,
     scalarValues,
   };

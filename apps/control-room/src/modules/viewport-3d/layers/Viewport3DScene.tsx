@@ -915,6 +915,7 @@ function Viewport3DModelLayerStack({
     <>
       {authoredRegionOverlaysVisible ? (
         <RegionOverlayNativePickingLayer
+          getRegionSettings={getRegionSettings}
           onSelectRegion={onSelectRegion}
           regions={regionOverlays}
           selectedObjectId={selectedObjectId}
@@ -1030,11 +1031,13 @@ function Viewport3DModelLayerStack({
 }
 
 function RegionOverlayNativePickingLayer({
+  getRegionSettings,
   onSelectRegion,
   regions,
   selectedObjectId,
   selectedRegionId,
 }: {
+  getRegionSettings: (region: RegionOverlayInput) => VisualizationTargetSettings;
   onSelectRegion: (selection: RegionOverlaySelection) => void;
   regions: readonly RegionOverlayInput[];
   selectedObjectId: string | null;
@@ -1044,10 +1047,11 @@ function RegionOverlayNativePickingLayer({
   const regionPickModels = useMemo(
     () =>
       buildRegionOverlayModels(regions, {
+        resolveSettings: getRegionSettings,
         selectedObjectId,
         selectedRegionId,
       }),
-    [regions, selectedObjectId, selectedRegionId],
+    [getRegionSettings, regions, selectedObjectId, selectedRegionId],
   );
   const handleSelectRegion = useEffectEvent(onSelectRegion);
 

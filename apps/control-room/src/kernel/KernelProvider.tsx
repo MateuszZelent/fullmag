@@ -47,6 +47,9 @@ import { RealtimeClient } from "./realtime/RealtimeClient";
 import { RealtimeInvalidationBridge } from "./realtime/RealtimeInvalidationBridge";
 import { useSimulationStartupOverlayVisibility } from "./layout/SimulationStartupOverlay";
 import { ResourceInvalidationController } from "./resources/ResourceInvalidationController";
+import {
+  createViewport3DInactiveResourcePauseController,
+} from "./resources/inactiveViewportResourcePolicy";
 import { useRuntimeCommandControlResourceData } from "./resources/studyRuntimeResources";
 import { STUDY_RUNTIME_COMMANDS } from "./runtime/studyRuntimeCommandContributions";
 import { SelectionController } from "./selection/SelectionController";
@@ -58,9 +61,6 @@ import { ObjectVisualizationController } from "./visualization/ObjectVisualizati
 import { VisualizationRegistrySyncController } from "./visualization/VisualizationRegistrySyncController";
 import { VISUALIZATION_TARGET_COMMANDS } from "./visualization/visualizationCommandContributions";
 import { resolveControlRoomModules } from "@/modules";
-import {
-  createViewport3DInactiveResourcePauseController,
-} from "@/modules/viewport-3d/viewport3dResourceLifecycle";
 
 installPerformanceMeasureGuard();
 

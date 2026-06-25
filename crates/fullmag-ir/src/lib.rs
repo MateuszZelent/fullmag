@@ -2618,6 +2618,8 @@ fn validate_settle_applies_to_value(value: &serde_json::Value) -> bool {
                 | "preparation"
                 | "saturation_probe"
                 | "major"
+                | "major_descending"
+                | "major_ascending"
                 | "minor"
                 | "recoil"
                 | "key_events"

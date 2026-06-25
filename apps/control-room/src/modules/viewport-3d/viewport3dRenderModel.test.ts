@@ -260,6 +260,23 @@ describe("viewport3dRenderModel", () => {
     expect(first?.positions).toBe(second?.positions);
   });
 
+  it("does not clone topology positions that are already Float32Array", () => {
+    const positions = new Float32Array([
+      0, 0, 0,
+      1, 0, 0,
+      0, 1, 0,
+      0, 0, 1,
+    ]);
+    const topology = {
+      ...topologyFixture(),
+      positions: positions as unknown as Float64Array,
+    };
+
+    const model = buildViewport3DTopologyRenderModel(topology, [], []);
+
+    expect(model?.positions).toBe(positions);
+  });
+
   it("reuses fallback topology index buffers for repeated model builds", () => {
     const topology = topologyFixture();
 
@@ -1005,6 +1022,65 @@ describe("viewport3dRenderModel", () => {
     expect(secondFieldModel?.scalarColors).toBe(firstFieldModel?.scalarColors);
   });
 
+  it("keeps recently used scalar color cache entries when applying the per-owner cap", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [],
+      [],
+    );
+    const fieldVector = fieldVectorFixture();
+    const buildXColors = (palette: string) =>
+      buildViewport3DFieldRenderModel(
+        topologyModel,
+        fieldVector,
+        0.5,
+        {
+          scalarColorModes: new Set(["x"]),
+          scalarColorPalette: palette,
+          vectorColorMode: "x",
+        },
+      )?.scalarColorsByMode.get("x") ?? null;
+
+    const palette0First = buildXColors("palette-0");
+    const palette1First = buildXColors("palette-1");
+    for (let index = 2; index < 8; index += 1) {
+      buildXColors(`palette-${index}`);
+    }
+
+    expect(buildXColors("palette-0")).toBe(palette0First);
+    buildXColors("palette-8");
+
+    expect(buildXColors("palette-0")).toBe(palette0First);
+    expect(buildXColors("palette-1")).not.toBe(palette1First);
+  });
+
+  it("keys scalar color cache entries by scalar range", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [],
+      [],
+    );
+    const fieldVector = fieldVectorFixture();
+    const buildXColors = (range: { max: number; min: number }) =>
+      buildViewport3DFieldRenderModel(
+        topologyModel,
+        fieldVector,
+        0.5,
+        {
+          scalarColorModes: new Set(["x"]),
+          scalarColorPalette: "viridis",
+          scalarRangesByMode: new Map([["x", range]]),
+          vectorColorMode: "x",
+        },
+      )?.scalarColorsByMode.get("x") ?? null;
+
+    const autoLikeRange = buildXColors({ max: 1, min: -1 });
+    const narrowedRange = buildXColors({ max: 0.5, min: -0.5 });
+
+    expect(narrowedRange).not.toBe(autoLikeRange);
+    expect(buildXColors({ max: 1, min: -1 })).toBe(autoLikeRange);
+  });
+
   it("builds scalar color buffers for every requested target shader mode from any active quantity", () => {
     const topologyModel = buildViewport3DTopologyRenderModel(
       topologyFixture(),
@@ -1221,6 +1297,48 @@ describe("viewport3dRenderModel", () => {
     expect(model?.partVectorSegments.get("part-a")).toBeNull();
   });
 
+  it("does not build orientation buffers from component-only field payloads", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "part-a",
+          label: "Part A",
+          nodeCount: 4,
+          nodeStart: 0,
+        },
+      ],
+      [],
+    );
+    const componentFieldVector: DecodedFieldVector = {
+      ...fieldVectorFixture(),
+      nComp: 1,
+      valueCount: 4,
+      values: new Float64Array([-1, -0.25, 0.25, 1]),
+    };
+
+    const model = buildViewport3DFieldRenderModel(
+      topologyModel,
+      componentFieldVector,
+      0.5,
+      {
+        scalarColorModes: new Set(["orientation", "x"]),
+        scalarColorsVisible: true,
+        vectorColorMode: "orientation",
+      },
+    );
+
+    expect(model?.scalarColorsByMode.get("orientation")).toBeNull();
+    expect(model?.scalarColorsByMode.get("x")?.colorMode).toBe("x");
+    expect(model?.scalarColorsByMode.get("x")?.range).toEqual({
+      max: 1,
+      min: -1,
+    });
+    expect(model?.scalarColors).toBeNull();
+  });
+
   it("maps magnetic-only FEM fields onto magnetic mesh nodes when the topology includes airbox nodes", () => {
     const topologyModel = buildViewport3DTopologyRenderModel(
       {
@@ -1419,6 +1537,100 @@ describe("viewport3dRenderModel", () => {
     );
   });
 
+  it("builds per-part scalar colors for shared field vectors when palette differs", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "part-a",
+          label: "Part A",
+          nodeCount: 2,
+          nodeStart: 0,
+        },
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 1,
+          id: "part-b",
+          label: "Part B",
+          nodeCount: 2,
+          nodeStart: 2,
+        },
+      ],
+      [],
+    );
+
+    const model = buildViewport3DFieldRenderModel(
+      topologyModel,
+      fieldVectorFixture(),
+      0.5,
+      {
+        partScalarColorModes: new Map([["part-a", "x"]]),
+        partScalarColorPalettes: new Map([["part-a", "inferno"]]),
+        scalarColorModes: new Set(["orientation", "x"]),
+        scalarColorPalette: "viridis",
+        scalarColorsVisible: true,
+      },
+    );
+
+    const partColors =
+      model?.scalarColorsByPartAndMode.get("part-a")?.get("x");
+    const globalColors = model?.scalarColorsByMode.get("x");
+    expect(partColors?.colorPalette).toBe("inferno");
+    expect(globalColors?.colorPalette).toBe("viridis");
+    expect(partColors?.colors).not.toBe(globalColors?.colors);
+  });
+
+  it("uses the part field vector range for per-part colors from another quantity", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "part-a",
+          label: "Part A",
+          nodeCount: 4,
+          nodeStart: 0,
+        },
+      ],
+      [],
+    );
+    const effectiveField = {
+      ...fieldVectorFixture(),
+      quantityId: "H_eff",
+      values: new Float64Array([
+        0, 10, 0,
+        0, 20, 0,
+        0, 30, 0,
+        0, 40, 0,
+      ]),
+    };
+
+    const model = buildViewport3DFieldRenderModel(
+      topologyModel,
+      fieldVectorFixture(),
+      0.5,
+      {
+        partFieldVectors: new Map([["part-a", effectiveField]]),
+        partScalarColorModes: new Map([["part-a", "y"]]),
+        scalarColorModes: new Set(["y"]),
+        scalarColorPalette: "viridis",
+        scalarRangesByMode: new Map([["y", { max: 1, min: -1 }]]),
+        scalarColorsVisible: true,
+      },
+    );
+
+    const partColors =
+      model?.scalarColorsByPartAndMode.get("part-a")?.get("y");
+    const globalColors = model?.scalarColorsByMode.get("y");
+    expect(globalColors?.quantityId).toBe("m");
+    expect(globalColors?.range).toEqual({ max: 1, min: -1 });
+    expect(partColors?.quantityId).toBe("H_eff");
+    expect(partColors?.range).toEqual({ max: 40, min: 10 });
+  });
+
   it("reuses unchanged part vector buffers when another part changes", () => {
     const topologyModel = buildViewport3DTopologyRenderModel(
       topologyFixture(),
@@ -1536,6 +1748,39 @@ describe("viewport3dRenderModel", () => {
         scalarColorsVisible: false,
       }),
     ).toBe(true);
+  });
+
+  it("uses explicit per-part scalar ranges for scoped color buffers", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [
+        {
+          boundary_face_count: 0,
+          boundary_face_start: 0,
+          element_count: 1,
+          element_start: 0,
+          id: "part-a",
+          label: "Part A",
+          node_count: 4,
+          node_start: 0,
+        },
+      ],
+      [],
+    );
+    const fieldVector = fieldVectorFixture();
+    const model = buildViewport3DFieldRenderModel(topologyModel, fieldVector, 1, {
+      partFieldVectors: new Map([["part-a", fieldVector]]),
+      partScalarColorModes: new Map([["part-a", "x"]]),
+      partScalarColorPalettes: new Map([["part-a", "inferno"]]),
+      partScalarRangesByMode: new Map([
+        ["part-a", new Map([["x", { max: 12, min: -3 }]])],
+      ]),
+      scalarColorModes: new Set(["x"]),
+      scalarColorsVisible: true,
+    });
+
+    expect(model?.scalarColorsByPartAndMode.get("part-a")?.get("x")?.range)
+      .toEqual({ max: 12, min: -3 });
   });
 
   it("can restrict per-part vector glyphs to boundary surface nodes", () => {

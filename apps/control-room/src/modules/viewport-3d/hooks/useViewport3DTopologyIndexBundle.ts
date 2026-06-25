@@ -36,7 +36,6 @@ export interface Viewport3DTopologyIndexBuildReference {
 export interface Viewport3DTopologyIndexBuildReferenceInput {
   domainId: string;
   sessionId: string;
-  targetVisualizationRevision: string | null;
   topologyRevision: string | null;
 }
 
@@ -104,11 +103,9 @@ const topologyIndexBundleCache = new Map<
 export function createViewport3DTopologyIndexBuildReference({
   domainId,
   sessionId,
-  targetVisualizationRevision,
   topologyRevision,
 }: Viewport3DTopologyIndexBuildReferenceInput): Viewport3DTopologyIndexBuildReference | null {
   if (!topologyRevision) return null;
-  const resolvedTargetRevision = targetVisualizationRevision ?? "unknown";
   return {
     buildKey: buildViewport3DTopologyIndexJobKey({
       algorithmVersion: 1,
@@ -121,11 +118,11 @@ export function createViewport3DTopologyIndexBuildReference({
       scopeKind: null,
       sessionId,
       styleRevision: "none",
-      targetVisualizationRevision: resolvedTargetRevision,
+      targetVisualizationRevision: "none",
       topologyRevision,
     }),
     groupKey: `topology-index:session=${sessionId}:domain=${domainId}`,
-    revisionSummary: `topology=${topologyRevision} targets=${resolvedTargetRevision}`,
+    revisionSummary: `topology=${topologyRevision}`,
   };
 }
 
@@ -258,7 +255,6 @@ export function useViewport3DTopologyIndexBundle({
   magneticParts,
   magneticSurfacePartsByPartId,
   sessionId = "current",
-  targetVisualizationRevision,
   topology,
   topologyRevision,
 }: {
@@ -271,7 +267,6 @@ export function useViewport3DTopologyIndexBundle({
     readonly Viewport3DTopologyIndexPartInput[]
   >;
   sessionId?: string;
-  targetVisualizationRevision?: string | null;
   topology: DecodedTopology | null | undefined;
   topologyRevision?: string | null;
 }): Viewport3DTopologyIndexBundleResult {
@@ -299,10 +294,9 @@ export function useViewport3DTopologyIndexBundle({
       createViewport3DTopologyIndexBuildReference({
         domainId,
         sessionId,
-        targetVisualizationRevision: targetVisualizationRevision ?? null,
         topologyRevision: topologyRevision ?? null,
       }),
-    [domainId, sessionId, targetVisualizationRevision, topologyRevision],
+    [domainId, sessionId, topologyRevision],
   );
   const compatible = viewport3DTopologyIndexStateIsCompatible(
     state.identity,

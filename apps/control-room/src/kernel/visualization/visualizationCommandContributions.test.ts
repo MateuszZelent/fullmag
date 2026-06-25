@@ -208,7 +208,7 @@ describe("visualization target commands", () => {
               },
             },
             scope: "object",
-            scope_id: "object:free-layer",
+            scope_id: "free-layer",
           },
         ],
       },

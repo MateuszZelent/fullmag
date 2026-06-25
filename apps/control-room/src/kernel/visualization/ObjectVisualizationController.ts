@@ -56,6 +56,7 @@ export interface VisualizationTargetSettings {
   shaderMonoColor: string;
   shaderVisible: boolean;
   surfaceColorSource: SurfaceColorSource;
+  viewportColorbarVisible: boolean;
   vectorAlphaPercent: number;
   vectorBudget: number;
   vectorCenteringEnabled: boolean;
@@ -132,6 +133,7 @@ export const DEFAULT_OBJECT_VISUALIZATION: VisualizationTargetSettings = {
   shaderMonoColor: "var(--fm-surface-magnetic)",
   shaderVisible: true,
   surfaceColorSource: "orientation",
+  viewportColorbarVisible: false,
   vectorAlphaPercent: 100,
   vectorBudget: 1200,
   vectorCenteringEnabled: true,
@@ -163,6 +165,7 @@ export const DEFAULT_AIRBOX_VISUALIZATION: VisualizationTargetSettings = {
   shaderMonoColor: "var(--fm-airbox-fill)",
   shaderVisible: true,
   surfaceColorSource: "solid",
+  viewportColorbarVisible: false,
   vectorAlphaPercent: 100,
   vectorBudget: 1200,
   vectorCenteringEnabled: true,
@@ -486,6 +489,14 @@ function resolveVisualizationStateTargetOverride(
     style.surface_mono_color === null
       ? {}
       : { shaderMonoColor: style.surface_mono_color }),
+    ...(style?.viewport_colorbar_visible === undefined ||
+    style.viewport_colorbar_visible === null
+      ? {}
+      : { viewportColorbarVisible: style.viewport_colorbar_visible }),
+    ...(style?.scalar_color_palette === undefined ||
+    style.scalar_color_palette === null
+      ? {}
+      : { scalarColorPalette: style.scalar_color_palette }),
     ...(style?.vector_alpha === undefined || style.vector_alpha === null
       ? {}
       : { vectorAlphaPercent: layerOpacityToPercent(style.vector_alpha) }),
@@ -574,6 +585,12 @@ export function visualizationStateOverrideFromTargetPatch(
     ...(normalized.shaderMonoColor === undefined
       ? {}
       : { surface_mono_color: normalized.shaderMonoColor }),
+    ...(normalized.viewportColorbarVisible === undefined
+      ? {}
+      : { viewport_colorbar_visible: normalized.viewportColorbarVisible }),
+    ...(normalized.scalarColorPalette === undefined
+      ? {}
+      : { scalar_color_palette: normalized.scalarColorPalette }),
     ...(normalized.vectorAlphaPercent === undefined
       ? {}
       : { vector_alpha: clampOpacity(normalized.vectorAlphaPercent) / 100 }),
@@ -610,12 +627,19 @@ export function visualizationStateOverrideFromTargetPatch(
 
   return {
     scope: target.kind,
-    scope_id: target.id,
+    scope_id: visualizationStateScopeIdForTarget(target),
     ...(normalized.visible === undefined ? {} : { visible: normalized.visible }),
     ...(Object.keys(display).length === 0 ? {} : { display }),
     ...(Object.keys(style).length === 0 ? {} : { style }),
     ...(quantity === undefined ? {} : { quantity }),
   };
+}
+
+function visualizationStateScopeIdForTarget(target: VisualizationTargetRef): string {
+  if (target.kind === "object" && target.id.startsWith("object:")) {
+    return target.id.slice("object:".length);
+  }
+  return target.id;
 }
 
 export function mergeVisualizationStateTargetOverride(
@@ -822,6 +846,7 @@ export function resolveGlobalObjectVisualizationSettings(
   const vectorMonoColor =
     state?.vector_style?.mono_color ??
     DEFAULT_OBJECT_VISUALIZATION.vectorMonoColor;
+  const vectorBudget = state?.layers?.vectors?.density;
   const activeQuantityId = normalizeQuantityIdOrDefault(
     state.quantity?.active_quantity_id ?? state.active_quantity_id,
     DEFAULT_OBJECT_VISUALIZATION.activeQuantityId,
@@ -856,7 +881,14 @@ export function resolveGlobalObjectVisualizationSettings(
     shaderVisible: surfaceVisible,
     surfaceColorSource,
     vectorAlphaPercent: layerOpacityToPercent(state?.vector_style?.alpha ?? 1),
+    vectorBudget:
+      vectorBudget === undefined || vectorBudget === null
+        ? DEFAULT_OBJECT_VISUALIZATION.vectorBudget
+        : Math.max(0, Math.floor(vectorBudget)),
     vectorColorMode,
+    vectorLengthScale:
+      state?.vector_style?.length_scale ??
+      DEFAULT_OBJECT_VISUALIZATION.vectorLengthScale,
     vectorMonoColor,
     vectorThickness:
       state?.vector_style?.thickness ??
@@ -943,6 +975,9 @@ function visualizationSettingsFromResolvedTarget(
     shaderMonoColor:
       settings.surface_mono_color ?? DEFAULT_AIRBOX_VISUALIZATION.shaderMonoColor,
     shaderVisible: settings.surface_visible,
+    scalarColorPalette:
+      settings.scalar_color_palette ??
+      DEFAULT_AIRBOX_VISUALIZATION.scalarColorPalette,
     surfaceColorSource: settings.surface_color_source,
     vectorAlphaPercent: layerOpacityToPercent(settings.vector_alpha),
     vectorBudget: Math.max(
@@ -1055,6 +1090,12 @@ export function airboxVisualizationStatePatchFromTargetPatch(
     ...(patch.geometryScope === undefined
       ? {}
       : { geometryScope: patch.geometryScope }),
+    ...(patch.scalarColorPalette === undefined
+      ? {}
+      : { scalarColorPalette: patch.scalarColorPalette }),
+    ...(patch.viewportColorbarVisible === undefined
+      ? {}
+      : { viewportColorbarVisible: patch.viewportColorbarVisible }),
     ...(patch.vectorLengthScale === undefined
       ? {}
       : { vectorLengthScale: patch.vectorLengthScale }),
@@ -1102,6 +1143,9 @@ export function airboxLocalVisualizationPatchFromTargetPatch(
     ...(patch.surfaceColorSource === undefined
       ? {}
       : { surfaceColorSource: patch.surfaceColorSource }),
+    ...(patch.viewportColorbarVisible === undefined
+      ? {}
+      : { viewportColorbarVisible: patch.viewportColorbarVisible }),
     ...(patch.vectorAlphaPercent === undefined
       ? {}
       : { vectorAlphaPercent: patch.vectorAlphaPercent }),

@@ -306,6 +306,62 @@ describe("useViewport3DSceneModel", () => {
       component: "magnitude",
       scope_kind: "full",
     });
+
+    expect(
+      resolveViewport3DPrimaryFieldQuery({
+        fdmInstanceModelNeedsFieldVector: false,
+        fdmSurfaceColorMode: null,
+        fdmTopographyEnabled: false,
+        fdmVectorsVisible: false,
+        fieldRenderOptions: {
+          fullVectorBudget: 0,
+          partVectorBudgets: new Map(),
+          scalarColorModes: new Set(["x"]),
+          scalarColorsVisible: true,
+        },
+      }),
+    ).toEqual({
+      component: "x",
+      scope_kind: "full",
+    });
+  });
+
+  it("keeps full vector data when scalar surface colors need multiple components", () => {
+    expect(
+      resolveViewport3DPrimaryFieldQuery({
+        fdmInstanceModelNeedsFieldVector: false,
+        fdmSurfaceColorMode: null,
+        fdmTopographyEnabled: false,
+        fdmVectorsVisible: false,
+        fieldRenderOptions: {
+          fullVectorBudget: 0,
+          partVectorBudgets: new Map(),
+          scalarColorModes: new Set(["x", "y"]),
+          scalarColorsVisible: true,
+        },
+      }),
+    ).toEqual({
+      component: "full",
+      scope_kind: "full",
+    });
+
+    expect(
+      resolveViewport3DPrimaryFieldQuery({
+        fdmInstanceModelNeedsFieldVector: false,
+        fdmSurfaceColorMode: "x",
+        fdmTopographyEnabled: false,
+        fdmVectorsVisible: false,
+        fieldRenderOptions: {
+          fullVectorBudget: 0,
+          partVectorBudgets: new Map(),
+          scalarColorModes: new Set(["magnitude"]),
+          scalarColorsVisible: true,
+        },
+      }),
+    ).toEqual({
+      component: "full",
+      scope_kind: "full",
+    });
   });
 
   it("keeps magnetic part render options active for analysis eigen overlays", () => {
@@ -364,6 +420,36 @@ describe("useViewport3DSceneModel", () => {
     expect(options.scalarColorPalette).toBe("inferno");
     expect(options.scalarColorsVisible).toBe(true);
     expect(options.scalarColorModes).toEqual(new Set(["z"]));
+  });
+
+  it("preserves per-part scalar color mode and palette for shared field rendering", () => {
+    const options = resolveViewport3DPrimaryFieldRenderOptions({
+      fieldRenderOptions: {
+        fullVectorBudget: 0,
+        partScalarColorModes: new Map([["film", "x"]]),
+        partScalarColorPalettes: new Map([["film", "inferno"]]),
+        partVectorBudgets: new Map(),
+        scalarColorModes: new Set(["x"]),
+        scalarColorPalette: "viridis",
+        scalarColorsVisible: true,
+      },
+      getPartSettings: () => ({
+        activeQuantityId: "m",
+        scalarColorPalette: "inferno",
+        shaderVisible: true,
+        surfaceColorSource: "component_x",
+        vectorBudget: 0,
+        vectorsVisible: false,
+        visible: true,
+      }),
+      magneticParts: [{ part: { id: "film" } as never }],
+      quantityId: "m",
+      vectorDomain: "auto",
+    });
+
+    expect(options.scalarColorModes).toEqual(new Set(["x"]));
+    expect(options.partScalarColorModes?.get("film")).toBe("x");
+    expect(options.partScalarColorPalettes?.get("film")).toBe("inferno");
   });
 
   it("uses analysis overlay display pass appearance for mode field vectors", () => {
@@ -718,7 +804,7 @@ describe("useViewport3DSceneModel", () => {
         resolveViewport3DTargetFieldQuery({
           surfaceColorMode: "magnitude",
           vectorsVisible: false,
-        }),
+        })!,
         {
           snapshot_id: "hysteresis_point_007",
           stage_id: "hysteresis-1",
@@ -736,7 +822,7 @@ describe("useViewport3DSceneModel", () => {
         resolveViewport3DTargetFieldQuery({
           surfaceColorMode: null,
           vectorsVisible: true,
-        }),
+        })!,
         {
           snapshot_id: "hysteresis_point_007",
           stage_id: "hysteresis-1",
@@ -1313,6 +1399,12 @@ describe("useViewport3DSceneModel", () => {
   it("resolves target-specific scalar field queries unless vectors need full components", () => {
     expect(
       resolveViewport3DTargetFieldQuery({
+        surfaceColorMode: null,
+        vectorsVisible: false,
+      }),
+    ).toBeNull();
+    expect(
+      resolveViewport3DTargetFieldQuery({
         surfaceColorMode: "x",
         vectorsVisible: false,
       }),
@@ -1462,38 +1554,149 @@ describe("useViewport3DSceneModel", () => {
         }) as never,
       magneticParts: [{ part }] as never,
       quantityId: "m",
-      scopedVectorOnlyPartIds: new Set(["part:arch_waveguide"]),
+      scopedFieldPartIds: new Set(["part:arch_waveguide"]),
       vectorDomain: "auto",
     });
 
-    expect(primaryOptions.partVectorBudgets).toEqual(
-      new Map([["part:arch_waveguide", 512]]),
-    );
-    const primaryDataOptions = resolveViewport3DPrimaryFieldDataOptions(
-      primaryOptions,
-      new Set(["part:arch_waveguide"]),
-    );
-
-    expect(viewport3DFieldRenderOptionsNeedFieldData(primaryDataOptions)).toBe(false);
+    expect(primaryOptions.partVectorBudgets).toEqual(new Map());
   });
 
-  it("keeps scalar-colored magnetic parts on the unsampled primary path", () => {
+  it("keeps scalar-colored magnetic parts on scoped unsampled field requests", () => {
+    const part = { id: "part:arch_waveguide" };
     const scopedRequests = resolveViewport3DScopedPartVectorFieldRequests({
       getPartSettings: () =>
         ({
           activeQuantityId: "m",
           shaderVisible: true,
           surfaceColorSource: "magnitude",
-          vectorBudget: 512,
-          vectorsVisible: true,
+          vectorBudget: 0,
+          vectorsVisible: false,
           visible: true,
         }) as never,
       maxVectorGlyphs: 2048,
-      magneticParts: [{ part: { id: "part:arch_waveguide" } }] as never,
+      magneticParts: [{ part }] as never,
       vectorDomain: "auto",
     });
 
-    expect(scopedRequests.size).toBe(0);
+    expect(scopedRequests).toEqual(
+      new Map([
+        [
+          "part:arch_waveguide",
+          {
+            quantityId: "m",
+            query: {
+              component: "magnitude",
+              scope_kind: "full",
+            },
+          },
+        ],
+      ]),
+    );
+
+    const primaryOptions = resolveViewport3DPrimaryFieldRenderOptions({
+      fieldRenderOptions: {
+        fullVectorBudget: 0,
+        partVectorBudgets: new Map([["part:arch_waveguide", 512]]),
+        scalarColorModes: new Set(),
+        scalarColorsVisible: false,
+      },
+      getPartSettings: () =>
+        ({
+          activeQuantityId: "m",
+          shaderVisible: true,
+          surfaceColorSource: "magnitude",
+          vectorBudget: 0,
+          vectorsVisible: false,
+          visible: true,
+        }) as never,
+      magneticParts: [{ part }] as never,
+      quantityId: "m",
+      scopedFieldPartIds: new Set(["part:arch_waveguide"]),
+      vectorDomain: "auto",
+    });
+    expect(primaryOptions.scalarColorsVisible).toBe(true);
+    expect(primaryOptions.scalarColorModes).toEqual(new Set(["magnitude"]));
+    expect(primaryOptions.partScalarColorModes?.get("part:arch_waveguide")).toBe(
+      "magnitude",
+    );
+    expect(primaryOptions.partVectorBudgets).toEqual(new Map());
+  });
+
+  it("keeps all visible scalar-colored magnetic parts on one aggregate field request", () => {
+    const scopedRequests = resolveViewport3DScopedPartVectorFieldRequests({
+      getPartSettings: () =>
+        ({
+          activeQuantityId: "m",
+          shaderVisible: true,
+          surfaceColorSource: "magnitude",
+          vectorBudget: 0,
+          vectorsVisible: false,
+          visible: true,
+        }) as never,
+      maxVectorGlyphs: 2048,
+      magneticParts: [
+        { part: { id: "part:a" } },
+        { part: { id: "part:b" } },
+      ] as never,
+      vectorDomain: "auto",
+    });
+
+    expect(scopedRequests).toEqual(new Map());
+  });
+
+  it("keeps scalar-colored subsets on scoped field requests", () => {
+    const scopedRequests = resolveViewport3DScopedPartVectorFieldRequests({
+      getPartSettings: (part) =>
+        ({
+          activeQuantityId: "m",
+          shaderVisible: part.id === "part:a",
+          surfaceColorSource:
+            part.id === "part:a" ? "magnitude" : "solid",
+          vectorBudget: 0,
+          vectorsVisible: false,
+          visible: true,
+        }) as never,
+      maxVectorGlyphs: 2048,
+      magneticParts: [
+        { part: { id: "part:a" } },
+        { part: { id: "part:b" } },
+      ] as never,
+      vectorDomain: "auto",
+    });
+
+    expect(scopedRequests).toEqual(
+      new Map([
+        [
+          "part:a",
+          {
+            quantityId: "m",
+            query: {
+              component: "magnitude",
+              scope_kind: "full",
+            },
+          },
+        ],
+      ]),
+    );
+  });
+
+  it("does not request field data for solid-colored magnetic parts", () => {
+    const scopedRequests = resolveViewport3DScopedPartVectorFieldRequests({
+      getPartSettings: () =>
+        ({
+          activeQuantityId: "m",
+          shaderVisible: true,
+          surfaceColorSource: "solid",
+          vectorBudget: 512,
+          vectorsVisible: false,
+          visible: true,
+        }) as never,
+      maxVectorGlyphs: 2048,
+      magneticParts: [{ part: { id: "part:solid" } }] as never,
+      vectorDomain: "auto",
+    });
+
+    expect(scopedRequests).toEqual(new Map());
   });
 
   it("caps scoped vector-only requests to the interactive glyph budget", () => {

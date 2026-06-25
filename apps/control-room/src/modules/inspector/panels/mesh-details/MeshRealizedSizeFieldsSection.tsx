@@ -17,7 +17,7 @@ export function MeshRealizedSizeFieldsSection({
     <InspectorSection value="size-fields" title="Realized Size Fields" badge={`${sizeFields.length}`} collapsible defaultCollapsed={false}>
       {sizeFields.length > 0 ? (
         <div className="fm-mesh-detail-list">
-          {sizeFields.map((field) => {
+          {sizeFields.map((field, index) => {
             const record = asRecord(field);
             const kind = recordField(record, "kind");
             const reason = recordField(record, "reason");
@@ -28,7 +28,7 @@ export function MeshRealizedSizeFieldsSection({
             );
             return (
               <div
-                key={meshDetailKey("size-field", [kind, status, reason, source])}
+                key={meshDetailKey("size-field", [kind, source, index])}
                 className="fm-mesh-detail-list__item"
                 data-status={formatValue(status)}
               >
@@ -57,7 +57,7 @@ export function OperationStatusesSection({
     <InspectorSection value="operation-statuses" title="Operation Statuses" badge={`${operationStatuses.length}`} collapsible defaultCollapsed={true}>
       {operationStatuses.length > 0 ? (
         <div className="fm-mesh-detail-list">
-          {operationStatuses.map((statusEntry) => {
+          {operationStatuses.map((statusEntry, index) => {
             const record = asRecord(statusEntry);
             const kind = recordField(record, "kind");
             const reason = recordField(record, "reason");
@@ -65,7 +65,7 @@ export function OperationStatusesSection({
             const status = recordField(record, "status");
             return (
               <div
-                key={meshDetailKey("operation-status", [kind, scope, status, reason])}
+                key={meshDetailKey("operation-status", [kind, scope, index])}
                 className="fm-mesh-detail-list__item"
                 data-status={formatValue(status)}
               >

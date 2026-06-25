@@ -15,9 +15,9 @@ import { LayoutController } from "@/kernel/layout/LayoutController";
 import {
   createViewport3DInactiveResourcePauseController,
   isViewport3DExclusiveResourceKey,
-} from "./viewport3dResourceLifecycle";
+} from "./inactiveViewportResourcePolicy";
 
-describe("viewport3dResourceLifecycle", () => {
+describe("inactiveViewportResourcePolicy", () => {
   it("classifies only viewport-3d exclusive resources for inactive-tab pause", () => {
     expect(
       isViewport3DExclusiveResourceKey(

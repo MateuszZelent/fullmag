@@ -21,6 +21,7 @@ import {
   ANALYSIS_HYSTERESIS_METRICS_PATH,
   ANALYSIS_HYSTERESIS_SATURATION_PATH,
   ANALYSIS_HYSTERESIS_ADAPTIVE_REFINEMENT_PATH,
+  ANALYSIS_HYSTERESIS_BOOKMARKS_PATH,
   ANALYSIS_HYSTERESIS_BRANCHES_PATH,
   ANALYSIS_HYSTERESIS_FAMILY_PATH,
   ANALYSIS_HYSTERESIS_MINOR_LOOPS_PATH,
@@ -101,9 +102,11 @@ import type {
   TableRowsResource,
   HysteresisAngularFamilyResource,
   HysteresisAdaptiveRefinementSchema,
+  HysteresisBookmarksResource,
   HysteresisBranchSchema,
   HysteresisMinorLoopSchema,
   HysteresisPointSchema,
+  HysteresisPointsResource,
   HysteresisMetricsSchema,
   HysteresisExecutionTreeResource,
   HysteresisOrientationSchema,
@@ -1287,15 +1290,15 @@ export function useHysteresisPointsResource(
       stageId
         ? api.analysis.hysteresis
             .points(stageId, { signal })
-            .catch(ignoreMissingResource<HysteresisPointSchema[]>)
+            .catch(ignoreMissingResource<HysteresisPointsResource>)
         : Promise.resolve(null),
     [api, stageId],
   );
 
-  return useResource<HysteresisPointSchema[] | null>({
+  return useResource<HysteresisPointsResource | null>({
     enabled: enabled && Boolean(stageId),
     load,
-    resolveRevision: (data) => data?.length ?? null,
+    resolveRevision: (data) => data?.revision ?? null,
     resourceKey,
   });
 }
@@ -1385,6 +1388,33 @@ export function useHysteresisAdaptiveRefinementResource(
 export type HysteresisBranch = HysteresisBranchSchema;
 export type HysteresisMinorLoop = HysteresisMinorLoopSchema;
 export type HysteresisSettleTraceEntry = HysteresisSettleTraceEntrySchema;
+
+export function useHysteresisBookmarksResource(
+  stageId: string | null | undefined,
+  { enabled = true }: RuntimeResourceOptions = {},
+) {
+  const { api } = useKernel();
+  const resourceKey = stageId
+    ? ANALYSIS_HYSTERESIS_BOOKMARKS_PATH.replace("{stage_id}", stageId)
+    : `${ANALYSIS_HYSTERESIS_BOOKMARKS_PATH}:none`;
+
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      stageId
+        ? api.analysis.hysteresis
+            .bookmarks(stageId, { signal })
+            .catch(ignoreMissingResource<HysteresisBookmarksResource>)
+        : Promise.resolve(null),
+    [api, stageId],
+  );
+
+  return useResource<HysteresisBookmarksResource | null>({
+    enabled: enabled && Boolean(stageId),
+    load,
+    resolveRevision: (data) => data?.revision ?? null,
+    resourceKey,
+  });
+}
 
 export function useHysteresisBranchesResource(
   stageId: string | null | undefined,

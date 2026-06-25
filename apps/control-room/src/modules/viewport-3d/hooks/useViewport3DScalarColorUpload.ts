@@ -50,6 +50,59 @@ const EMPTY_VIEWPORT_3D_SCALAR_SHADER_UPLOAD_SNAPSHOT:
     version: 0,
   };
 
+interface Viewport3DScalarColorUploadSnapshot {
+  readonly buffer: ScalarColorBuffer | null;
+  readonly geometry: BufferGeometry | null;
+  readonly version: number;
+}
+
+interface Viewport3DScalarColorUploadStore {
+  readonly getSnapshot: () => Viewport3DScalarColorUploadSnapshot;
+  readonly publish: (
+    buffer: ScalarColorBuffer | null,
+    geometry: BufferGeometry | null,
+  ) => void;
+  readonly subscribe: (listener: () => void) => () => void;
+}
+
+const EMPTY_VIEWPORT_3D_SCALAR_COLOR_UPLOAD_SNAPSHOT:
+  Viewport3DScalarColorUploadSnapshot = {
+    buffer: null,
+    geometry: null,
+    version: 0,
+  };
+
+function createViewport3DScalarColorUploadStore(): Viewport3DScalarColorUploadStore {
+  const listeners = new Set<() => void>();
+  let snapshot = EMPTY_VIEWPORT_3D_SCALAR_COLOR_UPLOAD_SNAPSHOT;
+
+  function publish(
+    buffer: ScalarColorBuffer | null,
+    geometry: BufferGeometry | null,
+  ): void {
+    if (snapshot.buffer === buffer && snapshot.geometry === geometry) return;
+    snapshot = {
+      buffer,
+      geometry,
+      version: snapshot.version + 1,
+    };
+    for (const listener of listeners) {
+      listener();
+    }
+  }
+
+  return {
+    getSnapshot: () => snapshot,
+    publish,
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
+}
+
 export function useViewport3DScalarColorUpload({
   colorBuffer,
   dirtyReason,
@@ -72,7 +125,7 @@ export function useViewport3DScalarColorUpload({
   uploadKey: string;
   vertexColorsEnabled: boolean;
   vertexCount: number;
-}): void {
+}): ScalarColorBuffer | null {
   const uploadManager = useMemo(
     () =>
       createViewport3DGpuUploadManager({
@@ -81,6 +134,12 @@ export function useViewport3DScalarColorUpload({
         },
       }),
     [],
+  );
+  const store = useMemo(() => createViewport3DScalarColorUploadStore(), []);
+  const snapshot = useSyncExternalStore(
+    store.subscribe,
+    store.getSnapshot,
+    store.getSnapshot,
   );
 
   useEffect(() => () => uploadManager.dispose(), [uploadManager]);
@@ -91,6 +150,7 @@ export function useViewport3DScalarColorUpload({
     const effectiveColorBuffer = vertexColorsEnabled ? colorBuffer : null;
     if (!effectiveColorBuffer) {
       applyVertexScalarColorBuffer(geometry, null, vertexCount);
+      store.publish(null, geometry);
       tracker.recordDirtyFrame(dirtyReason);
       invalidate();
       return;
@@ -103,6 +163,7 @@ export function useViewport3DScalarColorUpload({
     );
     if (!uploadPlan) {
       applyVertexScalarColorBuffer(geometry, null, vertexCount);
+      store.publish(null, geometry);
       tracker.recordDirtyFrame(dirtyReason);
       invalidate();
       return;
@@ -116,6 +177,7 @@ export function useViewport3DScalarColorUpload({
       lane: "field-color",
       onVisible: () => {
         uploadPlan.onVisible();
+        store.publish(effectiveColorBuffer, geometry);
         tracker.recordDirtyFrame(dirtyReason);
         invalidate();
       },
@@ -132,6 +194,7 @@ export function useViewport3DScalarColorUpload({
     enabled,
     geometry,
     invalidate,
+    store,
     targetRevision,
     tracker,
     uploadKey,
@@ -139,6 +202,8 @@ export function useViewport3DScalarColorUpload({
     vertexColorsEnabled,
     vertexCount,
   ]);
+
+  return snapshot.geometry === geometry ? snapshot.buffer : null;
 }
 
 export function createViewport3DScalarColorUploadPlan(

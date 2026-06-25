@@ -25,6 +25,7 @@ function settings(
     shaderMonoColor: "#123456",
     shaderVisible: true,
     surfaceColorSource: "orientation",
+    viewportColorbarVisible: patch.viewportColorbarVisible ?? false,
     vectorAlphaPercent: 100,
     vectorBudget: 12,
     vectorCenteringEnabled: true,

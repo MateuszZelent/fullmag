@@ -18,6 +18,7 @@ import {
   viewport3DFieldColorLayersEnabledFromBrowserConfig,
   viewport3DVectorLayersEnabledFromBrowserConfig,
 } from "@/kernel/browserFullmagConfig";
+import { resolveCanonicalQuantityId } from "@/kernel/api/quantityIds";
 
 import { createViewport3DGpuUploadManager } from "../build-engine/gpu/viewport3dGpuUploadManager";
 import {
@@ -68,6 +69,127 @@ import {
 } from "./viewport3DLayerSettings";
 
 const MESH_PART_GEOMETRY_UPLOAD_FRAME_BUDGET_MS = 3;
+
+export function resolveMeshPartScalarColors({
+  fieldModel,
+  partId,
+  scalarColorMode,
+  settings,
+}: {
+  fieldModel: Pick<
+    Viewport3DFieldRenderModel,
+    "scalarColorsByMode" | "scalarColorsByPartAndMode"
+  > | null;
+  partId: string;
+  scalarColorMode: string | null;
+  settings: Pick<
+    VisualizationTargetSettings,
+    "activeQuantityId" | "scalarColorPalette"
+  >;
+}): ScalarColorBuffer | null {
+  if (!fieldModel || !scalarColorMode) return null;
+  const partBuffer =
+    fieldModel.scalarColorsByPartAndMode.get(partId)?.get(scalarColorMode) ??
+    null;
+  if (scalarColorBufferMatchesSettings(partBuffer, scalarColorMode, settings)) {
+    return partBuffer;
+  }
+
+  const globalBuffer = fieldModel.scalarColorsByMode.get(scalarColorMode) ?? null;
+  return scalarColorBufferMatchesSettings(
+    globalBuffer,
+    scalarColorMode,
+    settings,
+  )
+    ? globalBuffer
+    : null;
+}
+
+export function resolveRetainedMeshPartScalarColors({
+  current,
+  previous,
+  scalarColorMode,
+  settings,
+  vertexCount,
+}: {
+  current: ScalarColorBuffer | null;
+  previous: ScalarColorBuffer | null;
+  scalarColorMode: string | null;
+  settings: Pick<
+    VisualizationTargetSettings,
+    "activeQuantityId" | "scalarColorPalette"
+  >;
+  vertexCount: number;
+}): ScalarColorBuffer | null {
+  if (current) return current;
+  if (!scalarColorMode) return null;
+  return scalarColorBufferMatchesRetainedSettings(
+    previous,
+    scalarColorMode,
+    settings,
+    vertexCount,
+  )
+    ? previous
+    : null;
+}
+
+function scalarColorBufferMatchesSettings(
+  buffer: ScalarColorBuffer | null,
+  scalarColorMode: string,
+  settings: Pick<
+    VisualizationTargetSettings,
+    "activeQuantityId" | "scalarColorPalette"
+  >,
+): buffer is ScalarColorBuffer {
+  if (!buffer) return false;
+  if (buffer.colorMode && buffer.colorMode !== scalarColorMode) return false;
+  if (
+    buffer.colorPalette &&
+    settings.scalarColorPalette &&
+    buffer.colorPalette !== settings.scalarColorPalette
+  ) {
+    return false;
+  }
+  if (
+    buffer.quantityId &&
+    resolveCanonicalQuantityId(buffer.quantityId) !==
+      resolveCanonicalQuantityId(settings.activeQuantityId)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function scalarColorBufferMatchesRetainedSettings(
+  buffer: ScalarColorBuffer | null,
+  scalarColorMode: string,
+  settings: Pick<
+    VisualizationTargetSettings,
+    "activeQuantityId" | "scalarColorPalette"
+  >,
+  vertexCount: number,
+): buffer is ScalarColorBuffer {
+  if (!buffer) return false;
+  if (buffer.colorMode && buffer.colorMode !== scalarColorMode) return false;
+  if (
+    buffer.colorPalette &&
+    settings.scalarColorPalette &&
+    buffer.colorPalette !== settings.scalarColorPalette
+  ) {
+    return false;
+  }
+  if (
+    buffer.quantityId &&
+    resolveCanonicalQuantityId(buffer.quantityId) !==
+      resolveCanonicalQuantityId(settings.activeQuantityId)
+  ) {
+    return false;
+  }
+  return (
+    canApplyVertexScalarColorBuffer(buffer, vertexCount) ||
+    canApplyScalarShaderColorBuffer(buffer, vertexCount)
+  );
+}
 
 export const MeshPartLayer = memo(function MeshPartLayer({
   colors,
@@ -205,13 +327,49 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   const scalarColorMode = fieldColorLayersEnabled
     ? surfaceScalarColorModeFromSettings(renderSettings)
     : null;
-  const scalarColors = scalarColorMode
-    ? fieldModel?.scalarColorsByPartAndMode
-        .get(part.id)
-        ?.get(scalarColorMode) ??
-      fieldModel?.scalarColorsByMode.get(scalarColorMode) ??
-      null
-    : null;
+  const scalarColorsCandidate = resolveMeshPartScalarColors({
+    fieldModel,
+    partId: part.id,
+    scalarColorMode,
+    settings: renderSettings,
+  });
+  const retainedScalarColorsRef = useRef<ScalarColorBuffer | null>(null);
+  const scalarColors = resolveRetainedMeshPartScalarColors({
+    current: scalarColorsCandidate,
+    previous: retainedScalarColorsRef.current,
+    scalarColorMode,
+    settings: renderSettings,
+    vertexCount: topologyModel?.nodeCount ?? 0,
+  });
+  useEffect(() => {
+    const vertexCount = topologyModel?.nodeCount ?? 0;
+    if (
+      scalarColorMode &&
+      scalarColorBufferMatchesRetainedSettings(
+        scalarColorsCandidate,
+        scalarColorMode,
+        renderSettings,
+        vertexCount,
+      )
+    ) {
+      retainedScalarColorsRef.current = scalarColorsCandidate;
+      return;
+    }
+    if (
+      !scalarColorMode ||
+      !fieldColorLayersEnabled ||
+      !renderSettings.visible ||
+      !renderSettings.shaderVisible
+    ) {
+      retainedScalarColorsRef.current = null;
+    }
+  }, [
+    fieldColorLayersEnabled,
+    renderSettings,
+    scalarColorMode,
+    scalarColorsCandidate,
+    topologyModel?.nodeCount,
+  ]);
   const effectiveScalarColors = meshQualityColors ?? scalarColors;
   const vertexColorsEnabled =
     Boolean(meshQualityColors) ||
@@ -246,7 +404,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       `mesh-part-shader-values:${part.id}:${topologyModel?.nodeCount ?? 0}`,
     vertexCount: topologyModel?.nodeCount ?? 0,
   });
-  useViewport3DScalarColorUpload({
+  const visibleScalarColors = useViewport3DScalarColorUpload({
     colorBuffer: effectiveScalarColors,
     dirtyReason: meshQualityColors ? "mesh-quality-colors" : "field-colors",
     enabled: Boolean(
@@ -268,7 +426,10 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   });
 
   const materialRef = useRef<MeshBasicMaterial>(null);
-  const hasScalarColors = vertexColorsEnabled && canUseVertexScalarColors;
+  const hasScalarColors =
+    vertexColorsEnabled &&
+    canUseVertexScalarColors &&
+    visibleScalarColors === effectiveScalarColors;
   const surfaceOpacity = opacityFromSettings(renderSettings);
   const surfacePolicy = useMemo(
     () => surfaceMaterialPolicyProps(surfaceOpacity),

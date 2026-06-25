@@ -1606,6 +1606,7 @@ pub(crate) fn build_visualization_state_response(
         .unwrap_or_default();
     let targets = build_visualization_target_registry(
         &quantity.active_quantity_id,
+        &quantity.colormap,
         &layers,
         &vector_style,
         &overrides,
@@ -1668,6 +1669,7 @@ pub(crate) fn build_visualization_state_response(
 
 fn build_visualization_target_registry(
     active_quantity_id: &str,
+    scalar_color_palette: &str,
     layers: &VisualizationLayerState,
     vector_style: &VectorStyleVisualizationState,
     overrides: &[VisualizationOverrideState],
@@ -1679,7 +1681,12 @@ fn build_visualization_target_registry(
             "airbox",
             "Airbox",
             VisualizationTargetSource::Airbox,
-            airbox_target_settings(active_quantity_id, layers, vector_style),
+            airbox_target_settings(
+                active_quantity_id,
+                scalar_color_palette,
+                layers,
+                vector_style,
+            ),
             overrides,
         ),
         objects: live_snapshot
@@ -1694,7 +1701,12 @@ fn build_visualization_target_registry(
                             &object.id,
                             &object.name,
                             VisualizationTargetSource::SceneObject,
-                            object_target_settings(active_quantity_id, layers, vector_style),
+                            object_target_settings(
+                                active_quantity_id,
+                                scalar_color_palette,
+                                layers,
+                                vector_style,
+                            ),
                             overrides,
                         )
                     })
@@ -1712,7 +1724,12 @@ fn build_visualization_target_registry(
                             &part.id,
                             &part.label,
                             VisualizationTargetSource::MeshPart,
-                            object_target_settings(active_quantity_id, layers, vector_style),
+                            object_target_settings(
+                                active_quantity_id,
+                                scalar_color_palette,
+                                layers,
+                                vector_style,
+                            ),
                             overrides,
                         )
                     })
@@ -1751,6 +1768,7 @@ fn visualization_target_registry_entry(
 
 fn object_target_settings(
     active_quantity_id: &str,
+    scalar_color_palette: &str,
     layers: &VisualizationLayerState,
     vector_style: &VectorStyleVisualizationState,
 ) -> VisualizationResolvedTargetSettings {
@@ -1763,9 +1781,11 @@ fn object_target_settings(
         point_color: "var(--fm-border-strong)".to_string(),
         points_visible: layers.points.visible,
         render_mode: VisualizationTargetRenderMode::Surface,
+        scalar_color_palette: scalar_color_palette.to_string(),
         surface_color_source: surface_color_source_from_vector_color_mode(vector_style.color_mode),
         surface_mono_color: vector_style.mono_color.clone(),
         surface_visible: layers.surface.visible,
+        viewport_colorbar_visible: false,
         vector_alpha: vector_style.alpha,
         vector_budget: layers.vectors.density,
         vector_color_mode: vector_style.color_mode,
@@ -1783,6 +1803,7 @@ fn object_target_settings(
 
 fn airbox_target_settings(
     active_quantity_id: &str,
+    scalar_color_palette: &str,
     layers: &VisualizationLayerState,
     vector_style: &VectorStyleVisualizationState,
 ) -> VisualizationResolvedTargetSettings {
@@ -1795,9 +1816,11 @@ fn airbox_target_settings(
         point_color: "var(--fm-info)".to_string(),
         points_visible: layers.airbox.points.visible,
         render_mode: VisualizationTargetRenderMode::Wireframe,
+        scalar_color_palette: scalar_color_palette.to_string(),
         surface_color_source: SurfaceColorSource::Solid,
         surface_mono_color: "var(--fm-airbox-fill)".to_string(),
         surface_visible: layers.airbox.surface.visible,
+        viewport_colorbar_visible: false,
         vector_alpha: 1.0,
         vector_budget: layers.airbox.vectors.density,
         vector_color_mode: VectorColorMode::Orientation,
@@ -1863,6 +1886,9 @@ fn apply_visualization_target_override(
         }
     }
     if let Some(style) = &override_state.style {
+        if let Some(scalar_color_palette) = &style.scalar_color_palette {
+            settings.scalar_color_palette = scalar_color_palette.clone();
+        }
         if let Some(surface_color_source) = style.surface_color_source {
             settings.surface_color_source = surface_color_source;
         }
@@ -1871,6 +1897,9 @@ fn apply_visualization_target_override(
         }
         if let Some(point_color) = &style.point_color {
             settings.point_color = point_color.clone();
+        }
+        if let Some(viewport_colorbar_visible) = style.viewport_colorbar_visible {
+            settings.viewport_colorbar_visible = viewport_colorbar_visible;
         }
         if let Some(vector_color_mode) = style.vector_color_mode {
             settings.vector_color_mode = vector_color_mode;

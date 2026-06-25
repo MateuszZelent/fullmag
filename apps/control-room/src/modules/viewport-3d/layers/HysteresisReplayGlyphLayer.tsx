@@ -30,6 +30,18 @@ export interface HysteresisReplayGlyphLayerModel {
   signature: string;
 }
 
+const CSS_VARIABLE_COLOR_PATTERN = /^var\((--[-_a-zA-Z0-9]+)\)$/;
+
+function resolveCssColorToken(color: string): string {
+  const match = CSS_VARIABLE_COLOR_PATTERN.exec(color.trim());
+  if (!match || typeof document === "undefined") return color;
+
+  const resolved = getComputedStyle(document.documentElement)
+    .getPropertyValue(match[1])
+    .trim();
+  return resolved || color;
+}
+
 export function buildHysteresisReplayGlyphLayerModel({
   bounds,
   glyphModel,
@@ -84,11 +96,11 @@ function glyphAxisColor(
 ): string {
   switch (key) {
     case "fieldDirection":
-      return "#ffcc66";
+      return "var(--fm-warning)";
     case "measurementAxis":
-      return "#7dd3fc";
+      return "var(--fm-info)";
     case "sampleNormal":
-      return "#c4b5fd";
+      return "var(--fm-stale)";
   }
 }
 
@@ -144,7 +156,7 @@ export const HysteresisReplayGlyphLayer = memo(function HysteresisReplayGlyphLay
           userData={{ label: axis.label }}
         >
           <lineBasicMaterial
-            color={axis.color}
+            color={resolveCssColorToken(axis.color)}
             depthTest={false}
             depthWrite={false}
             toneMapped={false}

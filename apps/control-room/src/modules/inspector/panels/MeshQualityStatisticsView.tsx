@@ -142,8 +142,8 @@ function SizeDistributionCard({
             aria-label={`${distribution.label} histogram bins`}
             className="fm-mesh-size-distribution__bins"
           >
-            {distribution.histogram.map((bin) => (
-              <li key={`${bin.lo ?? "min"}:${bin.hi ?? "max"}`}>
+            {distribution.histogram.map((bin, index) => (
+              <li key={`bin-${index}`}>
                 <span>{bin.label}</span>
                 <strong>{formatCount(bin.count)}</strong>
               </li>

@@ -3636,29 +3636,25 @@ function buildAirboxAction(
             type: "slider",
             id: "airbox:vectors-length",
             label: "Length scale",
-            value: vectorStyle?.length_scale ?? 1,
+            value: settings.vectorLengthScale,
             min: 0.2,
             max: 4,
             step: 0.1,
-            commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+            commandId: RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND,
             commandInput: (value: number) =>
-              visualizationStateCommandInput({
-                vector_style: { length_scale: value },
-              }),
+              visualizationAirboxCommandInput({ vectorLengthScale: value }),
           },
           {
             type: "slider",
             id: "airbox:vectors-thickness",
             label: "Thickness",
-            value: vectorStyle?.thickness ?? 1,
+            value: settings.vectorThickness,
             min: 0.2,
             max: 4,
             step: 0.1,
-            commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+            commandId: RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND,
             commandInput: (value: number) =>
-              visualizationStateCommandInput({
-                vector_style: { thickness: value },
-              }),
+              visualizationAirboxCommandInput({ vectorThickness: value }),
           },
           {
             type: "slider",
@@ -3880,8 +3876,21 @@ function buildSelectedVisualizationGroup(
 ): RibbonTabContent["groups"][number] {
   const { selection, visualizationSnapshot } = context;
   const target = resolveVisualizationTargetFromSelection(selection);
+  const inheritedRegionSettings =
+    target?.kind === "region" && selection.objectId
+      ? resolveTargetVisualization({
+          snapshot: visualizationSnapshot,
+          target: {
+            id: selection.objectId,
+            kind: "object",
+            label: selection.label ?? selection.objectId,
+          },
+          visualizationState: context.visualizationState,
+        }).settings
+      : undefined;
   const targetVisualization = target
     ? resolveTargetVisualization({
+        inheritedSettings: inheritedRegionSettings,
         snapshot: visualizationSnapshot,
         target,
         visualizationState: context.visualizationState,

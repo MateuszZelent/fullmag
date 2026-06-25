@@ -168,6 +168,7 @@ describe("compute performance microbench", () => {
       }),
     );
 
+    if (!result) throw new Error("expected chunked scalar color buffer");
     expect(result.colors).toHaveLength(60_000 * 3);
     assertUnderBudget("buildVertexScalarColorsChunked", durationMs);
   });

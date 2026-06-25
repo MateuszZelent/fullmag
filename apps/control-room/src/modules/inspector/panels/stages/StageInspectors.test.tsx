@@ -5,11 +5,13 @@ import { describe, expect, it } from "vitest";
 import { Accordion } from "@/shared/ui/Accordion";
 import { KernelContext } from "@/kernel/KernelContext";
 import {
+  ANALYSIS_HYSTERESIS_BOOKMARKS_PATH,
   ANALYSIS_HYSTERESIS_POINTS_PATH,
   ANALYSIS_HYSTERESIS_ADAPTIVE_REFINEMENT_PATH,
   ANALYSIS_HYSTERESIS_BRANCHES_PATH,
   ANALYSIS_HYSTERESIS_METRICS_PATH,
   ANALYSIS_HYSTERESIS_MINOR_LOOPS_PATH,
+  ANALYSIS_HYSTERESIS_POINT_PATH,
   ANALYSIS_HYSTERESIS_REVERSAL_FIELDS_PATH,
   ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH,
   DATA_FIELD_VECTOR_PATH,
@@ -25,9 +27,11 @@ import {
 import type {
   HysteresisAdaptiveRefinementSchema,
   HysteresisAngularFamilyResource,
+  HysteresisBookmarksResource,
   HysteresisMetricsSchema,
   HysteresisMinorLoopSchema,
   HysteresisPointSchema,
+  HysteresisPointsResource,
   HysteresisBranchSchema,
   HysteresisExecutionTreeResource,
   HysteresisProgressSchema,
@@ -44,6 +48,17 @@ import type { KernelApi } from "@/kernel/types";
 
 const selection = new SelectionController(new EventBus<KernelEventMap>());
 
+function hysteresisPointsResource(
+  points: HysteresisPointSchema[],
+): HysteresisPointsResource {
+  return {
+    points,
+    revision: 0,
+    stage_id: "hysteresis-1",
+    stage_index: 0,
+  };
+}
+
 const mockKernel = {
   commands: {
     execute: () => Promise.resolve(),
@@ -56,7 +71,7 @@ const mockKernel = {
   api: {
     analysis: {
       hysteresis: {
-        points: () => Promise.resolve([]),
+        points: () => Promise.resolve(hysteresisPointsResource([])),
         metrics: () => Promise.resolve(null),
         adaptiveRefinement: () => Promise.resolve(null),
       },
@@ -1445,7 +1460,7 @@ describe("Study stage inspectors", () => {
         warning_count: 1,
       },
     ];
-    sharedResourceRuntimeStore.updateData(pointsKey, points, 0);
+    sharedResourceRuntimeStore.updateData(pointsKey, hysteresisPointsResource(points), 0);
 
     const markup = render(
       <HysteresisStageInspector {...props("hysteresis")} view="points" />,
@@ -1490,7 +1505,7 @@ describe("Study stage inspectors", () => {
         warning_count: 0,
       },
     ];
-    sharedResourceRuntimeStore.updateData(pointsKey, points, 0);
+    sharedResourceRuntimeStore.updateData(pointsKey, hysteresisPointsResource(points), 0);
 
     const markup = render(
       <HysteresisStageInspector {...props("hysteresis")} view="points" />,
@@ -1528,7 +1543,7 @@ describe("Study stage inspectors", () => {
       status: "running",
       total_points: 81,
     };
-    sharedResourceRuntimeStore.updateData(pointsKey, [], 0);
+    sharedResourceRuntimeStore.updateData(pointsKey, hysteresisPointsResource([]), 0);
     sharedResourceRuntimeStore.updateData(progressKey, progress, 0);
 
     const markup = render(
@@ -1600,7 +1615,7 @@ describe("Study stage inspectors", () => {
       status: "running",
       total_points: 80,
     };
-    sharedResourceRuntimeStore.updateData(pointsKey, points, 0);
+    sharedResourceRuntimeStore.updateData(pointsKey, hysteresisPointsResource(points), 0);
     sharedResourceRuntimeStore.updateData(progressKey, progress, 0);
 
     const markup = render(
@@ -1762,6 +1777,31 @@ describe("Study stage inspectors", () => {
       total_points: 9,
       window: "active",
     };
+    const bookmarksKey = ANALYSIS_HYSTERESIS_BOOKMARKS_PATH.replace(
+      "{stage_id}",
+      "hysteresis-1",
+    );
+    const bookmarks: HysteresisBookmarksResource = {
+      bookmarks: [
+        {
+          bookmark_id: "bookmark:hc",
+          created_at_unix_ms: "1710000000000",
+          field_value_mT: 25,
+          label: "Coercivity candidate",
+          point_id: 4,
+          resource_ref: "analysis/hysteresis/hysteresis-1/points/4",
+          selection_ref: "hysteresis-bookmark:hysteresis-1:4",
+          snapshot_id: "hysteresis_point_005",
+          snapshot_resource_ref: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?snapshot_id=hysteresis_point_005&stage_id=hysteresis-1`,
+          stage_id: "hysteresis-1",
+          status: "completed",
+        },
+      ],
+      revision: 7,
+      stage_id: "hysteresis-1",
+      stage_index: 0,
+    };
+    sharedResourceRuntimeStore.updateData(bookmarksKey, bookmarks, 0);
     sharedResourceRuntimeStore.updateData(executionTreeKey, executionTree, 0);
 
     const markup = render(
@@ -1769,9 +1809,10 @@ describe("Study stage inspectors", () => {
       ["hysteresis-points-bookmarks"],
     );
 
-    expect(markup).toContain("Bookmarks");
-    expect(markup).toContain("3 events");
+    expect(markup).toContain("Point Markers");
+    expect(markup).toContain("3 markers");
     expect(markup).toContain("Coercivity candidate");
+    expect(markup).toContain("analysis/hysteresis/hysteresis-1/points/4");
     expect(markup).toContain("Snapshot hysteresis_point_005");
     expect(markup).toContain("Reversal field");
     expect(markup).toContain("hysteresis-snapshot:hysteresis-1:4:hysteresis_point_005");
@@ -1959,7 +2000,7 @@ describe("Study stage inspectors", () => {
       status: "completed",
       total_points: 5,
     };
-    sharedResourceRuntimeStore.updateData(pointsKey, points, 0);
+    sharedResourceRuntimeStore.updateData(pointsKey, hysteresisPointsResource(points), 0);
     sharedResourceRuntimeStore.updateData(progressKey, progress, 0);
     selection.set(
       {
@@ -2043,7 +2084,7 @@ describe("Study stage inspectors", () => {
         recoil_start_point_id: null,
       },
     ];
-    sharedResourceRuntimeStore.updateData(pointsKey, points, 0);
+    sharedResourceRuntimeStore.updateData(pointsKey, hysteresisPointsResource(points), 0);
     selection.set(
       {
         kind: "analysis.chart-point",
@@ -2088,6 +2129,10 @@ describe("Study stage inspectors", () => {
       "{stage_id}",
       "hysteresis-1",
     );
+    const pointKey = ANALYSIS_HYSTERESIS_POINT_PATH.replace(
+      "{stage_id}",
+      "hysteresis-1",
+    ).replace("{point_id}", "4");
     const points: HysteresisPointSchema[] = [
       {
         point_id: 4,
@@ -2125,7 +2170,13 @@ describe("Study stage inspectors", () => {
         recoil_start_point_id: null,
       },
     ];
-    sharedResourceRuntimeStore.updateData(pointsKey, points, 0);
+    const pointDetail: HysteresisPointSchema = {
+      ...points[0],
+      m_parallel: 0.91,
+      terminal_settle_reason: "resource_detail",
+    };
+    sharedResourceRuntimeStore.updateData(pointsKey, hysteresisPointsResource(points), 0);
+    sharedResourceRuntimeStore.updateData(pointKey, pointDetail, 3);
     selection.set(
       {
         kind: "study.stage.action",
@@ -2150,8 +2201,8 @@ describe("Study stage inspectors", () => {
 
     expect(markup).toContain("Field Point");
     expect(markup).toContain("25.000");
-    expect(markup).toContain("0.800000");
-    expect(markup).toContain("torque_threshold");
+    expect(markup).toContain("0.910000");
+    expect(markup).toContain("resource_detail");
     expect(markup).toContain("hysteresis_point_005");
     expect(markup).toContain("Load 3D");
     expect(markup).toContain("Use as initial");
@@ -2201,7 +2252,7 @@ describe("Study stage inspectors", () => {
         recoil_start_point_id: null,
       },
     ];
-    sharedResourceRuntimeStore.updateData(pointsKey, points, 0);
+    sharedResourceRuntimeStore.updateData(pointsKey, hysteresisPointsResource(points), 0);
     selection.set(
       {
         kind: "study.stage.action",
@@ -2284,7 +2335,7 @@ describe("Study stage inspectors", () => {
         recoil_start_point_id: null,
       },
     ];
-    sharedResourceRuntimeStore.updateData(pointsKey, points, 0);
+    sharedResourceRuntimeStore.updateData(pointsKey, hysteresisPointsResource(points), 0);
 
     const markup = render(
       <HysteresisStageInspector {...props("hysteresis")} view="points" />,
@@ -2422,6 +2473,63 @@ describe("Study stage inspectors", () => {
     expect(markup).toContain("Settle Trace");
     expect(markup).toContain("projected_gradient_bb");
     expect(markup).not.toContain("Current Field");
+
+    selection.clear("explorer");
+  });
+
+  it("renders settle trace for a hysteresis algorithm node selected in explorer", () => {
+    selection.set(
+      {
+        kind: "study.stage.action",
+        label: "Minimize",
+        nodeId:
+          "model:study:stages:stage:hysteresis-1:branches:branch:ascending:algorithm:minimize",
+        objectId: null,
+        ref: {
+          hysteresisExecutionNodeId:
+            "hysteresis-1:branch:ascending:field-point:7:algorithm:minimize",
+          hysteresisExecutionNodeKind: "settle_algorithm",
+          hysteresisPointId: 7,
+          kind: "study.stage.action",
+          nodeId:
+            "model:study:stages:stage:hysteresis-1:branches:branch:ascending:algorithm:minimize",
+          stageId: "hysteresis-1",
+          stageIndex: 0,
+          type: "study-stage",
+        },
+      },
+      "explorer",
+    );
+
+    const settleTraceKey = ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH
+      .replace("{stage_id}", "hysteresis-1")
+      .replace("{point_id}", "7");
+    const settleTrace: HysteresisSettleTraceEntrySchema[] = [
+      {
+        algorithm_id: "minimize",
+        energy: -4.8e-16,
+        fallback_reason: null,
+        field_value_mT: -25,
+        method: "projected_gradient_bb",
+        point_id: 7,
+        protocol_role: "major_ascending",
+        resolved_timestep_s: 1e-13,
+        retry_attempt: 0,
+        status: "converged",
+        step_index: 0,
+        torque: 1.4e-2,
+      },
+    ];
+    sharedResourceRuntimeStore.updateData(settleTraceKey, settleTrace, 0);
+
+    const markup = render(
+      <HysteresisStageInspector {...props("hysteresis")} view="settle-trace" />,
+      ["hysteresis-settle-trace"],
+    );
+
+    expect(markup).toContain("Settle Trace");
+    expect(markup).toContain("projected_gradient_bb");
+    expect(markup).toContain("converged");
 
     selection.clear("explorer");
   });

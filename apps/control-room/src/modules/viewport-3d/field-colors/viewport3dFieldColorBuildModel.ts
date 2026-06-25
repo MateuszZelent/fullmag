@@ -2,6 +2,7 @@ import type { DecodedFieldVector } from "@/kernel/api/codecs";
 
 import {
   buildVertexScalarColorsChunked,
+  fieldVectorSupportsScalarColorMode,
   type ChunkedFieldTransformOptions,
   type ScalarColorBuffer,
   type ScalarRange,
@@ -109,6 +110,7 @@ async function buildSampledFieldColorBuffer(
     options.colorMode,
     "magnitude",
   );
+  if (!fieldVectorSupportsScalarColorMode(fieldVector, colorMode)) return null;
   const colorPalette = options.colorPalette ?? "viridis";
   const shaderOnly = resolveShaderOnly(colorMode, fieldVector, options);
   const range = shaderOnly.vector
@@ -173,6 +175,7 @@ async function buildMappedFieldColorBuffer(
     options.colorMode,
     "magnitude",
   );
+  if (!fieldVectorSupportsScalarColorMode(fieldVector, colorMode)) return null;
   const colorPalette = options.colorPalette ?? "viridis";
   const shaderOnly = resolveShaderOnly(colorMode, fieldVector, options);
   const range = shaderOnly.vector
@@ -364,6 +367,21 @@ function colorAt(
   colorPalette: string,
 ): [number, number, number] {
   const offset = pointIndex * fieldVector.nComp;
+  if (fieldVector.nComp === 1) {
+    const value = fieldVector.values[offset] ?? 0;
+    return (
+      resolveViewport3DVectorColorRgb(
+        "magnitude",
+        value,
+        0,
+        0,
+        range,
+        normalizeScalarValue(value, range),
+        colorPalette,
+      ) ?? [1, 1, 1]
+    );
+  }
+
   const x = fieldVector.values[offset] ?? 0;
   const y = fieldVector.values[offset + 1] ?? 0;
   const z = fieldVector.values[offset + 2] ?? 0;

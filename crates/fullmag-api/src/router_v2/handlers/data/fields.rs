@@ -974,11 +974,20 @@ fn resolve_field_scope(
             resolve_part_scope(mesh, part_id, "part")?
         }
         "airbox" => {
-            let part = mesh
-                .mesh_parts
-                .iter()
-                .find(|part| part.role == "air")
-                .ok_or_else(|| ApiError::not_found("airbox mesh part not found"))?;
+            let part = if let Some(part_id) = query.scope_id.as_deref().filter(|id| !id.is_empty())
+            {
+                mesh.mesh_parts
+                    .iter()
+                    .find(|part| part.id == part_id && part.role == "air")
+                    .ok_or_else(|| {
+                        ApiError::not_found(format!("airbox mesh part not found: {part_id}"))
+                    })?
+            } else {
+                mesh.mesh_parts
+                    .iter()
+                    .find(|part| part.role == "air")
+                    .ok_or_else(|| ApiError::not_found("airbox mesh part not found"))?
+            };
             ResolvedFieldScope {
                 domain: ResolvedFieldScopeDomain::Air,
                 kind: "airbox".to_string(),
@@ -4445,11 +4454,14 @@ mod tests {
     use super::{
         analysis_complex_vector_view_values, analysis_frequency_response_view_values,
         decode_complex_f64_pairs_little_endian, is_fem_runtime, parse_analysis_eigen_mode_field_id,
-        parse_analysis_frequency_response_field_id,
+        parse_analysis_frequency_response_field_id, resolve_field_scope, FieldVectorQuery,
+        ResolvedFieldScopeDomain,
     };
     use crate::session::default_current_live_state;
     use crate::types::CurrentLiveSnapshotRequest;
-    use fullmag_runner::{BackendCapabilities, RuntimeEngineId};
+    use fullmag_runner::{
+        BackendCapabilities, FemMeshPartPayload, FemMeshPayload, RuntimeEngineId,
+    };
 
     #[test]
     fn parses_frequency_response_analysis_field_id() {
@@ -4487,6 +4499,113 @@ mod tests {
             .expect("complex f64 pair payload should decode");
 
         assert_eq!(values, vec![1.25, -0.5]);
+    }
+
+    #[test]
+    fn airbox_field_scope_honors_explicit_part_scope_id() {
+        let mesh = FemMeshPayload {
+            mesh_name: "multi-airbox-test".to_string(),
+            mesh_id: "multi-airbox-test:1".to_string(),
+            nodes: vec![[0.0, 0.0, 0.0]; 8],
+            elements: Vec::new(),
+            element_markers: Vec::new(),
+            boundary_faces: Vec::new(),
+            boundary_markers: Vec::new(),
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            object_segments: Vec::new(),
+            mesh_parts: vec![
+                FemMeshPartPayload {
+                    id: "body".to_string(),
+                    label: "body".to_string(),
+                    role: "magnetic_object".to_string(),
+                    object_id: Some("body".to_string()),
+                    geometry_id: Some("body".to_string()),
+                    material_id: Some("mat-body".to_string()),
+                    element_start: 0,
+                    element_count: 0,
+                    boundary_face_start: 0,
+                    boundary_face_count: 0,
+                    boundary_face_indices: Vec::new(),
+                    node_start: 0,
+                    node_count: 4,
+                    node_indices: vec![0, 1, 2, 3],
+                    surface_faces: Vec::new(),
+                    bounds_min: None,
+                    bounds_max: None,
+                },
+                FemMeshPartPayload {
+                    id: "airbox-a".to_string(),
+                    label: "airbox-a".to_string(),
+                    role: "air".to_string(),
+                    object_id: None,
+                    geometry_id: None,
+                    material_id: None,
+                    element_start: 0,
+                    element_count: 0,
+                    boundary_face_start: 0,
+                    boundary_face_count: 0,
+                    boundary_face_indices: Vec::new(),
+                    node_start: 4,
+                    node_count: 2,
+                    node_indices: vec![4, 5],
+                    surface_faces: Vec::new(),
+                    bounds_min: None,
+                    bounds_max: None,
+                },
+                FemMeshPartPayload {
+                    id: "airbox-b".to_string(),
+                    label: "airbox-b".to_string(),
+                    role: "air".to_string(),
+                    object_id: None,
+                    geometry_id: None,
+                    material_id: None,
+                    element_start: 0,
+                    element_count: 0,
+                    boundary_face_start: 0,
+                    boundary_face_count: 0,
+                    boundary_face_indices: Vec::new(),
+                    node_start: 6,
+                    node_count: 2,
+                    node_indices: vec![6, 7],
+                    surface_faces: Vec::new(),
+                    bounds_min: None,
+                    bounds_max: None,
+                },
+            ],
+            domain_mesh_mode: Some("shared_domain".to_string()),
+            domain_frame: None,
+            generation_id: Some("multi-airbox-generation".to_string()),
+            per_domain_quality: Default::default(),
+        };
+        let request: CurrentLiveSnapshotRequest =
+            serde_json::from_value(serde_json::json!({ "session_id": "scope-test" }))
+                .expect("minimal live snapshot request should deserialize");
+        let mut snapshot = default_current_live_state(&request);
+        snapshot.fem_mesh = Some(mesh);
+
+        let scope = resolve_field_scope(
+            &FieldVectorQuery {
+                component: Some("full".to_string()),
+                max_samples: None,
+                phase_rad: None,
+                scope_id: Some("airbox-b".to_string()),
+                scope_kind: Some("airbox".to_string()),
+                snapshot_id: None,
+                stage_id: None,
+                view: None,
+            },
+            &snapshot,
+            None,
+            8,
+            "H_demag",
+        )
+        .expect("airbox scope should resolve")
+        .expect("airbox scope should be scoped");
+
+        assert_eq!(scope.domain, ResolvedFieldScopeDomain::Air);
+        assert_eq!(scope.id.as_deref(), Some("airbox-b"));
+        assert_eq!(scope.node_indices, vec![6, 7]);
     }
 
     #[test]

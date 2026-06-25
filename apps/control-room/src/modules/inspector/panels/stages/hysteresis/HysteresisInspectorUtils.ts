@@ -203,6 +203,17 @@ export function activeHysteresisPointSelection(
       snapshotId: ref.snapshotId ?? null,
     };
   }
+  if (
+    ref?.type === "study-stage" &&
+    ref.stageId === stageId &&
+    ref.hysteresisPointId != null
+  ) {
+    return {
+      fieldValueMt: null,
+      pointId: ref.hysteresisPointId,
+      snapshotId: null,
+    };
+  }
   const pointId = pointIdFromHysteresisExplorerNode(selection.nodeId, stageId);
   if (pointId == null) {
     return null;

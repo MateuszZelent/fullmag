@@ -60,6 +60,8 @@ export function useViewport3DFieldRenderOptions({
     const partVectorScales = new Map<string, number>();
     const partVectorSurfaceOffsetEnabled = new Set<string>();
     const partVectorSurfaceOffsetScales = new Map<string, number>();
+    const partScalarColorModes = new Map<string, string>();
+    const partScalarColorPalettes = new Map<string, string>();
     const scalarColorModes = new Set<string>();
     let scalarColorsVisible = false;
     let fullVectorBudget = 0;
@@ -89,6 +91,8 @@ export function useViewport3DFieldRenderOptions({
           if (scalarColorMode) {
             scalarColorsVisible = true;
             scalarColorModes.add(scalarColorMode);
+            partScalarColorModes.set(partId, scalarColorMode);
+            partScalarColorPalettes.set(partId, settings.scalarColorPalette);
           }
         }
         partVectorScopes.set(partId, settings.geometryScope);
@@ -147,6 +151,8 @@ export function useViewport3DFieldRenderOptions({
         if (scalarColorMode) {
           scalarColorsVisible = true;
           scalarColorModes.add(scalarColorMode);
+          partScalarColorModes.set(partId, scalarColorMode);
+          partScalarColorPalettes.set(partId, airboxSettings.scalarColorPalette);
         }
       }
       partVectorScopes.set(partId, airboxSettings.geometryScope);
@@ -184,6 +190,12 @@ export function useViewport3DFieldRenderOptions({
           partVectorSurfaceOffsetScales.size > 0
             ? partVectorSurfaceOffsetScales
             : undefined,
+        partScalarColorModes:
+          partScalarColorModes.size > 0 ? partScalarColorModes : undefined,
+        partScalarColorPalettes:
+          partScalarColorPalettes.size > 0
+            ? partScalarColorPalettes
+            : undefined,
         scalarColorModes,
         scalarColorPalette,
         scalarColorsVisible,
@@ -202,6 +214,7 @@ export function useViewport3DFieldRenderOptions({
     airboxSettings.vectorSurfaceOffsetScale,
     airboxSettings.vectorsVisible,
     airboxSettings.geometryScope,
+    airboxSettings.scalarColorPalette,
     airboxSettings.surfaceColorSource,
     airboxSettings.shaderVisible,
     airboxSettings.visible,
@@ -356,6 +369,8 @@ export function sameViewport3DFieldRenderOptions(
     sameNumberMap(left.partVectorBudgets, right.partVectorBudgets) &&
     sameNumberMap(left.partVectorScales, right.partVectorScales) &&
     sameStringMap(left.partVectorScopes, right.partVectorScopes) &&
+    sameStringMap(left.partScalarColorModes, right.partScalarColorModes) &&
+    sameStringMap(left.partScalarColorPalettes, right.partScalarColorPalettes) &&
     sameStringSet(
       left.partVectorSurfaceOffsetEnabled,
       right.partVectorSurfaceOffsetEnabled,

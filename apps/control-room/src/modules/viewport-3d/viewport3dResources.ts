@@ -6,6 +6,7 @@ import {
   DATA_FIELDS_PATH,
   DATA_DOMAIN_META_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
+  DATA_FIELD_META_PATH,
   DATA_FIELD_VECTOR_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH,
@@ -31,6 +32,7 @@ import { useKernel } from "@/kernel/KernelContext";
 import { memoryBudgetRegistry } from "@/kernel/performance/MemoryBudgetRegistry";
 import { fieldVectorMinRefetchIntervalMs } from "@/kernel/realtime/communicationPolicy";
 import { ResourceCache } from "@/kernel/resources/ResourceCache";
+import type { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
 import { useResource } from "@/kernel/resources/useResource";
 
 import { viewport3DFieldUpdateHoldActive } from "./viewport3dFieldUpdateHold";
@@ -114,6 +116,30 @@ export interface Viewport3DPartFieldVectorRequest {
   key: string;
   quantityId: string;
   query: FieldVectorQuery;
+}
+
+export function viewport3DFieldMetaResourceMatchesQuantity(
+  resourceKey: string,
+  quantityId: string,
+): boolean {
+  const fieldMetaPath = DATA_FIELD_META_PATH.replace(
+    "{quantity_id}",
+    encodeURIComponent(resolveCanonicalQuantityId(quantityId)),
+  );
+  return resourceKey === fieldMetaPath || resourceKey.startsWith(`${fieldMetaPath}?`);
+}
+
+export function invalidateViewport3DFieldMetaResources(
+  resources: ResourceInvalidationController,
+  quantityId: string,
+  revision: ResourceRevision | null,
+): void {
+  if (revision === null) return;
+  resources.invalidateMatching(
+    (resourceKey) =>
+      viewport3DFieldMetaResourceMatchesQuantity(resourceKey, quantityId),
+    revision,
+  );
 }
 
 function resolveDomainMetaRevision(meta: { generation_id: number }) {
@@ -341,13 +367,11 @@ export function resolveViewport3DFieldVectorResourceKey(
 export function resolveViewport3DAirboxFieldVectorQuery(
   fieldQuery: FieldVectorQuery = FULL_FIELD_VECTOR_QUERY,
 ): FieldVectorQuery {
-  const query: FieldVectorQuery = {
+  return {
     ...fieldQuery,
     component: fieldQuery.component ?? "full",
     scope_kind: "airbox",
   };
-  delete query.scope_id;
-  return query;
 }
 
 function airboxFieldVectorUnavailable(error: unknown): boolean {
@@ -362,12 +386,17 @@ export function resolveViewport3DAirboxFieldVectorResourceKeys(
   if (isMagneticOnlyQuantityId(quantityId)) {
     return new Map();
   }
-  const query = resolveViewport3DAirboxFieldVectorQuery(fieldQuery);
   return new Map(
-    airboxParts.map((part) => [
-      part.id,
-      resolveViewport3DFieldVectorResourceKey(quantityId, query),
-    ]),
+    airboxParts.map((part) => {
+      const query = resolveViewport3DAirboxFieldVectorQuery({
+        ...fieldQuery,
+        scope_id: part.id,
+      });
+      return [
+        part.id,
+        resolveViewport3DFieldVectorResourceKey(quantityId, query),
+      ];
+    }),
   );
 }
 
@@ -529,8 +558,8 @@ export function useViewport3DFieldVector(
     [quantityId, query],
   );
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
-      loadCachedBinaryResource(
+    async ({ signal }: { signal: AbortSignal }) => {
+      const data = await loadCachedBinaryResource(
         fieldVectorCache,
         requestKey,
         (etag, requestSignal) =>
@@ -547,7 +576,16 @@ export function useViewport3DFieldVector(
           ),
           signal,
         },
-      ),
+      );
+      if (data !== null) {
+        invalidateViewport3DFieldMetaResources(
+          resources,
+          quantityId,
+          fieldVectorCache.peek(requestKey)?.etag ?? null,
+        );
+      }
+      return data;
+    },
     [api, quantityId, query, requestKey, resources],
   );
   const resolveRevision = useCallback(
@@ -623,6 +661,13 @@ export function useViewport3DAirboxFieldVectors(
               }
               throw error;
             });
+            if (data !== null) {
+              invalidateViewport3DFieldMetaResources(
+                resources,
+                quantityId,
+                fieldVectorCache.peek(key)?.etag ?? null,
+              );
+            }
             return [key, data] as const;
           }),
         ),
@@ -717,6 +762,13 @@ export function useViewport3DQuantityFieldVectors(
               signal,
             },
           );
+          if (data !== null) {
+            invalidateViewport3DFieldMetaResources(
+              resources,
+              quantityId,
+              fieldVectorCache.peek(request.key)?.etag ?? null,
+            );
+          }
           return [quantityId, data] as const;
         }),
       );
@@ -794,6 +846,13 @@ export function useViewport3DPartFieldVectors(
               signal,
             },
           );
+          if (data !== null) {
+            invalidateViewport3DFieldMetaResources(
+              resources,
+              request.quantityId,
+              fieldVectorCache.peek(request.key)?.etag ?? null,
+            );
+          }
           return [partId, data] as const;
         }),
       );

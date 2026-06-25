@@ -1,67 +1,122 @@
 "use client";
 
-import type { HysteresisExecutionTreeNode } from "@/kernel/api/apiTypes";
+import type {
+  HysteresisBookmarkSchema,
+  HysteresisBookmarksResource,
+  HysteresisExecutionTreeNode,
+} from "@/kernel/api/apiTypes";
 
 import { FieldRow } from "../../../primitives/FieldRow";
 import { InspectorSection } from "../../../primitives/InspectorSection";
 import type { HysteresisInspectorCommonProps } from "./HysteresisInspectorTypes";
 
 export function HysteresisBookmarksInspector({
+  bookmarks,
   executionTree,
-}: Pick<HysteresisInspectorCommonProps, "executionTree">) {
-  const bookmarks = flattenBookmarks(executionTree?.nodes ?? []);
+}: Pick<HysteresisInspectorCommonProps, "executionTree"> & {
+  bookmarks: HysteresisBookmarksResource | null | undefined;
+}) {
+  const markers = collectPointMarkers(bookmarks, executionTree?.nodes ?? []);
 
   return (
     <InspectorSection
       value="hysteresis-points-bookmarks"
-      title="Bookmarks"
-      badge={`${bookmarks.length} ${bookmarks.length === 1 ? "event" : "events"}`}
+      title="Point Markers"
+      badge={`${markers.length} ${markers.length === 1 ? "marker" : "markers"}`}
     >
-      {bookmarks.length > 0 ? (
+      {markers.length > 0 ? (
         <div className="fm-hysteresis-inspector-list">
-          {bookmarks.map((node) => (
+          {markers.map((node) => (
             <div
               className="fm-hysteresis-inspector-list__item"
-              key={node.node_id}
+              key={node.nodeId}
             >
-              <FieldRow label="Event" value={node.label} />
+              <FieldRow label="Marker" value={node.label} />
               <FieldRow label="Kind" value={node.kind} />
               <FieldRow label="Status" value={node.status} />
-              {typeof node.point_id === "number" && (
-                <FieldRow label="Point" value={String(node.point_id)} />
+              {typeof node.pointId === "number" && (
+                <FieldRow label="Point" value={String(node.pointId)} />
               )}
-              {node.selection_ref && (
-                <FieldRow label="Selection ref" value={node.selection_ref} />
+              {node.selectionRef && (
+                <FieldRow label="Selection ref" value={node.selectionRef} />
               )}
-              {node.resource_ref && (
-                <FieldRow label="Resource ref" value={node.resource_ref} />
+              {node.resourceRef && (
+                <FieldRow label="Resource ref" value={node.resourceRef} />
               )}
             </div>
           ))}
         </div>
       ) : (
         <div className="fm-hysteresis-inspector-empty">
-          No bookmark, key-event, or snapshot markers are available for this
-          hysteresis stage yet.
+          No point markers are available for this hysteresis stage yet.
         </div>
       )}
     </InspectorSection>
   );
 }
 
-function flattenBookmarks(
+interface PointMarker {
+  kind: string;
+  label: string;
+  nodeId: string;
+  pointId?: number;
+  resourceRef?: string | null;
+  selectionRef?: string | null;
+  status: string;
+}
+
+function collectPointMarkers(
+  bookmarks: HysteresisBookmarksResource | null | undefined,
   nodes: readonly HysteresisExecutionTreeNode[],
-): HysteresisExecutionTreeNode[] {
-  const flattened: HysteresisExecutionTreeNode[] = [];
+): PointMarker[] {
+  return [
+    ...(bookmarks?.bookmarks.map(bookmarkToPointMarker) ?? []),
+    ...flattenPointMarkers(nodes, { includeBookmarks: !bookmarks }),
+  ];
+}
+
+function bookmarkToPointMarker(bookmark: HysteresisBookmarkSchema): PointMarker {
+  return {
+    kind: "bookmark",
+    label: bookmark.label,
+    nodeId: bookmark.bookmark_id,
+    pointId: bookmark.point_id,
+    resourceRef: bookmark.resource_ref,
+    selectionRef: bookmark.selection_ref,
+    status: bookmark.status,
+  };
+}
+
+function flattenPointMarkers(
+  nodes: readonly HysteresisExecutionTreeNode[],
+  { includeBookmarks }: { includeBookmarks: boolean },
+): PointMarker[] {
+  const flattened: PointMarker[] = [];
   for (const node of nodes) {
     if (
-      node.kind === "bookmark" ||
+      (includeBookmarks && node.kind === "bookmark") ||
       node.kind === "key_event" ||
       node.kind === "snapshot"
     ) {
-      flattened.push(node);
+      flattened.push(executionTreeNodeToPointMarker(node));
     }
-    flattened.push(...flattenBookmarks(node.children ?? []));
+    flattened.push(
+      ...flattenPointMarkers(node.children ?? [], { includeBookmarks }),
+    );
   }
   return flattened;
+}
+
+function executionTreeNodeToPointMarker(
+  node: HysteresisExecutionTreeNode,
+): PointMarker {
+  return {
+    kind: node.kind,
+    label: node.label,
+    nodeId: node.node_id,
+    pointId: node.point_id ?? undefined,
+    resourceRef: node.resource_ref,
+    selectionRef: node.selection_ref,
+    status: node.status,
+  };
 }

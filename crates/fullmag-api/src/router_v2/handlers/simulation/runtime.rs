@@ -12,11 +12,11 @@ use serde_json::Value;
 
 use crate::error::ApiError;
 use crate::router_v2::handlers::analysis::hysteresis::{
-    read_hysteresis_minor_loops_if_available, read_hysteresis_points_if_available,
-    read_hysteresis_settle_trace_if_available,
+    hysteresis_bookmarks_resource, read_hysteresis_minor_loops_if_available,
+    read_hysteresis_points_if_available, read_hysteresis_settle_trace_if_available,
 };
 use crate::schemas::hysteresis::{
-    HysteresisExecutionTreeNode, HysteresisExecutionTreeResource,
+    HysteresisBookmarkSchema, HysteresisExecutionTreeNode, HysteresisExecutionTreeResource,
     HysteresisFieldUnitProvenanceSchema, HysteresisMinorLoopSchema, HysteresisOrientationSchema,
     HysteresisPointSchema, HysteresisProgressSchema, HysteresisProtocolSchema,
     HysteresisResolvedSettleStepSchema, HysteresisSettlePipelineSchema,
@@ -631,6 +631,17 @@ pub async fn get_hysteresis_execution_tree(
     let points = read_hysteresis_points_if_available(&state, &stage.stage_id).await?;
     let minor_loops = read_hysteresis_minor_loops_if_available(&state, &stage.stage_id).await?;
     let settle_trace = read_hysteresis_settle_trace_if_available(&state, &stage.stage_id).await?;
+    let bookmark_resource = if query.include_bookmarks.unwrap_or(true) {
+        Some(hysteresis_bookmarks_resource(&state, &stage).await)
+    } else {
+        None
+    };
+    let bookmark_revision = bookmark_resource
+        .as_ref()
+        .map_or(stage.revision, |resource| resource.revision);
+    let bookmarks = bookmark_resource
+        .map(|resource| resource.bookmarks)
+        .unwrap_or_default();
     Ok(Json(build_hysteresis_execution_tree(
         stage,
         progress,
@@ -638,6 +649,8 @@ pub async fn get_hysteresis_execution_tree(
         points,
         minor_loops,
         settle_trace,
+        bookmarks,
+        bookmark_revision,
     )))
 }
 
@@ -1923,6 +1936,8 @@ fn build_hysteresis_execution_tree(
     points: Vec<HysteresisPointSchema>,
     minor_loops: Vec<HysteresisMinorLoopSchema>,
     settle_trace: Vec<HysteresisSettleTraceEntrySchema>,
+    bookmarks: Vec<HysteresisBookmarkSchema>,
+    bookmark_revision: u64,
 ) -> HysteresisExecutionTreeResource {
     let before = query.before.unwrap_or(2).min(50);
     let after = query.after.unwrap_or(3).min(50);
@@ -1946,8 +1961,9 @@ fn build_hysteresis_execution_tree(
         settle_trace
             .into_iter()
             .filter_map(|entry| {
-                u32::try_from(entry.point_id)
-                    .ok()
+                entry
+                    .point_id
+                    .and_then(|point_id| u32::try_from(point_id).ok())
                     .map(|point_id| ((point_id, entry.step_index), entry))
             })
             .collect();
@@ -2025,9 +2041,11 @@ fn build_hysteresis_execution_tree(
         progress.status == "completed",
         stage.revision.max(progress.revision),
     ));
+    let revision = stage.revision.max(progress.revision).max(bookmark_revision);
+    nodes.extend(hysteresis_bookmark_nodes(&stage, bookmarks, revision));
 
     HysteresisExecutionTreeResource {
-        revision: stage.revision.max(progress.revision),
+        revision,
         stage_id: stage.stage_id,
         stage_index: stage.stage_index,
         window,
@@ -2040,6 +2058,33 @@ fn build_hysteresis_execution_tree(
         active_point_index,
         nodes,
     }
+}
+
+fn hysteresis_bookmark_nodes(
+    stage: &HysteresisSceneStage,
+    bookmarks: Vec<HysteresisBookmarkSchema>,
+    revision: u64,
+) -> Vec<HysteresisExecutionTreeNode> {
+    bookmarks
+        .into_iter()
+        .map(|bookmark| HysteresisExecutionTreeNode {
+            node_id: format!("{}:bookmark:{}", stage.stage_id, bookmark.point_id),
+            kind: "bookmark".to_string(),
+            stage_id: stage.stage_id.clone(),
+            point_id: Some(bookmark.point_id),
+            settle_step_id: None,
+            status: "ready".to_string(),
+            label: bookmark.label,
+            resource_ref: Some(bookmark.resource_ref),
+            selection_ref: Some(bookmark.selection_ref),
+            mesh_identity: None,
+            field_orientation: bookmark.field_orientation,
+            measurement_axis: bookmark.measurement_axis,
+            field_revision: None,
+            updated_revision: revision,
+            children: Vec::new(),
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy)]

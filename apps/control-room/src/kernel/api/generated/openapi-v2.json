@@ -5752,6 +5752,115 @@
         ],
         "type": "object"
       },
+      "HysteresisBookmarkPointRequest": {
+        "properties": {
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "point_id": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "point_id"
+        ],
+        "type": "object"
+      },
+      "HysteresisBookmarkSchema": {
+        "properties": {
+          "bookmark_id": {
+            "type": "string"
+          },
+          "created_at_unix_ms": {
+            "type": "string"
+          },
+          "field_orientation": {},
+          "field_value_mT": {
+            "format": "double",
+            "type": "number"
+          },
+          "label": {
+            "type": "string"
+          },
+          "measurement_axis": {},
+          "point_id": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "resource_ref": {
+            "type": "string"
+          },
+          "selection_ref": {
+            "type": "string"
+          },
+          "snapshot_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "snapshot_resource_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stage_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "bookmark_id",
+          "stage_id",
+          "point_id",
+          "label",
+          "resource_ref",
+          "selection_ref",
+          "created_at_unix_ms",
+          "field_value_mT",
+          "status"
+        ],
+        "type": "object"
+      },
+      "HysteresisBookmarksResource": {
+        "properties": {
+          "bookmarks": {
+            "items": {
+              "$ref": "#/components/schemas/HysteresisBookmarkSchema"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stage_id": {
+            "type": "string"
+          },
+          "stage_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "stage_id",
+          "stage_index",
+          "bookmarks"
+        ],
+        "type": "object"
+      },
       "HysteresisBranchSchema": {
         "properties": {
           "branch_id": {
@@ -6550,6 +6659,36 @@
         ],
         "type": "object"
       },
+      "HysteresisPointsResource": {
+        "properties": {
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/HysteresisPointSchema"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stage_id": {
+            "type": "string"
+          },
+          "stage_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "stage_id",
+          "stage_index",
+          "points"
+        ],
+        "type": "object"
+      },
       "HysteresisProgressSchema": {
         "properties": {
           "active": {
@@ -6905,7 +7044,16 @@
           },
           "point_id": {
             "minimum": 0,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "protocol_role": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "resolved_parameters": {},
           "resolved_timestep_s": {
@@ -6949,7 +7097,6 @@
           }
         },
         "required": [
-          "point_id",
           "field_value_mT",
           "step_index",
           "algorithm_id",
@@ -16814,6 +16961,9 @@
           "render_mode": {
             "$ref": "#/components/schemas/VisualizationTargetRenderMode"
           },
+          "scalar_color_palette": {
+            "type": "string"
+          },
           "surface_color_source": {
             "$ref": "#/components/schemas/SurfaceColorSource"
           },
@@ -16821,6 +16971,9 @@
             "type": "string"
           },
           "surface_visible": {
+            "type": "boolean"
+          },
+          "viewport_colorbar_visible": {
             "type": "boolean"
           },
           "vector_alpha": {
@@ -16872,9 +17025,11 @@
           "point_color",
           "points_visible",
           "render_mode",
+          "scalar_color_palette",
           "surface_color_source",
           "surface_mono_color",
           "surface_visible",
+          "viewport_colorbar_visible",
           "vector_alpha",
           "vector_budget",
           "vector_color_mode",
@@ -17486,6 +17641,12 @@
               "null"
             ]
           },
+          "scalar_color_palette": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "surface_color_source": {
             "oneOf": [
               {
@@ -17499,6 +17660,12 @@
           "surface_mono_color": {
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "viewport_colorbar_visible": {
+            "type": [
+              "boolean",
               "null"
             ]
           },
@@ -18550,6 +18717,82 @@
         ]
       }
     },
+    "/v2/sessions/current/analysis/hysteresis/{stage_id}/bookmarks": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_hysteresis_stage_id_bookmarks",
+        "parameters": [
+          {
+            "description": "Hysteresis stage index or stage identifier",
+            "in": "path",
+            "name": "stage_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HysteresisBookmarksResource"
+                }
+              }
+            },
+            "description": "Session-owned hysteresis point bookmarks"
+          },
+          "404": {
+            "description": "Hysteresis stage not found"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      },
+      "post": {
+        "operationId": "analysis_post_sessions_current_analysis_hysteresis_stage_id_bookmarks",
+        "parameters": [
+          {
+            "description": "Hysteresis stage index or stage identifier",
+            "in": "path",
+            "name": "stage_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HysteresisBookmarkPointRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HysteresisBookmarksResource"
+                }
+              }
+            },
+            "description": "Updated session-owned hysteresis point bookmarks"
+          },
+          "404": {
+            "description": "Hysteresis stage or point not found"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
     "/v2/sessions/current/analysis/hysteresis/{stage_id}/branches": {
       "get": {
         "operationId": "analysis_get_sessions_current_analysis_hysteresis_stage_id_branches",
@@ -18674,14 +18917,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/HysteresisPointSchema"
-                  },
-                  "type": "array"
+                  "$ref": "#/components/schemas/HysteresisPointsResource"
                 }
               }
             },
-            "description": "Hysteresis sweep points"
+            "description": "Revisioned hysteresis sweep points resource"
           },
           "404": {
             "description": "Hysteresis points not found"

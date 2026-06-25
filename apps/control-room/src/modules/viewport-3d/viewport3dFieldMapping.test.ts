@@ -117,6 +117,23 @@ describe("viewport3dFieldMapping", () => {
     expect(Array.from(result?.colors ?? [])).toEqual([1, 1, 1]);
   });
 
+  it("does not synthesize orientation colors from component-only payloads", async () => {
+    const fieldVector = vectorField([0.25, 0.5, 0.75], 1);
+
+    expect(
+      buildVertexScalarColors(fieldVector, 3, undefined, "orientation"),
+    ).toBeNull();
+    expect(
+      buildSampledScalarColors(fieldVector, Uint32Array.from([0, 1]), "orientation"),
+    ).toBeNull();
+    await expect(
+      buildVertexScalarColorsChunked(fieldVector, {
+        colorMode: "orientation",
+        shaderOnly: true,
+      }),
+    ).resolves.toBeNull();
+  });
+
   it("maps component color modes through the scalar gradient", () => {
     const result = buildVertexScalarColors(
       vectorField([
@@ -243,6 +260,7 @@ describe("viewport3dFieldMapping", () => {
       max: 2,
       min: 0,
     });
+    if (!result) throw new Error("expected chunked scalar color buffer");
     expect(result.colors).toHaveLength(9);
     expect(yieldToMain).toHaveBeenCalledTimes(4);
   });
@@ -262,6 +280,7 @@ describe("viewport3dFieldMapping", () => {
       },
     );
 
+    if (!result) throw new Error("expected chunked shader scalar buffer");
     expect(result.colors).toHaveLength(0);
     expect(Array.from(result.scalarValues ?? [])).toEqual([1, 2, 3]);
     expect(result.colorMode).toBe("magnitude");
@@ -281,6 +300,7 @@ describe("viewport3dFieldMapping", () => {
       },
     );
 
+    if (!result) throw new Error("expected chunked shader vector buffer");
     expect(result.colors).toHaveLength(0);
     expect(result.scalarValues).toBeUndefined();
     expect(Array.from(result.vectorValues ?? [])).toEqual([

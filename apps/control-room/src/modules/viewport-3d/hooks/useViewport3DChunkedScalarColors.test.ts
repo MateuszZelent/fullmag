@@ -11,6 +11,7 @@ import {
   createViewport3DFieldColorBuildReference,
   mergeViewport3DFieldScalarColors,
   resolveViewport3DChunkedFieldColorTarget,
+  resolveViewport3DChunkedPartDisplayModesKey,
   shouldStartChunkedScalarColorBuild,
 } from "./useViewport3DChunkedScalarColors";
 
@@ -36,6 +37,15 @@ function colorBuffer(value: number): ScalarColorBuffer {
 }
 
 describe("useViewport3DChunkedScalarColors", () => {
+  it("publishes completed color modes progressively instead of waiting for every mode", () => {
+    const source = readFileSync(sourceUrl, "utf8");
+
+    expect(source).toContain("await Promise.allSettled(");
+    expect(source).toContain("publishEntries(true)");
+    expect(source).toContain("publishEntries(false)");
+    expect(source).not.toContain("await Promise.all(");
+  });
+
   it("creates semantic field-color build references without camera-only revisions", () => {
     const base = {
       colorRangeRevision: "auto:min=-1:max=1",
@@ -106,12 +116,48 @@ describe("useViewport3DChunkedScalarColors", () => {
       buildKey:
         'field-color:{"algorithmVersion":1,"component":"orientation","domainId":"shared-domain","fieldRevision":"field-7","lane":"field-color","quantityId":"m","samplingRevision":"full-domain:chunked","scopeId":"full","scopeKind":"full","sessionId":"current","styleRevision":"palette=viridis|range=auto:min=-1:max=1|target=surface/full","targetVisualizationRevision":"field-color-data","topologyRevision":"mesh-4"}',
       groupKey:
-        "field-color:session=current:domain=shared-domain:quantity=m:scope=full:full:target=surface/full",
+        "field-color:session=current:domain=shared-domain:quantity=m:mode=orientation:scope=full:full:target=surface/full",
       revisionSummary:
         "topology=mesh-4 field=field-7 quantity=m mode=orientation palette=viridis range=auto:min=-1:max=1 target=surface/full sampling=full-domain:chunked",
       targetRevision: "field=field-7",
       topologyRevision: "mesh-4",
     });
+  });
+
+  it("groups latest-wins field-color jobs by color mode", () => {
+    const base = {
+      colorRangeRevision: "auto:min=-1:max=1",
+      colorPalette: "viridis",
+      domainId: "shared-domain",
+      fieldRevision: "field-7",
+      quantityId: "m",
+      samplingRevision: "full-domain:chunked",
+      sessionId: "current",
+      targetId: "surface/full",
+      targetScopeId: "full",
+      targetScopeKind: "full",
+      targetVisualizationRevision: "targets-3",
+      topologyRevision: "mesh-4",
+    };
+
+    const orientation = createViewport3DFieldColorBuildReference({
+      ...base,
+      colorMode: "orientation",
+    });
+    const orientationNewField = createViewport3DFieldColorBuildReference({
+      ...base,
+      colorMode: "orientation",
+      fieldRevision: "field-8",
+    });
+    const x = createViewport3DFieldColorBuildReference({
+      ...base,
+      colorMode: "x",
+    });
+
+    expect(orientation?.groupKey).toBe(orientationNewField?.groupKey);
+    expect(orientation?.groupKey).not.toBe(x?.groupKey);
+    expect(orientation?.groupKey).toContain("mode=orientation");
+    expect(x?.groupKey).toContain("mode=x");
   });
 
   it("merges chunked scalar buffers over the synchronous field render model", () => {
@@ -139,10 +185,41 @@ describe("useViewport3DChunkedScalarColors", () => {
     expect(result?.scalarColorsByMode.get("orientation")).toBe(asyncOrientation);
   });
 
+  it("merges chunked per-part scalar buffers over the synchronous field render model", () => {
+    const sync = colorBuffer(1);
+    const asyncPartY = colorBuffer(3);
+    const base: Viewport3DFieldRenderModel = {
+      complexFieldVector: null,
+      fullVectorBuild: null,
+      fullVectorSegments: null,
+      partVectorBuilds: new Map(),
+      partVectorSegments: new Map(),
+      scalarColors: sync,
+      scalarColorsByPartAndMode: new Map([
+        ["part-a", new Map([["y", null]])],
+      ]),
+      scalarColorsByMode: new Map([["orientation", sync]]),
+      visualizationPhaseRad: null,
+    };
+
+    const result = mergeViewport3DFieldScalarColors(
+      base,
+      new Map(),
+      "orientation",
+      new Map([["part-a", new Map([["y", asyncPartY]])]]),
+    );
+
+    expect(result?.scalarColorsByPartAndMode.get("part-a")?.get("y")).toBe(
+      asyncPartY,
+    );
+    expect(result?.scalarColorsByMode.get("orientation")).toBe(sync);
+  });
+
   it("keeps chunked buffers out of React state and clears them on cleanup", () => {
     const source = readFileSync(sourceUrl, "utf8");
 
     expect(source).toContain("const chunkedScalarColorBuffers = new WeakMap");
+    expect(source).toContain("const chunkedScalarColorBuffersByPartAndMode = new WeakMap");
     expect(source).toContain("useReducer");
     expect(source).toContain("chunkedScalarColorReducer");
     expect(source).toContain("releaseChunkedScalarColorToken");
@@ -154,6 +231,7 @@ describe("useViewport3DChunkedScalarColors", () => {
     const topology = { nodeCount: 75_000 };
     const fieldVector = {};
     const current = {
+      buildKey: "field=7|range=old",
       colorPalette: "viridis",
       fieldVector,
       modesKey: "orientation",
@@ -175,10 +253,11 @@ describe("useViewport3DChunkedScalarColors", () => {
     ).toBe(true);
   });
 
-  it("drops previous chunked buffers when topology or mode compatibility changes", () => {
+  it("drops previous chunked buffers when topology or target compatibility changes", () => {
     const topology = { nodeCount: 75_000 };
     const fieldVector = {};
     const current = {
+      buildKey: "field=7|range=old",
       colorPalette: "viridis",
       fieldVector,
       modesKey: "orientation",
@@ -202,17 +281,6 @@ describe("useViewport3DChunkedScalarColors", () => {
       chunkedScalarColorStateIsCompatible(current, {
         colorPalette: "viridis",
         enabled: true,
-        fieldPointCount: 75_000,
-        modesKey: "magnitude",
-        needsChunking: true,
-        targetKind: "full-domain",
-        topology,
-      }),
-    ).toBe(false);
-    expect(
-      chunkedScalarColorStateIsCompatible(current, {
-        colorPalette: "viridis",
-        enabled: true,
         fieldPointCount: 10_000,
         modesKey: "orientation",
         needsChunking: false,
@@ -220,6 +288,133 @@ describe("useViewport3DChunkedScalarColors", () => {
         topology,
       }),
     ).toBe(false);
+  });
+
+  it("keeps previous chunked buffers visible when only requested color modes change", () => {
+    const topology = { nodeCount: 75_000 };
+    const fieldVector = {};
+    const current = {
+      buildKey: "orientation",
+      colorPalette: "viridis",
+      fieldVector,
+      modesKey: "part-a:orientation:viridis|part-b:y:viridis",
+      targetKind: "full-domain" as const,
+      token: {},
+      topology,
+    };
+
+    expect(
+      chunkedScalarColorStateIsCompatible(current, {
+        colorPalette: "viridis",
+        enabled: true,
+        fieldPointCount: 75_000,
+        modesKey: "part-a:x:viridis|part-b:y:viridis",
+        needsChunking: true,
+        targetKind: "full-domain",
+        topology,
+      }),
+    ).toBe(true);
+    expect(
+      shouldStartChunkedScalarColorBuild({
+        builtBuildKey: current.buildKey,
+        builtFieldVector: current.fieldVector,
+        currentBuildKey: "part-a:x:viridis|part-b:y:viridis",
+        currentFieldVector: current.fieldVector,
+        eligibleForChunkedBuild: true,
+        pending: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps stale chunked buffers display-compatible while a new field build is needed", () => {
+    const topology = { nodeCount: 75_000 };
+    const fieldVector = {};
+    const current = {
+      buildKey: "field=7|range=old",
+      colorPalette: "viridis",
+      fieldVector,
+      modesKey: "part-a:y:viridis",
+      targetKind: "full-domain" as const,
+      token: {},
+      topology,
+    };
+
+    expect(
+      chunkedScalarColorStateIsCompatible(current, {
+        colorPalette: "viridis",
+        enabled: true,
+        fieldPointCount: 75_000,
+        modesKey: "part-a:y:viridis",
+        needsChunking: true,
+        targetKind: "full-domain",
+        topology,
+      }),
+    ).toBe(true);
+    expect(
+      shouldStartChunkedScalarColorBuild({
+        builtBuildKey: current.buildKey,
+        builtFieldVector: current.fieldVector,
+        currentBuildKey: "field=8|range=new",
+        currentFieldVector: current.fieldVector,
+        eligibleForChunkedBuild: true,
+        pending: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps stale chunked buffers visible while refreshed field data is temporarily unavailable", () => {
+    const topology = { nodeCount: 75_000 };
+    const fieldVector = {};
+    const current = {
+      buildKey: "field=7|range=old",
+      colorPalette: "viridis",
+      fieldVector,
+      modesKey: "part-a:y:viridis",
+      targetKind: "full-domain" as const,
+      token: {},
+      topology,
+    };
+
+    expect(
+      chunkedScalarColorStateIsCompatible(current, {
+        colorPalette: "viridis",
+        enabled: true,
+        fieldPointCount: null,
+        modesKey: "part-a:y:viridis",
+        needsChunking: false,
+        targetKind: null,
+        topology,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps per-part display compatibility independent from transient field-vector availability", () => {
+    const topology = {
+      airboxParts: [],
+      magneticParts: [
+        {
+          part: {
+            id: "part-a",
+          },
+        },
+      ],
+    };
+
+    expect(
+      resolveViewport3DChunkedPartDisplayModesKey({
+        colorPalette: "viridis",
+        partScalarColorModes: new Map([["part-a", "y"]]),
+        topology: topology as never,
+      }),
+    ).toBe("part-a:y:viridis");
+    expect(
+      resolveViewport3DChunkedPartDisplayModesKey({
+        colorPalette: "plasma",
+        partScalarColorModes: new Map([["part-a", "y"]]),
+        partScalarColorPalettes: new Map([["part-a", "magma"]]),
+        topology: topology as never,
+      }),
+    ).toBe("part-a:y:magma");
   });
 
   it("routes magnetic-only field colors through mapped worker targets", () => {
@@ -365,10 +560,12 @@ describe("useViewport3DChunkedScalarColors", () => {
 
     expect(source).toContain("fieldScalarRangesByMode");
     expect(source).toContain(
-      "scalarRange: fieldScalarRangesByMode?.get(mode)",
+      "partScalarRangesByMode?.get(partId)?.get(mode)",
     );
+    expect(source).toContain("partFieldVector === fieldVector");
     expect(sceneModelSource).toContain("useFieldMetaResource");
     expect(sceneModelSource).toContain("primaryMagnitudeFieldMeta");
+    expect(sceneModelSource).toContain("resolveScalarRange(fieldVector, scalarColorMode)");
     expect(sceneModelSource).toContain("fieldScalarRangesByMode");
   });
 });

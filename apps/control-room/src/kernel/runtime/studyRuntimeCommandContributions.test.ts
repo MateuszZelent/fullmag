@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  ANALYSIS_HYSTERESIS_BOOKMARKS_PATH,
   DATA_FIELDS_PATH,
   DATA_FIELD_VECTOR_PATH,
   DATA_SCALARS_PATH,
@@ -23,9 +24,11 @@ import {
   SIMULATION_RUN_CURRENT_PATH,
   SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
+  SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH,
   SIMULATION_STAGES_EXECUTION_PATH,
   VISUALIZATION_STATE_PATH,
 } from "../api/apiPaths";
+import type { ControlRoomApi } from "../api/ControlRoomApi";
 import { CommandRegistry } from "../commands/CommandRegistry";
 import { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
@@ -781,19 +784,27 @@ describe("study runtime command contributions", () => {
     });
   });
 
-  it("bookmarks a hysteresis point in browser local storage", async () => {
+  it("bookmarks a hysteresis point through the control-room resource", async () => {
     const registry = registryWithStudyRuntimeCommands();
-    const storage = new Map<string, string>();
-    vi.stubGlobal("window", {
-      localStorage: {
-        getItem: vi.fn((key: string) => storage.get(key) ?? null),
-        setItem: vi.fn((key: string, value: string) => {
-          storage.set(key, value);
-        }),
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bookmarkPoint = vi.fn(async () => ({
+      bookmarks: [],
+      revision: 42,
+      stage_id: "hysteresis-1",
+      stage_index: 0,
+    }));
+    const api = {
+      analysis: {
+        hysteresis: {
+          bookmarkPoint,
+        },
       },
-    });
+    } as unknown as ControlRoomApi;
 
     const result = await registry.execute("hysteresis.bookmark-point", {
+      api,
+      resources,
       source: "test",
     }, {
       point: hysteresisCommandPoint(),
@@ -804,21 +815,43 @@ describe("study runtime command contributions", () => {
       message: "Bookmarked hysteresis point 4.",
       status: "completed",
     });
+    expect(bookmarkPoint).toHaveBeenCalledWith("hysteresis-1", {
+      point_id: 4,
+    });
     expect(
-      JSON.parse(
-        storage.get("fullmag.hysteresis.point-bookmarks.v1") ?? "[]",
+      resources.getRevision(
+        ANALYSIS_HYSTERESIS_BOOKMARKS_PATH.replace(
+          "{stage_id}",
+          "hysteresis-1",
+        ),
       ),
-    ).toMatchObject([
-      {
-        field_value_mT: 25,
-        m_parallel: 0.8,
-        point_id: 4,
-        snapshot_id: "hysteresis_point_005",
-        stage_id: "hysteresis-1",
-      },
-    ]);
+    ).toBe(42);
+    expect(
+      resources.getRevision(
+        `${SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH.replace(
+          "{stage_id}",
+          "hysteresis-1",
+        )}?window=active`,
+      ),
+    ).toBe(42);
 
     vi.unstubAllGlobals();
+  });
+
+  it("fails hysteresis point bookmarking without the control-room API", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+
+    const result = await registry.execute("hysteresis.bookmark-point", {
+      source: "test",
+    }, {
+      point: hysteresisCommandPoint(),
+      stageId: "hysteresis-1",
+    });
+
+    expect(result).toEqual({
+      message: "Control-room API is unavailable.",
+      status: "failed",
+    });
   });
 
   it("clears a hysteresis snapshot explorer selection when returning that stage to live", async () => {

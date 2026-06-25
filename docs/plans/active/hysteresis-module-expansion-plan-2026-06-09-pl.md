@@ -3188,7 +3188,8 @@ Testy:
 - `run_next_algorithm` uruchamia drugi krok pipeline,
 - `retry_with_smaller_dt` zmienia resolved dt i zapisuje trace,
 - `key_event` uruchamia dokladniejszy minimize tylko dla wskazanych punktow,
-- `zero_field_relaxed` dodaje preparation point,
+- `zero_field_relaxed` zapisuje stage-level preparation trace bez przesuwania
+  mierzonego `point_id`,
 - `positive_saturation` zaczyna od preparation role.
 
 Weryfikacja:
@@ -3725,6 +3726,55 @@ Status 2026-06-13:
   oraz
   `CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-api hysteresis_ -- --nocapture`
   przeszly.
+- Aktualizacja 2026-06-24: bookmarki punktow histerezy sa teraz
+  first-class frontend resource. `useHysteresisBookmarksResource(stageId)`
+  czyta `analysis.hysteresis.bookmarks(stageId)` przez typed facade,
+  `RealtimeInvalidationBridge` invaliduje
+  `analysis/hysteresis/{stage_id}/bookmarks` razem z innymi zasobami
+  pochodnymi od `analysis.hysteresis.points`, a
+  `HysteresisBookmarksInspector` laczy bookmarki z dedykowanego zasobu z
+  automatycznymi markerami `snapshot`/`key_event` z execution tree. RED testy
+  najpierw potwierdzily brak hooka, brak invalidacji i brak `resource_ref`
+  z zasobu bookmarkow w inspectorze; po implementacji przeszly:
+  `pnpm --dir apps/control-room exec vitest run src/kernel/resources/studyRuntimeResources.test.ts src/kernel/realtime/RealtimeInvalidationBridge.test.ts src/modules/inspector/panels/stages/StageInspectors.test.tsx src/modules/explorer/builders/buildModelTree.test.ts`
+  (`136 passed`) oraz targeted ESLint dla dotknietych plikow.
+- Aktualizacja 2026-06-25: `HysteresisPointDetailInspector` konsumuje teraz
+  dedykowany zasob
+  `analysis/hysteresis/{stage_id}/steps/{point_id}` przez
+  `useHysteresisPointResource(stageId, pointId)` i uzywa pelnej listy
+  `analysis/hysteresis/{stage_id}/points` tylko jako fallback, gdy szczegol
+  punktu nie jest jeszcze dostepny. RED test w
+  `StageInspectors.test.tsx` najpierw pokazal, ze panel renderowal stara
+  wartosc z listy punktow zamiast nowszego zasobu szczegolu; po poprawce test
+  oraz targeted zestaw resource/realtime/inspector/explorer przeszly.
+- Aktualizacja 2026-06-25: `zero_field_relaxed` zachowuje pierwszy realny
+  sweep point jako `point_id=0`, a relaksacje przygotowawcza przy `H=0`
+  zapisuje w `hysteresis_settle_trace.json` jako
+  `protocol_role="preparation"` bez mierzonego `point_id`. Punktowy endpoint
+  settle-trace filtruje tylko wpisy z `point_id=Some(...)`, wiec preparation
+  nie miesza sie z `/steps/{point_id}`. RED test
+  `zero_field_relaxed_writes_preparation_settle_trace_without_reindexing_points`
+  najpierw padl na braku wpisu preparation, potem przeszedl; dodatkowo
+  `cargo test -p fullmag-runner hysteresis --no-fail-fast` i
+  `cargo test -p fullmag-api hysteresis --no-fail-fast` przeszly.
+- Aktualizacja 2026-06-25: auto-saturation probe nie gubi juz per-algorithm
+  settle trace. `HysteresisSaturationProbeRun` przenosi `solve_res.trace`, a
+  glowny runtime dopisuje wpisy `protocol_role="saturation_probe"` bez
+  mierzonego `point_id` do `hysteresis_settle_trace.json`. RED test
+  `positive_saturation_writes_probe_settle_trace_without_reindexing_points`
+  najpierw pokazal pusta liste probe trace fields, a po poprawce przeszedl.
+- Aktualizacja 2026-06-25: selektory `applies_to="major_descending"` i
+  `applies_to="major_ascending"` sa teraz spojne przez Python DSL, ProblemIR
+  validation i runner. Main sweep ustawia `point_role` z branch metadata
+  (`major_descending`/`major_ascending`, z fallbackiem `major` dla przebiegow
+  stacjonarnych), a matcher wykonuje branch-specific kroki tylko na wlasciwej
+  galezi. RED test
+  `major_descending_applies_to_runs_only_descending_branch_points` najpierw
+  zatrzymal sie na walidacji IR, potem na runtime skipie, a po poprawce
+  przeszedl. Targeted Python DSL test `pytest ... -k "settle"`, `cargo test
+  -p fullmag-ir --no-fail-fast`, `cargo test -p fullmag-runner hysteresis
+  --no-fail-fast` i `cargo test -p fullmag-api hysteresis --no-fail-fast`
+  przeszly.
 
 ### Etap G: Control Room authoring, inspector i explorer
 
@@ -3989,6 +4039,15 @@ Status 2026-06-13:
   `pnpm --dir apps/control-room test -- StageInspectors.test.tsx`,
   `pnpm --dir apps/control-room typecheck`, `pnpm --dir apps/control-room lint`
   oraz `git diff --check` dla dotknietych plikow przeszly.
+- Aktualizacja 2026-06-25: klikniecie runtime `settle_algorithm` node w
+  Explorerze prowadzi teraz do realnego punktowego settle trace. Selection ref
+  `study-stage` z `hysteresisPointId` jest uznawany przez
+  `activeHysteresisPointSelection`, wiec `HysteresisStageInspector` pobiera
+  `analysis/hysteresis/{stage_id}/steps/{point_id}/settle-trace` dla
+  kliknietego algorytmu, zamiast zostawac w stanie `select point`. RED test
+  `renders settle trace for a hysteresis algorithm node selected in explorer`
+  najpierw pokazal brak `projected_gradient_bb`; po poprawce przeszedl razem z
+  pelnym `StageInspectors.test.tsx`, `typecheck` i `lint`.
 
 #### G.3. Explorer i commands
 
@@ -4672,6 +4731,15 @@ pnpm --dir apps/control-room lint --max-warnings=0
    - no minor-loop points mixed into major-loop metrics silently.
 
 ## Ryzyka
+
+Status 2026-06-25:
+
+- `/v2/sessions/current/analysis/hysteresis/{stage_id}/points` jest
+  revisioned analysis resource envelope: `{ revision, stage_id, stage_index,
+  points }`. Backend zachowuje dotychczasowe raw-vector helpery dla branch,
+  family-variant, reversal-field i point-detail zasobow, ale glowny points
+  endpoint ma juz resource metadata i generated OpenAPI v2/Control Room hook
+  uzywa `revision` zamiast dlugosci tablicy jako freshness selector.
 
 1. Storage explosion: `every_step` dla duzych siatek moze szybko wygenerowac
    setki GB. Wymagany estimate gate.

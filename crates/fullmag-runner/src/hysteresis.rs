@@ -256,7 +256,10 @@ pub struct HysteresisMinorLoop {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HysteresisSettleTraceEntry {
-    pub point_id: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub point_id: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub protocol_role: Option<String>,
     pub field_value_mT: f64,
     pub step_index: usize,
     pub algorithm_id: String,
@@ -303,6 +306,7 @@ struct HysteresisSaturationProbeRun {
     result: HysteresisSaturationResult,
     final_magnetization: Vec<[f64; 3]>,
     steps: Vec<StepStats>,
+    trace: Vec<HysteresisSettleTraceEntry>,
     status: RunStatus,
 }
 
@@ -598,6 +602,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
         final_status = probe_run.status;
         preparation_field_mT = probe_run.result.preparation_field_mT;
         append_stage_steps(&mut steps_stats, &mut global_step_count, probe_run.steps);
+        settle_trace.extend(probe_run.trace);
         stop_after_saturation_probe = saturation_probe_should_stop_stage(
             saturation.as_ref().expect("checked saturation is present"),
             &probe_run.result,
@@ -634,6 +639,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
             &mut global_step_count,
             solve_res.executed_run.result.steps.clone(),
         );
+        settle_trace.extend(solve_res.trace);
         current_m = solve_res.executed_run.result.final_magnetization.clone();
     }
 
@@ -653,7 +659,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
                 Some(HysteresisProgressContext {
                     point_idx: Some(point_idx),
                     field_m_t: H_mT,
-                    point_role: "major",
+                    point_role: index_metadata.protocol_role.unwrap_or("major"),
                     branch_id: index_metadata.branch_id.map(str::to_string),
                 }),
                 settle_pipeline.as_ref(),
@@ -1173,6 +1179,7 @@ fn run_hysteresis_saturation_probe(
 ) -> Result<HysteresisSaturationProbeRun, RunError> {
     let mut current_m = initial_m.to_vec();
     let mut all_steps = Vec::new();
+    let mut trace = Vec::new();
     let mut probe_points = Vec::new();
     let mut status = RunStatus::Completed;
 
@@ -1228,6 +1235,7 @@ fn run_hysteresis_saturation_probe(
             torque: last_step.map(|step| step.max_torque_Apm),
             status: point_status,
         });
+        trace.extend(solve_res.trace);
         all_steps.extend(solve_res.executed_run.result.steps);
     }
 
@@ -1247,6 +1255,7 @@ fn run_hysteresis_saturation_probe(
         result,
         final_magnetization: current_m,
         steps: all_steps,
+        trace,
         status,
     })
 }
@@ -2113,20 +2122,19 @@ fn run_settle_at_field(
         let step = planned_step.step;
         if let Some(progress) = hysteresis_progress.as_ref() {
             if !settle_step_applies_to_context(&step, progress) {
-                if let Some(point_idx) = progress.point_idx {
-                    trace.push(settle_trace_entry(
-                        point_idx,
-                        progress.field_m_t,
-                        settle_idx,
-                        &step,
-                        "skipped".to_string(),
-                        Some(format!("applies_to_not_matching_{}", progress.point_role)),
-                        0,
-                        Some(resolved_settle_timestep(backend_plan, &step, None)),
-                        None,
-                        None,
-                    ));
-                }
+                trace.push(settle_trace_entry(
+                    progress.point_idx,
+                    Some(progress.point_role),
+                    progress.field_m_t,
+                    settle_idx,
+                    &step,
+                    "skipped".to_string(),
+                    Some(format!("applies_to_not_matching_{}", progress.point_role)),
+                    0,
+                    Some(resolved_settle_timestep(backend_plan, &step, None)),
+                    None,
+                    None,
+                ));
                 continue;
             }
         }
@@ -2153,38 +2161,36 @@ fn run_settle_at_field(
                 StepAction::Continue => {}
                 StepAction::Stop => {
                     final_status = RunStatus::Cancelled;
-                    if let Some(point_idx) = progress.point_idx {
-                        trace.push(settle_trace_entry(
-                            point_idx,
-                            progress.field_m_t,
-                            settle_idx,
-                            &step,
-                            "cancelled".to_string(),
-                            fallback_reason.clone(),
-                            0,
-                            Some(resolved_settle_timestep(backend_plan, &step, None)),
-                            None,
-                            None,
-                        ));
-                    }
+                    trace.push(settle_trace_entry(
+                        progress.point_idx,
+                        Some(progress.point_role),
+                        progress.field_m_t,
+                        settle_idx,
+                        &step,
+                        "cancelled".to_string(),
+                        fallback_reason.clone(),
+                        0,
+                        Some(resolved_settle_timestep(backend_plan, &step, None)),
+                        None,
+                        None,
+                    ));
                     break;
                 }
                 StepAction::Pause => {
                     final_status = RunStatus::Paused;
-                    if let Some(point_idx) = progress.point_idx {
-                        trace.push(settle_trace_entry(
-                            point_idx,
-                            progress.field_m_t,
-                            settle_idx,
-                            &step,
-                            "paused".to_string(),
-                            fallback_reason.clone(),
-                            0,
-                            Some(resolved_settle_timestep(backend_plan, &step, None)),
-                            None,
-                            None,
-                        ));
-                    }
+                    trace.push(settle_trace_entry(
+                        progress.point_idx,
+                        Some(progress.point_role),
+                        progress.field_m_t,
+                        settle_idx,
+                        &step,
+                        "paused".to_string(),
+                        fallback_reason.clone(),
+                        0,
+                        Some(resolved_settle_timestep(backend_plan, &step, None)),
+                        None,
+                        None,
+                    ));
                     break;
                 }
             }
@@ -2221,20 +2227,19 @@ fn run_settle_at_field(
             )?;
             let settle_status = settle_status_for_step(&step, &executed_run.result);
             if let Some(progress) = hysteresis_progress.as_ref() {
-                if let Some(point_idx) = progress.point_idx {
-                    trace.push(settle_trace_entry(
-                        point_idx,
-                        progress.field_m_t,
-                        settle_idx,
-                        &step,
-                        settle_status.to_string(),
-                        last_fallback_reason.clone(),
-                        retry_attempt,
-                        Some(resolved_timestep),
-                        executed_run.result.completion.as_ref(),
-                        executed_run.result.steps.last(),
-                    ));
-                }
+                trace.push(settle_trace_entry(
+                    progress.point_idx,
+                    Some(progress.point_role),
+                    progress.field_m_t,
+                    settle_idx,
+                    &step,
+                    settle_status.to_string(),
+                    last_fallback_reason.clone(),
+                    retry_attempt,
+                    Some(resolved_timestep),
+                    executed_run.result.completion.as_ref(),
+                    executed_run.result.steps.last(),
+                ));
             }
             if settle_status != "non_converged"
                 || settle_step_on_non_convergence(&step) != "retry_with_smaller_dt"
@@ -2755,6 +2760,8 @@ fn settle_selector_matches_point_role(selector: &str, point_role: &str) -> bool 
     match selector {
         "all_points" => true,
         "major" => matches!(point_role, "major" | "major_descending" | "major_ascending"),
+        "major_descending" => point_role == "major_descending",
+        "major_ascending" => point_role == "major_ascending",
         "minor" => point_role == "minor",
         "recoil" => point_role == "recoil",
         "key_events" => point_role == "key_event",
@@ -2892,7 +2899,8 @@ fn run_status_debug(status: RunStatus) -> String {
 }
 
 fn settle_trace_entry(
-    point_id: usize,
+    point_id: Option<usize>,
+    protocol_role: Option<&str>,
     field_value_mT: f64,
     step_index: usize,
     step: &SettleStepIR,
@@ -2910,6 +2918,7 @@ fn settle_trace_entry(
     let resolved_parameters = Some(settle_trace_resolved_parameters(step, resolved_timestep_s));
     HysteresisSettleTraceEntry {
         point_id,
+        protocol_role: protocol_role.map(str::to_string),
         field_value_mT,
         step_index,
         algorithm_id: format!(
@@ -4019,7 +4028,7 @@ fn branch_role_for_direction(direction: i32) -> &'static str {
     match direction {
         -1 => "major_descending",
         1 => "major_ascending",
-        _ => "stationary",
+        _ => "major",
     }
 }
 
@@ -6227,6 +6236,276 @@ mod tests {
     }
 
     #[test]
+    fn zero_field_relaxed_writes_preparation_settle_trace_without_reindexing_points() {
+        let mut problem = minimal_fdm_hysteresis_problem();
+        if let StudyIR::Hysteresis {
+            field_values_mT,
+            initial_protocol,
+            settle_pipeline,
+            ..
+        } = &mut problem.study
+        {
+            *field_values_mT = Some(vec![25.0]);
+            *initial_protocol = "zero_field_relaxed".to_string();
+            *settle_pipeline = Some(SettlePipelineIR::Sequence {
+                steps: vec![SettleStepIR::Relax {
+                    method: "llg_overdamped".to_string(),
+                    alpha: 1.0,
+                    torque_tolerance: 1.0e-3,
+                    max_steps: 1,
+                    applies_to: None,
+                    stop_criteria: None,
+                    timestep_s: None,
+                    max_pseudotime_s: None,
+                    max_physical_time_s: None,
+                    on_non_convergence: "continue_with_warning".to_string(),
+                    retry_timestep_scale: None,
+                    retry_max_attempts: None,
+                }],
+            });
+        } else {
+            panic!("minimal problem must be hysteresis");
+        }
+
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-hysteresis-zero-field-prep-trace-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time before unix epoch")
+                .as_nanos(),
+        ));
+        let _ = std::fs::remove_dir_all(&output_dir);
+
+        crate::run_problem_with_callback(&problem, 0.0, &output_dir, 1, |_| StepAction::Continue)
+            .expect("zero-field preparation hysteresis run should complete");
+
+        let points_payload: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(output_dir.join("hysteresis_points.json"))
+                .expect("points artifact should be written"),
+        )
+        .expect("points artifact should decode");
+        assert_eq!(points_payload.as_array().map(Vec::len), Some(1));
+        assert_eq!(points_payload[0]["point_id"], 0);
+        assert_eq!(points_payload[0]["field_value_mT"], 25.0);
+
+        let metrics: HysteresisMetrics = serde_json::from_str(
+            &std::fs::read_to_string(output_dir.join("hysteresis_metrics.json"))
+                .expect("metrics artifact should be written"),
+        )
+        .expect("metrics artifact should decode");
+        assert_eq!(metrics.saturation_status, "not_requested");
+        assert_eq!(metrics.saturation_preparation_field_mT, Some(0.0));
+
+        let trace_payload: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(output_dir.join("hysteresis_settle_trace.json"))
+                .expect("settle trace artifact should be written"),
+        )
+        .expect("settle trace artifact should decode");
+        let trace_entries = trace_payload
+            .as_array()
+            .expect("settle trace should be an array");
+        let preparation = trace_entries
+            .iter()
+            .find(|entry| entry["protocol_role"] == "preparation")
+            .expect("zero-field preparation settle should be recorded in settle trace");
+        assert!(preparation.get("point_id").is_none());
+        assert_eq!(preparation["field_value_mT"], 0.0);
+        assert_eq!(preparation["status"], "converged");
+
+        let measured = trace_entries
+            .iter()
+            .find(|entry| entry["point_id"] == 0)
+            .expect("first measured point settle trace should still use point_id 0");
+        assert_eq!(measured["protocol_role"], "major");
+        assert_eq!(measured["field_value_mT"], 25.0);
+
+        let _ = std::fs::remove_dir_all(&output_dir);
+    }
+
+    #[test]
+    fn positive_saturation_writes_probe_settle_trace_without_reindexing_points() {
+        let mut problem = minimal_fdm_hysteresis_problem();
+        if let StudyIR::Hysteresis {
+            field_values_mT,
+            initial_protocol,
+            saturation,
+            settle_pipeline,
+            ..
+        } = &mut problem.study
+        {
+            *field_values_mT = Some(vec![25.0]);
+            *initial_protocol = "positive_saturation".to_string();
+            *saturation = Some(fullmag_ir::SaturationProbeIR {
+                mode: "auto".to_string(),
+                max_field_mT: 3.0,
+                susceptibility_threshold: 1.0e-3,
+                transverse_threshold: 1.0e-2,
+                on_failure: "continue_with_warning".to_string(),
+            });
+            *settle_pipeline = Some(SettlePipelineIR::Sequence {
+                steps: vec![SettleStepIR::Relax {
+                    method: "llg_overdamped".to_string(),
+                    alpha: 1.0,
+                    torque_tolerance: 1.0e-3,
+                    max_steps: 1,
+                    applies_to: None,
+                    stop_criteria: None,
+                    timestep_s: None,
+                    max_pseudotime_s: None,
+                    max_physical_time_s: None,
+                    on_non_convergence: "continue_with_warning".to_string(),
+                    retry_timestep_scale: None,
+                    retry_max_attempts: None,
+                }],
+            });
+        } else {
+            panic!("minimal problem must be hysteresis");
+        }
+
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-hysteresis-positive-saturation-probe-trace-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time before unix epoch")
+                .as_nanos(),
+        ));
+        let _ = std::fs::remove_dir_all(&output_dir);
+
+        crate::run_problem_with_callback(&problem, 0.0, &output_dir, 1, |_| StepAction::Continue)
+            .expect("positive-saturation hysteresis run should complete");
+
+        let points_payload: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(output_dir.join("hysteresis_points.json"))
+                .expect("points artifact should be written"),
+        )
+        .expect("points artifact should decode");
+        assert_eq!(points_payload.as_array().map(Vec::len), Some(1));
+        assert_eq!(points_payload[0]["point_id"], 0);
+        assert_eq!(points_payload[0]["field_value_mT"], 25.0);
+
+        let saturation: HysteresisSaturationResult = serde_json::from_str(
+            &std::fs::read_to_string(output_dir.join("hysteresis_saturation.json"))
+                .expect("saturation artifact should be written"),
+        )
+        .expect("saturation artifact should decode");
+        assert_eq!(saturation.preparation_field_mT, Some(3.0));
+        assert_eq!(saturation.points.len(), 3);
+
+        let trace_payload: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(output_dir.join("hysteresis_settle_trace.json"))
+                .expect("settle trace artifact should be written"),
+        )
+        .expect("settle trace artifact should decode");
+        let trace_entries = trace_payload
+            .as_array()
+            .expect("settle trace should be an array");
+        let probe_fields = trace_entries
+            .iter()
+            .filter(|entry| entry["protocol_role"] == "saturation_probe")
+            .map(|entry| {
+                assert!(entry.get("point_id").is_none());
+                entry["field_value_mT"]
+                    .as_f64()
+                    .expect("probe trace field should be numeric")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(probe_fields, vec![1.0, 2.0, 3.0]);
+
+        let measured = trace_entries
+            .iter()
+            .find(|entry| entry["point_id"] == 0)
+            .expect("first measured point settle trace should still use point_id 0");
+        assert_eq!(measured["protocol_role"], "major");
+        assert_eq!(measured["field_value_mT"], 25.0);
+
+        let _ = std::fs::remove_dir_all(&output_dir);
+    }
+
+    #[test]
+    fn major_descending_applies_to_runs_only_descending_branch_points() {
+        let mut problem = minimal_fdm_hysteresis_problem();
+        if let StudyIR::Hysteresis {
+            field_values_mT,
+            settle_pipeline,
+            ..
+        } = &mut problem.study
+        {
+            *field_values_mT = Some(vec![100.0, 0.0, -100.0, 0.0, 100.0]);
+            *settle_pipeline = Some(SettlePipelineIR::Sequence {
+                steps: vec![SettleStepIR::Relax {
+                    method: "llg_overdamped".to_string(),
+                    alpha: 1.0,
+                    torque_tolerance: 1.0e-3,
+                    max_steps: 1,
+                    applies_to: Some(serde_json::json!("major_descending")),
+                    stop_criteria: None,
+                    timestep_s: None,
+                    max_pseudotime_s: None,
+                    max_physical_time_s: None,
+                    on_non_convergence: "continue_with_warning".to_string(),
+                    retry_timestep_scale: None,
+                    retry_max_attempts: None,
+                }],
+            });
+        } else {
+            panic!("minimal problem must be hysteresis");
+        }
+
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-hysteresis-major-descending-selector-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time before unix epoch")
+                .as_nanos(),
+        ));
+        let _ = std::fs::remove_dir_all(&output_dir);
+
+        crate::run_problem_with_callback(&problem, 0.0, &output_dir, 1, |_| StepAction::Continue)
+            .expect("branch-selective hysteresis run should complete");
+
+        let trace_payload: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(output_dir.join("hysteresis_settle_trace.json"))
+                .expect("settle trace artifact should be written"),
+        )
+        .expect("settle trace artifact should decode");
+        let trace_entries = trace_payload
+            .as_array()
+            .expect("settle trace should be an array");
+        let executed_descending_fields = trace_entries
+            .iter()
+            .filter(|entry| entry["protocol_role"] == "major_descending")
+            .filter(|entry| entry["status"] != "skipped")
+            .map(|entry| {
+                entry["field_value_mT"]
+                    .as_f64()
+                    .expect("trace field should be numeric")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(executed_descending_fields, vec![100.0, 0.0, -100.0]);
+
+        let skipped_ascending_fields = trace_entries
+            .iter()
+            .filter(|entry| entry["protocol_role"] == "major_ascending")
+            .filter(|entry| entry["status"] == "skipped")
+            .map(|entry| {
+                assert_eq!(
+                    entry["fallback_reason"],
+                    "applies_to_not_matching_major_ascending"
+                );
+                entry["field_value_mT"]
+                    .as_f64()
+                    .expect("trace field should be numeric")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(skipped_ascending_fields, vec![0.0, 100.0]);
+
+        let _ = std::fs::remove_dir_all(&output_dir);
+    }
+
+    #[test]
     fn hysteresis_runtime_writes_angular_family_manifest_for_active_variant() {
         let mut problem = minimal_fdm_hysteresis_problem();
         if let StudyIR::Hysteresis {
@@ -6932,7 +7211,8 @@ mod tests {
         assert!(settle_step_applies_to_point_role(&key_event_step, "minor"));
 
         let skipped = settle_trace_entry(
-            7,
+            Some(7),
+            Some("major"),
             25.0,
             1,
             &key_event_step,
@@ -7123,7 +7403,8 @@ mod tests {
     fn hysteresis_point_quality_reports_non_converged_settle_steps() {
         let trace = vec![
             settle_trace_entry(
-                2,
+                Some(2),
+                Some("major"),
                 -50.0,
                 0,
                 &SettleStepIR::Minimize {
@@ -7148,7 +7429,8 @@ mod tests {
                 None,
             ),
             settle_trace_entry(
-                2,
+                Some(2),
+                Some("major"),
                 -50.0,
                 1,
                 &SettleStepIR::Relax {
@@ -7216,7 +7498,8 @@ mod tests {
         };
 
         let entry = settle_trace_entry(
-            4,
+            Some(4),
+            Some("major"),
             -25.0,
             1,
             &step,
@@ -7228,7 +7511,8 @@ mod tests {
             Some(&stats),
         );
 
-        assert_eq!(entry.point_id, 4);
+        assert_eq!(entry.point_id, Some(4));
+        assert_eq!(entry.protocol_role.as_deref(), Some("major"));
         assert_eq!(entry.field_value_mT, -25.0);
         assert_eq!(entry.step_index, 1);
         assert_eq!(entry.algorithm_id, "settle_step_001_minimize");
@@ -8241,7 +8525,8 @@ mod tests {
         )];
         let metrics = calculate_metrics(&points, "major_loop", None, None);
         let settle_trace = vec![HysteresisSettleTraceEntry {
-            point_id: 0,
+            point_id: Some(0),
+            protocol_role: Some("major".to_string()),
             field_value_mT: 25.0,
             step_index: 0,
             algorithm_id: "relax:0".to_string(),

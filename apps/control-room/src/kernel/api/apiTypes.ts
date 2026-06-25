@@ -236,8 +236,16 @@ export type HysteresisExecutionTreeResource =
   components["schemas"]["HysteresisExecutionTreeResource"];
 export type HysteresisExecutionTreeNode =
   components["schemas"]["HysteresisExecutionTreeNode"];
+export type HysteresisBookmarkPointRequest =
+  components["schemas"]["HysteresisBookmarkPointRequest"];
+export type HysteresisBookmarkSchema =
+  components["schemas"]["HysteresisBookmarkSchema"];
+export type HysteresisBookmarksResource =
+  components["schemas"]["HysteresisBookmarksResource"];
 export type HysteresisAngularFamilyResource =
   components["schemas"]["HysteresisAngularFamilyResource"];
+export type HysteresisPointsResource =
+  components["schemas"]["HysteresisPointsResource"];
 export type HysteresisProgressSchema =
   components["schemas"]["HysteresisProgressSchema"];
 export type StudyRuntimePatchRequest =

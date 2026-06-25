@@ -7,9 +7,10 @@ use std::sync::Arc;
 
 use crate::schemas::hysteresis::{
     HysteresisAdaptiveRefinementSchema, HysteresisAngularFamilyResource,
-    HysteresisAngularFamilySeriesSchema, HysteresisBranchSchema, HysteresisMetricsSchema,
-    HysteresisMinorLoopSchema, HysteresisPointSchema, HysteresisSaturationResultSchema,
-    HysteresisSettleTraceEntrySchema,
+    HysteresisAngularFamilySeriesSchema, HysteresisBookmarkPointRequest, HysteresisBookmarkSchema,
+    HysteresisBookmarksResource, HysteresisBranchSchema, HysteresisMetricsSchema,
+    HysteresisMinorLoopSchema, HysteresisPointSchema, HysteresisPointsResource,
+    HysteresisSaturationResultSchema, HysteresisSettleTraceEntrySchema,
 };
 use axum::extract::{Path, State};
 use axum::Json;
@@ -18,7 +19,8 @@ use serde_json::Value;
 use crate::artifacts::require_current_live_artifact_dir;
 use crate::error::ApiError;
 use crate::router_v2::handlers::simulation::runtime::resolve_hysteresis_scene_stage;
-use crate::types::AppState;
+use crate::session::unix_time_millis_now;
+use crate::types::{AppState, HysteresisBookmarkStageStore};
 
 const HYSTERESIS_ZARR_STORE: &str = "hysteresis.zarr";
 const HYSTERESIS_STORAGE_FORMAT: &str = "zarr_v2_json_fallback";
@@ -122,6 +124,55 @@ fn stage_kind_for_index(stage: &crate::types::StageExecutionState, index: usize)
         return stage.active_stage_kind.clone();
     }
     None
+}
+
+struct HysteresisResourceStageMetadata {
+    revision: u64,
+    stage_id: String,
+    stage_index: u32,
+}
+
+async fn resolve_hysteresis_resource_stage_metadata(
+    state: &Arc<AppState>,
+    stage_id: &str,
+) -> Result<HysteresisResourceStageMetadata, ApiError> {
+    if let Ok(stage) = resolve_hysteresis_scene_stage(state, stage_id).await {
+        return Ok(HysteresisResourceStageMetadata {
+            revision: stage.revision,
+            stage_id: stage.stage_id,
+            stage_index: stage.stage_index,
+        });
+    }
+
+    let guard = state.current_live_state.read().await;
+    let Some(snapshot) = guard.as_ref() else {
+        return Err(ApiError::not_found("no active workspace"));
+    };
+    if let Some(stage_exec) = snapshot.stage_execution.as_ref() {
+        for (index, record) in stage_exec.stages.iter().enumerate() {
+            if stage_identifier_matches(record, index, stage_id) {
+                return Ok(HysteresisResourceStageMetadata {
+                    revision: snapshot.state_version,
+                    stage_id: record
+                        .stage_id
+                        .clone()
+                        .unwrap_or_else(|| format!("stage-{index:03}")),
+                    stage_index: index as u32,
+                });
+            }
+        }
+    }
+    if is_legacy_default_stage_id(stage_id) {
+        return Ok(HysteresisResourceStageMetadata {
+            revision: snapshot.state_version,
+            stage_id: "stage-000".to_string(),
+            stage_index: 0,
+        });
+    }
+    Err(ApiError::not_found(format!(
+        "hysteresis stage '{}' not found",
+        stage_id
+    )))
 }
 
 fn resolve_hysteresis_artifact_ref(
@@ -602,7 +653,7 @@ fn hysteresis_zarr_sample_exists(artifact_base_dir: &FsPath, snapshot_id: &str) 
         ("stage_id" = String, Path, description = "Hysteresis stage index or stage identifier"),
     ),
     responses(
-        (status = 200, description = "Hysteresis sweep points", body = Vec<HysteresisPointSchema>),
+        (status = 200, description = "Revisioned hysteresis sweep points resource", body = HysteresisPointsResource),
         (status = 404, description = "Hysteresis points not found"),
     ),
     tag = "analysis"
@@ -610,9 +661,15 @@ fn hysteresis_zarr_sample_exists(artifact_base_dir: &FsPath, snapshot_id: &str) 
 pub async fn get_points(
     State(state): State<Arc<AppState>>,
     Path(stage_id): Path<String>,
-) -> Result<Json<Vec<HysteresisPointSchema>>, ApiError> {
+) -> Result<Json<HysteresisPointsResource>, ApiError> {
     let points = read_hysteresis_points(&state, &stage_id).await?;
-    Ok(Json(points))
+    let stage = resolve_hysteresis_resource_stage_metadata(&state, &stage_id).await?;
+    Ok(Json(HysteresisPointsResource {
+        revision: stage.revision,
+        stage_id: stage.stage_id,
+        stage_index: stage.stage_index,
+        points,
+    }))
 }
 
 #[utoipa::path(
@@ -706,6 +763,134 @@ pub async fn get_branches(
         ));
     }
     Ok(Json(branches))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/analysis/hysteresis/{stage_id}/bookmarks",
+    params(
+        ("stage_id" = String, Path, description = "Hysteresis stage index or stage identifier"),
+    ),
+    responses(
+        (status = 200, description = "Session-owned hysteresis point bookmarks", body = HysteresisBookmarksResource),
+        (status = 404, description = "Hysteresis stage not found"),
+    ),
+    tag = "analysis"
+)]
+pub async fn get_bookmarks(
+    State(state): State<Arc<AppState>>,
+    Path(stage_id): Path<String>,
+) -> Result<Json<HysteresisBookmarksResource>, ApiError> {
+    let stage = resolve_hysteresis_scene_stage(&state, &stage_id).await?;
+    Ok(Json(hysteresis_bookmarks_resource(&state, &stage).await))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v2/sessions/current/analysis/hysteresis/{stage_id}/bookmarks",
+    params(
+        ("stage_id" = String, Path, description = "Hysteresis stage index or stage identifier"),
+    ),
+    request_body = HysteresisBookmarkPointRequest,
+    responses(
+        (status = 200, description = "Updated session-owned hysteresis point bookmarks", body = HysteresisBookmarksResource),
+        (status = 404, description = "Hysteresis stage or point not found"),
+    ),
+    tag = "analysis"
+)]
+pub async fn post_bookmark(
+    State(state): State<Arc<AppState>>,
+    Path(stage_id): Path<String>,
+    Json(request): Json<HysteresisBookmarkPointRequest>,
+) -> Result<Json<HysteresisBookmarksResource>, ApiError> {
+    let stage = resolve_hysteresis_scene_stage(&state, &stage_id).await?;
+    let points = read_hysteresis_points(&state, &stage.stage_id).await?;
+    let point = points
+        .into_iter()
+        .find(|point| u32::try_from(point.point_id).ok() == Some(request.point_id))
+        .ok_or_else(|| {
+            ApiError::not_found(format!(
+                "hysteresis point {} not found for stage {}",
+                request.point_id, stage.stage_id
+            ))
+        })?;
+    let bookmark_id = hysteresis_bookmark_id(&stage.stage_id, request.point_id);
+    let label = request
+        .label
+        .as_deref()
+        .map(str::trim)
+        .filter(|label| !label.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            format!(
+                "Point {} ({:.3} mT)",
+                request.point_id, point.field_value_m_t
+            )
+        });
+    let bookmark = HysteresisBookmarkSchema {
+        bookmark_id: bookmark_id.clone(),
+        stage_id: stage.stage_id.clone(),
+        point_id: request.point_id,
+        label,
+        resource_ref: format!(
+            "/v2/sessions/current/analysis/hysteresis/{}/steps/{}",
+            stage.stage_id, request.point_id
+        ),
+        selection_ref: format!(
+            "hysteresis-bookmark:{}:{}",
+            stage.stage_id, request.point_id
+        ),
+        created_at_unix_ms: unix_time_millis_now().to_string(),
+        field_value_m_t: point.field_value_m_t,
+        status: point.status,
+        snapshot_id: point.snapshot_id,
+        snapshot_resource_ref: point
+            .snapshot_vector_resource_ref
+            .or(point.snapshot_resource_ref),
+        field_orientation: point.field_orientation,
+        measurement_axis: point.measurement_axis,
+    };
+
+    let mut guard = state.current_hysteresis_bookmarks.write().await;
+    let store =
+        guard
+            .entry(stage.stage_id.clone())
+            .or_insert_with(|| HysteresisBookmarkStageStore {
+                revision: stage.revision,
+                bookmarks: BTreeMap::new(),
+            });
+    store.revision = store.revision.max(stage.revision).saturating_add(1);
+    store.bookmarks.insert(bookmark_id, bookmark);
+    Ok(Json(hysteresis_bookmarks_resource_from_store(
+        &stage,
+        Some(&*store),
+    )))
+}
+
+pub(crate) async fn hysteresis_bookmarks_resource(
+    state: &Arc<AppState>,
+    stage: &crate::router_v2::handlers::simulation::runtime::HysteresisSceneStage,
+) -> HysteresisBookmarksResource {
+    let guard = state.current_hysteresis_bookmarks.read().await;
+    hysteresis_bookmarks_resource_from_store(stage, guard.get(&stage.stage_id))
+}
+
+fn hysteresis_bookmarks_resource_from_store(
+    stage: &crate::router_v2::handlers::simulation::runtime::HysteresisSceneStage,
+    store: Option<&HysteresisBookmarkStageStore>,
+) -> HysteresisBookmarksResource {
+    HysteresisBookmarksResource {
+        revision: store.map_or(stage.revision, |store| store.revision.max(stage.revision)),
+        stage_id: stage.stage_id.clone(),
+        stage_index: stage.stage_index,
+        bookmarks: store
+            .map(|store| store.bookmarks.values().cloned().collect())
+            .unwrap_or_default(),
+    }
+}
+
+fn hysteresis_bookmark_id(stage_id: &str, point_id: u32) -> String {
+    format!("{stage_id}:bookmark:{point_id}")
 }
 
 #[utoipa::path(
@@ -1254,7 +1439,7 @@ pub async fn get_settle_trace(
         read_typed_stage_artifact(&state, &stage_id, "hysteresis_settle_trace.json").await?;
     let point_trace = trace
         .into_iter()
-        .filter(|entry| entry.point_id == point_id)
+        .filter(|entry| entry.point_id == Some(point_id))
         .collect::<Vec<_>>();
     if point_trace.is_empty() {
         return Err(ApiError::not_found(format!(

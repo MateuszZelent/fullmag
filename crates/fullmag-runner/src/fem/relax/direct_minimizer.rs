@@ -337,8 +337,11 @@ mod tests {
         assert!(
             source.contains("artifacts.record_scalar(&accepted_stats)?;")
                 && source.contains("let magnetization = if current_stats.step % heavy_payload_every == 0")
-                && source.contains("let action = (live.on_step)(StepUpdate {\n                stats: current_stats.clone(),"),
-            "FEM direct minimizer must publish live stats/magnetization after accepted steps, not only the initial snapshot"
+                && source.contains("current_stats = accepted_stats;\n\n        if let Some(live) = live.as_mut() {")
+                && source.contains("live_stats.field_copy_bytes =\n                        live_stats.field_copy_bytes.saturating_add(field_copy_bytes);")
+                && source.contains("live_stats.wall_time_ns = live_stats")
+                && source.contains("let action = (live.on_step)(StepUpdate {\n                stats: live_stats,"),
+            "FEM direct minimizer must publish accepted-step live stats/magnetization with cadence and timing/copy metrics"
         );
     }
 

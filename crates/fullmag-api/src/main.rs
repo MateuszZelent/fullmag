@@ -1393,6 +1393,7 @@ async fn main() {
         current_workspace_selection: Arc::new(RwLock::new(CurrentWorkspaceSelection::default())),
         current_workspace_ribbon: Arc::new(RwLock::new(CurrentWorkspaceRibbon::default())),
         current_workspace_layout: Arc::new(RwLock::new(CurrentWorkspaceLayout::default())),
+        current_hysteresis_bookmarks: Arc::new(RwLock::new(BTreeMap::new())),
         current_control_queue: Arc::new(Mutex::new(VecDeque::new())),
         current_command_responses: Arc::new(Mutex::new(VecDeque::new())),
         current_command_ledger: Arc::new(Mutex::new(VecDeque::new())),

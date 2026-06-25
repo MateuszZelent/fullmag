@@ -544,7 +544,7 @@ describe("ribbon structure", () => {
           {
             display: { geometry_scope: "surface" },
             scope: "object",
-            scope_id: "object:free-layer",
+            scope_id: "free-layer",
           },
         ],
       },
@@ -601,7 +601,7 @@ describe("ribbon structure", () => {
           {
             quantity: { active_quantity_id: "H_eff" },
             scope: "object",
-            scope_id: "object:free-layer",
+            scope_id: "free-layer",
           },
         ],
       },
@@ -721,6 +721,152 @@ describe("ribbon structure", () => {
         overrides: [
           {
             display: { wireframe: { visible: false } },
+            scope: "region",
+            scope_id: "region:free-layer:region%3Acore",
+          },
+        ],
+      },
+    ]);
+    await vi.waitFor(() =>
+      expect(invalidations).toEqual([[VISUALIZATION_STATE_PATH, 41]]),
+    );
+  });
+
+  it("resolves selected region coloring from owner object settings before region overrides", async () => {
+    const { context, patches } = createVisualizationRibbonContext({
+      overrides: [
+        {
+          scope: "object",
+          scope_id: "free-layer",
+          style: { surface_color_source: "component_y" },
+        },
+      ],
+      quantity: { active_quantity_id: "m" },
+      revision: 7,
+    });
+    const selection = {
+      kind: "object.region.visualization" as const,
+      label: "Core",
+      moduleSource: "test",
+      nodeId: "model:object:free-layer:regions:core:visualization",
+      objectId: "free-layer",
+      ref: {
+        kind: "object.region.visualization" as const,
+        nodeId: "model:object:free-layer:regions:core:visualization",
+        objectId: "free-layer",
+        regionId: "region:core",
+        type: "scene-object" as const,
+        visualizationTargetId: visualizationTargetIdForSceneObject(
+          "free-layer",
+          "region:core",
+        ),
+      },
+    };
+    const content = buildRibbonTabContent("view", {
+      ...context,
+      selection,
+    });
+    const selectedGroup = content?.groups.find(
+      (group) => group.id === "view-selected-display",
+    );
+    const textureAction = selectedGroup?.actions.find(
+      (action) => action.id === "view-selected-texture",
+    );
+    const surfaceColoringNode = textureAction?.menu?.find(
+      (node) =>
+        node.type === "radio-group" &&
+        node.id === "selected-texture:surface-coloring",
+    );
+
+    expect(surfaceColoringNode).toMatchObject({
+      commandId: "visualization.target.set-surface-color-source",
+      value: "inherit",
+    });
+    if (surfaceColoringNode?.type !== "radio-group") {
+      throw new Error("Expected selected region surface color control");
+    }
+
+    await runRibbonNode(surfaceColoringNode, "component_x", {
+      ...context,
+      selection,
+    });
+
+    expect(patches).toEqual([
+      {
+        overrides: [
+          {
+            scope: "object",
+            scope_id: "free-layer",
+            style: {
+              surface_color_source: "component_y",
+            },
+          },
+          {
+            scope: "region",
+            scope_id: "region:free-layer:region%3Acore",
+            style: {
+              surface_color_source: "component_x",
+            },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("patches selected region quantity through region-scoped overrides", async () => {
+    const { context, invalidations, patches } = createVisualizationRibbonContext({
+      overrides: [],
+      quantity: { active_quantity_id: "m" },
+      revision: 7,
+    });
+    const selection = {
+      kind: "object.region.visualization" as const,
+      label: "Core",
+      moduleSource: "test",
+      nodeId: "model:object:free-layer:regions:core:visualization",
+      objectId: "free-layer",
+      ref: {
+        kind: "object.region.visualization" as const,
+        nodeId: "model:object:free-layer:regions:core:visualization",
+        objectId: "free-layer",
+        regionId: "region:core",
+        type: "scene-object" as const,
+        visualizationTargetId: visualizationTargetIdForSceneObject(
+          "free-layer",
+          "region:core",
+        ),
+      },
+    };
+    const content = buildRibbonTabContent("view", {
+      ...context,
+      selection,
+    });
+    const selectedGroup = content?.groups.find(
+      (group) => group.id === "view-selected-display",
+    );
+    const textureAction = selectedGroup?.actions.find(
+      (action) => action.id === "view-selected-texture",
+    );
+    const quantityNode = textureAction?.menu?.find(
+      (node) =>
+        node.type === "radio-group" && node.id === "selected-texture:quantity",
+    );
+
+    expect(quantityNode).toMatchObject({
+      commandId: RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND,
+      value: "m",
+    });
+    if (quantityNode?.type !== "radio-group") {
+      throw new Error("Expected selected region quantity control");
+    }
+
+    await runRibbonNode(quantityNode, "h_demag", { ...context, selection });
+
+    expect(patches).toEqual([
+      {
+        overrides: [
+          {
+            quantity: { active_quantity_id: "H_demag" },
             scope: "region",
             scope_id: "region:free-layer:region%3Acore",
           },
@@ -1177,6 +1323,16 @@ describe("ribbon structure", () => {
         length_scale: 1,
         thickness: 1,
       },
+      overrides: [
+        {
+          scope: "airbox",
+          scope_id: "airbox",
+          style: {
+            vector_length_scale: 1.8,
+            vector_thickness: 1.2,
+          },
+        },
+      ],
     });
     const content = buildRibbonTabContent("view", context);
     const airboxAction = content?.groups
@@ -1199,6 +1355,9 @@ describe("ribbon structure", () => {
     const densityNode = vectorSizeNode.nodes.find(
       (node) => node.type === "slider" && node.id === "airbox:vectors-density",
     );
+    const lengthNode = vectorSizeNode.nodes.find(
+      (node) => node.type === "slider" && node.id === "airbox:vectors-length",
+    );
     const thicknessNode = vectorSizeNode.nodes.find(
       (node) => node.type === "slider" && node.id === "airbox:vectors-thickness",
     );
@@ -1208,11 +1367,13 @@ describe("ribbon structure", () => {
 
     expect(densityNode).toMatchObject({ value: 128 });
     expect(vectorScopeNode).toMatchObject({ disabled: false, value: "full" });
-    expect(thicknessNode).toMatchObject({ value: 1 });
+    expect(lengthNode).toMatchObject({ value: 1.8 });
+    expect(thicknessNode).toMatchObject({ value: 1.2 });
     expect(coloringNode).toMatchObject({ value: "orientation" });
 
     if (
       densityNode?.type !== "slider" ||
+      lengthNode?.type !== "slider" ||
       vectorScopeNode?.type !== "radio-group" ||
       thicknessNode?.type !== "slider" ||
       coloringNode?.type !== "radio-group"
@@ -1222,40 +1383,63 @@ describe("ribbon structure", () => {
 
     await runRibbonNode(vectorScopeNode, "surface", context);
     await runRibbonNode(densityNode, 256, context);
+    await runRibbonNode(lengthNode, 2.4, context);
     await runRibbonNode(thicknessNode, 1.6, context);
     await runRibbonNode(coloringNode, "x", context);
 
     expect(context.visualization.getSettings(AIRBOX_VISUALIZATION_TARGET))
       .toMatchObject({ geometryScope: "surface" });
-    expect(patches).toEqual([
-      {
-        overrides: [
-          {
-            display: {
-              geometry_scope: "surface",
-            },
-            scope: "airbox",
-            scope_id: "airbox",
+    expect(patches).toHaveLength(5);
+    expect(patches[0]).toMatchObject({
+      overrides: [
+        {
+          display: {
+            geometry_scope: "surface",
           },
-        ],
-      },
-      {
-        layers: {
-          airbox: {
-            vectors: {
-              density: 256,
-              domain: "airbox_only",
-            },
+          scope: "airbox",
+          scope_id: "airbox",
+        },
+      ],
+    });
+    expect(patches[1]).toEqual({
+      layers: {
+        airbox: {
+          vectors: {
+            density: 256,
+            domain: "airbox_only",
           },
         },
       },
-      {
-        vector_style: { thickness: 1.6 },
-      },
-      {
-        vector_style: { color_mode: "x" },
-      },
-    ]);
+    });
+    expect(patches[2]).toMatchObject({
+      overrides: [
+        {
+          scope: "airbox",
+          scope_id: "airbox",
+          style: {
+            vector_length_scale: 2.4,
+            vector_thickness: 1.2,
+          },
+        },
+      ],
+    });
+    expect(patches[2]).not.toHaveProperty("vector_style");
+    expect(patches[3]).toMatchObject({
+      overrides: [
+        {
+          scope: "airbox",
+          scope_id: "airbox",
+          style: {
+            vector_length_scale: 1.8,
+            vector_thickness: 1.6,
+          },
+        },
+      ],
+    });
+    expect(patches[3]).not.toHaveProperty("vector_style");
+    expect(patches[4]).toEqual({
+      vector_style: { color_mode: "x" },
+    });
   });
 
   it("keeps selected airbox display controls synchronized with canonical state", async () => {

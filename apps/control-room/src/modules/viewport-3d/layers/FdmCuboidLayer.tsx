@@ -935,7 +935,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
         <instancedMesh
           args={[geometry, surfaceMaterial, model.count]}
           frustumCulled={false}
-          key={`fdm-cuboids-surface-${model.count}-${usesInstanceColors ? "field" : "solid"}`}
+          key={`fdm-cuboids-surface-${model.count}`}
           onPointerMove={handlePointerMove}
           onPointerOut={handlePointerOut}
           ref={surfaceRef}

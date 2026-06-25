@@ -371,6 +371,11 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::simulation::get_hysteresis_progress),
         )
         .route(
+            "/v2/sessions/current/analysis/hysteresis/:stage_id/bookmarks",
+            get(handlers::analysis::hysteresis::get_bookmarks)
+                .post(handlers::analysis::hysteresis::post_bookmark),
+        )
+        .route(
             "/v2/sessions/current/simulation/solver/status",
             get(handlers::simulation::get_solver_status),
         )

@@ -2,11 +2,18 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { DATA_FIELD_VECTOR_PATH } from "@/kernel/api/apiPaths";
+import {
+  DATA_FIELD_META_PATH,
+  DATA_FIELD_VECTOR_PATH,
+} from "@/kernel/api/apiPaths";
+import { EventBus } from "@/kernel/events/EventBus";
+import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import { ResourceCache } from "@/kernel/resources/ResourceCache";
+import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
 
 import {
   cachedBinaryResourceMatchesRevision,
+  invalidateViewport3DFieldMetaResources,
   loadCachedBinaryResource,
   resolveViewport3DAirboxFieldVectorQuery,
   resolveViewport3DAirboxFieldVectorResourceKeys,
@@ -14,6 +21,7 @@ import {
   resolveViewport3DPartFieldVectorResourceRequests,
   resolveViewport3DQuantityFieldVectorResourceRequests,
   resolveViewport3DQuantityFieldVectorResourceKeys,
+  viewport3DFieldMetaResourceMatchesQuantity,
 } from "./viewport3dResources";
 
 const viewport3dResourcesSourceUrl = new URL(
@@ -87,6 +95,59 @@ describe("viewport3dResources", () => {
     );
   });
 
+  it("matches only field metadata resources for a fetched 3D quantity", () => {
+    const mMetaKey = `${DATA_FIELD_META_PATH.replace(
+      "{quantity_id}",
+      "m",
+    )}?component=x&scope_id=object%3Apermalloy_layer&scope_kind=object`;
+    const hEffMetaKey = `${DATA_FIELD_META_PATH.replace(
+      "{quantity_id}",
+      "H_eff",
+    )}?component=y&scope_kind=airbox`;
+    const hEffVectorKey = `${DATA_FIELD_VECTOR_PATH.replace(
+      "{quantity_id}",
+      "H_eff",
+    )}?component=full&scope_kind=airbox`;
+
+    expect(viewport3DFieldMetaResourceMatchesQuantity(mMetaKey, "m")).toBe(true);
+    expect(viewport3DFieldMetaResourceMatchesQuantity(hEffMetaKey, "h_eff")).toBe(
+      true,
+    );
+    expect(viewport3DFieldMetaResourceMatchesQuantity(hEffVectorKey, "h_eff")).toBe(
+      false,
+    );
+    expect(viewport3DFieldMetaResourceMatchesQuantity(mMetaKey, "H_eff")).toBe(
+      false,
+    );
+  });
+
+  it("invalidates matching field metadata after a 3D field vector refresh", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const hEffMetaKey = `${DATA_FIELD_META_PATH.replace(
+      "{quantity_id}",
+      "H_eff",
+    )}?component=z&scope_kind=airbox`;
+    const mMetaKey = `${DATA_FIELD_META_PATH.replace(
+      "{quantity_id}",
+      "m",
+    )}?component=z&scope_kind=full`;
+    const hEffVectorKey = `${DATA_FIELD_VECTOR_PATH.replace(
+      "{quantity_id}",
+      "H_eff",
+    )}?component=full&scope_kind=airbox`;
+
+    resources.subscribe(hEffMetaKey, () => {});
+    resources.subscribe(mMetaKey, () => {});
+    resources.subscribe(hEffVectorKey, () => {});
+
+    invalidateViewport3DFieldMetaResources(resources, "h_eff", "field-etag-9");
+
+    expect(resources.getRevision(hEffMetaKey)).toBe("field-etag-9");
+    expect(resources.getRevision(mMetaKey)).toBeNull();
+    expect(resources.getRevision(hEffVectorKey)).toBeNull();
+  });
+
   it("includes complex analysis field view and phase in field vector resource keys", () => {
     expect(
       resolveViewport3DFieldVectorResourceKey(
@@ -134,7 +195,7 @@ describe("viewport3dResources", () => {
     expect(source).toContain("view,");
   });
 
-  it("omits unstable airbox mesh part ids from field vector resource keys", () => {
+  it("preserves explicit airbox mesh part ids in field vector resource keys", () => {
     expect(
       resolveViewport3DAirboxFieldVectorResourceKeys("h_demag", [
         { id: "airbox" },
@@ -148,17 +209,17 @@ describe("viewport3dResources", () => {
       new Map([
         [
           "airbox",
-          `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_demag")}?component=full&max_samples=384&scope_kind=airbox`,
+          `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_demag")}?component=full&max_samples=384&scope_id=airbox&scope_kind=airbox`,
         ],
         [
           "airbox-shell",
-          `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_demag")}?component=full&max_samples=384&scope_kind=airbox`,
+          `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_demag")}?component=full&max_samples=384&scope_id=airbox-shell&scope_kind=airbox`,
         ],
       ]),
     );
   });
 
-  it("keeps airbox field vector queries canonical even when a part id is supplied", () => {
+  it("preserves explicit airbox field vector query scope ids", () => {
     expect(
       resolveViewport3DAirboxFieldVectorQuery({
         component: "full",
@@ -169,6 +230,7 @@ describe("viewport3dResources", () => {
     ).toEqual({
       component: "full",
       max_samples: 384,
+      scope_id: "part:__air__:1",
       scope_kind: "airbox",
     });
   });
@@ -191,7 +253,7 @@ describe("viewport3dResources", () => {
       new Map([
         [
           "airbox",
-          `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_eff")}?component=full&scope_kind=airbox`,
+          `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_eff")}?component=full&scope_id=airbox&scope_kind=airbox`,
         ],
       ]),
     );

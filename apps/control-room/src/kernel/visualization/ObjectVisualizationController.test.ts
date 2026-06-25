@@ -507,11 +507,16 @@ describe("ObjectVisualizationController", () => {
       },
       revision: 11,
       vector_glyphs: true,
+      vector_style: {
+        length_scale: 2.25,
+      },
     };
 
     expect(
       resolveGlobalObjectVisualizationSettings(visualizationState as never),
     ).toMatchObject({
+      vectorBudget: 512,
+      vectorLengthScale: 2.25,
       vectorsVisible: true,
     });
 
@@ -523,16 +528,24 @@ describe("ObjectVisualizationController", () => {
       }),
     ).toMatchObject({
       effectiveSettings: {
+        vectorBudget: 512,
+        vectorLengthScale: 2.25,
         vectorsVisible: true,
       },
       override: null,
       revision: "0:11",
       settings: {
+        vectorBudget: 512,
+        vectorLengthScale: 2.25,
         vectorsVisible: true,
       },
     });
 
-    controller.patchTarget(target, { vectorsVisible: false });
+    controller.patchTarget(target, {
+      vectorBudget: 64,
+      vectorLengthScale: 0.75,
+      vectorsVisible: false,
+    });
 
     expect(
       resolveTargetVisualization({
@@ -542,13 +555,19 @@ describe("ObjectVisualizationController", () => {
       }),
     ).toMatchObject({
       effectiveSettings: {
+        vectorBudget: 64,
+        vectorLengthScale: 0.75,
         vectorsVisible: false,
       },
       override: {
+        vectorBudget: 64,
+        vectorLengthScale: 0.75,
         vectorsVisible: false,
       },
       revision: "1:11",
       settings: {
+        vectorBudget: 64,
+        vectorLengthScale: 0.75,
         vectorsVisible: false,
       },
     });
@@ -656,6 +675,7 @@ describe("ObjectVisualizationController", () => {
               scope: "object",
               scope_id: "free-layer",
               style: {
+                scalar_color_palette: "inferno",
                 surface_color_source: "solid",
                 surface_mono_color: "#00ffaa",
                 vector_alpha: 0.4,
@@ -681,6 +701,7 @@ describe("ObjectVisualizationController", () => {
         activeQuantityId: "H_demag",
         geometryScope: "surface",
         opacityPercent: 35,
+        scalarColorPalette: "inferno",
         shaderMonoColor: "#00ffaa",
         shaderVisible: false,
         surfaceColorSource: "solid",
@@ -707,6 +728,7 @@ describe("ObjectVisualizationController", () => {
         {
           geometryScope: "surface",
           opacityPercent: 35,
+          scalarColorPalette: "inferno",
           shaderMonoColor: "#00ffaa",
           surfaceColorSource: "solid",
           vectorAlphaPercent: 40,
@@ -738,6 +760,7 @@ describe("ObjectVisualizationController", () => {
         active_quantity_id: "H_eff",
       },
       style: {
+        scalar_color_palette: "inferno",
         surface_color_source: "solid",
         surface_mono_color: "#00ffaa",
         point_color: "#66eeff",
@@ -810,7 +833,7 @@ describe("ObjectVisualizationController", () => {
           },
         },
         scope: "object",
-        scope_id: "object:free-layer",
+        scope_id: "free-layer",
         style: {
           surface_color_source: "solid",
           surface_mono_color: "#00ffaa",
@@ -892,9 +915,11 @@ describe("ObjectVisualizationController", () => {
               point_color: "var(--fm-info)",
               points_visible: false,
               render_mode: "surface",
+              scalar_color_palette: "viridis",
               surface_color_source: "solid",
               surface_mono_color: "var(--fm-airbox-fill)",
               surface_visible: false,
+              viewport_colorbar_visible: false,
               vector_alpha: 1,
               vector_budget: 1200,
               vector_color_mode: "orientation",
@@ -947,9 +972,11 @@ describe("ObjectVisualizationController", () => {
               opacity: 0.28,
               points_visible: false,
               render_mode: "wireframe",
+              scalar_color_palette: "inferno",
               surface_color_source: "solid",
               surface_mono_color: "#112233",
               surface_visible: false,
+              viewport_colorbar_visible: false,
               vector_alpha: 0.5,
               vector_budget: 256,
               vector_color_mode: "x",
@@ -973,6 +1000,7 @@ describe("ObjectVisualizationController", () => {
       boundsVisible: true,
       geometryScope: "surface",
       opacityPercent: 31,
+      scalarColorPalette: "inferno",
       shaderMonoColor: "#112233",
       vectorAlphaPercent: 50,
       vectorBudget: 256,
@@ -1048,9 +1076,11 @@ describe("ObjectVisualizationController", () => {
               point_color: "var(--fm-info)",
               points_visible: false,
               render_mode: "surface",
+              scalar_color_palette: "viridis",
               surface_color_source: "solid",
               surface_mono_color: "var(--fm-airbox-fill)",
               surface_visible: true,
+              viewport_colorbar_visible: false,
               vector_alpha: 1,
               vector_budget: 1200,
               vector_color_mode: "orientation",

@@ -294,6 +294,19 @@ describe("FdmCuboidLayer model", () => {
     expect(matrixUploadBlock).not.toContain("usesInstanceColors");
   });
 
+  it("keeps the FDM surface mesh mounted while scalar coloring changes", () => {
+    const layerSource = readFileSync(fdmCuboidLayerPath, "utf8");
+    const surfaceMeshBlock = layerSource.slice(
+      layerSource.indexOf("<instancedMesh"),
+      layerSource.indexOf("ref={surfaceRef}"),
+    );
+
+    expect(surfaceMeshBlock).toContain('key={`fdm-cuboids-surface-${model.count}`}');
+    expect(surfaceMeshBlock).not.toContain("usesInstanceColors");
+    expect(surfaceMeshBlock).not.toContain('"field"');
+    expect(surfaceMeshBlock).not.toContain('"solid"');
+  });
+
   it("does not recreate FDM materials for vector-only setting changes", () => {
     const layerSource = readFileSync(fdmCuboidLayerPath, "utf8");
     const surfaceMaterialBlock = layerSource.slice(

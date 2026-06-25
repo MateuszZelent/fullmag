@@ -38,18 +38,18 @@ describe("useViewport3DTopologyIndexBundle", () => {
     const reference = createViewport3DTopologyIndexBuildReference({
       domainId: "shared-domain",
       sessionId: "current",
-      targetVisualizationRevision: "targets-4",
       topologyRevision: "mesh-7",
     });
 
     expect(reference).not.toBeNull();
     expect(reference!).toEqual({
       buildKey:
-        'topology-index:{"algorithmVersion":1,"domainId":"shared-domain","lane":"topology-index","sessionId":"current","targetVisualizationRevision":"targets-4","topologyRevision":"mesh-7"}',
+        'topology-index:{"algorithmVersion":1,"domainId":"shared-domain","lane":"topology-index","sessionId":"current","topologyRevision":"mesh-7"}',
       groupKey: "topology-index:session=current:domain=shared-domain",
-      revisionSummary: "topology=mesh-7 targets=targets-4",
+      revisionSummary: "topology=mesh-7",
     });
     expect(reference!.buildKey).not.toContain("fieldRevision");
+    expect(reference!.buildKey).not.toContain("targetVisualizationRevision");
   });
 
   it("marks topology indices as building before the worker effect resolves", () => {

@@ -1,9 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { DATA_FIELD_VECTOR_PATH } from "@/kernel/api/apiPaths";
 import { RequestDiagnosticsController } from "@/kernel/api/RequestDiagnosticsController";
 
 import { DiagnosticRecorderController } from "./DiagnosticRecorderController";
 import { DIAGNOSTIC_EVENT_NAMES, type DiagnosticRecord } from "./diagnosticRecorderTypes";
+
+const MAGNETIZATION_FIELD_VECTOR_PATH = DATA_FIELD_VECTOR_PATH.replace(
+  "{quantity_id}",
+  "m",
+);
+const MAGNETIZATION_FIELD_VECTOR_QUERY_PATH = `${MAGNETIZATION_FIELD_VECTOR_PATH}?component=full`;
 
 function record(patch: Partial<DiagnosticRecord> = {}): DiagnosticRecord {
   return {
@@ -153,9 +160,9 @@ describe("DiagnosticRecorderController", () => {
       etag: "\"field-1\"",
       method: "GET",
       outcome: "ok",
-      path: "/v2/sessions/current/data/field-vector/m?component=full",
+      path: MAGNETIZATION_FIELD_VECTOR_QUERY_PATH,
       requestId: "req-1",
-      resourceKey: "/v2/sessions/current/data/field-vector/m?component=full",
+      resourceKey: MAGNETIZATION_FIELD_VECTOR_QUERY_PATH,
       status: 200,
       timestampMs: 1_040,
     });
@@ -168,10 +175,10 @@ describe("DiagnosticRecorderController", () => {
         etag: "\"field-1\"",
         method: "GET",
         name: DIAGNOSTIC_EVENT_NAMES.requestFinished,
-        path: "/v2/sessions/current/data/field-vector/m",
+        path: MAGNETIZATION_FIELD_VECTOR_PATH,
         query: "component=full",
         requestId: "req-1",
-        resourceKey: "/v2/sessions/current/data/field-vector/m?component=full",
+        resourceKey: MAGNETIZATION_FIELD_VECTOR_QUERY_PATH,
         status: 200,
       }),
     ]);

@@ -450,6 +450,24 @@ describe("Viewport3DScene scale helpers", () => {
 });
 
 describe("Viewport3DScene region overlay visibility", () => {
+  it("threads region target settings into authored native picking", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DScene.tsx", import.meta.url),
+      "utf8",
+    );
+    const layerInvocation = source.slice(
+      source.indexOf("<RegionOverlayNativePickingLayer"),
+      source.indexOf("/>", source.indexOf("<RegionOverlayNativePickingLayer")),
+    );
+    const nativePickingLayer = source.slice(
+      source.indexOf("function RegionOverlayNativePickingLayer"),
+      source.indexOf("function resolveRegionSettingsEntries"),
+    );
+
+    expect(layerInvocation).toContain("getRegionSettings={getRegionSettings}");
+    expect(nativePickingLayer).toContain("resolveSettings: getRegionSettings");
+  });
+
   it("keeps authored overlays visible in auto mode while realized overlays are building", () => {
     const base = {
       hasMeshBackedRegionOverlays: true,

@@ -10,22 +10,26 @@ import {
 } from "./viewport3dStore";
 
 describe("viewport3dStore", () => {
-  it("stores the active scalar colorbar legend with concrete range labels", () => {
+  it("stores active scalar colorbar legends with concrete range labels", () => {
     viewport3dStore.resetForTest();
 
-    viewport3dStore.setActiveScalarColorbarLegend({
-      label: "mat_ms [A/m]",
-      maxLabel: "400000",
-      minLabel: "400000",
-      paletteGradient: "linear-gradient(90deg, black, white)",
-    });
+    viewport3dStore.setActiveScalarColorbarLegends([
+      {
+        label: "mat_ms [A/m]",
+        maxLabel: "400000",
+        minLabel: "400000",
+        paletteGradient: "linear-gradient(90deg, black, white)",
+      },
+    ]);
 
-    expect(viewport3dStore.getActiveScalarColorbarLegend()).toEqual({
-      label: "mat_ms [A/m]",
-      maxLabel: "400000",
-      minLabel: "400000",
-      paletteGradient: "linear-gradient(90deg, black, white)",
-    });
+    expect(viewport3dStore.getActiveScalarColorbarLegends()).toEqual([
+      {
+        label: "mat_ms [A/m]",
+        maxLabel: "400000",
+        minLabel: "400000",
+        paletteGradient: "linear-gradient(90deg, black, white)",
+      },
+    ]);
   });
 
   it("keeps the canonical camera snapshot in module-local state", () => {

@@ -374,7 +374,10 @@ function meshPartSurfaceAlreadyRendered(
 function positionsForTopology(topology: DecodedTopology): Float32Array {
   const cached = topologyPositionCache.get(topology);
   if (cached) return cached;
-  const positions = Float32Array.from(topology.positions);
+  const positions =
+    topology.positions instanceof Float32Array
+      ? topology.positions
+      : Float32Array.from(topology.positions);
   topologyPositionCache.set(topology, positions);
   return positions;
 }

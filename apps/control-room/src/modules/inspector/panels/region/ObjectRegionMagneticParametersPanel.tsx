@@ -269,16 +269,6 @@ function useObjectRegionMagneticParametersPanelView({
     draft.materialOverrides.map((override) => override.parameter),
   );
   const inheritedParams = parameters.filter((p) => !overriddenParams.has(p));
-  const overrideKeys = draft.materialOverrides.map((override) =>
-    [
-      override.parameter,
-      override.value,
-      override.unit,
-      override.priority,
-      override.conflictPolicy,
-    ].join(":"),
-  );
-
   return (
     <Accordion
       className="fm-inspector-panel"
@@ -323,7 +313,7 @@ function useObjectRegionMagneticParametersPanelView({
             sceneData,
           );
           return (
-            <div className="fm-region-override" key={overrideKeys[index]} style={{ borderTop: "1px solid var(--fm-border, #ccc)", paddingTop: "12px", marginTop: "12px" }}>
+            <div className="fm-region-override" key={`override:${index}`} style={{ borderTop: "1px solid var(--fm-border-subtle)", paddingTop: "12px", marginTop: "12px" }}>
               <FormField
                 label={`Override ${index + 1}`}
                 type="select"
@@ -420,7 +410,7 @@ function useObjectRegionMagneticParametersPanelView({
           <div
             className="fm-region-override"
             key={field.assignmentId}
-            style={{ borderTop: "1px solid var(--fm-border, #ccc)", marginTop: "12px", paddingTop: "12px" }}
+            style={{ borderTop: "1px solid var(--fm-border-subtle)", marginTop: "12px", paddingTop: "12px" }}
           >
             <FormField
               label={`Field ${index + 1}`}
@@ -452,9 +442,9 @@ function useObjectRegionMagneticParametersPanelView({
               <option value="linear">Linear gradient</option>
               <option value="radial">Radial gradient</option>
             </FormField>
-            {realizationRows.map((row) => (
+            {realizationRows.map((row, rowIndex) => (
               <FieldRow
-                key={`realization:${field.assignmentId}:${row.label}`}
+                key={`realization:${field.assignmentId}:${rowIndex}`}
                 label={row.label}
                 value={row.value}
               />

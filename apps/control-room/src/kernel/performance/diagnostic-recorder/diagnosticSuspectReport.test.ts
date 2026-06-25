@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
 
+import { DATA_FIELD_VECTOR_PATH } from "@/kernel/api/apiPaths";
+
 import { buildDiagnosticSuspectReport } from "./diagnosticSuspectReport";
 import {
   DIAGNOSTIC_ARTIFACT_VERSION,
   DIAGNOSTIC_EVENT_NAMES,
   type DiagnosticArtifactV1,
 } from "./diagnosticRecorderTypes";
+
+const MAGNETIZATION_FIELD_VECTOR_PATH = DATA_FIELD_VECTOR_PATH.replace(
+  "{quantity_id}",
+  "m",
+);
 
 function artifact(
   streams: Partial<DiagnosticArtifactV1["streams"]>,
@@ -94,7 +101,7 @@ describe("buildDiagnosticSuspectReport", () => {
           method: "GET",
           name: DIAGNOSTIC_EVENT_NAMES.requestFinished,
           outcome: "ok",
-          path: "/v2/sessions/current/data/field-vector/m",
+          path: MAGNETIZATION_FIELD_VECTOR_PATH,
           query: "component=full",
           requestId: `req-${index}`,
           resourceKey: "field-vector:m",

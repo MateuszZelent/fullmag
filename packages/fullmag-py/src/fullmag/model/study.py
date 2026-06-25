@@ -53,6 +53,8 @@ SUPPORTED_SETTLE_APPLIES_TO = {
     "preparation",
     "saturation_probe",
     "major",
+    "major_descending",
+    "major_ascending",
     "minor",
     "recoil",
     "key_events",

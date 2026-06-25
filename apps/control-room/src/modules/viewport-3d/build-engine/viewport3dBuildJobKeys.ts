@@ -28,7 +28,6 @@ export function buildViewport3DTopologyIndexJobKey(
     domainId: parts.domainId,
     lane: "topology-index",
     sessionId: parts.sessionId,
-    targetVisualizationRevision: parts.targetVisualizationRevision,
     topologyRevision: parts.topologyRevision,
   });
 }

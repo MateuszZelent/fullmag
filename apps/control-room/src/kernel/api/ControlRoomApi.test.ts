@@ -804,9 +804,11 @@ describe("ControlRoomApi", () => {
   it("loads hysteresis analysis resources through the analysis facade", async () => {
     const observedUrls: string[] = [];
     const observedMethods: Array<string | undefined> = [];
+    const observedBodies: Array<BodyInit | null | undefined> = [];
     const fetchImpl = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
       observedUrls.push(String(url));
       observedMethods.push(init?.method);
+      observedBodies.push(init?.body);
       const target = String(url);
       if (target.endsWith("/metrics")) {
         return jsonResponse({
@@ -846,6 +848,22 @@ describe("ControlRoomApi", () => {
           status: "completed",
         });
       }
+      if (target.endsWith("/bookmarks")) {
+        return jsonResponse({
+          bookmarks: [],
+          revision: 12,
+          stage_id: "stage 1",
+          stage_index: 1,
+        });
+      }
+      if (target.includes("/analysis/hysteresis/") && target.endsWith("/points")) {
+        return jsonResponse({
+          points: [],
+          revision: 12,
+          stage_id: "stage 1",
+          stage_index: 1,
+        });
+      }
       return jsonResponse([]);
     });
 
@@ -859,6 +877,8 @@ describe("ControlRoomApi", () => {
     await api.analysis.hysteresis.metrics("stage 1");
     await api.analysis.hysteresis.saturation("stage 1");
     await api.analysis.hysteresis.branches("stage 1");
+    await api.analysis.hysteresis.bookmarks("stage 1");
+    await api.analysis.hysteresis.bookmarkPoint("stage 1", { point_id: 7 });
     await api.analysis.hysteresis.family("stage 1");
     await api.analysis.hysteresis.familyVariantPoints("stage 1", "theta 90");
     await api.analysis.hysteresis.minorLoops("stage 1");
@@ -866,12 +886,27 @@ describe("ControlRoomApi", () => {
     await api.analysis.hysteresis.point("stage 1", 7);
     await api.analysis.hysteresis.settleTrace("stage 1", 7);
 
-    expect(observedMethods).toEqual(Array(10).fill("GET"));
+    expect(observedMethods).toEqual([
+      "GET",
+      "GET",
+      "GET",
+      "GET",
+      "GET",
+      "POST",
+      "GET",
+      "GET",
+      "GET",
+      "GET",
+      "GET",
+      "GET",
+    ]);
     expect(observedUrls).toEqual([
       "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis/stage%201/points",
       "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis/stage%201/metrics",
       "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis/stage%201/saturation",
       "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis/stage%201/branches",
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis/stage%201/bookmarks",
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis/stage%201/bookmarks",
       "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis-family/stage%201",
       "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis-family/stage%201/variants/theta%2090/points",
       "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis/stage%201/minor-loops",
@@ -879,6 +914,12 @@ describe("ControlRoomApi", () => {
       "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis/stage%201/steps/7",
       "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis/stage%201/steps/7/settle-trace",
     ]);
+    const postBody = observedBodies[5];
+    expect(
+      postBody instanceof ArrayBuffer
+        ? new TextDecoder().decode(postBody)
+        : postBody,
+    ).toBe(JSON.stringify({ point_id: 7 }));
   });
 
   it("loads hysteresis stage resources through the simulation stage facade", async () => {

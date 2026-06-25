@@ -2,6 +2,7 @@
 
 use crate::schemas::commands::{CommandResponse, RuntimeCommandPrecondition, RuntimeCommandTarget};
 use crate::schemas::diagnostics::SolverProfileResource;
+use crate::schemas::hysteresis::HysteresisBookmarkSchema;
 use crate::schemas::realtime::RealtimeResourceChange;
 use crate::schemas::visualization_state::{
     ClipVisualizationState, DomainVisualizationState, FemVisualizationState,
@@ -123,6 +124,8 @@ pub(crate) struct AppState {
     pub current_workspace_ribbon: Arc<RwLock<CurrentWorkspaceRibbon>>,
     /// Workspace-only layout state for the local control room.
     pub current_workspace_layout: Arc<RwLock<CurrentWorkspaceLayout>>,
+    /// Session-owned hysteresis point bookmarks keyed by canonical stage id.
+    pub current_hysteresis_bookmarks: Arc<RwLock<BTreeMap<String, HysteresisBookmarkStageStore>>>,
     /// In-memory sequenced control queue for the root local-live workspace.
     pub current_control_queue: Arc<Mutex<VecDeque<SessionCommand>>>,
     /// Recent idempotent command responses keyed by request identity.
@@ -137,6 +140,12 @@ pub(crate) struct AppState {
     pub feature_flags: crate::feature_flags::FeatureFlags,
     /// P4: binary projection/slice cache decoupled from the session snapshot lock.
     pub quantity_data_plane: Arc<crate::quantity_data_plane::QuantityDataPlaneStore>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct HysteresisBookmarkStageStore {
+    pub revision: u64,
+    pub bookmarks: BTreeMap<String, HysteresisBookmarkSchema>,
 }
 
 #[derive(Debug, Clone)]

@@ -91,6 +91,41 @@ describe("viewport3dBuildScheduler", () => {
     scheduler.dispose();
   });
 
+  it("does not abort sibling latest-wins jobs in different groups", async () => {
+    const scheduler = createViewport3DBuildScheduler({
+      laneConcurrency: { "field-color": 2 },
+    });
+    const pending = [deferred<string>(), deferred<string>()];
+    let runIndex = 0;
+    const runner: Viewport3DBuildRunner<string> = () => {
+      const current = runIndex;
+      runIndex += 1;
+      return pending[current].promise;
+    };
+
+    const orientation = scheduler.schedule(
+      buildRequest("field-color:orientation", "field-color:m:mode=orientation", {
+        lane: "field-color",
+      }),
+      runner,
+      { latestWins: true },
+    );
+    const x = scheduler.schedule(
+      buildRequest("field-color:x", "field-color:m:mode=x", {
+        lane: "field-color",
+      }),
+      runner,
+      { latestWins: true },
+    );
+
+    pending[0]?.resolve("orientation");
+    pending[1]?.resolve("x");
+
+    await expect(orientation).resolves.toBe("orientation");
+    await expect(x).resolves.toBe("x");
+    scheduler.dispose();
+  });
+
   it("bounds concurrent jobs by lane policy", async () => {
     const scheduler = createViewport3DBuildScheduler({
       laneConcurrency: { "vector-glyph": 2 },

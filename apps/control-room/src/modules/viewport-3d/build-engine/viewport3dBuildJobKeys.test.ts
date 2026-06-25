@@ -78,6 +78,24 @@ describe("viewport3dBuildJobKeys", () => {
     );
   });
 
+  it("keeps visualization-only revisions out of topology index keys", () => {
+    const first = baseKeyParts();
+    const second: Viewport3DBuildJobKeyParts = {
+      ...first,
+      targetVisualizationRevision: "targets-2",
+    };
+
+    expect(buildViewport3DTopologyIndexJobKey(first)).toBe(
+      buildViewport3DTopologyIndexJobKey(second),
+    );
+    expect(buildViewport3DFieldColorJobKey(first)).not.toBe(
+      buildViewport3DFieldColorJobKey(second),
+    );
+    expect(buildViewport3DVectorGlyphJobKey(first)).not.toBe(
+      buildViewport3DVectorGlyphJobKey(second),
+    );
+  });
+
   it("invalidates every topology-dependent lane when topology changes", () => {
     const first = baseKeyParts();
     const second: Viewport3DBuildJobKeyParts = {

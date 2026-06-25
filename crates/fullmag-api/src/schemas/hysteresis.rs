@@ -51,6 +51,14 @@ pub struct HysteresisPointSchema {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct HysteresisPointsResource {
+    pub revision: u64,
+    pub stage_id: String,
+    pub stage_index: u32,
+    pub points: Vec<HysteresisPointSchema>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct HysteresisBranchSchema {
     pub branch_id: String,
     pub branch_index: u32,
@@ -119,7 +127,10 @@ pub struct HysteresisMinorLoopSchema {
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct HysteresisSettleTraceEntrySchema {
-    pub point_id: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub point_id: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub protocol_role: Option<String>,
     #[serde(rename = "field_value_mT")]
     pub field_value_m_t: f64,
     pub step_index: usize,
@@ -421,6 +432,43 @@ pub struct HysteresisResolvedSettleStepSchema {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub on_non_convergence: Option<String>,
     pub resolved_parameters: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct HysteresisBookmarkPointRequest {
+    pub point_id: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct HysteresisBookmarkSchema {
+    pub bookmark_id: String,
+    pub stage_id: String,
+    pub point_id: u32,
+    pub label: String,
+    pub resource_ref: String,
+    pub selection_ref: String,
+    pub created_at_unix_ms: String,
+    #[serde(rename = "field_value_mT")]
+    pub field_value_m_t: f64,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot_resource_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field_orientation: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub measurement_axis: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct HysteresisBookmarksResource {
+    pub revision: u64,
+    pub stage_id: String,
+    pub stage_index: u32,
+    pub bookmarks: Vec<HysteresisBookmarkSchema>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

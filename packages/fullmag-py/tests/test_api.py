@@ -4892,6 +4892,10 @@ class ProblemApiTests(unittest.TestCase):
             branch_step.to_ir()["applies_to"],
             {"kind": "branch_id", "branch_id": "descending"},
         )
+        self.assertEqual(
+            fm.RelaxStep(applies_to="major_descending").to_ir()["applies_to"],
+            "major_descending",
+        )
 
         with self.assertRaisesRegex(ValueError, "max_steps must be positive"):
             fm.RelaxStep(max_steps=0)

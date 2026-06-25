@@ -4,6 +4,7 @@ import type {
   FieldMetaQuery,
   MeshSharedDomainManifestResource,
 } from "@/kernel/api/apiTypes";
+import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
 import {
   isMagneticOnlyQuantityId,
   isScalarSpatialQuantityId,
@@ -145,6 +146,22 @@ export function fieldMetaScopeQueryForVisualizationTarget(
     case undefined:
       return { scope_id: null, scope_kind: null };
   }
+}
+
+export function objectVisualizationTargetForMeshPart(
+  part: NonNullable<MeshSharedDomainManifestResource["mesh_parts"]>[number],
+): VisualizationTargetRef {
+  return part.object_id
+    ? {
+        id: visualizationTargetIdForSceneObject(part.object_id),
+        kind: "object",
+        label: part.label,
+      }
+    : {
+        id: part.id,
+        kind: "part",
+        label: part.label,
+      };
 }
 
 const SCALAR_COLOR_PALETTE_STOPS: Record<string, [number, number, number][]> = {

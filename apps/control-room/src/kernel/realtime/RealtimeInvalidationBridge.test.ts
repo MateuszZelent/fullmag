@@ -5,10 +5,12 @@ import type { KernelEventMap } from "../events/eventTypes";
 import {
   DATA_DOMAIN_TOPOLOGY_PATH,
   DATA_FIELDS_PATH,
+  DATA_FIELD_META_PATH,
   DATA_FIELD_VECTOR_PATH,
   DATA_TABLE_ROWS_PATH,
   ANALYSIS_HYSTERESIS_BRANCHES_PATH,
   ANALYSIS_HYSTERESIS_ADAPTIVE_REFINEMENT_PATH,
+  ANALYSIS_HYSTERESIS_BOOKMARKS_PATH,
   ANALYSIS_HYSTERESIS_FAMILY_PATH,
   ANALYSIS_HYSTERESIS_FAMILY_VARIANT_POINTS_PATH,
   ANALYSIS_HYSTERESIS_METRICS_PATH,
@@ -729,6 +731,48 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision(hEffCollectionKey)).toBeNull();
   });
 
+  it("refreshes component field metadata when matching quantity samples change", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const hEffMetaKey = `${DATA_FIELD_META_PATH.replace(
+      "{quantity_id}",
+      "H_eff",
+    )}?component=y&scope_id=object%3Apermalloy_layer&scope_kind=object`;
+    const hEffRawObjectMetaKey = `${DATA_FIELD_META_PATH.replace(
+      "{quantity_id}",
+      "H_eff",
+    )}?component=y&scope_id=permalloy_layer&scope_kind=object`;
+    const mMetaKey = `${DATA_FIELD_META_PATH.replace(
+      "{quantity_id}",
+      "m",
+    )}?component=y&scope_id=object%3Apermalloy_layer&scope_kind=object`;
+
+    resources.subscribe(hEffMetaKey, () => {});
+    resources.subscribe(hEffRawObjectMetaKey, () => {});
+    resources.subscribe(mMetaKey, () => {});
+
+    const handled = bridge.handleEvent({
+      payload: {
+        changes: [
+          {
+            recommended_fetch: DATA_FIELDS_PATH,
+            quantity_ids: ["H_eff"],
+            resource: "fields",
+            resource_id: "samples",
+            revision: 13,
+          },
+        ],
+      },
+      type: "resource.batch_changed",
+    });
+
+    expect(handled).toBe(true);
+    expect(resources.getRevision(hEffMetaKey)).toBe(13);
+    expect(resources.getRevision(hEffRawObjectMetaKey)).toBe(13);
+    expect(resources.getRevision(mMetaKey)).toBeNull();
+  });
+
   it("refreshes mesh build dependents after latest successful build changes", () => {
     const bus = new EventBus<KernelEventMap>();
     const resources = new ResourceInvalidationController(bus);
@@ -925,6 +969,10 @@ describe("RealtimeInvalidationBridge", () => {
         "{stage_id}",
         "stage-000",
       );
+    const bookmarksKey = ANALYSIS_HYSTERESIS_BOOKMARKS_PATH.replace(
+      "{stage_id}",
+      "stage-000",
+    );
     const familyKey = ANALYSIS_HYSTERESIS_FAMILY_PATH.replace(
       "{stage_id}",
       "stage-000",
@@ -961,6 +1009,7 @@ describe("RealtimeInvalidationBridge", () => {
       metricsKey,
       saturationKey,
       adaptiveRefinementKey,
+      bookmarksKey,
       familyKey,
       familyVariantPointsKey,
       minorLoopsKey,
@@ -997,6 +1046,9 @@ describe("RealtimeInvalidationBridge", () => {
       dependentRevision(pointsKey, 51),
     );
     expect(resources.getRevision(adaptiveRefinementKey)).toBe(
+      dependentRevision(pointsKey, 51),
+    );
+    expect(resources.getRevision(bookmarksKey)).toBe(
       dependentRevision(pointsKey, 51),
     );
     expect(resources.getRevision(familyKey)).toBe(

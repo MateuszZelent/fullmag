@@ -17,7 +17,7 @@ export interface Viewport3DCameraState {
 }
 
 export interface Viewport3DCommandState {
-  activeScalarColorbarLegend: Viewport3DScalarColorbarLegend | null;
+  activeScalarColorbarLegends: Viewport3DScalarColorbarLegend[];
   camera: Viewport3DCameraState;
   captureReturnProfileId: Viewport3DVisualProfileId | null;
   captureRevision: number;
@@ -72,7 +72,7 @@ export const DEFAULT_VIEWPORT_3D_CAMERA_STATE: Viewport3DCameraState = {
 };
 
 const DEFAULT_VIEWPORT_3D_STATE: Viewport3DCommandState = {
-  activeScalarColorbarLegend: null,
+  activeScalarColorbarLegends: [],
   camera: {
     ...DEFAULT_VIEWPORT_3D_CAMERA_STATE,
   },
@@ -158,19 +158,24 @@ class Viewport3DStore {
     this.notify();
   }
 
-  getActiveScalarColorbarLegend(): Viewport3DScalarColorbarLegend | null {
-    return this.snapshot.activeScalarColorbarLegend;
+  getActiveScalarColorbarLegends(): Viewport3DScalarColorbarLegend[] {
+    return this.snapshot.activeScalarColorbarLegends;
   }
 
-  setActiveScalarColorbarLegend(
-    legend: Viewport3DScalarColorbarLegend | null,
+  setActiveScalarColorbarLegends(
+    legends: Viewport3DScalarColorbarLegend[],
   ): void {
-    if (sameViewport3DScalarColorbarLegend(this.snapshot.activeScalarColorbarLegend, legend)) {
+    if (
+      sameViewport3DScalarColorbarLegends(
+        this.snapshot.activeScalarColorbarLegends,
+        legends,
+      )
+    ) {
       return;
     }
     this.snapshot = {
       ...this.snapshot,
-      activeScalarColorbarLegend: legend,
+      activeScalarColorbarLegends: legends,
     };
     this.notify();
   }
@@ -474,18 +479,22 @@ export function useViewport3DCommandState(): Viewport3DCommandState {
   );
 }
 
-function sameViewport3DScalarColorbarLegend(
-  left: Viewport3DScalarColorbarLegend | null,
-  right: Viewport3DScalarColorbarLegend | null,
+function sameViewport3DScalarColorbarLegends(
+  left: readonly Viewport3DScalarColorbarLegend[],
+  right: readonly Viewport3DScalarColorbarLegend[],
 ): boolean {
   if (left === right) return true;
-  if (!left || !right) return left === right;
-  return (
-    left.label === right.label &&
-    left.maxLabel === right.maxLabel &&
-    left.minLabel === right.minLabel &&
-    left.paletteGradient === right.paletteGradient
-  );
+  if (left.length !== right.length) return false;
+  return left.every((legend, index) => {
+    const other = right[index];
+    return (
+      other !== undefined &&
+      legend.label === other.label &&
+      legend.maxLabel === other.maxLabel &&
+      legend.minLabel === other.minLabel &&
+      legend.paletteGradient === other.paletteGradient
+    );
+  });
 }
 
 function sameViewport3DCameraState(

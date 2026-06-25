@@ -52,4 +52,21 @@ describe("RegionMeshOverlayLayer", () => {
     expect(shapeSource).not.toContain("const surfaceGeometry = useMemo");
     expect(shapeSource).not.toContain("const edgeGeometry = useMemo");
   });
+
+  it("keeps previous realized overlay geometry visible while replacement uploads", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("./RegionMeshOverlayLayer.tsx", import.meta.url)),
+      "utf8",
+    );
+    const uploadEffect = source.slice(
+      source.indexOf("useEffect(() => {"),
+      source.indexOf("const abortController = new AbortController();"),
+    );
+
+    expect(uploadEffect).toContain("if (!enabled || !indices?.length) {");
+    expect(uploadEffect).toContain("clearCurrentGeometry();");
+    expect(source).toContain("if (store.getSnapshot().geometry !== uploadedGeometry)");
+    expect(source).not.toContain("if (store.getSnapshot().geometry === uploadedGeometry)");
+    expect(uploadEffect).not.toContain("useEffect(() => {\n    store.publish(null);");
+  });
 });

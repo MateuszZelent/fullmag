@@ -37,7 +37,7 @@ interface PendingColorTransform {
   signal: AbortSignal | null;
 }
 
-const COLOR_TRANSFORM_WORKER_IDLE_TIMEOUT_MS = 30_000;
+const COLOR_TRANSFORM_WORKER_IDLE_TIMEOUT_MS = 120_000;
 
 let fallbackColorTransformBuildId = 1;
 let colorTransformBuildJobScheduler:

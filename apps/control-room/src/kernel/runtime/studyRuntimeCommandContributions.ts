@@ -1,4 +1,5 @@
 import {
+  ANALYSIS_HYSTERESIS_BOOKMARKS_PATH,
   DATA_FIELDS_PATH,
   DATA_FIELD_VECTOR_PATH,
   DATA_SCALARS_PATH,
@@ -22,6 +23,7 @@ import {
   SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
   SIMULATION_SOLVER_ENERGIES_HISTORY_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
+  SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH,
   SIMULATION_STAGES_EXECUTION_PATH,
   VISUALIZATION_STATE_PATH,
 } from "../api/apiPaths";
@@ -35,6 +37,7 @@ import type {
   MeshSharedDomainManifestResource,
   CurrentRunResource,
   FieldStateTargetRef,
+  HysteresisBookmarkPointRequest,
   HysteresisPointSchema,
   RegionDiagnosticsResource,
   RuntimeCommandPrecondition,
@@ -1116,37 +1119,31 @@ function csvCell(value: string | number): string {
   return `"${text.replace(/"/g, '""')}"`;
 }
 
-function saveHysteresisPointBookmark(input: HysteresisPointCommandInput): boolean {
-  if (typeof window === "undefined" || !window.localStorage) return false;
-  const key = "fullmag.hysteresis.point-bookmarks.v1";
-  const stored = window.localStorage.getItem(key);
-  let bookmarks: unknown[] = [];
-  if (stored) {
-    try {
-      const parsed = JSON.parse(stored);
-      bookmarks = Array.isArray(parsed) ? parsed : [];
-    } catch {
-      bookmarks = [];
-    }
-  }
-  const nextBookmark = {
-    branch_id: input.point.branch_id ?? null,
-    field_value_mT: input.point.field_value_mT,
-    m_parallel: input.point.m_parallel,
+function hysteresisBookmarkPointRequest(
+  input: HysteresisPointCommandInput,
+): HysteresisBookmarkPointRequest {
+  return {
     point_id: input.point.point_id,
-    snapshot_id: input.point.snapshot_id ?? null,
-    stage_id: input.stageId,
   };
-  const filtered = bookmarks.filter((entry) => {
-    if (!entry || typeof entry !== "object") return false;
-    const record = entry as Record<string, unknown>;
-    return !(
-      record.stage_id === input.stageId &&
-      record.point_id === input.point.point_id
-    );
-  });
-  window.localStorage.setItem(key, JSON.stringify([...filtered, nextBookmark]));
-  return true;
+}
+
+function invalidateHysteresisBookmarkResources(
+  context: CommandContext,
+  stageId: string,
+  revision: number,
+): void {
+  const encodedStageId = encodeURIComponent(stageId);
+  context.resources?.invalidate(
+    ANALYSIS_HYSTERESIS_BOOKMARKS_PATH.replace("{stage_id}", encodedStageId),
+    revision,
+  );
+  context.resources?.invalidatePrefix(
+    SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH.replace(
+      "{stage_id}",
+      encodedStageId,
+    ),
+    revision,
+  );
 }
 
 interface ImportStateInput {
@@ -2291,18 +2288,22 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
     group: "hysteresis",
     scope: "runtime",
     isEnabled: () => true,
-    run: (context) => {
+    run: async (context) => {
       const input = resolveHysteresisPointCommandInput(context.input);
       if (!input) {
         return { status: "failed", message: "Missing hysteresis point input." };
       }
-      if (!saveHysteresisPointBookmark(input)) {
+      if (!context.api) {
         return {
           status: "failed",
-          message:
-            "Browser local storage is unavailable; persistent hysteresis bookmarks need a backend resource.",
+          message: "Control-room API is unavailable.",
         };
       }
+      const response = await context.api.analysis.hysteresis.bookmarkPoint(
+        input.stageId,
+        hysteresisBookmarkPointRequest(input),
+      );
+      invalidateHysteresisBookmarkResources(context, input.stageId, response.revision);
       return {
         status: "completed",
         message: `Bookmarked hysteresis point ${input.point.point_id}.`,
@@ -2346,9 +2347,9 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
         const stageId =
           commandInputStageId(context.input) ?? selectedStageId(context);
         if (stageId && context.api) {
-          const points = await context.api.analysis.hysteresis.points(stageId);
+          const pointsResource = await context.api.analysis.hysteresis.points(stageId);
           input = {
-            points: Array.isArray(points) ? points : [],
+            points: Array.isArray(pointsResource.points) ? pointsResource.points : [],
             stageId,
           };
         }

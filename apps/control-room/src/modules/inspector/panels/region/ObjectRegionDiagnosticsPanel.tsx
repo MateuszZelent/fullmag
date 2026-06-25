@@ -49,7 +49,7 @@ export function ObjectRegionDiagnosticsPanel({ model }: RegionSubPanelProps) {
                 style={{
                   marginBottom: "16px",
                   paddingBottom: "12px",
-                  borderBottom: "1px solid var(--fm-border, #eee)",
+                  borderBottom: "1px solid var(--fm-border-subtle)",
                 }}
               >
                 <FieldRow label="Severity" value={diagnostic.severity} />

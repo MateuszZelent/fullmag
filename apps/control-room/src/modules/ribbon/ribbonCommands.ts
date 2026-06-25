@@ -607,7 +607,12 @@ function asPhysicsInteractionInput(
 function isVisualizationTargetKind(
   value: unknown,
 ): value is VisualizationTargetKind {
-  return value === "airbox" || value === "object" || value === "part";
+  return (
+    value === "airbox" ||
+    value === "object" ||
+    value === "part" ||
+    value === "region"
+  );
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

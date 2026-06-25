@@ -218,13 +218,21 @@
   user-select: none;
 }
 
-.fm-viewport-3d__colorbar {
+.fm-viewport-3d__colorbar-stack {
   position: absolute;
   z-index: 2;
   right: var(--fm-space-3);
   bottom: var(--fm-space-3);
   display: grid;
   width: min(18rem, calc(100% - var(--fm-space-6)));
+  gap: var(--fm-space-1);
+  max-height: min(18rem, calc(100% - var(--fm-space-6)));
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.fm-viewport-3d__colorbar {
+  display: grid;
   gap: var(--fm-space-1);
   border: 1px solid color-mix(in srgb, var(--fm-border-subtle) 58%, transparent);
   border-radius: var(--fm-radius-sm);

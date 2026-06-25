@@ -1,9 +1,20 @@
 "use client";
 
 import { Info, RotateCcw } from "lucide-react";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
-import type { FieldCatalogResource, LiveStatusResource } from "@/kernel/api/apiTypes";
+import type {
+  FieldCatalogResource,
+  FieldMetaResource,
+  LiveStatusResource,
+} from "@/kernel/api/apiTypes";
 import { useKernel } from "@/kernel/KernelContext";
 import {
   airboxLocalVisualizationPatchFromTargetPatch,
@@ -69,6 +80,7 @@ import {
   colorPickerInputValue,
   fieldMetaScopeQueryForVisualizationTarget,
   formatScalarColorbarValue,
+  objectVisualizationTargetForMeshPart,
   resolveVisualizationVectorBudgetRange,
   resolveObjectVisualizationPanelTopologyFreshness,
   resolveVisualizationRenderResolution,
@@ -253,7 +265,6 @@ function remoteVisualizationTargetPatch(
   delete remotePatch.vectorSurfaceOffsetEnabled;
   delete remotePatch.vectorSurfaceOffsetScale;
   delete remotePatch.primitiveVisible;
-  delete remotePatch.scalarColorPalette;
   return remotePatch;
 }
 
@@ -477,6 +488,12 @@ function VisualizationSurfaceColoringSection({
     settings.activeQuantityId,
   );
   const fieldMetaScopeQuery = fieldMetaScopeQueryForVisualizationTarget(target);
+  const colorbarRangeIdentity = [
+    settings.activeQuantityId,
+    colorbarComponent ?? "none",
+    fieldMetaScopeQuery.scope_kind ?? "full",
+    fieldMetaScopeQuery.scope_id ?? "full",
+  ].join(":");
   const fieldMeta = useFieldMetaResource({
     component: colorbarComponent ?? null,
     enabled: showColorbar,
@@ -510,7 +527,22 @@ function VisualizationSurfaceColoringSection({
           fieldMeta={fieldMeta}
           palette={settings.scalarColorPalette}
           patch={patch}
+          rangeIdentity={colorbarRangeIdentity}
         />
+      ) : null}
+      {showColorbar ? (
+        <label className="fm-inspector-checkbox-row">
+          <input
+            className="fm-inspector-checkbox"
+            checked={settings.viewportColorbarVisible}
+            disabled={pending || sectionDisabled("surface-coloring")}
+            type="checkbox"
+            onChange={(event) =>
+              void patch({ viewportColorbarVisible: event.target.checked })
+            }
+          />
+          <span>Add colorbar to viewport</span>
+        </label>
       ) : null}
       {settings.surfaceColorSource === "solid" ? (
         <ColorField
@@ -537,13 +569,26 @@ function ScalarColorbarControl({
   fieldMeta,
   palette,
   patch,
+  rangeIdentity,
 }: {
   disabled: boolean;
   fieldMeta: ReturnType<typeof useFieldMetaResource>;
   palette: string;
   patch: PatchVisualizationTarget;
+  rangeIdentity: string;
 }) {
-  const stats = fieldMeta.data?.stats;
+  const cachedRange = useScalarColorbarRangeCache(rangeIdentity);
+  useEffect(() => {
+    if (
+      fieldMeta.data?.stats &&
+      typeof fieldMeta.data.stats.min === "number" &&
+      typeof fieldMeta.data.stats.max === "number"
+    ) {
+      rememberScalarColorbarRange(rangeIdentity, fieldMeta.data);
+    }
+  }, [fieldMeta.data, rangeIdentity]);
+  const visibleMeta = fieldMeta.data ?? cachedRange;
+  const stats = visibleMeta?.stats;
   const minLabel =
     typeof stats?.min === "number" ? formatScalarColorbarValue(stats.min) : null;
   const maxLabel =
@@ -573,7 +618,7 @@ function ScalarColorbarControl({
         className="fm-inspector-colorbar"
         aria-label={
           minLabel && maxLabel
-            ? `Scalar color range: ${fieldMeta.data?.quantity_id ?? "field"}, ${minLabel} to ${maxLabel}`
+            ? `Scalar color range: ${visibleMeta?.quantity_id ?? "field"}, ${minLabel} to ${maxLabel}`
             : "Scalar color map preview waiting for field range"
         }
       >
@@ -593,6 +638,43 @@ function ScalarColorbarControl({
       </div>
       <FieldRow label="Data range" value={dataRange} />
     </div>
+  );
+}
+
+const SCALAR_COLORBAR_RANGE_CACHE_MAX = 32;
+const scalarColorbarRangeCache = new Map<string, FieldMetaResource>();
+const scalarColorbarRangeListeners = new Set<() => void>();
+
+function subscribeScalarColorbarRangeCache(listener: () => void): () => void {
+  scalarColorbarRangeListeners.add(listener);
+  return () => {
+    scalarColorbarRangeListeners.delete(listener);
+  };
+}
+
+function rememberScalarColorbarRange(
+  identity: string,
+  data: FieldMetaResource,
+): void {
+  scalarColorbarRangeCache.delete(identity);
+  scalarColorbarRangeCache.set(identity, data);
+  while (scalarColorbarRangeCache.size > SCALAR_COLORBAR_RANGE_CACHE_MAX) {
+    const oldest = scalarColorbarRangeCache.keys().next().value;
+    if (!oldest) break;
+    scalarColorbarRangeCache.delete(oldest);
+  }
+  for (const listener of scalarColorbarRangeListeners) {
+    listener();
+  }
+}
+
+function useScalarColorbarRangeCache(
+  identity: string,
+): FieldMetaResource | null {
+  return useSyncExternalStore(
+    subscribeScalarColorbarRangeCache,
+    () => scalarColorbarRangeCache.get(identity) ?? null,
+    () => null,
   );
 }
 
@@ -812,8 +894,8 @@ function VisualizationVectorsSection({
         ))}
       </fieldset>
       {meshParts && meshParts.length > 1 && onTogglePartVectors && (
-        <fieldset className="fm-visualization-part-toggles" aria-label="Per-part vector visibility">
-          <span className="fm-visualization-part-toggles__label">Surfaces</span>
+        <fieldset className="fm-visualization-part-toggles" aria-label="Object target vector visibility">
+          <span className="fm-visualization-part-toggles__label">Object surfaces</span>
           {meshParts.map((part) => (
             <label key={part.id} className="fm-visualization-part-toggle">
               <input
@@ -943,11 +1025,7 @@ function useObjectVisualizationPanelState(
 
     for (const part of manifest.data?.mesh_parts ?? []) {
       if (part.role === "air" || part.role === "airbox") continue;
-      targets.push(
-        part.object_id
-          ? { id: part.object_id, kind: "object", label: part.label }
-          : { id: part.id, kind: "part", label: part.label },
-      );
+      targets.push(objectVisualizationTargetForMeshPart(part));
     }
 
     return targets;
@@ -1026,14 +1104,6 @@ function useObjectVisualizationPanelState(
 
   async function patch(patchValue: VisualizationTargetPatch): Promise<void> {
     if (!target) return;
-    const scalarColorPalette = patchValue.scalarColorPalette;
-    if (scalarColorPalette !== undefined && visualizationState.data) {
-      visualizationSync.queuePatch({
-        quantity: {
-          colormap: scalarColorPalette,
-        },
-      });
-    }
     if (target.kind === "airbox") {
       const localPatch =
         airboxLocalVisualizationPatchFromTargetPatch(patchValue);
@@ -1160,7 +1230,7 @@ function useObjectVisualizationPanelState(
     void patch({ wireframeOpacityPercent: value });
   }
 
-  // Build per-part arrow visibility list from manifest.
+  // Build object-target arrow visibility rows from manifest parts.
   const vectorMeshParts = (() => {
     const parts = manifest.data?.mesh_parts;
     if (!parts || parts.length === 0) return undefined;
@@ -1170,9 +1240,7 @@ function useObjectVisualizationPanelState(
     );
     if (magneticParts.length <= 1) return undefined;
     return magneticParts.map((p) => {
-      const partTarget = p.object_id
-        ? { id: p.object_id, kind: "object" as const }
-        : { id: p.id, kind: "part" as const };
+      const partTarget = objectVisualizationTargetForMeshPart(p);
       const partSettings = resolveTargetVisualization({
         snapshot,
         target: partTarget,
@@ -1200,9 +1268,7 @@ function useObjectVisualizationPanelState(
   function onTogglePartVectors(partId: string, visible: boolean) {
     const part = manifest.data?.mesh_parts?.find((p) => p.id === partId);
     if (!part || !visualizationState.data) return;
-    const partTarget = part.object_id
-      ? { id: part.object_id, kind: "object" as const, label: part.label }
-      : { id: part.id, kind: "part" as const, label: part.label };
+    const partTarget = objectVisualizationTargetForMeshPart(part);
     visualizationSync.queuePatch({
       overrides: mergeVisualizationStateTargetOverride(
         visualizationState.data.overrides ?? [],

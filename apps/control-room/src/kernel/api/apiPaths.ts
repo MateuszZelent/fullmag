@@ -123,6 +123,10 @@ export const ANALYSIS_HYSTERESIS_BRANCHES_PATH = openApiV2Path(
   "/v2/sessions/current/analysis/hysteresis/{stage_id}/branches",
 );
 
+export const ANALYSIS_HYSTERESIS_BOOKMARKS_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/hysteresis/{stage_id}/bookmarks",
+);
+
 export const ANALYSIS_HYSTERESIS_FAMILY_PATH = openApiV2Path(
   "/v2/sessions/current/analysis/hysteresis-family/{stage_id}",
 );

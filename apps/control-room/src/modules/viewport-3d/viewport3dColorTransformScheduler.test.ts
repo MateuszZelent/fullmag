@@ -58,6 +58,15 @@ describe("viewport3dColorTransformScheduler", () => {
     expect(abortBlock).not.toContain("this.dispose(createAbortError())");
   });
 
+  it("keeps the shared color transform worker warm across normal inspection pauses", () => {
+    const source = readFileSync(
+      new URL("./viewport3dColorTransformScheduler.ts", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("COLOR_TRANSFORM_WORKER_IDLE_TIMEOUT_MS = 120_000");
+  });
+
   it("routes semantic field-color builds through build-engine diagnostics", async () => {
     const records: Viewport3DBuildDiagnosticRecord[] = [];
 

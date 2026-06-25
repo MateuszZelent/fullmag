@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { DATA_FIELD_VECTOR_PATH } from "@/kernel/api/apiPaths";
+
 import {
   DIAGNOSTIC_ARTIFACT_VERSION,
   DIAGNOSTIC_EVENT_NAMES,
@@ -8,6 +10,11 @@ import {
   type DiagnosticRecord,
   normalizeDiagnosticRequestRecord,
 } from "./diagnosticRecorderTypes";
+
+const MAGNETIZATION_FIELD_VECTOR_PATH = DATA_FIELD_VECTOR_PATH.replace(
+  "{quantity_id}",
+  "m",
+);
 
 function baseRecord(patch: Partial<DiagnosticRecord> = {}): DiagnosticRecord {
   return {
@@ -119,7 +126,7 @@ describe("diagnostic recorder types", () => {
       etag: "\"field-1\"",
       method: "GET",
       outcome: "ok",
-      path: "/v2/sessions/current/data/fields/m/samples/vector",
+      path: MAGNETIZATION_FIELD_VECTOR_PATH,
       query: "component=full",
       requestId: "req-1",
       resourceKey: "data/fields/m/samples/vector?component=full",

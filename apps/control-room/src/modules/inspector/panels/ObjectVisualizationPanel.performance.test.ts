@@ -59,6 +59,12 @@ describe("ObjectVisualizationPanel performance contracts", () => {
     expect(panelSource).toContain("delete remotePatch.airboxSyntheticVectorsEnabled");
   });
 
+  it("does not promise per-part persistence for object-owned surface vector toggles", () => {
+    expect(panelSource).toContain('aria-label="Object target vector visibility"');
+    expect(panelSource).toContain(">Object surfaces<");
+    expect(panelSource).not.toContain("Per-part vector visibility");
+  });
+
   it("renders scalar colormap controls in the visualization inspector", () => {
     expect(panelSource).toContain("resolveSurfaceColorSourceItems(settings.activeQuantityId)");
     expect(panelSource).toContain("ScalarColorbarControl");
@@ -72,7 +78,7 @@ describe("ObjectVisualizationPanel performance contracts", () => {
     expect(panelSource).toContain("fieldMeta.data?.stats");
     expect(panelSource).not.toContain(">min<");
     expect(panelSource).not.toContain(">max<");
-    expect(panelSource).toContain("quantity: {");
-    expect(panelSource).toContain("colormap: scalarColorPalette");
+    expect(panelSource).not.toContain("colormap: scalarColorPalette");
+    expect(panelSource).not.toContain("delete remotePatch.scalarColorPalette");
   });
 });

@@ -744,9 +744,11 @@ fn default_visualization_target_registry_state() -> VisualizationTargetRegistryS
                 point_color: "var(--fm-info)".to_string(),
                 points_visible: false,
                 render_mode: VisualizationTargetRenderMode::Wireframe,
+                scalar_color_palette: "viridis".to_string(),
                 surface_color_source: SurfaceColorSource::Solid,
                 surface_mono_color: "var(--fm-airbox-fill)".to_string(),
                 surface_visible: false,
+                viewport_colorbar_visible: false,
                 vector_alpha: 1.0,
                 vector_budget: DEFAULT_AIRBOX_VECTOR_BUDGET,
                 vector_color_mode: VectorColorMode::Orientation,
@@ -794,9 +796,11 @@ pub struct VisualizationResolvedTargetSettings {
     pub point_color: String,
     pub points_visible: bool,
     pub render_mode: VisualizationTargetRenderMode,
+    pub scalar_color_palette: String,
     pub surface_color_source: SurfaceColorSource,
     pub surface_mono_color: String,
     pub surface_visible: bool,
+    pub viewport_colorbar_visible: bool,
     pub vector_alpha: f64,
     pub vector_budget: u32,
     pub vector_color_mode: VectorColorMode,
@@ -842,11 +846,15 @@ pub struct VisualizationTargetDisplayOverride {
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
 pub struct VisualizationTargetStyleOverride {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub scalar_color_palette: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub surface_color_source: Option<SurfaceColorSource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub surface_mono_color: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub point_color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub viewport_colorbar_visible: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vector_color_mode: Option<VectorColorMode>,
     #[serde(skip_serializing_if = "Option::is_none")]

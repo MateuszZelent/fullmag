@@ -7,6 +7,7 @@ import {
   useReducer,
   useRef,
   useState,
+  useSyncExternalStore,
   memo,
   type ComponentProps,
   type CSSProperties,
@@ -18,7 +19,10 @@ import type {
   VisualizationStatePatch,
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
-import { quantityUnitForColorbar } from "@/kernel/api/quantityIds";
+import {
+  quantityUnitForColorbar,
+  resolveCanonicalQuantityId,
+} from "@/kernel/api/quantityIds";
 import { viewport3DOrbitDebugEnabledFromBrowserConfig } from "@/kernel/browserFullmagConfig";
 import type { MeshSizeHistogramHighlight } from "@/kernel/events/eventTypes";
 import { useMeshHistogramBinElementsResource } from "@/kernel/resources/geometryLifecycleResources";
@@ -115,6 +119,7 @@ import {
   beginViewport3DFieldUpdateHold,
   endViewport3DFieldUpdateHold,
 } from "./viewport3dFieldUpdateHold";
+import type { ScalarColorBuffer } from "./viewport3dFieldMapping";
 import { installViewport3DThreeConsolePolicy } from "./viewport3dThreeConsolePolicy";
 
 type Viewport3DSceneProps = ComponentProps<typeof Viewport3DScene>;
@@ -139,6 +144,11 @@ interface Viewport3DColorbarLegend {
   maxLabel: string;
   minLabel: string;
   paletteGradient: string;
+}
+
+interface Viewport3DScopedColorbarLegend {
+  key: string;
+  legend: Viewport3DColorbarLegend;
 }
 
 interface Viewport3DInspectHover {
@@ -208,6 +218,310 @@ export function resolveViewport3DColorbarLegend({
     minLabel: formatLegendValue(range.min),
     paletteGradient: viewport3DColorPaletteGradientCss(colorPalette),
   };
+}
+
+interface Viewport3DScalarColorbarLegendInput {
+  colorPalette: string;
+  fdmSurfaceColors?: ScalarColorBuffer | null;
+  fdmSettings?: Pick<
+    Viewport3DSceneProps["fdmSettings"],
+    "activeQuantityId" | "scalarColorPalette" | "viewportColorbarVisible"
+  > | null;
+  fieldModel?: Pick<
+    NonNullable<Viewport3DSceneProps["fieldModel"]>,
+    "scalarColors" | "scalarColorsByMode" | "scalarColorsByPartAndMode"
+  > | null;
+  parts?: ReadonlyArray<{
+    id: string;
+    label: string;
+    settings: Pick<
+      Viewport3DSceneProps["fallbackSettings"],
+      | "activeQuantityId"
+      | "scalarColorPalette"
+      | "shaderVisible"
+      | "surfaceColorSource"
+      | "viewportColorbarVisible"
+      | "visible"
+    >;
+  }>;
+  quantityId: string;
+  surfaceColorMode: string | null;
+  unit?: string | null;
+  vectorColorMode: string;
+}
+
+function scalarColorRangeKey(buffer: ScalarColorBuffer): string {
+  return `${buffer.range.min}:${buffer.range.max}`;
+}
+
+export function resolveViewport3DScalarColorbarLegend({
+  colorPalette,
+  fdmSurfaceColors,
+  fieldModel,
+  quantityId,
+  surfaceColorMode,
+  unit,
+  vectorColorMode,
+}: Viewport3DScalarColorbarLegendInput): Viewport3DColorbarLegend | null {
+  if (fdmSurfaceColors) {
+    return resolveViewport3DColorbarLegend({
+      colorMode: surfaceColorMode ?? vectorColorMode,
+      colorPalette: fdmSurfaceColors.colorPalette ?? colorPalette,
+      quantityId,
+      range: fdmSurfaceColors.range,
+      unit,
+    });
+  }
+
+  const partBuffers: Array<{ buffer: ScalarColorBuffer; mode: string }> = [];
+  for (const partModes of fieldModel?.scalarColorsByPartAndMode.values() ?? []) {
+    for (const [mode, buffer] of partModes) {
+      if (buffer) partBuffers.push({ buffer, mode });
+    }
+  }
+
+  if (partBuffers.length > 0) {
+    const first = partBuffers[0];
+    if (
+      !first ||
+      partBuffers.some(
+        ({ buffer, mode }) =>
+          mode !== first.mode ||
+          (buffer.colorPalette ?? colorPalette) !==
+            (first.buffer.colorPalette ?? colorPalette) ||
+          scalarColorRangeKey(buffer) !== scalarColorRangeKey(first.buffer),
+      )
+    ) {
+      return null;
+    }
+
+    return resolveViewport3DColorbarLegend({
+      colorMode: first.mode,
+      colorPalette: first.buffer.colorPalette ?? colorPalette,
+      quantityId,
+      range: first.buffer.range,
+      unit,
+    });
+  }
+
+  const colorMode = surfaceColorMode ?? vectorColorMode;
+  const colors =
+    (surfaceColorMode
+      ? fieldModel?.scalarColorsByMode.get(surfaceColorMode)
+      : null) ??
+    fieldModel?.scalarColorsByMode.get(vectorColorMode) ??
+    fieldModel?.scalarColors ??
+    null;
+  return resolveViewport3DColorbarLegend({
+    colorMode,
+    colorPalette: colors?.colorPalette ?? colorPalette,
+    quantityId,
+    range: colors?.range ?? null,
+    unit,
+  });
+}
+
+function scalarColorBufferMatchesColorbarRequest({
+  buffer,
+  colorMode,
+  colorPalette,
+  quantityId,
+}: {
+  buffer: ScalarColorBuffer | null | undefined;
+  colorMode: string;
+  colorPalette: string;
+  quantityId: string;
+}): boolean {
+  if (!buffer) return false;
+  if (buffer.colorMode && buffer.colorMode !== colorMode) return false;
+  if (
+    buffer.colorPalette &&
+    buffer.colorPalette !== colorPalette
+  ) {
+    return false;
+  }
+  if (
+    buffer.quantityId &&
+    resolveCanonicalQuantityId(buffer.quantityId) !==
+      resolveCanonicalQuantityId(quantityId)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+export function resolveViewport3DScalarColorbarLegends({
+  colorPalette,
+  fdmSettings,
+  fdmSurfaceColors,
+  fieldModel,
+  parts,
+  surfaceColorMode,
+  vectorColorMode,
+}: Viewport3DScalarColorbarLegendInput): Viewport3DScopedColorbarLegend[] {
+  if (fdmSurfaceColors && fdmSettings?.viewportColorbarVisible) {
+    const legend = resolveViewport3DColorbarLegend({
+      colorMode: surfaceColorMode ?? vectorColorMode,
+      colorPalette: fdmSurfaceColors.colorPalette ?? fdmSettings.scalarColorPalette,
+      quantityId: fdmSettings.activeQuantityId,
+      range: fdmSurfaceColors.range,
+      unit: quantityUnitForColorbar(fdmSettings.activeQuantityId),
+    });
+    return legend ? [{ key: "fdm", legend }] : [];
+  }
+
+  const legends: Viewport3DScopedColorbarLegend[] = [];
+  const emitted = new Set<string>();
+  for (const part of parts ?? []) {
+    const settings = part.settings;
+    if (
+      !settings.viewportColorbarVisible ||
+      !settings.visible ||
+      !settings.shaderVisible
+    ) {
+      continue;
+    }
+    const colorMode = surfaceColorSourceToColorMode(settings.surfaceColorSource);
+    if (!colorMode) continue;
+    const palette = settings.scalarColorPalette ?? colorPalette;
+    const partBuffer =
+      fieldModel?.scalarColorsByPartAndMode.get(part.id)?.get(colorMode) ?? null;
+    const globalBuffer = fieldModel?.scalarColorsByMode.get(colorMode) ?? null;
+    const buffer = scalarColorBufferMatchesColorbarRequest({
+      buffer: partBuffer,
+      colorMode,
+      colorPalette: palette,
+      quantityId: settings.activeQuantityId,
+    })
+      ? partBuffer
+      : scalarColorBufferMatchesColorbarRequest({
+            buffer: globalBuffer,
+            colorMode,
+            colorPalette: palette,
+            quantityId: settings.activeQuantityId,
+          })
+        ? globalBuffer
+        : null;
+    const legend = resolveViewport3DColorbarLegend({
+      colorMode,
+      colorPalette: buffer?.colorPalette ?? palette,
+      quantityId: settings.activeQuantityId,
+      range: buffer?.range ?? null,
+      unit: quantityUnitForColorbar(settings.activeQuantityId),
+    });
+    if (!legend) continue;
+    const scopedLegend = {
+      ...legend,
+      label: `${part.label}: ${legend.label}`,
+    };
+    const key = [
+      part.id,
+      resolveCanonicalQuantityId(settings.activeQuantityId),
+      colorMode,
+      palette,
+    ].join(":");
+    if (emitted.has(key)) continue;
+    emitted.add(key);
+    legends.push({ key, legend: scopedLegend });
+  }
+
+  return legends;
+}
+
+export function resolveRetainedViewport3DScalarColorbarLegends({
+  current,
+  previous,
+  requested,
+}: {
+  current: readonly Viewport3DScopedColorbarLegend[];
+  previous: readonly Viewport3DScopedColorbarLegend[];
+  requested: boolean;
+}): readonly Viewport3DScopedColorbarLegend[] {
+  if (!requested) return [];
+  if (current.length === 0) return previous;
+  if (previous.length === 0) return current;
+  const retained = new Map(previous.map((entry) => [entry.key, entry]));
+  const retainedGroups = new Map(
+    previous.map((entry) => [viewport3DColorbarRetentionGroupKey(entry.key), entry.key]),
+  );
+  for (const entry of current) {
+    const groupKey = viewport3DColorbarRetentionGroupKey(entry.key);
+    const retainedKey = retainedGroups.get(groupKey);
+    if (retainedKey && retainedKey !== entry.key) {
+      retained.delete(retainedKey);
+    }
+    retainedGroups.set(groupKey, entry.key);
+    retained.set(entry.key, entry);
+  }
+  return Array.from(retained.values());
+}
+
+function viewport3DColorbarRetentionGroupKey(key: string): string {
+  const parts = key.split(":");
+  if (parts.length < 3) return key;
+  const palette = parts.at(-1) ?? "";
+  return [...parts.slice(0, -2), palette].join(":");
+}
+
+function sameViewport3DScopedColorbarLegends(
+  left: readonly Viewport3DScopedColorbarLegend[],
+  right: readonly Viewport3DScopedColorbarLegend[],
+): boolean {
+  if (left === right) return true;
+  if (left.length !== right.length) return false;
+  return left.every((entry, index) => {
+    const other = right[index];
+    return (
+      other !== undefined &&
+      entry.key === other.key &&
+      entry.legend.label === other.legend.label &&
+      entry.legend.maxLabel === other.legend.maxLabel &&
+      entry.legend.minLabel === other.legend.minLabel &&
+      entry.legend.paletteGradient === other.legend.paletteGradient
+    );
+  });
+}
+
+const retainedViewport3DColorbarLegendsBySlot = new Map<
+  string,
+  readonly Viewport3DScopedColorbarLegend[]
+>();
+const retainedViewport3DColorbarLegendListeners = new Set<() => void>();
+const EMPTY_VIEWPORT_3D_SCOPED_COLORBAR_LEGENDS: readonly Viewport3DScopedColorbarLegend[] =
+  [];
+
+function subscribeRetainedViewport3DColorbarLegends(
+  listener: () => void,
+): () => void {
+  retainedViewport3DColorbarLegendListeners.add(listener);
+  return () => {
+    retainedViewport3DColorbarLegendListeners.delete(listener);
+  };
+}
+
+function getRetainedViewport3DColorbarLegends(
+  slotId: string,
+): readonly Viewport3DScopedColorbarLegend[] {
+  return (
+    retainedViewport3DColorbarLegendsBySlot.get(slotId) ??
+    EMPTY_VIEWPORT_3D_SCOPED_COLORBAR_LEGENDS
+  );
+}
+
+function setRetainedViewport3DColorbarLegends(
+  slotId: string,
+  legends: readonly Viewport3DScopedColorbarLegend[],
+): void {
+  const current = getRetainedViewport3DColorbarLegends(slotId);
+  if (sameViewport3DScopedColorbarLegends(current, legends)) return;
+  if (legends.length > 0) {
+    retainedViewport3DColorbarLegendsBySlot.set(slotId, legends);
+  } else {
+    retainedViewport3DColorbarLegendsBySlot.delete(slotId);
+  }
+  for (const listener of retainedViewport3DColorbarLegendListeners) {
+    listener();
+  }
 }
 
 export function formatHysteresisReplayLabel(
@@ -583,26 +897,69 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       : surfaceColorSourceToColorMode(
           sceneProps.fallbackSettings.surfaceColorSource,
         );
-  const activeScalarColors =
-    sceneProps.fdmSurfaceColors ??
-    (activeSurfaceColorMode
-      ? sceneProps.fieldModel?.scalarColorsByMode.get(activeSurfaceColorMode)
-      : null) ??
-    sceneProps.fieldModel?.scalarColorsByMode.get(sceneProps.vectorColorMode) ??
-    sceneProps.fieldModel?.scalarColors ??
-    null;
-  const colorbarLegend = resolveViewport3DColorbarLegend({
-    colorMode: activeSurfaceColorMode ?? sceneProps.vectorColorMode,
+  const colorbarParts = [
+    ...(sceneProps.topologyModel?.magneticParts ?? []),
+    ...(sceneProps.topologyModel?.airboxParts ?? []),
+  ].map((partModel) => ({
+    id: partModel.part.id,
+    label: partModel.part.label ?? partModel.part.id,
+    settings: sceneProps.getPartSettings(partModel.part),
+  }));
+  const viewportColorbarRequested = colorbarParts.some(({ settings }) =>
+    Boolean(
+      settings.viewportColorbarVisible &&
+        settings.visible &&
+        settings.shaderVisible &&
+        surfaceColorSourceToColorMode(settings.surfaceColorSource),
+    ),
+  );
+  const retainedColorbarLegends = useSyncExternalStore(
+    subscribeRetainedViewport3DColorbarLegends,
+    () => getRetainedViewport3DColorbarLegends(slotId),
+    () => EMPTY_VIEWPORT_3D_SCOPED_COLORBAR_LEGENDS,
+  );
+  const resolvedColorbarLegends = resolveViewport3DScalarColorbarLegends({
     colorPalette: sceneProps.scalarColorPalette,
+    fdmSettings: sceneProps.fdmSettings,
+    fdmSurfaceColors: sceneProps.fdmSurfaceColors,
+    fieldModel: sceneProps.fieldModel,
+    parts: colorbarParts,
     quantityId,
-    range: activeScalarColors?.range ?? null,
+    surfaceColorMode: activeSurfaceColorMode,
     unit: quantityUnitForColorbar(quantityId),
+    vectorColorMode: sceneProps.vectorColorMode,
+  });
+  const colorbarLegends = resolveRetainedViewport3DScalarColorbarLegends({
+    current: resolvedColorbarLegends,
+    previous: retainedColorbarLegends,
+    requested:
+      viewportColorbarRequested ||
+      Boolean(sceneProps.fdmSettings?.viewportColorbarVisible),
   });
   useEffect(() => {
-    viewport3dStore.setActiveScalarColorbarLegend(colorbarLegend);
-  }, [colorbarLegend]);
+    if (resolvedColorbarLegends.length > 0) {
+      setRetainedViewport3DColorbarLegends(slotId, resolvedColorbarLegends);
+    } else if (
+      !viewportColorbarRequested &&
+      !sceneProps.fdmSettings?.viewportColorbarVisible
+    ) {
+      setRetainedViewport3DColorbarLegends(
+        slotId,
+        EMPTY_VIEWPORT_3D_SCOPED_COLORBAR_LEGENDS,
+      );
+    }
+    viewport3dStore.setActiveScalarColorbarLegends(
+      colorbarLegends.map(({ legend }) => legend),
+    );
+  }, [
+    colorbarLegends,
+    resolvedColorbarLegends,
+    sceneProps.fdmSettings?.viewportColorbarVisible,
+    slotId,
+    viewportColorbarRequested,
+  ]);
   useEffect(
-    () => () => viewport3dStore.setActiveScalarColorbarLegend(null),
+    () => () => viewport3dStore.setActiveScalarColorbarLegends([]),
     [],
   );
   const onVisualizationFrameCommitted = useCallback((revision: number) => {
@@ -839,7 +1196,13 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           {discretizationKind}
         </div>
       )}
-      {colorbarLegend ? <Viewport3DColorbar legend={colorbarLegend} /> : null}
+      {colorbarLegends.length > 0 ? (
+        <div className="fm-viewport-3d__colorbar-stack">
+          {colorbarLegends.map(({ key, legend }) => (
+            <Viewport3DColorbar key={key} legend={legend} />
+          ))}
+        </div>
+      ) : null}
       {visibleInspectHover ? (
         <Viewport3DInspectTooltip hover={visibleInspectHover} />
       ) : null}

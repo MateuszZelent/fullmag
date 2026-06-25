@@ -18,6 +18,7 @@ import {
   ANALYSIS_HYSTERESIS_SATURATION_PATH,
   ANALYSIS_HYSTERESIS_ADAPTIVE_REFINEMENT_PATH,
   ANALYSIS_HYSTERESIS_BRANCHES_PATH,
+  ANALYSIS_HYSTERESIS_BOOKMARKS_PATH,
   ANALYSIS_HYSTERESIS_FAMILY_PATH,
   ANALYSIS_HYSTERESIS_FAMILY_VARIANT_POINTS_PATH,
   ANALYSIS_HYSTERESIS_MINOR_LOOPS_PATH,
@@ -182,10 +183,13 @@ import type {
   JsonValue,
   HysteresisAdaptiveRefinementSchema,
   HysteresisAngularFamilyResource,
+  HysteresisBookmarkPointRequest,
+  HysteresisBookmarksResource,
   HysteresisBranchSchema,
   HysteresisExecutionTreeResource,
   HysteresisMinorLoopSchema,
   HysteresisPointSchema,
+  HysteresisPointsResource,
   HysteresisMetricsSchema,
   HysteresisOrientationSchema,
   HysteresisProgressSchema,
@@ -542,7 +546,7 @@ export class ControlRoomApi {
     },
     hysteresis: {
       points: (stageId: string, options?: RequestOptions) =>
-        this.requestJson<HysteresisPointSchema[]>(
+        this.requestJson<HysteresisPointsResource>(
           ANALYSIS_HYSTERESIS_POINTS_PATH,
           options,
           { path: { stage_id: stageId } },
@@ -568,6 +572,23 @@ export class ControlRoomApi {
       branches: (stageId: string, options?: RequestOptions) =>
         this.requestJson<HysteresisBranchSchema[]>(
           ANALYSIS_HYSTERESIS_BRANCHES_PATH,
+          options,
+          { path: { stage_id: stageId } },
+        ),
+      bookmarks: (stageId: string, options?: RequestOptions) =>
+        this.requestJson<HysteresisBookmarksResource>(
+          ANALYSIS_HYSTERESIS_BOOKMARKS_PATH,
+          options,
+          { path: { stage_id: stageId } },
+        ),
+      bookmarkPoint: (
+        stageId: string,
+        bookmark: HysteresisBookmarkPointRequest,
+        options?: RequestOptions,
+      ) =>
+        this.postJson<HysteresisBookmarksResource, HysteresisBookmarkPointRequest>(
+          ANALYSIS_HYSTERESIS_BOOKMARKS_PATH,
+          bookmark,
           options,
           { path: { stage_id: stageId } },
         ),

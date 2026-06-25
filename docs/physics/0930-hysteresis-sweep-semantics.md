@@ -142,6 +142,11 @@ $\mathbf{H}_{\text{ext}}$ in $\text{A/m}$; lowering therefore records
 - The runtime settle trace records the actually executed algorithm, status,
   fallback reason, retry attempt, resolved timestep, torque, and total energy
   for audit and Control Room inspection.
+- Stage-level preparation and saturation-probe settles are recorded in the
+  same settle trace with `protocol_role="preparation"` or
+  `protocol_role="saturation_probe"` and without a measured sweep `point_id`.
+  This preserves pre-sweep provenance without shifting `hysteresis_points.json`
+  point identifiers or the `/steps/{point_id}` resource contract.
 
 ### 3.4 Saturation Preparation Status
 - A `positive_saturation` or `negative_saturation` initial protocol applies a

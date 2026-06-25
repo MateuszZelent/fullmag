@@ -11,6 +11,8 @@ import {
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
   ANALYSIS_EIGEN_MODE_V2_PATH,
   ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH,
+  ANALYSIS_HYSTERESIS_BOOKMARKS_PATH,
+  ANALYSIS_HYSTERESIS_POINTS_PATH,
   ANALYSIS_HYSTERESIS_FAMILY_PATH,
   DATA_FIELD_META_PATH,
   DATA_TABLE_COLUMNS_PATH,
@@ -594,6 +596,42 @@ describe("study runtime command resource bundles", () => {
     expect(hookSource).toContain(
       "resourceKey = stageId",
     );
+    expect(hookSource).toContain(
+      "resolveRevision: (data) => data?.revision ?? null",
+    );
+  });
+
+  it("exposes hysteresis bookmarks as a revision-gated analysis resource", () => {
+    const source = readFileSync(studyRuntimeResourcesUrl, "utf8");
+    const hookSource = source.slice(
+      source.indexOf("export function useHysteresisBookmarksResource"),
+      source.indexOf("export function useHysteresisBranchesResource"),
+    );
+
+    expect(ANALYSIS_HYSTERESIS_BOOKMARKS_PATH).toBeTruthy();
+    expect(hookSource).toMatch(/api\.analysis\.hysteresis\s*\.bookmarks/);
+    expect(hookSource).toContain(
+      "ignoreMissingResource<HysteresisBookmarksResource>",
+    );
+    expect(hookSource).toContain("resourceKey = stageId");
+    expect(hookSource).toContain(
+      "resolveRevision: (data) => data?.revision ?? null",
+    );
+  });
+
+  it("exposes hysteresis points as a revision-gated analysis resource", () => {
+    const source = readFileSync(studyRuntimeResourcesUrl, "utf8");
+    const hookSource = source.slice(
+      source.indexOf("export function useHysteresisPointsResource"),
+      source.indexOf("export function useHysteresisMetricsResource"),
+    );
+
+    expect(ANALYSIS_HYSTERESIS_POINTS_PATH).toBeTruthy();
+    expect(hookSource).toMatch(/api\.analysis\.hysteresis\s*\.points/);
+    expect(hookSource).toContain(
+      "ignoreMissingResource<HysteresisPointsResource>",
+    );
+    expect(hookSource).toContain("useResource<HysteresisPointsResource | null>");
     expect(hookSource).toContain(
       "resolveRevision: (data) => data?.revision ?? null",
     );

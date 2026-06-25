@@ -127,6 +127,7 @@ import {
 import {
   buildSampledScalarColors,
   fieldTransformNeedsChunking,
+  resolveScalarRange,
   type ScalarRange,
 } from "../viewport3dFieldMapping";
 import { buildViewport3DResourceFrameKey } from "../viewport3dInvalidation";
@@ -211,6 +212,11 @@ interface Viewport3DScalarRangeModeFlags {
   x: boolean;
   y: boolean;
   z: boolean;
+}
+
+interface Viewport3DScalarFieldComponentRequest {
+  component: string | null;
+  needsFullVector: boolean;
 }
 
 function resolveViewport3DScalarRangeModeFlags(
@@ -862,20 +868,23 @@ export function resolveViewport3DPrimaryFieldQuery({
   snapshotQuery?: FieldVectorQuery | null;
 }): FieldVectorQuery {
   const snapshotParams = snapshotQuery ?? (snapshotId ? { snapshot_id: snapshotId } : {});
+  const scalarFieldComponentRequest = resolveScalarFieldComponentRequest(
+    fieldRenderOptions.scalarColorsVisible === false
+      ? null
+      : fieldRenderOptions.scalarColorModes,
+    fdmSurfaceColorMode,
+  );
   if (
     fdmVectorsVisible ||
     fdmTopographyEnabled ||
     viewport3DFieldRenderOptionsNeedFullVectorData(fieldRenderOptions) ||
-    (fdmSurfaceColorMode && !fieldColorModeScalarComponent(fdmSurfaceColorMode))
+    scalarFieldComponentRequest.needsFullVector
   ) {
     return { ...FULL_FIELD_QUERY, ...snapshotParams };
   }
 
   const component =
-    (fdmSurfaceColorMode
-      ? fieldColorModeScalarComponent(fdmSurfaceColorMode)
-      : null) ??
-    firstScalarFieldComponent(fieldRenderOptions.scalarColorModes) ??
+    scalarFieldComponentRequest.component ??
     (fdmInstanceModelNeedsFieldVector ? "magnitude" : null);
 
   return component
@@ -911,9 +920,13 @@ export function resolveViewport3DTargetFieldQuery({
 }: {
   surfaceColorMode: string | null;
   vectorsVisible: boolean;
-}): FieldVectorQuery {
+}): FieldVectorQuery | null {
   if (vectorsVisible) {
     return FULL_FIELD_QUERY;
+  }
+
+  if (!surfaceColorMode) {
+    return null;
   }
 
   const component = fieldColorModeScalarComponent(surfaceColorMode);
@@ -945,6 +958,9 @@ export function resolveViewport3DScopedVectorFieldQuery({
     surfaceColorMode,
     vectorsVisible,
   });
+  if (!query) {
+    return FULL_FIELD_QUERY;
+  }
   if (!vectorsVisible || surfaceColorMode) {
     return query;
   }
@@ -966,13 +982,14 @@ export function resolveViewport3DPrimaryFieldRenderOptions({
   magneticParts,
   quantityId,
   vectorDomain,
-  scopedVectorOnlyPartIds,
+  scopedFieldPartIds,
 }: {
   analysisOverlayAppearance?: AnalysisFieldOverlayAppearanceState | null;
   analysisOverlayActive?: boolean;
   fieldRenderOptions: Viewport3DFieldRenderOptions;
   getPartSettings: (part: Viewport3DMeshPart) => {
     activeQuantityId: string;
+    scalarColorPalette?: string;
     shaderVisible: boolean;
     surfaceColorSource: SurfaceColorSource;
     vectorBudget: number;
@@ -982,7 +999,7 @@ export function resolveViewport3DPrimaryFieldRenderOptions({
   magneticParts: readonly { part: Viewport3DMeshPart }[];
   quantityId: string;
   vectorDomain: string;
-  scopedVectorOnlyPartIds?: ReadonlySet<string>;
+  scopedFieldPartIds?: ReadonlySet<string>;
 }): Viewport3DFieldRenderOptions {
   if (magneticParts.length === 0) {
     return fieldRenderOptions;
@@ -990,6 +1007,12 @@ export function resolveViewport3DPrimaryFieldRenderOptions({
 
   const magneticVectorsAllowed = vectorDomain !== "airbox_only";
   const partVectorBudgets = new Map(fieldRenderOptions.partVectorBudgets ?? []);
+  const partScalarColorModes = analysisOverlayActive
+    ? new Map<string, string>()
+    : new Map(fieldRenderOptions.partScalarColorModes ?? []);
+  const partScalarColorPalettes = analysisOverlayActive
+    ? new Map<string, string>()
+    : new Map(fieldRenderOptions.partScalarColorPalettes ?? []);
   const scalarColorModes = new Set<string>();
 
   for (const partModel of magneticParts) {
@@ -1001,6 +1024,9 @@ export function resolveViewport3DPrimaryFieldRenderOptions({
     ) {
       continue;
     }
+    if (scopedFieldPartIds?.has(partModel.part.id)) {
+      partVectorBudgets.delete(partModel.part.id);
+    }
     if (analysisOverlayAppearance?.shaderVisible ?? settings.shaderVisible) {
       const scalarColorMode = surfaceColorSourceToColorMode(
         analysisOverlayAppearance?.surfaceColorSource ??
@@ -1008,13 +1034,23 @@ export function resolveViewport3DPrimaryFieldRenderOptions({
       );
       if (scalarColorMode) {
         scalarColorModes.add(scalarColorMode);
+        if (!analysisOverlayActive) {
+          partScalarColorModes.set(partModel.part.id, scalarColorMode);
+          partScalarColorPalettes.set(
+            partModel.part.id,
+            settings.scalarColorPalette ??
+              fieldRenderOptions.partScalarColorPalettes?.get(partModel.part.id) ??
+              fieldRenderOptions.scalarColorPalette ??
+              "viridis",
+            );
+        }
       }
     }
     if (
+      !scopedFieldPartIds?.has(partModel.part.id) &&
       magneticVectorsAllowed &&
       (analysisOverlayAppearance?.vectorsVisible ?? settings.vectorsVisible) &&
-      (analysisOverlayAppearance?.vectorBudget ?? settings.vectorBudget) > 0 &&
-      !scopedVectorOnlyPartIds?.has(partModel.part.id)
+      (analysisOverlayAppearance?.vectorBudget ?? settings.vectorBudget) > 0
     ) {
       partVectorBudgets.set(
         partModel.part.id,
@@ -1027,6 +1063,10 @@ export function resolveViewport3DPrimaryFieldRenderOptions({
     ...fieldRenderOptions,
     fullVectorBudget: 0,
     partVectorBudgets,
+    partScalarColorModes:
+      partScalarColorModes.size > 0 ? partScalarColorModes : undefined,
+    partScalarColorPalettes:
+      partScalarColorPalettes.size > 0 ? partScalarColorPalettes : undefined,
     scalarColorPalette:
       analysisOverlayAppearance?.scalarColorPalette ??
       fieldRenderOptions.scalarColorPalette,
@@ -1179,31 +1219,57 @@ export function resolveViewport3DScopedPartVectorFieldRequests({
     return new Map();
   }
 
-  const requests = new Map<string, Viewport3DScopedPartVectorFieldRequest>();
+  const visiblePartsByQuantity = new Map<string, number>();
+  const scalarPartsByQuantityAndMode = new Map<string, number>();
   for (const partModel of magneticParts) {
     const settings = getPartSettings(partModel.part);
-    if (
-      !settings.visible ||
-      !settings.vectorsVisible ||
-      settings.vectorBudget <= 0
-    ) {
-      continue;
-    }
+    if (!settings.visible) continue;
+    const quantityId = resolveCanonicalQuantityId(settings.activeQuantityId);
+    visiblePartsByQuantity.set(
+      quantityId,
+      (visiblePartsByQuantity.get(quantityId) ?? 0) + 1,
+    );
     const surfaceColorMode = settings.shaderVisible
       ? surfaceColorSourceToColorMode(settings.surfaceColorSource)
       : null;
-    if (surfaceColorMode) {
+    if (!surfaceColorMode) continue;
+    const groupKey = `${quantityId}\u0000${surfaceColorMode}`;
+    scalarPartsByQuantityAndMode.set(
+      groupKey,
+      (scalarPartsByQuantityAndMode.get(groupKey) ?? 0) + 1,
+    );
+  }
+
+  const requests = new Map<string, Viewport3DScopedPartVectorFieldRequest>();
+  for (const partModel of magneticParts) {
+    const settings = getPartSettings(partModel.part);
+    if (!settings.visible) {
+      continue;
+    }
+    const quantityId = resolveCanonicalQuantityId(settings.activeQuantityId);
+    const surfaceColorMode = settings.shaderVisible
+      ? surfaceColorSourceToColorMode(settings.surfaceColorSource)
+      : null;
+    const vectorsVisible =
+      settings.vectorsVisible && settings.vectorBudget > 0;
+    if (!surfaceColorMode && !vectorsVisible) continue;
+    if (
+      surfaceColorMode &&
+      scalarPartsByQuantityAndMode.get(`${quantityId}\u0000${surfaceColorMode}`) ===
+        visiblePartsByQuantity.get(quantityId) &&
+      visiblePartsByQuantity.get(quantityId)! > 1
+    ) {
       continue;
     }
     requests.set(partModel.part.id, {
-      quantityId: resolveCanonicalQuantityId(settings.activeQuantityId),
+      quantityId,
       query: resolveViewport3DScopedVectorFieldQuery({
         maxSamples: clampViewport3DInteractiveVectorBudget(
           settings.vectorBudget,
           maxVectorGlyphs,
         ),
-        surfaceColorMode: null,
-        vectorsVisible: true,
+        surfaceColorMode,
+        vectorsVisible,
       }),
     });
   }
@@ -1222,11 +1288,41 @@ function viewport3DFieldRenderOptionsNeedFullVectorData(
   if (mapHasPositiveValue(options.partVectorBudgets)) return true;
 
   if (options.scalarColorsVisible === false) return false;
-  for (const mode of options.scalarColorModes ?? []) {
-    if (!fieldColorModeScalarComponent(mode)) return true;
-  }
+  return resolveScalarFieldComponentRequest(options.scalarColorModes, null)
+    .needsFullVector;
+}
 
-  return false;
+function fieldColorModeScalarComponent(mode: string | null | undefined): string | null {
+  if (!mode) return null;
+  return VIEWPORT_3D_SCALAR_FIELD_COMPONENTS.has(mode) ? mode : null;
+}
+
+function resolveScalarFieldComponentRequest(
+  modes: ReadonlySet<string> | null | undefined,
+  additionalMode: string | null | undefined,
+): Viewport3DScalarFieldComponentRequest {
+  let component: string | null = null;
+  for (const mode of scalarFieldRequestModes(modes, additionalMode)) {
+    const nextComponent = fieldColorModeScalarComponent(mode);
+    if (!nextComponent) {
+      return { component: null, needsFullVector: true };
+    }
+    if (component && component !== nextComponent) {
+      return { component: null, needsFullVector: true };
+    }
+    component = nextComponent;
+  }
+  return { component, needsFullVector: false };
+}
+
+function* scalarFieldRequestModes(
+  modes: ReadonlySet<string> | null | undefined,
+  additionalMode: string | null | undefined,
+): Generator<string> {
+  if (additionalMode) yield additionalMode;
+  for (const mode of modes ?? []) {
+    yield mode;
+  }
 }
 
 function mapHasPositiveValue(
@@ -1237,21 +1333,6 @@ function mapHasPositiveValue(
     if (value > 0) return true;
   }
   return false;
-}
-
-function firstScalarFieldComponent(
-  modes: ReadonlySet<string> | null | undefined,
-): string | null {
-  for (const mode of modes ?? []) {
-    const component = fieldColorModeScalarComponent(mode);
-    if (component) return component;
-  }
-  return null;
-}
-
-function fieldColorModeScalarComponent(mode: string | null | undefined): string | null {
-  if (!mode) return null;
-  return VIEWPORT_3D_SCALAR_FIELD_COMPONENTS.has(mode) ? mode : null;
 }
 
 export function mergeViewport3DFieldQuery(
@@ -1533,8 +1614,6 @@ export function useViewport3DSceneModel({
     enabled: Boolean(topology.data),
     magneticParts: femDomain.magneticParts,
     magneticSurfacePartsByPartId: femDomain.magneticSurfacePartsByPartId,
-    targetVisualizationRevision:
-      renderingState?.revision == null ? null : String(renderingState.revision),
     topology: topology.data,
     topologyRevision: topology.revision == null ? null : String(topology.revision),
   });
@@ -2043,7 +2122,7 @@ export function useViewport3DSceneModel({
       vectorDomain,
     ],
   );
-  const magneticPartScopedVectorIds = useMemo(
+  const magneticPartScopedFieldIds = useMemo(
     () => new Set(magneticPartFieldQueries.keys()),
     [magneticPartFieldQueries],
   );
@@ -2052,8 +2131,9 @@ export function useViewport3DSceneModel({
     const queries = new Map<string, FieldVectorQuery>();
     const setQuery = (
       targetQuantityId: string,
-      query: FieldVectorQuery,
+      query: FieldVectorQuery | null,
     ): void => {
+      if (!query) return;
       queries.set(
         targetQuantityId,
         mergeViewport3DFieldQuery(queries.get(targetQuantityId), query),
@@ -2061,7 +2141,7 @@ export function useViewport3DSceneModel({
     };
 
     for (const partModel of currentTopologyRenderModel.magneticParts) {
-      if (magneticPartScopedVectorIds.has(partModel.part.id)) {
+      if (magneticPartScopedFieldIds.has(partModel.part.id)) {
         continue;
       }
       const settings = getPartSettings(partModel.part);
@@ -2070,17 +2150,17 @@ export function useViewport3DSceneModel({
         settings.visible &&
         (settings.shaderVisible || settings.vectorsVisible)
       ) {
+        const targetQuery = resolveViewport3DTargetFieldQuery({
+          surfaceColorMode: settings.shaderVisible
+            ? surfaceColorSourceToColorMode(settings.surfaceColorSource)
+            : null,
+          vectorsVisible: settings.vectorsVisible,
+        });
         setQuery(
           resolveCanonicalQuantityId(settings.activeQuantityId),
-          resolveViewport3DReplayFieldQuery(
-            resolveViewport3DTargetFieldQuery({
-              surfaceColorMode: settings.shaderVisible
-                ? surfaceColorSourceToColorMode(settings.surfaceColorSource)
-                : null,
-              vectorsVisible: settings.vectorsVisible,
-            }),
-            selectedSnapshotQuery,
-          ),
+          targetQuery
+            ? resolveViewport3DReplayFieldQuery(targetQuery, selectedSnapshotQuery)
+            : null,
         );
       }
     }
@@ -2089,15 +2169,15 @@ export function useViewport3DSceneModel({
       fdmSettings.visible &&
       (fdmSettings.shaderVisible || fdmSettings.vectorsVisible)
     ) {
+      const targetQuery = resolveViewport3DTargetFieldQuery({
+        surfaceColorMode: fdmSurfaceColorMode,
+        vectorsVisible: fdmSettings.vectorsVisible,
+      });
       setQuery(
         resolveCanonicalQuantityId(fdmSettings.activeQuantityId),
-        resolveViewport3DReplayFieldQuery(
-          resolveViewport3DTargetFieldQuery({
-            surfaceColorMode: fdmSurfaceColorMode,
-            vectorsVisible: fdmSettings.vectorsVisible,
-          }),
-          selectedSnapshotQuery,
-        ),
+        targetQuery
+          ? resolveViewport3DReplayFieldQuery(targetQuery, selectedSnapshotQuery)
+          : null,
       );
     }
     return new Map(Array.from(queries).toSorted(([left], [right]) =>
@@ -2111,7 +2191,7 @@ export function useViewport3DSceneModel({
     fdmSettings.visible,
     fdmSurfaceColorMode,
     getPartSettings,
-    magneticPartScopedVectorIds,
+    magneticPartScopedFieldIds,
     primaryFieldQuantityId,
     selectedSnapshotQuery,
   ]);
@@ -2167,7 +2247,7 @@ export function useViewport3DSceneModel({
                 getPartSettings,
                 magneticParts: currentTopologyRenderModel.magneticParts,
                 quantityId: primaryFieldQuantityId,
-                scopedVectorOnlyPartIds: magneticPartScopedVectorIds,
+                scopedFieldPartIds: magneticPartScopedFieldIds,
                 vectorDomain,
               }),
               visualizationPhaseRad:
@@ -2190,7 +2270,7 @@ export function useViewport3DSceneModel({
       currentTopologyRenderModel,
       fieldRenderOptions,
       getPartSettings,
-      magneticPartScopedVectorIds,
+      magneticPartScopedFieldIds,
       maxInteractiveVectorGlyphs,
       primaryFieldQuantityId,
       vectorDomain,
@@ -2201,7 +2281,7 @@ export function useViewport3DSceneModel({
     for (const partModel of currentTopologyRenderModel?.airboxParts ?? []) {
       excludedPartIds.add(partModel.part.id);
     }
-    for (const partId of magneticPartScopedVectorIds) {
+    for (const partId of magneticPartScopedFieldIds) {
       excludedPartIds.add(partId);
     }
     if (!analysisOverlay) {
@@ -2218,7 +2298,7 @@ export function useViewport3DSceneModel({
     currentTopologyRenderModel?.airboxParts,
     currentTopologyRenderModel?.magneticParts,
     getPartSettings,
-    magneticPartScopedVectorIds,
+    magneticPartScopedFieldIds,
     primaryFieldQuantityId,
   ]);
   const primaryFieldDataOptions = useMemo(
@@ -2277,10 +2357,29 @@ export function useViewport3DSceneModel({
           }
         }
       }
+      const partScalarRangesByMode = new Map<string, ReadonlyMap<string, ScalarRange>>();
+      for (const [partId, fieldVector] of partFieldVectors) {
+        const scalarColorMode =
+          primaryFieldRenderOptions.partScalarColorModes?.get(partId);
+        if (
+          scalarColorMode &&
+          scalarColorMode !== "orientation" &&
+          scalarColorMode !== "hsl_sphere" &&
+          scalarColorMode !== "monochrome"
+        ) {
+          partScalarRangesByMode.set(
+            partId,
+            new Map([[scalarColorMode, resolveScalarRange(fieldVector, scalarColorMode)]]),
+          );
+        }
+      }
       return partFieldVectors.size > 0
         ? {
             ...primaryFieldRenderOptions,
             partFieldVectors,
+            ...(partScalarRangesByMode.size > 0
+              ? { partScalarRangesByMode }
+              : {}),
           }
         : primaryFieldRenderOptions;
     },
@@ -2607,6 +2706,10 @@ export function useViewport3DSceneModel({
     fieldRevision: fieldVector.payloadRevision ?? fieldVector.revision,
     fieldScalarRangesByMode,
     fieldVector: committedFieldVector,
+    partFieldVectors: resolvedFieldRenderOptions.partFieldVectors,
+    partScalarColorModes: resolvedFieldRenderOptions.partScalarColorModes,
+    partScalarColorPalettes: resolvedFieldRenderOptions.partScalarColorPalettes,
+    partScalarRangesByMode: resolvedFieldRenderOptions.partScalarRangesByMode,
     targetVisualizationRevision: renderingState?.revision ?? null,
     topology: currentTopologyRenderModel,
     topologyRevision: topology.revision,
@@ -2650,9 +2753,11 @@ export function useViewport3DSceneModel({
       model,
       chunkedScalarColors.colors,
       vectorColorMode,
+      chunkedScalarColors.colorsByPartAndMode,
     );
   }, [
     chunkedScalarColors.colors,
+    chunkedScalarColors.colorsByPartAndMode,
     committedFieldVector,
     currentTopologyRenderModel,
     analysisComplexField,

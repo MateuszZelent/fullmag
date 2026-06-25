@@ -22,6 +22,7 @@ import type { HysteresisInspectorCommonProps } from "./HysteresisInspectorTypes"
 export function HysteresisPointDetailInspector({
   activePoint,
   kernel,
+  pointDetail,
   points,
   progress,
   stageId,
@@ -29,14 +30,18 @@ export function HysteresisPointDetailInspector({
 }: Pick<
   HysteresisInspectorCommonProps,
   "activePoint" | "kernel" | "points" | "progress" | "stageId" | "targetMetadata"
->) {
+> & {
+  pointDetail: HysteresisPointSchema | null | undefined;
+}) {
   const commandContext = useMemo(
     () => createCommandContext("inspector", kernel),
     [kernel],
   );
   const selectedPoint =
     activePoint?.pointId != null
-      ? points.find((point) => point.point_id === activePoint.pointId) ?? null
+      ? pointDetail ??
+        points.find((point) => point.point_id === activePoint.pointId) ??
+        null
       : null;
   const returnToLive = useCallback(() => {
     if (stageId) {

@@ -523,6 +523,7 @@ fn test_app_state() -> Arc<AppState> {
         current_workspace_selection: Arc::new(RwLock::new(CurrentWorkspaceSelection::default())),
         current_workspace_ribbon: Arc::new(RwLock::new(CurrentWorkspaceRibbon::default())),
         current_workspace_layout: Arc::new(RwLock::new(CurrentWorkspaceLayout::default())),
+        current_hysteresis_bookmarks: Arc::new(RwLock::new(BTreeMap::new())),
         current_control_queue: Arc::new(Mutex::new(VecDeque::new())),
         current_command_responses: Arc::new(Mutex::new(VecDeque::new())),
         current_command_ledger: Arc::new(Mutex::new(VecDeque::new())),
@@ -1228,6 +1229,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         current_workspace_selection: Arc::new(RwLock::new(CurrentWorkspaceSelection::default())),
         current_workspace_ribbon: Arc::new(RwLock::new(CurrentWorkspaceRibbon::default())),
         current_workspace_layout: Arc::new(RwLock::new(CurrentWorkspaceLayout::default())),
+        current_hysteresis_bookmarks: Arc::new(RwLock::new(BTreeMap::new())),
         current_control_queue: Arc::new(Mutex::new(VecDeque::new())),
         current_command_responses: Arc::new(Mutex::new(VecDeque::new())),
         current_command_ledger: Arc::new(Mutex::new(VecDeque::new())),
@@ -1371,6 +1373,20 @@ fn decode_fmvp_payload_f64(bytes: &[u8]) -> Vec<f64> {
 async fn body_json(response: axum::response::Response) -> serde_json::Value {
     let bytes = body_bytes(response).await;
     serde_json::from_slice(&bytes).expect("response body is not valid JSON")
+}
+
+fn assert_hysteresis_points_resource<'a>(
+    resource: &'a serde_json::Value,
+    expected_stage_index: u64,
+) -> &'a serde_json::Value {
+    assert!(
+        resource["revision"].as_u64().is_some(),
+        "hysteresis points resource must expose a numeric revision"
+    );
+    assert_eq!(resource["stage_index"], expected_stage_index);
+    resource
+        .get("points")
+        .expect("hysteresis points resource must expose points")
 }
 
 fn is_iso_calendar_date(value: &str) -> bool {
@@ -2719,9 +2735,11 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
                                     "geometry_scope": "surface"
                                 },
                                 "style": {
+                                    "scalar_color_palette": "inferno",
                                     "surface_color_source": "orientation",
                                     "surface_mono_color": "#00ffaa",
                                     "point_color": "#66eeff",
+                                    "viewport_colorbar_visible": true,
                                     "vector_color_mode": "orientation",
                                     "vector_mono_color": "#ff00aa",
                                     "vector_alpha": 0.45,
@@ -2772,16 +2790,32 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
     assert_eq!(json["overrides"][0]["display"]["vectors"]["visible"], false);
     assert_eq!(json["overrides"][0]["display"]["geometry_scope"], "surface");
     assert_eq!(
+        json["overrides"][0]["style"]["scalar_color_palette"],
+        "inferno"
+    );
+    assert_eq!(
         json["overrides"][0]["style"]["surface_color_source"],
         "orientation"
     );
     assert_eq!(json["overrides"][0]["style"]["point_color"], "#66eeff");
+    assert_eq!(
+        json["overrides"][0]["style"]["viewport_colorbar_visible"],
+        true
+    );
     assert_eq!(json["overrides"][0]["style"]["vector_alpha"], 0.45);
     assert_eq!(json["overrides"][0]["style"]["vector_budget"], 384);
     assert_eq!(json["overrides"][0]["style"]["vector_length_scale"], 1.75);
     assert_eq!(
         json["overrides"][0]["quantity"]["active_quantity_id"],
         "h_demag"
+    );
+    assert_eq!(
+        json["targets"]["objects"][0]["settings"]["scalar_color_palette"],
+        "inferno"
+    );
+    assert_eq!(
+        json["targets"]["objects"][0]["settings"]["viewport_colorbar_visible"],
+        true
     );
     assert_eq!(
         json["targets"]["objects"][0]["settings"]["active_quantity_id"],
@@ -13545,6 +13579,164 @@ async fn hysteresis_execution_tree_returns_windowed_active_points() {
 }
 
 #[tokio::test]
+async fn hysteresis_bookmarks_round_trip_through_resource_and_execution_tree() {
+    let (app, state, repo_root) = test_router_with_session_store_state().await;
+    let artifact_dir = repo_root.join("artifacts");
+    fs::create_dir_all(&artifact_dir).expect("artifact dir should be writable");
+    fs::write(
+        artifact_dir.join("hysteresis_points.json"),
+        serde_json::to_vec(&serde_json::json!([
+            {
+                "point_id": 0,
+                "field_value_mT": 20.0,
+                "m_parallel": 0.5,
+                "m_oop": 0.5,
+                "m_ip": 0.0,
+                "m_avg": [0.0, 0.0, 0.5],
+                "status": "completed"
+            },
+            {
+                "point_id": 4,
+                "field_value_mT": -20.0,
+                "m_parallel": -0.45,
+                "m_oop": -0.45,
+                "m_ip": 0.0,
+                "m_avg": [0.0, 0.0, -0.45],
+                "status": "completed",
+                "snapshot_id": "hysteresis_point_004",
+                "field_orientation": {
+                    "kind": "preset",
+                    "preset_name": "oop_positive"
+                },
+                "measurement_axis": {
+                    "kind": "field_axis"
+                }
+            }
+        ]))
+        .expect("hysteresis points should serialize"),
+    )
+    .expect("hysteresis points should be writable");
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 21;
+        snapshot.scene_document = Some(sample_scene_document_with_stage(serde_json::json!({
+            "entrypoint_kind": "flat_hysteresis",
+            "field_values_mT": [20.0, 10.0, 0.0, -10.0, -20.0],
+            "kind": "hysteresis",
+            "stage_id": "hysteresis-1"
+        })));
+        snapshot.stage_execution = Some(StageExecutionState {
+            total_stages: 1,
+            completed_stage_indexes: vec![0],
+            stages: vec![StageExecutionRecord {
+                stage_id: Some("hysteresis-1".into()),
+                kind: Some("hysteresis".into()),
+                status: StageLifecycleState::Completed,
+                command_id: Some("cmd-hyst".into()),
+                started_at_unix_ms: Some(1_700_000_002_000),
+                completed_at_unix_ms: Some(1_700_000_003_000),
+                reason: None,
+                artifact_refs: Vec::new(),
+                checkpoint_ref: None,
+                loaded_state_ref: None,
+                resume_from_checkpoint_ref: None,
+                state_transition: None,
+                state_transition_kind: None,
+                state_transition_reason: None,
+                state_transfer_operator_kind: None,
+                state_transition_ui_presentation: None,
+                metric_name: None,
+                metric_value: None,
+                threshold: None,
+                progress_percent: None,
+                progress_label: None,
+                progress_detail: None,
+                last_progress_unix_ms: None,
+                current_field_m_t: Some(-20.0),
+                current_point_index: Some(4),
+                current_settle_step_index: None,
+                current_settle_step_kind: None,
+                current_settle_step_method: None,
+            }],
+            stage_statuses: vec![StageLifecycleState::Completed],
+            active_stage_index: None,
+            active_stage_kind: Some("hysteresis".into()),
+            runtime_state: RuntimeLifecycleState::Completed,
+        });
+    }
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/hysteresis/hysteresis-1/bookmarks")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["bookmarks"].as_array().map(Vec::len), Some(0));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/analysis/hysteresis/hysteresis-1/bookmarks")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&serde_json::json!({
+                        "point_id": 4,
+                        "label": "Switching candidate"
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["stage_id"], "hysteresis-1");
+    assert_eq!(json["bookmarks"].as_array().map(Vec::len), Some(1));
+    assert_eq!(json["bookmarks"][0]["point_id"], 4);
+    assert_eq!(json["bookmarks"][0]["label"], "Switching candidate");
+    assert_eq!(json["bookmarks"][0]["field_value_mT"], -20.0);
+    assert_eq!(
+        json["bookmarks"][0]["resource_ref"],
+        "/v2/sessions/current/analysis/hysteresis/hysteresis-1/steps/4"
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/stages/hysteresis-1/hysteresis/execution-tree?window=all")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    let bookmark = json["nodes"]
+        .as_array()
+        .expect("execution-tree nodes should be an array")
+        .iter()
+        .find(|node| node["kind"] == "bookmark")
+        .expect("execution tree should include saved bookmark");
+    assert_eq!(bookmark["point_id"], 4);
+    assert_eq!(bookmark["label"], "Switching candidate");
+    assert_eq!(bookmark["status"], "ready");
+    assert_eq!(
+        bookmark["selection_ref"],
+        "hysteresis-bookmark:hysteresis-1:4"
+    );
+}
+
+#[tokio::test]
 async fn hysteresis_execution_tree_marks_missing_snapshot_payloads() {
     let (app, state, repo_root) = test_router_with_session_store_state().await;
     let artifact_dir = repo_root.join("artifacts");
@@ -16673,7 +16865,7 @@ async fn hysteresis_analysis_endpoints_read_typed_artifacts() {
     )
     .expect("snapshot fallback should be writable");
 
-    let points = body_json(
+    let points_resource = body_json(
         app.clone()
             .oneshot(
                 Request::builder()
@@ -16685,6 +16877,8 @@ async fn hysteresis_analysis_endpoints_read_typed_artifacts() {
             .unwrap(),
     )
     .await;
+    assert_eq!(points_resource["stage_id"], "stage-000");
+    let points = assert_hysteresis_points_resource(&points_resource, 0);
     assert_eq!(points.as_array().map(Vec::len), Some(4));
     assert_eq!(points[0]["branch_id"], "descending");
     assert_eq!(points[0]["branch_ids"][0], "descending");
@@ -17493,7 +17687,9 @@ async fn hysteresis_analysis_resolves_stage_directory_artifact_refs() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let points = body_json(response).await;
+    let points_resource = body_json(response).await;
+    assert_eq!(points_resource["stage_id"], "stage-000");
+    let points = assert_hysteresis_points_resource(&points_resource, 0);
     assert_eq!(points.as_array().map(Vec::len), Some(1));
     assert_eq!(points[0]["field_value_mT"], 15.0);
 
@@ -17520,7 +17716,9 @@ async fn hysteresis_analysis_resolves_stage_directory_artifact_refs() {
         .await
         .unwrap();
     assert_eq!(index_response.status(), StatusCode::OK);
-    let index_points = body_json(index_response).await;
+    let index_points_resource = body_json(index_response).await;
+    assert_eq!(index_points_resource["stage_id"], "stage-000");
+    let index_points = assert_hysteresis_points_resource(&index_points_resource, 0);
     assert_eq!(index_points.as_array().map(Vec::len), Some(1));
     assert_eq!(index_points[0]["field_value_mT"], 15.0);
 
@@ -17641,7 +17839,9 @@ async fn hysteresis_analysis_accepts_active_hysteresis_kind_when_record_kind_is_
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let points = body_json(response).await;
+    let points_resource = body_json(response).await;
+    assert_eq!(points_resource["stage_id"], "stage-000");
+    let points = assert_hysteresis_points_resource(&points_resource, 0);
     assert_eq!(points.as_array().map(Vec::len), Some(1));
     assert_eq!(points[0]["point_id"], 8);
     assert_eq!(points[0]["field_value_mT"], 200.0);
@@ -17758,7 +17958,9 @@ async fn hysteresis_analysis_reads_flat_live_artifact_with_active_stage_executio
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let points = body_json(response).await;
+    let points_resource = body_json(response).await;
+    assert_eq!(points_resource["stage_id"], "stage-000");
+    let points = assert_hysteresis_points_resource(&points_resource, 0);
     assert_eq!(points.as_array().map(Vec::len), Some(1));
     assert_eq!(points[0]["field_value_mT"], 95.0);
     assert_eq!(points[0]["m_parallel"], 0.386);
@@ -17915,7 +18117,9 @@ async fn hysteresis_analysis_points_returns_empty_for_running_stage_before_first
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let points = body_json(response).await;
+    let points_resource = body_json(response).await;
+    assert_eq!(points_resource["stage_id"], "stage-000");
+    let points = assert_hysteresis_points_resource(&points_resource, 0);
     assert_eq!(points.as_array().map(Vec::len), Some(0));
 
     let _ = fs::remove_dir_all(stage_dir);
@@ -17957,7 +18161,9 @@ async fn hysteresis_analysis_points_preserves_adaptive_refinement_provenance() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let points = body_json(response).await;
+    let points_resource = body_json(response).await;
+    assert_eq!(points_resource["stage_id"], "stage-000");
+    let points = assert_hysteresis_points_resource(&points_resource, 0);
     assert_eq!(points.as_array().map(Vec::len), Some(1));
     assert_eq!(points[0]["adaptive_inserted"], true);
     assert_eq!(points[0]["refinement_reason"][0], "zero_crossing");
@@ -21900,7 +22106,9 @@ fn openapi_visualization_state_schema_exposes_v2_layers() {
         "points_visible",
         "vectors_visible",
         "render_mode",
+        "scalar_color_palette",
         "surface_color_source",
+        "viewport_colorbar_visible",
         "vector_budget",
         "vector_color_mode",
         "vector_length_scale",
@@ -21945,6 +22153,8 @@ fn openapi_visualization_state_schema_exposes_v2_layers() {
         "vector_thickness",
         "wireframe_color",
         "point_color",
+        "scalar_color_palette",
+        "viewport_colorbar_visible",
     ] {
         assert!(
             override_style_props.contains(required),

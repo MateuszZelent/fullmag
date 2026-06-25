@@ -307,7 +307,7 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
     topologyModel.nodeCount,
     colors.mesh,
   );
-  useViewport3DScalarColorUpload({
+  const visibleScalarColors = useViewport3DScalarColorUpload({
     colorBuffer: surfaceColorState.scalarColors,
     dirtyReason: "airbox-field-colors",
     enabled: Boolean(
@@ -323,6 +323,16 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
     vertexColorsEnabled: surfaceColorState.vertexColorsEnabled,
     vertexCount: topologyModel.nodeCount,
   });
+
+  const hasScalarColors =
+    surfaceColorState.hasScalarColors &&
+    visibleScalarColors === surfaceColorState.scalarColors;
+
+  const materialColor = surfaceMaterialColorFromSettings(
+    renderSettings,
+    colors.mesh,
+    hasScalarColors,
+  );
 
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
     event.stopPropagation();
@@ -424,10 +434,10 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
           renderOrder={RENDER_POLICIES.airSurface.renderOrder}
         >
           <meshBasicMaterial
-            color={surfaceColorState.materialColor}
+            color={materialColor}
             opacity={opacity}
             toneMapped={materialProfile.airSurface.toneMapped}
-            vertexColors={surfaceColorState.hasScalarColors}
+            vertexColors={hasScalarColors}
             {...materialPolicyProps("airSurface")}
           />
         </mesh>

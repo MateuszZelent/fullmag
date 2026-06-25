@@ -31,6 +31,18 @@ function fieldVectorFixture(): DecodedFieldVector {
   };
 }
 
+function scalarComponentFieldVectorFixture(): DecodedFieldVector {
+  return {
+    dtype: "float64",
+    grid: [3, 1, 1],
+    nComp: 1,
+    pointCount: 3,
+    quantityId: "m",
+    valueCount: 3,
+    values: new Float64Array([10, 20, 30]),
+  };
+}
+
 function expectColorBufferToMatch(
   actual: ScalarColorBuffer,
   expected: ScalarColorBuffer,
@@ -69,7 +81,10 @@ describe("viewport3dFieldColorBuildModel", () => {
     ]);
 
     expect(result).not.toBeNull();
-    expectColorBufferToMatch(result!, expected);
+    expect(expected).not.toBeNull();
+    if (!result) throw new Error("expected full-domain field color buffer");
+    if (!expected) throw new Error("expected chunked scalar color buffer");
+    expectColorBufferToMatch(result, expected);
   });
 
   it("matches current sampled color semantics including invalid sample fallback", async () => {
@@ -95,6 +110,58 @@ describe("viewport3dFieldColorBuildModel", () => {
     expect(result).not.toBeNull();
     expect(expected).not.toBeNull();
     expectColorBufferToMatch(result!, expected!);
+  });
+
+  it("colors scalar component payloads as the selected component value", async () => {
+    const fieldVector = scalarComponentFieldVectorFixture();
+    const pointIndices = new Uint32Array([0, 1, 2]);
+    const expected = buildSampledScalarColors(
+      fieldVector,
+      pointIndices,
+      "z",
+      "viridis",
+    );
+
+    const result = await buildViewport3DFieldColorBuffer({
+      colorMode: "z",
+      colorPalette: "viridis",
+      fieldVector,
+      target: {
+        kind: "sampled",
+        pointIndices,
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(expected).not.toBeNull();
+    expectColorBufferToMatch(result!, expected!);
+  });
+
+  it("rejects orientation colors for scalar component payloads", async () => {
+    const fieldVector = scalarComponentFieldVectorFixture();
+
+    await expect(
+      buildViewport3DFieldColorBuffer({
+        colorMode: "orientation",
+        colorPalette: "viridis",
+        fieldVector,
+        target: {
+          kind: "full-domain",
+          vertexCount: fieldVector.pointCount,
+        },
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      buildViewport3DFieldColorBuffer({
+        colorMode: "orientation",
+        colorPalette: "viridis",
+        fieldVector,
+        target: {
+          kind: "sampled",
+          pointIndices: new Uint32Array([0, 1]),
+        },
+      }),
+    ).resolves.toBeNull();
   });
 
   it("matches current mapped vertex color semantics", async () => {

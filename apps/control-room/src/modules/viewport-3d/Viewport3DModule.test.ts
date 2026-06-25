@@ -6,9 +6,52 @@ import {
   formatHysteresisReplayGlyphVector,
   formatHysteresisReplayLabel,
   notifyMeshTopologyRendered,
+  resolveRetainedViewport3DScalarColorbarLegends,
   resolveViewport3DColorbarLegend,
   resolveViewport3DMeshQualityLegend,
+  resolveViewport3DScalarColorbarLegend,
+  resolveViewport3DScalarColorbarLegends,
 } from "./Viewport3DModule";
+import type { ScalarColorBuffer } from "./viewport3dFieldMapping";
+
+function scalarColorBuffer(
+  mode: string,
+  range: { max: number; min: number },
+  colorPalette = "viridis",
+  quantityId = "m",
+): ScalarColorBuffer {
+  return {
+    colors: new Float32Array([0, 0, 0]),
+    colorMode: mode,
+    colorPalette,
+    quantityId,
+    range,
+  };
+}
+
+function scalarColorbarPart(
+  id: string,
+  patch: {
+    activeQuantityId?: string;
+    label?: string;
+    palette?: string;
+    source?: "component_x" | "component_y" | "component_z" | "magnitude";
+    visible?: boolean;
+  } = {},
+) {
+  return {
+    id,
+    label: patch.label ?? id,
+    settings: {
+      activeQuantityId: patch.activeQuantityId ?? "m",
+      scalarColorPalette: patch.palette ?? "viridis",
+      shaderVisible: true,
+      surfaceColorSource: patch.source ?? "component_x",
+      viewportColorbarVisible: patch.visible ?? false,
+      visible: true,
+    },
+  };
+}
 
 describe("resolveViewport3DMeshQualityLegend", () => {
   it("describes the active mesh quality metric and range", () => {
@@ -80,6 +123,260 @@ describe("resolveViewport3DColorbarLegend", () => {
         unit: "1",
       }),
     ).toBeNull();
+  });
+
+  it("uses the single rendered per-part scalar buffer for the viewport colorbar", () => {
+    const xBuffer = scalarColorBuffer("x", { max: 0.4, min: -0.6 }, "inferno");
+
+    expect(
+      resolveViewport3DScalarColorbarLegend({
+        colorPalette: "viridis",
+        fieldModel: {
+          scalarColors: null,
+          scalarColorsByMode: new Map(),
+          scalarColorsByPartAndMode: new Map([
+            ["part-a", new Map([["x", xBuffer]])],
+          ]),
+        },
+        quantityId: "m",
+        surfaceColorMode: "x",
+        unit: "1",
+        vectorColorMode: "orientation",
+      }),
+    ).toEqual({
+      label: "m x [1]",
+      maxLabel: "0.4",
+      minLabel: "-0.6",
+      paletteGradient:
+        "linear-gradient(90deg, rgb(0, 0, 4), rgb(66, 10, 104), rgb(147, 43, 93), rgb(221, 81, 58), rgb(252, 255, 164))",
+    });
+  });
+
+  it("hides the viewport colorbar for mixed per-part scalar scales", () => {
+    expect(
+      resolveViewport3DScalarColorbarLegend({
+        colorPalette: "viridis",
+        fieldModel: {
+          scalarColors: null,
+          scalarColorsByMode: new Map(),
+          scalarColorsByPartAndMode: new Map([
+            [
+              "part-a",
+              new Map([["x", scalarColorBuffer("x", { max: 1, min: -1 })]]),
+            ],
+            [
+              "part-b",
+              new Map([["y", scalarColorBuffer("y", { max: 1, min: -1 })]]),
+            ],
+          ]),
+        },
+        quantityId: "m",
+        surfaceColorMode: "x",
+        unit: "1",
+        vectorColorMode: "orientation",
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps viewport scalar colorbars opt-in by part", () => {
+    const xBuffer = scalarColorBuffer("x", { max: 0.4, min: -0.6 });
+
+    expect(
+      resolveViewport3DScalarColorbarLegends({
+        colorPalette: "viridis",
+        fieldModel: {
+          scalarColors: null,
+          scalarColorsByMode: new Map(),
+          scalarColorsByPartAndMode: new Map([
+            ["part-a", new Map([["x", xBuffer]])],
+          ]),
+        },
+        parts: [scalarColorbarPart("part-a", { visible: false })],
+        quantityId: "m",
+        surfaceColorMode: "x",
+        unit: "1",
+        vectorColorMode: "orientation",
+      }),
+    ).toEqual([]);
+  });
+
+  it("returns separate viewport colorbars for mixed opt-in part scales", () => {
+    expect(
+      resolveViewport3DScalarColorbarLegends({
+        colorPalette: "viridis",
+        fieldModel: {
+          scalarColors: null,
+          scalarColorsByMode: new Map(),
+          scalarColorsByPartAndMode: new Map([
+            [
+              "part-a",
+              new Map([["x", scalarColorBuffer("x", { max: 1, min: -1 })]]),
+            ],
+            [
+              "part-b",
+              new Map([
+                ["y", scalarColorBuffer("y", { max: 4, min: -2 }, "inferno")],
+              ]),
+            ],
+          ]),
+        },
+        parts: [
+          scalarColorbarPart("part-a", {
+            label: "Permalloy",
+            source: "component_x",
+            visible: true,
+          }),
+          scalarColorbarPart("part-b", {
+            label: "CoFeB",
+            palette: "inferno",
+            source: "component_y",
+            visible: true,
+          }),
+        ],
+        quantityId: "m",
+        surfaceColorMode: "x",
+        unit: "1",
+        vectorColorMode: "orientation",
+      }).map(({ legend }) => ({
+        label: legend.label,
+        maxLabel: legend.maxLabel,
+        minLabel: legend.minLabel,
+      })),
+    ).toEqual([
+      { label: "Permalloy: m x [1]", maxLabel: "1", minLabel: "-1" },
+      { label: "CoFeB: m y [1]", maxLabel: "4", minLabel: "-2" },
+    ]);
+  });
+
+  it("keeps viewport colorbar keys stable when only the scalar range updates", () => {
+    const first = resolveViewport3DScalarColorbarLegends({
+      colorPalette: "viridis",
+      fieldModel: {
+        scalarColors: null,
+        scalarColorsByMode: new Map(),
+        scalarColorsByPartAndMode: new Map([
+          [
+            "part-a",
+            new Map([["x", scalarColorBuffer("x", { max: 1, min: -1 })]]),
+          ],
+        ]),
+      },
+      parts: [
+        scalarColorbarPart("part-a", {
+          label: "Permalloy",
+          source: "component_x",
+          visible: true,
+        }),
+      ],
+      quantityId: "m",
+      surfaceColorMode: "x",
+      unit: "1",
+      vectorColorMode: "orientation",
+    });
+    const updated = resolveViewport3DScalarColorbarLegends({
+      colorPalette: "viridis",
+      fieldModel: {
+        scalarColors: null,
+        scalarColorsByMode: new Map(),
+        scalarColorsByPartAndMode: new Map([
+          [
+            "part-a",
+            new Map([["x", scalarColorBuffer("x", { max: 0.5, min: -0.25 })]]),
+          ],
+        ]),
+      },
+      parts: [
+        scalarColorbarPart("part-a", {
+          label: "Permalloy",
+          source: "component_x",
+          visible: true,
+        }),
+      ],
+      quantityId: "m",
+      surfaceColorMode: "x",
+      unit: "1",
+      vectorColorMode: "orientation",
+    });
+
+    expect(updated[0]?.key).toBe(first[0]?.key);
+    expect(updated[0]?.legend).toMatchObject({
+      maxLabel: "0.5",
+      minLabel: "-0.25",
+    });
+  });
+
+  it("keeps the last viewport colorbar visible while a replacement scale is building", () => {
+    const previous = [
+      {
+        key: "part-a:m:x:viridis",
+        legend: {
+          label: "Permalloy: m x [1]",
+          maxLabel: "1",
+          minLabel: "-1",
+          paletteGradient: "linear-gradient(90deg, black, white)",
+        },
+      },
+    ];
+    const current = [
+      {
+        key: "part-b:m:y:viridis",
+        legend: {
+          label: "CoFeB: m y [1]",
+          maxLabel: "0.5",
+          minLabel: "-0.5",
+          paletteGradient: "linear-gradient(90deg, black, white)",
+        },
+      },
+    ];
+
+    expect(
+      resolveRetainedViewport3DScalarColorbarLegends({
+        current: [],
+        previous,
+        requested: true,
+      }),
+    ).toBe(previous);
+    expect(
+      resolveRetainedViewport3DScalarColorbarLegends({
+        current: [],
+        previous,
+        requested: false,
+      }),
+    ).toEqual([]);
+    expect(
+      resolveRetainedViewport3DScalarColorbarLegends({
+        current,
+        previous,
+        requested: true,
+      }),
+    ).toEqual([...previous, ...current]);
+    expect(
+      resolveRetainedViewport3DScalarColorbarLegends({
+        current: [
+          {
+            key: "part-a:m:y:viridis",
+            legend: {
+              label: "Permalloy: m y [1]",
+              maxLabel: "0.75",
+              minLabel: "-0.75",
+              paletteGradient: "linear-gradient(90deg, black, white)",
+            },
+          },
+        ],
+        previous,
+        requested: true,
+      }),
+    ).toEqual([
+      {
+        key: "part-a:m:y:viridis",
+        legend: {
+          label: "Permalloy: m y [1]",
+          maxLabel: "0.75",
+          minLabel: "-0.75",
+          paletteGradient: "linear-gradient(90deg, black, white)",
+        },
+      },
+    ]);
   });
 });
 

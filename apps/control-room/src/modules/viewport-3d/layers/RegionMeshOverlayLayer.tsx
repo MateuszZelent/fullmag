@@ -1,7 +1,13 @@
 "use client";
 
 import type { ThreeEvent } from "@react-three/fiber";
-import { useEffect, useMemo, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useSyncExternalStore,
+} from "react";
 import { BufferAttribute, BufferGeometry } from "three";
 
 import { createViewport3DGpuUploadManager } from "../build-engine/gpu/viewport3dGpuUploadManager";
@@ -214,11 +220,26 @@ function useRegionMeshOverlayGeometryUpload({
   uploadManager: Viewport3DGpuUploadManager;
 }): BufferGeometry | null {
   const store = useMemo(() => createRegionMeshOverlayGeometryStore(), []);
+  const releasedGeometriesRef = useRef(new WeakSet<BufferGeometry>());
   const snapshot = useSyncExternalStore(
     store.subscribe,
     store.getSnapshot,
     store.getSnapshot,
   );
+  const releaseGeometry = useCallback(
+    (geometry: BufferGeometry | null): void => {
+      if (!geometry || releasedGeometriesRef.current.has(geometry)) return;
+      releasedGeometriesRef.current.add(geometry);
+      tracker.release("geometry", geometry);
+    },
+    [tracker],
+  );
+  const clearCurrentGeometry = useCallback((): void => {
+    const current = store.getSnapshot().geometry;
+    if (!current) return;
+    store.publish(null);
+    releaseGeometry(current);
+  }, [releaseGeometry, store]);
   const uploadKey = createRegionMeshOverlayGeometryUploadKey({
     indexBytes: indices?.byteLength ?? 0,
     kind,
@@ -228,10 +249,18 @@ function useRegionMeshOverlayGeometryUpload({
     topologyRevision,
   });
 
-  useEffect(() => {
-    store.publish(null);
+  useEffect(
+    () => () => {
+      clearCurrentGeometry();
+    },
+    [clearCurrentGeometry],
+  );
 
-    if (!enabled || !indices?.length) return;
+  useEffect(() => {
+    if (!enabled || !indices?.length) {
+      clearCurrentGeometry();
+      return;
+    }
 
     const abortController = new AbortController();
     let uploadedGeometry: BufferGeometry | null = null;
@@ -256,7 +285,11 @@ function useRegionMeshOverlayGeometryUpload({
       lane: "region-overlay",
       onVisible: () => {
         if (!uploadedGeometry) return;
+        const previousGeometry = store.getSnapshot().geometry;
         store.publish(uploadedGeometry);
+        if (previousGeometry !== uploadedGeometry) {
+          releaseGeometry(previousGeometry);
+        }
         tracker.recordDirtyFrame(dirtyReason);
         invalidate();
       },
@@ -266,13 +299,12 @@ function useRegionMeshOverlayGeometryUpload({
 
     return () => {
       abortController.abort();
-      if (!uploadedGeometry) return;
-      if (store.getSnapshot().geometry === uploadedGeometry) {
-        store.publish(null);
+      if (store.getSnapshot().geometry !== uploadedGeometry) {
+        releaseGeometry(uploadedGeometry);
       }
-      tracker.release("geometry", uploadedGeometry);
     };
   }, [
+    clearCurrentGeometry,
     dirtyReason,
     enabled,
     indices,
@@ -281,6 +313,7 @@ function useRegionMeshOverlayGeometryUpload({
     store,
     targetVisualizationRevision,
     topologyRevision,
+    releaseGeometry,
     tracker,
     uploadKey,
     uploadManager,

@@ -37,19 +37,19 @@ describe("buildHysteresisReplayGlyphLayerModel", () => {
     expect(model).toEqual({
       axes: [
         {
-          color: "#ffcc66",
+          color: "var(--fm-warning)",
           key: "fieldDirection",
           label: "H field",
           positions: [1, 2, 3, 1, 2, 6],
         },
         {
-          color: "#7dd3fc",
+          color: "var(--fm-info)",
           key: "measurementAxis",
           label: "Measurement axis",
           positions: [1, 2, 3, 4, 2, 3],
         },
         {
-          color: "#c4b5fd",
+          color: "var(--fm-stale)",
           key: "sampleNormal",
           label: "Sample normal",
           positions: [1, 2, 3, 1, 2, 6],

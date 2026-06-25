@@ -227,7 +227,7 @@ export function FallbackTopologyMeshLayer({
       `fallback-surface-shader-values:${topologyModel?.nodeCount ?? 0}`,
     vertexCount: topologyModel?.nodeCount ?? 0,
   });
-  useViewport3DScalarColorUpload({
+  const visibleScalarColors = useViewport3DScalarColorUpload({
     colorBuffer: effectiveScalarColors,
     dirtyReason: meshQualityColors ? "mesh-quality-colors" : "field-colors",
     enabled: Boolean(
@@ -249,7 +249,9 @@ export function FallbackTopologyMeshLayer({
   });
 
   const hasScalarColors =
-    vertexColorsEnabled && canUseVertexScalarColors;
+    vertexColorsEnabled &&
+    canUseVertexScalarColors &&
+    visibleScalarColors === effectiveScalarColors;
   const surfaceOpacity = opacityFromSettings(renderSettings);
   const surfacePolicy = useMemo(
     () => surfaceMaterialPolicyProps(surfaceOpacity),

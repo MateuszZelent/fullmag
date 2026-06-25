@@ -1063,8 +1063,8 @@ function useHysteresisChartView({
   const progressRes = useHysteresisProgressResource(stageId);
   const protocolRes = useHysteresisProtocolResource(stageId);
 
-  const points = Array.isArray(pointsRes.data)
-    ? pointsRes.data
+  const points = Array.isArray(pointsRes.data?.points)
+    ? pointsRes.data.points
     : EMPTY_HYSTERESIS_POINTS;
   const branches = Array.isArray(branchesRes.data)
     ? branchesRes.data

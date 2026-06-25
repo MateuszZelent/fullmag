@@ -133,6 +133,9 @@ export interface Viewport3DFieldRenderOptions {
   fullVectorSurfaceOffsetScale?: number;
   complexFieldVector?: DecodedComplexFieldVector | null;
   partFieldVectors?: ReadonlyMap<string, DecodedFieldVector>;
+  partScalarColorModes?: ReadonlyMap<string, string>;
+  partScalarColorPalettes?: ReadonlyMap<string, string>;
+  partScalarRangesByMode?: ReadonlyMap<string, ReadonlyMap<string, ScalarRange>>;
   partVectorAnchorModes?: ReadonlyMap<string, Viewport3DVectorAnchorMode>;
   partVectorBudgets?: ReadonlyMap<string, number>;
   partVectorScales?: ReadonlyMap<string, number>;
@@ -277,7 +280,10 @@ function buildTopologyPositions(topology: DecodedTopology): Float32Array {
   const cached = topologyPositionCache.get(topology);
   if (cached) return cached;
 
-  const positions = Float32Array.from(topology.positions);
+  const positions =
+    topology.positions instanceof Float32Array
+      ? topology.positions
+      : Float32Array.from(topology.positions);
   topologyPositionCache.set(topology, positions);
   return positions;
 }
@@ -684,19 +690,36 @@ export function buildViewport3DFieldRenderModel(
             resolverSelection: vectorSelection,
           };
     const renderVectorSelection = scopedVectorSelection.renderSelection;
-    if (partFieldVector && partFieldVector !== renderFieldVector) {
+    const partScalarColorMode = options.partScalarColorModes?.get(partId);
+    const partScalarColorPalette =
+      options.partScalarColorPalettes?.get(partId) ?? options.scalarColorPalette;
+    const partScalarColorModes =
+      partScalarColorMode === undefined
+        ? partFieldVector && partFieldVector !== renderFieldVector
+          ? requestedScalarColorModes
+          : null
+        : new Set([partScalarColorMode]);
+    if (
+      options.scalarColorsVisible !== false &&
+      partFieldVector &&
+      partScalarColorModes &&
+      partScalarColorModes.size > 0
+    ) {
+      const partScalarRangesByMode =
+        options.partScalarRangesByMode?.get(partId) ??
+        (partFieldVector === renderFieldVector ? options.scalarRangesByMode : null);
       scalarColorsByPartAndMode.set(
         partId,
         new Map(
-          [...requestedScalarColorModes].map((colorMode) => [
+          [...partScalarColorModes].map((colorMode) => [
             colorMode,
             buildCachedPartVertexScalarColors(
               partModel,
               topology,
               partFieldVector,
               colorMode,
-              options.scalarColorPalette,
-              options.scalarRangesByMode?.get(colorMode),
+              partScalarColorPalette,
+              partScalarRangesByMode?.get(colorMode),
             ),
           ]),
         ),
@@ -1398,7 +1421,10 @@ function getCachedValue<TKey extends object, TValue>(
   }
 
   if (entries.has(key)) {
-    return entries.get(key) as TValue;
+    const value = entries.get(key) as TValue;
+    entries.delete(key);
+    entries.set(key, value);
+    return value;
   }
 
   const value = build();
