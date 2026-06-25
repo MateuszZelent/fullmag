@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
 import {
+  canRetainViewport3DScalarUploadBuffer,
   createViewport3DScalarColorUploadPlan,
   createViewport3DScalarShaderColorUploadPlan,
 } from "./useViewport3DScalarColorUpload";
@@ -21,6 +22,46 @@ function scalarColorBuffer(vertexCount: number): ScalarColorBuffer {
     range: { max: colors.length, min: 1 },
   };
 }
+
+describe("canRetainViewport3DScalarUploadBuffer", () => {
+  it("keeps a visible scalar upload only for the same semantic layer", () => {
+    const geometry = new BufferGeometry();
+    const buffer = scalarColorBuffer(2);
+
+    expect(
+      canRetainViewport3DScalarUploadBuffer({
+        allowRetention: true,
+        buffer,
+        geometry,
+        requestedGeometry: geometry,
+        requestedRetentionKey: "part=a|mode=x|quantity=m|palette=viridis",
+        retentionKey: "part=a|mode=x|quantity=m|palette=viridis",
+      }),
+    ).toBe(true);
+
+    expect(
+      canRetainViewport3DScalarUploadBuffer({
+        allowRetention: true,
+        buffer,
+        geometry,
+        requestedGeometry: geometry,
+        requestedRetentionKey: "part=a|mode=y|quantity=m|palette=viridis",
+        retentionKey: "part=a|mode=x|quantity=m|palette=viridis",
+      }),
+    ).toBe(false);
+
+    expect(
+      canRetainViewport3DScalarUploadBuffer({
+        allowRetention: false,
+        buffer,
+        geometry,
+        requestedGeometry: geometry,
+        requestedRetentionKey: "part=a|mode=x|quantity=m|palette=viridis",
+        retentionKey: "part=a|mode=x|quantity=m|palette=viridis",
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("createViewport3DScalarColorUploadPlan", () => {
   it("splits scalar color buffers into upload chunks before visible adoption", () => {

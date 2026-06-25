@@ -2330,11 +2330,28 @@ function scalarWindowQueryParams(query: ScalarWindowQuery): QueryParams {
 function fieldMetaQueryParams(query: FieldMetaQuery): QueryParams {
   return {
     component: query.component ?? undefined,
-    scope_id: query.scope_id ?? undefined,
+    scope_id: normalizeFieldMetaScopeId(
+      query.scope_kind,
+      query.scope_id,
+    ) ?? undefined,
     scope_kind: query.scope_kind ?? undefined,
     snapshot_id: query.snapshot_id ?? undefined,
     stage_id: query.stage_id ?? undefined,
   };
+}
+
+function normalizeFieldMetaScopeId(
+  scopeKind: FieldMetaQuery["scope_kind"],
+  scopeId: FieldMetaQuery["scope_id"],
+): string | null | undefined {
+  if (
+    scopeKind === "object" &&
+    typeof scopeId === "string" &&
+    scopeId.startsWith("object:")
+  ) {
+    return scopeId.slice("object:".length);
+  }
+  return scopeId;
 }
 
 function tableRowsQueryParams(query: TableRowsQuery): QueryParams {

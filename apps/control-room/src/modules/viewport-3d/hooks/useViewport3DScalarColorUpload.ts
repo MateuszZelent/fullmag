@@ -31,6 +31,7 @@ interface Viewport3DScalarColorUploadPlan {
 interface Viewport3DScalarShaderUploadSnapshot {
   readonly buffer: ScalarColorBuffer | null;
   readonly geometry: BufferGeometry | null;
+  readonly retentionKey: string | null;
   readonly version: number;
 }
 
@@ -39,6 +40,7 @@ interface Viewport3DScalarShaderUploadStore {
   readonly publish: (
     buffer: ScalarColorBuffer | null,
     geometry: BufferGeometry | null,
+    retentionKey: string | null,
   ) => void;
   readonly subscribe: (listener: () => void) => () => void;
 }
@@ -47,12 +49,14 @@ const EMPTY_VIEWPORT_3D_SCALAR_SHADER_UPLOAD_SNAPSHOT:
   Viewport3DScalarShaderUploadSnapshot = {
     buffer: null,
     geometry: null,
+    retentionKey: null,
     version: 0,
   };
 
 interface Viewport3DScalarColorUploadSnapshot {
   readonly buffer: ScalarColorBuffer | null;
   readonly geometry: BufferGeometry | null;
+  readonly retentionKey: string | null;
   readonly version: number;
 }
 
@@ -61,6 +65,7 @@ interface Viewport3DScalarColorUploadStore {
   readonly publish: (
     buffer: ScalarColorBuffer | null,
     geometry: BufferGeometry | null,
+    retentionKey: string | null,
   ) => void;
   readonly subscribe: (listener: () => void) => () => void;
 }
@@ -69,8 +74,33 @@ const EMPTY_VIEWPORT_3D_SCALAR_COLOR_UPLOAD_SNAPSHOT:
   Viewport3DScalarColorUploadSnapshot = {
     buffer: null,
     geometry: null,
+    retentionKey: null,
     version: 0,
   };
+
+export function canRetainViewport3DScalarUploadBuffer({
+  allowRetention,
+  buffer,
+  geometry,
+  requestedGeometry,
+  requestedRetentionKey,
+  retentionKey,
+}: {
+  allowRetention: boolean;
+  buffer: ScalarColorBuffer | null;
+  geometry: BufferGeometry | null;
+  requestedGeometry: BufferGeometry;
+  requestedRetentionKey: string | null | undefined;
+  retentionKey: string | null;
+}): boolean {
+  return Boolean(
+    allowRetention &&
+      requestedRetentionKey &&
+      buffer &&
+      geometry === requestedGeometry &&
+      retentionKey === requestedRetentionKey,
+  );
+}
 
 function createViewport3DScalarColorUploadStore(): Viewport3DScalarColorUploadStore {
   const listeners = new Set<() => void>();
@@ -79,11 +109,17 @@ function createViewport3DScalarColorUploadStore(): Viewport3DScalarColorUploadSt
   function publish(
     buffer: ScalarColorBuffer | null,
     geometry: BufferGeometry | null,
+    retentionKey: string | null,
   ): void {
-    if (snapshot.buffer === buffer && snapshot.geometry === geometry) return;
+    if (
+      snapshot.buffer === buffer &&
+      snapshot.geometry === geometry &&
+      snapshot.retentionKey === retentionKey
+    ) return;
     snapshot = {
       buffer,
       geometry,
+      retentionKey,
       version: snapshot.version + 1,
     };
     for (const listener of listeners) {
@@ -109,6 +145,7 @@ export function useViewport3DScalarColorUpload({
   enabled,
   geometry,
   invalidate,
+  retentionKey,
   targetRevision,
   tracker,
   uploadKey,
@@ -120,6 +157,7 @@ export function useViewport3DScalarColorUpload({
   enabled: boolean;
   geometry: BufferGeometry | null;
   invalidate: () => void;
+  retentionKey?: string | null;
   targetRevision?: string | null;
   tracker: Viewport3DResourceTracker;
   uploadKey: string;
@@ -149,8 +187,19 @@ export function useViewport3DScalarColorUpload({
 
     const effectiveColorBuffer = vertexColorsEnabled ? colorBuffer : null;
     if (!effectiveColorBuffer) {
+      const current = store.getSnapshot();
+      if (canRetainViewport3DScalarUploadBuffer({
+        allowRetention: vertexColorsEnabled,
+        buffer: current.buffer,
+        geometry: current.geometry,
+        requestedGeometry: geometry,
+        requestedRetentionKey: retentionKey,
+        retentionKey: current.retentionKey,
+      })) {
+        return;
+      }
       applyVertexScalarColorBuffer(geometry, null, vertexCount);
-      store.publish(null, geometry);
+      store.publish(null, geometry, null);
       tracker.recordDirtyFrame(dirtyReason);
       invalidate();
       return;
@@ -163,7 +212,7 @@ export function useViewport3DScalarColorUpload({
     );
     if (!uploadPlan) {
       applyVertexScalarColorBuffer(geometry, null, vertexCount);
-      store.publish(null, geometry);
+      store.publish(null, geometry, null);
       tracker.recordDirtyFrame(dirtyReason);
       invalidate();
       return;
@@ -177,7 +226,7 @@ export function useViewport3DScalarColorUpload({
       lane: "field-color",
       onVisible: () => {
         uploadPlan.onVisible();
-        store.publish(effectiveColorBuffer, geometry);
+        store.publish(effectiveColorBuffer, geometry, retentionKey ?? null);
         tracker.recordDirtyFrame(dirtyReason);
         invalidate();
       },
@@ -194,6 +243,7 @@ export function useViewport3DScalarColorUpload({
     enabled,
     geometry,
     invalidate,
+    retentionKey,
     store,
     targetRevision,
     tracker,
@@ -261,6 +311,7 @@ export function useViewport3DScalarShaderColorUpload({
   enabled,
   geometry,
   invalidate,
+  retentionKey,
   targetRevision,
   tracker,
   uploadKey,
@@ -271,6 +322,7 @@ export function useViewport3DScalarShaderColorUpload({
   enabled: boolean;
   geometry: BufferGeometry | null;
   invalidate: () => void;
+  retentionKey?: string | null;
   targetRevision?: string | null;
   tracker: Viewport3DResourceTracker;
   uploadKey: string;
@@ -298,8 +350,19 @@ export function useViewport3DScalarShaderColorUpload({
     if (!enabled || !geometry) return;
 
     if (!colorBuffer) {
+      const current = store.getSnapshot();
+      if (canRetainViewport3DScalarUploadBuffer({
+        allowRetention: true,
+        buffer: current.buffer,
+        geometry: current.geometry,
+        requestedGeometry: geometry,
+        requestedRetentionKey: retentionKey,
+        retentionKey: current.retentionKey,
+      })) {
+        return;
+      }
       deleteViewport3DScalarShaderAttributes(geometry);
-      store.publish(null, geometry);
+      store.publish(null, geometry, null);
       tracker.recordDirtyFrame(dirtyReason);
       invalidate();
       return;
@@ -312,7 +375,7 @@ export function useViewport3DScalarShaderColorUpload({
     );
     if (!uploadPlan) {
       deleteViewport3DScalarShaderAttributes(geometry);
-      store.publish(null, geometry);
+      store.publish(null, geometry, null);
       tracker.recordDirtyFrame(dirtyReason);
       invalidate();
       return;
@@ -326,7 +389,7 @@ export function useViewport3DScalarShaderColorUpload({
       lane: "field-color",
       onVisible: () => {
         uploadPlan.onVisible();
-        store.publish(colorBuffer, geometry);
+        store.publish(colorBuffer, geometry, retentionKey ?? null);
         tracker.recordDirtyFrame(dirtyReason);
         invalidate();
       },
@@ -343,6 +406,7 @@ export function useViewport3DScalarShaderColorUpload({
     enabled,
     geometry,
     invalidate,
+    retentionKey,
     store,
     targetRevision,
     tracker,
@@ -509,11 +573,17 @@ function createViewport3DScalarShaderUploadStore():
   function publish(
     buffer: ScalarColorBuffer | null,
     geometry: BufferGeometry | null,
+    retentionKey: string | null,
   ): void {
-    if (snapshot.buffer === buffer && snapshot.geometry === geometry) return;
+    if (
+      snapshot.buffer === buffer &&
+      snapshot.geometry === geometry &&
+      snapshot.retentionKey === retentionKey
+    ) return;
     snapshot = {
       buffer,
       geometry,
+      retentionKey,
       version: snapshot.version + 1,
     };
     for (const listener of listeners) {

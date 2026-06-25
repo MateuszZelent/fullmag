@@ -68,6 +68,22 @@ describe("viewport3dFieldMapping", () => {
     );
   });
 
+  it("treats component-only payloads as scalar component textures", () => {
+    const result = buildVertexScalarColors(
+      vectorField([-2, 0, 4], 1),
+      3,
+      undefined,
+      "y",
+      "coolwarm",
+      { max: 4, min: -2 },
+    );
+
+    expect(result?.colorMode).toBe("y");
+    expect(result?.range).toEqual({ max: 4, min: -2 });
+    expect(Array.from(result?.scalarValues ?? [])).toEqual([-2, 0, 4]);
+    expect(result?.colors).toHaveLength(9);
+  });
+
   it("uses the selected colormap for sampled FDM scalar colors", () => {
     const result = buildSampledScalarColors(
       vectorField([
@@ -285,6 +301,26 @@ describe("viewport3dFieldMapping", () => {
     expect(Array.from(result.scalarValues ?? [])).toEqual([1, 2, 3]);
     expect(result.colorMode).toBe("magnitude");
     expect(result.colorPalette).toBe("inferno");
+  });
+
+  it("builds shader-only scalar values for component-only payloads", async () => {
+    const result = await buildVertexScalarColorsChunked(
+      vectorField([-3, 2, 5], 1),
+      {
+        chunkSize: 1,
+        colorMode: "y",
+        colorPalette: "magma",
+        scalarRange: { max: 5, min: -3 },
+        shaderOnly: true,
+      },
+    );
+
+    if (!result) throw new Error("expected chunked shader scalar buffer");
+    expect(result.colors).toHaveLength(0);
+    expect(Array.from(result.scalarValues ?? [])).toEqual([-3, 2, 5]);
+    expect(result.colorMode).toBe("y");
+    expect(result.colorPalette).toBe("magma");
+    expect(result.range).toEqual({ max: 5, min: -3 });
   });
 
   it("builds shader-only vector values for chunked orientation colors", async () => {

@@ -6,11 +6,14 @@ import {
   formatHysteresisReplayGlyphVector,
   formatHysteresisReplayLabel,
   notifyMeshTopologyRendered,
+  resolveViewport3DRequestedColorbarGroupKeys,
   resolveRetainedViewport3DScalarColorbarLegends,
   resolveViewport3DColorbarLegend,
   resolveViewport3DMeshQualityLegend,
   resolveViewport3DScalarColorbarLegend,
   resolveViewport3DScalarColorbarLegends,
+  shouldClearRetainedViewport3DScalarColorbarLegends,
+  shouldRetainViewport3DScalarColorbarLegends,
 } from "./Viewport3DModule";
 import type { ScalarColorBuffer } from "./viewport3dFieldMapping";
 
@@ -35,6 +38,7 @@ function scalarColorbarPart(
     activeQuantityId?: string;
     label?: string;
     palette?: string;
+    paletteInherited?: boolean;
     source?: "component_x" | "component_y" | "component_z" | "magnitude";
     visible?: boolean;
   } = {},
@@ -44,7 +48,9 @@ function scalarColorbarPart(
     label: patch.label ?? id,
     settings: {
       activeQuantityId: patch.activeQuantityId ?? "m",
-      scalarColorPalette: patch.palette ?? "viridis",
+      scalarColorPalette: patch.paletteInherited
+        ? undefined
+        : (patch.palette ?? "viridis"),
       shaderVisible: true,
       surfaceColorSource: patch.source ?? "component_x",
       viewportColorbarVisible: patch.visible ?? false,
@@ -348,8 +354,20 @@ describe("resolveViewport3DColorbarLegend", () => {
         current,
         previous,
         requested: true,
+        requestedGroupKeys: new Set([
+          "part-a:m:x:viridis",
+          "part-b:m:y:viridis",
+        ]),
       }),
     ).toEqual([...previous, ...current]);
+    expect(
+      resolveRetainedViewport3DScalarColorbarLegends({
+        current,
+        previous,
+        requested: true,
+        requestedGroupKeys: new Set(["part-b:m:y:viridis"]),
+      }),
+    ).toEqual(current);
     expect(
       resolveRetainedViewport3DScalarColorbarLegends({
         current: [
@@ -365,6 +383,7 @@ describe("resolveViewport3DColorbarLegend", () => {
         ],
         previous,
         requested: true,
+        requestedGroupKeys: new Set(["part-a:m:y:viridis"]),
       }),
     ).toEqual([
       {
@@ -377,6 +396,119 @@ describe("resolveViewport3DColorbarLegend", () => {
         },
       },
     ]);
+  });
+
+  it("uses the inherited palette when retaining viewport colorbar groups", () => {
+    expect(
+      resolveViewport3DRequestedColorbarGroupKeys(
+        [
+          scalarColorbarPart("part-a", {
+            paletteInherited: true,
+            source: "component_x",
+            visible: true,
+          }),
+        ],
+        "inferno",
+      ),
+    ).toEqual(new Set(["part-a:m:x:inferno"]));
+    expect(
+      resolveViewport3DRequestedColorbarGroupKeys([], "viridis", {
+        fdmColorbarRequested: true,
+      }),
+    ).toEqual(new Set(["fdm"]));
+  });
+
+  it("does not clear retained viewport colorbars while the render surface is unavailable", () => {
+    expect(
+      shouldClearRetainedViewport3DScalarColorbarLegends({
+        fdmColorbarRequested: false,
+        renderSurfaceAvailable: false,
+        viewportColorbarRequested: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldClearRetainedViewport3DScalarColorbarLegends({
+        fdmColorbarRequested: false,
+        renderSurfaceAvailable: true,
+        viewportColorbarRequested: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldClearRetainedViewport3DScalarColorbarLegends({
+        fdmColorbarRequested: false,
+        renderSurfaceAvailable: true,
+        viewportColorbarRequested: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldRetainViewport3DScalarColorbarLegends({
+        fdmColorbarRequested: false,
+        renderSurfaceAvailable: false,
+        viewportColorbarRequested: false,
+      }),
+    ).toBe(true);
+    expect(
+      resolveRetainedViewport3DScalarColorbarLegends({
+        current: [],
+        previous: [
+          {
+            key: "part-a:m:x:viridis",
+            legend: {
+              label: "Permalloy: m x [1]",
+              maxLabel: "1",
+              minLabel: "-1",
+              paletteGradient: "linear-gradient(90deg, black, white)",
+            },
+          },
+        ],
+        requested: shouldRetainViewport3DScalarColorbarLegends({
+          fdmColorbarRequested: false,
+          renderSurfaceAvailable: false,
+          viewportColorbarRequested: false,
+        }),
+      }),
+    ).toHaveLength(1);
+    expect(
+      shouldRetainViewport3DScalarColorbarLegends({
+        fdmColorbarRequested: false,
+        renderSurfaceAvailable: true,
+        viewportColorbarRequested: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not carry retained per-part colorbars into FDM colorbar mode", () => {
+    const previous = [
+      {
+        key: "part-a:m:x:viridis",
+        legend: {
+          label: "Permalloy: m x [1]",
+          maxLabel: "1",
+          minLabel: "-1",
+          paletteGradient: "linear-gradient(90deg, black, white)",
+        },
+      },
+    ];
+    const current = [
+      {
+        key: "fdm",
+        legend: {
+          label: "m x [1]",
+          maxLabel: "0.5",
+          minLabel: "-0.5",
+          paletteGradient: "linear-gradient(90deg, black, white)",
+        },
+      },
+    ];
+
+    expect(
+      resolveRetainedViewport3DScalarColorbarLegends({
+        current,
+        previous,
+        requested: true,
+        requestedGroupKeys: new Set(["fdm"]),
+      }),
+    ).toEqual(current);
   });
 });
 

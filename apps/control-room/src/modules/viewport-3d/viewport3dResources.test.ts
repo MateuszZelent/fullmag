@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  DATA_FIELDS_PATH,
   DATA_FIELD_META_PATH,
   DATA_FIELD_VECTOR_PATH,
 } from "@/kernel/api/apiPaths";
@@ -108,11 +109,24 @@ describe("viewport3dResources", () => {
       "{quantity_id}",
       "H_eff",
     )}?component=full&scope_kind=airbox`;
+    const partScalarRangesKey = `${DATA_FIELDS_PATH}#viewport-3d:part-scalar-ranges:${DATA_FIELD_META_PATH.replace(
+      "{quantity_id}",
+      "m",
+    )}?component=x&scope_id=permalloy_layer&scope_kind=object|${DATA_FIELD_META_PATH.replace(
+      "{quantity_id}",
+      "H_eff",
+    )}?component=magnitude&scope_id=airbox&scope_kind=part`;
 
     expect(viewport3DFieldMetaResourceMatchesQuantity(mMetaKey, "m")).toBe(true);
     expect(viewport3DFieldMetaResourceMatchesQuantity(hEffMetaKey, "h_eff")).toBe(
       true,
     );
+    expect(
+      viewport3DFieldMetaResourceMatchesQuantity(partScalarRangesKey, "m"),
+    ).toBe(true);
+    expect(
+      viewport3DFieldMetaResourceMatchesQuantity(partScalarRangesKey, "H_eff"),
+    ).toBe(true);
     expect(viewport3DFieldMetaResourceMatchesQuantity(hEffVectorKey, "h_eff")).toBe(
       false,
     );

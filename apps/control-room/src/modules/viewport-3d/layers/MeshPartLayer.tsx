@@ -170,7 +170,6 @@ function scalarColorBufferMatchesRetainedSettings(
   vertexCount: number,
 ): buffer is ScalarColorBuffer {
   if (!buffer) return false;
-  if (buffer.colorMode && buffer.colorMode !== scalarColorMode) return false;
   if (
     buffer.colorPalette &&
     settings.scalarColorPalette &&
@@ -327,6 +326,34 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   const scalarColorMode = fieldColorLayersEnabled
     ? surfaceScalarColorModeFromSettings(renderSettings)
     : null;
+  const scalarColorRetentionKey = useMemo(() => {
+    if (!renderSettings.shaderVisible) return null;
+    if (meshQualityColors) {
+      return [
+        "mesh-quality",
+        `part=${part.id}`,
+        `vertices=${topologyModel?.nodeCount ?? 0}`,
+      ].join("|");
+    }
+    if (!fieldColorLayersEnabled || !scalarColorMode) return null;
+    return [
+      "field",
+      `part=${part.id}`,
+      `mode=${scalarColorMode}`,
+      `quantity=${resolveCanonicalQuantityId(renderSettings.activeQuantityId)}`,
+      `palette=${renderSettings.scalarColorPalette ?? "default"}`,
+      `vertices=${topologyModel?.nodeCount ?? 0}`,
+    ].join("|");
+  }, [
+    fieldColorLayersEnabled,
+    meshQualityColors,
+    part.id,
+    renderSettings.activeQuantityId,
+    renderSettings.scalarColorPalette,
+    renderSettings.shaderVisible,
+    scalarColorMode,
+    topologyModel?.nodeCount,
+  ]);
   const scalarColorsCandidate = resolveMeshPartScalarColors({
     fieldModel,
     partId: part.id,
@@ -397,6 +424,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     ),
     geometry,
     invalidate,
+    retentionKey: scalarColorRetentionKey,
     targetRevision: effectiveScalarColors?.targetRevision ?? null,
     tracker,
     uploadKey:
@@ -416,6 +444,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     ),
     geometry,
     invalidate,
+    retentionKey: scalarColorRetentionKey,
     targetRevision: effectiveScalarColors?.targetRevision ?? null,
     tracker,
     uploadKey:

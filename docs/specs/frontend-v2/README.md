@@ -31,6 +31,7 @@ This is not a second Fullmag product and not an FDM/FEM fork. It is one browser 
 19. `22-implementation-plan.md` - phased build plan.
 20. `23-per-object-visualization-control.md` - per-object and airbox visualization registry shared by ribbon, explorer, inspector, 3D viewport, and future 2D views.
 21. `24-geometry-object-authoring-lifecycle.md` - end-to-end plan for adding scene objects, primitive display fallback, mesh rebuild synchronization, and explorer/ribbon/inspector/viewport integration.
+22. `25-viewport-3d-field-data-architecture.md` - production field-data contract for scalar surfaces, vector glyphs, colorbars, scoped requests, worker builds, and no-duplicate shader/vector payloads.
 
 ## Authority
 

@@ -1606,7 +1606,10 @@ export function useFieldCatalogResource({
 function fieldMetaQueryEntries(query: FieldMetaQuery): Array<[string, string]> {
   const entries: Array<[string, string]> = [];
   const push = (key: keyof FieldMetaQuery) => {
-    const value = query[key];
+    const value =
+      key === "scope_id"
+        ? normalizeFieldMetaScopeId(query.scope_kind, query.scope_id)
+        : query[key];
     if (typeof value === "string" && value.length > 0) {
       entries.push([key, value]);
     }
@@ -1617,6 +1620,20 @@ function fieldMetaQueryEntries(query: FieldMetaQuery): Array<[string, string]> {
   push("snapshot_id");
   push("stage_id");
   return entries;
+}
+
+function normalizeFieldMetaScopeId(
+  scopeKind: FieldMetaQuery["scope_kind"],
+  scopeId: FieldMetaQuery["scope_id"],
+): string | null | undefined {
+  if (
+    scopeKind === "object" &&
+    typeof scopeId === "string" &&
+    scopeId.startsWith("object:")
+  ) {
+    return scopeId.slice("object:".length);
+  }
+  return scopeId;
 }
 
 export function resolveFieldMetaResourceKey(

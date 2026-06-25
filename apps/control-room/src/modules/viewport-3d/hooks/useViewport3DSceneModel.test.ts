@@ -30,6 +30,8 @@ import {
   resolveViewport3DMeshBackedRegionKeys,
   resolveViewport3DMeshBackedRegionOverlays,
   resolveViewport3DPartVisualizationSettings,
+  resolveViewport3DPartScalarRangeRequests,
+  mergeViewport3DPartScalarRanges,
   resolveViewport3DRegionMembershipIds,
   resolveViewport3DRegionOverlays,
   resolveViewport3DRegionSelectionBounds,
@@ -156,6 +158,29 @@ describe("useViewport3DSceneModel", () => {
     expect(options.scalarColorsVisible).toBe(false);
   });
 
+  it("keeps large per-part scalar color builds out of the synchronous render model", () => {
+    const options = resolveViewport3DFieldRenderModelBuildOptions({
+      complexFieldVector: null,
+      fieldRenderOptions: {
+        partFieldVectors: new Map([
+          ["part:film", { pointCount: 75_000 } as never],
+        ]),
+        partScalarColorModes: new Map([["part:film", "y"]]),
+        scalarColorModes: new Set(),
+        scalarColorsVisible: true,
+      },
+      fieldVector: { pointCount: 75_000 } as never,
+      topology: {
+        airboxParts: [],
+        magneticParts: [{ part: { id: "part:film" } }],
+        nodeCount: 75_000,
+      } as never,
+    });
+
+    expect(options.scalarColorModes).toEqual(new Set());
+    expect(options.scalarColorsVisible).toBe(false);
+  });
+
   it("keeps synchronous scalar colors for small, unmapped, and complex field cases", () => {
     const fieldRenderOptions = {
       scalarColorModes: new Set(["x"]),
@@ -222,6 +247,47 @@ describe("useViewport3DSceneModel", () => {
       0, 0, 1,
       0, 0, 1,
     ]);
+  });
+
+  it("keeps scoped part scalar ranges ahead of full-field fallback ranges", () => {
+    const ranges = mergeViewport3DPartScalarRanges({
+      baseRanges: new Map([
+        ["part:film", new Map([["y", { max: 5, min: -5 }]])],
+      ]),
+      partFieldVectors: new Map([
+        [
+          "part:film",
+          {
+            dtype: "float64",
+            grid: [2, 1, 1],
+            nComp: 1,
+            pointCount: 2,
+            quantityId: "m",
+            valueCount: 2,
+            values: new Float64Array([100, 200]),
+          },
+        ],
+        [
+          "part:ring",
+          {
+            dtype: "float64",
+            grid: [2, 1, 1],
+            nComp: 1,
+            pointCount: 2,
+            quantityId: "m",
+            valueCount: 2,
+            values: new Float64Array([-2, 3]),
+          },
+        ],
+      ]),
+      partScalarColorModes: new Map([
+        ["part:film", "y"],
+        ["part:ring", "y"],
+      ]),
+    });
+
+    expect(ranges.get("part:film")?.get("y")).toEqual({ max: 5, min: -5 });
+    expect(ranges.get("part:ring")?.get("y")).toEqual({ max: 3, min: -2 });
   });
 
   it("wires synthetic airbox vectors as a local render-only fallback", () => {
@@ -450,6 +516,96 @@ describe("useViewport3DSceneModel", () => {
     expect(options.scalarColorModes).toEqual(new Set(["x"]));
     expect(options.partScalarColorModes?.get("film")).toBe("x");
     expect(options.partScalarColorPalettes?.get("film")).toBe("inferno");
+  });
+
+  it("preserves per-part scalar color modes for non-primary quantities without making them global", () => {
+    const options = resolveViewport3DPrimaryFieldRenderOptions({
+      fieldRenderOptions: {
+        fullVectorBudget: 0,
+        partVectorBudgets: new Map(),
+        scalarColorModes: new Set(),
+        scalarColorPalette: "viridis",
+        scalarColorsVisible: false,
+      },
+      getPartSettings: () => ({
+        activeQuantityId: "H_eff",
+        scalarColorPalette: "magma",
+        shaderVisible: true,
+        surfaceColorSource: "component_y",
+        vectorBudget: 0,
+        vectorsVisible: false,
+        visible: true,
+      }),
+      magneticParts: [{ part: { id: "part:film" } as never }],
+      quantityId: "m",
+      vectorDomain: "auto",
+    });
+
+    expect(options.scalarColorModes).toEqual(new Set());
+    expect(options.scalarColorsVisible).toBe(true);
+    expect(options.partScalarColorModes?.get("part:film")).toBe("y");
+    expect(options.partScalarColorPalettes?.get("part:film")).toBe("magma");
+  });
+
+  it("builds per-part scalar range metadata requests for numeric component color modes", () => {
+    const requests = resolveViewport3DPartScalarRangeRequests({
+      fieldRenderOptions: {
+        partScalarColorModes: new Map([
+          ["part:film", "y"],
+          ["part:ring", "orientation"],
+          ["part:cap", "magnitude"],
+        ]),
+      },
+      getPartSettings: (part) => ({
+        activeQuantityId: part.id === "part:cap" ? "H_eff" : "m",
+        shaderVisible: part.id !== "part:ring",
+        surfaceColorSource:
+          part.id === "part:film"
+            ? "component_y"
+            : part.id === "part:cap"
+              ? "magnitude"
+              : "orientation",
+        visible: true,
+      } as never),
+      magneticParts: [
+        { part: { id: "part:film", object_id: "film" } as never },
+        { part: { id: "part:ring", object_id: "ring" } as never },
+        { part: { id: "part:cap" } as never },
+      ],
+      selectedSnapshotQuery: {
+        snapshot_id: "snapshot-4",
+        stage_id: "stage-1",
+      },
+    });
+
+    expect([...requests]).toEqual([
+      [
+        "part:cap",
+        {
+          component: "magnitude",
+          mode: "magnitude",
+          partId: "part:cap",
+          quantityId: "H_eff",
+          scopeId: "part:cap",
+          scopeKind: "part",
+          snapshot_id: "snapshot-4",
+          stage_id: "stage-1",
+        },
+      ],
+      [
+        "part:film",
+        {
+          component: "y",
+          mode: "y",
+          partId: "part:film",
+          quantityId: "m",
+          scopeId: "film",
+          scopeKind: "object",
+          snapshot_id: "snapshot-4",
+          stage_id: "stage-1",
+        },
+      ],
+    ]);
   });
 
   it("uses analysis overlay display pass appearance for mode field vectors", () => {
@@ -1483,11 +1639,14 @@ describe("useViewport3DSceneModel", () => {
     });
 
     expect(primaryOptions.partVectorBudgets).toEqual(
-      new Map([["part:__air__", 1024]]),
+      new Map([
+        ["part:__air__", 1024],
+        ["part:arch_waveguide", 256],
+      ]),
     );
     const primaryDataOptions = resolveViewport3DPrimaryFieldDataOptions(
       primaryOptions,
-      new Set(["part:__air__"]),
+      new Set(["part:__air__", "part:arch_waveguide"]),
     );
 
     expect(viewport3DFieldRenderOptionsNeedFieldData(primaryDataOptions)).toBe(false);
@@ -1558,7 +1717,19 @@ describe("useViewport3DSceneModel", () => {
       vectorDomain: "auto",
     });
 
-    expect(primaryOptions.partVectorBudgets).toEqual(new Map());
+    expect(primaryOptions.partVectorBudgets).toEqual(
+      new Map([["part:arch_waveguide", 512]]),
+    );
+
+    const primaryDataOptions = resolveViewport3DPrimaryFieldDataOptions(
+      primaryOptions,
+      new Set(["part:arch_waveguide"]),
+    );
+
+    expect(primaryDataOptions.partVectorBudgets).toEqual(new Map());
+    expect(viewport3DFieldRenderOptionsNeedFieldData(primaryDataOptions)).toBe(
+      false,
+    );
   });
 
   it("keeps scalar-colored magnetic parts on scoped unsampled field requests", () => {

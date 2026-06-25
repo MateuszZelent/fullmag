@@ -239,6 +239,16 @@ describe("study runtime command resource bundles", () => {
     ).toBe(
       `${expectedPath}?component=z&scope_id=part%3Abody&scope_kind=part&snapshot_id=hysteresis%20point%204&stage_id=stage%2F1`,
     );
+
+    expect(
+      resolveFieldMetaResourceKey("m", {
+        component: "x",
+        scope_id: "object:permalloy_layer",
+        scope_kind: "object",
+      }),
+    ).toBe(
+      `${expectedPath}?component=x&scope_id=permalloy_layer&scope_kind=object`,
+    );
   });
 
   it("builds hysteresis execution tree resource keys with include flags", () => {

@@ -773,6 +773,44 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision(mMetaKey)).toBeNull();
   });
 
+  it("refreshes viewport 3D part scalar range collections when matching quantity samples change", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const hEffMetaKey = `${DATA_FIELD_META_PATH.replace(
+      "{quantity_id}",
+      "H_eff",
+    )}?component=x&scope_id=cofeb_top_ring&scope_kind=object`;
+    const hEffPartScalarRangesKey = `${DATA_FIELDS_PATH}#viewport-3d:part-scalar-ranges:${hEffMetaKey}`;
+    const mMetaKey = `${DATA_FIELD_META_PATH.replace(
+      "{quantity_id}",
+      "m",
+    )}?component=x&scope_id=cofeb_top_ring&scope_kind=object`;
+    const mPartScalarRangesKey = `${DATA_FIELDS_PATH}#viewport-3d:part-scalar-ranges:${mMetaKey}`;
+
+    resources.subscribe(hEffPartScalarRangesKey, () => {});
+    resources.subscribe(mPartScalarRangesKey, () => {});
+
+    const handled = bridge.handleEvent({
+      payload: {
+        changes: [
+          {
+            recommended_fetch: DATA_FIELDS_PATH,
+            quantity_ids: ["H_eff"],
+            resource: "fields",
+            resource_id: "samples",
+            revision: 14,
+          },
+        ],
+      },
+      type: "resource.batch_changed",
+    });
+
+    expect(handled).toBe(true);
+    expect(resources.getRevision(hEffPartScalarRangesKey)).toBe(14);
+    expect(resources.getRevision(mPartScalarRangesKey)).toBeNull();
+  });
+
   it("refreshes mesh build dependents after latest successful build changes", () => {
     const bus = new EventBus<KernelEventMap>();
     const resources = new ResourceInvalidationController(bus);

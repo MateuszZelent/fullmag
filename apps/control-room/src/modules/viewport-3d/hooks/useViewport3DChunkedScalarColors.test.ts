@@ -9,9 +9,11 @@ import {
   attachViewport3DFieldColorBuildReference,
   chunkedScalarColorStateIsCompatible,
   createViewport3DFieldColorBuildReference,
+  filterViewport3DChunkedScalarColorEntries,
   mergeViewport3DFieldScalarColors,
   resolveViewport3DChunkedFieldColorTarget,
   resolveViewport3DChunkedPartDisplayModesKey,
+  shouldBuildViewport3DPartChunkedScalarColor,
   shouldStartChunkedScalarColorBuild,
 } from "./useViewport3DChunkedScalarColors";
 
@@ -415,6 +417,110 @@ describe("useViewport3DChunkedScalarColors", () => {
         topology: topology as never,
       }),
     ).toBe("part-a:y:magma");
+  });
+
+  it("filters stale chunked entries to currently requested global and per-part modes", () => {
+    const source = readFileSync(sourceUrl, "utf8");
+    const orientation = colorBuffer(1);
+    const x = colorBuffer(2);
+    const y = colorBuffer(3);
+
+    const filtered = filterViewport3DChunkedScalarColorEntries({
+      colorModes: ["orientation", "y"],
+      colors: new Map([
+        ["orientation", orientation],
+        ["x", x],
+      ]),
+      colorsByPartAndMode: new Map([
+        [
+          "part-a",
+          new Map([
+            ["orientation", orientation],
+            ["x", x],
+          ]),
+        ],
+        ["part-b", new Map([["y", y]])],
+      ]),
+      partScalarColorModes: new Map([
+        ["part-a", "x"],
+        ["part-b", "orientation"],
+      ]),
+    });
+
+    expect(filtered.colors).toEqual(new Map([["orientation", orientation]]));
+    expect(filtered.colorsByPartAndMode.get("part-a")).toEqual(
+      new Map([["x", x]]),
+    );
+    expect(filtered.colorsByPartAndMode.has("part-b")).toBe(false);
+    expect(source).toContain("const visibleEntries = useMemo");
+    expect(source).toContain("colors: rawColors");
+    expect(source).toContain("colorsByPartAndMode: rawColorsByPartAndMode");
+  });
+
+  it("builds part-specific chunked colors from the primary field when part range or palette differs", () => {
+    const source = readFileSync(sourceUrl, "utf8");
+
+    expect(source).toContain("explicitPartFieldVector ?? fieldVector ?? null");
+    expect(source).toContain("shouldBuildViewport3DPartChunkedScalarColor");
+    expect(source).toContain(
+      "resolveViewport3DChunkedFieldColorTarget(topology, partFieldVector)",
+    );
+  });
+
+  it("does not skip a part-specific chunked color unless the global build covers the same mode", () => {
+    const fieldVector = { pointCount: 75_000 } as never;
+    const range = { max: 1, min: -1 };
+
+    expect(
+      shouldBuildViewport3DPartChunkedScalarColor({
+        explicitPartFieldVector: false,
+        globalColorModes: ["orientation"],
+        globalColorPalette: "viridis",
+        globalFieldVector: fieldVector,
+        globalScalarRange: range,
+        mode: "y",
+        palette: "viridis",
+        partFieldVector: fieldVector,
+        scalarRange: range,
+      }),
+    ).toBe(true);
+    expect(
+      shouldBuildViewport3DPartChunkedScalarColor({
+        explicitPartFieldVector: false,
+        globalColorModes: ["orientation", "y"],
+        globalColorPalette: "viridis",
+        globalFieldVector: fieldVector,
+        globalScalarRange: range,
+        mode: "y",
+        palette: "viridis",
+        partFieldVector: fieldVector,
+        scalarRange: range,
+      }),
+    ).toBe(false);
+    expect(
+      shouldBuildViewport3DPartChunkedScalarColor({
+        explicitPartFieldVector: true,
+        globalColorModes: ["y"],
+        globalColorPalette: "viridis",
+        globalFieldVector: fieldVector,
+        globalScalarRange: range,
+        mode: "y",
+        palette: "viridis",
+        partFieldVector: fieldVector,
+        scalarRange: range,
+      }),
+    ).toBe(true);
+  });
+
+  it("allows part-only chunked builds without requiring a primary field vector", () => {
+    const source = readFileSync(sourceUrl, "utf8");
+
+    expect(source).toContain(
+      "const buildIdentityFieldVector =\n    fieldVector ?? partBuildSpecs[0]?.fieldVector ?? null;",
+    );
+    expect(source).toContain("currentFieldVector: buildIdentityFieldVector");
+    expect(source).toContain("!buildIdentityFieldVector");
+    expect(source).not.toContain("!fieldVector ||\n      !buildTargetKind");
   });
 
   it("routes magnetic-only field colors through mapped worker targets", () => {

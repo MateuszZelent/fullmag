@@ -322,6 +322,80 @@ export function mergeViewport3DFieldScalarColors(
   };
 }
 
+export function filterViewport3DChunkedScalarColorEntries({
+  colors,
+  colorsByPartAndMode,
+  colorModes,
+  partScalarColorModes,
+}: {
+  colors: ReadonlyMap<string, ScalarColorBuffer>;
+  colorsByPartAndMode: ReadonlyMap<
+    string,
+    ReadonlyMap<string, ScalarColorBuffer>
+  >;
+  colorModes: readonly string[];
+  partScalarColorModes?: ReadonlyMap<string, string>;
+}): {
+  colors: ReadonlyMap<string, ScalarColorBuffer>;
+  colorsByPartAndMode: ReadonlyMap<
+    string,
+    ReadonlyMap<string, ScalarColorBuffer>
+  >;
+} {
+  const requestedModes = new Set(colorModes);
+  const nextColors = new Map<string, ScalarColorBuffer>();
+  for (const [mode, buffer] of colors) {
+    if (requestedModes.has(mode)) {
+      nextColors.set(mode, buffer);
+    }
+  }
+
+  const nextPartColors = new Map<string, ReadonlyMap<string, ScalarColorBuffer>>();
+  for (const [partId, buffersByMode] of colorsByPartAndMode) {
+    const requestedPartMode = partScalarColorModes?.get(partId);
+    if (!requestedPartMode) continue;
+    const buffer = buffersByMode.get(requestedPartMode);
+    if (buffer) {
+      nextPartColors.set(partId, new Map([[requestedPartMode, buffer]]));
+    }
+  }
+
+  return {
+    colors: nextColors,
+    colorsByPartAndMode: nextPartColors,
+  };
+}
+
+export function shouldBuildViewport3DPartChunkedScalarColor({
+  explicitPartFieldVector,
+  globalColorModes,
+  globalColorPalette,
+  globalFieldVector,
+  globalScalarRange,
+  mode,
+  palette,
+  partFieldVector,
+  scalarRange,
+}: {
+  explicitPartFieldVector: boolean;
+  globalColorModes: readonly string[];
+  globalColorPalette: string;
+  globalFieldVector: DecodedFieldVector | null | undefined;
+  globalScalarRange: ScalarRange | null | undefined;
+  mode: string;
+  palette: string;
+  partFieldVector: DecodedFieldVector;
+  scalarRange: ScalarRange | null | undefined;
+}): boolean {
+  const globalChunkedColorAvailable =
+    !explicitPartFieldVector &&
+    partFieldVector === globalFieldVector &&
+    globalColorModes.includes(mode) &&
+    palette === globalColorPalette &&
+    scalarRangesEqual(scalarRange, globalScalarRange);
+  return !globalChunkedColorAvailable;
+}
+
 export function resolveViewport3DChunkedPartDisplayModesKey({
   colorPalette,
   partScalarColorModes,
@@ -407,7 +481,7 @@ export function useViewport3DChunkedScalarColors({
   );
   const displayModesKey = useMemo(() => modes.join("|"), [modes]);
   const partBuildSpecs = useMemo(() => {
-    if (!topology || !partFieldVectors || !partScalarColorModes) return [];
+    if (!topology || !partScalarColorModes) return [];
     const specs: Array<{
       fieldVector: DecodedFieldVector;
       mode: string;
@@ -419,8 +493,31 @@ export function useViewport3DChunkedScalarColors({
     for (const partModel of [...topology.magneticParts, ...topology.airboxParts]) {
       const partId = partModel.part.id;
       const mode = partScalarColorModes.get(partId);
-      const partFieldVector = partFieldVectors.get(partId);
+      const explicitPartFieldVector = partFieldVectors?.get(partId) ?? null;
+      const partFieldVector = explicitPartFieldVector ?? fieldVector ?? null;
       if (!mode || mode === "monochrome" || !partFieldVector) continue;
+      const palette = partScalarColorPalettes?.get(partId) ?? colorPalette;
+      const scalarRange =
+        partScalarRangesByMode?.get(partId)?.get(mode) ??
+        (partFieldVector === fieldVector
+          ? fieldScalarRangesByMode?.get(mode)
+          : undefined);
+      const globalRange = fieldScalarRangesByMode?.get(mode);
+      if (
+        !shouldBuildViewport3DPartChunkedScalarColor({
+          explicitPartFieldVector: Boolean(explicitPartFieldVector),
+          globalColorModes: modes,
+          globalColorPalette: colorPalette,
+          globalFieldVector: fieldVector,
+          globalScalarRange: globalRange,
+          mode,
+          palette,
+          partFieldVector,
+          scalarRange,
+        })
+      ) {
+        continue;
+      }
       if (
         !fieldTransformNeedsChunking(
           Math.max(partFieldVector.pointCount, topology.nodeCount),
@@ -428,28 +525,27 @@ export function useViewport3DChunkedScalarColors({
       ) {
         continue;
       }
-      const target = resolveViewport3DChunkedPartFieldColorTarget(
-        topology,
-        partModel,
-        partFieldVector,
-      );
+      const target = explicitPartFieldVector
+        ? resolveViewport3DChunkedPartFieldColorTarget(
+            topology,
+            partModel,
+            partFieldVector,
+          )
+        : resolveViewport3DChunkedFieldColorTarget(topology, partFieldVector);
       if (!target) continue;
       specs.push({
         fieldVector: partFieldVector,
         mode,
         partId,
-        palette: partScalarColorPalettes?.get(partId) ?? colorPalette,
-        scalarRange:
-          partScalarRangesByMode?.get(partId)?.get(mode) ??
-          (partFieldVector === fieldVector
-            ? fieldScalarRangesByMode?.get(mode)
-            : undefined),
+        palette,
+        scalarRange,
         target,
       });
     }
     return specs;
   }, [
     colorPalette,
+    modes,
     partFieldVectors,
     partScalarColorModes,
     partScalarColorPalettes,
@@ -495,25 +591,28 @@ export function useViewport3DChunkedScalarColors({
   );
   const buildTargetKind =
     fieldColorTarget?.kind ?? partBuildSpecs[0]?.target.kind ?? null;
-  const needsChunking = Boolean(
+  const primaryNeedsChunking = Boolean(
     fieldVector &&
       topology &&
       fieldTransformNeedsChunking(
         Math.max(fieldVector.pointCount, topology.nodeCount),
       ),
   );
+  const needsChunking = primaryNeedsChunking || partBuildSpecs.length > 0;
+  const buildIdentityFieldVector =
+    fieldVector ?? partBuildSpecs[0]?.fieldVector ?? null;
   const eligibleForChunkedBuild =
     enabled &&
     ((Boolean(fieldVector) &&
       Boolean(fieldColorTarget) &&
-      needsChunking &&
+      primaryNeedsChunking &&
       modes.length > 0) ||
       partBuildSpecs.length > 0);
   const compatibilityRequest = useMemo<ChunkedScalarColorCompatibilityRequest>(
     () => ({
       colorPalette,
       enabled,
-      fieldPointCount: fieldVector?.pointCount ?? null,
+      fieldPointCount: buildIdentityFieldVector?.pointCount ?? null,
       modesKey: combinedDisplayModesKey,
       needsChunking,
       targetKind: buildTargetKind,
@@ -521,10 +620,10 @@ export function useViewport3DChunkedScalarColors({
     }),
     [
       buildTargetKind,
+      buildIdentityFieldVector?.pointCount,
       colorPalette,
       combinedDisplayModesKey,
       enabled,
-      fieldVector?.pointCount,
       needsChunking,
       topology,
     ],
@@ -563,12 +662,12 @@ export function useViewport3DChunkedScalarColors({
         builtBuildKey: chunkedColorState.chunkedState?.buildKey ?? null,
         builtFieldVector: chunkedColorState.chunkedState?.fieldVector ?? null,
         currentBuildKey: combinedModesKey,
-        currentFieldVector: fieldVector ?? null,
+        currentFieldVector: buildIdentityFieldVector,
         eligibleForChunkedBuild,
         pending: chunkedColorState.pending,
       }) ||
       !topology ||
-      !fieldVector ||
+      !buildIdentityFieldVector ||
       !buildTargetKind
     ) {
       return undefined;
@@ -585,19 +684,22 @@ export function useViewport3DChunkedScalarColors({
     });
 
     void (async () => {
-      const entries = new Map(
-        chunkedColorState.chunkedState
-          ? chunkedScalarColorBuffers.get(chunkedColorState.chunkedState.token)
-          : null,
-      );
+      const retainedEntries = filterViewport3DChunkedScalarColorEntries({
+        colorModes: modes,
+        colors: chunkedColorState.chunkedState
+          ? (chunkedScalarColorBuffers.get(chunkedColorState.chunkedState.token) ??
+            EMPTY_SCALAR_COLOR_MAP)
+          : EMPTY_SCALAR_COLOR_MAP,
+        colorsByPartAndMode: chunkedColorState.chunkedState
+          ? (chunkedScalarColorBuffersByPartAndMode.get(
+              chunkedColorState.chunkedState.token,
+            ) ?? EMPTY_PART_SCALAR_COLOR_MAP)
+          : EMPTY_PART_SCALAR_COLOR_MAP,
+        partScalarColorModes,
+      });
+      const entries = new Map(retainedEntries.colors);
       const partEntries = new Map(
-        [
-          ...(chunkedColorState.chunkedState
-            ? (chunkedScalarColorBuffersByPartAndMode.get(
-                chunkedColorState.chunkedState.token,
-              ) ?? EMPTY_PART_SCALAR_COLOR_MAP)
-            : EMPTY_PART_SCALAR_COLOR_MAP),
-        ].map(([partId, colorsByMode]) => [
+        [...retainedEntries.colorsByPartAndMode].map(([partId, colorsByMode]) => [
           partId,
           new Map(colorsByMode),
         ]),
@@ -630,7 +732,7 @@ export function useViewport3DChunkedScalarColors({
           chunkedState: {
             buildKey: combinedModesKey,
             colorPalette,
-            fieldVector,
+            fieldVector: buildIdentityFieldVector,
             modesKey: combinedDisplayModesKey,
             targetKind: buildTargetKind,
             token,
@@ -779,6 +881,7 @@ export function useViewport3DChunkedScalarColors({
     chunkedColorState.pending,
     buildDomainId,
     buildSessionId,
+    buildIdentityFieldVector,
     colorPalette,
     combinedModesKey,
     combinedDisplayModesKey,
@@ -791,6 +894,7 @@ export function useViewport3DChunkedScalarColors({
     modes,
     needsChunking,
     partBuildSpecs,
+    partScalarColorModes,
     targetVisualizationRevision,
     topology,
     topologyRevision,
@@ -800,17 +904,29 @@ export function useViewport3DChunkedScalarColors({
     chunkedColorState.chunkedState,
     compatibilityRequest,
   );
-  const colors =
+  const rawColors =
     compatible && chunkedColorState.chunkedState
       ? chunkedScalarColorBuffers.get(chunkedColorState.chunkedState.token) ??
         EMPTY_SCALAR_COLOR_MAP
       : EMPTY_SCALAR_COLOR_MAP;
-  const colorsByPartAndMode =
+  const rawColorsByPartAndMode =
     compatible && chunkedColorState.chunkedState
       ? chunkedScalarColorBuffersByPartAndMode.get(
           chunkedColorState.chunkedState.token,
         ) ?? EMPTY_PART_SCALAR_COLOR_MAP
       : EMPTY_PART_SCALAR_COLOR_MAP;
+  const visibleEntries = useMemo(
+    () =>
+      filterViewport3DChunkedScalarColorEntries({
+        colorModes: modes,
+        colors: rawColors,
+        colorsByPartAndMode: rawColorsByPartAndMode,
+        partScalarColorModes,
+      }),
+    [modes, partScalarColorModes, rawColors, rawColorsByPartAndMode],
+  );
+  const colors = visibleEntries.colors;
+  const colorsByPartAndMode = visibleEntries.colorsByPartAndMode;
 
   return {
     colors,
@@ -958,6 +1074,14 @@ function scalarRangeRevisionKey(
     return "auto";
   }
   return `min=${range.min}:max=${range.max}`;
+}
+
+function scalarRangesEqual(
+  left: ScalarRange | null | undefined,
+  right: ScalarRange | null | undefined,
+): boolean {
+  if (!left || !right) return !left && !right;
+  return left.min === right.min && left.max === right.max;
 }
 
 function resolveChunkedScalarColorStatus({

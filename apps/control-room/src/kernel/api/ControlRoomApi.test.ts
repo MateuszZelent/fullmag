@@ -1051,6 +1051,37 @@ describe("ControlRoomApi", () => {
     );
   });
 
+  it("normalizes object-prefixed field metadata scope ids for object scopes", async () => {
+    let observedUrl = "";
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url) => {
+        observedUrl = String(url);
+        return jsonResponse({
+          components: 3,
+          domain_generation_id: 3,
+          field_revision: 8,
+          kind: "vector",
+          label: "Magnetization",
+          location: "nodes",
+          quantity_id: "m",
+          stats: { max: 1, mean: 0.5, min: 0 },
+          unit: "",
+        });
+      },
+    });
+
+    await api.data.fields.meta("m", {
+      component: "x",
+      scope_id: "object:permalloy_layer",
+      scope_kind: "object",
+    });
+
+    expect(observedUrl).toBe(
+      "http://127.0.0.1:8765/v2/sessions/current/data/fields/m/meta?component=x&scope_id=permalloy_layer&scope_kind=object",
+    );
+  });
+
   it("loads scalar windows through the v2 data facade", async () => {
     let observedUrl = "";
     const fetchImpl = vi.fn(async (url: RequestInfo | URL) => {

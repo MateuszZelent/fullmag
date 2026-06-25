@@ -126,7 +126,12 @@ export function viewport3DFieldMetaResourceMatchesQuantity(
     "{quantity_id}",
     encodeURIComponent(resolveCanonicalQuantityId(quantityId)),
   );
-  return resourceKey === fieldMetaPath || resourceKey.startsWith(`${fieldMetaPath}?`);
+  return (
+    resourceKey === fieldMetaPath ||
+    resourceKey.startsWith(`${fieldMetaPath}?`) ||
+    resourceKey.includes(`#viewport-3d:part-scalar-ranges:${fieldMetaPath}?`) ||
+    resourceKey.includes(`|${fieldMetaPath}?`)
+  );
 }
 
 export function invalidateViewport3DFieldMetaResources(

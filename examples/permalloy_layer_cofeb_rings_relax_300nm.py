@@ -73,7 +73,7 @@ layer.Ms = 1.6e6
 layer.Aex = 15e-12
 layer.alpha = 0.001
 layer.Ku1 = 1e5
-layer.anisU = (1,0,0)
+layer.anisU = (0,0,1)
 layer.m = fm.texture.uniform(1.0, 0.0, 0.0)
 layer.mesh(maximum_element_size=8 * NM, minimum_element_size=2 * NM, order=1)
 

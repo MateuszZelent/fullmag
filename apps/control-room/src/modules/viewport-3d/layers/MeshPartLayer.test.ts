@@ -117,6 +117,24 @@ describe("MeshPartLayer", () => {
     expect(uploadEffect).not.toContain("useEffect(() => {\n    store.publish(null);");
   });
 
+  it("keys scalar color upload retention by per-part color semantics", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("./MeshPartLayer.tsx", import.meta.url)),
+      "utf8",
+    );
+
+    expect(source).toContain("const scalarColorRetentionKey = useMemo");
+    expect(source).toContain("`part=${part.id}`");
+    expect(source).toContain("`mode=${scalarColorMode}`");
+    expect(source).toContain(
+      "`quantity=${resolveCanonicalQuantityId(renderSettings.activeQuantityId)}`",
+    );
+    expect(source).toContain(
+      "`palette=${renderSettings.scalarColorPalette ?? \"default\"}`",
+    );
+    expect(source).toContain("retentionKey: scalarColorRetentionKey");
+  });
+
   it("uses volume edges for full magnetic-object wireframe and surface edges for surface mode", () => {
     const surfaceEdges = new Uint32Array([0, 1, 1, 2]);
     const volumeEdges = new Uint32Array([0, 1, 1, 2, 2, 3, 0, 3]);
@@ -214,7 +232,7 @@ describe("MeshPartLayer", () => {
     ).toBe(partEffectiveFieldY);
   });
 
-  it("does not retain a scalar texture from a different color mode", () => {
+  it("retains the last compatible scalar texture while a different color mode is building", () => {
     const previousOrientation = {
       colors: new Float32Array(0),
       colorMode: "orientation",
@@ -243,7 +261,7 @@ describe("MeshPartLayer", () => {
         },
         vertexCount: 2,
       }),
-    ).toBeNull();
+    ).toBe(previousOrientation);
     expect(
       resolveRetainedMeshPartScalarColors({
         current: replacementY,
@@ -256,6 +274,30 @@ describe("MeshPartLayer", () => {
         vertexCount: 2,
       }),
     ).toBe(replacementY);
+  });
+
+  it("does not retain a stale scalar texture from a different quantity", () => {
+    const previousMagnetizationY = {
+      colors: new Float32Array(0),
+      colorMode: "y",
+      colorPalette: "viridis",
+      quantityId: "m",
+      range: { max: 1, min: -1 },
+      scalarValues: new Float32Array(2),
+    };
+
+    expect(
+      resolveRetainedMeshPartScalarColors({
+        current: null,
+        previous: previousMagnetizationY,
+        scalarColorMode: "y",
+        settings: {
+          activeQuantityId: "H_eff",
+          scalarColorPalette: "viridis",
+        },
+        vertexCount: 2,
+      }),
+    ).toBeNull();
   });
 
   it("retains the last same-mode scalar texture while replacement data is building", () => {

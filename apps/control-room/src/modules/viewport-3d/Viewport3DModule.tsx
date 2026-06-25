@@ -237,12 +237,13 @@ interface Viewport3DScalarColorbarLegendInput {
     settings: Pick<
       Viewport3DSceneProps["fallbackSettings"],
       | "activeQuantityId"
-      | "scalarColorPalette"
       | "shaderVisible"
       | "surfaceColorSource"
       | "viewportColorbarVisible"
       | "visible"
-    >;
+    > & {
+      scalarColorPalette?: string | null;
+    };
   }>;
   quantityId: string;
   surfaceColorMode: string | null;
@@ -432,17 +433,27 @@ export function resolveRetainedViewport3DScalarColorbarLegends({
   current,
   previous,
   requested,
+  requestedGroupKeys,
 }: {
   current: readonly Viewport3DScopedColorbarLegend[];
   previous: readonly Viewport3DScopedColorbarLegend[];
   requested: boolean;
+  requestedGroupKeys?: ReadonlySet<string>;
 }): readonly Viewport3DScopedColorbarLegend[] {
   if (!requested) return [];
-  if (current.length === 0) return previous;
-  if (previous.length === 0) return current;
-  const retained = new Map(previous.map((entry) => [entry.key, entry]));
+  const retainablePrevious = requestedGroupKeys
+    ? previous.filter((entry) =>
+        requestedGroupKeys.has(viewport3DColorbarRetentionGroupKey(entry.key)),
+      )
+    : previous;
+  if (current.length === 0) return retainablePrevious;
+  if (retainablePrevious.length === 0) return current;
+  const retained = new Map(retainablePrevious.map((entry) => [entry.key, entry]));
   const retainedGroups = new Map(
-    previous.map((entry) => [viewport3DColorbarRetentionGroupKey(entry.key), entry.key]),
+    retainablePrevious.map((entry) => [
+      viewport3DColorbarRetentionGroupKey(entry.key),
+      entry.key,
+    ]),
   );
   for (const entry of current) {
     const groupKey = viewport3DColorbarRetentionGroupKey(entry.key);
@@ -456,11 +467,74 @@ export function resolveRetainedViewport3DScalarColorbarLegends({
   return Array.from(retained.values());
 }
 
+export function resolveViewport3DRequestedColorbarGroupKeys(
+  parts: readonly NonNullable<Viewport3DScalarColorbarLegendInput["parts"]>[number][],
+  colorPalette: string,
+  { fdmColorbarRequested = false }: { fdmColorbarRequested?: boolean } = {},
+): ReadonlySet<string> {
+  const keys = new Set<string>();
+  if (fdmColorbarRequested) {
+    keys.add(viewport3DColorbarRetentionGroupKey("fdm"));
+  }
+  for (const part of parts) {
+    const settings = part.settings;
+    if (
+      !settings.viewportColorbarVisible ||
+      !settings.visible ||
+      !settings.shaderVisible
+    ) {
+      continue;
+    }
+    const colorMode = surfaceColorSourceToColorMode(settings.surfaceColorSource);
+    if (!colorMode) continue;
+    keys.add(
+      viewport3DColorbarRetentionGroupKey(
+        [
+          part.id,
+          resolveCanonicalQuantityId(settings.activeQuantityId),
+          colorMode,
+          settings.scalarColorPalette ?? colorPalette,
+        ].join(":"),
+      ),
+    );
+  }
+  return keys;
+}
+
+export function shouldClearRetainedViewport3DScalarColorbarLegends({
+  fdmColorbarRequested,
+  renderSurfaceAvailable,
+  viewportColorbarRequested,
+}: {
+  fdmColorbarRequested: boolean;
+  renderSurfaceAvailable: boolean;
+  viewportColorbarRequested: boolean;
+}): boolean {
+  return (
+    renderSurfaceAvailable &&
+    !viewportColorbarRequested &&
+    !fdmColorbarRequested
+  );
+}
+
+export function shouldRetainViewport3DScalarColorbarLegends({
+  fdmColorbarRequested,
+  renderSurfaceAvailable,
+  viewportColorbarRequested,
+}: {
+  fdmColorbarRequested: boolean;
+  renderSurfaceAvailable: boolean;
+  viewportColorbarRequested: boolean;
+}): boolean {
+  return (
+    viewportColorbarRequested ||
+    fdmColorbarRequested ||
+    !renderSurfaceAvailable
+  );
+}
+
 function viewport3DColorbarRetentionGroupKey(key: string): string {
-  const parts = key.split(":");
-  if (parts.length < 3) return key;
-  const palette = parts.at(-1) ?? "";
-  return [...parts.slice(0, -2), palette].join(":");
+  return key;
 }
 
 function sameViewport3DScopedColorbarLegends(
@@ -913,6 +987,22 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
         surfaceColorSourceToColorMode(settings.surfaceColorSource),
     ),
   );
+  const fdmColorbarRequested = Boolean(
+    sceneProps.fdmSettings?.viewportColorbarVisible,
+  );
+  const requestedColorbarGroupKeys =
+    resolveViewport3DRequestedColorbarGroupKeys(
+      colorbarParts,
+      sceneProps.scalarColorPalette,
+      { fdmColorbarRequested },
+    );
+  const renderSurfaceAvailable = Boolean(sceneProps.topology || sceneProps.fdmDomain);
+  const colorbarRetentionRequested =
+    shouldRetainViewport3DScalarColorbarLegends({
+      fdmColorbarRequested,
+      renderSurfaceAvailable,
+      viewportColorbarRequested,
+    });
   const retainedColorbarLegends = useSyncExternalStore(
     subscribeRetainedViewport3DColorbarLegends,
     () => getRetainedViewport3DColorbarLegends(slotId),
@@ -932,16 +1022,20 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   const colorbarLegends = resolveRetainedViewport3DScalarColorbarLegends({
     current: resolvedColorbarLegends,
     previous: retainedColorbarLegends,
-    requested:
-      viewportColorbarRequested ||
-      Boolean(sceneProps.fdmSettings?.viewportColorbarVisible),
+    requested: colorbarRetentionRequested,
+    requestedGroupKeys: viewportColorbarRequested || fdmColorbarRequested
+      ? requestedColorbarGroupKeys
+      : undefined,
   });
   useEffect(() => {
     if (resolvedColorbarLegends.length > 0) {
       setRetainedViewport3DColorbarLegends(slotId, resolvedColorbarLegends);
     } else if (
-      !viewportColorbarRequested &&
-      !sceneProps.fdmSettings?.viewportColorbarVisible
+      shouldClearRetainedViewport3DScalarColorbarLegends({
+        fdmColorbarRequested,
+        renderSurfaceAvailable,
+        viewportColorbarRequested,
+      })
     ) {
       setRetainedViewport3DColorbarLegends(
         slotId,
@@ -953,8 +1047,10 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     );
   }, [
     colorbarLegends,
+    colorbarRetentionRequested,
+    fdmColorbarRequested,
     resolvedColorbarLegends,
-    sceneProps.fdmSettings?.viewportColorbarVisible,
+    renderSurfaceAvailable,
     slotId,
     viewportColorbarRequested,
   ]);
