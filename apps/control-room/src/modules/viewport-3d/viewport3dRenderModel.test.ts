@@ -25,6 +25,7 @@ import {
   resolveViewport3DVectorSegmentScale,
   viewport3DFieldRenderOptionsNeedFieldData,
 } from "./viewport3dRenderModel";
+import { buildViewport3DTargetFieldBuffer } from "./model/viewport3DTargetFieldBuffer";
 import { magnitudeColorRgb } from "./viewport3dVectorColoring";
 
 const viewport3dRenderModelSource = readFileSync(
@@ -1465,6 +1466,100 @@ describe("viewport3dRenderModel", () => {
       model?.scalarColorsByPartAndMode.get("part-a")?.get("magnitude")?.colors
         .length,
     ).toBe(12);
+  });
+
+  it("rejects sampled target field buffers for per-vertex surface colors", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "part-a",
+          label: "Part A",
+          nodeCount: 4,
+          nodeStart: 0,
+        },
+      ],
+      [],
+    );
+    const fieldVector = fieldVectorFixture();
+    const sampledBuffer = buildViewport3DTargetFieldBuffer({
+      fieldVector,
+      query: {
+        component: "full",
+        max_samples: 4,
+        scope_id: "part-a",
+        scope_kind: "part",
+      },
+      targetIds: ["part-a"],
+    });
+
+    const model = buildViewport3DFieldRenderModel(
+      topologyModel,
+      fieldVectorFixture(),
+      0.5,
+      {
+        partFieldVectors: new Map([["part-a", fieldVector]]),
+        partScalarColorModes: new Map([["part-a", "x"]]),
+        partTargetFieldBuffers: new Map([["part-a", sampledBuffer]]),
+        partVectorBudgets: new Map([["part-a", 4]]),
+        scalarColorsVisible: true,
+      },
+    );
+
+    expect(model?.scalarColorsByPartAndMode.get("part-a")?.get("x")).toBeNull();
+    expect(model?.partVectorSegments.get("part-a")?.length).toBeGreaterThan(0);
+  });
+
+  it("rejects scalar-only target field buffers for vector glyphs", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "part-a",
+          label: "Part A",
+          nodeCount: 4,
+          nodeStart: 0,
+        },
+      ],
+      [],
+    );
+    const scalarFieldVector: DecodedFieldVector = {
+      ...fieldVectorFixture(),
+      nComp: 1,
+      valueCount: 4,
+      values: new Float64Array([1, 0, -1, 0.5]),
+    };
+    const scalarBuffer = buildViewport3DTargetFieldBuffer({
+      fieldVector: scalarFieldVector,
+      query: {
+        component: "x",
+        scope_id: "part-a",
+        scope_kind: "part",
+      },
+      targetIds: ["part-a"],
+    });
+
+    const model = buildViewport3DFieldRenderModel(
+      topologyModel,
+      fieldVectorFixture(),
+      0.5,
+      {
+        partFieldVectors: new Map([["part-a", scalarFieldVector]]),
+        partScalarColorModes: new Map([["part-a", "x"]]),
+        partTargetFieldBuffers: new Map([["part-a", scalarBuffer]]),
+        partVectorBudgets: new Map([["part-a", 4]]),
+        scalarColorsVisible: true,
+      },
+    );
+
+    expect(
+      model?.scalarColorsByPartAndMode.get("part-a")?.get("x")?.colors.length,
+    ).toBe(12);
+    expect(model?.partVectorSegments.get("part-a")).toBeNull();
   });
 
   it("maps scoped per-part scalar colors onto global topology node indices", () => {

@@ -1182,7 +1182,71 @@ The production implementation must also satisfy these criteria:
 9. No claim of "zero React re-renders" is accepted without render-reason instrumentation in the tested scenario.
 10. No claim of "no duplicate fetches" is accepted unless the request planner and actual API calls are compared by normalized request id.
 
-## 11. Short version
+## 11. Production-readiness proof matrix
+
+Implementing the target architecture is necessary, but it is not by itself enough to call the result production-grade. The implementation is production-grade only when every row below is satisfied by code, tests, and browser/runtime evidence.
+
+| Area | Production requirement | Proof required |
+|---|---|---|
+| Target intent | Every object, mesh part, airbox, and fallback domain has an explicit target render plan. | Unit tests for mixed object modes, hidden objects, solid-only targets, vector-only targets, shader+vector targets, and viewport colorbar opt-in. |
+| Request planning | Fetch requests are generated only from pass demands, never from layer-side fallbacks. | Planner tests proving scalar-only, vector-only, shader+vector, airbox, scoped object, and aggregate-sharing cases. |
+| Cache identity | The cache key and the actual API query are produced from the same normalized request object. | Tests comparing request id, query params, component, scope kind, scope id, quantity id, sample budget, and revision. |
+| Payload capability | Decoded buffers expose explicit capabilities before any layer can consume them. | Eligibility tests proving sampled payloads cannot feed shader surfaces and scalar payloads cannot feed vector glyphs. |
+| Surface texture correctness | Per-target `orientation`, `x`, `y`, `z`, magnitude, palette, and range do not leak between objects. | Browser scenario with at least three magnetic objects using different modes and palettes while solver updates are running. |
+| Surface texture performance | Palette/range/mode changes on the shader path update uniforms or palette textures, not topology geometry or material program class. | Render-reason diagnostics, WebGL resource counters, and material/geometry identity assertions around mode switching. |
+| Vector correctness | Vectors render for object, airbox, vector-only, and shader+vector cases. | Browser scenario enabling vectors on one target while other targets use different surface modes or solid color. |
+| Vector performance | Vector segment construction and glyph preparation are not unbounded synchronous main-thread loops. | Worker-lane diagnostics, fallback counters, and long-task audit during solver updates. |
+| Colorbar lifecycle | Viewport colorbars are opt-in per target and remain mounted across compatible range updates. | React remount counter or stable legend identity test while ranges update. |
+| Stale-compatible retention | Old compatible surfaces, vectors, and colorbars remain visible until replacement buffers are complete. | Tests for field revision transition, worker delay, aborted request, and rejected incompatible payload. |
+| Worker failure | Worker unavailable/failure states are explicit degraded states, not silent full-cost main-thread rebuilds. | Forced-worker-failure test and diagnostics event proving degraded state is surfaced. |
+| Dirty rendering | Idle viewport produces zero frames after settling. Solver, camera, resize, field update, and style update each have explicit dirty reasons. | `audit:idle-performance` plus viewport dirty-reason counters. |
+| Resource lifecycle | WebGL resources, workers, observers, and large buffers are released on layer/module unmount or topology/style invalidation. | Viewport memory stress test and resource tracker counts returning to zero for module-owned resources. |
+| API hygiene | React components do not construct data-plane endpoint strings or call transport directly. | API hygiene search/test proving requests go through facade/resource hooks/planners. |
+| Diagnostics | Every freeze, degraded pass, duplicate request, or buffer rejection can be traced to a demand id and target id. | Diagnostic record fixtures and browser diagnostic report from the mixed-object live scenario. |
+
+### 11.1 Hard fail conditions
+
+The implementation is not production-grade if any of these remain true:
+
+- a component-mode switch can make unrelated targets white, solid, or HSL-oriented;
+- a solver update causes repeated long main-thread windows with no demand/job attribution;
+- a vector layer disappears when the surface shader is enabled;
+- a colorbar unmounts and remounts during a compatible range update;
+- full vector data is fetched twice for the same compatible shader+vector target;
+- scalar component data is fetched for a target that also needs full vector glyphs and could share the full vector payload;
+- sampled vector data is consumed as a surface texture;
+- worker fallback silently runs large derived work synchronously on the main thread;
+- status or websocket events carry heavy field/topology payloads instead of invalidating named resources;
+- UI code constructs ad-hoc `/v2/...` strings for this path.
+
+### 11.2 Minimum live proof before calling it done
+
+The final implementation must produce one saved diagnostic bundle for this scenario:
+
+1. Start a short live simulation with at least three magnetic targets and an airbox.
+2. Configure target A: shader surface `orientation`, vectors on.
+3. Configure target B: shader surface `component_x`, vectors off, viewport colorbar on.
+4. Configure target C: solid color, vectors on.
+5. Configure airbox: sampled vectors on.
+6. While the solver updates fields, switch target B between `x`, `y`, `z`, and magnitude.
+7. Verify:
+   - no unrelated target changes mode;
+   - no white texture flash;
+   - no vector disappearance;
+   - no colorbar remount;
+   - no duplicate equivalent field requests;
+   - no unbounded main-thread derived build;
+   - idle returns to zero viewport frames after the solver stops.
+
+Passing unit tests without this live proof is not enough, because the reported regressions appear specifically at the interaction between resource invalidation, R3F adoption, worker timing, and live solver updates.
+
+### 11.3 Final answer to the production question
+
+If the implementation includes the architecture in this report, the Gemini reconciliation upgrades, and all proof gates in this section, then it is a credible production design for this subsystem.
+
+If it implements only the structural refactor but skips diagnostics, live mixed-object proof, worker-failure behavior, or resource/request identity tests, then it is not production-grade. It would only be a cleaner version of the current fragile path.
+
+## 12. Short version
 
 Current architecture:
 

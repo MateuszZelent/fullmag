@@ -18,6 +18,7 @@ import {
   loadCachedBinaryResource,
   resolveViewport3DAirboxFieldVectorQuery,
   resolveViewport3DAirboxFieldVectorResourceKeys,
+  resolveViewport3DAirboxFieldVectorResourceRequests,
   resolveViewport3DFieldVectorResourceKey,
   resolveViewport3DPartFieldVectorResourceRequests,
   resolveViewport3DQuantityFieldVectorResourceRequests,
@@ -268,6 +269,48 @@ describe("viewport3dResources", () => {
         [
           "airbox",
           `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_eff")}?component=full&scope_id=airbox&scope_kind=airbox`,
+        ],
+      ]),
+    );
+  });
+
+  it("keeps airbox field vector request keys and API queries in sync", () => {
+    expect(
+      resolveViewport3DAirboxFieldVectorResourceRequests("h_eff", [
+        { id: "airbox" },
+        { id: "airbox-shell" },
+      ], {
+        component: "full",
+        max_samples: 384,
+        scope_kind: "full",
+      }),
+    ).toEqual(
+      new Map([
+        [
+          "airbox",
+          {
+            key: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_eff")}?component=full&max_samples=384&scope_id=airbox&scope_kind=airbox`,
+            quantityId: "H_eff",
+            query: {
+              component: "full",
+              max_samples: 384,
+              scope_id: "airbox",
+              scope_kind: "airbox",
+            },
+          },
+        ],
+        [
+          "airbox-shell",
+          {
+            key: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_eff")}?component=full&max_samples=384&scope_id=airbox-shell&scope_kind=airbox`,
+            quantityId: "H_eff",
+            query: {
+              component: "full",
+              max_samples: 384,
+              scope_id: "airbox-shell",
+              scope_kind: "airbox",
+            },
+          },
         ],
       ]),
     );

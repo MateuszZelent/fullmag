@@ -1713,7 +1713,6 @@ describe("useViewport3DSceneModel", () => {
         }) as never,
       magneticParts: [{ part }] as never,
       quantityId: "m",
-      scopedFieldPartIds: new Set(["part:arch_waveguide"]),
       vectorDomain: "auto",
     });
 
@@ -1782,7 +1781,6 @@ describe("useViewport3DSceneModel", () => {
         }) as never,
       magneticParts: [{ part }] as never,
       quantityId: "m",
-      scopedFieldPartIds: new Set(["part:arch_waveguide"]),
       vectorDomain: "auto",
     });
     expect(primaryOptions.scalarColorsVisible).toBe(true);

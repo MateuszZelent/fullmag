@@ -20,6 +20,11 @@ import {
 } from "./viewport3dFieldMapping";
 import { buildViewport3DVectorGlyphJobKey } from "./build-engine/viewport3dBuildJobKeys";
 import {
+  viewport3DTargetFieldBufferCanServeSurface,
+  viewport3DTargetFieldBufferCanServeVectors,
+  type Viewport3DTargetFieldBuffer,
+} from "./model/viewport3DTargetFieldBuffer";
+import {
   buildPartSurfaceIndices as buildPartSurfaceIndicesUncached,
   buildPartSurfaceIndicesWithSupplemental as buildPartSurfaceIndicesWithSupplementalUncached,
   buildPartVolumeEdgeIndices as buildPartVolumeEdgeIndicesUncached,
@@ -133,6 +138,7 @@ export interface Viewport3DFieldRenderOptions {
   fullVectorSurfaceOffsetScale?: number;
   complexFieldVector?: DecodedComplexFieldVector | null;
   partFieldVectors?: ReadonlyMap<string, DecodedFieldVector>;
+  partTargetFieldBuffers?: ReadonlyMap<string, Viewport3DTargetFieldBuffer>;
   partScalarColorModes?: ReadonlyMap<string, string>;
   partScalarColorPalettes?: ReadonlyMap<string, string>;
   partScalarRangesByMode?: ReadonlyMap<string, ReadonlyMap<string, ScalarRange>>;
@@ -655,7 +661,11 @@ export function buildViewport3DFieldRenderModel(
     const surfaceOffsetScale =
       options.partVectorSurfaceOffsetScales?.get(partId) ?? 0;
     const explicitPartFieldVector =
-      options.partFieldVectors?.get(partId) ?? null;
+      options.partTargetFieldBuffers?.get(partId)?.fieldVector ??
+      options.partFieldVectors?.get(partId) ??
+      null;
+    const explicitPartFieldBuffer =
+      options.partTargetFieldBuffers?.get(partId) ?? null;
     const partUsesMagneticOnlyField = Boolean(
       !explicitPartFieldVector &&
         !fullFieldVector &&
@@ -708,22 +718,27 @@ export function buildViewport3DFieldRenderModel(
       const partScalarRangesByMode =
         options.partScalarRangesByMode?.get(partId) ??
         (partFieldVector === renderFieldVector ? options.scalarRangesByMode : null);
-      scalarColorsByPartAndMode.set(
-        partId,
-        new Map(
-          [...partScalarColorModes].map((colorMode) => [
-            colorMode,
-            buildCachedPartVertexScalarColors(
-              partModel,
-              topology,
-              partFieldVector,
+      const partScalarColorsByMode = new Map<string, ScalarColorBuffer | null>();
+      for (const colorMode of partScalarColorModes) {
+        partScalarColorsByMode.set(
+          colorMode,
+          explicitPartFieldBuffer &&
+            !viewport3DTargetFieldBufferCanServeSurface(
+              explicitPartFieldBuffer,
               colorMode,
-              partScalarColorPalette,
-              partScalarRangesByMode?.get(colorMode),
-            ),
-          ]),
-        ),
-      );
+            )
+            ? null
+            : buildCachedPartVertexScalarColors(
+                partModel,
+                topology,
+                partFieldVector,
+                colorMode,
+                partScalarColorPalette,
+                partScalarRangesByMode?.get(colorMode),
+              ),
+        );
+      }
+      scalarColorsByPartAndMode.set(partId, partScalarColorsByMode);
     }
     // Only build a scoped resolver when the part field data is genuinely scoped (fewer points
     // than the full topology). When the API returns full-domain data for a scoped request
@@ -741,23 +756,27 @@ export function buildViewport3DFieldRenderModel(
             )
           : null);
     const anchorMode = options.partVectorAnchorModes?.get(partId) ?? "center";
-    const partSegments = buildCachedPartVectorSegments(
-      partModel,
-      topology,
-      partFieldVector,
-      renderVectorSelection,
-      vectorScope,
-      scale * partScale,
-      partBudget,
-      {
-        anchorMode,
-        surfaceOffsetEnabled,
-        surfaceOffsetScale,
-        surfaceTriangleIndices:
-          surfaceOffsetEnabled ? partModel.surfaceIndices : null,
-      },
-      fieldValueResolver,
-    );
+    const partSegments =
+      explicitPartFieldBuffer &&
+      !viewport3DTargetFieldBufferCanServeVectors(explicitPartFieldBuffer)
+        ? null
+        : buildCachedPartVectorSegments(
+            partModel,
+            topology,
+            partFieldVector,
+            renderVectorSelection,
+            vectorScope,
+            scale * partScale,
+            partBudget,
+            {
+              anchorMode,
+              surfaceOffsetEnabled,
+              surfaceOffsetScale,
+              surfaceTriangleIndices:
+                surfaceOffsetEnabled ? partModel.surfaceIndices : null,
+            },
+            fieldValueResolver,
+          );
     partVectorSegments.set(partId, partSegments);
     partVectorBuilds.set(
       partId,

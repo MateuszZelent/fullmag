@@ -18,6 +18,10 @@ import {
   resolveNodeSelectionCount,
   resolveNodeSelectionIndex,
 } from "../viewport3dRenderModel";
+import {
+  viewport3DTargetFieldBufferCanServeSurface,
+  type Viewport3DTargetFieldBuffer,
+} from "../model/viewport3DTargetFieldBuffer";
 import type {
   Viewport3DFieldRenderModel,
   Viewport3DRenderablePart,
@@ -436,6 +440,7 @@ export function useViewport3DChunkedScalarColors({
   fieldScalarRangesByMode,
   fieldVector,
   partFieldVectors,
+  partTargetFieldBuffers,
   partScalarColorModes,
   partScalarColorPalettes,
   partScalarRangesByMode,
@@ -452,6 +457,7 @@ export function useViewport3DChunkedScalarColors({
   fieldScalarRangesByMode?: ReadonlyMap<string, ScalarRange>;
   fieldVector: DecodedFieldVector | null | undefined;
   partFieldVectors?: ReadonlyMap<string, DecodedFieldVector>;
+  partTargetFieldBuffers?: ReadonlyMap<string, Viewport3DTargetFieldBuffer>;
   partScalarColorModes?: ReadonlyMap<string, string>;
   partScalarColorPalettes?: ReadonlyMap<string, string>;
   partScalarRangesByMode?: ReadonlyMap<string, ReadonlyMap<string, ScalarRange>>;
@@ -494,8 +500,18 @@ export function useViewport3DChunkedScalarColors({
       const partId = partModel.part.id;
       const mode = partScalarColorModes.get(partId);
       const explicitPartFieldVector = partFieldVectors?.get(partId) ?? null;
+      const explicitPartFieldBuffer = partTargetFieldBuffers?.get(partId) ?? null;
       const partFieldVector = explicitPartFieldVector ?? fieldVector ?? null;
       if (!mode || mode === "monochrome" || !partFieldVector) continue;
+      if (
+        explicitPartFieldBuffer &&
+        !viewport3DTargetFieldBufferCanServeSurface(
+          explicitPartFieldBuffer,
+          mode,
+        )
+      ) {
+        continue;
+      }
       const palette = partScalarColorPalettes?.get(partId) ?? colorPalette;
       const scalarRange =
         partScalarRangesByMode?.get(partId)?.get(mode) ??
@@ -547,6 +563,7 @@ export function useViewport3DChunkedScalarColors({
     colorPalette,
     modes,
     partFieldVectors,
+    partTargetFieldBuffers,
     partScalarColorModes,
     partScalarColorPalettes,
     partScalarRangesByMode,

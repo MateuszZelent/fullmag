@@ -54,12 +54,12 @@ study.engine("fem")
 study.device("gpu", precision="double")
 study.universe(
     mode="auto",
-    size=(2.4e-6, 1.7e-6, 9.0e-7),
+    size=(2.8e-6, 2.1e-6, 1.2e-6),
     center=(0.0, 0.0, 0.0),
     padding=(0.0, 0.0, 0.0),
 )
 
-study.universe.mesh(maximum_element_size=350 * NM, minimum_element_size=20 * NM)
+study.universe.mesh(maximum_element_size=400 * NM, minimum_element_size=10 * NM)
 study.interactive(True)
 
 study.airbox.visualization(show=True, mode="vectors", active_quantity_id="h_eff", wireframe=False)
@@ -75,7 +75,7 @@ layer.alpha = 0.001
 layer.Ku1 = 1e5
 layer.anisU = (0,0,1)
 layer.m = fm.texture.uniform(1.0, 0.0, 0.0)
-layer.mesh(maximum_element_size=8 * NM, minimum_element_size=2 * NM, order=1)
+layer.mesh(maximum_element_size=4 * NM, minimum_element_size=2 * NM, order=1)
 
 top_ring = study.geometry(
     ring_geometry("cofeb_top_ring", RING_CENTER_Z),
@@ -93,7 +93,7 @@ for ring in (bottom_ring,):
     ring.Ku1 = 1.0e6
     ring.anisU = RING_AXIS
     ring.m = fm.texture.uniform(1,0,0)
-    ring.mesh(maximum_element_size=25 * NM, minimum_element_size=2.5 * NM, order=1)
+    ring.mesh(maximum_element_size=20 * NM, minimum_element_size=2.5 * NM, order=1)
 for ring in (top_ring,):
     ring.Ms = 1.51e6
     ring.Aex = 15e-12
@@ -101,7 +101,7 @@ for ring in (top_ring,):
     ring.Ku1 = 1.0e6
     ring.anisU = RING_AXIS
     ring.m = fm.texture.uniform(-1,0,0)
-    ring.mesh(maximum_element_size=25 * NM, minimum_element_size=2.5 * NM, order=1)
+    ring.mesh(maximum_element_size=20 * NM, minimum_element_size=2.5 * NM, order=1)
 
 # Interactions, mesh, and solver
 # study.exchange()

@@ -118,6 +118,12 @@ export interface Viewport3DPartFieldVectorRequest {
   query: FieldVectorQuery;
 }
 
+export interface Viewport3DAirboxFieldVectorRequest {
+  key: string;
+  quantityId: string;
+  query: FieldVectorQuery;
+}
+
 export function viewport3DFieldMetaResourceMatchesQuantity(
   resourceKey: string,
   quantityId: string,
@@ -388,9 +394,27 @@ export function resolveViewport3DAirboxFieldVectorResourceKeys(
   airboxParts: readonly { id: string }[],
   fieldQuery: FieldVectorQuery = FULL_FIELD_VECTOR_QUERY,
 ): Map<string, string> {
+  return new Map(
+    Array.from(
+      resolveViewport3DAirboxFieldVectorResourceRequests(
+        quantityId,
+        airboxParts,
+        fieldQuery,
+      ),
+      ([partId, request]) => [partId, request.key],
+    ),
+  );
+}
+
+export function resolveViewport3DAirboxFieldVectorResourceRequests(
+  quantityId: string,
+  airboxParts: readonly { id: string }[],
+  fieldQuery: FieldVectorQuery = FULL_FIELD_VECTOR_QUERY,
+): Map<string, Viewport3DAirboxFieldVectorRequest> {
   if (isMagneticOnlyQuantityId(quantityId)) {
     return new Map();
   }
+  const canonicalQuantityId = resolveCanonicalQuantityId(quantityId);
   return new Map(
     airboxParts.map((part) => {
       const query = resolveViewport3DAirboxFieldVectorQuery({
@@ -399,7 +423,14 @@ export function resolveViewport3DAirboxFieldVectorResourceKeys(
       });
       return [
         part.id,
-        resolveViewport3DFieldVectorResourceKey(quantityId, query),
+        {
+          key: resolveViewport3DFieldVectorResourceKey(
+            canonicalQuantityId,
+            query,
+          ),
+          quantityId: canonicalQuantityId,
+          query,
+        },
       ];
     }),
   );
@@ -621,9 +652,9 @@ export function useViewport3DAirboxFieldVectors(
   options: { pauseLoad?: boolean } = {},
 ) {
   const { api, resources } = useKernel();
-  const requestKeys = useMemo(
+  const requests = useMemo(
     () =>
-      resolveViewport3DAirboxFieldVectorResourceKeys(
+      resolveViewport3DAirboxFieldVectorResourceRequests(
         quantityId,
         airboxParts,
         fieldQuery,
@@ -633,21 +664,24 @@ export function useViewport3DAirboxFieldVectors(
   const resourceKey = useMemo(() => {
     return resolveViewport3DFieldVectorCollectionResourceKey(
       "airbox",
-      requestKeys.values(),
+      Array.from(requests.values(), (request) => request.key),
     );
-  }, [requestKeys]);
+  }, [requests]);
   const load = useCallback(
     async ({ signal }: { signal: AbortSignal }) => {
-      const query = resolveViewport3DAirboxFieldVectorQuery(fieldQuery);
-      const uniqueKeys = Array.from(new Set(requestKeys.values()));
+      const uniqueRequests = Array.from(
+        new Map(
+          Array.from(requests.values(), (request) => [request.key, request]),
+        ).values(),
+      );
       const dataByKey = new Map(
         await Promise.all(
-          uniqueKeys.map(async (key) => {
+          uniqueRequests.map(async (request) => {
             const data = await loadCachedBinaryResource(
               fieldVectorCache,
-              key,
+              request.key,
               (etag, requestSignal) =>
-                api.data.fields.vector(quantityId, query, {
+                api.data.fields.vector(request.quantityId, request.query, {
                   etag,
                   signal: requestSignal,
                 }),
@@ -655,8 +689,8 @@ export function useViewport3DAirboxFieldVectors(
                 pauseRequest: viewport3DFieldUpdateHoldActive,
                 preferCached: cachedBinaryResourceMatchesRevision(
                   fieldVectorCache,
-                  key,
-                  resources.getRevision(key),
+                  request.key,
+                  resources.getRevision(request.key),
                 ),
                 signal,
               },
@@ -669,17 +703,17 @@ export function useViewport3DAirboxFieldVectors(
             if (data !== null) {
               invalidateViewport3DFieldMetaResources(
                 resources,
-                quantityId,
-                fieldVectorCache.peek(key)?.etag ?? null,
+                request.quantityId,
+                fieldVectorCache.peek(request.key)?.etag ?? null,
               );
             }
-            return [key, data] as const;
+            return [request.key, data] as const;
           }),
         ),
       );
-      const entries = Array.from(requestKeys, ([partId, key]) => [
+      const entries = Array.from(requests, ([partId, request]) => [
         partId,
-        dataByKey.get(key) ?? null,
+        dataByKey.get(request.key) ?? null,
       ] as const);
 
       return new Map(
@@ -689,18 +723,18 @@ export function useViewport3DAirboxFieldVectors(
         ),
       );
     },
-    [api, fieldQuery, quantityId, requestKeys, resources],
+    [api, requests, resources],
   );
   const resolveRevision = useCallback(() => {
-    const revisions = Array.from(requestKeys.values()).map(
-      (key) => fieldVectorCache.peek(key)?.etag ?? "missing",
+    const revisions = Array.from(requests.values()).map(
+      (request) => fieldVectorCache.peek(request.key)?.etag ?? "missing",
     );
     return revisions.length > 0 ? revisions.join("|") : null;
-  }, [requestKeys]);
+  }, [requests]);
 
   const resource = useResource({
     abortStaleInflight: true,
-    enabled: enabled && requestKeys.size > 0,
+    enabled: enabled && requests.size > 0,
     load,
     minRefetchIntervalMs: fieldVectorMinRefetchIntervalMs(),
     pauseLoad: options.pauseLoad,
