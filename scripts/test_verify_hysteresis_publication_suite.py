@@ -397,10 +397,29 @@ def test_publication_suite_rejects_validated_acceptance_with_deferred_tolerance(
     manifest = write_publication_suite_fixture(tmp_path)
     metrics_parity_fixtures.write_parity_fixture(tmp_path / "parity")
     payload = json.loads(manifest.read_text())
+    payload["cases"]["fdm_gpu_parity"] = {
+        "backend": "fdm",
+        "device": "gpu",
+        "precision": "double",
+    }
+    payload["cases"]["fem_gpu_parity"] = {
+        "backend": "fem",
+        "device": "gpu",
+        "precision": "double",
+    }
     payload["cross_backend_acceptance"]["status"] = "validated"
     payload["cross_backend_acceptance"]["parity_checks"] = [
         "parity/hysteresis_metrics_parity.json"
     ]
+    for lane in payload["cross_backend_acceptance"]["lanes"]:
+        lane["status"] = "validated"
+        lane["evidence"] = "synthetic parity evidence for tolerance gate"
+        lane.pop("limitations", None)
+        lane.pop("reason", None)
+        if lane["backend"] == "fdm" and lane["device"] == "gpu":
+            lane["case_ids"] = ["fdm_gpu_parity"]
+        elif lane["backend"] == "fem" and lane["device"] == "gpu":
+            lane["case_ids"] = ["fem_gpu_parity"]
     write_json(manifest, payload)
 
     result = run_validator(manifest)
@@ -409,3 +428,298 @@ def test_publication_suite_rejects_validated_acceptance_with_deferred_tolerance(
     details = result.stderr + result.stdout
     assert "tolerances" in details
     assert "validated" in details
+
+
+def test_publication_suite_rejects_validated_acceptance_with_open_lane(
+    tmp_path: Path,
+) -> None:
+    manifest = write_publication_suite_fixture(tmp_path)
+    metrics_parity_fixtures.write_parity_fixture(tmp_path / "parity")
+    payload = json.loads(manifest.read_text())
+    payload["cross_backend_acceptance"]["status"] = "validated"
+    payload["cross_backend_acceptance"]["parity_checks"] = [
+        "parity/hysteresis_metrics_parity.json"
+    ]
+    for tolerance in payload["cross_backend_acceptance"]["tolerances"]:
+        tolerance["status"] = "validated"
+    write_json(manifest, payload)
+
+    result = run_validator(manifest)
+
+    assert result.returncode != 0
+    details = result.stderr + result.stdout
+    assert "lane" in details
+    assert "validated" in details
+
+
+def test_publication_suite_rejects_validated_acceptance_with_uncovered_lane(
+    tmp_path: Path,
+) -> None:
+    manifest = write_publication_suite_fixture(tmp_path)
+    metrics_parity_fixtures.write_parity_fixture(tmp_path / "parity")
+    payload = json.loads(manifest.read_text())
+    payload["cases"]["fdm_gpu_parity"] = {
+        "backend": "fdm",
+        "device": "gpu",
+        "precision": "double",
+    }
+    payload["cases"]["fem_gpu_parity"] = {
+        "backend": "fem",
+        "device": "gpu",
+        "precision": "double",
+    }
+    payload["cross_backend_acceptance"]["status"] = "validated"
+    payload["cross_backend_acceptance"]["parity_checks"] = [
+        "parity/hysteresis_metrics_parity.json"
+    ]
+    for tolerance in payload["cross_backend_acceptance"]["tolerances"]:
+        tolerance["status"] = "validated"
+    for lane in payload["cross_backend_acceptance"]["lanes"]:
+        lane["status"] = "validated"
+        lane["evidence"] = "synthetic lane evidence for coverage gate"
+        lane.pop("limitations", None)
+        lane.pop("reason", None)
+        if lane["backend"] == "fdm" and lane["device"] == "gpu":
+            lane["case_ids"] = ["fdm_gpu_parity"]
+        elif lane["backend"] == "fem" and lane["device"] == "gpu":
+            lane["case_ids"] = ["fem_gpu_parity"]
+    write_json(manifest, payload)
+
+    result = run_validator(manifest)
+
+    assert result.returncode != 0
+    details = result.stderr + result.stdout
+    assert "parity_checks" in details
+    assert "fdm/gpu/double" in details
+
+
+def test_publication_suite_accepts_validated_acceptance_with_full_parity_coverage(
+    tmp_path: Path,
+) -> None:
+    manifest = write_publication_suite_fixture(tmp_path)
+    parity_root = tmp_path / "parity"
+    for lane_dir in ("fdm_cpu", "fdm_gpu", "fem_cpu", "fem_gpu"):
+        metrics_parity_fixtures.write_json(
+            parity_root / lane_dir / "hysteresis_metrics.json",
+            metrics_parity_fixtures.metrics_payload(),
+        )
+    metrics_parity_fixtures.write_json(
+        parity_root / "hysteresis_metrics_parity.json",
+        {
+            "schema_version": "hysteresis-metrics-parity/v1",
+            "pairs": [
+                {
+                    "pair_id": "fdm_cpu_vs_fdm_gpu",
+                    "reference": {
+                        "backend": "fdm",
+                        "device": "cpu",
+                        "precision": "double",
+                        "metrics_path": "fdm_cpu/hysteresis_metrics.json",
+                    },
+                    "candidate": {
+                        "backend": "fdm",
+                        "device": "gpu",
+                        "precision": "double",
+                        "metrics_path": "fdm_gpu/hysteresis_metrics.json",
+                    },
+                    "metrics": [
+                        {"name": "H_c_plus", "unit": "mT", "abs_tolerance": 0.0},
+                        {"name": "H_c_minus", "unit": "mT", "abs_tolerance": 0.0},
+                        {"name": "M_r_plus", "unit": "1", "abs_tolerance": 0.0},
+                        {"name": "M_r_minus", "unit": "1", "abs_tolerance": 0.0},
+                    ],
+                },
+                {
+                    "pair_id": "fdm_cpu_vs_fem_cpu",
+                    "reference": {
+                        "backend": "fdm",
+                        "device": "cpu",
+                        "precision": "double",
+                        "metrics_path": "fdm_cpu/hysteresis_metrics.json",
+                    },
+                    "candidate": {
+                        "backend": "fem",
+                        "device": "cpu",
+                        "precision": "double",
+                        "metrics_path": "fem_cpu/hysteresis_metrics.json",
+                    },
+                    "metrics": [
+                        {"name": "H_c_plus", "unit": "mT", "abs_tolerance": 0.0},
+                        {"name": "H_c_minus", "unit": "mT", "abs_tolerance": 0.0},
+                        {"name": "M_r_plus", "unit": "1", "abs_tolerance": 0.0},
+                        {"name": "M_r_minus", "unit": "1", "abs_tolerance": 0.0},
+                    ],
+                },
+                {
+                    "pair_id": "fdm_cpu_vs_fem_gpu",
+                    "reference": {
+                        "backend": "fdm",
+                        "device": "cpu",
+                        "precision": "double",
+                        "metrics_path": "fdm_cpu/hysteresis_metrics.json",
+                    },
+                    "candidate": {
+                        "backend": "fem",
+                        "device": "gpu",
+                        "precision": "double",
+                        "metrics_path": "fem_gpu/hysteresis_metrics.json",
+                    },
+                    "metrics": [
+                        {"name": "H_c_plus", "unit": "mT", "abs_tolerance": 0.0},
+                        {"name": "H_c_minus", "unit": "mT", "abs_tolerance": 0.0},
+                        {"name": "M_r_plus", "unit": "1", "abs_tolerance": 0.0},
+                        {"name": "M_r_minus", "unit": "1", "abs_tolerance": 0.0},
+                    ],
+                },
+            ],
+        },
+    )
+    payload = json.loads(manifest.read_text())
+    payload["cases"]["fdm_gpu_parity"] = {
+        "backend": "fdm",
+        "device": "gpu",
+        "precision": "double",
+    }
+    payload["cases"]["fem_gpu_parity"] = {
+        "backend": "fem",
+        "device": "gpu",
+        "precision": "double",
+    }
+    payload["cross_backend_acceptance"]["status"] = "validated"
+    payload["cross_backend_acceptance"]["parity_checks"] = [
+        "parity/hysteresis_metrics_parity.json"
+    ]
+    for tolerance in payload["cross_backend_acceptance"]["tolerances"]:
+        tolerance["status"] = "validated"
+    for lane in payload["cross_backend_acceptance"]["lanes"]:
+        lane["status"] = "validated"
+        lane["evidence"] = "synthetic full parity coverage evidence"
+        lane.pop("limitations", None)
+        lane.pop("reason", None)
+        if lane["backend"] == "fdm" and lane["device"] == "gpu":
+            lane["case_ids"] = ["fdm_gpu_parity"]
+        elif lane["backend"] == "fem" and lane["device"] == "gpu":
+            lane["case_ids"] = ["fem_gpu_parity"]
+    write_json(manifest, payload)
+
+    result = run_validator(manifest)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "validated hysteresis publication suite" in result.stdout
+
+
+def test_publication_suite_rejects_validated_acceptance_with_reversed_parity_pair(
+    tmp_path: Path,
+) -> None:
+    manifest = write_publication_suite_fixture(tmp_path)
+    parity_root = tmp_path / "parity"
+    for lane_dir in ("fdm_cpu", "fdm_gpu", "fem_cpu", "fem_gpu"):
+        metrics_parity_fixtures.write_json(
+            parity_root / lane_dir / "hysteresis_metrics.json",
+            metrics_parity_fixtures.metrics_payload(),
+        )
+    metrics_parity_fixtures.write_json(
+        parity_root / "hysteresis_metrics_parity.json",
+        {
+            "schema_version": "hysteresis-metrics-parity/v1",
+            "pairs": [
+                {
+                    "pair_id": "fdm_gpu_vs_fdm_cpu_reversed",
+                    "reference": {
+                        "backend": "fdm",
+                        "device": "gpu",
+                        "precision": "double",
+                        "metrics_path": "fdm_gpu/hysteresis_metrics.json",
+                    },
+                    "candidate": {
+                        "backend": "fdm",
+                        "device": "cpu",
+                        "precision": "double",
+                        "metrics_path": "fdm_cpu/hysteresis_metrics.json",
+                    },
+                    "metrics": [
+                        {"name": "H_c_plus", "unit": "mT", "abs_tolerance": 0.0},
+                        {"name": "H_c_minus", "unit": "mT", "abs_tolerance": 0.0},
+                        {"name": "M_r_plus", "unit": "1", "abs_tolerance": 0.0},
+                        {"name": "M_r_minus", "unit": "1", "abs_tolerance": 0.0},
+                    ],
+                },
+                {
+                    "pair_id": "fdm_cpu_vs_fem_cpu",
+                    "reference": {
+                        "backend": "fdm",
+                        "device": "cpu",
+                        "precision": "double",
+                        "metrics_path": "fdm_cpu/hysteresis_metrics.json",
+                    },
+                    "candidate": {
+                        "backend": "fem",
+                        "device": "cpu",
+                        "precision": "double",
+                        "metrics_path": "fem_cpu/hysteresis_metrics.json",
+                    },
+                    "metrics": [
+                        {"name": "H_c_plus", "unit": "mT", "abs_tolerance": 0.0},
+                        {"name": "H_c_minus", "unit": "mT", "abs_tolerance": 0.0},
+                        {"name": "M_r_plus", "unit": "1", "abs_tolerance": 0.0},
+                        {"name": "M_r_minus", "unit": "1", "abs_tolerance": 0.0},
+                    ],
+                },
+                {
+                    "pair_id": "fdm_cpu_vs_fem_gpu",
+                    "reference": {
+                        "backend": "fdm",
+                        "device": "cpu",
+                        "precision": "double",
+                        "metrics_path": "fdm_cpu/hysteresis_metrics.json",
+                    },
+                    "candidate": {
+                        "backend": "fem",
+                        "device": "gpu",
+                        "precision": "double",
+                        "metrics_path": "fem_gpu/hysteresis_metrics.json",
+                    },
+                    "metrics": [
+                        {"name": "H_c_plus", "unit": "mT", "abs_tolerance": 0.0},
+                        {"name": "H_c_minus", "unit": "mT", "abs_tolerance": 0.0},
+                        {"name": "M_r_plus", "unit": "1", "abs_tolerance": 0.0},
+                        {"name": "M_r_minus", "unit": "1", "abs_tolerance": 0.0},
+                    ],
+                },
+            ],
+        },
+    )
+    payload = json.loads(manifest.read_text())
+    payload["cases"]["fdm_gpu_parity"] = {
+        "backend": "fdm",
+        "device": "gpu",
+        "precision": "double",
+    }
+    payload["cases"]["fem_gpu_parity"] = {
+        "backend": "fem",
+        "device": "gpu",
+        "precision": "double",
+    }
+    payload["cross_backend_acceptance"]["status"] = "validated"
+    payload["cross_backend_acceptance"]["parity_checks"] = [
+        "parity/hysteresis_metrics_parity.json"
+    ]
+    for tolerance in payload["cross_backend_acceptance"]["tolerances"]:
+        tolerance["status"] = "validated"
+    for lane in payload["cross_backend_acceptance"]["lanes"]:
+        lane["status"] = "validated"
+        lane["evidence"] = "synthetic reversed coverage evidence"
+        lane.pop("limitations", None)
+        lane.pop("reason", None)
+        if lane["backend"] == "fdm" and lane["device"] == "gpu":
+            lane["case_ids"] = ["fdm_gpu_parity"]
+        elif lane["backend"] == "fem" and lane["device"] == "gpu":
+            lane["case_ids"] = ["fem_gpu_parity"]
+    write_json(manifest, payload)
+
+    result = run_validator(manifest)
+
+    assert result.returncode != 0
+    details = result.stderr + result.stdout
+    assert "parity_checks" in details
+    assert "fdm/gpu/double" in details

@@ -420,6 +420,7 @@ are included in the final metrics calculation.
   publication-suite manifest may claim validated cross-backend acceptance.
   Metrics and parity manifests must resolve only within the manifest tree, and
   a `validated` cross-backend acceptance claim may not retain deferred
-  tolerance entries.
+  tolerance entries, non-validated lane statuses, or lane statuses not covered
+  by parity checks whose pair reference is the declared reference lane.
 - [ ] Publication-grade scientific validation suite with analytical
   Stoner-Wohlfarth tolerances and validated cross-backend numerical parity

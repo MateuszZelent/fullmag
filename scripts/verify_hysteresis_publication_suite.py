@@ -48,6 +48,7 @@ REQUIRED_CROSS_BACKEND_LANES = {
     ("fem", "cpu", "double"),
     ("fem", "gpu", "double"),
 }
+METRICS_PARITY_SCHEMA_VERSION = "hysteresis-metrics-parity/v1"
 
 
 def load_json(path: Path) -> Any:
@@ -118,7 +119,7 @@ def require_case(case_id: str, value: Any) -> dict[str, Any]:
 def require_cross_backend_acceptance(
     manifest: dict[str, Any],
     cases: dict[str, Any],
-) -> None:
+) -> tuple[tuple[str, str, str], dict[tuple[str, str, str], dict[str, Any]]]:
     cross_backend = require_mapping(
         manifest.get("cross_backend_acceptance"),
         "cross_backend_acceptance",
@@ -182,6 +183,12 @@ def require_cross_backend_acceptance(
                 f"cross_backend_acceptance.lanes[{index}].status must be one of "
                 + ", ".join(sorted(LANE_STATUSES))
                 + f", got {lane_status!r}"
+            )
+        if status == "validated" and lane_status != "validated":
+            raise SystemExit(
+                "cross_backend_acceptance.status='validated' requires "
+                "all cross_backend_acceptance.lanes entries to be 'validated', "
+                f"got {lane_status!r} for {lane_label(key)}"
             )
         case_ids = lane.get("case_ids", [])
         if case_ids != []:
@@ -290,6 +297,7 @@ def require_cross_backend_acceptance(
             tolerance.get("reason"),
             f"cross_backend_acceptance.tolerances[{index}].reason",
         )
+    return reference_key, lanes_by_key
 
 
 def resolve_case_dir(manifest_path: Path, case: dict[str, Any], case_id: str) -> Path:
@@ -363,6 +371,64 @@ def run_metrics_parity_validator(
         raise SystemExit(f"{display_path} parity validation failed: {details}")
 
 
+def parity_manifest_lane_pairs(parity_check: Path, display_path: str) -> set[tuple[str, str]]:
+    manifest = require_mapping(
+        load_json(parity_check),
+        f"{display_path} metrics parity manifest",
+    )
+    if manifest.get("schema_version") != METRICS_PARITY_SCHEMA_VERSION:
+        raise SystemExit(
+            f"{display_path}.schema_version must be "
+            f"{METRICS_PARITY_SCHEMA_VERSION!r}, got {manifest.get('schema_version')!r}"
+        )
+    pairs = manifest.get("pairs")
+    if not isinstance(pairs, list) or not pairs:
+        raise SystemExit(f"{display_path}.pairs must be a non-empty list")
+    lane_pairs: set[tuple[str, str]] = set()
+    for index, raw_pair in enumerate(pairs):
+        pair = require_mapping(raw_pair, f"{display_path}.pairs[{index}]")
+        reference = require_mapping(
+            pair.get("reference"),
+            f"{display_path}.pairs[{index}].reference",
+        )
+        candidate = require_mapping(
+            pair.get("candidate"),
+            f"{display_path}.pairs[{index}].candidate",
+        )
+        lane_pairs.add(
+            (
+                lane_label(lane_key(reference, f"{display_path}.pairs[{index}].reference")),
+                lane_label(lane_key(candidate, f"{display_path}.pairs[{index}].candidate")),
+            )
+        )
+    return lane_pairs
+
+
+def require_validated_parity_coverage(
+    reference_key: tuple[str, str, str],
+    lanes_by_key: dict[tuple[str, str, str], dict[str, Any]],
+    lane_pairs: set[tuple[str, str]],
+) -> None:
+    reference_label = lane_label(reference_key)
+    compared_lanes = {
+        candidate
+        for reference, candidate in lane_pairs
+        if reference == reference_label
+    }
+    required_lanes = {
+        lane_label(key)
+        for key in lanes_by_key
+        if key != reference_key
+    }
+    missing = sorted(required_lanes - compared_lanes)
+    if missing:
+        raise SystemExit(
+            "cross_backend_acceptance.status='validated' requires parity_checks "
+            "covering reference lane comparisons for: "
+            + ", ".join(missing)
+        )
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         raise SystemExit("usage: scripts/verify_hysteresis_publication_suite.py <manifest.json>")
@@ -381,7 +447,7 @@ def main() -> int:
     for case_id, value in cases.items():
         if case_id in REQUIRED_CASES:
             require_case(case_id, value)
-    require_cross_backend_acceptance(manifest, cases)
+    reference_key, lanes_by_key = require_cross_backend_acceptance(manifest, cases)
 
     scripts_dir = Path(__file__).resolve().parent
     for case_id, expected in REQUIRED_CASES.items():
@@ -399,16 +465,21 @@ def main() -> int:
             raise SystemExit(
                 "cross_backend_acceptance.parity_checks must be a list of strings"
             )
+        lane_pairs: set[tuple[str, str]] = set()
         for index, raw_check in enumerate(parity_checks):
+            display_path = require_string(
+                raw_check,
+                f"cross_backend_acceptance.parity_checks[{index}]",
+            )
             parity_check = resolve_parity_check(manifest_path, raw_check, index)
+            lane_pairs.update(parity_manifest_lane_pairs(parity_check, display_path))
             run_metrics_parity_validator(
                 parity_check,
                 scripts_dir / "verify_hysteresis_metrics_parity.py",
-                require_string(
-                    raw_check,
-                    f"cross_backend_acceptance.parity_checks[{index}]",
-                ),
+                display_path,
             )
+        if cross_backend.get("status") == "validated":
+            require_validated_parity_coverage(reference_key, lanes_by_key, lane_pairs)
 
     print(
         "validated hysteresis publication suite: "

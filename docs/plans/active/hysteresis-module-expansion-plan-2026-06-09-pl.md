@@ -4643,10 +4643,10 @@ Status wykonania:
   ograniczenia cross-backend, ale nie udaje jeszcze policzonej parytetowej
   tolerancji FDM/FEM. Aktualna weryfikacja
   `python3 -m pytest scripts/test_verify_hysteresis_publication_suite.py -q`
-  zwraca `15 passed`; pelny szybki agregat publikacyjny bez osobnego
+  zwraca `19 passed`; pelny szybki agregat publikacyjny bez osobnego
   metrics-parity validatora
   `python3 -m pytest scripts/test_verify_hysteresis_projection_benchmark.py scripts/test_verify_hysteresis_fdm_macrospin_sw_artifacts.py scripts/test_verify_hysteresis_fdm_thinfilm_oop_ip_artifacts.py scripts/test_verify_hysteresis_publication_suite.py -q`
-  zwraca `39 passed`.
+  zwraca `43 passed`.
   Bramka pozostaje szybkim suite gate dla obecnych FDM/projection fixtures; pelne
   publikacyjne tolerancje analityczne i validated cross-backend numerical parity
   pozostaja osobnym etapem.
@@ -4666,15 +4666,19 @@ Status wykonania:
   Publication suite uruchamia parity validator tylko wtedy, gdy
   `parity_checks` jest obecne; dla
   `cross_backend_acceptance.status == "validated"` co najmniej jeden parity
-  check jest wymagany, a wszystkie wpisy `tolerances` musza miec
-  `status="validated"` zamiast `deferred`. Weryfikacja:
+  check jest wymagany, wszystkie wpisy `tolerances` musza miec
+  `status="validated"` zamiast `deferred`, a wszystkie lane'y w
+  `cross_backend_acceptance.lanes` musza miec status `validated` i byc
+  pokryte przez `parity_checks`, w ktorych `pair.reference` jest deklarowanym
+  `reference_lane`, a `pair.candidate` jest sprawdzanym lane'em.
+  Weryfikacja:
   `python3 -m pytest scripts/test_verify_hysteresis_metrics_parity.py scripts/test_verify_hysteresis_publication_suite.py -q`
-  zwraca obecnie `23 passed`. Ta bramka zamyka narzedzie porownawcze dla
+  zwraca obecnie `27 passed`. Ta bramka zamyka narzedzie porownawcze dla
   rzeczywistych paired metrics artifacts, ale nadal nie deklaruje, ze takie
   publikacyjne FDM/FEM artefakty runtime zostaly juz wygenerowane.
   Pelny szybki agregat razem z metrics parity
   `python3 -m pytest scripts/test_verify_hysteresis_metrics_parity.py scripts/test_verify_hysteresis_projection_benchmark.py scripts/test_verify_hysteresis_fdm_macrospin_sw_artifacts.py scripts/test_verify_hysteresis_fdm_thinfilm_oop_ip_artifacts.py scripts/test_verify_hysteresis_publication_suite.py -q`
-  zwraca `47 passed`.
+  zwraca `51 passed`.
 - Zamkniety fixture niewystarczajacego pola saturacji: target
   `just run-hysteresis-waveguide-saturation-limit-smoke cpu` uruchomil sesje
   `session-1781258014197-2056303`, a
