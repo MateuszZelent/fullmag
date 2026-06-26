@@ -1067,6 +1067,26 @@ fn fem_live_mesh_payload_and_initial_magnetization(
     Ok((mesh_payload, initial_magnetization))
 }
 
+fn initial_live_state_manifest_from_backend_plan(
+    update: &fullmag_runner::StepUpdate,
+    backend_plan: &BackendPlanIR,
+) -> anyhow::Result<LiveStateManifest> {
+    let mut live_state = live_state_manifest_from_update(update);
+    if let Some(mesh_payload) = fem_mesh_payload_from_backend_plan(backend_plan) {
+        let initial_magnetization = current_stage_magnetization_vectors(None, backend_plan);
+        if mesh_payload.nodes.len() != initial_magnetization.len() {
+            bail!(
+                "initial FEM live mesh has {} nodes but initial magnetization has {} vectors",
+                mesh_payload.nodes.len(),
+                initial_magnetization.len()
+            );
+        }
+        live_state.latest_step.fem_mesh = Some(mesh_payload);
+        live_state.latest_step.magnetization = Some(flatten_magnetization(&initial_magnetization));
+    }
+    Ok(live_state)
+}
+
 fn default_domain_region_markers(
     geometry_entries: &[fullmag_ir::GeometryEntryIR],
 ) -> Vec<fullmag_ir::FemDomainRegionMarkerIR> {
@@ -4677,7 +4697,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             plan_summary_json(&current_plan_summary),
         ),
         run: build_run_manifest(&run_id, &session_id, "running", &artifact_dir),
-        live_state: live_state_manifest_from_update(&initial_update),
+        live_state: initial_live_state_manifest_from_backend_plan(
+            &initial_update,
+            &initial_execution_plan.backend_plan,
+        )?,
         metadata: Some(current_live_metadata(
             &stages[0].ir,
             &initial_execution_plan,
@@ -8126,13 +8149,14 @@ mod tests {
         discard_active_paused_stage_execution, execute_synthetic_stage,
         fem_gpu_memory_preflight_message, fem_interactive_dense_ram_estimate,
         fem_live_mesh_payload_and_initial_magnetization, fem_mesh_payload_from_backend_plan,
-        has_heavy_live_payload, interactive_session_should_stay_alive,
-        live_step_ingest_cached_m_preview_len, live_step_ingest_legacy_mag_len,
-        live_step_ingest_preview_len, mesh_build_pipeline_status_json,
-        scripted_stage_execution_state, stage_allows_sampled_continuation_initial_state,
-        user_cancelled_stage_completion, wait_for_solve_prompt, wait_for_solve_should_block,
-        wait_for_solve_supported, ActiveSequenceState, LiveProgressCadence, SceneProblemPatch,
-        WaitForSolveCommandAction, LIVE_PROGRESS_PUBLISH_INTERVAL,
+        has_heavy_live_payload, initial_live_state_manifest_from_backend_plan, initial_step_update,
+        interactive_session_should_stay_alive, live_step_ingest_cached_m_preview_len,
+        live_step_ingest_legacy_mag_len, live_step_ingest_preview_len,
+        mesh_build_pipeline_status_json, scripted_stage_execution_state,
+        stage_allows_sampled_continuation_initial_state, user_cancelled_stage_completion,
+        wait_for_solve_prompt, wait_for_solve_should_block, wait_for_solve_supported,
+        ActiveSequenceState, LiveProgressCadence, SceneProblemPatch, WaitForSolveCommandAction,
+        LIVE_PROGRESS_PUBLISH_INTERVAL,
     };
     use crate::live_workspace::bootstrap_live_state;
     use crate::types::{
@@ -9517,6 +9541,30 @@ mod tests {
 
         assert_eq!(payload.nodes.len(), initial_magnetization.len());
         assert_eq!(payload.object_segments.len(), 2);
+    }
+
+    #[test]
+    fn initial_live_state_publishes_shared_domain_fem_mesh_before_solver_start() {
+        let plan = tiny_shared_domain_fem_plan();
+        let update = initial_step_update(&plan);
+
+        let live_state = initial_live_state_manifest_from_backend_plan(&update, &plan)
+            .expect("initial FEM live state should carry shared-domain mesh");
+
+        let mesh = live_state
+            .latest_step
+            .fem_mesh
+            .as_ref()
+            .expect("shared-domain FEM mesh should be published before compute");
+        assert_eq!(mesh.object_segments.len(), 2);
+        assert_eq!(
+            live_state
+                .latest_step
+                .magnetization
+                .as_ref()
+                .map(|values| values.len()),
+            Some(mesh.nodes.len() * 3)
+        );
     }
 
     #[test]

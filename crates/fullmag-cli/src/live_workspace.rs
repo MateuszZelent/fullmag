@@ -51,14 +51,15 @@ impl LocalLiveWorkspaceState {
         preview_fields: Option<Vec<fullmag_runner::LivePreviewField>>,
         clear_preview_cache: bool,
     ) -> CurrentLiveSnapshotPayload {
-        let mut live_state = self.live_state.clone();
+        let live_state = self.live_state.clone();
         let mut metadata = self.metadata.clone();
 
-        // Promote fem_mesh to a top-level payload field — this makes the mesh
-        // lifecycle an explicit event rather than a hidden one-time-at-step-0
-        // trick relying on API-side caching.  After promotion the step view no
-        // longer carries the mesh, so the API protocol is unambiguous.
-        let fem_mesh = live_state.latest_step.fem_mesh.take();
+        // Promote fem_mesh to a top-level payload field while keeping the
+        // step copy for compatibility with an already-running API process that
+        // predates the top-level field. The API still treats the top-level
+        // field as authoritative when supported, and publish_delta suppresses
+        // repeated mesh sends by generation id.
+        let fem_mesh = live_state.latest_step.fem_mesh.clone();
         if live_state.latest_step.step > 0 {
             metadata = None;
         }
@@ -1085,8 +1086,8 @@ mod tests {
                 .live_state
                 .as_ref()
                 .and_then(|live_state| live_state.latest_step.fem_mesh.as_ref())
-                .is_none(),
-            "runtime state must not duplicate the promoted FEM mesh"
+                .is_some(),
+            "runtime state keeps FEM mesh for compatibility with an already-running API"
         );
         assert!(
             state.live_state.latest_step.fem_mesh.is_some(),

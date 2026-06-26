@@ -48,6 +48,61 @@ def _radius_from_center_to_bbox_corner(
     )
 
 
+def _entity_bounds(
+    gmsh: Any,
+    dimtags: list[tuple[int, int]],
+) -> tuple[tuple[float, float, float], tuple[float, float, float]] | None:
+    bounds: list[tuple[float, float, float, float, float, float]] = []
+    for dim, tag in dimtags:
+        try:
+            raw = gmsh.model.getBoundingBox(int(dim), int(tag))
+        except Exception:
+            continue
+        if len(raw) == 6:
+            bounds.append(tuple(float(value) for value in raw))  # type: ignore[arg-type]
+    if not bounds:
+        return None
+
+    return (
+        (
+            min(bound[0] for bound in bounds),
+            min(bound[1] for bound in bounds),
+            min(bound[2] for bound in bounds),
+        ),
+        (
+            max(bound[3] for bound in bounds),
+            max(bound[4] for bound in bounds),
+            max(bound[5] for bound in bounds),
+        ),
+    )
+
+
+def _component_interface_size_targets(options: MeshOptions | None) -> dict[str, float]:
+    if options is None:
+        return {}
+    targets: dict[str, float] = {}
+    for field in options.size_fields:
+        if not isinstance(field, dict):
+            continue
+        kind = field.get("kind")
+        params = field.get("params", {})
+        if not isinstance(params, dict):
+            continue
+        geometry_name = params.get("GeometryName")
+        if not isinstance(geometry_name, str) or not geometry_name.strip():
+            continue
+        value = None
+        if kind in {"SurfaceDistanceThreshold", "InterfaceShellThreshold"}:
+            value = params.get("SizeMin")
+        if not isinstance(value, (int, float)) or value <= 0.0:
+            continue
+        previous = targets.get(geometry_name)
+        targets[geometry_name] = (
+            float(value) if previous is None else min(previous, float(value))
+        )
+    return targets
+
+
 def _add_airbox_geo(
     gmsh: Any,
     body_vol_tags: list[int],
@@ -57,6 +112,7 @@ def _add_airbox_geo(
     *,
     component_volume_groups: dict[str, list[int]] | None = None,
     component_surface_groups: dict[str, list[int]] | None = None,
+    mesh_options: MeshOptions | None = None,
 ) -> int | None:
     """Add an airbox around a GEO-kernel body using pure GEO primitives.
 
@@ -190,31 +246,91 @@ def _add_airbox_geo(
 
     # 6 — mesh grading: fine at interface, coarse at outer boundary
     if airbox.grading_ratio > 1.0:
-        h_inner = (
+        default_h_inner = (
             airbox.minimum_element_size
             if airbox.minimum_element_size is not None
             else hmax
         )
-        d_outer = _airbox_boundary_distance_from_bbox(
+        global_d_outer = _airbox_boundary_distance_from_bbox(
             object_bounds_min=(xmin, ymin, zmin),
             object_bounds_max=(xmax, ymax, zmax),
             airbox_bounds_min=(x0, y0, z0),
             airbox_bounds_max=(x1, y1, z1),
         )
-        return _add_airbox_grading_field(
-            gmsh,
-            surface_tags=body_surf_tags,
-            h_inner=h_inner,
-            h_outer=h_outer,
-            grading_ratio=airbox.grading_ratio,
-            grading_mode=airbox.grading_mode,
-            dist_max=max(d_outer, hmax),
-            object_bounds_min=(xmin, ymin, zmin),
-            object_bounds_max=(xmax, ymax, zmax),
-            airbox_bounds_min=(x0, y0, z0),
-            airbox_bounds_max=(x1, y1, z1),
-            airbox_shape="bbox",
-        )
+        field_ids: list[int] = []
+        covered_surfaces: set[int] = set()
+        component_size_targets = _component_interface_size_targets(mesh_options)
+        if component_surface_groups:
+            for geometry_name, surface_tags in component_surface_groups.items():
+                if not surface_tags:
+                    continue
+                covered_surfaces.update(int(tag) for tag in surface_tags)
+                target = component_size_targets.get(geometry_name)
+                h_inner = (
+                    default_h_inner
+                    if target is None
+                    else min(default_h_inner, float(target))
+                )
+                component_bounds = None
+                if component_volume_groups is not None:
+                    component_bounds = _entity_bounds(
+                        gmsh,
+                        [(3, tag) for tag in component_volume_groups.get(geometry_name, [])],
+                    )
+                bounds_min, bounds_max = component_bounds or (
+                    (xmin, ymin, zmin),
+                    (xmax, ymax, zmax),
+                )
+                d_outer = _airbox_boundary_distance_from_bbox(
+                    object_bounds_min=bounds_min,
+                    object_bounds_max=bounds_max,
+                    airbox_bounds_min=(x0, y0, z0),
+                    airbox_bounds_max=(x1, y1, z1),
+                )
+                field_id = _add_airbox_grading_field(
+                    gmsh,
+                    surface_tags=surface_tags,
+                    h_inner=h_inner,
+                    h_outer=h_outer,
+                    grading_ratio=airbox.grading_ratio,
+                    grading_mode=airbox.grading_mode,
+                    dist_max=max(d_outer, hmax, default_h_inner, h_inner),
+                    object_bounds_min=bounds_min,
+                    object_bounds_max=bounds_max,
+                    airbox_bounds_min=(x0, y0, z0),
+                    airbox_bounds_max=(x1, y1, z1),
+                    airbox_shape="bbox",
+                )
+                if field_id is not None:
+                    field_ids.append(field_id)
+
+        remaining_surfaces = [
+            tag for tag in body_surf_tags if int(tag) not in covered_surfaces
+        ]
+        if remaining_surfaces or not field_ids:
+            field_id = _add_airbox_grading_field(
+                gmsh,
+                surface_tags=remaining_surfaces or body_surf_tags,
+                h_inner=default_h_inner,
+                h_outer=h_outer,
+                grading_ratio=airbox.grading_ratio,
+                grading_mode=airbox.grading_mode,
+                dist_max=max(global_d_outer, hmax, default_h_inner),
+                object_bounds_min=(xmin, ymin, zmin),
+                object_bounds_max=(xmax, ymax, zmax),
+                airbox_bounds_min=(x0, y0, z0),
+                airbox_bounds_max=(x1, y1, z1),
+                airbox_shape="bbox",
+            )
+            if field_id is not None:
+                field_ids.append(field_id)
+        if not field_ids:
+            return None
+        if len(field_ids) == 1:
+            return field_ids[0]
+        combined = gmsh.model.mesh.field.add("Min")
+        gmsh.model.mesh.field.setNumbers(combined, "FieldsList", field_ids)
+        return combined
     return None
 
 

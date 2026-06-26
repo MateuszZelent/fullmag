@@ -1609,13 +1609,14 @@ describe("viewport3dRenderModel", () => {
       ],
       degradation: [
         "surface:sampled-buffer-not-surface-capable",
+        `surface-rejected buffer=${sampledBuffer.bufferId} capability=full-vector-sampled reason=sampled-buffer-not-surface-capable`,
         "field-color:sampled-buffer-not-surface-capable",
       ],
       demand: "surface:x vector-glyph",
       derivedWork: [
         "field-color:scalar-colors:blocked:blocked:part-a:surface items=0 input=0B output=0B",
         "vector-glyph:vector-glyphs:ready:runtime-worker:part-a:vector-glyph items=4 input=112B output=112B",
-        "vector-glyph:vector-segments:ready:render-model-sync:part-a:vector-glyph items=4 input=0B output=112B",
+        "vector-glyph:vector-segments:ready:runtime-worker:part-a:vector-glyph items=4 input=96B output=112B",
       ],
       passes: ["surface", "vector-glyph"],
       requests: [sampledBuffer.requestId],
@@ -1857,12 +1858,13 @@ describe("viewport3dRenderModel", () => {
       ],
       degradation: [
         "vector-glyph:scalar-buffer-not-vector-capable",
+        `vector-glyph-rejected buffer=${scalarBuffer.bufferId} capability=scalar-complete reason=scalar-buffer-not-vector-capable`,
       ],
       demand: "surface:x vector-glyph",
       derivedWork: [
         "field-color:scalar-colors:ready:render-model-sync:part-a:surface items=4 input=16B output=48B",
         "vector-glyph:vector-glyphs:blocked:blocked:part-a:vector-glyph items=0 input=0B output=0B",
-        "vector-glyph:vector-segments:blocked:blocked:part-a:vector-glyph items=0 input=0B output=0B",
+        "vector-glyph:vector-segments:blocked:blocked:part-a:vector-glyph items=0 input=32B output=0B",
       ],
       passes: ["surface", "vector-glyph"],
       requests: [scalarBuffer.requestId],
@@ -1983,14 +1985,16 @@ describe("viewport3dRenderModel", () => {
       ],
       degradation: [
         "surface:buffer-quantity-mismatch",
+        `surface-rejected buffer=${scalarBuffer.bufferId} capability=scalar-complete reason=buffer-quantity-mismatch`,
         "vector-glyph:buffer-quantity-mismatch",
+        `vector-glyph-rejected buffer=${scalarBuffer.bufferId} capability=scalar-complete reason=buffer-quantity-mismatch`,
         "field-color:buffer-quantity-mismatch",
       ],
       demand: "surface:x vector-glyph",
       derivedWork: [
         "field-color:scalar-colors:blocked:blocked:part-a:surface items=0 input=0B output=0B",
         "vector-glyph:vector-glyphs:blocked:blocked:part-a:vector-glyph items=0 input=0B output=0B",
-        "vector-glyph:vector-segments:blocked:blocked:part-a:vector-glyph items=0 input=0B output=0B",
+        "vector-glyph:vector-segments:blocked:blocked:part-a:vector-glyph items=0 input=32B output=0B",
       ],
       passes: ["surface", "vector-glyph"],
       requests: [scalarBuffer.requestId],
@@ -2128,7 +2132,7 @@ describe("viewport3dRenderModel", () => {
       derivedWork: [
         "field-color:scalar-colors:ready:render-model-sync:part-a:surface items=4 input=16B output=48B",
         "vector-glyph:vector-glyphs:ready:runtime-worker:part-a:vector-glyph items=2 input=56B output=56B",
-        "vector-glyph:vector-segments:ready:render-model-sync:part-a:vector-glyph items=2 input=0B output=56B",
+        "vector-glyph:vector-segments:ready:runtime-worker:part-a:vector-glyph items=2 input=0B output=56B",
       ],
       passes: ["surface", "vector-glyph"],
       requests: [],

@@ -918,10 +918,7 @@ def _build_transition_fields(
             )
 
         if transition_distance is None:
-            if bulk_hmax < default_hmax:
-                transition_distance = bulk_hmax * 3.0
-            else:
-                continue
+            continue
 
         if transition_size_min >= default_hmax:
             continue
@@ -1392,15 +1389,18 @@ def _resolve_per_object_mesh_options(
 ) -> list[dict[str, object]]:
     """Build size-field overrides from per-object mesh recipes.
 
-    For each geometry that has an associated :class:`PerObjectMeshRecipe`, a
-    surface-driven threshold field is injected around the object's recovered
-    STL surfaces.
+    A plain ``object.mesh(maximum_element_size=...)`` recipe should only clamp
+    that object's interior.  It must not inherit the auto transition shell used
+    by workflow-authored field stacks, because that refines the neighboring
+    airbox and can turn thin-film shared-domain meshes into million-element
+    meshes.
     """
     extra_fields: list[dict[str, object]] = []
     for geometry in geometries:
         recipe = _lookup_geometry_name_alias(per_object_recipes, geometry.geometry_name)
         if recipe is None:
             continue
+        recipe_payload = recipe.to_ir()
         if bounds_by_name is not None:
             bounds_pair = bounds_by_name.get(geometry.geometry_name)
             if bounds_pair is None:
@@ -1410,9 +1410,11 @@ def _resolve_per_object_mesh_options(
             bounds_min, bounds_max = geometry_bounds(geometry, source_root=None)
         if bounds_min is None or bounds_max is None:
             continue
-        target_hmax = recipe.hmax if recipe.hmax is not None else default_hmax  # type: ignore[union-attr]
-        if target_hmax >= default_hmax:
-            extra_fields.extend(recipe.size_fields if recipe.size_fields else [])  # type: ignore[union-attr]
+        target_hmax = recipe_payload.get("hmax")
+        if not isinstance(target_hmax, (int, float)):
+            target_hmax = default_hmax
+        if float(target_hmax) >= default_hmax:
+            extra_fields.extend(recipe.size_fields if recipe.size_fields else [])
             continue
         if component_aware:
             extra_fields.append(
@@ -1441,9 +1443,9 @@ def _resolve_per_object_mesh_options(
                     },
                 }
             )
-        for sf in recipe.size_fields:  # type: ignore[union-attr]
-            if isinstance(sf, dict):
-                extra_fields.append(sf)
+        for size_field in recipe.size_fields:
+            if isinstance(size_field, dict):
+                extra_fields.append(size_field)
     return extra_fields
 
 
@@ -1537,6 +1539,16 @@ def _mesh_options_from_runtime_metadata(
             value = raw_mesh_options.get(key)
             if value is not None:
                 return value
+        if reducer == "min":
+            values: list[object] = []
+            for key in keys:
+                values.extend(_per_geometry_values(key))
+            numeric_values = [
+                float(value)
+                for value in values
+                if isinstance(value, (int, float))
+            ]
+            return min(numeric_values) if numeric_values else None
         for key in keys:
             value = _single_geometry_value(key)
             if value is not None:

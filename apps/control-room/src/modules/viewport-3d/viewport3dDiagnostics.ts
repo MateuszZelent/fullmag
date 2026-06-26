@@ -17,6 +17,7 @@ import {
   createDiagnosticRecordFromViewport3DBuildDiagnostic,
   subscribeViewport3DBuildDiagnostics,
 } from "./build-engine/viewport3dBuildDiagnostics";
+import type { Viewport3DBuildFallbackSnapshot } from "./build-engine/viewport3dBuildEngineTypes";
 import {
   createDiagnosticRecordFromViewport3DWorkerPoolDiagnostic,
   subscribeViewport3DWorkerPoolDiagnostics,
@@ -47,15 +48,27 @@ export interface Viewport3DResourceCounts {
 
 export interface Viewport3DDiagnosticsInput {
   airboxPartCount: number;
+  buildFallbacks?: readonly Viewport3DBuildFallbackSnapshot[];
   cache: ResourceCacheStats;
+  dataPlaneIssues?: readonly string[];
   fieldDemandDiagnostics?: readonly Viewport3DFieldDemandDiagnosticSummary[];
   fieldRevision: string | number | null;
   objectCount: number;
+  pipelineDiagnostics?: readonly Viewport3DPipelineDiagnosticSummary[];
   quantityId: string;
   surfaceColorStatus?: string | null;
   targetDiagnostics?: readonly Viewport3DTargetDiagnosticSummary[];
   topologyRevision: string | number | null;
   tracker: Viewport3DResourceCounts;
+}
+
+export interface Viewport3DPipelineDiagnosticSummary {
+  lane: string;
+  mainAdoptMs: number;
+  mainUploadMs: number;
+  queueWaitMs: number;
+  transferMs: number;
+  workerComputeMs: number;
 }
 
 interface DisposableResource {
@@ -335,12 +348,64 @@ export function buildViewport3DDiagnostics(
       : []),
     ...formatFieldDemandDiagnostics(input.fieldDemandDiagnostics),
     ...formatTargetDiagnostics(input.targetDiagnostics),
+    ...formatDataPlaneIssues(input.dataPlaneIssues),
+    ...formatPipelineDiagnostics(input.pipelineDiagnostics),
+    ...formatBuildFallbackDiagnostics(input.buildFallbacks),
     `obj:${input.objectCount}`,
     `air:${input.airboxPartCount}`,
     `geo:${input.tracker.geometries}`,
     `cache:${formatBytes(input.cache.byteLength)}`,
     `frames:${input.tracker.frames}`,
   ].join(" ");
+}
+
+function formatBuildFallbackDiagnostics(
+  fallbacks: readonly Viewport3DBuildFallbackSnapshot[] | undefined,
+): string[] {
+  if (!fallbacks?.length) return [];
+  const entries = fallbacks
+    .slice()
+    .sort((left, right) => left.lane.localeCompare(right.lane))
+    .slice(0, 3)
+    .map((fallback) => {
+      return [
+        `${fallback.lane}{count=${fallback.count}`,
+        `reason=${fallback.reason}`,
+        `key=${fallback.key}}`,
+      ].join(" ");
+    });
+  const suffix = fallbacks.length > entries.length ? ";..." : "";
+  return [`fallbacks:${fallbacks.length}[${entries.join(";")}${suffix}]`];
+}
+
+function formatDataPlaneIssues(
+  issues: readonly string[] | undefined,
+): string[] {
+  if (!issues?.length) return [];
+  const entries = issues.slice(0, 3);
+  const suffix = issues.length > entries.length ? ";..." : "";
+  return [`data-plane:${issues.length}[${entries.join(";")}${suffix}]`];
+}
+
+function formatPipelineDiagnostics(
+  summaries: readonly Viewport3DPipelineDiagnosticSummary[] | undefined,
+): string[] {
+  if (!summaries?.length) return [];
+  const entries = summaries.slice(0, 3).map((summary) => {
+    return [
+      `${summary.lane}{queue=${formatDurationMs(summary.queueWaitMs)}`,
+      `worker=${formatDurationMs(summary.workerComputeMs)}`,
+      `transfer=${formatDurationMs(summary.transferMs)}`,
+      `adopt=${formatDurationMs(summary.mainAdoptMs)}`,
+      `upload=${formatDurationMs(summary.mainUploadMs)}}`,
+    ].join(" ");
+  });
+  const suffix = summaries.length > entries.length ? ";..." : "";
+  return [`pipeline:${summaries.length}[${entries.join(";")}${suffix}]`];
+}
+
+function formatDurationMs(value: number): string {
+  return `${Math.max(0, Math.round(value))}ms`;
 }
 
 function formatFieldDemandDiagnostics(
@@ -366,7 +431,8 @@ function formatTargetDiagnostics(
     const buffers = summary.buffers.join("|") || "none";
     const derivedWork = summary.derivedWork.join("|") || "none";
     const degradation = summary.degradation.join("|") || "none";
-    return `${summary.targetId}{passes=${passes} demand=${demand} buffers=${buffers} work=${derivedWork} degradation=${degradation}}`;
+    const retained = summary.retained.join("|") || "none";
+    return `${summary.targetId}{passes=${passes} demand=${demand} buffers=${buffers} work=${derivedWork} degradation=${degradation} retained=${retained}}`;
   });
   const suffix = summaries.length > entries.length ? ";..." : "";
   return [`target-passes:${summaries.length}[${entries.join(";")}${suffix}]`];

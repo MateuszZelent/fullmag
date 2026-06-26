@@ -86,9 +86,11 @@ import {
 } from "./model/viewport3DFieldDataPlan";
 import {
   planViewport3DColorbars,
+  resolveViewport3DColorbarRangeStates,
+  scalarColorBufferMatchesColorbarRequest,
   type Viewport3DColorbarPlan,
-  type Viewport3DColorbarRangeState,
 } from "./model/viewport3DColorbarPlan";
+export { resolveViewport3DColorbarRangeStates } from "./model/viewport3DColorbarPlan";
 import {
   useViewport3DResourceCounts,
   useViewport3DResourceTracker,
@@ -134,7 +136,6 @@ import {
   endViewport3DFieldUpdateHold,
 } from "./viewport3dFieldUpdateHold";
 import type { ScalarColorBuffer } from "./viewport3dFieldMapping";
-import { FULL_VIEWPORT_3D_TARGET_ID } from "./viewport3dRenderModel";
 import { installViewport3DThreeConsolePolicy } from "./viewport3dThreeConsolePolicy";
 
 type Viewport3DSceneProps = ComponentProps<typeof Viewport3DScene>;
@@ -169,6 +170,7 @@ interface Viewport3DScopedColorbarLegend {
 interface Viewport3DColorbarTargetPart {
   id: string;
   label: string;
+  role?: string | null;
   settings: VisualizationTargetSettings;
   targetKind: Viewport3DTargetRenderPlan["targetKind"];
 }
@@ -395,35 +397,6 @@ export function resolveViewport3DScalarColorbarLegend({
   });
 }
 
-function scalarColorBufferMatchesColorbarRequest({
-  buffer,
-  colorMode,
-  colorPalette,
-  quantityId,
-}: {
-  buffer: ScalarColorBuffer | null | undefined;
-  colorMode: string;
-  colorPalette: string;
-  quantityId: string;
-}): boolean {
-  if (!buffer) return false;
-  if (buffer.colorMode && buffer.colorMode !== colorMode) return false;
-  if (
-    buffer.colorPalette &&
-    buffer.colorPalette !== colorPalette
-  ) {
-    return false;
-  }
-  if (
-    buffer.quantityId &&
-    resolveCanonicalQuantityId(buffer.quantityId) !==
-      resolveCanonicalQuantityId(quantityId)
-  ) {
-    return false;
-  }
-  return true;
-}
-
 function resolveViewport3DTargetColorbarLegend({
   colorMode,
   colorPalette,
@@ -462,65 +435,6 @@ function resolveViewport3DTargetColorbarLegend({
   };
 }
 
-export function resolveViewport3DColorbarRangeStates({
-  fdmSurfaceColors,
-  fieldModel,
-  plans,
-}: {
-  fdmSurfaceColors?: ScalarColorBuffer | null;
-  fieldModel?: (
-    Pick<
-      NonNullable<Viewport3DSceneProps["fieldModel"]>,
-      "scalarColorsByMode" | "scalarColorsByPartAndMode"
-    > &
-      Partial<
-        Pick<NonNullable<Viewport3DSceneProps["fieldModel"]>, "targetPasses">
-      >
-  ) | null;
-  plans: readonly Viewport3DColorbarPlan[];
-}): ReadonlyMap<string, Viewport3DColorbarRangeState> {
-  const rangeStates = new Map<string, Viewport3DColorbarRangeState>();
-  for (const plan of plans) {
-    const targetPassModelAuthoritative =
-      Boolean(fieldModel?.targetPasses) &&
-      (fieldModel?.targetPasses?.size ?? 0) > 0;
-    const candidate =
-      plan.scopeKind === "full" && fdmSurfaceColors
-        ? fdmSurfaceColors
-        : plan.scopeKind === "full"
-          ? resolveViewport3DTargetSurfaceLayerInput({
-              fieldModel: fieldModel ?? null,
-              partId: FULL_VIEWPORT_3D_TARGET_ID,
-              scalarColorMode: plan.colorMode,
-            }).scalarColors ??
-            (targetPassModelAuthoritative
-              ? null
-              : fieldModel?.scalarColorsByMode.get(plan.colorMode) ?? null)
-        : plan.scopeId == null
-          ? targetPassModelAuthoritative
-            ? null
-            : fieldModel?.scalarColorsByMode.get(plan.colorMode) ?? null
-          : resolveViewport3DTargetSurfaceLayerInput({
-              fieldModel: fieldModel ?? null,
-              partId: plan.scopeId,
-              scalarColorMode: plan.colorMode,
-            }).scalarColors;
-    const buffer = scalarColorBufferMatchesColorbarRequest({
-      buffer: candidate,
-      colorMode: plan.colorMode,
-      colorPalette: plan.palette,
-      quantityId: plan.quantityId,
-    })
-      ? candidate
-      : null;
-    rangeStates.set(plan.groupKey, {
-      range: buffer?.range ?? null,
-      state: buffer ? "current" : "pending",
-    });
-  }
-  return rangeStates;
-}
-
 export function buildViewport3DColorbarTargetPlans({
   fdmSettings,
   parts,
@@ -528,15 +442,17 @@ export function buildViewport3DColorbarTargetPlans({
   fdmSettings?: VisualizationTargetSettings | null;
   parts: readonly Viewport3DColorbarTargetPart[];
 }): Viewport3DTargetRenderPlan[] {
-  const targets = parts.map((part) =>
-    buildViewport3DTargetRenderPlan({
-      label: part.label,
-      quantityId: part.settings.activeQuantityId,
-      settings: part.settings,
-      targetId: part.id,
-      targetKind: part.targetKind,
-    }),
-  );
+  const targets = parts
+    .filter((part) => isViewport3DColorbarTargetPartEligible(part))
+    .map((part) =>
+      buildViewport3DTargetRenderPlan({
+        label: part.label,
+        quantityId: part.settings.activeQuantityId,
+        settings: part.settings,
+        targetId: part.id,
+        targetKind: part.targetKind,
+      }),
+    );
   if (fdmSettings) {
     targets.push(
       buildViewport3DTargetRenderPlan({
@@ -549,6 +465,12 @@ export function buildViewport3DColorbarTargetPlans({
     );
   }
   return targets;
+}
+
+function isViewport3DColorbarTargetPartEligible(
+  part: Viewport3DColorbarTargetPart,
+): boolean {
+  return part.role !== "air" && part.role !== "interface";
 }
 
 export function resolveViewport3DColorbarLegendsFromPlans({
@@ -1219,12 +1141,14 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       ...(colorbarTopologyModel?.magneticParts ?? []).map((partModel) => ({
         id: partModel.part.id,
         label: partModel.part.label ?? partModel.part.id,
+        role: partModel.part.role ?? null,
         settings: getColorbarPartSettings(partModel.part),
         targetKind: "part" as const,
       })),
       ...(colorbarTopologyModel?.airboxParts ?? []).map((partModel) => ({
         id: partModel.part.id,
         label: partModel.part.label ?? partModel.part.id,
+        role: partModel.part.role ?? null,
         settings: getColorbarPartSettings(partModel.part),
         targetKind: "airbox" as const,
       })),

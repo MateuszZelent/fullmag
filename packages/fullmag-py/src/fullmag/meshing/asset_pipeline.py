@@ -1062,7 +1062,8 @@ def _strip_overridden_geometry_fields(
     """
     overridden_names: set[str] = set()
     for geometry_name, recipe in per_object_recipes.items():
-        if recipe.hmax is not None and float(recipe.hmax) > 0.0:
+        recipe_hmax = recipe.to_ir().get("hmax")
+        if isinstance(recipe_hmax, (int, float)) and float(recipe_hmax) > 0.0:
             overridden_names.add(geometry_name.strip())
             if geometry_name.strip().endswith("_geom") and len(geometry_name.strip()) > len("_geom"):
                 overridden_names.add(geometry_name.strip()[: -len("_geom")])
@@ -1376,6 +1377,26 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                                 )
                                 break
                             except ValueError as exc:
+                                if "degenerate tetra volume" in str(exc):
+                                    cleanup_fallbacks = list(fallbacks_triggered)
+                                    try:
+                                        cleaned_mesh = _drop_degenerate_tetrahedra(
+                                            result.mesh,
+                                            context="Conformal OCC mesh",
+                                            fallbacks_triggered=cleanup_fallbacks,
+                                        )
+                                        if cleaned_mesh is not result.mesh:
+                                            cleaned_mesh.validate_strict(
+                                                require_positive_orientation=True
+                                            )
+                                            result = _dc_replace(
+                                                result,
+                                                mesh=cleaned_mesh,
+                                            )
+                                            fallbacks_triggered[:] = cleanup_fallbacks
+                                            break
+                                    except ValueError:
+                                        pass
                                 retry = (
                                     _conformal_occ_degenerate_retry(
                                         mesh_options,

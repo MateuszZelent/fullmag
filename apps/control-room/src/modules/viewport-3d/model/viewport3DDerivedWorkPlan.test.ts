@@ -114,7 +114,7 @@ describe("viewport3DDerivedWorkPlan", () => {
       items.find((item) => item.outputKind === "vector-segments"),
     ).toMatchObject({
       blockedReason: null,
-      execution: "render-model-sync",
+      execution: "runtime-worker",
       inputBufferId: "buffer:part-a",
       inputBytes: 96,
       itemCount: 1,
@@ -138,6 +138,44 @@ describe("viewport3DDerivedWorkPlan", () => {
       status: "ready",
       targetId: "part-a",
       workId: "vector-glyph:part-a:field-1:mesh-1",
+    });
+  });
+
+  it("plans missing vector segments as worker work before glyph transforms can run", () => {
+    const items = planViewport3DDerivedWorkItems({
+      targetPasses: new Map([
+        [
+          "part-a",
+          targetPass({
+            vectors: {
+              buildReference: null,
+              degradation: "vector-segments-unavailable",
+              passId: "part-a:vector-glyph",
+              segments: null,
+            },
+          }),
+        ],
+      ]),
+    });
+
+    expect(
+      items.find((item) => item.outputKind === "vector-segments"),
+    ).toMatchObject({
+      blockedReason: null,
+      execution: "runtime-worker",
+      inputBufferId: "buffer:part-a",
+      inputBytes: 96,
+      itemCount: 4,
+      outputBytesEstimate: 112,
+      status: "ready",
+    });
+    expect(
+      items.find((item) => item.outputKind === "vector-glyphs"),
+    ).toMatchObject({
+      blockedReason: "vector-segments-unavailable",
+      execution: "blocked",
+      inputBufferId: "buffer:part-a",
+      status: "blocked",
     });
   });
 

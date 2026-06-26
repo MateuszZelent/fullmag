@@ -1,12 +1,13 @@
 import { resolveCanonicalQuantityId } from "@/kernel/api/quantityIds";
 
-import type { ScalarRange } from "../viewport3dFieldMapping";
+import type { ScalarColorBuffer, ScalarRange } from "../viewport3dFieldMapping";
 import {
   DEFAULT_VIEWPORT_3D_SCALAR_RANGE_POLICY,
   type Viewport3DScalarRangePolicy,
   Viewport3DFieldScopeKind,
   Viewport3DTargetRenderPlan,
 } from "./viewport3DFieldDataPlan";
+import { resolveViewport3DTargetSurfaceLayerInput } from "../layers/viewport3DLayerPassInputs";
 
 export type Viewport3DColorbarRangeStateKind =
   | "current"
@@ -31,6 +32,23 @@ export interface Viewport3DColorbarPlan {
   scopeId: string | null;
   scopeKind: Viewport3DFieldScopeKind;
   targetIds: readonly string[];
+}
+
+export interface Viewport3DColorbarRangeFieldModel {
+  scalarColorsByMode: ReadonlyMap<string, ScalarColorBuffer | null>;
+  scalarColorsByPartAndMode: ReadonlyMap<
+    string,
+    ReadonlyMap<string, ScalarColorBuffer | null>
+  >;
+  targetPasses?: ReadonlyMap<
+    string,
+    {
+      surface: {
+        scalarColorMode: string | null;
+        scalarColors: ScalarColorBuffer | null;
+      };
+    }
+  >;
 }
 
 export function buildViewport3DColorbarGroupKey({
@@ -58,6 +76,28 @@ export function buildViewport3DColorbarGroupKey({
   ].join(":");
 }
 
+export function buildViewport3DColorbarRenderKey({
+  palette,
+  quantityId,
+  scalarRangePolicy = DEFAULT_VIEWPORT_3D_SCALAR_RANGE_POLICY,
+  scopeId,
+  scopeKind,
+}: {
+  palette: string;
+  quantityId: string;
+  scalarRangePolicy?: Viewport3DScalarRangePolicy;
+  scopeId: string | null;
+  scopeKind: Viewport3DFieldScopeKind;
+}): string {
+  return [
+    resolveCanonicalQuantityId(quantityId),
+    palette,
+    scopeKind,
+    scopeId ?? "none",
+    scalarRangePolicyKey(scalarRangePolicy),
+  ].join(":");
+}
+
 export function planViewport3DColorbars({
   previousPlans,
   rangeStatesByGroupKey,
@@ -73,6 +113,7 @@ export function planViewport3DColorbars({
     colorMode: string;
     palette: string;
     quantityId: string;
+    renderKey: string;
     scopeId: string | null;
     scopeKind: Viewport3DFieldScopeKind;
     targetIds: string[];
@@ -102,6 +143,13 @@ export function planViewport3DColorbars({
         colorMode,
         palette: target.shader.palette,
         quantityId: resolveCanonicalQuantityId(target.quantityId),
+        renderKey: buildViewport3DColorbarRenderKey({
+          palette: target.shader.palette,
+          quantityId: target.quantityId,
+          scalarRangePolicy: target.shader.scalarRangePolicy,
+          scopeId: scope.scopeId,
+          scopeKind: scope.scopeKind,
+        }),
         scopeId: scope.scopeId,
         scopeKind: scope.scopeKind,
         targetIds: [target.targetId],
@@ -124,12 +172,89 @@ export function planViewport3DColorbars({
       quantityId: group.quantityId,
       range: rangeState.range,
       rangeState: rangeState.state,
-      renderKey: `viewport-3d-colorbar:${groupKey}`,
+      renderKey: `viewport-3d-colorbar:${group.renderKey}`,
       scopeId: group.scopeId,
       scopeKind: group.scopeKind,
       targetIds,
     };
   }).toSorted((left, right) => left.groupKey.localeCompare(right.groupKey));
+}
+
+export function resolveViewport3DColorbarRangeStates({
+  fdmSurfaceColors,
+  fieldModel,
+  plans,
+}: {
+  fdmSurfaceColors?: ScalarColorBuffer | null;
+  fieldModel?: Viewport3DColorbarRangeFieldModel | null;
+  plans: readonly Viewport3DColorbarPlan[];
+}): ReadonlyMap<string, Viewport3DColorbarRangeState> {
+  const rangeStates = new Map<string, Viewport3DColorbarRangeState>();
+  const targetPassModelAuthoritative =
+    Boolean(fieldModel?.targetPasses) &&
+    (fieldModel?.targetPasses?.size ?? 0) > 0;
+  for (const plan of plans) {
+    const candidate =
+      plan.scopeKind === "full" && fdmSurfaceColors
+        ? fdmSurfaceColors
+        : plan.scopeKind === "full"
+          ? resolveViewport3DTargetSurfaceLayerInput({
+              fieldModel: fieldModel ?? null,
+              partId: "full",
+              scalarColorMode: plan.colorMode,
+            }).scalarColors ??
+            (targetPassModelAuthoritative
+              ? null
+              : fieldModel?.scalarColorsByMode.get(plan.colorMode) ?? null)
+        : plan.scopeId == null
+          ? targetPassModelAuthoritative
+            ? null
+            : fieldModel?.scalarColorsByMode.get(plan.colorMode) ?? null
+          : resolveViewport3DTargetSurfaceLayerInput({
+              fieldModel: fieldModel ?? null,
+              partId: plan.scopeId,
+              scalarColorMode: plan.colorMode,
+            }).scalarColors;
+    const buffer = scalarColorBufferMatchesColorbarRequest({
+      buffer: candidate,
+      colorMode: plan.colorMode,
+      colorPalette: plan.palette,
+      quantityId: plan.quantityId,
+    })
+      ? candidate
+      : null;
+    rangeStates.set(plan.groupKey, {
+      range: buffer?.range ?? null,
+      state: buffer ? "current" : "pending",
+    });
+  }
+  return rangeStates;
+}
+
+export function scalarColorBufferMatchesColorbarRequest({
+  buffer,
+  colorMode,
+  colorPalette,
+  quantityId,
+}: {
+  buffer: ScalarColorBuffer | null | undefined;
+  colorMode: string;
+  colorPalette: string;
+  quantityId: string;
+}): boolean {
+  if (!buffer) return false;
+  if (buffer.colorMode && buffer.colorMode !== colorMode) return false;
+  if (buffer.colorPalette && buffer.colorPalette !== colorPalette) {
+    return false;
+  }
+  if (
+    buffer.quantityId &&
+    resolveCanonicalQuantityId(buffer.quantityId) !==
+      resolveCanonicalQuantityId(quantityId)
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function resolveViewport3DColorbarRangeState({

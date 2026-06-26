@@ -42,9 +42,7 @@ def _component_interface_size_targets(options: MeshOptions) -> dict[str, float]:
         if not isinstance(geometry_name, str) or not geometry_name.strip():
             continue
         value = None
-        if kind == "ComponentVolumeConstant":
-            value = params.get("VIn")
-        elif kind in {"SurfaceDistanceThreshold", "InterfaceShellThreshold"}:
+        if kind in {"SurfaceDistanceThreshold", "InterfaceShellThreshold"}:
             value = params.get("SizeMin")
         if not isinstance(value, (int, float)) or value <= 0.0:
             continue
@@ -110,14 +108,10 @@ def _entity_bounds(
 
 def is_occ_compatible(geometries: list[Geometry]) -> bool:
     """Check if all geometries are standard shapes compatible with native OCC pipeline."""
-    if len(geometries) > 1 and any(_contains_boolean_csg(geometry) for geometry in geometries):
-        return False
     for geometry in geometries:
         if isinstance(geometry, ImportedGeometry):
             return False
         if isinstance(geometry, Cylinder):
-            if geometry.axis != (0.0, 0.0, 1.0):
-                return False
             continue
         if isinstance(geometry, (Box, Ellipsoid, Ellipse, ArchWaveguide)):
             continue
@@ -130,7 +124,9 @@ def is_occ_compatible(geometries: list[Geometry]) -> bool:
                 return False
             continue
         if isinstance(geometry, Union):
-            return False
+            if not is_occ_compatible([geometry.a, geometry.b]):
+                return False
+            continue
         if isinstance(geometry, Intersection):
             if not is_occ_compatible([geometry.a, geometry.b]):
                 return False

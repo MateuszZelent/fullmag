@@ -4,20 +4,29 @@ import type {
 } from "../viewport3dRenderModel";
 import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
 
+interface Viewport3DTargetSurfaceLayerFieldModel {
+  scalarColorsByMode: ReadonlyMap<string, ScalarColorBuffer | null>;
+  scalarColorsByPartAndMode?: ReadonlyMap<
+    string,
+    ReadonlyMap<string, ScalarColorBuffer | null>
+  >;
+  targetPasses?: ReadonlyMap<
+    string,
+    {
+      surface: {
+        scalarColorMode: string | null;
+        scalarColors: ScalarColorBuffer | null;
+      };
+    }
+  >;
+}
+
 export function resolveViewport3DTargetSurfaceLayerInput({
   fieldModel,
   partId,
   scalarColorMode,
 }: {
-  fieldModel: (
-    Pick<Viewport3DFieldRenderModel, "scalarColorsByMode"> &
-      Partial<
-        Pick<
-          Viewport3DFieldRenderModel,
-          "scalarColorsByPartAndMode" | "targetPasses"
-        >
-      >
-  ) | null;
+  fieldModel: Viewport3DTargetSurfaceLayerFieldModel | null;
   partId: string;
   scalarColorMode: string | null;
 }): {

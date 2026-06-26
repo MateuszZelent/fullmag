@@ -41,7 +41,7 @@ export function summarizeViewport3DTargetDiagnostics({
       derivedWork: targetWorkItems.map(summarizeDerivedWorkItem),
       passes: summarizeTargetPasses(pass),
       requests: summarizeTargetRequests(pass),
-      retained: [],
+      retained: summarizeTargetRetainedOutputs(pass),
       targetId,
     };
   }).toSorted((left, right) => left.targetId.localeCompare(right.targetId));
@@ -112,9 +112,29 @@ function summarizeTargetDegradation(
   const degradation = new Set<string>();
   if (pass.surface.degradation) {
     degradation.add(`surface:${pass.surface.degradation}`);
+    if (pass.fieldBuffer) {
+      degradation.add(
+        [
+          "surface-rejected",
+          `buffer=${pass.fieldBuffer.bufferId}`,
+          `capability=${pass.fieldBuffer.capability}`,
+          `reason=${pass.surface.degradation}`,
+        ].join(" "),
+      );
+    }
   }
   if (pass.vectors.degradation) {
     degradation.add(`vector-glyph:${pass.vectors.degradation}`);
+    if (pass.fieldBuffer) {
+      degradation.add(
+        [
+          "vector-glyph-rejected",
+          `buffer=${pass.fieldBuffer.bufferId}`,
+          `capability=${pass.fieldBuffer.capability}`,
+          `reason=${pass.vectors.degradation}`,
+        ].join(" "),
+      );
+    }
   }
   for (const item of workItems) {
     if (item.blockedReason) {
@@ -122,6 +142,42 @@ function summarizeTargetDegradation(
     }
   }
   return Array.from(degradation);
+}
+
+function summarizeTargetRetainedOutputs(
+  pass: Viewport3DTargetRenderPassModel,
+): string[] {
+  const retained: string[] = [];
+  const currentFieldRevision = pass.fieldBuffer?.fieldRevision ?? null;
+  if (!currentFieldRevision) return retained;
+
+  const surfaceRevision = pass.surface.scalarColors?.targetRevision ?? null;
+  if (
+    surfaceRevision &&
+    surfaceRevision !== `field=${currentFieldRevision}` &&
+    surfaceRevision !== currentFieldRevision
+  ) {
+    retained.push(
+      [
+        "surface stale-compatible",
+        `current=${currentFieldRevision}`,
+        `retained=${surfaceRevision}`,
+      ].join(" "),
+    );
+  }
+
+  const vectorRevision = pass.vectors.buildReference?.fieldRevision ?? null;
+  if (vectorRevision && vectorRevision !== currentFieldRevision) {
+    retained.push(
+      [
+        "vector-glyph stale-compatible",
+        `current=${currentFieldRevision}`,
+        `retained=${vectorRevision}`,
+      ].join(" "),
+    );
+  }
+
+  return retained;
 }
 
 function summarizeDerivedWorkItem(item: Viewport3DDerivedWorkItem): string {

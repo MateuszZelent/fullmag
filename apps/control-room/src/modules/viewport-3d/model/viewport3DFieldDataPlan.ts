@@ -805,6 +805,71 @@ export function buildViewport3DFieldResourceRequestId(
     .join("&");
 }
 
+export function validateViewport3DFieldResourceRequestIdentities(
+  requests: Iterable<readonly [string, Viewport3DFieldResourceRequest]>,
+): string[] {
+  const issues: string[] = [];
+  for (const [targetId, request] of requests) {
+    const expected = buildViewport3DFieldResourceRequestId(
+      request.quantityId,
+      request.query,
+    );
+    if (request.requestId !== expected) {
+      issues.push(
+        [
+          "request-id-mismatch",
+          `target=${targetId}`,
+          `expected=${expected}`,
+          `actual=${request.requestId}`,
+        ].join(" "),
+      );
+    }
+  }
+  return issues;
+}
+
+export function validateViewport3DFieldResourceRequestEquivalence(
+  requests: Iterable<readonly [string, Viewport3DFieldResourceRequest]>,
+): string[] {
+  const requestsById = new Map<string, {
+    consumers: Set<string>;
+    targets: Set<string>;
+  }>();
+  for (const [targetId, request] of requests) {
+    const requestId = buildViewport3DFieldResourceRequestId(
+      request.quantityId,
+      request.query,
+    );
+    const entry = requestsById.get(requestId);
+    if (entry) {
+      entry.targets.add(targetId);
+      for (const consumer of request.consumers) {
+        entry.consumers.add(consumer);
+      }
+    } else {
+      requestsById.set(requestId, {
+        consumers: new Set(request.consumers),
+        targets: new Set([targetId]),
+      });
+    }
+  }
+
+  return Array.from(requestsById, ([requestId, entry]) => ({
+    consumers: Array.from(entry.consumers).sort(),
+    requestId,
+    targets: Array.from(entry.targets).sort(),
+  }))
+    .filter((entry) => entry.targets.length > 1)
+    .map((entry) =>
+      [
+        "duplicate-equivalent-request",
+        `request=${entry.requestId}`,
+        `targets=${entry.targets.join(",")}`,
+        `consumers=${entry.consumers.join(",")}`,
+      ].join(" "),
+    );
+}
+
 export function resolveViewport3DTargetFieldQuery({
   surfaceColorMode,
   vectorsVisible,

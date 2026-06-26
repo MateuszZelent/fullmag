@@ -1128,12 +1128,12 @@ def _add_component_restricted_rectangular_perimeter_field(
         return None
 
     da = (
-        f"Min({coord_a} - {_math_number(min_a)}, "
-        f"{_math_number(max_a)} - {coord_a})"
+        f"Min({coord_a} - {_math_atom(min_a)}, "
+        f"{_math_atom(max_a)} - {coord_a})"
     )
     db = (
-        f"Min({coord_b} - {_math_number(min_b)}, "
-        f"{_math_number(max_b)} - {coord_b})"
+        f"Min({coord_b} - {_math_atom(min_b)}, "
+        f"{_math_atom(max_b)} - {coord_b})"
     )
     normalized_mode = str(mode).strip().lower()
     if normalized_mode == "corner":
@@ -1306,9 +1306,13 @@ def _math_number(value: float) -> str:
     return f"{float(value):.17g}"
 
 
+def _math_atom(value: float) -> str:
+    return f"({_math_number(value)})"
+
+
 def _box_outside_distance_expression(bounds_min: Sequence[float], bounds_max: Sequence[float]) -> str:
-    xmin, ymin, zmin = (_math_number(value) for value in bounds_min)
-    xmax, ymax, zmax = (_math_number(value) for value in bounds_max)
+    xmin, ymin, zmin = (_math_atom(value) for value in bounds_min)
+    xmax, ymax, zmax = (_math_atom(value) for value in bounds_max)
     dx = f"Max(Max({xmin} - x, 0), x - {xmax})"
     dy = f"Max(Max({ymin} - y, 0), y - {ymax})"
     dz = f"Max(Max({zmin} - z, 0), z - {zmax})"
@@ -1340,7 +1344,7 @@ def _box_airbox_boundary_ramp_expression(
 
         lower_gap = inner_min - outer_min
         if lower_gap > dist_min:
-            delta = f"Max({_math_number(inner_min)} - {coord}, 0)"
+            delta = f"Max({_math_atom(inner_min)} - {coord}, 0)"
             terms.append(
                 f"Min(Max(({delta} - {dist_min_text}) / "
                 f"{_math_number(lower_gap - dist_min)}, 0), 1)"
@@ -1348,7 +1352,7 @@ def _box_airbox_boundary_ramp_expression(
 
         upper_gap = outer_max - inner_max
         if upper_gap > dist_min:
-            delta = f"Max({coord} - {_math_number(inner_max)}, 0)"
+            delta = f"Max({coord} - {_math_atom(inner_max)}, 0)"
             terms.append(
                 f"Min(Max(({delta} - {dist_min_text}) / "
                 f"{_math_number(upper_gap - dist_min)}, 0), 1)"
@@ -1636,9 +1640,9 @@ def _configure_mesh_size_fields(
             y_c_scaled = center[1] * hscale
             z_c_scaled = center[2] * hscale
 
-            dx = f"Max(Abs(x - {_math_number(x_c_scaled)}) - {_math_number(0.5 * size[0] * hscale)}, 0)"
-            dy = f"Max(Abs(y - {_math_number(y_c_scaled)}) - {_math_number(0.5 * size[1] * hscale)}, 0)"
-            dz = f"Max(Abs(z - {_math_number(z_c_scaled)}) - {_math_number(0.5 * size[2] * hscale)}, 0)"
+            dx = f"Max(Abs(x - {_math_atom(x_c_scaled)}) - {_math_number(0.5 * size[0] * hscale)}, 0)"
+            dy = f"Max(Abs(y - {_math_atom(y_c_scaled)}) - {_math_number(0.5 * size[1] * hscale)}, 0)"
+            dz = f"Max(Abs(z - {_math_atom(z_c_scaled)}) - {_math_number(0.5 * size[2] * hscale)}, 0)"
             distance_expr = f"Sqrt(({dx})*({dx}) + ({dy})*({dy}) + ({dz})*({dz}))"
 
             span = trans * hscale
@@ -1686,12 +1690,12 @@ def _configure_mesh_size_fields(
             y_c_scaled = center[1] * hscale
             z_c_scaled = center[2] * hscale
 
-            xc_num = _math_number(x_c_scaled)
-            yc_num = _math_number(y_c_scaled)
-            zc_num = _math_number(z_c_scaled)
-            ax_num = _math_number(ax)
-            ay_num = _math_number(ay)
-            az_num = _math_number(az)
+            xc_num = _math_atom(x_c_scaled)
+            yc_num = _math_atom(y_c_scaled)
+            zc_num = _math_atom(z_c_scaled)
+            ax_num = _math_atom(ax)
+            ay_num = _math_atom(ay)
+            az_num = _math_atom(az)
 
             # va = projection along the unit axis vector
             va = f"((x - {xc_num})*{ax_num} + (y - {yc_num})*{ay_num} + (z - {zc_num})*{az_num})"
@@ -1742,7 +1746,7 @@ def _configure_mesh_size_fields(
             y_c_scaled = center[1] * hscale
             z_c_scaled = center[2] * hscale
 
-            d = f"Sqrt((x - {_math_number(x_c_scaled)})*(x - {_math_number(x_c_scaled)}) + (y - {_math_number(y_c_scaled)})*(y - {_math_number(y_c_scaled)}) + (z - {_math_number(z_c_scaled)})*(z - {_math_number(z_c_scaled)}))"
+            d = f"Sqrt((x - {_math_atom(x_c_scaled)})*(x - {_math_atom(x_c_scaled)}) + (y - {_math_atom(y_c_scaled)})*(y - {_math_atom(y_c_scaled)}) + (z - {_math_atom(z_c_scaled)})*(z - {_math_atom(z_c_scaled)}))"
             distance_expr = f"Max({d} - {_math_number(radius * hscale)}, 0)"
 
             span = trans * hscale

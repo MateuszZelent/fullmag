@@ -30,6 +30,7 @@
     "smoke:analysis-plots": "node scripts/smoke-analysis-plots.mjs",
     "screenshot:viewport-3d": "node scripts/screenshot-viewport-3d.mjs",
     "smoke:viewport-3d": "node scripts/smoke-viewport-3d.mjs",
+    "smoke:viewport-3d-mixed-targets": "node scripts/smoke-viewport-3d-mixed-targets.mjs",
     "smoke:realtime-communication-budget": "node scripts/smoke-realtime-communication-budget.mjs",
     "verify:mesh-build-new-object": "node scripts/verify-mesh-build-new-object.mjs",
     "test": "vitest run",

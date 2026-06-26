@@ -699,6 +699,40 @@ describe("resolveViewport3DColorbarLegend", () => {
     ]);
   });
 
+  it("does not plan a second viewport colorbar for air-interface parts", () => {
+    const targets = buildViewport3DColorbarTargetPlans({
+      parts: [
+        {
+          id: "part:permalloy_layer",
+          label: "permalloy_layer",
+          settings: visualizationSettings({
+            surfaceColorSource: "component_x",
+            viewportColorbarVisible: true,
+          }),
+          targetKind: "part",
+        },
+        {
+          id: "part:air-permalloy-interface",
+          label: "Air ↔ permalloy_layer_geom",
+          role: "interface",
+          settings: visualizationSettings({
+            surfaceColorSource: "component_x",
+            viewportColorbarVisible: true,
+          }),
+          targetKind: "part",
+        },
+      ],
+    });
+
+    const plans = planViewport3DColorbars({ targets });
+
+    expect(plans).toHaveLength(1);
+    expect(plans[0]).toMatchObject({
+      scopeKind: "part",
+      targetIds: ["part:permalloy_layer"],
+    });
+  });
+
   it("updates viewport colorbar range without changing the render key", () => {
     const targets = buildViewport3DColorbarTargetPlans({
       parts: [

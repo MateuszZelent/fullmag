@@ -102,6 +102,18 @@ describe("viewport3DColorbarPlan", () => {
     expect(second[0]?.range).toEqual({ max: 2, min: -2 });
   });
 
+  it("keeps render identity stable when the same target switches scalar component", () => {
+    const [xPlan] = planViewport3DColorbars({
+      targets: [objectPlan("object:film", { surfaceColorSource: "component_x" })],
+    });
+    const [yPlan] = planViewport3DColorbars({
+      targets: [objectPlan("object:film", { surfaceColorSource: "component_y" })],
+    });
+
+    expect(xPlan?.groupKey).not.toBe(yPlan?.groupKey);
+    expect(xPlan?.renderKey).toBe(yPlan?.renderKey);
+  });
+
   it("retains a previous compatible range while the fresh range is pending", () => {
     const target = objectPlan("object:film");
     const groupKey = buildViewport3DColorbarGroupKey({

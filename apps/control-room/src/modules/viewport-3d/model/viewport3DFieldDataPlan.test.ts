@@ -19,6 +19,8 @@ import {
   resolveViewport3DTargetQuantityFieldDemandPlan,
   resolveViewport3DTargetFieldQuery,
   summarizeViewport3DFieldDemandDiagnostics,
+  validateViewport3DFieldResourceRequestEquivalence,
+  validateViewport3DFieldResourceRequestIdentities,
   type Viewport3DTargetRenderPlan,
 } from "./viewport3DFieldDataPlan";
 
@@ -49,6 +51,56 @@ describe("viewport3DFieldDataPlan", () => {
     expect(buildViewport3DPassDemands(plan)).toEqual([]);
     expect(planViewport3DFieldResourceRequests(buildViewport3DPassDemands(plan)))
       .toEqual([]);
+  });
+
+  it("reports request id mismatches for scoped data-plane diagnostics", () => {
+    expect(
+      validateViewport3DFieldResourceRequestIdentities([
+        [
+          "part-a",
+          {
+            consumers: ["part-a:surface"],
+            quantityId: "m",
+            query: {
+              component: "x",
+              scope_id: "part-a",
+              scope_kind: "part",
+            },
+            requestId: "quantity=m&component=y&scope_id=part-a&scope_kind=part",
+          },
+        ],
+      ]),
+    ).toEqual([
+      "request-id-mismatch target=part-a expected=component=x&quantity=m&scope_id=part-a&scope_kind=part actual=quantity=m&component=y&scope_id=part-a&scope_kind=part",
+    ]);
+  });
+
+  it("reports duplicate equivalent field resource requests across data-plane planners", () => {
+    const request = {
+      consumers: ["part-a:surface"],
+      quantityId: "m",
+      query: {
+        component: "x" as const,
+        scope_id: "part-a",
+        scope_kind: "part" as const,
+      },
+      requestId: "component=x&quantity=m&scope_id=part-a&scope_kind=part",
+    };
+
+    expect(
+      validateViewport3DFieldResourceRequestEquivalence([
+        ["part-a", request],
+        [
+          "target-quantity:part-a",
+          {
+            ...request,
+            consumers: ["part-a:colorbar"],
+          },
+        ],
+      ]),
+    ).toEqual([
+      "duplicate-equivalent-request request=component=x&quantity=m&scope_id=part-a&scope_kind=part targets=part-a,target-quantity:part-a consumers=part-a:colorbar,part-a:surface",
+    ]);
   });
 
   it("uses scalar component data for component surfaces without vectors", () => {

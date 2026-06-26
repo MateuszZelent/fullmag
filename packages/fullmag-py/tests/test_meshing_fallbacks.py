@@ -400,11 +400,8 @@ class FieldStackParityTests(unittest.TestCase):
             component_aware=True,
         )
         kinds = sorted(f["kind"] for f in fields)
-        # No auto-generated interface field; only bulk + transition
-        self.assertEqual(
-            kinds,
-            ["ComponentVolumeConstant", "TransitionShellThreshold"],
-        )
+        # Plain hmax only clamps the component; transition is opt-in.
+        self.assertEqual(kinds, ["ComponentVolumeConstant"])
 
     def test_bounds_path_produces_coordinate_kinds(self):
         geom = fm.Box(2.0, 2.0, 2.0, name="left")
@@ -414,11 +411,8 @@ class FieldStackParityTests(unittest.TestCase):
             component_aware=False,
         )
         kinds = sorted(f["kind"] for f in fields)
-        # No auto-generated interface field; only bulk Box + transition BoundsSurfaceThreshold
-        self.assertEqual(
-            kinds,
-            ["BoundsSurfaceThreshold", "Box"],
-        )
+        # Plain hmax only creates the bulk Box; transition is opt-in.
+        self.assertEqual(kinds, ["Box"])
 
     def test_both_paths_produce_same_count(self):
         geom = fm.Box(2.0, 2.0, 2.0, name="left")
@@ -428,8 +422,8 @@ class FieldStackParityTests(unittest.TestCase):
                 per_geometry=[{"geometry": "left", "mode": "custom", "hmax": "8e-9"}],
                 component_aware=ca,
             )
-            # Bulk + transition (no auto interface)
-            self.assertEqual(len(fields), 2, f"component_aware={ca}")
+            # Bulk only; transition must be requested explicitly.
+            self.assertEqual(len(fields), 1, f"component_aware={ca}")
 
     def test_no_fields_when_coarser_than_default(self):
         geom = fm.Box(2.0, 2.0, 2.0, name="left")

@@ -1189,7 +1189,7 @@ run-cofeb-rings-relax-diagnostics fem_execution="gpu" cpu_threads="auto" web_por
       FULLMAG_CPU_THREADS="$cpu_threads_env" \
       FULLMAG_COFEB_RINGS_MINIMIZE_MAX_STEPS="${FULLMAG_COFEB_RINGS_MINIMIZE_MAX_STEPS:-10}" \
       FULLMAG_COFEB_RINGS_RELAX_MAX_STEPS="${FULLMAG_COFEB_RINGS_RELAX_MAX_STEPS:-10}" \
-      "{{gpu_runtime_bin}}" --dev -i examples/permalloy_layer_cofeb_rings_relax_300nm.py --web-port "{{web_port}}" \
+      "{{gpu_runtime_bin}}" --dev --web-port "{{web_port}}" -i examples/permalloy_layer_cofeb_rings_relax_300nm.py \
         > "$app_log" 2>&1 & \
       sim_pid=$!; \
       web_url="http://localhost:{{web_port}}/workspace"; \
@@ -1229,6 +1229,113 @@ run-cofeb-rings-relax-diagnostics fem_execution="gpu" cpu_threads="auto" web_por
       printf "  recorder: %s\n" "$recorder_log"; \
       printf "  artifact: %s\n" "$artifact_dir"; \
       node -e '\''const fs=require("fs"); const dir=process.argv[1]; const summary=JSON.parse(fs.readFileSync(`${dir}/summary.json`,"utf8")); const report=fs.readFileSync(`${dir}/suspect-report.md`,"utf8").split("\n").slice(0,28).join("\n"); console.log(`  records: ${summary.recordCount}, warnings: ${summary.warningCount}, critical: ${summary.criticalCount}, dropped: ${summary.droppedCount}`); console.log(report);'\'' "$artifact_dir"'
+
+run-cofeb-rings-relax-mixed-target-smoke fem_execution="gpu" cpu_threads="auto" web_port="3193":
+    just ensure-python
+    just ensure-managed-fem-runtime
+    bash -euo pipefail -c '\
+      mode="{{fem_execution}}"; \
+      case "$mode" in 0|cpu|CPU) mode="cpu" ;; gpu|GPU) mode="gpu" ;; *) echo "unsupported FEM execution mode: $mode (expected cpu or gpu)" >&2; exit 2 ;; esac; \
+      if [ "{{cpu_threads}}" = "auto" ]; then cpu_threads_env=auto; else cpu_threads_env="{{cpu_threads}}"; fi; \
+      if command -v pnpm >/dev/null 2>&1; then PNPM_CMD=pnpm; \
+      elif command -v corepack >/dev/null 2>&1; then PNPM_CMD="corepack pnpm"; \
+      else echo "pnpm or corepack not found on PATH" >&2; exit 127; fi; \
+      report_dir="{{repo_root}}/.fullmag/reports/cofeb-rings-relax-mixed-target-smoke"; \
+      app_log="$report_dir/fullmag-interactive.log"; \
+      smoke_log="$report_dir/mixed-target-smoke.log"; \
+      mkdir -p "$report_dir"; \
+      sim_pid=""; \
+      cleanup() { \
+        if [ -n "$sim_pid" ] && kill -0 "$sim_pid" >/dev/null 2>&1; then \
+          kill "$sim_pid" >/dev/null 2>&1 || true; \
+          wait "$sim_pid" >/dev/null 2>&1 || true; \
+        fi; \
+      }; \
+      trap cleanup EXIT INT TERM; \
+      FULLMAG_PYTHON="{{repo_python}}" \
+      FULLMAG_FDM_EXECUTION=cpu \
+      FULLMAG_FEM_EXECUTION="$mode" \
+      FULLMAG_RELAX_DEVICE="$mode" \
+      FULLMAG_CPU_THREADS="$cpu_threads_env" \
+      FULLMAG_COFEB_RINGS_MINIMIZE_MAX_STEPS="${FULLMAG_COFEB_RINGS_MINIMIZE_MAX_STEPS:-10}" \
+      FULLMAG_COFEB_RINGS_RELAX_MAX_STEPS="${FULLMAG_COFEB_RINGS_RELAX_MAX_STEPS:-10}" \
+      "{{gpu_runtime_bin}}" --dev --web-port "{{web_port}}" -i examples/permalloy_layer_cofeb_rings_relax_300nm.py \
+        > "$app_log" 2>&1 & \
+      sim_pid=$!; \
+      web_url="http://localhost:{{web_port}}/workspace"; \
+      for _ in $(seq 1 600); do \
+        curl -fsS "$web_url" >/dev/null 2>&1 && break; \
+        if ! kill -0 "$sim_pid" >/dev/null 2>&1; then \
+          echo "CoFeB rings simulation exited before control room became ready; see $app_log" >&2; \
+          tail -n 120 "$app_log" >&2 || true; \
+          exit 1; \
+        fi; \
+        sleep 0.5; \
+      done; \
+      curl -fsS "$web_url" >/dev/null 2>&1 || { echo "control room did not become ready at $web_url; see $app_log" >&2; exit 1; }; \
+      CONTROL_ROOM_URL="$web_url" \
+      CONTROL_ROOM_MIXED_TARGET_SMOKE_TIMEOUT_MS="${CONTROL_ROOM_MIXED_TARGET_SMOKE_TIMEOUT_MS:-180000}" \
+      $PNPM_CMD --dir apps/control-room smoke:viewport-3d-mixed-targets | tee "$smoke_log"; \
+      printf "\nCoFeB rings mixed-target smoke logs:\n"; \
+      printf "  fullmag: %s\n" "$app_log"; \
+      printf "  smoke: %s\n" "$smoke_log"'
+
+run-viewport-3d-mixed-target-smoke fem_execution="gpu" cpu_threads="auto" web_port="3193" api_port="8193":
+    just ensure-python
+    just ensure-managed-fem-runtime
+    bash -euo pipefail -c '\
+      mode="{{fem_execution}}"; \
+      case "$mode" in 0|cpu|CPU) mode="cpu" ;; gpu|GPU) mode="gpu" ;; *) echo "unsupported FEM execution mode: $mode (expected cpu or gpu)" >&2; exit 2 ;; esac; \
+      if [ "{{cpu_threads}}" = "auto" ]; then cpu_threads_env=auto; else cpu_threads_env="{{cpu_threads}}"; fi; \
+      api_url="http://localhost:{{api_port}}"; \
+      if command -v pnpm >/dev/null 2>&1; then PNPM_CMD=pnpm; \
+      elif command -v corepack >/dev/null 2>&1; then PNPM_CMD="corepack pnpm"; \
+      else echo "pnpm or corepack not found on PATH" >&2; exit 127; fi; \
+      report_dir="{{repo_root}}/.fullmag/reports/viewport-3d-mixed-target-smoke"; \
+      app_log="$report_dir/fullmag-interactive.log"; \
+      smoke_log="$report_dir/mixed-target-smoke.log"; \
+      mkdir -p "$report_dir"; \
+      sim_pid=""; \
+      cleanup() { \
+        if [ -n "$sim_pid" ] && kill -0 "$sim_pid" >/dev/null 2>&1; then \
+          kill "$sim_pid" >/dev/null 2>&1 || true; \
+          wait "$sim_pid" >/dev/null 2>&1 || true; \
+        fi; \
+      }; \
+      trap cleanup EXIT INT TERM; \
+      FULLMAG_PYTHON="{{repo_python}}" \
+      FULLMAG_FDM_EXECUTION=cpu \
+      FULLMAG_FEM_EXECUTION="$mode" \
+      FULLMAG_RELAX_DEVICE="$mode" \
+      FULLMAG_CPU_THREADS="$cpu_threads_env" \
+      FULLMAG_API_PORT="{{api_port}}" \
+      FULLMAG_VIEWPORT3D_MIXED_TARGET_MAX_STEPS="${FULLMAG_VIEWPORT3D_MIXED_TARGET_MAX_STEPS:-2000}" \
+      "{{gpu_runtime_bin}}" --dev --web-port "{{web_port}}" -i examples/viewport_3d_mixed_targets_smoke.py \
+        > "$app_log" 2>&1 & \
+      sim_pid=$!; \
+      web_url="http://localhost:{{web_port}}/workspace"; \
+      for _ in $(seq 1 600); do \
+        curl -fsS "$web_url" >/dev/null 2>&1 && break; \
+        if ! kill -0 "$sim_pid" >/dev/null 2>&1; then \
+          echo "Viewport 3D mixed-target fixture exited before control room became ready; see $app_log" >&2; \
+          tail -n 120 "$app_log" >&2 || true; \
+          exit 1; \
+        fi; \
+        sleep 0.5; \
+      done; \
+      curl -fsS "$web_url" >/dev/null 2>&1 || { echo "control room did not become ready at $web_url; see $app_log" >&2; exit 1; }; \
+      if ! kill -0 "$sim_pid" >/dev/null 2>&1; then \
+        echo "Viewport 3D mixed-target fixture exited before smoke started; see $app_log" >&2; \
+        tail -n 120 "$app_log" >&2 || true; \
+        exit 1; \
+      fi; \
+      CONTROL_ROOM_API_BASE_URL="$api_url" \
+      CONTROL_ROOM_URL="$web_url" \
+      CONTROL_ROOM_MIXED_TARGET_SMOKE_TIMEOUT_MS="${CONTROL_ROOM_MIXED_TARGET_SMOKE_TIMEOUT_MS:-180000}" \
+      $PNPM_CMD --dir apps/control-room smoke:viewport-3d-mixed-targets | tee "$smoke_log"; \
+      printf "\nViewport 3D mixed-target smoke logs:\n"; \
+      printf "  fullmag: %s\n" "$app_log"; \
+      printf "  smoke: %s\n" "$smoke_log"'
 
 run-permalloy-skyrmion-relax fem_execution="gpu":
     just run-permalloy-skyrmion-relax-interactive "{{fem_execution}}"

@@ -178,7 +178,7 @@ function buildVectorSegmentWorkItem(
   pass: Viewport3DTargetRenderPassModel,
 ): Viewport3DDerivedWorkItem {
   const inputBufferId = resolveVectorInputBufferId(pass);
-  const blockedReason = vectorGlyphBlockedReason(pass.vectors.degradation);
+  const blockedReason = vectorSegmentBlockedReason(pass.vectors.degradation);
   const status: Viewport3DDerivedWorkStatus = blockedReason ? "blocked" : "ready";
   const staleCompatibilityKey = [
     "vector-segments",
@@ -190,18 +190,14 @@ function buildVectorSegmentWorkItem(
 
   return {
     blockedReason,
-    execution: blockedReason
-      ? "blocked"
-      : pass.vectors.segments
-        ? "render-model-sync"
-        : "runtime-worker",
+    execution: blockedReason ? "blocked" : "runtime-worker",
     inputBufferId,
     inputBytes: vectorSegmentInputBytes(pass),
-    itemCount: vectorSegmentItemCount(pass.vectors.segments),
+    itemCount: blockedReason ? 0 : vectorSegmentItemCountEstimate(pass),
     lane: "vector-glyph",
     latestWins: true,
     outputKind: "vector-segments",
-    outputBytesEstimate: typedArrayByteLength(pass.vectors.segments),
+    outputBytesEstimate: blockedReason ? 0 : vectorSegmentOutputBytesEstimate(pass),
     passId: pass.vectors.passId,
     staleCompatibilityKey,
     status,
@@ -219,6 +215,25 @@ function vectorSegmentInputBytes(
   pass: Viewport3DTargetRenderPassModel,
 ): number {
   return typedArrayByteLength(pass.fieldBuffer?.values);
+}
+
+function vectorSegmentItemCountEstimate(
+  pass: Viewport3DTargetRenderPassModel,
+): number {
+  return (
+    vectorSegmentItemCount(pass.vectors.segments) ??
+    pass.fieldBuffer?.pointCount ??
+    0
+  );
+}
+
+function vectorSegmentOutputBytesEstimate(
+  pass: Viewport3DTargetRenderPassModel,
+): number {
+  return (
+    typedArrayByteLength(pass.vectors.segments) ||
+    (pass.fieldBuffer?.pointCount ?? 0) * 7 * Float32Array.BYTES_PER_ELEMENT
+  );
 }
 
 function buildVectorGlyphWorkItem(
@@ -241,7 +256,7 @@ function buildVectorGlyphWorkItem(
     execution: blockedReason ? "blocked" : "runtime-worker",
     inputBufferId,
     inputBytes: typedArrayByteLength(pass.vectors.segments),
-    itemCount: vectorSegmentItemCount(pass.vectors.segments),
+    itemCount: vectorSegmentItemCount(pass.vectors.segments) ?? 0,
     lane: "vector-glyph",
     latestWins: true,
     outputKind: "vector-glyphs",
@@ -319,8 +334,8 @@ function scalarColorOutputBytesEstimate(
 
 function vectorSegmentItemCount(
   segments: Float32Array | null | undefined,
-): number {
-  return Math.floor((segments?.length ?? 0) / 7);
+): number | null {
+  return segments ? Math.floor(segments.length / 7) : null;
 }
 
 function typedArrayByteLength(
@@ -346,6 +361,16 @@ function vectorGlyphBlockedReason(
     degradation === "buffer-quantity-mismatch" ||
     degradation === "scalar-buffer-not-vector-capable" ||
     degradation === "vector-segments-unavailable"
+    ? degradation
+    : null;
+}
+
+function vectorSegmentBlockedReason(
+  degradation: Viewport3DTargetPassDegradation | null,
+): Viewport3DTargetPassDegradation | null {
+  return degradation === "buffer-not-vector-capable" ||
+    degradation === "buffer-quantity-mismatch" ||
+    degradation === "scalar-buffer-not-vector-capable"
     ? degradation
     : null;
 }

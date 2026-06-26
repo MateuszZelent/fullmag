@@ -390,15 +390,6 @@ def resolve_shared_domain_targets(
             if isinstance(workflow_entry, Mapping)
             else None
         )
-        if (
-            transition_distance is None
-            and bulk_hmax is not None
-            and default_hmax is not None
-            and bulk_hmax < default_hmax
-        ):
-            transition_distance = bulk_hmax * 3.0
-            transition_realization = "auto"
-
         source = "study_default"
         if isinstance(recipe, PerObjectMeshRecipe):
             source = "recipe_override"

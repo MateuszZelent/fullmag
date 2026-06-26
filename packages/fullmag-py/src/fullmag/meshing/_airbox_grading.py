@@ -9,6 +9,10 @@ def _math_number(value: float) -> str:
     return f"{float(value):.17g}"
 
 
+def _math_atom(value: float) -> str:
+    return f"({_math_number(value)})"
+
+
 def _growth_number(value: float) -> str:
     return f"{float(value):.12g}"
 
@@ -91,11 +95,11 @@ def _axis_fraction_expression(
     upper_gap = float(airbox_max) - float(object_max)
     if lower_gap > 0.0:
         terms.append(
-            f"({_math_number(object_min)} - {coord}) / {_math_number(lower_gap)}"
+            f"({_math_atom(object_min)} - {coord}) / {_math_number(lower_gap)}"
         )
     if upper_gap > 0.0:
         terms.append(
-            f"({coord} - {_math_number(object_max)}) / {_math_number(upper_gap)}"
+            f"({coord} - {_math_atom(object_max)}) / {_math_number(upper_gap)}"
         )
     if not terms:
         return "0"
@@ -144,7 +148,7 @@ def _spherical_airbox_fraction_expression(
     span = float(airbox_radius) - float(object_radius)
     if span <= 0.0:
         return None
-    cx, cy, cz = (_math_number(float(value)) for value in center)
+    cx, cy, cz = (_math_atom(float(value)) for value in center)
     radius_expr = (
         f"Sqrt((x - {cx}) * (x - {cx}) + "
         f"(y - {cy}) * (y - {cy}) + "

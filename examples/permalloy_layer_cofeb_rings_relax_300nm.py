@@ -21,7 +21,7 @@ NM = 1e-9
 MINIMIZE_MAX_STEPS = int(os.environ.get("FULLMAG_COFEB_RINGS_MINIMIZE_MAX_STEPS", "4000"))
 RELAX_MAX_STEPS = int(os.environ.get("FULLMAG_COFEB_RINGS_RELAX_MAX_STEPS", "7500"))
 
-LAYER_SIZE = (2000 * NM, 600 * NM, 10 * NM)
+LAYER_SIZE = (2000 * NM, 600 * NM, 1.6 * NM)
 RING_OUTER_RADIUS = 150 * NM
 RING_INNER_RADIUS = 50 * NM
 RING_WIDTH = RING_OUTER_RADIUS - RING_INNER_RADIUS
@@ -81,19 +81,19 @@ top_ring = study.geometry(
     ring_geometry("cofeb_top_ring", RING_CENTER_Z),
     name="cofeb_top_ring",
 )
-bottom_ring = study.geometry(
-    ring_geometry("cofeb_bottom_ring", -RING_CENTER_Z),
-    name="cofeb_bottom_ring",
-)
+# bottom_ring = study.geometry(
+#     ring_geometry("cofeb_bottom_ring", -RING_CENTER_Z),
+#     name="cofeb_bottom_ring",
+# )
 
-for ring in (bottom_ring,):
-    ring.Ms = 1.51e6
-    ring.Aex = 15e-12
-    ring.alpha = 0.1
-    ring.Ku1 = 1.0e6
-    ring.anisU = RING_AXIS
-    ring.m = fm.texture.uniform(1,0,0)
-    ring.mesh(maximum_element_size=25 * NM, minimum_element_size=2.5 * NM, order=1)
+# for ring in (bottom_ring,):
+#     ring.Ms = 1.51e6
+#     ring.Aex = 15e-12
+#     ring.alpha = 0.1
+#     ring.Ku1 = 1.0e6
+#     ring.anisU = RING_AXIS
+#     ring.m = fm.texture.uniform(1,0,0)
+#     ring.mesh(maximum_element_size=25 * NM, minimum_element_size=2.5 * NM, order=1)
 for ring in (top_ring,):
     ring.Ms = 1.51e6
     ring.Aex = 15e-12
@@ -119,9 +119,9 @@ study.objects.mesh.defaults(
 )
 study.build_domain_mesh()
 
-study.solver(dt=1e-18, integrator="heun", g=2.115)
-study.save("m", every=1e-16)
-study.save("E_total", every=1e-16)
+# study.solver(dt=1e-18, integrator="heun", g=2.115)
+# study.save("m", every=1e-16)
+# study.save("E_total", every=1e-16)
 study.tableautosave(1e-16, quantities=["t", "step", "mx", "my", "mz", "E_total"])
 
 

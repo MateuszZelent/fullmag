@@ -1175,6 +1175,7 @@ def generate_shared_domain_mesh_from_components(
                 hmax,
                 component_volume_groups=component_volume_tags,
                 component_surface_groups=component_surface_tags,
+                mesh_options=shared_stl_opts,
             )
             if airbox_field is not None:
                 airbox_field_ids.append(airbox_field)

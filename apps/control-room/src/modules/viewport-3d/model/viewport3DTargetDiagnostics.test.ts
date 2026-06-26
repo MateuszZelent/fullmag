@@ -93,7 +93,7 @@ describe("viewport3DTargetDiagnostics", () => {
           workId: "vector-glyph:part-a:field-1:mesh-1",
         }),
         workItem({
-          execution: "render-model-sync",
+          execution: "runtime-worker",
           lane: "vector-glyph",
           outputKind: "vector-segments",
           passId: "part-a:vector-glyph",
@@ -113,7 +113,7 @@ describe("viewport3DTargetDiagnostics", () => {
         derivedWork: [
           "field-color:scalar-colors:ready:render-model-sync:part-a:surface items=4 input=0B output=48B",
           "vector-glyph:vector-glyphs:ready:runtime-worker:part-a:vector-glyph items=4 input=0B output=48B",
-          "vector-glyph:vector-segments:ready:render-model-sync:part-a:vector-glyph items=4 input=0B output=48B",
+          "vector-glyph:vector-segments:ready:runtime-worker:part-a:vector-glyph items=4 input=0B output=48B",
         ],
         passes: ["surface", "vector-glyph"],
         requests: [
@@ -195,13 +195,78 @@ describe("viewport3DTargetDiagnostics", () => {
 
     expect(summaries[0]?.degradation).toEqual([
       "surface:sampled-buffer-not-surface-capable",
+      "surface-rejected buffer=buffer:sampled capability=full-vector-sampled reason=sampled-buffer-not-surface-capable",
       "vector-glyph:scalar-buffer-not-vector-capable",
+      "vector-glyph-rejected buffer=buffer:sampled capability=full-vector-sampled reason=scalar-buffer-not-vector-capable",
       "field-color:sampled-buffer-not-surface-capable",
     ]);
     expect(summaries[0]?.derivedWork).toEqual([
       "field-color:scalar-colors:blocked:blocked:part-a:surface items=4 input=0B output=48B",
       "vector-glyph:vector-glyphs:blocked:blocked:part-a:vector-glyph items=4 input=0B output=48B",
       "vector-glyph:vector-segments:blocked:blocked:part-a:vector-glyph items=4 input=0B output=48B",
+    ]);
+  });
+
+  it("reports stale-compatible retained surface and vector outputs", () => {
+    const summaries = summarizeViewport3DTargetDiagnostics({
+      derivedWorkItems: [],
+      targetPasses: new Map([
+        [
+          "part-a",
+          targetPass({
+            fieldBuffer: {
+              bufferId: "buffer:part-a:fresh",
+              capability: "full-vector-complete",
+              component: "full",
+              componentCount: 3,
+              consumers: ["part-a:surface", "part-a:vector-glyph"],
+              fieldRevision: "field-2",
+              pointCount: 4,
+              quantityId: "m",
+              requestId:
+                "quantity=m&component=full&scope_kind=part&scope_id=part-a",
+              sampled: false,
+              scopeId: "part-a",
+              scopeKind: "part",
+              topologyRevision: "mesh-1",
+              values: new Float64Array(12),
+              vectorComponentCount: 3,
+            },
+            surface: {
+              degradation: null,
+              passId: "part-a:surface",
+              scalarColorMode: "x",
+              scalarColors: {
+                colors: new Float32Array(12),
+                colorMode: "x",
+                colorPalette: "viridis",
+                quantityId: "m",
+                range: { max: 1, min: -1 },
+                targetRevision: "field=field-1",
+                topologyRevision: "mesh-1",
+              },
+            },
+            vectors: {
+              buildReference: {
+                buildKey: "vector-glyph:part-a:field-1:mesh-1",
+                fieldRevision: "field-1",
+                groupKey: "vector-glyph:current:domain:m:part:part-a",
+                revisionSummary: "topology=mesh-1 field=field-1",
+                targetRevision: "field=field-1",
+                topologyRevision: "mesh-1",
+              },
+              degradation: null,
+              passId: "part-a:vector-glyph",
+              segments: new Float32Array(7),
+            },
+          }),
+        ],
+      ]),
+    });
+
+    expect(summaries[0]?.retained).toEqual([
+      "surface stale-compatible current=field-2 retained=field=field-1",
+      "vector-glyph stale-compatible current=field-2 retained=field-1",
     ]);
   });
 });

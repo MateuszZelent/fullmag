@@ -101,6 +101,15 @@ function fieldVectorFixture(
 }
 
 describe("useViewport3DSceneModel", () => {
+  it("subscribes to build diagnostic snapshot versions for live compact diagnostics", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+
+    expect(source).toContain("useSyncExternalStore");
+    expect(source).toContain("subscribeViewport3DBuildDiagnostics");
+    expect(source).toContain("getViewport3DBuildDiagnosticsSnapshotVersion");
+    expect(source).toContain("buildDiagnosticsSnapshotVersion");
+  });
+
   it("wraps primary field payloads as target field buffers without mixing legacy maps", () => {
     const primaryVector = fieldVectorFixture({ quantityId: "m" });
     const scopedVector = fieldVectorFixture({ pointCount: 2, quantityId: "m" });

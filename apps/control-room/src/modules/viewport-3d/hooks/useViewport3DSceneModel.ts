@@ -7,6 +7,7 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useSyncExternalStore,
   type ComponentProps,
 } from "react";
 
@@ -119,6 +120,8 @@ import {
   resolveViewport3DTargetQuantityFieldDemandPlan,
   resolveViewport3DTargetFieldQuery as resolveViewport3DTargetFieldQueryFromPlan,
   summarizeViewport3DFieldDemandDiagnostics,
+  validateViewport3DFieldResourceRequestEquivalence,
+  validateViewport3DFieldResourceRequestIdentities,
   type Viewport3DFieldDemandDiagnosticSummary,
   type Viewport3DFieldResourceRequest,
   type Viewport3DTargetRenderPlan,
@@ -157,6 +160,12 @@ import {
   buildViewport3DDiagnostics,
   type Viewport3DResourceCounts,
 } from "../viewport3dDiagnostics";
+import {
+  getViewport3DBuildDiagnosticsSnapshotVersion,
+  getViewport3DBuildFallbackDiagnosticsSnapshot,
+  getViewport3DBuildPipelineDiagnosticsSnapshot,
+  subscribeViewport3DBuildDiagnostics,
+} from "../build-engine/viewport3dBuildDiagnostics";
 import {
   buildSampledScalarColors,
   fieldTransformNeedsChunking,
@@ -2986,6 +2995,36 @@ export function useViewport3DSceneModel({
       targetQuantityFieldDemandPlan,
     ],
   );
+  const dataPlaneIssues = useMemo(() => {
+    const requests: Array<readonly [string, Viewport3DFieldResourceRequest]> = [
+      ["primary-field", primaryFieldDemandPlan.request],
+      ...Array.from(magneticPartFieldDemandPlan.requests),
+      ...Array.from(targetQuantityFieldDemandPlan.requests),
+      ...Array.from(airboxFieldDemandPlan.requests, ([targetId, request]) => [
+        targetId,
+        {
+          consumers: request.consumers ?? [],
+          query: request.query,
+          quantityId: request.quantityId,
+          requestId:
+            request.requestId ??
+            buildViewport3DFieldResourceRequestId(
+              request.quantityId,
+              request.query,
+            ),
+        },
+      ] as const),
+    ];
+    return [
+      ...validateViewport3DFieldResourceRequestIdentities(requests),
+      ...validateViewport3DFieldResourceRequestEquivalence(requests),
+    ];
+  }, [
+    airboxFieldDemandPlan,
+    magneticPartFieldDemandPlan,
+    primaryFieldDemandPlan,
+    targetQuantityFieldDemandPlan,
+  ]);
   const fieldVectorResourceKey = useMemo(
     () =>
       resolveViewport3DFieldVectorRequestResourceKey(primaryFieldRequest),
@@ -3346,12 +3385,37 @@ export function useViewport3DSceneModel({
   const domainSummary = fdmDomain
     ? `${fdmDomain.displayCellCount}/${fdmDomain.totalCells}`
     : `${femDomain.magneticParts.length}+${femDomain.airboxParts.length}`;
+  const buildDiagnosticsSnapshotVersion = useSyncExternalStore(
+    (onStoreChange) =>
+      subscribeViewport3DBuildDiagnostics(() => {
+        onStoreChange();
+      }),
+    getViewport3DBuildDiagnosticsSnapshotVersion,
+    getViewport3DBuildDiagnosticsSnapshotVersion,
+  );
+  const buildFallbackDiagnostics = useMemo(
+    () => {
+      void buildDiagnosticsSnapshotVersion;
+      return getViewport3DBuildFallbackDiagnosticsSnapshot();
+    },
+    [buildDiagnosticsSnapshotVersion],
+  );
+  const buildPipelineDiagnostics = useMemo(
+    () => {
+      void buildDiagnosticsSnapshotVersion;
+      return getViewport3DBuildPipelineDiagnosticsSnapshot();
+    },
+    [buildDiagnosticsSnapshotVersion],
+  );
   const diagnostics = buildViewport3DDiagnostics({
     airboxPartCount: femDomain.airboxParts.length,
+    buildFallbacks: buildFallbackDiagnostics,
     cache: getCacheStats(),
+    dataPlaneIssues,
     fieldDemandDiagnostics,
     fieldRevision: fieldVector.payloadRevision ?? fieldVector.revision,
     objectCount: femDomain.objectPartIds.size,
+    pipelineDiagnostics: buildPipelineDiagnostics,
     quantityId: primaryFieldQuantityId,
     surfaceColorStatus: chunkedScalarColors.status,
     targetDiagnostics: fieldRenderModel?.targetDiagnostics,

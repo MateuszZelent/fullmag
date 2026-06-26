@@ -85,6 +85,35 @@ describe("vectorGlyphBuildScheduler", () => {
     ]);
   });
 
+  it("fails large glyph builds as an explicit degraded state when workers are unavailable", async () => {
+    vi.stubGlobal("Worker", undefined);
+    const records: Viewport3DBuildDiagnosticRecord[] = [];
+    const segments = new Float32Array((4096 + 1) * 7);
+
+    await expect(
+      buildViewport3DVectorGlyphsOffMainThread({
+        colorMode: "x",
+        headRadiusRatio: 0.2,
+        segments,
+        shaftRadiusRatio: 0.08,
+      }, {
+        buildKey: "vector-glyph:large-worker-unavailable",
+        onDiagnosticRecord: (record) => records.push(record),
+      }),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining("worker is unavailable"),
+      name: "Viewport3DVectorGlyphWorkerUnavailableError",
+    });
+
+    expect(records).toEqual([
+      expect.objectContaining({
+        fallbackReason: "worker-unavailable",
+        key: "vector-glyph:large-worker-unavailable",
+        state: "failed",
+      }),
+    ]);
+  });
+
   it("transfers glyph input and output buffers through the worker path", () => {
     const schedulerSource = readFileSync(
       new URL("./vectorGlyphBuildScheduler.ts", import.meta.url),

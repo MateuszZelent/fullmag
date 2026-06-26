@@ -37,6 +37,7 @@ from fullmag.meshing.asset_pipeline import (
     _drop_degenerate_tetrahedra,
     _element_metric_summary_for_mask,
     _mesh_options_from_runtime_metadata,
+    _resolve_per_object_mesh_options,
     _resolve_effective_shared_domain_targets,
     _shared_domain_size_field_default_hmax,
     _shared_domain_local_size_fields,
@@ -56,7 +57,7 @@ from fullmag.meshing._mesh_targets import (
     resolve_object_preview_target,
     resolve_shared_domain_targets,
 )
-from fullmag.model.discretization import PerObjectMeshRecipe
+from fullmag.model.discretization import PerObjectMeshRecipe, SharedMeshAssemblyPolicy
 from fullmag.meshing.gmsh_bridge import (
     ALGO_3D_DELAUNAY,
     ALGO_3D_FRONTAL,
@@ -84,6 +85,12 @@ from fullmag.meshing._gmsh_generators import (
     _add_airbox_volume_clamp_fields,
     _build_stl_volume_model_for_component,
     _sanitize_csg_mesh_options_for_geometries,
+)
+from fullmag.meshing._gmsh_airbox import (
+    _component_interface_size_targets as _geo_component_interface_size_targets,
+)
+from fullmag.meshing._gmsh_occ import (
+    _component_interface_size_targets as _occ_component_interface_size_targets,
 )
 from fullmag.meshing._airbox_grading import (
     _add_airbox_grading_field,
@@ -128,15 +135,44 @@ from fullmag.meshing.voxelization import VoxelMaskData, voxelize_geometry
 
 
 class MeshScaffoldTests(unittest.TestCase):
-    def test_multi_body_annular_csg_is_not_routed_to_native_conformal_occ(self) -> None:
+    def test_multi_body_rotated_annular_csg_can_use_native_conformal_occ(self) -> None:
         layer = fm.Box(size=(300e-9, 1000e-9, 10e-9), name="layer")
         ring = fm.Difference(
-            base=fm.Cylinder(radius=150e-9, height=50e-9, name="ring_outer"),
-            tool=fm.Cylinder(radius=50e-9, height=50e-9, name="ring_inner"),
+            base=fm.Cylinder(radius=150e-9, height=50e-9, axis=(1.0, 0.0, 0.0), name="ring_outer"),
+            tool=fm.Cylinder(radius=50e-9, height=50e-9, axis=(1.0, 0.0, 0.0), name="ring_inner"),
             name="ring",
         ).translate((0.0, 0.0, 165e-9))
 
-        self.assertFalse(is_occ_compatible([layer, ring]))
+        self.assertTrue(is_occ_compatible([layer, ring]))
+
+    def test_airbox_interface_targets_ignore_component_bulk_hmax(self) -> None:
+        options = MeshOptions(
+            size_fields=[
+                {
+                    "kind": "ComponentVolumeConstant",
+                    "params": {
+                        "GeometryName": "layer",
+                        "VIn": 8e-9,
+                    },
+                },
+                {
+                    "kind": "InterfaceShellThreshold",
+                    "params": {
+                        "GeometryName": "layer",
+                        "SizeMin": 3e-9,
+                    },
+                },
+            ]
+        )
+
+        self.assertEqual(
+            _geo_component_interface_size_targets(options),
+            {"layer": 3e-9},
+        )
+        self.assertEqual(
+            _occ_component_interface_size_targets(options),
+            {"layer": 3e-9},
+        )
 
     def test_meshio_cell_markers_preserve_physical_air_marker(self) -> None:
         mesh = SimpleNamespace(
@@ -800,7 +836,7 @@ class MeshScaffoldTests(unittest.TestCase):
             ["Distance", "MathEval", "MathEval", "Min", "MathEval", "Max"],
         )
         envelope_expr = fields.strings[(5, "F")]
-        self.assertIn("Sqrt((x - 0)", envelope_expr)
+        self.assertIn("Sqrt((x - (0))", envelope_expr)
         self.assertIn(" / 3", envelope_expr)
         self.assertNotIn("Max(Max(Max(", envelope_expr)
 
@@ -2284,12 +2320,8 @@ class MeshScaffoldTests(unittest.TestCase):
         )
 
         kinds = [field["kind"] for field in mesh_options.size_fields]
-        # Plain per-object hmax creates the object bulk field and an auto
-        # transition shell so the effective transition target is realized.
-        self.assertEqual(
-            kinds,
-            ["ComponentVolumeConstant", "TransitionShellThreshold"],
-        )
+        # Plain per-object hmax should not auto-refine the neighboring airbox.
+        self.assertEqual(kinds, ["ComponentVolumeConstant"])
         self.assertEqual(mesh_options.size_fields[0]["params"]["GeometryName"], "left_geom")
         self.assertAlmostEqual(mesh_options.size_fields[0]["params"]["VIn"], 5e-9)
 
@@ -2318,7 +2350,7 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertAlmostEqual(effective_targets["left_geom"]["hmax"], 5e-9)
         self.assertAlmostEqual(effective_targets["left_geom"]["interface_hmax"], 3e-9)
         self.assertAlmostEqual(effective_targets["left_geom"]["interface_thickness"], 7e-9)
-        self.assertAlmostEqual(effective_targets["left_geom"]["transition_distance"], 15e-9)
+        self.assertIsNone(effective_targets["left_geom"]["transition_distance"])
         self.assertAlmostEqual(effective_targets["left_geom"]["transition_growth"], 1.5)
         self.assertEqual(effective_targets["left_geom"]["source"], "local_override")
 
@@ -3271,11 +3303,178 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertIsNotNone(field_id)
         expr = fake_field_api.strings[(field_id, "F")]
         self.assertNotIn("Sqrt(", expr)
-        self.assertIn("Max(-1 - x, 0)", expr)
-        self.assertIn("Max(x - 1, 0)", expr)
-        self.assertIn("Max(-0.5 - z, 0)", expr)
+        self.assertIn("Max((-1) - x, 0)", expr)
+        self.assertIn("Max(x - (1), 0)", expr)
+        self.assertIn("Max((-0.5) - z, 0)", expr)
         self.assertIn("/ 1.75", expr)
         self.assertIn("/ 0.75", expr)
+
+    def test_axis_aligned_box_airbox_boundary_ramp_wraps_negative_constants(self) -> None:
+        class _FakeFieldApi:
+            def __init__(self) -> None:
+                self.next_id = 0
+                self.strings: dict[tuple[int, str], str] = {}
+
+            def add(self, kind: str) -> int:
+                self.next_id += 1
+                return self.next_id
+
+            def setString(self, field_id: int, key: str, value: str) -> None:
+                self.strings[(field_id, key)] = value
+
+        fake_field_api = _FakeFieldApi()
+        fake_gmsh = type(
+            "FakeGmsh",
+            (),
+            {
+                "model": type(
+                    "FakeModel",
+                    (),
+                    {"mesh": type("FakeMesh", (), {"field": fake_field_api})()},
+                )(),
+            },
+        )()
+
+        field_id = _add_axis_aligned_box_distance_threshold_field(
+            fake_gmsh,
+            bounds_min=(-1.0, -1.0, -0.5),
+            bounds_max=(-0.25, 1.0, -0.1),
+            airbox_bounds_min=(-3.0, -2.0, -1.5),
+            airbox_bounds_max=(3.0, 2.0, 1.5),
+            size_min=2.0,
+            size_max=20.0,
+            dist_min=0.25,
+            dist_max=2.0,
+        )
+
+        self.assertIsNotNone(field_id)
+        expr = fake_field_api.strings[(field_id, "F")]
+        self.assertNotIn(" - -", expr)
+        self.assertIn("x - (-0.25)", expr)
+        self.assertIn("z - (-0.10000000000000001)", expr)
+
+    def test_component_restricted_matheval_fields_wrap_negative_constants(self) -> None:
+        class _FakeOptionsApi:
+            def setNumber(self, _key: str, _value: float) -> None:
+                return None
+
+        class _FakeFieldApi:
+            def __init__(self) -> None:
+                self._next = 1
+                self.background: int | None = None
+                self.kinds: dict[int, str] = {}
+                self.numbers: dict[tuple[int, str], float | list[float]] = {}
+                self.strings: dict[tuple[int, str], str] = {}
+
+            def add(self, kind: str) -> int:
+                current = self._next
+                self._next += 1
+                self.kinds[current] = kind
+                return current
+
+            def setNumber(self, field_id: int, key: str, value: float) -> None:
+                self.numbers[(field_id, key)] = float(value)
+
+            def setNumbers(self, field_id: int, key: str, values: object) -> None:
+                if isinstance(values, list):
+                    self.numbers[(field_id, key)] = [float(v) for v in values]
+
+            def setString(self, field_id: int, key: str, value: str) -> None:
+                self.strings[(field_id, key)] = value
+
+            def setAsBackgroundMesh(self, field_id: int) -> None:
+                self.background = field_id
+
+        fake_field_api = _FakeFieldApi()
+        fake_gmsh = type(
+            "FakeGmsh",
+            (),
+            {
+                "option": _FakeOptionsApi(),
+                "model": type(
+                    "FakeModel",
+                    (),
+                    {
+                        "mesh": type("FakeMesh", (), {"field": fake_field_api})(),
+                        "getEntities": staticmethod(lambda dim: []),
+                    },
+                )(),
+            },
+        )()
+
+        _apply_mesh_options(
+            fake_gmsh,
+            hmax=10.0,
+            order=1,
+            opts=MeshOptions(
+                size_fields=[
+                    {
+                        "kind": "ComponentRestrictedRectangularPerimeter",
+                        "params": {
+                            "GeometryName": "ring",
+                            "VIn": 1.0,
+                            "Extent": 0.2,
+                            "Mode": "edge",
+                            "AxisA": 0,
+                            "AxisB": 2,
+                            "XMin": -0.5,
+                            "XMax": -0.1,
+                            "YMin": -0.2,
+                            "YMax": 0.2,
+                            "ZMin": -0.4,
+                            "ZMax": -0.05,
+                        },
+                    },
+                    {
+                        "kind": "ComponentRestrictedGradedBox",
+                        "params": {
+                            "GeometryName": "ring",
+                            "VIn": 1.0,
+                            "VOut": 10.0,
+                            "TransitionDistance": 2.0,
+                            "Size": [0.5, 0.5, 0.5],
+                            "Center": [-0.25, -0.5, -0.75],
+                        },
+                    },
+                    {
+                        "kind": "ComponentRestrictedGradedCylinder",
+                        "params": {
+                            "GeometryName": "ring",
+                            "VIn": 1.0,
+                            "VOut": 10.0,
+                            "TransitionDistance": 2.0,
+                            "Radius": 0.25,
+                            "Height": 1.0,
+                            "Center": [-0.25, -0.5, -0.75],
+                            "Axis": [-1.0, 0.0, 1.0],
+                        },
+                    },
+                    {
+                        "kind": "ComponentRestrictedGradedSphere",
+                        "params": {
+                            "GeometryName": "ring",
+                            "VIn": 1.0,
+                            "VOut": 10.0,
+                            "TransitionDistance": 2.0,
+                            "Radius": 0.25,
+                            "Center": [-0.25, -0.5, -0.75],
+                        },
+                    },
+                ]
+            ),
+            component_volume_tags={"ring": [3]},
+        )
+
+        expressions = [
+            value
+            for (field_id, key), value in fake_field_api.strings.items()
+            if fake_field_api.kinds[field_id] == "MathEval" and key == "F"
+        ]
+        self.assertGreaterEqual(len(expressions), 4)
+        for expr in expressions:
+            self.assertNotIn(" - -", expr)
+        self.assertTrue(any("x - (-0.25)" in expr for expr in expressions))
+        self.assertTrue(any("z - (-0.75)" in expr for expr in expressions))
 
     def test_curvature_refinement_is_finer_than_far_field_airbox(self) -> None:
         try:
@@ -4443,7 +4642,7 @@ class MeshScaffoldTests(unittest.TestCase):
         fallback_options = generate_mesh_from_file.call_args.kwargs["options"]
         fallback_kinds = [field.get("kind") for field in fallback_options.size_fields]
         self.assertIn("Box", fallback_kinds)
-        self.assertIn("BoundsSurfaceThreshold", fallback_kinds)
+        self.assertNotIn("BoundsSurfaceThreshold", fallback_kinds)
         self.assertNotIn("ComponentVolumeConstant", fallback_kinds)
         self.assertNotIn("InterfaceShellThreshold", fallback_kinds)
         self.assertNotIn("TransitionShellThreshold", fallback_kinds)
@@ -4756,16 +4955,14 @@ class FieldStackAcceptanceTests(unittest.TestCase):
         self.assertEqual(fields[0]["params"]["GeometryName"], "left")
         self.assertAlmostEqual(fields[0]["params"]["SizeMin"], 4e-9)
 
-    def test_transition_field_auto_distance_builds_realized_field(self) -> None:
+    def test_transition_field_requires_explicit_distance(self) -> None:
         left = fm.Box(2.0, 2.0, 2.0, name="left")
         fields = _build_transition_fields(
             [left],
             default_hmax=20e-9,
             override_by_name={"left": {"bulk_hmax": "10e-9"}},
         )
-        self.assertEqual(len(fields), 1)
-        self.assertAlmostEqual(fields[0]["params"]["DistMax"], 30e-9)
-        self.assertEqual(fields[0]["params"]["Source"], "auto")
+        self.assertEqual(fields, [])
 
     def test_transition_field_explicit_distance_overrides_default(self) -> None:
         left = fm.Box(2.0, 2.0, 2.0, name="left")
@@ -5764,6 +5961,33 @@ class FieldStackAcceptanceTests(unittest.TestCase):
         ]
         self.assertEqual(len(remaining_left), 0, "workflow fields for 'left' should be removed")
 
+    def test_per_object_recipe_hmax_does_not_auto_add_transition_shell(self) -> None:
+        layer = fm.Box(size=(2000e-9, 600e-9, 10e-9), name="permalloy_layer")
+        ring = fm.Difference(
+            base=fm.Cylinder(radius=150e-9, height=50e-9, axis=(1.0, 0.0, 0.0), name="ring_outer"),
+            tool=fm.Cylinder(radius=50e-9, height=50e-9, axis=(1.0, 0.0, 0.0), name="ring_inner"),
+            name="cofeb_ring",
+        )
+
+        fields = _resolve_per_object_mesh_options(
+            [layer, ring],
+            {
+                "permalloy_layer": PerObjectMeshRecipe(maximum_element_size=8e-9),
+                "cofeb_ring": PerObjectMeshRecipe(maximum_element_size=25e-9),
+            },
+            SharedMeshAssemblyPolicy(),
+            default_hmax=500e-9,
+            bounds_by_name={
+                "permalloy_layer": ((-1000e-9, -300e-9, -5e-9), (1000e-9, 300e-9, 5e-9)),
+                "cofeb_ring": ((-25e-9, -150e-9, 15e-9), (25e-9, 150e-9, 315e-9)),
+            },
+            component_aware=True,
+        )
+
+        kinds = [field["kind"] for field in fields]
+        self.assertEqual(kinds, ["ComponentVolumeConstant", "ComponentVolumeConstant"])
+        self.assertNotIn("TransitionShellThreshold", kinds)
+
     def test_build_report_marks_degraded_when_component_aware_fails(self) -> None:
         """Build report degraded flag must be True when fallback was triggered (B2)."""
         left = fm.Box(2.0, 2.0, 2.0, name="left")
@@ -5892,6 +6116,79 @@ class FieldStackAcceptanceTests(unittest.TestCase):
         self.assertEqual(
             report.fallbacks_triggered,
             ["conformal_occ_hxt_degenerate_retry_delaunay"],
+        )
+
+    def test_conformal_occ_hxt_partial_degenerate_cleans_without_delaunay_retry(self) -> None:
+        left = fm.Box((20e-9, 20e-9, 10e-9), name="left")
+        calls: list[int] = []
+
+        mesh = MeshData(
+            nodes=np.asarray(
+                [
+                    [0.0, 0.0, 0.0],
+                    [1e-8, 0.0, 0.0],
+                    [0.0, 1e-8, 0.0],
+                    [0.0, 0.0, 1e-8],
+                    [2e-8, 0.0, 0.0],
+                    [3e-8, 0.0, 0.0],
+                    [2e-8, 1e-8, 0.0],
+                    [3e-8, 1e-8, 0.0],
+                ],
+                dtype=np.float64,
+            ),
+            elements=np.asarray([[0, 1, 2, 3], [4, 5, 6, 7]], dtype=np.int32),
+            element_markers=np.asarray([7, 7], dtype=np.int32),
+            boundary_faces=np.empty((0, 3), dtype=np.int32),
+            boundary_markers=np.empty((0,), dtype=np.int32),
+        )
+
+        def _fake_occ(*args: object, **kwargs: object) -> SharedDomainMeshResult:
+            options = kwargs.get("options")
+            self.assertIsInstance(options, MeshOptions)
+            calls.append(options.algorithm_3d)
+            return SharedDomainMeshResult(
+                mesh=mesh,
+                component_marker_tags={"left": 7},
+                component_volume_tags={"left": [7]},
+                component_surface_tags={"left": [1]},
+                interface_surface_tags=[1],
+                outer_boundary_surface_tags=[2],
+            )
+
+        with patch(
+            "fullmag.meshing._gmsh_occ.generate_shared_domain_mesh_via_occ",
+            side_effect=_fake_occ,
+        ):
+            cleaned_mesh, region_markers, report = realize_fem_domain_mesh_asset_from_components_with_report(
+                geometries=[left],
+                hints=fm.FEM(order=1, hmax=80e-9),
+                study_universe={
+                    "mode": "manual",
+                    "size": [120e-9, 120e-9, 80e-9],
+                    "center": [0.0, 0.0, 0.0],
+                    "airbox_hmax": 120e-9,
+                    "airbox_hmin": 20e-9,
+                },
+                mesh_workflow={
+                    "mesh_options": {"algorithm_3d": ALGO_3D_HXT},
+                    "per_geometry": [
+                        {
+                            "geometry": "left",
+                            "mode": "custom",
+                            "hmax": 20e-9,
+                        }
+                    ],
+                },
+            )
+
+        self.assertEqual(calls, [ALGO_3D_HXT])
+        self.assertEqual(cleaned_mesh.n_elements, 1)
+        self.assertEqual(region_markers, [{"geometry_name": "left", "marker": 1}])
+        self.assertEqual(report.build_mode, "conformal_occ")
+        self.assertFalse(report.degraded)
+        self.assertEqual(
+            report.fallbacks_triggered,
+            ["shared_domain_degenerate_tetra_cleanup"],
         )
 
     def test_conformal_occ_delaunay_degenerate_with_size_fields_retries_hxt_first(self) -> None:
@@ -6130,6 +6427,7 @@ class FieldStackAcceptanceTests(unittest.TestCase):
                     "conformal_occ_hxt_degenerate_retry_frontal",
                     "conformal_occ_delaunay_degenerate_retry_hxt",
                     "conformal_occ_delaunay_degenerate_retry_frontal",
+                    "shared_domain_degenerate_tetra_cleanup",
                 }
             )
         )

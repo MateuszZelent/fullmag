@@ -188,7 +188,138 @@ describe("viewport3dDiagnostics", () => {
         },
       }),
     ).toContain(
-      "target-passes:1[object:layer-a{passes=surface|vector-glyph demand=surface:x vector-glyph buffers=buffer:layer-a full-vector-complete quantity=m component=full scope=object:object:layer-a points=100000 ncomp=3 sampled=false state=target-buffer work=field-color:scalar-colors:ready:object:layer-a:surface|vector-glyph:vector-glyphs:ready:object:layer-a:vector-glyph degradation=none}]",
+      "target-passes:1[object:layer-a{passes=surface|vector-glyph demand=surface:x vector-glyph buffers=buffer:layer-a full-vector-complete quantity=m component=full scope=object:object:layer-a points=100000 ncomp=3 sampled=false state=target-buffer work=field-color:scalar-colors:ready:object:layer-a:surface|vector-glyph:vector-glyphs:ready:object:layer-a:vector-glyph degradation=none retained=none}]",
+    );
+  });
+
+  it("includes stale-compatible retention in compact target diagnostics", () => {
+    expect(
+      buildViewport3DDiagnostics({
+        airboxPartCount: 0,
+        cache: { byteLength: 0, entryCount: 0 },
+        fieldRevision: 12,
+        objectCount: 1,
+        quantityId: "m",
+        targetDiagnostics: [
+          {
+            buffers: ["state=target-buffer"],
+            degradation: [],
+            demand: "surface:x",
+            derivedWork: [],
+            passes: ["surface"],
+            requests: [],
+            retained: [
+              "surface stale-compatible current=field-2 retained=field=field-1",
+            ],
+            targetId: "object:layer-a",
+          },
+        ],
+        topologyRevision: 11,
+        tracker: {
+          contextLosses: 0,
+          contextRestores: 0,
+          dirtyReason: null,
+          frames: 0,
+          geometries: 0,
+          materials: 0,
+          renderTargets: 0,
+          textures: 0,
+          workers: 0,
+        },
+      }),
+    ).toContain(
+      "retained=surface stale-compatible current=field-2 retained=field=field-1",
+    );
+  });
+
+  it("includes data-plane mismatch and pipeline timing diagnostics", () => {
+    expect(
+      buildViewport3DDiagnostics({
+        airboxPartCount: 0,
+        cache: { byteLength: 0, entryCount: 0 },
+        dataPlaneIssues: [
+          "request-key-mismatch target=part-a key=component=x request=component=y",
+        ],
+        fieldRevision: 12,
+        objectCount: 1,
+        pipelineDiagnostics: [
+          {
+            lane: "vector-glyph",
+            mainAdoptMs: 4,
+            mainUploadMs: 3,
+            queueWaitMs: 7,
+            transferMs: 2,
+            workerComputeMs: 11,
+          },
+          {
+            lane: "gpu-upload",
+            mainAdoptMs: 0,
+            mainUploadMs: 6,
+            queueWaitMs: 1,
+            transferMs: 0,
+            workerComputeMs: 0,
+          },
+        ],
+        quantityId: "m",
+        topologyRevision: 11,
+        tracker: {
+          contextLosses: 0,
+          contextRestores: 0,
+          dirtyReason: null,
+          frames: 0,
+          geometries: 0,
+          materials: 0,
+          renderTargets: 0,
+          textures: 0,
+          workers: 0,
+        },
+      }),
+    ).toContain(
+      "data-plane:1[request-key-mismatch target=part-a key=component=x request=component=y] pipeline:2[vector-glyph{queue=7ms worker=11ms transfer=2ms adopt=4ms upload=3ms};gpu-upload{queue=1ms worker=0ms transfer=0ms adopt=0ms upload=6ms}]",
+    );
+  });
+
+  it("includes explicit worker fallback diagnostics by build lane", () => {
+    expect(
+      buildViewport3DDiagnostics({
+        airboxPartCount: 0,
+        buildFallbacks: [
+          {
+            count: 2,
+            key: "vector-segments:part-a",
+            lane: "vector-glyph",
+            reason: "worker-unavailable",
+            revisionSummary: "topology=mesh-1 field=field-1",
+            timestampMs: 100,
+          },
+          {
+            count: 1,
+            key: "complex-phase:m",
+            lane: "field-color",
+            reason: "worker-failed",
+            revisionSummary: "field=field-1 phase=1.57",
+            timestampMs: 120,
+          },
+        ],
+        cache: { byteLength: 0, entryCount: 0 },
+        fieldRevision: 12,
+        objectCount: 1,
+        quantityId: "m",
+        topologyRevision: 11,
+        tracker: {
+          contextLosses: 0,
+          contextRestores: 0,
+          dirtyReason: null,
+          frames: 0,
+          geometries: 0,
+          materials: 0,
+          renderTargets: 0,
+          textures: 0,
+          workers: 0,
+        },
+      }),
+    ).toContain(
+      "fallbacks:2[field-color{count=1 reason=worker-failed key=complex-phase:m};vector-glyph{count=2 reason=worker-unavailable key=vector-segments:part-a}]",
     );
   });
 

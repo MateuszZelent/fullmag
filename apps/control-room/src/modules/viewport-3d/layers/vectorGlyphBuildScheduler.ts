@@ -66,6 +66,7 @@ interface PendingVectorGlyphBuild {
 
 const VECTOR_GLYPH_WORKER_IDLE_TIMEOUT_MS = 30_000;
 const VECTOR_GLYPH_WORKER_POOL_SIZE = 2;
+const MAX_MAIN_THREAD_VECTOR_GLYPH_FALLBACK_SEGMENTS = 4096;
 
 let fallbackVectorGlyphBuildId = 1;
 let vectorGlyphBuildJobScheduler:
@@ -113,18 +114,26 @@ async function executeVectorGlyphBuild(
 ): Promise<VectorGlyphBuildResult> {
   throwIfAborted(options.signal);
   const client = getVectorGlyphWorkerClient();
+  let fallbackReason: string | null = null;
   if (client) {
     try {
       return await client.build(request, options);
     } catch (error) {
       if (isAbortError(error)) throw error;
       vectorGlyphWorkerFallbackReason = "worker-error";
-      options.recordFallback?.(vectorGlyphWorkerFallbackReason);
+      fallbackReason = vectorGlyphWorkerFallbackReason;
+      options.recordFallback?.(fallbackReason);
       vectorGlyphWorkerClient = null;
     }
   } else {
-    options.recordFallback?.(
-      vectorGlyphWorkerFallbackReason ?? "worker-unavailable",
+    fallbackReason = vectorGlyphWorkerFallbackReason ?? "worker-unavailable";
+    options.recordFallback?.(fallbackReason);
+  }
+
+  if (vectorGlyphBuildExceedsMainThreadFallbackLimit(request)) {
+    throw createVectorGlyphWorkerFallbackLimitError(
+      fallbackReason ?? "worker-unavailable",
+      request,
     );
   }
 
@@ -392,4 +401,34 @@ function isAbortError(error: unknown): boolean {
     (error.name === "AbortError" ||
       error.message === "Vector glyph build aborted")
   );
+}
+
+function vectorGlyphBuildExceedsMainThreadFallbackLimit(
+  request: VectorGlyphBuildRequest,
+): boolean {
+  return (
+    Math.floor(request.segments.length / 7) >
+    MAX_MAIN_THREAD_VECTOR_GLYPH_FALLBACK_SEGMENTS
+  );
+}
+
+function createVectorGlyphWorkerFallbackLimitError(
+  reason: string,
+  request: VectorGlyphBuildRequest,
+): Error {
+  const segmentCount = Math.floor(request.segments.length / 7);
+  const workerState =
+    reason === "worker-error" ? "worker failed" : "worker is unavailable";
+  const error = new Error(
+    [
+      `Viewport 3D vector glyph ${workerState} for a large build.`,
+      `Refusing ${segmentCount} glyphs on the main thread`,
+      `(limit ${MAX_MAIN_THREAD_VECTOR_GLYPH_FALLBACK_SEGMENTS}).`,
+    ].join(" "),
+  );
+  error.name =
+    reason === "worker-error"
+      ? "Viewport3DVectorGlyphWorkerFailedError"
+      : "Viewport3DVectorGlyphWorkerUnavailableError";
+  return error;
 }
