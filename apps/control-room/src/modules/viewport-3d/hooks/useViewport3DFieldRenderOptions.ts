@@ -60,10 +60,13 @@ export function useViewport3DFieldRenderOptions({
     const partVectorScales = new Map<string, number>();
     const partVectorSurfaceOffsetEnabled = new Set<string>();
     const partVectorSurfaceOffsetScales = new Map<string, number>();
+    const partQuantityIds = new Map<string, string>();
     const partScalarColorModes = new Map<string, string>();
     const partScalarColorPalettes = new Map<string, string>();
     const scalarColorModes = new Set<string>();
     let scalarColorsVisible = false;
+    let fullScalarColorMode: string | undefined;
+    let fullScalarColorPalette: string | undefined;
     let fullVectorBudget = 0;
     let fullVectorAnchorMode: "center" | "tail" = "center";
     let fullVectorSurfaceOffsetEnabled = false;
@@ -80,6 +83,7 @@ export function useViewport3DFieldRenderOptions({
       for (const partModel of topologyRenderModel.magneticParts) {
         const partId = partModel.part.id;
         const settings = getPartSettings(partModel.part);
+        partQuantityIds.set(partId, settings.activeQuantityId);
         const visible =
           magneticVectorsAllowed &&
           settings.visible &&
@@ -119,6 +123,8 @@ export function useViewport3DFieldRenderOptions({
         );
         if (scalarColorMode) {
           scalarColorModes.add(scalarColorMode);
+          fullScalarColorMode = scalarColorMode;
+          fullScalarColorPalette = fallbackSettings.scalarColorPalette;
         } else {
           scalarColorsVisible = false;
         }
@@ -140,6 +146,7 @@ export function useViewport3DFieldRenderOptions({
 
     for (const partModel of topologyRenderModel.airboxParts) {
       const partId = partModel.part.id;
+      partQuantityIds.set(partId, airboxSettings.activeQuantityId);
       if (
         airboxQuantityCompatible &&
         airboxSettings.visible &&
@@ -175,6 +182,8 @@ export function useViewport3DFieldRenderOptions({
       {
         fullVectorBudget,
         fullVectorAnchorMode,
+        fullScalarColorMode,
+        fullScalarColorPalette,
         fullVectorSurfaceOffsetEnabled,
         fullVectorSurfaceOffsetScale,
         partVectorAnchorModes:
@@ -190,6 +199,8 @@ export function useViewport3DFieldRenderOptions({
           partVectorSurfaceOffsetScales.size > 0
             ? partVectorSurfaceOffsetScales
             : undefined,
+        partQuantityIds:
+          partQuantityIds.size > 0 ? partQuantityIds : undefined,
         partScalarColorModes:
           partScalarColorModes.size > 0 ? partScalarColorModes : undefined,
         partScalarColorPalettes:
@@ -214,12 +225,14 @@ export function useViewport3DFieldRenderOptions({
     airboxSettings.vectorSurfaceOffsetScale,
     airboxSettings.vectorsVisible,
     airboxSettings.geometryScope,
+    airboxSettings.activeQuantityId,
     airboxSettings.scalarColorPalette,
     airboxSettings.surfaceColorSource,
     airboxSettings.shaderVisible,
     airboxSettings.visible,
     airboxQuantityCompatible,
     fallbackSettings.surfaceColorSource,
+    fallbackSettings.scalarColorPalette,
     fallbackSettings.shaderVisible,
     fallbackSettings.vectorBudget,
     fallbackSettings.vectorCenteringEnabled,
@@ -361,6 +374,9 @@ export function sameViewport3DFieldRenderOptions(
       Boolean(right.fullVectorSurfaceOffsetEnabled) &&
     (left.fullVectorSurfaceOffsetScale ?? 0) ===
       (right.fullVectorSurfaceOffsetScale ?? 0) &&
+    (left.fullScalarColorMode ?? "") === (right.fullScalarColorMode ?? "") &&
+    (left.fullScalarColorPalette ?? "") ===
+      (right.fullScalarColorPalette ?? "") &&
     Boolean(left.scalarColorsVisible) === Boolean(right.scalarColorsVisible) &&
     (left.scalarColorPalette ?? "viridis") ===
       (right.scalarColorPalette ?? "viridis") &&
@@ -369,6 +385,7 @@ export function sameViewport3DFieldRenderOptions(
     sameNumberMap(left.partVectorBudgets, right.partVectorBudgets) &&
     sameNumberMap(left.partVectorScales, right.partVectorScales) &&
     sameStringMap(left.partVectorScopes, right.partVectorScopes) &&
+    sameStringMap(left.partQuantityIds, right.partQuantityIds) &&
     sameStringMap(left.partScalarColorModes, right.partScalarColorModes) &&
     sameStringMap(left.partScalarColorPalettes, right.partScalarColorPalettes) &&
     sameStringSet(

@@ -71,6 +71,36 @@ describe("sameViewport3DFieldRenderOptions", () => {
     ).toBe(false);
   });
 
+  it("detects changed full-domain surface color options", () => {
+    expect(
+      sameViewport3DFieldRenderOptions(
+        {
+          fullScalarColorMode: "x",
+          fullScalarColorPalette: "viridis",
+          scalarColorsVisible: true,
+        },
+        {
+          fullScalarColorMode: "y",
+          fullScalarColorPalette: "inferno",
+          scalarColorsVisible: true,
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it("detects changed per-target active quantities", () => {
+    expect(
+      sameViewport3DFieldRenderOptions(
+        {
+          partQuantityIds: new Map([["part-a", "m"]]),
+        },
+        {
+          partQuantityIds: new Map([["part-a", "H_eff"]]),
+        },
+      ),
+    ).toBe(false);
+  });
+
   it("detects changed surface lift enablement independently from extra gap", () => {
     expect(
       sameViewport3DFieldRenderOptions(

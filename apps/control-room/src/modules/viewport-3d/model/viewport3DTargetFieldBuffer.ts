@@ -6,6 +6,7 @@ import type {
   Viewport3DFieldComponentDemand,
   Viewport3DFieldScopeKind,
 } from "./viewport3DFieldDataPlan";
+import { buildViewport3DFieldResourceRequestId } from "./viewport3DFieldDataPlan";
 
 export type Viewport3DFieldPayloadCapability =
   | "full-vector-complete"
@@ -17,20 +18,38 @@ export interface Viewport3DTargetFieldBuffer {
   bufferId: string;
   capability: Viewport3DFieldPayloadCapability;
   component: Exclude<Viewport3DFieldComponentDemand, "none">;
+  componentCount: number;
   complete: boolean;
+  consumers: readonly string[];
   fieldRevision: string | null;
   fieldVector: DecodedFieldVector;
   pointCount: number;
   quantityId: string;
+  requestId: string | null;
   sampled: boolean;
   scopeId: string | null;
   scopeKind: Viewport3DFieldScopeKind;
   targetIds: readonly string[];
   topologyRevision: string | null;
+  values: DecodedFieldVector["values"];
   vectorComponentCount: number;
 }
 
+export type Viewport3DTargetFieldInputSource =
+  | "fallback-field-vector"
+  | "legacy-part-field-vector"
+  | "none"
+  | "target-buffer";
+
+export interface Viewport3DTargetFieldInput {
+  explicitFieldBuffer: Viewport3DTargetFieldBuffer | null;
+  explicitFieldVector: DecodedFieldVector | null;
+  fieldVector: DecodedFieldVector | null;
+  source: Viewport3DTargetFieldInputSource;
+}
+
 export function buildViewport3DTargetFieldBuffer({
+  consumers = [],
   fieldRevision = null,
   fieldVector,
   query,
@@ -38,6 +57,7 @@ export function buildViewport3DTargetFieldBuffer({
   targetIds,
   topologyRevision = null,
 }: {
+  consumers?: readonly string[];
   fieldRevision?: string | null;
   fieldVector: DecodedFieldVector;
   query: FieldVectorQuery;
@@ -65,39 +85,104 @@ export function buildViewport3DTargetFieldBuffer({
     }),
     capability,
     component,
+    componentCount: fieldVector.nComp,
     complete: capability !== "full-vector-sampled",
+    consumers: [...consumers].sort(),
     fieldRevision,
     fieldVector,
     pointCount: fieldVector.pointCount,
     quantityId: resolveCanonicalQuantityId(fieldVector.quantityId),
+    requestId: synthetic
+      ? null
+      : buildViewport3DFieldResourceRequestId(fieldVector.quantityId, query),
     sampled,
     scopeId: query.scope_id ?? null,
     scopeKind: resolveTargetFieldBufferScopeKind(query.scope_kind),
     targetIds: [...targetIds].sort(),
     topologyRevision,
+    values: fieldVector.values,
     vectorComponentCount: fieldVector.nComp,
+  };
+}
+
+export function resolveViewport3DTargetFieldInput({
+  fallbackFieldVector,
+  legacyPartFieldVectors,
+  partId,
+  targetFieldBuffers,
+}: {
+  fallbackFieldVector: DecodedFieldVector | null | undefined;
+  legacyPartFieldVectors?: ReadonlyMap<string, DecodedFieldVector>;
+  partId: string;
+  targetFieldBuffers?: ReadonlyMap<string, Viewport3DTargetFieldBuffer>;
+}): Viewport3DTargetFieldInput {
+  const explicitFieldBuffer = targetFieldBuffers?.get(partId) ?? null;
+  if (explicitFieldBuffer) {
+    return {
+      explicitFieldBuffer,
+      explicitFieldVector: explicitFieldBuffer.fieldVector,
+      fieldVector: explicitFieldBuffer.fieldVector,
+      source: "target-buffer",
+    };
+  }
+  if (targetFieldBuffers) {
+    return {
+      explicitFieldBuffer: null,
+      explicitFieldVector: null,
+      fieldVector: null,
+      source: "none",
+    };
+  }
+
+  const legacyPartFieldVector = legacyPartFieldVectors?.get(partId) ?? null;
+  if (legacyPartFieldVector) {
+    return {
+      explicitFieldBuffer: null,
+      explicitFieldVector: legacyPartFieldVector,
+      fieldVector: legacyPartFieldVector,
+      source: "legacy-part-field-vector",
+    };
+  }
+
+  return {
+    explicitFieldBuffer: null,
+    explicitFieldVector: null,
+    fieldVector: fallbackFieldVector ?? null,
+    source: fallbackFieldVector ? "fallback-field-vector" : "none",
   };
 }
 
 export function viewport3DTargetFieldBufferCanServeSurface(
   buffer: Viewport3DTargetFieldBuffer | null | undefined,
   colorMode: string | null | undefined,
+  quantityId?: string | null,
 ): boolean {
   if (!buffer || !colorMode) return false;
+  if (!viewport3DTargetFieldBufferMatchesQuantity(buffer, quantityId)) {
+    return false;
+  }
   if (!buffer.complete) return false;
   if (colorMode === "orientation" || colorMode === "hsl_sphere") {
     return buffer.capability === "full-vector-complete";
   }
   if (colorMode === "monochrome") return false;
+  const scalarComponent = scalarComponentForColorMode(colorMode);
+  if (!scalarComponent) return buffer.capability === "full-vector-complete";
+  if (buffer.capability === "scalar-complete") {
+    return buffer.component === scalarComponent;
+  }
   return (
-    buffer.capability === "scalar-complete" ||
     buffer.capability === "full-vector-complete"
   );
 }
 
 export function viewport3DTargetFieldBufferCanServeVectors(
   buffer: Viewport3DTargetFieldBuffer | null | undefined,
+  quantityId?: string | null,
 ): boolean {
+  if (!viewport3DTargetFieldBufferMatchesQuantity(buffer, quantityId)) {
+    return false;
+  }
   return (
     buffer?.capability === "full-vector-complete" ||
     buffer?.capability === "full-vector-sampled" ||
@@ -146,6 +231,18 @@ function resolveTargetFieldBufferScopeKind(
   return "full";
 }
 
+export function viewport3DTargetFieldBufferMatchesQuantity(
+  buffer: Viewport3DTargetFieldBuffer | null | undefined,
+  quantityId?: string | null,
+): boolean {
+  return (
+    !buffer ||
+    quantityId == null ||
+    resolveCanonicalQuantityId(buffer.quantityId) ===
+      resolveCanonicalQuantityId(quantityId)
+  );
+}
+
 function buildViewport3DTargetFieldBufferId({
   component,
   fieldRevision,
@@ -172,4 +269,15 @@ function buildViewport3DTargetFieldBufferId({
     topologyRevision ?? "topology:none",
     [...targetIds].sort().join(","),
   ].join(":");
+}
+
+function scalarComponentForColorMode(
+  colorMode: string,
+): "magnitude" | "x" | "y" | "z" | null {
+  return colorMode === "magnitude" ||
+    colorMode === "x" ||
+    colorMode === "y" ||
+    colorMode === "z"
+    ? colorMode
+    : null;
 }

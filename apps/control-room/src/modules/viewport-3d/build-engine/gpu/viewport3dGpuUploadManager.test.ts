@@ -100,6 +100,147 @@ describe("viewport3dGpuUploadManager", () => {
     ]);
   });
 
+  it("shares one frame budget across independent manager instances", () => {
+    let nowMs = 0;
+    const scheduled: Array<() => void> = [];
+    const uploaded: string[] = [];
+    const adopted: string[] = [];
+    const createManager = () =>
+      createViewport3DGpuUploadManager({
+        now: () => nowMs,
+        policy: {
+          maxBytesPerSlice: 1024,
+          maxFrameBudgetMs: 2,
+          maxItemsPerSlice: 1024,
+          targetFrameBudgetMs: 2,
+        },
+        scheduleFrame: (callback) => {
+          scheduled.push(callback);
+          return scheduled.length;
+        },
+        cancelFrame: () => {},
+      });
+    const firstManager = createManager();
+    const secondManager = createManager();
+
+    firstManager.enqueue({
+      chunks: [
+        {
+          estimatedBytes: 16,
+          itemCount: 1,
+          upload: () => {
+            uploaded.push("first");
+            nowMs += 2;
+          },
+        },
+      ],
+      estimatedBytes: 16,
+      key: "first-upload",
+      lane: "field-color",
+      onVisible: () => adopted.push("first"),
+      targetRevision: "field=f1",
+    });
+    secondManager.enqueue({
+      chunks: [
+        {
+          estimatedBytes: 16,
+          itemCount: 1,
+          upload: () => {
+            uploaded.push("second");
+            nowMs += 2;
+          },
+        },
+      ],
+      estimatedBytes: 16,
+      key: "second-upload",
+      lane: "vector-glyph",
+      onVisible: () => adopted.push("second"),
+      targetRevision: "field=f1",
+    });
+
+    expect(scheduled).toHaveLength(1);
+    scheduled.shift()?.();
+    expect(uploaded).toEqual(["first"]);
+    expect(adopted).toEqual(["first"]);
+    expect(scheduled).toHaveLength(1);
+
+    scheduled.shift()?.();
+    expect(uploaded).toEqual(["first", "second"]);
+    expect(adopted).toEqual(["first", "second"]);
+  });
+
+  it("records each ticket upload time without charging prior managers in the shared frame", () => {
+    let nowMs = 0;
+    const scheduled: Array<() => void> = [];
+    const diagnostics: unknown[] = [];
+    const createManager = () =>
+      createViewport3DGpuUploadManager({
+        now: () => nowMs,
+        onDiagnosticRecord: (record) => diagnostics.push(record),
+        policy: {
+          maxBytesPerSlice: 1024,
+          maxFrameBudgetMs: 3,
+          maxItemsPerSlice: 1024,
+          targetFrameBudgetMs: 3,
+        },
+        scheduleFrame: (callback) => {
+          scheduled.push(callback);
+          return scheduled.length;
+        },
+        cancelFrame: () => {},
+      });
+    const firstManager = createManager();
+    const secondManager = createManager();
+
+    firstManager.enqueue({
+      chunks: [
+        {
+          estimatedBytes: 16,
+          itemCount: 1,
+          upload: () => {
+            nowMs += 1;
+          },
+        },
+      ],
+      estimatedBytes: 16,
+      key: "first-upload",
+      lane: "field-color",
+      onVisible: () => {},
+      targetRevision: "field=f1",
+    });
+    secondManager.enqueue({
+      chunks: [
+        {
+          estimatedBytes: 16,
+          itemCount: 1,
+          upload: () => {
+            nowMs += 1;
+          },
+        },
+      ],
+      estimatedBytes: 16,
+      key: "second-upload",
+      lane: "vector-glyph",
+      onVisible: () => {},
+      targetRevision: "field=f1",
+    });
+
+    scheduled.shift()?.();
+
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        key: "first-upload",
+        mainUploadMs: 1,
+        maxFrameUploadMs: 1,
+      }),
+      expect.objectContaining({
+        key: "second-upload",
+        mainUploadMs: 1,
+        maxFrameUploadMs: 1,
+      }),
+    ]);
+  });
+
   it("aborts obsolete tickets before mutating visible state", () => {
     const scheduled: Array<() => void> = [];
     const uploaded: string[] = [];

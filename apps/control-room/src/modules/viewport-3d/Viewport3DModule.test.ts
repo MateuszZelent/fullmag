@@ -3,10 +3,15 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  buildViewport3DColorbarTargetPlans,
   formatHysteresisReplayGlyphVector,
   formatHysteresisReplayLabel,
   notifyMeshTopologyRendered,
+  resolveViewport3DColorbarLegendsFromPlans,
+  resolveViewport3DColorbarPlansForRender,
+  resolveViewport3DColorbarRangeStates,
   resolveViewport3DRequestedColorbarGroupKeys,
+  resolveRetainedViewport3DColorbarPlansForStore,
   resolveRetainedViewport3DScalarColorbarLegends,
   resolveViewport3DColorbarLegend,
   resolveViewport3DMeshQualityLegend,
@@ -15,6 +20,8 @@ import {
   shouldClearRetainedViewport3DScalarColorbarLegends,
   shouldRetainViewport3DScalarColorbarLegends,
 } from "./Viewport3DModule";
+import { planViewport3DColorbars } from "./model/viewport3DColorbarPlan";
+import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 import type { ScalarColorBuffer } from "./viewport3dFieldMapping";
 
 function scalarColorBuffer(
@@ -56,6 +63,42 @@ function scalarColorbarPart(
       viewportColorbarVisible: patch.visible ?? false,
       visible: true,
     },
+  };
+}
+
+function visualizationSettings(
+  patch: Partial<VisualizationTargetSettings> = {},
+): VisualizationTargetSettings {
+  return {
+    activeQuantityId: patch.activeQuantityId ?? "m",
+    airboxSyntheticVectorsEnabled: patch.airboxSyntheticVectorsEnabled ?? false,
+    boundsVisible: patch.boundsVisible ?? true,
+    geometryScope: patch.geometryScope ?? "full",
+    opacityPercent: patch.opacityPercent ?? 100,
+    pointColor: patch.pointColor ?? "#ffffff",
+    pointsVisible: patch.pointsVisible ?? false,
+    primitiveVisible: patch.primitiveVisible,
+    renderMode: patch.renderMode ?? "surface",
+    scalarColorPalette: patch.scalarColorPalette ?? "viridis",
+    shaderColorMode: patch.shaderColorMode ?? "orientation",
+    shaderMonoColor: patch.shaderMonoColor ?? "#ffffff",
+    shaderVisible: patch.shaderVisible ?? true,
+    surfaceColorSource: patch.surfaceColorSource ?? "component_x",
+    vectorAlphaPercent: patch.vectorAlphaPercent ?? 100,
+    vectorBudget: patch.vectorBudget ?? 0,
+    vectorCenteringEnabled: patch.vectorCenteringEnabled ?? true,
+    vectorColorMode: patch.vectorColorMode ?? "magnitude",
+    vectorLengthScale: patch.vectorLengthScale ?? 1,
+    vectorMonoColor: patch.vectorMonoColor ?? "#ffffff",
+    vectorSurfaceOffsetEnabled: patch.vectorSurfaceOffsetEnabled ?? false,
+    vectorSurfaceOffsetScale: patch.vectorSurfaceOffsetScale ?? 0,
+    vectorThickness: patch.vectorThickness ?? 1,
+    vectorsVisible: patch.vectorsVisible ?? false,
+    viewportColorbarVisible: patch.viewportColorbarVisible ?? true,
+    visible: patch.visible ?? true,
+    wireframeColor: patch.wireframeColor ?? "#ffffff",
+    wireframeOpacityPercent: patch.wireframeOpacityPercent ?? 100,
+    wireframeVisible: patch.wireframeVisible ?? false,
   };
 }
 
@@ -252,6 +295,56 @@ describe("resolveViewport3DColorbarLegend", () => {
       { label: "Permalloy: m x [1]", maxLabel: "1", minLabel: "-1" },
       { label: "CoFeB: m y [1]", maxLabel: "4", minLabel: "-2" },
     ]);
+  });
+
+  it("does not use global scalar range for a target-pass colorbar while target colors are pending", () => {
+    expect(
+      resolveViewport3DScalarColorbarLegends({
+        colorPalette: "viridis",
+        fieldModel: {
+          scalarColors: null,
+          scalarColorsByMode: new Map([
+            ["x", scalarColorBuffer("x", { max: 1, min: -1 })],
+          ]),
+          scalarColorsByPartAndMode: new Map(),
+          targetPasses: new Map([
+            [
+              "part-a",
+              {
+                fieldBuffer: null,
+                fieldBufferState: "target-buffer",
+                surface: {
+                  degradation: "surface-colors-unavailable",
+                  passId: "part-a:surface",
+                  scalarColorMode: "x",
+                  scalarColors: null,
+                },
+                vectors: {
+                  buildReference: null,
+                  degradation: null,
+                  passId: "part-a:vector-glyph",
+                  segments: null,
+                },
+              },
+            ],
+          ]),
+        },
+        parts: [
+          scalarColorbarPart("part-a", {
+            label: "Permalloy",
+            source: "component_x",
+            visible: true,
+          }),
+        ],
+        quantityId: "m",
+        surfaceColorMode: "x",
+        unit: "1",
+        vectorColorMode: "orientation",
+      })[0]?.legend,
+    ).toMatchObject({
+      maxLabel: "pending",
+      minLabel: "pending",
+    });
   });
 
   it("keeps viewport colorbar keys stable when only the scalar range updates", () => {
@@ -477,6 +570,52 @@ describe("resolveViewport3DColorbarLegend", () => {
     ).toBe(false);
   });
 
+  it("keeps retained viewport colorbar plans during transient empty target refreshes", () => {
+    const retainedPlan = planViewport3DColorbars({
+      rangeStatesByGroupKey: new Map([
+        [
+          "m:x:viridis:part:part-a:range=auto=linear=asymmetric=min:auto=max:auto",
+          {
+            range: { max: 1, min: -1 },
+            state: "current",
+          },
+        ],
+      ]),
+      targets: buildViewport3DColorbarTargetPlans({
+        parts: [
+          {
+            id: "part-a",
+            label: "Permalloy",
+            settings: visualizationSettings({
+              surfaceColorSource: "component_x",
+              viewportColorbarVisible: true,
+            }),
+            targetKind: "part",
+          },
+        ],
+      }),
+    });
+
+    expect(
+      resolveViewport3DColorbarPlansForRender({
+        planned: [],
+        renderSurfaceAvailable: true,
+        retained: retainedPlan,
+        targetPlanAvailable: false,
+        viewportColorbarRequested: false,
+      }),
+    ).toBe(retainedPlan);
+    expect(
+      resolveRetainedViewport3DColorbarPlansForStore({
+        planned: [],
+        renderSurfaceAvailable: true,
+        retained: retainedPlan,
+        targetPlanAvailable: false,
+        viewportColorbarRequested: false,
+      }),
+    ).toBe(retainedPlan);
+  });
+
   it("does not carry retained per-part colorbars into FDM colorbar mode", () => {
     const previous = [
       {
@@ -509,6 +648,423 @@ describe("resolveViewport3DColorbarLegend", () => {
         requestedGroupKeys: new Set(["fdm"]),
       }),
     ).toEqual(current);
+  });
+
+  it("plans viewport colorbars from target demand before scalar buffers are ready", () => {
+    const targets = buildViewport3DColorbarTargetPlans({
+      parts: [
+        {
+          id: "part-a",
+          label: "Permalloy",
+          settings: visualizationSettings({
+            surfaceColorSource: "component_x",
+            viewportColorbarVisible: true,
+          }),
+          targetKind: "part",
+        },
+      ],
+    });
+    const requested = planViewport3DColorbars({ targets });
+    const rangeStates = resolveViewport3DColorbarRangeStates({
+      fieldModel: {
+        scalarColorsByMode: new Map(),
+        scalarColorsByPartAndMode: new Map(),
+      },
+      plans: requested,
+    });
+    const plans = planViewport3DColorbars({
+      rangeStatesByGroupKey: rangeStates,
+      targets,
+    });
+    const legends = resolveViewport3DColorbarLegendsFromPlans({
+      labelByTargetId: new Map([["part-a", "Permalloy"]]),
+      plans,
+    });
+
+    expect(plans).toHaveLength(1);
+    expect(plans[0]).toMatchObject({
+      range: null,
+      rangeState: "pending",
+      targetIds: ["part-a"],
+    });
+    expect(legends).toEqual([
+      {
+        key: plans[0]?.renderKey,
+        legend: expect.objectContaining({
+          label: "Permalloy: m x [1]",
+          maxLabel: "pending",
+          minLabel: "pending",
+        }),
+      },
+    ]);
+  });
+
+  it("updates viewport colorbar range without changing the render key", () => {
+    const targets = buildViewport3DColorbarTargetPlans({
+      parts: [
+        {
+          id: "part-a",
+          label: "Permalloy",
+          settings: visualizationSettings({
+            surfaceColorSource: "component_x",
+            viewportColorbarVisible: true,
+          }),
+          targetKind: "part",
+        },
+      ],
+    });
+    const requested = planViewport3DColorbars({ targets });
+    const firstRangeStates = resolveViewport3DColorbarRangeStates({
+      fieldModel: {
+        scalarColorsByMode: new Map(),
+        scalarColorsByPartAndMode: new Map([
+          [
+            "part-a",
+            new Map([["x", scalarColorBuffer("x", { max: 1, min: -1 })]]),
+          ],
+        ]),
+      },
+      plans: requested,
+    });
+    const first = planViewport3DColorbars({
+      rangeStatesByGroupKey: firstRangeStates,
+      targets,
+    });
+    const secondRangeStates = resolveViewport3DColorbarRangeStates({
+      fieldModel: {
+        scalarColorsByMode: new Map(),
+        scalarColorsByPartAndMode: new Map([
+          [
+            "part-a",
+            new Map([
+              ["x", scalarColorBuffer("x", { max: 0.25, min: -0.75 })],
+            ]),
+          ],
+        ]),
+      },
+      plans: requested,
+    });
+    const second = planViewport3DColorbars({
+      previousPlans: new Map(first.map((plan) => [plan.groupKey, plan])),
+      rangeStatesByGroupKey: secondRangeStates,
+      targets,
+    });
+
+    expect(second[0]?.renderKey).toBe(first[0]?.renderKey);
+    expect(second[0]?.range).toEqual({ max: 0.25, min: -0.75 });
+    expect(second[0]?.rangeState).toBe("current");
+  });
+
+  it("uses target-pass scalar ranges for mixed target viewport colorbars", () => {
+    const targets = buildViewport3DColorbarTargetPlans({
+      parts: [
+        {
+          id: "part-a",
+          label: "Permalloy",
+          settings: visualizationSettings({
+            surfaceColorSource: "component_x",
+            viewportColorbarVisible: true,
+          }),
+          targetKind: "part",
+        },
+        {
+          id: "part-b",
+          label: "CoFeB",
+          settings: visualizationSettings({
+            surfaceColorSource: "orientation",
+            viewportColorbarVisible: true,
+          }),
+          targetKind: "part",
+        },
+        {
+          id: "part-c",
+          label: "Vectors",
+          settings: visualizationSettings({
+            shaderVisible: false,
+            surfaceColorSource: "solid",
+            vectorBudget: 512,
+            vectorsVisible: true,
+            viewportColorbarVisible: true,
+          }),
+          targetKind: "part",
+        },
+      ],
+    });
+    const requested = planViewport3DColorbars({ targets });
+    const rangeStates = resolveViewport3DColorbarRangeStates({
+      fieldModel: {
+        scalarColorsByMode: new Map([
+          ["x", scalarColorBuffer("x", { max: 1, min: -1 }, "viridis", "m")],
+        ]),
+        scalarColorsByPartAndMode: new Map(),
+        targetPasses: new Map([
+          [
+            "part-a",
+            {
+              fieldBuffer: null,
+              fieldBufferState: "target-buffer",
+              surface: {
+                passId: "test:surface",
+degradation: null,
+                scalarColorMode: "x",
+                scalarColors: scalarColorBuffer(
+                  "x",
+                  { max: 0.25, min: -0.75 },
+                  "viridis",
+                  "m",
+                ),
+              },
+              vectors: {
+                passId: "test:vector-glyph",
+buildReference: null,
+                degradation: null,
+                segments: null,
+              },
+            },
+          ],
+        ]),
+      },
+      plans: requested,
+    });
+    const plans = planViewport3DColorbars({
+      rangeStatesByGroupKey: rangeStates,
+      targets,
+    });
+
+    expect(plans).toHaveLength(1);
+    expect(plans[0]).toMatchObject({
+      colorMode: "x",
+      range: { max: 0.25, min: -0.75 },
+      rangeState: "current",
+      targetIds: ["part-a"],
+    });
+  });
+
+  it("does not use a global colorbar range when a target-pass surface rejects the mode", () => {
+    const targets = buildViewport3DColorbarTargetPlans({
+      parts: [
+        {
+          id: "part-a",
+          label: "Permalloy",
+          settings: visualizationSettings({
+            surfaceColorSource: "component_x",
+            viewportColorbarVisible: true,
+          }),
+          targetKind: "part",
+        },
+      ],
+    });
+    const requested = planViewport3DColorbars({ targets });
+    const rangeStates = resolveViewport3DColorbarRangeStates({
+      fieldModel: {
+        scalarColorsByMode: new Map([
+          ["x", scalarColorBuffer("x", { max: 1, min: -1 }, "viridis", "m")],
+        ]),
+        scalarColorsByPartAndMode: new Map(),
+        targetPasses: new Map([
+          [
+            "part-a",
+            {
+              fieldBuffer: null,
+              fieldBufferState: "target-buffer",
+              surface: {
+                passId: "test:surface",
+degradation: "sampled-buffer-not-surface-capable",
+                scalarColorMode: "x",
+                scalarColors: null,
+              },
+              vectors: {
+                passId: "test:vector-glyph",
+buildReference: null,
+                degradation: null,
+                segments: null,
+              },
+            },
+          ],
+        ]),
+      },
+      plans: requested,
+    });
+    const plans = planViewport3DColorbars({
+      rangeStatesByGroupKey: rangeStates,
+      targets,
+    });
+
+    expect(plans[0]).toMatchObject({
+      range: null,
+      rangeState: "pending",
+      targetIds: ["part-a"],
+    });
+  });
+
+  it("uses the full-domain target-pass range before global colorbar buffers", () => {
+    const targets = buildViewport3DColorbarTargetPlans({
+      fdmSettings: visualizationSettings({
+        surfaceColorSource: "component_x",
+        viewportColorbarVisible: true,
+      }),
+      parts: [],
+    });
+    const requested = planViewport3DColorbars({ targets });
+    const rangeStates = resolveViewport3DColorbarRangeStates({
+      fieldModel: {
+        scalarColorsByMode: new Map([
+          ["x", scalarColorBuffer("x", { max: 1, min: -1 }, "viridis", "m")],
+        ]),
+        scalarColorsByPartAndMode: new Map(),
+        targetPasses: new Map([
+          [
+            "full",
+            {
+              fieldBuffer: null,
+              fieldBufferState: "derived-global",
+              surface: {
+                degradation: null,
+                passId: "full:surface",
+                scalarColorMode: "x",
+                scalarColors: scalarColorBuffer(
+                  "x",
+                  { max: 0.25, min: -0.75 },
+                  "viridis",
+                  "m",
+                ),
+              },
+              vectors: {
+                buildReference: null,
+                degradation: null,
+                passId: "full:vector-glyph",
+                segments: null,
+              },
+            },
+          ],
+        ]),
+      },
+      plans: requested,
+    });
+    const plans = planViewport3DColorbars({
+      rangeStatesByGroupKey: rangeStates,
+      targets,
+    });
+
+    expect(plans[0]).toMatchObject({
+      range: { max: 0.25, min: -0.75 },
+      rangeState: "current",
+      scopeKind: "full",
+      targetIds: ["fdm"],
+    });
+  });
+
+  it("does not use global full-domain colorbar buffers when target-pass model is authoritative but missing the full target", () => {
+    const targets = buildViewport3DColorbarTargetPlans({
+      fdmSettings: visualizationSettings({
+        surfaceColorSource: "component_x",
+        viewportColorbarVisible: true,
+      }),
+      parts: [],
+    });
+    const requested = planViewport3DColorbars({ targets });
+    const rangeStates = resolveViewport3DColorbarRangeStates({
+      fieldModel: {
+        scalarColorsByMode: new Map([
+          ["x", scalarColorBuffer("x", { max: 1, min: -1 }, "viridis", "m")],
+        ]),
+        scalarColorsByPartAndMode: new Map(),
+        targetPasses: new Map([
+          [
+            "part-a",
+            {
+              fieldBuffer: null,
+              fieldBufferState: "target-buffer",
+              surface: {
+                degradation: null,
+                passId: "part-a:surface",
+                scalarColorMode: "x",
+                scalarColors: scalarColorBuffer(
+                  "x",
+                  { max: 0.25, min: -0.75 },
+                  "viridis",
+                  "m",
+                ),
+              },
+              vectors: {
+                buildReference: null,
+                degradation: null,
+                passId: "part-a:vector-glyph",
+                segments: null,
+              },
+            },
+          ],
+        ]),
+      },
+      plans: requested,
+    });
+    const plans = planViewport3DColorbars({
+      rangeStatesByGroupKey: rangeStates,
+      targets,
+    });
+
+    expect(plans[0]).toMatchObject({
+      range: null,
+      rangeState: "pending",
+      scopeKind: "full",
+      targetIds: ["fdm"],
+    });
+  });
+
+  it("retains the previous compatible colorbar range while the next range is pending", () => {
+    const targets = buildViewport3DColorbarTargetPlans({
+      parts: [
+        {
+          id: "part-a",
+          label: "Permalloy",
+          settings: visualizationSettings({
+            surfaceColorSource: "component_x",
+            viewportColorbarVisible: true,
+          }),
+          targetKind: "part",
+        },
+      ],
+    });
+    const requested = planViewport3DColorbars({ targets });
+    const readyRangeStates = resolveViewport3DColorbarRangeStates({
+      fieldModel: {
+        scalarColorsByMode: new Map(),
+        scalarColorsByPartAndMode: new Map([
+          [
+            "part-a",
+            new Map([["x", scalarColorBuffer("x", { max: 1, min: -1 })]]),
+          ],
+        ]),
+      },
+      plans: requested,
+    });
+    const ready = planViewport3DColorbars({
+      rangeStatesByGroupKey: readyRangeStates,
+      targets,
+    });
+    const pendingRangeStates = resolveViewport3DColorbarRangeStates({
+      fieldModel: {
+        scalarColorsByMode: new Map(),
+        scalarColorsByPartAndMode: new Map(),
+      },
+      plans: requested,
+    });
+    const pending = planViewport3DColorbars({
+      previousPlans: new Map(ready.map((plan) => [plan.groupKey, plan])),
+      rangeStatesByGroupKey: pendingRangeStates,
+      targets,
+    });
+    const legends = resolveViewport3DColorbarLegendsFromPlans({
+      labelByTargetId: new Map([["part-a", "Permalloy"]]),
+      plans: pending,
+    });
+
+    expect(pending[0]?.rangeState).toBe("stale-compatible");
+    expect(pending[0]?.range).toEqual({ max: 1, min: -1 });
+    expect(legends[0]?.legend).toMatchObject({
+      maxLabel: "1",
+      minLabel: "-1",
+    });
   });
 });
 

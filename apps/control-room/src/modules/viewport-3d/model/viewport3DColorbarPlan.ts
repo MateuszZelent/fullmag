@@ -1,7 +1,9 @@
 import { resolveCanonicalQuantityId } from "@/kernel/api/quantityIds";
 
 import type { ScalarRange } from "../viewport3dFieldMapping";
-import type {
+import {
+  DEFAULT_VIEWPORT_3D_SCALAR_RANGE_POLICY,
+  type Viewport3DScalarRangePolicy,
   Viewport3DFieldScopeKind,
   Viewport3DTargetRenderPlan,
 } from "./viewport3DFieldDataPlan";
@@ -35,12 +37,14 @@ export function buildViewport3DColorbarGroupKey({
   colorMode,
   palette,
   quantityId,
+  scalarRangePolicy = DEFAULT_VIEWPORT_3D_SCALAR_RANGE_POLICY,
   scopeId,
   scopeKind,
 }: {
   colorMode: string;
   palette: string;
   quantityId: string;
+  scalarRangePolicy?: Viewport3DScalarRangePolicy;
   scopeId: string | null;
   scopeKind: Viewport3DFieldScopeKind;
 }): string {
@@ -50,6 +54,7 @@ export function buildViewport3DColorbarGroupKey({
     palette,
     scopeKind,
     scopeId ?? "none",
+    scalarRangePolicyKey(scalarRangePolicy),
   ].join(":");
 }
 
@@ -74,6 +79,7 @@ export function planViewport3DColorbars({
   }>();
 
   for (const target of targets) {
+    if (target.targetKind === "airbox") continue;
     if (!target.visible || !target.colorbar.viewportVisible) continue;
     const colorMode = target.shader.scalarColorMode;
     if (!colorMode || !viewport3DColorModeHasNumericColorbar(colorMode)) {
@@ -84,6 +90,7 @@ export function planViewport3DColorbars({
       colorMode,
       palette: target.shader.palette,
       quantityId: target.quantityId,
+      scalarRangePolicy: target.shader.scalarRangePolicy,
       scopeId: scope.scopeId,
       scopeKind: scope.scopeKind,
     });
@@ -137,18 +144,30 @@ function resolveViewport3DColorbarRangeState({
     | null;
 }): Viewport3DColorbarRangeState {
   const current = rangeStatesByGroupKey?.get(groupKey) ?? null;
-  if (current) return current;
   const previous = previousPlans?.get(groupKey) ?? null;
+  if (current?.range) return current;
   if (previous?.range) {
     return {
       range: previous.range,
       state: "stale-compatible",
     };
   }
+  if (current) return current;
   return {
     range: null,
     state: "unavailable",
   };
+}
+
+function scalarRangePolicyKey(policy: Viewport3DScalarRangePolicy): string {
+  return [
+    "range",
+    policy.mode,
+    policy.scale,
+    policy.symmetric ? "symmetric" : "asymmetric",
+    policy.min ?? "min:auto",
+    policy.max ?? "max:auto",
+  ].join("=");
 }
 
 function viewport3DColorModeHasNumericColorbar(colorMode: string): boolean {

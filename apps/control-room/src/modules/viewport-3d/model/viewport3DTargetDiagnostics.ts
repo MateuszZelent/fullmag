@@ -1,0 +1,154 @@
+import type { Viewport3DTargetRenderPassModel } from "../viewport3dRenderModel";
+
+import type { Viewport3DDerivedWorkItem } from "./viewport3DDerivedWorkPlan";
+
+export interface Viewport3DTargetDiagnosticSummary {
+  buffers: readonly string[];
+  degradation: readonly string[];
+  demand: string | null;
+  derivedWork: readonly string[];
+  passes: readonly string[];
+  requests: readonly string[];
+  retained: readonly string[];
+  targetId: string;
+}
+
+export function summarizeViewport3DTargetDiagnostics({
+  derivedWorkItems,
+  targetPasses,
+}: {
+  derivedWorkItems: readonly Viewport3DDerivedWorkItem[];
+  targetPasses: ReadonlyMap<string, Viewport3DTargetRenderPassModel>;
+}): Viewport3DTargetDiagnosticSummary[] {
+  const workItemsByTarget = new Map<string, Viewport3DDerivedWorkItem[]>();
+  for (const item of derivedWorkItems) {
+    const items = workItemsByTarget.get(item.targetId);
+    if (items) {
+      items.push(item);
+    } else {
+      workItemsByTarget.set(item.targetId, [item]);
+    }
+  }
+
+  return Array.from(targetPasses, ([targetId, pass]) => {
+    const targetWorkItems = (workItemsByTarget.get(targetId) ?? []).toSorted(
+      compareDerivedWorkItems,
+    );
+    return {
+      buffers: summarizeTargetBuffers(pass),
+      degradation: summarizeTargetDegradation(pass, targetWorkItems),
+      demand: summarizeTargetDemand(pass),
+      derivedWork: targetWorkItems.map(summarizeDerivedWorkItem),
+      passes: summarizeTargetPasses(pass),
+      requests: summarizeTargetRequests(pass),
+      retained: [],
+      targetId,
+    };
+  }).toSorted((left, right) => left.targetId.localeCompare(right.targetId));
+}
+
+function summarizeTargetPasses(
+  pass: Viewport3DTargetRenderPassModel,
+): string[] {
+  const passes: string[] = [];
+  if (pass.surface.scalarColorMode) passes.push("surface");
+  if (
+    pass.vectors.buildReference ||
+    pass.vectors.segments ||
+    pass.vectors.degradation
+  ) {
+    passes.push("vector-glyph");
+  }
+  return passes;
+}
+
+function summarizeTargetDemand(
+  pass: Viewport3DTargetRenderPassModel,
+): string | null {
+  const demand: string[] = [];
+  if (pass.surface.scalarColorMode) {
+    demand.push(`surface:${pass.surface.scalarColorMode}`);
+  }
+  if (
+    pass.vectors.buildReference ||
+    pass.vectors.segments ||
+    pass.vectors.degradation
+  ) {
+    demand.push("vector-glyph");
+  }
+  return demand.length > 0 ? demand.join(" ") : null;
+}
+
+function summarizeTargetRequests(
+  pass: Viewport3DTargetRenderPassModel,
+): string[] {
+  return pass.fieldBuffer?.requestId ? [pass.fieldBuffer.requestId] : [];
+}
+
+function summarizeTargetBuffers(
+  pass: Viewport3DTargetRenderPassModel,
+): string[] {
+  if (!pass.fieldBuffer) return [`state=${pass.fieldBufferState}`];
+  const scopeId = pass.fieldBuffer.scopeId ?? "none";
+  return [
+    [
+      pass.fieldBuffer.bufferId,
+      pass.fieldBuffer.capability,
+      `quantity=${pass.fieldBuffer.quantityId}`,
+      `component=${pass.fieldBuffer.component}`,
+      `scope=${pass.fieldBuffer.scopeKind}:${scopeId}`,
+      `points=${pass.fieldBuffer.pointCount}`,
+      `ncomp=${pass.fieldBuffer.vectorComponentCount}`,
+      `sampled=${pass.fieldBuffer.sampled}`,
+      `state=${pass.fieldBufferState}`,
+    ].join(" "),
+  ];
+}
+
+function summarizeTargetDegradation(
+  pass: Viewport3DTargetRenderPassModel,
+  workItems: readonly Viewport3DDerivedWorkItem[],
+): string[] {
+  const degradation = new Set<string>();
+  if (pass.surface.degradation) {
+    degradation.add(`surface:${pass.surface.degradation}`);
+  }
+  if (pass.vectors.degradation) {
+    degradation.add(`vector-glyph:${pass.vectors.degradation}`);
+  }
+  for (const item of workItems) {
+    if (item.blockedReason) {
+      degradation.add(`${item.lane}:${item.blockedReason}`);
+    }
+  }
+  return Array.from(degradation);
+}
+
+function summarizeDerivedWorkItem(item: Viewport3DDerivedWorkItem): string {
+  const base = [
+    item.lane,
+    item.outputKind,
+    item.status,
+    item.execution,
+    item.passId,
+  ].join(":");
+  return [
+    base,
+    `items=${item.itemCount}`,
+    `input=${formatByteCount(item.inputBytes)}`,
+    `output=${formatByteCount(item.outputBytesEstimate)}`,
+  ].join(" ");
+}
+
+function formatByteCount(value: number): string {
+  return `${Math.max(0, Math.floor(value))}B`;
+}
+
+function compareDerivedWorkItems(
+  left: Viewport3DDerivedWorkItem,
+  right: Viewport3DDerivedWorkItem,
+): number {
+  const passOrder = left.passId.localeCompare(right.passId);
+  if (passOrder !== 0) return passOrder;
+  return left.workId.localeCompare(right.workId);
+}

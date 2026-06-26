@@ -102,6 +102,96 @@ describe("viewport3dDiagnostics", () => {
     ).toBe("q:m top:7 field:8 surface:stale-visible obj:3 air:1 geo:1 cache:2KB frames:2");
   });
 
+  it("includes bounded field-demand request explanations", () => {
+    expect(
+      buildViewport3DDiagnostics({
+        airboxPartCount: 0,
+        cache: { byteLength: 0, entryCount: 0 },
+        fieldDemandDiagnostics: [
+          {
+            demands: [
+              "surface:x:complete",
+              "vector-glyph:full:complete",
+            ],
+            requests: [
+              "quantity=m component=full scope=object:object:layer-a consumers=object:layer-a:surface,object:layer-a:vector-glyph",
+            ],
+            targetId: "object:layer-a",
+          },
+          {
+            demands: ["vector-glyph:full:sampled-ok max_samples=128"],
+            requests: [
+              "quantity=m component=full scope=object:object:layer-b max_samples=128 consumers=object:layer-b:vector-glyph",
+            ],
+            targetId: "object:layer-b",
+          },
+        ],
+        fieldRevision: 12,
+        objectCount: 2,
+        quantityId: "m",
+        topologyRevision: 11,
+        tracker: {
+          contextLosses: 0,
+          contextRestores: 0,
+          dirtyReason: null,
+          frames: 0,
+          geometries: 0,
+          materials: 0,
+          renderTargets: 0,
+          textures: 0,
+          workers: 0,
+        },
+      }),
+    ).toContain(
+      "field-demands:2[object:layer-a{surface:x:complete|vector-glyph:full:complete=>quantity=m component=full scope=object:object:layer-a consumers=object:layer-a:surface,object:layer-a:vector-glyph};object:layer-b{vector-glyph:full:sampled-ok max_samples=128=>quantity=m component=full scope=object:object:layer-b max_samples=128 consumers=object:layer-b:vector-glyph}]",
+    );
+  });
+
+  it("includes bounded per-target buffer and derived-work explanations", () => {
+    expect(
+      buildViewport3DDiagnostics({
+        airboxPartCount: 0,
+        cache: { byteLength: 0, entryCount: 0 },
+        fieldRevision: 12,
+        objectCount: 1,
+        quantityId: "m",
+        targetDiagnostics: [
+          {
+            buffers: [
+              "buffer:layer-a full-vector-complete quantity=m component=full scope=object:object:layer-a points=100000 ncomp=3 sampled=false state=target-buffer",
+            ],
+            degradation: [],
+            demand: "surface:x vector-glyph",
+            derivedWork: [
+              "field-color:scalar-colors:ready:object:layer-a:surface",
+              "vector-glyph:vector-glyphs:ready:object:layer-a:vector-glyph",
+            ],
+            passes: ["surface", "vector-glyph"],
+            requests: [
+              "quantity=m&component=full&scope_kind=object&scope_id=object:layer-a",
+            ],
+            retained: [],
+            targetId: "object:layer-a",
+          },
+        ],
+        topologyRevision: 11,
+        tracker: {
+          contextLosses: 0,
+          contextRestores: 0,
+          dirtyReason: null,
+          frames: 0,
+          geometries: 0,
+          materials: 0,
+          renderTargets: 0,
+          textures: 0,
+          workers: 0,
+        },
+      }),
+    ).toContain(
+      "target-passes:1[object:layer-a{passes=surface|vector-glyph demand=surface:x vector-glyph buffers=buffer:layer-a full-vector-complete quantity=m component=full scope=object:object:layer-a points=100000 ncomp=3 sampled=false state=target-buffer work=field-color:scalar-colors:ready:object:layer-a:surface|vector-glyph:vector-glyphs:ready:object:layer-a:vector-glyph degradation=none}]",
+    );
+  });
+
   it("records viewport resource ledger events without forcing subscriptions", () => {
     const records: unknown[] = [];
     const tracker = new Viewport3DResourceTracker({

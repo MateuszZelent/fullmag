@@ -1,10 +1,14 @@
 import type { FieldVectorQuery } from "@/kernel/api/apiTypes";
-import { resolveCanonicalQuantityId } from "@/kernel/api/quantityIds";
+import {
+  isMagneticOnlyQuantityId,
+  resolveCanonicalQuantityId,
+} from "@/kernel/api/quantityIds";
 import {
   surfaceColorSourceToColorMode,
   type SurfaceColorSource,
   type VisualizationGeometryScope,
   type VisualizationTargetKind,
+  type VisualizationTargetSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
 
 export type Viewport3DFieldPayloadCompleteness =
@@ -77,6 +81,7 @@ export interface Viewport3DPassDemand {
   passId: string;
   passKind: Viewport3DPassDemandKind;
   quantityId: string;
+  replayQuery: Viewport3DReplayFieldQuery | null;
   scopeId: string | null;
   scopeKind: Viewport3DFieldScopeKind;
   targetId: string;
@@ -89,10 +94,89 @@ export interface Viewport3DFieldResourceRequest {
   requestId: string;
 }
 
+export interface Viewport3DFieldDemandDiagnosticSummary {
+  demands: readonly string[];
+  requests: readonly string[];
+  targetId: string;
+}
+
+export interface Viewport3DPrimaryFieldRenderOptionsForPlanning {
+  fullVectorBudget?: number | null;
+  partVectorBudgets?: ReadonlyMap<string, number> | null;
+  scalarColorModes?: ReadonlySet<string> | null;
+  scalarColorsVisible?: boolean | null;
+}
+
+export interface Viewport3DPrimaryFieldQueryOptions {
+  fdmInstanceModelNeedsFieldVector: boolean;
+  fdmSurfaceColorMode: string | null;
+  fdmTopographyEnabled: boolean;
+  fdmVectorsVisible: boolean;
+  fieldRenderOptions: Viewport3DPrimaryFieldRenderOptionsForPlanning;
+}
+
+export interface Viewport3DPrimaryFieldDemandPlan {
+  demands: readonly Viewport3DPassDemand[];
+  request: Viewport3DFieldResourceRequest;
+}
+
+export interface Viewport3DScopedPartFieldSettingsForPlanning {
+  activeQuantityId: string;
+  shaderVisible: boolean;
+  surfaceColorSource: SurfaceColorSource;
+  vectorBudget: number;
+  vectorsVisible: boolean;
+  visible: boolean;
+}
+
+export interface Viewport3DPlanMeshPart {
+  id: string;
+  label?: string | null;
+}
+
+export interface Viewport3DPlanPartModel {
+  part: Viewport3DPlanMeshPart;
+}
+
+export interface Viewport3DTargetQuantityFieldRequestsOptions {
+  fdmSettings: VisualizationTargetSettings | null;
+  getPartSettings: (part: Viewport3DPlanMeshPart) => VisualizationTargetSettings;
+  magneticPartScopedFieldIds: ReadonlySet<string>;
+  magneticParts: readonly Viewport3DPlanPartModel[];
+  maxVectorGlyphs: number;
+  primaryFieldQuantityId: string;
+  selectedSnapshotQuery?: FieldVectorQuery | null;
+}
+
+export interface Viewport3DTargetQuantityFieldDemandPlan {
+  demands: readonly Viewport3DPassDemand[];
+  requests: ReadonlyMap<string, Viewport3DFieldResourceRequest>;
+}
+
+export interface Viewport3DScopedPartFieldDemandPlan {
+  demands: readonly Viewport3DPassDemand[];
+  request: Viewport3DFieldResourceRequest | null;
+}
+
+export interface Viewport3DScopedPartVectorFieldDemandPlan {
+  demands: readonly Viewport3DPassDemand[];
+  requests: ReadonlyMap<string, Viewport3DFieldResourceRequest>;
+}
+
+export interface Viewport3DAirboxFieldVectorDemandPlan {
+  demands: readonly Viewport3DPassDemand[];
+  requests: ReadonlyMap<string, Viewport3DFieldResourceRequest>;
+}
+
 export interface Viewport3DScalarFieldComponentRequest {
   component: "magnitude" | "x" | "y" | "z" | null;
   needsFullVector: boolean;
 }
+
+export type Viewport3DReplayFieldQuery = Pick<
+  FieldVectorQuery,
+  "phase_rad" | "snapshot_id" | "stage_id" | "view"
+>;
 
 const VIEWPORT_3D_SCALAR_FIELD_COMPONENTS = new Set([
   "magnitude",
@@ -182,6 +266,7 @@ export function buildViewport3DPassDemands(
   plan: Viewport3DTargetRenderPlan,
   options: {
     maxSamples?: number | null;
+    replayQuery?: Viewport3DReplayFieldQuery | null;
     scopeId?: string | null;
     scopeKind?: Viewport3DFieldScopeKind;
   } = {},
@@ -206,6 +291,7 @@ export function buildViewport3DPassDemands(
         passId: `${plan.targetId}:surface`,
         passKind: "surface",
         quantityId: plan.quantityId,
+        replayQuery: normalizeReplayFieldQuery(options.replayQuery),
         scopeId,
         scopeKind,
         targetId: plan.targetId,
@@ -226,6 +312,7 @@ export function buildViewport3DPassDemands(
       passId: `${plan.targetId}:vector-glyph`,
       passKind: "vector-glyph",
       quantityId: plan.quantityId,
+      replayQuery: normalizeReplayFieldQuery(options.replayQuery),
       scopeId,
       scopeKind,
       targetId: plan.targetId,
@@ -240,6 +327,7 @@ export function buildViewport3DPassDemands(
       passId: `${plan.targetId}:colorbar`,
       passKind: "colorbar",
       quantityId: plan.quantityId,
+      replayQuery: normalizeReplayFieldQuery(options.replayQuery),
       scopeId,
       scopeKind,
       targetId: plan.targetId,
@@ -288,6 +376,409 @@ export function planViewport3DFieldResourceRequests(
       };
     })
     .sort((left, right) => left.requestId.localeCompare(right.requestId));
+}
+
+export function summarizeViewport3DFieldDemandDiagnostics({
+  demands,
+  requests,
+}: {
+  demands: readonly Viewport3DPassDemand[];
+  requests: readonly Viewport3DFieldResourceRequest[];
+}): Viewport3DFieldDemandDiagnosticSummary[] {
+  const summaries = new Map<string, {
+    demands: string[];
+    requestKeys: Set<string>;
+    requests: string[];
+  }>();
+  const passTargetIds = new Map<string, string>();
+
+  for (const demand of demands) {
+    const summary = targetFieldDemandDiagnosticSummary(
+      summaries,
+      demand.targetId,
+    );
+    summary.demands.push(summarizeViewport3DPassDemand(demand));
+    passTargetIds.set(demand.passId, demand.targetId);
+  }
+
+  for (const request of requests) {
+    for (const consumer of request.consumers) {
+      const targetId = passTargetIds.get(consumer);
+      if (!targetId) continue;
+      const summary = targetFieldDemandDiagnosticSummary(summaries, targetId);
+      if (summary.requestKeys.has(request.requestId)) continue;
+      summary.requestKeys.add(request.requestId);
+      summary.requests.push(summarizeViewport3DFieldResourceRequest(request));
+    }
+  }
+
+  return Array.from(summaries, ([targetId, summary]) => ({
+    demands: summary.demands.sort(),
+    requests: summary.requests.sort(),
+    targetId,
+  })).sort((left, right) => left.targetId.localeCompare(right.targetId));
+}
+
+export function resolveViewport3DPrimaryFieldQuery({
+  fdmInstanceModelNeedsFieldVector,
+  fdmSurfaceColorMode,
+  fdmTopographyEnabled,
+  fdmVectorsVisible,
+  fieldRenderOptions,
+  snapshotQuery,
+  snapshotId,
+}: Viewport3DPrimaryFieldQueryOptions & {
+  snapshotId?: string | null;
+  snapshotQuery?: FieldVectorQuery | null;
+}): FieldVectorQuery {
+  const snapshotParams = snapshotQuery ?? (snapshotId ? { snapshot_id: snapshotId } : {});
+  const scalarFieldComponentRequest = resolveViewport3DScalarComponentRequest(
+    fieldRenderOptions.scalarColorsVisible === false
+      ? null
+      : fieldRenderOptions.scalarColorModes,
+    fdmSurfaceColorMode,
+  );
+  if (
+    fdmVectorsVisible ||
+    fdmTopographyEnabled ||
+    viewport3DFieldRenderOptionsNeedFullVectorData(fieldRenderOptions) ||
+    scalarFieldComponentRequest.needsFullVector
+  ) {
+    return {
+      component: "full",
+      scope_kind: "full",
+      ...snapshotParams,
+    };
+  }
+
+  const component =
+    scalarFieldComponentRequest.component ??
+    (fdmInstanceModelNeedsFieldVector ? "magnitude" : null);
+
+  return component
+    ? {
+        component,
+        scope_kind: "full",
+        ...snapshotParams,
+      }
+    : {
+        component: "full",
+        scope_kind: "full",
+        ...snapshotParams,
+      };
+}
+
+export function resolveViewport3DPrimaryFieldDemandPlan({
+  primaryFieldQuantityId,
+  ...options
+}: Viewport3DPrimaryFieldQueryOptions & {
+  primaryFieldQuantityId: string;
+  snapshotId?: string | null;
+  snapshotQuery?: FieldVectorQuery | null;
+}): Viewport3DPrimaryFieldDemandPlan {
+  const demands = resolveViewport3DPrimaryFieldPassDemands({
+    ...options,
+    primaryFieldQuantityId,
+  });
+  const plannedRequest = planViewport3DFieldResourceRequests(demands)[0] ?? null;
+  if (plannedRequest) {
+    return {
+      demands,
+      request: {
+        ...plannedRequest,
+        quantityId: primaryFieldQuantityId,
+        requestId: buildViewport3DFieldResourceRequestId(
+          primaryFieldQuantityId,
+          plannedRequest.query,
+        ),
+      },
+    };
+  }
+
+  const query = resolveViewport3DPrimaryFieldQuery(options);
+  return {
+    demands,
+    request: {
+      consumers: ["primary-field-vector"],
+      quantityId: primaryFieldQuantityId,
+      query,
+      requestId: buildViewport3DFieldResourceRequestId(
+        primaryFieldQuantityId,
+        query,
+      ),
+    },
+  };
+}
+
+export function resolveViewport3DAirboxFieldVectorDemandPlan({
+  airboxParts,
+  fieldQuery = { component: "full", scope_kind: "full" },
+  quantityId,
+  replayQuery = null,
+  shaderVisible = false,
+  surfaceColorSource = "solid",
+  vectorBudget = fieldQuery.max_samples ?? 0,
+  vectorsVisible = Boolean(fieldQuery.max_samples != null),
+}: {
+  airboxParts: readonly { id: string; label?: string | null }[];
+  fieldQuery?: FieldVectorQuery;
+  quantityId: string;
+  replayQuery?: FieldVectorQuery | null;
+  shaderVisible?: boolean;
+  surfaceColorSource?: SurfaceColorSource;
+  vectorBudget?: number;
+  vectorsVisible?: boolean;
+}): Viewport3DAirboxFieldVectorDemandPlan {
+  if (isMagneticOnlyQuantityId(quantityId)) {
+    return {
+      demands: [],
+      requests: new Map(),
+    };
+  }
+
+  const demands: Viewport3DPassDemand[] = [];
+  const requests = new Map<string, Viewport3DFieldResourceRequest>();
+  for (const part of airboxParts) {
+    const plan = buildViewport3DTargetRenderPlan({
+      label: part.label ?? part.id,
+      quantityId,
+      settings: {
+        geometryScope: "full",
+        scalarColorPalette: "viridis",
+        shaderMonoColor: "#ffffff",
+        shaderVisible,
+        surfaceColorSource,
+        vectorBudget,
+        vectorCenteringEnabled: true,
+        vectorColorMode: "orientation",
+        vectorLengthScale: 1,
+        vectorSurfaceOffsetEnabled: false,
+        vectorSurfaceOffsetScale: 0,
+        vectorsVisible,
+        viewportColorbarVisible: false,
+        visible: true,
+      },
+      targetId: part.id,
+      targetKind: "airbox",
+    });
+    const partDemands = buildViewport3DPassDemands(plan, {
+      maxSamples: vectorBudget,
+      replayQuery,
+      scopeId: part.id,
+      scopeKind: "airbox",
+    });
+    demands.push(...partDemands);
+    const [plannedRequest] = planViewport3DFieldResourceRequests(partDemands);
+    const query = plannedRequest?.query ?? {
+      ...fieldQuery,
+      component: fieldQuery.component ?? "full",
+      scope_id: part.id,
+      scope_kind: "airbox" as const,
+    };
+    requests.set(part.id, {
+      consumers: plannedRequest?.consumers ?? [],
+      quantityId: resolveCanonicalQuantityId(quantityId),
+      query,
+      requestId:
+        plannedRequest?.requestId ??
+        buildViewport3DFieldResourceRequestId(quantityId, query),
+    });
+  }
+
+  return {
+    demands,
+    requests: new Map(
+      Array.from(requests).toSorted(([left], [right]) =>
+        left.localeCompare(right),
+      ),
+    ),
+  };
+}
+
+export function resolveViewport3DScopedPartVectorFieldDemandPlan({
+  getPartSettings,
+  maxVectorGlyphs,
+  magneticParts,
+  selectedSnapshotQuery,
+  vectorDomain,
+}: {
+  getPartSettings: (
+    part: Viewport3DPlanMeshPart,
+  ) => Viewport3DScopedPartFieldSettingsForPlanning;
+  maxVectorGlyphs: number;
+  magneticParts: readonly Viewport3DPlanPartModel[];
+  selectedSnapshotQuery?: FieldVectorQuery | null;
+  vectorDomain: string;
+}): Viewport3DScopedPartVectorFieldDemandPlan {
+  if (vectorDomain === "airbox_only") {
+    return {
+      demands: [],
+      requests: new Map(),
+    };
+  }
+
+  const visiblePartsByQuantity = new Map<string, number>();
+  const scalarPartsByQuantityAndMode = new Map<string, number>();
+  for (const partModel of magneticParts) {
+    const settings = getPartSettings(partModel.part);
+    if (!settings.visible) continue;
+    const quantityId = resolveCanonicalQuantityId(settings.activeQuantityId);
+    visiblePartsByQuantity.set(
+      quantityId,
+      (visiblePartsByQuantity.get(quantityId) ?? 0) + 1,
+    );
+    const surfaceColorMode = settings.shaderVisible
+      ? surfaceColorSourceToColorMode(settings.surfaceColorSource)
+      : null;
+    if (!surfaceColorMode) continue;
+    const groupKey = `${quantityId}\u0000${surfaceColorMode}`;
+    scalarPartsByQuantityAndMode.set(
+      groupKey,
+      (scalarPartsByQuantityAndMode.get(groupKey) ?? 0) + 1,
+    );
+  }
+
+  const demands: Viewport3DPassDemand[] = [];
+  const requests = new Map<string, Viewport3DFieldResourceRequest>();
+  for (const partModel of magneticParts) {
+    const settings = getPartSettings(partModel.part);
+    if (!settings.visible) continue;
+    const quantityId = resolveCanonicalQuantityId(settings.activeQuantityId);
+    const surfaceColorMode = settings.shaderVisible
+      ? surfaceColorSourceToColorMode(settings.surfaceColorSource)
+      : null;
+    const vectorsVisible =
+      settings.vectorsVisible && settings.vectorBudget > 0;
+    if (!surfaceColorMode && !vectorsVisible) continue;
+    const fieldRequest = resolveViewport3DScopedPartFieldRequest({
+      maxSamples: clampViewport3DInteractiveVectorBudgetForPlanning(
+        settings.vectorBudget,
+        maxVectorGlyphs,
+      ),
+      part: partModel.part,
+      quantityId,
+      replayQuery: selectedSnapshotQuery,
+      settings,
+    });
+    demands.push(...fieldRequest.demands);
+    if (
+      !vectorsVisible &&
+      surfaceColorMode &&
+      scalarPartsByQuantityAndMode.get(`${quantityId}\u0000${surfaceColorMode}`) ===
+        visiblePartsByQuantity.get(quantityId) &&
+      visiblePartsByQuantity.get(quantityId)! > 1
+    ) {
+      continue;
+    }
+    if (fieldRequest.request) {
+      requests.set(partModel.part.id, fieldRequest.request);
+    }
+  }
+
+  return {
+    demands,
+    requests: new Map(
+      Array.from(requests).toSorted(([left], [right]) =>
+        left.localeCompare(right),
+      ),
+    ),
+  };
+}
+
+export function resolveViewport3DTargetQuantityFieldDemandPlan({
+  fdmSettings,
+  getPartSettings,
+  magneticPartScopedFieldIds,
+  magneticParts,
+  maxVectorGlyphs,
+  primaryFieldQuantityId,
+  selectedSnapshotQuery,
+}: Viewport3DTargetQuantityFieldRequestsOptions): Viewport3DTargetQuantityFieldDemandPlan {
+  const demands: Viewport3DPassDemand[] = [];
+
+  for (const partModel of magneticParts) {
+    if (magneticPartScopedFieldIds.has(partModel.part.id)) continue;
+    const settings = getPartSettings(partModel.part);
+    const quantityId = resolveCanonicalQuantityId(settings.activeQuantityId);
+    if (
+      sameViewport3DQuantityIdForPlanning(quantityId, primaryFieldQuantityId) ||
+      !settings.visible ||
+      (!settings.shaderVisible && !settings.vectorsVisible)
+    ) {
+      continue;
+    }
+    demands.push(
+      ...buildViewport3DPassDemands(
+        buildViewport3DTargetRenderPlan({
+          label: partModel.part.label ?? partModel.part.id,
+          quantityId,
+          settings,
+          targetId: partModel.part.id,
+          targetKind: "part",
+        }),
+        {
+          maxSamples: clampViewport3DInteractiveVectorBudgetForPlanning(
+            settings.vectorBudget,
+            maxVectorGlyphs,
+          ),
+          replayQuery: selectedSnapshotQuery,
+          scopeId: null,
+          scopeKind: "full",
+        },
+      ),
+    );
+  }
+
+  if (
+    fdmSettings &&
+    !sameViewport3DQuantityIdForPlanning(
+      fdmSettings.activeQuantityId,
+      primaryFieldQuantityId,
+    ) &&
+    fdmSettings.visible &&
+    (fdmSettings.shaderVisible || fdmSettings.vectorsVisible)
+  ) {
+    const quantityId = resolveCanonicalQuantityId(fdmSettings.activeQuantityId);
+    demands.push(
+      ...buildViewport3DPassDemands(
+        buildViewport3DTargetRenderPlan({
+          label: "FDM domain",
+          quantityId,
+          settings: fdmSettings,
+          targetId: "fdm-domain",
+          targetKind: "fdm-domain",
+        }),
+        {
+          maxSamples: clampViewport3DInteractiveVectorBudgetForPlanning(
+            fdmSettings.vectorBudget,
+            maxVectorGlyphs,
+          ),
+          replayQuery: selectedSnapshotQuery,
+          scopeId: null,
+          scopeKind: "full",
+        },
+      ),
+    );
+  }
+
+  const requests = planViewport3DFieldResourceRequests(demands);
+  return {
+    demands,
+    requests: new Map(
+      requests
+        .filter((request) =>
+          !sameViewport3DQuantityIdForPlanning(
+            request.quantityId,
+            primaryFieldQuantityId,
+          ),
+        )
+        .map((request): [string, Viewport3DFieldResourceRequest] => [
+          request.requestId,
+          request,
+        ])
+        .toSorted(([left], [right]) => left.localeCompare(right)),
+    ),
+  };
 }
 
 export function buildViewport3DFieldResourceRequestId(
@@ -393,26 +884,72 @@ export function mergeViewport3DFieldVectorQueries(
   next: FieldVectorQuery,
 ): FieldVectorQuery {
   if (!current) return next;
-  const replayQuery = {
-    snapshot_id: next.snapshot_id ?? current.snapshot_id,
-    stage_id: next.stage_id ?? current.stage_id,
-    view: next.view ?? current.view,
-    phase_rad: next.phase_rad ?? current.phase_rad,
-  };
-  if (current.component === "full" || next.component === "full") {
+  const replayQuery = replayFieldQueryForMerge(current, next);
+  const scopeQuery = scopedFieldQueryForMerge(current, next);
+  const component =
+    current.component === "full" || next.component === "full"
+      ? "full"
+      : current.component === next.component
+        ? current.component
+        : "full";
+  if (component === "full") {
     return {
       component: "full",
-      scope_kind: "full",
+      ...scopeQuery,
       ...replayQuery,
     };
   }
-  return current.component === next.component
-    ? { ...current, ...replayQuery }
-    : {
-        component: "full",
-        scope_kind: "full",
-        ...replayQuery,
-      };
+  return {
+    component,
+    ...scopeQuery,
+    ...replayQuery,
+  };
+}
+
+function replayFieldQueryForMerge(
+  current: FieldVectorQuery,
+  next: FieldVectorQuery,
+): Pick<FieldVectorQuery, "phase_rad" | "snapshot_id" | "stage_id" | "view"> {
+  return dropUndefinedFieldQueryValues({
+    phase_rad: next.phase_rad ?? current.phase_rad,
+    snapshot_id: next.snapshot_id ?? current.snapshot_id,
+    stage_id: next.stage_id ?? current.stage_id,
+    view: next.view ?? current.view,
+  });
+}
+
+function scopedFieldQueryForMerge(
+  current: FieldVectorQuery,
+  next: FieldVectorQuery,
+): Pick<FieldVectorQuery, "scope_id" | "scope_kind"> {
+  const currentScopeKind = current.scope_kind ?? "full";
+  const nextScopeKind = next.scope_kind ?? "full";
+  const currentScopeId = current.scope_id ?? null;
+  const nextScopeId = next.scope_id ?? null;
+  if (
+    currentScopeKind === nextScopeKind &&
+    currentScopeId === nextScopeId
+  ) {
+    return dropUndefinedFieldQueryValues({
+      scope_id: currentScopeId ?? undefined,
+      scope_kind: currentScopeKind,
+    });
+  }
+  throw new Error(
+    [
+      "Cannot merge viewport 3D field queries for different scopes",
+      `${currentScopeKind}:${currentScopeId ?? "none"}`,
+      `${nextScopeKind}:${nextScopeId ?? "none"}`,
+    ].join(": "),
+  );
+}
+
+function dropUndefinedFieldQueryValues<T extends Partial<FieldVectorQuery>>(
+  query: T,
+): T {
+  return Object.fromEntries(
+    Object.entries(query).filter(([, value]) => value !== undefined),
+  ) as T;
 }
 
 function mergeFieldDemands(
@@ -431,6 +968,7 @@ function mergeFieldDemands(
       next.maxSamples,
       current.completeness === "complete" || next.completeness === "complete",
     ),
+    replayQuery: mergeReplayFieldQuery(current.replayQuery, next.replayQuery),
   };
 }
 
@@ -467,6 +1005,7 @@ function mergeMaxSamples(
 function fieldQueryForDemand(demand: Viewport3DPassDemand): FieldVectorQuery {
   const query: FieldVectorQuery = {
     component: demand.component === "none" ? "full" : demand.component,
+    ...dropUndefinedFieldQueryValues(demand.replayQuery ?? {}),
     scope_kind: demand.scopeKind,
   };
   if (demand.scopeId) query.scope_id = demand.scopeId;
@@ -477,12 +1016,263 @@ function fieldQueryForDemand(demand: Viewport3DPassDemand): FieldVectorQuery {
   return query;
 }
 
+function resolveViewport3DPrimaryFieldPassDemands({
+  fdmInstanceModelNeedsFieldVector,
+  fdmSurfaceColorMode,
+  fdmTopographyEnabled,
+  fdmVectorsVisible,
+  fieldRenderOptions,
+  primaryFieldQuantityId,
+  snapshotId,
+  snapshotQuery,
+}: Viewport3DPrimaryFieldQueryOptions & {
+  primaryFieldQuantityId: string;
+  snapshotId?: string | null;
+  snapshotQuery?: FieldVectorQuery | null;
+}): Viewport3DPassDemand[] {
+  const replayQuery = snapshotQuery ?? (snapshotId ? { snapshot_id: snapshotId } : null);
+  const demands: Viewport3DPassDemand[] = [];
+  const scalarFieldComponentRequest = resolveViewport3DScalarComponentRequest(
+    fieldRenderOptions.scalarColorsVisible === false
+      ? null
+      : fieldRenderOptions.scalarColorModes,
+    fdmSurfaceColorMode,
+  );
+  if (
+    fieldRenderOptions.scalarColorsVisible !== false &&
+    (scalarFieldComponentRequest.component ||
+      scalarFieldComponentRequest.needsFullVector)
+  ) {
+    demands.push({
+      component: scalarFieldComponentRequest.needsFullVector
+        ? "full"
+        : scalarFieldComponentRequest.component ?? "full",
+      completeness: "complete",
+      maxSamples: null,
+      passId: "primary-field:surface",
+      passKind: "surface",
+      quantityId: primaryFieldQuantityId,
+      replayQuery,
+      scopeId: null,
+      scopeKind: "full",
+      targetId: "primary-field",
+    });
+  }
+
+  if (
+    fdmVectorsVisible ||
+    fdmTopographyEnabled ||
+    fdmInstanceModelNeedsFieldVector ||
+    (fieldRenderOptions.fullVectorBudget ?? 0) > 0 ||
+    mapHasPositiveValue(fieldRenderOptions.partVectorBudgets)
+  ) {
+    demands.push({
+      component: "full",
+      completeness: "complete",
+      maxSamples: null,
+      passId: "primary-field:vector-glyph",
+      passKind: "vector-glyph",
+      quantityId: primaryFieldQuantityId,
+      replayQuery,
+      scopeId: null,
+      scopeKind: "full",
+      targetId: "primary-field",
+    });
+  }
+
+  return demands;
+}
+
+function resolveViewport3DScopedPartFieldRequest({
+  maxSamples,
+  part,
+  quantityId,
+  replayQuery,
+  settings,
+}: {
+  maxSamples: number;
+  part: Viewport3DPlanMeshPart;
+  quantityId: string;
+  replayQuery?: FieldVectorQuery | null;
+  settings: Viewport3DScopedPartFieldSettingsForPlanning;
+}): Viewport3DScopedPartFieldDemandPlan {
+  const plan = buildViewport3DTargetRenderPlan({
+    label: part.label ?? part.id,
+    quantityId,
+    settings: {
+      geometryScope: "full",
+      scalarColorPalette: "viridis",
+      shaderMonoColor: "#ffffff",
+      shaderVisible: settings.shaderVisible,
+      surfaceColorSource: settings.surfaceColorSource,
+      vectorBudget: settings.vectorBudget,
+      vectorCenteringEnabled: true,
+      vectorColorMode: "orientation",
+      vectorLengthScale: 1,
+      vectorSurfaceOffsetEnabled: false,
+      vectorSurfaceOffsetScale: 0,
+      vectorsVisible: settings.vectorsVisible,
+      viewportColorbarVisible: false,
+      visible: settings.visible,
+    },
+    targetId: part.id,
+    targetKind: "part",
+  });
+  const demands = buildViewport3DPassDemands(plan, {
+    maxSamples,
+    replayQuery,
+    scopeId: part.id,
+    scopeKind: "part",
+  });
+  const [request] = planViewport3DFieldResourceRequests(demands);
+  return {
+    demands,
+    request: request ?? null,
+  };
+}
+
+function viewport3DFieldRenderOptionsNeedFullVectorData(
+  options: Viewport3DPrimaryFieldRenderOptionsForPlanning,
+): boolean {
+  if ((options.fullVectorBudget ?? 0) > 0) return true;
+  if (mapHasPositiveValue(options.partVectorBudgets)) return true;
+
+  if (options.scalarColorsVisible === false) return false;
+  return resolveViewport3DScalarComponentRequest(options.scalarColorModes, null)
+    .needsFullVector;
+}
+
+function mapHasPositiveValue(
+  values: ReadonlyMap<string, number> | null | undefined,
+): boolean {
+  if (!values) return false;
+  for (const value of values.values()) {
+    if (value > 0) return true;
+  }
+  return false;
+}
+
+function clampViewport3DInteractiveVectorBudgetForPlanning(
+  requestedBudget: number,
+  maxVectorGlyphs: number,
+): number {
+  const requested = Math.max(0, Math.floor(requestedBudget));
+  const max = Math.max(0, Math.floor(maxVectorGlyphs));
+  if (requested <= 0 || max <= 0) return 0;
+  return Math.min(requested, max);
+}
+
+function sameViewport3DQuantityIdForPlanning(left: string, right: string): boolean {
+  return (
+    resolveCanonicalQuantityId(left) === resolveCanonicalQuantityId(right)
+  );
+}
+
 function fieldDemandBaseKey(demand: Viewport3DPassDemand): string {
   return [
     resolveCanonicalQuantityId(demand.quantityId),
     demand.scopeKind,
     demand.scopeId ?? "",
+    replayFieldQueryKey(demand.replayQuery),
   ].join("\u0000");
+}
+
+function targetFieldDemandDiagnosticSummary(
+  summaries: Map<string, {
+    demands: string[];
+    requestKeys: Set<string>;
+    requests: string[];
+  }>,
+  targetId: string,
+): {
+  demands: string[];
+  requestKeys: Set<string>;
+  requests: string[];
+} {
+  const current = summaries.get(targetId);
+  if (current) return current;
+  const summary = {
+    demands: [],
+    requestKeys: new Set<string>(),
+    requests: [],
+  };
+  summaries.set(targetId, summary);
+  return summary;
+}
+
+function summarizeViewport3DPassDemand(
+  demand: Viewport3DPassDemand,
+): string {
+  const parts = [
+    demand.passKind,
+    demand.component,
+    demand.completeness,
+  ];
+  const summary = parts.join(":");
+  return demand.maxSamples != null
+    ? `${summary} max_samples=${Math.max(0, Math.floor(demand.maxSamples))}`
+    : summary;
+}
+
+function normalizeReplayFieldQuery(
+  query: Viewport3DReplayFieldQuery | null | undefined,
+): Viewport3DReplayFieldQuery | null {
+  const normalized = dropUndefinedFieldQueryValues({
+    phase_rad: query?.phase_rad,
+    snapshot_id: query?.snapshot_id,
+    stage_id: query?.stage_id,
+    view: query?.view,
+  });
+  return Object.keys(normalized).length > 0 ? normalized : null;
+}
+
+function mergeReplayFieldQuery(
+  current: Viewport3DReplayFieldQuery | null,
+  next: Viewport3DReplayFieldQuery | null,
+): Viewport3DReplayFieldQuery | null {
+  const currentKey = replayFieldQueryKey(current);
+  const nextKey = replayFieldQueryKey(next);
+  if (currentKey === nextKey) return current ?? next;
+  throw new Error(
+    [
+      "Cannot merge viewport 3D field demands for different replay queries",
+      currentKey,
+      nextKey,
+    ].join(": "),
+  );
+}
+
+function replayFieldQueryKey(
+  query: Viewport3DReplayFieldQuery | null,
+): string {
+  const normalized = normalizeReplayFieldQuery(query);
+  if (!normalized) return "live";
+  return [
+    normalized.snapshot_id ? `snapshot=${normalized.snapshot_id}` : null,
+    normalized.stage_id ? `stage=${normalized.stage_id}` : null,
+    normalized.view ? `view=${normalized.view}` : null,
+    normalized.phase_rad != null ? `phase=${normalized.phase_rad}` : null,
+  ].filter(Boolean).join("|") || "live";
+}
+
+function summarizeViewport3DFieldResourceRequest(
+  request: Viewport3DFieldResourceRequest,
+): string {
+  const query = request.query;
+  const parts = [
+    `quantity=${resolveCanonicalQuantityId(request.quantityId)}`,
+    `component=${query.component ?? "full"}`,
+    `scope=${query.scope_kind ?? "full"}:${query.scope_id ?? "none"}`,
+  ];
+  if (query.max_samples != null) {
+    parts.push(`max_samples=${Math.max(0, Math.floor(query.max_samples))}`);
+  }
+  if (query.snapshot_id) parts.push(`snapshot_id=${query.snapshot_id}`);
+  if (query.stage_id) parts.push(`stage_id=${query.stage_id}`);
+  if (query.view) parts.push(`view=${query.view}`);
+  if (query.phase_rad != null) parts.push(`phase_rad=${query.phase_rad}`);
+  parts.push(`consumers=${request.consumers.join(",")}`);
+  return parts.join(" ");
 }
 
 function componentDemandForColorMode(

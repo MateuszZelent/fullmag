@@ -3,6 +3,9 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import type { DecodedFieldVector } from "@/kernel/api/codecs";
+
+import { buildViewport3DTargetFieldBuffer } from "../model/viewport3DTargetFieldBuffer";
 import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
 import type { Viewport3DFieldRenderModel } from "../viewport3dRenderModel";
 import {
@@ -12,6 +15,7 @@ import {
   filterViewport3DChunkedScalarColorEntries,
   mergeViewport3DFieldScalarColors,
   resolveViewport3DChunkedFieldColorTarget,
+  resolveViewport3DChunkedPartFieldInput,
   resolveViewport3DChunkedPartDisplayModesKey,
   shouldBuildViewport3DPartChunkedScalarColor,
   shouldStartChunkedScalarColorBuild,
@@ -35,6 +39,21 @@ function colorBuffer(value: number): ScalarColorBuffer {
   return {
     colors: new Float32Array([value, value, value]),
     range: { max: value, min: value },
+  };
+}
+
+function fieldVectorFixture(
+  quantityId: string,
+  pointCount = 75_000,
+): DecodedFieldVector {
+  return {
+    dtype: "float64",
+    grid: [pointCount, 1, 1],
+    nComp: 3,
+    pointCount,
+    quantityId,
+    valueCount: pointCount * 3,
+    values: new Float64Array(pointCount * 3),
   };
 }
 
@@ -167,6 +186,7 @@ describe("useViewport3DChunkedScalarColors", () => {
     const asyncOrientation = colorBuffer(2);
     const base: Viewport3DFieldRenderModel = {
       complexFieldVector: null,
+      derivedWorkItems: [],
       fullVectorBuild: null,
       fullVectorSegments: null,
       partVectorBuilds: new Map(),
@@ -174,6 +194,8 @@ describe("useViewport3DChunkedScalarColors", () => {
       scalarColors: sync,
       scalarColorsByPartAndMode: new Map(),
       scalarColorsByMode: new Map([["orientation", sync]]),
+      targetDiagnostics: [],
+      targetPasses: new Map(),
       visualizationPhaseRad: null,
     };
 
@@ -192,6 +214,7 @@ describe("useViewport3DChunkedScalarColors", () => {
     const asyncPartY = colorBuffer(3);
     const base: Viewport3DFieldRenderModel = {
       complexFieldVector: null,
+      derivedWorkItems: [],
       fullVectorBuild: null,
       fullVectorSegments: null,
       partVectorBuilds: new Map(),
@@ -201,6 +224,28 @@ describe("useViewport3DChunkedScalarColors", () => {
         ["part-a", new Map([["y", null]])],
       ]),
       scalarColorsByMode: new Map([["orientation", sync]]),
+      targetDiagnostics: [],
+      targetPasses: new Map([
+        [
+          "part-a",
+          {
+            fieldBuffer: null,
+            fieldBufferState: "target-buffer",
+            surface: {
+              passId: "test:surface",
+              degradation: "surface-colors-unavailable",
+              scalarColorMode: "y",
+              scalarColors: null,
+            },
+            vectors: {
+              passId: "test:vector-glyph",
+              buildReference: null,
+              degradation: null,
+              segments: null,
+            },
+          },
+        ],
+      ]),
       visualizationPhaseRad: null,
     };
 
@@ -215,6 +260,47 @@ describe("useViewport3DChunkedScalarColors", () => {
       asyncPartY,
     );
     expect(result?.scalarColorsByMode.get("orientation")).toBe(sync);
+    expect(result?.targetPasses.get("part-a")?.surface).toMatchObject({
+      degradation: null,
+      scalarColors: asyncPartY,
+    });
+    expect(result?.targetDiagnostics).toEqual([
+      {
+        buffers: ["state=target-buffer"],
+        degradation: [],
+        demand: "surface:y",
+        derivedWork: [],
+        passes: ["surface"],
+        requests: [],
+        retained: [],
+        targetId: "part-a",
+      },
+    ]);
+  });
+
+  it("prefers capability-tagged target buffers over legacy part field vectors", () => {
+    const legacyFieldVector = fieldVectorFixture("m");
+    const targetFieldVector = fieldVectorFixture("H_eff");
+    const targetBuffer = buildViewport3DTargetFieldBuffer({
+      fieldVector: targetFieldVector,
+      query: {
+        component: "full",
+        scope_id: "part-a",
+        scope_kind: "part",
+      },
+      targetIds: ["part-a"],
+    });
+
+    const input = resolveViewport3DChunkedPartFieldInput({
+      fieldVector: null,
+      partFieldVectors: new Map([["part-a", legacyFieldVector]]),
+      partId: "part-a",
+      partTargetFieldBuffers: new Map([["part-a", targetBuffer]]),
+    });
+
+    expect(input.explicitPartFieldBuffer).toBe(targetBuffer);
+    expect(input.explicitPartFieldVector).toBe(targetFieldVector);
+    expect(input.partFieldVector).toBe(targetFieldVector);
   });
 
   it("keeps chunked buffers out of React state and clears them on cleanup", () => {
@@ -460,7 +546,7 @@ describe("useViewport3DChunkedScalarColors", () => {
   it("builds part-specific chunked colors from the primary field when part range or palette differs", () => {
     const source = readFileSync(sourceUrl, "utf8");
 
-    expect(source).toContain("explicitPartFieldVector ?? fieldVector ?? null");
+    expect(source).toContain("resolveViewport3DTargetFieldInput");
     expect(source).toContain("shouldBuildViewport3DPartChunkedScalarColor");
     expect(source).toContain(
       "resolveViewport3DChunkedFieldColorTarget(topology, partFieldVector)",

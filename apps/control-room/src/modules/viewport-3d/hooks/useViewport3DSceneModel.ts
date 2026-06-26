@@ -98,7 +98,6 @@ import {
   viewport3DAirboxVectorsVisible,
 } from "./useViewport3DFieldRenderOptions";
 import {
-  FULL_FIELD_QUERY,
   buildHysteresisReplayGlyphModel,
   resolveHysteresisReplayMeshCompatibility,
   resolveHysteresisStepViewportTarget,
@@ -109,12 +108,31 @@ import {
   type HysteresisReplayMeshCompatibility,
 } from "../model/viewport3DTargets";
 import {
+  buildViewport3DTargetRenderPlan,
+  buildViewport3DFieldResourceRequestId,
+  mergeViewport3DFieldVectorQueries,
+  resolveViewport3DAirboxFieldVectorDemandPlan,
+  resolveViewport3DPrimaryFieldDemandPlan,
   resolveViewport3DScalarComponentRequest,
   resolveViewport3DScopedFieldQuery,
+  resolveViewport3DScopedPartVectorFieldDemandPlan,
+  resolveViewport3DTargetQuantityFieldDemandPlan,
   resolveViewport3DTargetFieldQuery as resolveViewport3DTargetFieldQueryFromPlan,
+  summarizeViewport3DFieldDemandDiagnostics,
+  type Viewport3DFieldDemandDiagnosticSummary,
+  type Viewport3DFieldResourceRequest,
+  type Viewport3DTargetRenderPlan,
+} from "../model/viewport3DFieldDataPlan";
+export {
+  resolveViewport3DAirboxFieldVectorDemandPlan,
+  resolveViewport3DPrimaryFieldDemandPlan,
+  resolveViewport3DPrimaryFieldQuery,
+  resolveViewport3DScopedPartVectorFieldDemandPlan,
+  resolveViewport3DTargetQuantityFieldDemandPlan,
 } from "../model/viewport3DFieldDataPlan";
 import {
   buildViewport3DTargetFieldBuffer,
+  resolveViewport3DTargetFieldInput,
   type Viewport3DTargetFieldBuffer,
 } from "../model/viewport3DTargetFieldBuffer";
 import {
@@ -175,12 +193,12 @@ import {
 } from "../viewport3dRenderModel";
 import {
   getViewport3DCacheStats as getCacheStats,
-  resolveViewport3DAirboxFieldVectorQuery,
-  resolveViewport3DFieldVectorResourceKey,
+  resolveViewport3DFieldVectorRequestResourceKey,
   useViewport3DAirboxFieldVectors,
   useViewport3DDomainMeta,
   useViewport3DDomainTopology,
   useViewport3DFieldVector,
+  useViewport3DFieldVectorRequest,
   useViewport3DMeshQualityData,
   useViewport3DPartFieldVectors,
   useViewport3DQuantityFieldVectors,
@@ -311,10 +329,12 @@ export function mergeViewport3DPartScalarRanges({
   baseRanges,
   partFieldVectors,
   partScalarColorModes,
+  partTargetFieldBuffers,
 }: {
   baseRanges?: ReadonlyMap<string, ReadonlyMap<string, ScalarRange>> | null;
   partFieldVectors: ReadonlyMap<string, DecodedFieldVector>;
   partScalarColorModes?: ReadonlyMap<string, string> | null;
+  partTargetFieldBuffers?: ReadonlyMap<string, Viewport3DTargetFieldBuffer> | null;
 }): ReadonlyMap<string, ReadonlyMap<string, ScalarRange>> {
   const mergedRanges = new Map<string, Map<string, ScalarRange>>();
   if (baseRanges) {
@@ -323,7 +343,11 @@ export function mergeViewport3DPartScalarRanges({
     }
   }
 
-  for (const [partId, fieldVector] of partFieldVectors) {
+  const partIds = new Set([
+    ...partFieldVectors.keys(),
+    ...(partTargetFieldBuffers?.keys() ?? []),
+  ]);
+  for (const partId of partIds) {
     const scalarColorMode = partScalarColorModes?.get(partId);
     if (
       !scalarColorMode ||
@@ -333,6 +357,13 @@ export function mergeViewport3DPartScalarRanges({
     ) {
       continue;
     }
+    const fieldVector = resolveViewport3DTargetFieldInput({
+      fallbackFieldVector: null,
+      legacyPartFieldVectors: partFieldVectors,
+      partId,
+      targetFieldBuffers: partTargetFieldBuffers ?? undefined,
+    }).fieldVector;
+    if (!fieldVector) continue;
     const rangesByMode = mergedRanges.get(partId) ?? new Map<string, ScalarRange>();
     if (rangesByMode.has(scalarColorMode)) {
       mergedRanges.set(partId, rangesByMode);
@@ -348,6 +379,345 @@ export function mergeViewport3DPartScalarRanges({
       new Map(rangesByMode),
     ]),
   );
+}
+
+export function mergeViewport3DPrimaryTargetFieldBuffers({
+  fieldRenderOptions,
+  fieldRevision = null,
+  fieldVector,
+  getPartSettings,
+  primaryFieldQuantityId,
+  primaryFieldRequest,
+  topology,
+  topologyRevision = null,
+}: {
+  fieldRenderOptions: Viewport3DFieldRenderOptions;
+  fieldRevision?: string | null;
+  fieldVector: DecodedFieldVector | null;
+  getPartSettings: (part: Viewport3DMeshPart) => VisualizationTargetSettings;
+  primaryFieldQuantityId: string;
+  primaryFieldRequest: Viewport3DFieldResourceRequest;
+  topology:
+    | Pick<
+        Viewport3DTopologyRenderModel<Viewport3DMeshPart>,
+        "magneticParts"
+      >
+    | null;
+  topologyRevision?: string | null;
+}): Viewport3DFieldRenderOptions {
+  if (!fieldVector || !topology) {
+    return fieldRenderOptions;
+  }
+
+  let changed = false;
+  const partFieldVectors = new Map(fieldRenderOptions.partFieldVectors);
+  const partTargetFieldBuffers = new Map(
+    fieldRenderOptions.partTargetFieldBuffers,
+  );
+
+  for (const partModel of topology.magneticParts) {
+    const partId = partModel.part.id;
+    if (partFieldVectors.has(partId) || partTargetFieldBuffers.has(partId)) {
+      continue;
+    }
+
+    const settings = getPartSettings(partModel.part);
+    if (
+      !settings.visible ||
+      (!settings.shaderVisible && !settings.vectorsVisible) ||
+      !sameViewport3DQuantityId(settings.activeQuantityId, primaryFieldQuantityId)
+    ) {
+      continue;
+    }
+
+    partTargetFieldBuffers.set(
+      partId,
+      buildViewport3DTargetFieldBuffer({
+        consumers: resolveViewport3DPrimaryTargetBufferConsumers({
+          partId,
+          primaryFieldRequest,
+          settings,
+        }),
+        fieldRevision,
+        fieldVector,
+        query: primaryFieldRequest.query,
+        targetIds: [partId],
+        topologyRevision,
+      }),
+    );
+    changed = true;
+  }
+
+  const normalizedPartFieldVectors =
+    partTargetFieldBuffers.size > 0
+      ? new Map<string, DecodedFieldVector>()
+      : partFieldVectors;
+  const normalized = normalizedPartFieldVectors.size !== partFieldVectors.size;
+
+  return changed || normalized
+    ? {
+        ...fieldRenderOptions,
+        ...(normalizedPartFieldVectors.size > 0
+          ? { partFieldVectors: normalizedPartFieldVectors }
+          : { partFieldVectors: undefined }),
+        partTargetFieldBuffers,
+      }
+    : fieldRenderOptions;
+}
+
+function resolveViewport3DPrimaryTargetBufferConsumers({
+  partId,
+  primaryFieldRequest,
+  settings,
+}: {
+  partId: string;
+  primaryFieldRequest: Viewport3DFieldResourceRequest;
+  settings: VisualizationTargetSettings;
+}): readonly string[] {
+  const consumers = new Set(primaryFieldRequest.consumers);
+  if (settings.visible && settings.shaderVisible) {
+    consumers.add(`${partId}:surface`);
+  }
+  if (
+    settings.visible &&
+    settings.vectorsVisible &&
+    settings.vectorBudget > 0
+  ) {
+    consumers.add(`${partId}:vector-glyph`);
+  }
+  return [...consumers].toSorted();
+}
+
+type Viewport3DResolvedFieldResourceRequest =
+  Pick<Viewport3DFieldResourceRequest, "query"> & {
+    consumers?: readonly string[];
+    quantityId?: string;
+  };
+
+export function resolveViewport3DResolvedPartFieldBuffers({
+  airboxFieldRevision = null,
+  airboxFieldVectorRequests,
+  airboxFieldVectors,
+  airboxQuantityCompatible = false,
+  airboxQuantityId = "m",
+  airboxSyntheticVectorsEnabled = false,
+  getPartSettings,
+  magneticPartFieldQueries,
+  magneticPartFieldRevision = null,
+  magneticPartFieldVectors,
+  targetQuantityFieldRequests,
+  targetQuantityFieldRevision = null,
+  targetQuantityFieldVectors,
+  topology,
+  topologyRevision = null,
+}: {
+  airboxFieldRevision?: ResourceRevision | null;
+  airboxFieldVectorRequests?: ReadonlyMap<
+    string,
+    Viewport3DResolvedFieldResourceRequest
+  >;
+  airboxFieldVectors?: ReadonlyMap<string, DecodedFieldVector> | null;
+  airboxQuantityCompatible?: boolean;
+  airboxQuantityId?: string | null;
+  airboxSyntheticVectorsEnabled?: boolean;
+  getPartSettings: (part: Viewport3DMeshPart) => VisualizationTargetSettings;
+  magneticPartFieldQueries?: ReadonlyMap<
+    string,
+    Viewport3DResolvedFieldResourceRequest
+  >;
+  magneticPartFieldRevision?: ResourceRevision | null;
+  magneticPartFieldVectors?: ReadonlyMap<string, DecodedFieldVector> | null;
+  targetQuantityFieldRequests?: ReadonlyMap<
+    string,
+    Viewport3DResolvedFieldResourceRequest
+  >;
+  targetQuantityFieldRevision?: ResourceRevision | null;
+  targetQuantityFieldVectors?: ReadonlyMap<string, DecodedFieldVector> | null;
+  topology:
+    | Pick<
+        Viewport3DTopologyRenderModel<Viewport3DMeshPart>,
+        "airboxParts" | "magneticParts" | "nodeCount"
+      >
+    | null
+    | undefined;
+  topologyRevision?: string | null;
+}): {
+  partFieldVectors: Map<string, DecodedFieldVector>;
+  partTargetFieldBuffers: Map<string, Viewport3DTargetFieldBuffer>;
+} {
+  const partFieldVectors = new Map<string, DecodedFieldVector>();
+  const partTargetFieldBuffers = new Map<string, Viewport3DTargetFieldBuffer>();
+  const resolvedTopologyRevision = topologyRevision ?? null;
+
+  const setResolvedPartFieldVector = ({
+    fieldRevision,
+    fieldVector,
+    partId,
+    request,
+  }: {
+    fieldRevision: ResourceRevision | null;
+    fieldVector: DecodedFieldVector;
+    partId: string;
+    request?: Viewport3DResolvedFieldResourceRequest | null;
+  }): void => {
+    if (!request) {
+      partFieldVectors.set(partId, fieldVector);
+      return;
+    }
+    partTargetFieldBuffers.set(
+      partId,
+      buildViewport3DTargetFieldBuffer({
+        consumers: request.consumers ?? [],
+        fieldRevision: fieldRevision == null ? null : String(fieldRevision),
+        fieldVector,
+        query: request.query,
+        targetIds: [partId],
+        topologyRevision: resolvedTopologyRevision,
+      }),
+    );
+  };
+
+  if (targetQuantityFieldVectors && topology) {
+    for (const partModel of topology.magneticParts) {
+      const partId = partModel.part.id;
+      const targetQuantityId = resolveCanonicalQuantityId(
+        getPartSettings(partModel.part).activeQuantityId,
+      );
+      const resolved = resolveViewport3DTargetQuantityFieldVectorForTarget({
+        fieldVectors: targetQuantityFieldVectors,
+        quantityId: targetQuantityId,
+        requests: targetQuantityFieldRequests,
+        targetId: partId,
+      });
+      if (!resolved) continue;
+      setResolvedPartFieldVector({
+        fieldRevision: targetQuantityFieldRevision,
+        fieldVector: resolved.fieldVector,
+        partId,
+        request: resolved.request,
+      });
+    }
+    if (airboxQuantityCompatible) {
+      const targetQuantityId = resolveCanonicalQuantityId(airboxQuantityId ?? "m");
+      for (const partModel of topology.airboxParts) {
+        const partId = partModel.part.id;
+        const resolved = resolveViewport3DTargetQuantityFieldVectorForTarget({
+          fieldVectors: targetQuantityFieldVectors,
+          quantityId: targetQuantityId,
+          requests: targetQuantityFieldRequests,
+          targetId: partId,
+        });
+        if (!resolved) continue;
+        setResolvedPartFieldVector({
+          fieldRevision: targetQuantityFieldRevision,
+          fieldVector: resolved.fieldVector,
+          partId,
+          request: resolved.request,
+        });
+      }
+    }
+  }
+
+  for (const [partId, fieldVector] of magneticPartFieldVectors ?? []) {
+    setResolvedPartFieldVector({
+      fieldRevision: magneticPartFieldRevision,
+      fieldVector,
+      partId,
+      request: magneticPartFieldQueries?.get(partId),
+    });
+  }
+
+  for (const [partId, fieldVector] of airboxFieldVectors ?? []) {
+    const request = airboxFieldVectorRequests?.get(partId);
+    if (!request) continue;
+    setResolvedPartFieldVector({
+      fieldRevision: airboxFieldRevision,
+      fieldVector,
+      partId,
+      request,
+    });
+  }
+
+  if (airboxSyntheticVectorsEnabled && topology) {
+    for (const partModel of topology.airboxParts) {
+      const partId = partModel.part.id;
+      if (partFieldVectors.has(partId) || partTargetFieldBuffers.has(partId)) {
+        continue;
+      }
+      const fieldVector = buildViewport3DAirboxSyntheticVectorField(
+        partModel.part,
+        topology.nodeCount,
+      );
+      if (!fieldVector) continue;
+      partTargetFieldBuffers.set(
+        partId,
+        buildViewport3DTargetFieldBuffer({
+          fieldVector,
+          query: {
+            component: "full",
+            scope_id: partId,
+            scope_kind: "airbox",
+          },
+          synthetic: true,
+          targetIds: [partId],
+          topologyRevision: resolvedTopologyRevision,
+        }),
+      );
+    }
+  }
+
+  return {
+    partFieldVectors:
+      partTargetFieldBuffers.size > 0
+        ? new Map<string, DecodedFieldVector>()
+        : partFieldVectors,
+    partTargetFieldBuffers,
+  };
+}
+
+function resolveViewport3DTargetQuantityFieldVectorForTarget({
+  fieldVectors,
+  quantityId,
+  requests,
+  targetId,
+}: {
+  fieldVectors: ReadonlyMap<string, DecodedFieldVector>;
+  quantityId: string;
+  requests?: ReadonlyMap<string, Viewport3DResolvedFieldResourceRequest>;
+  targetId: string;
+}): {
+  fieldVector: DecodedFieldVector;
+  request: Viewport3DResolvedFieldResourceRequest | null;
+} | null {
+  const canonicalQuantityId = resolveCanonicalQuantityId(quantityId);
+  for (const [requestId, request] of requests ?? []) {
+    if (!fieldVectors.has(requestId)) continue;
+    if (request.quantityId && !sameViewport3DQuantityId(
+      request.quantityId,
+      canonicalQuantityId,
+    )) {
+      continue;
+    }
+    const consumers = request.consumers ?? [];
+    if (
+      consumers.length > 0 &&
+      !consumers.some((consumer) => consumer.startsWith(`${targetId}:`))
+    ) {
+      continue;
+    }
+    return {
+      fieldVector: fieldVectors.get(requestId)!,
+      request,
+    };
+  }
+
+  const legacyFieldVector = fieldVectors.get(canonicalQuantityId) ?? null;
+  return legacyFieldVector
+    ? {
+        fieldVector: legacyFieldVector,
+        request: null,
+      }
+    : null;
 }
 
 function resolveViewport3DPartScalarRangeResourceKey(
@@ -866,19 +1236,6 @@ export interface Viewport3DFieldDataIssueInput {
   primaryFieldQuantityId: string;
 }
 
-export interface Viewport3DPrimaryFieldQueryOptions {
-  fdmInstanceModelNeedsFieldVector: boolean;
-  fdmSurfaceColorMode: string | null;
-  fdmTopographyEnabled: boolean;
-  fdmVectorsVisible: boolean;
-  fieldRenderOptions: Viewport3DFieldRenderOptions;
-}
-
-export interface Viewport3DScopedPartVectorFieldRequest {
-  quantityId: string;
-  query: FieldVectorQuery;
-}
-
 export function resolveViewport3DVisualizationQuantityId(
   state: VisualizationStateResource | null | undefined,
 ): string {
@@ -1038,47 +1395,6 @@ export function applyViewport3DFieldLayerDiagnosticOverrides(
   };
 }
 
-export function resolveViewport3DPrimaryFieldQuery({
-  fdmInstanceModelNeedsFieldVector,
-  fdmSurfaceColorMode,
-  fdmTopographyEnabled,
-  fdmVectorsVisible,
-  fieldRenderOptions,
-  snapshotQuery,
-  snapshotId,
-}: Viewport3DPrimaryFieldQueryOptions & {
-  snapshotId?: string | null;
-  snapshotQuery?: FieldVectorQuery | null;
-}): FieldVectorQuery {
-  const snapshotParams = snapshotQuery ?? (snapshotId ? { snapshot_id: snapshotId } : {});
-  const scalarFieldComponentRequest = resolveScalarFieldComponentRequest(
-    fieldRenderOptions.scalarColorsVisible === false
-      ? null
-      : fieldRenderOptions.scalarColorModes,
-    fdmSurfaceColorMode,
-  );
-  if (
-    fdmVectorsVisible ||
-    fdmTopographyEnabled ||
-    viewport3DFieldRenderOptionsNeedFullVectorData(fieldRenderOptions) ||
-    scalarFieldComponentRequest.needsFullVector
-  ) {
-    return { ...FULL_FIELD_QUERY, ...snapshotParams };
-  }
-
-  const component =
-    scalarFieldComponentRequest.component ??
-    (fdmInstanceModelNeedsFieldVector ? "magnitude" : null);
-
-  return component
-    ? {
-        component,
-        scope_kind: "full",
-        ...snapshotParams,
-      }
-    : { ...FULL_FIELD_QUERY, ...snapshotParams };
-}
-
 export function resolveViewport3DResourceFrameState({
   dataAvailable,
   error,
@@ -1147,11 +1463,19 @@ export function resolveViewport3DPrimaryFieldRenderOptions({
   fieldRenderOptions: Viewport3DFieldRenderOptions;
   getPartSettings: (part: Viewport3DMeshPart) => {
     activeQuantityId: string;
+    geometryScope?: "surface" | "full";
     scalarColorPalette?: string;
+    shaderMonoColor?: string;
     shaderVisible: boolean;
     surfaceColorSource: SurfaceColorSource;
     vectorBudget: number;
+    vectorCenteringEnabled?: boolean;
+    vectorColorMode?: "orientation" | "x" | "y" | "z" | "magnitude" | "monochrome";
+    vectorLengthScale?: number;
+    vectorSurfaceOffsetEnabled?: boolean;
+    vectorSurfaceOffsetScale?: number;
     vectorsVisible: boolean;
+    viewportColorbarVisible?: boolean;
     visible: boolean;
   };
   magneticParts: readonly { part: Viewport3DMeshPart }[];
@@ -1171,10 +1495,51 @@ export function resolveViewport3DPrimaryFieldRenderOptions({
     ? new Map<string, string>()
     : new Map(fieldRenderOptions.partScalarColorPalettes ?? []);
   const scalarColorModes = new Set<string>();
+  const targetRenderPlans = new Map<string, Viewport3DTargetRenderPlan>(
+    fieldRenderOptions.targetRenderPlans ?? [],
+  );
 
   for (const partModel of magneticParts) {
     const partId = partModel.part.id;
     const settings = getPartSettings(partModel.part);
+    const effectiveSurfaceColorSource =
+      analysisOverlayAppearance?.surfaceColorSource ?? settings.surfaceColorSource;
+    const effectiveVectorBudget =
+      analysisOverlayAppearance?.vectorBudget ?? settings.vectorBudget;
+    targetRenderPlans.set(
+      partId,
+      buildViewport3DTargetRenderPlan({
+        label: partModel.part.label ?? partId,
+        quantityId: analysisOverlayActive ? quantityId : settings.activeQuantityId,
+        settings: {
+          geometryScope: settings.geometryScope ?? "full",
+          scalarColorPalette:
+            analysisOverlayAppearance?.scalarColorPalette ??
+            settings.scalarColorPalette ??
+            fieldRenderOptions.partScalarColorPalettes?.get(partId) ??
+            fieldRenderOptions.scalarColorPalette ??
+            "viridis",
+          shaderMonoColor: settings.shaderMonoColor ?? "#ffffff",
+          shaderVisible:
+            analysisOverlayAppearance?.shaderVisible ?? settings.shaderVisible,
+          surfaceColorSource: effectiveSurfaceColorSource,
+          vectorBudget: effectiveVectorBudget,
+          vectorCenteringEnabled: settings.vectorCenteringEnabled ?? true,
+          vectorColorMode: settings.vectorColorMode ?? "magnitude",
+          vectorLengthScale: settings.vectorLengthScale ?? 1,
+          vectorSurfaceOffsetEnabled:
+            settings.vectorSurfaceOffsetEnabled ?? false,
+          vectorSurfaceOffsetScale: settings.vectorSurfaceOffsetScale ?? 0,
+          vectorsVisible:
+            magneticVectorsAllowed &&
+            (analysisOverlayAppearance?.vectorsVisible ?? settings.vectorsVisible),
+          viewportColorbarVisible: settings.viewportColorbarVisible ?? false,
+          visible: settings.visible,
+        },
+        targetId: partId,
+        targetKind: "part",
+      }),
+    );
     if (!settings.visible) {
       partVectorBudgets.delete(partId);
       continue;
@@ -1185,8 +1550,7 @@ export function resolveViewport3DPrimaryFieldRenderOptions({
     );
     if (analysisOverlayAppearance?.shaderVisible ?? settings.shaderVisible) {
       const scalarColorMode = surfaceColorSourceToColorMode(
-        analysisOverlayAppearance?.surfaceColorSource ??
-          settings.surfaceColorSource,
+        effectiveSurfaceColorSource,
       );
       if (scalarColorMode) {
         if (analysisOverlayActive || partUsesPrimaryQuantity) {
@@ -1204,14 +1568,12 @@ export function resolveViewport3DPrimaryFieldRenderOptions({
         }
       }
     }
-    const partVectorBudget =
-      analysisOverlayAppearance?.vectorBudget ?? settings.vectorBudget;
     if (
       magneticVectorsAllowed &&
       (analysisOverlayAppearance?.vectorsVisible ?? settings.vectorsVisible) &&
-      partVectorBudget > 0
+      effectiveVectorBudget > 0
     ) {
-      partVectorBudgets.set(partId, partVectorBudget);
+      partVectorBudgets.set(partId, effectiveVectorBudget);
     } else {
       partVectorBudgets.delete(partId);
     }
@@ -1225,6 +1587,8 @@ export function resolveViewport3DPrimaryFieldRenderOptions({
       partScalarColorModes.size > 0 ? partScalarColorModes : undefined,
     partScalarColorPalettes:
       partScalarColorPalettes.size > 0 ? partScalarColorPalettes : undefined,
+    targetRenderPlans:
+      targetRenderPlans.size > 0 ? targetRenderPlans : undefined,
     scalarColorPalette:
       analysisOverlayAppearance?.scalarColorPalette ??
       fieldRenderOptions.scalarColorPalette,
@@ -1251,6 +1615,22 @@ export function resolveViewport3DPrimaryFieldDataOptions(
       nextOptions = {
         ...nextOptions,
         partVectorBudgets,
+      };
+    }
+  }
+  if (options.targetRenderPlans && excludedPartIds.size > 0) {
+    const targetRenderPlans = new Map<string, Viewport3DTargetRenderPlan>();
+    for (const [targetId, plan] of options.targetRenderPlans) {
+      if (!excludedPartIds.has(targetId)) {
+        targetRenderPlans.set(targetId, plan);
+      }
+    }
+
+    if (targetRenderPlans.size !== options.targetRenderPlans.size) {
+      nextOptions = {
+        ...nextOptions,
+        targetRenderPlans:
+          targetRenderPlans.size > 0 ? targetRenderPlans : undefined,
       };
     }
   }
@@ -1308,9 +1688,12 @@ export function resolveViewport3DFieldRenderModelBuildOptions({
           partModel.part.id,
         );
         if (!colorMode || colorMode === "monochrome") return false;
-        const partFieldVector =
-          fieldRenderOptions.partFieldVectors?.get(partModel.part.id) ??
-          fieldVector;
+        const partFieldVector = resolveViewport3DTargetFieldInput({
+          fallbackFieldVector: fieldVector,
+          legacyPartFieldVectors: fieldRenderOptions.partFieldVectors,
+          partId: partModel.part.id,
+          targetFieldBuffers: fieldRenderOptions.partTargetFieldBuffers,
+        }).fieldVector;
         return (
           Boolean(partFieldVector) &&
           fieldTransformNeedsChunking(
@@ -1396,6 +1779,7 @@ export function resolveViewport3DScopedPartVectorFieldRequests({
   getPartSettings,
   maxVectorGlyphs,
   magneticParts,
+  selectedSnapshotQuery,
   vectorDomain,
 }: {
   getPartSettings: (part: Viewport3DMeshPart) => {
@@ -1408,123 +1792,59 @@ export function resolveViewport3DScopedPartVectorFieldRequests({
   };
   maxVectorGlyphs: number;
   magneticParts: readonly { part: Viewport3DMeshPart }[];
+  selectedSnapshotQuery?: FieldVectorQuery | null;
   vectorDomain: string;
-}): Map<string, Viewport3DScopedPartVectorFieldRequest> {
-  if (vectorDomain === "airbox_only") {
-    return new Map();
-  }
-
-  const visiblePartsByQuantity = new Map<string, number>();
-  const scalarPartsByQuantityAndMode = new Map<string, number>();
-  for (const partModel of magneticParts) {
-    const settings = getPartSettings(partModel.part);
-    if (!settings.visible) continue;
-    const quantityId = resolveCanonicalQuantityId(settings.activeQuantityId);
-    visiblePartsByQuantity.set(
-      quantityId,
-      (visiblePartsByQuantity.get(quantityId) ?? 0) + 1,
-    );
-    const surfaceColorMode = settings.shaderVisible
-      ? surfaceColorSourceToColorMode(settings.surfaceColorSource)
-      : null;
-    if (!surfaceColorMode) continue;
-    const groupKey = `${quantityId}\u0000${surfaceColorMode}`;
-    scalarPartsByQuantityAndMode.set(
-      groupKey,
-      (scalarPartsByQuantityAndMode.get(groupKey) ?? 0) + 1,
-    );
-  }
-
-  const requests = new Map<string, Viewport3DScopedPartVectorFieldRequest>();
-  for (const partModel of magneticParts) {
-    const settings = getPartSettings(partModel.part);
-    if (!settings.visible) {
-      continue;
-    }
-    const quantityId = resolveCanonicalQuantityId(settings.activeQuantityId);
-    const surfaceColorMode = settings.shaderVisible
-      ? surfaceColorSourceToColorMode(settings.surfaceColorSource)
-      : null;
-    const vectorsVisible =
-      settings.vectorsVisible && settings.vectorBudget > 0;
-    if (!surfaceColorMode && !vectorsVisible) continue;
-    if (
-      surfaceColorMode &&
-      scalarPartsByQuantityAndMode.get(`${quantityId}\u0000${surfaceColorMode}`) ===
-        visiblePartsByQuantity.get(quantityId) &&
-      visiblePartsByQuantity.get(quantityId)! > 1
-    ) {
-      continue;
-    }
-    requests.set(partModel.part.id, {
-      quantityId,
-      query: resolveViewport3DScopedVectorFieldQuery({
-        maxSamples: clampViewport3DInteractiveVectorBudget(
-          settings.vectorBudget,
-          maxVectorGlyphs,
-        ),
-        surfaceColorMode,
-        vectorsVisible,
-      }),
-    });
-  }
-
+}): Map<string, Viewport3DFieldResourceRequest> {
   return new Map(
-    Array.from(requests).toSorted(([left], [right]) =>
-      left.localeCompare(right),
-    ),
+    resolveViewport3DScopedPartVectorFieldDemandPlan({
+      getPartSettings: (part) => getPartSettings(part as Viewport3DMeshPart),
+      maxVectorGlyphs,
+      magneticParts,
+      selectedSnapshotQuery,
+      vectorDomain,
+    }).requests,
   );
 }
 
-function viewport3DFieldRenderOptionsNeedFullVectorData(
-  options: Viewport3DFieldRenderOptions,
-): boolean {
-  if ((options.fullVectorBudget ?? 0) > 0) return true;
-  if (mapHasPositiveValue(options.partVectorBudgets)) return true;
-
-  if (options.scalarColorsVisible === false) return false;
-  return resolveScalarFieldComponentRequest(options.scalarColorModes, null)
-    .needsFullVector;
+export function resolveViewport3DTargetQuantityFieldRequests({
+  fdmSettings,
+  getPartSettings,
+  magneticPartScopedFieldIds,
+  magneticParts,
+  maxVectorGlyphs,
+  primaryFieldQuantityId,
+  selectedSnapshotQuery,
+}: {
+  fdmSettings: VisualizationTargetSettings | null;
+  getPartSettings: (part: Viewport3DMeshPart) => VisualizationTargetSettings;
+  magneticPartScopedFieldIds: ReadonlySet<string>;
+  magneticParts: readonly { part: Viewport3DMeshPart }[];
+  maxVectorGlyphs: number;
+  primaryFieldQuantityId: string;
+  selectedSnapshotQuery?: FieldVectorQuery | null;
+}): Map<string, Viewport3DFieldResourceRequest> {
+  return new Map(
+    resolveViewport3DTargetQuantityFieldDemandPlan({
+      fdmSettings,
+      getPartSettings: (part) => getPartSettings(part as Viewport3DMeshPart),
+      magneticPartScopedFieldIds,
+      magneticParts,
+      maxVectorGlyphs,
+      primaryFieldQuantityId,
+      selectedSnapshotQuery,
+    }).requests,
+  );
 }
 
 function fieldColorModeScalarComponent(mode: string | null | undefined): string | null {
   return resolveViewport3DScalarComponentRequest(null, mode).component;
 }
 
-function resolveScalarFieldComponentRequest(
-  modes: ReadonlySet<string> | null | undefined,
-  additionalMode: string | null | undefined,
-): ReturnType<typeof resolveViewport3DScalarComponentRequest> {
-  return resolveViewport3DScalarComponentRequest(modes, additionalMode);
-}
-
-function mapHasPositiveValue(
-  values: ReadonlyMap<string, number> | null | undefined,
-): boolean {
-  if (!values) return false;
-  for (const value of values.values()) {
-    if (value > 0) return true;
-  }
-  return false;
-}
-
 export function mergeViewport3DFieldQuery(
   current: FieldVectorQuery | undefined,
   next: FieldVectorQuery,
 ): FieldVectorQuery {
-  if (!current) return next;
-  const replayQuery = {
-    snapshot_id: next.snapshot_id ?? current.snapshot_id,
-    stage_id: next.stage_id ?? current.stage_id,
-    view: next.view ?? current.view,
-    phase_rad: next.phase_rad ?? current.phase_rad,
-  };
-  if (current.component === "full" || next.component === "full") {
-    return resolveViewport3DReplayFieldQuery(FULL_FIELD_QUERY, replayQuery);
-  }
-  return current.component === next.component
-    ? resolveViewport3DReplayFieldQuery(current, replayQuery)
-    : resolveViewport3DReplayFieldQuery(FULL_FIELD_QUERY, replayQuery);
+  return mergeViewport3DFieldVectorQueries(current, next);
 }
 
 export function resolveViewport3DAnalysisComplexFieldQuery(
@@ -2276,98 +2596,86 @@ export function useViewport3DSceneModel({
       maxInteractiveVectorGlyphs,
     ],
   );
+  const airboxFieldDemandPlan = useMemo(
+    () =>
+      resolveViewport3DAirboxFieldVectorDemandPlan({
+        airboxParts: airboxFieldVectorParts,
+        fieldQuery: airboxFieldQuery,
+        quantityId: airboxSettings.activeQuantityId,
+        replayQuery: selectedSnapshotQuery,
+        shaderVisible: Boolean(airboxSurfaceColorMode),
+        surfaceColorSource: airboxSettings.surfaceColorSource,
+        vectorBudget: clampViewport3DInteractiveVectorBudget(
+          airboxSettings.vectorBudget,
+          maxInteractiveVectorGlyphs,
+        ),
+        vectorsVisible: airboxVectorsVisible,
+      }),
+    [
+      airboxFieldQuery,
+      airboxFieldVectorParts,
+      airboxSettings.activeQuantityId,
+      airboxSettings.surfaceColorSource,
+      airboxSettings.vectorBudget,
+      airboxSurfaceColorMode,
+      airboxVectorsVisible,
+      maxInteractiveVectorGlyphs,
+      selectedSnapshotQuery,
+    ],
+  );
+  const airboxFieldVectorRequests = airboxFieldDemandPlan.requests;
   const fdmSurfaceColorMode =
     fdmDomain && fdmSettings.visible && fdmSettings.shaderVisible
       ? surfaceColorSourceToColorMode(fdmSettings.surfaceColorSource)
       : null;
-  const magneticPartFieldQueries = useMemo(
+  const magneticPartFieldDemandPlan = useMemo(
     () =>
-      resolveViewport3DScopedPartVectorFieldRequests({
-        getPartSettings,
+      resolveViewport3DScopedPartVectorFieldDemandPlan({
+        getPartSettings: (part) => getPartSettings(part as Viewport3DMeshPart),
         maxVectorGlyphs: maxInteractiveVectorGlyphs,
         magneticParts: currentTopologyRenderModel?.magneticParts ?? [],
+        selectedSnapshotQuery,
         vectorDomain,
       }),
     [
       currentTopologyRenderModel?.magneticParts,
       getPartSettings,
       maxInteractiveVectorGlyphs,
+      selectedSnapshotQuery,
       vectorDomain,
     ],
   );
+  const magneticPartFieldQueries = magneticPartFieldDemandPlan.requests;
   const magneticPartScopedFieldIds = useMemo(
     () => new Set(magneticPartFieldQueries.keys()),
     [magneticPartFieldQueries],
   );
-  const targetQuantityFieldQueries = useMemo(() => {
-    if (!currentTopologyRenderModel) return new Map<string, FieldVectorQuery>();
-    const queries = new Map<string, FieldVectorQuery>();
-    const setQuery = (
-      targetQuantityId: string,
-      query: FieldVectorQuery | null,
-    ): void => {
-      if (!query) return;
-      queries.set(
-        targetQuantityId,
-        mergeViewport3DFieldQuery(queries.get(targetQuantityId), query),
-      );
-    };
-
-    for (const partModel of currentTopologyRenderModel.magneticParts) {
-      if (magneticPartScopedFieldIds.has(partModel.part.id)) {
-        continue;
-      }
-      const settings = getPartSettings(partModel.part);
-      if (
-        !sameViewport3DQuantityId(settings.activeQuantityId, primaryFieldQuantityId) &&
-        settings.visible &&
-        (settings.shaderVisible || settings.vectorsVisible)
-      ) {
-        const targetQuery = resolveViewport3DTargetFieldQuery({
-          surfaceColorMode: settings.shaderVisible
-            ? surfaceColorSourceToColorMode(settings.surfaceColorSource)
-            : null,
-          vectorsVisible: settings.vectorsVisible,
-        });
-        setQuery(
-          resolveCanonicalQuantityId(settings.activeQuantityId),
-          targetQuery
-            ? resolveViewport3DReplayFieldQuery(targetQuery, selectedSnapshotQuery)
-            : null,
-        );
-      }
+  const targetQuantityFieldDemandPlan = useMemo(() => {
+    if (!currentTopologyRenderModel) {
+      return {
+        demands: [],
+        requests: new Map<string, Viewport3DFieldResourceRequest>(),
+      };
     }
-    if (
-      !sameViewport3DQuantityId(fdmSettings.activeQuantityId, primaryFieldQuantityId) &&
-      fdmSettings.visible &&
-      (fdmSettings.shaderVisible || fdmSettings.vectorsVisible)
-    ) {
-      const targetQuery = resolveViewport3DTargetFieldQuery({
-        surfaceColorMode: fdmSurfaceColorMode,
-        vectorsVisible: fdmSettings.vectorsVisible,
-      });
-      setQuery(
-        resolveCanonicalQuantityId(fdmSettings.activeQuantityId),
-        targetQuery
-          ? resolveViewport3DReplayFieldQuery(targetQuery, selectedSnapshotQuery)
-          : null,
-      );
-    }
-    return new Map(Array.from(queries).toSorted(([left], [right]) =>
-      left.localeCompare(right),
-    ));
+    return resolveViewport3DTargetQuantityFieldDemandPlan({
+      fdmSettings,
+      getPartSettings: (part) => getPartSettings(part as Viewport3DMeshPart),
+      magneticPartScopedFieldIds,
+      magneticParts: currentTopologyRenderModel.magneticParts,
+      maxVectorGlyphs: maxInteractiveVectorGlyphs,
+      primaryFieldQuantityId,
+      selectedSnapshotQuery,
+    });
   }, [
     currentTopologyRenderModel,
-    fdmSettings.activeQuantityId,
-    fdmSettings.shaderVisible,
-    fdmSettings.vectorsVisible,
-    fdmSettings.visible,
-    fdmSurfaceColorMode,
+    fdmSettings,
     getPartSettings,
     magneticPartScopedFieldIds,
+    maxInteractiveVectorGlyphs,
     primaryFieldQuantityId,
     selectedSnapshotQuery,
   ]);
+  const targetQuantityFieldRequests = targetQuantityFieldDemandPlan.requests;
   const fieldUpdateHoldActive = useViewport3DFieldUpdateHoldActive();
   const magneticPartFieldVectors = useViewport3DPartFieldVectors(
     magneticPartFieldQueries,
@@ -2375,15 +2683,15 @@ export function useViewport3DSceneModel({
     { pauseLoad: fieldUpdateHoldActive },
   );
   const targetQuantityFieldVectors = useViewport3DQuantityFieldVectors(
-    targetQuantityFieldQueries,
-    targetQuantityFieldQueries.size > 0,
+    targetQuantityFieldRequests,
+    targetQuantityFieldRequests.size > 0,
     { pauseLoad: fieldUpdateHoldActive },
   );
   const airboxFieldVectors = useViewport3DAirboxFieldVectors(
     airboxSettings.activeQuantityId,
     airboxFieldVectorParts,
     airboxFieldVectorEnabled && airboxFieldVectorParts.length > 0,
-    airboxFieldQuery,
+    airboxFieldVectorRequests,
     { pauseLoad: fieldUpdateHoldActive },
   );
   const rawFieldRenderOptions = useViewport3DFieldRenderOptions({
@@ -2502,134 +2810,38 @@ export function useViewport3DSceneModel({
   );
   const resolvedFieldRenderOptions = useMemo(
     () => {
-      const partFieldVectors = new Map<string, DecodedFieldVector>();
-      const partTargetFieldBuffers = new Map<string, Viewport3DTargetFieldBuffer>();
-      if (targetQuantityFieldVectors.data && currentTopologyRenderModel) {
-        for (const partModel of currentTopologyRenderModel.magneticParts) {
-          const targetQuantityId = resolveCanonicalQuantityId(
-            getPartSettings(partModel.part).activeQuantityId,
-          );
-          const fieldVector = targetQuantityFieldVectors.data.get(targetQuantityId);
-          const query = targetQuantityFieldQueries.get(targetQuantityId);
-          if (fieldVector) {
-            partFieldVectors.set(partModel.part.id, fieldVector);
-            if (query) {
-              partTargetFieldBuffers.set(
-                partModel.part.id,
-                buildViewport3DTargetFieldBuffer({
-                  fieldRevision: targetQuantityFieldVectors.payloadRevision ?? null,
-                  fieldVector,
-                  query,
-                  targetIds: [partModel.part.id],
-                  topologyRevision:
-                    topology.revision == null ? null : String(topology.revision),
-                }),
-              );
-            }
-          }
-        }
-        if (airboxQuantityCompatible) {
-          for (const partModel of currentTopologyRenderModel.airboxParts) {
-            const targetQuantityId = resolveCanonicalQuantityId(
-              airboxSettings.activeQuantityId,
-            );
-            const fieldVector = targetQuantityFieldVectors.data.get(targetQuantityId);
-            const query = targetQuantityFieldQueries.get(targetQuantityId);
-            if (fieldVector) {
-              partFieldVectors.set(partModel.part.id, fieldVector);
-              if (query) {
-                partTargetFieldBuffers.set(
-                  partModel.part.id,
-                  buildViewport3DTargetFieldBuffer({
-                    fieldRevision: targetQuantityFieldVectors.payloadRevision ?? null,
-                    fieldVector,
-                    query,
-                    targetIds: [partModel.part.id],
-                    topologyRevision:
-                      topology.revision == null ? null : String(topology.revision),
-                  }),
-                );
-              }
-            }
-          }
-        }
-      }
-      if (magneticPartFieldVectors.data) {
-        for (const [partId, fieldVector] of magneticPartFieldVectors.data) {
-          partFieldVectors.set(partId, fieldVector);
-          const request = magneticPartFieldQueries.get(partId);
-          if (request) {
-            partTargetFieldBuffers.set(
-              partId,
-              buildViewport3DTargetFieldBuffer({
-                fieldRevision: magneticPartFieldVectors.payloadRevision ?? null,
-                fieldVector,
-                query: request.query,
-                targetIds: [partId],
-                topologyRevision:
-                  topology.revision == null ? null : String(topology.revision),
-              }),
-            );
-          }
-        }
-      }
-      if (airboxFieldVectors.data) {
-        for (const [partId, fieldVector] of airboxFieldVectors.data) {
-          partFieldVectors.set(partId, fieldVector);
-          partTargetFieldBuffers.set(
-            partId,
-            buildViewport3DTargetFieldBuffer({
-              fieldRevision: airboxFieldVectors.payloadRevision ?? null,
-              fieldVector,
-              query: resolveViewport3DAirboxFieldVectorQuery({
-                ...airboxFieldQuery,
-                scope_id: partId,
-              }),
-              targetIds: [partId],
-              topologyRevision:
-                topology.revision == null ? null : String(topology.revision),
-            }),
-          );
-        }
-      }
-      if (airboxSettings.airboxSyntheticVectorsEnabled && currentTopologyRenderModel) {
-        for (const partModel of currentTopologyRenderModel.airboxParts) {
-          if (partFieldVectors.has(partModel.part.id)) {
-            continue;
-          }
-          const fieldVector = buildViewport3DAirboxSyntheticVectorField(
-            partModel.part,
-            currentTopologyRenderModel.nodeCount,
-          );
-          if (fieldVector) {
-            partFieldVectors.set(partModel.part.id, fieldVector);
-            partTargetFieldBuffers.set(
-              partModel.part.id,
-              buildViewport3DTargetFieldBuffer({
-                fieldVector,
-                query: {
-                  component: "full",
-                  scope_id: partModel.part.id,
-                  scope_kind: "airbox",
-                },
-                synthetic: true,
-                targetIds: [partModel.part.id],
-                topologyRevision:
-                  topology.revision == null ? null : String(topology.revision),
-              }),
-            );
-          }
-        }
-      }
+      const { partFieldVectors, partTargetFieldBuffers } =
+        resolveViewport3DResolvedPartFieldBuffers({
+          airboxFieldRevision: airboxFieldVectors.payloadRevision ?? null,
+          airboxFieldVectorRequests,
+          airboxFieldVectors: airboxFieldVectors.data,
+          airboxQuantityCompatible,
+          airboxQuantityId: airboxSettings.activeQuantityId,
+          airboxSyntheticVectorsEnabled:
+            airboxSettings.airboxSyntheticVectorsEnabled,
+          getPartSettings,
+          magneticPartFieldQueries,
+          magneticPartFieldRevision:
+            magneticPartFieldVectors.payloadRevision ?? null,
+          magneticPartFieldVectors: magneticPartFieldVectors.data,
+          targetQuantityFieldRequests,
+          targetQuantityFieldRevision:
+            targetQuantityFieldVectors.payloadRevision ?? null,
+          targetQuantityFieldVectors: targetQuantityFieldVectors.data,
+          topology: currentTopologyRenderModel,
+          topologyRevision:
+            topology.revision == null ? null : String(topology.revision),
+        });
       const partScalarRangesByMode = mergeViewport3DPartScalarRanges({
         baseRanges: partScalarRanges.data,
         partFieldVectors,
         partScalarColorModes: primaryFieldRenderOptions.partScalarColorModes,
+        partTargetFieldBuffers,
       });
-      return partFieldVectors.size > 0
+      return partFieldVectors.size > 0 || partTargetFieldBuffers.size > 0
         ? {
             ...primaryFieldRenderOptions,
-            partFieldVectors,
+            ...(partFieldVectors.size > 0 ? { partFieldVectors } : {}),
             ...(partTargetFieldBuffers.size > 0
               ? { partTargetFieldBuffers }
               : {}),
@@ -2640,7 +2852,7 @@ export function useViewport3DSceneModel({
         : primaryFieldRenderOptions;
     },
     [
-      airboxFieldQuery,
+      airboxFieldVectorRequests,
       airboxFieldVectors.data,
       airboxFieldVectors.payloadRevision,
       airboxSettings.airboxSyntheticVectorsEnabled,
@@ -2655,7 +2867,7 @@ export function useViewport3DSceneModel({
       primaryFieldRenderOptions,
       targetQuantityFieldVectors.data,
       targetQuantityFieldVectors.payloadRevision,
-      targetQuantityFieldQueries,
+      targetQuantityFieldRequests,
       topology.revision,
     ],
   );
@@ -2700,17 +2912,30 @@ export function useViewport3DSceneModel({
       fieldRenderOptions: primaryFieldDataOptions,
       selectedSnapshotId,
     });
-  const primaryFieldQuery = useMemo(
+  const primaryFieldDemandPlan = useMemo(
     () => {
       if (analysisOverlay) {
-        return analysisOverlay.query;
+        const request: Viewport3DFieldResourceRequest = {
+          consumers: ["primary-field-vector"],
+          quantityId: primaryFieldQuantityId,
+          query: analysisOverlay.query,
+          requestId: buildViewport3DFieldResourceRequestId(
+            primaryFieldQuantityId,
+            analysisOverlay.query,
+          ),
+        };
+        return {
+          demands: [],
+          request,
+        };
       }
-      return resolveViewport3DPrimaryFieldQuery({
+      return resolveViewport3DPrimaryFieldDemandPlan({
         fdmInstanceModelNeedsFieldVector,
         fdmSurfaceColorMode,
         fdmTopographyEnabled,
         fdmVectorsVisible,
         fieldRenderOptions: primaryFieldDataOptions,
+        primaryFieldQuantityId,
         snapshotId: selectedSnapshotId,
         snapshotQuery: selectedSnapshotQuery,
       });
@@ -2722,17 +2947,49 @@ export function useViewport3DSceneModel({
       fdmTopographyEnabled,
       fdmVectorsVisible,
       primaryFieldDataOptions,
+      primaryFieldQuantityId,
       selectedSnapshotId,
       selectedSnapshotQuery,
     ],
   );
+  const primaryFieldRequest = primaryFieldDemandPlan.request;
+  const fieldDemandDiagnostics = useMemo<Viewport3DFieldDemandDiagnosticSummary[]>(
+    () =>
+      summarizeViewport3DFieldDemandDiagnostics({
+        demands: [
+          ...primaryFieldDemandPlan.demands,
+          ...magneticPartFieldDemandPlan.demands,
+          ...targetQuantityFieldDemandPlan.demands,
+          ...airboxFieldDemandPlan.demands,
+        ],
+        requests: [
+          primaryFieldDemandPlan.request,
+          ...magneticPartFieldDemandPlan.requests.values(),
+          ...targetQuantityFieldDemandPlan.requests.values(),
+          ...Array.from(airboxFieldDemandPlan.requests.values(), (request) => ({
+            consumers: request.consumers ?? [],
+            query: request.query,
+            quantityId: request.quantityId,
+            requestId:
+              request.requestId ??
+              buildViewport3DFieldResourceRequestId(
+                request.quantityId,
+                request.query,
+              ),
+          })),
+        ],
+      }),
+    [
+      airboxFieldDemandPlan,
+      magneticPartFieldDemandPlan,
+      primaryFieldDemandPlan,
+      targetQuantityFieldDemandPlan,
+    ],
+  );
   const fieldVectorResourceKey = useMemo(
     () =>
-      resolveViewport3DFieldVectorResourceKey(
-        primaryFieldQuantityId,
-        primaryFieldQuery,
-      ),
-    [primaryFieldQuery, primaryFieldQuantityId],
+      resolveViewport3DFieldVectorRequestResourceKey(primaryFieldRequest),
+    [primaryFieldRequest],
   );
   const hysteresisReplayMeshCompatibility = useMemo(
     () =>
@@ -2807,9 +3064,8 @@ export function useViewport3DSceneModel({
     primaryYFieldMeta.data,
     primaryZFieldMeta.data,
   ]);
-  const fieldVector = useViewport3DFieldVector(
-    primaryFieldQuantityId,
-    primaryFieldQuery,
+  const fieldVector = useViewport3DFieldVectorRequest(
+    primaryFieldRequest,
     fieldVectorEnabled,
     { pauseLoad: fieldUpdateHoldActive },
   );
@@ -2865,6 +3121,33 @@ export function useViewport3DSceneModel({
     ],
   );
   const committedFieldVector = fieldVector.data ?? null;
+  const primaryFieldRevision =
+    fieldVector.payloadRevision ?? fieldVector.revision;
+  const fieldRenderOptionsWithPrimaryTargetBuffers = useMemo(
+    () =>
+      mergeViewport3DPrimaryTargetFieldBuffers({
+        fieldRenderOptions: resolvedFieldRenderOptions,
+        fieldRevision:
+          primaryFieldRevision == null ? null : String(primaryFieldRevision),
+        fieldVector: committedFieldVector,
+        getPartSettings,
+        primaryFieldQuantityId,
+        primaryFieldRequest,
+        topology: currentTopologyRenderModel,
+        topologyRevision:
+          topology.revision == null ? null : String(topology.revision),
+      }),
+    [
+      committedFieldVector,
+      currentTopologyRenderModel,
+      getPartSettings,
+      primaryFieldQuantityId,
+      primaryFieldRequest,
+      primaryFieldRevision,
+      resolvedFieldRenderOptions,
+      topology.revision,
+    ],
+  );
   const analysisComplexField = useMemo(
     () => asDecodedComplexFieldVector(analysisComplexFieldVector.data),
     [analysisComplexFieldVector.data],
@@ -2872,9 +3155,14 @@ export function useViewport3DSceneModel({
   const fdmFieldVector =
     sameViewport3DQuantityId(fdmSettings.activeQuantityId, primaryFieldQuantityId)
       ? committedFieldVector
-      : targetQuantityFieldVectors.data?.get(
-          resolveCanonicalQuantityId(fdmSettings.activeQuantityId),
-        ) ?? null;
+      : targetQuantityFieldVectors.data
+        ? resolveViewport3DTargetQuantityFieldVectorForTarget({
+            fieldVectors: targetQuantityFieldVectors.data,
+            quantityId: fdmSettings.activeQuantityId,
+            requests: targetQuantityFieldRequests,
+            targetId: "fdm-domain",
+          })?.fieldVector ?? null
+        : null;
   const fdmFieldRevision =
     sameViewport3DQuantityId(fdmSettings.activeQuantityId, primaryFieldQuantityId)
       ? fieldVector.payloadRevision ?? fieldVector.revision
@@ -2967,14 +3255,18 @@ export function useViewport3DSceneModel({
     colorPalette:
       primaryFieldRenderOptions.scalarColorPalette ?? scalarColorPalette,
     enabled: primaryFieldRenderOptions.scalarColorsVisible !== false,
-    fieldRevision: fieldVector.payloadRevision ?? fieldVector.revision,
+    fieldRevision: primaryFieldRevision,
     fieldScalarRangesByMode,
     fieldVector: committedFieldVector,
-    partFieldVectors: resolvedFieldRenderOptions.partFieldVectors,
-    partTargetFieldBuffers: resolvedFieldRenderOptions.partTargetFieldBuffers,
-    partScalarColorModes: resolvedFieldRenderOptions.partScalarColorModes,
-    partScalarColorPalettes: resolvedFieldRenderOptions.partScalarColorPalettes,
-    partScalarRangesByMode: resolvedFieldRenderOptions.partScalarRangesByMode,
+    partFieldVectors: fieldRenderOptionsWithPrimaryTargetBuffers.partFieldVectors,
+    partTargetFieldBuffers:
+      fieldRenderOptionsWithPrimaryTargetBuffers.partTargetFieldBuffers,
+    partScalarColorModes:
+      fieldRenderOptionsWithPrimaryTargetBuffers.partScalarColorModes,
+    partScalarColorPalettes:
+      fieldRenderOptionsWithPrimaryTargetBuffers.partScalarColorPalettes,
+    partScalarRangesByMode:
+      fieldRenderOptionsWithPrimaryTargetBuffers.partScalarRangesByMode,
     targetVisualizationRevision: renderingState?.revision ?? null,
     topology: currentTopologyRenderModel,
     topologyRevision: topology.revision,
@@ -2983,7 +3275,7 @@ export function useViewport3DSceneModel({
     () =>
       resolveViewport3DFieldRenderModelBuildOptions({
         complexFieldVector: analysisComplexField,
-        fieldRenderOptions: resolvedFieldRenderOptions,
+        fieldRenderOptions: fieldRenderOptionsWithPrimaryTargetBuffers,
         fieldVector: committedFieldVector,
         topology: currentTopologyRenderModel,
       }),
@@ -2991,7 +3283,7 @@ export function useViewport3DSceneModel({
       analysisComplexField,
       committedFieldVector,
       currentTopologyRenderModel,
-      resolvedFieldRenderOptions,
+      fieldRenderOptionsWithPrimaryTargetBuffers,
     ],
   );
   const fieldRenderModel = useMemo(() => {
@@ -3057,10 +3349,12 @@ export function useViewport3DSceneModel({
   const diagnostics = buildViewport3DDiagnostics({
     airboxPartCount: femDomain.airboxParts.length,
     cache: getCacheStats(),
+    fieldDemandDiagnostics,
     fieldRevision: fieldVector.payloadRevision ?? fieldVector.revision,
     objectCount: femDomain.objectPartIds.size,
     quantityId: primaryFieldQuantityId,
     surfaceColorStatus: chunkedScalarColors.status,
+    targetDiagnostics: fieldRenderModel?.targetDiagnostics,
     topologyRevision: topology.revision,
     tracker: resourceCounts,
   });

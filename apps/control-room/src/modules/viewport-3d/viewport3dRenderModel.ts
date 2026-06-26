@@ -20,8 +20,19 @@ import {
 } from "./viewport3dFieldMapping";
 import { buildViewport3DVectorGlyphJobKey } from "./build-engine/viewport3dBuildJobKeys";
 import {
+  planViewport3DDerivedWorkItems,
+  type Viewport3DDerivedWorkItem,
+} from "./model/viewport3DDerivedWorkPlan";
+import type { Viewport3DTargetRenderPlan } from "./model/viewport3DFieldDataPlan";
+import {
+  summarizeViewport3DTargetDiagnostics,
+  type Viewport3DTargetDiagnosticSummary,
+} from "./model/viewport3DTargetDiagnostics";
+import {
+  resolveViewport3DTargetFieldInput,
   viewport3DTargetFieldBufferCanServeSurface,
   viewport3DTargetFieldBufferCanServeVectors,
+  viewport3DTargetFieldBufferMatchesQuantity,
   type Viewport3DTargetFieldBuffer,
 } from "./model/viewport3DTargetFieldBuffer";
 import {
@@ -41,6 +52,8 @@ export {
   buildTetraSurfaceIndices,
   buildTetraVolumeEdgeIndices,
 } from "./viewport3dTopologyIndexModel";
+
+export const FULL_VIEWPORT_3D_TARGET_ID = "full";
 
 export interface Viewport3DNodeSelection {
   nodeCount?: number;
@@ -110,6 +123,7 @@ export interface Viewport3DTopologyRenderModelOptions {
 
 export interface Viewport3DFieldRenderModel {
   complexFieldVector: DecodedComplexFieldVector | null;
+  derivedWorkItems: Viewport3DDerivedWorkItem[];
   fullVectorBuild: Viewport3DVectorBuildReference | null;
   fullVectorSegments: Float32Array | null;
   partVectorBuilds: Map<string, Viewport3DVectorBuildReference | null>;
@@ -117,7 +131,59 @@ export interface Viewport3DFieldRenderModel {
   scalarColors: ScalarColorBuffer | null;
   scalarColorsByPartAndMode: Map<string, Map<string, ScalarColorBuffer | null>>;
   scalarColorsByMode: Map<string, ScalarColorBuffer | null>;
+  targetDiagnostics: Viewport3DTargetDiagnosticSummary[];
+  targetPasses: Map<string, Viewport3DTargetRenderPassModel>;
   visualizationPhaseRad: number | null;
+}
+
+export type Viewport3DTargetFieldBufferState =
+  | "derived-global"
+  | "legacy-implicit"
+  | "missing"
+  | "target-buffer";
+
+export type Viewport3DTargetPassDegradation =
+  | "buffer-quantity-mismatch"
+  | "buffer-not-surface-capable"
+  | "buffer-not-vector-capable"
+  | "sampled-buffer-not-surface-capable"
+  | "scalar-buffer-not-vector-capable"
+  | "surface-colors-unavailable"
+  | "vector-segments-unavailable";
+
+export interface Viewport3DTargetFieldBufferSource {
+  bufferId: string;
+  capability: Viewport3DTargetFieldBuffer["capability"];
+  component: Viewport3DTargetFieldBuffer["component"];
+  consumers: readonly string[];
+  fieldRevision: string | null;
+  pointCount: number;
+  quantityId: string;
+  requestId: string | null;
+  sampled: boolean;
+  scopeId: string | null;
+  scopeKind: Viewport3DTargetFieldBuffer["scopeKind"];
+  topologyRevision: string | null;
+  componentCount: number;
+  values: Viewport3DTargetFieldBuffer["values"];
+  vectorComponentCount: number;
+}
+
+export interface Viewport3DTargetRenderPassModel {
+  fieldBuffer: Viewport3DTargetFieldBufferSource | null;
+  fieldBufferState: Viewport3DTargetFieldBufferState;
+  surface: {
+    degradation: Viewport3DTargetPassDegradation | null;
+    passId: string;
+    scalarColorMode: string | null;
+    scalarColors: ScalarColorBuffer | null;
+  };
+  vectors: {
+    buildReference: Viewport3DVectorBuildReference | null;
+    degradation: Viewport3DTargetPassDegradation | null;
+    passId: string;
+    segments: Float32Array | null;
+  };
 }
 
 export interface Viewport3DVectorBuildReference {
@@ -132,6 +198,8 @@ export interface Viewport3DVectorBuildReference {
 export interface Viewport3DFieldRenderOptions {
   buildDomainId?: string;
   buildSessionId?: string;
+  fullScalarColorMode?: string;
+  fullScalarColorPalette?: string;
   fullVectorBudget?: number;
   fullVectorAnchorMode?: Viewport3DVectorAnchorMode;
   fullVectorSurfaceOffsetEnabled?: boolean;
@@ -139,9 +207,11 @@ export interface Viewport3DFieldRenderOptions {
   complexFieldVector?: DecodedComplexFieldVector | null;
   partFieldVectors?: ReadonlyMap<string, DecodedFieldVector>;
   partTargetFieldBuffers?: ReadonlyMap<string, Viewport3DTargetFieldBuffer>;
+  partQuantityIds?: ReadonlyMap<string, string>;
   partScalarColorModes?: ReadonlyMap<string, string>;
   partScalarColorPalettes?: ReadonlyMap<string, string>;
   partScalarRangesByMode?: ReadonlyMap<string, ReadonlyMap<string, ScalarRange>>;
+  targetRenderPlans?: ReadonlyMap<string, Viewport3DTargetRenderPlan>;
   partVectorAnchorModes?: ReadonlyMap<string, Viewport3DVectorAnchorMode>;
   partVectorBudgets?: ReadonlyMap<string, number>;
   partVectorScales?: ReadonlyMap<string, number>;
@@ -637,6 +707,7 @@ export function buildViewport3DFieldRenderModel(
     string,
     Map<string, ScalarColorBuffer | null>
   >();
+  const targetPasses = new Map<string, Viewport3DTargetRenderPassModel>();
   const hasPartBudgetPlan = Boolean(options.partVectorBudgets);
   const magneticPartSet = new Set(topology.magneticParts);
   const airboxPartSet = new Set(topology.airboxParts);
@@ -647,25 +718,42 @@ export function buildViewport3DFieldRenderModel(
 
   for (const partModel of [...topology.magneticParts, ...topology.airboxParts]) {
     const partId = partModel.part.id;
-    const partBudget = hasPartBudgetPlan
+    const targetRenderPlan = options.targetRenderPlans?.get(partId) ?? null;
+    const partBudget = targetRenderPlan
+      ? targetRenderPlan.vectors.visible
+        ? targetRenderPlan.vectors.budget
+        : 0
+      : hasPartBudgetPlan
       ? options.partVectorBudgets?.get(partId) ?? 0
       : DEFAULT_VIEWPORT_3D_VECTOR_GLYPH_BUDGET;
-    const vectorScope = options.partVectorScopes?.get(partId) ?? "full";
+    const vectorScope =
+      targetRenderPlan?.vectors.scope ?? options.partVectorScopes?.get(partId) ?? "full";
     const vectorSelection =
       vectorScope === "surface"
         ? partModel.surfaceNodeSelection ?? partModel.part
         : partModel.part;
-    const partScale = options.partVectorScales?.get(partId) ?? 1;
+    const partScale =
+      targetRenderPlan?.vectors.lengthScale ??
+      options.partVectorScales?.get(partId) ??
+      1;
     const surfaceOffsetEnabled =
-      options.partVectorSurfaceOffsetEnabled?.has(partId) ?? false;
+      targetRenderPlan?.vectors.surfaceOffsetEnabled ??
+      options.partVectorSurfaceOffsetEnabled?.has(partId) ??
+      false;
     const surfaceOffsetScale =
-      options.partVectorSurfaceOffsetScales?.get(partId) ?? 0;
-    const explicitPartFieldVector =
-      options.partTargetFieldBuffers?.get(partId)?.fieldVector ??
-      options.partFieldVectors?.get(partId) ??
-      null;
-    const explicitPartFieldBuffer =
-      options.partTargetFieldBuffers?.get(partId) ?? null;
+      targetRenderPlan?.vectors.surfaceOffsetScale ??
+      options.partVectorSurfaceOffsetScales?.get(partId) ??
+      0;
+    const {
+      explicitFieldBuffer: explicitPartFieldBuffer,
+      explicitFieldVector: explicitPartFieldVector,
+      fieldVector: resolvedPartFieldVector,
+    } = resolveViewport3DTargetFieldInput({
+      fallbackFieldVector: fullFieldVector,
+      legacyPartFieldVectors: options.partFieldVectors,
+      partId,
+      targetFieldBuffers: options.partTargetFieldBuffers,
+    });
     const partUsesMagneticOnlyField = Boolean(
       !explicitPartFieldVector &&
         !fullFieldVector &&
@@ -673,8 +761,8 @@ export function buildViewport3DFieldRenderModel(
         magneticPartSet.has(partModel),
     );
     const partFieldVector =
-      explicitPartFieldVector ??
-      (partUsesMagneticOnlyField ? renderFieldVector : fullFieldVector);
+      resolvedPartFieldVector ??
+      (partUsesMagneticOnlyField ? renderFieldVector : null);
     const isScopedPartFieldVector = Boolean(
       partFieldVector &&
         partFieldVector !== renderFieldVector &&
@@ -700,15 +788,29 @@ export function buildViewport3DFieldRenderModel(
             resolverSelection: vectorSelection,
           };
     const renderVectorSelection = scopedVectorSelection.renderSelection;
-    const partScalarColorMode = options.partScalarColorModes?.get(partId);
+    const partScalarColorMode = targetRenderPlan
+      ? targetRenderPlan.shader.visible
+        ? targetRenderPlan.shader.scalarColorMode
+        : null
+      : options.partScalarColorModes?.get(partId);
+    const partQuantityId =
+      targetRenderPlan?.quantityId ?? options.partQuantityIds?.get(partId);
     const partScalarColorPalette =
-      options.partScalarColorPalettes?.get(partId) ?? options.scalarColorPalette;
+      targetRenderPlan?.shader.palette ??
+      options.partScalarColorPalettes?.get(partId) ??
+      options.scalarColorPalette;
     const partScalarColorModes =
-      partScalarColorMode === undefined
+      targetRenderPlan
+        ? partScalarColorMode
+          ? new Set([partScalarColorMode])
+          : null
+        : partScalarColorMode === undefined
         ? partFieldVector && partFieldVector !== renderFieldVector
           ? requestedScalarColorModes
           : null
         : new Set([partScalarColorMode]);
+    let partScalarColorsByMode: Map<string, ScalarColorBuffer | null> | null =
+      null;
     if (
       options.scalarColorsVisible !== false &&
       partFieldVector &&
@@ -718,14 +820,16 @@ export function buildViewport3DFieldRenderModel(
       const partScalarRangesByMode =
         options.partScalarRangesByMode?.get(partId) ??
         (partFieldVector === renderFieldVector ? options.scalarRangesByMode : null);
-      const partScalarColorsByMode = new Map<string, ScalarColorBuffer | null>();
+      partScalarColorsByMode = new Map<string, ScalarColorBuffer | null>();
       for (const colorMode of partScalarColorModes) {
+        if (!colorMode) continue;
         partScalarColorsByMode.set(
           colorMode,
           explicitPartFieldBuffer &&
             !viewport3DTargetFieldBufferCanServeSurface(
               explicitPartFieldBuffer,
               colorMode,
+              partQuantityId,
             )
             ? null
             : buildCachedPartVertexScalarColors(
@@ -755,10 +859,16 @@ export function buildViewport3DFieldRenderModel(
               partFieldVector.pointCount,
             )
           : null);
-    const anchorMode = options.partVectorAnchorModes?.get(partId) ?? "center";
+    const anchorMode =
+      targetRenderPlan?.vectors.anchorMode ??
+      options.partVectorAnchorModes?.get(partId) ??
+      "center";
     const partSegments =
       explicitPartFieldBuffer &&
-      !viewport3DTargetFieldBufferCanServeVectors(explicitPartFieldBuffer)
+      !viewport3DTargetFieldBufferCanServeVectors(
+        explicitPartFieldBuffer,
+        partQuantityId,
+      )
         ? null
         : buildCachedPartVectorSegments(
             partModel,
@@ -778,22 +888,56 @@ export function buildViewport3DFieldRenderModel(
             fieldValueResolver,
           );
     partVectorSegments.set(partId, partSegments);
-    partVectorBuilds.set(
-      partId,
-      buildVectorGlyphBuildReference({
-        budget: partBudget,
-        fieldVector: partFieldVector,
-        options,
-        scale: scale * partScale,
-        scopeId: partId,
-        scopeKind: vectorScope,
-        segments: partSegments,
-        topology,
-        vectorAnchorMode: anchorMode,
-        vectorSurfaceOffsetEnabled: surfaceOffsetEnabled,
-        vectorSurfaceOffsetScale: surfaceOffsetScale,
+    const partVectorBuildReference = buildVectorGlyphBuildReference({
+      budget: partBudget,
+      fieldVector: partFieldVector,
+      options,
+      scale: scale * partScale,
+      scopeId: partId,
+      scopeKind: vectorScope,
+      segments: partSegments,
+      topology,
+      vectorAnchorMode: anchorMode,
+      vectorSurfaceOffsetEnabled: surfaceOffsetEnabled,
+      vectorSurfaceOffsetScale: surfaceOffsetScale,
+    });
+    partVectorBuilds.set(partId, partVectorBuildReference);
+    const activePartScalarColors =
+      partScalarColorMode == null
+        ? null
+        : partScalarColorsByMode?.get(partScalarColorMode) ?? null;
+    targetPasses.set(partId, {
+      fieldBuffer: explicitPartFieldBuffer
+        ? targetFieldBufferSource(explicitPartFieldBuffer)
+        : null,
+      fieldBufferState: resolveViewport3DTargetFieldBufferState({
+        explicitPartFieldBuffer,
+        explicitPartFieldVector,
+        partFieldVector: partFieldVector ?? null,
       }),
-    );
+      surface: {
+        degradation: resolveViewport3DTargetSurfaceDegradation({
+          colorMode: partScalarColorMode ?? null,
+          explicitPartFieldBuffer,
+          quantityId: partQuantityId,
+          scalarColors: activePartScalarColors,
+        }),
+        passId: `${partId}:surface`,
+        scalarColorMode: partScalarColorMode ?? null,
+        scalarColors: activePartScalarColors,
+      },
+      vectors: {
+        buildReference: partVectorBuildReference,
+        degradation: resolveViewport3DTargetVectorDegradation({
+          explicitPartFieldBuffer,
+          partBudget,
+          quantityId: partQuantityId,
+          segments: partSegments,
+        }),
+        passId: `${partId}:vector-glyph`,
+        segments: partSegments,
+      },
+    });
   }
 
   const fullVectorBudget =
@@ -818,30 +962,202 @@ export function buildViewport3DFieldRenderModel(
           : null,
     },
   );
+  const fullVectorBuild = buildVectorGlyphBuildReference({
+    budget: fullVectorBudget,
+    fieldVector: fullFieldVector,
+    options,
+    scale,
+    scopeId: "full",
+    scopeKind: "full",
+    segments: fullVectorSegments,
+    topology,
+    vectorAnchorMode: fullVectorAnchorMode,
+    vectorSurfaceOffsetEnabled: fullVectorSurfaceOffsetEnabled,
+    vectorSurfaceOffsetScale: fullVectorSurfaceOffsetScale,
+  });
+  const fullScalarColorMode = options.fullScalarColorMode ?? null;
+  const fullScalarColorPalette =
+    options.fullScalarColorPalette ?? options.scalarColorPalette;
+  const fullTargetVectorsRequested = (options.fullVectorBudget ?? 0) > 0;
+  const fullScalarColors =
+    options.scalarColorsVisible === false || !fullScalarColorMode
+      ? null
+      : fullScalarColorPalette === options.scalarColorPalette
+        ? scalarColorsByMode.get(fullScalarColorMode) ?? null
+        : fullFieldVector
+          ? buildCachedVertexScalarColors(
+              fullFieldVector,
+              topology.nodeCount,
+              fullScalarColorMode,
+              fullScalarColorPalette,
+              options.scalarRangesByMode?.get(fullScalarColorMode),
+            )
+          : buildCachedMappedVertexScalarColors(
+              topology,
+              renderFieldVector,
+              magneticFieldNodeIndices,
+              fullScalarColorMode,
+              fullScalarColorPalette,
+              options.scalarRangesByMode?.get(fullScalarColorMode),
+            );
+  if (fullScalarColorMode || fullTargetVectorsRequested) {
+    targetPasses.set(FULL_VIEWPORT_3D_TARGET_ID, {
+      fieldBuffer: null,
+      fieldBufferState: fullFieldVector ? "derived-global" : "missing",
+      surface: {
+        degradation: resolveViewport3DTargetSurfaceDegradation({
+          colorMode: fullScalarColorMode,
+          explicitPartFieldBuffer: null,
+          scalarColors: fullScalarColors,
+        }),
+        passId: `${FULL_VIEWPORT_3D_TARGET_ID}:surface`,
+        scalarColorMode: fullScalarColorMode,
+        scalarColors: fullScalarColors,
+      },
+      vectors: {
+        buildReference: fullTargetVectorsRequested ? fullVectorBuild : null,
+        degradation: resolveViewport3DTargetVectorDegradation({
+          explicitPartFieldBuffer: null,
+          partBudget: fullTargetVectorsRequested ? fullVectorBudget : 0,
+          segments: fullTargetVectorsRequested ? fullVectorSegments : null,
+        }),
+        passId: `${FULL_VIEWPORT_3D_TARGET_ID}:vector-glyph`,
+        segments: fullTargetVectorsRequested ? fullVectorSegments : null,
+      },
+    });
+  }
+  const derivedWorkItems = planViewport3DDerivedWorkItems({
+    complexFieldVector: options.complexFieldVector,
+    targetPasses,
+    visualizationPhaseRad,
+  });
+  const targetDiagnostics = summarizeViewport3DTargetDiagnostics({
+    derivedWorkItems,
+    targetPasses,
+  });
 
   return {
     complexFieldVector: options.complexFieldVector ?? null,
-    fullVectorBuild: buildVectorGlyphBuildReference({
-      budget: fullVectorBudget,
-      fieldVector: fullFieldVector,
-      options,
-      scale,
-      scopeId: "full",
-      scopeKind: "full",
-      segments: fullVectorSegments,
-      topology,
-      vectorAnchorMode: fullVectorAnchorMode,
-      vectorSurfaceOffsetEnabled: fullVectorSurfaceOffsetEnabled,
-      vectorSurfaceOffsetScale: fullVectorSurfaceOffsetScale,
-    }),
+    derivedWorkItems,
+    fullVectorBuild,
     fullVectorSegments,
     partVectorBuilds,
     partVectorSegments,
     scalarColors,
     scalarColorsByPartAndMode,
     scalarColorsByMode,
+    targetDiagnostics,
+    targetPasses,
     visualizationPhaseRad,
   };
+}
+
+function resolveViewport3DTargetFieldBufferState({
+  explicitPartFieldBuffer,
+  explicitPartFieldVector,
+  partFieldVector,
+}: {
+  explicitPartFieldBuffer: Viewport3DTargetFieldBuffer | null;
+  explicitPartFieldVector: DecodedFieldVector | null;
+  partFieldVector: DecodedFieldVector | null;
+}): Viewport3DTargetFieldBufferState {
+  if (explicitPartFieldBuffer) return "target-buffer";
+  if (explicitPartFieldVector) return "legacy-implicit";
+  if (partFieldVector) return "derived-global";
+  return "missing";
+}
+
+function targetFieldBufferSource(
+  buffer: Viewport3DTargetFieldBuffer,
+): Viewport3DTargetFieldBufferSource {
+  return {
+    bufferId: buffer.bufferId,
+    capability: buffer.capability,
+    component: buffer.component,
+    componentCount: buffer.componentCount,
+    consumers: buffer.consumers,
+    fieldRevision: buffer.fieldRevision,
+    pointCount: buffer.pointCount,
+    quantityId: buffer.quantityId,
+    requestId: buffer.requestId,
+    sampled: buffer.sampled,
+    scopeId: buffer.scopeId,
+    scopeKind: buffer.scopeKind,
+    topologyRevision: buffer.topologyRevision,
+    values: buffer.values,
+    vectorComponentCount: buffer.vectorComponentCount,
+  };
+}
+
+function resolveViewport3DTargetSurfaceDegradation({
+  colorMode,
+  explicitPartFieldBuffer,
+  quantityId,
+  scalarColors,
+}: {
+  colorMode: string | null;
+  explicitPartFieldBuffer: Viewport3DTargetFieldBuffer | null;
+  quantityId?: string | null;
+  scalarColors: ScalarColorBuffer | null;
+}): Viewport3DTargetPassDegradation | null {
+  if (!colorMode) return null;
+  if (
+    explicitPartFieldBuffer &&
+    !viewport3DTargetFieldBufferMatchesQuantity(
+      explicitPartFieldBuffer,
+      quantityId,
+    )
+  ) {
+    return "buffer-quantity-mismatch";
+  }
+  if (
+    explicitPartFieldBuffer &&
+    !viewport3DTargetFieldBufferCanServeSurface(
+      explicitPartFieldBuffer,
+      colorMode,
+      quantityId,
+    )
+  ) {
+    return explicitPartFieldBuffer.sampled
+      ? "sampled-buffer-not-surface-capable"
+      : "buffer-not-surface-capable";
+  }
+  return scalarColors ? null : "surface-colors-unavailable";
+}
+
+function resolveViewport3DTargetVectorDegradation({
+  explicitPartFieldBuffer,
+  partBudget,
+  quantityId,
+  segments,
+}: {
+  explicitPartFieldBuffer: Viewport3DTargetFieldBuffer | null;
+  partBudget: number;
+  quantityId?: string | null;
+  segments: Float32Array | null;
+}): Viewport3DTargetPassDegradation | null {
+  if (partBudget <= 0) return null;
+  if (
+    explicitPartFieldBuffer &&
+    !viewport3DTargetFieldBufferMatchesQuantity(
+      explicitPartFieldBuffer,
+      quantityId,
+    )
+  ) {
+    return "buffer-quantity-mismatch";
+  }
+  if (
+    explicitPartFieldBuffer &&
+    !viewport3DTargetFieldBufferCanServeVectors(
+      explicitPartFieldBuffer,
+      quantityId,
+    )
+  ) {
+    return explicitPartFieldBuffer.capability === "scalar-complete"
+      ? "scalar-buffer-not-vector-capable"
+      : "buffer-not-vector-capable";
+  }
+  return segments ? null : "vector-segments-unavailable";
 }
 
 function buildVectorGlyphBuildReference({
@@ -1553,6 +1869,12 @@ export function viewport3DFieldRenderOptionsNeedFieldData(
 
   for (const budget of options.partVectorBudgets.values()) {
     if (budget > 0) return true;
+  }
+
+  for (const plan of options.targetRenderPlans?.values() ?? []) {
+    if (!plan.visible) continue;
+    if (plan.shader.visible && plan.shader.scalarColorMode) return true;
+    if (plan.vectors.visible && plan.vectors.budget > 0) return true;
   }
 
   return false;

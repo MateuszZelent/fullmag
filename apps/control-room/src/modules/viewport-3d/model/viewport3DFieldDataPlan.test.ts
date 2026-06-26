@@ -11,9 +11,14 @@ import {
   buildViewport3DTargetRenderPlan,
   mergeViewport3DFieldVectorQueries,
   planViewport3DFieldResourceRequests,
+  resolveViewport3DAirboxFieldVectorDemandPlan,
+  resolveViewport3DPrimaryFieldDemandPlan,
   resolveViewport3DScalarComponentRequest,
+  resolveViewport3DScopedPartVectorFieldDemandPlan,
   resolveViewport3DScopedFieldQuery,
+  resolveViewport3DTargetQuantityFieldDemandPlan,
   resolveViewport3DTargetFieldQuery,
+  summarizeViewport3DFieldDemandDiagnostics,
   type Viewport3DTargetRenderPlan,
 } from "./viewport3DFieldDataPlan";
 
@@ -170,6 +175,119 @@ describe("viewport3DFieldDataPlan", () => {
     });
   });
 
+  it("keeps mixed object demands isolated across component, orientation, and vector-only targets", () => {
+    const componentPlan = objectPlan("object:component-x", {
+      surfaceColorSource: "component_x",
+      vectorsVisible: false,
+      viewportColorbarVisible: true,
+    });
+    const orientationPlan = objectPlan("object:orientation", {
+      surfaceColorSource: "orientation",
+      vectorsVisible: false,
+      viewportColorbarVisible: true,
+    });
+    const vectorOnlyPlan = objectPlan("object:vectors", {
+      shaderVisible: false,
+      surfaceColorSource: "solid",
+      vectorBudget: 512,
+      vectorsVisible: true,
+      viewportColorbarVisible: true,
+    });
+    const demands = [
+      ...buildViewport3DPassDemands(componentPlan, { maxSamples: 128 }),
+      ...buildViewport3DPassDemands(orientationPlan, { maxSamples: 128 }),
+      ...buildViewport3DPassDemands(vectorOnlyPlan, { maxSamples: 128 }),
+    ];
+    const requests = planViewport3DFieldResourceRequests(demands);
+
+    expect(
+      demands
+        .map((demand) => ({
+          component: demand.component,
+          completeness: demand.completeness,
+          maxSamples: demand.maxSamples,
+          passKind: demand.passKind,
+          targetId: demand.targetId,
+        }))
+        .sort((left, right) =>
+          `${left.targetId}:${left.passKind}`.localeCompare(
+            `${right.targetId}:${right.passKind}`,
+          ),
+        ),
+    ).toEqual([
+      {
+        component: "x",
+        completeness: "complete",
+        maxSamples: null,
+        passKind: "colorbar",
+        targetId: "object:component-x",
+      },
+      {
+        component: "x",
+        completeness: "complete",
+        maxSamples: null,
+        passKind: "surface",
+        targetId: "object:component-x",
+      },
+      {
+        component: "full",
+        completeness: "complete",
+        maxSamples: null,
+        passKind: "surface",
+        targetId: "object:orientation",
+      },
+      {
+        component: "full",
+        completeness: "sampled-ok",
+        maxSamples: 128,
+        passKind: "vector-glyph",
+        targetId: "object:vectors",
+      },
+    ]);
+    expect(componentPlan.colorbar.viewportVisible).toBe(true);
+    expect(orientationPlan.colorbar.viewportVisible).toBe(false);
+    expect(vectorOnlyPlan.colorbar.viewportVisible).toBe(false);
+    expect(
+      requests
+        .map((request) => ({
+          consumers: request.consumers,
+          query: request.query,
+        }))
+        .sort((left, right) =>
+          String(left.query.scope_id).localeCompare(String(right.query.scope_id)),
+        ),
+    ).toEqual([
+      {
+        consumers: [
+          "object:component-x:colorbar",
+          "object:component-x:surface",
+        ],
+        query: {
+          component: "x",
+          scope_id: "object:component-x",
+          scope_kind: "object",
+        },
+      },
+      {
+        consumers: ["object:orientation:surface"],
+        query: {
+          component: "full",
+          scope_id: "object:orientation",
+          scope_kind: "object",
+        },
+      },
+      {
+        consumers: ["object:vectors:vector-glyph"],
+        query: {
+          component: "full",
+          max_samples: 128,
+          scope_id: "object:vectors",
+          scope_kind: "object",
+        },
+      },
+    ]);
+  });
+
   it("treats multiple scalar component demands for one target as full-vector demand", () => {
     expect(
       mergeViewport3DFieldVectorQueries(
@@ -187,6 +305,44 @@ describe("viewport3DFieldDataPlan", () => {
       component: null,
       needsFullVector: true,
     });
+  });
+
+  it("keeps scoped query identity when scalar components merge to full vector", () => {
+    expect(
+      mergeViewport3DFieldVectorQueries(
+        {
+          component: "x",
+          scope_id: "object:layer-a",
+          scope_kind: "object",
+        },
+        {
+          component: "y",
+          scope_id: "object:layer-a",
+          scope_kind: "object",
+        },
+      ),
+    ).toEqual({
+      component: "full",
+      scope_id: "object:layer-a",
+      scope_kind: "object",
+    });
+  });
+
+  it("rejects merging different scoped targets into one broad field query", () => {
+    expect(() =>
+      mergeViewport3DFieldVectorQueries(
+        {
+          component: "x",
+          scope_id: "object:layer-a",
+          scope_kind: "object",
+        },
+        {
+          component: "x",
+          scope_id: "object:layer-b",
+          scope_kind: "object",
+        },
+      ),
+    ).toThrow("Cannot merge viewport 3D field queries for different scopes");
   });
 
   it("keeps scoped query and request identity in sync", () => {
@@ -210,6 +366,169 @@ describe("viewport3DFieldDataPlan", () => {
       max_samples: 1200,
       scope_id: "part:air",
       scope_kind: "airbox",
+    });
+  });
+
+  it("carries replay query identity from pass demand to request planning and diagnostics", () => {
+    const plan = objectPlan("object:replay-mx", {
+      surfaceColorSource: "component_x",
+      vectorsVisible: false,
+    });
+    const demands = buildViewport3DPassDemands(plan, {
+      replayQuery: {
+        snapshot_id: "snapshot-17",
+        stage_id: "stage-relax",
+        view: "saved",
+      },
+    });
+    const requests = planViewport3DFieldResourceRequests(demands);
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.query).toMatchObject({
+      component: "x",
+      scope_id: "object:replay-mx",
+      scope_kind: "object",
+      snapshot_id: "snapshot-17",
+      stage_id: "stage-relax",
+      view: "saved",
+    });
+    expect(requests[0]?.requestId).toContain("snapshot_id=snapshot-17");
+    expect(requests[0]?.requestId).toContain("stage_id=stage-relax");
+    expect(
+      summarizeViewport3DFieldDemandDiagnostics({
+        demands,
+        requests,
+      })[0]?.requests[0],
+    ).toContain("snapshot_id=snapshot-17");
+  });
+
+  it("explains which target pass demands produced each field request", () => {
+    const shaderAndVectorPlan = objectPlan("object:mx-vectors", {
+      surfaceColorSource: "component_x",
+      vectorBudget: 512,
+      vectorsVisible: true,
+    });
+    const vectorOnlyPlan = objectPlan("object:vectors", {
+      shaderVisible: false,
+      vectorBudget: 256,
+      vectorsVisible: true,
+    });
+    const demands = [
+      ...buildViewport3DPassDemands(shaderAndVectorPlan, { maxSamples: 512 }),
+      ...buildViewport3DPassDemands(vectorOnlyPlan, { maxSamples: 128 }),
+    ];
+    const requests = planViewport3DFieldResourceRequests(demands);
+
+    expect(
+      summarizeViewport3DFieldDemandDiagnostics({
+        demands,
+        requests,
+      }),
+    ).toEqual([
+      {
+        demands: [
+          "surface:x:complete",
+          "vector-glyph:full:complete",
+        ],
+        requests: [
+          "quantity=m component=full scope=object:object:mx-vectors consumers=object:mx-vectors:surface,object:mx-vectors:vector-glyph",
+        ],
+        targetId: "object:mx-vectors",
+      },
+      {
+        demands: [
+          "vector-glyph:full:sampled-ok max_samples=128",
+        ],
+        requests: [
+          "quantity=m component=full scope=object:object:vectors max_samples=128 consumers=object:vectors:vector-glyph",
+        ],
+        targetId: "object:vectors",
+      },
+    ]);
+  });
+
+  it("owns the primary, scoped part, target quantity, and airbox request planners", () => {
+    const primary = resolveViewport3DPrimaryFieldDemandPlan({
+      fdmInstanceModelNeedsFieldVector: false,
+      fdmSurfaceColorMode: null,
+      fdmTopographyEnabled: false,
+      fdmVectorsVisible: false,
+      fieldRenderOptions: {
+        scalarColorModes: new Set(["x"]),
+        scalarColorsVisible: true,
+      },
+      primaryFieldQuantityId: "m",
+    });
+
+    expect(primary.request).toMatchObject({
+      query: {
+        component: "x",
+        scope_kind: "full",
+      },
+      quantityId: "m",
+    });
+
+    const scoped = resolveViewport3DScopedPartVectorFieldDemandPlan({
+      getPartSettings: () => ({
+        ...DEFAULT_OBJECT_VISUALIZATION,
+        activeQuantityId: "m",
+        shaderVisible: false,
+        vectorBudget: 64,
+        vectorsVisible: true,
+        visible: true,
+      }),
+      maxVectorGlyphs: 256,
+      magneticParts: [{ part: { id: "part-a", label: "Part A" } }],
+      vectorDomain: "full",
+    });
+
+    expect(scoped.requests.get("part-a")).toMatchObject({
+      query: {
+        component: "full",
+        max_samples: 64,
+        scope_id: "part-a",
+        scope_kind: "part",
+      },
+    });
+
+    const targetQuantity = resolveViewport3DTargetQuantityFieldDemandPlan({
+      fdmSettings: null,
+      getPartSettings: () => ({
+        ...DEFAULT_OBJECT_VISUALIZATION,
+        activeQuantityId: "H_eff",
+        surfaceColorSource: "component_y",
+        vectorsVisible: false,
+        visible: true,
+      }),
+      magneticPartScopedFieldIds: new Set(),
+      magneticParts: [{ part: { id: "part-b", label: "Part B" } }],
+      maxVectorGlyphs: 256,
+      primaryFieldQuantityId: "m",
+    });
+
+    expect([...targetQuantity.requests.values()][0]).toMatchObject({
+      query: {
+        component: "y",
+        scope_kind: "full",
+      },
+      quantityId: "H_eff",
+    });
+
+    const airbox = resolveViewport3DAirboxFieldVectorDemandPlan({
+      airboxParts: [{ id: "airbox-a", label: "Airbox A" }],
+      quantityId: "H_demag",
+      vectorBudget: 32,
+      vectorsVisible: true,
+    });
+
+    expect(airbox.requests.get("airbox-a")).toMatchObject({
+      query: {
+        component: "full",
+        max_samples: 32,
+        scope_id: "airbox-a",
+        scope_kind: "airbox",
+      },
+      quantityId: "H_demag",
     });
   });
 });

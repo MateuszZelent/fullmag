@@ -6,6 +6,10 @@ import { describe, expect, it } from "vitest";
 import type { DecodedFieldVector, DecodedTopology } from "@/kernel/api/codecs";
 
 import {
+  buildViewport3DTargetRenderPlan,
+  type Viewport3DTargetRenderPlan,
+} from "./model/viewport3DFieldDataPlan";
+import {
   buildViewport3DFieldRenderModel,
   buildViewport3DTopologyRenderModel,
   EMPTY_VIEWPORT_3D_TOPOLOGY_INDICES,
@@ -87,6 +91,47 @@ function inwardSurfaceNormalFieldVectorFixture(): DecodedFieldVector {
       0, 0, -1,
     ]),
   };
+}
+
+function targetRenderPlanFixture(
+  overrides: Partial<{
+    quantityId: string;
+    shaderVisible: boolean;
+    surfaceColorSource:
+      | "component_x"
+      | "component_y"
+      | "component_z"
+      | "magnitude"
+      | "orientation"
+      | "solid";
+    targetId: string;
+    vectorBudget: number;
+    vectorsVisible: boolean;
+    visible: boolean;
+  }> = {},
+): Viewport3DTargetRenderPlan {
+  return buildViewport3DTargetRenderPlan({
+    label: overrides.targetId ?? "part-a",
+    quantityId: overrides.quantityId ?? "m",
+    settings: {
+      geometryScope: "full",
+      scalarColorPalette: "plasma",
+      shaderMonoColor: "#ffffff",
+      shaderVisible: overrides.shaderVisible ?? true,
+      surfaceColorSource: overrides.surfaceColorSource ?? "component_x",
+      vectorBudget: overrides.vectorBudget ?? 4,
+      vectorCenteringEnabled: true,
+      vectorColorMode: "magnitude",
+      vectorLengthScale: 1,
+      vectorSurfaceOffsetEnabled: false,
+      vectorSurfaceOffsetScale: 0,
+      vectorsVisible: overrides.vectorsVisible ?? true,
+      viewportColorbarVisible: false,
+      visible: overrides.visible ?? true,
+    },
+    targetId: overrides.targetId ?? "part-a",
+    targetKind: "part",
+  });
 }
 
 describe("viewport3dRenderModel performance contracts", () => {
@@ -1216,6 +1261,15 @@ describe("viewport3dRenderModel", () => {
     expect(phaseQuarter?.scalarColorsByMode.get("x")?.complexPhaseRad).toBe(
       Math.PI / 2,
     );
+    expect(phaseQuarter?.derivedWorkItems).toContainEqual(
+      expect.objectContaining({
+        lane: "field-color",
+        outputKind: "complex-phase-projection",
+        passId: "complex-field:phase-projection",
+        status: "ready",
+        targetId: "complex-field",
+      }),
+    );
   });
 
   it("bounds complex phase projection cache entries during phase animation", () => {
@@ -1466,6 +1520,9 @@ describe("viewport3dRenderModel", () => {
       model?.scalarColorsByPartAndMode.get("part-a")?.get("magnitude")?.colors
         .length,
     ).toBe(12);
+    expect(model?.targetPasses.get("part-a")?.fieldBufferState).toBe(
+      "legacy-implicit",
+    );
   });
 
   it("rejects sampled target field buffers for per-vertex surface colors", () => {
@@ -1510,6 +1567,224 @@ describe("viewport3dRenderModel", () => {
 
     expect(model?.scalarColorsByPartAndMode.get("part-a")?.get("x")).toBeNull();
     expect(model?.partVectorSegments.get("part-a")?.length).toBeGreaterThan(0);
+    expect(model?.targetPasses.get("part-a")?.fieldBuffer).toMatchObject({
+      bufferId: sampledBuffer.bufferId,
+      capability: "full-vector-sampled",
+      component: "full",
+      requestId: sampledBuffer.requestId,
+      scopeId: "part-a",
+      scopeKind: "part",
+    });
+    expect(model?.targetPasses.get("part-a")?.surface).toMatchObject({
+      degradation: "sampled-buffer-not-surface-capable",
+      passId: "part-a:surface",
+      scalarColorMode: "x",
+      scalarColors: null,
+    });
+    expect(model?.targetPasses.get("part-a")?.vectors).toMatchObject({
+      degradation: null,
+      passId: "part-a:vector-glyph",
+    });
+    expect(
+      model?.derivedWorkItems.find((item) => item.passId === "part-a:surface"),
+    ).toMatchObject({
+      blockedReason: "sampled-buffer-not-surface-capable",
+      inputBufferId: sampledBuffer.bufferId,
+      status: "blocked",
+      targetId: "part-a",
+    });
+    expect(
+      model?.derivedWorkItems.find(
+        (item) => item.passId === "part-a:vector-glyph",
+      ),
+    ).toMatchObject({
+      blockedReason: null,
+      inputBufferId: sampledBuffer.bufferId,
+      status: "ready",
+      targetId: "part-a",
+    });
+    expect(model?.targetDiagnostics).toContainEqual({
+      buffers: [
+        `${sampledBuffer.bufferId} full-vector-sampled quantity=m component=full scope=part:part-a points=4 ncomp=3 sampled=true state=target-buffer`,
+      ],
+      degradation: [
+        "surface:sampled-buffer-not-surface-capable",
+        "field-color:sampled-buffer-not-surface-capable",
+      ],
+      demand: "surface:x vector-glyph",
+      derivedWork: [
+        "field-color:scalar-colors:blocked:blocked:part-a:surface items=0 input=0B output=0B",
+        "vector-glyph:vector-glyphs:ready:runtime-worker:part-a:vector-glyph items=4 input=112B output=112B",
+        "vector-glyph:vector-segments:ready:render-model-sync:part-a:vector-glyph items=4 input=0B output=112B",
+      ],
+      passes: ["surface", "vector-glyph"],
+      requests: [sampledBuffer.requestId],
+      retained: [],
+      targetId: "part-a",
+    });
+  });
+
+  it("uses target render plans as authoritative part pass semantics", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "part-a",
+          label: "Part A",
+          nodeCount: 4,
+          nodeStart: 0,
+        },
+      ],
+      [],
+    );
+    const fieldVector = fieldVectorFixture();
+    const targetBuffer = buildViewport3DTargetFieldBuffer({
+      fieldVector,
+      query: {
+        component: "full",
+        scope_id: "part-a",
+        scope_kind: "part",
+      },
+      targetIds: ["part-a"],
+    });
+
+    const model = buildViewport3DFieldRenderModel(
+      topologyModel,
+      fieldVector,
+      0.5,
+      {
+        partScalarColorModes: new Map([["part-a", "y"]]),
+        partTargetFieldBuffers: new Map([["part-a", targetBuffer]]),
+        partVectorBudgets: new Map([["part-a", 0]]),
+        fieldRevision: "field-1",
+        scalarColorsVisible: true,
+        targetVisualizationRevision: "viz-1",
+        targetRenderPlans: new Map([
+          ["part-a", targetRenderPlanFixture({ surfaceColorSource: "component_x" })],
+        ]),
+        topologyRevision: "topology-1",
+      },
+    );
+
+    const targetPass = model?.targetPasses.get("part-a");
+    expect(targetPass?.surface.scalarColorMode).toBe("x");
+    expect(targetPass?.surface.scalarColors?.colors.length).toBe(12);
+    expect(targetPass?.vectors.segments?.length).toBeGreaterThan(0);
+    expect(targetPass?.vectors.buildReference).toMatchObject({
+      revisionSummary: expect.stringContaining("scope=full:part-a"),
+    });
+    expect(model?.targetDiagnostics).toContainEqual(
+      expect.objectContaining({
+        demand: "surface:x vector-glyph",
+        targetId: "part-a",
+      }),
+    );
+  });
+
+  it("does not resurrect disabled target passes from legacy option maps", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "part-a",
+          label: "Part A",
+          nodeCount: 4,
+          nodeStart: 0,
+        },
+      ],
+      [],
+    );
+    const fieldVector = fieldVectorFixture();
+    const targetBuffer = buildViewport3DTargetFieldBuffer({
+      fieldVector,
+      query: {
+        component: "full",
+        scope_id: "part-a",
+        scope_kind: "part",
+      },
+      targetIds: ["part-a"],
+    });
+
+    const model = buildViewport3DFieldRenderModel(
+      topologyModel,
+      fieldVector,
+      0.5,
+      {
+        partScalarColorModes: new Map([["part-a", "x"]]),
+        partTargetFieldBuffers: new Map([["part-a", targetBuffer]]),
+        partVectorBudgets: new Map([["part-a", 4]]),
+        scalarColorsVisible: true,
+        targetRenderPlans: new Map([
+          [
+            "part-a",
+            targetRenderPlanFixture({
+              shaderVisible: false,
+              vectorsVisible: false,
+            }),
+          ],
+        ]),
+      },
+    );
+
+    const targetPass = model?.targetPasses.get("part-a");
+    expect(targetPass?.surface.scalarColorMode).toBeNull();
+    expect(targetPass?.surface.scalarColors).toBeNull();
+    expect(targetPass?.vectors.segments).toBeNull();
+    expect(targetPass?.vectors.buildReference).toBeNull();
+    expect(model?.targetDiagnostics).toContainEqual(
+      expect.objectContaining({
+        demand: null,
+        targetId: "part-a",
+      }),
+    );
+  });
+
+  it("exposes full-domain surface and vector passes through the target-pass contract", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [],
+      [],
+    );
+
+    const model = buildViewport3DFieldRenderModel(
+      topologyModel,
+      fieldVectorFixture(),
+      0.5,
+      {
+        fullScalarColorMode: "x",
+        fullVectorBudget: 4,
+        scalarColorModes: new Set(["x"]),
+        scalarColorsVisible: true,
+      },
+    );
+
+    const fullPass = model?.targetPasses.get("full");
+    const scalarColors = model?.scalarColorsByMode.get("x");
+
+    expect(fullPass?.fieldBufferState).toBe("derived-global");
+    expect(fullPass?.surface).toMatchObject({
+      degradation: null,
+      passId: "full:surface",
+      scalarColorMode: "x",
+      scalarColors,
+    });
+    expect(fullPass?.vectors).toMatchObject({
+      degradation: null,
+      passId: "full:vector-glyph",
+      segments: model?.fullVectorSegments,
+    });
+    expect(fullPass?.vectors.buildReference).toBe(model?.fullVectorBuild);
+    expect(
+      model?.derivedWorkItems.find((item) => item.passId === "full:surface"),
+    ).toMatchObject({
+      blockedReason: null,
+      status: "ready",
+      targetId: "full",
+    });
   });
 
   it("rejects scalar-only target field buffers for vector glyphs", () => {
@@ -1560,6 +1835,168 @@ describe("viewport3dRenderModel", () => {
       model?.scalarColorsByPartAndMode.get("part-a")?.get("x")?.colors.length,
     ).toBe(12);
     expect(model?.partVectorSegments.get("part-a")).toBeNull();
+    expect(model?.targetPasses.get("part-a")?.surface.degradation).toBeNull();
+    expect(model?.targetPasses.get("part-a")?.vectors).toMatchObject({
+      buildReference: null,
+      degradation: "scalar-buffer-not-vector-capable",
+      segments: null,
+    });
+    expect(
+      model?.derivedWorkItems.find(
+        (item) => item.passId === "part-a:vector-glyph",
+      ),
+    ).toMatchObject({
+      blockedReason: "scalar-buffer-not-vector-capable",
+      inputBufferId: scalarBuffer.bufferId,
+      status: "blocked",
+      targetId: "part-a",
+    });
+    expect(model?.targetDiagnostics).toContainEqual({
+      buffers: [
+        `${scalarBuffer.bufferId} scalar-complete quantity=m component=x scope=part:part-a points=4 ncomp=1 sampled=false state=target-buffer`,
+      ],
+      degradation: [
+        "vector-glyph:scalar-buffer-not-vector-capable",
+      ],
+      demand: "surface:x vector-glyph",
+      derivedWork: [
+        "field-color:scalar-colors:ready:render-model-sync:part-a:surface items=4 input=16B output=48B",
+        "vector-glyph:vector-glyphs:blocked:blocked:part-a:vector-glyph items=0 input=0B output=0B",
+        "vector-glyph:vector-segments:blocked:blocked:part-a:vector-glyph items=0 input=0B output=0B",
+      ],
+      passes: ["surface", "vector-glyph"],
+      requests: [scalarBuffer.requestId],
+      retained: [],
+      targetId: "part-a",
+    });
+  });
+
+  it("rejects scalar target field buffers for a different surface component", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "part-a",
+          label: "Part A",
+          nodeCount: 4,
+          nodeStart: 0,
+        },
+      ],
+      [],
+    );
+    const scalarXFieldVector: DecodedFieldVector = {
+      ...fieldVectorFixture(),
+      nComp: 1,
+      valueCount: 4,
+      values: new Float64Array([1, 0, -1, 0.5]),
+    };
+    const scalarXBuffer = buildViewport3DTargetFieldBuffer({
+      fieldVector: scalarXFieldVector,
+      query: {
+        component: "x",
+        scope_id: "part-a",
+        scope_kind: "part",
+      },
+      targetIds: ["part-a"],
+    });
+
+    const model = buildViewport3DFieldRenderModel(
+      topologyModel,
+      fieldVectorFixture(),
+      0.5,
+      {
+        partFieldVectors: new Map([["part-a", scalarXFieldVector]]),
+        partScalarColorModes: new Map([["part-a", "y"]]),
+        partTargetFieldBuffers: new Map([["part-a", scalarXBuffer]]),
+        scalarColorsVisible: true,
+      },
+    );
+
+    expect(model?.scalarColorsByPartAndMode.get("part-a")?.get("y")).toBeNull();
+    expect(model?.targetPasses.get("part-a")?.surface).toMatchObject({
+      degradation: "buffer-not-surface-capable",
+      scalarColorMode: "y",
+      scalarColors: null,
+    });
+  });
+
+  it("rejects target field buffers from another active target quantity", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "part-a",
+          label: "Part A",
+          nodeCount: 4,
+          nodeStart: 0,
+        },
+      ],
+      [],
+    );
+    const scalarFieldVector: DecodedFieldVector = {
+      ...fieldVectorFixture(),
+      nComp: 1,
+      quantityId: "m",
+      valueCount: 4,
+      values: new Float64Array([1, 0, -1, 0.5]),
+    };
+    const scalarBuffer = buildViewport3DTargetFieldBuffer({
+      fieldVector: scalarFieldVector,
+      query: {
+        component: "x",
+        scope_id: "part-a",
+        scope_kind: "part",
+      },
+      targetIds: ["part-a"],
+    });
+
+    const model = buildViewport3DFieldRenderModel(
+      topologyModel,
+      fieldVectorFixture(),
+      0.5,
+      {
+        partQuantityIds: new Map([["part-a", "H_eff"]]),
+        partScalarColorModes: new Map([["part-a", "x"]]),
+        partTargetFieldBuffers: new Map([["part-a", scalarBuffer]]),
+        partVectorBudgets: new Map([["part-a", 4]]),
+        scalarColorsVisible: true,
+      },
+    );
+
+    expect(model?.scalarColorsByPartAndMode.get("part-a")?.get("x")).toBeNull();
+    expect(model?.partVectorSegments.get("part-a")).toBeNull();
+    expect(model?.targetPasses.get("part-a")?.surface).toMatchObject({
+      degradation: "buffer-quantity-mismatch",
+      scalarColors: null,
+    });
+    expect(model?.targetPasses.get("part-a")?.vectors).toMatchObject({
+      degradation: "buffer-quantity-mismatch",
+      segments: null,
+    });
+    expect(model?.targetDiagnostics).toContainEqual({
+      buffers: [
+        `${scalarBuffer.bufferId} scalar-complete quantity=m component=x scope=part:part-a points=4 ncomp=1 sampled=false state=target-buffer`,
+      ],
+      degradation: [
+        "surface:buffer-quantity-mismatch",
+        "vector-glyph:buffer-quantity-mismatch",
+        "field-color:buffer-quantity-mismatch",
+      ],
+      demand: "surface:x vector-glyph",
+      derivedWork: [
+        "field-color:scalar-colors:blocked:blocked:part-a:surface items=0 input=0B output=0B",
+        "vector-glyph:vector-glyphs:blocked:blocked:part-a:vector-glyph items=0 input=0B output=0B",
+        "vector-glyph:vector-segments:blocked:blocked:part-a:vector-glyph items=0 input=0B output=0B",
+      ],
+      passes: ["surface", "vector-glyph"],
+      requests: [scalarBuffer.requestId],
+      retained: [],
+      targetId: "part-a",
+    });
   });
 
   it("maps scoped per-part scalar colors onto global topology node indices", () => {
@@ -1675,6 +2112,29 @@ describe("viewport3dRenderModel", () => {
     expect(partColors?.colorPalette).toBe("inferno");
     expect(globalColors?.colorPalette).toBe("viridis");
     expect(partColors?.colors).not.toBe(globalColors?.colors);
+    expect(
+      model?.derivedWorkItems.find((item) => item.passId === "part-a:surface"),
+    ).toMatchObject({
+      blockedReason: null,
+      lane: "field-color",
+      outputKind: "scalar-colors",
+      status: "ready",
+      targetId: "part-a",
+    });
+    expect(model?.targetDiagnostics).toContainEqual({
+      buffers: ["state=derived-global"],
+      degradation: [],
+      demand: "surface:x vector-glyph",
+      derivedWork: [
+        "field-color:scalar-colors:ready:render-model-sync:part-a:surface items=4 input=16B output=48B",
+        "vector-glyph:vector-glyphs:ready:runtime-worker:part-a:vector-glyph items=2 input=56B output=56B",
+        "vector-glyph:vector-segments:ready:render-model-sync:part-a:vector-glyph items=2 input=0B output=56B",
+      ],
+      passes: ["surface", "vector-glyph"],
+      requests: [],
+      retained: [],
+      targetId: "part-a",
+    });
   });
 
   it("uses the part field vector range for per-part colors from another quantity", () => {
@@ -1841,6 +2301,32 @@ describe("viewport3dRenderModel", () => {
         fullVectorBudget: 0,
         partVectorBudgets: new Map([["part-a", 1]]),
         scalarColorsVisible: false,
+      }),
+    ).toBe(true);
+    expect(
+      viewport3DFieldRenderOptionsNeedFieldData({
+        fullVectorBudget: 0,
+        partVectorBudgets: new Map(),
+        scalarColorsVisible: false,
+        targetRenderPlans: new Map([
+          [
+            "part-a",
+            targetRenderPlanFixture({
+              shaderVisible: false,
+              vectorsVisible: false,
+            }),
+          ],
+        ]),
+      }),
+    ).toBe(false);
+    expect(
+      viewport3DFieldRenderOptionsNeedFieldData({
+        fullVectorBudget: 0,
+        partVectorBudgets: new Map(),
+        scalarColorsVisible: false,
+        targetRenderPlans: new Map([
+          ["part-a", targetRenderPlanFixture({ surfaceColorSource: "component_x" })],
+        ]),
       }),
     ).toBe(true);
   });

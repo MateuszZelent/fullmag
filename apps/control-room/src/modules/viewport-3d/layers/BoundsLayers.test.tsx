@@ -105,6 +105,20 @@ it("routes airbox mesh-part topology geometry adoption through the upload manage
   expect(airboxMeshPartLayerSource).not.toContain("const pointsGeometry = useMemo");
 });
 
+it("routes airbox vector layer input through target-pass selection", () => {
+  expect(boundsLayersSource).toContain(
+    "resolveViewport3DTargetVectorLayerInput",
+  );
+  expect(boundsLayersSource).toContain("vectorLayerInput.buildReference");
+  expect(boundsLayersSource).toContain("vectorLayerInput.segments");
+  expect(boundsLayersSource).not.toContain(
+    "fieldModel?.partVectorBuilds.get(part.id)",
+  );
+  expect(boundsLayersSource).not.toContain(
+    "fieldModel?.partVectorSegments.get(part.id)",
+  );
+});
+
 function airboxTopology(): Viewport3DTopologyRenderModel<Viewport3DMeshPart> {
   const part = {
     boundary_face_count: 1,
@@ -325,6 +339,7 @@ describe("AirboxLayer", () => {
     };
     const fieldModel = {
       complexFieldVector: null,
+      derivedWorkItems: [],
       fullVectorBuild: null,
       fullVectorSegments: null,
       partVectorBuilds: new Map(),
@@ -332,6 +347,8 @@ describe("AirboxLayer", () => {
       scalarColors: null,
       scalarColorsByPartAndMode: new Map(),
       scalarColorsByMode: new Map([["x", colorsByComponent]]),
+      targetDiagnostics: [],
+      targetPasses: new Map(),
       visualizationPhaseRad: null,
     } satisfies Viewport3DFieldRenderModel;
 
@@ -343,6 +360,7 @@ describe("AirboxLayer", () => {
           surfaceColorSource: "component_x",
         },
         fieldModel,
+        "airbox",
         4,
         colors.mesh,
       ),
@@ -350,6 +368,65 @@ describe("AirboxLayer", () => {
       hasScalarColors: true,
       materialColor: VERTEX_COLOR_MATERIAL_COLOR,
       scalarColors: colorsByComponent,
+      vertexColorsEnabled: true,
+    });
+  });
+
+  it("does not fall back to global colors when an airbox target pass is unavailable", () => {
+    const colorsByComponent = {
+      colors: new Float32Array(12).fill(0.5),
+      range: { max: 1, min: -1 },
+    };
+    const fieldModel = {
+      complexFieldVector: null,
+      derivedWorkItems: [],
+      fullVectorBuild: null,
+      fullVectorSegments: null,
+      partVectorBuilds: new Map(),
+      partVectorSegments: new Map(),
+      scalarColors: null,
+      scalarColorsByPartAndMode: new Map(),
+      scalarColorsByMode: new Map([["x", colorsByComponent]]),
+      targetDiagnostics: [],
+      targetPasses: new Map([
+        [
+          "airbox",
+          {
+            fieldBuffer: null,
+            fieldBufferState: "target-buffer",
+            surface: {
+              passId: "test:surface",
+degradation: "sampled-buffer-not-surface-capable",
+              scalarColorMode: "x",
+              scalarColors: null,
+            },
+            vectors: {
+              passId: "test:vector-glyph",
+buildReference: null,
+              degradation: null,
+              segments: null,
+            },
+          },
+        ],
+      ]),
+      visualizationPhaseRad: null,
+    } satisfies Viewport3DFieldRenderModel;
+
+    expect(
+      resolveAirboxSurfaceColorState(
+        {
+          ...DEFAULT_AIRBOX_VISUALIZATION,
+          shaderVisible: true,
+          surfaceColorSource: "component_x",
+        },
+        fieldModel,
+        "airbox",
+        4,
+        colors.mesh,
+      ),
+    ).toMatchObject({
+      hasScalarColors: false,
+      scalarColors: null,
       vertexColorsEnabled: true,
     });
   });
@@ -411,6 +488,7 @@ describe("AirboxLayer", () => {
     const tracker = new Viewport3DResourceTracker();
     const fieldModel = {
       complexFieldVector: null,
+      derivedWorkItems: [],
       fullVectorBuild: null,
       fullVectorSegments: null,
       partVectorBuilds: new Map(),
@@ -420,6 +498,8 @@ describe("AirboxLayer", () => {
       scalarColors: null,
       scalarColorsByPartAndMode: new Map(),
       scalarColorsByMode: new Map(),
+      targetDiagnostics: [],
+      targetPasses: new Map(),
       visualizationPhaseRad: null,
     } satisfies Viewport3DFieldRenderModel;
 

@@ -60,6 +60,10 @@ import {
   vectorStyleFromSettings,
   wireframeColorFromSettings,
 } from "./viewport3DLayerSettings";
+import {
+  resolveViewport3DTargetSurfaceLayerInput,
+  resolveViewport3DTargetVectorLayerInput,
+} from "./viewport3DLayerPassInputs";
 
 export interface AirboxSurfaceColorState {
   hasScalarColors: boolean;
@@ -304,6 +308,7 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
   const surfaceColorState = resolveAirboxSurfaceColorState(
     renderSettings,
     fieldColorLayersEnabled ? fieldModel : null,
+    part.id,
     topologyModel.nodeCount,
     colors.mesh,
   );
@@ -333,6 +338,10 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
     colors.mesh,
     hasScalarColors,
   );
+  const vectorLayerInput = resolveViewport3DTargetVectorLayerInput({
+    fieldModel,
+    partId: part.id,
+  });
 
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
     event.stopPropagation();
@@ -412,12 +421,12 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
         {viewport3DVectorLayersEnabledFromBrowserConfig() &&
         renderSettings.vectorsVisible ? (
           <VectorFieldLayer
-            buildReference={fieldModel?.partVectorBuilds.get(part.id) ?? null}
+            buildReference={vectorLayerInput.buildReference}
             colors={colors}
             colorMode={vectorColorModeFromSettings(renderSettings, vectorColorMode)}
             materialProfile={materialProfile.glyphs}
             opacity={opacity}
-            segments={fieldModel?.partVectorSegments.get(part.id) ?? null}
+            segments={vectorLayerInput.segments}
             style={vectorStyleFromSettings(renderSettings, vectorStyle)}
             tracker={tracker}
           />
@@ -504,12 +513,12 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
       {viewport3DVectorLayersEnabledFromBrowserConfig() &&
       renderSettings.vectorsVisible ? (
         <VectorFieldLayer
-          buildReference={fieldModel?.partVectorBuilds.get(part.id) ?? null}
+          buildReference={vectorLayerInput.buildReference}
           colors={colors}
           colorMode={vectorColorModeFromSettings(renderSettings, vectorColorMode)}
           materialProfile={materialProfile.glyphs}
           opacity={opacity}
-          segments={fieldModel?.partVectorSegments.get(part.id) ?? null}
+          segments={vectorLayerInput.segments}
           style={vectorStyleFromSettings(renderSettings, vectorStyle)}
           tracker={tracker}
         />
@@ -781,14 +790,21 @@ export function resolveAirboxRuntimeVisualizationSettings(
 
 export function resolveAirboxSurfaceColorState(
   settings: VisualizationTargetSettings,
-  fieldModel: Pick<Viewport3DFieldRenderModel, "scalarColorsByMode"> | null,
+  fieldModel: (
+    Pick<Viewport3DFieldRenderModel, "scalarColorsByMode"> &
+      Partial<Pick<Viewport3DFieldRenderModel, "targetPasses">>
+  ) | null,
+  partId: string,
   nodeCount: number,
   fallbackColor: ColorRepresentation,
 ): AirboxSurfaceColorState {
   const scalarColorMode = surfaceScalarColorModeFromSettings(settings);
-  const scalarColors: ScalarColorBuffer | null = scalarColorMode
-    ? fieldModel?.scalarColorsByMode.get(scalarColorMode) ?? null
-    : null;
+  const scalarColors: ScalarColorBuffer | null =
+    resolveViewport3DTargetSurfaceLayerInput({
+      fieldModel,
+      partId,
+      scalarColorMode,
+    }).scalarColors;
   const vertexColorsEnabled = shaderUsesVertexColors(settings);
   const hasScalarColors =
     vertexColorsEnabled &&

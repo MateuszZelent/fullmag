@@ -67,6 +67,10 @@ import {
   wireframeColorFromSettings,
   wireframeOpacityFromSettings,
 } from "./viewport3DLayerSettings";
+import {
+  resolveViewport3DTargetSurfaceLayerInput,
+  resolveViewport3DTargetVectorLayerInput,
+} from "./viewport3DLayerPassInputs";
 
 const MESH_PART_GEOMETRY_UPLOAD_FRAME_BUDGET_MS = 3;
 
@@ -76,10 +80,13 @@ export function resolveMeshPartScalarColors({
   scalarColorMode,
   settings,
 }: {
-  fieldModel: Pick<
-    Viewport3DFieldRenderModel,
-    "scalarColorsByMode" | "scalarColorsByPartAndMode"
-  > | null;
+  fieldModel: (
+    Pick<
+      Viewport3DFieldRenderModel,
+      "scalarColorsByMode" | "scalarColorsByPartAndMode"
+    > &
+      Partial<Pick<Viewport3DFieldRenderModel, "targetPasses">>
+  ) | null;
   partId: string;
   scalarColorMode: string | null;
   settings: Pick<
@@ -88,21 +95,25 @@ export function resolveMeshPartScalarColors({
   >;
 }): ScalarColorBuffer | null {
   if (!fieldModel || !scalarColorMode) return null;
-  const partBuffer =
-    fieldModel.scalarColorsByPartAndMode.get(partId)?.get(scalarColorMode) ??
-    null;
-  if (scalarColorBufferMatchesSettings(partBuffer, scalarColorMode, settings)) {
-    return partBuffer;
-  }
-
-  const globalBuffer = fieldModel.scalarColorsByMode.get(scalarColorMode) ?? null;
+  const { scalarColors } = resolveViewport3DTargetSurfaceLayerInput({
+    fieldModel,
+    partId,
+    scalarColorMode,
+  });
   return scalarColorBufferMatchesSettings(
-    globalBuffer,
+    scalarColors,
     scalarColorMode,
     settings,
   )
-    ? globalBuffer
+    ? scalarColors
     : null;
+}
+
+export function resolveMeshPartVectorLayerInput({
+  fieldModel,
+  partId,
+}: Parameters<typeof resolveViewport3DTargetVectorLayerInput>[0]) {
+  return resolveViewport3DTargetVectorLayerInput({ fieldModel, partId });
 }
 
 export function resolveRetainedMeshPartScalarColors({
@@ -511,6 +522,10 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     renderSettings.pointsVisible ||
     renderSettings.vectorsVisible ||
     renderSettings.boundsVisible;
+  const vectorLayerInput = resolveMeshPartVectorLayerInput({
+    fieldModel,
+    partId: part.id,
+  });
 
   if (!geometry || !renderSettings.visible || !hasAnyVisibleSubLayer) return null;
   const meshColor = resolveMeshPartSurfaceMaterialColor(
@@ -602,12 +617,12 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       {viewport3DVectorLayersEnabledFromBrowserConfig() &&
       renderSettings.vectorsVisible ? (
         <VectorFieldLayer
-          buildReference={fieldModel?.partVectorBuilds.get(part.id) ?? null}
+          buildReference={vectorLayerInput.buildReference}
           colors={colors}
           colorMode={vectorColorModeFromSettings(renderSettings, vectorColorMode)}
           materialProfile={materialProfile.glyphs}
           opacity={surfaceOpacity}
-          segments={fieldModel?.partVectorSegments.get(part.id) ?? null}
+          segments={vectorLayerInput.segments}
           style={vectorStyleFromSettings(renderSettings, vectorStyle)}
           tracker={tracker}
         />

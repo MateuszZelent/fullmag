@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  useMemo,
   memo,
   type ComponentProps,
   type CSSProperties,
@@ -33,7 +34,10 @@ import {
 } from "@/kernel/selection/useSelection";
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
 import type { ModuleProps } from "@/kernel/types";
-import { surfaceColorSourceToColorMode } from "@/kernel/visualization/ObjectVisualizationController";
+import {
+  surfaceColorSourceToColorMode,
+  type VisualizationTargetSettings,
+} from "@/kernel/visualization/ObjectVisualizationController";
 import {
   useVisualizationClientAck,
   useVisualizationClientAckSender,
@@ -64,6 +68,7 @@ import {
   VIEWPORT_3D_ORBIT_DEBUG_LIMITS,
 } from "./layers/CameraControls";
 import { Viewport3DScene } from "./layers/Viewport3DScene";
+import { resolveViewport3DTargetSurfaceLayerInput } from "./layers/viewport3DLayerPassInputs";
 import type { RegionOverlaySelection } from "./layers/RegionOverlayLayer";
 import type { RegionOverlayMode } from "./regionOverlayMode";
 import { Viewport3DCameraDialog } from "./components/Viewport3DCameraDialog";
@@ -75,6 +80,15 @@ import type {
   HysteresisReplayGlyphModel,
   HysteresisStepViewportTarget,
 } from "./model/viewport3DTargets";
+import {
+  buildViewport3DTargetRenderPlan,
+  type Viewport3DTargetRenderPlan,
+} from "./model/viewport3DFieldDataPlan";
+import {
+  planViewport3DColorbars,
+  type Viewport3DColorbarPlan,
+  type Viewport3DColorbarRangeState,
+} from "./model/viewport3DColorbarPlan";
 import {
   useViewport3DResourceCounts,
   useViewport3DResourceTracker,
@@ -120,6 +134,7 @@ import {
   endViewport3DFieldUpdateHold,
 } from "./viewport3dFieldUpdateHold";
 import type { ScalarColorBuffer } from "./viewport3dFieldMapping";
+import { FULL_VIEWPORT_3D_TARGET_ID } from "./viewport3dRenderModel";
 import { installViewport3DThreeConsolePolicy } from "./viewport3dThreeConsolePolicy";
 
 type Viewport3DSceneProps = ComponentProps<typeof Viewport3DScene>;
@@ -151,6 +166,13 @@ interface Viewport3DScopedColorbarLegend {
   legend: Viewport3DColorbarLegend;
 }
 
+interface Viewport3DColorbarTargetPart {
+  id: string;
+  label: string;
+  settings: VisualizationTargetSettings;
+  targetKind: Viewport3DTargetRenderPlan["targetKind"];
+}
+
 interface Viewport3DInspectHover {
   inspectRevision: number;
   sample: Viewport3DInspectSample;
@@ -175,6 +197,23 @@ export function notifyMeshTopologyRendered({
 
 function formatLegendValue(value: number): string {
   return Number.isFinite(value) ? Number(value.toPrecision(4)).toString() : "unknown";
+}
+
+function formatViewport3DColorbarQuantityLabel({
+  colorMode,
+  quantityId,
+  unit,
+}: {
+  colorMode: string;
+  quantityId: string;
+  unit?: string | null;
+}): string {
+  const component =
+    colorMode === "x" || colorMode === "y" || colorMode === "z"
+      ? ` ${colorMode}`
+      : "";
+  const unitLabel = unit?.trim() ? ` [${unit.trim()}]` : "";
+  return `${quantityId}${component}${unitLabel}`;
 }
 
 export function resolveViewport3DMeshQualityLegend(
@@ -207,16 +246,48 @@ export function resolveViewport3DColorbarLegend({
     return null;
   }
 
-  const component =
-    normalizedMode === "x" || normalizedMode === "y" || normalizedMode === "z"
-      ? ` ${normalizedMode}`
-      : "";
-  const unitLabel = unit?.trim() ? ` [${unit.trim()}]` : "";
   return {
-    label: `${quantityId}${component}${unitLabel}`,
+    label: formatViewport3DColorbarQuantityLabel({
+      colorMode: normalizedMode,
+      quantityId,
+      unit,
+    }),
     maxLabel: formatLegendValue(range.max),
     minLabel: formatLegendValue(range.min),
     paletteGradient: viewport3DColorPaletteGradientCss(colorPalette),
+  };
+}
+
+function resolveViewport3DColorbarLegendFromPlan({
+  labelByTargetId,
+  plan,
+}: {
+  labelByTargetId: ReadonlyMap<string, string>;
+  plan: Viewport3DColorbarPlan;
+}): Viewport3DScopedColorbarLegend {
+  const unit = quantityUnitForColorbar(plan.quantityId);
+  const quantityLabel = formatViewport3DColorbarQuantityLabel({
+    colorMode: plan.colorMode,
+    quantityId: plan.quantityId,
+    unit,
+  });
+  const targetLabels = plan.targetIds
+    .map((targetId) => labelByTargetId.get(targetId) ?? targetId)
+    .filter((label, index, labels) => labels.indexOf(label) === index);
+  const labelPrefix =
+    targetLabels.length === 1
+      ? `${targetLabels[0]}: `
+      : targetLabels.length > 1
+        ? `${targetLabels.length} targets: `
+        : "";
+  return {
+    key: plan.renderKey,
+    legend: {
+      label: `${labelPrefix}${quantityLabel}`,
+      maxLabel: plan.range ? formatLegendValue(plan.range.max) : "pending",
+      minLabel: plan.range ? formatLegendValue(plan.range.min) : "pending",
+      paletteGradient: viewport3DColorPaletteGradientCss(plan.palette),
+    },
   };
 }
 
@@ -230,7 +301,9 @@ interface Viewport3DScalarColorbarLegendInput {
   fieldModel?: Pick<
     NonNullable<Viewport3DSceneProps["fieldModel"]>,
     "scalarColors" | "scalarColorsByMode" | "scalarColorsByPartAndMode"
-  > | null;
+  > &
+    Partial<Pick<NonNullable<Viewport3DSceneProps["fieldModel"]>, "targetPasses">>
+    | null;
   parts?: ReadonlyArray<{
     id: string;
     label: string;
@@ -351,6 +424,145 @@ function scalarColorBufferMatchesColorbarRequest({
   return true;
 }
 
+function resolveViewport3DTargetColorbarLegend({
+  colorMode,
+  colorPalette,
+  quantityId,
+  range,
+  unit,
+}: Viewport3DColorbarLegendInput): Viewport3DColorbarLegend | null {
+  const legend = resolveViewport3DColorbarLegend({
+    colorMode,
+    colorPalette,
+    quantityId,
+    range,
+    unit,
+  });
+  if (legend) return legend;
+
+  const normalizedMode = colorMode.trim().toLowerCase();
+  if (
+    normalizedMode === "orientation" ||
+    normalizedMode === "hsl_sphere" ||
+    normalizedMode === "hsl" ||
+    normalizedMode === "monochrome"
+  ) {
+    return null;
+  }
+
+  return {
+    label: formatViewport3DColorbarQuantityLabel({
+      colorMode: normalizedMode,
+      quantityId,
+      unit,
+    }),
+    maxLabel: "pending",
+    minLabel: "pending",
+    paletteGradient: viewport3DColorPaletteGradientCss(colorPalette),
+  };
+}
+
+export function resolveViewport3DColorbarRangeStates({
+  fdmSurfaceColors,
+  fieldModel,
+  plans,
+}: {
+  fdmSurfaceColors?: ScalarColorBuffer | null;
+  fieldModel?: (
+    Pick<
+      NonNullable<Viewport3DSceneProps["fieldModel"]>,
+      "scalarColorsByMode" | "scalarColorsByPartAndMode"
+    > &
+      Partial<
+        Pick<NonNullable<Viewport3DSceneProps["fieldModel"]>, "targetPasses">
+      >
+  ) | null;
+  plans: readonly Viewport3DColorbarPlan[];
+}): ReadonlyMap<string, Viewport3DColorbarRangeState> {
+  const rangeStates = new Map<string, Viewport3DColorbarRangeState>();
+  for (const plan of plans) {
+    const targetPassModelAuthoritative =
+      Boolean(fieldModel?.targetPasses) &&
+      (fieldModel?.targetPasses?.size ?? 0) > 0;
+    const candidate =
+      plan.scopeKind === "full" && fdmSurfaceColors
+        ? fdmSurfaceColors
+        : plan.scopeKind === "full"
+          ? resolveViewport3DTargetSurfaceLayerInput({
+              fieldModel: fieldModel ?? null,
+              partId: FULL_VIEWPORT_3D_TARGET_ID,
+              scalarColorMode: plan.colorMode,
+            }).scalarColors ??
+            (targetPassModelAuthoritative
+              ? null
+              : fieldModel?.scalarColorsByMode.get(plan.colorMode) ?? null)
+        : plan.scopeId == null
+          ? targetPassModelAuthoritative
+            ? null
+            : fieldModel?.scalarColorsByMode.get(plan.colorMode) ?? null
+          : resolveViewport3DTargetSurfaceLayerInput({
+              fieldModel: fieldModel ?? null,
+              partId: plan.scopeId,
+              scalarColorMode: plan.colorMode,
+            }).scalarColors;
+    const buffer = scalarColorBufferMatchesColorbarRequest({
+      buffer: candidate,
+      colorMode: plan.colorMode,
+      colorPalette: plan.palette,
+      quantityId: plan.quantityId,
+    })
+      ? candidate
+      : null;
+    rangeStates.set(plan.groupKey, {
+      range: buffer?.range ?? null,
+      state: buffer ? "current" : "pending",
+    });
+  }
+  return rangeStates;
+}
+
+export function buildViewport3DColorbarTargetPlans({
+  fdmSettings,
+  parts,
+}: {
+  fdmSettings?: VisualizationTargetSettings | null;
+  parts: readonly Viewport3DColorbarTargetPart[];
+}): Viewport3DTargetRenderPlan[] {
+  const targets = parts.map((part) =>
+    buildViewport3DTargetRenderPlan({
+      label: part.label,
+      quantityId: part.settings.activeQuantityId,
+      settings: part.settings,
+      targetId: part.id,
+      targetKind: part.targetKind,
+    }),
+  );
+  if (fdmSettings) {
+    targets.push(
+      buildViewport3DTargetRenderPlan({
+        label: "FDM domain",
+        quantityId: fdmSettings.activeQuantityId,
+        settings: fdmSettings,
+        targetId: "fdm",
+        targetKind: "fdm-domain",
+      }),
+    );
+  }
+  return targets;
+}
+
+export function resolveViewport3DColorbarLegendsFromPlans({
+  labelByTargetId,
+  plans,
+}: {
+  labelByTargetId: ReadonlyMap<string, string>;
+  plans: readonly Viewport3DColorbarPlan[];
+}): Viewport3DScopedColorbarLegend[] {
+  return plans.map((plan) =>
+    resolveViewport3DColorbarLegendFromPlan({ labelByTargetId, plan }),
+  );
+}
+
 export function resolveViewport3DScalarColorbarLegends({
   colorPalette,
   fdmSettings,
@@ -385,25 +597,20 @@ export function resolveViewport3DScalarColorbarLegends({
     const colorMode = surfaceColorSourceToColorMode(settings.surfaceColorSource);
     if (!colorMode) continue;
     const palette = settings.scalarColorPalette ?? colorPalette;
-    const partBuffer =
-      fieldModel?.scalarColorsByPartAndMode.get(part.id)?.get(colorMode) ?? null;
-    const globalBuffer = fieldModel?.scalarColorsByMode.get(colorMode) ?? null;
+    const targetBuffer = resolveViewport3DTargetSurfaceLayerInput({
+      fieldModel: fieldModel ?? null,
+      partId: part.id,
+      scalarColorMode: colorMode,
+    }).scalarColors;
     const buffer = scalarColorBufferMatchesColorbarRequest({
-      buffer: partBuffer,
+      buffer: targetBuffer,
       colorMode,
       colorPalette: palette,
       quantityId: settings.activeQuantityId,
     })
-      ? partBuffer
-      : scalarColorBufferMatchesColorbarRequest({
-            buffer: globalBuffer,
-            colorMode,
-            colorPalette: palette,
-            quantityId: settings.activeQuantityId,
-          })
-        ? globalBuffer
-        : null;
-    const legend = resolveViewport3DColorbarLegend({
+      ? targetBuffer
+      : null;
+    const legend = resolveViewport3DTargetColorbarLegend({
       colorMode,
       colorPalette: buffer?.colorPalette ?? palette,
       quantityId: settings.activeQuantityId,
@@ -533,67 +740,107 @@ export function shouldRetainViewport3DScalarColorbarLegends({
   );
 }
 
+export function resolveViewport3DColorbarPlansForRender({
+  planned,
+  renderSurfaceAvailable,
+  retained,
+  targetPlanAvailable,
+  viewportColorbarRequested,
+}: {
+  planned: readonly Viewport3DColorbarPlan[];
+  renderSurfaceAvailable: boolean;
+  retained: readonly Viewport3DColorbarPlan[];
+  targetPlanAvailable: boolean;
+  viewportColorbarRequested: boolean;
+}): readonly Viewport3DColorbarPlan[] {
+  if (planned.length > 0) return planned;
+  return viewportColorbarRequested || !renderSurfaceAvailable || !targetPlanAvailable
+    ? retained
+    : planned;
+}
+
+export function resolveRetainedViewport3DColorbarPlansForStore({
+  planned,
+  renderSurfaceAvailable,
+  retained,
+  targetPlanAvailable,
+  viewportColorbarRequested,
+}: {
+  planned: readonly Viewport3DColorbarPlan[];
+  renderSurfaceAvailable: boolean;
+  retained: readonly Viewport3DColorbarPlan[];
+  targetPlanAvailable: boolean;
+  viewportColorbarRequested: boolean;
+}): readonly Viewport3DColorbarPlan[] {
+  if (planned.length > 0) return planned;
+  return viewportColorbarRequested || !renderSurfaceAvailable || !targetPlanAvailable
+    ? retained
+    : EMPTY_VIEWPORT_3D_COLORBAR_PLANS;
+}
+
 function viewport3DColorbarRetentionGroupKey(key: string): string {
   return key;
 }
 
-function sameViewport3DScopedColorbarLegends(
-  left: readonly Viewport3DScopedColorbarLegend[],
-  right: readonly Viewport3DScopedColorbarLegend[],
+const retainedViewport3DColorbarPlansBySlot = new Map<
+  string,
+  readonly Viewport3DColorbarPlan[]
+>();
+const retainedViewport3DColorbarPlanListeners = new Set<() => void>();
+const EMPTY_VIEWPORT_3D_COLORBAR_PLANS: readonly Viewport3DColorbarPlan[] = [];
+
+function sameViewport3DColorbarPlans(
+  left: readonly Viewport3DColorbarPlan[],
+  right: readonly Viewport3DColorbarPlan[],
 ): boolean {
   if (left === right) return true;
   if (left.length !== right.length) return false;
-  return left.every((entry, index) => {
+  return left.every((plan, index) => {
     const other = right[index];
     return (
       other !== undefined &&
-      entry.key === other.key &&
-      entry.legend.label === other.legend.label &&
-      entry.legend.maxLabel === other.legend.maxLabel &&
-      entry.legend.minLabel === other.legend.minLabel &&
-      entry.legend.paletteGradient === other.legend.paletteGradient
+      plan.groupKey === other.groupKey &&
+      plan.range?.min === other.range?.min &&
+      plan.range?.max === other.range?.max &&
+      plan.rangeState === other.rangeState &&
+      plan.targetIds.length === other.targetIds.length &&
+      plan.targetIds.every((targetId, targetIndex) =>
+        targetId === other.targetIds[targetIndex],
+      )
     );
   });
 }
 
-const retainedViewport3DColorbarLegendsBySlot = new Map<
-  string,
-  readonly Viewport3DScopedColorbarLegend[]
->();
-const retainedViewport3DColorbarLegendListeners = new Set<() => void>();
-const EMPTY_VIEWPORT_3D_SCOPED_COLORBAR_LEGENDS: readonly Viewport3DScopedColorbarLegend[] =
-  [];
-
-function subscribeRetainedViewport3DColorbarLegends(
+function subscribeRetainedViewport3DColorbarPlans(
   listener: () => void,
 ): () => void {
-  retainedViewport3DColorbarLegendListeners.add(listener);
+  retainedViewport3DColorbarPlanListeners.add(listener);
   return () => {
-    retainedViewport3DColorbarLegendListeners.delete(listener);
+    retainedViewport3DColorbarPlanListeners.delete(listener);
   };
 }
 
-function getRetainedViewport3DColorbarLegends(
+function getRetainedViewport3DColorbarPlans(
   slotId: string,
-): readonly Viewport3DScopedColorbarLegend[] {
+): readonly Viewport3DColorbarPlan[] {
   return (
-    retainedViewport3DColorbarLegendsBySlot.get(slotId) ??
-    EMPTY_VIEWPORT_3D_SCOPED_COLORBAR_LEGENDS
+    retainedViewport3DColorbarPlansBySlot.get(slotId) ??
+    EMPTY_VIEWPORT_3D_COLORBAR_PLANS
   );
 }
 
-function setRetainedViewport3DColorbarLegends(
+function setRetainedViewport3DColorbarPlans(
   slotId: string,
-  legends: readonly Viewport3DScopedColorbarLegend[],
+  plans: readonly Viewport3DColorbarPlan[],
 ): void {
-  const current = getRetainedViewport3DColorbarLegends(slotId);
-  if (sameViewport3DScopedColorbarLegends(current, legends)) return;
-  if (legends.length > 0) {
-    retainedViewport3DColorbarLegendsBySlot.set(slotId, legends);
+  const current = getRetainedViewport3DColorbarPlans(slotId);
+  if (sameViewport3DColorbarPlans(current, plans)) return;
+  if (plans.length > 0) {
+    retainedViewport3DColorbarPlansBySlot.set(slotId, plans);
   } else {
-    retainedViewport3DColorbarLegendsBySlot.delete(slotId);
+    retainedViewport3DColorbarPlansBySlot.delete(slotId);
   }
-  for (const listener of retainedViewport3DColorbarLegendListeners) {
+  for (const listener of retainedViewport3DColorbarPlanListeners) {
     listener();
   }
 }
@@ -965,92 +1212,119 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     meshQualityMetric,
     meshQualityRange,
   );
-  const activeSurfaceColorMode =
-    sceneProps.fdmDomain !== null
-      ? surfaceColorSourceToColorMode(sceneProps.fdmSettings.surfaceColorSource)
-      : surfaceColorSourceToColorMode(
-          sceneProps.fallbackSettings.surfaceColorSource,
-        );
-  const colorbarParts = [
-    ...(sceneProps.topologyModel?.magneticParts ?? []),
-    ...(sceneProps.topologyModel?.airboxParts ?? []),
-  ].map((partModel) => ({
-    id: partModel.part.id,
-    label: partModel.part.label ?? partModel.part.id,
-    settings: sceneProps.getPartSettings(partModel.part),
-  }));
-  const viewportColorbarRequested = colorbarParts.some(({ settings }) =>
-    Boolean(
-      settings.viewportColorbarVisible &&
-        settings.visible &&
-        settings.shaderVisible &&
-        surfaceColorSourceToColorMode(settings.surfaceColorSource),
-    ),
+  const colorbarTopologyModel = sceneProps.topologyModel;
+  const getColorbarPartSettings = sceneProps.getPartSettings;
+  const colorbarParts = useMemo<Viewport3DColorbarTargetPart[]>(
+    () => [
+      ...(colorbarTopologyModel?.magneticParts ?? []).map((partModel) => ({
+        id: partModel.part.id,
+        label: partModel.part.label ?? partModel.part.id,
+        settings: getColorbarPartSettings(partModel.part),
+        targetKind: "part" as const,
+      })),
+      ...(colorbarTopologyModel?.airboxParts ?? []).map((partModel) => ({
+        id: partModel.part.id,
+        label: partModel.part.label ?? partModel.part.id,
+        settings: getColorbarPartSettings(partModel.part),
+        targetKind: "airbox" as const,
+      })),
+    ],
+    [colorbarTopologyModel, getColorbarPartSettings],
   );
-  const fdmColorbarRequested = Boolean(
-    sceneProps.fdmSettings?.viewportColorbarVisible,
-  );
-  const requestedColorbarGroupKeys =
-    resolveViewport3DRequestedColorbarGroupKeys(
-      colorbarParts,
-      sceneProps.scalarColorPalette,
-      { fdmColorbarRequested },
-    );
   const renderSurfaceAvailable = Boolean(sceneProps.topology || sceneProps.fdmDomain);
-  const colorbarRetentionRequested =
-    shouldRetainViewport3DScalarColorbarLegends({
-      fdmColorbarRequested,
-      renderSurfaceAvailable,
-      viewportColorbarRequested,
-    });
-  const retainedColorbarLegends = useSyncExternalStore(
-    subscribeRetainedViewport3DColorbarLegends,
-    () => getRetainedViewport3DColorbarLegends(slotId),
-    () => EMPTY_VIEWPORT_3D_SCOPED_COLORBAR_LEGENDS,
+  const retainedColorbarPlans = useSyncExternalStore(
+    subscribeRetainedViewport3DColorbarPlans,
+    () => getRetainedViewport3DColorbarPlans(slotId),
+    () => EMPTY_VIEWPORT_3D_COLORBAR_PLANS,
   );
-  const resolvedColorbarLegends = resolveViewport3DScalarColorbarLegends({
-    colorPalette: sceneProps.scalarColorPalette,
-    fdmSettings: sceneProps.fdmSettings,
-    fdmSurfaceColors: sceneProps.fdmSurfaceColors,
-    fieldModel: sceneProps.fieldModel,
-    parts: colorbarParts,
-    quantityId,
-    surfaceColorMode: activeSurfaceColorMode,
-    unit: quantityUnitForColorbar(quantityId),
-    vectorColorMode: sceneProps.vectorColorMode,
+  const colorbarTargetPlans = useMemo(
+    () =>
+      buildViewport3DColorbarTargetPlans({
+        fdmSettings: sceneProps.fdmDomain ? sceneProps.fdmSettings : null,
+        parts: colorbarParts,
+      }),
+    [colorbarParts, sceneProps.fdmDomain, sceneProps.fdmSettings],
+  );
+  const initialColorbarPlans = useMemo(
+    () => planViewport3DColorbars({ targets: colorbarTargetPlans }),
+    [colorbarTargetPlans],
+  );
+  const previousColorbarPlansByGroupKey = useMemo(
+    () => new Map(retainedColorbarPlans.map((plan) => [plan.groupKey, plan])),
+    [retainedColorbarPlans],
+  );
+  const colorbarRangeStates = useMemo(
+    () =>
+      resolveViewport3DColorbarRangeStates({
+        fdmSurfaceColors: sceneProps.fdmSurfaceColors,
+        fieldModel: sceneProps.fieldModel,
+        plans: initialColorbarPlans,
+      }),
+    [initialColorbarPlans, sceneProps.fdmSurfaceColors, sceneProps.fieldModel],
+  );
+  const plannedColorbars = useMemo(
+    () =>
+      planViewport3DColorbars({
+        previousPlans: previousColorbarPlansByGroupKey,
+        rangeStatesByGroupKey: colorbarRangeStates,
+        targets: colorbarTargetPlans,
+      }),
+    [
+      colorbarRangeStates,
+      colorbarTargetPlans,
+      previousColorbarPlansByGroupKey,
+    ],
+  );
+  const viewportColorbarRequested = colorbarTargetPlans.some(
+    (target) => target.colorbar.viewportVisible,
+  );
+  const colorbarTargetPlanAvailable = Boolean(
+    sceneProps.fdmDomain || colorbarTopologyModel,
+  );
+  const colorbarPlans = resolveViewport3DColorbarPlansForRender({
+    planned: plannedColorbars,
+    renderSurfaceAvailable,
+    retained: retainedColorbarPlans,
+    targetPlanAvailable: colorbarTargetPlanAvailable,
+    viewportColorbarRequested,
   });
-  const colorbarLegends = resolveRetainedViewport3DScalarColorbarLegends({
-    current: resolvedColorbarLegends,
-    previous: retainedColorbarLegends,
-    requested: colorbarRetentionRequested,
-    requestedGroupKeys: viewportColorbarRequested || fdmColorbarRequested
-      ? requestedColorbarGroupKeys
-      : undefined,
-  });
-  useEffect(() => {
-    if (resolvedColorbarLegends.length > 0) {
-      setRetainedViewport3DColorbarLegends(slotId, resolvedColorbarLegends);
-    } else if (
-      shouldClearRetainedViewport3DScalarColorbarLegends({
-        fdmColorbarRequested,
-        renderSurfaceAvailable,
-        viewportColorbarRequested,
-      })
-    ) {
-      setRetainedViewport3DColorbarLegends(
-        slotId,
-        EMPTY_VIEWPORT_3D_SCOPED_COLORBAR_LEGENDS,
-      );
+  const colorbarLabelByTargetId = useMemo(() => {
+    const labels = new Map<string, string>(
+      colorbarParts.map((part) => [part.id, part.label]),
+    );
+    if (sceneProps.fdmDomain) {
+      labels.set("fdm", "FDM domain");
     }
+    return labels;
+  }, [colorbarParts, sceneProps.fdmDomain]);
+  const colorbarLegends = useMemo(
+    () =>
+      resolveViewport3DColorbarLegendsFromPlans({
+        labelByTargetId: colorbarLabelByTargetId,
+        plans: colorbarPlans,
+      }),
+    [colorbarLabelByTargetId, colorbarPlans],
+  );
+  useEffect(() => {
+    setRetainedViewport3DColorbarPlans(
+      slotId,
+      resolveRetainedViewport3DColorbarPlansForStore({
+        planned: plannedColorbars,
+        renderSurfaceAvailable,
+        retained: retainedColorbarPlans,
+        targetPlanAvailable: colorbarTargetPlanAvailable,
+        viewportColorbarRequested,
+      }),
+    );
     viewport3dStore.setActiveScalarColorbarLegends(
       colorbarLegends.map(({ legend }) => legend),
     );
   }, [
     colorbarLegends,
-    colorbarRetentionRequested,
-    fdmColorbarRequested,
-    resolvedColorbarLegends,
+    colorbarTargetPlanAvailable,
+    plannedColorbars,
     renderSurfaceAvailable,
+    retainedColorbarPlans,
     slotId,
     viewportColorbarRequested,
   ]);

@@ -11,6 +11,8 @@ import {
 } from "@/kernel/performance/diagnostic-recorder/diagnosticRecorderTypes";
 import type { ResourceCacheStats } from "@/kernel/resources/ResourceCache";
 
+import type { Viewport3DFieldDemandDiagnosticSummary } from "./model/viewport3DFieldDataPlan";
+import type { Viewport3DTargetDiagnosticSummary } from "./model/viewport3DTargetDiagnostics";
 import {
   createDiagnosticRecordFromViewport3DBuildDiagnostic,
   subscribeViewport3DBuildDiagnostics,
@@ -46,10 +48,12 @@ export interface Viewport3DResourceCounts {
 export interface Viewport3DDiagnosticsInput {
   airboxPartCount: number;
   cache: ResourceCacheStats;
+  fieldDemandDiagnostics?: readonly Viewport3DFieldDemandDiagnosticSummary[];
   fieldRevision: string | number | null;
   objectCount: number;
   quantityId: string;
   surfaceColorStatus?: string | null;
+  targetDiagnostics?: readonly Viewport3DTargetDiagnosticSummary[];
   topologyRevision: string | number | null;
   tracker: Viewport3DResourceCounts;
 }
@@ -329,12 +333,43 @@ export function buildViewport3DDiagnostics(
     ...(input.surfaceColorStatus
       ? [`surface:${input.surfaceColorStatus}`]
       : []),
+    ...formatFieldDemandDiagnostics(input.fieldDemandDiagnostics),
+    ...formatTargetDiagnostics(input.targetDiagnostics),
     `obj:${input.objectCount}`,
     `air:${input.airboxPartCount}`,
     `geo:${input.tracker.geometries}`,
     `cache:${formatBytes(input.cache.byteLength)}`,
     `frames:${input.tracker.frames}`,
   ].join(" ");
+}
+
+function formatFieldDemandDiagnostics(
+  summaries: readonly Viewport3DFieldDemandDiagnosticSummary[] | undefined,
+): string[] {
+  if (!summaries?.length) return [];
+  const entries = summaries.slice(0, 2).map((summary) => {
+    const demands = summary.demands.join("|") || "none";
+    const requests = summary.requests.join("|") || "none";
+    return `${summary.targetId}{${demands}=>${requests}}`;
+  });
+  const suffix = summaries.length > entries.length ? ";..." : "";
+  return [`field-demands:${summaries.length}[${entries.join(";")}${suffix}]`];
+}
+
+function formatTargetDiagnostics(
+  summaries: readonly Viewport3DTargetDiagnosticSummary[] | undefined,
+): string[] {
+  if (!summaries?.length) return [];
+  const entries = summaries.slice(0, 2).map((summary) => {
+    const passes = summary.passes.join("|") || "none";
+    const demand = summary.demand ?? "none";
+    const buffers = summary.buffers.join("|") || "none";
+    const derivedWork = summary.derivedWork.join("|") || "none";
+    const degradation = summary.degradation.join("|") || "none";
+    return `${summary.targetId}{passes=${passes} demand=${demand} buffers=${buffers} work=${derivedWork} degradation=${degradation}}`;
+  });
+  const suffix = summaries.length > entries.length ? ";..." : "";
+  return [`target-passes:${summaries.length}[${entries.join(";")}${suffix}]`];
 }
 
 export function useViewport3DResourceCounts(

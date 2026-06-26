@@ -40,6 +40,7 @@ import type {
   Viewport3DFieldRenderModel,
   Viewport3DTopologyRenderModel,
 } from "../viewport3dRenderModel";
+import { FULL_VIEWPORT_3D_TARGET_ID } from "../viewport3dRenderModel";
 import {
   canApplyScalarShaderColorBuffer,
   createScalarSurfaceShaderMaterial,
@@ -49,6 +50,10 @@ import type { Viewport3DColors } from "../viewport3dTypes";
 import { VectorFieldLayer } from "./VectorFieldLayer";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
 import { eventIntersectsRegionOverlay } from "./regionOverlayPicking";
+import {
+  resolveViewport3DTargetSurfaceLayerInput,
+  resolveViewport3DTargetVectorLayerInput,
+} from "./viewport3DLayerPassInputs";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import {
   opacityFromSettings,
@@ -190,9 +195,15 @@ export function FallbackTopologyMeshLayer({
   const scalarColorMode = fieldColorLayersEnabled
     ? surfaceScalarColorModeFromSettings(renderSettings)
     : null;
-  const scalarColors = scalarColorMode
-    ? fieldModel?.scalarColorsByMode.get(scalarColorMode) ?? null
-    : null;
+  const { scalarColors } = resolveViewport3DTargetSurfaceLayerInput({
+    fieldModel,
+    partId: FULL_VIEWPORT_3D_TARGET_ID,
+    scalarColorMode,
+  });
+  const vectorLayerInput = resolveViewport3DTargetVectorLayerInput({
+    fieldModel,
+    partId: FULL_VIEWPORT_3D_TARGET_ID,
+  });
   const effectiveScalarColors = meshQualityColors ?? scalarColors;
   const vertexColorsEnabled =
     Boolean(meshQualityColors) ||
@@ -324,7 +335,6 @@ export function FallbackTopologyMeshLayer({
     <FallbackTopologyMeshPrimitives
       colors={colors}
       edgeGeometry={edgeGeometry}
-      fieldModel={fieldModel}
       geometry={geometry}
       hasScalarColors={hasScalarColors}
       materialProfile={materialProfile}
@@ -335,7 +345,9 @@ export function FallbackTopologyMeshLayer({
       surfaceOpacity={surfaceOpacity}
       surfacePolicy={surfacePolicy}
       tracker={tracker}
+      vectorBuildReference={vectorLayerInput.buildReference}
       vectorColorMode={vectorColorMode}
+      vectorSegments={vectorLayerInput.segments}
       vectorStyle={vectorStyle}
     />
   );
@@ -344,7 +356,6 @@ export function FallbackTopologyMeshLayer({
 function FallbackTopologyMeshPrimitives({
   colors,
   edgeGeometry,
-  fieldModel,
   geometry,
   hasScalarColors,
   materialProfile,
@@ -355,12 +366,13 @@ function FallbackTopologyMeshPrimitives({
   surfaceOpacity,
   surfacePolicy,
   tracker,
+  vectorBuildReference,
   vectorColorMode,
+  vectorSegments,
   vectorStyle,
 }: {
   colors: Viewport3DColors;
   edgeGeometry: BufferGeometry | null;
-  fieldModel: Viewport3DFieldRenderModel | null;
   geometry: BufferGeometry | null;
   hasScalarColors: boolean;
   materialProfile: Viewport3DMaterialProfile;
@@ -371,7 +383,9 @@ function FallbackTopologyMeshPrimitives({
   surfaceOpacity: number;
   surfacePolicy: ReturnType<typeof surfaceMaterialPolicyProps>;
   tracker: Viewport3DResourceTracker;
+  vectorBuildReference: Viewport3DFieldRenderModel["fullVectorBuild"];
   vectorColorMode: string;
+  vectorSegments: Viewport3DFieldRenderModel["fullVectorSegments"];
   vectorStyle: VectorFieldLayerVectorStyle;
 }) {
   return (
@@ -453,7 +467,7 @@ function FallbackTopologyMeshPrimitives({
       {viewport3DVectorLayersEnabledFromBrowserConfig() &&
       renderSettings.vectorsVisible ? (
         <VectorFieldLayer
-          buildReference={fieldModel?.fullVectorBuild ?? null}
+          buildReference={vectorBuildReference}
           colors={colors}
           colorMode={vectorColorModeFromSettings(
             renderSettings,
@@ -461,7 +475,7 @@ function FallbackTopologyMeshPrimitives({
           )}
           materialProfile={materialProfile.glyphs}
           opacity={surfaceOpacity}
-          segments={fieldModel?.fullVectorSegments ?? null}
+          segments={vectorSegments}
           style={vectorStyleFromSettings(renderSettings, vectorStyle)}
           tracker={tracker}
         />

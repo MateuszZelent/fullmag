@@ -35,6 +35,10 @@ import { ResourceCache } from "@/kernel/resources/ResourceCache";
 import type { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
 import { useResource } from "@/kernel/resources/useResource";
 
+import {
+  buildViewport3DFieldResourceRequestId,
+  type Viewport3DFieldResourceRequest,
+} from "./model/viewport3DFieldDataPlan";
 import { viewport3DFieldUpdateHoldActive } from "./viewport3dFieldUpdateHold";
 
 const topologyCache = new ResourceCache<DecodedTopology>({
@@ -108,21 +112,32 @@ const FULL_FIELD_VECTOR_QUERY: FieldVectorQuery = {
 };
 
 export interface Viewport3DQuantityFieldVectorRequest {
+  consumers?: readonly string[];
   key: string;
+  quantityId: string;
   query: FieldVectorQuery;
+  requestId?: string;
 }
 
 export interface Viewport3DPartFieldVectorRequest {
+  consumers?: readonly string[];
   key: string;
   quantityId: string;
   query: FieldVectorQuery;
+  requestId?: string;
 }
 
 export interface Viewport3DAirboxFieldVectorRequest {
+  consumers?: readonly string[];
   key: string;
   quantityId: string;
   query: FieldVectorQuery;
+  requestId?: string;
 }
+
+type Viewport3DAirboxFieldVectorSourceRequest =
+  | Viewport3DAirboxFieldVectorRequest
+  | Viewport3DFieldResourceRequest;
 
 export function viewport3DFieldMetaResourceMatchesQuantity(
   resourceKey: string,
@@ -375,6 +390,12 @@ export function resolveViewport3DFieldVectorResourceKey(
   return suffix ? `${path}?${suffix}` : path;
 }
 
+export function resolveViewport3DFieldVectorRequestResourceKey(
+  request: Viewport3DFieldResourceRequest,
+): string {
+  return resolveViewport3DFieldVectorResourceKey(request.quantityId, request.query);
+}
+
 export function resolveViewport3DAirboxFieldVectorQuery(
   fieldQuery: FieldVectorQuery = FULL_FIELD_VECTOR_QUERY,
 ): FieldVectorQuery {
@@ -460,31 +481,79 @@ export function resolveViewport3DQuantityFieldVectorResourceKeys(
 }
 
 export function resolveViewport3DQuantityFieldVectorResourceRequests(
-  quantityQueries: ReadonlyMap<string, FieldVectorQuery>,
+  quantityQueries: ReadonlyMap<
+    string,
+    FieldVectorQuery | Viewport3DFieldResourceRequest
+  >,
 ): Map<string, Viewport3DQuantityFieldVectorRequest> {
-  const canonicalQueries = new Map<string, FieldVectorQuery>();
-  for (const [quantityId, query] of quantityQueries) {
-    const trimmed = quantityId.trim();
-    if (!trimmed) continue;
-    canonicalQueries.set(resolveCanonicalQuantityId(trimmed), query);
+  const canonicalQueries = new Map<string, {
+    consumers?: readonly string[];
+    query: FieldVectorQuery;
+    quantityId: string;
+    requestId?: string;
+  }>();
+  for (const [sourceKey, queryOrRequest] of quantityQueries) {
+    const quantityId = resolveCanonicalQuantityId(
+      "quantityId" in queryOrRequest ? queryOrRequest.quantityId : sourceKey,
+    );
+    if (!quantityId) continue;
+    const requestMetadata = viewport3DFieldResourceRequestMetadata(queryOrRequest);
+    const query = viewport3DFieldResourceRequestQuery(queryOrRequest);
+    const requestId =
+      requestMetadata?.requestId ??
+      buildViewport3DFieldResourceRequestId(quantityId, query);
+    canonicalQueries.set(requestId, {
+      ...(requestMetadata?.consumers
+        ? { consumers: requestMetadata.consumers }
+        : {}),
+      query,
+      quantityId,
+      requestId,
+    });
   }
   return new Map(
     Array.from(canonicalQueries)
       .sort(([left], [right]) => left.localeCompare(right))
-      .map(([quantityId, query]) => [
-        quantityId,
+      .map(([requestId, request]) => [
+        requestId,
         {
-          key: resolveViewport3DFieldVectorResourceKey(quantityId, query),
-          query,
+          ...(request.consumers ? { consumers: request.consumers } : {}),
+          key: resolveViewport3DFieldVectorResourceKey(
+            request.quantityId,
+            request.query,
+          ),
+          quantityId: request.quantityId,
+          query: request.query,
+          ...(request.requestId ? { requestId: request.requestId } : {}),
         },
       ]),
   );
 }
 
+function viewport3DFieldResourceRequestQuery(
+  queryOrRequest: FieldVectorQuery | Viewport3DFieldResourceRequest,
+): FieldVectorQuery {
+  return "requestId" in queryOrRequest ? queryOrRequest.query : queryOrRequest;
+}
+
+function viewport3DFieldResourceRequestMetadata(
+  queryOrRequest:
+    | FieldVectorQuery
+    | Viewport3DFieldResourceRequest
+    | { quantityId: string; query: FieldVectorQuery },
+): Pick<Viewport3DFieldResourceRequest, "consumers" | "requestId"> | null {
+  return "requestId" in queryOrRequest && "consumers" in queryOrRequest
+    ? {
+        consumers: queryOrRequest.consumers,
+        requestId: queryOrRequest.requestId,
+      }
+    : null;
+}
+
 export function resolveViewport3DPartFieldVectorResourceRequests(
   partQueries: ReadonlyMap<
     string,
-    { quantityId: string; query: FieldVectorQuery }
+    { quantityId: string; query: FieldVectorQuery } | Viewport3DFieldResourceRequest
   >,
 ): Map<string, Viewport3DPartFieldVectorRequest> {
   return new Map(
@@ -495,21 +564,31 @@ export function resolveViewport3DPartFieldVectorResourceRequests(
         const quantityId = resolveCanonicalQuantityId(
           request.quantityId.trim(),
         );
+        const requestMetadata = viewport3DFieldResourceRequestMetadata(request);
+        const scopeId = request.query.scope_id ?? partId;
         const query: FieldVectorQuery = {
           ...request.query,
           component: request.query.component ?? "full",
-          scope_id: partId,
-          scope_kind: "part",
+          scope_id: scopeId,
+          scope_kind: request.query.scope_id
+            ? request.query.scope_kind ?? "part"
+            : "part",
         };
         return [
           partId,
           {
+            ...(requestMetadata?.consumers
+              ? { consumers: requestMetadata.consumers }
+              : {}),
             key: resolveViewport3DFieldVectorResourceKey(
               quantityId,
               query,
             ),
             quantityId,
             query,
+            ...(requestMetadata?.requestId
+              ? { requestId: requestMetadata.requestId }
+              : {}),
           },
         ];
       }),
@@ -567,7 +646,6 @@ export function useViewport3DFieldVector(
   enabled = true,
   options: { pauseLoad?: boolean } = {},
 ) {
-  const { api, resources } = useKernel();
   const component = fieldQuery.component ?? "full";
   const maxSamples = fieldQuery.max_samples ?? null;
   const phaseRad = fieldQuery.phase_rad ?? null;
@@ -589,9 +667,29 @@ export function useViewport3DFieldVector(
     }),
     [component, maxSamples, phaseRad, scopeId, scopeKind, snapshotId, stageId, view],
   );
-  const requestKey = useMemo(
-    () => resolveViewport3DFieldVectorResourceKey(quantityId, query),
+  const request = useMemo<Viewport3DFieldResourceRequest>(
+    () => ({
+      consumers: ["legacy-field-vector-hook"],
+      quantityId,
+      query,
+      requestId: buildViewport3DFieldResourceRequestId(quantityId, query),
+    }),
     [quantityId, query],
+  );
+  return useViewport3DFieldVectorRequest(request, enabled, options);
+}
+
+export function useViewport3DFieldVectorRequest(
+  request: Viewport3DFieldResourceRequest,
+  enabled = true,
+  options: { pauseLoad?: boolean } = {},
+) {
+  const { api, resources } = useKernel();
+  const quantityId = request.quantityId;
+  const query = request.query;
+  const requestKey = useMemo(
+    () => resolveViewport3DFieldVectorRequestResourceKey(request),
+    [request],
   );
   const load = useCallback(
     async ({ signal }: { signal: AbortSignal }) => {
@@ -648,18 +746,30 @@ export function useViewport3DAirboxFieldVectors(
   quantityId: string,
   airboxParts: readonly { id: string }[],
   enabled = true,
-  fieldQuery: FieldVectorQuery = FULL_FIELD_VECTOR_QUERY,
+  fieldSource:
+    | FieldVectorQuery
+    | ReadonlyMap<string, Viewport3DAirboxFieldVectorSourceRequest> =
+    FULL_FIELD_VECTOR_QUERY,
   options: { pauseLoad?: boolean } = {},
 ) {
   const { api, resources } = useKernel();
   const requests = useMemo(
-    () =>
-      resolveViewport3DAirboxFieldVectorResourceRequests(
+    () => {
+      if (isViewport3DAirboxFieldVectorRequestMap(fieldSource)) {
+        return new Map(
+          Array.from(fieldSource, ([partId, request]) => [
+            partId,
+            normalizeViewport3DAirboxFieldVectorRequest(request),
+          ]),
+        );
+      }
+      return resolveViewport3DAirboxFieldVectorResourceRequests(
         quantityId,
         airboxParts,
-        fieldQuery,
-      ),
-    [airboxParts, fieldQuery, quantityId],
+        fieldSource,
+      );
+    },
+    [airboxParts, fieldSource, quantityId],
   );
   const resourceKey = useMemo(() => {
     return resolveViewport3DFieldVectorCollectionResourceKey(
@@ -747,8 +857,31 @@ export function useViewport3DAirboxFieldVectors(
   };
 }
 
+function isViewport3DAirboxFieldVectorRequestMap(
+  value:
+    | FieldVectorQuery
+    | ReadonlyMap<string, Viewport3DAirboxFieldVectorSourceRequest>,
+): value is ReadonlyMap<string, Viewport3DAirboxFieldVectorSourceRequest> {
+  return typeof (value as { entries?: unknown }).entries === "function";
+}
+
+function normalizeViewport3DAirboxFieldVectorRequest(
+  request: Viewport3DAirboxFieldVectorSourceRequest,
+): Viewport3DAirboxFieldVectorRequest {
+  if ("key" in request) return request;
+  return {
+    consumers: request.consumers,
+    key: resolveViewport3DFieldVectorRequestResourceKey(request),
+    quantityId: request.quantityId,
+    query: request.query,
+    requestId: request.requestId,
+  };
+}
+
 export function useViewport3DQuantityFieldVectors(
-  quantitySource: readonly string[] | ReadonlyMap<string, FieldVectorQuery>,
+  quantitySource:
+    | readonly string[]
+    | ReadonlyMap<string, FieldVectorQuery | Viewport3DFieldResourceRequest>,
   enabled = true,
   options: { pauseLoad?: boolean } = {},
 ) {
@@ -762,6 +895,7 @@ export function useViewport3DQuantityFieldVectors(
             quantityId,
             {
               key,
+              quantityId,
               query: FULL_FIELD_VECTOR_QUERY,
             },
           ]),
@@ -769,7 +903,10 @@ export function useViewport3DQuantityFieldVectors(
     }
 
     return resolveViewport3DQuantityFieldVectorResourceRequests(
-      quantitySource as ReadonlyMap<string, FieldVectorQuery>,
+      quantitySource as ReadonlyMap<
+        string,
+        FieldVectorQuery | Viewport3DFieldResourceRequest
+      >,
     );
   }, [quantitySource]);
   const resourceKey = useMemo(() => {
@@ -781,13 +918,13 @@ export function useViewport3DQuantityFieldVectors(
   const load = useCallback(
     async ({ signal }: { signal: AbortSignal }) => {
       const entries = await Promise.all(
-        Array.from(requestKeys, async ([quantityId, request]) => {
+        Array.from(requestKeys, async ([requestId, request]) => {
           const data = await loadCachedBinaryResource(
             fieldVectorCache,
             request.key,
             (etag, requestSignal) =>
               api.data.fields.vector(
-                quantityId,
+                request.quantityId,
                 request.query,
                 { etag, signal: requestSignal },
               ),
@@ -804,11 +941,11 @@ export function useViewport3DQuantityFieldVectors(
           if (data !== null) {
             invalidateViewport3DFieldMetaResources(
               resources,
-              quantityId,
+              request.quantityId,
               fieldVectorCache.peek(request.key)?.etag ?? null,
             );
           }
-          return [quantityId, data] as const;
+          return [requestId, data] as const;
         }),
       );
 

@@ -49,6 +49,7 @@ function fallbackTopology(): Viewport3DTopologyRenderModel {
 function vectorFieldModel(): Viewport3DFieldRenderModel {
   return {
     complexFieldVector: null,
+    derivedWorkItems: [],
     fullVectorBuild: null,
     fullVectorSegments: new Float32Array([0, 0, 0, 1, 0, 0, 1]),
     partVectorBuilds: new Map(),
@@ -56,6 +57,8 @@ function vectorFieldModel(): Viewport3DFieldRenderModel {
     scalarColors: null,
     scalarColorsByPartAndMode: new Map(),
     scalarColorsByMode: new Map(),
+    targetDiagnostics: [],
+    targetPasses: new Map(),
     visualizationPhaseRad: null,
   };
 }
@@ -115,6 +118,21 @@ describe("FallbackTopologyMeshLayer", () => {
 
     expect(source).toContain("function FallbackTopologyMeshPrimitives");
     expect(source).toContain("<FallbackTopologyMeshPrimitives");
+  });
+
+  it("resolves fallback field buffers through the target-pass contract", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("./FallbackTopologyMeshLayer.tsx", import.meta.url)),
+      "utf8",
+    );
+
+    expect(source).toContain("resolveViewport3DTargetSurfaceLayerInput");
+    expect(source).toContain("resolveViewport3DTargetVectorLayerInput");
+    expect(source).not.toContain(
+      "fieldModel?.scalarColorsByMode.get(scalarColorMode)",
+    );
+    expect(source).not.toContain("fieldModel?.fullVectorBuild ?? null");
+    expect(source).not.toContain("fieldModel?.fullVectorSegments ?? null");
   });
 
   it("renders vector-only fallback topology layers", () => {

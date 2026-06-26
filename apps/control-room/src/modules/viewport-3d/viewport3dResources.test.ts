@@ -82,15 +82,18 @@ describe("viewport3dResources", () => {
     ).toEqual(
       new Map([
         [
-          "H_eff",
+          "component=full&quantity=H_eff&scope_kind=full&snapshot_id=hysteresis_point_007&stage_id=hysteresis-1",
           {
             key: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_eff")}?component=full&scope_kind=full&snapshot_id=hysteresis_point_007&stage_id=hysteresis-1`,
+            quantityId: "H_eff",
             query: {
               component: "full",
               scope_kind: "full",
               snapshot_id: "hysteresis_point_007",
               stage_id: "hysteresis-1",
             },
+            requestId:
+              "component=full&quantity=H_eff&scope_kind=full&snapshot_id=hysteresis_point_007&stage_id=hysteresis-1",
           },
         ],
       ]),
@@ -376,6 +379,59 @@ describe("viewport3dResources", () => {
     );
   });
 
+  it("preserves scoped magnetic part query scope when the request planner provides it", () => {
+    expect(
+      resolveViewport3DPartFieldVectorResourceRequests(
+        new Map([
+          [
+            "part-a",
+            {
+              quantityId: "m",
+              query: {
+                component: "full",
+                scope_id: "part-a",
+                scope_kind: "part",
+              },
+            },
+          ],
+        ]),
+      ).get("part-a"),
+    ).toEqual({
+      key: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?component=full&scope_id=part-a&scope_kind=part`,
+      quantityId: "m",
+      query: {
+        component: "full",
+        scope_id: "part-a",
+        scope_kind: "part",
+      },
+    });
+  });
+
+  it("preserves scoped magnetic part request identity and consumers from planner requests", () => {
+    expect(
+      resolveViewport3DPartFieldVectorResourceRequests(
+        new Map([
+          [
+            "part-a",
+            {
+              consumers: ["part-a:surface", "part-a:vector-glyph"],
+              quantityId: "m",
+              query: {
+                component: "full",
+                scope_id: "part-a",
+                scope_kind: "part",
+              },
+              requestId: "component=full&quantity=m&scope_id=part-a&scope_kind=part",
+            },
+          ],
+        ]),
+      ).get("part-a"),
+    ).toMatchObject({
+      consumers: ["part-a:surface", "part-a:vector-glyph"],
+      requestId: "component=full&quantity=m&scope_id=part-a&scope_kind=part",
+    });
+  });
+
   it("builds stable full-field keys for target-specific quantities", () => {
     expect(
       resolveViewport3DQuantityFieldVectorResourceKeys(["h_eff", "H_eff", "m"]),
@@ -393,7 +449,7 @@ describe("viewport3dResources", () => {
     );
   });
 
-  it("deduplicates target-specific field vector requests after canonicalization", () => {
+  it("preserves target-specific field vector requests after canonicalization", () => {
     expect(
       resolveViewport3DQuantityFieldVectorResourceRequests(
         new Map([
@@ -404,13 +460,140 @@ describe("viewport3dResources", () => {
     ).toEqual(
       new Map([
         [
-          "H_eff",
+          "component=full&quantity=H_eff&scope_kind=full",
+          {
+            key: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_eff")}?component=full&scope_kind=full`,
+            quantityId: "H_eff",
+            query: {
+              component: "full",
+              scope_kind: "full",
+            },
+            requestId: "component=full&quantity=H_eff&scope_kind=full",
+          },
+        ],
+        [
+          "component=magnitude&quantity=H_eff&scope_kind=full",
           {
             key: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_eff")}?component=magnitude&scope_kind=full`,
+            quantityId: "H_eff",
             query: {
               component: "magnitude",
               scope_kind: "full",
             },
+            requestId: "component=magnitude&quantity=H_eff&scope_kind=full",
+          },
+        ],
+      ]),
+    );
+  });
+
+  it("keeps same-quantity target-specific field vector requests separated by request identity", () => {
+    expect(
+      resolveViewport3DQuantityFieldVectorResourceRequests(
+        new Map([
+          [
+            "H_eff:part-a",
+            {
+              consumers: ["part:a:surface"],
+              quantityId: "H_eff",
+              query: {
+                component: "x",
+                scope_id: "part:a",
+                scope_kind: "part",
+              },
+              requestId:
+                "component=x&quantity=H_eff&scope_id=part:a&scope_kind=part",
+            },
+          ],
+          [
+            "H_eff:part-b",
+            {
+              consumers: ["part:b:surface"],
+              quantityId: "H_eff",
+              query: {
+                component: "x",
+                scope_id: "part:b",
+                scope_kind: "part",
+              },
+              requestId:
+                "component=x&quantity=H_eff&scope_id=part:b&scope_kind=part",
+            },
+          ],
+        ]),
+      ),
+    ).toEqual(
+      new Map([
+        [
+          "component=x&quantity=H_eff&scope_id=part:a&scope_kind=part",
+          {
+            consumers: ["part:a:surface"],
+            key: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_eff")}?component=x&scope_id=part%3Aa&scope_kind=part`,
+            quantityId: "H_eff",
+            query: {
+              component: "x",
+              scope_id: "part:a",
+              scope_kind: "part",
+            },
+            requestId:
+              "component=x&quantity=H_eff&scope_id=part:a&scope_kind=part",
+          },
+        ],
+        [
+          "component=x&quantity=H_eff&scope_id=part:b&scope_kind=part",
+          {
+            consumers: ["part:b:surface"],
+            key: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_eff")}?component=x&scope_id=part%3Ab&scope_kind=part`,
+            quantityId: "H_eff",
+            query: {
+              component: "x",
+              scope_id: "part:b",
+              scope_kind: "part",
+            },
+            requestId:
+              "component=x&quantity=H_eff&scope_id=part:b&scope_kind=part",
+          },
+        ],
+      ]),
+    );
+  });
+
+  it("builds target-specific field vector keys from planner request objects", () => {
+    expect(
+      resolveViewport3DQuantityFieldVectorResourceRequests(
+        new Map([
+          [
+            "H_eff",
+            {
+              consumers: ["part:a:surface", "part:a:vector-glyph"],
+              quantityId: "H_eff",
+              query: {
+                component: "full",
+                scope_kind: "full",
+                snapshot_id: "hysteresis_point_007",
+                stage_id: "hysteresis-1",
+              },
+              requestId:
+                "component=full&quantity=H_eff&scope_kind=full&snapshot_id=hysteresis_point_007&stage_id=hysteresis-1",
+            },
+          ],
+        ]),
+      ),
+    ).toEqual(
+      new Map([
+        [
+          "component=full&quantity=H_eff&scope_kind=full&snapshot_id=hysteresis_point_007&stage_id=hysteresis-1",
+          {
+            key: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_eff")}?component=full&scope_kind=full&snapshot_id=hysteresis_point_007&stage_id=hysteresis-1`,
+            consumers: ["part:a:surface", "part:a:vector-glyph"],
+            quantityId: "H_eff",
+            query: {
+              component: "full",
+              scope_kind: "full",
+              snapshot_id: "hysteresis_point_007",
+              stage_id: "hysteresis-1",
+            },
+            requestId:
+              "component=full&quantity=H_eff&scope_kind=full&snapshot_id=hysteresis_point_007&stage_id=hysteresis-1",
           },
         ],
       ]),
@@ -440,23 +623,27 @@ describe("viewport3dResources", () => {
     ).toEqual(
       new Map([
         [
-          "H_eff",
+          "component=magnitude&quantity=H_eff&scope_kind=full",
           {
             key: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_eff")}?component=magnitude&scope_kind=full`,
+            quantityId: "H_eff",
             query: {
               component: "magnitude",
               scope_kind: "full",
             },
+            requestId: "component=magnitude&quantity=H_eff&scope_kind=full",
           },
         ],
         [
-          "m",
+          "component=x&quantity=m&scope_kind=full",
           {
             key: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?component=x&scope_kind=full`,
+            quantityId: "m",
             query: {
               component: "x",
               scope_kind: "full",
             },
+            requestId: "component=x&quantity=m&scope_kind=full",
           },
         ],
       ]),

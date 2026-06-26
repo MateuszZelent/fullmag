@@ -19,9 +19,11 @@ import {
   resolveNodeSelectionIndex,
 } from "../viewport3dRenderModel";
 import {
+  resolveViewport3DTargetFieldInput,
   viewport3DTargetFieldBufferCanServeSurface,
   type Viewport3DTargetFieldBuffer,
 } from "../model/viewport3DTargetFieldBuffer";
+import { summarizeViewport3DTargetDiagnostics } from "../model/viewport3DTargetDiagnostics";
 import type {
   Viewport3DFieldRenderModel,
   Viewport3DRenderablePart,
@@ -307,6 +309,7 @@ export function mergeViewport3DFieldScalarColors(
     scalarColorsByMode.set(mode, colors);
   }
   const scalarColorsByPartAndMode = new Map(base.scalarColorsByPartAndMode);
+  const targetPasses = new Map(base.targetPasses);
   for (const [partId, colorsByMode] of chunkedColorsByPartAndMode) {
     scalarColorsByPartAndMode.set(
       partId,
@@ -315,6 +318,21 @@ export function mergeViewport3DFieldScalarColors(
         ...colorsByMode,
       ]),
     );
+    const targetPass = targetPasses.get(partId);
+    const targetSurfaceMode = targetPass?.surface.scalarColorMode ?? null;
+    const targetSurfaceColors = targetSurfaceMode
+      ? colorsByMode.get(targetSurfaceMode) ?? null
+      : null;
+    if (targetPass && targetSurfaceColors) {
+      targetPasses.set(partId, {
+        ...targetPass,
+        surface: {
+          ...targetPass.surface,
+          degradation: null,
+          scalarColors: targetSurfaceColors,
+        },
+      });
+    }
   }
 
   return {
@@ -323,6 +341,11 @@ export function mergeViewport3DFieldScalarColors(
       scalarColorsByMode.get(vectorColorMode) ?? base.scalarColors,
     scalarColorsByPartAndMode,
     scalarColorsByMode,
+    targetDiagnostics: summarizeViewport3DTargetDiagnostics({
+      derivedWorkItems: base.derivedWorkItems,
+      targetPasses,
+    }),
+    targetPasses,
   };
 }
 
@@ -499,9 +522,16 @@ export function useViewport3DChunkedScalarColors({
     for (const partModel of [...topology.magneticParts, ...topology.airboxParts]) {
       const partId = partModel.part.id;
       const mode = partScalarColorModes.get(partId);
-      const explicitPartFieldVector = partFieldVectors?.get(partId) ?? null;
-      const explicitPartFieldBuffer = partTargetFieldBuffers?.get(partId) ?? null;
-      const partFieldVector = explicitPartFieldVector ?? fieldVector ?? null;
+      const {
+        explicitPartFieldBuffer,
+        explicitPartFieldVector,
+        partFieldVector,
+      } = resolveViewport3DChunkedPartFieldInput({
+        fieldVector,
+        partFieldVectors,
+        partId,
+        partTargetFieldBuffers,
+      });
       if (!mode || mode === "monochrome" || !partFieldVector) continue;
       if (
         explicitPartFieldBuffer &&
@@ -988,6 +1018,34 @@ export function resolveViewport3DChunkedFieldColorTarget(
     kind: "mapped-vertices",
     targetNodeIndices,
     vertexCount: topology.nodeCount,
+  };
+}
+
+export function resolveViewport3DChunkedPartFieldInput({
+  fieldVector,
+  partFieldVectors,
+  partId,
+  partTargetFieldBuffers,
+}: {
+  fieldVector: DecodedFieldVector | null | undefined;
+  partFieldVectors?: ReadonlyMap<string, DecodedFieldVector>;
+  partId: string;
+  partTargetFieldBuffers?: ReadonlyMap<string, Viewport3DTargetFieldBuffer>;
+}): {
+  explicitPartFieldBuffer: Viewport3DTargetFieldBuffer | null;
+  explicitPartFieldVector: DecodedFieldVector | null;
+  partFieldVector: DecodedFieldVector | null;
+} {
+  const input = resolveViewport3DTargetFieldInput({
+    fallbackFieldVector: fieldVector,
+    legacyPartFieldVectors: partFieldVectors,
+    partId,
+    targetFieldBuffers: partTargetFieldBuffers,
+  });
+  return {
+    explicitPartFieldBuffer: input.explicitFieldBuffer,
+    explicitPartFieldVector: input.explicitFieldVector,
+    partFieldVector: input.fieldVector,
   };
 }
 

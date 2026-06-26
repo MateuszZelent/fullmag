@@ -1,4 +1,4 @@
-import { FrontSide } from "three";
+import { DoubleSide } from "three";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -8,7 +8,7 @@ import {
 } from "./viewport3DRenderPolicy";
 
 describe("viewport3DRenderPolicy", () => {
-  it("keeps opaque magnetic surfaces out of transparent sorting", () => {
+  it("renders opaque magnetic surfaces double-sided without transparent sorting", () => {
     expect(resolveSurfacePolicy(1)).toMatchObject({
       depthTest: true,
       depthWrite: true,
@@ -16,7 +16,7 @@ describe("viewport3DRenderPolicy", () => {
       polygonOffsetFactor: 1,
       polygonOffsetUnits: 1,
       renderOrder: 0,
-      side: FrontSide,
+      side: DoubleSide,
       transparent: false,
     });
   });

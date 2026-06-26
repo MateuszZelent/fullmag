@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   resolveRetainedMeshPartScalarColors,
   resolveMeshPartScalarColors,
+  resolveMeshPartVectorLayerInput,
   resolveMeshPartWireframeEdgeIndices,
 } from "./MeshPartLayer";
 
@@ -135,6 +136,19 @@ describe("MeshPartLayer", () => {
     expect(source).toContain("retentionKey: scalarColorRetentionKey");
   });
 
+  it("routes mesh vector layer input through target-pass selection", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("./MeshPartLayer.tsx", import.meta.url)),
+      "utf8",
+    );
+
+    expect(source).toContain("resolveViewport3DTargetVectorLayerInput");
+    expect(source).toContain("vectorLayerInput.buildReference");
+    expect(source).toContain("vectorLayerInput.segments");
+    expect(source).not.toContain("fieldModel?.partVectorBuilds.get(part.id)");
+    expect(source).not.toContain("fieldModel?.partVectorSegments.get(part.id)");
+  });
+
   it("uses volume edges for full magnetic-object wireframe and surface edges for surface mode", () => {
     const surfaceEdges = new Uint32Array([0, 1, 1, 2]);
     const volumeEdges = new Uint32Array([0, 1, 1, 2, 2, 3, 0, 3]);
@@ -230,6 +244,260 @@ describe("MeshPartLayer", () => {
         },
       }),
     ).toBe(partEffectiveFieldY);
+  });
+
+  it("uses target-pass scalar colors before legacy part/global maps", () => {
+    const globalMagnetizationY = {
+      colors: new Float32Array(0),
+      colorMode: "y",
+      colorPalette: "viridis",
+      quantityId: "m",
+      range: { max: 1, min: -1 },
+    };
+    const targetEffectiveFieldY = {
+      colors: new Float32Array(0),
+      colorMode: "y",
+      colorPalette: "viridis",
+      quantityId: "H_eff",
+      range: { max: 5, min: -5 },
+    };
+
+    expect(
+      resolveMeshPartScalarColors({
+        fieldModel: {
+          scalarColorsByMode: new Map([["y", globalMagnetizationY]]),
+          scalarColorsByPartAndMode: new Map(),
+          targetPasses: new Map([
+            [
+              "part-a",
+              {
+                fieldBuffer: null,
+                fieldBufferState: "target-buffer",
+                surface: {
+                  passId: "test:surface",
+degradation: null,
+                  scalarColorMode: "y",
+                  scalarColors: targetEffectiveFieldY,
+                },
+                vectors: {
+                  passId: "test:vector-glyph",
+buildReference: null,
+                  degradation: null,
+                  segments: null,
+                },
+              },
+            ],
+          ]),
+        },
+        partId: "part-a",
+        scalarColorMode: "y",
+        settings: {
+          activeQuantityId: "H_eff",
+          scalarColorPalette: "viridis",
+        },
+      }),
+    ).toBe(targetEffectiveFieldY);
+  });
+
+  it("does not fall back to global colors when target-pass surface rejects the mode", () => {
+    const globalMagnetizationY = {
+      colors: new Float32Array(0),
+      colorMode: "y",
+      colorPalette: "viridis",
+      quantityId: "m",
+      range: { max: 1, min: -1 },
+    };
+
+    expect(
+      resolveMeshPartScalarColors({
+        fieldModel: {
+          scalarColorsByMode: new Map([["y", globalMagnetizationY]]),
+          scalarColorsByPartAndMode: new Map(),
+          targetPasses: new Map([
+            [
+              "part-a",
+              {
+                fieldBuffer: null,
+                fieldBufferState: "target-buffer",
+                surface: {
+                  passId: "test:surface",
+degradation: "sampled-buffer-not-surface-capable",
+                  scalarColorMode: "y",
+                  scalarColors: null,
+                },
+                vectors: {
+                  passId: "test:vector-glyph",
+buildReference: null,
+                  degradation: null,
+                  segments: null,
+                },
+              },
+            ],
+          ]),
+        },
+        partId: "part-a",
+        scalarColorMode: "y",
+        settings: {
+          activeQuantityId: "m",
+          scalarColorPalette: "viridis",
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("does not fall back to global colors when target-pass surface has a different mode", () => {
+    const globalMagnetizationY = {
+      colors: new Float32Array(0),
+      colorMode: "y",
+      colorPalette: "viridis",
+      quantityId: "m",
+      range: { max: 1, min: -1 },
+    };
+    const targetOrientation = {
+      colors: new Float32Array(0),
+      colorMode: "orientation",
+      colorPalette: "viridis",
+      quantityId: "m",
+      range: { max: 1, min: 0 },
+      vectorValues: new Float32Array(6),
+    };
+
+    expect(
+      resolveMeshPartScalarColors({
+        fieldModel: {
+          scalarColorsByMode: new Map([["y", globalMagnetizationY]]),
+          scalarColorsByPartAndMode: new Map(),
+          targetPasses: new Map([
+            [
+              "part-a",
+              {
+                fieldBuffer: null,
+                fieldBufferState: "target-buffer",
+                surface: {
+                  passId: "test:surface",
+degradation: null,
+                  scalarColorMode: "orientation",
+                  scalarColors: targetOrientation,
+                },
+                vectors: {
+                  passId: "test:vector-glyph",
+buildReference: null,
+                  degradation: null,
+                  segments: null,
+                },
+              },
+            ],
+          ]),
+        },
+        partId: "part-a",
+        scalarColorMode: "y",
+        settings: {
+          activeQuantityId: "m",
+          scalarColorPalette: "viridis",
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("uses target-pass vector segments before legacy part vector maps", () => {
+    const legacySegments = new Float32Array([0, 0, 0, 1, 0, 0]);
+    const targetSegments = new Float32Array([0, 0, 0, 0, 1, 0]);
+    const legacyBuild = {
+      buildKey: "legacy",
+      fieldRevision: "r1",
+      groupKey: "legacy",
+      revisionSummary: "legacy",
+      targetRevision: "legacy-target",
+      topologyRevision: "legacy-topology",
+    };
+    const targetBuild = {
+      buildKey: "target",
+      fieldRevision: "r2",
+      groupKey: "target",
+      revisionSummary: "target",
+      targetRevision: "target-target",
+      topologyRevision: "target-topology",
+    };
+
+    expect(
+      resolveMeshPartVectorLayerInput({
+        fieldModel: {
+          partVectorBuilds: new Map([["part-a", legacyBuild]]),
+          partVectorSegments: new Map([["part-a", legacySegments]]),
+          targetPasses: new Map([
+            [
+              "part-a",
+              {
+                fieldBuffer: null,
+                fieldBufferState: "target-buffer",
+                surface: {
+                  passId: "test:surface",
+degradation: null,
+                  scalarColorMode: null,
+                  scalarColors: null,
+                },
+                vectors: {
+                  passId: "test:vector-glyph",
+buildReference: targetBuild,
+                  degradation: null,
+                  segments: targetSegments,
+                },
+              },
+            ],
+          ]),
+        },
+        partId: "part-a",
+      }),
+    ).toEqual({
+      buildReference: targetBuild,
+      segments: targetSegments,
+    });
+  });
+
+  it("does not fall back to legacy vector maps when target-pass vectors are rejected", () => {
+    const legacySegments = new Float32Array([0, 0, 0, 1, 0, 0]);
+    const legacyBuild = {
+      buildKey: "legacy",
+      fieldRevision: "r1",
+      groupKey: "legacy",
+      revisionSummary: "legacy",
+      targetRevision: "legacy-target",
+      topologyRevision: "legacy-topology",
+    };
+
+    expect(
+      resolveMeshPartVectorLayerInput({
+        fieldModel: {
+          partVectorBuilds: new Map([["part-a", legacyBuild]]),
+          partVectorSegments: new Map([["part-a", legacySegments]]),
+          targetPasses: new Map([
+            [
+              "part-a",
+              {
+                fieldBuffer: null,
+                fieldBufferState: "target-buffer",
+                surface: {
+                  passId: "test:surface",
+degradation: null,
+                  scalarColorMode: null,
+                  scalarColors: null,
+                },
+                vectors: {
+                  passId: "test:vector-glyph",
+buildReference: null,
+                  degradation: "scalar-buffer-not-vector-capable",
+                  segments: null,
+                },
+              },
+            ],
+          ]),
+        },
+        partId: "part-a",
+      }),
+    ).toEqual({
+      buildReference: null,
+      segments: null,
+    });
   });
 
   it("retains the last compatible scalar texture while a different color mode is building", () => {

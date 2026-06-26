@@ -3,9 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   buildViewport3DColorbarGroupKey,
   planViewport3DColorbars,
+  resolveViewport3DColorbarRangeStates,
   type Viewport3DColorbarPlan,
 } from "./viewport3DColorbarPlan";
 import {
+  DEFAULT_VIEWPORT_3D_SCALAR_RANGE_POLICY,
   buildViewport3DTargetRenderPlan,
   type Viewport3DTargetRenderPlan,
 } from "./viewport3DFieldDataPlan";
@@ -40,6 +42,21 @@ function objectPlan(
     targetId,
     targetKind: "object",
   });
+}
+
+function airboxPlan(
+  targetId: string,
+  overrides: Partial<{
+    palette: string;
+    quantityId: string;
+    surfaceColorSource: "component_x" | "component_y" | "component_z" | "magnitude" | "orientation";
+    viewportColorbarVisible: boolean;
+  }> = {},
+): Viewport3DTargetRenderPlan {
+  return {
+    ...objectPlan(targetId, overrides),
+    targetKind: "airbox",
+  };
 }
 
 describe("viewport3DColorbarPlan", () => {
@@ -122,6 +139,53 @@ describe("viewport3DColorbarPlan", () => {
     expect(plans[0]?.range).toEqual({ max: 1, min: -1 });
   });
 
+  it("resolves planned range states from target pass scalar buffers", () => {
+    const target = objectPlan("part:film");
+    const [plan] = planViewport3DColorbars({ targets: [target] });
+
+    const rangeStates = resolveViewport3DColorbarRangeStates({
+      fieldModel: {
+        scalarColorsByMode: new Map(),
+        scalarColorsByPartAndMode: new Map(),
+        targetPasses: new Map([
+          [
+            "part:film",
+            {
+              fieldBuffer: null,
+              fieldBufferState: "derived-global",
+              surface: {
+                degradation: null,
+                passId: "part:film:surface",
+                scalarColorMode: "x",
+                scalarColors: {
+                  colors: new Float32Array(12),
+                  colorMode: "x",
+                  colorPalette: "viridis",
+                  quantityId: "m",
+                  range: { max: 1, min: -1 },
+                  targetRevision: "field=1",
+                  topologyRevision: "mesh=1",
+                },
+              },
+              vectors: {
+                buildReference: null,
+                degradation: null,
+                passId: "part:film:vector-glyph",
+                segments: null,
+              },
+            },
+          ],
+        ]),
+      },
+      plans: plan ? [plan] : [],
+    });
+
+    expect(rangeStates.get(plan!.groupKey)).toEqual({
+      range: { max: 1, min: -1 },
+      state: "current",
+    });
+  });
+
   it("splits plans when targets use different palettes or modes", () => {
     const plans = planViewport3DColorbars({
       targets: [
@@ -140,6 +204,37 @@ describe("viewport3DColorbarPlan", () => {
     ]);
   });
 
+  it("splits plans when targets use different scalar range policies", () => {
+    const autoRangeTarget = {
+      ...objectPlan("fdm-auto"),
+      targetKind: "fdm-domain" as const,
+    };
+    const manualRangeTarget = {
+      ...objectPlan("fdm-manual"),
+      shader: {
+        ...objectPlan("fdm-manual").shader,
+        scalarRangePolicy: {
+          ...DEFAULT_VIEWPORT_3D_SCALAR_RANGE_POLICY,
+          max: 0.25,
+          min: -0.25,
+          mode: "manual" as const,
+          symmetric: true,
+        },
+      },
+      targetKind: "fdm-domain" as const,
+    };
+
+    const plans = planViewport3DColorbars({
+      targets: [autoRangeTarget, manualRangeTarget],
+    });
+
+    expect(plans).toHaveLength(2);
+    expect(plans.map((plan) => plan.targetIds)).toEqual([
+      ["fdm-auto"],
+      ["fdm-manual"],
+    ]);
+  });
+
   it("does not plan viewport colorbars for orientation or disabled viewport legends", () => {
     expect(
       planViewport3DColorbars({
@@ -153,5 +248,27 @@ describe("viewport3DColorbarPlan", () => {
         ],
       }),
     ).toEqual([]);
+  });
+
+  it("does not plan viewport colorbars for airbox targets", () => {
+    expect(
+      planViewport3DColorbars({
+        targets: [
+          objectPlan("part:permalloy", {
+            surfaceColorSource: "component_x",
+            viewportColorbarVisible: true,
+          }),
+          airboxPlan("air:permalloy-geometry", {
+            surfaceColorSource: "component_x",
+            viewportColorbarVisible: true,
+          }),
+        ],
+      }),
+    ).toMatchObject([
+      {
+        scopeKind: "object",
+        targetIds: ["part:permalloy"],
+      },
+    ]);
   });
 });

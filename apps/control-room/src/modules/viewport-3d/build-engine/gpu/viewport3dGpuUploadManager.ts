@@ -47,6 +47,22 @@ interface PendingViewport3DGpuUploadTicket {
   uploadFrames: number;
 }
 
+interface Viewport3DGpuUploadFrameHost {
+  readonly cancelFrame: (handle: unknown) => void;
+  readonly now: () => number;
+  readonly policy: Viewport3DGpuUploadPolicy;
+  readonly runFrame: (
+    frameStartMs: number,
+    targetFrameBudgetMs: number,
+    maxFrameBudgetMs: number,
+  ) => void;
+  readonly scheduleFrame: (callback: () => void) => unknown;
+  readonly shouldStayQueued: () => boolean;
+}
+
+const sharedViewport3DGpuUploadFrameCoordinator =
+  createViewport3DGpuUploadFrameCoordinator();
+
 export function createViewport3DGpuUploadManager({
   cancelFrame = defaultCancelFrame,
   now = defaultNow,
@@ -60,7 +76,14 @@ export function createViewport3DGpuUploadManager({
   };
   const queue: PendingViewport3DGpuUploadTicket[] = [];
   let disposed = false;
-  let scheduledFrame: unknown = null;
+  const frameHost: Viewport3DGpuUploadFrameHost = {
+    cancelFrame,
+    now,
+    policy,
+    runFrame,
+    scheduleFrame,
+    shouldStayQueued: () => !disposed && queue.length > 0,
+  };
 
   function enqueue(input: Viewport3DGpuUploadTicketInput): void {
     if (disposed) return;
@@ -109,10 +132,7 @@ export function createViewport3DGpuUploadManager({
   function dispose(): void {
     if (disposed) return;
     disposed = true;
-    if (scheduledFrame !== null) {
-      cancelFrame(scheduledFrame);
-      scheduledFrame = null;
-    }
+    sharedViewport3DGpuUploadFrameCoordinator.remove(frameHost);
     for (const ticket of queue.splice(0)) {
       ticket.aborted = true;
       cleanupTicket(ticket);
@@ -121,12 +141,15 @@ export function createViewport3DGpuUploadManager({
   }
 
   function schedule(): void {
-    if (disposed || scheduledFrame !== null || queue.length === 0) return;
-    scheduledFrame = scheduleFrame(runFrame);
+    if (disposed || queue.length === 0) return;
+    sharedViewport3DGpuUploadFrameCoordinator.request(frameHost);
   }
 
-  function runFrame(): void {
-    scheduledFrame = null;
+  function runFrame(
+    sharedFrameStartMs: number,
+    sharedTargetFrameBudgetMs: number,
+    sharedMaxFrameBudgetMs: number,
+  ): void {
     if (disposed) return;
 
     const ticket = queue[0];
@@ -139,12 +162,21 @@ export function createViewport3DGpuUploadManager({
       return;
     }
 
-    const frameStartMs = now();
+    const ticketFrameStartMs = now();
     let frameBytes = 0;
     let frameItems = 0;
     let frameChunks = 0;
 
     while (ticket.index < ticket.chunks.length) {
+      const sharedFrameElapsedMs = Math.max(0, now() - sharedFrameStartMs);
+      if (
+        frameChunks === 0 &&
+        (sharedFrameElapsedMs >= sharedTargetFrameBudgetMs ||
+          sharedFrameElapsedMs >= sharedMaxFrameBudgetMs)
+      ) {
+        break;
+      }
+
       const chunk = ticket.chunks[ticket.index];
       if (!chunk) break;
 
@@ -170,20 +202,19 @@ export function createViewport3DGpuUploadManager({
       frameItems += chunkItems;
       frameChunks += 1;
 
-      const frameElapsedMs = Math.max(0, now() - frameStartMs);
+      const frameElapsedMs = Math.max(0, now() - sharedFrameStartMs);
       if (
-        frameElapsedMs >= normalizeBudget(policy.targetFrameBudgetMs) ||
-        frameElapsedMs >= normalizeBudget(policy.maxFrameBudgetMs)
+        frameElapsedMs >= sharedTargetFrameBudgetMs ||
+        frameElapsedMs >= sharedMaxFrameBudgetMs
       ) {
         ticket.budgetExceeded =
-          ticket.budgetExceeded ||
-          frameElapsedMs > normalizeBudget(policy.maxFrameBudgetMs);
+          ticket.budgetExceeded || frameElapsedMs > sharedMaxFrameBudgetMs;
         break;
       }
     }
 
     if (frameChunks > 0) {
-      const frameUploadMs = Math.max(0, now() - frameStartMs);
+      const frameUploadMs = Math.max(0, now() - ticketFrameStartMs);
       ticket.uploadFrames += 1;
       ticket.mainUploadMs += frameUploadMs;
       ticket.maxFrameUploadMs = Math.max(
@@ -196,7 +227,6 @@ export function createViewport3DGpuUploadManager({
       queue.shift();
       cleanupTicket(ticket);
       recordTerminal(ticket, true);
-      schedule();
       return;
     }
 
@@ -205,11 +235,8 @@ export function createViewport3DGpuUploadManager({
       cleanupTicket(ticket);
       ticket.onVisible();
       recordTerminal(ticket, false);
-      schedule();
       return;
     }
-
-    schedule();
   }
 
   function recordTerminal(
@@ -242,6 +269,106 @@ export function createViewport3DGpuUploadManager({
     abort,
     dispose,
     enqueue,
+  };
+}
+
+function createViewport3DGpuUploadFrameCoordinator(): {
+  readonly remove: (host: Viewport3DGpuUploadFrameHost) => void;
+  readonly request: (host: Viewport3DGpuUploadFrameHost) => void;
+} {
+  const activeHosts: Viewport3DGpuUploadFrameHost[] = [];
+  let scheduledFrame: unknown = null;
+  let scheduledFrameHost: Viewport3DGpuUploadFrameHost | null = null;
+
+  function request(host: Viewport3DGpuUploadFrameHost): void {
+    if (!host.shouldStayQueued()) return;
+    if (!activeHosts.includes(host)) {
+      activeHosts.push(host);
+    }
+    schedule();
+  }
+
+  function remove(host: Viewport3DGpuUploadFrameHost): void {
+    const index = activeHosts.indexOf(host);
+    if (index >= 0) {
+      activeHosts.splice(index, 1);
+    }
+    if (scheduledFrameHost === host && scheduledFrame !== null) {
+      host.cancelFrame(scheduledFrame);
+      scheduledFrame = null;
+      scheduledFrameHost = null;
+      schedule();
+    }
+  }
+
+  function schedule(): void {
+    pruneInactiveHosts();
+    if (scheduledFrame !== null || activeHosts.length === 0) return;
+    const host = activeHosts[0];
+    if (!host) return;
+    scheduledFrameHost = host;
+    scheduledFrame = host.scheduleFrame(runFrame);
+  }
+
+  function runFrame(): void {
+    scheduledFrame = null;
+    scheduledFrameHost = null;
+    pruneInactiveHosts();
+    if (activeHosts.length === 0) return;
+
+    const frameClockHost = activeHosts[0];
+    if (!frameClockHost) return;
+    const frameStartMs = frameClockHost.now();
+    const targetFrameBudgetMs = minActiveBudget("targetFrameBudgetMs");
+    const maxFrameBudgetMs = minActiveBudget("maxFrameBudgetMs");
+
+    let hostIndex = 0;
+    while (hostIndex < activeHosts.length) {
+      pruneInactiveHosts();
+      const host = activeHosts[hostIndex];
+      if (!host) break;
+      const frameElapsedMs = Math.max(0, host.now() - frameStartMs);
+      if (
+        frameElapsedMs >= targetFrameBudgetMs ||
+        frameElapsedMs >= maxFrameBudgetMs
+      ) {
+        break;
+      }
+
+      host.runFrame(frameStartMs, targetFrameBudgetMs, maxFrameBudgetMs);
+      if (host.shouldStayQueued()) {
+        hostIndex += 1;
+      } else {
+        activeHosts.splice(hostIndex, 1);
+      }
+    }
+
+    schedule();
+  }
+
+  function pruneInactiveHosts(): void {
+    for (let index = activeHosts.length - 1; index >= 0; index -= 1) {
+      if (!activeHosts[index]?.shouldStayQueued()) {
+        activeHosts.splice(index, 1);
+      }
+    }
+  }
+
+  function minActiveBudget(
+    key: "maxFrameBudgetMs" | "targetFrameBudgetMs",
+  ): number {
+    let budget = Number.POSITIVE_INFINITY;
+    for (const host of activeHosts) {
+      budget = Math.min(budget, normalizeBudget(host.policy[key]));
+    }
+    return Number.isFinite(budget)
+      ? budget
+      : normalizeBudget(DEFAULT_VIEWPORT_3D_GPU_UPLOAD_POLICY[key]);
+  }
+
+  return {
+    remove,
+    request,
   };
 }
 
