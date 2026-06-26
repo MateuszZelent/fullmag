@@ -3797,6 +3797,9 @@ mod tests {
             "/src/fem/relax/finalize.rs"
         ))
         .expect("fem/relax/finalize.rs should be readable");
+        let native_fem =
+            fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/native_fem.rs"))
+                .expect("native_fem.rs should be readable");
         let helper_signature = ["pub(crate) fn ", "copy_native_fem_field_snapshot"].concat();
 
         assert!(
@@ -3808,8 +3811,25 @@ mod tests {
             "native FEM relaxation field outputs should share one copy helper"
         );
         assert!(
-            snapshots.contains("\"H_dmi\" => backend.copy_h_dmi(node_count)")
-                && snapshots.contains("\"H_dmi_bulk\" => backend.copy_h_dmi_bulk(node_count)"),
+            snapshots.contains("begin_field_snapshot(quantity, 0, 0.0, 0.0)?")
+                && native_fem.contains(
+                    &[
+                        "QuantityId::HDmi => ffi::",
+                        "fullmag_",
+                        "fem_observable::",
+                        "FULLMAG_FEM_OBSERVABLE_H_DMI",
+                    ]
+                    .concat()
+                )
+                && native_fem.contains(
+                    &[
+                        "QuantityId::HDmiBulk => ffi::",
+                        "fullmag_",
+                        "fem_observable::",
+                        "FULLMAG_FEM_OBSERVABLE_H_DMI_BULK",
+                    ]
+                    .concat()
+                ),
             "native FEM field output helper must expose interfacial and bulk DMI fields"
         );
         assert!(
@@ -5554,7 +5574,7 @@ mod tests {
                 && source.contains(
                     "let magnetization = if current_stats.step % heavy_payload_every == 0"
                 )
-                && source.contains("stats: current_stats.clone(),")
+                && source.contains("stats: live_stats,")
                 && source.contains("magnetization,")
                 && source.contains("let action = (live.on_step)(StepUpdate {"),
             "native FEM direct minimizer must publish live updates after accepted steps"

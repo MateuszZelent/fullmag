@@ -653,7 +653,7 @@ const CATALOG: [QuantitySpec; 44] = [
         normalization_hint: NormalizationHint::MaxAbs,
         default_component: QuantityComponent::Magnitude,
         supports_preview_2d: true,
-        supports_preview_3d: false,
+        supports_preview_3d: true,
         supports_history: false,
         supports_export: true,
     },
@@ -674,7 +674,7 @@ const CATALOG: [QuantitySpec; 44] = [
         normalization_hint: NormalizationHint::MaxAbs,
         default_component: QuantityComponent::Magnitude,
         supports_preview_2d: true,
-        supports_preview_3d: false,
+        supports_preview_3d: true,
         supports_history: false,
         supports_export: true,
     },
@@ -695,7 +695,7 @@ const CATALOG: [QuantitySpec; 44] = [
         normalization_hint: NormalizationHint::MaxAbs,
         default_component: QuantityComponent::Magnitude,
         supports_preview_2d: true,
-        supports_preview_3d: false,
+        supports_preview_3d: true,
         supports_history: false,
         supports_export: true,
     },
@@ -716,7 +716,7 @@ const CATALOG: [QuantitySpec; 44] = [
         normalization_hint: NormalizationHint::MaxAbs,
         default_component: QuantityComponent::Magnitude,
         supports_preview_2d: true,
-        supports_preview_3d: false,
+        supports_preview_3d: true,
         supports_history: false,
         supports_export: true,
     },
@@ -737,7 +737,7 @@ const CATALOG: [QuantitySpec; 44] = [
         normalization_hint: NormalizationHint::MaxAbs,
         default_component: QuantityComponent::Magnitude,
         supports_preview_2d: true,
-        supports_preview_3d: false,
+        supports_preview_3d: true,
         supports_history: false,
         supports_export: true,
     },
@@ -758,7 +758,7 @@ const CATALOG: [QuantitySpec; 44] = [
         normalization_hint: NormalizationHint::MaxAbs,
         default_component: QuantityComponent::Magnitude,
         supports_preview_2d: true,
-        supports_preview_3d: false,
+        supports_preview_3d: true,
         supports_history: false,
         supports_export: true,
     },
@@ -1029,6 +1029,34 @@ mod tests {
             assert_eq!(spec.domain, QuantityDomain::MagneticOnly);
             assert!(spec.interactive_preview);
             assert!(spec.ui_exposed);
+            assert!(spec.supports_preview_3d);
+        }
+    }
+
+    #[test]
+    fn energy_density_quantities_are_spatial_scalars_for_3d_colormaps() {
+        let expected = [
+            "eden_ex",
+            "eden_demag",
+            "eden_ext",
+            "eden_ani",
+            "eden_dmi",
+            "eden_total",
+        ];
+
+        for id in expected {
+            let spec = quantity_spec(id).expect("energy density should be catalogued");
+            assert_eq!(
+                normalize_quantity_id(id).expect("known quantity").as_str(),
+                id
+            );
+            assert_eq!(spec.shape, QuantityShape::SpatialScalar);
+            assert_eq!(spec.unit, "J/m³");
+            assert_eq!(spec.n_comp, 1);
+            assert_eq!(spec.domain, QuantityDomain::MagneticOnly);
+            assert!(spec.interactive_preview);
+            assert!(spec.ui_exposed);
+            assert!(spec.supports_preview_2d);
             assert!(spec.supports_preview_3d);
         }
     }

@@ -3130,12 +3130,12 @@ mod tests {
             "fem/relax/preview.rs must own the native FEM live-preview boundary"
         );
         assert!(
-            preview.contains(".begin_live_preview_snapshot(request)?"),
-            "FEM live preview must use the native snapshot boundary"
+            preview.contains("backend.copy_live_preview_field(request, node_count)"),
+            "FEM live preview helper must route through the shared preview boundary"
         );
         assert!(
-            !preview.contains(".copy_live_preview_field("),
-            "FEM live preview helper must not use the synchronous copy boundary"
+            preview.contains("backend.begin_live_preview_snapshot(&request)"),
+            "FEM cached vector preview must still use the native snapshot boundary"
         );
     }
 
@@ -3219,7 +3219,9 @@ mod tests {
                 "{path} must poll completed preview snapshots without blocking"
             );
             assert!(
-                source.contains("live_preview_handoff.request_preview(backend, &request)?"),
+                source.contains(
+                    "live_preview_handoff.request_preview(backend, &request, node_count)?"
+                ),
                 "{path} must request live preview through the handoff boundary"
             );
             assert!(
@@ -3487,7 +3489,7 @@ mod tests {
             "fem/relax/snapshots.rs must own native FEM relaxation field snapshot helpers"
         );
         assert!(
-            module.contains(".begin_field_snapshot(quantity)?")
+            module.contains(".begin_field_snapshot(quantity, 0, 0.0, 0.0)?")
                 && module.contains(".into_vector_field()?"),
             "native FEM relaxation field snapshots must use the native snapshot boundary"
         );
@@ -4217,8 +4219,10 @@ mod tests {
         assert!(output_dir.join("scalars.csv").is_file());
         assert!(output_dir.join("m_initial.json").is_file());
         assert!(output_dir.join("m_final.json").is_file());
-        assert!(output_dir.join("fields/m.zarr").is_dir());
-        assert!(output_dir.join("fields/H_ex.zarr").is_dir());
+        assert!(output_dir.join("fields/m/step_000000.json").is_file());
+        assert!(output_dir.join("fields/m/step_000002.json").is_file());
+        assert!(output_dir.join("fields/H_ex/step_000000.json").is_file());
+        assert!(output_dir.join("fields/H_ex/step_000002.json").is_file());
 
         let metadata: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(output_dir.join("metadata.json"))

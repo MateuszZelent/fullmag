@@ -15,7 +15,8 @@ use fullmag_engine::fem::{
     FemBackendId, FemIntegratorWorkspace, FemLlgProblem, FemLlgState, MeshTopology,
 };
 use fullmag_engine::{
-    AdaptiveStepConfig, EffectiveFieldTerms, LlgConfig, MaterialParameters, TimeIntegrator,
+    dot, AdaptiveStepConfig, EffectiveFieldTerms, LlgConfig, MaterialParameters, TimeIntegrator,
+    MU0,
 };
 use fullmag_ir::{ExecutionPrecision, FemObjectSegmentIR, FemPlanIR, IntegratorChoice, OutputIR};
 
@@ -26,8 +27,8 @@ use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
 use crate::derived_fields::{compute_torque_field, max_torque_residual_apm_from_field};
 use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 use crate::preview::{
-    build_mesh_preview_field_with_active_mask, flatten_vectors, mesh_quantity_active_mask,
-    select_observables,
+    build_mesh_preview_field_with_active_mask, build_mesh_scalar_preview_field_with_active_mask,
+    flatten_vectors, mesh_quantity_active_mask, select_observables,
 };
 use crate::quantities::normalized_quantity_name;
 use crate::relaxation::{
@@ -70,11 +71,12 @@ pub(crate) fn snapshot_preview(
         .clone()
         .unwrap_or_else(|| vec![[0.0, 0.0, 0.0]; state.magnetization().len()]);
     let observables = observe_state(&problem, &state, &antenna_field)?;
-    Ok(build_mesh_preview_field_with_active_mask(
+    build_fem_preview_field(
         request,
-        select_observables(&observables, &request.quantity)?,
-        mesh_quantity_active_mask(&request.quantity, &plan.mesh),
-    ))
+        &observables,
+        &plan.mesh,
+        problem.material.saturation_magnetisation,
+    )
 }
 
 pub(crate) fn snapshot_vector_fields(
@@ -100,13 +102,149 @@ pub(crate) fn snapshot_vector_fields(
         }
         let mut preview_request = request.clone();
         preview_request.quantity = quantity.to_string();
-        cached.push(build_mesh_preview_field_with_active_mask(
+        cached.push(build_fem_preview_field(
             &preview_request,
-            select_observables(&observables, quantity)?,
-            mesh_quantity_active_mask(quantity, &plan.mesh),
-        ));
+            &observables,
+            &plan.mesh,
+            problem.material.saturation_magnetisation,
+        )?);
     }
     Ok(cached)
+}
+
+pub(crate) fn build_fem_preview_field(
+    request: &LivePreviewRequest,
+    observables: &StateObservables,
+    mesh: &fullmag_ir::MeshIR,
+    saturation_magnetisation: f64,
+) -> Result<crate::LivePreviewField, RunError> {
+    let quantity = normalized_quantity_name(&request.quantity)?;
+    let active_mask = mesh_quantity_active_mask(quantity, mesh);
+    if let Some(values) = fem_energy_density_values(
+        observables,
+        quantity,
+        saturation_magnetisation,
+        active_mask.as_deref(),
+    )? {
+        return Ok(build_mesh_scalar_preview_field_with_active_mask(
+            request,
+            &values,
+            active_mask,
+        ));
+    }
+
+    Ok(build_mesh_preview_field_with_active_mask(
+        request,
+        select_observables(observables, quantity)?,
+        active_mask,
+    ))
+}
+
+pub(crate) fn fem_energy_density_values(
+    observables: &StateObservables,
+    quantity: &str,
+    saturation_magnetisation: f64,
+    active_mask: Option<&[bool]>,
+) -> Result<Option<Vec<f64>>, RunError> {
+    let values = match quantity {
+        "eden_ex" => field_dot_energy_density(
+            &observables.magnetization,
+            &observables.exchange_field,
+            saturation_magnetisation,
+            -0.5,
+            active_mask,
+            quantity,
+        )?,
+        "eden_demag" => field_dot_energy_density(
+            &observables.magnetization,
+            &observables.demag_field,
+            saturation_magnetisation,
+            -0.5,
+            active_mask,
+            quantity,
+        )?,
+        "eden_ext" => field_dot_energy_density(
+            &observables.magnetization,
+            &observables.external_field,
+            saturation_magnetisation,
+            -1.0,
+            active_mask,
+            quantity,
+        )?,
+        "eden_ani" => field_dot_energy_density(
+            &observables.magnetization,
+            &observables.anisotropy_field,
+            saturation_magnetisation,
+            -0.5,
+            active_mask,
+            quantity,
+        )?,
+        "eden_dmi" => field_dot_energy_density(
+            &observables.magnetization,
+            &observables.dmi_field,
+            saturation_magnetisation,
+            -0.5,
+            active_mask,
+            quantity,
+        )?,
+        "eden_total" => {
+            let mut total = vec![0.0; observables.magnetization.len()];
+            for term in ["eden_ex", "eden_demag", "eden_ext", "eden_ani", "eden_dmi"] {
+                if let Some(values) = fem_energy_density_values(
+                    observables,
+                    term,
+                    saturation_magnetisation,
+                    active_mask,
+                )? {
+                    for (accum, value) in total.iter_mut().zip(values) {
+                        *accum += value;
+                    }
+                }
+            }
+            total
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(values))
+}
+
+fn field_dot_energy_density(
+    magnetization: &[[f64; 3]],
+    field: &[[f64; 3]],
+    saturation_magnetisation: f64,
+    prefactor: f64,
+    active_mask: Option<&[bool]>,
+    quantity: &str,
+) -> Result<Vec<f64>, RunError> {
+    if field.is_empty() {
+        return Ok(vec![0.0; magnetization.len()]);
+    }
+    if field.len() != magnetization.len() {
+        return Err(RunError {
+            message: format!(
+                "FEM preview quantity '{}' requires a {}-node source field, got {} values",
+                quantity,
+                magnetization.len(),
+                field.len()
+            ),
+        });
+    }
+
+    Ok(magnetization
+        .iter()
+        .zip(field.iter())
+        .enumerate()
+        .map(|(index, (m, h))| {
+            if active_mask
+                .and_then(|mask| mask.get(index))
+                .is_some_and(|active| !*active)
+            {
+                0.0
+            } else {
+                prefactor * MU0 * saturation_magnetisation * dot(*m, *h)
+            }
+        })
+        .collect())
 }
 
 pub(crate) fn fem_observables_for_magnetization(
@@ -1909,6 +2047,36 @@ mod tests {
                 .iter()
                 .any(|value| value.abs() > 0.0),
             "expected FEM cached H_eff preview to contain nonzero values"
+        );
+    }
+
+    #[test]
+    fn fem_snapshot_exposes_energy_density_scalar_fields() {
+        let mut plan = make_box_demag_plan();
+        plan.external_field = Some([0.0, 0.0, 1.0]);
+        plan.initial_magnetization = vec![[0.0, 0.0, 1.0]; plan.mesh.nodes.len()];
+
+        let fields = snapshot_vector_fields(
+            &plan,
+            &["eden_ex", "eden_demag", "eden_ext", "eden_total"],
+            &crate::LivePreviewRequest::default(),
+        )
+        .expect("FEM energy density preview snapshot should succeed");
+
+        let total = fields
+            .iter()
+            .find(|field| field.quantity == "eden_total")
+            .expect("eden_total preview should be present");
+        assert_eq!(fields.len(), 4);
+        assert_eq!(total.spatial_kind, "mesh");
+        assert_eq!(total.unit, "J/m³");
+        assert_eq!(total.vector_field_values.len(), plan.mesh.nodes.len());
+        assert!(
+            total
+                .vector_field_values
+                .iter()
+                .any(|value| value.abs() > 0.0),
+            "expected FEM eden_total preview to contain nonzero scalar values"
         );
     }
 

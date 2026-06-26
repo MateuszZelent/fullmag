@@ -387,6 +387,32 @@ pub(crate) fn build_mesh_preview_field_with_active_mask(
     }
 }
 
+pub(crate) fn build_mesh_scalar_preview_field_with_active_mask(
+    request: &LivePreviewRequest,
+    values: &[f64],
+    active_mask: Option<Vec<bool>>,
+) -> LivePreviewField {
+    let quantity = normalized_quantity_name(&request.quantity).unwrap_or("m");
+    LivePreviewField {
+        config_revision: request.revision,
+        quantity: quantity.to_string(),
+        unit: quantity_unit(quantity).to_string(),
+        spatial_kind: "mesh".to_string(),
+        quantity_domain: quantity_spatial_domain(quantity).to_string(),
+        preview_grid: [values.len() as u32, 1, 1],
+        original_grid: [0, 0, 0],
+        vector_field_values: values.to_vec(),
+        x_chosen_size: 0,
+        y_chosen_size: 0,
+        applied_x_chosen_size: 0,
+        applied_y_chosen_size: 0,
+        applied_layer_stride: 1,
+        auto_downscaled: false,
+        auto_downscale_message: None,
+        active_mask,
+    }
+}
+
 fn candidate_preview_sizes(full: usize) -> Vec<usize> {
     let mut sizes = vec![full.max(1)];
     let mut current = full.max(1);

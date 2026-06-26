@@ -198,6 +198,12 @@ fn fem_quantity_is_active(engine: FemEngine, plan: &FemPlanIR, id: QuantityId) -
                 | QuantityId::HEff
                 | QuantityId::HDmi
                 | QuantityId::HDmiBulk
+                | QuantityId::EdenEx
+                | QuantityId::EdenDemag
+                | QuantityId::EdenExt
+                | QuantityId::EdenAni
+                | QuantityId::EdenDmi
+                | QuantityId::EdenTotal
         ),
         FemEngine::NativeGpu => matches!(
             id,
@@ -215,6 +221,12 @@ fn fem_quantity_is_active(engine: FemEngine, plan: &FemPlanIR, id: QuantityId) -
                 | QuantityId::HDmiBulk
                 | QuantityId::HOe
                 | QuantityId::HTherm
+                | QuantityId::EdenEx
+                | QuantityId::EdenDemag
+                | QuantityId::EdenExt
+                | QuantityId::EdenAni
+                | QuantityId::EdenDmi
+                | QuantityId::EdenTotal
         ),
     };
     engine_exposes && fem_plan_enables_quantity(plan, id)
@@ -240,6 +252,20 @@ fn fem_plan_enables_quantity(plan: &FemPlanIR, id: QuantityId) -> bool {
         QuantityId::HTherm => plan
             .temperature
             .is_some_and(|temperature| temperature > 0.0),
+        QuantityId::EdenEx => plan.enable_exchange,
+        QuantityId::EdenDemag => plan.enable_demag,
+        QuantityId::EdenExt => plan.external_field.is_some(),
+        QuantityId::EdenAni => {
+            material_has_uniaxial_anisotropy(&plan.material)
+                || material_has_cubic_anisotropy(&plan.material)
+        }
+        QuantityId::EdenDmi => {
+            plan.interfacial_dmi.is_some()
+                || has_values(&plan.dind_field)
+                || plan.bulk_dmi.is_some()
+                || has_values(&plan.dbulk_field)
+        }
+        QuantityId::EdenTotal => true,
         QuantityId::EEx
         | QuantityId::U
         | QuantityId::Eps
@@ -256,12 +282,6 @@ fn fem_plan_enables_quantity(plan: &FemPlanIR, id: QuantityId) -> bool {
         | QuantityId::ModeReal
         | QuantityId::ModeImag
         | QuantityId::ModePhase
-        | QuantityId::EdenEx
-        | QuantityId::EdenDemag
-        | QuantityId::EdenExt
-        | QuantityId::EdenAni
-        | QuantityId::EdenDmi
-        | QuantityId::EdenTotal
         | QuantityId::MatMs
         | QuantityId::MatAex
         | QuantityId::MatAlpha
@@ -509,6 +529,56 @@ mod tests {
         assert_eq!(
             active_fem_preview_quantities(FemEngine::CpuNative, &plan, &quantities),
             vec!["m", "H_ex", "H_demag", "H_ext", "torque", "H_eff"]
+        );
+    }
+
+    #[test]
+    fn fem_energy_density_quantities_follow_active_energy_terms() {
+        let mut plan = fem_plan();
+        let quantities = [
+            "eden_ex",
+            "eden_demag",
+            "eden_ext",
+            "eden_ani",
+            "eden_dmi",
+            "eden_total",
+        ];
+
+        assert_eq!(
+            active_fem_preview_quantities(FemEngine::NativeGpu, &plan, &quantities),
+            vec!["eden_ex", "eden_total"]
+        );
+        assert_eq!(
+            active_fem_preview_quantities(FemEngine::CpuNative, &plan, &quantities),
+            vec!["eden_ex", "eden_total"]
+        );
+
+        plan.enable_demag = true;
+        plan.external_field = Some([1.0, 0.0, 0.0]);
+        plan.material.uniaxial_anisotropy = Some(1.0e5);
+        plan.interfacial_dmi = Some(1.0e-3);
+
+        assert_eq!(
+            active_fem_preview_quantities(FemEngine::NativeGpu, &plan, &quantities),
+            vec![
+                "eden_ex",
+                "eden_demag",
+                "eden_ext",
+                "eden_ani",
+                "eden_dmi",
+                "eden_total"
+            ]
+        );
+        assert_eq!(
+            active_fem_preview_quantities(FemEngine::CpuNative, &plan, &quantities),
+            vec![
+                "eden_ex",
+                "eden_demag",
+                "eden_ext",
+                "eden_ani",
+                "eden_dmi",
+                "eden_total"
+            ]
         );
     }
 

@@ -599,17 +599,6 @@ describe("ribbon structure", () => {
       {
         overrides: [
           {
-            scope: "airbox",
-            scope_id: "airbox",
-            style: {
-              surface_color_source: "component_x",
-            },
-          },
-        ],
-      },
-      {
-        overrides: [
-          {
             quantity: { active_quantity_id: "H_eff" },
             scope: "object",
             scope_id: "free-layer",
@@ -1218,6 +1207,17 @@ describe("ribbon structure", () => {
             scope: "airbox",
             scope_id: "airbox",
             style: {
+              surface_color_source: "component_x",
+            },
+          },
+        ],
+      },
+      {
+        overrides: [
+          {
+            scope: "airbox",
+            scope_id: "airbox",
+            style: {
               vector_thickness: 2.4,
             },
           },
@@ -1235,6 +1235,7 @@ describe("ribbon structure", () => {
       expect(invalidations).toEqual([
         [VISUALIZATION_STATE_PATH, 41],
         [VISUALIZATION_STATE_PATH, 42],
+        [VISUALIZATION_STATE_PATH, 43],
       ]),
     );
   });

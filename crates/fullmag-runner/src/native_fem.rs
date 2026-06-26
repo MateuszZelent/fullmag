@@ -52,13 +52,18 @@ pub(crate) use runtime_info::{
 };
 
 #[cfg(feature = "fem-gpu")]
-use crate::preview::{build_mesh_preview_field_with_active_mask, mesh_quantity_active_mask};
+use crate::preview::{
+    build_mesh_preview_field_with_active_mask, build_mesh_scalar_preview_field_with_active_mask,
+    mesh_quantity_active_mask,
+};
 #[cfg(feature = "fem-gpu")]
 use crate::quantities::{normalize_quantity_id, QuantityId};
 #[cfg(feature = "fem-gpu")]
 use crate::scalar_metrics::{single_object_scalars, weighted_object_scalars};
 #[cfg(feature = "fem-gpu")]
 use crate::types::{LivePreviewField, LivePreviewRequest, RunError, StepStats};
+#[cfg(feature = "fem-gpu")]
+use fullmag_engine::{dot, MU0};
 #[cfg(feature = "fem-gpu")]
 use fullmag_ir::StageCompletionIR;
 #[cfg(feature = "fem-gpu")]
@@ -439,10 +444,58 @@ fn fem_preview_observable(quantity: &str) -> Result<ffi::fullmag_fem_observable,
 pub(crate) struct NativeFemBackend {
     handle: *mut ffi::fullmag_fem_backend,
     magnetic_node_mask: Vec<bool>,
+    saturation_magnetisation: f64,
+    energy_density_terms: NativeFemEnergyDensityTerms,
     object_weights: Vec<(String, f64)>,
     object_node_indices: Vec<(String, Vec<u32>)>,
     demag_solver: Option<String>,
     demag_preconditioner: Option<String>,
+}
+
+#[cfg(feature = "fem-gpu")]
+#[derive(Debug, Clone, Copy)]
+struct NativeFemEnergyDensityTerms {
+    exchange: bool,
+    demag: bool,
+    external: bool,
+    anisotropy: bool,
+    dmi: bool,
+}
+
+#[cfg(feature = "fem-gpu")]
+impl NativeFemEnergyDensityTerms {
+    fn from_plan(plan: &fullmag_ir::FemPlanIR) -> Self {
+        Self {
+            exchange: plan.enable_exchange,
+            demag: plan.enable_demag,
+            external: plan.external_field.is_some(),
+            anisotropy: native_fem_plan_has_anisotropy(plan),
+            dmi: native_fem_plan_has_dmi(plan),
+        }
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn native_fem_plan_has_anisotropy(plan: &fullmag_ir::FemPlanIR) -> bool {
+    plan.material.uniaxial_anisotropy.is_some()
+        || plan.material.uniaxial_anisotropy_k2.is_some()
+        || plan.material.cubic_anisotropy_kc1.is_some()
+        || plan.material.cubic_anisotropy_kc2.is_some()
+        || plan.material.cubic_anisotropy_kc3.is_some()
+}
+
+#[cfg(feature = "fem-gpu")]
+fn native_fem_plan_has_dmi(plan: &fullmag_ir::FemPlanIR) -> bool {
+    plan.interfacial_dmi.is_some()
+        || plan.bulk_dmi.is_some()
+        || plan
+            .dind_field
+            .as_ref()
+            .is_some_and(|values| !values.is_empty())
+        || plan
+            .dbulk_field
+            .as_ref()
+            .is_some_and(|values| !values.is_empty())
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -1366,6 +1419,8 @@ impl NativeFemBackend {
             handle,
             magnetic_node_mask: mesh_quantity_active_mask("m", &plan.mesh)
                 .unwrap_or_else(|| vec![true; plan.mesh.nodes.len()]),
+            saturation_magnetisation: plan.material.saturation_magnetisation,
+            energy_density_terms: NativeFemEnergyDensityTerms::from_plan(plan),
             object_weights: if plan.object_segments.is_empty() {
                 vec![("free".to_string(), 1.0)]
             } else {
@@ -2195,6 +2250,13 @@ impl NativeFemBackend {
         request: &LivePreviewRequest,
         node_count: usize,
     ) -> Result<LivePreviewField, RunError> {
+        if let Some(values) = self.copy_energy_density_values(&request.quantity, node_count)? {
+            return Ok(build_mesh_scalar_preview_field_with_active_mask(
+                request,
+                &values,
+                Some(self.magnetic_node_mask.clone()),
+            ));
+        }
         let values = self.copy_field(fem_preview_observable(&request.quantity)?, node_count)?;
         let active_mask = (crate::quantities::quantity_spatial_domain(&request.quantity)
             == "magnetic_only")
@@ -2204,6 +2266,97 @@ impl NativeFemBackend {
             &values,
             active_mask,
         ))
+    }
+
+    fn copy_energy_density_values(
+        &self,
+        quantity: &str,
+        node_count: usize,
+    ) -> Result<Option<Vec<f64>>, RunError> {
+        let quantity = crate::quantities::normalized_quantity_name(quantity)?;
+        let values = match quantity {
+            "eden_ex" => self.copy_field_energy_density(
+                ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_EX,
+                node_count,
+                -0.5,
+            )?,
+            "eden_demag" => self.copy_field_energy_density(
+                ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_DEMAG,
+                node_count,
+                -0.5,
+            )?,
+            "eden_ext" => self.copy_field_energy_density(
+                ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_EXT,
+                node_count,
+                -1.0,
+            )?,
+            "eden_ani" => self.copy_field_energy_density(
+                ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_ANI,
+                node_count,
+                -0.5,
+            )?,
+            "eden_dmi" => {
+                let mut values = self.copy_field_energy_density(
+                    ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_DMI,
+                    node_count,
+                    -0.5,
+                )?;
+                let bulk = self.copy_field_energy_density(
+                    ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_DMI_BULK,
+                    node_count,
+                    -0.5,
+                )?;
+                for (value, bulk_value) in values.iter_mut().zip(bulk) {
+                    *value += bulk_value;
+                }
+                values
+            }
+            "eden_total" => {
+                let mut total = vec![0.0; node_count];
+                let terms = [
+                    (self.energy_density_terms.exchange, "eden_ex"),
+                    (self.energy_density_terms.demag, "eden_demag"),
+                    (self.energy_density_terms.external, "eden_ext"),
+                    (self.energy_density_terms.anisotropy, "eden_ani"),
+                    (self.energy_density_terms.dmi, "eden_dmi"),
+                ];
+                for (_, term) in terms.into_iter().filter(|(enabled, _)| *enabled) {
+                    if let Some(values) = self.copy_energy_density_values(term, node_count)? {
+                        for (accum, value) in total.iter_mut().zip(values) {
+                            *accum += value;
+                        }
+                    }
+                }
+                total
+            }
+            _ => return Ok(None),
+        };
+        Ok(Some(values))
+    }
+
+    fn copy_field_energy_density(
+        &self,
+        observable: ffi::fullmag_fem_observable,
+        node_count: usize,
+        prefactor: f64,
+    ) -> Result<Vec<f64>, RunError> {
+        let magnetization = self.copy_field(
+            ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_M,
+            node_count,
+        )?;
+        let field = self.copy_field(observable, node_count)?;
+        Ok(magnetization
+            .iter()
+            .zip(field.iter())
+            .enumerate()
+            .map(|(index, (m, h))| {
+                if !self.magnetic_node_mask.get(index).copied().unwrap_or(true) {
+                    0.0
+                } else {
+                    prefactor * MU0 * self.saturation_magnetisation * dot(*m, *h)
+                }
+            })
+            .collect())
     }
 
     pub fn device_info(&self) -> Result<DeviceInfo, RunError> {

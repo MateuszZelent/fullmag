@@ -40,6 +40,22 @@ def point(field_value_mT: float, m_avg: list[float], m_parallel: float) -> dict:
     }
 
 
+def publication_metrics() -> dict:
+    metrics = {
+        "H_c_plus": 10.0,
+        "H_c_minus": -10.0,
+        "H_c": 10.0,
+        "M_r_plus": 0.2,
+        "M_r_minus": -0.2,
+        "loop_area": 1.0,
+    }
+    metrics["metric_statuses"] = {
+        key: {"status": "available", "reason": "Metric value is available."}
+        for key in metrics
+    }
+    return metrics
+
+
 def write_projection_fixture(
     root: Path,
     *,
@@ -118,14 +134,7 @@ def write_projection_fixture(
         ],
     )
     if include_metrics:
-        metrics = {
-            "H_c_plus": 10.0,
-            "H_c_minus": -10.0,
-            "H_c": 10.0,
-            "M_r_plus": 0.2,
-            "M_r_minus": -0.2,
-            "loop_area": 1.0,
-        }
+        metrics = publication_metrics()
         write_json(root / "hysteresis_metrics.json", metrics)
         write_json(root / "hysteresis_angular_family/oop/hysteresis_metrics.json", metrics)
         write_json(
@@ -189,3 +198,32 @@ def test_projection_validator_rejects_missing_publication_metrics(tmp_path: Path
 
     assert result.returncode != 0
     assert "metrics" in (result.stderr + result.stdout)
+
+
+def test_projection_validator_rejects_metrics_without_statuses(tmp_path: Path) -> None:
+    write_projection_fixture(tmp_path)
+    metrics = publication_metrics()
+    metrics.pop("metric_statuses")
+    write_json(tmp_path / "hysteresis_metrics.json", metrics)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "metric_statuses" in (result.stderr + result.stdout)
+
+
+def test_projection_validator_rejects_unavailable_publication_metric_status(
+    tmp_path: Path,
+) -> None:
+    write_projection_fixture(tmp_path)
+    metrics = publication_metrics()
+    metrics["metric_statuses"]["H_c_plus"] = {
+        "status": "unavailable",
+        "reason": "No positive coercive crossing.",
+    }
+    write_json(tmp_path / "hysteresis_metrics.json", metrics)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "H_c_plus" in (result.stderr + result.stdout)

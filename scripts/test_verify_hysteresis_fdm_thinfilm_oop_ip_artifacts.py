@@ -49,6 +49,22 @@ def thinfilm_points(high_field_projection: float) -> list[dict]:
     return [point(index, field, m_parallel) for index, (field, m_parallel) in enumerate(values)]
 
 
+def publication_metrics() -> dict:
+    metrics = {
+        "H_c_plus": 10.0,
+        "H_c_minus": -10.0,
+        "H_c": 10.0,
+        "M_r_plus": 0.2,
+        "M_r_minus": -0.2,
+        "loop_area": 1.0,
+    }
+    metrics["metric_statuses"] = {
+        key: {"status": "available", "reason": "Metric value is available."}
+        for key in metrics
+    }
+    return metrics
+
+
 def write_thinfilm_fixture(
     root: Path,
     *,
@@ -59,6 +75,7 @@ def write_thinfilm_fixture(
     variants = [
         {
             "data_status": "computed_active_stage",
+            "metrics_path": "hysteresis_metrics.json",
             "point_count": 5,
             "points_path": "hysteresis_points.json",
             "points_resource_ref": "/v2/sessions/current/analysis/hysteresis-family/stage-0/variants/ip_near_x/points",
@@ -66,6 +83,7 @@ def write_thinfilm_fixture(
         },
         {
             "data_status": oop_status,
+            "metrics_path": "hysteresis_angular_family/oop/hysteresis_metrics.json",
             "point_count": 5,
             "points_path": "hysteresis_angular_family/oop/hysteresis_points.json",
             "points_resource_ref": oop_resource_ref,
@@ -85,6 +103,9 @@ def write_thinfilm_fixture(
         root / "hysteresis_angular_family/oop/hysteresis_points.json",
         oop_points if oop_points is not None else thinfilm_points(0.55),
     )
+    metrics = publication_metrics()
+    write_json(root / "hysteresis_metrics.json", metrics)
+    write_json(root / "hysteresis_angular_family/oop/hysteresis_metrics.json", metrics)
 
 
 def test_thinfilm_validator_accepts_public_computed_variants(tmp_path: Path) -> None:
@@ -134,3 +155,42 @@ def test_thinfilm_validator_rejects_missing_demag_contrast(tmp_path: Path) -> No
 
     assert result.returncode != 0
     assert "demag contrast failed" in (result.stderr + result.stdout)
+
+
+def test_thinfilm_validator_rejects_missing_publication_metrics(tmp_path: Path) -> None:
+    write_thinfilm_fixture(tmp_path)
+    (tmp_path / "hysteresis_metrics.json").unlink()
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "metrics" in (result.stderr + result.stdout)
+
+
+def test_thinfilm_validator_rejects_metrics_without_statuses(tmp_path: Path) -> None:
+    write_thinfilm_fixture(tmp_path)
+    metrics = publication_metrics()
+    metrics.pop("metric_statuses")
+    write_json(tmp_path / "hysteresis_metrics.json", metrics)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "metric_statuses" in (result.stderr + result.stdout)
+
+
+def test_thinfilm_validator_rejects_warning_publication_metric_status(
+    tmp_path: Path,
+) -> None:
+    write_thinfilm_fixture(tmp_path)
+    metrics = publication_metrics()
+    metrics["metric_statuses"]["loop_area"] = {
+        "status": "warning",
+        "reason": "Loop closure remains open.",
+    }
+    write_json(tmp_path / "hysteresis_metrics.json", metrics)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "loop_area" in (result.stderr + result.stdout)

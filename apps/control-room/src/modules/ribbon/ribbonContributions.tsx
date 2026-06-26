@@ -90,6 +90,7 @@ import {
   type VisualizationColorMode,
   type VisualizationGeometryScope,
   type VisualizationRenderMode,
+  type VisualizationTargetKind,
   type VisualizationTargetPatch,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import {

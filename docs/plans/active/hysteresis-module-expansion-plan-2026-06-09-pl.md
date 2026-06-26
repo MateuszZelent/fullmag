@@ -2505,7 +2505,12 @@ Niezamkniete braki produkcyjne:
   oraz powrotu do pola startowego. RED gate
   `python3 -m pytest scripts/test_verify_hysteresis_projection_benchmark.py -q`
   najpierw pokazal, ze oba slabe artefakty byly akceptowane, po poprawce
-  zwrocil `6 passed`. Dodatkowa weryfikacja kompilacji:
+  zwrocil `6 passed`. Aktualizacja 2026-06-26: ten sam walidator wymaga teraz
+  `metric_statuses.<metric>.status == "available"` i niepustego `reason` dla
+  kazdej publikacyjnej metryki; brak `metric_statuses` albo status
+  `warning/unavailable` odrzuca fixture. Aktualna weryfikacja
+  `python3 -m pytest scripts/test_verify_hysteresis_projection_benchmark.py -q`
+  zwraca `8 passed`. Dodatkowa weryfikacja kompilacji:
   `python3 -m py_compile scripts/verify_hysteresis_projection_benchmark.py scripts/test_verify_hysteresis_projection_benchmark.py`.
   Wczesniejsza weryfikacja:
   `python3 -m pytest scripts/test_verify_hysteresis_projection_benchmark.py -q`
@@ -4599,9 +4604,14 @@ Status wykonania:
   `computed_variant_run`, musza miec publiczny
   `/v2/sessions/current/analysis/hysteresis-family/...` w
   `points_resource_ref`, a walidator odrzuca slaby response in-plane oraz brak
-  kontrastu demag OOP/IP. Weryfikacja:
+  kontrastu demag OOP/IP. Aktualizacja 2026-06-26: walidator wymaga rowniez
+  `metrics_path`, publikacyjnych metryk `H_c+/-`, `H_c`, `M_r+/-`,
+  `loop_area` oraz `metric_statuses.<metric>.status == "available"` z
+  niepustym `reason`; brak statusow albo status `warning/unavailable`
+  odrzuca fixture jako niewystarczajacy dla szybkiej bramki publikacyjnej.
+  Weryfikacja:
   `python3 -m pytest scripts/test_verify_hysteresis_projection_benchmark.py scripts/test_verify_hysteresis_fdm_macrospin_sw_artifacts.py scripts/test_verify_hysteresis_fdm_thinfilm_oop_ip_artifacts.py -q`
-  dala `14 passed`, a
+  zwraca obecnie `24 passed`, a
   `python3 -m py_compile scripts/verify_hysteresis_fdm_macrospin_sw_artifacts.py scripts/test_verify_hysteresis_fdm_macrospin_sw_artifacts.py scripts/verify_hysteresis_fdm_thinfilm_oop_ip_artifacts.py scripts/test_verify_hysteresis_fdm_thinfilm_oop_ip_artifacts.py`
   przeszlo bez bledow.
 - Zamknieta manifestowa bramka publication suite dla trzech szybkich
@@ -4617,14 +4627,54 @@ Status wykonania:
   `just verify-hysteresis-publication-suite <manifest>` jest publiczna bramka
   CI/operatora dla zestawu artifact dirs. Weryfikacja:
   `python3 -m pytest scripts/test_verify_hysteresis_publication_suite.py -q`
-  zwrocilo `5 passed`; agregat
+  zwrocilo historycznie `5 passed`; agregat
   `python3 -m pytest scripts/test_verify_hysteresis_projection_benchmark.py scripts/test_verify_hysteresis_fdm_macrospin_sw_artifacts.py scripts/test_verify_hysteresis_fdm_thinfilm_oop_ip_artifacts.py scripts/test_verify_hysteresis_publication_suite.py -q`
-  zwrocil `21 passed`; oraz
+  zwracal wtedy `29 passed`; oraz
   `python3 -m py_compile scripts/verify_hysteresis_publication_suite.py scripts/test_verify_hysteresis_publication_suite.py`
   przeszlo bez bledow.
+  Aktualizacja 2026-06-26: manifest musi zawierac
+  `cross_backend_acceptance` z `status="criteria_declared_runtime_open"`,
+  `reference_lane`, `required_metrics` obejmujacymi `H_c+/-` oraz `M_r+/-`,
+  jawne lane statusy dla `fdm/cpu/double`, `fdm/gpu/double`,
+  `fem/cpu/double`, `fem/gpu/double`, a takze wpisy `tolerances` z powodem.
+  Lane `validated` wymaga pasujacych `case_ids` i `evidence`, lane
+  `supported-with-warning` wymaga `limitations` albo `blockers`, a lane
+  `unsupported` wymaga `reason`. To jest metadata gate: deklaruje scope i
+  ograniczenia cross-backend, ale nie udaje jeszcze policzonej parytetowej
+  tolerancji FDM/FEM. Aktualna weryfikacja
+  `python3 -m pytest scripts/test_verify_hysteresis_publication_suite.py -q`
+  zwraca `15 passed`; pelny szybki agregat publikacyjny bez osobnego
+  metrics-parity validatora
+  `python3 -m pytest scripts/test_verify_hysteresis_projection_benchmark.py scripts/test_verify_hysteresis_fdm_macrospin_sw_artifacts.py scripts/test_verify_hysteresis_fdm_thinfilm_oop_ip_artifacts.py scripts/test_verify_hysteresis_publication_suite.py -q`
+  zwraca `39 passed`.
   Bramka pozostaje szybkim suite gate dla obecnych FDM/projection fixtures; pelne
-  publikacyjne tolerancje analityczne, metric-status gates i cross-backend
-  acceptance pozostaja osobnym etapem.
+  publikacyjne tolerancje analityczne i validated cross-backend numerical parity
+  pozostaja osobnym etapem.
+- Dodana opcjonalna bramka parytetu metryk:
+  `just verify-hysteresis-metrics-parity <manifest.json>` albo bezposrednio
+  `scripts/verify_hysteresis_metrics_parity.py <manifest.json>`. Manifest
+  `hysteresis-metrics-parity/v1` porownuje sparowane
+  `hysteresis_metrics.json` dla lane'ow, np. `fdm/cpu/double` kontra
+  `fem/cpu/double`, bez ponownego przeliczania punktow petli. Kazda metryka
+  wymaga jawnego `abs_tolerance`, skonczonych wartosci liczbowych w obu
+  artefaktach oraz `metric_statuses.<metric>.status == "available"` z
+  niepustym `reason`. Minimalny publikacyjny zestaw obejmuje `H_c_plus`,
+  `H_c_minus`, `M_r_plus` i `M_r_minus`, a kazdy pair musi deklarowac komplet
+  tych metryk. Sciezki `artifact_dir`, `metrics_path` oraz opcjonalne
+  `cross_backend_acceptance.parity_checks` w publication suite musza byc
+  wzgledne wobec manifestu i nie moga przez `../` wyjsc poza drzewo manifestu.
+  Publication suite uruchamia parity validator tylko wtedy, gdy
+  `parity_checks` jest obecne; dla
+  `cross_backend_acceptance.status == "validated"` co najmniej jeden parity
+  check jest wymagany, a wszystkie wpisy `tolerances` musza miec
+  `status="validated"` zamiast `deferred`. Weryfikacja:
+  `python3 -m pytest scripts/test_verify_hysteresis_metrics_parity.py scripts/test_verify_hysteresis_publication_suite.py -q`
+  zwraca obecnie `23 passed`. Ta bramka zamyka narzedzie porownawcze dla
+  rzeczywistych paired metrics artifacts, ale nadal nie deklaruje, ze takie
+  publikacyjne FDM/FEM artefakty runtime zostaly juz wygenerowane.
+  Pelny szybki agregat razem z metrics parity
+  `python3 -m pytest scripts/test_verify_hysteresis_metrics_parity.py scripts/test_verify_hysteresis_projection_benchmark.py scripts/test_verify_hysteresis_fdm_macrospin_sw_artifacts.py scripts/test_verify_hysteresis_fdm_thinfilm_oop_ip_artifacts.py scripts/test_verify_hysteresis_publication_suite.py -q`
+  zwraca `47 passed`.
 - Zamkniety fixture niewystarczajacego pola saturacji: target
   `just run-hysteresis-waveguide-saturation-limit-smoke cpu` uruchomil sesje
   `session-1781258014197-2056303`, a

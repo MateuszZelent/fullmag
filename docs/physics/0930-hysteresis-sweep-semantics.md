@@ -407,6 +407,19 @@ are included in the final metrics calculation.
   explicitly opted in
 - [x] Fast publication-suite manifest gate across macrospin, OOP/IP thin-film,
   and custom-angle projection benchmark cases
+- [x] Fast publication validators require `metric_statuses` entries with
+  `available` status and non-empty reasons for required publication metrics in
+  OOP/IP thin-film and custom-angle projection benchmark artifacts
+- [x] Publication-suite manifest declares cross-backend acceptance scope,
+  reference lane, required coercivity/remanence metrics, explicit
+  FDM/FEM CPU/GPU lane statuses, and deferred tolerance rationale
+- [x] Optional cross-backend metrics parity validator for paired
+  `hysteresis_metrics.json` artifacts, requiring finite coercivity/remanence
+  values, `metric_statuses[*].status="available"`, and explicit per-metric
+  tolerances for the required `H_c+/-` and `M_r+/-` set before a
+  publication-suite manifest may claim validated cross-backend acceptance.
+  Metrics and parity manifests must resolve only within the manifest tree, and
+  a `validated` cross-backend acceptance claim may not retain deferred
+  tolerance entries.
 - [ ] Publication-grade scientific validation suite with analytical
-  Stoner-Wohlfarth tolerances, metric-status gates, and cross-backend acceptance
-  criteria
+  Stoner-Wohlfarth tolerances and validated cross-backend numerical parity

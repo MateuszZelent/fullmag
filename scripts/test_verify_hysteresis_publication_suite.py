@@ -32,6 +32,9 @@ thinfilm_fixtures = load_script_module(
 projection_fixtures = load_script_module(
     REPO_ROOT / "scripts" / "test_verify_hysteresis_projection_benchmark.py"
 )
+metrics_parity_fixtures = load_script_module(
+    REPO_ROOT / "scripts" / "test_verify_hysteresis_metrics_parity.py"
+)
 
 
 def write_json(path: Path, payload: object) -> None:
@@ -47,6 +50,69 @@ def run_validator(manifest: Path) -> subprocess.CompletedProcess[str]:
         stderr=subprocess.PIPE,
         check=False,
     )
+
+
+def cross_backend_acceptance_fixture() -> dict:
+    return {
+        "status": "criteria_declared_runtime_open",
+        "reference_lane": {
+            "backend": "fdm",
+            "device": "cpu",
+            "precision": "double",
+            "case_ids": ["macrospin_sw", "thinfilm_oop_ip"],
+        },
+        "required_metrics": ["H_c_plus", "H_c_minus", "M_r_plus", "M_r_minus"],
+        "lanes": [
+            {
+                "backend": "fdm",
+                "device": "cpu",
+                "precision": "double",
+                "status": "validated",
+                "case_ids": ["macrospin_sw", "thinfilm_oop_ip"],
+                "evidence": "fast publication fixtures pass current validators",
+            },
+            {
+                "backend": "fem",
+                "device": "cpu",
+                "precision": "double",
+                "status": "supported-with-warning",
+                "case_ids": ["projection_benchmark"],
+                "limitations": [
+                    "projection benchmark is not coercivity/remanence parity",
+                ],
+            },
+            {
+                "backend": "fdm",
+                "device": "gpu",
+                "precision": "double",
+                "status": "unsupported",
+                "reason": "no publication-suite hysteresis parity fixture declared",
+            },
+            {
+                "backend": "fem",
+                "device": "gpu",
+                "precision": "double",
+                "status": "unsupported",
+                "reason": "no publication-suite hysteresis parity fixture declared",
+            },
+        ],
+        "tolerances": [
+            {
+                "metric": "coercivity_mT",
+                "status": "deferred",
+                "reason": (
+                    "paired FDM/FEM runtime parity artifacts are not part of the fast suite"
+                ),
+            },
+            {
+                "metric": "remanence",
+                "status": "deferred",
+                "reason": (
+                    "paired FDM/FEM runtime parity artifacts are not part of the fast suite"
+                ),
+            },
+        ],
+    }
 
 
 def write_publication_suite_fixture(root: Path, *, omit_case: str | None = None) -> Path:
@@ -97,6 +163,7 @@ def write_publication_suite_fixture(root: Path, *, omit_case: str | None = None)
         manifest,
         {
             "schema_version": "hysteresis-publication-suite/v1",
+            "cross_backend_acceptance": cross_backend_acceptance_fixture(),
             "cases": cases,
         },
     )
@@ -150,6 +217,87 @@ def test_publication_suite_rejects_missing_reproducibility_metadata(
     assert "run_command" in (result.stderr + result.stdout)
 
 
+def test_publication_suite_rejects_missing_cross_backend_acceptance(
+    tmp_path: Path,
+) -> None:
+    manifest = write_publication_suite_fixture(tmp_path)
+    payload = json.loads(manifest.read_text())
+    del payload["cross_backend_acceptance"]
+    write_json(manifest, payload)
+
+    result = run_validator(manifest)
+
+    assert result.returncode != 0
+    assert "cross_backend_acceptance" in (result.stderr + result.stdout)
+
+
+def test_publication_suite_rejects_single_backend_cross_backend_claim(
+    tmp_path: Path,
+) -> None:
+    manifest = write_publication_suite_fixture(tmp_path)
+    payload = json.loads(manifest.read_text())
+    payload["cases"]["projection_benchmark"]["backend"] = "fdm"
+    write_json(manifest, payload)
+
+    result = run_validator(manifest)
+
+    assert result.returncode != 0
+    assert "cross_backend_acceptance" in (result.stderr + result.stdout)
+
+
+def test_publication_suite_rejects_missing_required_cross_backend_lane(
+    tmp_path: Path,
+) -> None:
+    manifest = write_publication_suite_fixture(tmp_path)
+    payload = json.loads(manifest.read_text())
+    payload["cross_backend_acceptance"]["lanes"] = [
+        lane
+        for lane in payload["cross_backend_acceptance"]["lanes"]
+        if not (
+            lane["backend"] == "fem"
+            and lane["device"] == "gpu"
+            and lane["precision"] == "double"
+        )
+    ]
+    write_json(manifest, payload)
+
+    result = run_validator(manifest)
+
+    assert result.returncode != 0
+    assert "fem/gpu/double" in (result.stderr + result.stdout)
+
+
+def test_publication_suite_rejects_unsupported_lane_without_reason(
+    tmp_path: Path,
+) -> None:
+    manifest = write_publication_suite_fixture(tmp_path)
+    payload = json.loads(manifest.read_text())
+    del payload["cross_backend_acceptance"]["lanes"][2]["reason"]
+    write_json(manifest, payload)
+
+    result = run_validator(manifest)
+
+    assert result.returncode != 0
+    assert "reason" in (result.stderr + result.stdout)
+
+
+def test_publication_suite_rejects_case_artifact_dir_outside_manifest_tree(
+    tmp_path: Path,
+) -> None:
+    manifest_root = tmp_path / "manifest"
+    manifest = write_publication_suite_fixture(manifest_root)
+    outside = tmp_path / "outside_case"
+    projection_fixtures.write_projection_fixture(outside)
+    payload = json.loads(manifest.read_text())
+    payload["cases"]["projection_benchmark"]["artifact_dir"] = "../outside_case"
+    write_json(manifest, payload)
+
+    result = run_validator(manifest)
+
+    assert result.returncode != 0
+    assert "must stay under" in (result.stderr + result.stdout)
+
+
 def test_publication_suite_surfaces_case_validator_failure(tmp_path: Path) -> None:
     manifest = write_publication_suite_fixture(tmp_path)
     fields = [50.0, 0.0, -50.0, 0.0, 50.0]
@@ -170,3 +318,94 @@ def test_publication_suite_surfaces_case_validator_failure(tmp_path: Path) -> No
     assert result.returncode != 0
     assert "projection_benchmark" in (result.stderr + result.stdout)
     assert "m_parallel" in (result.stderr + result.stdout)
+
+
+def test_publication_suite_runs_optional_metrics_parity_check(
+    tmp_path: Path,
+) -> None:
+    manifest = write_publication_suite_fixture(tmp_path)
+    metrics_parity_fixtures.write_parity_fixture(
+        tmp_path / "parity",
+        candidate_h_c_plus=15.5,
+    )
+    payload = json.loads(manifest.read_text())
+    payload["cross_backend_acceptance"]["parity_checks"] = [
+        "parity/hysteresis_metrics_parity.json"
+    ]
+    write_json(manifest, payload)
+
+    result = run_validator(manifest)
+
+    assert result.returncode != 0
+    details = result.stderr + result.stdout
+    assert "parity/hysteresis_metrics_parity.json" in details
+    assert "H_c_plus" in details
+
+
+def test_publication_suite_accepts_passing_metrics_parity_check(
+    tmp_path: Path,
+) -> None:
+    manifest = write_publication_suite_fixture(tmp_path)
+    metrics_parity_fixtures.write_parity_fixture(tmp_path / "parity")
+    payload = json.loads(manifest.read_text())
+    payload["cross_backend_acceptance"]["parity_checks"] = [
+        "parity/hysteresis_metrics_parity.json"
+    ]
+    write_json(manifest, payload)
+
+    result = run_validator(manifest)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "validated hysteresis publication suite" in result.stdout
+
+
+def test_publication_suite_rejects_parity_check_outside_manifest_tree(
+    tmp_path: Path,
+) -> None:
+    manifest_root = tmp_path / "manifest"
+    manifest = write_publication_suite_fixture(manifest_root)
+    metrics_parity_fixtures.write_parity_fixture(tmp_path / "outside_parity")
+    payload = json.loads(manifest.read_text())
+    payload["cross_backend_acceptance"]["parity_checks"] = [
+        "../outside_parity/hysteresis_metrics_parity.json"
+    ]
+    write_json(manifest, payload)
+
+    result = run_validator(manifest)
+
+    assert result.returncode != 0
+    assert "must stay under" in (result.stderr + result.stdout)
+
+
+def test_publication_suite_rejects_validated_acceptance_without_parity_check(
+    tmp_path: Path,
+) -> None:
+    manifest = write_publication_suite_fixture(tmp_path)
+    payload = json.loads(manifest.read_text())
+    payload["cross_backend_acceptance"]["status"] = "validated"
+    write_json(manifest, payload)
+
+    result = run_validator(manifest)
+
+    assert result.returncode != 0
+    assert "parity_checks" in (result.stderr + result.stdout)
+
+
+def test_publication_suite_rejects_validated_acceptance_with_deferred_tolerance(
+    tmp_path: Path,
+) -> None:
+    manifest = write_publication_suite_fixture(tmp_path)
+    metrics_parity_fixtures.write_parity_fixture(tmp_path / "parity")
+    payload = json.loads(manifest.read_text())
+    payload["cross_backend_acceptance"]["status"] = "validated"
+    payload["cross_backend_acceptance"]["parity_checks"] = [
+        "parity/hysteresis_metrics_parity.json"
+    ]
+    write_json(manifest, payload)
+
+    result = run_validator(manifest)
+
+    assert result.returncode != 0
+    details = result.stderr + result.stdout
+    assert "tolerances" in details
+    assert "validated" in details

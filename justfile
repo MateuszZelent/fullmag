@@ -905,6 +905,9 @@ verify-hysteresis-fdm-thinfilm-oop-ip artifacts_dir:
 verify-hysteresis-publication-suite manifest:
     python3 scripts/verify_hysteresis_publication_suite.py "{{manifest}}"
 
+verify-hysteresis-metrics-parity manifest:
+    python3 scripts/verify_hysteresis_metrics_parity.py "{{manifest}}"
+
 run-permalloy-box-relax-fdm web_port="3100":
     just run-permalloy-box-relax-fdm-interactive "{{web_port}}"
 

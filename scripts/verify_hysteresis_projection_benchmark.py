@@ -107,6 +107,29 @@ def require_metrics(root: Path, relative_path: str, variant_id: str) -> dict[str
             raise SystemExit(
                 f"metrics artifact for {variant_id} must provide finite {field}, got {value!r}"
             )
+    statuses = metrics.get("metric_statuses")
+    if not isinstance(statuses, dict):
+        raise SystemExit(
+            f"metrics artifact for {variant_id} must provide metric_statuses for "
+            "publication metrics"
+        )
+    for field in sorted(REQUIRED_METRIC_FIELDS):
+        status_entry = statuses.get(field)
+        if not isinstance(status_entry, dict):
+            raise SystemExit(
+                f"metrics artifact for {variant_id} must provide metric_statuses.{field}"
+            )
+        status = status_entry.get("status")
+        reason = status_entry.get("reason")
+        if status != "available":
+            raise SystemExit(
+                f"metrics artifact for {variant_id} requires metric_statuses.{field}.status "
+                f"to be 'available', got {status!r}"
+            )
+        if not isinstance(reason, str) or not reason.strip():
+            raise SystemExit(
+                f"metrics artifact for {variant_id} requires metric_statuses.{field}.reason"
+            )
     return metrics
 
 

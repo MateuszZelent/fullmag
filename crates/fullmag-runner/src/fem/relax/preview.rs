@@ -12,6 +12,13 @@ use crate::quantities::active_fem_preview_quantities;
 use crate::types::{LivePreviewField, LivePreviewRequest, RunError};
 use crate::DisplaySelectionState;
 
+fn is_fem_energy_density_quantity(quantity: &str) -> bool {
+    matches!(
+        crate::quantities::normalized_quantity_name(quantity),
+        Ok("eden_ex" | "eden_demag" | "eden_ext" | "eden_ani" | "eden_dmi" | "eden_total")
+    )
+}
+
 #[derive(Default)]
 pub(crate) struct FemLivePreviewHandoff {
     pending: Option<NativeFemPreviewSnapshot>,
@@ -42,7 +49,16 @@ impl FemLivePreviewHandoff {
         &mut self,
         backend: &NativeFemBackend,
         request: &LivePreviewRequest,
+        node_count: usize,
     ) -> Result<Option<LivePreviewField>, RunError> {
+        if is_fem_energy_density_quantity(&request.quantity) {
+            let field = backend.copy_live_preview_field(request, node_count)?;
+            self.pending = None;
+            self.pending_request = None;
+            self.last_good = Some(field.clone());
+            self.last_good_request = Some(request.clone());
+            return Ok(Some(field));
+        }
         if self
             .pending_request
             .as_ref()
@@ -114,6 +130,7 @@ impl FemCachedPreviewHandoff {
         engine: FemEngine,
         display_selection: &DisplaySelectionState,
         plan: &FemPlanIR,
+        node_count: usize,
     ) -> Result<Option<Vec<LivePreviewField>>, RunError> {
         if self
             .pending_revision
@@ -134,6 +151,12 @@ impl FemCachedPreviewHandoff {
             for quantity in quantities {
                 let mut request = base_request.clone();
                 request.quantity = quantity.to_string();
+                if is_fem_energy_density_quantity(&request.quantity) {
+                    if let Ok(field) = backend.copy_live_preview_field(&request, node_count) {
+                        completed.push(field);
+                    }
+                    continue;
+                }
                 if let Ok(snapshot) = backend.begin_live_preview_snapshot(&request) {
                     self.pending.push((request, snapshot));
                 }
@@ -214,11 +237,9 @@ impl FemLiveMagnetizationHandoff {
 pub(crate) fn build_fem_live_preview_field(
     backend: &NativeFemBackend,
     request: &crate::LivePreviewRequest,
-    _node_count: usize,
+    node_count: usize,
 ) -> Result<LivePreviewField, RunError> {
-    backend
-        .begin_live_preview_snapshot(request)?
-        .into_live_preview_field()
+    backend.copy_live_preview_field(request, node_count)
 }
 
 /// Build cached preview fields for all non-active FEM quantities.

@@ -217,7 +217,7 @@ pub(crate) fn execute_llg_overdamped(
                     let preview_start = std::time::Instant::now();
                     let preview_field = if preview_due && !preview_targets_global_scalar {
                         let request = display_selection.preview_request();
-                        live_preview_handoff.request_preview(backend, &request)?
+                        live_preview_handoff.request_preview(backend, &request, node_count)?
                     } else {
                         live_preview_handoff.poll_completed()?
                     };
@@ -235,6 +235,7 @@ pub(crate) fn execute_llg_overdamped(
                             engine,
                             &display_selection,
                             plan,
+                            node_count,
                         )?
                     } else {
                         cached_preview_handoff.poll_completed()?
@@ -359,7 +360,7 @@ pub(crate) fn execute_llg_overdamped(
             let preview_field = if preview_due && !preview_targets_global_scalar {
                 let selection = display_selection.as_ref().expect("checked preview_due");
                 let request = selection.preview_request();
-                live_preview_handoff.request_preview(backend, &request)?
+                live_preview_handoff.request_preview(backend, &request, node_count)?
             } else {
                 live_preview_handoff.poll_completed()?
             };
@@ -379,7 +380,7 @@ pub(crate) fn execute_llg_overdamped(
             let cached_preview_fields = if cached_preview_due {
                 match display_selection.as_ref() {
                     Some(selection) => cached_preview_handoff
-                        .request_cached_previews(backend, engine, selection, plan)?,
+                        .request_cached_previews(backend, engine, selection, plan, node_count)?,
                     None => cached_preview_handoff.poll_completed()?,
                 }
             } else {

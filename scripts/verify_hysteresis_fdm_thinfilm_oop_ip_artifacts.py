@@ -11,6 +11,14 @@ from typing import Any
 
 
 REQUIRED_VARIANTS = {"ip_near_x", "oop"}
+REQUIRED_METRIC_FIELDS = {
+    "H_c_plus",
+    "H_c_minus",
+    "H_c",
+    "M_r_plus",
+    "M_r_minus",
+    "loop_area",
+}
 COMPUTED_VARIANT_STATUSES = {"computed_active_stage", "computed_variant_run"}
 HYSTERESIS_FAMILY_RESOURCE_PREFIX = "/v2/sessions/current/analysis/hysteresis-family/"
 
@@ -37,6 +45,51 @@ def require_points(root: Path, variant: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(points, list) or len(points) < 5:
         raise SystemExit(f"variant {variant_id!r} must contain a resolved loop")
     return points
+
+
+def require_metrics(root: Path, variant: dict[str, Any]) -> dict[str, Any]:
+    variant_id = variant.get("variant_id")
+    metrics_path = variant.get("metrics_path")
+    if not isinstance(metrics_path, str):
+        raise SystemExit(f"variant {variant_id!r} is missing metrics_path")
+    path = root / metrics_path
+    if not path.is_file():
+        raise SystemExit(f"missing metrics artifact for {variant_id}: {path}")
+    metrics = load_json(path)
+    if not isinstance(metrics, dict):
+        raise SystemExit(f"metrics artifact for {variant_id!r} must be a JSON object")
+    missing = sorted(REQUIRED_METRIC_FIELDS.difference(metrics))
+    if missing:
+        raise SystemExit(
+            f"metrics artifact for {variant_id!r} is missing publication metrics: "
+            + ", ".join(missing)
+        )
+    for field in sorted(REQUIRED_METRIC_FIELDS):
+        require_number(metrics.get(field), f"{variant_id}.metrics.{field}")
+    statuses = metrics.get("metric_statuses")
+    if not isinstance(statuses, dict):
+        raise SystemExit(
+            f"metrics artifact for {variant_id!r} must provide metric_statuses for "
+            "publication metrics"
+        )
+    for field in sorted(REQUIRED_METRIC_FIELDS):
+        status_entry = statuses.get(field)
+        if not isinstance(status_entry, dict):
+            raise SystemExit(
+                f"metrics artifact for {variant_id!r} must provide metric_statuses.{field}"
+            )
+        status = status_entry.get("status")
+        reason = status_entry.get("reason")
+        if status != "available":
+            raise SystemExit(
+                f"metrics artifact for {variant_id!r} requires metric_statuses.{field}.status "
+                f"to be 'available', got {status!r}"
+            )
+        if not isinstance(reason, str) or not reason.strip():
+            raise SystemExit(
+                f"metrics artifact for {variant_id!r} requires metric_statuses.{field}.reason"
+            )
+    return metrics
 
 
 def validate_variant_manifest_contract(variant: dict[str, Any], variant_id: str) -> None:
@@ -117,6 +170,7 @@ def main() -> int:
         variant = variants_by_id[variant_id]
         validate_variant_manifest_contract(variant, variant_id)
         points = require_points(root, variant)
+        require_metrics(root, variant)
         validate_point_schema(points, variant_id)
         projection_values(points, variant_id)
         points_by_variant[variant_id] = points

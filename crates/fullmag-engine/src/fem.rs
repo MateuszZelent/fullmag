@@ -2343,13 +2343,19 @@ impl FemLlgProblem {
 
         let max_torque_Apm = max_cross_norm(magnetization, &effective_field);
 
+        let dmi_field = interfacial_dmi_field
+            .iter()
+            .zip(bulk_dmi_field.iter())
+            .map(|(interfacial, bulk)| add(*interfacial, *bulk))
+            .collect::<Vec<_>>();
+
         Ok(EffectiveFieldObservables {
             magnetization: magnetization.to_vec(),
             exchange_field,
             demag_field,
             external_field,
             effective_field,
-            dmi_field: vec![[0.0, 0.0, 0.0]; magnetization.len()],
+            dmi_field,
             exchange_energy_joules,
             demag_energy_joules,
             external_energy_joules,

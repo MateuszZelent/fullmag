@@ -2378,11 +2378,12 @@ impl CpuInteractiveFemPreviewRuntime {
         }
         let observables =
             fem_baseline::observe_state(&self.problem, &self.state, &self.antenna_field)?;
-        Ok(build_mesh_preview_field_with_active_mask(
+        fem_baseline::build_fem_preview_field(
             request,
-            select_observables(&observables, &request.quantity)?,
-            mesh_quantity_active_mask(&request.quantity, &self.plan_signature.mesh),
-        ))
+            &observables,
+            &self.plan_signature.mesh,
+            self.problem.material.saturation_magnetisation,
+        )
     }
 
     fn snapshot_vector_fields(
@@ -2405,11 +2406,12 @@ impl CpuInteractiveFemPreviewRuntime {
             }
             let mut preview_request = request.clone();
             preview_request.quantity = quantity.to_string();
-            cached.push(build_mesh_preview_field_with_active_mask(
+            cached.push(fem_baseline::build_fem_preview_field(
                 &preview_request,
-                select_observables(&observables, quantity)?,
-                mesh_quantity_active_mask(quantity, &self.plan_signature.mesh),
-            ));
+                &observables,
+                &self.plan_signature.mesh,
+                self.problem.material.saturation_magnetisation,
+            )?);
         }
         Ok(cached)
     }
