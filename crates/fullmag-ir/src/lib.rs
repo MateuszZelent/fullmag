@@ -2591,6 +2591,15 @@ fn validate_hysteresis_minor_loops(loops: &[MinorLoopIR], errors: &mut Vec<Strin
                 idx
             ));
         }
+        if !matches!(
+            minor_loop.continuation_policy.as_str(),
+            "branch_only" | "resume_parent" | "replace_parent"
+        ) {
+            errors.push(format!(
+                "study.stages[].hysteresis.minor_loops[{}] continuation_policy must be one of: branch_only, resume_parent, replace_parent",
+                idx
+            ));
+        }
     }
 }
 

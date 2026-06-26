@@ -2,6 +2,7 @@ import type { ResourceRevision } from "../api/apiTypes";
 import type { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
 import {
+  ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH,
   ANALYSIS_HYSTERESIS_ADAPTIVE_REFINEMENT_PATH,
   ANALYSIS_HYSTERESIS_BOOKMARKS_PATH,
   ANALYSIS_HYSTERESIS_BRANCHES_PATH,
@@ -13,6 +14,7 @@ import {
   ANALYSIS_HYSTERESIS_POINTS_PATH,
   ANALYSIS_HYSTERESIS_REVERSAL_FIELDS_PATH,
   ANALYSIS_HYSTERESIS_SATURATION_PATH,
+  ANALYSIS_HYSTERESIS_STAGE_SETTLE_TRACE_PATH,
   ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH,
   DATA_DOMAIN_META_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
@@ -489,6 +491,12 @@ export class RealtimeInvalidationBridge {
         resourceKey.includes(quantityPrefix),
       revision,
     );
+    if (canonicalQuantityId === "m") {
+      this.queuePrefixInvalidation(
+        resourceFamilyPrefix(ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH),
+        revision,
+      );
+    }
   }
 
   private queueMatchingInvalidation(
@@ -589,6 +597,10 @@ export class RealtimeInvalidationBridge {
       resourceFamilyPrefix(MESHING_OBJECT_SIZE_FIELD_PATH),
       revision,
     );
+    this.resources.invalidatePrefix(
+      resourceFamilyPrefix(ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH),
+      revision,
+    );
   }
 
   private invalidateSceneDocumentDependents(
@@ -665,6 +677,10 @@ export class RealtimeInvalidationBridge {
           matchesStageScopedResource(
             resourceKey,
             ANALYSIS_HYSTERESIS_POINT_PATH,
+          ) ||
+          matchesStageScopedResource(
+            resourceKey,
+            ANALYSIS_HYSTERESIS_STAGE_SETTLE_TRACE_PATH,
           ) ||
           matchesStageScopedResource(
             resourceKey,
@@ -782,6 +798,11 @@ export class RealtimeInvalidationBridge {
         matchesConcreteStageScopedResource(
           resourceKey,
           ANALYSIS_HYSTERESIS_POINT_PATH,
+          stageId,
+        ) ||
+        matchesConcreteStageScopedResource(
+          resourceKey,
+          ANALYSIS_HYSTERESIS_STAGE_SETTLE_TRACE_PATH,
           stageId,
         ) ||
         matchesConcreteStageScopedResource(

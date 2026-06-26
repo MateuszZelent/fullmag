@@ -489,6 +489,63 @@ describe("ControlRoomApi", () => {
     );
   });
 
+  it("loads object topological charge through the analysis extensions facade", async () => {
+    let observedInit: RequestInit | undefined;
+    let observedUrl = "";
+    const fetchImpl = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      observedUrl = String(url);
+      observedInit = init;
+      return jsonResponse({
+        charge: null,
+        computed_at_unix_ms: 0,
+        domain_generation_id: null,
+        field_revision: null,
+        integer_error: null,
+        mesh_generation_id: null,
+        mesh_revision: null,
+        method: "berg_luescher_grid",
+        nearest_integer: null,
+        object_id: "permalloy_layer",
+        plane: "auto",
+        polarity: null,
+        quantity_id: "m",
+        revision: 1,
+        sample_count: 0,
+        sample_grid: null,
+        status: "field_missing",
+        valid_sample_count: 0,
+        warnings: [],
+      });
+    });
+
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl,
+      requestIdFactory: () => "req-topological-charge",
+    });
+
+    const resource = await api.analysis.extensions.objects.topologicalCharge(
+      "permalloy_layer",
+      { plane: "xy", quantity_id: "m", resolution: "auto" },
+    );
+
+    expect(resource.status).toBe("field_missing");
+    expect(resource.object_id).toBe("permalloy_layer");
+    const observed = new URL(observedUrl);
+    expect(`${observed.origin}${observed.pathname}`).toBe(
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/extensions/objects/permalloy_layer/topological-charge",
+    );
+    expect(Object.fromEntries(observed.searchParams.entries())).toEqual({
+      plane: "xy",
+      quantity_id: "m",
+      resolution: "auto",
+    });
+    expect(observedInit?.method).toBe("GET");
+    expect(new Headers(observedInit?.headers).get("x-request-id")).toBe(
+      "req-topological-charge",
+    );
+  });
+
   it("loads frequency-domain artifact resources through the analysis facade", async () => {
     const observedUrls: string[] = [];
     const fetchImpl = vi.fn(async (url: RequestInfo | URL) => {
@@ -812,28 +869,64 @@ describe("ControlRoomApi", () => {
       const target = String(url);
       if (target.endsWith("/metrics")) {
         return jsonResponse({
-          H_c: null,
-          H_c_minus: null,
-          H_c_plus: null,
-          H_eb: null,
-          M_r_minus: null,
-          M_r_plus: null,
-          loop_area: 0,
-          magnetization_average_weighting: "uniform_sample_average",
-          saturation_preparation_field_mT: null,
-          saturation_status: "not_available",
+          metrics: {
+            H_c: null,
+            H_c_minus: null,
+            H_c_plus: null,
+            H_eb: null,
+            M_r_minus: null,
+            M_r_plus: null,
+            loop_area: 0,
+            magnetization_average_weighting: "uniform_sample_average",
+            saturation_preparation_field_mT: null,
+            saturation_status: "not_available",
+          },
+          revision: 12,
+          stage_id: "stage 1",
+          stage_index: 1,
         });
       }
       if (target.endsWith("/saturation")) {
         return jsonResponse({
-          direction: 1,
-          max_probe_field_mT: 300,
-          points: [],
-          preparation_field_mT: null,
-          reason: "not run",
-          status: "not_available",
-          susceptibility_threshold: 0.001,
-          transverse_threshold: 0.01,
+          revision: 12,
+          saturation: {
+            direction: 1,
+            max_probe_field_mT: 300,
+            points: [],
+            preparation_field_mT: null,
+            reason: "not run",
+            status: "not_available",
+            susceptibility_threshold: 0.001,
+            transverse_threshold: 0.01,
+          },
+          stage_id: "stage 1",
+          stage_index: 1,
+        });
+      }
+      if (target.endsWith("/adaptive-refinement")) {
+        return jsonResponse({
+          adaptive_refinement: {
+            candidates: [],
+            enabled: true,
+            kind: "adaptive_refinement",
+            max_insertions_per_pass: 0,
+            max_passes: 0,
+            points: [],
+            settle_trace: [],
+            source_point_count: 0,
+            status: "computed",
+          },
+          revision: 12,
+          stage_id: "stage 1",
+          stage_index: 1,
+        });
+      }
+      if (target.endsWith("/branches")) {
+        return jsonResponse({
+          branches: [],
+          revision: 12,
+          stage_id: "stage 1",
+          stage_index: 1,
         });
       }
       if (target.endsWith("/steps/7")) {
@@ -856,10 +949,38 @@ describe("ControlRoomApi", () => {
           stage_index: 1,
         });
       }
+      if (target.endsWith("/minor-loops")) {
+        return jsonResponse({
+          minor_loops: [],
+          revision: 12,
+          stage_id: "stage 1",
+          stage_index: 1,
+        });
+      }
+      if (target.endsWith("/reversal-fields")) {
+        return jsonResponse({
+          reversal_fields: [],
+          revision: 12,
+          stage_id: "stage 1",
+          stage_index: 1,
+        });
+      }
       if (target.includes("/analysis/hysteresis/") && target.endsWith("/points")) {
         return jsonResponse({
           points: [],
           revision: 12,
+          stage_id: "stage 1",
+          stage_index: 1,
+        });
+      }
+      if (
+        target.includes("/analysis/hysteresis/") &&
+        target.endsWith("/settle-trace") &&
+        !target.includes("/steps/")
+      ) {
+        return jsonResponse({
+          revision: 12,
+          settle_trace: [],
           stage_id: "stage 1",
           stage_index: 1,
         });
@@ -876,6 +997,7 @@ describe("ControlRoomApi", () => {
     await api.analysis.hysteresis.points("stage 1");
     await api.analysis.hysteresis.metrics("stage 1");
     await api.analysis.hysteresis.saturation("stage 1");
+    await api.analysis.hysteresis.adaptiveRefinement("stage 1");
     await api.analysis.hysteresis.branches("stage 1");
     await api.analysis.hysteresis.bookmarks("stage 1");
     await api.analysis.hysteresis.bookmarkPoint("stage 1", { point_id: 7 });
@@ -884,9 +1006,11 @@ describe("ControlRoomApi", () => {
     await api.analysis.hysteresis.minorLoops("stage 1");
     await api.analysis.hysteresis.reversalFields("stage 1");
     await api.analysis.hysteresis.point("stage 1", 7);
+    await api.analysis.hysteresis.stageSettleTrace("stage 1");
     await api.analysis.hysteresis.settleTrace("stage 1", 7);
 
     expect(observedMethods).toEqual([
+      "GET",
       "GET",
       "GET",
       "GET",
@@ -899,11 +1023,13 @@ describe("ControlRoomApi", () => {
       "GET",
       "GET",
       "GET",
+      "GET",
     ]);
     expect(observedUrls).toEqual([
       "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis/stage%201/points",
       "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis/stage%201/metrics",
       "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis/stage%201/saturation",
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis/stage%201/adaptive-refinement",
       "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis/stage%201/branches",
       "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis/stage%201/bookmarks",
       "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis/stage%201/bookmarks",
@@ -912,9 +1038,10 @@ describe("ControlRoomApi", () => {
       "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis/stage%201/minor-loops",
       "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis/stage%201/reversal-fields",
       "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis/stage%201/steps/7",
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis/stage%201/settle-trace",
       "http://127.0.0.1:8765/v2/sessions/current/analysis/hysteresis/stage%201/steps/7/settle-trace",
     ]);
-    const postBody = observedBodies[5];
+    const postBody = observedBodies[6];
     expect(
       postBody instanceof ArrayBuffer
         ? new TextDecoder().decode(postBody)

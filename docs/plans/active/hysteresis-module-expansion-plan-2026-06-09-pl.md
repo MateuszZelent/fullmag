@@ -720,6 +720,7 @@ GET /v2/sessions/current/analysis/hysteresis/{stage_id}/metrics
 GET /v2/sessions/current/analysis/hysteresis/{stage_id}/branches
 GET /v2/sessions/current/analysis/hysteresis/{stage_id}/minor-loops
 GET /v2/sessions/current/analysis/hysteresis/{stage_id}/reversal-fields
+GET /v2/sessions/current/analysis/hysteresis/{stage_id}/settle-trace
 GET /v2/sessions/current/analysis/hysteresis/{stage_id}/steps/{point_id}
 GET /v2/sessions/current/analysis/hysteresis/{stage_id}/steps/{point_id}/settle-trace
 GET /v2/sessions/current/data/fields/m/meta?snapshot_id={snapshot_id}
@@ -3318,8 +3319,11 @@ Instrukcja:
    dojscia. Musi zachowac historie stanu.
 4. Dodaj policy:
    - `branch_only`: minor loop nie zmienia parent branch,
-   - `resume_parent`: po minor loop wracamy do snapshotu/stanu parent branch,
-   - `replace_parent`: tylko jako explicit advanced mode.
+   - `resume_parent`: po minor loop wracamy do snapshotu/stanu parent branch
+     i zapisujemy jawne provenance tej decyzji,
+   - `replace_parent`: explicit advanced mode, ktory zastępuje roboczy parent
+     state w runtime dla kolejnych minor loops, bez przepisywania juz
+     opublikowanego `hysteresis_points.json`.
 5. Metryki:
    - minor-loop area,
    - recoil susceptibility,
@@ -3333,7 +3337,12 @@ Testy:
 - reversal/return fields sa w wynikach,
 - closure error liczy sie dla zamknietej petli,
 - minor loop points nie trafiaja do major-loop coercivity bez jawnego wyboru,
-- `branch_only` nie nadpisuje parent branch.
+- `branch_only` nie nadpisuje parent branch,
+- `resume_parent` zapisuje policy w artefakcie minor-loop i nie dopisuje
+  punktow minor-loop do artefaktu major-loop,
+- `replace_parent` sprawia, ze kolejna minor loop startujaca z return field
+  poprzedniej petli uzywa zwroconego stanu jako parent state, ale nadal nie
+  dopisuje punktow minor-loop do artefaktu major-loop.
 
 Weryfikacja:
 
@@ -3396,14 +3405,21 @@ Stan implementacji:
 - `ProblemIR` waliduje progi i kroki adaptacji,
 - `/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/plan`
   wystawia `adaptive_refinement`,
-- runner generuje kandydatow oraz wykonuje second-pass branch points od stanu
-  lewego rodzica odcinka,
+- runner generuje kandydatow oraz wykonuje bounded multi-pass branch points od
+  stanu lewego rodzica odcinka; `max_passes` ogranicza liczbe iteracji,
+  `max_insertions_per_pass` pozostaje limitem per pass, a kolejne passy widza
+  punkty adaptacyjne obliczone w passach poprzednich,
 - `hysteresis_adaptive_refinement.json` zawiera kandydatow, obliczone punkty,
   `settle_trace`, `adaptive_inserted=true`, `refinement_reason` i snapshot ref
   dla polityk zapisujacych `m`,
+- `AdaptiveRefinement.include_in_metrics` jawnie decyduje, czy punkty
+  adaptacyjne, wlacznie z potomkami z passow pozniejszych niz pierwszy,
+  wchodza do finalnego `hysteresis_metrics.json`; domyslnie metryki pozostaja
+  zwiazane z requested schedule, a `hysteresis_points.json` nie miesza punktow
+  adaptacyjnych z planowanymi,
 - potwierdzony gate:
-  `CARGO_TARGET_DIR=/tmp/fullmag-api-zarr-target cargo test -p fullmag-runner adaptive_refinement --no-fail-fast`
-  zwrocil `2 passed`.
+  `CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-runner adaptive_refinement --no-fail-fast`
+  zwrocil `4 passed`.
 
 Testy:
 
@@ -3763,6 +3779,15 @@ Status 2026-06-13:
   mierzonego `point_id` do `hysteresis_settle_trace.json`. RED test
   `positive_saturation_writes_probe_settle_trace_without_reindexing_points`
   najpierw pokazal pusta liste probe trace fields, a po poprawce przeszedl.
+- Aktualizacja 2026-06-26: stage-level trace ma teraz wlasny revisioned
+  resource
+  `/v2/sessions/current/analysis/hysteresis/{stage_id}/settle-trace`, zeby
+  wpisy `protocol_role="preparation"` i `protocol_role="saturation_probe"`
+  bez mierzonego `point_id` byly widoczne w API i Control Room bez mieszania
+  ich z punktowym `/steps/{point_id}/settle-trace`. Fasada
+  `ControlRoomApi.analysis.hysteresis.stageSettleTrace`, hook
+  `useHysteresisStageSettleTraceResource` i `HysteresisSettleTraceInspector`
+  uzywaja tego zasobu, gdy nie ma aktywnego punktu.
 - Aktualizacja 2026-06-25: selektory `applies_to="major_descending"` i
   `applies_to="major_ascending"` sa teraz spojne przez Python DSL, ProblemIR
   validation i runner. Main sweep ustawia `point_role` z branch metadata
@@ -3966,8 +3991,9 @@ Instrukcja:
    - edycje `applies_to`,
    - edycje fallback policy,
    - pokaz resolved defaults z planu.
-8. `HysteresisSettleTraceSection` pokazuje trace dla wybranego punktu z
-   resource `steps/{point_id}/settle-trace`.
+8. `HysteresisSettleTraceSection` pokazuje stage-level trace z resource
+   `settle-trace`, gdy punkt nie jest wybrany, oraz punktowy trace z resource
+   `steps/{point_id}/settle-trace` po wyborze punktu.
 9. Akcje:
    - `Estimate saturation`,
    - `Accept saturation`,
@@ -4612,6 +4638,16 @@ Status wykonania:
   dala `20 passed`, a
   `python3 -m py_compile scripts/verify_hysteresis_saturation_limit_artifacts.py scripts/test_verify_hysteresis_saturation_limit_artifacts.py scripts/verify_hysteresis_minor_loop_artifacts.py scripts/test_verify_hysteresis_minor_loop_artifacts.py`
   przeszlo bez bledow.
+  Aktualizacja 2026-06-26: Python DSL, `ProblemIR` i runtime artefakt
+  przyjmuja `continuation_policy="resume_parent"` dla `MinorLoop`.
+  `resume_parent` jest jawna, nie-mutujaca polityka provenance: punkty
+  minor-loop pozostaja w `hysteresis_minor_loops.json`, nie sa dopisywane do
+  `hysteresis_points.json`, a artefakt raportuje `policy="resume_parent"`.
+  Aktualizacja 2026-06-26: `replace_parent` jest zaakceptowana wartoscia
+  Python DSL i `ProblemIR`. Runtime traktuje ja jako jawna, mutujaca
+  kontynuacje roboczego parent state dla kolejnych minor loops w tej samej
+  stage; `hysteresis_points.json` pozostaje artefaktem major-loop i nie jest
+  przepisywany.
 
 Brama produkcyjna:
 
@@ -4740,6 +4776,17 @@ Status 2026-06-25:
   family-variant, reversal-field i point-detail zasobow, ale glowny points
   endpoint ma juz resource metadata i generated OpenAPI v2/Control Room hook
   uzywa `revision` zamiast dlugosci tablicy jako freshness selector.
+
+Status 2026-06-26:
+
+- Stage-level analysis endpoints `metrics`, `saturation`,
+  `adaptive-refinement`, `branches`, `minor-loops`, `reversal-fields` i
+  `settle-trace` sa revisioned resource envelopes:
+  `{ revision, stage_id, stage_index, <payload> }`. Control Room facade i
+  resource hooks uzywaja envelope `revision` jako freshness selector, a UI
+  unwrapuje raw payload dopiero przy przekazywaniu danych do inspectorow i
+  wykresow. Point detail `/steps/{point_id}`, point-scoped settle trace i
+  family variant points zostaja raw detail endpoints.
 
 1. Storage explosion: `every_step` dla duzych siatek moze szybko wygenerowac
    setki GB. Wymagany estimate gate.

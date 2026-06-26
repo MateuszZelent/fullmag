@@ -51,6 +51,10 @@ export const ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH = openApiV2Path(
   "/v2/sessions/current/analysis/frequency-response/magnetic-sweep.v1",
 );
 
+export const ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/extensions/objects/{object_id}/topological-charge",
+);
+
 export const ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH = openApiV2Path(
   "/v2/sessions/current/analysis/frequency-domain/manifest.v1",
 );
@@ -145,6 +149,10 @@ export const ANALYSIS_HYSTERESIS_REVERSAL_FIELDS_PATH = openApiV2Path(
 
 export const ANALYSIS_HYSTERESIS_POINT_PATH = openApiV2Path(
   "/v2/sessions/current/analysis/hysteresis/{stage_id}/steps/{point_id}",
+);
+
+export const ANALYSIS_HYSTERESIS_STAGE_SETTLE_TRACE_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/hysteresis/{stage_id}/settle-trace",
 );
 
 export const ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH = openApiV2Path(

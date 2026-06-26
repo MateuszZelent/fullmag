@@ -13,6 +13,7 @@ import {
   ANALYSIS_HYSTERESIS_MINOR_LOOPS_PATH,
   ANALYSIS_HYSTERESIS_POINT_PATH,
   ANALYSIS_HYSTERESIS_REVERSAL_FIELDS_PATH,
+  ANALYSIS_HYSTERESIS_STAGE_SETTLE_TRACE_PATH,
   ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH,
   DATA_FIELD_VECTOR_PATH,
   SIMULATION_STAGE_HYSTERESIS_PLAN_PATH,
@@ -25,10 +26,14 @@ import {
   ANALYSIS_HYSTERESIS_FAMILY_VARIANT_POINTS_PATH,
 } from "@/kernel/api/apiPaths";
 import type {
+  HysteresisAdaptiveRefinementResource,
   HysteresisAdaptiveRefinementSchema,
   HysteresisAngularFamilyResource,
+  HysteresisBranchesResource,
   HysteresisBookmarksResource,
+  HysteresisMetricsResource,
   HysteresisMetricsSchema,
+  HysteresisMinorLoopsResource,
   HysteresisMinorLoopSchema,
   HysteresisPointSchema,
   HysteresisPointsResource,
@@ -36,7 +41,9 @@ import type {
   HysteresisExecutionTreeResource,
   HysteresisProgressSchema,
   HysteresisProtocolSchema,
+  HysteresisReversalFieldsResource,
   HysteresisSettleTraceEntrySchema,
+  HysteresisSettleTraceResource,
   HysteresisSettlePipelineSchema,
   HysteresisStagePlanSchema,
 } from "@/kernel/api/apiTypes";
@@ -54,6 +61,50 @@ function hysteresisPointsResource(
   return {
     points,
     revision: 0,
+    stage_id: "hysteresis-1",
+    stage_index: 0,
+  };
+}
+
+function hysteresisBranchesResource(
+  branches: HysteresisBranchSchema[],
+): HysteresisBranchesResource {
+  return {
+    branches,
+    revision: 0,
+    stage_id: "hysteresis-1",
+    stage_index: 0,
+  };
+}
+
+function hysteresisMinorLoopsResource(
+  minorLoops: HysteresisMinorLoopSchema[],
+): HysteresisMinorLoopsResource {
+  return {
+    minor_loops: minorLoops,
+    revision: 0,
+    stage_id: "hysteresis-1",
+    stage_index: 0,
+  };
+}
+
+function hysteresisReversalFieldsResource(
+  reversalFields: HysteresisPointSchema[],
+): HysteresisReversalFieldsResource {
+  return {
+    reversal_fields: reversalFields,
+    revision: 0,
+    stage_id: "hysteresis-1",
+    stage_index: 0,
+  };
+}
+
+function hysteresisAdaptiveRefinementResource(
+  adaptiveRefinement: HysteresisAdaptiveRefinementSchema,
+): HysteresisAdaptiveRefinementResource {
+  return {
+    adaptive_refinement: adaptiveRefinement,
+    revision: 22,
     stage_id: "hysteresis-1",
     stage_index: 0,
   };
@@ -1172,7 +1223,11 @@ describe("Study stage inspectors", () => {
         points: [],
       },
     ];
-    sharedResourceRuntimeStore.updateData(branchesKey, branches, 0);
+    sharedResourceRuntimeStore.updateData(
+      branchesKey,
+      hysteresisBranchesResource(branches),
+      0,
+    );
     selection.set(
       {
         kind: "study.stage.action",
@@ -1240,7 +1295,11 @@ describe("Study stage inspectors", () => {
         points: [],
       },
     ];
-    sharedResourceRuntimeStore.updateData(branchesKey, branches, 0);
+    sharedResourceRuntimeStore.updateData(
+      branchesKey,
+      hysteresisBranchesResource(branches),
+      0,
+    );
     selection.set(
       {
         kind: "study.stage.action",
@@ -1296,7 +1355,11 @@ describe("Study stage inspectors", () => {
         points: [],
       },
     ];
-    sharedResourceRuntimeStore.updateData(minorLoopsKey, minorLoops, 0);
+    sharedResourceRuntimeStore.updateData(
+      minorLoopsKey,
+      hysteresisMinorLoopsResource(minorLoops),
+      0,
+    );
     selection.set(
       {
         kind: "study.stage.action",
@@ -1383,7 +1446,13 @@ describe("Study stage inspectors", () => {
       saturation_preparation_field_mT: 300,
       saturation_status: "preparation_applied_unverified",
     };
-    sharedResourceRuntimeStore.updateData(metricsKey, metrics, 0);
+    const metricsResource: HysteresisMetricsResource = {
+      metrics,
+      revision: 1,
+      stage_id: "hysteresis-1",
+      stage_index: 0,
+    };
+    sharedResourceRuntimeStore.updateData(metricsKey, metricsResource, 0);
 
     const markup = render(
       <HysteresisStageInspector {...props("hysteresis")} view="saturation" />,
@@ -2427,6 +2496,67 @@ describe("Study stage inspectors", () => {
     selection.clear("analysis-plots");
   });
 
+  it("renders stage-level preparation and probe settle trace before point selection", () => {
+    selection.clear("analysis-plots");
+    selection.clear("explorer");
+
+    const stageSettleTraceKey = ANALYSIS_HYSTERESIS_STAGE_SETTLE_TRACE_PATH.replace(
+      "{stage_id}",
+      "hysteresis-1",
+    );
+    const stageSettleTrace: HysteresisSettleTraceResource = {
+      revision: 4,
+      settle_trace: [
+        {
+          algorithm_id: "prepare_minimize",
+          energy: -5.93e-16,
+          fallback_reason: null,
+          field_value_mT: 0,
+          method: "projected_gradient_bb",
+          point_id: null,
+          protocol_role: "preparation",
+          resolved_timestep_s: 1e-13,
+          retry_attempt: 0,
+          status: "converged",
+          step_index: 0,
+          torque: 2.6e-2,
+        },
+        {
+          algorithm_id: "probe_relax",
+          energy: -5.94e-16,
+          fallback_reason: null,
+          field_value_mT: 300,
+          method: "llg_overdamped",
+          point_id: null,
+          protocol_role: "saturation_probe",
+          retry_attempt: 0,
+          status: "converged",
+          step_index: 1,
+          torque: 5.1e-2,
+        },
+      ],
+      stage_id: "hysteresis-1",
+      stage_index: 0,
+    };
+    sharedResourceRuntimeStore.updateData(
+      stageSettleTraceKey,
+      stageSettleTrace,
+      4,
+    );
+
+    const markup = render(
+      <HysteresisStageInspector {...props("hysteresis")} view="settle-trace" />,
+      ["hysteresis-settle-trace"],
+    );
+
+    expect(markup).toContain("Settle Trace");
+    expect(markup).toContain("prepare_minimize");
+    expect(markup).toContain("probe_relax");
+    expect(markup).toContain("preparation");
+    expect(markup).toContain("saturation_probe");
+    expect(markup).not.toContain("Select a calculated point");
+  });
+
   it("renders settle trace for a hysteresis field point selected in explorer", () => {
     selection.set(
       {
@@ -2615,8 +2745,18 @@ describe("Study stage inspectors", () => {
         status: "Completed",
       },
     ];
-    sharedResourceRuntimeStore.updateData(metricsKey, metrics, 0);
-    sharedResourceRuntimeStore.updateData(reversalFieldsKey, reversalFields, 0);
+    const metricsResource: HysteresisMetricsResource = {
+      metrics,
+      revision: 1,
+      stage_id: "hysteresis-1",
+      stage_index: 0,
+    };
+    sharedResourceRuntimeStore.updateData(metricsKey, metricsResource, 0);
+    sharedResourceRuntimeStore.updateData(
+      reversalFieldsKey,
+      hysteresisReversalFieldsResource(reversalFields),
+      0,
+    );
 
     const markup = render(
       <HysteresisStageInspector {...props("hysteresis")} view="metrics" />,
@@ -2722,7 +2862,11 @@ describe("Study stage inspectors", () => {
       status: "computed",
     };
     sharedResourceRuntimeStore.updateData(planKey, plan, 22);
-    sharedResourceRuntimeStore.updateData(adaptiveRefinementKey, adaptiveRefinement, 22);
+    sharedResourceRuntimeStore.updateData(
+      adaptiveRefinementKey,
+      hysteresisAdaptiveRefinementResource(adaptiveRefinement),
+      22,
+    );
 
     const markup = render(
       <HysteresisStageInspector {...props("hysteresis")} view="plan" />,
@@ -2796,7 +2940,11 @@ describe("Study stage inspectors", () => {
       source_point_count: 6,
       status: "computed",
     };
-    sharedResourceRuntimeStore.updateData(adaptiveRefinementKey, adaptiveRefinement, 22);
+    sharedResourceRuntimeStore.updateData(
+      adaptiveRefinementKey,
+      hysteresisAdaptiveRefinementResource(adaptiveRefinement),
+      22,
+    );
 
     const markup = render(
       <HysteresisStageInspector

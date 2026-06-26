@@ -2929,6 +2929,7 @@ def _render_hysteresis_adaptive_refinement(value: object) -> str:
         f"min_step_mT={_py_number(float(payload.get('min_step_mT', 0.1)))}",
         f"include_zero_crossings={_py_literal(bool(payload.get('include_zero_crossings', True)))}",
         f"include_high_susceptibility={_py_literal(bool(payload.get('include_high_susceptibility', True)))}",
+        f"include_in_metrics={_py_literal(bool(payload.get('include_in_metrics', False)))}",
     ]
     return "fm.AdaptiveRefinement(" + ", ".join(kwargs) + ")"
 
@@ -3118,10 +3119,16 @@ def _render_hysteresis_minor_loops(value: object) -> str:
 
 def _render_hysteresis_minor_loop(value: object) -> str:
     payload = _normalize_mapping(value)
+    args = [
+        f"reversal_mT={_py_number(float(payload.get('reversal_mT', 0.0)))}",
+        f"return_mT={_py_number(float(payload.get('return_mT', 0.0)))}",
+    ]
+    if payload.get("continuation_policy") not in (None, "branch_only"):
+        args.append(f"continuation_policy={_py_repr(str(payload['continuation_policy']))}")
     return (
         "fm.MinorLoop("
-        f"reversal_mT={_py_number(float(payload.get('reversal_mT', 0.0)))}, "
-        f"return_mT={_py_number(float(payload.get('return_mT', 0.0)))})"
+        + ", ".join(args)
+        + ")"
     )
 
 

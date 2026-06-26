@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
 import {
+  ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
   DATA_FIELDS_PATH,
   DATA_FIELD_META_PATH,
@@ -19,6 +20,7 @@ import {
   ANALYSIS_HYSTERESIS_POINTS_PATH,
   ANALYSIS_HYSTERESIS_REVERSAL_FIELDS_PATH,
   ANALYSIS_HYSTERESIS_SATURATION_PATH,
+  ANALYSIS_HYSTERESIS_STAGE_SETTLE_TRACE_PATH,
   ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
@@ -773,6 +775,40 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision(mMetaKey)).toBeNull();
   });
 
+  it("refreshes object topological charge when magnetization samples change", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const topologicalChargeKey =
+      ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH.replace("{object_id}", "body");
+    const hEffMetaKey = `${DATA_FIELD_META_PATH.replace(
+      "{quantity_id}",
+      "H_eff",
+    )}?component=y&scope_id=body&scope_kind=object`;
+
+    resources.subscribe(topologicalChargeKey, () => {});
+    resources.subscribe(hEffMetaKey, () => {});
+
+    const handled = bridge.handleEvent({
+      payload: {
+        changes: [
+          {
+            recommended_fetch: DATA_FIELDS_PATH,
+            quantity_ids: ["m"],
+            resource: "fields",
+            resource_id: "samples",
+            revision: 17,
+          },
+        ],
+      },
+      type: "resource.batch_changed",
+    });
+
+    expect(handled).toBe(true);
+    expect(resources.getRevision(topologicalChargeKey)).toBe(17);
+    expect(resources.getRevision(hEffMetaKey)).toBeNull();
+  });
+
   it("refreshes viewport 3D part scalar range collections when matching quantity samples change", () => {
     const bus = new EventBus<KernelEventMap>();
     const resources = new ResourceInvalidationController(bus);
@@ -831,12 +867,15 @@ describe("RealtimeInvalidationBridge", () => {
       "{object_id}",
       "box",
     );
+    const topologicalChargeKey =
+      ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH.replace("{object_id}", "box");
 
     for (const resourceKey of [
       objectTopologyKey,
       objectReportKey,
       objectQualityKey,
       objectSizeFieldKey,
+      topologicalChargeKey,
     ]) {
       resources.subscribe(resourceKey, () => {});
     }
@@ -877,6 +916,7 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision(objectReportKey)).toBe("mesh-build-9");
     expect(resources.getRevision(objectQualityKey)).toBe("mesh-build-9");
     expect(resources.getRevision(objectSizeFieldKey)).toBe("mesh-build-9");
+    expect(resources.getRevision(topologicalChargeKey)).toBe("mesh-build-9");
   });
 
   it("ignores realtime lifecycle events without resource changes", () => {
@@ -930,6 +970,11 @@ describe("RealtimeInvalidationBridge", () => {
       "{stage_id}",
       "stage-000",
     ).replace("{point_id}", "12");
+    const hysteresisStageSettleTraceKey =
+      ANALYSIS_HYSTERESIS_STAGE_SETTLE_TRACE_PATH.replace(
+        "{stage_id}",
+        "stage-000",
+      );
 
     resources.subscribe(hysteresisProgressKey, () => {});
     resources.subscribe(hysteresisTreeKey, () => {});
@@ -937,6 +982,7 @@ describe("RealtimeInvalidationBridge", () => {
     resources.subscribe(hysteresisMetricsKey, () => {});
     resources.subscribe(hysteresisPointKey, () => {});
     resources.subscribe(hysteresisSettleTraceKey, () => {});
+    resources.subscribe(hysteresisStageSettleTraceKey, () => {});
 
     const handled = bridge.handleEvent({
       payload: {
@@ -978,6 +1024,9 @@ describe("RealtimeInvalidationBridge", () => {
       dependentRevision(SIMULATION_STAGES_EXECUTION_PATH, 44),
     );
     expect(resources.getRevision(hysteresisSettleTraceKey)).toBe(
+      dependentRevision(SIMULATION_STAGES_EXECUTION_PATH, 44),
+    );
+    expect(resources.getRevision(hysteresisStageSettleTraceKey)).toBe(
       dependentRevision(SIMULATION_STAGES_EXECUTION_PATH, 44),
     );
   });
@@ -1036,6 +1085,11 @@ describe("RealtimeInvalidationBridge", () => {
       "{stage_id}",
       "stage-000",
     ).replace("{point_id}", "12");
+    const stageSettleTraceKey =
+      ANALYSIS_HYSTERESIS_STAGE_SETTLE_TRACE_PATH.replace(
+        "{stage_id}",
+        "stage-000",
+      );
     const otherStagePointKey = ANALYSIS_HYSTERESIS_POINT_PATH.replace(
       "{stage_id}",
       "stage-999",
@@ -1054,6 +1108,7 @@ describe("RealtimeInvalidationBridge", () => {
       reversalFieldsKey,
       pointKey,
       settleTraceKey,
+      stageSettleTraceKey,
       otherStagePointKey,
     ]) {
       resources.subscribe(resourceKey, () => {});
@@ -1105,6 +1160,9 @@ describe("RealtimeInvalidationBridge", () => {
       dependentRevision(pointsKey, 51),
     );
     expect(resources.getRevision(settleTraceKey)).toBe(
+      dependentRevision(pointsKey, 51),
+    );
+    expect(resources.getRevision(stageSettleTraceKey)).toBe(
       dependentRevision(pointsKey, 51),
     );
     expect(resources.getRevision(otherStagePointKey)).toBeNull();

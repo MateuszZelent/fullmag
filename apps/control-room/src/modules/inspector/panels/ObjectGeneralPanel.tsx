@@ -33,6 +33,7 @@ import { Accordion } from "@/shared/ui/Accordion";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
+import { ObjectExtensionsSection } from "../extensions/ObjectExtensionsSection";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
@@ -238,6 +239,7 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
         "resource",
         "actions",
         "validation",
+        "extensions",
       ]}
     >
       <InspectorSection value="summary" title="Ferromagnet Object" collapsible defaultCollapsed={false}>
@@ -365,6 +367,11 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
           <FieldRow label="Backend validation" value="no object issues" />
         )}
       </InspectorSection>
+
+      <ObjectExtensionsSection
+        objectId={object.objectId}
+        selection={selection}
+      />
     </Accordion>
   );
 }

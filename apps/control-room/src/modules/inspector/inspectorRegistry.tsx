@@ -83,6 +83,7 @@ import { ObjectGeneralPanel } from "./panels/ObjectGeneralPanel";
 import { ObjectMagneticTexturePanel } from "./panels/ObjectMagneticTexturePanel";
 import { ObjectMaterialPanel } from "./panels/ObjectMaterialPanel";
 import { ObjectMeshPolicyPanel } from "./panels/ObjectMeshPolicyPanel";
+import { TopologicalChargeExtensionPanel } from "./extensions/topological-charge/TopologicalChargeExtensionPanel";
 import {
   ObjectRegionDiagnosticsPanel,
   ObjectRegionGeometryPanel,
@@ -567,6 +568,12 @@ const PANELS: InspectorPanelContribution[] = [
     title: "Object Mesh Policy",
     selectionKinds: ["object.mesh"],
     component: ObjectMeshPolicyPanel,
+  },
+  {
+    id: "object-extension-topological-charge",
+    title: "Topological Charge",
+    selectionKinds: ["object.extension.topological-charge"],
+    component: TopologicalChargeExtensionPanel,
   },
   {
     id: "mesh-details",

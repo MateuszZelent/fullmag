@@ -250,12 +250,14 @@ Hysteresis workflows expose endpoints for planning, execution progress, points d
 | `/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/progress` | `GET` | Read overall point progress and status counters |
 | `/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/execution-tree` | `GET` | Read live window of completed, active, and queued points in the explorer |
 | `/v2/sessions/current/analysis/hysteresis/{stage_id}/points` | `GET` | Read revisioned resource envelope for resolved point averages, field projections, and convergence status |
-| `/v2/sessions/current/analysis/hysteresis/{stage_id}/metrics` | `GET` | Read loop metrics (remanence, coercivity, bias, energy loss area) |
-| `/v2/sessions/current/analysis/hysteresis/{stage_id}/saturation` | `GET` | Read executed auto-saturation probe points, thresholds, status, and decision reason |
-| `/v2/sessions/current/analysis/hysteresis/{stage_id}/branches` | `GET` | Read branch metadata indexing (forward, return, recoil, minor branch relations) |
-| `/v2/sessions/current/analysis/hysteresis/{stage_id}/minor-loops` | `GET` | Read minor loop specifications, closure status, and recoil metrics |
-| `/v2/sessions/current/analysis/hysteresis/{stage_id}/reversal-fields` | `GET` | Read reversal fields and recoil start indices |
+| `/v2/sessions/current/analysis/hysteresis/{stage_id}/metrics` | `GET` | Read revisioned loop metrics resource (remanence, coercivity, bias, energy loss area) |
+| `/v2/sessions/current/analysis/hysteresis/{stage_id}/saturation` | `GET` | Read revisioned auto-saturation analysis resource with executed probe points, thresholds, status, and decision reason |
+| `/v2/sessions/current/analysis/hysteresis/{stage_id}/adaptive-refinement` | `GET` | Read revisioned adaptive-refinement resource with candidates, inserted points, and settle trace |
+| `/v2/sessions/current/analysis/hysteresis/{stage_id}/branches` | `GET` | Read revisioned branch metadata resource indexing forward, return, recoil, and minor branch relations |
+| `/v2/sessions/current/analysis/hysteresis/{stage_id}/minor-loops` | `GET` | Read revisioned minor loop resource with specifications, closure status, and recoil metrics |
+| `/v2/sessions/current/analysis/hysteresis/{stage_id}/reversal-fields` | `GET` | Read revisioned reversal-fields resource with recoil start indices |
 | `/v2/sessions/current/analysis/hysteresis/{stage_id}/bookmarks` | `GET`, `POST` | Read and create session-owned bookmarked hysteresis points for Explorer/Inspector navigation |
+| `/v2/sessions/current/analysis/hysteresis/{stage_id}/settle-trace` | `GET` | Read revisioned stage-level settle trace, including preparation and saturation-probe rows without measured point ids |
 | `/v2/sessions/current/analysis/hysteresis/{stage_id}/steps/{point_id}` | `GET` | Read detailed result summary for a single point and its snapshot ref |
 | `/v2/sessions/current/analysis/hysteresis/{stage_id}/steps/{point_id}/settle-trace` | `GET` | Read step-by-step trace of solver algorithms run for relaxation of this point |
 

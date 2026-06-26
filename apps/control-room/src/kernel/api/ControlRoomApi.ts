@@ -13,6 +13,7 @@ import {
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
   ANALYSIS_EIGEN_MODE_V2_PATH,
   ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH,
+  ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH,
   ANALYSIS_HYSTERESIS_POINTS_PATH,
   ANALYSIS_HYSTERESIS_METRICS_PATH,
   ANALYSIS_HYSTERESIS_SATURATION_PATH,
@@ -24,6 +25,7 @@ import {
   ANALYSIS_HYSTERESIS_MINOR_LOOPS_PATH,
   ANALYSIS_HYSTERESIS_REVERSAL_FIELDS_PATH,
   ANALYSIS_HYSTERESIS_POINT_PATH,
+  ANALYSIS_HYSTERESIS_STAGE_SETTLE_TRACE_PATH,
   ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH,
   API_CONTRACT_VERSION_HEADER,
   DATA_FIELDS_PATH,
@@ -181,22 +183,24 @@ import type {
   FrequencyDomainFieldResource,
   FrequencyDomainSweepProgressResource,
   JsonValue,
-  HysteresisAdaptiveRefinementSchema,
+  HysteresisAdaptiveRefinementResource,
   HysteresisAngularFamilyResource,
   HysteresisBookmarkPointRequest,
   HysteresisBookmarksResource,
-  HysteresisBranchSchema,
+  HysteresisBranchesResource,
   HysteresisExecutionTreeResource,
-  HysteresisMinorLoopSchema,
+  HysteresisMinorLoopsResource,
+  HysteresisMetricsResource,
   HysteresisPointSchema,
   HysteresisPointsResource,
-  HysteresisMetricsSchema,
   HysteresisOrientationSchema,
   HysteresisProgressSchema,
   HysteresisProtocolSchema,
-  HysteresisSaturationResultSchema,
+  HysteresisReversalFieldsResource,
+  HysteresisSaturationResource,
   HysteresisSettlePipelineSchema,
   HysteresisSettleTraceEntrySchema,
+  HysteresisSettleTraceResource,
   HysteresisStagePlanSchema,
   HysteresisStageSaturationSchema,
   MaterialParameterFieldListResource,
@@ -258,6 +262,8 @@ import type {
   SceneResource,
   ScriptSyncRequest,
   ScriptSyncResponse,
+  TopologicalChargeQuery,
+  TopologicalChargeResource,
   SessionAssetImportResponse,
   SessionExportRequest,
   SessionExportResponse,
@@ -544,6 +550,23 @@ export class ControlRoomApi {
       magneticSweepV2: (options?: RequestOptions) =>
         this.analysis.frequencyDomain.responseMagneticSweep(options),
     },
+    extensions: {
+      objects: {
+        topologicalCharge: (
+          objectId: string,
+          query: TopologicalChargeQuery = {},
+          options?: RequestOptions,
+        ) =>
+          this.requestJson<TopologicalChargeResource>(
+            ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH,
+            options,
+            {
+              path: { object_id: objectId },
+              query: topologicalChargeQueryParams(query),
+            },
+          ),
+      },
+    },
     hysteresis: {
       points: (stageId: string, options?: RequestOptions) =>
         this.requestJson<HysteresisPointsResource>(
@@ -552,25 +575,25 @@ export class ControlRoomApi {
           { path: { stage_id: stageId } },
         ),
       metrics: (stageId: string, options?: RequestOptions) =>
-        this.requestJson<HysteresisMetricsSchema>(
+        this.requestJson<HysteresisMetricsResource>(
           ANALYSIS_HYSTERESIS_METRICS_PATH,
           options,
           { path: { stage_id: stageId } },
         ),
       saturation: (stageId: string, options?: RequestOptions) =>
-        this.requestJson<HysteresisSaturationResultSchema>(
+        this.requestJson<HysteresisSaturationResource>(
           ANALYSIS_HYSTERESIS_SATURATION_PATH,
           options,
           { path: { stage_id: stageId } },
         ),
       adaptiveRefinement: (stageId: string, options?: RequestOptions) =>
-        this.requestJson<HysteresisAdaptiveRefinementSchema>(
+        this.requestJson<HysteresisAdaptiveRefinementResource>(
           ANALYSIS_HYSTERESIS_ADAPTIVE_REFINEMENT_PATH,
           options,
           { path: { stage_id: stageId } },
         ),
       branches: (stageId: string, options?: RequestOptions) =>
-        this.requestJson<HysteresisBranchSchema[]>(
+        this.requestJson<HysteresisBranchesResource>(
           ANALYSIS_HYSTERESIS_BRANCHES_PATH,
           options,
           { path: { stage_id: stageId } },
@@ -609,13 +632,13 @@ export class ControlRoomApi {
           { path: { stage_id: stageId, variant_id: variantId } },
         ),
       minorLoops: (stageId: string, options?: RequestOptions) =>
-        this.requestJson<HysteresisMinorLoopSchema[]>(
+        this.requestJson<HysteresisMinorLoopsResource>(
           ANALYSIS_HYSTERESIS_MINOR_LOOPS_PATH,
           options,
           { path: { stage_id: stageId } },
         ),
       reversalFields: (stageId: string, options?: RequestOptions) =>
-        this.requestJson<HysteresisPointSchema[]>(
+        this.requestJson<HysteresisReversalFieldsResource>(
           ANALYSIS_HYSTERESIS_REVERSAL_FIELDS_PATH,
           options,
           { path: { stage_id: stageId } },
@@ -625,6 +648,12 @@ export class ControlRoomApi {
           ANALYSIS_HYSTERESIS_POINT_PATH,
           options,
           { path: { stage_id: stageId, point_id: pointId } },
+        ),
+      stageSettleTrace: (stageId: string, options?: RequestOptions) =>
+        this.requestJson<HysteresisSettleTraceResource>(
+          ANALYSIS_HYSTERESIS_STAGE_SETTLE_TRACE_PATH,
+          options,
+          { path: { stage_id: stageId } },
         ),
       settleTrace: (stageId: string, pointId: number, options?: RequestOptions) =>
         this.requestJson<HysteresisSettleTraceEntrySchema[]>(
@@ -2337,6 +2366,18 @@ function fieldMetaQueryParams(query: FieldMetaQuery): QueryParams {
     scope_kind: query.scope_kind ?? undefined,
     snapshot_id: query.snapshot_id ?? undefined,
     stage_id: query.stage_id ?? undefined,
+  };
+}
+
+function topologicalChargeQueryParams(
+  query: TopologicalChargeQuery,
+): QueryParams {
+  return {
+    method: query.method,
+    plane: query.plane,
+    quantity_id: query.quantity_id,
+    resolution: query.resolution,
+    snapshot_id: query.snapshot_id ?? undefined,
   };
 }
 

@@ -29,6 +29,7 @@ use tracing::info;
 use fullmag_quantities::{quantity_spec, QuantityShape as QuantityKind};
 use fullmag_runner::LivePreviewField;
 
+mod analysis;
 mod artifacts;
 mod assets;
 mod build_info;

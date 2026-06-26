@@ -22,6 +22,7 @@
 //! the total cached byte count exceeds `max_bytes` or entry count exceeds `max_entries`.
 
 use crate::fem_spatial_index::FemNormalAxisIndex;
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -30,6 +31,8 @@ use tokio::sync::Mutex;
 const DEFAULT_MAX_PROJECTION_ENTRIES: usize = 64;
 /// Maximum number of cached slice entries.
 const DEFAULT_MAX_SLICE_ENTRIES: usize = 128;
+/// Maximum number of cached analysis resource entries.
+const DEFAULT_MAX_ANALYSIS_RESOURCE_ENTRIES: usize = 128;
 /// Default memory budget for each sub-cache in bytes (128 MiB).
 const DEFAULT_MAX_BYTES: usize = 128 * 1024 * 1024;
 
@@ -54,6 +57,68 @@ pub(crate) struct BinaryCache {
     generation: u64,
     max_entries: usize,
     max_bytes: usize,
+}
+
+#[derive(Clone)]
+pub(crate) struct CachedJsonResource {
+    pub value: Value,
+    pub generation: u64,
+}
+
+pub(crate) struct JsonResourceCache {
+    entries: HashMap<String, CachedJsonResource>,
+    generation: u64,
+    max_entries: usize,
+}
+
+impl JsonResourceCache {
+    pub fn new(max_entries: usize) -> Self {
+        Self {
+            entries: HashMap::with_capacity(max_entries.min(256)),
+            generation: 0,
+            max_entries,
+        }
+    }
+
+    pub fn get(&mut self, key: &str) -> Option<Value> {
+        let entry = self.entries.get_mut(key)?;
+        self.generation += 1;
+        entry.generation = self.generation;
+        Some(entry.value.clone())
+    }
+
+    pub fn insert(&mut self, key: String, value: Value) {
+        if self.max_entries == 0 {
+            return;
+        }
+        self.entries.remove(&key);
+        while self.entries.len() >= self.max_entries {
+            if !self.evict_one() {
+                break;
+            }
+        }
+        self.generation += 1;
+        self.entries.insert(
+            key,
+            CachedJsonResource {
+                value,
+                generation: self.generation,
+            },
+        );
+    }
+
+    fn evict_one(&mut self) -> bool {
+        let oldest_key = self
+            .entries
+            .iter()
+            .min_by_key(|(_, value)| value.generation)
+            .map(|(key, _)| key.clone());
+        let Some(key) = oldest_key else {
+            return false;
+        };
+        self.entries.remove(&key);
+        true
+    }
 }
 
 impl BinaryCache {
@@ -246,6 +311,24 @@ pub(crate) fn slice_cache_key(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn topological_charge_cache_key(
+    object_id: &str,
+    quantity_id: &str,
+    field_revision: u64,
+    mesh_revision: u64,
+    mesh_generation_id: Option<&str>,
+    scene_revision: u64,
+    plane: &str,
+    resolution: &str,
+    method: &str,
+) -> String {
+    format!(
+        "analysis:topological-charge:{object_id}:{quantity_id}:field={field_revision}:mesh={mesh_revision}:mesh-gen={mesh_generation_id}:scene={scene_revision}:plane={plane}:resolution={resolution}:method={method}:v1",
+        mesh_generation_id = mesh_generation_id.unwrap_or("none"),
+    )
+}
+
 /// Data-plane store holding the binary projection cache and the binary slice cache.
 ///
 /// Held in `AppState` as `Arc<QuantityDataPlaneStore>`.  Both sub-caches are protected by their
@@ -259,6 +342,8 @@ pub(crate) struct QuantityDataPlaneStore {
     pub arrow_slice_cache: Mutex<BinaryCache>,
     /// Cache for mesh-revision keyed FEM normal-axis indexes.
     pub fem_spatial_index_cache: Mutex<HashMap<String, Arc<FemNormalAxisIndex>>>,
+    /// Cache for small JSON analysis resources keyed by source revisions.
+    pub topological_charge_cache: Mutex<JsonResourceCache>,
 }
 
 impl std::fmt::Debug for QuantityDataPlaneStore {
@@ -275,6 +360,7 @@ impl QuantityDataPlaneStore {
             DEFAULT_MAX_PROJECTION_ENTRIES,
             DEFAULT_MAX_SLICE_ENTRIES,
             DEFAULT_MAX_SLICE_ENTRIES,
+            DEFAULT_MAX_ANALYSIS_RESOURCE_ENTRIES,
             DEFAULT_MAX_BYTES,
         )
     }
@@ -283,6 +369,7 @@ impl QuantityDataPlaneStore {
         max_projection: usize,
         max_scalar_slices: usize,
         max_arrow_slices: usize,
+        max_analysis_resources: usize,
         max_bytes_each: usize,
     ) -> Self {
         Self {
@@ -290,6 +377,7 @@ impl QuantityDataPlaneStore {
             scalar_slice_cache: Mutex::new(BinaryCache::new(max_scalar_slices, max_bytes_each)),
             arrow_slice_cache: Mutex::new(BinaryCache::new(max_arrow_slices, max_bytes_each)),
             fem_spatial_index_cache: Mutex::new(HashMap::new()),
+            topological_charge_cache: Mutex::new(JsonResourceCache::new(max_analysis_resources)),
         }
     }
 }

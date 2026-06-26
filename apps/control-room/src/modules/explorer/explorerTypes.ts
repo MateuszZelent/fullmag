@@ -39,6 +39,7 @@ type ExplorerNodeKind =
   | "object.magnetic-texture.load"
   | "object.magnetic-texture.transform"
   | "object.mesh"
+  | "object.extension.topological-charge"
   | "object.visualization"
   | "airbox.mesh"
   | "airbox.mesh-quality"
@@ -232,6 +233,7 @@ export interface ExplorerNode {
   crossSectionDraftId?: "draft";
   crossSectionPlotId?: string;
   fieldId?: string;
+  extensionId?: string;
   fieldOrientation?: string;
   fieldRevision?: number | string;
   fmrPeakIndex?: number;
@@ -278,6 +280,13 @@ export interface ModelTreeObjectSnapshot {
   regionMagnetizationLabel?: string | null;
   textureLoadEnabled?: boolean;
   textureTransformAvailable?: boolean;
+  extensions?: readonly ModelTreeObjectExtensionSnapshot[];
+}
+
+export interface ModelTreeObjectExtensionSnapshot {
+  id: "topological_charge";
+  label: string;
+  status?: ExplorerNodeStatus;
 }
 
 export interface ModelTreeObjectRegionSnapshot {

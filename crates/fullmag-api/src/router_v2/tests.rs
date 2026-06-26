@@ -16732,6 +16732,29 @@ async fn hysteresis_analysis_endpoints_read_typed_artifacts() {
         artifact_dir.join("hysteresis_settle_trace.json"),
         serde_json::to_vec(&serde_json::json!([
             {
+                "protocol_role": "preparation",
+                "field_value_mT": 0.0,
+                "step_index": 0,
+                "algorithm_id": "settle_step_000_minimize",
+                "method": "projected_gradient_bb",
+                "status": "converged",
+                "stop_reason": "energy",
+                "fallback_reason": null,
+                "retry_attempt": 0,
+                "resolved_timestep_s": 1e-13,
+                "resolved_parameters": {
+                    "kind": "minimize",
+                    "method": "projected_gradient_bb",
+                    "energy_tolerance": 1e-20,
+                    "max_steps": 200
+                },
+                "metric_name": "energy_delta",
+                "metric_value": 1e-22,
+                "threshold": 1e-20,
+                "torque": 0.1,
+                "energy": -3.0
+            },
+            {
                 "point_id": 2,
                 "field_value_mT": -50.0,
                 "step_index": 0,
@@ -16951,7 +16974,7 @@ async fn hysteresis_analysis_endpoints_read_typed_artifacts() {
         .as_array()
         .is_some_and(|values| values.contains(&serde_json::Value::String("descending".into()))));
 
-    let metrics = body_json(
+    let metrics_resource = body_json(
         app.clone()
             .oneshot(
                 Request::builder()
@@ -16963,6 +16986,10 @@ async fn hysteresis_analysis_endpoints_read_typed_artifacts() {
             .unwrap(),
     )
     .await;
+    assert_eq!(metrics_resource["stage_id"], "stage-000");
+    assert_eq!(metrics_resource["stage_index"], 0);
+    assert!(metrics_resource["revision"].as_u64().is_some());
+    let metrics = &metrics_resource["metrics"];
     assert_eq!(metrics["H_c"], 11.5);
     assert_eq!(metrics["metric_statuses"]["H_c"]["status"], "available");
     assert_eq!(
@@ -16983,7 +17010,7 @@ async fn hysteresis_analysis_endpoints_read_typed_artifacts() {
         "Negative remanence interpolation is unavailable."
     );
 
-    let saturation = body_json(
+    let saturation_resource = body_json(
         app.clone()
             .oneshot(
                 Request::builder()
@@ -16995,11 +17022,15 @@ async fn hysteresis_analysis_endpoints_read_typed_artifacts() {
             .unwrap(),
     )
     .await;
+    assert_eq!(saturation_resource["stage_id"], "stage-000");
+    assert_eq!(saturation_resource["stage_index"], 0);
+    assert!(saturation_resource["revision"].as_u64().is_some());
+    let saturation = &saturation_resource["saturation"];
     assert_eq!(saturation["status"], "probably_saturated");
     assert_eq!(saturation["preparation_field_mT"], 300.0);
     assert_eq!(saturation["points"].as_array().map(Vec::len), Some(2));
 
-    let branches = body_json(
+    let branches_resource = body_json(
         app.clone()
             .oneshot(
                 Request::builder()
@@ -17011,6 +17042,10 @@ async fn hysteresis_analysis_endpoints_read_typed_artifacts() {
             .unwrap(),
     )
     .await;
+    assert_eq!(branches_resource["stage_id"], "stage-000");
+    assert_eq!(branches_resource["stage_index"], 0);
+    assert!(branches_resource["revision"].as_u64().is_some());
+    let branches = &branches_resource["branches"];
     assert_eq!(branches.as_array().map(Vec::len), Some(2));
     assert_eq!(branches[0]["branch_id"], "descending");
     assert_eq!(branches[0]["branch_index"], 0);
@@ -17035,7 +17070,7 @@ async fn hysteresis_analysis_endpoints_read_typed_artifacts() {
     assert_eq!(branches[1]["points"][0]["branch_index"], 1);
     assert_eq!(branches[1]["points"][0]["protocol_role"], "forward");
 
-    let reversal_fields = body_json(
+    let reversal_fields_resource = body_json(
         app.clone()
             .oneshot(
                 Request::builder()
@@ -17047,6 +17082,10 @@ async fn hysteresis_analysis_endpoints_read_typed_artifacts() {
             .unwrap(),
     )
     .await;
+    assert_eq!(reversal_fields_resource["stage_id"], "stage-000");
+    assert_eq!(reversal_fields_resource["stage_index"], 0);
+    assert!(reversal_fields_resource["revision"].as_u64().is_some());
+    let reversal_fields = &reversal_fields_resource["reversal_fields"];
     assert_eq!(reversal_fields.as_array().map(Vec::len), Some(1));
     assert_eq!(reversal_fields[0]["point_id"], 2);
     assert_eq!(reversal_fields[0]["is_reversal_field"], true);
@@ -17094,7 +17133,11 @@ async fn hysteresis_analysis_endpoints_read_typed_artifacts() {
         .await
         .unwrap();
     assert_eq!(minor_loops_response.status(), StatusCode::OK);
-    let minor_loops = body_json(minor_loops_response).await;
+    let minor_loops_resource = body_json(minor_loops_response).await;
+    assert_eq!(minor_loops_resource["stage_id"], "stage-000");
+    assert_eq!(minor_loops_resource["stage_index"], 0);
+    assert!(minor_loops_resource["revision"].as_u64().is_some());
+    let minor_loops = &minor_loops_resource["minor_loops"];
     assert_eq!(minor_loops.as_array().map(Vec::len), Some(1));
     assert_eq!(minor_loops[0]["loop_id"], "minor_loop_001");
     assert_eq!(minor_loops[0]["parent_branch_id"], "descending");
@@ -17149,6 +17192,35 @@ async fn hysteresis_analysis_endpoints_read_typed_artifacts() {
     );
     assert_eq!(settle_trace[1]["retry_attempt"], 0);
     assert_eq!(settle_trace[1]["resolved_timestep_s"], 1e-13);
+
+    let stage_settle_trace = body_json(
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v2/sessions/current/analysis/hysteresis/stage_0/settle-trace")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(stage_settle_trace["stage_id"], "stage-000");
+    assert_eq!(stage_settle_trace["stage_index"], 0);
+    assert!(stage_settle_trace["revision"].as_u64().is_some());
+    assert_eq!(
+        stage_settle_trace["settle_trace"].as_array().map(Vec::len),
+        Some(4)
+    );
+    assert_eq!(
+        stage_settle_trace["settle_trace"][0]["protocol_role"],
+        "preparation"
+    );
+    assert_eq!(
+        stage_settle_trace["settle_trace"][0]["point_id"],
+        serde_json::Value::Null
+    );
+    assert_eq!(stage_settle_trace["settle_trace"][1]["point_id"], 2);
 
     let missing_settle_trace = app
         .clone()
@@ -17976,7 +18048,11 @@ async fn hysteresis_analysis_reads_flat_live_artifact_with_active_stage_executio
         .unwrap();
 
     assert_eq!(metrics_response.status(), StatusCode::OK);
-    let metrics = body_json(metrics_response).await;
+    let metrics_resource = body_json(metrics_response).await;
+    assert_eq!(metrics_resource["stage_id"], "stage-000");
+    assert_eq!(metrics_resource["stage_index"], 0);
+    assert!(metrics_resource["revision"].as_u64().is_some());
+    let metrics = &metrics_resource["metrics"];
     assert_eq!(metrics["H_c"], 11.5);
     assert_eq!(
         metrics["saturation_status"],
@@ -18247,13 +18323,29 @@ async fn hysteresis_analysis_adaptive_refinement_returns_runtime_artifact() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let resource = body_json(response).await;
-    assert_eq!(resource["kind"], "adaptive_refinement");
-    assert_eq!(resource["status"], "computed");
-    assert_eq!(resource["candidates"].as_array().map(Vec::len), Some(1));
-    assert_eq!(resource["candidates"][0]["reasons"][0], "zero_crossing");
-    assert_eq!(resource["points"].as_array().map(Vec::len), Some(1));
-    assert_eq!(resource["points"][0]["adaptive_inserted"], true);
-    assert_eq!(resource["settle_trace"].as_array().map(Vec::len), Some(1));
+    assert_eq!(resource["stage_id"], "stage-000");
+    assert_eq!(resource["stage_index"], 0);
+    assert!(resource["revision"].as_u64().is_some());
+    let adaptive_refinement = &resource["adaptive_refinement"];
+    assert_eq!(adaptive_refinement["kind"], "adaptive_refinement");
+    assert_eq!(adaptive_refinement["status"], "computed");
+    assert_eq!(
+        adaptive_refinement["candidates"].as_array().map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(
+        adaptive_refinement["candidates"][0]["reasons"][0],
+        "zero_crossing"
+    );
+    assert_eq!(
+        adaptive_refinement["points"].as_array().map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(adaptive_refinement["points"][0]["adaptive_inserted"], true);
+    assert_eq!(
+        adaptive_refinement["settle_trace"].as_array().map(Vec::len),
+        Some(1)
+    );
 
     let _ = fs::remove_dir_all(artifact_dir);
 }
@@ -19908,6 +20000,432 @@ async fn v2_field_vector_prefers_fresh_m_preview_cache_over_stale_latest_field()
         .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
         .collect();
     assert_eq!(values, vec![0.0, 0.0, -1.0, 0.0, -1.0, 0.0]);
+}
+
+#[tokio::test]
+async fn topological_charge_reports_mesh_missing_when_m_field_exists_without_usable_fdm_plane_or_object_mesh(
+) {
+    let state = test_app_state_with_live_session().await;
+    let scene = sample_scene_document();
+    let object_id = scene.objects[0].id.clone();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.live_state = Some(LiveState {
+            status: "running".into(),
+            updated_at_unix_ms: 1_700_000_000_789,
+            latest_step: StepUpdateView {
+                step: 1,
+                time: 0.0,
+                dt: 1.0e-13,
+                pseudo_time_s: None,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 100,
+                grid: [4, 1, 1],
+                fem_mesh: None,
+                magnetization: Some(vec![
+                    0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0,
+                ]),
+                per_object_scalars: Default::default(),
+                preview_field: None,
+                finished: false,
+            },
+        });
+        snapshot.field_quantity_revisions.insert("m".to_string(), 7);
+    }
+
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/v2/sessions/current/analysis/extensions/objects/{object_id}/topological-charge"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["status"], "mesh_missing");
+    assert_eq!(json["field_revision"], 7);
+    assert_eq!(json["sample_count"], 4);
+    assert_eq!(json["valid_sample_count"], 4);
+    assert_eq!(json["warnings"][0]["code"], "mesh_missing");
+}
+
+#[tokio::test]
+async fn topological_charge_computes_uniform_fdm_grid_without_fem_mesh() {
+    let state = test_app_state_with_live_session().await;
+    let scene = sample_scene_document();
+    let object_id = scene.objects[0].id.clone();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.live_state = Some(LiveState {
+            status: "running".into(),
+            updated_at_unix_ms: 1_700_000_000_789,
+            latest_step: StepUpdateView {
+                step: 1,
+                time: 0.0,
+                dt: 1.0e-13,
+                pseudo_time_s: None,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 100,
+                grid: [3, 3, 1],
+                fem_mesh: None,
+                magnetization: Some(vec![
+                    0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0,
+                    0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0,
+                ]),
+                per_object_scalars: Default::default(),
+                preview_field: None,
+                finished: false,
+            },
+        });
+        snapshot.field_quantity_revisions.insert("m".to_string(), 9);
+    }
+
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/v2/sessions/current/analysis/extensions/objects/{object_id}/topological-charge"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["status"], "ready");
+    assert_eq!(json["field_revision"], 9);
+    assert_eq!(json["sample_grid"]["nx"], 3);
+    assert_eq!(json["sample_grid"]["ny"], 3);
+    assert_eq!(json["sample_grid"]["plane"], "xy");
+    assert_eq!(json["sample_count"], 9);
+    assert_eq!(json["valid_sample_count"], 9);
+    assert!(json["charge"].as_f64().unwrap().abs() < 1.0e-6);
+    assert!(json["warnings"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn topological_charge_cache_key_tracks_field_revision() {
+    let state = test_app_state_with_live_session().await;
+    let scene = sample_scene_document();
+    let object_id = scene.objects[0].id.clone();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.live_state = Some(LiveState {
+            status: "running".into(),
+            updated_at_unix_ms: 1_700_000_000_789,
+            latest_step: StepUpdateView {
+                step: 1,
+                time: 0.0,
+                dt: 1.0e-13,
+                pseudo_time_s: None,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 100,
+                grid: [3, 3, 1],
+                fem_mesh: None,
+                magnetization: Some(vec![
+                    0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0,
+                    0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0,
+                ]),
+                per_object_scalars: Default::default(),
+                preview_field: None,
+                finished: false,
+            },
+        });
+        snapshot
+            .field_quantity_revisions
+            .insert("m".to_string(), 31);
+    }
+
+    let app = build_v2_router().with_state(state.clone());
+    let path =
+        format!("/v2/sessions/current/analysis/extensions/objects/{object_id}/topological-charge");
+    let first = body_json(
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(&path)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(first["valid_sample_count"], 9);
+    assert!(first["warnings"].as_array().unwrap().is_empty());
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot
+            .live_state
+            .as_mut()
+            .unwrap()
+            .latest_step
+            .magnetization = Some(vec![0.0; 27]);
+    }
+    let cached = body_json(
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(&path)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(cached["valid_sample_count"], 9);
+    assert!(cached["warnings"].as_array().unwrap().is_empty());
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot
+            .field_quantity_revisions
+            .insert("m".to_string(), 32);
+    }
+    let recomputed = body_json(
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(&path)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(recomputed["valid_sample_count"], 0);
+    assert_eq!(recomputed["warnings"][0]["code"], "non_unit_magnetization");
+}
+
+#[tokio::test]
+async fn topological_charge_auto_plane_uses_midplane_of_thinnest_fdm_axis() {
+    let state = test_app_state_with_live_session().await;
+    let scene = sample_scene_document();
+    let object_id = scene.objects[0].id.clone();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let uniform_3d_m = (0..75).flat_map(|_| [0.0, 0.0, 1.0]).collect::<Vec<_>>();
+        snapshot.scene_document = Some(scene);
+        snapshot.live_state = Some(LiveState {
+            status: "running".into(),
+            updated_at_unix_ms: 1_700_000_000_789,
+            latest_step: StepUpdateView {
+                step: 1,
+                time: 0.0,
+                dt: 1.0e-13,
+                pseudo_time_s: None,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 100,
+                grid: [5, 5, 3],
+                fem_mesh: None,
+                magnetization: Some(uniform_3d_m),
+                per_object_scalars: Default::default(),
+                preview_field: None,
+                finished: false,
+            },
+        });
+        snapshot
+            .field_quantity_revisions
+            .insert("m".to_string(), 11);
+    }
+
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/v2/sessions/current/analysis/extensions/objects/{object_id}/topological-charge?plane=auto"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["status"], "ready");
+    assert_eq!(json["plane"], "xy");
+    assert_eq!(json["sample_grid"]["nx"], 5);
+    assert_eq!(json["sample_grid"]["ny"], 5);
+    assert_eq!(json["sample_grid"]["plane"], "xy");
+    assert_eq!(json["sample_count"], 25);
+    assert_eq!(json["valid_sample_count"], 25);
+    assert!(json["charge"].as_f64().unwrap().abs() < 1.0e-6);
+}
+
+#[tokio::test]
+async fn topological_charge_computes_uniform_fem_object_from_tetra_volume_without_surface_faces() {
+    let state = test_app_state_with_live_session().await;
+    let scene = sample_scene_document();
+    let object_id = scene.objects[0].id.clone();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_scoped_fem_mesh_payload();
+        mesh.mesh_parts[0].surface_faces.clear();
+        snapshot.scene_document = Some(scene);
+        snapshot.mesh_revision = 17;
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "field_revision": 13,
+                "values": [
+                    [0.0, 0.0, 1.0],
+                    [0.0, 0.0, 1.0],
+                    [0.0, 0.0, 1.0],
+                    [0.0, 0.0, 1.0],
+                    [0.0, 0.0, 1.0],
+                    [0.0, 0.0, 1.0],
+                    [0.0, 0.0, 1.0],
+                    [0.0, 0.0, 1.0]
+                ],
+                "layout": {
+                    "grid_cells": [8, 1, 1]
+                }
+            }
+        }))
+        .expect("mock FEM m field should deserialize");
+    }
+
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/v2/sessions/current/analysis/extensions/objects/{object_id}/topological-charge?plane=xy&resolution=5"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["status"], "ready");
+    assert_eq!(json["field_revision"], 13);
+    assert_eq!(json["mesh_revision"], 17);
+    assert_eq!(json["mesh_generation_id"], "42");
+    assert_eq!(json["plane"], "xy");
+    assert_eq!(json["sample_grid"]["nx"], 5);
+    assert_eq!(json["sample_grid"]["ny"], 5);
+    assert_eq!(json["sample_grid"]["plane"], "xy");
+    assert_eq!(json["sample_count"], 25);
+    assert!(json["valid_sample_count"].as_u64().unwrap() > 0);
+    assert!(json["charge"].as_f64().unwrap().abs() < 1.0e-6);
+    assert!(json["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|warning| warning["code"] != "mesh_surface_incomplete"));
+}
+
+#[tokio::test]
+async fn topological_charge_reports_mesh_surface_incomplete_when_no_volume_sampler_is_available() {
+    let state = test_app_state_with_live_session().await;
+    let scene = sample_scene_document();
+    let object_id = scene.objects[0].id.clone();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_scoped_fem_mesh_payload();
+        mesh.mesh_parts[0].element_count = 0;
+        mesh.mesh_parts[0].surface_faces.clear();
+        snapshot.scene_document = Some(scene);
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "field_revision": 14,
+                "values": [
+                    [0.0, 0.0, 1.0],
+                    [0.0, 0.0, 1.0],
+                    [0.0, 0.0, 1.0],
+                    [0.0, 0.0, 1.0],
+                    [0.0, 0.0, 1.0],
+                    [0.0, 0.0, 1.0],
+                    [0.0, 0.0, 1.0],
+                    [0.0, 0.0, 1.0]
+                ],
+                "layout": {
+                    "grid_cells": [8, 1, 1]
+                }
+            }
+        }))
+        .expect("mock FEM m field should deserialize");
+    }
+
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/v2/sessions/current/analysis/extensions/objects/{object_id}/topological-charge?plane=xy&resolution=5"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["status"], "unsupported_geometry");
+    assert_eq!(json["warnings"][0]["code"], "mesh_surface_incomplete");
+    assert!(json["charge"].is_null());
 }
 
 #[tokio::test]

@@ -19,7 +19,11 @@ export function HysteresisSettleTraceInspector({
       title="Settle Trace"
       badge={
         activePoint?.pointId == null
-          ? "select point"
+          ? settleTrace.length > 0
+            ? `${settleTrace.length} stage step(s)`
+            : settleTraceStatus === "loading"
+              ? "loading"
+              : "no stage trace"
           : settleTrace.length > 0
             ? `${settleTrace.length} step(s)`
             : settleTraceStatus === "loading"
@@ -27,11 +31,7 @@ export function HysteresisSettleTraceInspector({
               : "no trace"
       }
     >
-      {activePoint?.pointId == null ? (
-        <div className="fm-hysteresis-inspector-empty">
-          Select a calculated point to inspect the algorithms actually run for that field.
-        </div>
-      ) : settleTrace.length > 0 ? (
+      {settleTrace.length > 0 ? (
         <div className="fm-hysteresis-inspector-step-list">
           {settleTrace.map((entry) => (
             <HysteresisSettleTraceRow
@@ -39,6 +39,10 @@ export function HysteresisSettleTraceInspector({
               entry={entry}
             />
           ))}
+        </div>
+      ) : activePoint?.pointId == null ? (
+        <div className="fm-hysteresis-inspector-empty">
+          No stage-level settle trace is available yet.
         </div>
       ) : (
         <div className="fm-hysteresis-inspector-empty">
@@ -64,6 +68,8 @@ function HysteresisSettleTraceRow({
       </div>
       <div className="fm-hysteresis-inspector-step__meta">
         <span>Status: {settleTraceStatusLabel(entry.status)}</span>
+        {entry.protocol_role && <span>Role: {entry.protocol_role}</span>}
+        {entry.point_id != null && <span>Point: {entry.point_id}</span>}
         {entry.retry_attempt > 0 && <span>retry {entry.retry_attempt}</span>}
         {entry.resolved_timestep_s != null && (
           <span>dt: {entry.resolved_timestep_s.toExponential(2)} s</span>

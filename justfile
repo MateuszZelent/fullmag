@@ -68,6 +68,11 @@ check:
 test:
     cargo +nightly test --workspace --exclude fullmag-desktop
 
+run-topological-charge-skyrmion-smoke device="cpu":
+    mode="{{device}}"; \
+    case "$mode" in cpu|CPU|0) ;; *) echo "unsupported topological-charge smoke device: $mode (expected cpu)" >&2; exit 2 ;; esac; \
+    cargo test -p fullmag-api analysis::topological_charge::tests::analytic_neel_skyrmion_integrates_to_unit_charge_with_known_orientation -- --exact
+
 test-desktop:
     just check-desktop-linux-deps
     cargo +nightly test -p fullmag-desktop

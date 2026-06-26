@@ -100,6 +100,11 @@ SUPPORTED_HYSTERESIS_BRANCH_MODES = {
     "virgin_curve",
     "virgin_then_major_loop",
 }
+SUPPORTED_HYSTERESIS_MINOR_LOOP_CONTINUATION_POLICIES = {
+    "branch_only",
+    "replace_parent",
+    "resume_parent",
+}
 SUPPORTED_HYSTERESIS_STORAGE_MAGNETIZATION = {
     "none",
     "selected",
@@ -1096,6 +1101,7 @@ class HysteresisStorage:
 class MinorLoop:
     reversal_mT: float
     return_mT: float
+    continuation_policy: str = "branch_only"
 
     def __post_init__(self) -> None:
         reversal = float(self.reversal_mT)
@@ -1104,6 +1110,9 @@ class MinorLoop:
             raise ValueError("MinorLoop reversal_mT and return_mT must be finite")
         if reversal == return_field:
             raise ValueError("MinorLoop reversal_mT and return_mT must differ")
+        if self.continuation_policy not in SUPPORTED_HYSTERESIS_MINOR_LOOP_CONTINUATION_POLICIES:
+            supported = ", ".join(sorted(SUPPORTED_HYSTERESIS_MINOR_LOOP_CONTINUATION_POLICIES))
+            raise ValueError(f"MinorLoop.continuation_policy must be one of: {supported}")
         object.__setattr__(self, "reversal_mT", reversal)
         object.__setattr__(self, "return_mT", return_field)
 
@@ -1111,6 +1120,7 @@ class MinorLoop:
         return {
             "reversal_mT": self.reversal_mT,
             "return_mT": self.return_mT,
+            "continuation_policy": self.continuation_policy,
         }
 
 
@@ -1241,6 +1251,7 @@ class AdaptiveRefinement:
     min_step_mT: float = 0.1
     include_zero_crossings: bool = True
     include_high_susceptibility: bool = True
+    include_in_metrics: bool = False
 
     def __post_init__(self) -> None:
         if self.max_passes <= 0:
@@ -1264,6 +1275,7 @@ class AdaptiveRefinement:
             "min_step_mT": float(self.min_step_mT),
             "include_zero_crossings": bool(self.include_zero_crossings),
             "include_high_susceptibility": bool(self.include_high_susceptibility),
+            "include_in_metrics": bool(self.include_in_metrics),
         }
 
 

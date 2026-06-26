@@ -553,7 +553,8 @@ mod tests {
             "max_step_mT": 2.5,
             "min_step_mT": 0.25,
             "include_zero_crossings": true,
-            "include_high_susceptibility": false
+            "include_high_susceptibility": false,
+            "include_in_metrics": true
         }))
         .expect("adaptive refinement policy should deserialize");
 
@@ -565,6 +566,11 @@ mod tests {
         assert_eq!(policy.min_step_mT, 0.25);
         assert!(policy.include_zero_crossings);
         assert!(!policy.include_high_susceptibility);
+        assert!(policy.include_in_metrics);
+
+        let default_policy: AdaptiveRefinementIR = serde_json::from_value(serde_json::json!({}))
+            .expect("adaptive refinement defaults should deserialize");
+        assert!(!default_policy.include_in_metrics);
     }
 
     #[test]
@@ -1012,6 +1018,10 @@ fn default_adaptive_refinement_min_step_m_t() -> f64 {
     0.1
 }
 
+fn default_adaptive_refinement_include_in_metrics() -> bool {
+    false
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AdaptiveRefinementIR {
     #[serde(default = "default_adaptive_refinement_kind")]
@@ -1032,6 +1042,8 @@ pub struct AdaptiveRefinementIR {
     pub include_zero_crossings: bool,
     #[serde(default = "default_adaptive_refinement_enabled")]
     pub include_high_susceptibility: bool,
+    #[serde(default = "default_adaptive_refinement_include_in_metrics")]
+    pub include_in_metrics: bool,
 }
 
 fn default_hysteresis_angular_family_kind() -> String {
@@ -1063,10 +1075,16 @@ pub struct HysteresisAngularFamilyIR {
     pub variants: Vec<HysteresisAngularVariantIR>,
 }
 
+fn default_hysteresis_minor_loop_continuation_policy() -> String {
+    "branch_only".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MinorLoopIR {
     pub reversal_mT: f64,
     pub return_mT: f64,
+    #[serde(default = "default_hysteresis_minor_loop_continuation_policy")]
+    pub continuation_policy: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -25,6 +25,7 @@ type ObjectSelectionKind =
   | "object.magnetic-texture.load"
   | "object.magnetic-texture.transform"
   | "object.mesh"
+  | "object.extension.topological-charge"
   | "object.visualization";
 
 type MeshQualitySelectionMetric = CrossSectionQualityMetric;
@@ -43,6 +44,7 @@ export type SelectionRef =
       kind: ObjectSelectionKind;
       nodeId: string;
       objectId: string;
+      extensionId?: string;
       regionId?: string;
       type: "scene-object";
       visualizationTargetId: `object:${string}` | RegionVisualizationTargetId;
@@ -254,6 +256,7 @@ export function selectionRefEquals(
         left.kind === right.kind &&
         left.nodeId === right.nodeId &&
         left.objectId === right.objectId &&
+        nullableStringEquals(left.extensionId, right.extensionId) &&
         nullableStringEquals(left.regionId, right.regionId) &&
         left.visualizationTargetId === right.visualizationTargetId
       );

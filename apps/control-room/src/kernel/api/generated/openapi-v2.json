@@ -5601,6 +5601,33 @@
         ],
         "type": "object"
       },
+      "HysteresisAdaptiveRefinementResource": {
+        "properties": {
+          "adaptive_refinement": {
+            "$ref": "#/components/schemas/HysteresisAdaptiveRefinementSchema"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stage_id": {
+            "type": "string"
+          },
+          "stage_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "stage_id",
+          "stage_index",
+          "adaptive_refinement"
+        ],
+        "type": "object"
+      },
       "HysteresisAdaptiveRefinementSchema": {
         "properties": {
           "candidates": {
@@ -5932,6 +5959,36 @@
         ],
         "type": "object"
       },
+      "HysteresisBranchesResource": {
+        "properties": {
+          "branches": {
+            "items": {
+              "$ref": "#/components/schemas/HysteresisBranchSchema"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stage_id": {
+            "type": "string"
+          },
+          "stage_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "stage_id",
+          "stage_index",
+          "branches"
+        ],
+        "type": "object"
+      },
       "HysteresisConvergenceQualitySummarySchema": {
         "properties": {
           "converged_points": {
@@ -6188,6 +6245,33 @@
         ],
         "type": "object"
       },
+      "HysteresisMetricsResource": {
+        "properties": {
+          "metrics": {
+            "$ref": "#/components/schemas/HysteresisMetricsSchema"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stage_id": {
+            "type": "string"
+          },
+          "stage_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "stage_id",
+          "stage_index",
+          "metrics"
+        ],
+        "type": "object"
+      },
       "HysteresisMetricsSchema": {
         "properties": {
           "H_c": {
@@ -6388,6 +6472,36 @@
           "reversal_field_mT",
           "return_field_mT",
           "points"
+        ],
+        "type": "object"
+      },
+      "HysteresisMinorLoopsResource": {
+        "properties": {
+          "minor_loops": {
+            "items": {
+              "$ref": "#/components/schemas/HysteresisMinorLoopSchema"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stage_id": {
+            "type": "string"
+          },
+          "stage_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "stage_id",
+          "stage_index",
+          "minor_loops"
         ],
         "type": "object"
       },
@@ -6881,6 +6995,36 @@
         ],
         "type": "object"
       },
+      "HysteresisReversalFieldsResource": {
+        "properties": {
+          "reversal_fields": {
+            "items": {
+              "$ref": "#/components/schemas/HysteresisPointSchema"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stage_id": {
+            "type": "string"
+          },
+          "stage_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "stage_id",
+          "stage_index",
+          "reversal_fields"
+        ],
+        "type": "object"
+      },
       "HysteresisSaturationProbePointSchema": {
         "properties": {
           "field_value_mT": {
@@ -6916,6 +7060,33 @@
           "m_parallel",
           "m_transverse",
           "status"
+        ],
+        "type": "object"
+      },
+      "HysteresisSaturationResource": {
+        "properties": {
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "saturation": {
+            "$ref": "#/components/schemas/HysteresisSaturationResultSchema"
+          },
+          "stage_id": {
+            "type": "string"
+          },
+          "stage_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "stage_id",
+          "stage_index",
+          "saturation"
         ],
         "type": "object"
       },
@@ -7103,6 +7274,36 @@
           "method",
           "status",
           "retry_attempt"
+        ],
+        "type": "object"
+      },
+      "HysteresisSettleTraceResource": {
+        "properties": {
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "settle_trace": {
+            "items": {
+              "$ref": "#/components/schemas/HysteresisSettleTraceEntrySchema"
+            },
+            "type": "array"
+          },
+          "stage_id": {
+            "type": "string"
+          },
+          "stage_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "stage_id",
+          "stage_index",
+          "settle_trace"
         ],
         "type": "object"
       },
@@ -16086,6 +16287,200 @@
         ],
         "type": "object"
       },
+      "TopologicalChargeQuery": {
+        "properties": {
+          "method": {
+            "type": "string"
+          },
+          "plane": {
+            "type": "string"
+          },
+          "quantity_id": {
+            "type": "string"
+          },
+          "resolution": {
+            "type": "string"
+          },
+          "snapshot_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "TopologicalChargeResource": {
+        "properties": {
+          "charge": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "computed_at_unix_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "domain_generation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "field_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "integer_error": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "mesh_generation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mesh_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "method": {
+            "type": "string"
+          },
+          "nearest_integer": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "object_id": {
+            "type": "string"
+          },
+          "plane": {
+            "type": "string"
+          },
+          "polarity": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "quantity_id": {
+            "type": "string"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sample_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sample_grid": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TopologicalChargeSampleGrid"
+              }
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/TopologicalChargeStatus"
+          },
+          "valid_sample_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/TopologicalChargeWarning"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "object_id",
+          "quantity_id",
+          "revision",
+          "status",
+          "method",
+          "plane",
+          "sample_count",
+          "valid_sample_count",
+          "computed_at_unix_ms",
+          "warnings"
+        ],
+        "type": "object"
+      },
+      "TopologicalChargeSampleGrid": {
+        "properties": {
+          "nx": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ny": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "plane": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "nx",
+          "ny",
+          "plane"
+        ],
+        "type": "object"
+      },
+      "TopologicalChargeStatus": {
+        "enum": [
+          "ready",
+          "field_missing",
+          "mesh_missing",
+          "stale",
+          "unsupported_geometry",
+          "insufficient_samples",
+          "error"
+        ],
+        "type": "string"
+      },
+      "TopologicalChargeWarning": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "type": "object"
+      },
       "TrimAxisVisualizationAxes": {
         "properties": {
           "x": {
@@ -16973,9 +17368,6 @@
           "surface_visible": {
             "type": "boolean"
           },
-          "viewport_colorbar_visible": {
-            "type": "boolean"
-          },
           "vector_alpha": {
             "format": "double",
             "type": "number"
@@ -17000,6 +17392,9 @@
             "type": "number"
           },
           "vectors_visible": {
+            "type": "boolean"
+          },
+          "viewport_colorbar_visible": {
             "type": "boolean"
           },
           "visible": {
@@ -17663,12 +18058,6 @@
               "null"
             ]
           },
-          "viewport_colorbar_visible": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
           "vector_alpha": {
             "format": "double",
             "type": [
@@ -17711,6 +18100,12 @@
             "format": "double",
             "type": [
               "number",
+              "null"
+            ]
+          },
+          "viewport_colorbar_visible": {
+            "type": [
+              "boolean",
               "null"
             ]
           },
@@ -18297,6 +18692,83 @@
         ]
       }
     },
+    "/v2/sessions/current/analysis/extensions/objects/{object_id}/topological-charge": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_extensions_objects_object_id_topological_charge",
+        "parameters": [
+          {
+            "description": "Canonical scene object id",
+            "in": "path",
+            "name": "object_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "quantity_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "plane",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resolution",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "snapshot_id",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "method",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TopologicalChargeResource"
+                }
+              }
+            },
+            "description": "Object-scoped topological charge analysis resource"
+          },
+          "404": {
+            "description": "Object or workspace not found"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
     "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2": {
       "get": {
         "operationId": "analysis_get_sessions_current_analysis_frequency_domain_eigen_branches_v2",
@@ -18702,11 +19174,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HysteresisAdaptiveRefinementSchema"
+                  "$ref": "#/components/schemas/HysteresisAdaptiveRefinementResource"
                 }
               }
             },
-            "description": "Executed hysteresis adaptive refinement candidates and inserted points"
+            "description": "Revisioned executed hysteresis adaptive refinement resource"
           },
           "404": {
             "description": "Hysteresis adaptive refinement artifact not found"
@@ -18812,14 +19284,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/HysteresisBranchSchema"
-                  },
-                  "type": "array"
+                  "$ref": "#/components/schemas/HysteresisBranchesResource"
                 }
               }
             },
-            "description": "Hysteresis loop branches grouped by sweep direction"
+            "description": "Revisioned hysteresis loop branches grouped by sweep direction"
           },
           "404": {
             "description": "Hysteresis points not found"
@@ -18849,11 +19318,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HysteresisMetricsSchema"
+                  "$ref": "#/components/schemas/HysteresisMetricsResource"
                 }
               }
             },
-            "description": "Hysteresis loop metrics"
+            "description": "Revisioned hysteresis loop metrics resource"
           },
           "404": {
             "description": "Hysteresis metrics not found"
@@ -18883,14 +19352,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/HysteresisMinorLoopSchema"
-                  },
-                  "type": "array"
+                  "$ref": "#/components/schemas/HysteresisMinorLoopsResource"
                 }
               }
             },
-            "description": "Minor loops"
+            "description": "Revisioned minor loops resource"
           }
         },
         "tags": [
@@ -18951,14 +19417,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/HysteresisPointSchema"
-                  },
-                  "type": "array"
+                  "$ref": "#/components/schemas/HysteresisReversalFieldsResource"
                 }
               }
             },
-            "description": "Reversal fields"
+            "description": "Revisioned reversal fields resource"
           }
         },
         "tags": [
@@ -18985,14 +19448,48 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HysteresisSaturationResultSchema"
+                  "$ref": "#/components/schemas/HysteresisSaturationResource"
                 }
               }
             },
-            "description": "Hysteresis saturation probe result"
+            "description": "Revisioned hysteresis saturation probe resource"
           },
           "404": {
             "description": "Hysteresis saturation probe result not found"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/hysteresis/{stage_id}/settle-trace": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_hysteresis_stage_id_settle_trace",
+        "parameters": [
+          {
+            "description": "Hysteresis stage index or stage identifier",
+            "in": "path",
+            "name": "stage_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HysteresisSettleTraceResource"
+                }
+              }
+            },
+            "description": "Revisioned stage-level settle trace resource"
+          },
+          "404": {
+            "description": "Settle trace not found"
           }
         },
         "tags": [

@@ -260,6 +260,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/analysis/extensions/objects/{object_id}/topological-charge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_extensions_objects_object_id_topological_charge"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2": {
         parameters: {
             query?: never;
@@ -620,6 +636,22 @@ export interface paths {
             cookie?: never;
         };
         get: operations["analysis_get_sessions_current_analysis_hysteresis_stage_id_saturation"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/hysteresis/{stage_id}/settle-trace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_hysteresis_stage_id_settle_trace"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4205,6 +4237,14 @@ export interface components {
             reasons: string[];
             status: string;
         };
+        HysteresisAdaptiveRefinementResource: {
+            adaptive_refinement: components["schemas"]["HysteresisAdaptiveRefinementSchema"];
+            /** Format: int64 */
+            revision: number;
+            stage_id: string;
+            /** Format: int32 */
+            stage_index: number;
+        };
         HysteresisAdaptiveRefinementSchema: {
             candidates?: components["schemas"]["HysteresisAdaptiveRefinementCandidateSchema"][];
             enabled: boolean;
@@ -4290,6 +4330,14 @@ export interface components {
             start_field_mT: number;
             start_point_id: number;
         };
+        HysteresisBranchesResource: {
+            branches: components["schemas"]["HysteresisBranchSchema"][];
+            /** Format: int64 */
+            revision: number;
+            stage_id: string;
+            /** Format: int32 */
+            stage_index: number;
+        };
         HysteresisConvergenceQualitySummarySchema: {
             converged_points: number;
             non_converged_points: number;
@@ -4358,6 +4406,14 @@ export interface components {
             reason: string;
             status: string;
         };
+        HysteresisMetricsResource: {
+            metrics: components["schemas"]["HysteresisMetricsSchema"];
+            /** Format: int64 */
+            revision: number;
+            stage_id: string;
+            /** Format: int32 */
+            stage_index: number;
+        };
         HysteresisMetricsSchema: {
             /** Format: double */
             H_c?: number | null;
@@ -4406,6 +4462,14 @@ export interface components {
             reversal_field_mT: number;
             reversal_point_id?: number | null;
             settle_trace?: components["schemas"]["HysteresisSettleTraceEntrySchema"][];
+        };
+        HysteresisMinorLoopsResource: {
+            minor_loops: components["schemas"]["HysteresisMinorLoopSchema"][];
+            /** Format: int64 */
+            revision: number;
+            stage_id: string;
+            /** Format: int32 */
+            stage_index: number;
         };
         HysteresisOrientationSchema: {
             direction?: number[] | null;
@@ -4521,6 +4585,14 @@ export interface components {
             /** Format: int32 */
             step_index: number;
         };
+        HysteresisReversalFieldsResource: {
+            reversal_fields: components["schemas"]["HysteresisPointSchema"][];
+            /** Format: int64 */
+            revision: number;
+            stage_id: string;
+            /** Format: int32 */
+            stage_index: number;
+        };
         HysteresisSaturationProbePointSchema: {
             /** Format: double */
             field_value_mT: number;
@@ -4532,6 +4604,14 @@ export interface components {
             status: string;
             /** Format: double */
             torque?: number | null;
+        };
+        HysteresisSaturationResource: {
+            /** Format: int64 */
+            revision: number;
+            saturation: components["schemas"]["HysteresisSaturationResultSchema"];
+            stage_id: string;
+            /** Format: int32 */
+            stage_index: number;
         };
         HysteresisSaturationResultSchema: {
             /** Format: int32 */
@@ -4583,6 +4663,14 @@ export interface components {
             threshold?: number | null;
             /** Format: double */
             torque?: number | null;
+        };
+        HysteresisSettleTraceResource: {
+            /** Format: int64 */
+            revision: number;
+            settle_trace: components["schemas"]["HysteresisSettleTraceEntrySchema"][];
+            stage_id: string;
+            /** Format: int32 */
+            stage_index: number;
         };
         HysteresisStagePlanSchema: {
             adaptive_refinement?: unknown;
@@ -6803,6 +6891,54 @@ export interface components {
             /** Format: int64 */
             total_rows: number;
         };
+        TopologicalChargeQuery: {
+            method?: string;
+            plane?: string;
+            quantity_id?: string;
+            resolution?: string;
+            snapshot_id?: string | null;
+        };
+        TopologicalChargeResource: {
+            /** Format: double */
+            charge?: number | null;
+            /** Format: int64 */
+            computed_at_unix_ms: number;
+            domain_generation_id?: string | null;
+            /** Format: int64 */
+            field_revision?: number | null;
+            /** Format: double */
+            integer_error?: number | null;
+            mesh_generation_id?: string | null;
+            /** Format: int64 */
+            mesh_revision?: number | null;
+            method: string;
+            /** Format: int64 */
+            nearest_integer?: number | null;
+            object_id: string;
+            plane: string;
+            polarity?: string | null;
+            quantity_id: string;
+            /** Format: int64 */
+            revision: number;
+            sample_count: number;
+            sample_grid?: null | components["schemas"]["TopologicalChargeSampleGrid"];
+            status: components["schemas"]["TopologicalChargeStatus"];
+            valid_sample_count: number;
+            warnings: components["schemas"]["TopologicalChargeWarning"][];
+        };
+        TopologicalChargeSampleGrid: {
+            /** Format: int32 */
+            nx: number;
+            /** Format: int32 */
+            ny: number;
+            plane: string;
+        };
+        /** @enum {string} */
+        TopologicalChargeStatus: "ready" | "field_missing" | "mesh_missing" | "stale" | "unsupported_geometry" | "insufficient_samples" | "error";
+        TopologicalChargeWarning: {
+            code: string;
+            message: string;
+        };
         TrimAxisVisualizationAxes: {
             x: components["schemas"]["TrimAxisVisualizationState"];
             y: components["schemas"]["TrimAxisVisualizationState"];
@@ -6994,7 +7130,6 @@ export interface components {
             surface_color_source: components["schemas"]["SurfaceColorSource"];
             surface_mono_color: string;
             surface_visible: boolean;
-            viewport_colorbar_visible: boolean;
             /** Format: double */
             vector_alpha: number;
             /** Format: int32 */
@@ -7006,6 +7141,7 @@ export interface components {
             /** Format: double */
             vector_thickness: number;
             vectors_visible: boolean;
+            viewport_colorbar_visible: boolean;
             visible: boolean;
             wireframe_color: string;
             /** Format: double */
@@ -7172,7 +7308,6 @@ export interface components {
             scalar_color_palette?: string | null;
             surface_color_source?: null | components["schemas"]["SurfaceColorSource"];
             surface_mono_color?: string | null;
-            viewport_colorbar_visible?: boolean | null;
             /** Format: double */
             vector_alpha?: number | null;
             /** Format: int32 */
@@ -7183,6 +7318,7 @@ export interface components {
             vector_mono_color?: string | null;
             /** Format: double */
             vector_thickness?: number | null;
+            viewport_colorbar_visible?: boolean | null;
             wireframe_color?: string | null;
         };
         WorkspaceActiveNodeReplaceRequest: {
@@ -7662,6 +7798,42 @@ export interface operations {
             };
         };
     };
+    analysis_get_sessions_current_analysis_extensions_objects_object_id_topological_charge: {
+        parameters: {
+            query?: {
+                quantity_id?: string;
+                plane?: string;
+                resolution?: string;
+                snapshot_id?: string | null;
+                method?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Canonical scene object id */
+                object_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Object-scoped topological charge analysis resource */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TopologicalChargeResource"];
+                };
+            };
+            /** @description Object or workspace not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     analysis_get_sessions_current_analysis_frequency_domain_eigen_branches_v2: {
         parameters: {
             query?: never;
@@ -8012,13 +8184,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Executed hysteresis adaptive refinement candidates and inserted points */
+            /** @description Revisioned executed hysteresis adaptive refinement resource */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HysteresisAdaptiveRefinementSchema"];
+                    "application/json": components["schemas"]["HysteresisAdaptiveRefinementResource"];
                 };
             };
             /** @description Hysteresis adaptive refinement artifact not found */
@@ -8106,13 +8278,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Hysteresis loop branches grouped by sweep direction */
+            /** @description Revisioned hysteresis loop branches grouped by sweep direction */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HysteresisBranchSchema"][];
+                    "application/json": components["schemas"]["HysteresisBranchesResource"];
                 };
             };
             /** @description Hysteresis points not found */
@@ -8136,13 +8308,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Hysteresis loop metrics */
+            /** @description Revisioned hysteresis loop metrics resource */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HysteresisMetricsSchema"];
+                    "application/json": components["schemas"]["HysteresisMetricsResource"];
                 };
             };
             /** @description Hysteresis metrics not found */
@@ -8166,13 +8338,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Minor loops */
+            /** @description Revisioned minor loops resource */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HysteresisMinorLoopSchema"][];
+                    "application/json": components["schemas"]["HysteresisMinorLoopsResource"];
                 };
             };
         };
@@ -8219,13 +8391,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Reversal fields */
+            /** @description Revisioned reversal fields resource */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HysteresisPointSchema"][];
+                    "application/json": components["schemas"]["HysteresisReversalFieldsResource"];
                 };
             };
         };
@@ -8242,16 +8414,46 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Hysteresis saturation probe result */
+            /** @description Revisioned hysteresis saturation probe resource */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HysteresisSaturationResultSchema"];
+                    "application/json": components["schemas"]["HysteresisSaturationResource"];
                 };
             };
             /** @description Hysteresis saturation probe result not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_hysteresis_stage_id_settle_trace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Hysteresis stage index or stage identifier */
+                stage_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revisioned stage-level settle trace resource */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HysteresisSettleTraceResource"];
+                };
+            };
+            /** @description Settle trace not found */
             404: {
                 headers: {
                     [name: string]: unknown;

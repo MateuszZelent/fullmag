@@ -84,6 +84,8 @@ def hysteresis_point(
 def write_minor_loop_fixture(
     root: Path,
     *,
+    policy: str = "branch_only",
+    closure_status: str = "returned",
     include_loop_point_provenance: bool = True,
     include_return_snapshot: bool = True,
     contaminate_major_points: bool = False,
@@ -103,7 +105,7 @@ def write_minor_loop_fixture(
         [
             {
                 "closure_error_m_parallel": 0.2,
-                "closure_status": "returned",
+                "closure_status": closure_status,
                 "loop_id": loop_id,
                 "minor_loop_area": 3.0,
                 "parent_branch_id": "descending",
@@ -124,7 +126,7 @@ def write_minor_loop_fixture(
                         include_snapshot=include_return_snapshot,
                     ),
                 ],
-                "policy": "branch_only",
+                "policy": policy,
                 "recoil_susceptibility": 0.1,
                 "return_field_mT": -25.0,
                 "return_point_id": 1,
@@ -143,6 +145,49 @@ def test_minor_loop_validator_accepts_branch_only_fixture(tmp_path: Path) -> Non
 
     assert result.returncode == 0, result.stderr + result.stdout
     assert "validated hysteresis minor loop" in result.stdout
+    assert "policy=branch_only" in result.stdout
+
+
+def test_minor_loop_validator_accepts_resume_parent_fixture(tmp_path: Path) -> None:
+    write_minor_loop_fixture(tmp_path, policy="resume_parent")
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "policy=resume_parent" in result.stdout
+
+
+def test_minor_loop_validator_accepts_replace_parent_fixture(tmp_path: Path) -> None:
+    write_minor_loop_fixture(
+        tmp_path,
+        policy="replace_parent",
+        closure_status="replaced_parent",
+    )
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "policy=replace_parent" in result.stdout
+
+
+def test_minor_loop_validator_rejects_unknown_policy(tmp_path: Path) -> None:
+    write_minor_loop_fixture(tmp_path, policy="teleport_parent")
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "minor loop policy must be one of" in (result.stderr + result.stdout)
+
+
+def test_minor_loop_validator_rejects_replace_parent_without_replaced_status(
+    tmp_path: Path,
+) -> None:
+    write_minor_loop_fixture(tmp_path, policy="replace_parent")
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "closure_status must be replaced_parent" in (result.stderr + result.stdout)
 
 
 def test_minor_loop_validator_rejects_minor_points_in_major_artifact(tmp_path: Path) -> None:

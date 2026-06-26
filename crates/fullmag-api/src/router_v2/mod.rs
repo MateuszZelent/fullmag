@@ -585,6 +585,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::analysis::get_magnetic_response_sweep_v1),
         )
         .route(
+            "/v2/sessions/current/analysis/extensions/objects/:object_id/topological-charge",
+            get(handlers::analysis::get_object_topological_charge),
+        )
+        .route(
             "/v2/sessions/current/analysis/frequency-domain/manifest.v1",
             get(handlers::analysis::get_frequency_domain_manifest_v1),
         )
@@ -675,6 +679,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         .route(
             "/v2/sessions/current/analysis/hysteresis/:stage_id/steps/:point_id",
             get(handlers::analysis::get_point_by_id),
+        )
+        .route(
+            "/v2/sessions/current/analysis/hysteresis/:stage_id/settle-trace",
+            get(handlers::analysis::get_stage_settle_trace),
         )
         .route(
             "/v2/sessions/current/analysis/hysteresis/:stage_id/steps/:point_id/settle-trace",

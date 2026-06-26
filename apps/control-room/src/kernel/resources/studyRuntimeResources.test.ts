@@ -11,8 +11,15 @@ import {
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
   ANALYSIS_EIGEN_MODE_V2_PATH,
   ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH,
+  ANALYSIS_HYSTERESIS_ADAPTIVE_REFINEMENT_PATH,
   ANALYSIS_HYSTERESIS_BOOKMARKS_PATH,
+  ANALYSIS_HYSTERESIS_BRANCHES_PATH,
+  ANALYSIS_HYSTERESIS_MINOR_LOOPS_PATH,
+  ANALYSIS_HYSTERESIS_METRICS_PATH,
   ANALYSIS_HYSTERESIS_POINTS_PATH,
+  ANALYSIS_HYSTERESIS_REVERSAL_FIELDS_PATH,
+  ANALYSIS_HYSTERESIS_SATURATION_PATH,
+  ANALYSIS_HYSTERESIS_STAGE_SETTLE_TRACE_PATH,
   ANALYSIS_HYSTERESIS_FAMILY_PATH,
   DATA_FIELD_META_PATH,
   DATA_TABLE_COLUMNS_PATH,
@@ -642,6 +649,144 @@ describe("study runtime command resource bundles", () => {
       "ignoreMissingResource<HysteresisPointsResource>",
     );
     expect(hookSource).toContain("useResource<HysteresisPointsResource | null>");
+    expect(hookSource).toContain(
+      "resolveRevision: (data) => data?.revision ?? null",
+    );
+  });
+
+  it("exposes hysteresis metrics as a revision-gated analysis resource", () => {
+    const source = readFileSync(studyRuntimeResourcesUrl, "utf8");
+    const hookSource = source.slice(
+      source.indexOf("export function useHysteresisMetricsResource"),
+      source.indexOf("export function useHysteresisSaturationResource"),
+    );
+
+    expect(ANALYSIS_HYSTERESIS_METRICS_PATH).toBeTruthy();
+    expect(hookSource).toMatch(/api\.analysis\.hysteresis\s*\.metrics/);
+    expect(hookSource).toContain(
+      "ignoreMissingResource<HysteresisMetricsResource>",
+    );
+    expect(hookSource).toContain("useResource<HysteresisMetricsResource | null>");
+    expect(hookSource).toContain(
+      "resolveRevision: (data) => data?.revision ?? null",
+    );
+  });
+
+  it("exposes hysteresis saturation as a revision-gated analysis resource", () => {
+    const source = readFileSync(studyRuntimeResourcesUrl, "utf8");
+    const hookSource = source.slice(
+      source.indexOf("export function useHysteresisSaturationResource"),
+      source.indexOf("export function useHysteresisAdaptiveRefinementResource"),
+    );
+
+    expect(ANALYSIS_HYSTERESIS_SATURATION_PATH).toBeTruthy();
+    expect(hookSource).toMatch(/api\.analysis\.hysteresis\s*\.saturation/);
+    expect(hookSource).toContain(
+      "ignoreMissingResource<HysteresisSaturationResource>",
+    );
+    expect(hookSource).toContain(
+      "useResource<HysteresisSaturationResource | null>",
+    );
+    expect(hookSource).toContain(
+      "resolveRevision: (data) => data?.revision ?? null",
+    );
+  });
+
+  it("exposes hysteresis adaptive refinement as a revision-gated analysis resource", () => {
+    const source = readFileSync(studyRuntimeResourcesUrl, "utf8");
+    const hookSource = source.slice(
+      source.indexOf("export function useHysteresisAdaptiveRefinementResource"),
+      source.indexOf("export type HysteresisBranch"),
+    );
+
+    expect(ANALYSIS_HYSTERESIS_ADAPTIVE_REFINEMENT_PATH).toBeTruthy();
+    expect(hookSource).toMatch(/api\.analysis\.hysteresis\s*\.adaptiveRefinement/);
+    expect(hookSource).toContain(
+      "ignoreMissingResource<HysteresisAdaptiveRefinementResource>",
+    );
+    expect(hookSource).toContain(
+      "useResource<HysteresisAdaptiveRefinementResource | null>",
+    );
+    expect(hookSource).toContain(
+      "resolveRevision: (data) => data?.revision ?? null",
+    );
+  });
+
+  it("exposes hysteresis branches as a revision-gated analysis resource", () => {
+    const source = readFileSync(studyRuntimeResourcesUrl, "utf8");
+    const hookSource = source.slice(
+      source.indexOf("export function useHysteresisBranchesResource"),
+      source.indexOf("export function useHysteresisFamilyResource"),
+    );
+
+    expect(ANALYSIS_HYSTERESIS_BRANCHES_PATH).toBeTruthy();
+    expect(hookSource).toMatch(/api\.analysis\.hysteresis\s*\.branches/);
+    expect(hookSource).toContain(
+      "ignoreMissingResource<HysteresisBranchesResource>",
+    );
+    expect(hookSource).toContain(
+      "useResource<HysteresisBranchesResource | null>",
+    );
+    expect(hookSource).toContain(
+      "resolveRevision: (data) => data?.revision ?? null",
+    );
+  });
+
+  it("exposes hysteresis minor loops as a revision-gated analysis resource", () => {
+    const source = readFileSync(studyRuntimeResourcesUrl, "utf8");
+    const hookSource = source.slice(
+      source.indexOf("export function useHysteresisMinorLoopsResource"),
+      source.indexOf("export function useHysteresisPointResource"),
+    );
+
+    expect(ANALYSIS_HYSTERESIS_MINOR_LOOPS_PATH).toBeTruthy();
+    expect(hookSource).toMatch(/api\.analysis\.hysteresis\s*\.minorLoops/);
+    expect(hookSource).toContain(
+      "ignoreMissingResource<HysteresisMinorLoopsResource>",
+    );
+    expect(hookSource).toContain(
+      "useResource<HysteresisMinorLoopsResource | null>",
+    );
+    expect(hookSource).toContain(
+      "resolveRevision: (data) => data?.revision ?? null",
+    );
+  });
+
+  it("exposes hysteresis reversal fields as a revision-gated analysis resource", () => {
+    const source = readFileSync(studyRuntimeResourcesUrl, "utf8");
+    const hookSource = source.slice(
+      source.indexOf("export function useHysteresisReversalFieldsResource"),
+      source.indexOf("export function useFieldCatalogResource"),
+    );
+
+    expect(ANALYSIS_HYSTERESIS_REVERSAL_FIELDS_PATH).toBeTruthy();
+    expect(hookSource).toMatch(/api\.analysis\.hysteresis\s*\.reversalFields/);
+    expect(hookSource).toContain(
+      "ignoreMissingResource<HysteresisReversalFieldsResource>",
+    );
+    expect(hookSource).toContain(
+      "useResource<HysteresisReversalFieldsResource | null>",
+    );
+    expect(hookSource).toContain(
+      "resolveRevision: (data) => data?.revision ?? null",
+    );
+  });
+
+  it("exposes stage-level hysteresis settle trace as a revision-gated analysis resource", () => {
+    const source = readFileSync(studyRuntimeResourcesUrl, "utf8");
+    const hookSource = source.slice(
+      source.indexOf("export function useHysteresisStageSettleTraceResource"),
+      source.indexOf("export function useHysteresisPointResource"),
+    );
+
+    expect(ANALYSIS_HYSTERESIS_STAGE_SETTLE_TRACE_PATH).toBeTruthy();
+    expect(hookSource).toMatch(/api\.analysis\.hysteresis\s*\.stageSettleTrace/);
+    expect(hookSource).toContain(
+      "ignoreMissingResource<HysteresisSettleTraceResource>",
+    );
+    expect(hookSource).toContain(
+      "useResource<HysteresisSettleTraceResource | null>",
+    );
     expect(hookSource).toContain(
       "resolveRevision: (data) => data?.revision ?? null",
     );

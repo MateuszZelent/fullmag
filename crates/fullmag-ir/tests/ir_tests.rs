@@ -330,6 +330,7 @@ fn hysteresis_validation_accepts_major_with_minor_loops_branch_mode() {
         minor_loops: Some(vec![MinorLoopIR {
             reversal_mT: 25.0,
             return_mT: -25.0,
+            continuation_policy: "branch_only".to_string(),
         }]),
         sampling: SamplingIR {
             outputs: vec![OutputIR::Field {
@@ -343,6 +344,105 @@ fn hysteresis_validation_accepts_major_with_minor_loops_branch_mode() {
     if let Err(errors) = ir.validate() {
         panic!("major_with_minor_loops should validate, got errors: {errors:?}");
     }
+}
+
+#[test]
+fn hysteresis_minor_loop_defaults_continuation_policy_to_branch_only() {
+    let minor_loop: MinorLoopIR = serde_json::from_value(serde_json::json!({
+        "reversal_mT": 25.0,
+        "return_mT": -25.0
+    }))
+    .expect("minor loop without continuation_policy should deserialize");
+
+    assert_eq!(minor_loop.continuation_policy, "branch_only");
+}
+
+#[test]
+fn hysteresis_validation_accepts_replace_parent_minor_loop_continuation_policy() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study = StudyIR::Hysteresis {
+        field_min_mT: Some(-100.0),
+        field_max_mT: Some(100.0),
+        field_step_mT: Some(10.0),
+        field_values_mT: None,
+        field_unit_provenance: None,
+        direction: None,
+        orientation: None,
+        measurement_axis: MeasurementAxisIR::field_axis(),
+        angular_family: None,
+        initial_protocol: "as_authored".to_string(),
+        initial_state_ref: None,
+        saturation: None,
+        branch_mode: "major_with_minor_loops".to_string(),
+        settle_pipeline: None,
+        storage: None,
+        field_schedule: None,
+        schedule_refinements: None,
+        adaptive_refinement: None,
+        minor_loops: Some(vec![MinorLoopIR {
+            reversal_mT: 25.0,
+            return_mT: -25.0,
+            continuation_policy: "replace_parent".to_string(),
+        }]),
+        sampling: SamplingIR {
+            outputs: vec![OutputIR::Scalar {
+                name: "mz".to_string(),
+                every_seconds: 1.0e-12,
+            }],
+            table_autosave: None,
+        },
+    };
+
+    if let Err(errors) = ir.validate() {
+        panic!("replace_parent minor-loop continuation policy should validate, got {errors:?}");
+    }
+}
+
+#[test]
+fn hysteresis_validation_rejects_unknown_minor_loop_continuation_policy() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study = StudyIR::Hysteresis {
+        field_min_mT: Some(-100.0),
+        field_max_mT: Some(100.0),
+        field_step_mT: Some(10.0),
+        field_values_mT: None,
+        field_unit_provenance: None,
+        direction: None,
+        orientation: None,
+        measurement_axis: MeasurementAxisIR::field_axis(),
+        angular_family: None,
+        initial_protocol: "as_authored".to_string(),
+        initial_state_ref: None,
+        saturation: None,
+        branch_mode: "major_with_minor_loops".to_string(),
+        settle_pipeline: None,
+        storage: None,
+        field_schedule: None,
+        schedule_refinements: None,
+        adaptive_refinement: None,
+        minor_loops: Some(vec![MinorLoopIR {
+            reversal_mT: 25.0,
+            return_mT: -25.0,
+            continuation_policy: "teleport_parent".to_string(),
+        }]),
+        sampling: SamplingIR {
+            outputs: vec![OutputIR::Scalar {
+                name: "mz".to_string(),
+                every_seconds: 1.0e-12,
+            }],
+            table_autosave: None,
+        },
+    };
+
+    let errors = ir
+        .validate()
+        .expect_err("unknown minor-loop continuation policy must fail validation");
+    assert!(
+        errors.iter().any(|error| error.contains(
+            "study.stages[].hysteresis.minor_loops[0] continuation_policy must be one of"
+        )),
+        "expected continuation policy validation error, got {errors:?}"
+    );
 }
 
 #[test]
@@ -756,6 +856,7 @@ fn hysteresis_validation_rejects_invalid_public_contract_values() {
         minor_loops: Some(vec![MinorLoopIR {
             reversal_mT: 10.0,
             return_mT: 10.0,
+            continuation_policy: "branch_only".to_string(),
         }]),
         sampling: SamplingIR {
             outputs: vec![OutputIR::Scalar {

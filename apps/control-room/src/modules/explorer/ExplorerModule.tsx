@@ -36,6 +36,12 @@ import {
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
+import {
+  resolveActiveObjectExtensionExplorerItems,
+} from "@/modules/inspector/extensions/ObjectExtensionsSectionModel";
+import {
+  useObjectExtensionActivationSnapshot,
+} from "@/modules/inspector/extensions/useObjectExtensionActivation";
 import type { ModuleProps } from "@/kernel/types";
 import { useCrossSectionWorkspaceSelector } from "@/kernel/workspace/useCrossSectionWorkspace";
 import {
@@ -161,6 +167,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   const textureLoadObjectIds = useExplorerStoreSelector(
     (explorer) => explorer.textureLoadObjectIds,
   );
+  const objectExtensionActivation = useObjectExtensionActivationSnapshot();
   const selectedNodeId = useSelectionSelector((selection) => selection.nodeId);
   const crossSections = useCrossSectionWorkspaceSelector(
     selectExplorerCrossSections,
@@ -298,6 +305,10 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     };
     const objects = modelSnapshot.objects?.map((object) => ({
       ...object,
+      extensions: resolveActiveObjectExtensionExplorerItems(
+        object.id,
+        objectExtensionActivation,
+      ),
       textureLoadEnabled: textureLoadObjectIds.has(object.id),
     }));
     const baseNodes =
@@ -328,6 +339,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     stageExecution.data,
     hysteresisExecutionTree.data,
     textureLoadObjectIds,
+    objectExtensionActivation,
     qualityGates.data,
     realizedSizeFields.data,
     frequencyDomainBranches.data,

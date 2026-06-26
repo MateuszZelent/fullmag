@@ -21,6 +21,7 @@ import {
   useHysteresisSettlePipelineResource,
   useHysteresisStagePlanResource,
   useHysteresisSettleTraceResource,
+  useHysteresisStageSettleTraceResource,
   useHysteresisStageSaturationResource,
 } from "@/kernel/resources/studyRuntimeResources";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
@@ -116,6 +117,9 @@ export function HysteresisStageInspector(props: HysteresisStageInspectorProps) {
     activePoint?.pointId,
     { enabled: activePoint?.pointId != null },
   );
+  const stageSettleTraceRes = useHysteresisStageSettleTraceResource(stageId, {
+    enabled: activePoint?.pointId == null,
+  });
 
   const points = Array.isArray(pointsRes.data?.points) ? pointsRes.data.points : [];
   const stagePlan = stagePlanRes.data;
@@ -124,16 +128,33 @@ export function HysteresisStageInspector(props: HysteresisStageInspectorProps) {
   const executionTree = executionTreeRes.data;
   const angularFamily = angularFamilyRes.data;
   const bookmarks = bookmarksRes.data;
-  const branches = Array.isArray(branchesRes.data) ? branchesRes.data : [];
-  const minorLoops = Array.isArray(minorLoopsRes.data) ? minorLoopsRes.data : [];
-  const reversalFields = Array.isArray(reversalFieldsRes.data) ? reversalFieldsRes.data : [];
-  const metrics = metricsRes.data;
+  const branches = Array.isArray(branchesRes.data?.branches)
+    ? branchesRes.data.branches
+    : [];
+  const minorLoops = Array.isArray(minorLoopsRes.data?.minor_loops)
+    ? minorLoopsRes.data.minor_loops
+    : [];
+  const reversalFields = Array.isArray(reversalFieldsRes.data?.reversal_fields)
+    ? reversalFieldsRes.data.reversal_fields
+    : [];
+  const metrics = metricsRes.data?.metrics;
   const progress = progressRes.data;
   const stageSaturation = stageSaturationRes.data;
-  const saturation = stageSaturation?.result ?? saturationRes.data;
-  const adaptiveRefinement = adaptiveRefinementRes.data;
+  const saturation = stageSaturation?.result ?? saturationRes.data?.saturation;
+  const adaptiveRefinement = adaptiveRefinementRes.data?.adaptive_refinement;
   const saturationPoints = Array.isArray(saturation?.points) ? saturation.points : [];
-  const settleTrace = Array.isArray(settleTraceRes.data) ? settleTraceRes.data : [];
+  const pointSettleTrace = Array.isArray(settleTraceRes.data)
+    ? settleTraceRes.data
+    : [];
+  const stageSettleTrace = Array.isArray(stageSettleTraceRes.data?.settle_trace)
+    ? stageSettleTraceRes.data.settle_trace
+    : [];
+  const settleTrace =
+    activePoint?.pointId != null ? pointSettleTrace : stageSettleTrace;
+  const settleTraceStatus =
+    activePoint?.pointId != null
+      ? settleTraceRes.status
+      : stageSettleTraceRes.status;
   const targetMetadata = hysteresisTargetMetadataFromOrientation(orientationRes.data);
 
   const panels = {
@@ -288,7 +309,7 @@ export function HysteresisStageInspector(props: HysteresisStageInspectorProps) {
       <HysteresisSettleTraceInspector
         activePoint={activePoint}
         settleTrace={settleTrace}
-        settleTraceStatus={settleTraceRes.status}
+        settleTraceStatus={settleTraceStatus}
       />
     ),
     transitions: (
@@ -332,7 +353,7 @@ export function HysteresisStageInspector(props: HysteresisStageInspectorProps) {
       <HysteresisSettleTraceInspector
         activePoint={activePoint}
         settleTrace={settleTrace}
-        settleTraceStatus={settleTraceRes.status}
+        settleTraceStatus={settleTraceStatus}
       />
       {panels["live-run"]}
       {panels.branches}

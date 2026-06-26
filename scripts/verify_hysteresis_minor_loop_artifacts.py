@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate branch-only hysteresis minor-loop artifacts."""
+"""Validate hysteresis minor-loop artifacts."""
 
 from __future__ import annotations
 
@@ -12,6 +12,11 @@ from typing import Any
 
 EXPECTED_REVERSAL_MT = 50.0
 EXPECTED_RETURN_MT = -25.0
+EXPECTED_CLOSURE_STATUS_BY_POLICY = {
+    "branch_only": "returned",
+    "resume_parent": "returned",
+    "replace_parent": "replaced_parent",
+}
 
 
 def load_json(path: Path) -> Any:
@@ -127,11 +132,15 @@ def main() -> int:
     loop_id = loop.get("loop_id")
     if loop_id != "minor_loop_001":
         raise SystemExit(f"unexpected minor loop id {loop_id!r}")
-    if loop.get("policy") != "branch_only":
-        raise SystemExit(f"minor loop policy must be branch_only, got {loop.get('policy')!r}")
-    if loop.get("closure_status") != "returned":
+    policy = loop.get("policy")
+    expected_closure_status = EXPECTED_CLOSURE_STATUS_BY_POLICY.get(policy)
+    if expected_closure_status is None:
+        supported = ", ".join(sorted(EXPECTED_CLOSURE_STATUS_BY_POLICY))
+        raise SystemExit(f"minor loop policy must be one of: {supported}, got {policy!r}")
+    if loop.get("closure_status") != expected_closure_status:
         raise SystemExit(
-            f"minor loop closure_status must be returned, got {loop.get('closure_status')!r}"
+            "minor loop closure_status must be "
+            f"{expected_closure_status}, got {loop.get('closure_status')!r}"
         )
     require_close(loop.get("reversal_field_mT"), EXPECTED_REVERSAL_MT, "reversal_field_mT")
     require_close(loop.get("return_field_mT"), EXPECTED_RETURN_MT, "return_field_mT")
@@ -164,7 +173,7 @@ def main() -> int:
 
     print(
         "validated hysteresis minor loop: "
-        f"loop_id={loop_id} policy=branch_only points={len(points)}"
+        f"loop_id={loop_id} policy={policy} points={len(points)}"
     )
     return 0
 

@@ -165,8 +165,27 @@ function objectNodes(object: ModelTreeObjectSnapshot): ExplorerNode {
         status: "ready",
         contextCommands: ["workspace.focus-selection"],
       },
+      ...objectExtensionNodes(parentId, object),
     ],
   };
+}
+
+function objectExtensionNodes(
+  parentId: string,
+  object: ModelTreeObjectSnapshot,
+): ExplorerNode[] {
+  return (object.extensions ?? []).map((extension) => ({
+    id: `${parentId}:extensions:${extension.id}`,
+    kind: "object.extension.topological-charge",
+    label: extension.label,
+    parentId,
+    badge: "extension",
+    icon: "activity",
+    objectId: object.id,
+    extensionId: extension.id,
+    status: extension.status ?? "ready",
+    contextCommands: ["workspace.focus-selection"],
+  }));
 }
 
 function regionsNode(

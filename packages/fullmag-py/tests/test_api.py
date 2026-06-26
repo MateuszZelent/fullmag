@@ -4693,6 +4693,7 @@ class ProblemApiTests(unittest.TestCase):
                 min_step_mT=0.25,
                 include_zero_crossings=True,
                 include_high_susceptibility=True,
+                include_in_metrics=True,
             ),
         )
         """
@@ -4718,6 +4719,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(policy["min_step_mT"], 0.25)
         self.assertTrue(policy["include_zero_crossings"])
         self.assertTrue(policy["include_high_susceptibility"])
+        self.assertTrue(policy["include_in_metrics"])
 
     def test_study_stage_builder_hysteresis_angular_family_round_trip(self) -> None:
         script = """
@@ -4788,7 +4790,16 @@ class ProblemApiTests(unittest.TestCase):
             field_step_mT=10.0,
             branch_mode="major_with_minor_loops",
             minor_loops=[
-                fm.MinorLoop(reversal_mT=25.0, return_mT=-25.0),
+                fm.MinorLoop(
+                    reversal_mT=25.0,
+                    return_mT=-25.0,
+                    continuation_policy="resume_parent",
+                ),
+                fm.MinorLoop(
+                    reversal_mT=50.0,
+                    return_mT=-50.0,
+                    continuation_policy="replace_parent",
+                ),
                 fm.MinorLoop(reversal_mT=-50.0, return_mT=50.0),
             ],
         )
@@ -4801,14 +4812,19 @@ class ProblemApiTests(unittest.TestCase):
 
         ir = loaded.stages[0].problem.study.to_ir()
         self.assertEqual(ir["branch_mode"], "major_with_minor_loops")
-        self.assertEqual(len(ir["minor_loops"]), 2)
+        self.assertEqual(len(ir["minor_loops"]), 3)
         self.assertEqual(ir["minor_loops"][0]["reversal_mT"], 25.0)
         self.assertEqual(ir["minor_loops"][0]["return_mT"], -25.0)
+        self.assertEqual(ir["minor_loops"][0]["continuation_policy"], "resume_parent")
+        self.assertEqual(ir["minor_loops"][1]["continuation_policy"], "replace_parent")
+        self.assertEqual(ir["minor_loops"][2]["continuation_policy"], "branch_only")
 
         rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
         self.assertIn('branch_mode="major_with_minor_loops"', rewritten)
         self.assertIn("minor_loops=[", rewritten)
         self.assertIn("fm.MinorLoop(", rewritten)
+        self.assertIn('continuation_policy="resume_parent"', rewritten)
+        self.assertIn('continuation_policy="replace_parent"', rewritten)
 
         with TemporaryDirectory() as tmp_dir:
             rewritten_path = Path(tmp_dir) / "rewritten_hysteresis_minor_loops.py"
@@ -4818,6 +4834,17 @@ class ProblemApiTests(unittest.TestCase):
         reloaded_ir = reloaded.stages[0].problem.study.to_ir()
         self.assertEqual(reloaded_ir["branch_mode"], "major_with_minor_loops")
         self.assertEqual(reloaded_ir["minor_loops"], ir["minor_loops"])
+
+    def test_hysteresis_minor_loop_rejects_unknown_continuation_policy(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "MinorLoop.continuation_policy must be one of",
+        ):
+            fm.MinorLoop(
+                reversal_mT=25.0,
+                return_mT=-25.0,
+                continuation_policy="teleport_parent",
+            )
 
     def test_study_stage_builder_hysteresis_rejects_invalid_schedule(self) -> None:
         with self.assertRaisesRegex(ValueError, "FieldSegment.step must not be zero"):

@@ -1066,14 +1066,14 @@ function useHysteresisChartView({
   const points = Array.isArray(pointsRes.data?.points)
     ? pointsRes.data.points
     : EMPTY_HYSTERESIS_POINTS;
-  const branches = Array.isArray(branchesRes.data)
-    ? branchesRes.data
+  const branches = Array.isArray(branchesRes.data?.branches)
+    ? branchesRes.data.branches
     : EMPTY_HYSTERESIS_BRANCHES;
-  const minorLoops = Array.isArray(minorLoopsRes.data)
-    ? minorLoopsRes.data
+  const minorLoops = Array.isArray(minorLoopsRes.data?.minor_loops)
+    ? minorLoopsRes.data.minor_loops
     : EMPTY_HYSTERESIS_MINOR_LOOPS;
   const angularFamily = familyRes.data;
-  const metrics = metricsRes.data;
+  const metrics = metricsRes.data?.metrics;
   const progress = progressRes.data;
   const branchMode = protocolRes.data?.branch_mode ?? null;
 

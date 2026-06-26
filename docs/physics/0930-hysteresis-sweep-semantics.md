@@ -245,11 +245,20 @@ $\mathbf{H}_{\text{ext}}$ in $\text{A/m}$; lowering therefore records
 - The public contract uses `minor_loop_id`, `reversal_field`, `return_field`,
   and `parent_branch_id` to keep a minor-loop branch distinct from the major
   loop and from derived chart windows.
-- The current `branch_only` implementation is intentionally non-mutating: after
-  the minor-loop branch is recorded, the major-loop terminal state remains the
-  final stage state. Continuation policies such as `resume_parent` and
-  `replace_parent`, interpolated reversal states, and multi-segment minor-loop
-  schedules remain deferred.
+- `branch_only` and `resume_parent` are intentionally non-mutating: after the
+  minor-loop branch is recorded, the parent/major-loop state remains the final
+  stage state. `resume_parent` records the requested continuation provenance
+  explicitly for consumers that need to distinguish branch-only analysis from
+  parent-resume intent.
+- `replace_parent` is an explicit advanced continuation policy. It updates the
+  runtime's working parent state at the minor-loop return field, so subsequent
+  minor loops in the same stage can fork from the returned branch state instead
+  of the originally executed major-loop state. It does not rewrite already
+  published `hysteresis_points.json` major-loop points; consumers must treat
+  the replacement as minor-loop continuation provenance recorded in
+  `hysteresis_minor_loops.json`.
+- Interpolated reversal states and multi-segment minor-loop schedules remain
+  deferred.
 - Consumers must not interpret `derived_from_major_loop_window` as evidence
   that such a branch was executed.
 
@@ -295,9 +304,19 @@ study.stages.add_hysteresis_sweep(
 
 ### 4.2 ProblemIR Representation
 `StudyIR` is extended to support `Hysteresis` containing a `field_schedule`, `settle_pipeline`, and `storage_policy`.
+Adaptive refinement is represented as an explicit policy. Refined points affect
+global hysteresis metrics only when `include_in_metrics=true`; the default is
+`false`, so reproducible metrics remain tied to the requested field schedule
+unless the user explicitly opts into refinement-aware metrics.
+Runtime adaptive refinement honors `max_passes` as a bounded iterative
+scheduler: each pass proposes at most `max_insertions_per_pass` candidates from
+the current sweep order, including adaptive points inserted by earlier passes.
 
 ### 4.3 Planner and Capability-Matrix Impact
 The planner expands the piecewise segments and refinements into a sequence of concrete `HysteresisPointIR` steps before execution.
+Runtime adaptive-refinement points remain separate from `hysteresis_points.json`
+and are reported through `hysteresis_adaptive_refinement.json`, even when they
+are included in the final metrics calculation.
 
 ## 5. Validation Strategy
 
@@ -357,10 +376,15 @@ The planner expands the piecewise segments and refinements into a sequence of co
   `capped_by_limit` provenance
 - [x] Runtime artifact smoke for `branch_only` minor-loop execution with
   branch-local points and settle trace
+- [x] Public DSL/ProblemIR/runtime provenance for `resume_parent` minor-loop
+  continuation without mutating the major-loop artifact
 - [ ] Higher-order FEM and future non-P1 basis-specific hysteresis averaging
-- [ ] Complete minor-loop continuation policy family (`resume_parent`,
-  `replace_parent`), interpolated reversal states, and multi-segment minor-loop
-  schedules
-- [ ] Adaptive refinement scheduler
+- [ ] Complete remaining minor-loop extensions: interpolated reversal states
+  and multi-segment minor-loop schedules
+- [x] Explicit adaptive-refinement metrics policy (`include_in_metrics`) with
+  default schedule-only metrics
+- [x] Adaptive refinement scheduler honors `max_passes`,
+  `max_insertions_per_pass`, and descendant adaptive points in metrics when
+  explicitly opted in
 - [ ] Publication-grade scientific validation suite across OOP, in-plane, and
   custom-angle benchmark cases

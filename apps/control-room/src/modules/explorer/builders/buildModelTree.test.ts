@@ -25,6 +25,11 @@ import {
   DATA_FIELD_VECTOR_PATH,
   MESHING_PERIODIC_PAIRS_PATH,
 } from "@/kernel/api/apiPaths";
+import {
+  createObjectExtensionActivationState,
+  resolveActiveObjectExtensionExplorerItems,
+  setObjectExtensionEnabled,
+} from "@/modules/inspector/extensions/ObjectExtensionsSectionModel";
 
 import {
   buildExplorerTree,
@@ -381,6 +386,54 @@ describe("buildModelTree", () => {
     });
     expect(flattened.map((node) => node.id)).not.toContain(
       "model:object:free-layer:regions:primary",
+    );
+  });
+
+  it("adds active object extension nodes below the owning object", () => {
+    const activation = setObjectExtensionEnabled(
+      createObjectExtensionActivationState(),
+      "permalloy_layer",
+      "topological_charge",
+      true,
+    );
+    const flattened = flattenExplorerNodes(
+      buildModelTree({
+        objects: [
+          {
+            extensions: resolveActiveObjectExtensionExplorerItems(
+              "permalloy_layer",
+              activation,
+            ),
+            id: "permalloy_layer",
+            label: "permalloy_layer",
+          },
+          {
+            extensions: resolveActiveObjectExtensionExplorerItems(
+              "cofeb_ring",
+              activation,
+            ),
+            id: "cofeb_ring",
+            label: "cofeb_ring",
+          },
+        ],
+      }),
+    );
+
+    expect(
+      flattened.find(
+        (node) =>
+          node.id ===
+          "model:object:permalloy_layer:extensions:topological_charge",
+      ),
+    ).toMatchObject({
+      kind: "object.extension.topological-charge",
+      label: "Topological Charge",
+      objectId: "permalloy_layer",
+      parentId: "model:object:permalloy_layer",
+      status: "ready",
+    });
+    expect(flattened.map((node) => node.id)).not.toContain(
+      "model:object:cofeb_ring:extensions:topological_charge",
     );
   });
 

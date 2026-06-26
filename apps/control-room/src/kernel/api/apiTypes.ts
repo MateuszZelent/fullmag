@@ -110,6 +110,15 @@ export type LiveStatusResource = components["schemas"]["LiveStatus"];
 export type MagneticResponseSweepResource = JsonObject & {
   schema_version: string;
 };
+export type TopologicalChargeResource =
+  components["schemas"]["TopologicalChargeResource"];
+export interface TopologicalChargeQuery {
+  method?: string;
+  plane?: "auto" | "xy" | "xz" | "yz";
+  quantity_id?: string;
+  resolution?: "auto" | number | string;
+  snapshot_id?: string | null;
+}
 export type FrequencyDomainManifestResource =
   components["schemas"]["FrequencyDomainManifestResource"];
 export type FrequencyDomainJsonArtifactResource =
@@ -244,8 +253,20 @@ export type HysteresisBookmarksResource =
   components["schemas"]["HysteresisBookmarksResource"];
 export type HysteresisAngularFamilyResource =
   components["schemas"]["HysteresisAngularFamilyResource"];
+export type HysteresisAdaptiveRefinementResource =
+  components["schemas"]["HysteresisAdaptiveRefinementResource"];
+export type HysteresisBranchesResource =
+  components["schemas"]["HysteresisBranchesResource"];
+export type HysteresisMinorLoopsResource =
+  components["schemas"]["HysteresisMinorLoopsResource"];
 export type HysteresisPointsResource =
   components["schemas"]["HysteresisPointsResource"];
+export type HysteresisMetricsResource =
+  components["schemas"]["HysteresisMetricsResource"];
+export type HysteresisReversalFieldsResource =
+  components["schemas"]["HysteresisReversalFieldsResource"];
+export type HysteresisSettleTraceResource =
+  components["schemas"]["HysteresisSettleTraceResource"];
 export type HysteresisProgressSchema =
   components["schemas"]["HysteresisProgressSchema"];
 export type StudyRuntimePatchRequest =
@@ -488,6 +509,8 @@ export type HysteresisMinorLoopSchema =
 export type HysteresisMetricsSchema = components["schemas"]["HysteresisMetricsSchema"];
 export type HysteresisSaturationResultSchema =
   components["schemas"]["HysteresisSaturationResultSchema"];
+export type HysteresisSaturationResource =
+  components["schemas"]["HysteresisSaturationResource"];
 export type HysteresisSettleTraceEntrySchema =
   components["schemas"]["HysteresisSettleTraceEntrySchema"];
 

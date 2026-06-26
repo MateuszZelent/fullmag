@@ -77,6 +77,14 @@ pub struct HysteresisBranchSchema {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct HysteresisBranchesResource {
+    pub revision: u64,
+    pub stage_id: String,
+    pub stage_index: u32,
+    pub branches: Vec<HysteresisBranchSchema>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct HysteresisAngularFamilyResource {
     pub revision: u64,
     pub stage_id: String,
@@ -126,6 +134,14 @@ pub struct HysteresisMinorLoopSchema {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct HysteresisMinorLoopsResource {
+    pub revision: u64,
+    pub stage_id: String,
+    pub stage_index: u32,
+    pub minor_loops: Vec<HysteresisMinorLoopSchema>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct HysteresisSettleTraceEntrySchema {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub point_id: Option<usize>,
@@ -147,6 +163,14 @@ pub struct HysteresisSettleTraceEntrySchema {
     pub resolved_parameters: Option<Value>,
     pub torque: Option<f64>,
     pub energy: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct HysteresisSettleTraceResource {
+    pub revision: u64,
+    pub stage_id: String,
+    pub stage_index: u32,
+    pub settle_trace: Vec<HysteresisSettleTraceEntrySchema>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -180,6 +204,14 @@ pub struct HysteresisMetricsSchema {
     pub warnings: Vec<String>,
     #[serde(default)]
     pub convergence_quality_summary: Option<HysteresisConvergenceQualitySummarySchema>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct HysteresisMetricsResource {
+    pub revision: u64,
+    pub stage_id: String,
+    pub stage_index: u32,
+    pub metrics: HysteresisMetricsSchema,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -234,6 +266,14 @@ pub struct HysteresisAdaptiveRefinementSchema {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct HysteresisAdaptiveRefinementResource {
+    pub revision: u64,
+    pub stage_id: String,
+    pub stage_index: u32,
+    pub adaptive_refinement: HysteresisAdaptiveRefinementSchema,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct HysteresisAdaptiveRefinementCandidateSchema {
     pub candidate_id: String,
     pub pass_index: u32,
@@ -274,6 +314,22 @@ pub struct HysteresisSaturationResultSchema {
     pub susceptibility_threshold: f64,
     pub transverse_threshold: f64,
     pub points: Vec<HysteresisSaturationProbePointSchema>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct HysteresisSaturationResource {
+    pub revision: u64,
+    pub stage_id: String,
+    pub stage_index: u32,
+    pub saturation: HysteresisSaturationResultSchema,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct HysteresisReversalFieldsResource {
+    pub revision: u64,
+    pub stage_id: String,
+    pub stage_index: u32,
+    pub reversal_fields: Vec<HysteresisPointSchema>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

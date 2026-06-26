@@ -119,6 +119,9 @@ describe("inspectorRegistry", () => {
     expect(resolveInspectorPanel({ kind: "object.geometry" })?.id).toBe(
       "geometry-object",
     );
+    expect(
+      resolveInspectorPanel({ kind: "object.extension.topological-charge" })?.id,
+    ).toBe("object-extension-topological-charge");
   });
 
   it("resolves object physics selections to the physics interaction panel", () => {

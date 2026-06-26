@@ -27,7 +27,9 @@ import {
   ANALYSIS_HYSTERESIS_MINOR_LOOPS_PATH,
   ANALYSIS_HYSTERESIS_POINT_PATH,
   ANALYSIS_HYSTERESIS_REVERSAL_FIELDS_PATH,
+  ANALYSIS_HYSTERESIS_STAGE_SETTLE_TRACE_PATH,
   ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH,
+  ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH,
   DATA_FIELD_META_PATH,
   DATA_FIELDS_PATH,
   DATA_SCALARS_PATH,
@@ -100,23 +102,28 @@ import type {
   TableResource,
   TableRowsQuery,
   TableRowsResource,
+  HysteresisAdaptiveRefinementResource,
   HysteresisAngularFamilyResource,
-  HysteresisAdaptiveRefinementSchema,
   HysteresisBookmarksResource,
+  HysteresisBranchesResource,
   HysteresisBranchSchema,
+  HysteresisMinorLoopsResource,
   HysteresisMinorLoopSchema,
   HysteresisPointSchema,
   HysteresisPointsResource,
-  HysteresisMetricsSchema,
+  HysteresisMetricsResource,
+  HysteresisReversalFieldsResource,
   HysteresisExecutionTreeResource,
   HysteresisOrientationSchema,
   HysteresisProgressSchema,
   HysteresisProtocolSchema,
-  HysteresisSaturationResultSchema,
+  HysteresisSaturationResource,
   HysteresisSettlePipelineSchema,
   HysteresisSettleTraceEntrySchema,
+  HysteresisSettleTraceResource,
   HysteresisStagePlanSchema,
   HysteresisStageSaturationSchema,
+  TopologicalChargeResource,
 } from "../api/apiTypes";
 import { normalizeQuantityIdOrDefault } from "../api/quantityIds";
 import type { DecodedTableRows } from "../api/codecs";
@@ -1317,14 +1324,15 @@ export function useHysteresisMetricsResource(
       stageId
         ? api.analysis.hysteresis
             .metrics(stageId, { signal })
-            .catch(ignoreMissingResource<HysteresisMetricsSchema>)
+            .catch(ignoreMissingResource<HysteresisMetricsResource>)
         : Promise.resolve(null),
     [api, stageId],
   );
 
-  return useResource<HysteresisMetricsSchema | null>({
+  return useResource<HysteresisMetricsResource | null>({
     enabled: enabled && Boolean(stageId),
     load,
+    resolveRevision: (data) => data?.revision ?? null,
     resourceKey,
   });
 }
@@ -1343,14 +1351,15 @@ export function useHysteresisSaturationResource(
       stageId
         ? api.analysis.hysteresis
             .saturation(stageId, { signal })
-            .catch(ignoreMissingResource<HysteresisSaturationResultSchema>)
+            .catch(ignoreMissingResource<HysteresisSaturationResource>)
         : Promise.resolve(null),
     [api, stageId],
   );
 
-  return useResource<HysteresisSaturationResultSchema | null>({
+  return useResource<HysteresisSaturationResource | null>({
     enabled: enabled && Boolean(stageId),
     load,
+    resolveRevision: (data) => data?.revision ?? null,
     resourceKey,
   });
 }
@@ -1369,18 +1378,15 @@ export function useHysteresisAdaptiveRefinementResource(
       stageId
         ? api.analysis.hysteresis
             .adaptiveRefinement(stageId, { signal })
-            .catch(ignoreMissingResource<HysteresisAdaptiveRefinementSchema>)
+            .catch(ignoreMissingResource<HysteresisAdaptiveRefinementResource>)
         : Promise.resolve(null),
     [api, stageId],
   );
 
-  return useResource<HysteresisAdaptiveRefinementSchema | null>({
+  return useResource<HysteresisAdaptiveRefinementResource | null>({
     enabled: enabled && Boolean(stageId),
     load,
-    resolveRevision: (data) =>
-      data
-        ? `${data.status}:${data.candidates?.length ?? 0}:${data.points?.length ?? 0}`
-        : null,
+    resolveRevision: (data) => data?.revision ?? null,
     resourceKey,
   });
 }
@@ -1388,6 +1394,33 @@ export function useHysteresisAdaptiveRefinementResource(
 export type HysteresisBranch = HysteresisBranchSchema;
 export type HysteresisMinorLoop = HysteresisMinorLoopSchema;
 export type HysteresisSettleTraceEntry = HysteresisSettleTraceEntrySchema;
+
+export function useHysteresisStageSettleTraceResource(
+  stageId: string | null | undefined,
+  { enabled = true }: RuntimeResourceOptions = {},
+) {
+  const { api } = useKernel();
+  const resourceKey = stageId
+    ? ANALYSIS_HYSTERESIS_STAGE_SETTLE_TRACE_PATH.replace("{stage_id}", stageId)
+    : `${ANALYSIS_HYSTERESIS_STAGE_SETTLE_TRACE_PATH}:none`;
+
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      stageId
+        ? api.analysis.hysteresis
+            .stageSettleTrace(stageId, { signal })
+            .catch(ignoreMissingResource<HysteresisSettleTraceResource>)
+        : Promise.resolve(null),
+    [api, stageId],
+  );
+
+  return useResource<HysteresisSettleTraceResource | null>({
+    enabled: enabled && Boolean(stageId),
+    load,
+    resolveRevision: (data) => data?.revision ?? null,
+    resourceKey,
+  });
+}
 
 export function useHysteresisBookmarksResource(
   stageId: string | null | undefined,
@@ -1430,15 +1463,15 @@ export function useHysteresisBranchesResource(
       stageId
         ? api.analysis.hysteresis
             .branches(stageId, { signal })
-            .catch(ignoreMissingResource<HysteresisBranch[]>)
+            .catch(ignoreMissingResource<HysteresisBranchesResource>)
         : Promise.resolve(null),
     [api, stageId],
   );
 
-  return useResource<HysteresisBranch[] | null>({
+  return useResource<HysteresisBranchesResource | null>({
     enabled: enabled && Boolean(stageId),
     load,
-    resolveRevision: (data) => data?.length ?? null,
+    resolveRevision: (data) => data?.revision ?? null,
     resourceKey,
   });
 }
@@ -1484,15 +1517,15 @@ export function useHysteresisMinorLoopsResource(
       stageId
         ? api.analysis.hysteresis
             .minorLoops(stageId, { signal })
-            .catch(ignoreMissingResource<HysteresisMinorLoop[]>)
+            .catch(ignoreMissingResource<HysteresisMinorLoopsResource>)
         : Promise.resolve(null),
     [api, stageId],
   );
 
-  return useResource<HysteresisMinorLoop[] | null>({
+  return useResource<HysteresisMinorLoopsResource | null>({
     enabled: enabled && Boolean(stageId),
     load,
-    resolveRevision: (data) => data?.length ?? null,
+    resolveRevision: (data) => data?.revision ?? null,
     resourceKey,
   });
 }
@@ -1572,15 +1605,15 @@ export function useHysteresisReversalFieldsResource(
       stageId
         ? api.analysis.hysteresis
             .reversalFields(stageId, { signal })
-            .catch(ignoreMissingResource<HysteresisPointSchema[]>)
+            .catch(ignoreMissingResource<HysteresisReversalFieldsResource>)
         : Promise.resolve(null),
     [api, stageId],
   );
 
-  return useResource<HysteresisPointSchema[] | null>({
+  return useResource<HysteresisReversalFieldsResource | null>({
     enabled: enabled && Boolean(stageId),
     load,
-    resolveRevision: (data) => data?.length ?? null,
+    resolveRevision: (data) => data?.revision ?? null,
     resourceKey,
   });
 }
@@ -2196,6 +2229,31 @@ export function useObjectMetricsResource(objectId: string | null | undefined) {
   );
 
   return useResource<ObjectMetricsResource | null>({
+    enabled: Boolean(objectId),
+    load,
+    resolveRevision: (data) => data?.revision ?? null,
+    resourceKey,
+  });
+}
+
+export function useObjectTopologicalChargeResource(
+  objectId: string | null | undefined,
+) {
+  const { api } = useKernel();
+  const resourceKey = objectId
+    ? ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH.replace("{object_id}", objectId)
+    : `${ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH}:none`;
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      objectId
+        ? api.analysis.extensions.objects
+            .topologicalCharge(objectId, {}, { signal })
+            .catch(ignoreMissingResource<TopologicalChargeResource>)
+        : Promise.resolve(null),
+    [api, objectId],
+  );
+
+  return useResource<TopologicalChargeResource | null>({
     enabled: Boolean(objectId),
     load,
     resolveRevision: (data) => data?.revision ?? null,

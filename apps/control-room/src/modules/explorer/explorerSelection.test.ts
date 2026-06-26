@@ -637,6 +637,33 @@ describe("selectExplorerNode", () => {
     });
   });
 
+  it("selects object extension nodes as scene-object extension selections", () => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      id: "model:object:permalloy_layer:extensions:topological_charge",
+      kind: "object.extension.topological-charge",
+      label: "Topological Charge",
+      objectId: "permalloy_layer",
+      parentId: "model:object:permalloy_layer",
+    };
+
+    selectExplorerNode(kernel, node, "explorer");
+
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "object.extension.topological-charge",
+      label: "Topological Charge",
+      nodeId: "model:object:permalloy_layer:extensions:topological_charge",
+      objectId: "permalloy_layer",
+      ref: {
+        extensionId: "topological_charge",
+        kind: "object.extension.topological-charge",
+        objectId: "permalloy_layer",
+        type: "scene-object",
+        visualizationTargetId: "object:permalloy_layer",
+      },
+    });
+  });
+
   it("selects object texture load nodes as scene-object selections", () => {
     const kernel = makeKernel();
     const node: ExplorerNode = {

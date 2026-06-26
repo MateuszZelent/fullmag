@@ -49,6 +49,14 @@ function isStudyStageSelectionKind(
   return STUDY_STAGE_SELECTION_KINDS.has(kind);
 }
 
+function extensionIdFromNode(node: ExplorerNode): string | undefined {
+  if (node.extensionId) return node.extensionId;
+  if (node.kind === "object.extension.topological-charge") {
+    return "topological_charge";
+  }
+  return undefined;
+}
+
 function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
   if (isFrequencyDomainSelectionNode(node)) {
     return {
@@ -99,12 +107,15 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       node.kind === "object.magnetic-texture.load" ||
       node.kind === "object.magnetic-texture.transform" ||
       node.kind === "object.mesh" ||
+      node.kind === "object.extension.topological-charge" ||
       node.kind === "object.visualization")
   ) {
+    const extensionId = extensionIdFromNode(node);
     return {
       kind: node.kind,
       nodeId: node.id,
       objectId: node.objectId,
+      ...(extensionId ? { extensionId } : {}),
       ...(node.regionId ? { regionId: node.regionId } : {}),
       type: "scene-object",
       visualizationTargetId: visualizationTargetIdForSceneObject(

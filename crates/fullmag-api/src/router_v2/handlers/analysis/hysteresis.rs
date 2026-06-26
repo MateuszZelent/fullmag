@@ -6,11 +6,15 @@ use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 
 use crate::schemas::hysteresis::{
-    HysteresisAdaptiveRefinementSchema, HysteresisAngularFamilyResource,
+    HysteresisAdaptiveRefinementResource, HysteresisAdaptiveRefinementSchema,
+    HysteresisAngularFamilyResource,
     HysteresisAngularFamilySeriesSchema, HysteresisBookmarkPointRequest, HysteresisBookmarkSchema,
-    HysteresisBookmarksResource, HysteresisBranchSchema, HysteresisMetricsSchema,
+    HysteresisBookmarksResource, HysteresisBranchesResource, HysteresisBranchSchema,
+    HysteresisMetricsResource, HysteresisMetricsSchema, HysteresisMinorLoopsResource,
     HysteresisMinorLoopSchema, HysteresisPointSchema, HysteresisPointsResource,
+    HysteresisReversalFieldsResource, HysteresisSaturationResource,
     HysteresisSaturationResultSchema, HysteresisSettleTraceEntrySchema,
+    HysteresisSettleTraceResource,
 };
 use axum::extract::{Path, State};
 use axum::Json;
@@ -679,7 +683,7 @@ pub async fn get_points(
         ("stage_id" = String, Path, description = "Hysteresis stage index or stage identifier"),
     ),
     responses(
-        (status = 200, description = "Hysteresis loop metrics", body = HysteresisMetricsSchema),
+        (status = 200, description = "Revisioned hysteresis loop metrics resource", body = HysteresisMetricsResource),
         (status = 404, description = "Hysteresis metrics not found"),
     ),
     tag = "analysis"
@@ -687,9 +691,15 @@ pub async fn get_points(
 pub async fn get_metrics(
     State(state): State<Arc<AppState>>,
     Path(stage_id): Path<String>,
-) -> Result<Json<HysteresisMetricsSchema>, ApiError> {
+) -> Result<Json<HysteresisMetricsResource>, ApiError> {
     let metrics = read_typed_stage_artifact(&state, &stage_id, "hysteresis_metrics.json").await?;
-    Ok(Json(metrics))
+    let stage = resolve_hysteresis_resource_stage_metadata(&state, &stage_id).await?;
+    Ok(Json(HysteresisMetricsResource {
+        revision: stage.revision,
+        stage_id: stage.stage_id,
+        stage_index: stage.stage_index,
+        metrics,
+    }))
 }
 
 #[utoipa::path(
@@ -699,7 +709,7 @@ pub async fn get_metrics(
         ("stage_id" = String, Path, description = "Hysteresis stage index or stage identifier"),
     ),
     responses(
-        (status = 200, description = "Hysteresis saturation probe result", body = HysteresisSaturationResultSchema),
+        (status = 200, description = "Revisioned hysteresis saturation probe resource", body = HysteresisSaturationResource),
         (status = 404, description = "Hysteresis saturation probe result not found"),
     ),
     tag = "analysis"
@@ -707,9 +717,15 @@ pub async fn get_metrics(
 pub async fn get_saturation(
     State(state): State<Arc<AppState>>,
     Path(stage_id): Path<String>,
-) -> Result<Json<HysteresisSaturationResultSchema>, ApiError> {
+) -> Result<Json<HysteresisSaturationResource>, ApiError> {
     let saturation = read_hysteresis_saturation_result(&state, &stage_id).await?;
-    Ok(Json(saturation))
+    let stage = resolve_hysteresis_resource_stage_metadata(&state, &stage_id).await?;
+    Ok(Json(HysteresisSaturationResource {
+        revision: stage.revision,
+        stage_id: stage.stage_id,
+        stage_index: stage.stage_index,
+        saturation,
+    }))
 }
 
 #[utoipa::path(
@@ -719,7 +735,7 @@ pub async fn get_saturation(
         ("stage_id" = String, Path, description = "Hysteresis stage index or stage identifier"),
     ),
     responses(
-        (status = 200, description = "Executed hysteresis adaptive refinement candidates and inserted points", body = HysteresisAdaptiveRefinementSchema),
+        (status = 200, description = "Revisioned executed hysteresis adaptive refinement resource", body = HysteresisAdaptiveRefinementResource),
         (status = 404, description = "Hysteresis adaptive refinement artifact not found"),
     ),
     tag = "analysis"
@@ -727,9 +743,15 @@ pub async fn get_saturation(
 pub async fn get_adaptive_refinement(
     State(state): State<Arc<AppState>>,
     Path(stage_id): Path<String>,
-) -> Result<Json<HysteresisAdaptiveRefinementSchema>, ApiError> {
+) -> Result<Json<HysteresisAdaptiveRefinementResource>, ApiError> {
     let adaptive_refinement = read_hysteresis_adaptive_refinement(&state, &stage_id).await?;
-    Ok(Json(adaptive_refinement))
+    let stage = resolve_hysteresis_resource_stage_metadata(&state, &stage_id).await?;
+    Ok(Json(HysteresisAdaptiveRefinementResource {
+        revision: stage.revision,
+        stage_id: stage.stage_id,
+        stage_index: stage.stage_index,
+        adaptive_refinement,
+    }))
 }
 
 #[utoipa::path(
@@ -739,7 +761,7 @@ pub async fn get_adaptive_refinement(
         ("stage_id" = String, Path, description = "Hysteresis stage index or stage identifier"),
     ),
     responses(
-        (status = 200, description = "Hysteresis loop branches grouped by sweep direction", body = Vec<HysteresisBranchSchema>),
+        (status = 200, description = "Revisioned hysteresis loop branches grouped by sweep direction", body = HysteresisBranchesResource),
         (status = 404, description = "Hysteresis points not found"),
     ),
     tag = "analysis"
@@ -747,22 +769,26 @@ pub async fn get_adaptive_refinement(
 pub async fn get_branches(
     State(state): State<Arc<AppState>>,
     Path(stage_id): Path<String>,
-) -> Result<Json<Vec<HysteresisBranchSchema>>, ApiError> {
+) -> Result<Json<HysteresisBranchesResource>, ApiError> {
     let points = read_hysteresis_points(&state, &stage_id).await?;
-    if points.is_empty() {
-        return Ok(Json(Vec::new()));
-    }
-
     let mut branches = Vec::new();
-    for (branch_index, direction, branch_points) in infer_hysteresis_branch_segments(&points) {
-        branches.push(build_branch_schema(
-            branch_index,
-            direction,
-            branch_points,
-            Some(&stage_id),
-        ));
+    if !points.is_empty() {
+        for (branch_index, direction, branch_points) in infer_hysteresis_branch_segments(&points) {
+            branches.push(build_branch_schema(
+                branch_index,
+                direction,
+                branch_points,
+                Some(&stage_id),
+            ));
+        }
     }
-    Ok(Json(branches))
+    let stage = resolve_hysteresis_resource_stage_metadata(&state, &stage_id).await?;
+    Ok(Json(HysteresisBranchesResource {
+        revision: stage.revision,
+        stage_id: stage.stage_id,
+        stage_index: stage.stage_index,
+        branches,
+    }))
 }
 
 #[utoipa::path(
@@ -1117,15 +1143,15 @@ pub async fn get_angular_family_variant_points(
         ("stage_id" = String, Path, description = "Hysteresis stage index or stage identifier"),
     ),
     responses(
-        (status = 200, description = "Minor loops", body = Vec<HysteresisMinorLoopSchema>),
+        (status = 200, description = "Revisioned minor loops resource", body = HysteresisMinorLoopsResource),
     ),
     tag = "analysis"
 )]
 pub async fn get_minor_loops(
     State(state): State<Arc<AppState>>,
     Path(stage_id): Path<String>,
-) -> Result<Json<Vec<HysteresisMinorLoopSchema>>, ApiError> {
-    match read_optional_typed_stage_artifact_with_path::<Vec<HysteresisMinorLoopSchema>>(
+) -> Result<Json<HysteresisMinorLoopsResource>, ApiError> {
+    let minor_loops = match read_optional_typed_stage_artifact_with_path::<Vec<HysteresisMinorLoopSchema>>(
         &state,
         &stage_id,
         "hysteresis_minor_loops.json",
@@ -1134,17 +1160,24 @@ pub async fn get_minor_loops(
     {
         Ok(Some((path, minor_loops))) => {
             let stage_points = read_hysteresis_points(&state, &stage_id).await?;
-            Ok(Json(annotate_minor_loops(
+            annotate_minor_loops(
                 minor_loops,
                 &stage_points,
                 path.parent().unwrap_or_else(|| FsPath::new("")),
                 Some(&stage_id),
-            )))
+            )
         }
-        Ok(None) => Ok(Json(Vec::new())),
-        Err(error) if error.status == axum::http::StatusCode::NOT_FOUND => Ok(Json(Vec::new())),
-        Err(error) => Err(error),
-    }
+        Ok(None) => Vec::new(),
+        Err(error) if error.status == axum::http::StatusCode::NOT_FOUND => Vec::new(),
+        Err(error) => return Err(error),
+    };
+    let stage = resolve_hysteresis_resource_stage_metadata(&state, &stage_id).await?;
+    Ok(Json(HysteresisMinorLoopsResource {
+        revision: stage.revision,
+        stage_id: stage.stage_id,
+        stage_index: stage.stage_index,
+        minor_loops,
+    }))
 }
 
 #[utoipa::path(
@@ -1154,32 +1187,37 @@ pub async fn get_minor_loops(
         ("stage_id" = String, Path, description = "Hysteresis stage index or stage identifier"),
     ),
     responses(
-        (status = 200, description = "Reversal fields", body = Vec<HysteresisPointSchema>),
+        (status = 200, description = "Revisioned reversal fields resource", body = HysteresisReversalFieldsResource),
     ),
     tag = "analysis"
 )]
 pub async fn get_reversal_fields(
     State(state): State<Arc<AppState>>,
     Path(stage_id): Path<String>,
-) -> Result<Json<Vec<HysteresisPointSchema>>, ApiError> {
+) -> Result<Json<HysteresisReversalFieldsResource>, ApiError> {
     let points = read_hysteresis_points(&state, &stage_id).await?;
     let mut reversal_fields = Vec::new();
-    if points.len() < 3 {
-        return Ok(Json(Vec::new()));
-    }
-    for i in 1..(points.len() - 1) {
-        let prev = points[i - 1].field_value_m_t;
-        let curr = points[i].field_value_m_t;
-        let next = points[i + 1].field_value_m_t;
-        if (curr - prev) * (next - curr) < 0.0 {
-            let mut point = points[i].clone();
-            point.is_reversal_field = Some(true);
-            point.reversal_index = Some(reversal_fields.len() as u32);
-            point.recoil_start_point_id = Some(point.point_id);
-            reversal_fields.push(point);
+    if points.len() >= 3 {
+        for i in 1..(points.len() - 1) {
+            let prev = points[i - 1].field_value_m_t;
+            let curr = points[i].field_value_m_t;
+            let next = points[i + 1].field_value_m_t;
+            if (curr - prev) * (next - curr) < 0.0 {
+                let mut point = points[i].clone();
+                point.is_reversal_field = Some(true);
+                point.reversal_index = Some(reversal_fields.len() as u32);
+                point.recoil_start_point_id = Some(point.point_id);
+                reversal_fields.push(point);
+            }
         }
     }
-    Ok(Json(reversal_fields))
+    let stage = resolve_hysteresis_resource_stage_metadata(&state, &stage_id).await?;
+    Ok(Json(HysteresisReversalFieldsResource {
+        revision: stage.revision,
+        stage_id: stage.stage_id,
+        stage_index: stage.stage_index,
+        reversal_fields,
+    }))
 }
 
 #[utoipa::path(
@@ -1417,6 +1455,33 @@ fn minor_loop_area_m_parallel(points: &[HysteresisPointSchema]) -> Option<f64> {
 
 fn same_m_t(left: f64, right: f64) -> bool {
     (left - right).abs() <= 1e-9
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/analysis/hysteresis/{stage_id}/settle-trace",
+    params(
+        ("stage_id" = String, Path, description = "Hysteresis stage index or stage identifier"),
+    ),
+    responses(
+        (status = 200, description = "Revisioned stage-level settle trace resource", body = HysteresisSettleTraceResource),
+        (status = 404, description = "Settle trace not found"),
+    ),
+    tag = "analysis"
+)]
+pub async fn get_stage_settle_trace(
+    State(state): State<Arc<AppState>>,
+    Path(stage_id): Path<String>,
+) -> Result<Json<HysteresisSettleTraceResource>, ApiError> {
+    let settle_trace: Vec<HysteresisSettleTraceEntrySchema> =
+        read_typed_stage_artifact(&state, &stage_id, "hysteresis_settle_trace.json").await?;
+    let stage = resolve_hysteresis_resource_stage_metadata(&state, &stage_id).await?;
+    Ok(Json(HysteresisSettleTraceResource {
+        revision: stage.revision,
+        stage_id: stage.stage_id,
+        stage_index: stage.stage_index,
+        settle_trace,
+    }))
 }
 
 #[utoipa::path(
