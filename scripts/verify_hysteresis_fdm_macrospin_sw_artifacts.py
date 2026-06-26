@@ -14,6 +14,7 @@ REQUIRED_VARIANTS = {"easy_axis", "theta45"}
 COMPUTED_VARIANT_STATUSES = {"computed_active_stage", "computed_variant_run"}
 HYSTERESIS_FAMILY_RESOURCE_PREFIX = "/v2/sessions/current/analysis/hysteresis-family/"
 EXPECTED_VARIANT_THETA_DEG = {"easy_axis": 30.0, "theta45": 45.0}
+GROSS_ASTROID_RATIO_FRACTION = 0.5
 
 
 def load_json(path: Path) -> Any:
@@ -99,6 +100,27 @@ def validate_variant(points: list[dict[str, Any]], label: str) -> float:
     return hc
 
 
+def stoner_wohlfarth_astroid_hc_ratio(theta_deg: float) -> float:
+    theta_rad = math.radians(theta_deg)
+    sin_term = abs(math.sin(theta_rad)) ** (2.0 / 3.0)
+    cos_term = abs(math.cos(theta_rad)) ** (2.0 / 3.0)
+    return (sin_term + cos_term) ** -1.5
+
+
+def validate_gross_astroid_ratio(hc_by_variant: dict[str, float]) -> None:
+    expected_ratio = (
+        stoner_wohlfarth_astroid_hc_ratio(EXPECTED_VARIANT_THETA_DEG["theta45"])
+        / stoner_wohlfarth_astroid_hc_ratio(EXPECTED_VARIANT_THETA_DEG["easy_axis"])
+    )
+    observed_ratio = hc_by_variant["theta45"] / hc_by_variant["easy_axis"]
+    if observed_ratio < expected_ratio * GROSS_ASTROID_RATIO_FRACTION:
+        raise SystemExit(
+            "Stoner-Wohlfarth astroid ratio failed: "
+            f"theta45/easy observed={observed_ratio:.6g}, "
+            f"expected~={expected_ratio:.6g}"
+        )
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         raise SystemExit(
@@ -128,11 +150,12 @@ def main() -> int:
 
     easy_hc = hc_by_variant["easy_axis"]
     theta_hc = hc_by_variant["theta45"]
-    if not theta_hc < easy_hc * 0.95:
+    if not theta_hc < easy_hc:
         raise SystemExit(
             "Stoner-Wohlfarth angular trend failed: "
             f"theta45 Hc={theta_hc:.6g} mT, easy-axis Hc={easy_hc:.6g} mT"
         )
+    validate_gross_astroid_ratio(hc_by_variant)
 
     print(
         "validated FDM macrospin Stoner-Wohlfarth trend: "

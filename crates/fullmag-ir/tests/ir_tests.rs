@@ -330,6 +330,7 @@ fn hysteresis_validation_accepts_major_with_minor_loops_branch_mode() {
         minor_loops: Some(vec![MinorLoopIR {
             reversal_mT: 25.0,
             return_mT: -25.0,
+            intermediate_fields_mT: Vec::new(),
             continuation_policy: "branch_only".to_string(),
         }]),
         sampling: SamplingIR {
@@ -382,6 +383,7 @@ fn hysteresis_validation_accepts_replace_parent_minor_loop_continuation_policy()
         minor_loops: Some(vec![MinorLoopIR {
             reversal_mT: 25.0,
             return_mT: -25.0,
+            intermediate_fields_mT: Vec::new(),
             continuation_policy: "replace_parent".to_string(),
         }]),
         sampling: SamplingIR {
@@ -396,6 +398,96 @@ fn hysteresis_validation_accepts_replace_parent_minor_loop_continuation_policy()
     if let Err(errors) = ir.validate() {
         panic!("replace_parent minor-loop continuation policy should validate, got {errors:?}");
     }
+}
+
+#[test]
+fn hysteresis_validation_accepts_minor_loop_intermediate_fields() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study = StudyIR::Hysteresis {
+        field_min_mT: Some(-100.0),
+        field_max_mT: Some(100.0),
+        field_step_mT: Some(10.0),
+        field_values_mT: None,
+        field_unit_provenance: None,
+        direction: None,
+        orientation: None,
+        measurement_axis: MeasurementAxisIR::field_axis(),
+        angular_family: None,
+        initial_protocol: "as_authored".to_string(),
+        initial_state_ref: None,
+        saturation: None,
+        branch_mode: "major_with_minor_loops".to_string(),
+        settle_pipeline: None,
+        storage: None,
+        field_schedule: None,
+        schedule_refinements: None,
+        adaptive_refinement: None,
+        minor_loops: Some(vec![MinorLoopIR {
+            reversal_mT: 50.0,
+            return_mT: -50.0,
+            intermediate_fields_mT: vec![0.0],
+            continuation_policy: "branch_only".to_string(),
+        }]),
+        sampling: SamplingIR {
+            outputs: vec![OutputIR::Scalar {
+                name: "mz".to_string(),
+                every_seconds: 1.0e-12,
+            }],
+            table_autosave: None,
+        },
+    };
+
+    if let Err(errors) = ir.validate() {
+        panic!("minor-loop intermediate fields should validate, got {errors:?}");
+    }
+}
+
+#[test]
+fn hysteresis_validation_rejects_duplicate_minor_loop_intermediate_boundary() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study = StudyIR::Hysteresis {
+        field_min_mT: Some(-100.0),
+        field_max_mT: Some(100.0),
+        field_step_mT: Some(10.0),
+        field_values_mT: None,
+        field_unit_provenance: None,
+        direction: None,
+        orientation: None,
+        measurement_axis: MeasurementAxisIR::field_axis(),
+        angular_family: None,
+        initial_protocol: "as_authored".to_string(),
+        initial_state_ref: None,
+        saturation: None,
+        branch_mode: "major_with_minor_loops".to_string(),
+        settle_pipeline: None,
+        storage: None,
+        field_schedule: None,
+        schedule_refinements: None,
+        adaptive_refinement: None,
+        minor_loops: Some(vec![MinorLoopIR {
+            reversal_mT: 50.0,
+            return_mT: -50.0,
+            intermediate_fields_mT: vec![50.0],
+            continuation_policy: "branch_only".to_string(),
+        }]),
+        sampling: SamplingIR {
+            outputs: vec![OutputIR::Scalar {
+                name: "mz".to_string(),
+                every_seconds: 1.0e-12,
+            }],
+            table_autosave: None,
+        },
+    };
+
+    let errors = ir
+        .validate()
+        .expect_err("duplicate minor-loop intermediate boundary must fail validation");
+    assert!(
+        errors.iter().any(|error| error.contains(
+            "study.stages[].hysteresis.minor_loops[0] intermediate_fields_mT must not repeat adjacent fields"
+        )),
+        "expected intermediate field validation error, got {errors:?}"
+    );
 }
 
 #[test]
@@ -423,6 +515,7 @@ fn hysteresis_validation_rejects_unknown_minor_loop_continuation_policy() {
         minor_loops: Some(vec![MinorLoopIR {
             reversal_mT: 25.0,
             return_mT: -25.0,
+            intermediate_fields_mT: Vec::new(),
             continuation_policy: "teleport_parent".to_string(),
         }]),
         sampling: SamplingIR {
@@ -856,6 +949,7 @@ fn hysteresis_validation_rejects_invalid_public_contract_values() {
         minor_loops: Some(vec![MinorLoopIR {
             reversal_mT: 10.0,
             return_mT: 10.0,
+            intermediate_fields_mT: Vec::new(),
             continuation_policy: "branch_only".to_string(),
         }]),
         sampling: SamplingIR {

@@ -2591,6 +2591,29 @@ fn validate_hysteresis_minor_loops(loops: &[MinorLoopIR], errors: &mut Vec<Strin
                 idx
             ));
         }
+        if minor_loop
+            .intermediate_fields_mT
+            .iter()
+            .any(|field| !field.is_finite())
+        {
+            errors.push(format!(
+                "study.stages[].hysteresis.minor_loops[{}] intermediate_fields_mT values must be finite",
+                idx
+            ));
+        }
+        let mut scheduled_fields = Vec::with_capacity(minor_loop.intermediate_fields_mT.len() + 2);
+        scheduled_fields.push(minor_loop.reversal_mT);
+        scheduled_fields.extend(minor_loop.intermediate_fields_mT.iter().copied());
+        scheduled_fields.push(minor_loop.return_mT);
+        if scheduled_fields
+            .windows(2)
+            .any(|fields| fields[0] == fields[1])
+        {
+            errors.push(format!(
+                "study.stages[].hysteresis.minor_loops[{}] intermediate_fields_mT must not repeat adjacent fields",
+                idx
+            ));
+        }
         if !matches!(
             minor_loop.continuation_policy.as_str(),
             "branch_only" | "resume_parent" | "replace_parent"

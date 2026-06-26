@@ -187,3 +187,17 @@ def test_macrospin_validator_rejects_failed_angular_trend(tmp_path: Path) -> Non
 
     assert result.returncode != 0
     assert "angular trend failed" in (result.stderr + result.stdout)
+
+
+def test_macrospin_validator_rejects_gross_astroid_ratio_mismatch(tmp_path: Path) -> None:
+    write_macrospin_fixture(
+        tmp_path,
+        easy_orientation={"kind": "sample", "theta": 30.0, "phi": 0.0},
+        theta_orientation={"kind": "sample", "theta": 45.0, "phi": 0.0},
+        theta_points=loop_points(1.0),
+    )
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "astroid" in (result.stderr + result.stdout)

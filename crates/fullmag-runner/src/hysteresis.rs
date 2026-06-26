@@ -4748,121 +4748,150 @@ fn run_hysteresis_minor_loops(
                 all_steps.extend(reversal_res.executed_run.result.steps);
                 (magnetization, point, reversal_res.trace)
             };
-        let return_field_mT = configured.return_mT;
-        let return_field_Apm = field_mT_to_h_apm(return_field_mT);
-        let field_vector_A_per_m = [
-            return_field_Apm * u_H[0],
-            return_field_Apm * u_H[1],
-            return_field_Apm * u_H[2],
-        ];
-        let solve_res = run_settle_at_field(
-            &plan.backend_plan,
-            problem,
-            &reversal_magnetization,
-            field_vector_A_per_m,
-            Some(HysteresisProgressContext {
-                point_idx: Some(1),
-                field_m_t: return_field_mT,
-                point_role: "minor",
-                branch_id: parent.point.branch_id.clone(),
-            }),
-            settle_pipeline,
-            until_seconds,
-            field_every_n,
-            display_selection,
-            interrupt_requested,
-            false,
-            on_step,
-        )?;
-        status = combine_run_status(status, solve_res.executed_run.result.status);
+        let mut target_fields_mT = configured.intermediate_fields_mT.clone();
+        target_fields_mT.push(configured.return_mT);
+        let mut points = vec![reversal_point];
+        let mut previous_magnetization = reversal_magnetization;
+        let mut previous_field_mT = reversal_field_mT;
+        let mut previous_m_parallel = points[0].m_parallel;
+        let mut return_magnetization = previous_magnetization.clone();
 
-        let return_magnetization = solve_res.executed_run.result.final_magnetization.clone();
-        let point_quality =
-            hysteresis_point_quality(solve_res.executed_run.result.status, &solve_res.trace);
-        let m_avg = average_hysteresis_magnetization(&return_magnetization, averaging);
-        let m_parallel = hysteresis_project_m_parallel(m_avg, u_meas);
-        let (m_oop, m_ip) = hysteresis_oop_ip_components(m_avg, hysteresis_sample_normal());
-        let point_non_converged = solve_res
-            .trace
-            .iter()
-            .any(|entry| entry.status == "non_converged");
-        let snapshot_context = HysteresisSnapshotDecisionContext {
-            point_idx: 1,
-            field_value_mT: return_field_mT,
-            previous_field_value_mT: Some(reversal_field_mT),
-            next_field_value_mT: None,
-            m_parallel,
-            previous_m_parallel: Some(reversal_point.m_parallel),
-            status: solve_res.executed_run.result.status,
-            non_converged: point_non_converged,
-        };
-        let snapshot_id = if should_store_hysteresis_snapshot(storage, snapshot_context) {
-            Some(format!("hysteresis_{}_return_{:03}", loop_id, 1))
-        } else {
-            None
-        };
-        if let Some(snapshot_id) = snapshot_id.as_deref() {
-            write_hysteresis_magnetization_snapshot(
-                output_dir,
-                snapshot_id,
-                1,
-                return_field_mT,
-                hysteresis_magnetization_grid(plan, &return_magnetization),
-                &return_magnetization,
-                &averaging.weighting,
-                averaging.weights.as_deref(),
-                storage
-                    .map(|policy| policy.magnetization.as_str())
-                    .unwrap_or("unspecified"),
-                HysteresisSnapshotIndexMetadata {
-                    branch_id: parent.point.branch_id.as_deref(),
-                    protocol_role: Some("minor"),
-                },
+        for (target_index, target_field_mT) in target_fields_mT.iter().copied().enumerate() {
+            let point_id = target_index + 1;
+            let is_return_point = target_index + 1 == target_fields_mT.len();
+            let target_field_Apm = field_mT_to_h_apm(target_field_mT);
+            let field_vector_A_per_m = [
+                target_field_Apm * u_H[0],
+                target_field_Apm * u_H[1],
+                target_field_Apm * u_H[2],
+            ];
+            let solve_res = run_settle_at_field(
+                &plan.backend_plan,
+                problem,
+                &previous_magnetization,
+                field_vector_A_per_m,
+                Some(HysteresisProgressContext {
+                    point_idx: Some(point_id),
+                    field_m_t: target_field_mT,
+                    point_role: "minor",
+                    branch_id: parent.point.branch_id.clone(),
+                }),
+                settle_pipeline,
+                until_seconds,
+                field_every_n,
+                display_selection,
+                interrupt_requested,
+                false,
+                on_step,
             )?;
+            status = combine_run_status(status, solve_res.executed_run.result.status);
+
+            let magnetization = solve_res.executed_run.result.final_magnetization.clone();
+            let point_quality =
+                hysteresis_point_quality(solve_res.executed_run.result.status, &solve_res.trace);
+            let m_avg = average_hysteresis_magnetization(&magnetization, averaging);
+            let m_parallel = hysteresis_project_m_parallel(m_avg, u_meas);
+            let (m_oop, m_ip) = hysteresis_oop_ip_components(m_avg, hysteresis_sample_normal());
+            let point_non_converged = solve_res
+                .trace
+                .iter()
+                .any(|entry| entry.status == "non_converged");
+            let snapshot_context = HysteresisSnapshotDecisionContext {
+                point_idx: point_id,
+                field_value_mT: target_field_mT,
+                previous_field_value_mT: Some(previous_field_mT),
+                next_field_value_mT: target_fields_mT.get(target_index + 1).copied(),
+                m_parallel,
+                previous_m_parallel: Some(previous_m_parallel),
+                status: solve_res.executed_run.result.status,
+                non_converged: point_non_converged,
+            };
+            let snapshot_id = if should_store_hysteresis_snapshot(storage, snapshot_context) {
+                if is_return_point {
+                    Some(format!("hysteresis_{}_return_{:03}", loop_id, point_id))
+                } else {
+                    Some(format!(
+                        "hysteresis_{}_intermediate_{:03}",
+                        loop_id, point_id
+                    ))
+                }
+            } else {
+                None
+            };
+            if let Some(snapshot_id) = snapshot_id.as_deref() {
+                write_hysteresis_magnetization_snapshot(
+                    output_dir,
+                    snapshot_id,
+                    point_id,
+                    target_field_mT,
+                    hysteresis_magnetization_grid(plan, &magnetization),
+                    &magnetization,
+                    &averaging.weighting,
+                    averaging.weights.as_deref(),
+                    storage
+                        .map(|policy| policy.magnetization.as_str())
+                        .unwrap_or("unspecified"),
+                    HysteresisSnapshotIndexMetadata {
+                        branch_id: parent.point.branch_id.as_deref(),
+                        protocol_role: Some("minor"),
+                    },
+                )?;
+            }
+
+            let point = HysteresisPoint {
+                point_id,
+                field_value_mT: target_field_mT,
+                m_parallel,
+                m_oop,
+                m_ip,
+                m_avg,
+                status: point_quality.run_status.clone(),
+                run_status: point_quality.run_status,
+                settle_status: point_quality.settle_status,
+                has_non_converged_steps: point_quality.has_non_converged_steps,
+                terminal_settle_reason: point_quality.terminal_settle_reason,
+                warning_count: point_quality.warning_count,
+                snapshot_id,
+                protocol_role: Some("minor".to_string()),
+                branch_id: parent.point.branch_id.clone(),
+                branch_ids: parent.point.branch_ids.clone(),
+                branch_index: parent.point.branch_index,
+                parent_branch_id: parent.point.branch_id.clone(),
+                minor_loop_id: Some(loop_id.clone()),
+                snapshot_resource_ref: None,
+                snapshot_vector_resource_ref: None,
+                snapshot_json_artifact_ref: None,
+                snapshot_zarr_store_ref: None,
+                snapshot_storage_format: None,
+                field_vector_A_per_m: Some(field_vector_A_per_m),
+                field_orientation: parent.point.field_orientation.clone(),
+                measurement_axis: parent.point.measurement_axis.clone(),
+                field_display_unit: Some("mT".to_string()),
+                is_reversal_field: None,
+                reversal_index: None,
+                recoil_start_point_id: Some(parent.point.point_id),
+                adaptive_inserted: None,
+                refinement_reason: None,
+                refinement_parent_left_point_id: None,
+                refinement_parent_right_point_id: None,
+            };
+
+            all_steps.extend(solve_res.executed_run.result.steps);
+            settle_trace.extend(solve_res.trace);
+            previous_magnetization = magnetization.clone();
+            previous_field_mT = target_field_mT;
+            previous_m_parallel = m_parallel;
+            if is_return_point {
+                return_magnetization = magnetization;
+            }
+            points.push(point);
         }
 
-        let mut return_point = HysteresisPoint {
-            point_id: 1,
-            field_value_mT: return_field_mT,
-            m_parallel,
-            m_oop,
-            m_ip,
-            m_avg,
-            status: point_quality.run_status.clone(),
-            run_status: point_quality.run_status,
-            settle_status: point_quality.settle_status,
-            has_non_converged_steps: point_quality.has_non_converged_steps,
-            terminal_settle_reason: point_quality.terminal_settle_reason,
-            warning_count: point_quality.warning_count,
-            snapshot_id,
-            protocol_role: Some("minor".to_string()),
-            branch_id: parent.point.branch_id.clone(),
-            branch_ids: parent.point.branch_ids.clone(),
-            branch_index: parent.point.branch_index,
-            parent_branch_id: parent.point.branch_id.clone(),
-            minor_loop_id: Some(loop_id.clone()),
-            snapshot_resource_ref: None,
-            snapshot_vector_resource_ref: None,
-            snapshot_json_artifact_ref: None,
-            snapshot_zarr_store_ref: None,
-            snapshot_storage_format: None,
-            field_vector_A_per_m: Some(field_vector_A_per_m),
-            field_orientation: parent.point.field_orientation.clone(),
-            measurement_axis: parent.point.measurement_axis.clone(),
-            field_display_unit: Some("mT".to_string()),
-            is_reversal_field: None,
-            reversal_index: None,
-            recoil_start_point_id: Some(parent.point.point_id),
-            adaptive_inserted: None,
-            refinement_reason: None,
-            refinement_parent_left_point_id: None,
-            refinement_parent_right_point_id: None,
-        };
-
-        let mut points = vec![reversal_point, return_point.clone()];
         annotate_hysteresis_points_for_artifact(&mut points, stage_id);
-        return_point = points[1].clone();
-        settle_trace.extend(solve_res.trace);
+        let return_point = points
+            .last()
+            .cloned()
+            .expect("minor loop must contain a return point");
         let closure_status = if configured.continuation_policy == "replace_parent" {
             "replaced_parent"
         } else {
@@ -4871,7 +4900,7 @@ fn run_hysteresis_minor_loops(
         let loop_artifact = HysteresisMinorLoop {
             loop_id,
             reversal_field_mT,
-            return_field_mT,
+            return_field_mT: configured.return_mT,
             parent_branch_id: parent.point.branch_id.clone(),
             reversal_point_id: Some(0),
             return_point_id: Some(return_point.point_id),
@@ -4884,7 +4913,6 @@ fn run_hysteresis_minor_loops(
             points,
         };
 
-        all_steps.extend(solve_res.executed_run.result.steps);
         if configured.continuation_policy == "replace_parent" {
             replace_hysteresis_parent_state(
                 &mut working_states,
@@ -7027,6 +7055,7 @@ mod tests {
             *minor_loops = Some(vec![fullmag_ir::MinorLoopIR {
                 reversal_mT: 100.0,
                 return_mT: -100.0,
+                intermediate_fields_mT: Vec::new(),
                 continuation_policy: "branch_only".to_string(),
             }]);
             *storage = Some(fullmag_ir::HysteresisStorageIR {
@@ -7105,6 +7134,7 @@ mod tests {
             *minor_loops = Some(vec![fullmag_ir::MinorLoopIR {
                 reversal_mT: 50.0,
                 return_mT: -100.0,
+                intermediate_fields_mT: Vec::new(),
                 continuation_policy: "branch_only".to_string(),
             }]);
             *storage = Some(fullmag_ir::HysteresisStorageIR {
@@ -7201,6 +7231,7 @@ mod tests {
             *minor_loops = Some(vec![fullmag_ir::MinorLoopIR {
                 reversal_mT: 100.0,
                 return_mT: -100.0,
+                intermediate_fields_mT: Vec::new(),
                 continuation_policy: "resume_parent".to_string(),
             }]);
             *storage = Some(fullmag_ir::HysteresisStorageIR {
@@ -7251,6 +7282,82 @@ mod tests {
     }
 
     #[test]
+    fn configured_minor_loop_executes_intermediate_fields_before_return() {
+        let mut problem = minimal_fdm_hysteresis_problem();
+        if let StudyIR::Hysteresis {
+            branch_mode,
+            minor_loops,
+            storage,
+            ..
+        } = &mut problem.study
+        {
+            *branch_mode = "major_with_minor_loops".to_string();
+            *minor_loops = Some(vec![fullmag_ir::MinorLoopIR {
+                reversal_mT: 100.0,
+                return_mT: -100.0,
+                intermediate_fields_mT: vec![0.0],
+                continuation_policy: "branch_only".to_string(),
+            }]);
+            *storage = Some(fullmag_ir::HysteresisStorageIR {
+                scalar_history: true,
+                magnetization: "none".to_string(),
+                every_n: 1,
+                key_events: false,
+                key_event_threshold_dm: 0.02,
+            });
+        } else {
+            panic!("minimal problem must be hysteresis");
+        }
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-hysteresis-minor-loop-intermediate-fields-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&output_dir);
+
+        crate::run_problem_with_callback(&problem, 0.0, &output_dir, 1, |_| StepAction::Continue)
+            .expect("intermediate-field minor loop hysteresis run should complete");
+
+        let minor_loops_json =
+            std::fs::read_to_string(output_dir.join("hysteresis_minor_loops.json"))
+                .expect("minor loop artifact should be written");
+        let minor_loops: Vec<HysteresisMinorLoop> =
+            serde_json::from_str(&minor_loops_json).expect("minor loop artifact should decode");
+        let major_points_json = std::fs::read_to_string(output_dir.join("hysteresis_points.json"))
+            .expect("major-loop points artifact should be written");
+        let major_points: Vec<HysteresisPoint> =
+            serde_json::from_str(&major_points_json).expect("major-loop points should decode");
+
+        assert_eq!(minor_loops.len(), 1);
+        assert_eq!(
+            minor_loops[0]
+                .points
+                .iter()
+                .map(|point| point.field_value_mT)
+                .collect::<Vec<_>>(),
+            vec![100.0, 0.0, -100.0],
+        );
+        assert_eq!(minor_loops[0].reversal_point_id, Some(0));
+        assert_eq!(minor_loops[0].return_point_id, Some(2));
+        assert_eq!(
+            minor_loops[0]
+                .settle_trace
+                .iter()
+                .map(|entry| entry.field_value_mT)
+                .collect::<Vec<_>>(),
+            vec![0.0, -100.0],
+        );
+        assert!(
+            major_points
+                .iter()
+                .all(|point| point.protocol_role.as_deref() != Some("minor")
+                    && point.minor_loop_id.is_none()),
+            "multi-point minor loop must not rewrite the published major-loop artifact"
+        );
+
+        let _ = std::fs::remove_dir_all(&output_dir);
+    }
+
+    #[test]
     fn configured_minor_loop_replace_parent_seeds_following_minor_loop_from_return_state() {
         let mut problem = minimal_fdm_hysteresis_problem();
         if let StudyIR::Hysteresis {
@@ -7265,11 +7372,13 @@ mod tests {
                 fullmag_ir::MinorLoopIR {
                     reversal_mT: 100.0,
                     return_mT: -100.0,
+                    intermediate_fields_mT: vec![0.0],
                     continuation_policy: "replace_parent".to_string(),
                 },
                 fullmag_ir::MinorLoopIR {
                     reversal_mT: -100.0,
                     return_mT: 100.0,
+                    intermediate_fields_mT: Vec::new(),
                     continuation_policy: "branch_only".to_string(),
                 },
             ]);
@@ -7311,7 +7420,7 @@ mod tests {
         let first_return = minor_loops[0]
             .points
             .iter()
-            .find(|point| point.point_id == 1)
+            .find(|point| point.point_id == 2)
             .expect("first loop return point should be present");
         let second_reversal = minor_loops[1]
             .points
@@ -7916,6 +8025,7 @@ mod tests {
             &[fullmag_ir::MinorLoopIR {
                 reversal_mT: -20.0,
                 return_mT: 30.0,
+                intermediate_fields_mT: Vec::new(),
                 continuation_policy: "branch_only".to_string(),
             }],
             &points,

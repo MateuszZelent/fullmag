@@ -66,6 +66,8 @@ import type {
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
 import {
+  isMagneticOnlyQuantityId,
+  isScalarSpatialQuantityId,
   normalizeQuantityIdOrDefault,
   sameQuantityId,
 } from "@/kernel/api/quantityIds";
@@ -76,6 +78,7 @@ import {
   AIRBOX_VISUALIZATION_TARGET,
   DEFAULT_AIRBOX_VISUALIZATION,
   DEFAULT_OBJECT_VISUALIZATION,
+  defaultSurfaceColorSourceForQuantity,
   displayLabelForVisualizationTarget,
   renderModePatch,
   resolveEffectiveVisualizationSettings,
@@ -354,6 +357,7 @@ const QUANTITY_ITEMS = [
   { value: "H_ex",          label: "Exchange field / H_ex" },
   { value: "H_ani",         label: "Anisotropy field / H_ani" },
   { value: "H_ant",         label: "Antenna field / H_ant" },
+  { value: "torque",        label: "Torque / torque" },
   { value: "eden_total",    label: "Total energy density / ε_total" },
   { value: "eden_ex",       label: "Exchange energy density / ε_ex" },
   { value: "eden_demag",    label: "Demag energy density / ε_demag" },
@@ -366,6 +370,19 @@ const QUANTITY_ITEMS = [
   { value: "mat_dind",      label: "Interfacial DMI / D_ind" },
   { value: "mat_dbulk",     label: "Bulk DMI / D_bulk" },
 ];
+
+function quantityItemsForVisualizationTarget(
+  activeQuantityId: string,
+  targetKind?: VisualizationTargetKind,
+): Array<{ label: string; value: string }> {
+  const baseItems =
+    targetKind === "airbox"
+      ? QUANTITY_ITEMS.filter((item) => !isMagneticOnlyQuantityId(item.value))
+      : QUANTITY_ITEMS;
+  return baseItems.some((item) => item.value === activeQuantityId)
+    ? baseItems
+    : [{ value: activeQuantityId, label: activeQuantityId }, ...baseItems];
+}
 
 const VECTOR_COLOR_ITEMS: Array<{
   label: string;
@@ -1451,11 +1468,12 @@ const resultsTab: RibbonTabContent = {
       subtitle: "resources",
       tone: "neutral",
       actions: [
-        { id: "res-m",          icon: icon(Magnet),    label: "M",         active: true, iconColor: "text-pink-400",    menu: radioMenu("results-quantity", "Result quantity", "m", [["m", "Magnetization / m"], ["H_eff", "H_eff"], ["H_demag", "H_demag"], ["H_ex", "H_ex"], ["H_ani", "H_ani"], ["H_ant", "H_ant"], ["eden_total", "ε_total"], ["eden_ex", "ε_ex"], ["eden_demag", "ε_demag"], ["eden_ext", "ε_ext"], ["eden_ani", "ε_ani"], ["eden_dmi", "ε_dmi"], ["mat_ms", "M_sat"], ["mat_aex", "A_ex"], ["mat_alpha", "α"], ["mat_dind", "D_ind"], ["mat_dbulk", "D_bulk"]]) },
+        { id: "res-m",          icon: icon(Magnet),    label: "M",         active: true, iconColor: "text-pink-400",    menu: radioMenu("results-quantity", "Result quantity", "m", [["m", "Magnetization / m"], ["H_eff", "H_eff"], ["H_demag", "H_demag"], ["H_ex", "H_ex"], ["H_ani", "H_ani"], ["H_ant", "H_ant"], ["torque", "torque"], ["eden_total", "ε_total"], ["eden_ex", "ε_ex"], ["eden_demag", "ε_demag"], ["eden_ext", "ε_ext"], ["eden_ani", "ε_ani"], ["eden_dmi", "ε_dmi"], ["mat_ms", "M_sat"], ["mat_aex", "A_ex"], ["mat_alpha", "α"], ["mat_dind", "D_ind"], ["mat_dbulk", "D_bulk"]]) },
         { id: "res-heff",       icon: icon(Zap),       label: "H_eff",                   iconColor: "text-yellow-400" },
         { id: "res-demag",      icon: icon(Sigma),     label: "H_demag",                 iconColor: "text-violet-300" },
         { id: "res-exchange",   icon: icon(Zap),       label: "H_ex",                    iconColor: "text-amber-400" },
         { id: "res-anis",       icon: icon(Target),    label: "H_anis",                  iconColor: "text-rose-400" },
+        { id: "res-torque",     icon: icon(Activity),  label: "Torque",                  iconColor: "text-cyan-300" },
         { id: "res-energy",     icon: icon(BarChart3), label: "Energy",                  iconColor: "text-teal-400" },
       ],
     },
@@ -1571,6 +1589,7 @@ function buildResultsQuantityGroup(
     ["res-demag", "H_demag"],
     ["res-exchange", "H_ex"],
     ["res-anis", "H_ani"],
+    ["res-torque", "torque"],
   ]);
 
   return {
@@ -3926,6 +3945,24 @@ function buildSelectedVisualizationGroup(
       context.visualizationState?.quantity?.active_quantity_id ??
       context.visualizationState?.active_quantity_id,
   );
+  const selectedQuantityItems = quantityItemsForVisualizationTarget(
+    selectedQuantityId,
+    target?.kind,
+  );
+  const targetQuantityPatch = (value: string): VisualizationTargetPatch => {
+    const activeQuantityId = normalizeQuantityIdOrDefault(value);
+    const surfaceColorSource = defaultSurfaceColorSourceForQuantity(
+      activeQuantityId,
+      settings?.vectorColorMode ?? targetDefaults.vectorColorMode,
+    );
+    return {
+      activeQuantityId,
+      ...(isScalarSpatialQuantityId(activeQuantityId) ||
+      settings?.surfaceColorSource === "colormap"
+        ? { surfaceColorSource }
+        : {}),
+    };
+  };
   const selectedVectorScope =
     targetVisualization?.override?.geometryScope ??
     (target
@@ -3964,14 +4001,12 @@ function buildSelectedVisualizationGroup(
             id: "selected-texture:quantity",
             label: "Quantity source",
             value: selectedQuantityId,
-            items: QUANTITY_ITEMS,
+            items: selectedQuantityItems,
             disabled: !enabled || !target,
             commandId: RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND,
             commandInput: (value: string) =>
               target
-                ? visualizationTargetCommandInput(target, {
-                    activeQuantityId: value,
-                  })
+                ? visualizationTargetCommandInput(target, targetQuantityPatch(value))
                 : value,
           },
           {

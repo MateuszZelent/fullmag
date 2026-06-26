@@ -1101,27 +1101,43 @@ class HysteresisStorage:
 class MinorLoop:
     reversal_mT: float
     return_mT: float
+    intermediate_fields_mT: Sequence[float] | None = None
     continuation_policy: str = "branch_only"
 
     def __post_init__(self) -> None:
         reversal = float(self.reversal_mT)
         return_field = float(self.return_mT)
+        intermediate_fields = tuple(
+            float(field_value) for field_value in (self.intermediate_fields_mT or ())
+        )
         if not math.isfinite(reversal) or not math.isfinite(return_field):
             raise ValueError("MinorLoop reversal_mT and return_mT must be finite")
+        if not all(math.isfinite(field_value) for field_value in intermediate_fields):
+            raise ValueError("MinorLoop.intermediate_fields_mT values must be finite")
         if reversal == return_field:
             raise ValueError("MinorLoop reversal_mT and return_mT must differ")
+        scheduled_fields = (reversal, *intermediate_fields, return_field)
+        if any(
+            left == right
+            for left, right in zip(scheduled_fields, scheduled_fields[1:])
+        ):
+            raise ValueError("MinorLoop.intermediate_fields_mT must not repeat adjacent fields")
         if self.continuation_policy not in SUPPORTED_HYSTERESIS_MINOR_LOOP_CONTINUATION_POLICIES:
             supported = ", ".join(sorted(SUPPORTED_HYSTERESIS_MINOR_LOOP_CONTINUATION_POLICIES))
             raise ValueError(f"MinorLoop.continuation_policy must be one of: {supported}")
         object.__setattr__(self, "reversal_mT", reversal)
         object.__setattr__(self, "return_mT", return_field)
+        object.__setattr__(self, "intermediate_fields_mT", intermediate_fields)
 
     def to_ir(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "reversal_mT": self.reversal_mT,
             "return_mT": self.return_mT,
             "continuation_policy": self.continuation_policy,
         }
+        if self.intermediate_fields_mT:
+            payload["intermediate_fields_mT"] = list(self.intermediate_fields_mT)
+        return payload
 
 
 @dataclass(frozen=True, slots=True)

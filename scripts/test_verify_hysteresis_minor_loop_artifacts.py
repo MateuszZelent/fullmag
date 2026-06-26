@@ -86,11 +86,15 @@ def write_minor_loop_fixture(
     *,
     policy: str = "branch_only",
     closure_status: str = "returned",
+    intermediate_fields_mT: list[float] | None = None,
     include_loop_point_provenance: bool = True,
     include_return_snapshot: bool = True,
     contaminate_major_points: bool = False,
 ) -> None:
     loop_id = "minor_loop_001"
+    intermediate_fields = intermediate_fields_mT or []
+    loop_fields = [50.0, *intermediate_fields, -25.0]
+    return_point_id = len(loop_fields) - 1
     major_points = [
         hysteresis_point(0, 50.0),
         hysteresis_point(1, 0.0),
@@ -111,32 +115,30 @@ def write_minor_loop_fixture(
                 "parent_branch_id": "descending",
                 "points": [
                     hysteresis_point(
-                        0,
-                        50.0,
+                        point_id,
+                        field_value_mT,
                         minor_loop_id=loop_id,
                         protocol_role="minor",
                         include_provenance=include_loop_point_provenance,
-                    ),
-                    hysteresis_point(
-                        1,
-                        -25.0,
-                        minor_loop_id=loop_id,
-                        protocol_role="minor",
-                        include_provenance=include_loop_point_provenance,
-                        include_snapshot=include_return_snapshot,
-                    ),
+                        include_snapshot=(
+                            include_return_snapshot and point_id == return_point_id
+                        ),
+                    )
+                    for point_id, field_value_mT in enumerate(loop_fields)
                 ],
                 "policy": policy,
                 "recoil_susceptibility": 0.1,
                 "return_field_mT": -25.0,
-                "return_point_id": 1,
+                "return_point_id": return_point_id,
                 "reversal_field_mT": 50.0,
                 "reversal_point_id": 0,
-                "settle_trace": [{"field_value_mT": -25.0, "status": "converged"}],
+                "settle_trace": [
+                    {"field_value_mT": field_value_mT, "status": "converged"}
+                    for field_value_mT in loop_fields[1:]
+                ],
             }
         ],
     )
-
 
 def test_minor_loop_validator_accepts_branch_only_fixture(tmp_path: Path) -> None:
     write_minor_loop_fixture(tmp_path)
@@ -146,6 +148,15 @@ def test_minor_loop_validator_accepts_branch_only_fixture(tmp_path: Path) -> Non
     assert result.returncode == 0, result.stderr + result.stdout
     assert "validated hysteresis minor loop" in result.stdout
     assert "policy=branch_only" in result.stdout
+
+
+def test_minor_loop_validator_accepts_intermediate_field_fixture(tmp_path: Path) -> None:
+    write_minor_loop_fixture(tmp_path, intermediate_fields_mT=[0.0])
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "points=3" in result.stdout
 
 
 def test_minor_loop_validator_accepts_resume_parent_fixture(tmp_path: Path) -> None:

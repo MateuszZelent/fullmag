@@ -144,25 +144,33 @@ def main() -> int:
         )
     require_close(loop.get("reversal_field_mT"), EXPECTED_REVERSAL_MT, "reversal_field_mT")
     require_close(loop.get("return_field_mT"), EXPECTED_RETURN_MT, "return_field_mT")
-    if loop.get("reversal_point_id") != 0 or loop.get("return_point_id") != 1:
+    points = loop.get("points")
+    if not isinstance(points, list) or len(points) < 2:
+        raise SystemExit(f"minor loop must contain at least two branch points, got {points!r}")
+    return_point_id = len(points) - 1
+    if loop.get("reversal_point_id") != 0 or loop.get("return_point_id") != return_point_id:
         raise SystemExit(
-            "minor loop must use branch-local reversal_point_id=0 and return_point_id=1"
+            "minor loop must use branch-local reversal_point_id=0 and "
+            f"return_point_id={return_point_id}"
         )
 
-    points = loop.get("points")
-    if not isinstance(points, list) or len(points) != 2:
-        raise SystemExit(f"minor loop must contain two branch points, got {points!r}")
     require_point(points[0], EXPECTED_REVERSAL_MT, loop_id, "points[0]")
-    require_point(points[1], EXPECTED_RETURN_MT, loop_id, "points[1]")
-    require_return_point_snapshot(points[1], "points[1]")
+    for index, point in enumerate(points[1:-1], start=1):
+        field_value_mT = require_number(
+            point.get("field_value_mT"),
+            f"points[{index}].field_value_mT",
+        )
+        require_point(point, field_value_mT, loop_id, f"points[{index}]")
+    require_point(points[-1], EXPECTED_RETURN_MT, loop_id, f"points[{return_point_id}]")
+    require_return_point_snapshot(points[-1], f"points[{return_point_id}]")
 
     settle_trace = loop.get("settle_trace")
     if not isinstance(settle_trace, list) or not settle_trace:
         raise SystemExit("minor loop must contain a non-empty settle_trace")
     require_close(
-        settle_trace[0].get("field_value_mT"),
+        settle_trace[-1].get("field_value_mT"),
         EXPECTED_RETURN_MT,
-        "settle_trace[0].field_value_mT",
+        f"settle_trace[{len(settle_trace) - 1}].field_value_mT",
     )
     if loop.get("closure_error_m_parallel") is not None:
         require_number(loop.get("closure_error_m_parallel"), "closure_error_m_parallel")

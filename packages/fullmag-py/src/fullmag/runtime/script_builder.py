@@ -3123,6 +3123,15 @@ def _render_hysteresis_minor_loop(value: object) -> str:
         f"reversal_mT={_py_number(float(payload.get('reversal_mT', 0.0)))}",
         f"return_mT={_py_number(float(payload.get('return_mT', 0.0)))}",
     ]
+    intermediate_fields = payload.get("intermediate_fields_mT")
+    if intermediate_fields:
+        if not isinstance(intermediate_fields, list):
+            raise ValueError("hysteresis minor loop intermediate_fields_mT must be a list")
+        args.append(
+            "intermediate_fields_mT=["
+            + ", ".join(_py_number(float(field)) for field in intermediate_fields)
+            + "]"
+        )
     if payload.get("continuation_policy") not in (None, "branch_only"):
         args.append(f"continuation_policy={_py_repr(str(payload['continuation_policy']))}")
     return (

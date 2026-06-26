@@ -257,8 +257,14 @@ $\mathbf{H}_{\text{ext}}$ in $\text{A/m}$; lowering therefore records
   published `hysteresis_points.json` major-loop points; consumers must treat
   the replacement as minor-loop continuation provenance recorded in
   `hysteresis_minor_loops.json`.
-- Interpolated reversal states and multi-segment minor-loop schedules remain
-  deferred.
+- Minor loops may include `intermediate_fields_mT` to execute additional
+  history-dependent field points between the reversal field and return field.
+  The runtime advances through each intermediate point in order from the
+  previous computed magnetization; it does not interpolate magnetization or snap
+  reported fields to major-loop points. `return_point_id` identifies the final
+  point in the minor-loop artifact.
+- Interpolated reversal states and richer labeled/segmented minor-loop schedule
+  metadata remain deferred.
 - Consumers must not interpret `derived_from_major_loop_window` as evidence
   that such a branch was executed.
 
@@ -325,7 +331,11 @@ are included in the final metrics calculation.
   fast FDM macrospin regression uses a near-easy-axis variant at
   $\theta=30^\circ$ rather than the exactly collinear $\theta=0^\circ$ case,
   because ideal easy-axis switching is a torque-free saddle in deterministic
-  local minimization and needs an explicit perturbation/noise policy.
+  local minimization and needs an explicit perturbation/noise policy. The fast
+  artifact validator also rejects gross violations of the analytical
+  Stoner-Wohlfarth astroid coercivity ratio between the $\theta=30^\circ$ and
+  $\theta=45^\circ$ variants; tighter publication tolerances remain a separate
+  acceptance gate.
 - Thin-film demagnetizing contrast for OOP versus in-plane applied fields. The
   fast FDM CPU regression uses a tiny strip with demag enabled and verifies that
   the in-plane high-field projection remains much larger than the OOP
@@ -339,6 +349,10 @@ are included in the final metrics calculation.
   variants and verifies that each stored point satisfies
   `m_parallel = <m> . u_meas`, `m_oop = <m> . n_sample`, and
   `m_ip = |<m> - m_oop n_sample|`.
+- The publication-suite manifest validator requires the fast FDM macrospin
+  Stoner-Wohlfarth trend, the FDM thin-film OOP/IP demag contrast fixture, and
+  the projection/custom-angle benchmark to be present, reproducibly described,
+  and individually valid before the suite is accepted.
 - Playback artifact validation must verify `m_avg` directly from stored `m`
   snapshots. For `uniform_sample_average`, the verifier uses the unweighted
   mean. For weighted FDM/FEM cases, the verifier uses the stored
@@ -378,13 +392,21 @@ are included in the final metrics calculation.
   branch-local points and settle trace
 - [x] Public DSL/ProblemIR/runtime provenance for `resume_parent` minor-loop
   continuation without mutating the major-loop artifact
+- [x] Public DSL/ProblemIR/runtime provenance for `replace_parent` minor-loop
+  continuation as a working-parent state replacement for later minor loops,
+  without rewriting the major-loop artifact
 - [ ] Higher-order FEM and future non-P1 basis-specific hysteresis averaging
+- [x] Multi-point minor-loop schedules through `intermediate_fields_mT`, with
+  history-dependent execution and final return-point provenance
 - [ ] Complete remaining minor-loop extensions: interpolated reversal states
-  and multi-segment minor-loop schedules
+  and richer labeled/segmented schedule metadata
 - [x] Explicit adaptive-refinement metrics policy (`include_in_metrics`) with
   default schedule-only metrics
 - [x] Adaptive refinement scheduler honors `max_passes`,
   `max_insertions_per_pass`, and descendant adaptive points in metrics when
   explicitly opted in
-- [ ] Publication-grade scientific validation suite across OOP, in-plane, and
-  custom-angle benchmark cases
+- [x] Fast publication-suite manifest gate across macrospin, OOP/IP thin-film,
+  and custom-angle projection benchmark cases
+- [ ] Publication-grade scientific validation suite with analytical
+  Stoner-Wohlfarth tolerances, metric-status gates, and cross-backend acceptance
+  criteria

@@ -1093,6 +1093,9 @@ export function airboxVisualizationStatePatchFromTargetPatch(
     ...(patch.scalarColorPalette === undefined
       ? {}
       : { scalarColorPalette: patch.scalarColorPalette }),
+    ...(patch.surfaceColorSource === undefined
+      ? {}
+      : { surfaceColorSource: patch.surfaceColorSource }),
     ...(patch.viewportColorbarVisible === undefined
       ? {}
       : { viewportColorbarVisible: patch.viewportColorbarVisible }),
@@ -1399,7 +1402,7 @@ function surfaceColorSourceFromColorMode(
   return undefined;
 }
 
-function defaultSurfaceColorSourceForQuantity(
+export function defaultSurfaceColorSourceForQuantity(
   activeQuantityId: string,
   vectorColorMode: VisualizationColorMode,
 ): SurfaceColorSource {

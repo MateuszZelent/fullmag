@@ -4800,7 +4800,11 @@ class ProblemApiTests(unittest.TestCase):
                     return_mT=-50.0,
                     continuation_policy="replace_parent",
                 ),
-                fm.MinorLoop(reversal_mT=-50.0, return_mT=50.0),
+                fm.MinorLoop(
+                    reversal_mT=-50.0,
+                    intermediate_fields_mT=[0.0],
+                    return_mT=50.0,
+                ),
             ],
         )
         """
@@ -4818,6 +4822,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(ir["minor_loops"][0]["continuation_policy"], "resume_parent")
         self.assertEqual(ir["minor_loops"][1]["continuation_policy"], "replace_parent")
         self.assertEqual(ir["minor_loops"][2]["continuation_policy"], "branch_only")
+        self.assertEqual(ir["minor_loops"][2]["intermediate_fields_mT"], [0.0])
 
         rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
         self.assertIn('branch_mode="major_with_minor_loops"', rewritten)
@@ -4825,6 +4830,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertIn("fm.MinorLoop(", rewritten)
         self.assertIn('continuation_policy="resume_parent"', rewritten)
         self.assertIn('continuation_policy="replace_parent"', rewritten)
+        self.assertIn("intermediate_fields_mT=[0]", rewritten)
 
         with TemporaryDirectory() as tmp_dir:
             rewritten_path = Path(tmp_dir) / "rewritten_hysteresis_minor_loops.py"

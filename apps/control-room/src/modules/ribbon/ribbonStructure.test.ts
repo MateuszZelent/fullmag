@@ -599,9 +599,80 @@ describe("ribbon structure", () => {
       {
         overrides: [
           {
+            scope: "airbox",
+            scope_id: "airbox",
+            style: {
+              surface_color_source: "component_x",
+            },
+          },
+        ],
+      },
+      {
+        overrides: [
+          {
             quantity: { active_quantity_id: "H_eff" },
             scope: "object",
             scope_id: "free-layer",
+          },
+        ],
+      },
+    ]);
+    await vi.waitFor(() =>
+      expect(invalidations).toEqual([[VISUALIZATION_STATE_PATH, 41]]),
+    );
+  });
+
+  it("switches selected scalar quantities to colormap surface coloring", async () => {
+    const { context, invalidations, patches } =
+      createVisualizationRibbonContext({
+        active_quantity_id: "m",
+        overrides: [],
+        quantity: { active_quantity_id: "m" },
+        revision: 7,
+      });
+    const selection = {
+      kind: "object.visualization" as const,
+      label: "Free layer",
+      moduleSource: "test",
+      nodeId: "model:object:free-layer:visualization",
+      objectId: "free-layer",
+      ref: null,
+    };
+    const content = buildRibbonTabContent("view", {
+      ...context,
+      selection,
+    });
+    const selectedGroup = content?.groups.find(
+      (group) => group.id === "view-selected-display",
+    );
+    const textureAction = selectedGroup?.actions.find(
+      (action) => action.id === "view-selected-texture",
+    );
+    const quantityNode = textureAction?.menu?.find(
+      (node) =>
+        node.type === "radio-group" && node.id === "selected-texture:quantity",
+    );
+
+    expect(quantityNode?.type === "radio-group" ? quantityNode.items : []).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ value: "torque" }),
+        expect.objectContaining({ value: "eden_total" }),
+      ]),
+    );
+    if (quantityNode?.type !== "radio-group") {
+      throw new Error("Expected selected target quantity control");
+    }
+
+    await runRibbonNode(quantityNode, "eden_total", { ...context, selection });
+
+    expect(patches).toEqual([
+      {
+        overrides: [
+          {
+            quantity: { active_quantity_id: "eden_total" },
+            scope: "object",
+            scope_id: "free-layer",
+            style: { surface_color_source: "colormap" },
           },
         ],
       },
@@ -1815,6 +1886,12 @@ describe("ribbon structure", () => {
       commandId: RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
       value: "m",
     });
+    expect(sourceNode?.type === "radio-group" ? sourceNode.items : []).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ value: "torque" }),
+        expect.objectContaining({ value: "eden_total" }),
+      ]),
+    );
     if (!hEffAction?.commandId || sourceNode?.type !== "radio-group") {
       throw new Error("Expected Results quantity controls");
     }

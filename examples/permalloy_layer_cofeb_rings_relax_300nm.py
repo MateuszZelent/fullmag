@@ -133,10 +133,10 @@ study.stages.add_minimize(
 
 study.stages.add_relax(
     algorithm="llg_overdamped",
-    solver="rk45",
+    solver="rk23",
     max_error=1e-6,
     dt_min=1e-17,
-    dt_max=1e-15,
+    dt_max=1e-13,
     max_steps=RELAX_MAX_STEPS,
     tol=1e-4,
 )

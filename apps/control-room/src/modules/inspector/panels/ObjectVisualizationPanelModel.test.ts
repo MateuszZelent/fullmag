@@ -86,6 +86,7 @@ describe("ObjectVisualizationPanelModel", () => {
       "H_demag",
       "H_ex",
       "H_ani",
+      "torque",
       "eden_total",
       "eden_ex",
       "eden_demag",

@@ -902,6 +902,9 @@ run-hysteresis-fdm-thinfilm-oop-ip-smoke:
 verify-hysteresis-fdm-thinfilm-oop-ip artifacts_dir:
     python3 scripts/verify_hysteresis_fdm_thinfilm_oop_ip_artifacts.py "{{artifacts_dir}}"
 
+verify-hysteresis-publication-suite manifest:
+    python3 scripts/verify_hysteresis_publication_suite.py "{{manifest}}"
+
 run-permalloy-box-relax-fdm web_port="3100":
     just run-permalloy-box-relax-fdm-interactive "{{web_port}}"
 

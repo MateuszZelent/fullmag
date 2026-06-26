@@ -4574,6 +4574,13 @@ Status wykonania:
   dala `9 passed`, a
   `python3 -m py_compile scripts/verify_hysteresis_fdm_macrospin_sw_artifacts.py scripts/test_verify_hysteresis_fdm_macrospin_sw_artifacts.py`
   przeszlo bez bledow.
+  Aktualizacja 2026-06-26: validator SW odrzuca teraz rowniez razaco
+  niezgodny z astroidem stosunek `Hc(theta45)/Hc(theta30)`, nawet jezeli
+  prosty trend `theta45 < theta30` nadal bylby spelniony. To jest szybki
+  sanity gate dla obecnego coarse fixture, nie pelna tolerancja analityczna
+  publikacyjnego sweepu. Weryfikacja:
+  `python3 -m pytest scripts/test_verify_hysteresis_fdm_macrospin_sw_artifacts.py -q`
+  zwrocilo `8 passed`.
 - Zamkniety szybki fixture FDM CPU dla cienkiej warstwy OOP i paska in-plane:
   `examples/hysteresis_fdm_thinfilm_oop_ip_validation.py` uruchamia maly
   pasek `100 x 20 x 10 nm`, demag wlaczony, rodzine katowa `ip_near_x` oraz
@@ -4597,6 +4604,27 @@ Status wykonania:
   dala `14 passed`, a
   `python3 -m py_compile scripts/verify_hysteresis_fdm_macrospin_sw_artifacts.py scripts/test_verify_hysteresis_fdm_macrospin_sw_artifacts.py scripts/verify_hysteresis_fdm_thinfilm_oop_ip_artifacts.py scripts/test_verify_hysteresis_fdm_thinfilm_oop_ip_artifacts.py`
   przeszlo bez bledow.
+- Zamknieta manifestowa bramka publication suite dla trzech szybkich
+  benchmarkow: `macrospin_sw`, `thinfilm_oop_ip` i
+  `projection_benchmark`. `scripts/verify_hysteresis_publication_suite.py`
+  wymaga manifestu `hysteresis-publication-suite/v1`, sprawdza obecność
+  wszystkich trzech przypadkow, wymaga metadanych reprodukowalnosci
+  (`artifact_dir`, `run_command`, `validator`, `backend`, `device`,
+  `precision`, `roles`) i deleguje do istniejacych walidatorow:
+  `verify_hysteresis_fdm_macrospin_sw_artifacts.py`,
+  `verify_hysteresis_fdm_thinfilm_oop_ip_artifacts.py` oraz
+  `verify_hysteresis_projection_benchmark.py`. Target
+  `just verify-hysteresis-publication-suite <manifest>` jest publiczna bramka
+  CI/operatora dla zestawu artifact dirs. Weryfikacja:
+  `python3 -m pytest scripts/test_verify_hysteresis_publication_suite.py -q`
+  zwrocilo `5 passed`; agregat
+  `python3 -m pytest scripts/test_verify_hysteresis_projection_benchmark.py scripts/test_verify_hysteresis_fdm_macrospin_sw_artifacts.py scripts/test_verify_hysteresis_fdm_thinfilm_oop_ip_artifacts.py scripts/test_verify_hysteresis_publication_suite.py -q`
+  zwrocil `21 passed`; oraz
+  `python3 -m py_compile scripts/verify_hysteresis_publication_suite.py scripts/test_verify_hysteresis_publication_suite.py`
+  przeszlo bez bledow.
+  Bramka pozostaje szybkim suite gate dla obecnych FDM/projection fixtures; pelne
+  publikacyjne tolerancje analityczne, metric-status gates i cross-backend
+  acceptance pozostaja osobnym etapem.
 - Zamkniety fixture niewystarczajacego pola saturacji: target
   `just run-hysteresis-waveguide-saturation-limit-smoke cpu` uruchomil sesje
   `session-1781258014197-2056303`, a
@@ -4648,6 +4676,27 @@ Status wykonania:
   kontynuacje roboczego parent state dla kolejnych minor loops w tej samej
   stage; `hysteresis_points.json` pozostaje artefaktem major-loop i nie jest
   przepisywany.
+  Aktualizacja 2026-06-26: walidator artefaktow minor-loop akceptuje teraz
+  `branch_only`, `resume_parent` i `replace_parent`, wymaga
+  `closure_status="replaced_parent"` dla `replace_parent`, oraz nadal odrzuca
+  punkty minor-loop w `hysteresis_points.json`. Weryfikacja lokalna:
+  `python3 -m pytest scripts/test_verify_hysteresis_minor_loop_artifacts.py -q`
+  zwrocilo `8 passed`;
+  `PYTHONPATH=packages/fullmag-py/src python3 -m pytest packages/fullmag-py/tests/test_api.py -k hysteresis_minor_loop -q`
+  zwrocilo `2 passed, 216 deselected`;
+  `CARGO_TARGET_DIR=/dev/shm/fullmag-codex-target cargo test -p fullmag-ir hysteresis --no-fail-fast`
+  zwrocilo `23 passed`; oraz
+  `CARGO_TARGET_DIR=/dev/shm/fullmag-codex-target cargo test -p fullmag-runner hysteresis --no-fail-fast`
+  zwrocilo `65 passed`.
+  Aktualizacja 2026-06-26: minor-loop ma minimalny multi-point schedule przez
+  `intermediate_fields_mT`. Python DSL, canonical script export, `ProblemIR`
+  i runtime zachowuja sciezke `reversal_mT -> intermediate_fields_mT... ->
+  return_mT`; runner wykonuje kazdy punkt od poprzednio policzonej
+  magnetyzacji, ustawia `return_point_id` na ostatni punkt i nie dopisuje
+  punktow minor-loop do `hysteresis_points.json`. `replace_parent` uzywa
+  finalnego return state rowniez wtedy, gdy petla ma punkty posrednie. To nie
+  jest jeszcze pelny labelowany `FieldScheduleIR` dla minor loops; segment
+  labels/reasons pozostaja osobnym rozszerzeniem.
 
 Brama produkcyjna:
 

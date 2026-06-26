@@ -249,6 +249,7 @@ export const VISUALIZATION_QUANTITY_ITEMS: Array<{
   { value: "H_demag", label: "Demag field / H_demag" },
   { value: "H_ex", label: "Exchange field / H_ex" },
   { value: "H_ani", label: "Anisotropy field / H_ani" },
+  { value: "torque", label: "Torque / torque" },
   { value: "eden_total", label: "Total energy density / eden_total" },
   { value: "eden_ex", label: "Exchange energy density / eden_ex" },
   { value: "eden_demag", label: "Demag energy density / eden_demag" },

@@ -1083,6 +1083,8 @@ fn default_hysteresis_minor_loop_continuation_policy() -> String {
 pub struct MinorLoopIR {
     pub reversal_mT: f64,
     pub return_mT: f64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub intermediate_fields_mT: Vec<f64>,
     #[serde(default = "default_hysteresis_minor_loop_continuation_policy")]
     pub continuation_policy: String,
 }
