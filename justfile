@@ -87,6 +87,21 @@ verify-fem-relaxation-source-contract:
     docker compose --profile fem-gpu run --rm \
       fem-gpu bash -lc 'cd /workspace && cmake --build native/build --target fem_relaxation_source_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_relaxation_source_contract'
 
+verify-fem-exchange-runtime:
+    just ensure-managed-fem-runtime
+    docker compose --profile fem-gpu run --rm \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_FDM_EXECUTION=cpu \
+      -e FULLMAG_FEM_EXECUTION=cpu \
+      -e FULLMAG_RELAX_DEVICE=cpu \
+      -e FULLMAG_CPU_THREADS="${FULLMAG_CPU_THREADS:-auto}" \
+      -e FULLMAG_HOST_UID="$(id -u)" \
+      -e FULLMAG_HOST_GID="$(id -g)" \
+      fem-gpu bash -lc 'cd /workspace && \
+        trap '\''chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" tests/fem_exchange_validation/results 2>/dev/null || true'\'' EXIT && \
+        scripts/verify_fem_exchange_runtime.sh'
+
 verify-fem-frequency-domain-native-contract:
     just ensure-managed-fem-runtime
     docker compose --profile fem-gpu run --rm \

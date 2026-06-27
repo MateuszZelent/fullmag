@@ -24,6 +24,7 @@ clear_runtime_bundle_contents() {
   mkdir -p "$runtime_root/bin" "$runtime_root/lib" "$runtime_root/include"
   find "$runtime_root/bin" "$runtime_root/lib" \
     -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+  rm -f "$runtime_root"/_fullmag_core*.so
   rm -rf "$runtime_root/include"
   rm -rf "$runtime_root/openmpi"
   mkdir -p "$runtime_root/include"
@@ -31,14 +32,14 @@ clear_runtime_bundle_contents() {
 }
 echo "[export_fem_gpu_runtime] using cached cargo target when available; no cargo clean is performed"
 
-echo "[export_fem_gpu_runtime] building fullmag-cli and fullmag-api with cuda fem-gpu release features"
+echo "[export_fem_gpu_runtime] building fullmag-cli, fullmag-api, and PyO3 core with cuda fem-gpu release features"
 cargo_jobs="${FULLMAG_FEM_RUNTIME_CARGO_JOBS:-1}"
 if ! [[ "$cargo_jobs" =~ ^[1-9][0-9]*$ ]]; then
   echo "[export_fem_gpu_runtime] FULLMAG_FEM_RUNTIME_CARGO_JOBS must be a positive integer, got: ${cargo_jobs}" >&2
   exit 2
 fi
 echo "[export_fem_gpu_runtime] cargo build jobs: ${cargo_jobs}"
-FULLMAG_USE_MFEM_STACK=ON cargo +nightly build -j "$cargo_jobs" -p fullmag-cli -p fullmag-api --features "fullmag-cli/cuda fullmag-cli/fem-gpu fullmag-api/cuda fullmag-api/fem-gpu" --release 2>&1 | tee /tmp/fullmag-build.log
+FULLMAG_USE_MFEM_STACK=ON cargo +nightly build -j "$cargo_jobs" -p fullmag-cli -p fullmag-api -p fullmag-py-core --features "fullmag-cli/cuda fullmag-cli/fem-gpu fullmag-api/cuda fullmag-api/fem-gpu" --release 2>&1 | tee /tmp/fullmag-build.log
 echo "[export_fem_gpu_runtime] clearing previous runtime bundle contents"
 clear_runtime_bundle_contents
 echo "[export_fem_gpu_runtime] copying launcher and API binaries"
@@ -50,6 +51,11 @@ copy_runtime_binary() {
 }
 copy_runtime_binary target/release/fullmag .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu-bin
 copy_runtime_binary target/release/fullmag-api .fullmag/runtimes/fem-gpu-host/bin/fullmag-api
+if [ ! -f target/release/lib_fullmag_core.so ]; then
+  echo "[export_fem_gpu_runtime] failed to locate PyO3 module: target/release/lib_fullmag_core.so" >&2
+  exit 1
+fi
+install -m 755 target/release/lib_fullmag_core.so .fullmag/runtimes/fem-gpu-host/_fullmag_core.so
 latest_native_lib_dir() {
   local pattern="$1"
   local selected
@@ -247,6 +253,7 @@ require_exported_path .fullmag/runtimes/fem-gpu-host/lib/pmix2/lib/pmix/mca_pcom
 require_exported_path .fullmag/runtimes/fem-gpu-host/lib/pmix2/share/pmix/help-pmix-runtime.txt "PMIx help data"
 require_exported_path .fullmag/runtimes/fem-gpu-host/lib/libpetsc_real.so "PETSc shared library"
 require_exported_path .fullmag/runtimes/fem-gpu-host/lib/libslepc_real.so "SLEPc shared library"
+require_exported_path .fullmag/runtimes/fem-gpu-host/_fullmag_core.so "PyO3 _fullmag_core module"
 require_exported_path .fullmag/runtimes/fem-gpu-host/lib/cmake/fullmag-frequency-domain/FindPETSc.cmake "PETSc CMake find module"
 require_exported_path .fullmag/runtimes/fem-gpu-host/lib/cmake/fullmag-frequency-domain/FindSLEPc.cmake "SLEPc CMake find module"
 export PETSC_VERSION="$petsc_version"
@@ -290,7 +297,8 @@ chown -R "${runtime_owner}" \
   .fullmag/runtimes/fem-gpu-host/bin \
   .fullmag/runtimes/fem-gpu-host/lib \
   .fullmag/runtimes/fem-gpu-host/include \
-  .fullmag/runtimes/fem-gpu-host/openmpi
+  .fullmag/runtimes/fem-gpu-host/openmpi \
+  .fullmag/runtimes/fem-gpu-host/_fullmag_core.so
 echo "[export_fem_gpu_runtime] container-side export complete"
 '
 
@@ -302,6 +310,7 @@ RUNTIME_ROOT="$(cd "${SELF_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${RUNTIME_ROOT}/../../.." && pwd)"
 export FULLMAG_REPO_ROOT="${REPO_ROOT}"
 export LD_LIBRARY_PATH="${RUNTIME_ROOT}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+export PYTHONPATH="${RUNTIME_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 OPENMPI_ROOT="${RUNTIME_ROOT}/openmpi"
 if [ -e "${RUNTIME_ROOT}/lib/libmpi.so.40" ]; then
   missing_openmpi=0
@@ -421,6 +430,9 @@ manifest = {
         "launcher": "bin/fullmag-fem-gpu",
         "worker": "bin/fullmag-fem-gpu-bin",
         "api": "bin/fullmag-api",
+    },
+    "python_modules": {
+        "_fullmag_core": "_fullmag_core.so",
     },
     "frequency_domain_dependencies": dependency_info,
 }

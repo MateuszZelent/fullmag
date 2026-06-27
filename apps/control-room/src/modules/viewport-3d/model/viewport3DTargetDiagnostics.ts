@@ -99,6 +99,9 @@ function summarizeTargetBuffers(
       `scope=${pass.fieldBuffer.scopeKind}:${scopeId}`,
       `points=${pass.fieldBuffer.pointCount}`,
       `ncomp=${pass.fieldBuffer.vectorComponentCount}`,
+      `indexing=${pass.fieldBuffer.indexing ?? "unknown"}`,
+      `nodeIndices=${pass.fieldBuffer.nodeIndexCount ?? "none"}`,
+      `topologyHash=${pass.fieldBuffer.meshTopologyHash ?? "none"}`,
       `sampled=${pass.fieldBuffer.sampled}`,
       `state=${pass.fieldBufferState}`,
     ].join(" "),
@@ -122,6 +125,21 @@ function summarizeTargetDegradation(
         ].join(" "),
       );
     }
+  }
+  if (pass.surface.scalarColors?.rangeDiagnostics?.outlierDominated) {
+    const diagnostics = pass.surface.scalarColors.rangeDiagnostics;
+    degradation.add(
+      [
+        "surface:range-outlier-dominated",
+        `min=${diagnostics.min}`,
+        `max=${diagnostics.max}`,
+        `p01=${diagnostics.p01}`,
+        `p99=${diagnostics.p99}`,
+        `finite=${diagnostics.finiteCount}`,
+        `nonFinite=${diagnostics.nonFiniteCount}`,
+        `zero=${diagnostics.zeroCount}`,
+      ].join(" "),
+    );
   }
   if (pass.vectors.degradation) {
     degradation.add(`vector-glyph:${pass.vectors.degradation}`);

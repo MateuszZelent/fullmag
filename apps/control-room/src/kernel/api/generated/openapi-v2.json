@@ -4317,7 +4317,7 @@
             ]
           },
           "max_samples": {
-            "description": "Optional hard cap for vector samples returned by the binary payload.\n\nScoped FEM queries are sampled by scope node index. Unscoped queries\nreturn a contiguous center window for lightweight diagnostics.",
+            "description": "Optional hard cap for vector samples returned by the binary payload.\n\nFMVP v3 encodes sampled FEM responses with `sampled_node_indices`.\nSampled responses are valid for vector glyph placement only; surface\nshader coloring requires either full-domain data or an explicit complete\nnode-index mapping for the target surface.",
             "format": "int32",
             "minimum": 0,
             "type": [
@@ -10183,12 +10183,16 @@
               "integer",
               "null"
             ]
+          },
+          "topology_fingerprint": {
+            "type": "string"
           }
         },
         "required": [
           "revision",
           "mesh_name",
-          "mesh_id"
+          "mesh_id",
+          "topology_fingerprint"
         ],
         "type": "object"
       },
@@ -10249,11 +10253,15 @@
             "format": "int32",
             "minimum": 0,
             "type": "integer"
+          },
+          "topology_fingerprint": {
+            "type": "string"
           }
         },
         "required": [
           "mesh_name",
           "mesh_id",
+          "topology_fingerprint",
           "object_segment_count",
           "mesh_part_count"
         ],
@@ -21863,7 +21871,7 @@
             }
           },
           {
-            "description": "Optional hard cap for vector samples returned by the binary payload.\n\nScoped FEM queries are sampled by scope node index. Unscoped queries\nreturn a contiguous center window for lightweight diagnostics.",
+            "description": "Optional hard cap for vector samples returned by the binary payload.\n\nFMVP v3 encodes sampled FEM responses with `sampled_node_indices`.\nSampled responses are valid for vector glyph placement only; surface\nshader coloring requires either full-domain data or an explicit complete\nnode-index mapping for the target surface.",
             "in": "query",
             "name": "max_samples",
             "required": false,
@@ -21931,7 +21939,7 @@
             "content": {
               "application/octet-stream": {}
             },
-            "description": "Binary FMVP v2 field vector"
+            "description": "Binary FMVP field vector. FEM payloads use FMVP v3 metadata with domain_generation_id, mesh topology revision/hash, scope kind/id, indexing, and optional node_indices. FMVP v2 remains accepted for legacy full-domain payloads."
           },
           "204": {
             "description": "Recognized field quantity is not available yet"

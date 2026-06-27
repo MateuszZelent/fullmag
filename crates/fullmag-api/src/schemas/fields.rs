@@ -67,8 +67,10 @@ pub struct FieldVectorQuery {
     pub scope_id: Option<String>,
     /// Optional hard cap for vector samples returned by the binary payload.
     ///
-    /// Scoped FEM queries are sampled by scope node index. Unscoped queries
-    /// return a contiguous center window for lightweight diagnostics.
+    /// FMVP v3 encodes sampled FEM responses with `sampled_node_indices`.
+    /// Sampled responses are valid for vector glyph placement only; surface
+    /// shader coloring requires either full-domain data or an explicit complete
+    /// node-index mapping for the target surface.
     pub max_samples: Option<u32>,
     /// Optional persisted analysis snapshot id, for example a saved
     /// hysteresis-point magnetization state.

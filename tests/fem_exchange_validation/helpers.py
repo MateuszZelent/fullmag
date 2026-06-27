@@ -70,6 +70,15 @@ def analytical_helical_exchange_energy(
     return float(aex) * k * k * float(volume)
 
 
+def exchange_amplitude_from_energy(*, exchange_energy: float, ms: float, volume: float) -> float:
+    """Return helical |H_ex| implied by exchange energy for E=A k^2 V."""
+    if ms <= 0.0:
+        raise ValueError(f"ms must be positive, got {ms}")
+    if volume <= 0.0:
+        raise ValueError(f"volume must be positive, got {volume}")
+    return 2.0 * float(exchange_energy) / (MU0 * float(ms) * float(volume))
+
+
 def relative_error(value: float, reference: float) -> float:
     """Return a finite relative error against a nonzero reference value."""
     if not math.isfinite(value):

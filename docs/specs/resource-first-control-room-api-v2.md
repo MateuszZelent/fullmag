@@ -304,6 +304,15 @@ Required field sample scopes:
 Scope resolution is a backend contract. The frontend may request a selected scope, but it must not
 download full-domain data just to filter large FEM payloads client-side.
 
+FEM vector field payloads use versioned FMVP. FMVP v3 includes
+`domain_generation_id`, mesh topology revision/hash, scope kind/id, an indexing
+mode, and `node_indices` for explicit or sampled non-full-domain payloads.
+`sampled_node_indices` payloads are valid for vector glyph placement only;
+surface shaders require `full_domain` or `explicit_node_indices` data that can
+be matched to the target topology. FMVP v2 remains a legacy full-domain
+compatibility format and must not be treated as proof for scoped FEM surface
+mapping.
+
 The same rule applies to realtime fetch hints. If the active viewport consumes
 `component=magnitude&scope_kind=airbox&scope_id=part:__air__`, the invalidation
 system must prefer that scoped query. It must not fall back to

@@ -2287,10 +2287,14 @@ describe("useViewport3DSceneModel", () => {
       scope_id: "part:__air__",
       scope_kind: "airbox",
     });
-    expect(resolveViewport3DFieldVectorResourceKey("H_eff", request!.query))
-      .toBe(
-        "/v2/sessions/current/data/fields/H_eff/samples/vector?component=x&scope_id=part%3A__air__&scope_kind=airbox",
-      );
+    const resourceKey = resolveViewport3DFieldVectorResourceKey(
+      "H_eff",
+      request!.query,
+    );
+    const resourceQuery = new URLSearchParams(resourceKey.split("?")[1] ?? "");
+    expect(resourceQuery.get("component")).toBe("x");
+    expect(resourceQuery.get("scope_id")).toBe("part:__air__");
+    expect(resourceQuery.get("scope_kind")).toBe("airbox");
     expect(request?.requestId).toContain("component=x");
     expect(request?.requestId).not.toContain("max_samples=1200");
   });

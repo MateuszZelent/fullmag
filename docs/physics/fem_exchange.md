@@ -153,12 +153,23 @@ and the top-level `Context` does not own a flat `enable_exchange` field.
 
 ## Testy
 
-Current local gate:
+Current source-contract gate:
 
 ```bash
 cmake --build native/build --target fem_exchange_contract
 ctest --test-dir native/build/backends/fem -R fem_exchange_contract --output-on-failure
 ```
+
+Final runtime proof uses the managed FEM runtime route:
+
+```bash
+just verify-fem-exchange-runtime
+```
+
+That recipe first runs `just ensure-managed-fem-runtime`, then executes
+`tests/fem_exchange_validation/sinusoidal_mode.py` in the FEM runtime container.
+Host CMake/CTest runs are useful diagnostics and source-contract checks, but
+they are not the final native FEM exchange runtime proof.
 
 `fem_exchange_contract` also checks source-module ownership for operator
 assembly, field computation, runtime refresh, fallback, mass projection, and
@@ -173,9 +184,13 @@ masking, and the separation between exchange upload, RK dispatch, and final
 energy reductions.
 
 Runtime validation is gated by
+`just verify-fem-exchange-runtime`, which runs
 `tests/fem_exchange_validation/sinusoidal_mode.py`. The scripted acceptance
 requires finite `H_ex` and energy metrics, finest-mesh `H_ex` relative error
-below 25% against `2 A_ex/(mu0 Ms) Delta m`, and finest-mesh energy relative
-error below 8% against `A_ex k^2 V`. Executing the full CSV sweep still requires
-an environment with complete MFEM/libCEED headers, libraries, and the matching
-PyO3 `_fullmag_core`.
+below 25% against `2 A_ex/(mu0 Ms) Delta m` using the energy-equivalent
+helical amplitude `2 E_ex/(mu0 Ms V)`, and finest-mesh energy relative error
+below 8% against `A_ex k^2 V`. It also records raw `max_h_eff` as an
+outlier diagnostic and writes
+`tests/fem_exchange_validation/results/sinusoidal_mode.csv`. Executing the full
+CSV sweep still requires a managed runtime export with complete MFEM/libCEED
+libraries and the matching PyO3 `_fullmag_core`.

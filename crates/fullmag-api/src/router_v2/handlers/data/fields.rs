@@ -5,10 +5,10 @@ use std::collections::BTreeSet;
 use std::io::{BufRead, BufReader, Read};
 use std::sync::Arc;
 
+use axum::Json;
 use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::response::IntoResponse;
-use axum::Json;
 use serde::Deserialize;
 
 use super::field_resolution::{
@@ -18,26 +18,30 @@ use super::field_resolution::{
 };
 use crate::artifacts::{read_json_artifact_value, try_resolve_artifact_path};
 use crate::error::ApiError;
-use crate::fem_slice::{fem_tetra_linear_slice, fem_tetra_slab_slice, SlabAggregation};
+use crate::fem_slice::{SlabAggregation, fem_tetra_linear_slice, fem_tetra_slab_slice};
 use crate::fem_slice_overlay::{
-    collect_fem_slice_overlay, cut_norm_from_world, fem_normal_bounds_from_nodes,
-    overlay_segments_to_pixel_lines, FemSliceOverlayInput, SliceOverlayBounds,
+    FemSliceOverlayInput, SliceOverlayBounds, collect_fem_slice_overlay, cut_norm_from_world,
+    fem_normal_bounds_from_nodes, overlay_segments_to_pixel_lines,
 };
 use crate::fem_spatial_index::FemNormalAxisIndex;
 use crate::field_projection::{
-    component_etag_token, parse_component, project_values, ComponentSelection,
+    ComponentSelection, component_etag_token, parse_component, project_values,
 };
 use crate::field_render_png::{
-    encode_rgba_matrix_png, encode_rgba_matrix_png_with_lines, encode_scalar_png,
-    encode_scalar_png_with_lines, AutoScaleMode,
+    AutoScaleMode, encode_rgba_matrix_png, encode_rgba_matrix_png_with_lines, encode_scalar_png,
+    encode_scalar_png_with_lines,
 };
 use crate::field_slice::{
-    fdm_projection, fdm_slice, fem_projection_exact, fem_projection_profile, fem_slice_fallback,
+    FdmField, FemField, FieldProjectionProfileQuery, FieldProjectionQuery, FieldSliceQuery,
+    ProjectionResult, ResolvedProjectionQuery, SlicePlane, fdm_projection, fdm_slice,
+    fem_projection_exact, fem_projection_profile, fem_slice_fallback,
     resolve_projection_profile_query, resolve_projection_query, resolve_slice_query,
-    slice_etag_token, FdmField, FemField, FieldProjectionProfileQuery, FieldProjectionQuery,
-    FieldSliceQuery, ProjectionResult, ResolvedProjectionQuery, SlicePlane,
+    slice_etag_token,
 };
-use crate::field_store::serialize_field_vector_binary_v2;
+use crate::field_store::{
+    FieldVectorBinaryMetadata, FieldVectorIndexing, serialize_field_vector_binary_v2,
+    serialize_field_vector_binary_v3,
+};
 use crate::orientation_color::apply_magnetization_hsl_rgba;
 use crate::preview::{quantity_spatial_domain, quantity_unit};
 use crate::quantity_data_plane::{
@@ -67,6 +71,8 @@ static HDR_VALUE_COUNT: &str = "x-fullmag-value-count";
 static HDR_SCOPE_KIND: &str = "x-fullmag-scope-kind";
 static HDR_SCOPE_ID: &str = "x-fullmag-scope-id";
 static HDR_SNAPSHOT_ID: &str = "x-fullmag-snapshot-id";
+static HDR_FIELD_INDEXING: &str = "x-fullmag-field-indexing";
+static HDR_NODE_INDEX_COUNT: &str = "x-fullmag-node-index-count";
 const HYSTERESIS_ZARR_STORE: &str = "hysteresis.zarr";
 const HYSTERESIS_ZARR_M_FIELD: &str = "fields/m";
 
@@ -464,8 +470,8 @@ fn validate_hysteresis_zarr_root_point_index(
                 let actual = parse_column(column, name)?;
                 if actual != expected {
                     return Err(ApiError::internal(format!(
-                            "hysteresis Zarr root point index {name} mismatch for snapshot '{snapshot_id}': got {actual:?}, expected {expected:?}"
-                        )));
+                        "hysteresis Zarr root point index {name} mismatch for snapshot '{snapshot_id}': got {actual:?}, expected {expected:?}"
+                    )));
                 }
             }
             Ok(())
@@ -620,6 +626,48 @@ fn insert_snapshot_header(resp: &mut axum::response::Response, snapshot_id: Opti
         resp.headers_mut()
             .insert(HeaderName::from_static(HDR_SNAPSHOT_ID), value);
     }
+}
+
+fn insert_field_vector_binary_headers(
+    resp: &mut axum::response::Response,
+    encoding_version: u8,
+    topology_hash: Option<&str>,
+    indexing: Option<FieldVectorIndexing>,
+    node_index_count: Option<usize>,
+) {
+    let h = resp.headers_mut();
+    if let Ok(value) = HeaderValue::from_str(&format!("FMVP;version={encoding_version}")) {
+        h.insert(HeaderName::from_static(HDR_ENCODING), value);
+    }
+    if let Some(topology_hash) = topology_hash {
+        if let Ok(value) = HeaderValue::from_str(topology_hash) {
+            h.insert(
+                HeaderName::from_static("x-fullmag-mesh-topology-hash"),
+                value,
+            );
+        }
+    }
+    if let Some(indexing) = indexing {
+        h.insert(
+            HeaderName::from_static(HDR_FIELD_INDEXING),
+            HeaderValue::from_static(indexing.as_str()),
+        );
+    }
+    if let Some(node_index_count) = node_index_count {
+        if let Ok(value) = HeaderValue::from_str(&node_index_count.to_string()) {
+            h.insert(HeaderName::from_static(HDR_NODE_INDEX_COUNT), value);
+        }
+    }
+}
+
+fn field_vector_binary_header_counts(binary: &[u8]) -> (u8, usize, usize) {
+    if binary.len() < 16 || &binary[0..4] != b"FMVP" {
+        return (0, 0, 0);
+    }
+    let version = binary[4];
+    let n_comp = (binary[6] as usize).max(1);
+    let value_count = u32::from_le_bytes(binary[12..16].try_into().unwrap()) as usize;
+    (version, value_count / n_comp, value_count)
 }
 
 // ── Catalog ──────────────────────────────────────────────────────────────────
@@ -1311,19 +1359,54 @@ fn field_vector_sample_cache_token(max_samples: Option<usize>) -> String {
         .unwrap_or_default()
 }
 
+fn field_node_indices_cache_token(node_indices: Option<&[u32]>) -> String {
+    let Some(node_indices) = node_indices else {
+        return "none".to_string();
+    };
+    if node_indices.is_empty() {
+        return "empty".to_string();
+    }
+    node_indices
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn mesh_topology_hash_bytes(hash: &str) -> Result<[u8; 32], ApiError> {
+    let mut bytes = [0u8; 32];
+    if hash.len() != 64 {
+        return Err(ApiError::internal(format!(
+            "mesh topology hash must be 64 hex characters, got {}",
+            hash.len()
+        )));
+    }
+    for (index, chunk) in hash.as_bytes().chunks_exact(2).enumerate() {
+        let raw = std::str::from_utf8(chunk).map_err(|error| {
+            ApiError::internal(format!(
+                "mesh topology hash is not valid UTF-8 hex: {error}"
+            ))
+        })?;
+        bytes[index] = u8::from_str_radix(raw, 16).map_err(|error| {
+            ApiError::internal(format!("mesh topology hash contains invalid hex: {error}"))
+        })?;
+    }
+    Ok(bytes)
+}
+
 fn sample_unscoped_field_values(
     raw_values: Vec<f64>,
     grid: [u32; 3],
     n_comp: usize,
     max_samples: Option<usize>,
-) -> (Vec<f64>, [u32; 3]) {
+) -> (Vec<f64>, [u32; 3], Option<Vec<usize>>) {
     let Some(max_samples) = max_samples else {
-        return (raw_values, grid);
+        return (raw_values, grid, None);
     };
     let n_comp = n_comp.max(1);
     let point_count = raw_values.len() / n_comp;
     if max_samples >= point_count {
-        return (raw_values, grid);
+        return (raw_values, grid, None);
     }
 
     let sample_count = max_samples.max(1);
@@ -1334,7 +1417,11 @@ fn sample_unscoped_field_values(
         sampled.extend_from_slice(&raw_values[offset..offset + n_comp]);
     }
 
-    (sampled, [sample_count as u32, 1, 1])
+    (
+        sampled,
+        [sample_count as u32, 1, 1],
+        Some((start..start + sample_count).collect()),
+    )
 }
 
 // ── Binary vector — P1 ───────────────────────────────────────────────────────
@@ -1348,7 +1435,7 @@ fn sample_unscoped_field_values(
         FieldVectorQuery,
     ),
     responses(
-        (status = 200, description = "Binary FMVP v2 field vector", content_type = "application/octet-stream"),
+        (status = 200, description = "Binary FMVP field vector. FEM payloads use FMVP v3 metadata with domain_generation_id, mesh topology revision/hash, scope kind/id, indexing, and optional node_indices. FMVP v2 remains accepted for legacy full-domain payloads.", content_type = "application/octet-stream"),
         (status = 204, description = "Recognized field quantity is not available yet"),
         (status = 304, description = "Not modified — ETag matched"),
         (status = 400, description = "Invalid component or snapshot parameter"),
@@ -1487,6 +1574,18 @@ pub async fn get_field_vector(
     )?;
     let sample_limit = resolve_field_vector_sample_limit(&query, resolved_scope.as_ref())?;
     let resolved_scope = resolved_scope.map(|scope| sample_field_scope(scope, sample_limit));
+    let topology_hash = snapshot
+        .fem_mesh
+        .as_ref()
+        .map(fullmag_runner::fem_mesh_topology_fingerprint);
+    let topology_hash_bytes = topology_hash
+        .as_deref()
+        .map(mesh_topology_hash_bytes)
+        .transpose()?;
+    let topology_revision = snapshot.mesh_revision;
+    let scoped_node_indices = resolved_scope
+        .as_ref()
+        .map(|scope| scope.node_indices.clone());
 
     drop(guard);
 
@@ -1506,14 +1605,55 @@ pub async fn get_field_vector(
         .as_ref()
         .map(|scope| [scope.node_indices.len() as u32, 1, 1])
         .unwrap_or(grid);
-    let (raw_values, scoped_grid) = if resolved_scope.is_some() {
+    let (raw_values, scoped_grid, sampled_node_indices) = if resolved_scope.is_some() {
         (
             apply_field_scope(raw_values, grid, n_comp, resolved_scope.as_ref()),
             scoped_grid,
+            None,
         )
     } else {
         sample_unscoped_field_values(raw_values, scoped_grid, n_comp, sample_limit)
     };
+    let field_node_indices = scoped_node_indices.or(sampled_node_indices);
+    let field_node_indices_u32 = field_node_indices
+        .as_ref()
+        .map(|node_indices| {
+            node_indices
+                .iter()
+                .map(|index| {
+                    u32::try_from(*index).map_err(|_| {
+                        ApiError::internal(format!(
+                            "field node index {index} exceeds u32 payload capacity"
+                        ))
+                    })
+                })
+                .collect::<Result<Vec<_>, ApiError>>()
+        })
+        .transpose()?;
+    let field_indexing = topology_hash
+        .as_ref()
+        .map(|_| match field_node_indices_u32.as_ref() {
+            Some(_) if sample_limit.is_some() => FieldVectorIndexing::SampledNodeIndices,
+            Some(_) => FieldVectorIndexing::ExplicitNodeIndices,
+            None => FieldVectorIndexing::FullDomain,
+        });
+    let scope_kind_for_metadata = resolved_scope
+        .as_ref()
+        .map(|scope| scope.kind.as_str())
+        .unwrap_or("full");
+    let scope_id_for_metadata = resolved_scope
+        .as_ref()
+        .and_then(|scope| scope.id.as_deref())
+        .unwrap_or("");
+    let topology_cache_token = topology_hash
+        .as_ref()
+        .map(|hash| {
+            format!(
+                ":topology_hash={hash}:node_indices={}",
+                field_node_indices_cache_token(field_node_indices_u32.as_deref())
+            )
+        })
+        .unwrap_or_default();
 
     // P4: check projection cache before doing heavy projection work
     let comp_key = match &component {
@@ -1527,25 +1667,15 @@ pub async fn get_field_vector(
         quantity_id,
         field_revision,
         gen_id,
-        &format!("{comp_key}:{scope_token}{sample_token}{snapshot_token}"),
+        &format!("{comp_key}:{scope_token}{sample_token}{snapshot_token}{topology_cache_token}"),
     );
     {
         let mut proj_cache = state.quantity_data_plane.projection_cache.lock().await;
         if let Some(cached) = proj_cache.get(&cache_key) {
             let binary = cached.bytes.clone();
             drop(proj_cache);
-            // Derive point/value counts from cached FMVP payload for headers.
-            let total_value_count = if binary.len() > 48 {
-                (binary.len() - 48) / 8
-            } else {
-                0
-            };
-            let out_n_comp_for_header: usize = if binary.len() > 6 {
-                binary[6] as usize
-            } else {
-                1
-            };
-            let point_count = total_value_count / out_n_comp_for_header.max(1);
+            let (encoding_version, point_count, total_value_count) =
+                field_vector_binary_header_counts(&binary);
             let mut resp = crate::router_v2::handlers::shared::conditional_binary_response(
                 &headers, &etag, binary,
             );
@@ -1557,6 +1687,13 @@ pub async fn get_field_vector(
                 gen_id,
                 point_count,
                 total_value_count,
+            );
+            insert_field_vector_binary_headers(
+                &mut resp,
+                encoding_version,
+                topology_hash.as_deref(),
+                field_indexing,
+                field_node_indices_u32.as_ref().map(Vec::len),
             );
             insert_scope_headers(&mut resp, resolved_scope.as_ref());
             insert_snapshot_header(&mut resp, requested_snapshot_id);
@@ -1580,8 +1717,33 @@ pub async fn get_field_vector(
         scoped_grid
     };
 
-    let binary = serialize_field_vector_binary_v2(quantity_id, out_n_comp, out_grid, &projected)
+    let binary = if let (Some(topology_hash_bytes), Some(topology_hash)) =
+        (topology_hash_bytes, topology_hash.as_deref())
+    {
+        let indexing = field_indexing.unwrap_or(FieldVectorIndexing::FullDomain);
+        let metadata = FieldVectorBinaryMetadata {
+            domain_generation_id: gen_id,
+            mesh_topology_revision: topology_revision,
+            mesh_topology_hash: topology_hash_bytes,
+            scope_kind: scope_kind_for_metadata,
+            scope_id: scope_id_for_metadata,
+            indexing,
+            node_indices: field_node_indices_u32.as_deref().unwrap_or(&[]),
+        };
+        let binary = serialize_field_vector_binary_v3(
+            quantity_id,
+            out_n_comp,
+            out_grid,
+            &projected,
+            &metadata,
+        )
         .map_err(ApiError::internal)?;
+        debug_assert!(!topology_hash.is_empty());
+        binary
+    } else {
+        serialize_field_vector_binary_v2(quantity_id, out_n_comp, out_grid, &projected)
+            .map_err(ApiError::internal)?
+    };
 
     // P4: populate projection cache
     {
@@ -1601,6 +1763,13 @@ pub async fn get_field_vector(
         gen_id,
         point_count,
         value_count,
+    );
+    insert_field_vector_binary_headers(
+        &mut resp,
+        if topology_hash.is_some() { 3 } else { 2 },
+        topology_hash.as_deref(),
+        field_indexing,
+        field_node_indices_u32.as_ref().map(Vec::len),
     );
     insert_scope_headers(&mut resp, resolved_scope.as_ref());
     insert_snapshot_header(&mut resp, requested_snapshot_id);
@@ -4452,10 +4621,10 @@ fn urlencoding(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        analysis_complex_vector_view_values, analysis_frequency_response_view_values,
-        decode_complex_f64_pairs_little_endian, is_fem_runtime, parse_analysis_eigen_mode_field_id,
-        parse_analysis_frequency_response_field_id, resolve_field_scope, FieldVectorQuery,
-        ResolvedFieldScopeDomain,
+        FieldVectorQuery, ResolvedFieldScopeDomain, analysis_complex_vector_view_values,
+        analysis_frequency_response_view_values, decode_complex_f64_pairs_little_endian,
+        is_fem_runtime, parse_analysis_eigen_mode_field_id,
+        parse_analysis_frequency_response_field_id, resolve_field_scope,
     };
     use crate::session::default_current_live_state;
     use crate::types::CurrentLiveSnapshotRequest;

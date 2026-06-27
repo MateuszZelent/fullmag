@@ -152,6 +152,7 @@ function airboxTopology(): Viewport3DTopologyRenderModel<Viewport3DMeshPart> {
     magneticParts: [],
     meshGenerationId: null,
     meshRevision: null,
+    meshTopologyHash: null,
     nodeCount: 4,
     positions: new Float32Array(),
   };

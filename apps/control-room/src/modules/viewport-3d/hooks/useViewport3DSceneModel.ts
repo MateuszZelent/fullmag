@@ -2101,6 +2101,8 @@ export function useViewport3DSceneModel({
   });
   const universe = useViewport3DUniverse();
   const sharedDomainManifest = useViewport3DSharedDomainManifest();
+  const sharedDomainTopologyFingerprint =
+    sharedDomainManifest.data?.topology_fingerprint ?? null;
   const unknownTopologyProvenanceRefreshRef = useRef<string | null>(null);
   const topology = useViewport3DDomainTopology();
   const fdmDomain = useMemo(
@@ -2138,6 +2140,7 @@ export function useViewport3DSceneModel({
             {
               meshGenerationId: sharedDomainManifest.data?.generation_id ?? null,
               meshRevision: sharedDomainManifest.data?.revision ?? null,
+              meshTopologyHash: sharedDomainTopologyFingerprint,
             },
             {
               topologyIndexBundle: topologyIndexBundle.bundle,
@@ -2151,6 +2154,7 @@ export function useViewport3DSceneModel({
       femDomain.magneticSurfacePartsByPartId,
       sharedDomainManifest.data?.generation_id,
       sharedDomainManifest.data?.revision,
+      sharedDomainTopologyFingerprint,
       topology.data,
       topologyIndexBundle.bundle,
       topologyIndexState,

@@ -13,6 +13,16 @@ export interface ScalarRange {
   min: number;
 }
 
+export interface ScalarRangeDiagnostics extends ScalarRange {
+  finiteCount: number;
+  mean: number;
+  nonFiniteCount: number;
+  outlierDominated: boolean;
+  p01: number;
+  p99: number;
+  zeroCount: number;
+}
+
 export interface ScalarColorBuffer {
   buildKey?: string;
   colors: Float32Array;
@@ -23,6 +33,7 @@ export interface ScalarColorBuffer {
   complexRealValues?: Float32Array;
   quantityId?: string;
   range: ScalarRange;
+  rangeDiagnostics?: ScalarRangeDiagnostics;
   scalarValues?: Float32Array;
   targetRevision?: string;
   topologyRevision?: string;
@@ -138,6 +149,10 @@ export function buildSampledScalarColors(
     colorPalette,
     quantityId: fieldVector.quantityId,
     range,
+    rangeDiagnostics: resolveScalarRangeDiagnostics(
+      fieldVector,
+      resolvedColorMode,
+    ),
     scalarValues,
   };
 }
@@ -202,6 +217,10 @@ export function buildMappedVertexScalarColors(
     colorPalette,
     quantityId: fieldVector.quantityId,
     range,
+    rangeDiagnostics: resolveScalarRangeDiagnostics(
+      fieldVector,
+      resolvedColorMode,
+    ),
     scalarValues,
   };
 }
@@ -273,6 +292,7 @@ export async function buildVertexScalarColorsChunked(
     colorPalette,
     quantityId: fieldVector.quantityId,
     range,
+    rangeDiagnostics: resolveScalarRangeDiagnostics(fieldVector, colorMode),
     scalarValues,
     vectorValues,
   };
@@ -364,6 +384,68 @@ export function resolveScalarRange(
   return { max, min };
 }
 
+export function resolveScalarRangeDiagnostics(
+  fieldVector: DecodedFieldVector,
+  colorMode = "magnitude",
+): ScalarRangeDiagnostics {
+  const resolvedColorMode = normalizeViewport3DVectorColorMode(
+    colorMode,
+    "magnitude",
+  );
+  const finiteValues: number[] = [];
+  let max = -Infinity;
+  let min = Infinity;
+  let nonFiniteCount = 0;
+  let sum = 0;
+  let zeroCount = 0;
+
+  for (let index = 0; index < fieldVector.pointCount; index += 1) {
+    const value = scalarAt(fieldVector, index, resolvedColorMode);
+    if (!Number.isFinite(value)) {
+      nonFiniteCount += 1;
+      continue;
+    }
+    finiteValues.push(value);
+    if (value === 0) zeroCount += 1;
+    if (value < min) min = value;
+    if (value > max) max = value;
+    sum += value;
+  }
+
+  const finiteCount = finiteValues.length;
+  if (finiteCount === 0) {
+    return {
+      finiteCount: 0,
+      max: 0,
+      mean: 0,
+      min: 0,
+      nonFiniteCount,
+      outlierDominated: false,
+      p01: 0,
+      p99: 0,
+      zeroCount,
+    };
+  }
+
+  finiteValues.sort((left, right) => left - right);
+  const p01 = finiteValues[percentileIndex(finiteCount, 0.01)] ?? min;
+  const p99 = finiteValues[percentileIndex(finiteCount, 0.99)] ?? max;
+  const centralAbs = Math.max(Math.abs(p01), Math.abs(p99), 1e-12);
+  const maxAbs = Math.max(Math.abs(min), Math.abs(max));
+
+  return {
+    finiteCount,
+    max,
+    mean: sum / finiteCount,
+    min,
+    nonFiniteCount,
+    outlierDominated: finiteCount >= 3 && maxAbs > 50 * centralAbs,
+    p01,
+    p99,
+    zeroCount,
+  };
+}
+
 function buildVertexScalarColorsUnchecked(
   fieldVector: DecodedFieldVector,
   vertexCount: number,
@@ -394,8 +476,16 @@ function buildVertexScalarColorsUnchecked(
     colorPalette,
     quantityId: fieldVector.quantityId,
     range,
+    rangeDiagnostics: resolveScalarRangeDiagnostics(fieldVector, colorMode),
     scalarValues,
   };
+}
+
+function percentileIndex(count: number, percentile: number): number {
+  return Math.min(
+    count - 1,
+    Math.max(0, Math.floor((count - 1) * percentile)),
+  );
 }
 
 function writeScalarColors(
@@ -509,6 +599,7 @@ function normalizeScalarValue(
   value: number,
   range: Viewport3DScalarColorRange,
 ): number {
+  if (!Number.isFinite(value)) return 0.5;
   const span = Math.max(range.max - range.min, 1e-12);
   return Math.min(Math.max((value - range.min) / span, 0), 1);
 }

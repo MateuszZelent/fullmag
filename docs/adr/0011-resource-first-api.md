@@ -51,7 +51,7 @@ Heavy data is fetched lazily from dedicated resource endpoints:
 | Domain topology | `GET /domain/topology` | Binary FMMT v1 |
 | Domain coordinates | `GET /domain/coordinates` | Binary |
 | Field catalog | `GET /fields/catalog` | JSON |
-| Field vector | `GET /fields/{id}/vector` | Binary FMVP v2 |
+| Field vector | `GET /fields/{id}/vector` | Binary FMVP v2/v3 |
 | Scalar history | `GET /scalars?since_revision=X` | JSON |
 
 Control-plane JSON and data-plane binary are separate by design.
@@ -194,7 +194,7 @@ the legacy whole-state snapshot compatibility route.
 - Existing tests need updating as bootstrap endpoint is removed.
 
 ### Neutral
-- Binary protocols (FMVP v2, FMMT v1) are unchanged.
+- Binary protocols are versioned. FMVP v2 remains readable for legacy full-domain vectors; FEM field vectors use FMVP v3 metadata for domain generation, mesh topology revision/hash, scope, indexing mode, and optional node indices. FMMT remains v1.
 - The canonical realtime path is `GET /v2/sessions/current/events/ws`; no legacy websocket compatibility layer remains in the public server.
 
 ## Follow-up rule

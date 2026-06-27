@@ -8,7 +8,7 @@ use crate::router_v2::handlers::data::field_resolution::{
 };
 use crate::types::*;
 use fullmag_runner::{LivePreviewField, RuntimeStatus};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 
@@ -784,14 +784,7 @@ fn clear_mesh_dirty_tags_for_built_scene(
 }
 
 fn fem_mesh_identity(mesh: &fullmag_runner::FemMeshPayload) -> String {
-    format!(
-        "{}:{}:{}:{}:{}",
-        mesh.generation_id.as_deref().unwrap_or(""),
-        mesh.mesh_id,
-        mesh.nodes.len(),
-        mesh.elements.len(),
-        mesh.boundary_faces.len()
-    )
+    fullmag_runner::fem_mesh_topology_fingerprint(mesh)
 }
 
 fn is_solver_domain_fem_mesh(mesh: &fullmag_runner::FemMeshPayload) -> bool {
@@ -1829,6 +1822,44 @@ mod tests {
     }
 
     #[test]
+    fn fem_mesh_identity_changes_for_same_count_connectivity_change() {
+        let mut current = test_current_snapshot();
+        let first_mesh = domain_fem_mesh("domain-gen-1");
+        let mut remeshed = domain_fem_mesh("domain-gen-1");
+        remeshed.elements[0] = [0, 1, 3, 2];
+
+        apply_fem_mesh_update(&mut current, first_mesh);
+        let mesh_revision = current.mesh_revision;
+        let mesh_build_revision = current.mesh_build_revision;
+
+        apply_fem_mesh_update(&mut current, remeshed);
+
+        assert!(current.mesh_revision > mesh_revision);
+        assert!(current.mesh_build_revision > mesh_build_revision);
+    }
+
+    #[test]
+    fn fem_mesh_identity_changes_for_same_count_part_order_change() {
+        let mut current = test_current_snapshot();
+        let mut first_mesh = domain_fem_mesh("domain-gen-1");
+        first_mesh.mesh_parts = vec![
+            test_mesh_part("part:a", vec![0, 1, 2]),
+            test_mesh_part("part:b", vec![1, 2, 3]),
+        ];
+        let mut remeshed = first_mesh.clone();
+        remeshed.mesh_parts.swap(0, 1);
+
+        apply_fem_mesh_update(&mut current, first_mesh);
+        let mesh_revision = current.mesh_revision;
+        let mesh_build_revision = current.mesh_build_revision;
+
+        apply_fem_mesh_update(&mut current, remeshed);
+
+        assert!(current.mesh_revision > mesh_revision);
+        assert!(current.mesh_build_revision > mesh_build_revision);
+    }
+
+    #[test]
     fn mesh_statistics_update_bumps_mesh_revision() {
         let mut current = test_current_snapshot();
 
@@ -2565,10 +2596,12 @@ mod tests {
             Some("cp-000041")
         );
         assert_eq!(record.state_transition.as_deref(), Some("restored"));
-        assert!(record
-            .artifact_refs
-            .iter()
-            .any(|artifact_ref| artifact_ref == "cp-common-state"));
+        assert!(
+            record
+                .artifact_refs
+                .iter()
+                .any(|artifact_ref| artifact_ref == "cp-common-state")
+        );
     }
 
     fn session_command(command_id: &str, kind: &str) -> SessionCommand {
@@ -2840,6 +2873,28 @@ mod tests {
             domain_frame: None,
             generation_id: Some(generation_id.to_string()),
             per_domain_quality: Default::default(),
+        }
+    }
+
+    fn test_mesh_part(id: &str, node_indices: Vec<u32>) -> fullmag_runner::FemMeshPartPayload {
+        fullmag_runner::FemMeshPartPayload {
+            id: id.to_string(),
+            label: id.to_string(),
+            role: "magnetic_object".to_string(),
+            object_id: Some(id.to_string()),
+            geometry_id: None,
+            material_id: None,
+            element_start: 0,
+            element_count: 1,
+            boundary_face_start: 0,
+            boundary_face_count: 1,
+            boundary_face_indices: vec![0],
+            node_start: 0,
+            node_count: node_indices.len() as u32,
+            node_indices,
+            surface_faces: vec![[0, 1, 2]],
+            bounds_min: None,
+            bounds_max: None,
         }
     }
 

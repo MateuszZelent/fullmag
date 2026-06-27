@@ -105,6 +105,7 @@ export interface Viewport3DTopologyRenderModel<
   airboxParts: Array<Viewport3DTopologyPartRenderModel<TPart>>;
   meshGenerationId: string | null;
   meshRevision: number | string | null;
+  meshTopologyHash: string | null;
   nodeCount: number;
   positions: Float32Array;
 }
@@ -157,6 +158,9 @@ export interface Viewport3DTargetFieldBufferSource {
   component: Viewport3DTargetFieldBuffer["component"];
   consumers: readonly string[];
   fieldRevision: string | null;
+  indexing?: Viewport3DTargetFieldBuffer["indexing"];
+  meshTopologyHash?: string | null;
+  nodeIndexCount?: number | null;
   pointCount: number;
   quantityId: string;
   requestId: string | null;
@@ -268,11 +272,6 @@ interface Viewport3DRenderCacheCounter {
   entryCount: number;
   id: string;
   label: string;
-}
-
-interface ScopedVectorSelectionResolution {
-  resolverSelection: Viewport3DNodeSelection;
-  renderSelection: Viewport3DNodeSelection;
 }
 
 const renderCacheCounters = new Map<string, Viewport3DRenderCacheCounter>();
@@ -507,6 +506,7 @@ export function buildViewport3DTopologyRenderModel<
   meshIdentity: {
     meshGenerationId?: string | null;
     meshRevision?: number | string | null;
+    meshTopologyHash?: string | null;
   } = {},
   options: Viewport3DTopologyRenderModelOptions = {},
 ): Viewport3DTopologyRenderModel<TPart> | null {
@@ -582,6 +582,7 @@ export function buildViewport3DTopologyRenderModel<
     ),
     meshGenerationId: meshIdentity.meshGenerationId ?? null,
     meshRevision: meshIdentity.meshRevision ?? null,
+    meshTopologyHash: meshIdentity.meshTopologyHash ?? null,
     nodeCount: topology.nodeCount,
     positions: buildTopologyPositions(topology),
   };
@@ -643,13 +644,13 @@ export function buildViewport3DFieldRenderModel(
     ) ?? fieldVector;
   const fullFieldVector = isFullTopologyFieldVector(
     renderFieldVector,
-    topology.nodeCount,
+    topology,
   )
     ? renderFieldVector
     : null;
   const magneticFieldNodeIndices =
     !fullFieldVector && renderFieldVector
-      ? buildMagneticFieldNodeIndices(topology, renderFieldVector.pointCount)
+      ? resolveFieldVectorNodeIndices(renderFieldVector, topology)
       : null;
   const magneticFieldValueResolver = magneticFieldNodeIndices
     ? buildNodeIndexFieldValueResolver(
@@ -768,14 +769,26 @@ export function buildViewport3DFieldRenderModel(
         partFieldVector !== renderFieldVector &&
         partFieldVector.pointCount < topology.nodeCount,
     );
+    const scopedPartFieldNodeIndices =
+      isScopedPartFieldVector && partFieldVector
+        ? resolveFieldVectorNodeIndices(partFieldVector, topology)
+        : null;
+    const scopedPartFieldNodeSelection = scopedPartFieldNodeIndices
+      ? nodeIndicesToSelection(scopedPartFieldNodeIndices)
+      : null;
     const scopedVectorSelection =
       isScopedPartFieldVector && partFieldVector
-        ? resolveScopedPartVectorSelection(
-            vectorSelection,
-            topology,
-            partFieldVector.pointCount,
-            airboxPartSet.has(partModel) ? magneticVectorNodeIndices : null,
-          )
+        ? {
+            renderSelection: scopedPartFieldNodeSelection
+              ? airboxPartSet.has(partModel) && magneticVectorNodeIndices
+                ? filterNodeSelectionExcludingIndices(
+                    scopedPartFieldNodeSelection,
+                    topology,
+                    magneticVectorNodeIndices,
+                  )
+                : scopedPartFieldNodeSelection
+              : { nodeCount: 0, nodeStart: 0 },
+          }
         : {
             renderSelection:
               airboxPartSet.has(partModel) && magneticVectorNodeIndices
@@ -785,7 +798,6 @@ export function buildViewport3DFieldRenderModel(
                     magneticVectorNodeIndices,
                   )
                 : vectorSelection,
-            resolverSelection: vectorSelection,
           };
     const renderVectorSelection = scopedVectorSelection.renderSelection;
     const partScalarColorMode = targetRenderPlan
@@ -836,6 +848,7 @@ export function buildViewport3DFieldRenderModel(
                 partModel,
                 topology,
                 partFieldVector,
+                scopedPartFieldNodeIndices,
                 colorMode,
                 partScalarColorPalette,
                 partScalarRangesByMode?.get(colorMode),
@@ -853,18 +866,21 @@ export function buildViewport3DFieldRenderModel(
       (partUsesMagneticOnlyField
         ? magneticFieldValueResolver
         : isScopedPartFieldVector
-          ? buildScopedPartFieldValueResolver(
-              scopedVectorSelection.resolverSelection,
-              topology,
-              partFieldVector.pointCount,
-            )
+          ? scopedPartFieldNodeIndices
+            ? buildNodeIndexFieldValueResolver(
+                scopedPartFieldNodeIndices,
+                topology.nodeCount,
+              )
+            : null
           : null);
     const anchorMode =
       targetRenderPlan?.vectors.anchorMode ??
       options.partVectorAnchorModes?.get(partId) ??
       "center";
     const partSegments =
-      explicitPartFieldBuffer &&
+      isScopedPartFieldVector && !scopedPartFieldNodeIndices
+        ? null
+        : explicitPartFieldBuffer &&
       !viewport3DTargetFieldBufferCanServeVectors(
         explicitPartFieldBuffer,
         partQuantityId,
@@ -1077,6 +1093,9 @@ function targetFieldBufferSource(
     componentCount: buffer.componentCount,
     consumers: buffer.consumers,
     fieldRevision: buffer.fieldRevision,
+    indexing: buffer.indexing,
+    meshTopologyHash: buffer.meshTopologyHash,
+    nodeIndexCount: buffer.nodeIndices?.length ?? null,
     pointCount: buffer.pointCount,
     quantityId: buffer.quantityId,
     requestId: buffer.requestId,
@@ -1311,10 +1330,18 @@ function buildComplexPhaseProjection(
 
   return {
     dtype: "float64",
+    domainGenerationId: complexFieldVector.domainGenerationId,
+    formatVersion: complexFieldVector.formatVersion,
     grid: complexFieldVector.grid,
+    indexing: complexFieldVector.indexing,
+    meshTopologyHash: complexFieldVector.meshTopologyHash,
+    meshTopologyRevision: complexFieldVector.meshTopologyRevision,
     nComp: componentCount,
+    nodeIndices: complexFieldVector.nodeIndices,
     pointCount: complexFieldVector.pointCount,
     quantityId: complexFieldVector.quantityId,
+    scopeId: complexFieldVector.scopeId,
+    scopeKind: complexFieldVector.scopeKind,
     valueCount: projectedValues.length,
     values: projectedValues,
   };
@@ -1392,9 +1419,11 @@ function attachComplexShaderValues(
 
 function isFullTopologyFieldVector(
   fieldVector: DecodedFieldVector | null | undefined,
-  nodeCount: number,
+  topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
 ): fieldVector is DecodedFieldVector {
-  return Boolean(fieldVector) && fieldVector!.pointCount === nodeCount;
+  return Boolean(fieldVector) &&
+    fieldVector!.pointCount === topology.nodeCount &&
+    fieldVectorMatchesTopology(fieldVector, topology);
 }
 
 function buildCachedMappedVertexScalarColors(
@@ -1463,30 +1492,6 @@ function scalarRangeCacheKey(range: ScalarRange | null | undefined): string {
   return `range=${range.min}:${range.max}`;
 }
 
-function buildMagneticFieldNodeIndices(
-  topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
-  pointCount: number,
-): Uint32Array | null {
-  if (pointCount <= 0 || pointCount > topology.nodeCount) return null;
-
-  const nodeIndices = new Set<number>();
-  for (const partModel of topology.magneticParts) {
-    const partNodeIndices = buildNodeSelectionIndices(partModel.part, topology);
-    if (!partNodeIndices) continue;
-    for (let index = 0; index < partNodeIndices.length; index += 1) {
-      const nodeIndex = partNodeIndices[index] ?? -1;
-      if (nodeIndex >= 0 && nodeIndex < topology.nodeCount) {
-        nodeIndices.add(nodeIndex);
-      }
-    }
-  }
-
-  if (nodeIndices.size !== pointCount) return null;
-  return Uint32Array.from(
-    [...nodeIndices].toSorted((left, right) => left - right),
-  );
-}
-
 function buildMagneticPartNodeIndexSet(
   topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
 ): ReadonlySet<number> | null {
@@ -1538,60 +1543,6 @@ function filterNodeSelectionExcludingIndices(
     : { nodeCount: 0, nodeStart: 0 };
 }
 
-function resolveScopedPartVectorSelection(
-  vectorSelection: Viewport3DNodeSelection,
-  topology: Pick<Viewport3DPositionSource, "nodeCount">,
-  fieldPointCount: number,
-  excludedNodeIndices: ReadonlySet<number> | null,
-): ScopedVectorSelectionResolution {
-  const sampledVectorSelection = buildScopedPartFieldSampleSelection(
-    vectorSelection,
-    topology,
-    fieldPointCount,
-  );
-  if (!excludedNodeIndices || excludedNodeIndices.size === 0) {
-    return {
-      renderSelection: sampledVectorSelection,
-      resolverSelection: vectorSelection,
-    };
-  }
-
-  const filteredSampledSelection = filterNodeSelectionExcludingIndices(
-    sampledVectorSelection,
-    topology,
-    excludedNodeIndices,
-  );
-  const filteredBaseSelection = filterNodeSelectionExcludingIndices(
-    vectorSelection,
-    topology,
-    excludedNodeIndices,
-  );
-  const filteredSampledCount = resolveNodeSelectionCount(
-    filteredSampledSelection,
-    topology,
-  );
-  const filteredBaseCount = resolveNodeSelectionCount(
-    filteredBaseSelection,
-    topology,
-  );
-  const expectedVisibleCount = Math.min(fieldPointCount, filteredBaseCount);
-  if (filteredSampledCount >= expectedVisibleCount) {
-    return {
-      renderSelection: filteredSampledSelection,
-      resolverSelection: vectorSelection,
-    };
-  }
-
-  return {
-    renderSelection: buildScopedPartFieldSampleSelection(
-      filteredBaseSelection,
-      topology,
-      fieldPointCount,
-    ),
-    resolverSelection: filteredBaseSelection,
-  };
-}
-
 function buildNodeIndexFieldValueResolver(
   targetNodeIndices: Uint32Array,
   nodeCount: number,
@@ -1615,6 +1566,7 @@ function buildCachedPartVertexScalarColors(
   partModel: Viewport3DTopologyPartRenderModel<Viewport3DRenderablePart>,
   topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
   fieldVector: DecodedFieldVector | null | undefined,
+  targetNodeIndices: Uint32Array | null,
   colorMode: string | undefined,
   colorPalette: string | undefined,
   scalarRange?: ScalarRange | null,
@@ -1630,7 +1582,6 @@ function buildCachedPartVertexScalarColors(
     );
   }
 
-  const targetNodeIndices = buildNodeSelectionIndices(partModel.part, topology);
   if (!targetNodeIndices || targetNodeIndices.length !== fieldVector.pointCount) {
     return null;
   }
@@ -1675,6 +1626,64 @@ function buildNodeSelectionIndices(
   }
 
   return indices.length > 0 ? Uint32Array.from(indices) : null;
+}
+
+function nodeIndicesToSelection(
+  nodeIndices: Uint32Array,
+): Viewport3DNodeSelection {
+  return { nodeIndices: Array.from(nodeIndices) };
+}
+
+function resolveFieldVectorNodeIndices(
+  fieldVector: DecodedFieldVector | null | undefined,
+  topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
+): Uint32Array | null {
+  if (!fieldVector || fieldVector.pointCount <= 0) return null;
+  if (!fieldVectorMatchesTopology(fieldVector, topology)) return null;
+  const nodeIndices = fieldVector.nodeIndices;
+  if (!nodeIndices || nodeIndices.length !== fieldVector.pointCount) {
+    return null;
+  }
+
+  const resolved = new Uint32Array(nodeIndices.length);
+  for (let index = 0; index < nodeIndices.length; index += 1) {
+    const nodeIndex = nodeIndices[index];
+    if (
+      nodeIndex === undefined ||
+      !Number.isInteger(nodeIndex) ||
+      nodeIndex < 0 ||
+      nodeIndex >= topology.nodeCount
+    ) {
+      return null;
+    }
+    resolved[index] = nodeIndex;
+  }
+  return resolved;
+}
+
+function fieldVectorMatchesTopology(
+  fieldVector: DecodedFieldVector | null | undefined,
+  topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
+): boolean {
+  if (!fieldVector) return false;
+  const fieldHash = fieldVector.meshTopologyHash ?? null;
+  if (
+    fieldHash !== null &&
+    topology.meshTopologyHash !== null &&
+    fieldHash !== topology.meshTopologyHash
+  ) {
+    return false;
+  }
+  const fieldTopologyRevision = fieldVector.meshTopologyRevision ?? null;
+  const topologyRevision = revisionToString(topology.meshRevision);
+  if (
+    fieldTopologyRevision !== null &&
+    topologyRevision !== null &&
+    fieldTopologyRevision !== topologyRevision
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function buildCachedFullVectorSegments(
@@ -2693,93 +2702,6 @@ function asVec3(value: unknown): [number, number, number] | null {
     return [value[0], value[1], value[2]];
   }
   return null;
-}
-
-function buildScopedPartFieldValueResolver(
-  partSelection: Viewport3DNodeSelection,
-  topology: Pick<Viewport3DPositionSource, "nodeCount">,
-  fieldPointCount: number,
-): Viewport3DVectorFieldValueResolver {
-  const selectedNodeCount = resolveNodeSelectionCount(partSelection, topology);
-  if (fieldPointCount > 0 && fieldPointCount < selectedNodeCount) {
-    const stride = Math.max(1, Math.floor(selectedNodeCount / fieldPointCount));
-    const sampleIndexByGlobalNode = new Map<number, number>();
-    for (
-      let selectedOffset = 0;
-      selectedOffset < selectedNodeCount;
-      selectedOffset += 1
-    ) {
-      if (selectedOffset % stride !== 0) continue;
-      const sampleIndex = Math.floor(selectedOffset / stride);
-      if (sampleIndex >= fieldPointCount) continue;
-      const globalNodeIndex = resolveNodeSelectionIndex(
-        partSelection,
-        selectedOffset,
-      );
-      if (
-        globalNodeIndex === null ||
-        globalNodeIndex < 0 ||
-        globalNodeIndex >= topology.nodeCount
-      ) {
-        continue;
-      }
-      sampleIndexByGlobalNode.set(globalNodeIndex, sampleIndex);
-    }
-    return (globalNodeIndex) =>
-      sampleIndexByGlobalNode.get(globalNodeIndex) ?? null;
-  }
-
-  const localIndexByGlobalNode = new Map<number, number>();
-  for (let localIndex = 0; localIndex < selectedNodeCount; localIndex += 1) {
-    const globalNodeIndex = resolveNodeSelectionIndex(partSelection, localIndex);
-    if (
-      globalNodeIndex === null ||
-      globalNodeIndex < 0 ||
-      globalNodeIndex >= topology.nodeCount
-    ) {
-      continue;
-    }
-    localIndexByGlobalNode.set(globalNodeIndex, localIndex);
-  }
-
-  return (globalNodeIndex) => localIndexByGlobalNode.get(globalNodeIndex) ?? null;
-}
-
-function buildScopedPartFieldSampleSelection(
-  partSelection: Viewport3DNodeSelection,
-  topology: Pick<Viewport3DPositionSource, "nodeCount">,
-  fieldPointCount: number,
-): Viewport3DNodeSelection {
-  const selectedNodeCount = resolveNodeSelectionCount(partSelection, topology);
-  if (fieldPointCount <= 0 || fieldPointCount >= selectedNodeCount) {
-    return partSelection;
-  }
-
-  const stride = Math.max(1, Math.floor(selectedNodeCount / fieldPointCount));
-  const nodeIndices: number[] = [];
-  for (
-    let selectedOffset = 0;
-    selectedOffset < selectedNodeCount;
-    selectedOffset += 1
-  ) {
-    if (selectedOffset % stride !== 0) continue;
-    const sampleIndex = Math.floor(selectedOffset / stride);
-    if (sampleIndex >= fieldPointCount) continue;
-    const globalNodeIndex = resolveNodeSelectionIndex(
-      partSelection,
-      selectedOffset,
-    );
-    if (
-      globalNodeIndex === null ||
-      globalNodeIndex < 0 ||
-      globalNodeIndex >= topology.nodeCount
-    ) {
-      continue;
-    }
-    nodeIndices.push(globalNodeIndex);
-  }
-
-  return nodeIndices.length > 0 ? { nodeIndices } : { nodeCount: 0, nodeStart: 0 };
 }
 
 export function resolveNodeSelectionCount(

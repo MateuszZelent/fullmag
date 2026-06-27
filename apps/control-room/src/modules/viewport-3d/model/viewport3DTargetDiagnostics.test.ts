@@ -106,7 +106,7 @@ describe("viewport3DTargetDiagnostics", () => {
     expect(summaries).toEqual([
       {
         buffers: [
-          "buffer:part-a full-vector-complete quantity=m component=full scope=part:part-a points=4 ncomp=3 sampled=false state=target-buffer",
+          "buffer:part-a full-vector-complete quantity=m component=full scope=part:part-a points=4 ncomp=3 indexing=unknown nodeIndices=none topologyHash=none sampled=false state=target-buffer",
         ],
         degradation: [],
         demand: "surface:x vector-glyph",
@@ -205,6 +205,49 @@ describe("viewport3DTargetDiagnostics", () => {
       "vector-glyph:vector-glyphs:blocked:blocked:part-a:vector-glyph items=4 input=0B output=48B",
       "vector-glyph:vector-segments:blocked:blocked:part-a:vector-glyph items=4 input=0B output=48B",
     ]);
+  });
+
+  it("reports outlier-dominated scalar ranges without hiding surface colors", () => {
+    const summaries = summarizeViewport3DTargetDiagnostics({
+      derivedWorkItems: [],
+      targetPasses: new Map([
+        [
+          "part-a",
+          targetPass({
+            surface: {
+              degradation: null,
+              passId: "part-a:surface",
+              scalarColorMode: "x",
+              scalarColors: {
+                colors: new Float32Array(12),
+                colorMode: "x",
+                colorPalette: "viridis",
+                quantityId: "h_ex",
+                range: { max: 1000, min: 1 },
+                rangeDiagnostics: {
+                  finiteCount: 101,
+                  max: 1000,
+                  mean: 10.891089108910892,
+                  min: 1,
+                  nonFiniteCount: 0,
+                  outlierDominated: true,
+                  p01: 1,
+                  p99: 1,
+                  zeroCount: 0,
+                },
+                targetRevision: "field=field-1",
+                topologyRevision: "mesh-1",
+              },
+            },
+          }),
+        ],
+      ]),
+    });
+
+    expect(summaries[0]?.degradation).toEqual([
+      "surface:range-outlier-dominated min=1 max=1000 p01=1 p99=1 finite=101 nonFinite=0 zero=0",
+    ]);
+    expect(summaries[0]?.passes).toEqual(["surface", "vector-glyph"]);
   });
 
   it("reports stale-compatible retained surface and vector outputs", () => {

@@ -91,6 +91,7 @@ function manifestFixture(): MeshSharedDomainManifestResource {
       },
     ],
     revision: 7,
+    topology_fingerprint: "mesh-topology-hash",
   };
 }
 

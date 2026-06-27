@@ -95,7 +95,7 @@ Surface shader demand depends on `surfaceColorSource`.
 | orientation / HSL sphere | full vector | full vector |
 | complex phase modes | full or complex payload according to analysis overlay | full or complex payload according to analysis overlay |
 
-When surface shader is active, the payload must cover the surface's required vertex domain. `max_samples` is not valid for shader coloring unless the payload explicitly contains a complete value-to-vertex mapping for that surface.
+When surface shader is active, the payload must cover the surface's required vertex domain. `max_samples` is not valid for shader coloring. A FEM surface pass may use FMVP v3 `full_domain` data, or `explicit_node_indices` data whose node map covers the target. `sampled_node_indices` is vector-glyph only.
 
 ### 5.2 Vector Glyph Pass
 
@@ -116,6 +116,13 @@ A colorbar is not a separate field payload demand by default. It consumes range 
 3. retained previous range while a compatible update is pending.
 
 Colorbar range for orientation/HSL modes is style-defined, not computed from scalar min/max.
+
+Decoded scalar color buffers also carry diagnostic range statistics (`min`,
+`max`, `mean`, `p01`, `p99`, finite/non-finite counts, and zero count). If the
+observed extrema are outlier-dominated, target diagnostics must report
+`range-outlier-dominated`. This is observability only: the default `auto` range,
+palette, and field-to-node mapping must not be silently changed to hide
+indexing or topology errors.
 
 ### 5.4 Wireframe, Points, Bounds, Selection
 
@@ -375,7 +382,13 @@ Required response metadata:
 - point count;
 - component count;
 - field revision or ETag;
-- enough topology/sampling metadata to prove whether the payload is complete or sampled.
+- `domain_generation_id`;
+- mesh topology revision;
+- mesh topology hash;
+- indexing mode: `full_domain`, `explicit_node_indices`, `sampled_node_indices`, or `legacy_count_only`;
+- `nodeIndices` when indexing is explicit or sampled.
+
+FMVP v2 remains a legacy full-domain compatibility format. It must not satisfy scoped, sampled, magnetic-only compressed, object, part, airbox, or selection surface passes unless a resource cache layer has already proven full-domain topology compatibility. Realtime events remain invalidation-only; they do not carry field or topology binary payloads.
 
 Frontend code must call this only through the typed API facade and resource hooks. React components must not build `/v2/...` paths directly.
 
@@ -387,6 +400,7 @@ Viewport diagnostics must expose:
 - merged field data demand list;
 - actual request list;
 - payload capabilities after decode;
+- field/topology compatibility, including indexing mode and node-index count;
 - pass eligibility failures;
 - retained stale-compatible buffers;
 - worker queue durations by lane;

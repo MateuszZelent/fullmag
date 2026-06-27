@@ -189,7 +189,7 @@ export function createViewport3DFieldColorBuildReference({
       `target=${resolvedTargetId}`,
       `sampling=${resolvedSamplingRevision}`,
     ].join(" "),
-    targetRevision: `field=${resolvedFieldRevision}`,
+    targetRevision: `topology=${resolvedTopologyRevision} field=${resolvedFieldRevision}`,
     topologyRevision: resolvedTopologyRevision,
   };
 }

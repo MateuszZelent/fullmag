@@ -163,6 +163,7 @@ describe("viewport3dPrimitiveModel", () => {
       ],
       revision: 2,
       source_scene_revision: 7,
+      topology_fingerprint: "mesh-topology-hash",
     };
 
     const model = buildViewport3DPrimitiveRenderModel(
@@ -408,6 +409,7 @@ describe("viewport3dPrimitiveModel", () => {
       ],
       revision: 2,
       source_scene_revision: 6,
+      topology_fingerprint: "mesh-topology-hash",
     };
 
     const model = buildViewport3DPrimitiveRenderModel(
@@ -453,6 +455,7 @@ describe("viewport3dPrimitiveModel", () => {
       ],
       revision: 2,
       source_scene_revision: 6,
+      topology_fingerprint: "mesh-topology-hash",
     };
 
     const model = buildViewport3DPrimitiveRenderModel(
@@ -498,6 +501,7 @@ describe("viewport3dPrimitiveModel", () => {
       ],
       revision: 2,
       source_scene_revision: 7,
+      topology_fingerprint: "mesh-topology-hash",
     };
 
     const model = buildViewport3DPrimitiveRenderModel(
@@ -541,6 +545,7 @@ describe("viewport3dPrimitiveModel", () => {
       ],
       revision: 2,
       source_scene_revision: 7,
+      topology_fingerprint: "mesh-topology-hash",
     };
 
     const model = buildViewport3DPrimitiveRenderModel(
@@ -581,6 +586,7 @@ describe("viewport3dPrimitiveModel", () => {
       ],
       revision: 2,
       source_scene_revision: 6,
+      topology_fingerprint: "mesh-topology-hash",
     };
 
     const model = buildViewport3DPrimitiveRenderModel(

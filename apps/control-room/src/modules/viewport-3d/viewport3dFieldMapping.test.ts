@@ -195,6 +195,44 @@ describe("viewport3dFieldMapping", () => {
     );
   });
 
+  it("records scalar range diagnostics without changing the color range", () => {
+    const values = Array.from({ length: 100 }, () => 1);
+    values.push(1000);
+    const result = buildVertexScalarColors(vectorField(values, 1), 101);
+
+    expect(result?.range).toEqual({ max: 1000, min: 1 });
+    expect(result?.rangeDiagnostics).toEqual({
+      finiteCount: 101,
+      max: 1000,
+      mean: (100 + 1000) / 101,
+      min: 1,
+      nonFiniteCount: 0,
+      outlierDominated: true,
+      p01: 1,
+      p99: 1,
+      zeroCount: 0,
+    });
+  });
+
+  it("counts non-finite scalar values in range diagnostics", () => {
+    const result = buildVertexScalarColors(
+      vectorField([0, Number.NaN, Number.POSITIVE_INFINITY, 2], 1),
+      4,
+    );
+
+    expect(result?.range).toEqual({ max: 0, min: 0 });
+    expect(result?.rangeDiagnostics).toMatchObject({
+      finiteCount: 2,
+      max: 2,
+      min: 0,
+      nonFiniteCount: 2,
+      outlierDominated: false,
+      p01: 0,
+      p99: 0,
+      zeroCount: 1,
+    });
+  });
+
   it("maps sampled point indices to compact scalar colors", () => {
     const result = buildSampledScalarColors(
       vectorField([

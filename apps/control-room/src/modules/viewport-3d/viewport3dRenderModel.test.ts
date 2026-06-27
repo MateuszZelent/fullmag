@@ -176,12 +176,17 @@ describe("viewport3dRenderModel", () => {
       [],
       [],
       undefined,
-      { meshGenerationId: "gen-7", meshRevision: 42 },
+      {
+        meshGenerationId: "gen-7",
+        meshRevision: 42,
+        meshTopologyHash: "hash-7",
+      },
     );
 
     expect(topologyModel).toMatchObject({
       meshGenerationId: "gen-7",
       meshRevision: 42,
+      meshTopologyHash: "hash-7",
     });
   });
 
@@ -1446,6 +1451,7 @@ describe("viewport3dRenderModel", () => {
       dtype: "float64",
       grid: [4, 1, 1],
       nComp: 3,
+      nodeIndices: new Uint32Array([2, 4, 6, 7]),
       pointCount: 4,
       quantityId: "m",
       valueCount: 12,
@@ -1474,6 +1480,95 @@ describe("viewport3dRenderModel", () => {
     expect(Array.from(colors!.slice(6, 9))).not.toEqual([0, 0, 0]);
     expect(model?.partVectorSegments.get("magnetic-part")?.length).toBe(28);
     expect(model?.partVectorSegments.get("airbox")).toBeNull();
+  });
+
+  it("rejects compressed magnetic-only FEM fields without explicit node indices", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      {
+        ...topologyFixture(),
+        nodeCount: 5,
+        positions: new Float64Array([
+          0, 0, 0,
+          1, 0, 0,
+          0, 1, 0,
+          0, 0, 1,
+          10, 10, 10,
+        ]),
+      },
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "part-a",
+          label: "Part A",
+          node_indices: [0, 1, 2, 3],
+        },
+      ],
+      [],
+    );
+    const compressedMagneticField: DecodedFieldVector = {
+      ...fieldVectorFixture(),
+      grid: [4, 1, 1],
+      pointCount: 4,
+      valueCount: 12,
+    };
+
+    const model = buildViewport3DFieldRenderModel(
+      topologyModel,
+      compressedMagneticField,
+      0.5,
+      {
+        partVectorBudgets: new Map([["part-a", 4]]),
+        scalarColorModes: new Set(["x"]),
+        scalarColorsVisible: true,
+      },
+    );
+
+    expect(model?.scalarColorsByMode.get("x")).toBeNull();
+    expect(model?.partVectorSegments.get("part-a")).toBeNull();
+  });
+
+  it("rejects FEM field vectors whose topology hash does not match the render topology", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "part-a",
+          label: "Part A",
+          nodeCount: 4,
+          nodeStart: 0,
+        },
+      ],
+      [],
+      undefined,
+      {
+        meshRevision: "mesh-1",
+        meshTopologyHash: "topology-hash",
+      },
+    );
+    const fieldVector: DecodedFieldVector = {
+      ...fieldVectorFixture(),
+      formatVersion: 3,
+      indexing: "full_domain",
+      meshTopologyHash: "field-hash",
+      meshTopologyRevision: "mesh-1",
+    };
+
+    const model = buildViewport3DFieldRenderModel(
+      topologyModel,
+      fieldVector,
+      0.5,
+      {
+        partVectorBudgets: new Map([["part-a", 4]]),
+        scalarColorModes: new Set(["x"]),
+        scalarColorsVisible: true,
+      },
+    );
+
+    expect(model?.scalarColorsByMode.get("x")).toBeNull();
+    expect(model?.partVectorSegments.get("part-a")).toBeNull();
   });
 
   it("builds per-part scalar colors from target-specific quantity vectors", () => {
@@ -1605,7 +1700,7 @@ describe("viewport3dRenderModel", () => {
     });
     expect(model?.targetDiagnostics).toContainEqual({
       buffers: [
-        `${sampledBuffer.bufferId} full-vector-sampled quantity=m component=full scope=part:part-a points=4 ncomp=3 sampled=true state=target-buffer`,
+        `${sampledBuffer.bufferId} full-vector-sampled quantity=m component=full scope=part:part-a points=4 ncomp=3 indexing=legacy_count_only nodeIndices=none topologyHash=none sampled=true state=target-buffer`,
       ],
       degradation: [
         "surface:sampled-buffer-not-surface-capable",
@@ -1854,7 +1949,7 @@ describe("viewport3dRenderModel", () => {
     });
     expect(model?.targetDiagnostics).toContainEqual({
       buffers: [
-        `${scalarBuffer.bufferId} scalar-complete quantity=m component=x scope=part:part-a points=4 ncomp=1 sampled=false state=target-buffer`,
+        `${scalarBuffer.bufferId} scalar-complete quantity=m component=x scope=part:part-a points=4 ncomp=1 indexing=legacy_count_only nodeIndices=none topologyHash=none sampled=false state=target-buffer`,
       ],
       degradation: [
         "vector-glyph:scalar-buffer-not-vector-capable",
@@ -1981,7 +2076,7 @@ describe("viewport3dRenderModel", () => {
     });
     expect(model?.targetDiagnostics).toContainEqual({
       buffers: [
-        `${scalarBuffer.bufferId} scalar-complete quantity=m component=x scope=part:part-a points=4 ncomp=1 sampled=false state=target-buffer`,
+        `${scalarBuffer.bufferId} scalar-complete quantity=m component=x scope=part:part-a points=4 ncomp=1 indexing=legacy_count_only nodeIndices=none topologyHash=none sampled=false state=target-buffer`,
       ],
       degradation: [
         "surface:buffer-quantity-mismatch",
@@ -2004,6 +2099,77 @@ describe("viewport3dRenderModel", () => {
   });
 
   it("maps scoped per-part scalar colors onto global topology node indices", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      {
+        ...topologyFixture(),
+        indices: new Uint32Array([
+          0, 1, 2, 3,
+          1, 2, 3, 4,
+        ]),
+        nodeCount: 5,
+        positions: new Float64Array([
+          0, 0, 0,
+          1, 0, 0,
+          0, 1, 0,
+          0, 0, 1,
+          1, 1, 0,
+        ]),
+      },
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "part-a",
+          label: "Part A",
+          node_indices: [2, 4],
+        },
+      ],
+      [],
+    );
+    const scopedTargetVector: DecodedFieldVector = {
+      dtype: "float64",
+      grid: [2, 1, 1],
+      nComp: 3,
+      nodeIndices: new Uint32Array([2, 4]),
+      pointCount: 2,
+      quantityId: "h_eff",
+      valueCount: 6,
+      values: new Float64Array([
+        -1, 0, 0,
+        1, 0, 0,
+      ]),
+    };
+
+    const model = buildViewport3DFieldRenderModel(
+      topologyModel,
+      {
+        ...fieldVectorFixture(),
+        pointCount: 5,
+        valueCount: 15,
+        values: new Float64Array(15),
+      },
+      0.5,
+      {
+        partFieldVectors: new Map([["part-a", scopedTargetVector]]),
+        scalarColorModes: new Set(["x"]),
+        scalarColorsVisible: true,
+      },
+    );
+
+    const colors =
+      model?.scalarColorsByPartAndMode.get("part-a")?.get("x")?.colors;
+    expect(colors).toBeDefined();
+    expect(Array.from(colors!.slice(0, 6))).toEqual([0, 0, 0, 0, 0, 0]);
+    expect(Array.from(colors!.slice(6, 9))).toEqual(
+      Array.from(Float32Array.from(magnitudeColorRgb(0))),
+    );
+    expect(Array.from(colors!.slice(9, 12))).toEqual([0, 0, 0]);
+    expect(Array.from(colors!.slice(12, 15))).toEqual(
+      Array.from(Float32Array.from(magnitudeColorRgb(1))),
+    );
+  });
+
+  it("rejects scoped per-part scalar colors without explicit node indices", () => {
     const topologyModel = buildViewport3DTopologyRenderModel(
       {
         ...topologyFixture(),
@@ -2060,17 +2226,9 @@ describe("viewport3dRenderModel", () => {
       },
     );
 
-    const colors =
-      model?.scalarColorsByPartAndMode.get("part-a")?.get("x")?.colors;
-    expect(colors).toBeDefined();
-    expect(Array.from(colors!.slice(0, 6))).toEqual([0, 0, 0, 0, 0, 0]);
-    expect(Array.from(colors!.slice(6, 9))).toEqual(
-      Array.from(Float32Array.from(magnitudeColorRgb(0))),
-    );
-    expect(Array.from(colors!.slice(9, 12))).toEqual([0, 0, 0]);
-    expect(Array.from(colors!.slice(12, 15))).toEqual(
-      Array.from(Float32Array.from(magnitudeColorRgb(1))),
-    );
+    expect(
+      model?.scalarColorsByPartAndMode.get("part-a")?.get("x"),
+    ).toBeNull();
   });
 
   it("builds per-part scalar colors for shared field vectors when palette differs", () => {
@@ -2493,6 +2651,7 @@ describe("viewport3dRenderModel", () => {
               dtype: "float64",
               grid: [4, 1, 1],
               nComp: 3,
+              nodeIndices: new Uint32Array([0, 1, 2, 4]),
               pointCount: 4,
               quantityId: "H_demag",
               valueCount: 12,
@@ -2572,6 +2731,7 @@ describe("viewport3dRenderModel", () => {
               dtype: "float64",
               grid: [4, 1, 1],
               nComp: 3,
+              nodeIndices: new Uint32Array([4, 5, 6, 7]),
               pointCount: 4,
               quantityId: "H_demag",
               valueCount: 12,
@@ -2645,6 +2805,7 @@ describe("viewport3dRenderModel", () => {
               dtype: "float64",
               grid: [2, 1, 1],
               nComp: 3,
+              nodeIndices: new Uint32Array([4, 6]),
               pointCount: 2,
               quantityId: "H_demag",
               valueCount: 6,
@@ -2715,6 +2876,7 @@ describe("viewport3dRenderModel", () => {
             dtype: "float64",
             grid: [5, 1, 1],
             nComp: 3,
+            nodeIndices: new Uint32Array([6, 7, 8, 9, 10]),
             pointCount: 5,
             quantityId: "H_eff",
             valueCount: 15,
@@ -2787,6 +2949,7 @@ describe("viewport3dRenderModel", () => {
             dtype: "float64",
             grid: [2, 1, 1],
             nComp: 3,
+            nodeIndices: new Uint32Array([6, 9]),
             pointCount: 2,
             quantityId: "H_demag",
             valueCount: 6,
@@ -2858,6 +3021,7 @@ describe("viewport3dRenderModel", () => {
               dtype: "float64",
               grid: [2, 1, 1],
               nComp: 3,
+              nodeIndices: new Uint32Array([4, 6]),
               pointCount: 2,
               quantityId: "m",
               valueCount: 6,

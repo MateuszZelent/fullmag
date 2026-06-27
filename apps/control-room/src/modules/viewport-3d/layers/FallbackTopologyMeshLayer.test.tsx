@@ -41,6 +41,7 @@ function fallbackTopology(): Viewport3DTopologyRenderModel {
     magneticParts: [],
     meshGenerationId: null,
     meshRevision: null,
+    meshTopologyHash: null,
     nodeCount: 2,
     positions: new Float32Array([0, 0, 0, 1, 0, 0]),
   };

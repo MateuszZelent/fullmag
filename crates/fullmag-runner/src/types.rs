@@ -1221,6 +1221,46 @@ pub struct FemMeshPayload {
     pub per_domain_quality: HashMap<u32, MeshQualityPayload>,
 }
 
+pub fn fem_mesh_topology_fingerprint(mesh: &FemMeshPayload) -> String {
+    let mut hasher = Sha256::new();
+    update_hash_bytes(
+        &mut hasher,
+        "schema",
+        b"fullmag:fem-mesh-topology-fingerprint:v1",
+    );
+    update_hash_str(&mut hasher, "mesh_name", &mesh.mesh_name);
+    update_hash_str(&mut hasher, "mesh_id", &mesh.mesh_id);
+    update_hash_serialized(&mut hasher, "generation_id", &mesh.generation_id);
+    update_hash_nodes(&mut hasher, "nodes", &mesh.nodes);
+    update_hash_tets(&mut hasher, "elements", &mesh.elements);
+    update_hash_u32_slice(&mut hasher, "element_markers", &mesh.element_markers);
+    update_hash_triangles(&mut hasher, "boundary_faces", &mesh.boundary_faces);
+    update_hash_u32_slice(&mut hasher, "boundary_markers", &mesh.boundary_markers);
+    update_hash_serialized(
+        &mut hasher,
+        "periodic_boundary_pairs",
+        &mesh.periodic_boundary_pairs,
+    );
+    update_hash_serialized(
+        &mut hasher,
+        "periodic_node_pairs",
+        &mesh.periodic_node_pairs,
+    );
+    update_hash_serialized(&mut hasher, "object_segments", &mesh.object_segments);
+    update_hash_serialized(&mut hasher, "mesh_parts", &mesh.mesh_parts);
+    update_hash_serialized(&mut hasher, "domain_mesh_mode", &mesh.domain_mesh_mode);
+    update_hash_serialized(&mut hasher, "domain_frame", &mesh.domain_frame);
+    digest_hex(&hasher.finalize())
+}
+
+fn digest_hex(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        let _ = fmt::Write::write_fmt(&mut out, format_args!("{byte:02x}"));
+    }
+    out
+}
+
 fn normalized_payload_element_markers(
     element_markers: &[u32],
     magnetic_markers: Option<&BTreeSet<u32>>,
@@ -1908,8 +1948,8 @@ pub(crate) struct StateObservables {
 #[cfg(test)]
 mod tests {
     use super::{
-        normalized_payload_element_markers, FemMeshPartPayload, FemMeshPayload, LivePreviewField,
-        StepStats, StepUpdate,
+        fem_mesh_topology_fingerprint, normalized_payload_element_markers, FemMeshPartPayload,
+        FemMeshPayload, LivePreviewField, StepStats, StepUpdate,
     };
     use fullmag_ir::{
         ExchangeBoundaryCondition, ExecutionPrecision, FemDomainMeshModeIR, FemMeshPartIR,
@@ -2035,6 +2075,60 @@ mod tests {
 
         assert_eq!(first.generation_id, second.generation_id);
         assert_eq!(first.mesh_id, second.mesh_id);
+    }
+
+    #[test]
+    fn fem_mesh_topology_fingerprint_changes_for_node_reorder() {
+        let base = FemMeshPayload::from(&tiny_fem_plan());
+        let mut reordered = base.clone();
+        reordered.nodes.swap(1, 2);
+
+        assert_ne!(
+            fem_mesh_topology_fingerprint(&base),
+            fem_mesh_topology_fingerprint(&reordered)
+        );
+    }
+
+    #[test]
+    fn fem_mesh_topology_fingerprint_changes_for_element_connectivity() {
+        let base = FemMeshPayload::from(&tiny_fem_plan());
+        let mut rewired = base.clone();
+        rewired.elements[0] = [0, 1, 3, 2];
+
+        assert_ne!(
+            fem_mesh_topology_fingerprint(&base),
+            fem_mesh_topology_fingerprint(&rewired)
+        );
+    }
+
+    #[test]
+    fn fem_mesh_topology_fingerprint_changes_for_mesh_part_node_indices() {
+        let base = FemMeshPayload::from(&tiny_fem_plan());
+        let mut repartitioned = base.clone();
+        repartitioned.mesh_parts.push(FemMeshPartPayload {
+            id: "part:film".to_string(),
+            label: "Film".to_string(),
+            role: "magnetic_object".to_string(),
+            object_id: Some("film".to_string()),
+            geometry_id: None,
+            material_id: None,
+            element_start: 0,
+            element_count: 1,
+            boundary_face_start: 0,
+            boundary_face_count: 1,
+            boundary_face_indices: Vec::new(),
+            node_start: 0,
+            node_count: 4,
+            node_indices: vec![0, 1, 2, 3],
+            surface_faces: Vec::new(),
+            bounds_min: None,
+            bounds_max: None,
+        });
+
+        assert_ne!(
+            fem_mesh_topology_fingerprint(&base),
+            fem_mesh_topology_fingerprint(&repartitioned)
+        );
     }
 
     #[test]

@@ -54,6 +54,7 @@ pub struct MeshObjectConfigEntryResource {
 pub struct MeshSolverMeshResource {
     pub mesh_name: String,
     pub mesh_id: String,
+    pub topology_fingerprint: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generation_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -611,6 +612,7 @@ pub struct MeshSharedDomainManifestResource {
     /// Mesh identity for tree/selection metadata.
     pub mesh_name: String,
     pub mesh_id: String,
+    pub topology_fingerprint: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generation_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

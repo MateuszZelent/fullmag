@@ -42,6 +42,7 @@ function topologyModelFixture(): Viewport3DTopologyRenderModel {
     magneticParts: [],
     meshGenerationId: null,
     meshRevision: null,
+    meshTopologyHash: null,
     nodeCount: 8,
     positions: Float32Array.from(topologyFixture().positions),
   };

@@ -1,4 +1,5 @@
 use axum::body::Body;
+use axum::http::HeaderName;
 use axum::http::header::{
     ACCEPT_RANGES, CACHE_CONTROL, CONTENT_RANGE, CONTENT_TYPE, ETAG, IF_NONE_MATCH, RANGE,
 };
@@ -9,6 +10,15 @@ use serde::Serialize;
 
 pub(crate) fn stable_strong_etag(token: &str) -> String {
     format!("\"{}\"", token.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+pub(crate) fn insert_mesh_topology_hash_header(response: &mut Response, topology_hash: &str) {
+    if let Ok(value) = HeaderValue::from_str(topology_hash) {
+        response.headers_mut().insert(
+            HeaderName::from_static("x-fullmag-mesh-topology-hash"),
+            value,
+        );
+    }
 }
 
 fn if_none_match_matches(headers: &HeaderMap, etag: &str) -> bool {

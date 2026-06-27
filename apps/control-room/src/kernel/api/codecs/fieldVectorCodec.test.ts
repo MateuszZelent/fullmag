@@ -30,14 +30,117 @@ function makeFieldVectorBuffer({
   return buffer;
 }
 
+function makeFieldVectorV3Buffer({
+  indexing = 0,
+  nodeIndices = [],
+  quantityId = "m",
+  scopeId = "",
+  scopeKind = "full",
+  values = [1, 0, -1],
+}: {
+  indexing?: number;
+  nodeIndices?: number[];
+  quantityId?: string;
+  scopeId?: string;
+  scopeKind?: string;
+  values?: number[];
+} = {}): ArrayBuffer {
+  const encoder = new TextEncoder();
+  const scopeKindBytes = encoder.encode(scopeKind);
+  const scopeIdBytes = encoder.encode(scopeId);
+  const rawMetadataLength =
+    68 + scopeKindBytes.length + scopeIdBytes.length + nodeIndices.length * 4;
+  const metadataLength = Math.ceil(rawMetadataLength / 8) * 8;
+  const buffer = new ArrayBuffer(
+    48 + metadataLength + values.length * Float64Array.BYTES_PER_ELEMENT,
+  );
+  const view = new DataView(buffer);
+  for (const [index, code] of [..."FMVP"].entries()) {
+    view.setUint8(index, code.charCodeAt(0));
+  }
+  view.setUint8(4, 3);
+  view.setUint8(5, 1);
+  view.setUint8(6, 3);
+  view.setUint32(8, metadataLength, true);
+  view.setUint32(12, values.length, true);
+  view.setUint32(16, values.length / 3, true);
+  view.setUint32(20, 1, true);
+  view.setUint32(24, 1, true);
+  encoder.encodeInto(quantityId, new Uint8Array(buffer, 28, 16));
+
+  for (const [index, code] of [..."FMMI"].entries()) {
+    view.setUint8(48 + index, code.charCodeAt(0));
+  }
+  view.setUint16(52, 1, true);
+  view.setBigUint64(56, BigInt(42), true);
+  view.setBigUint64(64, BigInt(7), true);
+  new Uint8Array(buffer, 72, 32).fill(0xab);
+  view.setUint32(104, indexing, true);
+  view.setUint32(108, nodeIndices.length, true);
+  view.setUint16(112, scopeKindBytes.length, true);
+  view.setUint16(114, scopeIdBytes.length, true);
+  new Uint8Array(buffer, 116, scopeKindBytes.length).set(scopeKindBytes);
+  new Uint8Array(buffer, 116 + scopeKindBytes.length, scopeIdBytes.length).set(
+    scopeIdBytes,
+  );
+  let offset = 116 + scopeKindBytes.length + scopeIdBytes.length;
+  for (const nodeIndex of nodeIndices) {
+    view.setUint32(offset, nodeIndex, true);
+    offset += 4;
+  }
+  new Float64Array(buffer, 48 + metadataLength).set(values);
+  return buffer;
+}
+
 describe("decodeFieldVector", () => {
   it("decodes valid FMVP field vector buffers", () => {
     const decoded = decodeFieldVector(makeFieldVectorBuffer());
 
     expect(decoded.quantityId).toBe("m");
+    expect(decoded.formatVersion).toBe(2);
+    expect(decoded.indexing).toBe("legacy_count_only");
     expect(decoded.nComp).toBe(3);
     expect(decoded.grid).toEqual([1, 1, 1]);
     expect(Array.from(decoded.values)).toEqual([1, 0, -1]);
+  });
+
+  it("decodes FMVP v3 full-domain metadata", () => {
+    const decoded = decodeFieldVector(makeFieldVectorV3Buffer());
+
+    expect(decoded.formatVersion).toBe(3);
+    expect(decoded.domainGenerationId).toBe(42);
+    expect(decoded.meshTopologyRevision).toBe("7");
+    expect(decoded.meshTopologyHash).toBe("abababababababababababababababababababababababababababababababab");
+    expect(decoded.scopeKind).toBe("full");
+    expect(decoded.scopeId).toBeNull();
+    expect(decoded.indexing).toBe("full_domain");
+    expect(decoded.nodeIndices).toBeNull();
+  });
+
+  it("decodes scoped FMVP v3 node indices", () => {
+    const decoded = decodeFieldVector(
+      makeFieldVectorV3Buffer({
+        indexing: 1,
+        nodeIndices: [3, 1],
+        quantityId: "h_eff",
+        scopeId: "part:a",
+        scopeKind: "part",
+        values: [1, 0, 0, 0, 1, 0],
+      }),
+    );
+
+    expect(decoded.quantityId).toBe("h_eff");
+    expect(decoded.scopeKind).toBe("part");
+    expect(decoded.scopeId).toBe("part:a");
+    expect(decoded.indexing).toBe("explicit_node_indices");
+    expect(Array.from(decoded.nodeIndices ?? [])).toEqual([3, 1]);
+  });
+
+  it("rejects malformed FMVP v3 metadata lengths", () => {
+    const buffer = makeFieldVectorV3Buffer();
+    new DataView(buffer).setUint32(8, 8, true);
+
+    expect(() => decodeFieldVector(buffer)).toThrow(/FMVP metadata/);
   });
 
   it("rejects malformed FMVP buffers", () => {

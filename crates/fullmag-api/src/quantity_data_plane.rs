@@ -39,7 +39,7 @@ const DEFAULT_MAX_BYTES: usize = 128 * 1024 * 1024;
 /// A single cached binary buffer with its ETag and provenance information.
 #[derive(Clone)]
 pub(crate) struct CachedBinary {
-    /// FMVP v2 encoded binary.
+    /// Versioned FMVP-encoded binary.
     pub bytes: Vec<u8>,
     /// HTTP ETag (strong, quoted).
     pub etag: String,

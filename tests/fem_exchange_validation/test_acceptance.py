@@ -16,6 +16,7 @@ from helpers import (  # noqa: E402
     ValidationFailure,
     analytical_helical_exchange_amplitude,
     analytical_helical_exchange_energy,
+    exchange_amplitude_from_energy,
     exchange_field_scale,
     require_error_decreases_with_refinement,
     require_finite_metrics,
@@ -51,6 +52,28 @@ class ExchangeValidationAcceptanceTests(unittest.TestCase):
         k = 2.0 * math.pi / wavelength
 
         self.assertAlmostEqual(energy, 13e-12 * k * k * volume)
+
+    def test_exchange_amplitude_from_energy_matches_helical_reference(self) -> None:
+        wavelength = 100e-9
+        volume = 200e-9 * 20e-9 * 10e-9
+        energy = analytical_helical_exchange_energy(
+            aex=13e-12,
+            wavelength=wavelength,
+            volume=volume,
+        )
+
+        self.assertAlmostEqual(
+            exchange_amplitude_from_energy(
+                exchange_energy=energy,
+                ms=800e3,
+                volume=volume,
+            ),
+            analytical_helical_exchange_amplitude(
+                aex=13e-12,
+                ms=800e3,
+                wavelength=wavelength,
+            ),
+        )
 
     def test_finite_metrics_reject_nan_rows(self) -> None:
         rows = [{"case": "bad", "h_ex_rel_error": math.nan}]

@@ -3904,8 +3904,10 @@ export interface components {
              * Format: int32
              * @description Optional hard cap for vector samples returned by the binary payload.
              *
-             *     Scoped FEM queries are sampled by scope node index. Unscoped queries
-             *     return a contiguous center window for lightweight diagnostics.
+             *     FMVP v3 encodes sampled FEM responses with `sampled_node_indices`.
+             *     Sampled responses are valid for vector glyph placement only; surface
+             *     shader coloring requires either full-domain data or an explicit complete
+             *     node-index mapping for the target surface.
              */
             max_samples?: number | null;
             /**
@@ -5384,6 +5386,7 @@ export interface components {
             revision: number;
             /** Format: int64 */
             source_scene_revision?: number | null;
+            topology_fingerprint: string;
         };
         MeshSharedDomainQualityResource: {
             quality?: unknown;
@@ -5404,6 +5407,7 @@ export interface components {
             mesh_part_count: number;
             /** Format: int32 */
             object_segment_count: number;
+            topology_fingerprint: string;
         };
         MeshSummaryResource: {
             /** @description Transitional dashboard target summary. Build-specific target resolution is owned by `meshing/builds/current`. */
@@ -9600,8 +9604,10 @@ export interface operations {
                 /**
                  * @description Optional hard cap for vector samples returned by the binary payload.
                  *
-                 *     Scoped FEM queries are sampled by scope node index. Unscoped queries
-                 *     return a contiguous center window for lightweight diagnostics.
+                 *     FMVP v3 encodes sampled FEM responses with `sampled_node_indices`.
+                 *     Sampled responses are valid for vector glyph placement only; surface
+                 *     shader coloring requires either full-domain data or an explicit complete
+                 *     node-index mapping for the target surface.
                  */
                 max_samples?: number | null;
                 /**
@@ -9639,7 +9645,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Binary FMVP v2 field vector */
+            /** @description Binary FMVP field vector. FEM payloads use FMVP v3 metadata with domain_generation_id, mesh topology revision/hash, scope kind/id, indexing, and optional node_indices. FMVP v2 remains accepted for legacy full-domain payloads. */
             200: {
                 headers: {
                     [name: string]: unknown;

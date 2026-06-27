@@ -90,10 +90,10 @@ pub use solver_profile::{
     SolverProfileThreading,
 };
 pub use types::{
-    ExecutionProvenance, FemEigenRunResult, FemMeshObjectSegment, FemMeshPartPayload,
-    FemMeshPayload, LivePreviewField, LivePreviewRequest, LiveVectorFieldSnapshot,
-    ResolvedFallback, RunError, RunResult, RunStatus, RuntimeEngineInfo, StepAction, StepStats,
-    StepUpdate,
+    fem_mesh_topology_fingerprint, ExecutionProvenance, FemEigenRunResult, FemMeshObjectSegment,
+    FemMeshPartPayload, FemMeshPayload, LivePreviewField, LivePreviewRequest,
+    LiveVectorFieldSnapshot, ResolvedFallback, RunError, RunResult, RunStatus, RuntimeEngineInfo,
+    StepAction, StepStats, StepUpdate,
 };
 
 use crate::capabilities::{

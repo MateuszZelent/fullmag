@@ -1,9 +1,31 @@
+export type DecodedFieldVectorIndexing =
+  | "explicit_node_indices"
+  | "full_domain"
+  | "legacy_count_only"
+  | "sampled_node_indices";
+
+export type DecodedFieldVectorScopeKind =
+  | "airbox"
+  | "full"
+  | "magnetic_only"
+  | "object"
+  | "part"
+  | "selection";
+
 export interface DecodedFieldVector {
   dtype: "float64";
+  domainGenerationId?: number | null;
+  formatVersion?: 2 | 3;
   grid: [number, number, number];
+  indexing?: DecodedFieldVectorIndexing;
+  meshTopologyHash?: string | null;
+  meshTopologyRevision?: string | null;
   nComp: number;
+  nodeIndices?: readonly number[] | Uint32Array | null;
   pointCount: number;
   quantityId: string;
+  scopeId?: string | null;
+  scopeKind?: DecodedFieldVectorScopeKind | null;
   valueCount: number;
   values: Float64Array;
 }
@@ -11,9 +33,17 @@ export interface DecodedFieldVector {
 export interface DecodedComplexFieldVector {
   componentCount: number;
   dtype: "complex128";
+  domainGenerationId?: number | null;
+  formatVersion?: 2 | 3;
   grid: [number, number, number];
+  indexing?: DecodedFieldVectorIndexing;
+  meshTopologyHash?: string | null;
+  meshTopologyRevision?: string | null;
+  nodeIndices?: readonly number[] | Uint32Array | null;
   pointCount: number;
   quantityId: string;
+  scopeId?: string | null;
+  scopeKind?: DecodedFieldVectorScopeKind | null;
   valueCount: number;
   values: Float64Array;
 }

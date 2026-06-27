@@ -140,7 +140,7 @@ describe("useViewport3DChunkedScalarColors", () => {
         "field-color:session=current:domain=shared-domain:quantity=m:mode=orientation:scope=full:full:target=surface/full",
       revisionSummary:
         "topology=mesh-4 field=field-7 quantity=m mode=orientation palette=viridis range=auto:min=-1:max=1 target=surface/full sampling=full-domain:chunked",
-      targetRevision: "field=field-7",
+      targetRevision: "topology=mesh-4 field=field-7",
       topologyRevision: "mesh-4",
     });
   });
@@ -738,7 +738,7 @@ describe("useViewport3DChunkedScalarColors", () => {
     expect(tagged?.colors).toBe(colors.colors);
     expect(tagged).toMatchObject({
       buildKey: reference?.buildKey,
-      targetRevision: "field=field-9",
+      targetRevision: "topology=mesh-4 field=field-9",
       topologyRevision: "mesh-4",
     });
   });

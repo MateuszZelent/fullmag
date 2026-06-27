@@ -121,6 +121,7 @@ export function resolveRetainedMeshPartScalarColors({
   previous,
   scalarColorMode,
   settings,
+  topologyRevision,
   vertexCount,
 }: {
   current: ScalarColorBuffer | null;
@@ -130,6 +131,7 @@ export function resolveRetainedMeshPartScalarColors({
     VisualizationTargetSettings,
     "activeQuantityId" | "scalarColorPalette"
   >;
+  topologyRevision?: number | string | null;
   vertexCount: number;
 }): ScalarColorBuffer | null {
   if (current) return current;
@@ -138,6 +140,7 @@ export function resolveRetainedMeshPartScalarColors({
     previous,
     scalarColorMode,
     settings,
+    topologyRevision,
     vertexCount,
   )
     ? previous
@@ -178,9 +181,18 @@ function scalarColorBufferMatchesRetainedSettings(
     VisualizationTargetSettings,
     "activeQuantityId" | "scalarColorPalette"
   >,
+  topologyRevision: number | string | null | undefined,
   vertexCount: number,
 ): buffer is ScalarColorBuffer {
   if (!buffer) return false;
+  if (
+    buffer.topologyRevision &&
+    topologyRevision !== undefined &&
+    topologyRevision !== null &&
+    buffer.topologyRevision !== String(topologyRevision)
+  ) {
+    return false;
+  }
   if (
     buffer.colorPalette &&
     settings.scalarColorPalette &&
@@ -343,6 +355,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       return [
         "mesh-quality",
         `part=${part.id}`,
+        `topology=${topologyRevision ?? "none"}`,
         `vertices=${topologyModel?.nodeCount ?? 0}`,
       ].join("|");
     }
@@ -353,6 +366,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       `mode=${scalarColorMode}`,
       `quantity=${resolveCanonicalQuantityId(renderSettings.activeQuantityId)}`,
       `palette=${renderSettings.scalarColorPalette ?? "default"}`,
+      `topology=${topologyRevision ?? "none"}`,
       `vertices=${topologyModel?.nodeCount ?? 0}`,
     ].join("|");
   }, [
@@ -364,6 +378,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     renderSettings.shaderVisible,
     scalarColorMode,
     topologyModel?.nodeCount,
+    topologyRevision,
   ]);
   const scalarColorsCandidate = resolveMeshPartScalarColors({
     fieldModel,
@@ -377,6 +392,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     previous: retainedScalarColorsRef.current,
     scalarColorMode,
     settings: renderSettings,
+    topologyRevision,
     vertexCount: topologyModel?.nodeCount ?? 0,
   });
   useEffect(() => {
@@ -387,6 +403,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
         scalarColorsCandidate,
         scalarColorMode,
         renderSettings,
+        topologyRevision,
         vertexCount,
       )
     ) {
@@ -407,6 +424,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     scalarColorMode,
     scalarColorsCandidate,
     topologyModel?.nodeCount,
+    topologyRevision,
   ]);
   const effectiveScalarColors = meshQualityColors ?? scalarColors;
   const vertexColorsEnabled =

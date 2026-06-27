@@ -23,6 +23,9 @@ export interface Viewport3DTargetFieldBuffer {
   consumers: readonly string[];
   fieldRevision: string | null;
   fieldVector: DecodedFieldVector;
+  indexing: NonNullable<DecodedFieldVector["indexing"]>;
+  meshTopologyHash: string | null;
+  nodeIndices: DecodedFieldVector["nodeIndices"];
   pointCount: number;
   quantityId: string;
   requestId: string | null;
@@ -67,6 +70,8 @@ export function buildViewport3DTargetFieldBuffer({
 }): Viewport3DTargetFieldBuffer {
   const component = resolveTargetFieldBufferComponent(fieldVector, query);
   const sampled = query.max_samples != null;
+  const indexing = fieldVector.indexing ?? "legacy_count_only";
+  const meshTopologyHash = fieldVector.meshTopologyHash ?? null;
   const capability = resolveTargetFieldBufferCapability({
     component,
     fieldVector,
@@ -81,6 +86,8 @@ export function buildViewport3DTargetFieldBuffer({
       scopeId: query.scope_id ?? null,
       scopeKind: resolveTargetFieldBufferScopeKind(query.scope_kind),
       targetIds,
+      meshTopologyHash,
+      indexing,
       topologyRevision,
     }),
     capability,
@@ -90,6 +97,9 @@ export function buildViewport3DTargetFieldBuffer({
     consumers: [...consumers].sort(),
     fieldRevision,
     fieldVector,
+    indexing,
+    meshTopologyHash,
+    nodeIndices: fieldVector.nodeIndices ?? null,
     pointCount: fieldVector.pointCount,
     quantityId: resolveCanonicalQuantityId(fieldVector.quantityId),
     requestId: synthetic
@@ -162,6 +172,7 @@ export function viewport3DTargetFieldBufferCanServeSurface(
     return false;
   }
   if (!buffer.complete) return false;
+  if (!targetFieldBufferHasSurfaceCompatibleIndexing(buffer)) return false;
   if (colorMode === "orientation" || colorMode === "hsl_sphere") {
     return buffer.capability === "full-vector-complete";
   }
@@ -180,9 +191,11 @@ export function viewport3DTargetFieldBufferCanServeVectors(
   buffer: Viewport3DTargetFieldBuffer | null | undefined,
   quantityId?: string | null,
 ): boolean {
+  if (!buffer) return false;
   if (!viewport3DTargetFieldBufferMatchesQuantity(buffer, quantityId)) {
     return false;
   }
+  if (!targetFieldBufferHasVectorCompatibleIndexing(buffer)) return false;
   return (
     buffer?.capability === "full-vector-complete" ||
     buffer?.capability === "full-vector-sampled" ||
@@ -215,6 +228,44 @@ function resolveTargetFieldBufferCapability({
   if (synthetic) return "synthetic-full-vector";
   if (component !== "full" || fieldVector.nComp < 3) return "scalar-complete";
   return sampled ? "full-vector-sampled" : "full-vector-complete";
+}
+
+function targetFieldBufferHasSurfaceCompatibleIndexing(
+  buffer: Viewport3DTargetFieldBuffer,
+): boolean {
+  if (buffer.indexing === "sampled_node_indices") return false;
+  if (buffer.indexing === "explicit_node_indices") {
+    return targetFieldBufferHasNodeIndexMap(buffer);
+  }
+  if (buffer.indexing === "full_domain") {
+    return buffer.meshTopologyHash !== null;
+  }
+  return true;
+}
+
+function targetFieldBufferHasVectorCompatibleIndexing(
+  buffer: Viewport3DTargetFieldBuffer,
+): boolean {
+  if (
+    buffer.indexing === "explicit_node_indices" ||
+    buffer.indexing === "sampled_node_indices"
+  ) {
+    return targetFieldBufferHasNodeIndexMap(buffer);
+  }
+  if (buffer.indexing === "full_domain") {
+    return buffer.meshTopologyHash !== null;
+  }
+  return true;
+}
+
+function targetFieldBufferHasNodeIndexMap(
+  buffer: Viewport3DTargetFieldBuffer,
+): boolean {
+  return (
+    buffer.meshTopologyHash !== null &&
+    buffer.nodeIndices != null &&
+    buffer.nodeIndices.length === buffer.pointCount
+  );
 }
 
 function resolveTargetFieldBufferScopeKind(
@@ -250,6 +301,8 @@ function buildViewport3DTargetFieldBufferId({
   scopeId,
   scopeKind,
   targetIds,
+  meshTopologyHash,
+  indexing,
   topologyRevision,
 }: {
   component: Exclude<Viewport3DFieldComponentDemand, "none">;
@@ -258,6 +311,8 @@ function buildViewport3DTargetFieldBufferId({
   scopeId: string | null;
   scopeKind: Viewport3DFieldScopeKind;
   targetIds: readonly string[];
+  meshTopologyHash: string | null;
+  indexing: NonNullable<DecodedFieldVector["indexing"]>;
   topologyRevision: string | null;
 }): string {
   return [
@@ -267,6 +322,8 @@ function buildViewport3DTargetFieldBufferId({
     scopeId ?? "none",
     fieldRevision ?? "field:none",
     topologyRevision ?? "topology:none",
+    meshTopologyHash ?? "topology-hash:none",
+    indexing,
     [...targetIds].sort().join(","),
   ].join(":");
 }

@@ -18,7 +18,7 @@ These modules share the same kernel slot and command model. They do not duplicat
 
 1. One viewport tree for FDM and FEM.
 2. FDM/FEM differences live in domain adapters and render-model builders.
-3. Topology rebuilds are separate from field-buffer swaps.
+3. Topology rebuilds are separate from field-buffer swaps; a field buffer may be reused only when its domain generation and mesh topology revision/hash remain compatible with the current topology.
 4. Render loops are dirty-driven, not always-on.
 5. Every GPU resource has explicit ownership and disposal.
 6. Non-3D center surfaces do not keep `viewport-3d` mounted. Server-rendered cross-section images use no browser WebGL. Any future WebGL-backed 2D mode must follow the same active-only mounting and teardown rules as `viewport-3d`.

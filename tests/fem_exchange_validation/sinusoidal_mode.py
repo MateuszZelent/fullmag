@@ -53,6 +53,7 @@ from helpers import (  # noqa: E402
     ValidationFailure,
     analytical_helical_exchange_amplitude,
     analytical_helical_exchange_energy,
+    exchange_amplitude_from_energy,
     relative_error,
     require_error_decreases_with_refinement,
     require_finite_metrics,
@@ -160,9 +161,14 @@ def run_sweep() -> list[dict]:
                 raise ValidationFailure("run produced no step stats")
             last = result.steps[-1]
             measured = float(getattr(last, "max_h_eff", float("nan")))
-            h_error = relative_error(measured, REFERENCE_H_EX)
             energy = float(getattr(last, "e_ex", float("nan")))
             energy_error = relative_error(energy, REFERENCE_E_EX)
+            h_energy_equivalent = exchange_amplitude_from_energy(
+                exchange_energy=energy,
+                ms=MS,
+                volume=VOLUME,
+            )
+            h_error = relative_error(h_energy_equivalent, REFERENCE_H_EX)
             row = {
                 "case": label,
                 "hmax_m": hmax,
@@ -170,8 +176,10 @@ def run_sweep() -> list[dict]:
                 "wavelength_m": WAVELENGTH,
                 "k_rad_per_m": K,
                 "h_ex_max_Apm": measured,
+                "h_ex_energy_equivalent_Apm": h_energy_equivalent,
                 "h_ex_reference_Apm": REFERENCE_H_EX,
                 "h_ex_rel_error": h_error,
+                "h_eff_max_to_reference_ratio": measured / REFERENCE_H_EX,
                 "exchange_energy_J": energy,
                 "exchange_energy_reference_J": REFERENCE_E_EX,
                 "exchange_energy_rel_error": energy_error,
@@ -191,8 +199,10 @@ def run_sweep() -> list[dict]:
                 "wavelength_m": WAVELENGTH,
                 "k_rad_per_m": K,
                 "h_ex_max_Apm": float("nan"),
+                "h_ex_energy_equivalent_Apm": float("nan"),
                 "h_ex_reference_Apm": REFERENCE_H_EX,
                 "h_ex_rel_error": float("nan"),
+                "h_eff_max_to_reference_ratio": float("nan"),
                 "exchange_energy_J": float("nan"),
                 "exchange_energy_reference_J": REFERENCE_E_EX,
                 "exchange_energy_rel_error": float("nan"),
@@ -222,8 +232,10 @@ def main() -> int:
             rows,
             [
                 "h_ex_max_Apm",
+                "h_ex_energy_equivalent_Apm",
                 "h_ex_reference_Apm",
                 "h_ex_rel_error",
+                "h_eff_max_to_reference_ratio",
                 "exchange_energy_J",
                 "exchange_energy_reference_J",
                 "exchange_energy_rel_error",

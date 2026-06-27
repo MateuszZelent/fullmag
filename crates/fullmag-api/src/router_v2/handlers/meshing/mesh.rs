@@ -4,25 +4,25 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::sync::Arc;
 
+use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::IntoResponse;
-use axum::Json;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::error::ApiError;
 use crate::fem_cross_section::{
-    cross_section_quality_from_fmmq, cross_section_quality_from_parent_tets,
-    per_element_quality_metric_from_fmmq, serialize_cross_section_fmcs,
-    serialize_cross_section_quality_fmqs, CrossSectionQualityMetric,
+    CrossSectionQualityMetric, cross_section_quality_from_fmmq,
+    cross_section_quality_from_parent_tets, per_element_quality_metric_from_fmmq,
+    serialize_cross_section_fmcs, serialize_cross_section_quality_fmqs,
 };
 use crate::fem_cross_section_image::{
-    render_cross_section_png, validate_cross_section_image_query, CrossSectionImageColorScale,
-    CrossSectionImageRenderOptions,
+    CrossSectionImageColorScale, CrossSectionImageRenderOptions, render_cross_section_png,
+    validate_cross_section_image_query,
 };
-use crate::fem_slice_overlay::{collect_fem_slice_overlay, FemSliceOverlayInput};
-use crate::field_slice::{resolve_slice_query, FieldSliceQuery, SlicePlane};
+use crate::fem_slice_overlay::{FemSliceOverlayInput, collect_fem_slice_overlay};
+use crate::field_slice::{FieldSliceQuery, SlicePlane, resolve_slice_query};
 use crate::field_store::serialize_fem_mesh_topology_binary_v1;
 use crate::schemas::mesh::{
     MeshActiveBuildResource, MeshBuildDiagnosticsResource, MeshBuildHistoryResource,
@@ -183,6 +183,7 @@ pub async fn get_mesh_semantics(
         .map(|mesh| MeshSolverMeshResource {
             mesh_name: mesh.mesh_name.clone(),
             mesh_id: mesh.mesh_id.clone(),
+            topology_fingerprint: fullmag_runner::fem_mesh_topology_fingerprint(mesh),
             generation_id: mesh.generation_id.clone(),
             domain_mesh_mode: mesh.domain_mesh_mode.clone(),
             object_segment_count: mesh.object_segments.len() as u32,
@@ -1359,12 +1360,14 @@ pub async fn get_mesh_shared_domain_manifest(
     match snapshot.fem_mesh.as_ref() {
         Some(mesh) => {
             let provenance = mesh_build_provenance(&snapshot);
+            let topology_hash = fullmag_runner::fem_mesh_topology_fingerprint(mesh);
             let body = MeshSharedDomainManifestResource {
                 revision: snapshot.mesh_revision,
                 source_scene_revision: provenance.source_scene_revision,
                 geometry_realization_revision: provenance.geometry_realization_revision,
                 mesh_name: mesh.mesh_name.clone(),
                 mesh_id: mesh.mesh_id.clone(),
+                topology_fingerprint: topology_hash.clone(),
                 generation_id: mesh.generation_id.clone(),
                 domain_mesh_mode: mesh.domain_mesh_mode.clone(),
                 object_segments: mesh
@@ -1381,7 +1384,7 @@ pub async fn get_mesh_shared_domain_manifest(
             };
             let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
             let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
-                "mesh-shared-domain-manifest:{generation_id}:{}:{}:{}",
+                "mesh-shared-domain-manifest:{generation_id}:{topology_hash}:{}:{}:{}",
                 snapshot.mesh_revision,
                 provenance
                     .source_scene_revision
@@ -1428,15 +1431,19 @@ pub async fn get_mesh_shared_domain_topology(
         Some(mesh) => {
             let binary = serialize_fem_mesh_topology_binary_v1(mesh);
             let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
+            let topology_hash = fullmag_runner::fem_mesh_topology_fingerprint(mesh);
             let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
-                "mesh-shared-domain-topology:{generation_id}:{}",
-                snapshot.mesh_revision
+                "mesh-shared-domain-topology:{generation_id}:{topology_hash}:{}",
+                snapshot.mesh_revision,
             ));
-            Ok(
-                crate::router_v2::handlers::shared::conditional_binary_response(
-                    &headers, &etag, binary,
-                ),
-            )
+            let mut response = crate::router_v2::handlers::shared::conditional_binary_response(
+                &headers, &etag, binary,
+            );
+            crate::router_v2::handlers::shared::insert_mesh_topology_hash_header(
+                &mut response,
+                &topology_hash,
+            );
+            Ok(response)
         }
         None => Ok(StatusCode::NO_CONTENT.into_response()),
     }
@@ -1680,15 +1687,19 @@ pub async fn get_mesh_object_topology(
             })?;
             let binary = serialize_fem_mesh_topology_binary_v1(&object_mesh);
             let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
+            let topology_hash = fullmag_runner::fem_mesh_topology_fingerprint(&object_mesh);
             let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
-                "mesh-object-topology:{object_id}:{generation_id}:{}",
-                snapshot.mesh_revision
+                "mesh-object-topology:{object_id}:{generation_id}:{topology_hash}:{}",
+                snapshot.mesh_revision,
             ));
-            Ok(
-                crate::router_v2::handlers::shared::conditional_binary_response(
-                    &headers, &etag, binary,
-                ),
-            )
+            let mut response = crate::router_v2::handlers::shared::conditional_binary_response(
+                &headers, &etag, binary,
+            );
+            crate::router_v2::handlers::shared::insert_mesh_topology_hash_header(
+                &mut response,
+                &topology_hash,
+            );
+            Ok(response)
         }
         None => Ok(StatusCode::NO_CONTENT.into_response()),
     }
@@ -1724,15 +1735,19 @@ pub async fn get_mesh_part_topology(
                 .ok_or_else(|| ApiError::not_found(format!("mesh part not found: {part_id}")))?;
             let binary = serialize_fem_mesh_topology_binary_v1(&part_mesh);
             let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
+            let topology_hash = fullmag_runner::fem_mesh_topology_fingerprint(&part_mesh);
             let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
-                "mesh-part-topology:{part_id}:{generation_id}:{}",
-                snapshot.mesh_revision
+                "mesh-part-topology:{part_id}:{generation_id}:{topology_hash}:{}",
+                snapshot.mesh_revision,
             ));
-            Ok(
-                crate::router_v2::handlers::shared::conditional_binary_response(
-                    &headers, &etag, binary,
-                ),
-            )
+            let mut response = crate::router_v2::handlers::shared::conditional_binary_response(
+                &headers, &etag, binary,
+            );
+            crate::router_v2::handlers::shared::insert_mesh_topology_hash_header(
+                &mut response,
+                &topology_hash,
+            );
+            Ok(response)
         }
         None => Ok(StatusCode::NO_CONTENT.into_response()),
     }

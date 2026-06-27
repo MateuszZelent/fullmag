@@ -123,6 +123,7 @@ Disposal rules:
 
 - field value update updates buffers, not topology geometry;
 - topology revision change releases stale topology geometry and compatible derived buffers;
+- scalar/vector upload retention keys include both field and topology identity;
 - quantity style change updates uniforms/material state without rebuilding geometry when possible;
 - module unmount releases all module-owned resources;
 - context loss clears/rebuilds resource ownership from the current render model.
@@ -132,8 +133,8 @@ Disposal rules:
 | Layer | Update trigger |
 |---|---|
 | object mesh | topology revision, displayed object/part set, per-object display style |
-| scalar field | field revision, quantity/component, color range, compatible topology |
-| vector glyphs | vector field revision, density, vector scope, per-object glyph visibility/style |
+| scalar field | field revision, quantity/component, color range, compatible topology, FMVP indexing map |
+| vector glyphs | vector field revision, density, vector scope, per-object glyph visibility/style, FMVP indexing map for sampled/scoped payloads |
 | wireframe | topology revision or per-object wireframe visibility |
 | airbox | mesh/manifest revision or airbox visualization state |
 | axes/grid/bounds | camera/domain setting |

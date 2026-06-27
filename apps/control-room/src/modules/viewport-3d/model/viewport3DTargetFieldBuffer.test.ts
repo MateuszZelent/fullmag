@@ -56,7 +56,11 @@ describe("viewport3DTargetFieldBuffer", () => {
 
   it("allows sampled full vectors for glyphs but not surface shaders", () => {
     const buffer = buildViewport3DTargetFieldBuffer({
-      fieldVector: vectorFixture(),
+      fieldVector: vectorFixture({
+        indexing: "sampled_node_indices",
+        meshTopologyHash: "hash-1",
+        nodeIndices: new Uint32Array([0, 2, 4, 6]),
+      }),
       query: {
         component: "full",
         max_samples: 128,
@@ -67,12 +71,77 @@ describe("viewport3DTargetFieldBuffer", () => {
     });
 
     expect(buffer.capability).toBe("full-vector-sampled");
+    expect(buffer.indexing).toBe("sampled_node_indices");
+    expect(buffer.meshTopologyHash).toBe("hash-1");
+    expect(buffer.nodeIndices).toEqual(new Uint32Array([0, 2, 4, 6]));
     expect(buffer.complete).toBe(false);
     expect(buffer.sampled).toBe(true);
     expect(viewport3DTargetFieldBufferCanServeVectors(buffer)).toBe(true);
     expect(viewport3DTargetFieldBufferCanServeSurface(buffer, "x")).toBe(false);
     expect(viewport3DTargetFieldBufferCanServeSurface(buffer, "orientation"))
       .toBe(false);
+  });
+
+  it("rejects sampled payloads for glyphs when node indices are absent", () => {
+    const buffer = buildViewport3DTargetFieldBuffer({
+      fieldVector: vectorFixture({
+        indexing: "sampled_node_indices",
+        meshTopologyHash: "hash-1",
+      }),
+      query: {
+        component: "full",
+        max_samples: 128,
+        scope_id: "part-a",
+        scope_kind: "part",
+      },
+      targetIds: ["part-a"],
+    });
+
+    expect(viewport3DTargetFieldBufferCanServeVectors(buffer)).toBe(false);
+    expect(viewport3DTargetFieldBufferCanServeSurface(buffer, "orientation"))
+      .toBe(false);
+  });
+
+  it("rejects explicit node-index payloads without topology hash", () => {
+    const buffer = buildViewport3DTargetFieldBuffer({
+      fieldVector: vectorFixture({
+        indexing: "explicit_node_indices",
+        nodeIndices: new Uint32Array([0, 2, 4, 6]),
+      }),
+      query: {
+        component: "full",
+        scope_id: "part-a",
+        scope_kind: "part",
+      },
+      targetIds: ["part-a"],
+    });
+
+    expect(viewport3DTargetFieldBufferCanServeSurface(buffer, "orientation"))
+      .toBe(false);
+    expect(viewport3DTargetFieldBufferCanServeVectors(buffer)).toBe(false);
+  });
+
+  it("accepts explicit node-index payloads with matching map metadata", () => {
+    const buffer = buildViewport3DTargetFieldBuffer({
+      fieldVector: vectorFixture({
+        indexing: "explicit_node_indices",
+        meshTopologyHash: "hash-1",
+        nodeIndices: new Uint32Array([0, 2, 4, 6]),
+      }),
+      query: {
+        component: "full",
+        scope_id: "part-a",
+        scope_kind: "part",
+      },
+      targetIds: ["part-a"],
+      topologyRevision: "topology-1",
+    });
+
+    expect(viewport3DTargetFieldBufferCanServeSurface(buffer, "orientation"))
+      .toBe(true);
+    expect(viewport3DTargetFieldBufferCanServeVectors(buffer)).toBe(true);
+    expect(buffer.bufferId).toContain("hash-1");
+    expect(buffer.bufferId).toContain("explicit_node_indices");
   });
 
   it("keeps planner pass consumers on target field buffers", () => {

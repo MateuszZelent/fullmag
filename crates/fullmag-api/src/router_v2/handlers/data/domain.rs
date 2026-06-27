@@ -3,17 +3,17 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::Json;
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::error::ApiError;
-use crate::fem_slice_overlay::{collect_fem_slice_overlay, FemSliceOverlayInput};
-use crate::field_slice::{resolve_slice_query, FieldSliceQuery, SlicePlane};
+use crate::fem_slice_overlay::{FemSliceOverlayInput, collect_fem_slice_overlay};
+use crate::field_slice::{FieldSliceQuery, SlicePlane, resolve_slice_query};
 use crate::field_store::serialize_fem_mesh_topology_binary_v1;
 use crate::router_v2::handlers::sessions::status::{domain_generation_id, fdm_grid_shape};
 use crate::schemas::domain::*;
@@ -227,15 +227,19 @@ pub async fn get_domain_topology(
         Some(mesh) => {
             let binary = serialize_fem_mesh_topology_binary_v1(mesh);
             let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
+            let topology_hash = fullmag_runner::fem_mesh_topology_fingerprint(mesh);
             let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
-                "domain-topology:{generation_id}:{}",
-                snapshot.mesh_revision
+                "domain-topology:{generation_id}:{topology_hash}:{}",
+                snapshot.mesh_revision,
             ));
-            Ok(
-                crate::router_v2::handlers::shared::conditional_binary_response(
-                    &headers, &etag, binary,
-                ),
-            )
+            let mut response = crate::router_v2::handlers::shared::conditional_binary_response(
+                &headers, &etag, binary,
+            );
+            crate::router_v2::handlers::shared::insert_mesh_topology_hash_header(
+                &mut response,
+                &topology_hash,
+            );
+            Ok(response)
         }
         None => Ok(StatusCode::NO_CONTENT.into_response()),
     }

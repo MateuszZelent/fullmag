@@ -592,6 +592,32 @@ buildReference: null,
     ).toBe(previousY);
   });
 
+  it("does not retain scalar textures across topology revision changes", () => {
+    const previousY = {
+      colors: new Float32Array(0),
+      colorMode: "y",
+      colorPalette: "viridis",
+      quantityId: "H_eff",
+      range: { max: 1, min: -1 },
+      scalarValues: new Float32Array(2),
+      topologyRevision: "mesh-a",
+    };
+
+    expect(
+      resolveRetainedMeshPartScalarColors({
+        current: null,
+        previous: previousY,
+        scalarColorMode: "y",
+        settings: {
+          activeQuantityId: "H_eff",
+          scalarColorPalette: "viridis",
+        },
+        topologyRevision: "mesh-b",
+        vertexCount: 2,
+      }),
+    ).toBeNull();
+  });
+
   it("does not retain scalar textures across quantity or solid-color changes", () => {
     const previousMagnetizationY = {
       colors: new Float32Array(0),
