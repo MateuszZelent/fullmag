@@ -36,7 +36,9 @@ pub(crate) use frequency_domain::{
     NativeDrivenResponseContractRequest, NativeFrequencyDomainCancelCallback,
     NativeFrequencyDomainContractResult, NativeFrequencyDomainExecutionLane,
     NativeFrequencyDomainProgress, NativeFrequencyDomainProgressCallback,
-    NativeFrequencyDomainStatus, NativeModalEigenRequest,
+    NativeFrequencyDomainStatus, NativeModalEigenCsrMatrixView,
+    NativeModalEigenMfemOperatorProblem, NativeModalEigenRequest,
+    NativeModalEigenSparseOperatorProblem,
 };
 #[allow(unused_imports)]
 #[cfg(feature = "fem-gpu")]

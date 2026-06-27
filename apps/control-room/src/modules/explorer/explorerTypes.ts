@@ -394,10 +394,13 @@ interface ModelTreeStudySnapshot {
 
 export interface ModelTreeStudyStageSnapshot {
   artifactName?: string | null;
+  boundaryCondition?: string | null;
+  calculationMode?: string | null;
   device?: string | null;
   energyTolerance?: string | number | null;
   index: number;
   kind: string;
+  kSamplingKind?: string | null;
   maxSteps?: string | number | null;
   stageId?: string | null;
   hysteresisCurrentFieldMt?: string | number | null;

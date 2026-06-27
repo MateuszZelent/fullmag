@@ -403,6 +403,116 @@ fn sample_scoped_fem_mesh_payload() -> FemMeshPayload {
     }
 }
 
+fn sample_fem_neel_skyrmion_mesh_and_values(
+    grid: usize,
+    radius: f64,
+    wall_width: f64,
+) -> (FemMeshPayload, Vec<[f64; 3]>) {
+    let span = 2.4 * radius;
+    let half_thickness = 0.04 * radius;
+    let node_count_per_layer = grid * grid;
+    let mut nodes = Vec::with_capacity(node_count_per_layer * 2);
+    let mut values = Vec::with_capacity(node_count_per_layer * 2);
+    for layer in 0..2 {
+        let z = if layer == 0 {
+            -half_thickness
+        } else {
+            half_thickness
+        };
+        for y_index in 0..grid {
+            let y = -span * 0.5 + span * y_index as f64 / (grid - 1) as f64;
+            for x_index in 0..grid {
+                let x = -span * 0.5 + span * x_index as f64 / (grid - 1) as f64;
+                nodes.push([x, y, z]);
+                values.push(neel_skyrmion_vector(x, y, radius, wall_width));
+            }
+        }
+    }
+
+    let node_index = |x: usize, y: usize, layer: usize| -> u32 {
+        (layer * node_count_per_layer + y * grid + x) as u32
+    };
+    let mut elements = Vec::with_capacity((grid - 1) * (grid - 1) * 6);
+    for y in 0..(grid - 1) {
+        for x in 0..(grid - 1) {
+            let v0 = node_index(x, y, 0);
+            let v1 = node_index(x + 1, y, 0);
+            let v2 = node_index(x, y + 1, 0);
+            let v3 = node_index(x + 1, y + 1, 0);
+            let v4 = node_index(x, y, 1);
+            let v5 = node_index(x + 1, y, 1);
+            let v6 = node_index(x, y + 1, 1);
+            let v7 = node_index(x + 1, y + 1, 1);
+            elements.extend_from_slice(&[
+                [v0, v1, v3, v7],
+                [v0, v3, v2, v7],
+                [v0, v2, v6, v7],
+                [v0, v6, v4, v7],
+                [v0, v4, v5, v7],
+                [v0, v5, v1, v7],
+            ]);
+        }
+    }
+
+    let node_indices = (0..nodes.len() as u32).collect::<Vec<_>>();
+    let mesh = FemMeshPayload {
+        mesh_name: "skyrmion-test-mesh".to_string(),
+        mesh_id: "skyrmion-test-mesh:1".to_string(),
+        nodes,
+        elements,
+        element_markers: vec![1; (grid - 1) * (grid - 1) * 6],
+        boundary_faces: Vec::new(),
+        boundary_markers: Vec::new(),
+        periodic_boundary_pairs: Vec::new(),
+        periodic_node_pairs: Vec::new(),
+        object_segments: vec![FemMeshObjectSegment {
+            object_id: "body".to_string(),
+            geometry_id: Some("body".to_string()),
+            node_start: 0,
+            node_count: node_indices.len() as u32,
+            element_start: 0,
+            element_count: ((grid - 1) * (grid - 1) * 6) as u32,
+            boundary_face_start: 0,
+            boundary_face_count: 0,
+        }],
+        mesh_parts: vec![FemMeshPartPayload {
+            id: "body".to_string(),
+            label: "body".to_string(),
+            role: "magnetic_object".to_string(),
+            object_id: Some("body".to_string()),
+            geometry_id: Some("body".to_string()),
+            material_id: Some("mat-body".to_string()),
+            element_start: 0,
+            element_count: ((grid - 1) * (grid - 1) * 6) as u32,
+            boundary_face_start: 0,
+            boundary_face_count: 0,
+            boundary_face_indices: Vec::new(),
+            node_start: 0,
+            node_count: node_indices.len() as u32,
+            node_indices,
+            surface_faces: Vec::new(),
+            bounds_min: Some([-span * 0.5, -span * 0.5, -half_thickness]),
+            bounds_max: Some([span * 0.5, span * 0.5, half_thickness]),
+        }],
+        domain_mesh_mode: Some("shared_domain".to_string()),
+        domain_frame: None,
+        generation_id: Some("9001".to_string()),
+        per_domain_quality: HashMap::new(),
+    };
+    (mesh, values)
+}
+
+fn neel_skyrmion_vector(x: f64, y: f64, radius: f64, wall_width: f64) -> [f64; 3] {
+    let r = (x * x + y * y).sqrt();
+    let phi = y.atan2(x);
+    let theta = 2.0 * (-(r - radius) / wall_width).exp().atan();
+    [
+        theta.sin() * phi.cos(),
+        theta.sin() * phi.sin(),
+        theta.cos(),
+    ]
+}
+
 fn sample_shared_node_airbox_mesh_payload() -> FemMeshPayload {
     FemMeshPayload {
         mesh_name: "shared-node-test-mesh".to_string(),
@@ -19519,6 +19629,42 @@ async fn field_meta_component_query_reports_scoped_object_stats() {
 }
 
 #[tokio::test]
+async fn field_meta_energy_density_accepts_object_prefixed_scope_ids() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_scoped_fem_mesh_payload());
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "eden_total": {
+                "values": [10.0, 11.0, 12.0, 13.0, 0.0, 1.0, 2.0, 3.0],
+                "layout": {
+                    "grid_cells": [8, 1, 1]
+                }
+            }
+        }))
+        .expect("scoped eden_total latest_fields should deserialize");
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/eden_total/meta?scope_kind=object&scope_id=object%3Abody")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let meta = body_json(response).await;
+    assert_eq!(meta["quantity_id"], "eden_total");
+    assert_eq!(meta["components"], 1);
+    assert_eq!(meta["stats"]["min"], serde_json::json!(10.0));
+    assert_eq!(meta["stats"]["max"], serde_json::json!(13.0));
+    assert_eq!(meta["stats"]["mean"], serde_json::json!(11.5));
+}
+
+#[tokio::test]
 async fn field_vector_etag_stays_stable_when_only_snapshot_state_version_changes() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -20428,8 +20574,13 @@ async fn topological_charge_cache_key_tracks_field_revision() {
             .unwrap(),
     )
     .await;
+    assert_eq!(recomputed["status"], "insufficient_samples");
     assert_eq!(recomputed["valid_sample_count"], 0);
-    assert_eq!(recomputed["warnings"][0]["code"], "non_unit_magnetization");
+    assert!(recomputed["charge"].is_null());
+    assert!(recomputed["nearest_integer"].is_null());
+    assert!(recomputed["integer_error"].is_null());
+    assert!(recomputed["polarity"].is_null());
+    assert_eq!(recomputed["warnings"][0]["code"], "insufficient_samples");
 }
 
 #[tokio::test]
@@ -20557,6 +20708,7 @@ async fn topological_charge_computes_uniform_fem_object_from_tetra_volume_withou
     assert_eq!(json["sample_grid"]["plane"], "xy");
     assert_eq!(json["sample_count"], 25);
     assert!(json["valid_sample_count"].as_u64().unwrap() > 0);
+    assert_eq!(json["domain_generation_id"], "42");
     assert!(json["charge"].as_f64().unwrap().abs() < 1.0e-6);
     assert!(
         json["warnings"]
@@ -20565,6 +20717,62 @@ async fn topological_charge_computes_uniform_fem_object_from_tetra_volume_withou
             .iter()
             .all(|warning| warning["code"] != "mesh_surface_incomplete")
     );
+}
+
+#[tokio::test]
+async fn topological_charge_computes_analytic_neel_skyrmion_from_fem_object_slice() {
+    let state = test_app_state_with_live_session().await;
+    let scene = sample_scene_document();
+    let object_id = scene.objects[0].id.clone();
+    let (mesh, values) = sample_fem_neel_skyrmion_mesh_and_values(25, 1.0, 0.12);
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.mesh_revision = 23;
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "field_revision": 29,
+                "values": values,
+                "layout": {
+                    "grid_cells": [1250, 1, 1]
+                }
+            }
+        }))
+        .expect("analytic FEM skyrmion m field should deserialize");
+    }
+
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/v2/sessions/current/analysis/extensions/objects/{object_id}/topological-charge?plane=xy&resolution=65"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["status"], "ready");
+    assert_eq!(json["field_revision"], 29);
+    assert_eq!(json["mesh_revision"], 23);
+    assert_eq!(json["mesh_generation_id"], "9001");
+    assert_eq!(json["domain_generation_id"], "9001");
+    assert_eq!(json["sample_count"], 4225);
+    assert_eq!(json["valid_sample_count"], 4225);
+    let charge = json["charge"]
+        .as_f64()
+        .expect("FEM skyrmion charge should be numeric");
+    assert!(
+        (charge + 1.0).abs() < 0.18,
+        "expected FEM Neel skyrmion charge close to -1, got {charge}"
+    );
+    assert_eq!(json["nearest_integer"], -1);
+    assert_eq!(json["polarity"], "negative");
 }
 
 #[tokio::test]

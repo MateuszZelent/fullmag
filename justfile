@@ -150,7 +150,21 @@ verify-fem-frequency-domain-eigen-runtime:
         test -f .fullmag/reports/frequency-domain-eigen-runtime/artifacts/eigen/modes/sample_0000/mode_0000.json && \
         test -f .fullmag/reports/frequency-domain-eigen-runtime/artifacts/eigen/mode_fields.zarr/sample_0000/mode_0000/vector_xyz_complex/0.0.0 && \
         test -f .fullmag/reports/frequency-domain-eigen-runtime/artifacts/frequency_domain/manifest.v1.json && \
-        python3 scripts/verify_fem_frequency_domain_eigen_artifacts.py .fullmag/reports/frequency-domain-eigen-runtime/artifacts'
+        python3 scripts/verify_fem_frequency_domain_eigen_artifacts.py .fullmag/reports/frequency-domain-eigen-runtime/artifacts && \
+        rm -rf .fullmag/reports/frequency-domain-eigen-runtime/window-artifacts && \
+        .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu \
+          examples/fem_eigenmodes_frequency_window.py \
+          --backend fem \
+          --headless \
+          --json \
+          --output-dir .fullmag/reports/frequency-domain-eigen-runtime/window-artifacts && \
+        test -f .fullmag/reports/frequency-domain-eigen-runtime/window-artifacts/eigen/spectrum.v2.json && \
+        test -f .fullmag/reports/frequency-domain-eigen-runtime/window-artifacts/eigen/branches.v2.json && \
+        test -f .fullmag/reports/frequency-domain-eigen-runtime/window-artifacts/eigen/dispersion.csv && \
+        test -f .fullmag/reports/frequency-domain-eigen-runtime/window-artifacts/eigen/modes/sample_0000/mode_0000.json && \
+        test -f .fullmag/reports/frequency-domain-eigen-runtime/window-artifacts/eigen/mode_fields.zarr/sample_0000/mode_0000/vector_xyz_complex/0.0.0 && \
+        test -f .fullmag/reports/frequency-domain-eigen-runtime/window-artifacts/frequency_domain/manifest.v1.json && \
+        python3 scripts/verify_fem_frequency_domain_eigen_artifacts.py .fullmag/reports/frequency-domain-eigen-runtime/window-artifacts'
 
 fem-fmr-free-demag-airbox-example:
     just verify-fem-fmr-free-demag-airbox-runtime

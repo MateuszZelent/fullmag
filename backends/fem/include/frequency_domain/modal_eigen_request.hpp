@@ -23,6 +23,17 @@ struct LinearizedOperatorRequest {
     const char *operator_diagnostics_json = nullptr;
 };
 
+struct CsrMatrixView {
+    std::uint64_t row_count = 0;
+    std::uint64_t column_count = 0;
+    const std::uint32_t *row_offsets = nullptr;
+    std::uint64_t row_offsets_len = 0;
+    const std::uint32_t *column_indices = nullptr;
+    std::uint64_t column_indices_len = 0;
+    const double *values = nullptr;
+    std::uint64_t values_len = 0;
+};
+
 struct ModalEigenRequest {
     std::uint32_t abi_version = kFrequencyDomainAbiVersion;
     LinearizedOperatorRequest operator_request{};
@@ -49,6 +60,15 @@ struct ModalEigenRequest {
     const double *tiny_validation_mass_matrix_row_major = nullptr;
     const double *tiny_validation_stiffness_diagonal = nullptr;
     const double *tiny_validation_mass_diagonal = nullptr;
+    int mfem_operator_enabled = 0;
+    std::uint64_t mfem_tangent_dof_count = 0;
+    const double *mfem_stiffness_matrix_row_major = nullptr;
+    const double *mfem_gyrotropic_matrix_row_major = nullptr;
+    const double *mfem_mass_matrix_row_major = nullptr;
+    int mfem_sparse_operator_enabled = 0;
+    CsrMatrixView mfem_sparse_stiffness_csr{};
+    CsrMatrixView mfem_sparse_gyrotropic_csr{};
+    CsrMatrixView mfem_sparse_mass_csr{};
 };
 
 struct DrivenResponseContractRequest {

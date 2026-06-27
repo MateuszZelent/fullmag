@@ -951,11 +951,16 @@ describe("buildModelTree", () => {
             stage_id: "hysteresis-1",
           },
           {
+            bc: "periodic",
             kind: "eigenmodes",
+            k_sampling: { kind: "path" },
             stage_id: "eigen-1",
           },
           {
+            bc: "periodic",
+            calculation_mode: "response_map",
             kind: "frequency_response",
+            k_sampling: { kind: "grid" },
             stage_id: "freq-1",
           },
         ],
@@ -1113,6 +1118,98 @@ describe("buildModelTree", () => {
     );
     expect(flattened.map((node) => node.id)).not.toContain(
       "model:study:run",
+    );
+  });
+
+  it("omits periodic and k-sampling eigenmode nodes for a free-boundary stage", () => {
+    const snapshot = modelTreeSnapshotFromScene({
+      objects: [],
+      study: {
+        stages: [
+          {
+            bc: "free",
+            kind: "eigenmodes",
+            stage_id: "eigen-free",
+          },
+        ],
+      },
+    });
+
+    const flattened = flattenExplorerNodes(buildModelTree(snapshot));
+
+    expect(flattened.map((node) => node.id)).toEqual(
+      expect.arrayContaining([
+        "model:study:stages:stage:eigen-free",
+        "model:study:stages:stage:eigen-free:setup",
+        "model:study:stages:stage:eigen-free:solver",
+        "model:study:stages:stage:eigen-free:diagnostics",
+      ]),
+    );
+    expect(flattened.map((node) => node.id)).not.toEqual(
+      expect.arrayContaining([
+        "model:study:stages:stage:eigen-free:periodic-pairs",
+        "model:study:stages:stage:eigen-free:k-path",
+      ]),
+    );
+  });
+
+  it("reads object boundary conditions and namespaced k-sampling for eigenmode nodes", () => {
+    const snapshot = modelTreeSnapshotFromScene({
+      objects: [],
+      study: {
+        stages: [
+          {
+            eigen_k_sampling: { path: "gamma-x", points: 5 },
+            eigen_spin_wave_bc: { axes: ["x"], kind: "periodic" },
+            kind: "eigenmodes",
+            stage_id: "eigen-periodic",
+          },
+        ],
+      },
+    });
+
+    const flattened = flattenExplorerNodes(buildModelTree(snapshot));
+
+    expect(flattened.map((node) => node.id)).toEqual(
+      expect.arrayContaining([
+        "model:study:stages:stage:eigen-periodic:boundary",
+        "model:study:stages:stage:eigen-periodic:periodic-pairs",
+        "model:study:stages:stage:eigen-periodic:k-path",
+      ]),
+    );
+  });
+
+  it("omits periodic and k-grid response nodes without response-map semantics", () => {
+    const snapshot = modelTreeSnapshotFromScene({
+      objects: [],
+      study: {
+        stages: [
+          {
+            bc: "free",
+            calculation_mode: "fmr_response",
+            kind: "frequency_response",
+            stage_id: "response-free",
+          },
+        ],
+      },
+    });
+
+    const flattened = flattenExplorerNodes(buildModelTree(snapshot));
+
+    expect(flattened.map((node) => node.id)).toEqual(
+      expect.arrayContaining([
+        "model:study:stages:stage:response-free",
+        "model:study:stages:stage:response-free:setup",
+        "model:study:stages:stage:response-free:excitation",
+        "model:study:stages:stage:response-free:sweep",
+        "model:study:stages:stage:response-free:solver",
+      ]),
+    );
+    expect(flattened.map((node) => node.id)).not.toEqual(
+      expect.arrayContaining([
+        "model:study:stages:stage:response-free:periodic-pairs",
+        "model:study:stages:stage:response-free:k-grid",
+      ]),
     );
   });
 
@@ -1329,12 +1426,7 @@ describe("buildModelTree", () => {
           node.id ===
           "results:frequency-domain:calculation-modes:response-map",
       ),
-    ).toMatchObject({
-      badge: "unsupported",
-      calculationMode: "response_map",
-      kind: "results.frequency_domain.response_map",
-      status: "unsupported",
-    });
+    ).toBeUndefined();
     expect(
       results.find(
         (node) => node.id === "results:frequency-domain:fmr:response-sweep",
@@ -1966,6 +2058,101 @@ describe("buildModelTree", () => {
         "diagnostics.frequency_domain.periodic_floquet",
       ]),
     );
+  });
+
+  it("keeps modal namespace compatibility and gates response/comparison result roots", () => {
+    const modalOnlyResults = flattenExplorerNodes(
+      buildExplorerTree("results", {
+        frequencyDomainManifest: FREQUENCY_DOMAIN_MANIFEST,
+        frequencyDomainSpectrum: FREQUENCY_DOMAIN_SPECTRUM,
+      }),
+    );
+
+    expect(
+      modalOnlyResults.find((node) => node.id === "results:eigen"),
+    ).toMatchObject({
+      kind: "results.eigen.root",
+      label: "Modal Eigen Results",
+    });
+    expect(modalOnlyResults.map((node) => node.id)).not.toContain(
+      "results:modal-eigen",
+    );
+    expect(modalOnlyResults.map((node) => node.id)).not.toContain(
+      "results:frequency-response",
+    );
+    expect(modalOnlyResults.map((node) => node.id)).not.toContain(
+      "results:frequency-domain:comparison",
+    );
+
+    const progressOnlyResponseResults = flattenExplorerNodes(
+      buildExplorerTree("results", {
+        frequencyDomainManifest: {
+          ...FREQUENCY_DOMAIN_MANIFEST,
+          response_progress: FREQUENCY_DOMAIN_RESPONSE_PROGRESS,
+        },
+      }),
+    );
+
+    expect(
+      progressOnlyResponseResults.find(
+        (node) => node.id === "results:frequency-response",
+      ),
+    ).toMatchObject({
+      kind: "results.frequency_response.root",
+      label: "Driven Frequency Response",
+    });
+    expect(
+      progressOnlyResponseResults.find(
+        (node) => node.id === "results:frequency-response:progress",
+      ),
+    ).toMatchObject({
+      kind: "results.frequency_response.progress",
+      status: "ready",
+    });
+    expect(progressOnlyResponseResults.map((node) => node.id)).not.toContain(
+      "results:eigen",
+    );
+    expect(progressOnlyResponseResults.map((node) => node.id)).not.toContain(
+      "results:frequency-domain:comparison",
+    );
+
+    const drivenOnlyResults = flattenExplorerNodes(
+      buildExplorerTree("results", {
+        frequencyDomainManifest: FREQUENCY_DOMAIN_MANIFEST,
+        frequencyDomainResponseSweep: FREQUENCY_DOMAIN_RESPONSE_SWEEP,
+      }),
+    );
+
+    expect(
+      drivenOnlyResults.find((node) => node.id === "results:frequency-response"),
+    ).toMatchObject({
+      kind: "results.frequency_response.root",
+      label: "Driven Frequency Response",
+    });
+    expect(drivenOnlyResults.map((node) => node.id)).not.toContain(
+      "results:eigen",
+    );
+    expect(drivenOnlyResults.map((node) => node.id)).not.toContain(
+      "results:frequency-domain:comparison",
+    );
+
+    const modalAndDrivenResults = flattenExplorerNodes(
+      buildExplorerTree("results", {
+        frequencyDomainManifest: FREQUENCY_DOMAIN_MANIFEST,
+        frequencyDomainResponseSweep: FREQUENCY_DOMAIN_RESPONSE_SWEEP,
+        frequencyDomainSpectrum: FREQUENCY_DOMAIN_SPECTRUM,
+      }),
+    );
+
+    expect(
+      modalAndDrivenResults.find(
+        (node) => node.id === "results:frequency-domain:comparison",
+      ),
+    ).toMatchObject({
+      kind: "results.frequency_domain.comparison",
+      label: "Modal vs Driven Comparison",
+      status: "ready",
+    });
   });
 
   it("builds frequency-domain jobs from live progress resources", () => {
@@ -3074,6 +3261,54 @@ describe("buildModelTree", () => {
       ),
     ).toMatchObject({
       badge: "available",
+      status: "ready",
+    });
+  });
+
+  it("shows a response-map result node when the result manifest requested response-map semantics", () => {
+    const manifest = {
+      ...FREQUENCY_DOMAIN_MANIFEST,
+      floquet_nonzero_k_response_supported: true,
+      result_manifest: {
+        artifact_path: "frequency_domain/manifest.v1.json",
+        missing_reason: null,
+        payload: {
+          artifacts: {
+            response_map_v2_path: "response/response_map.v2.json",
+          },
+          requested_execution: {
+            calculation_mode: "response_map",
+          },
+          resources: {
+            response_map_resource_key:
+              "/v2/sessions/current/analysis/frequency-domain/response-map.v2",
+          },
+        },
+        resource_key: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
+        schema_version: "frequency_domain_manifest.v1",
+        status: "ready",
+      },
+    } satisfies FrequencyDomainManifestResource;
+
+    const results = flattenExplorerNodes(
+      buildExplorerTree("results", {
+        frequencyDomainManifest: manifest,
+      }),
+    );
+
+    expect(
+      results.find(
+        (node) =>
+          node.id ===
+          "results:frequency-domain:calculation-modes:response-map",
+      ),
+    ).toMatchObject({
+      artifactPath: "response/response_map.v2.json",
+      badge: "available",
+      calculationMode: "response_map",
+      kind: "results.frequency_domain.response_map",
+      resourceRef:
+        "/v2/sessions/current/analysis/frequency-domain/response-map.v2",
       status: "ready",
     });
   });

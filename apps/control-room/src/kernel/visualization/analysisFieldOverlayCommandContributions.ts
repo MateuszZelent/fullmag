@@ -462,6 +462,51 @@ function setOverlayAnimationCommand(options: {
   };
 }
 
+function stopOverlayAnimationCommand(options: {
+  activeOverlay: (context: CommandContext) => AnalysisFieldOverlayState | null;
+  id: string;
+  missingMessage: string;
+  title: string;
+}): CommandContribution {
+  return {
+    id: options.id,
+    title: options.title,
+    category: "analysis",
+    disabledReason: (context) => {
+      if (!context.analysisFieldOverlay) {
+        return "Analysis field overlay controller is unavailable.";
+      }
+      return options.activeOverlay(context)
+        ? null
+        : options.missingMessage;
+    },
+    group: "analysis.frequency-domain",
+    isEnabled: (context) =>
+      Boolean(context.analysisFieldOverlay && options.activeOverlay(context)),
+    run: (context) => {
+      const overlay = options.activeOverlay(context);
+      const controller = context.analysisFieldOverlay;
+      if (!overlay || !controller) {
+        return {
+          status: "failed",
+          message: options.missingMessage,
+        };
+      }
+      controller.update({
+        animation: {
+          animatePhase: false,
+          animationRateHz: 0,
+        },
+      });
+      return {
+        status: "completed",
+        message: "Frequency-domain phase animation stopped.",
+      };
+    },
+    scope: "viewport",
+  };
+}
+
 function plotCommand(
   id: string,
   title: string,
@@ -583,6 +628,12 @@ export const ANALYSIS_FIELD_OVERLAY_COMMANDS: CommandContribution[] = [
     id: "analysis.frequency-domain.set-3d-animation",
     missingMessage: "No frequency-domain field overlay is active.",
     title: "Animate frequency-domain phase",
+  }),
+  stopOverlayAnimationCommand({
+    activeOverlay: activeAnalysisOverlay,
+    id: "analysis.frequency-domain.stop-3d-animation",
+    missingMessage: "No frequency-domain field overlay is active.",
+    title: "Stop frequency-domain phase animation",
   }),
   setOverlayAppearanceCommand({
     activeOverlay: activeAnalysisOverlay,

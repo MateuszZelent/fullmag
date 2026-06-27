@@ -388,6 +388,10 @@ Required response metadata:
 - indexing mode: `full_domain`, `explicit_node_indices`, `sampled_node_indices`, or `legacy_count_only`;
 - `nodeIndices` when indexing is explicit or sampled.
 
+The binary decoder exposes `domain_generation_id` and mesh topology revision as
+exact string tokens, not JavaScript numbers. Both values originate as backend
+`u64` metadata and may exceed `Number.MAX_SAFE_INTEGER`.
+
 FMVP v2 remains a legacy full-domain compatibility format. It must not satisfy scoped, sampled, magnetic-only compressed, object, part, airbox, or selection surface passes unless a resource cache layer has already proven full-domain topology compatibility. Realtime events remain invalidation-only; they do not carry field or topology binary payloads.
 
 Frontend code must call this only through the typed API facade and resource hooks. React components must not build `/v2/...` paths directly.

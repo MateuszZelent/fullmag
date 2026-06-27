@@ -211,6 +211,69 @@ describe("analysis field overlay commands", () => {
     });
   });
 
+  it("keeps the command-edited display profile when switching from mode 1 to mode 2", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+
+    await commands.execute(
+      "analysis.eigen.plot-mode-3d",
+      {
+        analysisFieldOverlay: overlay,
+        source: "test",
+      },
+      {
+        fieldId: "analysis:eigen:sample-0000:mode-0001",
+        label: "Mode 1",
+        source: "eigen-mode",
+      },
+    );
+
+    const profileResult = await commands.execute(
+      "analysis.frequency-domain.set-3d-appearance",
+      {
+        analysisFieldOverlay: overlay,
+        source: "test",
+      },
+      {
+        colorSource: "colormap",
+        colormap: "magma",
+        geometryScope: "full",
+        shaderVisible: false,
+        vectorBudget: 384,
+        vectorsVisible: true,
+      },
+    );
+
+    expect(profileResult.status).toBe("completed");
+
+    const modeSwitchResult = await commands.execute(
+      "analysis.eigen.plot-mode-3d",
+      {
+        analysisFieldOverlay: overlay,
+        source: "test",
+      },
+      {
+        fieldId: "analysis:eigen:sample-0000:mode-0002",
+        label: "Mode 2",
+        source: "eigen-mode",
+      },
+    );
+
+    expect(modeSwitchResult.status).toBe("completed");
+    expect(overlay.getSnapshot()).toMatchObject({
+      appearance: {
+        geometryScope: "full",
+        scalarColorPalette: "magma",
+        shaderVisible: false,
+        surfaceColorSource: "colormap",
+        vectorBudget: 384,
+        vectorsVisible: true,
+      },
+      fieldId: "analysis:eigen:sample-0000:mode-0002",
+      source: "eigen-mode",
+    });
+  });
+
   it("keeps shared appearance when switching from modal to driven field overlays", async () => {
     const commands = commandRegistry();
     const overlay = new AnalysisFieldOverlayController();
@@ -634,6 +697,46 @@ describe("analysis field overlay commands", () => {
 
     expect(result.status).toBe("completed");
     expect(overlay.getSnapshot()).toBeNull();
+  });
+
+  it("stops the active frequency-domain phase animation without changing fields", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+    overlay.set({
+      animation: {
+        animatePhase: true,
+        animationRateHz: 2,
+      },
+      fieldId: "analysis:eigen:sample-0000:mode-0002",
+      label: "Mode 2",
+      query: {
+        component: "full",
+        phase_rad: 0,
+        scope_kind: "full",
+        view: "phase_rotated_real",
+      },
+      source: "eigen-mode",
+      visualizationPhaseRad: 0.5,
+    });
+
+    const result = await commands.execute(
+      "analysis.frequency-domain.stop-3d-animation",
+      {
+        analysisFieldOverlay: overlay,
+        source: "test",
+      },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(overlay.getSnapshot()).toMatchObject({
+      animation: {
+        animatePhase: false,
+        animationRateHz: 0,
+      },
+      fieldId: "analysis:eigen:sample-0000:mode-0002",
+      source: "eigen-mode",
+      visualizationPhaseRad: 0.5,
+    });
   });
 
   it("updates eigen mode phase animation on the active overlay only", async () => {

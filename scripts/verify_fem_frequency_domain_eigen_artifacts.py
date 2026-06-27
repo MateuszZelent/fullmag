@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 import math
@@ -11,6 +12,9 @@ from pathlib import Path
 
 
 TWO_PI = 2.0 * math.pi
+PRODUCTION_SHIFT_INVERT_SOLVER_MODELS = {
+    "slepc_multi_shift_invert_production_cpu_dense",
+}
 
 
 def fail(message: str) -> None:
@@ -486,6 +490,7 @@ def validate_mode_summary(
     sample_index: int,
     manifest_mode_paths: set[str],
     manifest_mode_resources: set[str],
+    requested_window_hz: list[float] | None,
 ) -> tuple[int, int, float, float, float]:
     raw_mode_index = require_non_negative_int(mode.get("raw_mode_index"), "mode.raw_mode_index")
     expected_field_id = mode_field_id(sample_index, raw_mode_index)
@@ -497,6 +502,7 @@ def validate_mode_summary(
         "mode.mode_field_resource_key",
     )
     frequency_hz = require_finite_number(mode.get("frequency_hz"), "mode.frequency_hz")
+    require_frequency_inside_window(frequency_hz, requested_window_hz, "mode.frequency_hz")
     frequency_real_hz = require_finite_number(mode.get("frequency_real_hz"), "mode.frequency_real_hz")
     require_close(frequency_hz, frequency_real_hz, "mode.frequency_hz")
     require_finite_number(mode.get("frequency_imag_hz"), "mode.frequency_imag_hz")
@@ -606,6 +612,7 @@ def validate_mode_summary(
 def validate_eigen_summary(
     summary: dict,
     known_modes: dict[tuple[int, int], tuple[float, float, float]],
+    requested_window_hz: list[float] | None,
 ) -> None:
     diagnostics = summary.get("solver_diagnostics")
     if not isinstance(diagnostics, dict):
@@ -645,6 +652,11 @@ def validate_eigen_summary(
         if mode_key not in known_modes:
             fail(f"eigen_summary references unknown mode {mode_key!r}")
         frequency_hz = require_finite_number(mode.get("frequency_hz"), "eigen_summary mode.frequency_hz")
+        require_frequency_inside_window(
+            frequency_hz,
+            requested_window_hz,
+            f"eigen_summary.modes[{raw_mode_index}].frequency_hz",
+        )
         validate_mode_diagnostics_fields(
             mode,
             f"eigen_summary.modes[{raw_mode_index}]",
@@ -662,9 +674,31 @@ def require_frequency_pair(value: object, name: str) -> list[float]:
     return [lo, hi]
 
 
-def validate_solver_window_diagnostics(diagnostics: dict) -> None:
-    if "window_completeness" not in diagnostics:
+def require_frequency_inside_window(
+    frequency_hz: float,
+    requested_window_hz: list[float] | None,
+    name: str,
+) -> None:
+    if requested_window_hz is None:
         return
+    lo, hi = requested_window_hz
+    tolerance = max(abs(lo), abs(hi), 1.0) * 1.0e-12
+    if frequency_hz < lo - tolerance or frequency_hz > hi + tolerance:
+        fail(
+            f"{name} must be inside solver_diagnostics.requested_window_hz: "
+            f"got {frequency_hz!r}, expected [{lo!r}, {hi!r}]"
+        )
+
+
+def validate_solver_window_diagnostics(
+    diagnostics: dict,
+    *,
+    require_window: bool,
+) -> list[float] | None:
+    if "window_completeness" not in diagnostics:
+        if require_window:
+            fail("solver_diagnostics.window_completeness is required")
+        return None
 
     requested = require_frequency_pair(
         diagnostics.get("requested_window_hz"),
@@ -729,8 +763,23 @@ def validate_solver_window_diagnostics(diagnostics: dict) -> None:
         if search_hz[0] > requested_hz[0] or search_hz[1] < requested_hz[1]:
             fail(f"{name}.search_hz must cover requested_hz")
         shift_hz = require_finite_number(subwindow.get("shift_hz"), f"{name}.shift_hz")
+        shift_frequency_hz = require_finite_number(
+            subwindow.get("shift_frequency_hz"),
+            f"{name}.shift_frequency_hz",
+        )
+        require_close(
+            shift_frequency_hz,
+            shift_hz,
+            f"{name}.shift_frequency_hz",
+        )
         if shift_hz < requested_hz[0] or shift_hz > requested_hz[1]:
             fail(f"{name}.shift_hz must be inside requested_hz")
+        require_close(
+            require_finite_number(subwindow.get("shift_omega_rad_s"), f"{name}.shift_omega_rad_s"),
+            TWO_PI * shift_frequency_hz,
+            f"{name}.shift_omega_rad_s",
+            absolute_tolerance=1.0e-3,
+        )
         require_non_negative_int(subwindow.get("outer_iterations"), f"{name}.outer_iterations")
         require_non_negative_int(
             subwindow.get("linear_iterations_total"),
@@ -743,6 +792,71 @@ def validate_solver_window_diagnostics(diagnostics: dict) -> None:
             fail(f"{name}.residual_max must be non-negative")
         if subwindow.get("stop_reason") not in valid_stop_reasons:
             fail(f"{name}.stop_reason is invalid")
+    return requested
+
+
+def validate_solver_provenance(
+    diagnostics: dict,
+    *,
+    require_production_shift_invert_window: bool,
+) -> None:
+    solver_model = require_non_empty_string(
+        diagnostics.get("solver_model"),
+        "solver_diagnostics.solver_model",
+    )
+    resolved_solver_family = require_non_empty_string(
+        diagnostics.get("resolved_solver_family"),
+        "solver_diagnostics.resolved_solver_family",
+    )
+    spectral_transform = require_non_empty_string(
+        diagnostics.get("spectral_transform"),
+        "solver_diagnostics.spectral_transform",
+    )
+    if spectral_transform not in {"none", "shift_invert", "contour_integral"}:
+        fail("solver_diagnostics.spectral_transform is invalid")
+    if not require_production_shift_invert_window:
+        return
+
+    if solver_model not in PRODUCTION_SHIFT_INVERT_SOLVER_MODELS:
+        fail(
+            "solver_diagnostics.solver_model must identify the managed "
+            f"production shift-invert adapter; got {solver_model!r}"
+        )
+    require_equal(
+        diagnostics.get("solver_family"),
+        solver_model,
+        "solver_diagnostics.solver_family",
+    )
+    require_equal(
+        resolved_solver_family,
+        "shift_invert",
+        "solver_diagnostics.resolved_solver_family",
+    )
+    require_equal(
+        spectral_transform,
+        "shift_invert",
+        "solver_diagnostics.spectral_transform",
+    )
+    require_equal(
+        diagnostics.get("solver_adapter"),
+        "slepc_modal_eigen",
+        "solver_diagnostics.solver_adapter",
+    )
+    require_equal(
+        diagnostics.get("execution_lane"),
+        "production_cpu",
+        "solver_diagnostics.execution_lane",
+    )
+    require_equal(
+        diagnostics.get("production_solver_available"),
+        True,
+        "solver_diagnostics.production_solver_available",
+    )
+    require_equal(
+        diagnostics.get("dense_reference_oracle"),
+        False,
+        "solver_diagnostics.dense_reference_oracle",
+    )
 
 
 def validate_dispersion(
@@ -803,8 +917,30 @@ def validate_dispersion(
         )
 
 
-def main() -> int:
-    root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".fullmag/reports/eigen/artifacts")
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Validate FEM frequency-domain modal eigen artifacts.",
+    )
+    parser.add_argument(
+        "root",
+        nargs="?",
+        default=".fullmag/reports/eigen/artifacts",
+        help="artifact root directory",
+    )
+    parser.add_argument(
+        "--require-production-shift-invert-window",
+        action="store_true",
+        help=(
+            "require managed runtime frequency-window artifacts from the "
+            "native production modal SLEPc shift-invert adapter"
+        ),
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(sys.argv[1:] if argv is None else argv)
+    root = Path(args.root)
     for relative_path in [
         "eigen/spectrum.v2.json",
         "eigen/branches.v2.json",
@@ -845,7 +981,14 @@ def main() -> int:
         "modal_eigen",
         "solver_diagnostics.study_product",
     )
-    validate_solver_window_diagnostics(solver_diagnostics)
+    validate_solver_provenance(
+        solver_diagnostics,
+        require_production_shift_invert_window=args.require_production_shift_invert_window,
+    )
+    requested_window_hz = validate_solver_window_diagnostics(
+        solver_diagnostics,
+        require_window=args.require_production_shift_invert_window,
+    )
     require_equal(
         manifest.get("artifacts", {}).get("spectrum_v2_path"),
         "eigen/spectrum.v2.json",
@@ -899,6 +1042,7 @@ def main() -> int:
                 sample_index,
                 manifest_mode_paths,
                 manifest_mode_resources,
+                requested_window_hz,
             )
             known_modes[(known_sample_index, known_raw_mode_index)] = (
                 known_frequency_hz,
@@ -957,7 +1101,7 @@ def main() -> int:
     if unknown_branch_modes:
         fail(f"branches reference unknown modes: {sorted(unknown_branch_modes)!r}")
 
-    validate_eigen_summary(summary, known_modes)
+    validate_eigen_summary(summary, known_modes, requested_window_hz)
     validate_dispersion(root, known_modes)
     return 0
 

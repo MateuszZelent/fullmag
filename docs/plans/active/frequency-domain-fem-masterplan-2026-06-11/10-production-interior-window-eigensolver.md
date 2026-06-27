@@ -785,22 +785,22 @@ docs/plans/active/frequency-domain-fem-masterplan-2026-06-11/01-backend-native-f
 
 ### Implementation Steps
 
-- [ ] Add a "Product Split" section to `docs/physics/0700-frequency-domain-linearized-llg.md`.
-- [ ] State that `Eigenmodes` solves `A q = lambda B q`.
-- [ ] State that `FrequencyResponse` solves `(i omega B - A) q = b`.
-- [ ] State that both products use `gamma0 = mu0 * |gamma|`.
-- [ ] State that both products use tangent variables, not unconstrained 3D
+- [x] Add a "Product Split" section to `docs/physics/0700-frequency-domain-linearized-llg.md`.
+- [x] State that `Eigenmodes` solves `A q = lambda B q`.
+- [x] State that `FrequencyResponse` solves `(i omega B - A) q = b`.
+- [x] State that both products use `gamma0 = mu0 * |gamma|`.
+- [x] State that both products use tangent variables, not unconstrained 3D
       variables.
-- [ ] Add a capability row for `FEM modal interior-window eigensolve`.
-- [ ] Keep its status `semantic_only` until the production native path passes
+- [x] Add a capability row for `FEM modal interior-window eigensolve`.
+- [x] Keep its status `semantic_only` until the production native path passes
       managed runtime validation.
-- [ ] Add a separate row for `FEM driven frequency response`.
-- [ ] Ensure the response row does not inherit modal eigensolver status.
-- [ ] Update artifact docs with `eigen/diagnostics/solver.v1.json`.
-- [ ] Update artifact docs with `response/diagnostics/solver.v1.json`.
-- [ ] Add a rule that `frequency_domain/manifest.v1.json` must include
+- [x] Add a separate row for `FEM driven frequency response`.
+- [x] Ensure the response row does not inherit modal eigensolver status.
+- [x] Update artifact docs with `eigen/diagnostics/solver.v1.json`.
+- [x] Update artifact docs with `response/diagnostics/solver.v1.json`.
+- [x] Add a rule that `frequency_domain/manifest.v1.json` must include
       `study_product = "modal_eigen"` or `study_product = "driven_response"`.
-- [ ] Add a rule that UI labels must use "Eigenmodes" and "Frequency Response"
+- [x] Add a rule that UI labels must use "Eigenmodes" and "Frequency Response"
       separately.
 
 ### Exact Artifact Fields
@@ -835,14 +835,14 @@ Driven response manifest fields:
 
 ### Tests
 
-- [ ] Add markdown consistency test under the existing docs test mechanism if
+- [x] Add markdown consistency test under the existing docs test mechanism if
       present. If no docs test exists, add a Python script:
       `scripts/validate_frequency_domain_product_split.py`.
-- [ ] Script checks that all docs contain both `modal_eigen` and
+- [x] Script checks that all docs contain both `modal_eigen` and
       `driven_response`.
-- [ ] Script checks that capability matrix has separate rows for modal and
+- [x] Script checks that capability matrix has separate rows for modal and
       driven response.
-- [ ] Script fails if `Eigenmodes` is described as "the frequency-domain
+- [x] Script fails if `Eigenmodes` is described as "the frequency-domain
       solver" without the word "modal".
 
 Command:
@@ -889,18 +889,18 @@ docs/specs/frequency-domain-artifacts-v2.md
 
 ### Implementation Steps
 
-- [ ] Keep dense solve as reference-only for small systems.
-- [ ] For every exported mode, compute generalized residual:
+- [x] Keep dense solve as reference-only for small systems.
+- [x] For every exported mode, compute generalized residual:
 
 ```text
 r = K u - lambda M u
 relative_residual = ||r||_2 / (||K u||_2 + |lambda| * ||M u||_2)
 ```
 
-- [ ] Export `residual_absolute_l2`.
-- [ ] Export `residual_relative_l2`.
-- [ ] Export `residual_linf`.
-- [ ] Compute tangent leakage for real and imaginary reconstructed fields:
+- [x] Export `residual_absolute_l2`.
+- [x] Export `residual_relative_l2`.
+- [x] Export `residual_linf`.
+- [x] Compute tangent leakage for real and imaginary reconstructed fields:
 
 ```text
 leak_i = abs(m0_i dot delta_m_i)
@@ -908,25 +908,25 @@ tangent_leakage_mean_abs = mean(leak_i)
 tangent_leakage_max_abs = max(leak_i)
 ```
 
-- [ ] Export mass norm:
+- [x] Export mass norm:
 
 ```text
 mass_norm = u^T M u
 ```
 
-- [ ] Export orthogonality for dense oracle:
+- [x] Export orthogonality for dense oracle:
 
 ```text
 orthogonality_ij = u_i^T M u_j
 ```
 
-- [ ] Store `omega_rad_s`.
-- [ ] Store `frequency_hz`.
-- [ ] Store `gamma_rad_s_T`.
-- [ ] Store `gamma0_rad_s_per_A_m`.
-- [ ] Store `mu0_T_m_per_A`.
-- [ ] Add `solver_diagnostics` section to `eigen/metadata/eigen_summary.json`.
-- [ ] Update verifier to reject missing residual diagnostics for dense oracle.
+- [x] Store `omega_rad_s`.
+- [x] Store `frequency_hz`.
+- [x] Store `gamma_rad_s_T`.
+- [x] Store `gamma0_rad_s_per_A_m`.
+- [x] Store `mu0_T_m_per_A`.
+- [x] Add `solver_diagnostics` section to `eigen/metadata/eigen_summary.json`.
+- [x] Update verifier to reject missing residual diagnostics for dense oracle.
 
 ### Exact Rust Helper Signatures
 
@@ -958,12 +958,12 @@ struct TangentLeakageSummary {
 
 ### Tests
 
-- [ ] Add test `dense_eigen_exports_relative_residuals`.
-- [ ] Add test `dense_eigen_exports_tangent_leakage`.
-- [ ] Add test `dense_eigen_frequency_units_are_hz_and_rad_s`.
-- [ ] Add test `macrospin_kittel_frequency_order_of_magnitude`.
-- [ ] Add verifier case with missing `residual_relative_l2`; expected failure.
-- [ ] Add verifier case with missing `omega_rad_s`; expected failure.
+- [x] Add test `dense_eigen_exports_relative_residuals`.
+- [x] Add test `dense_eigen_exports_tangent_leakage`.
+- [x] Add test `dense_eigen_frequency_units_are_hz_and_rad_s`.
+- [x] Add test `macrospin_kittel_frequency_order_of_magnitude`.
+- [x] Add verifier case with missing `residual_relative_l2`; expected failure.
+- [x] Add verifier case with missing `omega_rad_s`; expected failure.
 
 Commands:
 
@@ -1225,12 +1225,12 @@ diagnostics. It must not crash, throw, or return null diagnostics.
 
 ### Rust Binding Steps
 
-- [ ] Add bindgen declarations in `crates/fullmag-fem-sys/src/lib.rs`.
-- [ ] Add safe wrappers in `crates/fullmag-runner/src/native_fem.rs`.
-- [ ] Convert native statuses to `RunError` or capability diagnostics.
-- [ ] Preserve `diagnostics_json` in runner error messages and stage
+- [x] Add bindgen declarations in `crates/fullmag-fem-sys/src/lib.rs`.
+- [x] Add safe wrappers in `crates/fullmag-runner/src/native_fem.rs`.
+- [x] Convert native statuses to `RunError` or capability diagnostics.
+- [x] Preserve `diagnostics_json` in runner error messages and stage
       diagnostics.
-- [ ] Add unit test proving unavailable native modal solver is not treated as
+- [x] Add unit test proving unavailable native modal solver is not treated as
       dense fallback.
 
 ### Tests
@@ -1298,51 +1298,52 @@ backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp
 
 ### Implementation Steps
 
-- [ ] Add or extend a `just` recipe that inspects managed FEM solver
+- [x] Add or extend a `just` recipe that inspects managed FEM solver
       dependencies without requiring implementers to hand-write Docker commands:
 
 ```bash
 just inspect-managed-fem-frequency-domain-deps
 ```
 
-- [ ] The recipe reports PETSc/SLEPc availability, versions, CMake package
+- [x] The recipe reports PETSc/SLEPc availability, versions, CMake package
       locations, and exported runtime-library paths.
-- [ ] Raw `docker compose` may be used only inside the `justfile` recipe or as a
+- [x] Raw `docker compose` may be used only inside the `justfile` recipe or as a
       labelled diagnostic when the recipe itself is broken. It is not the normal
       build path.
-- [ ] If PETSc/SLEPc are absent, add deterministic installation to
+- [x] If PETSc/SLEPc are absent, add deterministic installation to
       `docker/fem-gpu/Dockerfile`.
-- [ ] Add or extend the container-backed rebuild recipe:
+- [x] Add or extend the container-backed rebuild recipe:
 
 ```bash
 just rebuild-fem-runtime
 ```
 
-- [ ] Prefer distro packages only if they provide versions compatible with the
+- [x] Prefer distro packages only if they provide versions compatible with the
       MFEM/hypre stack in the image.
-- [ ] If building from source, pin versions in Dockerfile ARGs:
+- [x] If building from source, pin versions in Dockerfile ARGs. Not applicable
+      for the current runtime because it uses distro PETSc/SLEPc packages:
 
 ```text
 PETSC_VERSION=3.x.y
 SLEPC_VERSION=3.x.y
 ```
 
-- [ ] Record versions in `.fullmag/runtimes/fem-gpu-host/manifest.json`.
-- [ ] Export required shared libraries in `scripts/export_fem_gpu_runtime.sh`.
-- [ ] Export headers and CMake package files needed by `backends/fem`.
-- [ ] Add CMake feature flag:
+- [x] Record versions in `.fullmag/runtimes/fem-gpu-host/manifest.json`.
+- [x] Export required shared libraries in `scripts/export_fem_gpu_runtime.sh`.
+- [x] Export headers and CMake package files needed by `backends/fem`.
+- [x] Add CMake feature flag:
 
 ```text
 FULLMAG_FEM_WITH_SLEPC=ON
 ```
 
-- [ ] Add runtime capability probe:
+- [x] Add runtime capability probe:
 
 ```text
 modal_eigen_native_cpu_slepc_available = true|false
 ```
 
-- [ ] Add clear error if requested production modal path lacks SLEPc.
+- [x] Add clear error if requested production modal path lacks SLEPc.
 
 ### CMake Requirements
 
@@ -4054,13 +4055,13 @@ apps/control-room/src/modules/explorer/builders/study/studyExplorerNodes.ts
 
 Steps:
 
-- [ ] Add tests that free-boundary eigenmodes do not create Periodic Pairs or
+- [x] Add tests that free-boundary eigenmodes do not create Periodic Pairs or
       k-Path children.
-- [ ] Add tests that frequency response without response-map request does not
+- [x] Add tests that frequency response without response-map request does not
       create k/f Grid.
-- [ ] Add dynamic builder predicates for each child node.
-- [ ] Delete static `EIGENMODES_DETAIL_NODES` and `RESPONSE_DETAIL_NODES`.
-- [ ] Verify with `pnpm --dir apps/control-room test -- buildModelTree`.
+- [x] Add dynamic builder predicates for each child node.
+- [x] Delete static `EIGENMODES_DETAIL_NODES` and `RESPONSE_DETAIL_NODES`.
+- [x] Verify with `pnpm --dir apps/control-room test -- buildModelTree`.
 
 Task UI-2: Replace generic contract inspectors with data-backed panels.
 
@@ -4075,13 +4076,13 @@ apps/control-room/src/modules/inspector/panels/stages/StageInspectors.test.tsx
 
 Steps:
 
-- [ ] Rename visible titles from `* Contract` to product labels:
+- [x] Rename visible titles from `* Contract` to product labels:
       `Study Settings`, `Linearization Point`, `Solver Configuration`,
       `Progress`, `Output`, `Diagnostics`.
-- [ ] Remove rows that only say `not applicable` or future-gated prose.
-- [ ] Add missing-data groups that explain absent resources once per section.
-- [ ] Add progress fields listed above.
-- [ ] Verify with `pnpm --dir apps/control-room test -- StageInspectors`.
+- [x] Remove rows that only say `not applicable` or future-gated prose.
+- [x] Add missing-data groups that explain absent resources once per section.
+- [x] Add progress fields listed above.
+- [x] Verify with `pnpm --dir apps/control-room test -- StageInspectors`.
 
 Task UI-3: Build product-split Results tree.
 
@@ -4096,12 +4097,12 @@ apps/control-room/src/modules/explorer/builders/buildModelTree.test.ts
 
 Steps:
 
-- [ ] Create `results.modal_eigen.root` or keep existing kind only if naming
+- [x] Create `results.modal_eigen.root` or keep existing kind only if naming
       migration cost is explicitly handled.
-- [ ] Create response root only from response stage/progress/sweep/diagnostics.
-- [ ] Create comparison only when modal and driven data both exist.
-- [ ] Remove unsupported `Response Map` from normal tree when not requested.
-- [ ] Verify selection routing tests.
+- [x] Create response root only from response stage/progress/sweep/diagnostics.
+- [x] Create comparison only when modal and driven data both exist.
+- [x] Remove unsupported `Response Map` from normal tree when not requested.
+- [x] Verify selection routing tests.
 
 Task UI-4: Refactor FMR peak inspector.
 
@@ -4115,11 +4116,11 @@ apps/control-room/src/modules/inspector/panels/FrequencyDomainInspectorPanel.tes
 
 Steps:
 
-- [ ] Extract FMR peak detail into a focused component.
-- [ ] Group sections as Identity, Physical Quantities, Provenance,
+- [x] Extract FMR peak detail into a focused component.
+- [x] Group sections as Identity, Physical Quantities, Provenance,
       Visualization, Diagnostics.
-- [ ] Move binary transport details behind advanced Resource Diagnostics.
-- [ ] Verify active peak plot/select commands still work.
+- [x] Move binary transport details behind advanced Resource Diagnostics.
+- [x] Verify active peak plot/select commands still work.
 
 Task UI-5: Share visualization display profile across all modes.
 
@@ -4134,11 +4135,11 @@ apps/control-room/src/modules/viewport-3d/viewport3dStore.ts
 
 Steps:
 
-- [ ] Add a test proving changing display profile on mode 1 persists when mode
+- [x] Add a test proving changing display profile on mode 1 persists when mode
       2 is selected.
-- [ ] Add a stop command for phase animation if absent.
-- [ ] Ensure animation does not trigger uncontrolled high-rate backend fetches.
-- [ ] Verify viewport smoke when this is implemented, because this touches 3D.
+- [x] Add a stop command for phase animation if absent.
+- [x] Ensure animation does not trigger uncontrolled high-rate backend fetches.
+- [x] Verify viewport smoke when this is implemented, because this touches 3D.
 
 ### Acceptance Criteria
 

@@ -117,7 +117,7 @@ export function decodeFieldVector(buffer: ArrayBuffer): DecodedFieldVector {
 }
 
 interface DecodedFieldVectorMetadata {
-  domainGenerationId: number | null;
+  domainGenerationId: string | null;
   indexing: DecodedFieldVectorIndexing;
   meshTopologyHash: string | null;
   meshTopologyRevision: string | null;
@@ -168,10 +168,9 @@ function decodeFieldVectorMetadata(
     );
   }
 
-  const domainGenerationId = safeNumberFromU64(
-    view.getBigUint64(metadataStart + 8, true),
-    "domain_generation_id",
-  );
+  const domainGenerationId = view
+    .getBigUint64(metadataStart + 8, true)
+    .toString();
   const meshTopologyRevision = view
     .getBigUint64(metadataStart + 16, true)
     .toString();
@@ -234,13 +233,6 @@ function decodeFieldVectorMetadata(
     scopeId: rawScopeId.length > 0 ? rawScopeId : null,
     scopeKind: decodeFieldVectorScopeKind(rawScopeKind),
   };
-}
-
-function safeNumberFromU64(value: bigint, label: string): number {
-  if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
-    throw new Error(`FMVP metadata ${label} exceeds Number.MAX_SAFE_INTEGER`);
-  }
-  return Number(value);
 }
 
 function decodeFieldVectorIndexing(code: number): DecodedFieldVectorIndexing {

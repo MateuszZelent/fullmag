@@ -430,6 +430,8 @@ def write_eigen_fixture(
                 "status": "ready",
                 "complete": True,
                 "solver_model": "dense_reference_oracle",
+                "resolved_solver_family": "dense_reference_oracle",
+                "spectral_transform": "none",
                 "sample_count": 1,
                 "mode_count": 1,
             }
@@ -439,9 +441,9 @@ def write_eigen_fixture(
     )
 
 
-def run_validator(root: Path) -> subprocess.CompletedProcess[str]:
+def run_validator(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, str(VALIDATOR), str(root)],
+        [sys.executable, str(VALIDATOR), str(root), *args],
         check=False,
         text=True,
         stdout=subprocess.PIPE,
@@ -633,6 +635,8 @@ def test_validator_rejects_window_completeness_without_subwindows(
             "status": "ready",
             "complete": True,
             "solver_model": "shift_invert",
+            "resolved_solver_family": "shift_invert",
+            "spectral_transform": "shift_invert",
             "sample_count": 1,
             "mode_count": 1,
             "requested_window_hz": [1.0e8, 5.0e9],
@@ -650,6 +654,126 @@ def test_validator_rejects_window_completeness_without_subwindows(
 
     assert result.returncode != 0
     assert "solver_diagnostics.subwindows" in (result.stderr + result.stdout)
+
+
+def test_validator_requires_production_shift_invert_provenance_when_requested(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+
+    result = run_validator(tmp_path, "--require-production-shift-invert-window")
+
+    assert result.returncode != 0
+    assert "solver_diagnostics.solver_model" in (result.stderr + result.stdout)
+
+
+def test_validator_accepts_production_shift_invert_window_provenance(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(
+        tmp_path,
+        solver_diagnostics_override={
+            "schema_version": "frequency_domain_modal_solver_diagnostics.v1",
+            "study_product": "modal_eigen",
+            "status": "ready",
+            "complete": True,
+            "solver_model": "slepc_multi_shift_invert_production_cpu_dense",
+            "solver_family": "slepc_multi_shift_invert_production_cpu_dense",
+            "resolved_solver_family": "shift_invert",
+            "spectral_transform": "shift_invert",
+            "solver_adapter": "slepc_modal_eigen",
+            "execution_lane": "production_cpu",
+            "production_solver_available": True,
+            "dense_reference_oracle": False,
+            "sample_count": 1,
+            "mode_count": 1,
+            "requested_window_hz": [1.0e8, 5.0e9],
+            "resolved_search_window_hz": [7.5e7, 5.125e9],
+            "window_completeness": {
+                "policy": "best_effort",
+                "status": "not_certified",
+                "certification_method": "none",
+                "estimated_modes_in_window": 1,
+                "certified_modes_in_window": 0,
+                "additional_modes_may_exist": True,
+            },
+            "subwindows": [
+                {
+                    "index": 0,
+                    "requested_hz": [1.0e8, 5.0e9],
+                    "search_hz": [7.5e7, 5.125e9],
+                    "shift_hz": 2.55e9,
+                    "shift_frequency_hz": 2.55e9,
+                    "shift_omega_rad_s": 16022122533.30759,
+                    "outer_iterations": 1,
+                    "linear_iterations_total": 3,
+                    "candidate_modes": 2,
+                    "accepted_modes": 1,
+                    "residual_max": 1.0e-9,
+                    "stop_reason": "converged",
+                }
+            ],
+        },
+    )
+
+    result = run_validator(tmp_path, "--require-production-shift-invert-window")
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_rejects_production_window_mode_outside_requested_range(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(
+        tmp_path,
+        solver_diagnostics_override={
+            "schema_version": "frequency_domain_modal_solver_diagnostics.v1",
+            "study_product": "modal_eigen",
+            "status": "ready",
+            "complete": True,
+            "solver_model": "slepc_multi_shift_invert_production_cpu_dense",
+            "solver_family": "slepc_multi_shift_invert_production_cpu_dense",
+            "resolved_solver_family": "shift_invert",
+            "spectral_transform": "shift_invert",
+            "solver_adapter": "slepc_modal_eigen",
+            "execution_lane": "production_cpu",
+            "production_solver_available": True,
+            "dense_reference_oracle": False,
+            "sample_count": 1,
+            "mode_count": 1,
+            "requested_window_hz": [2.0e9, 3.0e9],
+            "resolved_search_window_hz": [1.9e9, 3.1e9],
+            "window_completeness": {
+                "policy": "best_effort",
+                "status": "not_certified",
+                "certification_method": "none",
+                "estimated_modes_in_window": 1,
+                "certified_modes_in_window": 0,
+                "additional_modes_may_exist": True,
+            },
+            "subwindows": [
+                {
+                    "index": 0,
+                    "requested_hz": [2.0e9, 3.0e9],
+                    "search_hz": [1.9e9, 3.1e9],
+                    "shift_hz": 2.5e9,
+                    "shift_frequency_hz": 2.5e9,
+                    "shift_omega_rad_s": 15707963267.948966,
+                    "outer_iterations": 1,
+                    "linear_iterations_total": 3,
+                    "candidate_modes": 2,
+                    "accepted_modes": 1,
+                    "residual_max": 1.0e-9,
+                    "stop_reason": "converged",
+                }
+            ],
+        },
+    )
+
+    result = run_validator(tmp_path, "--require-production-shift-invert-window")
+
+    assert result.returncode != 0
+    assert "requested_window_hz" in (result.stderr + result.stdout)
 
 
 def test_validator_accepts_exp_i_omega_t_phase_convention(tmp_path: Path) -> None:

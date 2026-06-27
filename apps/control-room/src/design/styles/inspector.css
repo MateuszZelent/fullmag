@@ -187,6 +187,112 @@
   font-family: var(--fm-font-ui);
 }
 
+.fm-topological-charge-method {
+  display: grid;
+  gap: var(--fm-space-2);
+  border-bottom: 1px solid var(--fm-border-subtle);
+  padding: var(--fm-space-2);
+}
+
+.fm-topological-charge-method__header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--fm-space-2);
+  align-items: start;
+}
+
+.fm-topological-charge-method__header h4 {
+  margin: 0;
+  color: var(--fm-text-primary);
+  font-size: var(--fm-font-size-sm);
+  font-weight: 600;
+}
+
+.fm-topological-charge-method__header p {
+  margin: var(--fm-space-1) 0 0;
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-xs);
+  line-height: 1.45;
+}
+
+.fm-topological-charge-method__header span {
+  justify-self: start;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-xs);
+  background: var(--fm-bg-chrome);
+  color: var(--fm-text-muted);
+  font-family: var(--fm-font-mono);
+  font-size: 10px;
+  padding: 2px var(--fm-space-1);
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.fm-topological-charge-method__equations {
+  display: grid;
+  gap: var(--fm-space-1);
+}
+
+.fm-topological-charge-method__equation {
+  display: grid;
+  gap: 2px;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-sm);
+  background: var(--fm-bg-panel);
+  padding: var(--fm-space-2);
+}
+
+.fm-topological-charge-method__equation > span {
+  color: var(--fm-text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.fm-topological-charge-method__equation math {
+  overflow-x: auto;
+  max-width: 100%;
+  color: var(--fm-text-primary);
+  font-size: var(--fm-font-size-sm);
+}
+
+.fm-topological-charge-method__terms {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+}
+
+.fm-topological-charge-method__terms div {
+  display: grid;
+  grid-template-columns: minmax(84px, 0.5fr) minmax(0, 1fr);
+  gap: var(--fm-space-2);
+  border-radius: var(--fm-radius-sm);
+  padding: 2px var(--fm-space-1);
+}
+
+.fm-topological-charge-method__terms dt {
+  color: var(--fm-text-primary);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-topological-charge-method__terms dd {
+  margin: 0;
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-xs);
+  line-height: 1.35;
+}
+
+.fm-topological-charge-method__notes {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding-left: var(--fm-space-3);
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+  line-height: 1.35;
+}
+
 .fm-study-command-link {
   display: inline-flex;
   min-width: 0;

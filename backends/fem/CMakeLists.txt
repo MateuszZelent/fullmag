@@ -137,8 +137,11 @@ set(FEM_SOURCES
     cpu/frequency_domain/contour_quadrature.cpp
     cpu/frequency_domain/mfem_driven_response_validation.cpp
     cpu/frequency_domain/mfem_dmi_operator.cpp
+    cpu/frequency_domain/mfem_modal_operator_payload.cpp
     cpu/frequency_domain/production_cpu_modal_eigen.cpp
     cpu/frequency_domain/production_cpu_driven_response.cpp
+    cpu/frequency_domain/slepc_modal_eigen.cpp
+    cpu/frequency_domain/spectral_transform.cpp
     gpu/cuda/demag_poisson/hypre_device_solver.cpp
     gpu/cuda/demag_poisson/operators.cpp
     gpu/cuda/demag_poisson/poisson.cpp

@@ -42,6 +42,10 @@ describe("topologicalChargeModel", () => {
         kind: "warning",
         message: "Object surface has missing faces; volume slice was used.",
       },
+      method: expect.objectContaining({
+        sampleQuality: "4088/4096 valid samples (99.80%)",
+        title: "Berg-Luescher topological charge",
+      }),
       rows: [
         { label: "Object", value: "permalloy_ring" },
         { label: "Fetch state", value: "ready" },
@@ -64,6 +68,10 @@ describe("topologicalChargeModel", () => {
   it("renders missing resources without pretending a charge is available", () => {
     expect(resolveTopologicalChargePanelModel("loading", null)).toEqual({
       banner: undefined,
+      method: expect.objectContaining({
+        sampleQuality: "unavailable",
+        title: "Berg-Luescher topological charge",
+      }),
       rows: [
         { label: "Object", value: "none" },
         { label: "Fetch state", value: "loading" },
@@ -97,6 +105,25 @@ describe("topologicalChargeModel", () => {
     ).toEqual({
       kind: "warning",
       message: "Topological charge status: insufficient samples.",
+    });
+  });
+
+  it("describes the FEM/FDM calculation contract and sample quality", () => {
+    const model = resolveTopologicalChargePanelModel("ready", readyResource);
+
+    expect(model.method.title).toBe("Berg-Luescher topological charge");
+    expect(model.method.continuumEquationLatex).toContain(
+      "\\hat{\\mathbf m}\\cdot",
+    );
+    expect(model.method.discreteEquationLatex).toContain(
+      "\\operatorname{atan2}",
+    );
+    expect(model.method.sampleQuality).toBe(
+      "4088/4096 valid samples (99.80%)",
+    );
+    expect(model.method.terms).toContainEqual({
+      symbol: "\\hat{\\mathbf m}",
+      meaning: "unit magnetization direction sampled from quantity m",
     });
   });
 });

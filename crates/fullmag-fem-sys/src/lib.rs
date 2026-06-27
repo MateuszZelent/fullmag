@@ -665,6 +665,19 @@ pub struct FullmagFemLinearizedOperatorRequest {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+pub struct FullmagFemCsrMatrixView {
+    pub row_count: u64,
+    pub column_count: u64,
+    pub row_offsets: *const u32,
+    pub row_offsets_len: u64,
+    pub column_indices: *const u32,
+    pub column_indices_len: u64,
+    pub values: *const f64,
+    pub values_len: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct FullmagFemModalEigenRequest {
     pub abi_version: u32,
     pub operator_request: FullmagFemLinearizedOperatorRequest,
@@ -691,6 +704,15 @@ pub struct FullmagFemModalEigenRequest {
     pub tiny_validation_mass_matrix_row_major: *const f64,
     pub tiny_validation_stiffness_diagonal: *const f64,
     pub tiny_validation_mass_diagonal: *const f64,
+    pub mfem_operator_enabled: i32,
+    pub mfem_tangent_dof_count: u64,
+    pub mfem_stiffness_matrix_row_major: *const f64,
+    pub mfem_gyrotropic_matrix_row_major: *const f64,
+    pub mfem_mass_matrix_row_major: *const f64,
+    pub mfem_sparse_operator_enabled: i32,
+    pub mfem_sparse_stiffness_csr: FullmagFemCsrMatrixView,
+    pub mfem_sparse_gyrotropic_csr: FullmagFemCsrMatrixView,
+    pub mfem_sparse_mass_csr: FullmagFemCsrMatrixView,
 }
 
 #[repr(C)]
@@ -1447,6 +1469,28 @@ mod tests {
         assert_eq!(progress.residual_l2_norm, 0.0);
         assert_eq!(progress.relative_residual_l2_norm, 0.0);
         assert_eq!(progress.converged, 0);
+    }
+
+    #[test]
+    fn modal_eigen_request_abi_exposes_mfem_payload_fields() {
+        let request = std::mem::MaybeUninit::<FullmagFemModalEigenRequest>::zeroed();
+        let request = unsafe { request.assume_init() };
+        assert_eq!(request.mfem_operator_enabled, 0);
+        assert_eq!(request.mfem_tangent_dof_count, 0);
+        assert!(request.mfem_stiffness_matrix_row_major.is_null());
+        assert!(request.mfem_gyrotropic_matrix_row_major.is_null());
+        assert!(request.mfem_mass_matrix_row_major.is_null());
+        assert_eq!(request.mfem_sparse_operator_enabled, 0);
+        assert_eq!(request.mfem_sparse_stiffness_csr.row_count, 0);
+        assert_eq!(request.mfem_sparse_stiffness_csr.column_count, 0);
+        assert!(request.mfem_sparse_stiffness_csr.row_offsets.is_null());
+        assert_eq!(request.mfem_sparse_stiffness_csr.row_offsets_len, 0);
+        assert!(request.mfem_sparse_stiffness_csr.column_indices.is_null());
+        assert_eq!(request.mfem_sparse_stiffness_csr.column_indices_len, 0);
+        assert!(request.mfem_sparse_stiffness_csr.values.is_null());
+        assert_eq!(request.mfem_sparse_stiffness_csr.values_len, 0);
+        assert_eq!(request.mfem_sparse_gyrotropic_csr.row_count, 0);
+        assert_eq!(request.mfem_sparse_mass_csr.row_count, 0);
     }
 
     #[test]

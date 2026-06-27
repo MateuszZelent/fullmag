@@ -3,6 +3,7 @@
 #include "cpu/frequency_domain/contour_interval_solver.hpp"
 #include "cpu/frequency_domain/mode_deduplication.hpp"
 #include "cpu/frequency_domain/mode_filter.hpp"
+#include "cpu/frequency_domain/slepc_modal_eigen.hpp"
 #include "cpu/frequency_domain/window_partition.hpp"
 #include "frequency_domain/solver_progress.hpp"
 
@@ -149,6 +150,8 @@ void emit_progress(
         "\"accepted_mode_count\":%llu,"
         "\"candidate_mode_count\":%llu,"
         "\"current_shift_hz\":%.17g,"
+        "\"shift_frequency_hz\":%.17g,"
+        "\"shift_omega_rad_s\":%.17g,"
         "\"outer_iteration\":1,"
         "\"max_outer_iterations\":%d,"
         "\"linear_iteration\":1,"
@@ -162,6 +165,8 @@ void emit_progress(
         static_cast<unsigned long long>(accepted_mode_count),
         static_cast<unsigned long long>(candidate_mode_count),
         shift_frequency_hz,
+        shift_frequency_hz,
+        2.0 * 3.14159265358979323846264338327950288 * shift_frequency_hz,
         request.max_outer_iterations,
         request.max_linear_iterations,
         relative_residual,
@@ -587,6 +592,143 @@ FrequencyDomainContractResult interrupted_result(
     return result;
 }
 
+FrequencyDomainContractResult slepc_tiny_validation_result(
+    const ModalEigenRequest &request,
+    const double stiffness[4],
+    const double gyrotropic_mass[4]) noexcept
+{
+    constexpr double kTwoPi = 2.0 * 3.14159265358979323846264338327950288;
+    const double shift_frequency_hz = target_shift_frequency_hz(request);
+    SLEPcTinyGyrotropicModalEigenRequest slepc_request{};
+    slepc_request.tangent_dof_count =
+        static_cast<int>(request.tiny_validation_tangent_dof_count);
+    slepc_request.stiffness_matrix_row_major = stiffness;
+    slepc_request.gyrotropic_matrix_row_major = gyrotropic_mass;
+    slepc_request.requested_mode_count = request.requested_mode_count;
+    slepc_request.target_frequency_hz = shift_frequency_hz;
+    slepc_request.frequency_min_hz = request.frequency_min_hz;
+    slepc_request.frequency_max_hz = request.frequency_max_hz;
+    slepc_request.residual_tolerance = request.residual_tolerance;
+    slepc_request.max_outer_iterations = request.max_outer_iterations;
+    slepc_request.max_linear_iterations = request.max_linear_iterations;
+
+    const SLEPcTinyGyrotropicModalEigenResult slepc_result =
+        solve_slepc_tiny_gyrotropic_modal_eigen(slepc_request);
+    FrequencyDomainContractResult result{};
+    const char *status = slepc_result.ok ? "ok" : "solve_error";
+    result.status = slepc_result.ok ?
+        FrequencyDomainStatus::ok :
+        FrequencyDomainStatus::solve_error;
+    result.error_message = slepc_result.ok ?
+        "" :
+        "native FEM modal_eigen validation SLEPc shift-invert solve failed";
+    if (slepc_result.ok) {
+        emit_progress(
+            request,
+            shift_frequency_hz,
+            static_cast<std::uint64_t>(slepc_result.converged_eigenpair_count),
+            static_cast<std::uint64_t>(slepc_result.accepted_mode_count),
+            slepc_result.max_relative_residual);
+    }
+    result.diagnostics_json =
+        "{\"schema_version\":\"frequency_domain_modal_diagnostics.v1\","
+        "\"study_product\":\"modal_eigen\","
+        "\"status\":\"" +
+        std::string(status) +
+        "\",\"complete\":" +
+        std::string(slepc_result.ok ? "true" : "false") +
+        ",\"execution_lane\":\"validation\","
+        "\"progress_schema_version\":\"fem_frequency_domain_progress.v1\","
+        "\"production_solver_available\":false,"
+        "\"tiny_validation_solver\":true,"
+        "\"solver_adapter\":\"" +
+        std::string(slepc_result.solver_adapter) +
+        "\",\"solver_family\":\"slepc_shift_invert_validation\","
+        "\"eps_type\":\"" +
+        std::string(slepc_result.eps_type) +
+        "\",\"slepc_problem_type\":\"" +
+        std::string(slepc_result.problem_type) +
+        "\",\"spectral_transform\":\"" +
+        std::string(slepc_result.spectral_transform) +
+        "\",\"which_eigenpairs\":\"" +
+        std::string(slepc_result.which_eigenpairs) +
+        "\",\"ksp_type\":\"" +
+        std::string(slepc_result.ksp_type) +
+        "\",\"pc_type\":\"" +
+        std::string(slepc_result.pc_type) +
+        "\",\"ksp_rtol\":" +
+        format_double(slepc_result.ksp_rtol) +
+        ",\"ksp_atol\":" +
+        format_double(slepc_result.ksp_atol) +
+        ",\"ksp_max_iterations\":" +
+        std::to_string(slepc_result.ksp_max_iterations) +
+        ",\"ksp_final_residual\":" +
+        format_double(slepc_result.ksp_final_residual) +
+        ",\"positive_frequency_filter\":\"imag(lambda) > 0\","
+        "\"eigenvalue_to_frequency\":\"frequency_hz = imag(lambda)/(2*pi)\","
+        "\"conjugate_pair_policy\":\"keep_positive_frequency_partner\","
+        "\"requested_mode_count\":" +
+        std::to_string(request.requested_mode_count) +
+        ",\"accepted_mode_count\":" +
+        std::to_string(slepc_result.accepted_mode_count) +
+        ",\"candidate_mode_count\":" +
+        std::to_string(slepc_result.converged_eigenpair_count) +
+        ",\"shift_frequency_hz\":" +
+        format_double(shift_frequency_hz) +
+        ",\"shift_omega_rad_s\":" +
+        format_double(kTwoPi * shift_frequency_hz) +
+        ",\"outer_iteration\":" +
+        std::to_string(slepc_result.outer_iterations) +
+        ",\"linear_iteration\":1,"
+        "\"relative_residual_max\":" +
+        format_double(slepc_result.max_relative_residual);
+    if (!slepc_result.ok) {
+        result.diagnostics_json +=
+            ",\"stop_reason\":\"" +
+            std::string(
+                slepc_result.unsupported_reason != nullptr &&
+                        slepc_result.unsupported_reason[0] != '\0' ?
+                    slepc_result.unsupported_reason :
+                    "slepc_validation_solve_failed") +
+            "\"";
+    }
+    result.diagnostics_json += "}";
+    result.diagnostics_json = with_operator_diagnostics(
+        result.diagnostics_json,
+        request.operator_request.operator_diagnostics_json);
+
+    result.result_json =
+        "{\"schema_version\":\"frequency_domain_modal_result.v1\","
+        "\"study_product\":\"modal_eigen\","
+        "\"status\":\"" +
+        std::string(status) +
+        "\",\"solver_adapter\":\"" +
+        std::string(slepc_result.solver_adapter) +
+        "\",\"accepted_mode_count\":" +
+        std::to_string(slepc_result.accepted_mode_count);
+    if (slepc_result.ok) {
+        result.result_json +=
+            ",\"frequency_hz\":" +
+            format_double(slepc_result.frequency_hz) +
+            ",\"omega_rad_s\":" +
+            format_double(slepc_result.lambda_imag) +
+            ",\"eigenvalue_real\":" +
+            format_double(slepc_result.lambda_real) +
+            ",\"eigenvalue_imag\":" +
+            format_double(slepc_result.lambda_imag) +
+            ",\"relative_residual\":" +
+            format_double(slepc_result.relative_residual);
+    }
+    result.result_json +=
+        ",\"shift_frequency_hz\":" +
+        format_double(shift_frequency_hz) +
+        ",\"shift_omega_rad_s\":" +
+        format_double(kTwoPi * shift_frequency_hz) +
+        "}";
+    result.artifact_manifest_path.clear();
+    return result;
+}
+
 FrequencyDomainContractResult solve_tiny_validation_modal_problem(
     const ModalEigenRequest &request) noexcept
 {
@@ -669,6 +811,12 @@ FrequencyDomainContractResult solve_tiny_validation_modal_problem(
             return unresolved_window_result(request, partition);
         }
     }
+
+#if FULLMAG_FEM_WITH_SLEPC
+    if (!is_frequency_window(request)) {
+        return slepc_tiny_validation_result(request, stiffness, gyrotropic_mass);
+    }
+#endif
 
     const double det_g =
         gyrotropic_mass[0] * gyrotropic_mass[3] -

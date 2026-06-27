@@ -38,6 +38,7 @@ struct ContourIntervalMode {
     double omega_rad_s = 0.0;
     std::complex<double> eigenvalue{};
     std::complex<double> mode[2]{};
+    std::vector<std::complex<double>> mode_vector{};
     double relative_residual = 0.0;
 };
 
@@ -58,6 +59,7 @@ struct ContourIntervalSolveResult {
     double contour_center_hz = 0.0;
     double contour_radius_hz = 0.0;
     int projection_rank = 0;
+    std::complex<double> projection_matrix_row_major[4]{};
     int estimated_mode_count = 0;
     int accepted_mode_count = 0;
     bool count_certificate = false;

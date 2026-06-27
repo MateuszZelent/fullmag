@@ -14,7 +14,7 @@ export type DecodedFieldVectorScopeKind =
 
 export interface DecodedFieldVector {
   dtype: "float64";
-  domainGenerationId?: number | null;
+  domainGenerationId?: string | null;
   formatVersion?: 2 | 3;
   grid: [number, number, number];
   indexing?: DecodedFieldVectorIndexing;
@@ -33,7 +33,7 @@ export interface DecodedFieldVector {
 export interface DecodedComplexFieldVector {
   componentCount: number;
   dtype: "complex128";
-  domainGenerationId?: number | null;
+  domainGenerationId?: string | null;
   formatVersion?: 2 | 3;
   grid: [number, number, number];
   indexing?: DecodedFieldVectorIndexing;

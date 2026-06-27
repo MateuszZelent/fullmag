@@ -10,10 +10,51 @@ export interface TopologicalChargePanelBanner {
   message: string;
 }
 
+export interface TopologicalChargeMethodTerm {
+  symbol: string;
+  meaning: string;
+}
+
+export interface TopologicalChargeMethodInfo {
+  title: string;
+  description: string;
+  continuumEquationLatex: string;
+  discreteEquationLatex: string;
+  sampleQuality: string;
+  terms: TopologicalChargeMethodTerm[];
+  notes: string[];
+}
+
 export interface TopologicalChargePanelModel {
   banner: TopologicalChargePanelBanner | undefined;
+  method: TopologicalChargeMethodInfo;
   rows: TopologicalChargePanelRow[];
 }
+
+const CONTINUUM_EQUATION_LATEX =
+  "Q = \\frac{1}{4\\pi}\\int_{\\Omega}\\hat{\\mathbf m}\\cdot\\left(\\partial_u\\hat{\\mathbf m}\\times\\partial_v\\hat{\\mathbf m}\\right)\\,du\\,dv";
+
+const DISCRETE_EQUATION_LATEX =
+  "Q_h = \\frac{1}{4\\pi}\\sum_{\\triangle}2\\operatorname{atan2}\\left(a\\cdot(b\\times c),1+a\\cdot b+b\\cdot c+c\\cdot a\\right)";
+
+const METHOD_TERMS: TopologicalChargeMethodTerm[] = [
+  {
+    symbol: "\\hat{\\mathbf m}",
+    meaning: "unit magnetization direction sampled from quantity m",
+  },
+  {
+    symbol: "u, v",
+    meaning: "oriented in-plane coordinates of the selected analysis plane",
+  },
+  {
+    symbol: "a, b, c",
+    meaning: "normalized magnetization vectors on one oriented grid triangle",
+  },
+  {
+    symbol: "\\Omega_\\triangle",
+    meaning: "oriented solid angle contributed by one triangle",
+  },
+];
 
 function formatMaybeNumber(value: number | null | undefined): string {
   return typeof value === "number" && Number.isFinite(value)
@@ -43,6 +84,30 @@ function formatStatusForSentence(status: string): string {
   return status.replace(/_/g, " ");
 }
 
+function formatSampleQuality(resource: TopologicalChargeResource | null): string {
+  if (!resource || resource.sample_count <= 0) return "unavailable";
+  const fraction = resource.valid_sample_count / resource.sample_count;
+  return `${resource.valid_sample_count}/${resource.sample_count} valid samples (${(fraction * 100).toFixed(2)}%)`;
+}
+
+function resolveMethodInfo(
+  resource: TopologicalChargeResource | null,
+): TopologicalChargeMethodInfo {
+  return {
+    title: "Berg-Luescher topological charge",
+    description:
+      "Computes an object-scoped skyrmion charge from normalized magnetization directions. FEM fields are linearly interpolated from tetrahedra onto the selected plane, then evaluated on the same regular grid solid-angle sum as FDM fields.",
+    continuumEquationLatex: CONTINUUM_EQUATION_LATEX,
+    discreteEquationLatex: DISCRETE_EQUATION_LATEX,
+    sampleQuality: formatSampleQuality(resource),
+    terms: METHOD_TERMS,
+    notes: [
+      "Q is dimensionless; integer-like values are meaningful only when the full texture and boundary state are resolved.",
+      "Zero, missing, or non-finite vectors are rejected before the solid-angle sum.",
+    ],
+  };
+}
+
 function resolveBanner(
   resource: TopologicalChargeResource | null,
 ): TopologicalChargePanelBanner | undefined {
@@ -70,6 +135,7 @@ export function resolveTopologicalChargePanelModel(
   const data = resource ?? null;
   return {
     banner: resolveBanner(data),
+    method: resolveMethodInfo(data),
     rows: [
       { label: "Object", value: data?.object_id ?? "none" },
       { label: "Fetch state", value: fetchStatus },

@@ -31,6 +31,7 @@ const RELAX_MAX_STEPS: u64 = 4_000;
 /// the dense O(n³) path. Below this, Cholesky + SymmetricEigen is used.
 const SPARSE_EIGEN_THRESHOLD: usize = 3_000;
 const FLOQUET_DYNAMIC_DEMAG_UNSUPPORTED: &str = "dynamic demag for Floquet periodic FEM is not implemented yet. Disable demag or use k=0/free boundary.";
+const NATIVE_CPU_MODAL_WINDOW_SOLVER_KIND: &str = "slepc_multi_shift_invert_production_cpu_dense";
 
 #[derive(Debug, Clone)]
 pub(crate) struct FemEigenProgress {
@@ -141,6 +142,19 @@ struct ComplexEigenpair {
     vector: Vec<Complex64>,
 }
 
+#[derive(Debug, Clone)]
+struct NativeModalEigenpair {
+    frequency_hz: f64,
+    omega_rad_s: f64,
+    eigenvalue_real: f64,
+    eigenvalue_imag: f64,
+    residual_absolute_l2: f64,
+    residual_relative_l2: f64,
+    residual_linf: f64,
+    mass_norm: f64,
+    vector: Vec<Complex64>,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct TangentLeakageSummary {
     mean_abs: f64,
@@ -205,15 +219,43 @@ pub(crate) fn execute_baseline_fem_eigen(
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
 ) -> Result<ExecutedRun, RunError> {
-    execute_fem_eigen_inner(plan, outputs, false, None)
+    execute_fem_eigen_inner(plan, outputs, false, false, None)
 }
 
+#[allow(dead_code)]
 pub(crate) fn execute_baseline_fem_eigen_with_progress(
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
     progress: &mut FemEigenProgressCallback<'_>,
 ) -> Result<ExecutedRun, RunError> {
-    execute_fem_eigen_inner(plan, outputs, false, Some(progress))
+    execute_fem_eigen_inner(plan, outputs, false, false, Some(progress))
+}
+
+pub(crate) fn execute_cpu_fem_eigen(
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+) -> Result<ExecutedRun, RunError> {
+    execute_fem_eigen_inner(
+        plan,
+        outputs,
+        false,
+        native_cpu_modal_window_enabled(plan),
+        None,
+    )
+}
+
+pub(crate) fn execute_cpu_fem_eigen_with_progress(
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    progress: &mut FemEigenProgressCallback<'_>,
+) -> Result<ExecutedRun, RunError> {
+    execute_fem_eigen_inner(
+        plan,
+        outputs,
+        false,
+        native_cpu_modal_window_enabled(plan),
+        Some(progress),
+    )
 }
 
 /// GPU-accelerated FEM eigensolver (Etap A4) — TRANSITIONAL dense path.
@@ -260,6 +302,8 @@ pub(crate) fn execute_gpu_fem_eigen(
         cancel_requested: None,
         progress_callback: None,
         tiny_validation_problem: None,
+        mfem_operator_problem: None,
+        mfem_sparse_operator_problem: None,
     })
     .map_err(|message| RunError { message })?;
 
@@ -336,10 +380,27 @@ fn native_modal_k_vector(k_sampling: Option<&KSamplingIR>) -> Option<&[f64]> {
     }
 }
 
+fn native_cpu_modal_window_enabled(plan: &FemEigenPlanIR) -> bool {
+    matches!(
+        plan.target,
+        fullmag_ir::EigenTargetIR::FrequencyWindow { .. }
+    ) && matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2)
+        && matches!(
+            plan.damping_policy,
+            fullmag_ir::EigenDampingPolicyIR::Ignore
+        )
+        && matches!(
+            plan.spin_wave_bc.kind(),
+            fullmag_ir::SpinWaveBoundaryKindIR::Free
+        )
+        && plan.k_sampling.is_none()
+}
+
 fn execute_fem_eigen_inner(
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
     try_gpu: bool,
+    use_native_modal_production: bool,
     mut progress: Option<&mut FemEigenProgressCallback<'_>>,
 ) -> Result<ExecutedRun, RunError> {
     if plan.precision != fullmag_ir::ExecutionPrecision::Double {
@@ -452,6 +513,23 @@ fn execute_fem_eigen_inner(
             &equilibrium,
             &bases,
         );
+        if use_native_modal_production {
+            return execute_native_cpu_modal_window_from_full_2x2(
+                plan,
+                outputs,
+                initial_magnetization,
+                equilibrium,
+                observables,
+                relaxation_steps,
+                &reduction,
+                &bases,
+                &stiffness,
+                &mass,
+                progress,
+                active_n,
+                effective_dof,
+            );
+        }
         if use_sparse {
             emit_fem_eigen_progress(
                 &mut progress,
@@ -983,6 +1061,762 @@ fn execute_fem_eigen_inner(
     })
 }
 
+fn execute_native_cpu_modal_window_from_full_2x2(
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    initial_magnetization: Vec<Vector3>,
+    equilibrium: Vec<Vector3>,
+    observables: EffectiveFieldObservables,
+    relaxation_steps: u64,
+    reduction: &ReductionMap,
+    bases: &[(Vector3, Vector3)],
+    stiffness_field: &DMatrix<f64>,
+    mass: &DMatrix<f64>,
+    mut progress: Option<&mut FemEigenProgressCallback<'_>>,
+    active_nodes: usize,
+    effective_dof: usize,
+) -> Result<ExecutedRun, RunError> {
+    emit_fem_eigen_progress(
+        &mut progress,
+        FemEigenProgress {
+            phase: "solving_native_shift_invert",
+            phase_index: 3,
+            phase_count: 5,
+            percent: 35.0,
+            solver_kind: NATIVE_CPU_MODAL_WINDOW_SOLVER_KIND,
+            active_nodes,
+            effective_dof,
+            requested_modes: plan.count as usize,
+            candidate_modes: plan.count as usize,
+            computed_modes: 0,
+            iteration: Some(0),
+            max_iterations: Some(300),
+            residual: None,
+            warning: None,
+        },
+    )?;
+
+    let stiffness_omega = stiffness_field * plan.gyromagnetic_ratio;
+    let stiffness_row_major = dmatrix_to_row_major(&stiffness_omega);
+    let gyrotropic_row_major = gyrotropic_matrix_row_major_from_tangent_mass(mass, active_nodes)?;
+    let tangent_mass_row_major = dmatrix_to_row_major(mass);
+    let native_result = native_fem::solve_native_modal_eigen(native_fem::NativeModalEigenRequest {
+        mesh_asset_id: &plan.mesh_name,
+        equilibrium_source_kind: native_modal_equilibrium_source_kind(&plan.equilibrium),
+        gamma_rad_s_t: plan.gyromagnetic_ratio / MU0,
+        mu0_t_m_a: MU0,
+        alpha: plan.material.damping,
+        include_exchange: plan.enable_exchange,
+        include_demag: plan.enable_demag,
+        demag_realization: resolved_demag_realization(plan).map(|value| value.provenance_name()),
+        damping_policy: native_modal_damping_policy(plan.damping_policy),
+        spin_wave_bc_kind: native_modal_spin_wave_bc_kind(&plan.spin_wave_bc),
+        k_vector_rad_m: None,
+        operator_diagnostics_json: Some(
+            "{\"schema_version\":\"frequency_domain_operator_diagnostics.v1\",\
+             \"payload_kind\":\"rust_full_2x2_dense_operator\",\
+             \"stiffness_units\":\"rad_s_inv\",\
+             \"gyrotropic_form\":\"[[0,-M],[M,0]]\"}",
+        ),
+        requested_mode_count: plan.count as i32,
+        target_kind: native_modal_target_kind(&plan.target),
+        target_frequency_hz: native_modal_target_frequency_hz(&plan.target),
+        frequency_min_hz: native_modal_frequency_min_hz(&plan.target),
+        frequency_max_hz: native_modal_frequency_max_hz(&plan.target),
+        residual_tolerance: 1.0e-8,
+        max_outer_iterations: 300,
+        max_linear_iterations: 1000,
+        output_directory: None,
+        write_partial_artifacts: false,
+        completeness_policy: 1,
+        eigensolver_family: 1,
+        spectral_transform_kind: 1,
+        cancel_requested: None,
+        progress_callback: None,
+        tiny_validation_problem: None,
+        mfem_operator_problem: Some(native_fem::NativeModalEigenMfemOperatorProblem {
+            tangent_dof_count: stiffness_omega.nrows() as u64,
+            stiffness_matrix_row_major: Some(&stiffness_row_major),
+            gyrotropic_matrix_row_major: Some(&gyrotropic_row_major),
+            mass_matrix_row_major: Some(&tangent_mass_row_major),
+        }),
+        mfem_sparse_operator_problem: None,
+    })
+    .map_err(|message| RunError { message })?;
+
+    if native_result.status != native_fem::NativeFrequencyDomainStatus::Ok {
+        return Err(RunError {
+            message: format!(
+                "native FEM modal_eigen production CPU solve failed: {} (diagnostics_json={})",
+                native_result.error_message, native_result.diagnostics_json
+            ),
+        });
+    }
+    let solver_diagnostics = native_solver_diagnostics_json(plan, &native_result.diagnostics_json)?;
+    let modes = native_modal_modes_from_result_json(
+        plan,
+        &native_result.result_json,
+        &stiffness_omega,
+        &gyrotropic_row_major,
+        mass,
+    )?;
+    if modes.is_empty() {
+        return Err(RunError {
+            message: "native FEM modal_eigen production CPU solve returned no modes".to_string(),
+        });
+    }
+
+    emit_fem_eigen_progress(
+        &mut progress,
+        FemEigenProgress {
+            phase: "writing_artifacts",
+            phase_index: 4,
+            phase_count: 5,
+            percent: 85.0,
+            solver_kind: NATIVE_CPU_MODAL_WINDOW_SOLVER_KIND,
+            active_nodes,
+            effective_dof,
+            requested_modes: plan.count as usize,
+            candidate_modes: modes.len(),
+            computed_modes: modes.len(),
+            iteration: None,
+            max_iterations: None,
+            residual: modes
+                .iter()
+                .map(|mode| mode.residual_relative_l2)
+                .reduce(f64::max),
+            warning: None,
+        },
+    )?;
+
+    let auxiliary_artifacts = native_modal_artifacts(
+        plan,
+        outputs,
+        &equilibrium,
+        reduction,
+        bases,
+        &modes,
+        solver_diagnostics,
+        relaxation_steps,
+    )?;
+
+    let stats = StepStats {
+        step: relaxation_steps,
+        time: 0.0,
+        dt: 0.0,
+        e_ex: observables.exchange_energy_joules,
+        e_demag: observables.demag_energy_joules,
+        e_ext: observables.external_energy_joules,
+        e_total: observables.total_energy_joules,
+        max_dm_dt: observables.max_rhs_amplitude,
+        max_h_eff: observables.max_effective_field_amplitude,
+        max_h_demag: observables.max_demag_field_amplitude,
+        ..StepStats::default()
+    };
+
+    emit_fem_eigen_progress(
+        &mut progress,
+        FemEigenProgress {
+            phase: "completed",
+            phase_index: 5,
+            phase_count: 5,
+            percent: 100.0,
+            solver_kind: NATIVE_CPU_MODAL_WINDOW_SOLVER_KIND,
+            active_nodes,
+            effective_dof,
+            requested_modes: plan.count as usize,
+            candidate_modes: modes.len(),
+            computed_modes: modes.len(),
+            iteration: None,
+            max_iterations: None,
+            residual: None,
+            warning: None,
+        },
+    )?;
+
+    Ok(ExecutedRun {
+        result: RunResult {
+            status: RunStatus::Completed,
+            steps: vec![stats],
+            final_magnetization: equilibrium,
+            completion: Some(crate::relaxation::infer_stage_completion(
+                RunStatus::Completed,
+                None,
+                &[],
+                0.0,
+                0.0,
+                false,
+            )),
+        },
+        initial_magnetization,
+        field_snapshots: Vec::new(),
+        field_snapshot_count: 0,
+        auxiliary_artifacts,
+        provenance: native_modal_execution_provenance(plan),
+    })
+}
+
+fn dmatrix_to_row_major(matrix: &DMatrix<f64>) -> Vec<f64> {
+    let mut values = Vec::with_capacity(matrix.nrows() * matrix.ncols());
+    for row in 0..matrix.nrows() {
+        for col in 0..matrix.ncols() {
+            values.push(matrix[(row, col)]);
+        }
+    }
+    values
+}
+
+fn gyrotropic_matrix_row_major_from_tangent_mass(
+    mass: &DMatrix<f64>,
+    active_nodes: usize,
+) -> Result<Vec<f64>, RunError> {
+    let dim = active_nodes.checked_mul(2).ok_or_else(|| RunError {
+        message: "native modal gyrotropic matrix dimension overflow".to_string(),
+    })?;
+    if mass.nrows() != dim || mass.ncols() != dim {
+        return Err(RunError {
+            message: format!(
+                "native modal full_2x2 mass matrix has shape {}x{}, expected {}x{}",
+                mass.nrows(),
+                mass.ncols(),
+                dim,
+                dim
+            ),
+        });
+    }
+    let mut gyrotropic = vec![0.0; dim * dim];
+    for row in 0..active_nodes {
+        for col in 0..active_nodes {
+            let tangent_mass = mass[(row, col)];
+            gyrotropic[row * dim + col + active_nodes] = -tangent_mass;
+            gyrotropic[(row + active_nodes) * dim + col] = tangent_mass;
+        }
+    }
+    Ok(gyrotropic)
+}
+
+fn native_solver_diagnostics_json(
+    plan: &FemEigenPlanIR,
+    raw: &str,
+) -> Result<serde_json::Value, RunError> {
+    let mut diagnostics =
+        serde_json::from_str::<serde_json::Value>(raw).map_err(|error| RunError {
+            message: format!("failed to parse native modal diagnostics JSON: {error}"),
+        })?;
+    let Some(object) = diagnostics.as_object_mut() else {
+        return Err(RunError {
+            message: "native modal diagnostics JSON must be an object".to_string(),
+        });
+    };
+    object.insert(
+        "schema_version".to_string(),
+        serde_json::json!("frequency_domain_modal_solver_diagnostics.v1"),
+    );
+    object
+        .entry("solver_model".to_string())
+        .or_insert_with(|| serde_json::json!("contour_interval_production_cpu_dense"));
+    object
+        .entry("resolved_solver_family".to_string())
+        .or_insert_with(|| serde_json::json!("contour_interval"));
+    object
+        .entry("spectral_transform".to_string())
+        .or_insert_with(|| serde_json::json!("contour_integral"));
+    object
+        .entry("dense_reference_oracle".to_string())
+        .or_insert_with(|| serde_json::json!(false));
+    object
+        .entry("residual_definition".to_string())
+        .or_insert_with(|| {
+            serde_json::json!(
+                "relative_residual = ||K phi - omega G phi||_2 / (||K phi||_2 + |omega| * ||G phi||_2)"
+            )
+        });
+    object
+        .entry("tangent_leakage_definition".to_string())
+        .or_insert_with(|| {
+            serde_json::json!(
+                "abs(m0 dot delta_m) over reconstructed real and imaginary mode vectors"
+            )
+        });
+    object.entry("constants".to_string()).or_insert_with(|| {
+        serde_json::json!({
+            "gamma_rad_s_T": plan.gyromagnetic_ratio / MU0,
+            "gamma0_rad_s_per_A_m": plan.gyromagnetic_ratio,
+            "mu0_T_m_per_A": MU0,
+        })
+    });
+    if matches!(
+        plan.target,
+        fullmag_ir::EigenTargetIR::FrequencyWindow { .. }
+    ) {
+        let accepted_modes = object
+            .get("accepted_mode_count_after_dedup")
+            .or_else(|| object.get("accepted_mode_count"))
+            .and_then(|value| value.as_u64())
+            .unwrap_or(0);
+        object
+            .entry("window_completeness".to_string())
+            .or_insert_with(|| {
+                serde_json::json!({
+                    "policy": "best_effort",
+                    "status": "not_certified",
+                    "certification_method": "none",
+                    "estimated_modes_in_window": accepted_modes,
+                    "certified_modes_in_window": 0,
+                    "additional_modes_may_exist": true,
+                })
+            });
+    }
+    Ok(diagnostics)
+}
+
+fn native_modal_modes_from_result_json(
+    plan: &FemEigenPlanIR,
+    raw: &str,
+    stiffness_omega: &DMatrix<f64>,
+    gyrotropic_row_major: &[f64],
+    tangent_mass: &DMatrix<f64>,
+) -> Result<Vec<NativeModalEigenpair>, RunError> {
+    let result = serde_json::from_str::<serde_json::Value>(raw).map_err(|error| RunError {
+        message: format!("failed to parse native modal result JSON: {error}"),
+    })?;
+    let modes = result
+        .get("modes")
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| RunError {
+            message: "native modal result JSON is missing modes[]".to_string(),
+        })?;
+    modes
+        .iter()
+        .map(|mode| {
+            native_modal_mode_from_json(
+                plan,
+                mode,
+                stiffness_omega,
+                gyrotropic_row_major,
+                tangent_mass,
+            )
+        })
+        .collect()
+}
+
+fn native_modal_mode_from_json(
+    plan: &FemEigenPlanIR,
+    mode: &serde_json::Value,
+    stiffness_omega: &DMatrix<f64>,
+    gyrotropic_row_major: &[f64],
+    tangent_mass: &DMatrix<f64>,
+) -> Result<NativeModalEigenpair, RunError> {
+    let real = required_f64_array(mode, "mode_vector_real")?;
+    let imag = required_f64_array(mode, "mode_vector_imag")?;
+    if real.len() != imag.len() || real.len() != stiffness_omega.nrows() {
+        return Err(RunError {
+            message: format!(
+                "native modal mode vector length mismatch: real={}, imag={}, operator={}",
+                real.len(),
+                imag.len(),
+                stiffness_omega.nrows()
+            ),
+        });
+    }
+    let mut vector = real
+        .iter()
+        .zip(imag.iter())
+        .map(|(re, im)| Complex64::new(*re, *im))
+        .collect::<Vec<_>>();
+    normalize_complex_block_mode(&mut vector, tangent_mass, plan.normalization);
+    let eigenvalue_real = required_f64(mode, "eigenvalue_real")?;
+    let eigenvalue_imag = required_f64(mode, "eigenvalue_imag")?;
+    let lambda = Complex64::new(eigenvalue_real, eigenvalue_imag);
+    let (residual_absolute_l2, residual_relative_l2, residual_linf) =
+        gyrotropic_pencil_residual_norms(stiffness_omega, gyrotropic_row_major, lambda, &vector);
+    let mass_norm = complex_block_mass_norm(tangent_mass, &vector).re;
+    Ok(NativeModalEigenpair {
+        frequency_hz: required_f64(mode, "frequency_hz")?,
+        omega_rad_s: required_f64(mode, "omega_rad_s")?,
+        eigenvalue_real,
+        eigenvalue_imag,
+        residual_absolute_l2,
+        residual_relative_l2,
+        residual_linf,
+        mass_norm,
+        vector,
+    })
+}
+
+fn required_f64(value: &serde_json::Value, key: &str) -> Result<f64, RunError> {
+    value
+        .get(key)
+        .and_then(|field| field.as_f64())
+        .filter(|number| number.is_finite())
+        .ok_or_else(|| RunError {
+            message: format!("native modal result field '{key}' must be finite"),
+        })
+}
+
+fn required_f64_array(value: &serde_json::Value, key: &str) -> Result<Vec<f64>, RunError> {
+    let array = value
+        .get(key)
+        .and_then(|field| field.as_array())
+        .ok_or_else(|| RunError {
+            message: format!("native modal result field '{key}' must be an array"),
+        })?;
+    array
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            item.as_f64()
+                .filter(|number| number.is_finite())
+                .ok_or_else(|| RunError {
+                    message: format!("native modal result field '{key}[{index}]' must be finite"),
+                })
+        })
+        .collect()
+}
+
+fn normalize_complex_block_mode(
+    vector: &mut [Complex64],
+    mass: &DMatrix<f64>,
+    normalization: EigenNormalizationIR,
+) {
+    let scale = match normalization {
+        EigenNormalizationIR::UnitL2 => complex_block_mass_norm(mass, vector).re.max(0.0).sqrt(),
+        EigenNormalizationIR::UnitMaxAmplitude => vector
+            .iter()
+            .fold(0.0_f64, |acc, value| acc.max(value.norm())),
+    }
+    .max(1.0e-30);
+    for value in vector {
+        *value /= scale;
+    }
+}
+
+fn complex_block_mass_norm(mass: &DMatrix<f64>, vector: &[Complex64]) -> Complex64 {
+    let mut norm = Complex64::new(0.0, 0.0);
+    for row in 0..mass.nrows() {
+        let mut projected = Complex64::new(0.0, 0.0);
+        for col in 0..mass.ncols() {
+            projected += vector[col] * mass[(row, col)];
+        }
+        norm += vector[row].conj() * projected;
+    }
+    norm
+}
+
+fn gyrotropic_pencil_residual_norms(
+    stiffness_omega: &DMatrix<f64>,
+    gyrotropic_row_major: &[f64],
+    lambda: Complex64,
+    vector: &[Complex64],
+) -> (f64, f64, f64) {
+    let dim = vector.len();
+    let mut residual_l2: f64 = 0.0;
+    let mut residual_linf: f64 = 0.0;
+    let mut k_norm_l2: f64 = 0.0;
+    let mut g_norm_l2: f64 = 0.0;
+    for row in 0..dim {
+        let mut k_row = Complex64::new(0.0, 0.0);
+        let mut g_row = Complex64::new(0.0, 0.0);
+        for col in 0..dim {
+            k_row += vector[col] * stiffness_omega[(row, col)];
+            g_row += vector[col] * gyrotropic_row_major[row * dim + col];
+        }
+        let residual = k_row - lambda * g_row;
+        let residual_norm = residual.norm();
+        residual_l2 += residual_norm * residual_norm;
+        residual_linf = residual_linf.max(residual_norm);
+        k_norm_l2 += k_row.norm_sqr();
+        g_norm_l2 += g_row.norm_sqr();
+    }
+    let residual_absolute_l2 = residual_l2.sqrt();
+    let denominator = k_norm_l2.sqrt() + lambda.norm() * g_norm_l2.sqrt();
+    let residual_relative_l2 = if denominator > 0.0 {
+        residual_absolute_l2 / denominator
+    } else {
+        residual_absolute_l2
+    };
+    (residual_absolute_l2, residual_relative_l2, residual_linf)
+}
+
+fn native_modal_artifacts(
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    equilibrium: &[Vector3],
+    reduction: &ReductionMap,
+    bases: &[(Vector3, Vector3)],
+    modes: &[NativeModalEigenpair],
+    solver_diagnostics: serde_json::Value,
+    relaxation_steps: u64,
+) -> Result<Vec<AuxiliaryArtifact>, RunError> {
+    let requested_modes = requested_mode_indices(outputs);
+    let wants_spectrum = outputs
+        .iter()
+        .any(|output| matches!(output, OutputIR::EigenSpectrum { .. }));
+    let wants_dispersion = outputs
+        .iter()
+        .any(|output| matches!(output, OutputIR::DispersionCurve { .. }));
+    let gamma_rad_s_t = plan.gyromagnetic_ratio / MU0;
+    let gamma0_rad_s_per_a_m = plan.gyromagnetic_ratio;
+    let mu0_t_m_per_a = MU0;
+    let mut auxiliary_artifacts = Vec::new();
+    let mut modes_summary = Vec::with_capacity(modes.len());
+    let solver_backend = solver_diagnostics
+        .get("solver_backend")
+        .and_then(|value| value.as_str())
+        .unwrap_or("native_fem_modal_eigen");
+    let solver_kind = solver_diagnostics
+        .get("solver_model")
+        .or_else(|| solver_diagnostics.get("solver_kind"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("contour_interval_production_cpu_dense");
+    let spectral_transform = solver_diagnostics
+        .get("spectral_transform")
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown");
+    let resolved_solver_family = solver_diagnostics
+        .get("resolved_solver_family")
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown");
+    let shift_invert_backend =
+        spectral_transform == "shift_invert" || resolved_solver_family == "shift_invert";
+    let solver_notes = if shift_invert_backend {
+        "native FEM production CPU modal eigensolver using SLEPc shift-invert"
+    } else {
+        "native FEM production CPU modal eigensolver using dense contour interval search"
+    };
+    let solver_capabilities: Vec<&'static str> = if shift_invert_backend {
+        vec![
+            "native_modal_eigen",
+            "production_cpu",
+            "shift_invert",
+            "frequency_window_filter",
+        ]
+    } else {
+        vec![
+            "native_modal_eigen",
+            "production_cpu",
+            "contour_interval",
+            "frequency_window_filter",
+        ]
+    };
+    let solver_limitations: Vec<&'static str> = if shift_invert_backend {
+        vec![
+            "dense_operator_payload",
+            "window_count_certification_pending",
+        ]
+    } else {
+        vec![
+            "dense_operator_payload",
+            "block_diagonal_2x2_contour_payload",
+        ]
+    };
+
+    for (mode_index, mode) in modes.iter().enumerate() {
+        let (real, imag, amplitude, phase, max_amplitude) =
+            project_complex_2x2_mode_to_tangent_basis(
+                equilibrium.len(),
+                &reduction.active_nodes,
+                &mode.vector,
+                bases,
+            );
+        let norm = mode
+            .vector
+            .iter()
+            .map(|value| value.norm_sqr())
+            .sum::<f64>()
+            .sqrt();
+        let dominant_polarization = classify_polarization(
+            &amplitude,
+            &reduction.active_nodes,
+            equilibrium,
+            max_amplitude,
+        );
+        let (tangent_leakage_mean_abs, tangent_leakage_max_abs) =
+            mode_tangent_leakage(equilibrium, &real, &imag);
+        let mode_summary = serde_json::json!({
+            "index": mode_index,
+            "frequency_hz": mode.frequency_hz,
+            "frequency_real_hz": mode.frequency_hz,
+            "frequency_imag_hz": 0.0,
+            "angular_frequency_rad_per_s": mode.omega_rad_s,
+            "omega_rad_s": mode.omega_rad_s,
+            "angular_frequency_imag_rad_per_s": 0.0,
+            "eigenvalue_field_au_per_m": mode.omega_rad_s / plan.gyromagnetic_ratio,
+            "eigenvalue_real": mode.eigenvalue_real,
+            "eigenvalue_imag": mode.eigenvalue_imag,
+            "norm": norm,
+            "max_amplitude": max_amplitude,
+            "residual_norm": mode.residual_absolute_l2,
+            "residual_absolute_l2": mode.residual_absolute_l2,
+            "residual_relative_l2": mode.residual_relative_l2,
+            "residual_linf": mode.residual_linf,
+            "mass_norm": mode.mass_norm,
+            "tangent_leakage_mean_abs": tangent_leakage_mean_abs,
+            "tangent_leakage_max_abs": tangent_leakage_max_abs,
+            "gamma_rad_s_T": gamma_rad_s_t,
+            "gamma0_rad_s_per_A_m": gamma0_rad_s_per_a_m,
+            "mu0_T_m_per_A": mu0_t_m_per_a,
+            "dominant_polarization": dominant_polarization,
+            "k_vector": k_vector_json(plan.k_sampling.as_ref()),
+        });
+        modes_summary.push(mode_summary.clone());
+
+        if requested_modes.contains(&(mode_index as u32)) {
+            let payload = serde_json::json!({
+                "index": mode_index,
+                "frequency_hz": mode.frequency_hz,
+                "frequency_real_hz": mode.frequency_hz,
+                "frequency_imag_hz": 0.0,
+                "angular_frequency_rad_per_s": mode.omega_rad_s,
+                "omega_rad_s": mode.omega_rad_s,
+                "angular_frequency_imag_rad_per_s": 0.0,
+                "eigenvalue_real": mode.eigenvalue_real,
+                "eigenvalue_imag": mode.eigenvalue_imag,
+                "max_amplitude": max_amplitude,
+                "residual_norm": mode.residual_absolute_l2,
+                "residual_absolute_l2": mode.residual_absolute_l2,
+                "residual_relative_l2": mode.residual_relative_l2,
+                "residual_linf": mode.residual_linf,
+                "mass_norm": mode.mass_norm,
+                "tangent_leakage_mean_abs": tangent_leakage_mean_abs,
+                "tangent_leakage_max_abs": tangent_leakage_max_abs,
+                "gamma_rad_s_T": gamma_rad_s_t,
+                "gamma0_rad_s_per_A_m": gamma0_rad_s_per_a_m,
+                "mu0_T_m_per_A": mu0_t_m_per_a,
+                "normalization": normalization_label(plan.normalization),
+                "damping_policy": damping_policy_label(plan.damping_policy),
+                "solver_backend": solver_backend,
+                "solver_kind": solver_kind,
+                "solver_notes": solver_notes,
+                "solver_capabilities": solver_capabilities,
+                "solver_limitations": solver_limitations,
+                "dominant_polarization": dominant_polarization,
+                "k_vector": k_vector_json(plan.k_sampling.as_ref()),
+                "real": real,
+                "imag": imag,
+                "amplitude": amplitude,
+                "phase": phase,
+            });
+            auxiliary_artifacts.push(json_artifact(
+                format!("eigen/modes/mode_{mode_index:04}.json"),
+                &payload,
+            )?);
+        }
+    }
+
+    let summary_payload = serde_json::json!({
+        "study_kind": "eigenmodes",
+        "solver_backend": solver_backend,
+        "solver_kind": solver_kind,
+        "solver_notes": solver_notes,
+        "solver_capabilities": solver_capabilities,
+        "solver_limitations": solver_limitations,
+        "mesh_name": plan.mesh_name,
+        "mode_count": modes_summary.len(),
+        "normalization": normalization_label(plan.normalization),
+        "damping_policy": damping_policy_label(plan.damping_policy),
+        "spin_wave_bc": spin_wave_bc_label(plan.spin_wave_bc.clone()),
+        "boundary_config": spin_wave_bc_json(&plan.spin_wave_bc),
+        "equilibrium_source": equilibrium_source_json(&plan.equilibrium),
+        "included_terms": {
+            "exchange": plan.enable_exchange,
+            "demag": plan.enable_demag,
+            "zeeman": plan.external_field.is_some(),
+            "interfacial_dmi": plan.interfacial_dmi.is_some(),
+            "bulk_dmi": plan.bulk_dmi.is_some(),
+            "surface_anisotropy": plan.spin_wave_bc.surface_anisotropy_ks().is_some(),
+        },
+        "operator": {
+            "kind": format!("{:?}", plan.operator.kind).to_lowercase(),
+            "include_demag": plan.operator.include_demag,
+        },
+        "solver_diagnostics": solver_diagnostics,
+        "k_sampling": k_vector_json(plan.k_sampling.as_ref()),
+        "relaxation_steps": relaxation_steps,
+        "modes": modes_summary,
+    });
+
+    if wants_spectrum {
+        auxiliary_artifacts.push(json_artifact("eigen/spectrum.json", &summary_payload)?);
+    }
+    auxiliary_artifacts.push(json_artifact(
+        "eigen/metadata/eigen_summary.json",
+        &summary_payload,
+    )?);
+    auxiliary_artifacts.push(json_artifact(
+        "eigen/metadata/normalization.json",
+        &serde_json::json!({
+            "normalization": normalization_label(plan.normalization),
+            "mode_count": summary_payload["mode_count"],
+        }),
+    )?);
+    auxiliary_artifacts.push(json_artifact(
+        "eigen/metadata/equilibrium_source.json",
+        &equilibrium_source_json(&plan.equilibrium),
+    )?);
+
+    if wants_dispersion {
+        let k_vector = k_vector_json(plan.k_sampling.as_ref());
+        auxiliary_artifacts.push(json_artifact(
+            "eigen/dispersion/path.json",
+            &serde_json::json!({
+                "sampling": plan.k_sampling,
+                "k_vector": k_vector,
+            }),
+        )?);
+        auxiliary_artifacts.push(AuxiliaryArtifact {
+            relative_path: "eigen/dispersion/branch_table.csv".to_string(),
+            bytes: dispersion_csv(plan.k_sampling.as_ref(), &summary_payload["modes"]).into_bytes(),
+        });
+        auxiliary_artifacts.push(AuxiliaryArtifact {
+            relative_path: "eigen/dispersion.csv".to_string(),
+            bytes: dispersion_v2_csv(plan.k_sampling.as_ref(), &summary_payload["modes"])
+                .into_bytes(),
+        });
+    }
+    write_eigen_v2_bundle(
+        plan,
+        &summary_payload,
+        &requested_modes,
+        &mut auxiliary_artifacts,
+    )?;
+    auxiliary_artifacts
+        .retain(|artifact| artifact.relative_path != "eigen/diagnostics/solver.v1.json");
+    auxiliary_artifacts.push(json_artifact(
+        "eigen/diagnostics/solver.v1.json",
+        &summary_payload["solver_diagnostics"],
+    )?);
+    Ok(auxiliary_artifacts)
+}
+
+fn project_complex_2x2_mode_to_tangent_basis(
+    total_nodes: usize,
+    active_nodes: &[usize],
+    amplitudes: &[Complex64],
+    bases: &[(Vector3, Vector3)],
+) -> (Vec<Vector3>, Vec<Vector3>, Vec<f64>, Vec<f64>, f64) {
+    let n = active_nodes.len();
+    let mut real = vec![[0.0, 0.0, 0.0]; total_nodes];
+    let mut imag = vec![[0.0, 0.0, 0.0]; total_nodes];
+    let mut amplitude = vec![0.0; total_nodes];
+    let mut phase = vec![0.0; total_nodes];
+    let mut max_amplitude: f64 = 0.0;
+
+    for (reduced_index, node_index) in active_nodes.iter().enumerate() {
+        let u1 = amplitudes[reduced_index];
+        let u2 = amplitudes[reduced_index + n];
+        let (e1, e2) = bases[*node_index];
+        real[*node_index] = add_vector(scale_vector(e1, u1.re), scale_vector(e2, u2.re));
+        imag[*node_index] = add_vector(scale_vector(e1, u1.im), scale_vector(e2, u2.im));
+        let amp = (u1.norm_sqr() + u2.norm_sqr()).sqrt();
+        amplitude[*node_index] = amp;
+        phase[*node_index] = (u1.im + u2.im).atan2(u1.re + u2.re);
+        max_amplitude = max_amplitude.max(amp);
+    }
+
+    (real, imag, amplitude, phase, max_amplitude)
+}
+
 fn execution_provenance(plan: &FemEigenPlanIR, used_gpu: bool) -> ExecutionProvenance {
     let engine = if used_gpu {
         format!("gpu_cusolver_fem_eigen/{}", solver_kind_label(plan))
@@ -993,6 +1827,29 @@ fn execution_provenance(plan: &FemEigenPlanIR, used_gpu: bool) -> ExecutionProve
     ExecutionProvenance {
         execution_engine: engine,
         // FEM eigen baseline currently executes in double precision.
+        precision: "double".to_string(),
+        demag_operator_kind: resolved_demag.map(|r| r.provenance_name().to_string()),
+        requested_demag_realization: if plan.enable_demag {
+            plan.demag_realization
+                .map(|requested| demag_realization_label(requested).to_string())
+        } else {
+            None
+        },
+        resolved_demag_realization: resolved_demag
+            .map(|resolved| demag_realization_label(resolved).to_string()),
+        fft_backend: None,
+        device_name: None,
+        compute_capability: None,
+        cuda_driver_version: None,
+        cuda_runtime_version: None,
+        ..Default::default()
+    }
+}
+
+fn native_modal_execution_provenance(plan: &FemEigenPlanIR) -> ExecutionProvenance {
+    let resolved_demag = resolved_demag_realization(plan);
+    ExecutionProvenance {
+        execution_engine: format!("native_fem_modal_eigen/{NATIVE_CPU_MODAL_WINDOW_SOLVER_KIND}"),
         precision: "double".to_string(),
         demag_operator_kind: resolved_demag.map(|r| r.provenance_name().to_string()),
         requested_demag_realization: if plan.enable_demag {
@@ -3369,6 +4226,8 @@ fn modal_solver_diagnostics_json(
         "status": "ready",
         "complete": true,
         "solver_model": solver_model,
+        "resolved_solver_family": solver_model,
+        "spectral_transform": "none",
         "sample_count": 1,
         "mode_count": mode_count,
         "normalization": normalization_label(plan.normalization),
@@ -3396,13 +4255,16 @@ fn modal_solver_diagnostics_json(
             let sub_width = sub_max - sub_min;
             let search_min = (sub_min - guard_fraction * sub_width).max(0.0);
             let search_max = sub_max + guard_fraction * sub_width;
+            let shift_frequency_hz = 0.5 * (sub_min + sub_max);
             resolved_min_hz = resolved_min_hz.min(search_min);
             resolved_max_hz = resolved_max_hz.max(search_max);
             subwindows.push(serde_json::json!({
                 "index": index,
                 "requested_hz": [sub_min, sub_max],
                 "search_hz": [search_min, search_max],
-                "shift_hz": 0.5 * (sub_min + sub_max),
+                "shift_hz": shift_frequency_hz,
+                "shift_frequency_hz": shift_frequency_hz,
+                "shift_omega_rad_s": 2.0 * std::f64::consts::PI * shift_frequency_hz,
                 "outer_iterations": 0,
                 "linear_iterations_total": 0,
                 "candidate_modes": 0,
@@ -3925,6 +4787,18 @@ mod tests {
 
         assert_eq!(
             diagnostics
+                .get("resolved_solver_family")
+                .and_then(|value| value.as_str()),
+            Some("cpu_sparse_lobpcg")
+        );
+        assert_eq!(
+            diagnostics
+                .get("spectral_transform")
+                .and_then(|value| value.as_str()),
+            Some("none")
+        );
+        assert_eq!(
+            diagnostics
                 .get("window_completeness")
                 .and_then(|value| value.get("policy"))
                 .and_then(|value| value.as_str()),
@@ -3941,6 +4815,37 @@ mod tests {
             .get("subwindows")
             .and_then(|value| value.as_array())
             .is_some_and(|subwindows| !subwindows.is_empty()));
+        let first_subwindow = &diagnostics
+            .get("subwindows")
+            .and_then(|value| value.as_array())
+            .expect("subwindows must be present")[0];
+        let requested_hz = first_subwindow
+            .get("requested_hz")
+            .and_then(|value| value.as_array())
+            .expect("subwindow requested_hz must be present");
+        let expected_shift_frequency_hz = 0.5
+            * (requested_hz[0]
+                .as_f64()
+                .expect("requested lower bound must be numeric")
+                + requested_hz[1]
+                    .as_f64()
+                    .expect("requested upper bound must be numeric"));
+        let shift_frequency_hz = first_subwindow
+            .get("shift_frequency_hz")
+            .and_then(|value| value.as_f64())
+            .expect("subwindow shift_frequency_hz must be present");
+        let legacy_shift_hz = first_subwindow
+            .get("shift_hz")
+            .and_then(|value| value.as_f64())
+            .expect("subwindow shift_hz must be present");
+        assert_eq!(shift_frequency_hz, legacy_shift_hz);
+        assert_eq!(shift_frequency_hz, expected_shift_frequency_hz);
+        assert_eq!(
+            first_subwindow
+                .get("shift_omega_rad_s")
+                .and_then(|value| value.as_f64()),
+            Some(2.0 * std::f64::consts::PI * shift_frequency_hz)
+        );
     }
 
     #[test]
@@ -4075,5 +4980,131 @@ mod tests {
                 "missing modal diagnostics"
             );
         }
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn cpu_full_2x2_frequency_window_uses_native_modal_artifact_path() {
+        let mut plan = minimal_native_modal_plan();
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.damping_policy = EigenDampingPolicyIR::Ignore;
+        plan.k_sampling = None;
+        plan.count = 4;
+        plan.target = fullmag_ir::EigenTargetIR::FrequencyWindow {
+            frequency_min_hz: 1.0e3,
+            frequency_max_hz: 5.0e6,
+        };
+
+        let run = execute_cpu_fem_eigen(
+            &plan,
+            &[
+                OutputIR::EigenSpectrum {
+                    quantity: "frequency_hz".to_string(),
+                },
+                OutputIR::EigenMode {
+                    field: "mode".to_string(),
+                    indices: vec![0],
+                },
+            ],
+        )
+        .expect("eligible full 2x2 frequency window should use native modal production");
+
+        let summary = run
+            .auxiliary_artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == "eigen/metadata/eigen_summary.json")
+            .expect("native modal path must publish eigen summary");
+        let summary_json: serde_json::Value =
+            serde_json::from_slice(&summary.bytes).expect("summary should be JSON");
+        assert_eq!(
+            summary_json
+                .get("solver_backend")
+                .and_then(|value| value.as_str()),
+            Some("native_fem_modal_eigen")
+        );
+        assert_eq!(
+            summary_json
+                .get("solver_diagnostics")
+                .and_then(|value| value.get("execution_lane"))
+                .and_then(|value| value.as_str()),
+            Some("production_cpu")
+        );
+        assert_eq!(
+            summary_json
+                .get("solver_diagnostics")
+                .and_then(|value| value.get("solver_model"))
+                .and_then(|value| value.as_str()),
+            Some("slepc_multi_shift_invert_production_cpu_dense")
+        );
+        assert_eq!(
+            summary_json
+                .get("solver_kind")
+                .and_then(|value| value.as_str()),
+            Some("slepc_multi_shift_invert_production_cpu_dense")
+        );
+        assert!(
+            summary_json
+                .get("solver_capabilities")
+                .and_then(|value| value.as_array())
+                .is_some_and(|capabilities| capabilities
+                    .iter()
+                    .any(|value| value.as_str() == Some("shift_invert"))),
+            "{}",
+            summary_json
+        );
+        assert!(
+            summary_json
+                .get("solver_notes")
+                .and_then(|value| value.as_str())
+                .is_some_and(|notes| notes.contains("shift-invert")),
+            "{}",
+            summary_json
+        );
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn cpu_full_2x2_frequency_window_progress_and_provenance_report_shift_invert() {
+        let mut plan = minimal_native_modal_plan();
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.damping_policy = EigenDampingPolicyIR::Ignore;
+        plan.k_sampling = None;
+        plan.count = 4;
+        plan.target = fullmag_ir::EigenTargetIR::FrequencyWindow {
+            frequency_min_hz: 1.0e3,
+            frequency_max_hz: 5.0e6,
+        };
+
+        let mut progress_events = Vec::<FemEigenProgress>::new();
+        let mut progress = |event: FemEigenProgress| {
+            progress_events.push(event);
+            StepAction::Continue
+        };
+        let run = execute_cpu_fem_eigen_with_progress(
+            &plan,
+            &[OutputIR::EigenSpectrum {
+                quantity: "frequency_hz".to_string(),
+            }],
+            &mut progress,
+        )
+        .expect("native full 2x2 frequency window should solve with shift-invert");
+
+        assert!(
+            progress_events
+                .iter()
+                .any(|event| event.phase == "solving_native_shift_invert"
+                    && event.solver_kind == "slepc_multi_shift_invert_production_cpu_dense"),
+            "{progress_events:?}"
+        );
+        assert!(
+            progress_events
+                .iter()
+                .all(|event| event.solver_kind != "contour_interval_production_cpu_dense"),
+            "{progress_events:?}"
+        );
+        assert_eq!(
+            run.provenance.execution_engine,
+            "native_fem_modal_eigen/slepc_multi_shift_invert_production_cpu_dense"
+        );
     }
 }

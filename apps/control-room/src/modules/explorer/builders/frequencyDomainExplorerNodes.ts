@@ -219,9 +219,7 @@ function buildFrequencyDomainCalculationModesNode({
   const hasFmr = hasModalFmr || hasDrivenFmr || fmrPeaks.peaks.length > 0;
   const hasDispersion =
     dispersionModel.points.length > 0 || branchesModel.branches.length > 0;
-  const hasComputedFrequencyDomainResult = hasFmr || hasDispersion;
-  const responseMapAvailable =
-    manifest?.floquet_nonzero_k_response_supported === true;
+  const responseMap = responseMapResultState(manifest);
   const children = compactExplorerNodes([
     hasFmr
       ? {
@@ -257,17 +255,18 @@ function buildFrequencyDomainCalculationModesNode({
           status: "ready",
         }
       : null,
-    manifest && hasComputedFrequencyDomainResult
+    responseMap.show
       ? {
           id: `${parentId}:calculation-modes:response-map`,
           kind: "results.frequency_domain.response_map",
           label: "Response Map",
           parentId: `${parentId}:calculation-modes`,
-          badge: responseMapAvailable ? "available" : "unsupported",
+          artifactPath: responseMap.artifactPath,
+          badge: responseMap.badge,
           calculationMode: "response_map",
           icon: "gauge",
-          resourceRef: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
-          status: responseMapAvailable ? "ready" : "unsupported",
+          resourceRef: responseMap.resourceRef,
+          status: responseMap.status,
         }
       : null,
   ]);
@@ -288,6 +287,40 @@ function buildFrequencyDomainCalculationModesNode({
     icon: "settings",
     resourceRef: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
     status,
+  };
+}
+
+function responseMapResultState(
+  manifest: FrequencyDomainManifestResource | null | undefined,
+): {
+  artifactPath?: string;
+  badge: string;
+  resourceRef: string;
+  show: boolean;
+  status: ExplorerNodeStatus;
+} {
+  const requested =
+    manifestString(manifest, "requested_execution", "calculation_mode") ===
+    "response_map";
+  const artifactPath =
+    manifestString(manifest, "artifacts", "response_map_v2_path") ??
+    manifestString(manifest, "artifacts", "response_map_v1_path");
+  const resourceRef =
+    manifestString(manifest, "resources", "response_map_resource_key") ??
+    ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH;
+  const hasResourceRef =
+    resourceRef !== ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH;
+  const available =
+    Boolean(artifactPath) ||
+    hasResourceRef ||
+    manifest?.floquet_nonzero_k_response_supported === true;
+
+  return {
+    artifactPath,
+    badge: available ? "available" : "unsupported",
+    resourceRef,
+    show: requested || Boolean(artifactPath) || hasResourceRef,
+    status: available ? "ready" : "unsupported",
   };
 }
 

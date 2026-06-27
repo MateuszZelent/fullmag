@@ -115,6 +115,52 @@ copy_pkg_library_group() {
     ln -s "$resolved_name" "$dest_dir/${stem}.so"
   fi
 }
+copy_shared_library_dependency_closure() {
+  local initial_lib="$1"
+  local dest_dir=".fullmag/runtimes/fem-gpu-host/lib"
+  local pending=("$initial_lib")
+  local visited=" "
+  local skip_system_runtime_regex="/(ld-linux|ld64|libc|libdl|libm|libpthread|libresolv|librt|libutil|libgcc_s|libstdc\+\+)\.so"
+  while [ "${#pending[@]}" -gt 0 ]; do
+    local lib="${pending[0]}"
+    pending=("${pending[@]:1}")
+    local resolved
+    resolved="$(readlink -f "$lib" 2>/dev/null || true)"
+    if [ -z "$resolved" ] || [ ! -f "$resolved" ]; then
+      continue
+    fi
+    case "$visited" in
+      *" $resolved "*) continue ;;
+    esac
+    visited="${visited}${resolved} "
+    if [[ "$resolved" =~ $skip_system_runtime_regex ]]; then
+      continue
+    fi
+    local requested_name
+    requested_name="$(basename "$lib")"
+    local lib_name
+    lib_name="$(basename "$resolved")"
+    case "$resolved" in
+      /lib/*|/lib64/*|/usr/lib/*|/usr/lib64/*)
+        if [ -e "$lib" ] && [ ! -e "$dest_dir/$requested_name" ]; then
+          cp -a "$lib" "$dest_dir/"
+        fi
+        if [ ! -e "$dest_dir/$lib_name" ]; then
+          cp -a "$resolved" "$dest_dir/"
+        fi
+        ;;
+    esac
+    while IFS= read -r dep; do
+      pending+=("$dep")
+    done < <(
+      ldd "$resolved" \
+        | awk "
+            \$2 == \"=>\" && \$3 ~ /^\// { print \$3 }
+            \$1 ~ /^\// { print \$1 }
+          "
+    )
+  done
+}
 copy_pkg_include_dirs() {
   local pkg="$1"
   local dest="$2"
@@ -148,6 +194,8 @@ slepc_pkgconfig_dir="$(pkg-config --variable=pcfiledir SLEPc)"
 echo "[export_fem_gpu_runtime] bundling PETSc/SLEPc shared libraries"
 copy_pkg_library_group PETSc libpetsc_real
 copy_pkg_library_group SLEPc libslepc_real
+copy_shared_library_dependency_closure .fullmag/runtimes/fem-gpu-host/lib/libpetsc_real.so
+copy_shared_library_dependency_closure .fullmag/runtimes/fem-gpu-host/lib/libslepc_real.so
 for dep_entry in /opt/fullmag-deps/lib/*; do
   dep_name="$(basename "$dep_entry")"
   dep_dest=".fullmag/runtimes/fem-gpu-host/lib/$dep_name"

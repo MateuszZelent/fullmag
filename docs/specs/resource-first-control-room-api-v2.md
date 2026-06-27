@@ -307,6 +307,10 @@ download full-domain data just to filter large FEM payloads client-side.
 FEM vector field payloads use versioned FMVP. FMVP v3 includes
 `domain_generation_id`, mesh topology revision/hash, scope kind/id, an indexing
 mode, and `node_indices` for explicit or sampled non-full-domain payloads.
+Clients must preserve `domain_generation_id` and mesh topology revision as
+exact revision tokens. JavaScript clients must not coerce FMVP v3 `u64`
+metadata into `number`, because valid backend revisions may exceed
+`Number.MAX_SAFE_INTEGER`.
 `sampled_node_indices` payloads are valid for vector glyph placement only;
 surface shaders require `full_domain` or `explicit_node_indices` data that can
 be matched to the target topology. FMVP v2 remains a legacy full-domain

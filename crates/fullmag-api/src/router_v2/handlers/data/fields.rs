@@ -1087,6 +1087,8 @@ fn required_scope_id<'a>(
 }
 
 fn object_ids_match(a: &str, b: &str) -> bool {
+    let a = a.strip_prefix("object:").unwrap_or(a);
+    let b = b.strip_prefix("object:").unwrap_or(b);
     if a == b {
         return true;
     }

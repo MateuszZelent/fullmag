@@ -1209,6 +1209,27 @@ describe("ControlRoomApi", () => {
     );
   });
 
+  it("normalizes object-prefixed field vector scope ids for object scopes", async () => {
+    let observedUrl = "";
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url) => {
+        observedUrl = String(url);
+        return binaryResponse(makeFieldVectorBuffer());
+      },
+    });
+
+    await api.data.fields.vector("m", {
+      component: "full",
+      scope_id: "object:permalloy_layer",
+      scope_kind: "object",
+    });
+
+    expect(observedUrl).toBe(
+      "http://127.0.0.1:8765/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_id=permalloy_layer&scope_kind=object",
+    );
+  });
+
   it("loads scalar windows through the v2 data facade", async () => {
     let observedUrl = "";
     const fetchImpl = vi.fn(async (url: RequestInfo | URL) => {

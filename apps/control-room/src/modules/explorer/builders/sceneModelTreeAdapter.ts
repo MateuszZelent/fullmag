@@ -703,6 +703,15 @@ function sceneStudyStageSnapshot(
 
   return {
     artifactName: stringValue(stage.artifact_name),
+    boundaryCondition:
+      boundaryConditionKind(stage.bc) ??
+      boundaryConditionKind(stage.spin_wave_bc) ??
+      boundaryConditionKind(stage.eigen_spin_wave_bc) ??
+      boundaryConditionKind(stage.frequency_spin_wave_bc),
+    calculationMode:
+      stringValue(stage.calculation_mode) ??
+      stringValue(stage.eigen_calculation_mode) ??
+      stringValue(stage.frequency_calculation_mode),
     device: stringValue(stage.device),
     energyTolerance: scalarText(stage.energy_tolerance),
     hysteresisBranchMode: stringValue(stage.branch_mode) ?? stringValue(stage.branchMode),
@@ -717,11 +726,31 @@ function sceneStudyStageSnapshot(
     hysteresisSettleSteps: hysteresisSettleSteps(stage.settle_pipeline),
     index,
     kind,
+    kSamplingKind:
+      kSamplingKind(stage.k_sampling) ??
+      kSamplingKind(stage.eigen_k_sampling) ??
+      kSamplingKind(stage.frequency_k_sampling),
     maxSteps: scalarText(stage.max_steps),
     stageId: stringValue(stage.stage_id) ?? stringValue(stage.id),
     torqueTolerance: stageTorqueToleranceApm(stage),
     untilSeconds: scalarText(stage.until_seconds),
   };
+}
+
+function boundaryConditionKind(value: unknown): string | null {
+  const record = recordValue(value);
+  return stringValue(record?.kind) ?? stringValue(value);
+}
+
+function kSamplingKind(value: unknown): string | null {
+  const record = recordValue(value);
+  if (!record) return null;
+  const kind = stringValue(record.kind);
+  if (kind) return kind;
+  if (record.path != null) return "path";
+  if (record.grid != null) return "grid";
+  if (record.points != null || record.vectors != null) return "explicit";
+  return null;
 }
 
 function hysteresisSaturationMode(value: unknown): string | null {

@@ -1,21 +1,21 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use axum::extract::{Path, Query, State};
 use axum::Json;
+use axum::extract::{Path, Query, State};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
 use crate::analysis::topological_charge::{
-    compute_topological_charge_grid, TopologicalChargeInput, TopologicalChargeWarningCode,
+    TopologicalChargeInput, TopologicalChargeWarningCode, compute_topological_charge_grid,
 };
 use crate::error::ApiError;
 use crate::fem_slice::fem_tetra_linear_slice;
-use crate::field_slice::{resolve_slice_query, FemField, FieldSliceQuery, SlicePlane};
+use crate::field_slice::{FemField, FieldSliceQuery, SlicePlane, resolve_slice_query};
 use crate::router_v2::handlers::data::field_resolution::{
     flatten_json_field_values, json_field_grid, live_magnetization_values,
 };
-use crate::router_v2::handlers::sessions::status::field_quantity_revision;
+use crate::router_v2::handlers::sessions::status::{domain_generation_id, field_quantity_revision};
 use crate::types::AppState;
 
 #[derive(Debug, Clone, Deserialize, IntoParams, ToSchema)]
@@ -173,16 +173,21 @@ pub async fn get_object_topological_charge(
     let mesh_surface_incomplete = mesh.is_some_and(|mesh| {
         sampled_result.is_none() && object_mesh_surface_incomplete(mesh, &object.id)
     });
+    let sampled_result_has_valid_samples = sampled_result
+        .as_ref()
+        .is_some_and(|result| result.result.valid_sample_count > 0);
     let status = match (
         field_summary.as_ref(),
         sampled_result.as_ref(),
+        sampled_result_has_valid_samples,
         mesh_missing,
     ) {
-        (None, _, _) => TopologicalChargeStatus::FieldMissing,
-        (Some(_), Some(_), true) => TopologicalChargeStatus::Ready,
-        (Some(_), None, true) => TopologicalChargeStatus::MeshMissing,
-        (Some(_), Some(_), false) => TopologicalChargeStatus::Ready,
-        (Some(_), None, false) => TopologicalChargeStatus::UnsupportedGeometry,
+        (None, _, _, _) => TopologicalChargeStatus::FieldMissing,
+        (Some(_), Some(_), false, _) => TopologicalChargeStatus::InsufficientSamples,
+        (Some(_), Some(_), true, true) => TopologicalChargeStatus::Ready,
+        (Some(_), None, _, true) => TopologicalChargeStatus::MeshMissing,
+        (Some(_), Some(_), true, false) => TopologicalChargeStatus::Ready,
+        (Some(_), None, _, false) => TopologicalChargeStatus::UnsupportedGeometry,
     };
     let warnings = topological_charge_warnings(
         &status,
@@ -194,7 +199,9 @@ pub async fn get_object_topological_charge(
         sampled_result.as_ref(),
         mesh_surface_incomplete,
     );
-    let charge: Option<f64> = sampled_result.as_ref().map(|result| result.result.charge);
+    let charge: Option<f64> = matches!(status, TopologicalChargeStatus::Ready)
+        .then(|| sampled_result.as_ref().map(|result| result.result.charge))
+        .flatten();
     let nearest_integer = charge.map(|value| value.round() as i64);
     let integer_error = charge
         .zip(nearest_integer)
@@ -247,7 +254,7 @@ pub async fn get_object_topological_charge(
             |result| result.result.valid_sample_count,
         ),
         field_revision,
-        domain_generation_id: None,
+        domain_generation_id: Some(domain_generation_id(snapshot).to_string()),
         mesh_generation_id: mesh.and_then(|mesh| mesh.generation_id.clone()),
         mesh_revision: mesh.map(|_| snapshot.mesh_revision.max(1)),
         computed_at_unix_ms: 0,

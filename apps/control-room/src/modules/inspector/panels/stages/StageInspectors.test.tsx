@@ -308,8 +308,6 @@ describe("Study stage inspectors", () => {
         "Requested vs resolved execution",
         "Validate stage",
         "Run modal stage",
-        "Open latest spectrum",
-        "Open latest dispersion",
         "Export canonical Python",
       ],
     ],
@@ -331,8 +329,6 @@ describe("Study stage inspectors", () => {
         "Latest progress",
         "Validate driven response",
         "Run response sweep",
-        "Open latest sweep",
-        "Open strongest FMR peak",
         "Export canonical Python",
       ],
     ],
@@ -352,13 +348,10 @@ describe("Study stage inspectors", () => {
           : /<button[^>]*class="[^"]*fm-button[^"]*"[^>]*>.*Run response sweep.*<\/button>/,
       );
       expect(html).toContain(
-        '<span class="fm-inspector-field-row__value">Result artifact is not available yet</span>',
-      );
-      expect(html).toContain(
         '<span class="fm-inspector-field-row__value">Canonical Python export is available after the saved stage patch is materialized</span>',
       );
       expect(html).not.toMatch(
-        /<button[^>]*disabled=""[^>]*>(?:Run modal stage|Run response sweep|Open latest spectrum|Open latest dispersion|Open latest sweep|Open strongest FMR peak|Export canonical Python)<\/button>/,
+        /<button[^>]*disabled=""[^>]*>(?:Run modal stage|Run response sweep|Export canonical Python)<\/button>/,
       );
       if (kind === "frequency_response") {
         expect(html).toContain(
@@ -541,11 +534,9 @@ describe("Study stage inspectors", () => {
 
     expect(html).toContain("Equilibrium");
     expect(html).toContain("Eq artifact");
-    expect(html).toContain("Modal Equilibrium Contract");
+    expect(html).toContain("Linearization Point");
     expect(html).toContain("Physics invariant");
     expect(html).toContain("m0 x H0 ~= 0; |m0| = 1");
-    expect(html).toContain("Residual summary");
-    expect(html).toContain("unavailable until relaxation/static-state artifact exists");
     expect(html).toContain("State provenance");
     expect(html).toContain("relaxed initial state");
     expect(html).toContain("Artifact readiness");
@@ -563,13 +554,11 @@ describe("Study stage inspectors", () => {
       ["authoring", "frequency-response-equilibrium-detail"],
     );
 
-    expect(html).toContain("Driven Response Equilibrium Contract");
+    expect(html).toContain("Linearization Point");
     expect(html).toContain("Response readiness");
     expect(html).toContain("same equilibrium can be reused for modal comparison");
     expect(html).toContain("Provenance link");
     expect(html).toContain("provided current state");
-    expect(html).toContain("Residual status");
-    expect(html).toContain("missing until runtime provides residual diagnostics");
     expect(html).toContain("Artifact readiness");
     expect(html).toContain("no artifact required for provided source");
     expect(html).not.toContain("Modal Setup Contract");
@@ -605,7 +594,7 @@ describe("Study stage inspectors", () => {
       ["authoring", "eigenmodes-setup-detail"],
     );
 
-    expect(html).toContain("Modal Setup Contract");
+    expect(html).toContain("Study Settings");
     expect(html).toContain("Mode request");
     expect(html).toContain("count 10; target lowest");
     expect(html).toContain("Operator preset");
@@ -626,15 +615,15 @@ describe("Study stage inspectors", () => {
       ["authoring", "eigenmodes-solver-detail"],
     );
 
-    expect(html).toContain("Modal Solver Contract");
+    expect(html).toContain("Solver Configuration");
     expect(html).toContain("Requested execution");
     expect(html).toContain("cpu; backend/device/precision resolved by planner");
     expect(html).toContain("Solver lane");
-    expect(html).toContain("dense/reference now; production eigensolver capability-gated");
+    expect(html).toContain("native SLEPc shift-invert modal lane with reference CPU parity path");
     expect(html).toContain("Tolerance policy");
-    expect(html).toContain("backend default until solver contract exposes fields");
-    expect(html).toContain("Latest convergence");
-    expect(html).toContain("not available until eigen diagnostics artifact exists");
+    expect(html).toContain("residual, window, and tangent-space checks are published through eigen diagnostics");
+    expect(html).toContain("Progress");
+    expect(html).toContain("0%");
     expect(html).toContain("Runtime metric");
     expect(html).toContain("not available");
     expect(html).not.toContain("Driven Response Solver Contract");
@@ -664,7 +653,7 @@ describe("Study stage inspectors", () => {
       ["authoring", "eigenmodes-operator-detail"],
     );
 
-    expect(html).toContain("Modal Operator Contract");
+    expect(html).toContain("Physics and Variables");
     expect(html).toContain("linearized LLG tangent-space eigenproblem");
     expect(html).toContain("Demag term");
     expect(html).toContain("included");
@@ -694,7 +683,7 @@ describe("Study stage inspectors", () => {
     expect(html).toContain("k sampling");
     expect(html).toContain("Gamma/free FMR when empty; dispersion_modal when nonzero k-path is set");
     expect(html).toContain("Demag-k gate");
-    expect(html).toContain("nonzero-k demag remains capability-gated");
+    expect(html).toContain("nonzero-k demag readiness is reported in diagnostics");
     expect(html).not.toContain("Driven Sweep Contract");
   });
 
@@ -707,11 +696,11 @@ describe("Study stage inspectors", () => {
       ["authoring", "eigenmodes-boundary-detail"],
     );
 
-    expect(html).toContain("Modal Boundary Contract");
+    expect(html).toContain("Boundary");
     expect(html).toContain("Boundary condition");
     expect(html).toContain("free");
     expect(html).toContain("Supported choices");
-    expect(html).toContain("free/open; pinned capability-gated; static periodic; Floquet/Bloch");
+    expect(html).toContain("free/open; static periodic; Floquet/Bloch");
     expect(html).toContain("Periodic pair requirement");
     expect(html).toContain("static periodic and Floquet require validated periodic pairs");
     expect(html).toContain("Single-k vector");
@@ -750,6 +739,108 @@ describe("Study stage inspectors", () => {
     expect(html).not.toContain("free_modes");
   });
 
+  it("does not expose generic contract copy in frequency-domain stage child inspectors", () => {
+    const eigenViews = [
+      "setup",
+      "equilibrium",
+      "solver",
+      "operator",
+      "diagnostics",
+      "outputs",
+      "boundary",
+      "periodic_pairs",
+      "k_sampling",
+      "k_path",
+    ] as const;
+    const responseViews = [
+      "setup",
+      "excitation",
+      "equilibrium",
+      "solver",
+      "sweep",
+      "outputs",
+      "diagnostics",
+      "boundary",
+      "periodic_pairs",
+      "k_grid",
+    ] as const;
+
+    const html = [
+      ...eigenViews.map((authoringView) =>
+        render(
+          <EigenmodesStageInspector
+            {...props("eigenmodes")}
+            authoringView={authoringView}
+          />,
+          ["authoring"],
+        ),
+      ),
+      ...responseViews.map((authoringView) =>
+        render(
+          <FrequencyResponseStageInspector
+            {...props("frequency_response")}
+            authoringView={authoringView}
+          />,
+          ["authoring"],
+        ),
+      ),
+    ].join("\n");
+
+    expect(html).not.toContain("Contract");
+  });
+
+  it("does not expose future-resource placeholder rows in frequency-domain child inspectors", () => {
+    const eigenViews = [
+      ["setup", "eigenmodes-setup-detail"],
+      ["equilibrium", "eigenmodes-equilibrium-detail"],
+      ["solver", "eigenmodes-solver-detail"],
+      ["operator", "eigenmodes-operator-detail"],
+      ["diagnostics", "eigenmodes-diagnostics-detail"],
+      ["outputs", "eigenmodes-outputs-detail"],
+      ["boundary", "eigenmodes-boundary-detail"],
+      ["periodic_pairs", "eigenmodes-periodic-pairs-detail"],
+      ["k_sampling", "eigenmodes-k-sampling-detail"],
+      ["k_path", "eigenmodes-k-path-detail"],
+    ] as const;
+    const responseViews = [
+      ["setup", "frequency-response-setup-detail"],
+      ["excitation", "frequency-response-excitation-detail"],
+      ["equilibrium", "frequency-response-equilibrium-detail"],
+      ["solver", "frequency-response-solver-detail"],
+      ["sweep", "frequency-response-sweep-detail"],
+      ["outputs", "frequency-response-outputs-detail"],
+      ["diagnostics", "frequency-response-diagnostics-detail"],
+      ["boundary", "frequency-response-boundary-detail"],
+      ["periodic_pairs", "frequency-response-periodic-pairs-detail"],
+      ["k_grid", "frequency-response-k-grid-detail"],
+    ] as const;
+
+    const html = [
+      ...eigenViews.map(([authoringView, detail]) =>
+        render(
+          <EigenmodesStageInspector
+            {...props("eigenmodes")}
+            authoringView={authoringView}
+          />,
+          ["authoring", detail],
+        ),
+      ),
+      ...responseViews.map(([authoringView, detail]) =>
+        render(
+          <FrequencyResponseStageInspector
+            {...props("frequency_response")}
+            authoringView={authoringView}
+          />,
+          ["authoring", detail],
+        ),
+      ),
+    ].join("\n");
+
+    expect(html).not.toMatch(
+      /not applicable|not available until|unavailable until|missing until|backend default until|capability-gated|Result artifact is not available yet/i,
+    );
+  });
+
   it("renders driven response setup semantics in the response setup child view", () => {
     const html = render(
       <FrequencyResponseStageInspector
@@ -759,11 +850,9 @@ describe("Study stage inspectors", () => {
       ["authoring", "frequency-response-setup-detail"],
     );
 
-    expect(html).toContain("Driven Response Setup Contract");
+    expect(html).toContain("Study Settings");
     expect(html).toContain("Direct solve");
     expect(html).toContain("(i omega B - L) q = f");
-    expect(html).toContain("Time integrator");
-    expect(html).toContain("not applicable");
     expect(html).toContain("Executable lane");
     expect(html).toContain("FEM magnetic-only CPU response; double precision");
     expect(html).toContain("Frequency summary");
@@ -780,15 +869,15 @@ describe("Study stage inspectors", () => {
       ["authoring", "frequency-response-solver-detail"],
     );
 
-    expect(html).toContain("Driven Response Solver Contract");
+    expect(html).toContain("Solver Configuration");
     expect(html).toContain("Requested execution");
     expect(html).toContain("cpu; double precision production slice");
     expect(html).toContain("Solver lane");
     expect(html).toContain("matrix_free_solver; krylov_solver = gmres");
     expect(html).toContain("Tolerance policy");
-    expect(html).toContain("backend default until solver contract exposes fields");
-    expect(html).toContain("Completed frequencies");
-    expect(html).toContain("not available until progress resource exists");
+    expect(html).toContain("response residuals and solver status are published through response diagnostics");
+    expect(html).toContain("Progress");
+    expect(html).toContain("0%");
     expect(html).toContain("Unsupported lanes");
     expect(html).toContain("GPU response, single precision, nonzero-k response, magnetoelastic response");
     expect(html).not.toContain("Modal Solver Contract");
@@ -803,7 +892,7 @@ describe("Study stage inspectors", () => {
       ["authoring", "frequency-response-excitation-detail"],
     );
 
-    expect(html).toContain("Driven Excitation Contract");
+    expect(html).toContain("Excitation");
     expect(html).toContain("Drive vector");
     expect(html).toContain("0, 0, 1 A/m");
     expect(html).toContain("Excitation phase");
@@ -815,7 +904,7 @@ describe("Study stage inspectors", () => {
     expect(html).toContain("Phase validation");
     expect(html).toContain("finite phase");
     expect(html).toContain("Source selector");
-    expect(html).toContain("field phasor now; antenna/source capability-gated");
+    expect(html).toContain("field phasor; antenna/source support is reported in diagnostics");
     expect(html).toContain("Projection");
     expect(html).toContain("projected into local tangent plane");
     expect(html).toContain("Phasor convention");
@@ -832,7 +921,7 @@ describe("Study stage inspectors", () => {
       ["authoring", "frequency-response-sweep-detail"],
     );
 
-    expect(html).toContain("Driven Sweep Contract");
+    expect(html).toContain("Frequency Sweep");
     expect(html).toContain("Frequency grid");
     expect(html).toContain("1 GHz");
     expect(html).toContain("Frequency count");
@@ -861,7 +950,7 @@ describe("Study stage inspectors", () => {
       ["authoring", "frequency-response-boundary-detail"],
     );
 
-    expect(html).toContain("Driven Response Boundary Contract");
+    expect(html).toContain("Boundary");
     expect(html).toContain("Boundary condition");
     expect(html).toContain("free");
     expect(html).toContain("Current production slice");
@@ -886,7 +975,7 @@ describe("Study stage inspectors", () => {
       ["authoring", "frequency-response-outputs-detail"],
     );
 
-    expect(html).toContain("Driven Response Outputs Contract");
+    expect(html).toContain("Output");
     expect(html).toContain("Primary observable");
     expect(html).toContain("susceptibility_tensor");
     expect(html).toContain("Complex magnetization response");
@@ -917,7 +1006,7 @@ describe("Study stage inspectors", () => {
       ["authoring", "eigenmodes-diagnostics-detail"],
     );
 
-    expect(html).toContain("Modal Diagnostics Contract");
+    expect(html).toContain("Diagnostics");
     expect(html).toContain("UI validation");
     expect(html).toContain("valid");
     expect(html).toContain("IR validation");
@@ -925,7 +1014,7 @@ describe("Study stage inspectors", () => {
     expect(html).toContain("Planner diagnostics");
     expect(html).toContain("backend/device/precision resolved during planning");
     expect(html).toContain("Capability matrix");
-    expect(html).toContain("reference CPU modal path ready; production modal solver capability-gated");
+    expect(html).toContain("reference CPU modal path ready; native production modal readiness is reported in diagnostics");
     expect(html).toContain("Eigen diagnostics artifact");
     expect(html).toContain("eigen/diagnostics.v2.json");
     expect(html).toContain("Mode field diagnostics");
@@ -942,7 +1031,7 @@ describe("Study stage inspectors", () => {
       ["authoring", "eigenmodes-outputs-detail"],
     );
 
-    expect(html).toContain("Modal Outputs Contract");
+    expect(html).toContain("Output");
     expect(html).toContain("Spectrum output");
     expect(html).toContain("eigen/spectrum.v2.json for modal FMR and free-mode tables");
     expect(html).toContain("Mode metadata");
@@ -971,7 +1060,7 @@ describe("Study stage inspectors", () => {
       ["authoring", "frequency-response-diagnostics-detail"],
     );
 
-    expect(html).toContain("Driven Response Diagnostics Contract");
+    expect(html).toContain("Diagnostics");
     expect(html).toContain("UI validation");
     expect(html).toContain("valid");
     expect(html).toContain("IR validation");

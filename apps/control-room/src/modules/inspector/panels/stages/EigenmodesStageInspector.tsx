@@ -51,7 +51,7 @@ function renderEigenmodesStageInspector(props: StageInspectorFrameProps) {
       {authoringView === "setup" ? (
         <InspectorSection
           value="eigenmodes-setup-detail"
-          title="Modal Setup Contract"
+          title="Study Settings"
           badge={draft?.target ?? "target"}
         >
           <FieldRow
@@ -87,10 +87,6 @@ function renderEigenmodesStageInspector(props: StageInspectorFrameProps) {
             value="FMR modal spectrum / free modes / dispersion"
           />
           <FieldRow
-            label="Mesh DOF estimate"
-            value="not available until FEM mesh resource is built"
-          />
-          <FieldRow
             label="Non-uniform equilibrium"
             value="valid only when the selected operator supports tangent-space linearization"
           />
@@ -99,7 +95,7 @@ function renderEigenmodesStageInspector(props: StageInspectorFrameProps) {
       {authoringView === "equilibrium" ? (
         <InspectorSection
           value="eigenmodes-equilibrium-detail"
-          title="Modal Equilibrium Contract"
+          title="Linearization Point"
           badge={equilibriumSummary.source}
         >
           <FieldRow
@@ -109,10 +105,6 @@ function renderEigenmodesStageInspector(props: StageInspectorFrameProps) {
           <FieldRow
             label="Physics invariant"
             value="m0 x H0 ~= 0; |m0| = 1"
-          />
-          <FieldRow
-            label="Residual summary"
-            value="unavailable until relaxation/static-state artifact exists"
           />
           <FieldRow
             label="State provenance"
@@ -131,7 +123,7 @@ function renderEigenmodesStageInspector(props: StageInspectorFrameProps) {
       {authoringView === "solver" ? (
         <InspectorSection
           value="eigenmodes-solver-detail"
-          title="Modal Solver Contract"
+          title="Solver Configuration"
           badge={draft?.deviceTarget ?? "device"}
         >
           <FieldRow
@@ -144,19 +136,19 @@ function renderEigenmodesStageInspector(props: StageInspectorFrameProps) {
           />
           <FieldRow
             label="Solver lane"
-            value="dense/reference now; production eigensolver capability-gated"
+            value="native SLEPc shift-invert modal lane with reference CPU parity path"
           />
           <FieldRow
             label="Tolerance policy"
-            value="backend default until solver contract exposes fields"
+            value="residual, window, and tangent-space checks are published through eigen diagnostics"
           />
           <FieldRow
             label="Plan fields"
             value="mesh, FE order, hmax, precision, exchange BC, demag realization, gamma"
           />
           <FieldRow
-            label="Latest convergence"
-            value="not available until eigen diagnostics artifact exists"
+            label="Progress"
+            value={`${stage?.progressPercent ?? 0}%`}
           />
           <FieldRow
             label="Runtime metric"
@@ -171,7 +163,7 @@ function renderEigenmodesStageInspector(props: StageInspectorFrameProps) {
       {authoringView === "operator" ? (
         <InspectorSection
           value="eigenmodes-operator-detail"
-          title="Modal Operator Contract"
+          title="Physics and Variables"
           badge="linearized LLG"
         >
           <FieldRow
@@ -203,7 +195,7 @@ function renderEigenmodesStageInspector(props: StageInspectorFrameProps) {
       {authoringView === "diagnostics" ? (
         <InspectorSection
           value="eigenmodes-diagnostics-detail"
-          title="Modal Diagnostics Contract"
+          title="Diagnostics"
           badge={validationSummary.badge}
         >
           <FieldRow label="UI validation" value={validationSummary.summary} />
@@ -217,7 +209,7 @@ function renderEigenmodesStageInspector(props: StageInspectorFrameProps) {
           />
           <FieldRow
             label="Capability matrix"
-            value="reference CPU modal path ready; production modal solver capability-gated"
+            value="reference CPU modal path ready; native production modal readiness is reported in diagnostics"
           />
           <FieldRow
             label="Eigen diagnostics artifact"
@@ -240,7 +232,7 @@ function renderEigenmodesStageInspector(props: StageInspectorFrameProps) {
       {authoringView === "outputs" ? (
         <InspectorSection
           value="eigenmodes-outputs-detail"
-          title="Modal Outputs Contract"
+          title="Output"
           badge={draft?.target ?? "outputs"}
         >
           <FieldRow
@@ -284,13 +276,13 @@ function renderEigenmodesStageInspector(props: StageInspectorFrameProps) {
       {authoringView === "boundary" ? (
         <InspectorSection
           value="eigenmodes-boundary-detail"
-          title="Modal Boundary Contract"
+          title="Boundary"
           badge={draft?.bc || "free"}
         >
           <FieldRow label="Boundary condition" value={draft?.bc || "free"} />
           <FieldRow
             label="Supported choices"
-            value="free/open; pinned capability-gated; static periodic; Floquet/Bloch"
+            value="free/open; static periodic; Floquet/Bloch"
           />
           <FieldRow
             label="Periodic pair requirement"
@@ -322,7 +314,7 @@ function renderEigenmodesStageInspector(props: StageInspectorFrameProps) {
       {authoringView === "periodic_pairs" ? (
         <InspectorSection
           value="eigenmodes-periodic-pairs-detail"
-          title="Modal Periodic Pair Contract"
+          title="Periodic Pairs"
           badge={draft?.bc || "periodic pairs"}
         >
           <FieldRow label="Boundary condition" value={draft?.bc || "free"} />
@@ -340,7 +332,7 @@ function renderEigenmodesStageInspector(props: StageInspectorFrameProps) {
           />
           <FieldRow
             label="Demag-k gate"
-            value="nonzero-k dynamic demag remains capability-gated"
+            value="nonzero-k dynamic demag readiness is reported in diagnostics"
           />
         </InspectorSection>
       ) : null}
@@ -353,7 +345,7 @@ function renderEigenmodesStageInspector(props: StageInspectorFrameProps) {
           }
           title={
             authoringView === "k_path"
-              ? "Modal k-Path Contract"
+              ? "k-Path"
               : "Modal k-Space Sampling"
           }
           badge={draft?.bc || "free"}
@@ -367,7 +359,7 @@ function renderEigenmodesStageInspector(props: StageInspectorFrameProps) {
           />
           <FieldRow
             label="Demag-k gate"
-            value="nonzero-k demag remains capability-gated"
+            value="nonzero-k demag readiness is reported in diagnostics"
           />
           <FieldRow
             label="Expected result"
@@ -431,7 +423,7 @@ function renderEigenmodesStageInspector(props: StageInspectorFrameProps) {
           />
           <FieldRow
             label="Capability status"
-            value="modal reference CPU ready; production modal solver capability-gated"
+            value="modal reference CPU ready; native production modal readiness is reported in diagnostics"
           />
           <FieldRow
             label="Latest manifest links"
@@ -469,14 +461,6 @@ function renderEigenmodesStageInspector(props: StageInspectorFrameProps) {
           {runModalDisabledReason ? (
             <FieldRow label="Run readiness" value={runModalDisabledReason} />
           ) : null}
-          <FieldRow
-            label="Open latest spectrum"
-            value="Result artifact is not available yet"
-          />
-          <FieldRow
-            label="Open latest dispersion"
-            value="Result artifact is not available yet"
-          />
           <FieldRow
             label="Export canonical Python"
             value="Canonical Python export is available after the saved stage patch is materialized"

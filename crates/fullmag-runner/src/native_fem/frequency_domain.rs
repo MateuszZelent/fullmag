@@ -187,6 +187,8 @@ pub(crate) struct NativeModalEigenRequest<'a> {
     pub cancel_requested: Option<&'a NativeFrequencyDomainCancelCallback<'a>>,
     pub progress_callback: Option<&'a NativeModalEigenProgressCallback<'a>>,
     pub tiny_validation_problem: Option<NativeModalEigenTinyValidationProblem<'a>>,
+    pub mfem_operator_problem: Option<NativeModalEigenMfemOperatorProblem<'a>>,
+    pub mfem_sparse_operator_problem: Option<NativeModalEigenSparseOperatorProblem<'a>>,
 }
 
 #[derive(Debug, Clone)]
@@ -197,6 +199,33 @@ pub(crate) struct NativeModalEigenTinyValidationProblem<'a> {
     pub mass_matrix_row_major: Option<&'a [f64]>,
     pub stiffness_diagonal: Option<&'a [f64]>,
     pub mass_diagonal: Option<&'a [f64]>,
+}
+
+#[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
+pub(crate) struct NativeModalEigenMfemOperatorProblem<'a> {
+    pub tangent_dof_count: u64,
+    pub stiffness_matrix_row_major: Option<&'a [f64]>,
+    pub gyrotropic_matrix_row_major: Option<&'a [f64]>,
+    pub mass_matrix_row_major: Option<&'a [f64]>,
+}
+
+#[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
+pub(crate) struct NativeModalEigenCsrMatrixView<'a> {
+    pub row_count: u64,
+    pub column_count: u64,
+    pub row_offsets: &'a [u32],
+    pub column_indices: &'a [u32],
+    pub values: &'a [f64],
+}
+
+#[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
+pub(crate) struct NativeModalEigenSparseOperatorProblem<'a> {
+    pub stiffness_csr: NativeModalEigenCsrMatrixView<'a>,
+    pub gyrotropic_csr: NativeModalEigenCsrMatrixView<'a>,
+    pub mass_csr: NativeModalEigenCsrMatrixView<'a>,
 }
 
 #[derive(Clone)]
@@ -237,6 +266,8 @@ pub(crate) struct NativeFrequencyDomainContractResult {
 pub(crate) fn solve_native_driven_frequency_response(
     request: NativeDrivenFrequencyResponseRequest<'_>,
 ) -> Result<NativeDrivenFrequencyResponseResult, String> {
+    #[cfg(feature = "fem-gpu")]
+    super::configure_managed_openmpi_environment();
     solve_native_driven_frequency_response_impl(request)
 }
 
@@ -244,6 +275,8 @@ pub(crate) fn solve_native_driven_frequency_response(
 pub(crate) fn solve_native_modal_eigen(
     request: NativeModalEigenRequest<'_>,
 ) -> Result<NativeFrequencyDomainContractResult, String> {
+    #[cfg(feature = "fem-gpu")]
+    super::configure_managed_openmpi_environment();
     solve_native_modal_eigen_impl(request)
 }
 
@@ -251,6 +284,8 @@ pub(crate) fn solve_native_modal_eigen(
 pub(crate) fn solve_native_driven_response_contract(
     request: NativeDrivenResponseContractRequest<'_>,
 ) -> Result<NativeFrequencyDomainContractResult, String> {
+    #[cfg(feature = "fem-gpu")]
+    super::configure_managed_openmpi_environment();
     solve_native_driven_response_contract_impl(request)
 }
 
@@ -539,6 +574,34 @@ fn slice_ptr_or_null<T>(values: &[T]) -> *const T {
     }
 }
 
+#[cfg(feature = "fem-gpu")]
+fn csr_matrix_view_or_zero(
+    value: Option<&NativeModalEigenCsrMatrixView<'_>>,
+) -> ffi::FullmagFemCsrMatrixView {
+    value.map_or(
+        ffi::FullmagFemCsrMatrixView {
+            row_count: 0,
+            column_count: 0,
+            row_offsets: std::ptr::null(),
+            row_offsets_len: 0,
+            column_indices: std::ptr::null(),
+            column_indices_len: 0,
+            values: std::ptr::null(),
+            values_len: 0,
+        },
+        |view| ffi::FullmagFemCsrMatrixView {
+            row_count: view.row_count,
+            column_count: view.column_count,
+            row_offsets: slice_ptr_or_null(view.row_offsets),
+            row_offsets_len: view.row_offsets.len() as u64,
+            column_indices: slice_ptr_or_null(view.column_indices),
+            column_indices_len: view.column_indices.len() as u64,
+            values: slice_ptr_or_null(view.values),
+            values_len: view.values.len() as u64,
+        },
+    )
+}
+
 #[cfg(not(feature = "fem-gpu"))]
 fn solve_native_driven_frequency_response_impl(
     request: NativeDrivenFrequencyResponseRequest<'_>,
@@ -602,6 +665,8 @@ fn solve_native_modal_eigen_impl(
         (None, std::ptr::null_mut())
     };
     let tiny_validation = request.tiny_validation_problem.as_ref();
+    let mfem_operator = request.mfem_operator_problem.as_ref();
+    let mfem_sparse_operator = request.mfem_sparse_operator_problem.as_ref();
 
     let ffi_request = ffi::FullmagFemModalEigenRequest {
         abi_version: ffi::FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION,
@@ -658,6 +723,29 @@ fn solve_native_modal_eigen_impl(
         tiny_validation_mass_diagonal: tiny_validation
             .and_then(|problem| problem.mass_diagonal)
             .map_or(std::ptr::null(), slice_ptr_or_null),
+        mfem_operator_enabled: mfem_operator.is_some() as i32,
+        mfem_tangent_dof_count: mfem_operator
+            .map(|problem| problem.tangent_dof_count)
+            .unwrap_or(0),
+        mfem_stiffness_matrix_row_major: mfem_operator
+            .and_then(|problem| problem.stiffness_matrix_row_major)
+            .map_or(std::ptr::null(), slice_ptr_or_null),
+        mfem_gyrotropic_matrix_row_major: mfem_operator
+            .and_then(|problem| problem.gyrotropic_matrix_row_major)
+            .map_or(std::ptr::null(), slice_ptr_or_null),
+        mfem_mass_matrix_row_major: mfem_operator
+            .and_then(|problem| problem.mass_matrix_row_major)
+            .map_or(std::ptr::null(), slice_ptr_or_null),
+        mfem_sparse_operator_enabled: mfem_sparse_operator.is_some() as i32,
+        mfem_sparse_stiffness_csr: csr_matrix_view_or_zero(
+            mfem_sparse_operator.map(|problem| &problem.stiffness_csr),
+        ),
+        mfem_sparse_gyrotropic_csr: csr_matrix_view_or_zero(
+            mfem_sparse_operator.map(|problem| &problem.gyrotropic_csr),
+        ),
+        mfem_sparse_mass_csr: csr_matrix_view_or_zero(
+            mfem_sparse_operator.map(|problem| &problem.mass_csr),
+        ),
     };
 
     let mut ffi_result = NativeFrequencyDomainContractFfiResult {
@@ -1117,6 +1205,8 @@ mod tests {
                 cancel_requested: None,
                 progress_callback: None,
                 tiny_validation_problem: None,
+                mfem_operator_problem: None,
+                mfem_sparse_operator_problem: None,
             })
             .expect_err("native modal contract should require fem-gpu feature");
             assert!(err.contains("fem-gpu"));
@@ -1153,6 +1243,8 @@ mod tests {
                 cancel_requested: None,
                 progress_callback: None,
                 tiny_validation_problem: None,
+                mfem_operator_problem: None,
+                mfem_sparse_operator_problem: None,
             })
             .expect("native modal contract should return a structured unavailable result");
             assert_eq!(result.status, NativeFrequencyDomainStatus::Unavailable);
@@ -1201,6 +1293,8 @@ mod tests {
             cancel_requested: None,
             progress_callback: None,
             tiny_validation_problem: None,
+            mfem_operator_problem: None,
+            mfem_sparse_operator_problem: None,
         })
         .expect("native modal contract should return a structured unavailable result");
 
@@ -1267,6 +1361,8 @@ mod tests {
                 stiffness_diagonal: None,
                 mass_diagonal: None,
             }),
+            mfem_operator_problem: None,
+            mfem_sparse_operator_problem: None,
         })
         .expect("native modal validation solve should return a structured result");
 
@@ -1325,6 +1421,8 @@ mod tests {
                 stiffness_diagonal: None,
                 mass_diagonal: None,
             }),
+            mfem_operator_problem: None,
+            mfem_sparse_operator_problem: None,
         })
         .expect("native modal validation cancel should return a structured result");
 
@@ -1379,6 +1477,8 @@ mod tests {
                 stiffness_diagonal: None,
                 mass_diagonal: None,
             }),
+            mfem_operator_problem: None,
+            mfem_sparse_operator_problem: None,
         })
         .expect("native modal frequency-window validation solve should return a result");
 
@@ -1423,6 +1523,211 @@ mod tests {
             result
                 .result_json
                 .contains("\"window_completeness\":\"not_certified\""),
+            "{}",
+            result.result_json
+        );
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn frequency_window_mfem_payload_reaches_production_contour_bridge() {
+        use std::cell::RefCell;
+
+        let stiffness_matrix_row_major = [
+            1.0, 0.0, 0.0, 0.0, //
+            0.0, 1.0, 0.0, 0.0, //
+            0.0, 0.0, 2.0, 0.0, //
+            0.0, 0.0, 0.0, 2.0,
+        ];
+        let gyrotropic_mass_row_major = [
+            0.0, -1.0, 0.0, 0.0, //
+            1.0, 0.0, 0.0, 0.0, //
+            0.0, 0.0, 0.0, -1.0, //
+            0.0, 0.0, 1.0, 0.0,
+        ];
+        let mass_matrix_row_major = [
+            1.0, 0.0, 0.0, 0.0, //
+            0.0, 1.0, 0.0, 0.0, //
+            0.0, 0.0, 1.0, 0.0, //
+            0.0, 0.0, 0.0, 1.0,
+        ];
+        let progress_events = RefCell::new(Vec::<String>::new());
+        let progress_callback = |progress_json: &str| {
+            progress_events.borrow_mut().push(progress_json.to_string());
+        };
+
+        let result = solve_native_modal_eigen(NativeModalEigenRequest {
+            mesh_asset_id: "mfem_dense_payload",
+            equilibrium_source_kind: "provided",
+            gamma_rad_s_t: 1.760859e11,
+            mu0_t_m_a: 1.25663706212e-6,
+            alpha: 0.0,
+            include_exchange: false,
+            include_demag: false,
+            demag_realization: None,
+            damping_policy: "ignore",
+            spin_wave_bc_kind: "free",
+            k_vector_rad_m: None,
+            operator_diagnostics_json: Some(
+                "{\"schema_version\":\"frequency_domain_operator_diagnostics.v1\",\"payload_kind\":\"dense_linearized_mfem_operator\"}",
+            ),
+            requested_mode_count: 4,
+            target_kind: "frequency_window",
+            target_frequency_hz: 0.0,
+            frequency_min_hz: 0.1,
+            frequency_max_hz: 0.5,
+            residual_tolerance: 1.0e-10,
+            max_outer_iterations: 32,
+            max_linear_iterations: 128,
+            output_directory: None,
+            write_partial_artifacts: false,
+            completeness_policy: 1,
+            eigensolver_family: 2,
+            spectral_transform_kind: 0,
+            cancel_requested: None,
+            progress_callback: Some(&progress_callback),
+            tiny_validation_problem: None,
+            mfem_operator_problem: Some(NativeModalEigenMfemOperatorProblem {
+                tangent_dof_count: 4,
+                stiffness_matrix_row_major: Some(&stiffness_matrix_row_major),
+                gyrotropic_matrix_row_major: Some(&gyrotropic_mass_row_major),
+                mass_matrix_row_major: Some(&mass_matrix_row_major),
+            }),
+            mfem_sparse_operator_problem: None,
+        })
+        .expect("native modal production payload should return a structured result");
+
+        assert_eq!(result.status, NativeFrequencyDomainStatus::Ok);
+        assert!(
+            result
+                .diagnostics_json
+                .contains("\"execution_lane\":\"production_cpu\""),
+            "{}",
+            result.diagnostics_json
+        );
+        assert!(
+            result
+                .diagnostics_json
+                .contains("\"mfem_operator_payload\":\"dense_gyrotropic_matrix\""),
+            "{}",
+            result.diagnostics_json
+        );
+        assert!(
+            result
+                .diagnostics_json
+                .contains("\"resolved_solver_family\":\"contour_interval\""),
+            "{}",
+            result.diagnostics_json
+        );
+        assert!(
+            result
+                .diagnostics_json
+                .contains("\"solver_model\":\"contour_interval_production_cpu_dense\""),
+            "{}",
+            result.diagnostics_json
+        );
+        assert!(
+            result.diagnostics_json.contains(
+                "\"operator_diagnostics\":{\"schema_version\":\"frequency_domain_operator_diagnostics.v1\""
+            ),
+            "{}",
+            result.diagnostics_json
+        );
+        assert!(
+            result
+                .result_json
+                .contains("\"window_completeness\":\"certified\""),
+            "{}",
+            result.result_json
+        );
+        assert!(
+            result.result_json.contains("\"accepted_mode_count\":2"),
+            "{}",
+            result.result_json
+        );
+        assert_eq!(progress_events.into_inner().len(), 16);
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn frequency_window_mfem_payload_uses_production_shift_invert_when_requested() {
+        let stiffness_matrix_row_major = [
+            1.0, 0.0, 0.0, 0.0, //
+            0.0, 1.0, 0.0, 0.0, //
+            0.0, 0.0, 2.0, 0.0, //
+            0.0, 0.0, 0.0, 2.0,
+        ];
+        let gyrotropic_mass_row_major = [
+            0.0, -1.0, 0.0, 0.0, //
+            1.0, 0.0, 0.0, 0.0, //
+            0.0, 0.0, 0.0, -1.0, //
+            0.0, 0.0, 1.0, 0.0,
+        ];
+        let mass_matrix_row_major = [
+            1.0, 0.0, 0.0, 0.0, //
+            0.0, 1.0, 0.0, 0.0, //
+            0.0, 0.0, 1.0, 0.0, //
+            0.0, 0.0, 0.0, 1.0,
+        ];
+
+        let result = solve_native_modal_eigen(NativeModalEigenRequest {
+            mesh_asset_id: "mfem_dense_shift_invert_payload",
+            equilibrium_source_kind: "provided",
+            gamma_rad_s_t: 1.760859e11,
+            mu0_t_m_a: 1.25663706212e-6,
+            alpha: 0.0,
+            include_exchange: false,
+            include_demag: false,
+            demag_realization: None,
+            damping_policy: "ignore",
+            spin_wave_bc_kind: "free",
+            k_vector_rad_m: None,
+            operator_diagnostics_json: Some(
+                "{\"schema_version\":\"frequency_domain_operator_diagnostics.v1\",\"payload_kind\":\"dense_linearized_mfem_operator\"}",
+            ),
+            requested_mode_count: 2,
+            target_kind: "frequency_window",
+            target_frequency_hz: 0.0,
+            frequency_min_hz: 0.1,
+            frequency_max_hz: 0.5,
+            residual_tolerance: 1.0e-10,
+            max_outer_iterations: 32,
+            max_linear_iterations: 128,
+            output_directory: None,
+            write_partial_artifacts: false,
+            completeness_policy: 1,
+            eigensolver_family: 1,
+            spectral_transform_kind: 1,
+            cancel_requested: None,
+            progress_callback: None,
+            tiny_validation_problem: None,
+            mfem_operator_problem: Some(NativeModalEigenMfemOperatorProblem {
+                tangent_dof_count: 4,
+                stiffness_matrix_row_major: Some(&stiffness_matrix_row_major),
+                gyrotropic_matrix_row_major: Some(&gyrotropic_mass_row_major),
+                mass_matrix_row_major: Some(&mass_matrix_row_major),
+            }),
+            mfem_sparse_operator_problem: None,
+        })
+        .expect("native modal shift-invert payload should return a structured result");
+
+        assert_eq!(result.status, NativeFrequencyDomainStatus::Ok);
+        assert!(
+            result
+                .diagnostics_json
+                .contains("\"resolved_solver_family\":\"shift_invert\""),
+            "{}",
+            result.diagnostics_json
+        );
+        assert!(
+            result
+                .diagnostics_json
+                .contains("\"solver_model\":\"slepc_multi_shift_invert_production_cpu_dense\""),
+            "{}",
+            result.diagnostics_json
+        );
+        assert!(
+            result.result_json.contains("\"accepted_mode_count\":2"),
             "{}",
             result.result_json
         );

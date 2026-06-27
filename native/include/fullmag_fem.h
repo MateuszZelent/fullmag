@@ -588,6 +588,17 @@ typedef struct {
 } FullmagFemLinearizedOperatorRequest;
 
 typedef struct {
+    uint64_t row_count;
+    uint64_t column_count;
+    const uint32_t *row_offsets;
+    uint64_t row_offsets_len;
+    const uint32_t *column_indices;
+    uint64_t column_indices_len;
+    const double *values;
+    uint64_t values_len;
+} FullmagFemCsrMatrixView;
+
+typedef struct {
     uint32_t abi_version;
     FullmagFemLinearizedOperatorRequest operator_request;
     int requested_mode_count;
@@ -613,6 +624,15 @@ typedef struct {
     const double *tiny_validation_mass_matrix_row_major;
     const double *tiny_validation_stiffness_diagonal;
     const double *tiny_validation_mass_diagonal;
+    int mfem_operator_enabled;
+    uint64_t mfem_tangent_dof_count;
+    const double *mfem_stiffness_matrix_row_major;
+    const double *mfem_gyrotropic_matrix_row_major;
+    const double *mfem_mass_matrix_row_major;
+    int mfem_sparse_operator_enabled;
+    FullmagFemCsrMatrixView mfem_sparse_stiffness_csr;
+    FullmagFemCsrMatrixView mfem_sparse_gyrotropic_csr;
+    FullmagFemCsrMatrixView mfem_sparse_mass_csr;
 } FullmagFemModalEigenRequest;
 
 typedef struct {

@@ -55,18 +55,17 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
       {authoringView === "setup" ? (
         <InspectorSection
           value="frequency-response-setup-detail"
-          title="Driven Response Setup Contract"
+          title="Study Settings"
           badge="direct solve"
         >
           <FieldRow
             label="Calculation workflow"
-            value="fmr_response now; response_map capability-gated"
+            value="fmr_response; response_map readiness is reported in diagnostics"
           />
           <FieldRow
             label="Direct solve"
             value="(i omega B - L) q = f"
           />
-          <FieldRow label="Time integrator" value="not applicable" />
           <FieldRow
             label="Executable lane"
             value="FEM magnetic-only CPU response; double precision"
@@ -96,7 +95,7 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
       {authoringView === "excitation" ? (
         <InspectorSection
           value="frequency-response-excitation-detail"
-          title="Driven Excitation Contract"
+          title="Excitation"
           badge="phasor"
         >
           <FieldRow
@@ -121,7 +120,7 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
           />
           <FieldRow
             label="Source selector"
-            value="field phasor now; antenna/source capability-gated"
+            value="field phasor; antenna/source support is reported in diagnostics"
           />
           <FieldRow
             label="Projection"
@@ -140,7 +139,7 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
       {authoringView === "equilibrium" ? (
         <InspectorSection
           value="frequency-response-equilibrium-detail"
-          title="Driven Response Equilibrium Contract"
+          title="Linearization Point"
           badge={equilibriumSummary.source}
         >
           <FieldRow
@@ -156,10 +155,6 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
             value={equilibriumSummary.provenance}
           />
           <FieldRow
-            label="Residual status"
-            value="missing until runtime provides residual diagnostics"
-          />
-          <FieldRow
             label="Artifact readiness"
             value={equilibriumSummary.artifactReadiness}
           />
@@ -168,7 +163,7 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
       {authoringView === "solver" ? (
         <InspectorSection
           value="frequency-response-solver-detail"
-          title="Driven Response Solver Contract"
+          title="Solver Configuration"
           badge={draft?.deviceTarget ?? "device"}
         >
           <FieldRow
@@ -181,15 +176,15 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
           />
           <FieldRow
             label="Tolerance policy"
-            value="backend default until solver contract exposes fields"
+            value="response residuals and solver status are published through response diagnostics"
           />
           <FieldRow
             label="Plan fields"
             value="mesh, FE order, equilibrium, material, operator, excitation, frequencies, precision, demag realization"
           />
           <FieldRow
-            label="Completed frequencies"
-            value="not available until progress resource exists"
+            label="Progress"
+            value={`${stage?.progressPercent ?? 0}%`}
           />
           <FieldRow
             label="Runtime metric"
@@ -204,7 +199,7 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
       {authoringView === "sweep" ? (
         <InspectorSection
           value="frequency-response-sweep-detail"
-          title="Driven Sweep Contract"
+          title="Frequency Sweep"
           badge={draft?.observable ?? "observable"}
         >
           <FieldRow
@@ -248,7 +243,7 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
       {authoringView === "outputs" ? (
         <InspectorSection
           value="frequency-response-outputs-detail"
-          title="Driven Response Outputs Contract"
+          title="Output"
           badge={draft?.observable ?? "outputs"}
         >
           <FieldRow
@@ -296,7 +291,7 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
       {authoringView === "diagnostics" ? (
         <InspectorSection
           value="frequency-response-diagnostics-detail"
-          title="Driven Response Diagnostics Contract"
+          title="Diagnostics"
           badge={validationSummary.badge}
         >
           <FieldRow label="UI validation" value={validationSummary.summary} />
@@ -337,7 +332,7 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
       {authoringView === "boundary" ? (
         <InspectorSection
           value="frequency-response-boundary-detail"
-          title="Driven Response Boundary Contract"
+          title="Boundary"
           badge={draft?.bc || "free"}
         >
           <FieldRow label="Boundary condition" value={draft?.bc || "free"} />
@@ -370,7 +365,7 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
       {authoringView === "periodic_pairs" ? (
         <InspectorSection
           value="frequency-response-periodic-pairs-detail"
-          title="Driven Response Periodic Pair Contract"
+          title="Periodic Pairs"
           badge={draft?.bc || "periodic pairs"}
         >
           <FieldRow label="Boundary condition" value={draft?.bc || "free"} />
@@ -384,7 +379,7 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
           />
           <FieldRow
             label="Nonzero-k response"
-            value="capability-gated until dynamic demag-k response is validated"
+            value="readiness is reported by response diagnostics"
           />
           <FieldRow
             label="Validation"
@@ -395,7 +390,7 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
       {authoringView === "k_grid" ? (
         <InspectorSection
           value="frequency-response-k-grid-detail"
-          title="Driven Response k-Grid Contract"
+          title="k/f Grid"
           badge={draft?.kSampling || "k-grid"}
         >
           <FieldRow label="Boundary condition" value={draft?.bc || "free"} />
@@ -403,7 +398,7 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
           <FieldRow label="k grid" value={draft?.kSampling || "not set"} />
           <FieldRow
             label="Workflow"
-            value="response_map over frequency x k, currently capability-gated"
+            value="response_map over frequency x k when authored and supported by diagnostics"
           />
           <FieldRow
             label="Frequency coupling"
@@ -487,14 +482,6 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
           {runResponseDisabledReason ? (
             <FieldRow label="Run readiness" value={runResponseDisabledReason} />
           ) : null}
-          <FieldRow
-            label="Open latest sweep"
-            value="Result artifact is not available yet"
-          />
-          <FieldRow
-            label="Open strongest FMR peak"
-            value="Result artifact is not available yet"
-          />
           <FieldRow
             label="Export canonical Python"
             value="Canonical Python export is available after the saved stage patch is materialized"

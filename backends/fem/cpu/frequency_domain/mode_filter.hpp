@@ -8,6 +8,7 @@ namespace fullmag::fem::frequency_domain {
 struct ModalCandidate {
     double frequency_hz = 0.0;
     double relative_residual = 0.0;
+    int source_index = -1;
     std::vector<std::complex<double>> mode;
 };
 

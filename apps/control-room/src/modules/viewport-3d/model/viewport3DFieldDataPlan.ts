@@ -1,6 +1,7 @@
 import type { FieldVectorQuery } from "@/kernel/api/apiTypes";
 import {
   isMagneticOnlyQuantityId,
+  isScalarSpatialQuantityId,
   resolveCanonicalQuantityId,
 } from "@/kernel/api/quantityIds";
 import {
@@ -278,6 +279,7 @@ export function buildViewport3DPassDemands(
 
   if (plan.shader.visible && plan.shader.scalarColorMode) {
     const query = resolveViewport3DTargetFieldQuery({
+      quantityId: plan.quantityId,
       surfaceColorMode: plan.shader.scalarColorMode,
       vectorsVisible: false,
     });
@@ -871,9 +873,11 @@ export function validateViewport3DFieldResourceRequestEquivalence(
 }
 
 export function resolveViewport3DTargetFieldQuery({
+  quantityId,
   surfaceColorMode,
   vectorsVisible,
 }: {
+  quantityId?: string | null;
   surfaceColorMode: string | null;
   vectorsVisible: boolean;
 }): FieldVectorQuery | null {
@@ -884,6 +888,13 @@ export function resolveViewport3DTargetFieldQuery({
     };
   }
   if (!surfaceColorMode) return null;
+
+  if (quantityId && isScalarSpatialQuantityId(quantityId)) {
+    return {
+      component: "full",
+      scope_kind: "full",
+    };
+  }
 
   const component = fieldColorModeScalarComponent(surfaceColorMode);
   return component
@@ -899,14 +910,17 @@ export function resolveViewport3DTargetFieldQuery({
 
 export function resolveViewport3DScopedFieldQuery({
   maxSamples,
+  quantityId,
   surfaceColorMode,
   vectorsVisible,
 }: {
   maxSamples: number;
+  quantityId?: string | null;
   surfaceColorMode: string | null;
   vectorsVisible: boolean;
 }): FieldVectorQuery {
   const query = resolveViewport3DTargetFieldQuery({
+    quantityId,
     surfaceColorMode,
     vectorsVisible,
   }) ?? {

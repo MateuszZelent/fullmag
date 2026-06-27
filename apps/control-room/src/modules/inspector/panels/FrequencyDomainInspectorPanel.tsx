@@ -2704,39 +2704,10 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
           onClick={() => {
             void kernel.commands
               .execute(
-                "analysis.frequency-domain.set-3d-animation",
+                "analysis.frequency-domain.stop-3d-animation",
                 createCommandContext("inspector", kernel, {
                   sourceDetail: selection.kind ?? "frequency-domain",
                 }),
-                {
-                  ...modeAppearanceCommandInput(),
-                  animatePhase: false,
-                  animationRateHz:
-                    finiteNumber(
-                      analysisFieldAnimationRateInputRef.current?.value,
-                    ) ?? 1,
-                  componentBasis: selectedFieldMeta?.component_basis ?? null,
-                  componentCount: selectedFieldMeta?.component_count ?? null,
-                  fieldId: activeAnalysisFieldOverlay?.fieldId ?? selectedFieldId,
-                  label:
-                    activeAnalysisFieldOverlay?.label ??
-                    selection.label ??
-                    selectedFieldId,
-                  phaseRad:
-                    activeAnalysisFieldOverlay?.visualizationPhaseRad ??
-                    activeAnalysisFieldOverlay?.query.phase_rad ??
-                    finiteNumber(analysisFieldPhaseInputRef.current?.value) ??
-                    selectedFieldMeta?.default_phase_rad ??
-                    0,
-                  source:
-                    activeAnalysisFieldOverlay?.source ??
-                    selectedFieldOverlaySource,
-                  valueKind: selectedFieldMeta?.value_kind ?? null,
-                  view:
-                    activeAnalysisFieldOverlay?.query.view ??
-                    analysisFieldViewSelectRef.current?.value ??
-                    defaultAnalysisFieldView,
-                },
               )
               .then((result) => {
                 setInspectorState({ commandMessage: result.message ?? result.status });

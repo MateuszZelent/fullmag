@@ -2250,7 +2250,7 @@ pub(crate) fn execute_fem_eigen(
     }
 
     match engine {
-        FemEngine::CpuNative => fem_eigen::execute_baseline_fem_eigen(plan, outputs),
+        FemEngine::CpuNative => fem_eigen::execute_cpu_fem_eigen(plan, outputs),
         FemEngine::NativeGpu => {
             // GPU-accelerated dense eigensolver (Etap A4) — TRANSITIONAL.
             // `execute_gpu_fem_eigen` uses cuSolverDN; returns error if GPU
@@ -2272,7 +2272,7 @@ pub(crate) fn execute_fem_eigen_with_progress(
 
     match engine {
         FemEngine::CpuNative => {
-            fem_eigen::execute_baseline_fem_eigen_with_progress(plan, outputs, progress)
+            fem_eigen::execute_cpu_fem_eigen_with_progress(plan, outputs, progress)
         }
         FemEngine::NativeGpu => fem_eigen::execute_gpu_fem_eigen(plan, outputs),
     }

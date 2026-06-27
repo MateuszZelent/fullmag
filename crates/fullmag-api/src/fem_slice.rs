@@ -498,6 +498,7 @@ fn rasterize_triangle(
     let y0 = pixel_floor(min_v, frame.v_min, dv, y_size);
     let y1 = pixel_floor(max_v, frame.v_min, dv, y_size);
 
+    let mut wrote_sample = false;
     for py in y0..=y1 {
         let v = frame.v_min + (py as f64 + 0.5) * dv;
         for px in x0..=x1 {
@@ -506,16 +507,44 @@ fn rasterize_triangle(
                 continue;
             };
             let pixel = py * x_size + px;
-            let base = pixel * n_comp;
-            for component in 0..n_comp {
-                let value = weights[0] * triangle[0].values[component]
-                    + weights[1] * triangle[1].values[component]
-                    + weights[2] * triangle[2].values[component];
-                raw_values[base + component] += value;
-            }
-            hit_count[pixel] = hit_count[pixel].saturating_add(1);
+            accumulate_triangle_sample(triangle, weights, n_comp, pixel, raw_values, hit_count);
+            wrote_sample = true;
         }
     }
+
+    if !wrote_sample {
+        let u = (points[0][0] + points[1][0] + points[2][0]) / 3.0;
+        let v = (points[0][1] + points[1][1] + points[2][1]) / 3.0;
+        let px = pixel_floor(u, frame.u_min, du, x_size);
+        let py = pixel_floor(v, frame.v_min, dv, y_size);
+        let pixel = py * x_size + px;
+        accumulate_triangle_sample(
+            triangle,
+            [1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0],
+            n_comp,
+            pixel,
+            raw_values,
+            hit_count,
+        );
+    }
+}
+
+fn accumulate_triangle_sample(
+    triangle: [&SliceVertex; 3],
+    weights: [f64; 3],
+    n_comp: usize,
+    pixel: usize,
+    raw_values: &mut [f64],
+    hit_count: &mut [u32],
+) {
+    let base = pixel * n_comp;
+    for component in 0..n_comp {
+        let value = weights[0] * triangle[0].values[component]
+            + weights[1] * triangle[1].values[component]
+            + weights[2] * triangle[2].values[component];
+        raw_values[base + component] += value;
+    }
+    hit_count[pixel] = hit_count[pixel].saturating_add(1);
 }
 
 fn triangle_bounds(points: [[f64; 2]; 3]) -> (f64, f64, f64, f64) {
@@ -750,6 +779,46 @@ mod tests {
                 assert!((value - expected).abs() < 1.0e-9);
             }
         }
+    }
+
+    #[test]
+    fn exact_cut_keeps_subpixel_triangle_visible() {
+        let field = FemField {
+            n_comp: 1,
+            nodes: vec![
+                [0.0, 0.0, -1.0],
+                [0.01, 0.0, -1.0],
+                [0.0, 0.01, -1.0],
+                [0.0, 0.0, 1.0],
+                [1.0, 1.0, 0.0],
+            ],
+            elements: vec![[0, 1, 2, 3]],
+            element_markers: vec![1],
+            values: vec![7.0; 5],
+        };
+        let q = resolve(FieldSliceQuery {
+            plane: SlicePlane::Xy,
+            component: Some("full".to_string()),
+            cut_world: Some(0.0),
+            cut_norm: None,
+            x_size: Some(4),
+            y_size: Some(4),
+            max_points: None,
+            include_arrows: None,
+            arrow_every: None,
+            max_arrows: None,
+        });
+
+        let result = fem_tetra_linear_slice(&field, &q, None).unwrap();
+        let finite: Vec<f64> = result
+            .scalar_values
+            .iter()
+            .copied()
+            .filter(|value| value.is_finite())
+            .collect();
+
+        assert!(!finite.is_empty());
+        assert!(finite.iter().all(|value| (*value - 7.0).abs() < 1.0e-12));
     }
 
     #[test]

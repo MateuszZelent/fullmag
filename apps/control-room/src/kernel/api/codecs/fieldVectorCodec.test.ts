@@ -31,6 +31,7 @@ function makeFieldVectorBuffer({
 }
 
 function makeFieldVectorV3Buffer({
+  domainGenerationId = BigInt(42),
   indexing = 0,
   nodeIndices = [],
   quantityId = "m",
@@ -38,6 +39,7 @@ function makeFieldVectorV3Buffer({
   scopeKind = "full",
   values = [1, 0, -1],
 }: {
+  domainGenerationId?: bigint;
   indexing?: number;
   nodeIndices?: number[];
   quantityId?: string;
@@ -72,7 +74,7 @@ function makeFieldVectorV3Buffer({
     view.setUint8(48 + index, code.charCodeAt(0));
   }
   view.setUint16(52, 1, true);
-  view.setBigUint64(56, BigInt(42), true);
+  view.setBigUint64(56, domainGenerationId, true);
   view.setBigUint64(64, BigInt(7), true);
   new Uint8Array(buffer, 72, 32).fill(0xab);
   view.setUint32(104, indexing, true);
@@ -108,13 +110,23 @@ describe("decodeFieldVector", () => {
     const decoded = decodeFieldVector(makeFieldVectorV3Buffer());
 
     expect(decoded.formatVersion).toBe(3);
-    expect(decoded.domainGenerationId).toBe(42);
+    expect(decoded.domainGenerationId).toBe("42");
     expect(decoded.meshTopologyRevision).toBe("7");
     expect(decoded.meshTopologyHash).toBe("abababababababababababababababababababababababababababababababab");
     expect(decoded.scopeKind).toBe("full");
     expect(decoded.scopeId).toBeNull();
     expect(decoded.indexing).toBe("full_domain");
     expect(decoded.nodeIndices).toBeNull();
+  });
+
+  it("preserves FMVP v3 u64 domain generation ids above Number.MAX_SAFE_INTEGER", () => {
+    const decoded = decodeFieldVector(
+      makeFieldVectorV3Buffer({
+        domainGenerationId: BigInt(Number.MAX_SAFE_INTEGER) + BigInt(10),
+      }),
+    );
+
+    expect(decoded.domainGenerationId).toBe("9007199254741001");
   });
 
   it("decodes scoped FMVP v3 node indices", () => {

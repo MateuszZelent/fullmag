@@ -9,6 +9,26 @@ fn env_flag(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn rerun_if_changed_tree(path: impl AsRef<std::path::Path>) {
+    let path = path.as_ref();
+    println!("cargo:rerun-if-changed={}", path.display());
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return;
+    };
+    let mut entries = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    entries.sort();
+    for entry in entries {
+        if entry.is_dir() {
+            rerun_if_changed_tree(&entry);
+        } else {
+            println!("cargo:rerun-if-changed={}", entry.display());
+        }
+    }
+}
+
 fn main() {
     if let Ok(lib_dir) = std::env::var("FULLMAG_FEM_LIB_DIR") {
         println!("cargo:rustc-link-search=native={}", lib_dir);
@@ -21,11 +41,11 @@ fn main() {
     println!("cargo:rerun-if-changed=../../native/include/fullmag_fem.h");
     println!("cargo:rerun-if-changed=../../native/CMakeLists.txt");
     println!("cargo:rerun-if-changed=../../backends/fem/CMakeLists.txt");
-    println!("cargo:rerun-if-changed=../../backends/fem/core");
-    println!("cargo:rerun-if-changed=../../backends/fem/cpu");
-    println!("cargo:rerun-if-changed=../../backends/fem/gpu");
-    println!("cargo:rerun-if-changed=../../backends/fem/src");
-    println!("cargo:rerun-if-changed=../../backends/fem/include");
+    rerun_if_changed_tree("../../backends/fem/core");
+    rerun_if_changed_tree("../../backends/fem/cpu");
+    rerun_if_changed_tree("../../backends/fem/gpu");
+    rerun_if_changed_tree("../../backends/fem/src");
+    rerun_if_changed_tree("../../backends/fem/include");
     println!("cargo:rerun-if-env-changed=FULLMAG_FEM_LIB_DIR");
     println!("cargo:rerun-if-env-changed=FULLMAG_USE_MFEM_STACK");
     println!("cargo:rerun-if-env-changed=FULLMAG_FEM_REQUIRE_GPU");

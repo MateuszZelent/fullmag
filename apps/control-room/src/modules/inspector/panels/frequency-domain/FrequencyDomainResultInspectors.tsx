@@ -8,6 +8,7 @@
  */
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
+import { FmrPeakInspector } from "./FmrPeakInspector";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorSection } from "../../primitives/InspectorSection";
 import { Activity, Download, Eye, Play, RotateCw } from "lucide-react";
@@ -2403,63 +2404,10 @@ export function FmrPeakInspectorPanel(props: InspectorPanelProps) {
   const summary = useFmrPeakSummary(props);
 
   return (
-    <div data-inspector-surface="fmr-peak">
-      <InspectorSection title="FMR Peak Workbench" badge={summary.badge}>
-        <div className="fm-frequency-domain-active-peak">
-          <div className="fm-frequency-domain-active-peak__header">
-            <h4>{summary.frequency}</h4>
-            <span className="fm-inspector-section__badge">
-              {summary.sourceBadge}
-            </span>
-          </div>
-          <FieldRow label="Peak frequency" value={summary.frequency} />
-          <FieldRow label="Physical source" value={summary.source} />
-          <FieldRow label="Canonical target" value={summary.target} />
-          <FieldRow label="3D field payload" value={summary.fieldPayload} />
-          <FieldRow label="Validation" value={summary.validation} />
-        </div>
-      </InspectorSection>
-      <InspectorSection
-        title="Peak Observables"
-        badge={summary.spectralBadge}
-      >
-        <FieldRow label="Amplitude" value={summary.amplitude} />
-        <FieldRow
-          label="Absorbed power density"
-          value={summary.absorbedPowerDensity}
-        />
-        <FieldRow label="Phase" value={summary.phase} />
-        <FieldRow label="Linewidth" value={summary.linewidth} />
-        <FieldRow label="Missing values" value={summary.missingSpectralValues} />
-      </InspectorSection>
-      <InspectorSection
-        title="Visualization Handoff"
-        badge={summary.actionBadge}
-      >
-        <FieldRow label="Default field view" value="phase-rotated real" />
-        <FieldRow
-          label="Display controls"
-          value="shared mode-field controls: component, real/imag/magnitude, colormap, vectors, shader, phase"
-        />
-        <FieldRow
-          label="Volume roadmap"
-          value="future clip/trim plane and shader transparency belong to the shared mode-field display"
-        />
-        <FieldRow label="Plot readiness" value={summary.visualizationReadiness} />
-        <FmrPeakActions summary={summary} />
-      </InspectorSection>
-      <InspectorSection
-        title="Resource Provenance"
-        badge={summary.provenanceBadge}
-      >
-        <FieldRow label="Source surface" value={summary.sourceInspectorLabel} />
-        <FieldRow label="Source artifact" value={summary.artifactFamily} />
-        <FieldRow label="Field ID" value={summary.fieldId ?? "not available"} />
-        <FieldRow label="Data-plane resource" value={summary.dataPlaneResource} />
-        <FieldRow label="Selection kind" value={props.selection.kind ?? "not available"} />
-        <FieldRow label="Node ID" value={props.selection.nodeId ?? "not available"} />
-      </InspectorSection>
-    </div>
+    <FmrPeakInspector
+      actions={<FmrPeakActions summary={summary} />}
+      summary={summary}
+    />
   );
 }
 
@@ -3144,19 +3092,10 @@ function EigenMode3DActions({
   const stopAnimation = (): void => {
     if (!summary.fieldId) return;
     void kernel.commands.execute(
-      "analysis.frequency-domain.set-3d-animation",
+      "analysis.frequency-domain.stop-3d-animation",
       createCommandContext("inspector", kernel, {
         sourceDetail: "results.eigen.mode",
       }),
-      {
-        animatePhase: false,
-        animationRateHz: 0,
-        fieldId: summary.fieldId,
-        label: summary.modeIdentity,
-        phaseRad: 0,
-        source: "eigen-mode",
-        view: "phase_rotated_real",
-      },
     );
   };
   const disabled = !summary.fieldId;
@@ -3344,19 +3283,10 @@ function FrequencyResponsePoint3DActions({
   const stopAnimation = (): void => {
     if (!summary.fieldId) return;
     void kernel.commands.execute(
-      "analysis.frequency-domain.set-3d-animation",
+      "analysis.frequency-domain.stop-3d-animation",
       createCommandContext("inspector", kernel, {
         sourceDetail: "results.frequency_response.frequency_point",
       }),
-      {
-        animatePhase: false,
-        animationRateHz: 0,
-        fieldId: summary.fieldId,
-        label: summary.frequencyDisplay,
-        phaseRad: summary.defaultPhaseRad,
-        source: "frequency-response",
-        view: "phase_rotated_real",
-      },
     );
   };
   const disabled = !summary.fieldId;
@@ -5415,7 +5345,7 @@ function useFmrPeakSummary({ selection }: InspectorPanelProps) {
         : `frequency point ${frequencyPointIndex}`,
     validation: peak?.validationStatus ?? "not available",
     visualizationReadiness: peak?.fieldId
-      ? "field id is published; plot command can request the data-plane vector resource"
+      ? "field id is published; plot command can use the linked field id"
       : "field payload missing; 3D overlay is unavailable",
   };
 }

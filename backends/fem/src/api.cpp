@@ -1421,6 +1421,64 @@ FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve(
         request->tiny_validation_stiffness_diagonal;
     native_request.tiny_validation_mass_diagonal =
         request->tiny_validation_mass_diagonal;
+    native_request.mfem_operator_enabled = request->mfem_operator_enabled;
+    native_request.mfem_tangent_dof_count = request->mfem_tangent_dof_count;
+    native_request.mfem_stiffness_matrix_row_major =
+        request->mfem_stiffness_matrix_row_major;
+    native_request.mfem_gyrotropic_matrix_row_major =
+        request->mfem_gyrotropic_matrix_row_major;
+    native_request.mfem_mass_matrix_row_major =
+        request->mfem_mass_matrix_row_major;
+    native_request.mfem_sparse_operator_enabled =
+        request->mfem_sparse_operator_enabled;
+    native_request.mfem_sparse_stiffness_csr.row_count =
+        request->mfem_sparse_stiffness_csr.row_count;
+    native_request.mfem_sparse_stiffness_csr.column_count =
+        request->mfem_sparse_stiffness_csr.column_count;
+    native_request.mfem_sparse_stiffness_csr.row_offsets =
+        request->mfem_sparse_stiffness_csr.row_offsets;
+    native_request.mfem_sparse_stiffness_csr.row_offsets_len =
+        request->mfem_sparse_stiffness_csr.row_offsets_len;
+    native_request.mfem_sparse_stiffness_csr.column_indices =
+        request->mfem_sparse_stiffness_csr.column_indices;
+    native_request.mfem_sparse_stiffness_csr.column_indices_len =
+        request->mfem_sparse_stiffness_csr.column_indices_len;
+    native_request.mfem_sparse_stiffness_csr.values =
+        request->mfem_sparse_stiffness_csr.values;
+    native_request.mfem_sparse_stiffness_csr.values_len =
+        request->mfem_sparse_stiffness_csr.values_len;
+    native_request.mfem_sparse_gyrotropic_csr.row_count =
+        request->mfem_sparse_gyrotropic_csr.row_count;
+    native_request.mfem_sparse_gyrotropic_csr.column_count =
+        request->mfem_sparse_gyrotropic_csr.column_count;
+    native_request.mfem_sparse_gyrotropic_csr.row_offsets =
+        request->mfem_sparse_gyrotropic_csr.row_offsets;
+    native_request.mfem_sparse_gyrotropic_csr.row_offsets_len =
+        request->mfem_sparse_gyrotropic_csr.row_offsets_len;
+    native_request.mfem_sparse_gyrotropic_csr.column_indices =
+        request->mfem_sparse_gyrotropic_csr.column_indices;
+    native_request.mfem_sparse_gyrotropic_csr.column_indices_len =
+        request->mfem_sparse_gyrotropic_csr.column_indices_len;
+    native_request.mfem_sparse_gyrotropic_csr.values =
+        request->mfem_sparse_gyrotropic_csr.values;
+    native_request.mfem_sparse_gyrotropic_csr.values_len =
+        request->mfem_sparse_gyrotropic_csr.values_len;
+    native_request.mfem_sparse_mass_csr.row_count =
+        request->mfem_sparse_mass_csr.row_count;
+    native_request.mfem_sparse_mass_csr.column_count =
+        request->mfem_sparse_mass_csr.column_count;
+    native_request.mfem_sparse_mass_csr.row_offsets =
+        request->mfem_sparse_mass_csr.row_offsets;
+    native_request.mfem_sparse_mass_csr.row_offsets_len =
+        request->mfem_sparse_mass_csr.row_offsets_len;
+    native_request.mfem_sparse_mass_csr.column_indices =
+        request->mfem_sparse_mass_csr.column_indices;
+    native_request.mfem_sparse_mass_csr.column_indices_len =
+        request->mfem_sparse_mass_csr.column_indices_len;
+    native_request.mfem_sparse_mass_csr.values =
+        request->mfem_sparse_mass_csr.values;
+    native_request.mfem_sparse_mass_csr.values_len =
+        request->mfem_sparse_mass_csr.values_len;
 
     return copy_frequency_domain_contract_result(
         fd::solve_modal_eigen_contract(native_request));

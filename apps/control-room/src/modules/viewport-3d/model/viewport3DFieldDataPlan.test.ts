@@ -133,6 +133,27 @@ describe("viewport3DFieldDataPlan", () => {
     });
   });
 
+  it("requests full scalar values for energy-density colormap surfaces", () => {
+    const plan = objectPlan("object:energy", {
+      activeQuantityId: "eden_total",
+      surfaceColorSource: "colormap",
+      vectorsVisible: false,
+    });
+    const requests = planViewport3DFieldResourceRequests(
+      buildViewport3DPassDemands(plan),
+    );
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
+      query: {
+        component: "full",
+        scope_id: "object:energy",
+        scope_kind: "object",
+      },
+      quantityId: "eden_total",
+    });
+  });
+
   it("upgrades component surfaces with vectors to one complete full-vector request", () => {
     const plan = objectPlan("object:mx-vectors", {
       surfaceColorSource: "component_x",

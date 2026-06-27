@@ -2010,41 +2010,82 @@ describe("FrequencyDomainInspectorPanel", () => {
       <FmrPeakInspectorPanel selection={selection} />,
     );
 
-    expect(html).toContain("FMR Peak Workbench");
-    expect(html).toContain("Peak Observables");
+    expect(html).toContain("Identity");
+    expect(html).toContain("Physical Quantities");
+    expect(html).toContain("Provenance");
+    expect(html).toContain("Visualization");
+    expect(html).toContain("Diagnostics");
     expect(html).toContain("Physical source");
     expect(html).toContain("modal eigenmode");
-    expect(html).toContain("Peak frequency");
+    expect(html).toContain("Frequency");
     expect(html).toContain("9.5 GHz");
     expect(html).toContain("Canonical target");
     expect(html).toContain("sample 0, mode 1");
-    expect(html).toContain("Visualization Handoff");
     expect(html).toContain("Field ID");
     expect(html).toContain("analysis:eigen:sample-0000:mode-0001");
-    expect(html).toContain("Data-plane resource");
     expect(html).toContain("Plot readiness");
     expect(html).toContain(
-      "field id is published; plot command can request the data-plane vector resource",
+      "field id is published; plot command can use the linked field id",
     );
     expect(html).toContain("Display controls");
-    expect(html).toContain("Volume roadmap");
+    expect(html).toContain("Volume controls");
     expect(html).toContain("Missing values");
     expect(html).toContain("amplitude, absorbed power, phase, linewidth");
-    expect(html).toContain("Resource Provenance");
     expect(html).toContain("Validation");
     expect(html).toContain("unavailable");
     expect(html).toContain("Source surface");
-    expect(html).toContain(
-      analysisFieldVectorResourceKey(
-        "analysis:eigen:sample-0000:mode-0001",
-      ).replace("&", "&amp;"),
-    );
     expect(html).toContain("Open source result");
     expect(html).toContain("Open linked mode inspector");
     expect(html).toContain("Plot linked field in 3D");
+    expect(html).not.toContain("FMR Peak Workbench");
+    expect(html).not.toContain("Peak Observables");
+    expect(html).not.toContain("Data-plane resource");
+    expect(html).not.toContain("Selection kind");
+    expect(html).not.toContain("Node ID");
     expect(html).not.toContain("Selected Field Metadata");
     expect(html).not.toContain("Value kind");
     expect(html).not.toContain("Unknown Frequency-Domain");
+  });
+
+  it("groups single FMR peak details by product sections and hides transport internals", () => {
+    const selection: Selection = {
+      kind: "results.frequency_domain.fmr_peak",
+      label: "Modal Peak 1",
+      moduleSource: "explorer",
+      nodeId: "results:frequency-domain:fmr:peaks:peak:0",
+      objectId: null,
+      ref: {
+        fmrPeakIndex: 0,
+        kind: "results.frequency_domain.fmr_peak",
+        nodeId: "results:frequency-domain:fmr:peaks:peak:0",
+        type: "frequency-domain",
+      },
+    };
+
+    const html = renderToStaticMarkup(
+      <FmrPeakInspectorPanel selection={selection} />,
+    );
+
+    expect(html).toContain("Identity");
+    expect(html).toContain("Physical Quantities");
+    expect(html).toContain("Provenance");
+    expect(html).toContain("Visualization");
+    expect(html).toContain("Diagnostics");
+    expect(html).toContain("Physical source");
+    expect(html).toContain("modal eigenmode");
+    expect(html).toContain("Frequency");
+    expect(html).toContain("9.5 GHz");
+    expect(html).toContain("Amplitude");
+    expect(html).toContain("Absorbed power density");
+    expect(html).toContain("Field ID");
+    expect(html).toContain("Plot linked field in 3D");
+    expect(html).not.toContain("FMR Peak Workbench");
+    expect(html).not.toContain("Peak Observables");
+    expect(html).not.toContain("Visualization Handoff");
+    expect(html).not.toContain("Resource Provenance");
+    expect(html).not.toContain("Data-plane resource");
+    expect(html).not.toContain("Selection kind");
+    expect(html).not.toContain("Node ID");
   });
 
   it("renders a dedicated FMR modal spectrum control surface", () => {
@@ -3956,11 +3997,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(source).toContain('"analysis.eigen.set-mode-3d-animation"');
     expect(source).toContain("action === \"animate\"");
     expect(source).toContain("Stop selected frequency-domain field animation");
-    expect(source).toContain("activeAnalysisFieldOverlay?.fieldId ?? selectedFieldId");
-    expect(source).toContain("activeAnalysisFieldOverlay?.source ??");
-    expect(source).toContain("activeAnalysisFieldOverlay?.visualizationPhaseRad ??");
-    expect(source).toContain("activeAnalysisFieldOverlay?.query.phase_rad ??");
-    expect(source).toContain("activeAnalysisFieldOverlay?.query.view ??");
+    expect(source).toContain('"analysis.frequency-domain.stop-3d-animation"');
     expect(displayControlsSource).toContain('"analysis.frequency-domain.set-3d-appearance"');
     expect(displayControlsSource).toContain("activeAnalysisFieldOverlay?.appearance?.surfaceColorSource");
     expect(displayControlsSource).toContain("activeAnalysisFieldOverlay?.appearance?.scalarColorPalette");
