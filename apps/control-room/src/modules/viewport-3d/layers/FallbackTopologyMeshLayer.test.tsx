@@ -121,6 +121,20 @@ describe("FallbackTopologyMeshLayer", () => {
     expect(source).toContain("<FallbackTopologyMeshPrimitives");
   });
 
+  it("does not render depth-bypassing hidden edges for fallback magnetic topology", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("./FallbackTopologyMeshLayer.tsx", import.meta.url)),
+      "utf8",
+    );
+
+    expect(source).not.toContain(
+      "materialPolicyProps(\"hiddenEdges\")",
+    );
+    expect(source).not.toContain(
+      "RENDER_POLICIES.hiddenEdges.renderOrder",
+    );
+  });
+
   it("resolves fallback field buffers through the target-pass contract", () => {
     const source = readFileSync(
       fileURLToPath(new URL("./FallbackTopologyMeshLayer.tsx", import.meta.url)),

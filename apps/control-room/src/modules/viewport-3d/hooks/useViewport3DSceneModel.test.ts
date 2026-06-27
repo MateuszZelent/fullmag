@@ -20,6 +20,7 @@ import {
   resolveViewport3DActiveQuantityId,
   resolveViewport3DAnalysisComplexFieldQuery,
   resolveViewport3DDisplayedLiveValue,
+  resolveViewport3DFieldMetaScalarComponent,
   resolveViewport3DPrimaryFieldDataOptions,
   resolveViewport3DPrimaryFieldDemandPlan,
   resolveViewport3DPrimaryFieldRenderOptions,
@@ -101,6 +102,13 @@ function fieldVectorFixture(
 }
 
 describe("useViewport3DSceneModel", () => {
+  it("uses full metadata component for scalar spatial quantities", () => {
+    expect(resolveViewport3DFieldMetaScalarComponent("eden_total", "magnitude"))
+      .toBe("full");
+    expect(resolveViewport3DFieldMetaScalarComponent("m", "magnitude"))
+      .toBe("magnitude");
+  });
+
   it("subscribes to build diagnostic snapshot versions for live compact diagnostics", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
 
@@ -980,6 +988,31 @@ describe("useViewport3DSceneModel", () => {
         },
       ],
     ]);
+  });
+
+  it("uses full field metadata for scalar spatial per-part color ranges", () => {
+    const requests = resolveViewport3DPartScalarRangeRequests({
+      fieldRenderOptions: {
+        partScalarColorModes: new Map([["part:layer", "magnitude"]]),
+      },
+      getPartSettings: () => ({
+        activeQuantityId: "eden_total",
+        shaderVisible: true,
+        surfaceColorSource: "colormap",
+        visible: true,
+      } as never),
+      magneticParts: [
+        { part: { id: "part:layer", object_id: "permalloy_layer" } as never },
+      ],
+    });
+
+    expect(requests.get("part:layer")).toMatchObject({
+      component: "full",
+      mode: "magnitude",
+      quantityId: "eden_total",
+      scopeId: "permalloy_layer",
+      scopeKind: "object",
+    });
   });
 
   it("uses analysis overlay display pass appearance for mode field vectors", () => {

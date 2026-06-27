@@ -1113,7 +1113,7 @@ fn resolve_object_scope(
                     .as_deref()
                     .map(|id| object_ids_match(id, object_id))
                     .unwrap_or(false)
-                || part.id == object_id)
+                || object_ids_match(&part.id, object_id))
     }) {
         return Ok(ResolvedFieldScope {
             domain: ResolvedFieldScopeDomain::Magnetic,

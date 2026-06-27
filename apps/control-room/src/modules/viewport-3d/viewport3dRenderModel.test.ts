@@ -2169,6 +2169,62 @@ describe("viewport3dRenderModel", () => {
     );
   });
 
+  it("maps full-size explicit node-index vectors before building per-part scalar colors", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "part-a",
+          label: "Part A",
+          nodeCount: 4,
+          nodeStart: 0,
+        },
+      ],
+      [],
+      undefined,
+      {
+        meshTopologyHash: "hash-1",
+      },
+    );
+    const reorderedFieldVector: DecodedFieldVector = {
+      dtype: "float64",
+      grid: [4, 1, 1],
+      indexing: "explicit_node_indices",
+      meshTopologyHash: "hash-1",
+      nComp: 3,
+      nodeIndices: new Uint32Array([3, 2, 1, 0]),
+      pointCount: 4,
+      quantityId: "h_ex",
+      valueCount: 12,
+      values: new Float64Array([
+        -1, 0, 0,
+        -0.5, 0, 0,
+        0.5, 0, 0,
+        1, 0, 0,
+      ]),
+    };
+
+    const model = buildViewport3DFieldRenderModel(
+      topologyModel,
+      fieldVectorFixture(),
+      0.5,
+      {
+        partFieldVectors: new Map([["part-a", reorderedFieldVector]]),
+        partScalarColorModes: new Map([["part-a", "x"]]),
+        scalarColorsVisible: true,
+      },
+    );
+
+    expect(
+      Array.from(
+        model?.scalarColorsByPartAndMode.get("part-a")?.get("x")?.scalarValues ??
+          [],
+      ),
+    ).toEqual([1, 0.5, -0.5, -1]);
+  });
+
   it("rejects scoped per-part scalar colors without explicit node indices", () => {
     const topologyModel = buildViewport3DTopologyRenderModel(
       {

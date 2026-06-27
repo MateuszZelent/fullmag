@@ -48,12 +48,12 @@ export function MeshSizeHighlightLayer({
   return (
     <lineSegments
       geometry={geometry}
-      renderOrder={RENDER_POLICIES.hiddenEdges.renderOrder + 1}
+      renderOrder={RENDER_POLICIES.featureEdges.renderOrder + 1}
     >
       <lineBasicMaterial
         color={colors.accentStrong ?? colors.accent}
         opacity={0.95}
-        {...materialPolicyProps("hiddenEdges")}
+        {...materialPolicyProps("featureEdges")}
       />
     </lineSegments>
   );

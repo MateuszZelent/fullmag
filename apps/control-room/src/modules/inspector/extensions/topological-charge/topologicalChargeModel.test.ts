@@ -12,25 +12,44 @@ const readyResource: TopologicalChargeResource = {
   integer_error: 0.0176588,
   mesh_generation_id: "mesh-gen-9",
   mesh_revision: 17,
-  method: "berg-luscher",
+  method: "berg_luescher_fem_layers",
   nearest_integer: -1,
   object_id: "permalloy_ring",
   plane: "auto",
   polarity: "negative",
   quantity_id: "m",
   revision: 91,
-  sample_count: 4096,
-  sample_grid: {
-    nx: 64,
-    ny: 64,
-    plane: "xy",
+  sample_count: 1250,
+  sample_grid: null,
+  sample_topology: {
+    kind: "fem_layer_faces",
+    point_count: 1250,
+    triangle_count: 2304,
   },
   status: "ready",
-  valid_sample_count: 4088,
+  valid_sample_count: 1250,
+  layer_samples: [
+    {
+      charge: -0.9823412,
+      coordinate: -4.0e-8,
+      index: 0,
+      sample_count: 625,
+      triangle_count: 1152,
+      valid_sample_count: 625,
+    },
+    {
+      charge: -0.9818918,
+      coordinate: 4.0e-8,
+      index: 1,
+      sample_count: 625,
+      triangle_count: 1152,
+      valid_sample_count: 625,
+    },
+  ],
   warnings: [
     {
-      code: "mesh_surface_incomplete",
-      message: "Object surface has missing faces; volume slice was used.",
+      code: "under_resolved",
+      message: "Some neighboring magnetization directions indicate an under-resolved texture.",
     },
   ],
 };
@@ -40,10 +59,10 @@ describe("topologicalChargeModel", () => {
     expect(resolveTopologicalChargePanelModel("ready", readyResource)).toEqual({
       banner: {
         kind: "warning",
-        message: "Object surface has missing faces; volume slice was used.",
+        message: "Some neighboring magnetization directions indicate an under-resolved texture.",
       },
       method: expect.objectContaining({
-        sampleQuality: "4088/4096 valid samples (99.80%)",
+        sampleQuality: "1250/1250 valid samples (100.00%)",
         title: "Berg-Luescher topological charge",
       }),
       rows: [
@@ -55,8 +74,12 @@ describe("topologicalChargeModel", () => {
         { label: "Nearest integer", value: "-1" },
         { label: "Integer error", value: "0.017659" },
         { label: "Polarity", value: "negative" },
-        { label: "Sampling", value: "xy 64 x 64, 4088/4096 valid" },
-        { label: "Method", value: "berg-luscher" },
+        {
+          label: "Sampling",
+          value: "fem layer faces, 1250 nodes, 2304 triangles, 1250/1250 valid",
+        },
+        { label: "Support profile", value: "2 supports, Q(s) -0.982341 .. -0.981892" },
+        { label: "Method", value: "berg_luescher_fem_layers" },
         { label: "Field revision", value: "42" },
         { label: "Mesh revision", value: "17" },
         { label: "Domain generation", value: "domain-7" },
@@ -82,6 +105,7 @@ describe("topologicalChargeModel", () => {
         { label: "Integer error", value: "unavailable" },
         { label: "Polarity", value: "unavailable" },
         { label: "Sampling", value: "unavailable" },
+        { label: "Support profile", value: "unavailable" },
         { label: "Method", value: "unavailable" },
         { label: "Field revision", value: "unavailable" },
         { label: "Mesh revision", value: "unavailable" },
@@ -98,13 +122,15 @@ describe("topologicalChargeModel", () => {
         charge: null,
         integer_error: null,
         nearest_integer: null,
+        layer_samples: [],
         sample_grid: null,
-        status: "insufficient_samples",
+        sample_topology: null,
+        status: "invalid_magnetization",
         warnings: [],
       }).banner,
     ).toEqual({
       kind: "warning",
-      message: "Topological charge status: insufficient samples.",
+      message: "Topological charge status: invalid magnetization.",
     });
   });
 
@@ -119,7 +145,7 @@ describe("topologicalChargeModel", () => {
       "\\operatorname{atan2}",
     );
     expect(model.method.sampleQuality).toBe(
-      "4088/4096 valid samples (99.80%)",
+      "1250/1250 valid samples (100.00%)",
     );
     expect(model.method.terms).toContainEqual({
       symbol: "\\hat{\\mathbf m}",

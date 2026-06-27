@@ -16,6 +16,7 @@ import {
   mergeViewport3DFieldScalarColors,
   resolveViewport3DChunkedFieldColorTarget,
   resolveViewport3DChunkedPartFieldInput,
+  resolveViewport3DChunkedPartFieldColorTarget,
   resolveViewport3DChunkedPartDisplayModesKey,
   shouldBuildViewport3DPartChunkedScalarColor,
   shouldStartChunkedScalarColorBuild,
@@ -638,6 +639,67 @@ describe("useViewport3DChunkedScalarColors", () => {
       kind: "mapped-vertices",
       targetNodeIndices: new Uint32Array([1, 2, 4]),
       vertexCount: 5,
+    });
+  });
+
+  it("routes full-size explicit-index field colors through mapped worker targets", () => {
+    const target = resolveViewport3DChunkedFieldColorTarget(
+      {
+        meshTopologyHash: "hash-1",
+        nodeCount: 4,
+      } as never,
+      {
+        dtype: "float64",
+        grid: [4, 1, 1],
+        indexing: "explicit_node_indices",
+        meshTopologyHash: "hash-1",
+        nComp: 3,
+        nodeIndices: new Uint32Array([3, 2, 1, 0]),
+        pointCount: 4,
+        quantityId: "h_ex",
+        valueCount: 12,
+        values: new Float64Array(12),
+      },
+    );
+
+    expect(target).toEqual({
+      kind: "mapped-vertices",
+      targetNodeIndices: new Uint32Array([3, 2, 1, 0]),
+      vertexCount: 4,
+    });
+  });
+
+  it("routes full-size explicit-index part field colors through mapped worker targets", () => {
+    const target = resolveViewport3DChunkedPartFieldColorTarget(
+      {
+        meshTopologyHash: "hash-1",
+        nodeCount: 4,
+      } as never,
+      {
+        part: {
+          id: "part-a",
+          nodeCount: 4,
+          nodeStart: 0,
+        },
+      } as never,
+      {
+        dtype: "float64",
+        grid: [4, 1, 1],
+        indexing: "explicit_node_indices",
+        meshTopologyHash: "hash-1",
+        nComp: 3,
+        nodeIndices: new Uint32Array([3, 2, 1, 0]),
+        pointCount: 4,
+        quantityId: "h_ex",
+        valueCount: 12,
+        values: new Float64Array(12),
+      },
+    );
+
+    expect(target).toEqual({
+      kind: "mapped-vertices",
+      targetNodeIndices: new Uint32Array([3, 2, 1, 0]),
+      vertexCount: 4,
     });
   });
 

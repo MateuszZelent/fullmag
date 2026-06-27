@@ -1,4 +1,4 @@
-# Topological charge observable
+# Skyrmion charge and topological charge observable
 
 - Status: draft
 - Owners: Fullmag core physics/runtime
@@ -8,11 +8,18 @@
 
 ## 1. Problem statement
 
-Fullmag exposes an object-scoped topological charge observable for skyrmion and
-texture analysis. The observable must distinguish a physically meaningful charge
-from missing samples, stale fields, incomplete topology, or a projection that
-does not cover the magnetic texture. A displayed `Q = 0` is valid only when it
-comes from a non-empty unit magnetization sample set.
+Fullmag exposes an object-scoped skyrmion-charge observable for skyrmion and
+texture analysis. The observable is a geometric winding on an oriented
+two-dimensional support: a native FDM layer, a native FEM surface, an exact FEM
+tetrahedral plane cut, or a layer/profile made from such supports.
+
+It is not a sum over all unordered vectors in a three-dimensional volume. A
+future three-dimensional topological-flux or Hopf-index observable must use a
+separate contract. The current charge resource must distinguish a physically
+meaningful `Q` from missing current magnetization, empty supports, invalid
+magnetization, stale fields, degenerate topology, or under-resolved textures.
+A displayed `Q = 0` is valid only when it comes from a non-empty unit
+magnetization sample set on the selected 2D support.
 
 ## 2. Physical model
 
@@ -29,9 +36,9 @@ Q = \frac{1}{4\pi}\int_\Omega
 \frac{\partial \hat{\mathbf m}}{\partial v}\right)\,du\,dv .
 ```
 
-Fullmag currently reports the geometric Berg-Luescher grid discretization. Each
-grid cell is split into two oriented triangles. For a triangle with unit
-magnetization samples `a`, `b`, and `c`, the oriented solid angle is
+Fullmag uses the geometric Berg-Luescher solid-angle discretization on oriented
+triangles. For a triangle with unit magnetization samples `a`, `b`, and `c`,
+the oriented solid angle is
 
 ```math
 \Omega(a,b,c) =
@@ -56,7 +63,9 @@ Q_h = \frac{1}{4\pi}\sum_{\triangle\in\mathcal T_h}\Omega_\triangle .
 | `hat(m)` | normalized magnetization direction `M / |M|` | dimensionless |
 | `u`, `v` | in-plane coordinates of the analysis plane | m |
 | `Omega` | oriented solid angle on the unit sphere | rad |
-| `nx`, `ny` | regular analysis-grid sample counts | dimensionless |
+| `Sigma` | oriented 2D support: grid layer, surface, or plane cut | m^2 |
+| `T_h` | oriented triangle set covering the support | dimensionless |
+| `nx`, `ny` | regular native-grid sample counts when the support is FDM | dimensionless |
 
 ### 2.3 Assumptions and approximations
 
@@ -67,16 +76,24 @@ Q_h = \frac{1}{4\pi}\sum_{\triangle\in\mathcal T_h}\Omega_\triangle .
 - The method is geometric and robust for smooth unit-vector textures, but the
   integer interpretation is meaningful only when the texture is sufficiently
   resolved and the boundary state is approximately uniform.
-- The current FEM path is a plane-slice observable, not a mesh-intrinsic
-  simplicial charge over arbitrary curved surfaces.
+- The selected support must be two-dimensional and oriented. Unordered 3D nodes
+  do not define a skyrmion number.
+- The FEM film interpretation is a selected surface/cut or a stack of
+  two-dimensional charges `Q(s_i)`, not a global 3D sum. A scalar average is
+  only a summary; the profile is part of the diagnostic contract.
+- A rasterized preview is not the production observable. If a diagnostic path
+  resamples the field, the API must report the method as resampled/preview.
 
 ## 3. Numerical interpretation
 
 ### 3.1 FDM
 
-For FDM fields, Fullmag takes the selected structured-grid plane (`xy`, `xz`, or
-`yz`; `auto` chooses the thinnest axis), extracts the vector samples, normalizes
-valid samples, and applies the two-triangle Berg-Luescher sum per grid cell.
+For FDM fields, Fullmag takes the selected native structured-grid plane (`xy`,
+`xz`, or `yz`; `auto` chooses the thinnest axis), extracts all vector samples
+on that native layer, normalizes valid samples, and applies the two-triangle
+Berg-Luescher sum per grid cell. For thick 3D FDM textures, the correct
+extension is a profile `Q(s_i)` over native layers or an explicitly selected
+cross-section, not a global volume sum.
 
 ### 3.2 FEM
 
@@ -84,15 +101,22 @@ For FEM fields, Fullmag:
 
 1. resolves the selected magnetic object to its FEM nodes and tetrahedra,
 2. takes the object-scoped nodal vector field for the requested quantity,
-3. linearly interpolates tetrahedral data onto an exact plane cut,
-4. rasterizes the cut into a regular `nx * ny` grid,
-5. normalizes valid vector samples,
-6. applies the same Berg-Luescher grid sum as the FDM path.
+3. resolves the requested analysis plane (`xy`, `xz`, or `yz`; `auto` chooses
+   the thinnest object axis),
+4. uses true planar layer faces when the mesh exposes them and computes the
+   layer profile `Q(s_i)` on the native layer triangulations,
+5. thickness-averages valid layer charges only as a scalar summary while
+   preserving the per-layer profile in the resource,
+6. falls back to an exact tetrahedral plane cut for general 3D FEM objects
+   without native planar layer faces,
+7. deduplicates cut vertices by mesh vertex or global edge key, linearly
+   interpolates the current magnetization to cut vertices, triangulates each cut
+   polygon, and orients triangles in the support frame,
+8. normalizes valid vector samples and applies the Berg-Luescher solid-angle
+   sum on the layer or cut triangulation.
 
-Subpixel FEM cut triangles must remain visible to the rasterizer. If a cut
-triangle does not contain any pixel center, the rasterizer deposits a centroid
-sample into the corresponding pixel so a physically present slice is not turned
-into an empty analysis grid.
+A regular-grid FEM slice is a diagnostic raster path only when explicitly
+requested; it is not the default scientific result.
 
 ### 3.3 Hybrid
 
@@ -111,14 +135,32 @@ runtime analysis resource over an already-authored object and field quantity.
 
 No new `ProblemIR` field is required. The observable depends on the existing
 scene object identity, field quantity identity, mesh/domain provenance, field
-revision, and requested analysis plane/resolution.
+revision, selected support, sign convention, and method version.
 
 ### 4.3 Planner and capability-matrix impact
 
 No execution-planner choice changes. The analysis resource is available only
-when the runtime has compatible field samples and either an FDM plane or FEM
-object topology. Unsupported or empty sampling must be reported as degraded
-analysis status rather than a physical zero.
+when the runtime has current magnetization samples and a valid oriented 2D
+support. Empty support, invalid magnetization, or degenerate topology must be
+reported as degraded analysis status rather than a physical zero.
+
+Current status vocabulary:
+
+- `ready`: result computed on a non-empty support,
+- `no_current_magnetization`: no current vector field is available,
+- `empty_support`: the selected object/plane does not provide a 2D support,
+- `invalid_magnetization`: all support vectors are zero, NaN, Inf, or otherwise
+  invalid,
+- `degenerate_support`: the support has no usable oriented triangles,
+- `under_resolved`: result computed, but quality diagnostics indicate a weak
+  integer interpretation.
+
+The inspector must default to on-demand evaluation. Continuous recalculation is
+allowed only when the user explicitly selects it, or when a future table/quantity
+consumer subscribes to `skyrmion_charge` as a displayed quantity. The backend
+resource remains revision-keyed by mesh revision, field revision, support
+definition, object id, and method version; preview/rasterized paths must not be
+silently cached as production charge.
 
 ## 5. Validation strategy
 
@@ -128,20 +170,23 @@ analysis status rather than a physical zero.
 - An analytic Neel skyrmion sampled on a regular grid must produce `Q_h` close
   to the known orientation sign.
 - An analytic Neel skyrmion assigned to a thin FEM tetrahedral film and sampled
-  through the object-scoped analysis endpoint must produce the same charge
-  within a documented tolerance.
+  through object-scoped native layer faces must produce the same charge within a
+  documented tolerance. Exact plane-cut fallback is tested separately for FEM
+  meshes without planar layer faces.
 
 ### 5.2 Cross-backend checks
 
 FDM and FEM checks use the same Berg-Luescher solid-angle kernel after each
-backend has produced a regular plane grid. Differences are expected only from
-the FEM interpolation/rasterization step and the selected analysis plane.
+backend has produced an oriented triangle support. Differences are expected
+only from native-grid resolution, FEM interpolation to cut vertices, mesh
+quality, support selection, and sign convention.
 
 ### 5.3 Regression tests
 
 - `compute_topological_charge_grid` covers uniform fields, analytic skyrmions,
   and zero-length samples.
-- FEM slice tests cover exact tetra-plane cuts and subpixel triangle visibility.
+- FEM tests cover native layer profiles, exact tetra-plane-cut fallback, and
+  subpixel triangle visibility for the explicit raster diagnostic path.
 - Router tests cover FDM, FEM uniform fields, stale cache invalidation,
   zero-valid-sample degradation, and analytic FEM skyrmion charge.
 
@@ -151,8 +196,9 @@ the FEM interpolation/rasterization step and the selected analysis plane.
 - [x] ProblemIR: no new lowered representation
 - [x] Planner: no execution-selection change
 - [x] Capability matrix: no new capability vocabulary
-- [x] FDM backend: structured plane sampling into Berg-Luescher grid
-- [x] FEM backend: object-scoped tetra slice into Berg-Luescher grid
+- [x] FDM backend: native structured plane sampling into Berg-Luescher triangles
+- [x] FEM backend: object-scoped layer triangulation profile into Berg-Luescher sums
+- [x] FEM backend: object-scoped exact tetra-plane-cut fallback
 - [ ] Hybrid backend
 - [x] Outputs / observables: v2 analysis resource and inspector panel
 - [x] Tests / benchmarks: targeted analytical and regression tests
@@ -160,11 +206,14 @@ the FEM interpolation/rasterization step and the selected analysis plane.
 
 ## 7. Known limits and deferred work
 
-- The FEM observable is currently plane-based. A future mesh-intrinsic
-  topological charge over triangulated object surfaces would need a separate
-  orientation and boundary contract.
-- The current resource reports one selected plane and resolution. Multi-plane
-  convergence diagnostics are deferred.
+- Full 3D topological flux, Hopf index, and density maps are separate
+  observables/resources and are not implemented by this scalar inspector
+  resource.
+- Strongly curved surfaces or bobber-like textures require inspecting a full
+  `Q(s_i)` profile or topological flux rather than trusting one scalar cut.
+- A separate charge over arbitrary curved object surfaces needs an explicit
+  orientation and boundary contract. It is not the default skyrmion-number
+  interpretation for a film.
 - Integer-charge claims should be treated as diagnostic unless the valid-sample
   fraction, boundary texture, and grid-convergence checks are acceptable for the
   study.

@@ -6895,6 +6895,16 @@ export interface components {
             /** Format: int64 */
             total_rows: number;
         };
+        TopologicalChargeLayerSample: {
+            /** Format: double */
+            charge?: number | null;
+            /** Format: double */
+            coordinate: number;
+            index: number;
+            sample_count: number;
+            triangle_count: number;
+            valid_sample_count: number;
+        };
         TopologicalChargeQuery: {
             method?: string;
             plane?: string;
@@ -6912,6 +6922,7 @@ export interface components {
             field_revision?: number | null;
             /** Format: double */
             integer_error?: number | null;
+            layer_samples: components["schemas"]["TopologicalChargeLayerSample"][];
             mesh_generation_id?: string | null;
             /** Format: int64 */
             mesh_revision?: number | null;
@@ -6926,6 +6937,7 @@ export interface components {
             revision: number;
             sample_count: number;
             sample_grid?: null | components["schemas"]["TopologicalChargeSampleGrid"];
+            sample_topology?: null | components["schemas"]["TopologicalChargeSampleTopology"];
             status: components["schemas"]["TopologicalChargeStatus"];
             valid_sample_count: number;
             warnings: components["schemas"]["TopologicalChargeWarning"][];
@@ -6937,8 +6949,13 @@ export interface components {
             ny: number;
             plane: string;
         };
+        TopologicalChargeSampleTopology: {
+            kind: string;
+            point_count: number;
+            triangle_count: number;
+        };
         /** @enum {string} */
-        TopologicalChargeStatus: "ready" | "field_missing" | "mesh_missing" | "stale" | "unsupported_geometry" | "insufficient_samples" | "error";
+        TopologicalChargeStatus: "ready" | "no_current_magnetization" | "empty_support" | "invalid_magnetization" | "degenerate_support" | "under_resolved" | "stale" | "unsupported_geometry" | "error";
         TopologicalChargeWarning: {
             code: string;
             message: string;

@@ -7,10 +7,14 @@ use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
 use crate::analysis::topological_charge::{
-    TopologicalChargeInput, TopologicalChargeWarningCode, compute_topological_charge_grid,
+    TopologicalChargeInput, TopologicalChargeTriangleInput, TopologicalChargeWarningCode,
+    compute_topological_charge_grid, compute_topological_charge_triangles,
 };
 use crate::error::ApiError;
 use crate::fem_slice::fem_tetra_linear_slice;
+use crate::fem_slice_overlay::{
+    FemSliceOverlayInput, SliceOverlayPoint, collect_fem_slice_overlay,
+};
 use crate::field_slice::{FemField, FieldSliceQuery, SlicePlane, resolve_slice_query};
 use crate::router_v2::handlers::data::field_resolution::{
     flatten_json_field_values, json_field_grid, live_magnetization_values,
@@ -40,6 +44,23 @@ pub struct TopologicalChargeSampleGrid {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct TopologicalChargeSampleTopology {
+    pub kind: String,
+    pub point_count: usize,
+    pub triangle_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct TopologicalChargeLayerSample {
+    pub index: usize,
+    pub coordinate: f64,
+    pub charge: Option<f64>,
+    pub sample_count: usize,
+    pub valid_sample_count: usize,
+    pub triangle_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct TopologicalChargeWarning {
     pub code: String,
     pub message: String,
@@ -49,11 +70,13 @@ pub struct TopologicalChargeWarning {
 #[serde(rename_all = "snake_case")]
 pub enum TopologicalChargeStatus {
     Ready,
-    FieldMissing,
-    MeshMissing,
+    NoCurrentMagnetization,
+    EmptySupport,
+    InvalidMagnetization,
+    DegenerateSupport,
+    UnderResolved,
     Stale,
     UnsupportedGeometry,
-    InsufficientSamples,
     Error,
 }
 
@@ -70,6 +93,8 @@ pub struct TopologicalChargeResource {
     pub method: String,
     pub plane: String,
     pub sample_grid: Option<TopologicalChargeSampleGrid>,
+    pub sample_topology: Option<TopologicalChargeSampleTopology>,
+    pub layer_samples: Vec<TopologicalChargeLayerSample>,
     pub sample_count: usize,
     pub valid_sample_count: usize,
     pub field_revision: Option<u64>,
@@ -93,7 +118,7 @@ fn default_resolution() -> String {
 }
 
 fn default_method() -> String {
-    "berg_luescher_grid".to_string()
+    "berg_luescher".to_string()
 }
 
 #[utoipa::path(
@@ -128,6 +153,7 @@ pub async fn get_object_topological_charge(
         .find(|object| object.id == object_id || object.name == object_id)
         .ok_or_else(|| ApiError::not_found(format!("object not found: {object_id}")))?;
     let requested_resolution = query.resolution;
+    let requested_method = query.method;
     let requested_snapshot = query.snapshot_id.as_deref().unwrap_or("latest");
     let field_summary = topological_charge_field_summary(snapshot, &query.quantity_id);
     let mesh = snapshot.fem_mesh.as_ref();
@@ -139,6 +165,7 @@ pub async fn get_object_topological_charge(
             &object.id,
             &query.plane,
             &requested_resolution,
+            &requested_method,
         ),
         _ => None,
     };
@@ -156,7 +183,7 @@ pub async fn get_object_topological_charge(
         scene.revision,
         &query.plane,
         &requested_resolution,
-        &query.method,
+        &requested_method,
     );
     if let Some(cached) = state
         .quantity_data_plane
@@ -169,26 +196,16 @@ pub async fn get_object_topological_charge(
             return Ok(Json(resource));
         }
     }
-    let mesh_missing = mesh.is_none();
-    let mesh_surface_incomplete = mesh.is_some_and(|mesh| {
-        sampled_result.is_none() && object_mesh_surface_incomplete(mesh, &object.id)
-    });
+    let missing_fem_mesh = mesh.is_none();
     let sampled_result_has_valid_samples = sampled_result
         .as_ref()
         .is_some_and(|result| result.result.valid_sample_count > 0);
-    let status = match (
+    let status = TopologicalChargeStatus::from_inputs(
         field_summary.as_ref(),
         sampled_result.as_ref(),
         sampled_result_has_valid_samples,
-        mesh_missing,
-    ) {
-        (None, _, _, _) => TopologicalChargeStatus::FieldMissing,
-        (Some(_), Some(_), false, _) => TopologicalChargeStatus::InsufficientSamples,
-        (Some(_), Some(_), true, true) => TopologicalChargeStatus::Ready,
-        (Some(_), None, _, true) => TopologicalChargeStatus::MeshMissing,
-        (Some(_), Some(_), true, false) => TopologicalChargeStatus::Ready,
-        (Some(_), None, _, false) => TopologicalChargeStatus::UnsupportedGeometry,
-    };
+        missing_fem_mesh,
+    );
     let warnings = topological_charge_warnings(
         &status,
         requested_snapshot,
@@ -197,7 +214,6 @@ pub async fn get_object_topological_charge(
             .as_ref()
             .map_or(0, |summary| summary.sample_count),
         sampled_result.as_ref(),
-        mesh_surface_incomplete,
     );
     let charge: Option<f64> = matches!(status, TopologicalChargeStatus::Ready)
         .then(|| sampled_result.as_ref().map(|result| result.result.charge))
@@ -228,15 +244,19 @@ pub async fn get_object_topological_charge(
         nearest_integer,
         integer_error,
         polarity,
-        method: query.method,
+        method: sampled_result
+            .as_ref()
+            .map_or_else(|| requested_method.clone(), |result| result.method.clone()),
         plane: resolved_plane,
         sample_grid: sampled_result
             .as_ref()
-            .map(|result| TopologicalChargeSampleGrid {
-                nx: result.nx as u32,
-                ny: result.ny as u32,
-                plane: result.plane.clone(),
-            }),
+            .and_then(|result| result.sample_grid.clone()),
+        sample_topology: sampled_result
+            .as_ref()
+            .and_then(|result| result.sample_topology.clone()),
+        layer_samples: sampled_result
+            .as_ref()
+            .map_or_else(Vec::new, |result| result.layer_samples.clone()),
         sample_count: sampled_result.as_ref().map_or_else(
             || {
                 field_summary
@@ -280,9 +300,44 @@ struct FieldSampleSummary {
 
 struct ComputedTopologicalCharge {
     result: crate::analysis::topological_charge::TopologicalChargeResult,
-    nx: usize,
-    ny: usize,
+    method: String,
     plane: String,
+    sample_grid: Option<TopologicalChargeSampleGrid>,
+    sample_topology: Option<TopologicalChargeSampleTopology>,
+    layer_samples: Vec<TopologicalChargeLayerSample>,
+}
+
+impl TopologicalChargeStatus {
+    fn from_inputs(
+        field_summary: Option<&FieldSampleSummary>,
+        sampled_result: Option<&ComputedTopologicalCharge>,
+        has_valid_samples: bool,
+        missing_fem_mesh: bool,
+    ) -> Self {
+        let Some(_summary) = field_summary else {
+            return Self::NoCurrentMagnetization;
+        };
+        let Some(result) = sampled_result else {
+            return if missing_fem_mesh {
+                Self::EmptySupport
+            } else {
+                Self::DegenerateSupport
+            };
+        };
+        if has_valid_samples {
+            return Self::Ready;
+        }
+        if result
+            .result
+            .warnings
+            .iter()
+            .any(|warning| warning.code == TopologicalChargeWarningCode::NonUnitMagnetization)
+        {
+            Self::InvalidMagnetization
+        } else {
+            Self::DegenerateSupport
+        }
+    }
 }
 
 fn topological_charge_field_summary(
@@ -348,9 +403,15 @@ fn compute_regular_fdm_topological_charge(
     .ok()?;
     Some(ComputedTopologicalCharge {
         result,
-        nx,
-        ny,
-        plane,
+        method: "berg_luescher_grid".to_string(),
+        plane: plane.clone(),
+        sample_grid: Some(TopologicalChargeSampleGrid {
+            nx: nx as u32,
+            ny: ny as u32,
+            plane,
+        }),
+        sample_topology: None,
+        layer_samples: Vec::new(),
     })
 }
 
@@ -360,7 +421,22 @@ fn compute_fem_topological_charge(
     object_id: &str,
     requested_plane: &str,
     requested_resolution: &str,
+    requested_method: &str,
 ) -> Option<ComputedTopologicalCharge> {
+    if let Some(result) =
+        compute_fem_layered_topological_charge(summary, mesh, object_id, requested_plane)
+    {
+        return Some(result);
+    }
+    if let Some(result) =
+        compute_fem_plane_cut_topological_charge(summary, mesh, object_id, requested_plane)
+    {
+        return Some(result);
+    }
+    if !allows_fem_slice_grid_method(requested_method) {
+        return None;
+    }
+
     let fem_field = object_scoped_fem_field(summary, mesh, object_id)?;
     let plane = resolve_fem_plane(&fem_field.nodes, requested_plane)?;
     let resolution = resolve_topological_charge_resolution(requested_resolution)?;
@@ -405,10 +481,389 @@ fn compute_fem_topological_charge(
     .ok()?;
     Some(ComputedTopologicalCharge {
         result,
-        nx: slice.x_size as usize,
-        ny: slice.y_size as usize,
+        method: "berg_luescher_fem_slice_grid".to_string(),
         plane: plane.as_str().to_string(),
+        sample_grid: Some(TopologicalChargeSampleGrid {
+            nx: slice.x_size,
+            ny: slice.y_size,
+            plane: plane.as_str().to_string(),
+        }),
+        sample_topology: None,
+        layer_samples: Vec::new(),
     })
+}
+
+fn allows_fem_slice_grid_method(requested_method: &str) -> bool {
+    matches!(
+        requested_method,
+        "berg_luescher_fem_slice_grid" | "fem_slice_grid" | "slice_grid"
+    )
+}
+
+fn compute_fem_plane_cut_topological_charge(
+    summary: &FieldSampleSummary,
+    mesh: &fullmag_runner::FemMeshPayload,
+    object_id: &str,
+    requested_plane: &str,
+) -> Option<ComputedTopologicalCharge> {
+    let fem_field = object_scoped_fem_field(summary, mesh, object_id)?;
+    let plane = resolve_fem_plane(&fem_field.nodes, requested_plane)?;
+    let resolved_slice = resolve_slice_query(
+        &FieldSliceQuery {
+            plane,
+            component: Some("full".to_string()),
+            cut_world: None,
+            cut_norm: Some(0.5),
+            x_size: Some(2),
+            y_size: Some(2),
+            max_points: Some(4),
+            include_arrows: Some(false),
+            arrow_every: None,
+            max_arrows: None,
+        },
+        3,
+    )
+    .ok()?;
+    let overlay = collect_fem_slice_overlay(
+        FemSliceOverlayInput {
+            nodes: &fem_field.nodes,
+            elements: &fem_field.elements,
+            element_markers: &fem_field.element_markers,
+        },
+        &resolved_slice,
+    )
+    .ok()?;
+
+    let mut sample_map = BTreeMap::<CutPointKey, usize>::new();
+    let mut samples = Vec::new();
+    let mut triangles = Vec::new();
+    let mut degenerate_triangle_count = 0usize;
+    for polygon in &overlay.polygons {
+        if polygon.points.len() < 3 {
+            continue;
+        }
+        for index in 1..(polygon.points.len() - 1) {
+            let points = [
+                &polygon.points[0],
+                &polygon.points[index],
+                &polygon.points[index + 1],
+            ];
+            if cut_triangle_area(points) <= 1.0e-30 {
+                degenerate_triangle_count += 1;
+                continue;
+            }
+            let mut triangle = [0usize; 3];
+            for (slot, point) in points.into_iter().enumerate() {
+                triangle[slot] = remap_cut_point(&fem_field, point, &mut sample_map, &mut samples)?;
+            }
+            triangles.push(triangle);
+        }
+    }
+    if samples.len() < 3 || triangles.is_empty() {
+        return None;
+    }
+
+    let mut result = compute_topological_charge_triangles(TopologicalChargeTriangleInput {
+        samples: &samples,
+        triangles: &triangles,
+    })
+    .ok()?;
+    if degenerate_triangle_count > 0 {
+        result.warnings.push(
+            crate::analysis::topological_charge::TopologicalChargeWarning {
+                code: TopologicalChargeWarningCode::InsufficientSamples,
+                message: format!(
+                    "{degenerate_triangle_count} degenerate FEM cut triangles were skipped."
+                ),
+            },
+        );
+    }
+    let sample_count = result.sample_count;
+    let valid_sample_count = result.valid_sample_count;
+    let triangle_count = triangles.len();
+    let charge = (valid_sample_count > 0).then_some(result.charge);
+    Some(ComputedTopologicalCharge {
+        result,
+        method: "fem_plane_cut_solid_angle".to_string(),
+        plane: plane.as_str().to_string(),
+        sample_grid: None,
+        sample_topology: Some(TopologicalChargeSampleTopology {
+            kind: "tetra_plane_cut".to_string(),
+            point_count: sample_count,
+            triangle_count,
+        }),
+        layer_samples: vec![TopologicalChargeLayerSample {
+            index: 0,
+            coordinate: overlay.cut_world,
+            charge,
+            sample_count,
+            valid_sample_count,
+            triangle_count,
+        }],
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum CutPointKey {
+    MeshNode(u32),
+    Edge { a: u32, b: u32, t_quantized: i64 },
+}
+
+fn cut_point_key(point: &SliceOverlayPoint) -> CutPointKey {
+    let [a, b] = point.edge_node_ids;
+    if a == b {
+        return CutPointKey::MeshNode(a);
+    }
+    let (a, b, t) = if a <= b {
+        (a, b, point.edge_t)
+    } else {
+        (b, a, 1.0 - point.edge_t)
+    };
+    CutPointKey::Edge {
+        a,
+        b,
+        t_quantized: (t.clamp(0.0, 1.0) * 1.0e12).round() as i64,
+    }
+}
+
+fn remap_cut_point(
+    field: &FemField,
+    point: &SliceOverlayPoint,
+    sample_map: &mut BTreeMap<CutPointKey, usize>,
+    samples: &mut Vec<[f64; 3]>,
+) -> Option<usize> {
+    let key = cut_point_key(point);
+    if let Some(index) = sample_map.get(&key) {
+        return Some(*index);
+    }
+    let sample = cut_point_sample(field, point)?;
+    let index = samples.len();
+    sample_map.insert(key, index);
+    samples.push(sample);
+    Some(index)
+}
+
+fn cut_point_sample(field: &FemField, point: &SliceOverlayPoint) -> Option<[f64; 3]> {
+    let [a, b] = point.edge_node_ids;
+    if a == b {
+        return fem_field_node_vector(field, a as usize);
+    }
+    let left = fem_field_node_vector(field, a as usize)?;
+    let right = fem_field_node_vector(field, b as usize)?;
+    let t = point.edge_t.clamp(0.0, 1.0);
+    Some([
+        left[0] + (right[0] - left[0]) * t,
+        left[1] + (right[1] - left[1]) * t,
+        left[2] + (right[2] - left[2]) * t,
+    ])
+}
+
+fn fem_field_node_vector(field: &FemField, node_index: usize) -> Option<[f64; 3]> {
+    if field.n_comp != 3 {
+        return None;
+    }
+    let base = node_index.checked_mul(3)?;
+    Some([
+        *field.values.get(base)?,
+        *field.values.get(base + 1)?,
+        *field.values.get(base + 2)?,
+    ])
+}
+
+fn cut_triangle_area(points: [&SliceOverlayPoint; 3]) -> f64 {
+    let a = points[0].uv;
+    let b = points[1].uv;
+    let c = points[2].uv;
+    0.5 * ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])).abs()
+}
+
+fn compute_fem_layered_topological_charge(
+    summary: &FieldSampleSummary,
+    mesh: &fullmag_runner::FemMeshPayload,
+    object_id: &str,
+    requested_plane: &str,
+) -> Option<ComputedTopologicalCharge> {
+    let layers = object_scoped_fem_layers(summary, mesh, object_id, requested_plane)?;
+    let mut layer_samples = Vec::with_capacity(layers.len());
+    let mut valid_layers = Vec::new();
+    let mut sample_count = 0usize;
+    let mut valid_sample_count = 0usize;
+    let mut saw_non_unit = false;
+    let mut saw_insufficient = false;
+
+    for (index, layer) in layers.iter().enumerate() {
+        let layer_result = compute_topological_charge_triangles(TopologicalChargeTriangleInput {
+            samples: &layer.samples,
+            triangles: &layer.triangles,
+        })
+        .ok()?;
+        sample_count += layer_result.sample_count;
+        valid_sample_count += layer_result.valid_sample_count;
+        for warning in &layer_result.warnings {
+            match warning.code {
+                TopologicalChargeWarningCode::NonUnitMagnetization => saw_non_unit = true,
+                TopologicalChargeWarningCode::InsufficientSamples => saw_insufficient = true,
+            }
+        }
+        let charge = (layer_result.valid_sample_count > 0).then_some(layer_result.charge);
+        if let Some(charge) = charge {
+            valid_layers.push((layer.coordinate, charge));
+        }
+        layer_samples.push(TopologicalChargeLayerSample {
+            index,
+            coordinate: layer.coordinate,
+            charge,
+            sample_count: layer_result.sample_count,
+            valid_sample_count: layer_result.valid_sample_count,
+            triangle_count: layer.triangles.len(),
+        });
+    }
+
+    let charge = thickness_average_charge(&valid_layers).unwrap_or(0.0);
+    let mut warnings = Vec::new();
+    if saw_non_unit {
+        warnings.push(
+            crate::analysis::topological_charge::TopologicalChargeWarning {
+                code: TopologicalChargeWarningCode::NonUnitMagnetization,
+                message: "One or more magnetization samples were normalized or rejected."
+                    .to_string(),
+            },
+        );
+    }
+    if saw_insufficient || valid_layers.is_empty() {
+        warnings.push(
+            crate::analysis::topological_charge::TopologicalChargeWarning {
+                code: TopologicalChargeWarningCode::InsufficientSamples,
+                message: "One or more FEM layers had no valid oriented triangle samples."
+                    .to_string(),
+            },
+        );
+    }
+    let result = crate::analysis::topological_charge::TopologicalChargeResult {
+        charge,
+        sample_count,
+        valid_sample_count,
+        warnings,
+    };
+    let triangle_count = layers.iter().map(|layer| layer.triangles.len()).sum();
+    Some(ComputedTopologicalCharge {
+        result,
+        method: "berg_luescher_fem_layers".to_string(),
+        plane: layers[0].plane.as_str().to_string(),
+        sample_grid: None,
+        sample_topology: Some(TopologicalChargeSampleTopology {
+            kind: "fem_layer_faces".to_string(),
+            point_count: sample_count,
+            triangle_count,
+        }),
+        layer_samples,
+    })
+}
+
+struct FemLayerSamples {
+    samples: Vec<[f64; 3]>,
+    triangles: Vec<[usize; 3]>,
+    plane: SlicePlane,
+    coordinate: f64,
+}
+
+fn object_scoped_fem_layers(
+    summary: &FieldSampleSummary,
+    mesh: &fullmag_runner::FemMeshPayload,
+    object_id: &str,
+    requested_plane: &str,
+) -> Option<Vec<FemLayerSamples>> {
+    if summary.values.len() / 3 != mesh.nodes.len() {
+        return None;
+    }
+    let (node_indices, element_indices) = object_mesh_scope(mesh, object_id)?;
+    let plane = resolve_fem_plane_for_object(mesh, &node_indices, requested_plane)?;
+    let normal_axis = plane_normal_axis(plane);
+    let (_, max) = node_bounds(mesh, &node_indices)?;
+    let tolerance = layer_coordinate_tolerance(mesh, &node_indices, normal_axis)?;
+    let mut layers = layer_coordinates(mesh, &node_indices, normal_axis, tolerance);
+    layers.sort_by(|a, b| a.total_cmp(b));
+    let mut result = Vec::new();
+    for coordinate in layers {
+        let faces = layer_faces_from_elements(
+            mesh,
+            &element_indices,
+            plane,
+            normal_axis,
+            coordinate,
+            tolerance,
+        );
+        let mut node_map = BTreeMap::<u32, usize>::new();
+        let mut samples = Vec::new();
+        let mut triangles = Vec::new();
+        for face in faces {
+            let Some(triangle) =
+                remap_surface_triangle(mesh, summary, face, plane, &mut node_map, &mut samples)
+            else {
+                continue;
+            };
+            triangles.push(triangle);
+        }
+        if samples.len() >= 3 && !triangles.is_empty() {
+            result.push(FemLayerSamples {
+                samples,
+                triangles,
+                plane,
+                coordinate,
+            });
+        }
+    }
+    if result.is_empty() {
+        let top_faces = object_surface_layer_faces(
+            mesh,
+            object_id,
+            plane,
+            normal_axis,
+            max[normal_axis],
+            tolerance,
+        )?;
+        let mut node_map = BTreeMap::<u32, usize>::new();
+        let mut samples = Vec::new();
+        let mut triangles = Vec::new();
+        for face in top_faces {
+            let Some(triangle) =
+                remap_surface_triangle(mesh, summary, face, plane, &mut node_map, &mut samples)
+            else {
+                continue;
+            };
+            triangles.push(triangle);
+        }
+        if samples.len() >= 3 && !triangles.is_empty() {
+            result.push(FemLayerSamples {
+                samples,
+                triangles,
+                plane,
+                coordinate: max[normal_axis],
+            });
+        }
+    }
+    (!result.is_empty()).then_some(result)
+}
+
+fn thickness_average_charge(layers: &[(f64, f64)]) -> Option<f64> {
+    if layers.is_empty() {
+        return None;
+    }
+    if layers.len() == 1 {
+        return Some(layers[0].1);
+    }
+    let mut sorted = layers.to_vec();
+    sorted.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let thickness = sorted.last()?.0 - sorted.first()?.0;
+    if thickness.abs() <= 1.0e-30 {
+        return Some(sorted.iter().map(|(_, charge)| charge).sum::<f64>() / sorted.len() as f64);
+    }
+    let mut integral = 0.0;
+    for pair in sorted.windows(2) {
+        let dz = pair[1].0 - pair[0].0;
+        integral += 0.5 * dz * (pair[0].1 + pair[1].1);
+    }
+    Some(integral / thickness)
 }
 
 fn object_scoped_fem_field(
@@ -519,19 +974,265 @@ fn object_mesh_scope(
     ))
 }
 
-fn object_mesh_surface_incomplete(mesh: &fullmag_runner::FemMeshPayload, object_id: &str) -> bool {
+fn resolve_fem_plane_for_object(
+    mesh: &fullmag_runner::FemMeshPayload,
+    node_indices: &[usize],
+    requested_plane: &str,
+) -> Option<SlicePlane> {
+    match requested_plane {
+        "xy" | "XY" => return Some(SlicePlane::Xy),
+        "xz" | "XZ" => return Some(SlicePlane::Xz),
+        "yz" | "YZ" => return Some(SlicePlane::Yz),
+        "auto" | "" => {}
+        _ => return None,
+    }
+    let nodes = node_indices
+        .iter()
+        .filter_map(|index| mesh.nodes.get(*index).copied())
+        .collect::<Vec<_>>();
+    resolve_fem_plane(&nodes, requested_plane)
+}
+
+fn object_part_boundary_face_indices(
+    part: &fullmag_runner::FemMeshPartPayload,
+    boundary_face_count: usize,
+) -> Vec<u32> {
+    if !part.boundary_face_indices.is_empty() {
+        return part.boundary_face_indices.clone();
+    }
+    let start = part.boundary_face_start as usize;
+    let end = start
+        .saturating_add(part.boundary_face_count as usize)
+        .min(boundary_face_count);
+    if start >= end {
+        return Vec::new();
+    }
+    (start..end).map(|index| index as u32).collect()
+}
+
+fn object_surface_layer_faces(
+    mesh: &fullmag_runner::FemMeshPayload,
+    object_id: &str,
+    plane: SlicePlane,
+    normal_axis: usize,
+    coordinate: f64,
+    tolerance: f64,
+) -> Option<Vec<[u32; 3]>> {
+    let mut faces = Vec::new();
     if let Some(part) = mesh
         .mesh_parts
         .iter()
         .find(|part| part.role == "magnetic_object" && part.object_id.as_deref() == Some(object_id))
     {
-        return part.surface_faces.is_empty()
-            || (part.boundary_face_count > 0 && part.boundary_face_indices.is_empty());
-    }
-    mesh.object_segments
+        faces.extend(part.surface_faces.iter().copied());
+        if faces.is_empty() {
+            for face_index in object_part_boundary_face_indices(part, mesh.boundary_faces.len()) {
+                if let Some(face) = mesh.boundary_faces.get(face_index as usize) {
+                    faces.push(*face);
+                }
+            }
+        }
+    } else if let Some(segment) = mesh
+        .object_segments
         .iter()
         .find(|segment| segment.object_id == object_id)
-        .is_some_and(|segment| segment.boundary_face_count > 0 && mesh.boundary_faces.is_empty())
+    {
+        let start = segment.boundary_face_start as usize;
+        let end = start
+            .saturating_add(segment.boundary_face_count as usize)
+            .min(mesh.boundary_faces.len());
+        faces.extend(mesh.boundary_faces[start..end].iter().copied());
+    }
+    let selected =
+        select_faces_on_axis_target(mesh, &faces, plane, normal_axis, coordinate, tolerance);
+    (!selected.is_empty()).then_some(selected)
+}
+
+fn node_bounds(
+    mesh: &fullmag_runner::FemMeshPayload,
+    node_indices: &[usize],
+) -> Option<([f64; 3], [f64; 3])> {
+    let mut min = [f64::INFINITY; 3];
+    let mut max = [f64::NEG_INFINITY; 3];
+    let mut saw_node = false;
+    for node_index in node_indices {
+        let node = mesh.nodes.get(*node_index)?;
+        saw_node = true;
+        for axis in 0..3 {
+            min[axis] = min[axis].min(node[axis]);
+            max[axis] = max[axis].max(node[axis]);
+        }
+    }
+    saw_node.then_some((min, max))
+}
+
+fn layer_coordinate_tolerance(
+    mesh: &fullmag_runner::FemMeshPayload,
+    node_indices: &[usize],
+    normal_axis: usize,
+) -> Option<f64> {
+    let (min, max) = node_bounds(mesh, node_indices)?;
+    let extent = max[normal_axis] - min[normal_axis];
+    Some((extent.abs() * 1.0e-8).max(1.0e-12))
+}
+
+fn layer_coordinates(
+    mesh: &fullmag_runner::FemMeshPayload,
+    node_indices: &[usize],
+    normal_axis: usize,
+    tolerance: f64,
+) -> Vec<f64> {
+    let mut coordinates = Vec::<f64>::new();
+    for node_index in node_indices {
+        let Some(node) = mesh.nodes.get(*node_index) else {
+            continue;
+        };
+        let coordinate = node[normal_axis];
+        if coordinates
+            .iter()
+            .any(|existing| (*existing - coordinate).abs() <= tolerance)
+        {
+            continue;
+        }
+        coordinates.push(coordinate);
+    }
+    coordinates
+}
+
+fn layer_faces_from_elements(
+    mesh: &fullmag_runner::FemMeshPayload,
+    element_indices: &[usize],
+    plane: SlicePlane,
+    normal_axis: usize,
+    coordinate: f64,
+    tolerance: f64,
+) -> Vec<[u32; 3]> {
+    let mut seen = BTreeSet::<[u32; 3]>::new();
+    let mut faces = Vec::new();
+    for element_index in element_indices {
+        let Some(element) = mesh.elements.get(*element_index) else {
+            continue;
+        };
+        for face in tetra_faces(*element) {
+            if !face.iter().all(|node_index| {
+                mesh.nodes
+                    .get(*node_index as usize)
+                    .is_some_and(|node| (node[normal_axis] - coordinate).abs() <= tolerance)
+            }) {
+                continue;
+            }
+            if projected_triangle_area(mesh, face, plane).abs() <= 1.0e-30 {
+                continue;
+            }
+            let mut key = face;
+            key.sort_unstable();
+            if seen.insert(key) {
+                faces.push(face);
+            }
+        }
+    }
+    faces
+}
+
+fn tetra_faces(element: [u32; 4]) -> [[u32; 3]; 4] {
+    [
+        [element[0], element[1], element[2]],
+        [element[0], element[1], element[3]],
+        [element[0], element[2], element[3]],
+        [element[1], element[2], element[3]],
+    ]
+}
+
+fn select_faces_on_axis_target(
+    mesh: &fullmag_runner::FemMeshPayload,
+    faces: &[[u32; 3]],
+    plane: SlicePlane,
+    normal_axis: usize,
+    target: f64,
+    tolerance: f64,
+) -> Vec<[u32; 3]> {
+    faces
+        .iter()
+        .copied()
+        .filter(|face| {
+            face.iter().all(|node_index| {
+                mesh.nodes
+                    .get(*node_index as usize)
+                    .is_some_and(|node| (node[normal_axis] - target).abs() <= tolerance)
+            }) && projected_triangle_area(mesh, *face, plane).abs() > 1.0e-30
+        })
+        .collect()
+}
+
+fn remap_surface_triangle(
+    mesh: &fullmag_runner::FemMeshPayload,
+    summary: &FieldSampleSummary,
+    face: [u32; 3],
+    plane: SlicePlane,
+    node_map: &mut BTreeMap<u32, usize>,
+    samples: &mut Vec<[f64; 3]>,
+) -> Option<[usize; 3]> {
+    let mut remapped = [0usize; 3];
+    for (slot, old_index) in face.iter().copied().enumerate() {
+        let new_index = if let Some(index) = node_map.get(&old_index) {
+            *index
+        } else {
+            let old_index_usize = old_index as usize;
+            let value_offset = old_index_usize * 3;
+            let sample = [
+                *summary.values.get(value_offset)?,
+                *summary.values.get(value_offset + 1)?,
+                *summary.values.get(value_offset + 2)?,
+            ];
+            let index = samples.len();
+            node_map.insert(old_index, index);
+            samples.push(sample);
+            index
+        };
+        remapped[slot] = new_index;
+    }
+    if projected_triangle_area(mesh, face, plane) < 0.0 {
+        remapped.swap(1, 2);
+    }
+    Some(remapped)
+}
+
+fn plane_normal_axis(plane: SlicePlane) -> usize {
+    match plane {
+        SlicePlane::Xy => 2,
+        SlicePlane::Xz => 1,
+        SlicePlane::Yz => 0,
+    }
+}
+
+fn plane_axes(plane: SlicePlane) -> (usize, usize) {
+    match plane {
+        SlicePlane::Xy => (0, 1),
+        SlicePlane::Xz => (0, 2),
+        SlicePlane::Yz => (1, 2),
+    }
+}
+
+fn projected_triangle_area(
+    mesh: &fullmag_runner::FemMeshPayload,
+    face: [u32; 3],
+    plane: SlicePlane,
+) -> f64 {
+    let (u_axis, v_axis) = plane_axes(plane);
+    let Some(a) = mesh.nodes.get(face[0] as usize) else {
+        return 0.0;
+    };
+    let Some(b) = mesh.nodes.get(face[1] as usize) else {
+        return 0.0;
+    };
+    let Some(c) = mesh.nodes.get(face[2] as usize) else {
+        return 0.0;
+    };
+    let bu = b[u_axis] - a[u_axis];
+    let bv = b[v_axis] - a[v_axis];
+    let cu = c[u_axis] - a[u_axis];
+    let cv = c[v_axis] - a[v_axis];
+    0.5 * (bu * cv - bv * cu)
 }
 
 fn range_indices(start: usize, count: usize, limit: usize) -> Vec<usize> {
@@ -682,42 +1383,42 @@ fn topological_charge_warnings(
     requested_resolution: &str,
     sample_count: usize,
     fdm_result: Option<&ComputedTopologicalCharge>,
-    mesh_surface_incomplete: bool,
 ) -> Vec<TopologicalChargeWarning> {
     match status {
         TopologicalChargeStatus::Ready => fdm_result_warnings(fdm_result),
-        TopologicalChargeStatus::FieldMissing => vec![TopologicalChargeWarning {
-            code: "field_missing".to_string(),
+        TopologicalChargeStatus::NoCurrentMagnetization => vec![TopologicalChargeWarning {
+            code: "no_current_magnetization".to_string(),
             message: format!(
-                "Magnetization field data is not available for this object yet (snapshot: {requested_snapshot}, resolution: {requested_resolution}).",
+                "Current magnetization field data is not available for this object yet (snapshot: {requested_snapshot}, resolution: {requested_resolution}).",
             ),
         }],
-        TopologicalChargeStatus::MeshMissing => vec![TopologicalChargeWarning {
-            code: "mesh_missing".to_string(),
+        TopologicalChargeStatus::EmptySupport => vec![TopologicalChargeWarning {
+            code: "empty_support".to_string(),
             message: format!(
-                "Magnetization samples are available ({sample_count}), but object mesh provenance is not available yet.",
+                "No valid two-dimensional support is available for the selected object and analysis plane (magnetization samples: {sample_count}).",
             ),
         }],
-        TopologicalChargeStatus::UnsupportedGeometry if mesh_surface_incomplete => {
+        TopologicalChargeStatus::InvalidMagnetization => vec![TopologicalChargeWarning {
+            code: "invalid_magnetization".to_string(),
+            message: "No valid magnetization vectors are available on the selected support; the result is undefined, not Q = 0.".to_string(),
+        }],
+        TopologicalChargeStatus::DegenerateSupport => {
             vec![TopologicalChargeWarning {
-                code: "mesh_surface_incomplete".to_string(),
-                message: "Object surface topology is incomplete and no volume slice result was available for this request.".to_string(),
+                code: "degenerate_support".to_string(),
+                message: "The selected support has no usable oriented triangles for topological charge.".to_string(),
             }]
         }
-        TopologicalChargeStatus::UnsupportedGeometry => {
-            vec![TopologicalChargeWarning {
-                code: "unsupported_geometry".to_string(),
-                message: "Object field sampling for this mesh geometry is not available yet."
-                    .to_string(),
-            }]
-        }
+        TopologicalChargeStatus::UnderResolved => vec![TopologicalChargeWarning {
+            code: "under_resolved".to_string(),
+            message: "Topological charge was computed, but neighboring magnetization directions indicate an under-resolved texture.".to_string(),
+        }],
         TopologicalChargeStatus::Stale => vec![TopologicalChargeWarning {
             code: "stale".to_string(),
             message: "Topological charge source data is stale.".to_string(),
         }],
-        TopologicalChargeStatus::InsufficientSamples => vec![TopologicalChargeWarning {
-            code: "insufficient_samples".to_string(),
-            message: "Not enough object field samples are available.".to_string(),
+        TopologicalChargeStatus::UnsupportedGeometry => vec![TopologicalChargeWarning {
+            code: "unsupported_geometry".to_string(),
+            message: "The selected geometry is not supported for topological charge.".to_string(),
         }],
         TopologicalChargeStatus::Error => vec![TopologicalChargeWarning {
             code: "error".to_string(),

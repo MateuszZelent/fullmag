@@ -16295,6 +16295,45 @@
         ],
         "type": "object"
       },
+      "TopologicalChargeLayerSample": {
+        "properties": {
+          "charge": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "coordinate": {
+            "format": "double",
+            "type": "number"
+          },
+          "index": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sample_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "triangle_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "valid_sample_count": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "index",
+          "coordinate",
+          "sample_count",
+          "valid_sample_count",
+          "triangle_count"
+        ],
+        "type": "object"
+      },
       "TopologicalChargeQuery": {
         "properties": {
           "method": {
@@ -16352,6 +16391,12 @@
               "number",
               "null"
             ]
+          },
+          "layer_samples": {
+            "items": {
+              "$ref": "#/components/schemas/TopologicalChargeLayerSample"
+            },
+            "type": "array"
           },
           "mesh_generation_id": {
             "type": [
@@ -16411,6 +16456,16 @@
               }
             ]
           },
+          "sample_topology": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TopologicalChargeSampleTopology"
+              }
+            ]
+          },
           "status": {
             "$ref": "#/components/schemas/TopologicalChargeStatus"
           },
@@ -16432,6 +16487,7 @@
           "status",
           "method",
           "plane",
+          "layer_samples",
           "sample_count",
           "valid_sample_count",
           "computed_at_unix_ms",
@@ -16462,14 +16518,37 @@
         ],
         "type": "object"
       },
+      "TopologicalChargeSampleTopology": {
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "point_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "triangle_count": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "point_count",
+          "triangle_count"
+        ],
+        "type": "object"
+      },
       "TopologicalChargeStatus": {
         "enum": [
           "ready",
-          "field_missing",
-          "mesh_missing",
+          "no_current_magnetization",
+          "empty_support",
+          "invalid_magnetization",
+          "degenerate_support",
+          "under_resolved",
           "stale",
           "unsupported_geometry",
-          "insufficient_samples",
           "error"
         ],
         "type": "string"

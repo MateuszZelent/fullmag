@@ -305,6 +305,30 @@ export function fieldVectorSupportsScalarColorMode(
   return colorMode !== "orientation" || fieldVector.nComp >= 3;
 }
 
+export function fieldVectorUsesDirectNodeOrder(
+  fieldVector:
+    | Pick<DecodedFieldVector, "indexing" | "nodeIndices" | "pointCount">
+    | null
+    | undefined,
+  nodeCount: number,
+): boolean {
+  if (
+    !fieldVector ||
+    fieldVector.pointCount !== nodeCount ||
+    fieldVector.indexing === "sampled_node_indices"
+  ) {
+    return false;
+  }
+
+  const nodeIndices = fieldVector.nodeIndices;
+  if (!nodeIndices) return fieldVector.indexing !== "explicit_node_indices";
+  if (nodeIndices.length !== fieldVector.pointCount) return false;
+  for (let index = 0; index < nodeIndices.length; index += 1) {
+    if (nodeIndices[index] !== index) return false;
+  }
+  return true;
+}
+
 function resolveProvidedScalarRange(
   range: ScalarRange | null | undefined,
 ): ScalarRange | null {

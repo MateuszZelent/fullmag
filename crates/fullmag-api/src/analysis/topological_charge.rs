@@ -7,6 +7,12 @@ pub struct TopologicalChargeInput<'a> {
     pub ny: usize,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct TopologicalChargeTriangleInput<'a> {
+    pub samples: &'a [[f64; 3]],
+    pub triangles: &'a [[usize; 3]],
+}
+
 #[derive(Debug, Clone)]
 pub struct TopologicalChargeResult {
     pub charge: f64,
@@ -30,6 +36,7 @@ pub struct TopologicalChargeWarning {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TopologicalChargeError {
     SampleCountMismatch { expected: usize, actual: usize },
+    TriangleIndexOutOfBounds { index: usize, sample_count: usize },
 }
 
 pub fn compute_topological_charge_grid(
@@ -57,32 +64,9 @@ pub fn compute_topological_charge_grid(
         });
     }
 
-    let norm_tolerance = norm_warning_tolerance(input.nx, input.ny);
-    let mut saw_non_unit = false;
-    let normalized: Vec<Option<[f64; 3]>> = input
-        .samples
-        .iter()
-        .map(|sample| {
-            let norm_squared = dot(*sample, *sample);
-            if norm_squared <= 1.0e-24 || !norm_squared.is_finite() {
-                saw_non_unit = true;
-                return None;
-            }
-            let norm = norm_squared.sqrt();
-            if (norm - 1.0).abs() > norm_tolerance {
-                saw_non_unit = true;
-            }
-            Some([sample[0] / norm, sample[1] / norm, sample[2] / norm])
-        })
-        .collect();
-    let valid_sample_count = normalized.iter().filter(|sample| sample.is_some()).count();
-
-    if saw_non_unit {
-        warnings.push(TopologicalChargeWarning {
-            code: TopologicalChargeWarningCode::NonUnitMagnetization,
-            message: "One or more magnetization samples were normalized or rejected.".to_string(),
-        });
-    }
+    let (normalized, valid_sample_count, normalize_warnings) =
+        normalize_samples(input.samples, norm_warning_tolerance(expected));
+    warnings.extend(normalize_warnings);
 
     let mut solid_angle_sum = 0.0;
     for y in 0..(input.ny - 1) {
@@ -109,8 +93,90 @@ pub fn compute_topological_charge_grid(
     })
 }
 
-fn norm_warning_tolerance(nx: usize, ny: usize) -> f64 {
-    let samples = nx.saturating_mul(ny).max(1) as f64;
+pub fn compute_topological_charge_triangles(
+    input: TopologicalChargeTriangleInput<'_>,
+) -> Result<TopologicalChargeResult, TopologicalChargeError> {
+    let mut warnings = Vec::new();
+    if input.samples.len() < 3 || input.triangles.is_empty() {
+        warnings.push(TopologicalChargeWarning {
+            code: TopologicalChargeWarningCode::InsufficientSamples,
+            message: "Topological charge requires at least one oriented triangle.".to_string(),
+        });
+        return Ok(TopologicalChargeResult {
+            charge: 0.0,
+            sample_count: input.samples.len(),
+            valid_sample_count: 0,
+            warnings,
+        });
+    }
+
+    for triangle in input.triangles {
+        for index in triangle {
+            if *index >= input.samples.len() {
+                return Err(TopologicalChargeError::TriangleIndexOutOfBounds {
+                    index: *index,
+                    sample_count: input.samples.len(),
+                });
+            }
+        }
+    }
+
+    let (normalized, valid_sample_count, normalize_warnings) =
+        normalize_samples(input.samples, norm_warning_tolerance(input.samples.len()));
+    warnings.extend(normalize_warnings);
+
+    let mut solid_angle_sum = 0.0;
+    for triangle in input.triangles {
+        let a = normalized[triangle[0]];
+        let b = normalized[triangle[1]];
+        let c = normalized[triangle[2]];
+        if let (Some(a), Some(b), Some(c)) = (a, b, c) {
+            solid_angle_sum += triangle_solid_angle(a, b, c);
+        }
+    }
+
+    Ok(TopologicalChargeResult {
+        charge: solid_angle_sum / (4.0 * PI),
+        sample_count: input.samples.len(),
+        valid_sample_count,
+        warnings,
+    })
+}
+
+fn normalize_samples(
+    samples: &[[f64; 3]],
+    norm_tolerance: f64,
+) -> (Vec<Option<[f64; 3]>>, usize, Vec<TopologicalChargeWarning>) {
+    let mut saw_non_unit = false;
+    let normalized: Vec<Option<[f64; 3]>> = samples
+        .iter()
+        .map(|sample| {
+            let norm_squared = dot(*sample, *sample);
+            if norm_squared <= 1.0e-24 || !norm_squared.is_finite() {
+                saw_non_unit = true;
+                return None;
+            }
+            let norm = norm_squared.sqrt();
+            if (norm - 1.0).abs() > norm_tolerance {
+                saw_non_unit = true;
+            }
+            Some([sample[0] / norm, sample[1] / norm, sample[2] / norm])
+        })
+        .collect();
+    let valid_sample_count = normalized.iter().filter(|sample| sample.is_some()).count();
+    let warnings = if saw_non_unit {
+        vec![TopologicalChargeWarning {
+            code: TopologicalChargeWarningCode::NonUnitMagnetization,
+            message: "One or more magnetization samples were normalized or rejected.".to_string(),
+        }]
+    } else {
+        Vec::new()
+    };
+    (normalized, valid_sample_count, warnings)
+}
+
+fn norm_warning_tolerance(samples: usize) -> f64 {
+    let samples = samples.max(1) as f64;
     (1.0 / samples).clamp(1.0e-6, 1.0e-3)
 }
 
@@ -139,7 +205,8 @@ fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
 #[cfg(test)]
 mod tests {
     use super::{
-        compute_topological_charge_grid, TopologicalChargeInput, TopologicalChargeWarningCode,
+        TopologicalChargeInput, TopologicalChargeTriangleInput, TopologicalChargeWarningCode,
+        compute_topological_charge_grid, compute_topological_charge_triangles,
     };
 
     fn uniform_grid(nx: usize, ny: usize) -> Vec<[f64; 3]> {
@@ -224,5 +291,37 @@ mod tests {
             .find(|warning| warning.code == TopologicalChargeWarningCode::NonUnitMagnetization)
             .expect("zero vector should emit a non-unit magnetization warning");
         assert!(non_unit_warning.message.contains("normalized or rejected"));
+    }
+
+    #[test]
+    fn oriented_triangle_mesh_integrates_like_grid() {
+        let nx = 41;
+        let ny = 41;
+        let samples = neel_skyrmion_grid(nx, ny, 1.0, 0.12);
+        let mut triangles = Vec::new();
+        for y in 0..(ny - 1) {
+            for x in 0..(nx - 1) {
+                let p00 = y * nx + x;
+                let p10 = y * nx + x + 1;
+                let p01 = (y + 1) * nx + x;
+                let p11 = (y + 1) * nx + x + 1;
+                triangles.push([p00, p10, p11]);
+                triangles.push([p00, p11, p01]);
+            }
+        }
+
+        let result = compute_topological_charge_triangles(TopologicalChargeTriangleInput {
+            samples: &samples,
+            triangles: &triangles,
+        })
+        .expect("oriented triangle mesh should be valid");
+
+        assert!(
+            (result.charge + 1.0).abs() < 0.12,
+            "expected Q close to -1 for oriented skyrmion mesh, got {}",
+            result.charge
+        );
+        assert_eq!(result.sample_count, nx * ny);
+        assert_eq!(result.valid_sample_count, nx * ny);
     }
 }

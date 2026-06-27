@@ -69,8 +69,8 @@ export function buildViewport3DTargetFieldBuffer({
   topologyRevision?: string | null;
 }): Viewport3DTargetFieldBuffer {
   const component = resolveTargetFieldBufferComponent(fieldVector, query);
-  const sampled = query.max_samples != null;
   const indexing = fieldVector.indexing ?? "legacy_count_only";
+  const sampled = indexing === "sampled_node_indices" || query.max_samples != null;
   const meshTopologyHash = fieldVector.meshTopologyHash ?? null;
   const capability = resolveTargetFieldBufferCapability({
     component,

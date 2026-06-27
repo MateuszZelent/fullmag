@@ -503,7 +503,7 @@ describe("ControlRoomApi", () => {
         integer_error: null,
         mesh_generation_id: null,
         mesh_revision: null,
-        method: "berg_luescher_grid",
+        method: "berg_luescher",
         nearest_integer: null,
         object_id: "permalloy_layer",
         plane: "auto",
@@ -512,7 +512,9 @@ describe("ControlRoomApi", () => {
         revision: 1,
         sample_count: 0,
         sample_grid: null,
-        status: "field_missing",
+        sample_topology: null,
+        layer_samples: [],
+        status: "no_current_magnetization",
         valid_sample_count: 0,
         warnings: [],
       });
@@ -529,7 +531,7 @@ describe("ControlRoomApi", () => {
       { plane: "xy", quantity_id: "m", resolution: "auto" },
     );
 
-    expect(resource.status).toBe("field_missing");
+    expect(resource.status).toBe("no_current_magnetization");
     expect(resource.object_id).toBe("permalloy_layer");
     const observed = new URL(observedUrl);
     expect(`${observed.origin}${observed.pathname}`).toBe(

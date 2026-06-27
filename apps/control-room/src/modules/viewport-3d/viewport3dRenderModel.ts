@@ -15,6 +15,7 @@ import {
 import {
   buildMappedVertexScalarColors,
   buildVertexScalarColors,
+  fieldVectorUsesDirectNodeOrder,
   type ScalarColorBuffer,
   type ScalarRange,
 } from "./viewport3dFieldMapping";
@@ -769,10 +770,12 @@ export function buildViewport3DFieldRenderModel(
         partFieldVector !== renderFieldVector &&
         partFieldVector.pointCount < topology.nodeCount,
     );
-    const scopedPartFieldNodeIndices =
-      isScopedPartFieldVector && partFieldVector
+    const partFieldNodeIndices =
+      partFieldVector && partFieldVector !== renderFieldVector
         ? resolveFieldVectorNodeIndices(partFieldVector, topology)
         : null;
+    const scopedPartFieldNodeIndices =
+      isScopedPartFieldVector ? partFieldNodeIndices : null;
     const scopedPartFieldNodeSelection = scopedPartFieldNodeIndices
       ? nodeIndicesToSelection(scopedPartFieldNodeIndices)
       : null;
@@ -848,7 +851,7 @@ export function buildViewport3DFieldRenderModel(
                 partModel,
                 topology,
                 partFieldVector,
-                scopedPartFieldNodeIndices,
+                partFieldNodeIndices,
                 colorMode,
                 partScalarColorPalette,
                 partScalarRangesByMode?.get(colorMode),
@@ -865,13 +868,11 @@ export function buildViewport3DFieldRenderModel(
       partFieldVector &&
       (partUsesMagneticOnlyField
         ? magneticFieldValueResolver
-        : isScopedPartFieldVector
-          ? scopedPartFieldNodeIndices
-            ? buildNodeIndexFieldValueResolver(
-                scopedPartFieldNodeIndices,
-                topology.nodeCount,
-              )
-            : null
+        : partFieldNodeIndices
+          ? buildNodeIndexFieldValueResolver(
+              partFieldNodeIndices,
+              topology.nodeCount,
+            )
           : null);
     const anchorMode =
       targetRenderPlan?.vectors.anchorMode ??
@@ -1422,8 +1423,8 @@ function isFullTopologyFieldVector(
   topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
 ): fieldVector is DecodedFieldVector {
   return Boolean(fieldVector) &&
-    fieldVector!.pointCount === topology.nodeCount &&
-    fieldVectorMatchesTopology(fieldVector, topology);
+    fieldVectorMatchesTopology(fieldVector, topology) &&
+    fieldVectorUsesDirectNodeOrder(fieldVector, topology.nodeCount);
 }
 
 function buildCachedMappedVertexScalarColors(
@@ -1572,7 +1573,10 @@ function buildCachedPartVertexScalarColors(
   scalarRange?: ScalarRange | null,
 ): ScalarColorBuffer | null {
   if (!fieldVector) return null;
-  if (fieldVector.pointCount >= topology.nodeCount) {
+  if (
+    fieldVectorMatchesTopology(fieldVector, topology) &&
+    fieldVectorUsesDirectNodeOrder(fieldVector, topology.nodeCount)
+  ) {
     return buildCachedVertexScalarColors(
       fieldVector,
       topology.nodeCount,
@@ -1582,7 +1586,12 @@ function buildCachedPartVertexScalarColors(
     );
   }
 
-  if (!targetNodeIndices || targetNodeIndices.length !== fieldVector.pointCount) {
+  const resolvedNodeIndices =
+    targetNodeIndices ?? resolveFieldVectorNodeIndices(fieldVector, topology);
+  if (
+    !resolvedNodeIndices ||
+    resolvedNodeIndices.length !== fieldVector.pointCount
+  ) {
     return null;
   }
 
@@ -1594,7 +1603,7 @@ function buildCachedPartVertexScalarColors(
     () =>
       buildMappedVertexScalarColors(
         fieldVector,
-        targetNodeIndices,
+        resolvedNodeIndices,
         topology.nodeCount,
         undefined,
         colorMode,

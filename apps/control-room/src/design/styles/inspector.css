@@ -293,6 +293,25 @@
   line-height: 1.35;
 }
 
+.fm-topological-charge-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--fm-space-2);
+  border-bottom: 1px solid var(--fm-border-subtle);
+  padding: var(--fm-space-2);
+  flex-wrap: wrap;
+}
+
+.fm-topological-charge-controls .fm-tabs-list {
+  gap: 2px;
+}
+
+.fm-topological-charge-controls .fm-tabs-trigger {
+  min-width: 82px;
+  font-size: var(--fm-font-size-xs);
+}
+
 .fm-study-command-link {
   display: inline-flex;
   min-width: 0;

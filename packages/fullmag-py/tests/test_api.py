@@ -1040,6 +1040,64 @@ class ProblemApiTests(unittest.TestCase):
             {"x_faces"},
         )
 
+    def test_in_plane_10mt_hole_fmr_frequency_response_smoke_example_loads_contract(self) -> None:
+        example_path = (
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "fem_frequency_response_smoke.py"
+        )
+
+        loaded = fm.load_problem_from_script(example_path, lightweight_assets=True)
+
+        self.assertEqual(len(loaded.stages), 2)
+        relax = loaded.stages[0].problem.study.to_ir()
+        self.assertEqual(relax["kind"], "relaxation")
+
+        problem = loaded.stages[1].problem
+        study = problem.study.to_ir()
+        self.assertEqual(study["kind"], "frequency_response")
+        self.assertEqual(study["operator"]["include_demag"], False)
+        self.assertEqual(study["equilibrium"], {"kind": "relaxed_initial_state"})
+        self.assertEqual(study["damping_policy"], "include")
+        self.assertEqual(
+            study["spin_wave_bc"],
+            {"kind": "periodic", "pair_ids": ["x_faces", "y_faces"]},
+        )
+        self.assertEqual(
+            study["frequencies_hz"],
+            {
+                "values_hz": [
+                    1.0e9,
+                    1.5e9,
+                    2.0e9,
+                    2.5e9,
+                    3.0e9,
+                    3.5e9,
+                    4.0e9,
+                    4.5e9,
+                    5.0e9,
+                    5.5e9,
+                    6.0e9,
+                ],
+            },
+        )
+        problem_ir = problem.to_ir()
+        zeeman_terms = [
+            term for term in problem_ir["energy_terms"] if term["kind"] == "zeeman"
+        ]
+        self.assertEqual(zeeman_terms, [{"kind": "zeeman", "B": [0.01, 0.0, 0.0]}])
+        geometry = problem_ir["geometry"]["entries"][0]
+        self.assertEqual(geometry["kind"], "difference")
+        self.assertEqual(len(geometry["base"]["size"]), 3)
+        for actual, expected in zip(
+            geometry["base"]["size"],
+            [200e-9, 200e-9, 10e-9],
+            strict=True,
+        ):
+            self.assertAlmostEqual(actual, expected)
+        self.assertAlmostEqual(geometry["tool"]["radius"], 25e-9)
+        self.assertAlmostEqual(geometry["tool"]["height"], 10e-9)
+
     def test_free_demag_airbox_fmr_eigenmodes_smoke_example_loads_contract(self) -> None:
         example_path = (
             Path(__file__).resolve().parents[3]

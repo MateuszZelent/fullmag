@@ -596,21 +596,6 @@ export const MeshPartLayer = memo(function MeshPartLayer({
           />
         </lineSegments>
       ) : null}
-      {renderSettings.wireframeVisible && renderSettings.shaderVisible && edgeGeometry ? (
-        <lineSegments
-          geometry={edgeGeometry}
-          renderOrder={RENDER_POLICIES.hiddenEdges.renderOrder}
-        >
-          <lineBasicMaterial
-            color={wireframeColorFromSettings(renderSettings, colors.wire)}
-            opacity={wireframeOpacityFromSettings(
-              renderSettings,
-              materialProfile.featureEdges,
-            ) * 0.25}
-            {...materialPolicyProps("hiddenEdges")}
-          />
-        </lineSegments>
-      ) : null}
       {renderSettings.boundsVisible ? (
         <BoundsBox
           bounds={resolveMeshPartBounds(part)}

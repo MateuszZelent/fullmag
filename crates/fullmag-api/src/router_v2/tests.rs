@@ -19665,6 +19665,48 @@ async fn field_meta_energy_density_accepts_object_prefixed_scope_ids() {
 }
 
 #[tokio::test]
+async fn field_meta_energy_density_accepts_geom_suffixed_part_ids() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_scoped_fem_mesh_payload();
+        mesh.object_segments.clear();
+        mesh.mesh_parts[0].id = "permalloy_layer_geom".to_string();
+        mesh.mesh_parts[0].label = "Permalloy layer".to_string();
+        mesh.mesh_parts[0].object_id = None;
+        mesh.mesh_parts[0].geometry_id = None;
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "eden_total": {
+                "values": [10.0, 11.0, 12.0, 13.0, 0.0, 1.0, 2.0, 3.0],
+                "layout": {
+                    "grid_cells": [8, 1, 1]
+                }
+            }
+        }))
+        .expect("scoped eden_total latest_fields should deserialize");
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/eden_total/meta?scope_kind=object&scope_id=permalloy_layer")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let meta = body_json(response).await;
+    assert_eq!(meta["quantity_id"], "eden_total");
+    assert_eq!(meta["components"], 1);
+    assert_eq!(meta["stats"]["min"], serde_json::json!(10.0));
+    assert_eq!(meta["stats"]["max"], serde_json::json!(13.0));
+    assert_eq!(meta["stats"]["mean"], serde_json::json!(11.5));
+}
+
+#[tokio::test]
 async fn field_vector_etag_stays_stable_when_only_snapshot_state_version_changes() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -20339,7 +20381,7 @@ async fn v2_field_vector_prefers_fresh_m_preview_cache_over_stale_latest_field()
 }
 
 #[tokio::test]
-async fn topological_charge_reports_mesh_missing_when_m_field_exists_without_usable_fdm_plane_or_object_mesh()
+async fn topological_charge_reports_empty_support_when_m_field_exists_without_usable_fdm_plane_or_object_mesh()
  {
     let state = test_app_state_with_live_session().await;
     let scene = sample_scene_document();
@@ -20395,11 +20437,11 @@ async fn topological_charge_reports_mesh_missing_when_m_field_exists_without_usa
 
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
-    assert_eq!(json["status"], "mesh_missing");
+    assert_eq!(json["status"], "empty_support");
     assert_eq!(json["field_revision"], 7);
     assert_eq!(json["sample_count"], 4);
     assert_eq!(json["valid_sample_count"], 4);
-    assert_eq!(json["warnings"][0]["code"], "mesh_missing");
+    assert_eq!(json["warnings"][0]["code"], "empty_support");
 }
 
 #[tokio::test]
@@ -20574,13 +20616,13 @@ async fn topological_charge_cache_key_tracks_field_revision() {
             .unwrap(),
     )
     .await;
-    assert_eq!(recomputed["status"], "insufficient_samples");
+    assert_eq!(recomputed["status"], "invalid_magnetization");
     assert_eq!(recomputed["valid_sample_count"], 0);
     assert!(recomputed["charge"].is_null());
     assert!(recomputed["nearest_integer"].is_null());
     assert!(recomputed["integer_error"].is_null());
     assert!(recomputed["polarity"].is_null());
-    assert_eq!(recomputed["warnings"][0]["code"], "insufficient_samples");
+    assert_eq!(recomputed["warnings"][0]["code"], "invalid_magnetization");
 }
 
 #[tokio::test]
@@ -20651,7 +20693,7 @@ async fn topological_charge_auto_plane_uses_midplane_of_thinnest_fdm_axis() {
 }
 
 #[tokio::test]
-async fn topological_charge_computes_uniform_fem_object_from_tetra_volume_without_surface_faces() {
+async fn topological_charge_computes_uniform_fem_object_from_native_layer_faces() {
     let state = test_app_state_with_live_session().await;
     let scene = sample_scene_document();
     let object_id = scene.objects[0].id.clone();
@@ -20703,11 +20745,19 @@ async fn topological_charge_computes_uniform_fem_object_from_tetra_volume_withou
     assert_eq!(json["mesh_revision"], 17);
     assert_eq!(json["mesh_generation_id"], "42");
     assert_eq!(json["plane"], "xy");
-    assert_eq!(json["sample_grid"]["nx"], 5);
-    assert_eq!(json["sample_grid"]["ny"], 5);
-    assert_eq!(json["sample_grid"]["plane"], "xy");
-    assert_eq!(json["sample_count"], 25);
-    assert!(json["valid_sample_count"].as_u64().unwrap() > 0);
+    assert!(json["sample_grid"].is_null());
+    assert_eq!(json["sample_topology"]["kind"], "fem_layer_faces");
+    assert_eq!(json["sample_topology"]["point_count"], 3);
+    assert_eq!(json["sample_topology"]["triangle_count"], 1);
+    assert_eq!(json["sample_count"], json["sample_topology"]["point_count"]);
+    assert_eq!(json["valid_sample_count"], json["sample_count"]);
+    assert_eq!(json["layer_samples"].as_array().unwrap().len(), 1);
+    assert_eq!(json["layer_samples"][0]["sample_count"], 3);
+    assert_eq!(json["layer_samples"][0]["valid_sample_count"], 3);
+    assert_eq!(
+        json["layer_samples"][0]["triangle_count"],
+        json["sample_topology"]["triangle_count"]
+    );
     assert_eq!(json["domain_generation_id"], "42");
     assert!(json["charge"].as_f64().unwrap().abs() < 1.0e-6);
     assert!(
@@ -20715,12 +20765,12 @@ async fn topological_charge_computes_uniform_fem_object_from_tetra_volume_withou
             .as_array()
             .unwrap()
             .iter()
-            .all(|warning| warning["code"] != "mesh_surface_incomplete")
+            .all(|warning| warning["code"] != "degenerate_support")
     );
 }
 
 #[tokio::test]
-async fn topological_charge_computes_analytic_neel_skyrmion_from_fem_object_slice() {
+async fn topological_charge_computes_analytic_neel_skyrmion_from_fem_layer_profile() {
     let state = test_app_state_with_live_session().await;
     let scene = sample_scene_document();
     let object_id = scene.objects[0].id.clone();
@@ -20762,8 +20812,20 @@ async fn topological_charge_computes_analytic_neel_skyrmion_from_fem_object_slic
     assert_eq!(json["mesh_revision"], 23);
     assert_eq!(json["mesh_generation_id"], "9001");
     assert_eq!(json["domain_generation_id"], "9001");
-    assert_eq!(json["sample_count"], 4225);
-    assert_eq!(json["valid_sample_count"], 4225);
+    assert!(json["sample_grid"].is_null());
+    assert_eq!(json["sample_topology"]["kind"], "fem_layer_faces");
+    assert_eq!(json["sample_topology"]["point_count"], 1250);
+    assert_eq!(json["sample_topology"]["triangle_count"], 2304);
+    assert_eq!(json["sample_count"], json["sample_topology"]["point_count"]);
+    assert_eq!(json["valid_sample_count"], json["sample_count"]);
+    let layer_samples = json["layer_samples"].as_array().unwrap();
+    assert_eq!(layer_samples.len(), 2);
+    assert_eq!(layer_samples[0]["sample_count"], 625);
+    assert_eq!(layer_samples[0]["valid_sample_count"], 625);
+    assert_eq!(layer_samples[0]["triangle_count"], 1152);
+    assert_eq!(layer_samples[1]["sample_count"], 625);
+    assert_eq!(layer_samples[1]["valid_sample_count"], 625);
+    assert_eq!(layer_samples[1]["triangle_count"], 1152);
     let charge = json["charge"]
         .as_f64()
         .expect("FEM skyrmion charge should be numeric");
@@ -20776,7 +20838,7 @@ async fn topological_charge_computes_analytic_neel_skyrmion_from_fem_object_slic
 }
 
 #[tokio::test]
-async fn topological_charge_reports_mesh_surface_incomplete_when_no_volume_sampler_is_available() {
+async fn topological_charge_reports_degenerate_support_when_no_volume_sampler_is_available() {
     let state = test_app_state_with_live_session().await;
     let scene = sample_scene_document();
     let object_id = scene.objects[0].id.clone();
@@ -20823,8 +20885,8 @@ async fn topological_charge_reports_mesh_surface_incomplete_when_no_volume_sampl
 
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
-    assert_eq!(json["status"], "unsupported_geometry");
-    assert_eq!(json["warnings"][0]["code"], "mesh_surface_incomplete");
+    assert_eq!(json["status"], "degenerate_support");
+    assert_eq!(json["warnings"][0]["code"], "degenerate_support");
     assert!(json["charge"].is_null());
 }
 

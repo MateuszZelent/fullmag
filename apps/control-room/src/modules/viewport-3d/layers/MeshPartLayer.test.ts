@@ -48,17 +48,17 @@ describe("MeshPartLayer", () => {
     expect(source).not.toContain("computeVertexNormals");
   });
 
-  it("does not suppress hidden full-volume wireframe behind a shaded magnetic surface", () => {
+  it("does not render depth-bypassing hidden edges for magnetic-object wireframe", () => {
     const source = readFileSync(
       fileURLToPath(new URL("./MeshPartLayer.tsx", import.meta.url)),
       "utf8",
     );
 
-    expect(source).toContain(
-      "renderSettings.wireframeVisible && renderSettings.shaderVisible && edgeGeometry",
+    expect(source).not.toContain(
+      "materialPolicyProps(\"hiddenEdges\")",
     );
     expect(source).not.toContain(
-      'renderSettings.geometryScope !== "full" && edgeGeometry',
+      "RENDER_POLICIES.hiddenEdges.renderOrder",
     );
   });
 

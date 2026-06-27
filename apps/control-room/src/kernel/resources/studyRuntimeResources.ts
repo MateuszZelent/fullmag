@@ -2238,6 +2238,7 @@ export function useObjectMetricsResource(objectId: string | null | undefined) {
 
 export function useObjectTopologicalChargeResource(
   objectId: string | null | undefined,
+  options: RuntimeResourceOptions & { pauseLoad?: boolean } = {},
 ) {
   const { api } = useKernel();
   const resourceKey = objectId
@@ -2254,8 +2255,9 @@ export function useObjectTopologicalChargeResource(
   );
 
   return useResource<TopologicalChargeResource | null>({
-    enabled: Boolean(objectId),
+    enabled: Boolean(objectId) && options.enabled !== false,
     load,
+    pauseLoad: options.pauseLoad,
     resolveRevision: (data) => data?.revision ?? null,
     resourceKey,
   });

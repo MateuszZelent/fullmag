@@ -20,7 +20,7 @@ import {
   type ResourceRuntimeStore,
 } from "./ResourceRuntimeStore";
 import type { ResourceKey, ResourceResult } from "./resourceTypes";
-import { markResourceLoading } from "./resourceState";
+import { markResourceLoading, type ResourceState } from "./resourceState";
 
 interface LoadContext {
   signal: AbortSignal;
@@ -93,6 +93,7 @@ export function useResource<TData>({
     getRuntimeSnapshot,
   );
   const [refreshToken, setRefreshToken] = useState(0);
+  const [loadedRefreshToken, setLoadedRefreshToken] = useState(refreshToken);
 
   // Track consecutive errors to apply backoff before retrying.
   const errorCountRef = useRef(0);
@@ -104,12 +105,14 @@ export function useResource<TData>({
     errorCountRef,
     externalRevision,
     load,
+    loadedRefreshToken,
     minRefetchIntervalMs,
     pauseLoad,
     refreshToken,
     resolveRevision,
     resourceKey,
     runtimeStore,
+    setLoadedRefreshToken,
   });
 
   const refetch = useCallback(() => {
@@ -117,10 +120,6 @@ export function useResource<TData>({
     setRefreshToken((current) => current + 1);
   }, []);
 
-  const settledForCurrentResource =
-    state.settledResourceKey === resourceKey &&
-    (state.settledExternalRevision === externalRevision ||
-      state.revision === externalRevision);
   if (!enabled) {
     return {
       data: null,
@@ -131,9 +130,13 @@ export function useResource<TData>({
     };
   }
 
-  const visibleState = settledForCurrentResource
-    ? state
-    : markResourceLoading(state, externalRevision);
+  const visibleState = visibleResourceState({
+    externalRevision,
+    manualRefreshPending: refreshToken !== loadedRefreshToken,
+    pauseLoad,
+    resourceKey,
+    state,
+  });
 
   return { ...visibleState, refetch };
 }
@@ -152,6 +155,7 @@ export function useResourceSelector<TData, TSelected>({
   const { diagnosticRecorder, resources } = useKernel();
   const runtimeStore = sharedResourceRuntimeStore as ResourceRuntimeStore<TData>;
   const [refreshToken, setRefreshToken] = useState(0);
+  const [loadedRefreshToken, setLoadedRefreshToken] = useState(refreshToken);
   const errorCountRef = useRef(0);
   const selectedRef = useRef<{ selected: TSelected } | null>(null);
 
@@ -190,6 +194,8 @@ export function useResourceSelector<TData, TSelected>({
     const visibleState = visibleResourceResult({
       enabled,
       externalRevision,
+      manualRefreshPending: refreshToken !== loadedRefreshToken,
+      pauseLoad,
       refetch,
       resourceKey,
       state,
@@ -206,8 +212,11 @@ export function useResourceSelector<TData, TSelected>({
     enabled,
     externalRevision,
     isEqual,
+    loadedRefreshToken,
+    pauseLoad,
     refetch,
     resourceKey,
+    refreshToken,
     runtimeStore,
     selector,
   ]);
@@ -225,12 +234,14 @@ export function useResourceSelector<TData, TSelected>({
     errorCountRef,
     externalRevision,
     load,
+    loadedRefreshToken,
     minRefetchIntervalMs,
     pauseLoad,
     refreshToken,
     resolveRevision,
     resourceKey,
     runtimeStore,
+    setLoadedRefreshToken,
   });
 
   return selected;
@@ -243,12 +254,14 @@ function useResourceLoader<TData>({
   errorCountRef,
   externalRevision,
   load,
+  loadedRefreshToken,
   minRefetchIntervalMs = 0,
   pauseLoad = false,
   refreshToken,
   resolveRevision,
   resourceKey,
   runtimeStore,
+  setLoadedRefreshToken,
 }: {
   abortStaleInflight?: boolean;
   diagnosticRecorder: KernelApi["diagnosticRecorder"];
@@ -256,16 +269,19 @@ function useResourceLoader<TData>({
   errorCountRef: { current: number };
   externalRevision: ResourceRevision | null;
   load: (context: LoadContext) => Promise<TData>;
+  loadedRefreshToken: number;
   minRefetchIntervalMs?: number;
   pauseLoad?: boolean;
   refreshToken: number;
   resolveRevision?: (data: TData) => ResourceRevision | null;
   resourceKey: ResourceKey;
   runtimeStore: ResourceRuntimeStore<TData>;
+  setLoadedRefreshToken: (token: number) => void;
 }): void {
   useEffect(() => {
     if (!enabled) return;
-    if (pauseLoad) {
+    const hasManualRefresh = refreshToken !== loadedRefreshToken;
+    if (pauseLoad && !hasManualRefresh) {
       runtimeStore.pauseLoad(resourceKey);
       recordResourceHookDiagnostic({
         action: "stale-skip",
@@ -297,7 +313,7 @@ function useResourceLoader<TData>({
         diagnosticRecorder,
         detail: {
           abortStaleInflight,
-          force: refreshToken > 0,
+          force: hasManualRefresh,
           minRefetchIntervalMs,
         },
         resourceKey,
@@ -307,7 +323,7 @@ function useResourceLoader<TData>({
         .ensureLoad({
           abortStaleInflight,
           externalRevision,
-          force: refreshToken > 0,
+          force: hasManualRefresh,
           load,
           minRefetchIntervalMs,
           resolveRevision,
@@ -316,6 +332,9 @@ function useResourceLoader<TData>({
         .then((snapshot) => {
           completed = true;
           if (cancelled) return;
+          if (hasManualRefresh) {
+            setLoadedRefreshToken(refreshToken);
+          }
           if (snapshot.status === "ready") {
             recordResourceHookDiagnostic({
               action: "set",
@@ -350,12 +369,14 @@ function useResourceLoader<TData>({
     errorCountRef,
     externalRevision,
     load,
+    loadedRefreshToken,
     minRefetchIntervalMs,
     pauseLoad,
     refreshToken,
     resolveRevision,
     resourceKey,
     runtimeStore,
+    setLoadedRefreshToken,
   ]);
 }
 
@@ -409,12 +430,16 @@ function resourceSettledForRevision<TData>(
 function visibleResourceResult<TData>({
   enabled,
   externalRevision,
+  manualRefreshPending,
+  pauseLoad,
   refetch,
   resourceKey,
   state,
 }: {
   enabled: boolean;
   externalRevision: ResourceRevision | null;
+  manualRefreshPending: boolean;
+  pauseLoad: boolean;
   refetch: () => void;
   resourceKey: ResourceKey;
   state: ResourceRuntimeSnapshot<TData>;
@@ -429,13 +454,43 @@ function visibleResourceResult<TData>({
     };
   }
 
-  const settledForCurrentResource =
-    state.settledResourceKey === resourceKey &&
-    (state.settledExternalRevision === externalRevision ||
-      state.revision === externalRevision);
-  const visibleState = settledForCurrentResource
-    ? state
-    : markResourceLoading(state, externalRevision);
+  const visibleState = visibleResourceState({
+    externalRevision,
+    manualRefreshPending,
+    pauseLoad,
+    resourceKey,
+    state,
+  });
 
   return { ...visibleState, refetch };
+}
+
+function visibleResourceState<TData>({
+  externalRevision,
+  manualRefreshPending,
+  pauseLoad,
+  resourceKey,
+  state,
+}: {
+  externalRevision: ResourceRevision | null;
+  manualRefreshPending: boolean;
+  pauseLoad: boolean;
+  resourceKey: ResourceKey;
+  state: ResourceRuntimeSnapshot<TData>;
+}): ResourceState<TData> {
+  if (resourceSettledForRevision(state, resourceKey, externalRevision)) {
+    return state;
+  }
+  if (pauseLoad && !manualRefreshPending) {
+    if (state.status === "error") {
+      return state;
+    }
+    return {
+      ...state,
+      error: null,
+      revision: externalRevision,
+      status: state.data ? "stale" : "idle",
+    };
+  }
+  return markResourceLoading(state, externalRevision);
 }

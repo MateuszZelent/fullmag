@@ -129,7 +129,7 @@ function RegionOverlayShape({
             <RegionOverlayGeometry model={model} />
             <meshBasicMaterial
               color={fillColor}
-              depthTest={false}
+              depthTest
               depthWrite={false}
               opacity={model.style.fillOpacity}
               transparent
@@ -146,7 +146,7 @@ function RegionOverlayShape({
             <RegionOverlayGeometry model={model} />
             <meshBasicMaterial
               color={wireframeColor}
-              depthTest={false}
+              depthTest
               depthWrite={false}
               opacity={model.style.wireframeOpacity}
               transparent

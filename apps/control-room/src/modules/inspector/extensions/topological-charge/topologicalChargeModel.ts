@@ -47,8 +47,12 @@ const METHOD_TERMS: TopologicalChargeMethodTerm[] = [
     meaning: "oriented in-plane coordinates of the selected analysis plane",
   },
   {
+    symbol: "z_i",
+    meaning: "FEM layer coordinate along the selected plane normal",
+  },
+  {
     symbol: "a, b, c",
-    meaning: "normalized magnetization vectors on one oriented grid triangle",
+    meaning: "normalized magnetization vectors on one oriented grid or FEM layer triangle",
   },
   {
     symbol: "\\Omega_\\triangle",
@@ -74,14 +78,50 @@ function formatMaybeText(value: string | number | null | undefined): string {
     : "unavailable";
 }
 
-function formatSampleGrid(resource: TopologicalChargeResource | null): string {
-  if (!resource?.sample_grid) return "unavailable";
+function formatSampling(resource: TopologicalChargeResource | null): string {
+  if (!resource) return "unavailable";
+  if (resource.sample_topology) {
+    const topology = resource.sample_topology;
+    return `${formatTopologyKind(topology.kind)}, ${topology.point_count} nodes, ${topology.triangle_count} triangles, ${resource.valid_sample_count}/${resource.sample_count} valid`;
+  }
+  if (!resource.sample_grid) return "unavailable";
   const grid = resource.sample_grid;
   return `${grid.plane} ${grid.nx} x ${grid.ny}, ${resource.valid_sample_count}/${resource.sample_count} valid`;
 }
 
+function formatTopologyKind(kind: string): string {
+  return kind.replace(/_/g, " ");
+}
+
+function formatLayerProfile(resource: TopologicalChargeResource | null): string {
+  const layers = resource?.layer_samples ?? [];
+  if (layers.length === 0) return "unavailable";
+  const charges = layers
+    .map((layer) => layer.charge)
+    .filter((charge): charge is number => typeof charge === "number" && Number.isFinite(charge));
+  if (charges.length === 0) return `${layers.length} layers, no valid layer charge`;
+  if (layers.length === 1) {
+    const layer = layers[0];
+    return `1 support, Q ${charges[0].toFixed(6)} at s=${layer.coordinate.toExponential(3)}`;
+  }
+  const min = Math.min(...charges);
+  const max = Math.max(...charges);
+  return `${layers.length} supports, Q(s) ${min.toFixed(6)} .. ${max.toFixed(6)}`;
+}
+
 function formatStatusForSentence(status: string): string {
-  return status.replace(/_/g, " ");
+  switch (status) {
+    case "no_current_magnetization":
+      return "no current magnetization";
+    case "empty_support":
+      return "no valid 2D support";
+    case "invalid_magnetization":
+      return "invalid magnetization";
+    case "degenerate_support":
+      return "degenerate 2D support";
+    default:
+      return status.replace(/_/g, " ");
+  }
 }
 
 function formatSampleQuality(resource: TopologicalChargeResource | null): string {
@@ -96,13 +136,15 @@ function resolveMethodInfo(
   return {
     title: "Berg-Luescher topological charge",
     description:
-      "Computes an object-scoped skyrmion charge from normalized magnetization directions. FEM fields are linearly interpolated from tetrahedra onto the selected plane, then evaluated on the same regular grid solid-angle sum as FDM fields.",
+      "Computes an object-scoped skyrmion charge from normalized magnetization directions. FDM uses the selected native grid plane. FEM uses mesh-native surface, layer, or exact tetra-plane-cut triangles.",
     continuumEquationLatex: CONTINUUM_EQUATION_LATEX,
     discreteEquationLatex: DISCRETE_EQUATION_LATEX,
     sampleQuality: formatSampleQuality(resource),
     terms: METHOD_TERMS,
     notes: [
       "Q is dimensionless; integer-like values are meaningful only when the full texture and boundary state are resolved.",
+      "Q is computed on an oriented 2D support; unordered 3D nodes are not summed into a skyrmion number.",
+      "For FEM films, inspect the layer profile when the texture varies through thickness.",
       "Zero, missing, or non-finite vectors are rejected before the solid-angle sum.",
     ],
   };
@@ -145,7 +187,8 @@ export function resolveTopologicalChargePanelModel(
       { label: "Nearest integer", value: formatMaybeInteger(data?.nearest_integer) },
       { label: "Integer error", value: formatMaybeNumber(data?.integer_error) },
       { label: "Polarity", value: formatMaybeText(data?.polarity) },
-      { label: "Sampling", value: formatSampleGrid(data) },
+      { label: "Sampling", value: formatSampling(data) },
+      { label: "Support profile", value: formatLayerProfile(data) },
       { label: "Method", value: formatMaybeText(data?.method) },
       { label: "Field revision", value: formatMaybeInteger(data?.field_revision) },
       { label: "Mesh revision", value: formatMaybeInteger(data?.mesh_revision) },

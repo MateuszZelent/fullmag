@@ -30,6 +30,7 @@ import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
 import type { MeshSizeHistogramHighlight } from "@/kernel/events/eventTypes";
 import {
   isMagneticOnlyQuantityId,
+  isScalarSpatialQuantityId,
   resolveCanonicalQuantityId,
   sameQuantityId,
 } from "@/kernel/api/quantityIds";
@@ -315,12 +316,13 @@ export function resolveViewport3DPartScalarRangeRequests({
     if (!mode || !component) continue;
     const settings = getPartSettings(partModel.part);
     if (!settings.visible || !settings.shaderVisible) continue;
+    const quantityId = resolveCanonicalQuantityId(settings.activeQuantityId);
     const objectScopeId = partModel.part.object_id ?? partModel.part.geometry_id;
     requests.set(partId, {
-      component,
+      component: resolveViewport3DFieldMetaScalarComponent(quantityId, component),
       mode,
       partId,
-      quantityId: resolveCanonicalQuantityId(settings.activeQuantityId),
+      quantityId,
       scopeId: objectScopeId ?? partId,
       scopeKind: objectScopeId ? "object" : "part",
       snapshot_id: selectedSnapshotQuery?.snapshot_id ?? null,
@@ -1845,6 +1847,13 @@ export function resolveViewport3DTargetQuantityFieldRequests({
   );
 }
 
+export function resolveViewport3DFieldMetaScalarComponent(
+  quantityId: string,
+  component: string,
+): string {
+  return isScalarSpatialQuantityId(quantityId) ? "full" : component;
+}
+
 function fieldColorModeScalarComponent(mode: string | null | undefined): string | null {
   return resolveViewport3DScalarComponentRequest(null, mode).component;
 }
@@ -3059,28 +3068,40 @@ export function useViewport3DSceneModel({
   const scalarRangeStatsEnabled =
     fieldVectorEnabled && primaryFieldRenderOptions.scalarColorsVisible !== false;
   const primaryMagnitudeFieldMeta = useFieldMetaResource({
-    component: "magnitude",
+    component: resolveViewport3DFieldMetaScalarComponent(
+      primaryFieldQuantityId,
+      "magnitude",
+    ),
     enabled: scalarRangeStatsEnabled && scalarRangeModeFlags.magnitude,
     quantityId: primaryFieldQuantityId,
     snapshot_id: selectedSnapshotQuery?.snapshot_id ?? null,
     stage_id: selectedSnapshotQuery?.stage_id ?? null,
   });
   const primaryXFieldMeta = useFieldMetaResource({
-    component: "x",
+    component: resolveViewport3DFieldMetaScalarComponent(
+      primaryFieldQuantityId,
+      "x",
+    ),
     enabled: scalarRangeStatsEnabled && scalarRangeModeFlags.x,
     quantityId: primaryFieldQuantityId,
     snapshot_id: selectedSnapshotQuery?.snapshot_id ?? null,
     stage_id: selectedSnapshotQuery?.stage_id ?? null,
   });
   const primaryYFieldMeta = useFieldMetaResource({
-    component: "y",
+    component: resolveViewport3DFieldMetaScalarComponent(
+      primaryFieldQuantityId,
+      "y",
+    ),
     enabled: scalarRangeStatsEnabled && scalarRangeModeFlags.y,
     quantityId: primaryFieldQuantityId,
     snapshot_id: selectedSnapshotQuery?.snapshot_id ?? null,
     stage_id: selectedSnapshotQuery?.stage_id ?? null,
   });
   const primaryZFieldMeta = useFieldMetaResource({
-    component: "z",
+    component: resolveViewport3DFieldMetaScalarComponent(
+      primaryFieldQuantityId,
+      "z",
+    ),
     enabled: scalarRangeStatsEnabled && scalarRangeModeFlags.z,
     quantityId: primaryFieldQuantityId,
     snapshot_id: selectedSnapshotQuery?.snapshot_id ?? null,

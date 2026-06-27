@@ -82,6 +82,28 @@ describe("viewport3DTargetFieldBuffer", () => {
       .toBe(false);
   });
 
+  it("treats sampled payload metadata as sampled even without max_samples in the query", () => {
+    const buffer = buildViewport3DTargetFieldBuffer({
+      fieldVector: vectorFixture({
+        indexing: "sampled_node_indices",
+        meshTopologyHash: "hash-1",
+        nodeIndices: new Uint32Array([0, 2, 4, 6]),
+      }),
+      query: {
+        component: "full",
+        scope_id: "part-a",
+        scope_kind: "part",
+      },
+      targetIds: ["part-a"],
+    });
+
+    expect(buffer.capability).toBe("full-vector-sampled");
+    expect(buffer.complete).toBe(false);
+    expect(buffer.sampled).toBe(true);
+    expect(viewport3DTargetFieldBufferCanServeSurface(buffer, "x")).toBe(false);
+    expect(viewport3DTargetFieldBufferCanServeVectors(buffer)).toBe(true);
+  });
+
   it("rejects sampled payloads for glyphs when node indices are absent", () => {
     const buffer = buildViewport3DTargetFieldBuffer({
       fieldVector: vectorFixture({

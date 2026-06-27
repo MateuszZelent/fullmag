@@ -7,6 +7,7 @@ import type { DecodedFieldVector } from "@/kernel/api/codecs";
 import { buildViewport3DFieldColorJobKey } from "../build-engine/viewport3dBuildJobKeys";
 import { buildVertexScalarColorsOffMainThread } from "../viewport3dColorTransformScheduler";
 import {
+  fieldVectorUsesDirectNodeOrder,
   fieldTransformNeedsChunking,
   type ScalarColorBuffer,
   type ScalarRange,
@@ -1002,11 +1003,31 @@ export function resolveViewport3DChunkedFieldColorTarget(
   fieldVector: DecodedFieldVector | null | undefined,
 ): Viewport3DFieldColorBuildTarget | null {
   if (!topology || !fieldVector) return null;
-  if (fieldVector.pointCount === topology.nodeCount) {
+  if (!chunkedFieldVectorMatchesTopology(fieldVector, topology)) return null;
+  if (fieldVectorUsesDirectNodeOrder(fieldVector, topology.nodeCount)) {
     return {
       kind: "full-domain",
       vertexCount: topology.nodeCount,
     };
+  }
+
+  const explicitNodeIndices = resolveChunkedFieldVectorNodeIndices(
+    fieldVector,
+    topology,
+  );
+  if (explicitNodeIndices) {
+    return {
+      kind: "mapped-vertices",
+      targetNodeIndices: explicitNodeIndices,
+      vertexCount: topology.nodeCount,
+    };
+  }
+
+  if (
+    fieldVector.indexing === "explicit_node_indices" ||
+    fieldVector.indexing === "sampled_node_indices"
+  ) {
+    return null;
   }
 
   const targetNodeIndices = resolveMagneticFieldTargetNodeIndices(
@@ -1054,11 +1075,31 @@ export function resolveViewport3DChunkedPartFieldColorTarget(
   partModel: Viewport3DTopologyPartRenderModel<Viewport3DRenderablePart>,
   fieldVector: DecodedFieldVector,
 ): Viewport3DFieldColorBuildTarget | null {
-  if (fieldVector.pointCount === topology.nodeCount) {
+  if (!chunkedFieldVectorMatchesTopology(fieldVector, topology)) return null;
+  if (fieldVectorUsesDirectNodeOrder(fieldVector, topology.nodeCount)) {
     return {
       kind: "full-domain",
       vertexCount: topology.nodeCount,
     };
+  }
+
+  const explicitNodeIndices = resolveChunkedFieldVectorNodeIndices(
+    fieldVector,
+    topology,
+  );
+  if (explicitNodeIndices) {
+    return {
+      kind: "mapped-vertices",
+      targetNodeIndices: explicitNodeIndices,
+      vertexCount: topology.nodeCount,
+    };
+  }
+
+  if (
+    fieldVector.indexing === "explicit_node_indices" ||
+    fieldVector.indexing === "sampled_node_indices"
+  ) {
+    return null;
   }
 
   const count = resolveNodeSelectionCount(partModel.part, topology);
@@ -1081,6 +1122,62 @@ export function resolveViewport3DChunkedPartFieldColorTarget(
     targetNodeIndices,
     vertexCount: topology.nodeCount,
   };
+}
+
+function chunkedFieldVectorMatchesTopology(
+  fieldVector: DecodedFieldVector,
+  topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
+): boolean {
+  const fieldHash = fieldVector.meshTopologyHash ?? null;
+  if (
+    fieldHash !== null &&
+    topology.meshTopologyHash !== null &&
+    fieldHash !== topology.meshTopologyHash
+  ) {
+    return false;
+  }
+
+  const fieldTopologyRevision = fieldVector.meshTopologyRevision ?? null;
+  const topologyRevision = revisionToString(topology.meshRevision);
+  if (
+    fieldTopologyRevision !== null &&
+    topologyRevision !== null &&
+    fieldTopologyRevision !== topologyRevision
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function resolveChunkedFieldVectorNodeIndices(
+  fieldVector: DecodedFieldVector,
+  topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
+): Uint32Array | null {
+  if (
+    fieldVector.indexing === "sampled_node_indices" ||
+    fieldVector.pointCount <= 0
+  ) {
+    return null;
+  }
+
+  const nodeIndices = fieldVector.nodeIndices;
+  if (!nodeIndices || nodeIndices.length !== fieldVector.pointCount) return null;
+
+  const resolved = new Uint32Array(nodeIndices.length);
+  for (let index = 0; index < nodeIndices.length; index += 1) {
+    const nodeIndex = nodeIndices[index];
+    if (
+      nodeIndex === undefined ||
+      !Number.isInteger(nodeIndex) ||
+      nodeIndex < 0 ||
+      nodeIndex >= topology.nodeCount
+    ) {
+      return null;
+    }
+    resolved[index] = nodeIndex;
+  }
+  return resolved;
 }
 
 function resolveMagneticFieldTargetNodeIndices(

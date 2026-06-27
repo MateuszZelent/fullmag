@@ -1,7 +1,12 @@
+import { useCallback, useState } from "react";
+import { Calculator } from "lucide-react";
+
 import { useObjectTopologicalChargeResource } from "@/kernel/resources/studyRuntimeResources";
 import { FeedbackBanner } from "@/modules/inspector/primitives/FeedbackBanner";
 import { FieldRow } from "@/modules/inspector/primitives/FieldRow";
 import { InspectorSection } from "@/modules/inspector/primitives/InspectorSection";
+import { Button } from "@/shared/ui/Button";
+import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/Tabs";
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import {
@@ -49,23 +54,82 @@ const DISCRETE_MATHML = `<math display="block" aria-label="Q h equals one over f
   </mrow>
 </math>`;
 
+type TopologicalChargeCalculationMode = "on_demand" | "continuous";
+
 export function TopologicalChargeExtensionPanel({ selection }: InspectorPanelProps) {
   const objectId =
     selection.ref?.type === "scene-object" ? selection.ref.objectId : selection.objectId;
-  const resource = useObjectTopologicalChargeResource(objectId);
+  const [calculationMode, setCalculationMode] =
+    useState<TopologicalChargeCalculationMode>("on_demand");
+  const resource = useObjectTopologicalChargeResource(objectId, {
+    pauseLoad: calculationMode === "on_demand",
+  });
   const model = resolveTopologicalChargePanelModel(resource.status, resource.data);
+  const busy = resource.status === "loading";
+
+  const handleModeChange = useCallback((nextMode: string) => {
+    setCalculationMode(nextMode as TopologicalChargeCalculationMode);
+  }, []);
+
+  const handleCompute = useCallback(() => {
+    resource.refetch();
+  }, [resource]);
 
   return (
     <div className="fm-inspector-panel">
       <InspectorSection title="Topological Charge">
         <TopologicalChargeMethodSummary method={model.method} />
+        <TopologicalChargeControls
+          busy={busy}
+          mode={calculationMode}
+          onCompute={handleCompute}
+          onModeChange={handleModeChange}
+        />
         {model.banner ? (
           <FeedbackBanner kind={model.banner.kind} message={model.banner.message} />
         ) : null}
+        <FieldRow
+          label="Calculation"
+          value={calculationMode === "continuous" ? "continuous" : "on demand"}
+        />
         {model.rows.map((row) => (
           <FieldRow key={row.label} label={row.label} value={row.value} />
         ))}
       </InspectorSection>
+    </div>
+  );
+}
+
+function TopologicalChargeControls({
+  busy,
+  mode,
+  onCompute,
+  onModeChange,
+}: {
+  busy: boolean;
+  mode: TopologicalChargeCalculationMode;
+  onCompute: () => void;
+  onModeChange: (mode: string) => void;
+}) {
+  return (
+    <div className="fm-topological-charge-controls">
+      <Tabs value={mode} onValueChange={onModeChange}>
+        <TabsList aria-label="Topological charge calculation mode">
+          <TabsTrigger value="on_demand">On demand</TabsTrigger>
+          <TabsTrigger value="continuous">Continuous</TabsTrigger>
+        </TabsList>
+      </Tabs>
+      <Button
+        size="sm"
+        type="button"
+        variant={mode === "continuous" ? "secondary" : "primary"}
+        disabled={busy}
+        onClick={onCompute}
+        title="Compute topological charge now"
+      >
+        <Calculator size={13} aria-hidden="true" />
+        {busy ? "Computing" : "Compute"}
+      </Button>
     </div>
   );
 }
@@ -93,7 +157,7 @@ function TopologicalChargeMethodSummary({
           <RenderedMath mathml={CONTINUUM_MATHML} />
         </div>
         <div className="fm-topological-charge-method__equation">
-          <span>Discrete grid</span>
+          <span>Discrete triangles</span>
           <RenderedMath mathml={DISCRETE_MATHML} />
         </div>
       </div>
